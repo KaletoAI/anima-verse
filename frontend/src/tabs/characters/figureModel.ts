@@ -388,7 +388,14 @@ export function choiceAllowed(key: keyof TemplateParams, choice: string, p: Temp
   if (key === 'sleeves' && offShoulder(p)) return OFF_SHOULDER_SLEEVES.includes(choice)
   // A233: a stirrup only under a skinny full-length leg (`garment_template._validate_trousers`)
   if (key === 'hem' && choice === 'stirrup') return p.leg_shape === 'skinny' && p.trouser_length === 'full'
+  // bug round 2026-11-20: a stirrup is pinned whole as a second skin — its seat is fitted (`_validate_trousers`)
+  if (key === 'seat' && p.hem === 'stirrup') return choice === 'fitted'
   return true
+}
+
+/** Bug round 2026-11-20: the seat a leg shape starts with (`garment_template.default_seat`): fitted for a skinny leg. */
+export function defaultSeat(p: TemplateParams): string {
+  return p.leg_shape === 'skinny' ? 'fitted' : 'regular'
 }
 
 /** A template row's drape state and parameters (`figure_build._template_row`). */

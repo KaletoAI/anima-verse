@@ -24,11 +24,12 @@ the lowest Hips-weighted vertex near the centre (a part rigged to the hips stays
 * trousers (A233): the hips and both legs from the waistband plane at ``top_y`` to a hem plane per length (``trouser_hem``
   of the side's crotch / knee / ankle; a stirrup keeps a band under the arch instead), no arm / hand and no foot; laid
   out at ``offset_m`` like every fitted piece, then each leg is widened round its bone axis (hip -> knee -> ankle
-  joint) to the leg shape's radius (``trouser_widen``, from the seat's dropped crotch) and evened once more; then the
-  seat (bug round 2026-11-20, ``trouser_seat``): a regular / relaxed seat bridges each slice to its convex hull,
-  eases it out, lets the cloth hang from the seat and joins the legs down to the dropped crotch — a fitted seat stays
-  a second skin. Pinned (taken after the seat): the waist band, the centre seam over the crotch and — skinny — a band
-  at each hem (a stirrup: whole, a second skin); a widened leg hangs from the waist band.
+  joint) to the leg shape's radius (``trouser_widen``) and evened once more; then the seat (bug round 2026-11-20,
+  ``trouser_seat``): a regular / relaxed seat bridges each slice to its convex hull and eases it out, the skin facing
+  up or down and the legs under the crotch follow that move smoothly — a fitted seat stays a second skin. Pinned
+  (taken after the seat): the waist band, the centre seam over the crotch (a bridged seat's from
+  ``SEAT_SEAM_LIFT_M`` over it) and — skinny — a band at each hem (a stirrup: whole, a second skin, its seat always
+  fitted); a widened leg hangs from the waist band.
 * bra: the underband plane at ``under_y - band``; per side a cup from the underbust line to its top edge
   (``style`` / ``coverage``), the gore between them, the straps (``straps``) as strips within half their width of a
   path laid on the surface; push-up moves the cups up, in and out before the evening. Pinned: the band, the straps,
@@ -661,19 +662,13 @@ def _polyline_foot(p, pts):
     return best
 
 
-def seat_crotch(f, d):
-    """The crotch the leg shape starts from: the body's (``d["crotch"]``, A239) less the seat's crotch drop."""
-    return float(d["crotch"]) - float((f.get("seat") or {}).get("drop_m") or 0.0)
-
-
 def trouser_widen(V, f, sides, cx):
     """A233: each leg widened round its bone axis (hip -> knee -> ankle joint) — a vertex below the crotch moves out
     along its radial direction to max(its radius, R(z)), faded in over ``ramp_m`` under the crotch. R runs straight
     (in z) from the thigh radius ``r_t`` at the crotch to ``shape_r[0] x r_t`` at the knee and ``shape_r[1] x r_t`` at
     the ankle; ``r_t`` = the median radius of the side's vertices 2-4 cm under the crotch x (1 + ``radial_ease``). An
     inner side stays ``centre_gap_m`` off the centre plane. A cuffed hem stands ``cuff_fold_m`` further out over
-    ``cuff_m``. The crotch here is the seat's dropped one (``seat_crotch``, bug round 2026-11-20). Returns
-    ``(V, info)``."""
+    ``cuff_m``. Returns ``(V, info)``."""
     V = V.copy()
     info = {}
     for s_, d in sides.items():
@@ -686,14 +681,13 @@ def trouser_widen(V, f, sides, cx):
         z = V[side][:, 2]
         new = rl.copy()
         if f.get("shape_r"):
-            cz = seat_crotch(f, d)
-            band = (z < cz - 0.02) & (z > cz - 0.04)
+            band = (z < d["crotch"] - 0.02) & (z > d["crotch"] - 0.04)
             r_t = float(np.median(rl[band])) if band.sum() > 5 else 0.08
             r_t *= 1.0 + float(f["radial_ease"])
             k, h = f["shape_r"]
-            zs = [d["ankle"], d["knee"], cz]
+            zs = [d["ankle"], d["knee"], d["crotch"]]
             R = np.interp(z, zs, [h * r_t, k * r_t, r_t])
-            t = np.clip((cz - z) / float(f["ramp_m"]), 0.0, 1.0)
+            t = np.clip((d["crotch"] - z) / float(f["ramp_m"]), 0.0, 1.0)
             new = np.maximum(rl, rl + t * (R - rl))
             info[str(s_)] = {"r_t": round(r_t, 4), "r_knee": round(k * r_t, 4), "r_ankle": round(h * r_t, 4),
                              "widened_p50_mm": round(float(np.median(new - rl)) * 1000, 1)}
@@ -760,127 +754,111 @@ def _on_hulls(P, C, ids, hulls):
     return out
 
 
-def trouser_seat(V, N, E, f, sides, cx, crotch, top, band_lo):
-    """Bug round 2026-11-20 — the seat of a trouser (``f["seat"]``: ``garment_template.seat_spec``). A trouser is not
-    a second skin above the crotch. On the laid-out cut (``V``, its vertex normals ``N``, its edges ``E``), BEFORE the
-    pins are taken (the A237 centre seam is then held as shaped):
+def trouser_seat(V, N, E, f, cx, crotch, top, band_lo):
+    """Bug round 2026-11-20 (review fix) — the seat of a trouser (``f["seat"]``: ``garment_template.seat_spec``). A
+    trouser is not a second skin above the crotch. On the laid-out cut (``V``, its vertex normals ``N``, its edges
+    ``E``), BEFORE the pins are taken (the A237 centre seam is then held as shaped):
 
-    * bridge + ease + curtain, above the crotch: per horizontal slice up to the top edge (``slice_m`` thick, its hull
-      read over ``hull_m`` of the laid-out cut) the slice's 2D convex hull, scaled about its centroid so the slice's
-      median radius grows by ``ease_m`` (0 at the waistband's lower edge ``band_lo``, full ``ramp_m`` under it; the
-      band itself is bridged, never eased). A vertex's target is on the ray from the slice's centroid, at the hull of
-      its own and the eased hulls up to ``curtain_m`` above it — the cloth spans the seat's cleft, the groin and the
-      small of the back, and falls straight from the seat's fullest part instead of back in under it. Skin facing up
-      or down (``|n_z|`` over ``FLAT_NZ``: under the seat, over the hip) is no ring vertex and stays as laid — the
-      cloth rests on it; the part of it between the legs at the crotch (``CROTCH_SKIN_HALF_M`` / ``_UP_M``) is evened
-      with its neighbours (left as laid, it folded the bridged cloth into a crease along the crotch);
-    * hang + drop, under the crotch: per leg a vertex's target is on the horizontal ray from its leg's bone axis, at
-      the lowest slice's curtain (that side's half), never past ``centre_gap_m`` off the centre plane — the legs
-      continue the seat, and their inner sides meet at the centre down to the dropped crotch ``crotch - drop_m``;
-      under that the hang fades back to the leg over ``hang_fade_m`` (smoothstep). A leg vertex only moves out.
+    * bridge + ease, above the crotch: per horizontal slice up to the top edge (``slice_m`` thick, its hull read over
+      ``hull_m`` of the laid-out cut) the slice's 2D convex hull, scaled about its centroid so the slice's median
+      radius grows by ``ease_m`` (0 at the waistband's lower edge ``band_lo``, full ``ramp_m`` under it; the band
+      itself is bridged, never eased). A ring vertex's target is on the ray from the centroid, at the hulls of the
+      two slices round its height blended by it — the cloth spans the seat's cleft, the groin and the small of the
+      back. The targets are approached by ``relax_passes`` rounds of an evening
+      along each slice (umbrella, horizontal only) followed by putting every ring vertex back on its target radius:
+      a vertex in the cleft slides along the hull instead of landing on the point its neighbours land on;
+    * the fill: skin facing up or down (``|n_z|`` over ``FLAT_NZ``: under the seat, the top of the hip, between the
+      legs at the crotch) has no ray from its slice's centre and is no ring vertex, and the legs under the crotch are
+      no slice at all. Their horizontal MOVE is the mean of their neighbours' (``fill_passes`` Jacobi rounds,
+      harmonic): it follows the ring vertices round it and fades to 0 at ``fade_m`` under the crotch, where the leg
+      is as laid. Left as laid (the first version), each such patch was a step against the moved ring next to it —
+      the folds over the crotch, round the thighs and over the small of the back.
 
-    The targets are approached by ``relax_passes`` rounds of an evening along each slice (umbrella, horizontal only)
-    followed by putting every vertex back on its target radius: a vertex in the cleft is not thrown onto the hull at
-    the point its neighbours land on (folded, near-zero triangles crumpled in the drape), it slides along it. Returns
-    ``(V, info)``; a fitted seat returns V untouched."""
+    Returns ``(V, info)``; a fitted seat returns V untouched."""
     st = f.get("seat") or {}
-    ease, drop, bridge = float(st.get("ease_m") or 0.0), float(st.get("drop_m") or 0.0), bool(st.get("bridge"))
-    info = {"name": st.get("name"), "ease_m": ease, "drop_m": drop, "bridge": bridge}
+    ease, bridge = float(st.get("ease_m") or 0.0), bool(st.get("bridge"))
+    info = {"name": st.get("name"), "ease_m": ease, "bridge": bridge}
     if not bridge:
         return V, info
     V0 = V
     z = V0[:, 2]
-    # the skin facing down between the legs at the crotch is no part of a slice's ring (its ray from the slice's centre
-    # is any direction): it is evened along with its neighbours instead
-    crotch_skin = (np.abs(N[:, 2]) > FLAT_NZ) & (np.abs(V0[:, 0] - cx) < CROTCH_SKIN_HALF_M) \
-        & (V0[:, 2] < crotch + CROTCH_SKIN_UP_M)
-    # any other skin facing up or down (the fold under the seat, the top of the hip) is no part of a ring either and
-    # stays as laid: the cloth rests on it (moved out with the rest, a whole seat floated and sagged into folds)
     ring_ok = np.abs(N[:, 2]) <= FLAT_NZ
     above = (z > crotch) & (z <= top + 1e-4)
     step, half, ramp_e = float(st["slice_m"]), float(st["hull_m"]), float(st["ramp_m"])
-    # per vertex: its centre, its hull and its target scale (above: the slice; under: the leg)
-    centre = np.zeros((len(V), 2))
-    scale = np.zeros(len(V))
-    hull_id = np.full(len(V), -1)
-    hulls = []
-    move = np.zeros(len(V), bool)
-    rows = []               # per slice: (its lower z, its vertices, its centroid, its hull eased)
+    rows = []               # per slice: (its mid z, its centroid, its hull eased)
     for z0 in np.arange(crotch, top + step, step):
-        on = above & (z >= z0) & (z < z0 + step)
-        if not on.any():
+        zc = z0 + step / 2
+        ring = above & ring_ok & (np.abs(z - zc) < half)
+        if not ring.any():
             continue
-        ring = above & ring_ok & (np.abs(z - (z0 + step / 2)) < half)
         H = _hull2(V0[ring][:, :2])
         if len(H) < 3:
             continue
         c = H.mean(0)
         R = float(np.median(np.linalg.norm(V0[ring][:, :2] - c, axis=1)))
-        k = ease * float(np.clip((band_lo - (z0 + step / 2)) / ramp_e, 0.0, 1.0)) / max(R, 1e-3)
-        rows.append((z0, np.where(on & ring_ok)[0], c, c + (H - c) * (1.0 + k)))
+        k = ease * float(np.clip((band_lo - zc) / ramp_e, 0.0, 1.0)) / max(R, 1e-3)
+        rows.append((zc, c, c + (H - c) * (1.0 + k)))
     info["slices"] = len(rows)
-    # the curtain: a slice's target is the hull of its own eased hull and those up to ``curtain_m`` above it — the
-    # cloth falls straight from the seat's fullest part over the fold under it, never back in toward the skin
-    curtain = float(st["curtain_m"])
-    for z0, idx, c, _H in rows:
-        up = np.vstack([Hh for zz, _i, _c, Hh in rows if z0 <= zz <= z0 + curtain])
-        centre[idx] = c
-        hull_id[idx] = len(hulls)
-        hulls.append(_hull2(up))
-        move[idx] = True
-    # the leg's hang: the curtain of the lowest slice, per side, never past the centre plane
-    gap = float(f["centre_gap_m"])
-    fade = float(st["hang_fade_m"])
-    cz = crotch - drop
-    leg_axis = {}
-    low = hulls[0] if hulls else None
-    for s_, d in sides.items():
-        if low is None:
-            break
-        Ps = np.vstack([low, [[cx + s_ * gap, p[1]] for p in low]])
-        Ps = Ps[(Ps[:, 0] - cx) * s_ >= gap - 1e-9]
-        if len(Ps) < 3:
-            continue
-        Hs = _hull2(Ps)
-        leg = ((V0[:, 0] - cx) * s_ > 0) & (z <= crotch) & (z > cz - fade) & ring_ok
-        if len(Hs) < 3 or not leg.any():
-            continue
-        q = _polyline_foot(V0[leg], np.array(d["axis"]))[:, :2]
-        w = np.clip(1.0 - (cz - z[leg]) / fade, 0.0, 1.0)
-        w = w * w * (3.0 - 2.0 * w)
-        idx = np.where(leg)[0][w > 0]
-        centre[idx] = q[w > 0]
-        hull_id[idx] = len(hulls)
-        hulls.append(Hs)
-        scale[idx] = w[w > 0]
-        move[idx] = True
-        leg_axis[str(s_)] = {"verts": int(len(idx)), "hull": len(Hs)}
-    info["hang"] = leg_axis
+    hulls = [Hk for _zc, _c, Hk in rows]
+    move = above & ring_ok & bool(rows)
     idx = np.where(move)[0]
-    base_r = np.linalg.norm(V0[idx, :2] - centre[idx], axis=1)
+    # a ring vertex's target lies between the two slices round its height, blended by it: a vertex is never put on
+    # its slice's hull alone (each slice a vertical band, a step to the next — a staircase of folds over the back)
+    zcs = np.array([r[0] for r in rows]) if rows else np.zeros(1)
+    cs = np.array([r[1] for r in rows]) if rows else np.zeros((1, 2))
+    j = np.clip(np.searchsorted(zcs, z[idx]), 1, max(1, len(zcs) - 1))
+    i0, i1 = j - 1, np.minimum(j, len(zcs) - 1)
+    span = np.maximum(zcs[i1] - zcs[i0], 1e-9)
+    t = np.where(i1 > i0, np.clip((z[idx] - zcs[i0]) / span, 0.0, 1.0), 0.0)
+    centre = cs[i0] * (1.0 - t)[:, None] + cs[i1] * t[:, None]
 
     def target(P):
-        D = P - centre[idx]
+        D = P - centre
         U = D / np.maximum(np.linalg.norm(D, axis=1), 1e-9)[:, None]
-        rh = np.linalg.norm(_on_hulls(P, centre[idx], hull_id[idx], hulls) - centre[idx], axis=1)
-        w = scale[idx]
-        hang = w > 0                    # a leg vertex: its hang weight (``scale``); a slice's: on its curtain
-        r = np.where(hang, np.maximum(base_r, base_r + w * (rh - base_r)), rh)
-        return centre[idx] + U * r[:, None]
+        r0 = np.linalg.norm(_on_hulls(P, centre, i0, hulls) - centre, axis=1)
+        r1 = np.linalg.norm(_on_hulls(P, centre, i1, hulls) - centre, axis=1)
+        return centre + U * ((1.0 - t) * r0 + t * r1)[:, None]
+
+    # the filled vertices: no ring vertex (or one tilted past ``FLAT_NZ_CORE``: it blends from its target to the fill,
+    # so the edge of the skin facing down under the seat is no kink), above the crotch or on the legs down to twice
+    # ``fade_m`` under it; on the legs the fill is then faded out by a smoothstep from the crotch to ``fade_m`` under
+    # it (a hard stop drew a line round the thighs). The skin between the legs under the crotch
+    # (``CROTCH_STRIP_HALF_M`` of the centre plane) takes only ``CROTCH_STRIP_SHARE`` of its filled move: moved in full
+    # with the seat's front and back, its narrow triangles crumpled (a high flowing trouser failed the stretch gate
+    # there); held as laid, a tight trouser (fit 0) tore at the crotch in the drape
+    fade = float(st["fade_m"])
+    nz = np.abs(N[:, 2])
+    core = move & (nz <= FLAT_NZ_CORE)
+    blend = np.clip((FLAT_NZ - nz) / (FLAT_NZ - FLAT_NZ_CORE), 0.0, 1.0)
+    blend = np.where(move, blend * blend * (3.0 - 2.0 * blend), 0.0)
+    strip = (z <= crotch) & (np.abs(V0[:, 0] - cx) < CROTCH_STRIP_HALF_M)
+    free = np.where(~core & (z <= top + 1e-4) & (z > crotch - 2.0 * fade))[0]
+    w_leg = np.clip((z - (crotch - fade)) / fade, 0.0, 1.0)
+    w_leg = np.where(z <= crotch, w_leg * w_leg * (3.0 - 2.0 * w_leg), 1.0)
+    deg = np.bincount(E.ravel(), minlength=len(V)).astype(float)
+    a, b = E[:, 0], E[:, 1]
+
+    def nmean(X):
+        out = np.empty_like(X)
+        for k in range(X.shape[1]):
+            out[:, k] = (np.bincount(a, X[b, k], len(V)) + np.bincount(b, X[a, k], len(V))) / np.maximum(deg, 1.0)
+        return out
 
     V = V0.copy()
-    V[idx, :2] = target(V0[idx, :2])
-    # the skin facing down between the legs follows its neighbours: left where it lay, it folded the bridged cloth
-    # into a crease along the crotch
-    free = np.where(crotch_skin)[0]
-    deg = np.bincount(E.ravel(), minlength=len(V)).astype(float)
-    for _ in range(int(st["relax_passes"])):
-        acc = np.zeros((len(V), 3))
-        np.add.at(acc, E[:, 0], V[E[:, 1]])
-        np.add.at(acc, E[:, 1], V[E[:, 0]])
-        mean = np.where(deg[:, None] > 0, acc / np.maximum(deg, 1.0)[:, None], V)
-        V[idx, :2] = target(0.5 * V[idx, :2] + 0.5 * mean[idx, :2])
-        V[free, :2] = 0.5 * V[free, :2] + 0.5 * mean[free, :2]
+    if len(idx):
+        V[idx, :2] = target(V0[idx, :2])
+        for _ in range(int(st["relax_passes"])):
+            mean = nmean(V[:, :2])
+            V[idx, :2] = target(0.5 * V[idx, :2] + 0.5 * mean[idx])
+    Dt = V[:, :2] - V0[:, :2]
+    D = np.where(core[:, None], Dt, 0.0)
+    for _ in range(int(st["fill_passes"])):
+        D[free] = nmean(D)[free]
+    D = blend[:, None] * Dt + (1.0 - blend[:, None]) * D
+    D = D * w_leg[:, None]
+    D[strip] *= CROTCH_STRIP_SHARE
+    V = V0.copy()
+    V[:, :2] += D
     info["free_verts"] = int(len(free))
     moved = np.linalg.norm(V[:, :2] - V0[:, :2], axis=1)
     info["moved_verts"] = int((moved > 1e-4).sum())
@@ -889,11 +867,15 @@ def trouser_seat(V, N, E, f, sides, cx, crotch, top, band_lo):
     return V, info
 
 
-#: A vertex whose normal's vertical part is above this faces up or down; within CROTCH_SKIN_HALF_M of the centre plane
-#: and under CROTCH_SKIN_UP_M above the crotch it is the skin between the legs (``trouser_seat``).
+#: A vertex whose normal's vertical part is above this faces up or down: no ring vertex of a seat slice, its move is
+#: filled in from its neighbours (``trouser_seat``).
 FLAT_NZ = 0.7
-CROTCH_SKIN_HALF_M = 0.04
-CROTCH_SKIN_UP_M = 0.03
+#: Up to this the ring vertex lies on its target alone; from it to ``FLAT_NZ`` it blends into the fill.
+FLAT_NZ_CORE = 0.5
+#: Under the crotch the skin this close to the centre plane (between the legs) takes this share of its filled move
+#: (``trouser_seat``).
+CROTCH_STRIP_HALF_M = 0.03
+CROTCH_STRIP_SHARE = 0.5
 
 
 # --- the builder -----------------------------------------------------------------------------------------------
@@ -1141,7 +1123,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         bm.normal_update()
         Vs, info["seat"] = trouser_seat(np.array([v.co for v in bm.verts]), np.array([v.normal for v in bm.verts]),
                                         np.array([(e.verts[0].index, e.verts[1].index) for e in bm.edges], int),
-                                        f, tsides, cx, float(info["crotch_z"]), top_z, top_z - float(f["band_m"]))
+                                        f, cx, float(info["crotch_z"]), top_z, top_z - float(f["band_m"]))
         if info["seat"].get("moved_verts"):
             for v, p in zip(bm.verts, Vs):
                 v.co = Vector(p)
@@ -1154,7 +1136,10 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         # A237: the centre seam over the crotch's front and back hollows (the mons, the seat's cleft) is held as laid —
         # after the seat bridged them (``trouser_seat``): the cloth bridging them was drawn into them in the drape
         # (Ylva: 4 edges on the centre line, stretch 2.09)
-        seam = (np.abs(V[:, 0] - cx) < SEAM_HALF_M) & (V[:, 2] > float(info["crotch_z"]))
+        # (a bridged seat's seam starts ``SEAT_SEAM_LIFT_M`` over the crotch: pinned down to the crotch point, the cloth
+        # meeting the skin between the legs there was stretched over the gate in the drape — a high flowing trouser)
+        lift = SEAT_SEAM_LIFT_M if (f.get("seat") or {}).get("bridge") else 0.0
+        seam = (np.abs(V[:, 0] - cx) < SEAM_HALF_M) & (V[:, 2] > float(info["crotch_z"]) + lift)
         pin_mask = pin_mask | seam
         info["seam_pins"] = int(seam.sum())
         if boots:
@@ -1196,6 +1181,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
 
 #: A237: half the width of the trousers' centre seam held as laid over the crotch (``build_fitted``).
 SEAM_HALF_M = 0.012
+#: Bug round 2026-11-20: a bridged seat's centre seam is held from this far over the crotch up (``build_fitted``).
+SEAT_SEAM_LIFT_M = 0.01
 #: A237: a trouser vertex this far above a boot's top is still pushed out of it (the hem bells over the collar).
 OVER_BOOT_ABOVE_M = 0.02
 #: A237: where the inward ray starts, from the leg's axis — inside the gap between the legs, so a ray toward the other

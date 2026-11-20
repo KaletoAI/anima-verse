@@ -24,7 +24,7 @@ import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -254,6 +254,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     }
     // A229: off the shoulders a piece keeps at least short sleeves
     if (data.spec.sleeves?.type === 'choice' && !choiceAllowed('sleeves', next.sleeves, next)) next.sleeves = 'short'
+    // bug round 2026-11-20: a leg shape change carries the seat along unless one was chosen (skinny: fitted)
+    if (key === 'leg_shape' && (draft.seat || 'regular') === defaultSeat(draft)) next.seat = defaultSeat(next)
+    if (!choiceAllowed('seat', next.seat || 'regular', next)) next.seat = 'fitted'
     setDraft(next)
     setSource('user')
     setSaved('')
@@ -263,6 +266,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     if (!draft) return
     const next = { ...draft, ...values } as TemplateParams
     if (!choiceAllowed('hem', next.hem || 'plain', next)) next.hem = 'plain'
+    if (!choiceAllowed('seat', next.seat || 'regular', next)) next.seat = 'fitted'
     setDraft(next)
     setSource('user')
     setSaved('')
@@ -394,7 +398,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                   <div className="ga-hint">{t('A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.')}</div>
                 ) : null}
                 {draft.kind === 'trousers' ? (
-                  <div className="ga-hint">{t('Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. Above the crotch the seat decides: fitted lies on the skin, regular and relaxed span the hollows, stand off the seat and drop the crotch. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.')}</div>
+                  <div className="ga-hint">{t('Trousers are cut from the body from the waistband to the hem and widened round each leg by the leg shape. Above the crotch the seat decides: fitted lies on the skin (a skinny leg starts fitted), regular and relaxed span the hollows and stand off the seat. A skinny full-length leg goes into the shoe; every other leg hangs over it. The fly and belt loops come from the picture.')}</div>
                 ) : null}
                 {draft.kind === 'jacket' ? (
                   <div className="ga-hint">{t('A jacket is draped over the tops and dresses worn with it (built first).')}</div>

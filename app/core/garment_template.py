@@ -194,26 +194,23 @@ TROUSER_RAMP_M = 0.08
 #: A widened inner leg never crosses the body's centre plane closer than this (the two legs stay apart).
 TROUSER_CENTRE_GAP_M = 0.006
 #: Bug round 2026-11-20 — the seat: how a trouser sits ABOVE the crotch. ``fitted`` = a second skin over the hips, the
-#: seat and the crotch (leggings, skinny jeans: the A233 cut unchanged); ``regular`` / ``relaxed`` = woven trousers —
-#: every slice from the crotch to the top edge is bridged to its convex hull (the cloth spans the seat's cleft and the
-#: groin) and eased out by ``SEAT_EASE_M``; under the crotch the cloth hangs from the seat and the legs' inner sides
-#: meet at the centre down to the crotch dropped by ``CROTCH_DROP_M`` (``garment_template_fitted.trouser_seat``). The
-#: leg shape's widening starts from the dropped crotch.
+#: seat and the crotch (leggings, skinny jeans, a stirrup: the A233 cut unchanged); ``regular`` / ``relaxed`` = woven
+#: trousers — every slice from the crotch to the top edge is bridged to its convex hull (the cloth spans the seat's
+#: cleft, the groin and the small of the back) and eased out by ``SEAT_EASE_M``; the skin facing up or down and the
+#: legs down to ``SEAT_FADE_M`` under the crotch follow that move smoothly (``garment_template_fitted.trouser_seat``).
+#: A missing seat defaults by the leg (``default_seat``): fitted for a skinny leg or a stirrup, regular otherwise.
 SEATS = ("fitted", "regular", "relaxed")
 SEAT_EASE_M = {"fitted": 0.0, "regular": 0.01, "relaxed": 0.025}
-CROTCH_DROP_M = {"fitted": 0.0, "regular": 0.02, "relaxed": 0.04}
 #: The bridge's slices (thickness) and the band each slice's hull is read over (half height).
 SEAT_SLICE_M = 0.005
 SEAT_HULL_M = 0.01
 #: The ease grows from 0 at the waistband's lower edge to full this far under it.
 SEAT_RAMP_M = 0.06
-#: The curtain: a slice's target hull takes in the slices up to this far above it (the cloth falls straight from the
-#: seat's fullest part). Under the crotch the legs hang from the lowest slice's curtain and fade back to the leg this
-#: far under the dropped crotch.
-SEAT_CURTAIN_M = 0.12
-SEAT_HANG_FADE_M = 0.08
-#: Rounds of evening along the slices + back onto the target (``trouser_seat``).
+#: The seat's move fades into the leg over this far under the crotch.
+SEAT_FADE_M = 0.08
+#: Rounds of evening along the slices + back onto the target, and the Jacobi rounds of the fill (``trouser_seat``).
 SEAT_RELAX_PASSES = 8
+SEAT_FILL_PASSES = 200
 #: The leggings preset of the dialog: trousers that are a second skin from the waist to the ankle.
 LEGGINGS = {"kind": "trousers", "leg_shape": "skinny", "seat": "fitted", "fit": 0.0, "trouser_length": "full"}
 #: The waist finish: an elastic band, a belt band (belt loops are the picture's) or none — its height (the pinned
@@ -801,7 +798,7 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
         else:
             params["fit"] = PARAM_SPEC["fit"][2]
     if kind == "trousers":
-        _validate_trousers(params)
+        _validate_trousers(params, seat_given=raw.get("seat") not in (None, ""))
     if params["slit"] == "none":
         params["slit_m"] = 0.0
     elif params["slit_m"] <= 0.0:
@@ -810,10 +807,22 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     return params, errors
 
 
-def _validate_trousers(params: Dict[str, Any]) -> None:
-    """A233: a stirrup only under a skinny full-length leg (else the hem is plain)."""
+def _validate_trousers(params: Dict[str, Any], seat_given: bool = True) -> None:
+    """A233: a stirrup only under a skinny full-length leg (else the hem is plain). Bug round 2026-11-20: a seat not
+    given takes ``default_seat``; a stirrup is pinned whole as a second skin, so its seat is always fitted."""
     if params["hem"] == "stirrup" and not (params["leg_shape"] == "skinny" and params["trouser_length"] == "full"):
         params["hem"] = "plain"
+    if not seat_given:
+        params["seat"] = default_seat(params)
+    if params["hem"] == "stirrup":
+        params["seat"] = "fitted"
+
+
+def default_seat(params: Dict[str, Any]) -> str:
+    """Bug round 2026-11-20: the seat of trousers whose seat is not given (an answer without it, a piece stored before
+    the field) — fitted for a skinny leg (leggings, skinny jeans: a second skin, as they were cut before the seat
+    existed), regular for every other leg shape."""
+    return "fitted" if params.get("leg_shape") == "skinny" else "regular"
 
 
 def tucked_into_shoes(params: Optional[Dict[str, Any]]) -> bool:
@@ -1624,9 +1633,9 @@ def trouser_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]
 def seat_spec(seat: str) -> Dict[str, Any]:
     """Bug round 2026-11-20: the seat's part of ``trouser_spec`` (``SEATS``; the builder's
     ``garment_template_fitted.trouser_seat``) — a fitted seat moves nothing."""
-    return {"name": seat, "ease_m": SEAT_EASE_M[seat], "drop_m": CROTCH_DROP_M[seat], "bridge": seat != "fitted",
-            "slice_m": SEAT_SLICE_M, "hull_m": SEAT_HULL_M, "ramp_m": SEAT_RAMP_M, "curtain_m": SEAT_CURTAIN_M,
-            "hang_fade_m": SEAT_HANG_FADE_M, "relax_passes": SEAT_RELAX_PASSES}
+    return {"name": seat, "ease_m": SEAT_EASE_M[seat], "bridge": seat != "fitted",
+            "slice_m": SEAT_SLICE_M, "hull_m": SEAT_HULL_M, "ramp_m": SEAT_RAMP_M, "fade_m": SEAT_FADE_M,
+            "relax_passes": SEAT_RELAX_PASSES, "fill_passes": SEAT_FILL_PASSES}
 
 
 def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:

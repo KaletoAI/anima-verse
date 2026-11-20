@@ -12,23 +12,38 @@ world-DB import) with a temp shared items file.
 
 Expected by hand:
 
-[P] parameters: ``seat`` is a trouser field (in ``TROUSER_FIELDS`` and ``KIND_FIELDS["trousers"]``), default
-    ``regular``; a skirt's key is the same with or without a ``seat`` value (it never enters another kind's key); a
-    trouser's key changes from regular to fitted. ``LEGGINGS`` = skinny / fitted / fit 0 / full, and validates to
-    itself (no field reset).
-[S] ``seat_spec``: fitted ease 0, drop 0, no bridge; regular ease 0.01, drop 0.02, bridge; relaxed 0.025 / 0.04.
-    ``trouser_spec`` carries it as ``seat``.
-[B] ``trouser_seat`` on a synthetic tube (``ring`` below): 72 vertices per ring at 5 deg steps, radius 0.15 about
-    (0, 0), rings every 5 mm from z 0.8025 (just above the crotch 0.80) to the top 1.00, waistband 0.04 (its lower
-    edge 0.96); the vertex at 90 deg is the cleft, 0.02 in (radius 0.13). Normals horizontal (every vertex is in a
-    ring), no legs.
+[P] parameters: ``seat`` is a trouser field (in ``TROUSER_FIELDS`` and ``KIND_FIELDS["trousers"]``). Not given, it
+    follows the leg (``default_seat``): straight -> ``regular``, skinny -> ``fitted`` (a skinny piece stored before the
+    field keeps its second skin); given, it is kept (skinny + regular stays regular); a stirrup is pinned whole as a
+    second skin, so skinny + stirrup + regular -> fitted. A skirt's key is the same with or without a ``seat`` value
+    (it never enters another kind's key); a trouser's key changes from regular to fitted. ``LEGGINGS`` = skinny /
+    fitted / fit 0 / full, and validates to itself (no field reset).
+[S] ``seat_spec``: fitted ease 0, no bridge; regular ease 0.01, bridge; relaxed 0.025, bridge; no crotch drop any
+    more (the review of 2026-11-20: two leg walls meeting at the centre plane read as a slit). ``trouser_spec``
+    carries it as ``seat``.
+[B] ``trouser_seat`` on a synthetic tube (``ring_tube``): 72 vertices per ring at 5 deg steps, radius 0.15 about
+    (0, 0), rings every 5 mm from z 0.7025 to the top 1.00, the crotch at 0.80, waistband 0.04 (its lower edge 0.96).
+    Above the crotch the vertex at 90 deg is the cleft, 0.02 in (radius 0.13); under it (the leg) every vertex is at
+    0.15. Normals horizontal, except the 0 deg vertex of the ring at z 0.9275 (normal straight up: no ring vertex).
     - fitted: V returned unchanged.
-    - regular at a ring well under the ease ramp (z 0.85: ease full from 0.96 - 0.06 = 0.90 down): the convex hull
-      runs straight from the 85 deg to the 95 deg vertex, so at 90 deg it lies at 0.15 x cos 5 deg = 0.149429; the
-      slice's median radius is 0.15, so the scale is 1 + 0.01 / 0.15 = 1.066667: the cleft vertex ends at
-      0.149429 x 1.066667 = 0.159391 and the 0 deg vertex (a hull vertex) at 0.15 x 1.066667 = 0.16 — the cleft is
-      bridged to within 0.16 - 0.159391 = 0.6 mm (it was 20 mm).
-    - in the waistband (z 0.98, no ease): the cleft vertex at 0.149429 (bridged), the 0 deg vertex stays at 0.15.
+    - the hull of a slice: the 71 vertices at 0.15 (the cleft is inside); its centroid c = -(the cleft's circle point)
+      / 71 = (0, -0.15 / 71) = (0, -0.00211268) (the 72 circle points sum to 0).
+    - the slice's median radius about c: of the 72 distances sorted, the cleft (0.13 + 0.00211) is the smallest; the
+      others are sqrt(0.0225 + 0.3 d sin a + d^2) (d = 0.00211268), ascending in sin a; the 36th and 37th of all 72 are
+      the 35th and 36th of the 71 = sin a -cos 85 deg and 0: 0.14983065 and 0.15001488, median R = 0.14992276. Ease
+      0.01 -> scale 1 + k with k = 0.01 / R = 0.06670101.
+    - regular at z 0.8525 (ease full: 0.96 - 0.06 = 0.90 and down; both slices round it alike): the cleft's ray from c
+      runs along +y and meets the hull's edge from 85 to 95 deg at y = 0.15 cos 5 deg = 0.14942920, scaled about c:
+      -d + (0.14942920 + d)(1 + k) = 0.15953720. The 270 deg vertex (a hull vertex on the same ray, the other way):
+      d + (0.15 - d)(1 + k) = 0.15986423. Both rays are mirror lines of their neighbourhood, so the evening keeps them.
+    - in the waistband (z 0.9825, no ease): the cleft at 0.14942920 (bridged), the 270 deg vertex at 0.15.
+    (Tolerance 1e-6: ``_hull2`` rounds the hull's points to 1e-6.)
+    - the fill: the 0 deg vertex at z 0.9275 is no ring vertex; all its neighbours are, so its horizontal move is the
+      mean of their four moves exactly. The leg (z <= 0.80): no vertex moves at or under 0.80 - 0.08 = 0.72, a leg
+      vertex never moves in, the 0 deg column's move shrinks going down, and the skin between the legs (|x| < 0.03:
+      the 80..100 and 260..280 deg columns) takes half its filled move (``CROTCH_STRIP_SHARE`` 0.5): run once more
+      with the share at 1, its moves are exactly twice these, every other vertex's the same. Heights are never
+      changed.
 [M] the migration on a temp world: W1 = trousers with length_m 0.9 / waist_height low / no leg_shape -> rise low,
     trouser_length full (0.9 >= 0.85), leg_shape straight, length_m and waist_height gone; W2 = trousers already with
     leg_shape skinny -> untouched; W3 = a skirt -> untouched; shared S1 = trousers length_m 0.5 / natural -> rise
@@ -71,13 +86,13 @@ def fitted_module():
 
 def ring_tube():
     angles = np.radians(np.arange(0, 360, 5))
-    zs = np.round(np.arange(0.8025, 1.0001, 0.005), 4)
+    zs = np.round(np.arange(0.7025, 1.0001, 0.005), 4)
     V, N = [], []
     for z in zs:
         for a in angles:
-            r = 0.13 if abs(math.degrees(a) - 90) < 1e-6 else 0.15
+            r = 0.13 if abs(math.degrees(a) - 90) < 1e-6 and z > 0.80 else 0.15
             V.append([r * math.cos(a), r * math.sin(a), z])
-            N.append([math.cos(a), math.sin(a), 0.0])
+            N.append([0.0, 0.0, 1.0] if abs(z - 0.9275) < 1e-6 and abs(a) < 1e-6 else [math.cos(a), math.sin(a), 0.0])
     n = len(angles)
     E = []
     for i in range(len(zs)):
@@ -93,7 +108,12 @@ def main() -> int:
 
     print("[P] parameters")
     check("seat is a trouser field", "seat" in gt.TROUSER_FIELDS and "seat" in gt.KIND_FIELDS["trousers"], True)
-    check("default seat", gt.validate_params({"kind": "trousers"})[0]["seat"], "regular")
+    check("default seat, straight", gt.validate_params({"kind": "trousers"})[0]["seat"], "regular")
+    check("default seat, skinny", gt.validate_params({"kind": "trousers", "leg_shape": "skinny"})[0]["seat"], "fitted")
+    check("skinny + regular kept", gt.validate_params({"kind": "trousers", "leg_shape": "skinny",
+                                                       "seat": "regular"})[0]["seat"], "regular")
+    check("stirrup -> fitted", gt.validate_params({"kind": "trousers", "leg_shape": "skinny", "hem": "stirrup",
+                                                   "seat": "regular"})[0]["seat"], "fitted")
     skirt = gt.validate_params({"kind": "skirt"})[0]
     key = dict(base_sha="b" * 64, texture_sha="t" * 12, lower=[])
     check("a skirt's key ignores seat", gt.tsig({**skirt, "seat": "relaxed"}, **key), gt.tsig(skirt, **key))
@@ -105,26 +125,48 @@ def main() -> int:
     check("leggings preset valid", errors, [])
 
     print("[S] seat_spec")
-    for name, ease, drop, bridge in (("fitted", 0.0, 0.0, False), ("regular", 0.01, 0.02, True),
-                                     ("relaxed", 0.025, 0.04, True)):
+    for name, ease, bridge in (("fitted", 0.0, False), ("regular", 0.01, True), ("relaxed", 0.025, True)):
         sp = gt.seat_spec(name)
-        check(f"{name}", (sp["ease_m"], sp["drop_m"], sp["bridge"]), (ease, drop, bridge))
+        check(f"{name}", (sp["ease_m"], sp["bridge"], "drop_m" in sp), (ease, bridge, False))
     meas = {"waist_y": 1.05, "hip_y": 0.90}
     check("trouser_spec carries seat", gt.trouser_spec(reg, meas)["seat"], gt.seat_spec("regular"))
 
     print("[B] trouser_seat")
     gf = fitted_module()
     V, N, E, zs, n = ring_tube()
-    f = {"seat": gt.seat_spec("fitted"), "centre_gap_m": gt.TROUSER_CENTRE_GAP_M}
-    out, _info = gf.trouser_seat(V, N, E, f, {}, 0.0, 0.80, 1.0, 0.96)
+    f = {"seat": gt.seat_spec("fitted")}
+    out, _info = gf.trouser_seat(V, N, E, f, 0.0, 0.80, 1.0, 0.96)
     check("fitted: untouched", bool(np.array_equal(out, V)), True)
-    f = {"seat": gt.seat_spec("regular"), "centre_gap_m": gt.TROUSER_CENTRE_GAP_M}
-    out, info = gf.trouser_seat(V, N, E, f, {}, 0.0, 0.80, 1.0, 0.96)
-    for z, cleft_r, side_r in ((0.8525, 0.159391, 0.16), (0.9825, 0.149429, 0.15)):
-        i = int(np.argmin(np.abs(zs - z)))
-        check(f"z {zs[i]}: cleft radius", float(np.linalg.norm(out[i * n + 18, :2])), cleft_r, tol=2e-4)
-        check(f"z {zs[i]}: side radius", float(np.linalg.norm(out[i * n, :2])), side_r, tol=2e-4)
+    f = {"seat": gt.seat_spec("regular")}
+    out, info = gf.trouser_seat(V, N, E, f, 0.0, 0.80, 1.0, 0.96)
+    ring = lambda z: int(np.argmin(np.abs(zs - z)))
+    for z, cleft_r, back_r in ((0.8525, 0.15953720, 0.15986423), (0.9825, 0.14942920, 0.15)):
+        i = ring(z)
+        check(f"z {zs[i]}: cleft radius", float(np.linalg.norm(out[i * n + 18, :2])), cleft_r, tol=1e-6)
+        check(f"z {zs[i]}: 270 deg radius", float(np.linalg.norm(out[i * n + 54, :2])), back_r, tol=1e-6)
     check("heights kept", bool(np.array_equal(out[:, 2], V[:, 2])), True)
+    D = out[:, :2] - V[:, :2]
+    k = ring(0.9275) * n
+    nb = [k + 1, k + n - 1, k + n, k - n]
+    check("fill: the up-facing vertex moves as its neighbours' mean", float(np.abs(D[k] - D[nb].mean(0)).max()), 0.0,
+          tol=1e-9)
+    check("fill: the up-facing vertex moved", bool(np.linalg.norm(D[k]) > 1e-3), True)
+    leg = V[:, 2] <= 0.80
+    rad = np.linalg.norm(out[:, :2], axis=1) - np.linalg.norm(V[:, :2], axis=1)
+    check("leg: nothing moves at or under 0.72", float(np.abs(D[V[:, 2] <= 0.72 + 1e-9]).max()), 0.0, tol=0.0)
+    check("leg: never moves in", float(rad[leg].min()) >= -1e-9, True)
+    col = [float(np.linalg.norm(D[ring(z) * n])) for z in zs if z <= 0.80]
+    check("leg: the 0 deg column's move shrinks going down", bool(np.all(np.diff(col) >= -1e-12)), True)
+    check("leg: the 0 deg column moves under the crotch", col[-1] > 1e-3, True)
+    strip = leg & (np.abs(V[:, 0]) < 0.03)
+    check("strip share", gf.CROTCH_STRIP_SHARE, 0.5)
+    gf.CROTCH_STRIP_SHARE = 1.0
+    full, _info = gf.trouser_seat(V, N, E, f, 0.0, 0.80, 1.0, 0.96)
+    gf.CROTCH_STRIP_SHARE = 0.5
+    Df = full[:, :2] - V[:, :2]
+    check("strip: half its filled move", float(np.abs(2.0 * D[strip] - Df[strip]).max()), 0.0, tol=1e-12)
+    check("strip: it does move", bool(np.abs(Df[strip]).max() > 1e-4), True)
+    check("strip: nothing else changes", float(np.abs(D[~strip] - Df[~strip]).max()), 0.0, tol=0.0)
 
     print("[M] migration")
     from app.core import trouser_params_migration as tm

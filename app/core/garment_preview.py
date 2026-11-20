@@ -803,7 +803,9 @@ def _trousers(p, m, reg: Registration, cap_m: float, add, mark) -> None:
     the waistband (``rise``) to the crotch, then each leg along the leg in the picture down to the hem
     (``trouser_hem``), as wide as the leg plus the cloth's gap and — not skinny — at least the leg shape's radius
     (``LEG_SHAPE_R`` of the thigh's half width, straight in height from the crotch to the knee to the ankle); the
-    waist band, a cuff and the fly as guides."""
+    waist band, a cuff and the fly as guides. Bug round 2026-11-20: the seat's ease (``seat_spec``) widens the seat
+    from 0 at the waistband's lower edge to full ``ramp_m`` under it, and fades out down the leg over ``fade_m`` under
+    the crotch, as the builder's ``trouser_seat`` moves the cloth."""
     import numpy as np
     from app.core import garment_template as gt
     spec = gt.trouser_spec(p, m)
@@ -817,8 +819,16 @@ def _trousers(p, m, reg: Registration, cap_m: float, add, mark) -> None:
     bl, br = reg.body_half(top, cap_m)
     hl, hr = reg.body_half(m["hip_y"], cap_m)
     seat_y = min(m["hip_y"], top)
-    add("body", "fill", [[x0 - bl - off, top], [x0 + br + off, top], [x0 + hr + off, seat_y],
-                         [x0 + hr + off, crotch], [x0 - hl - off, crotch], [x0 - hl - off, seat_y]])
+    st = spec["seat"]
+    band_lo = top - spec["band_m"]
+
+    def ease(y):
+        """The seat's ease at height ``y`` (0 over the band, full ``ramp_m`` under it, fading out under the crotch)."""
+        e = float(st["ease_m"]) * min(1.0, max(0.0, (band_lo - y) / float(st["ramp_m"])))
+        return e * min(1.0, max(0.0, 1.0 - (crotch - y) / float(st["fade_m"]))) if y < crotch else e
+    add("body", "fill", [[x0 - bl - off, top], [x0 + br + off, top], [x0 + hr + off + ease(seat_y), seat_y],
+                         [x0 + hr + off + ease(crotch), crotch], [x0 - hl - off - ease(crotch), crotch],
+                         [x0 - hl - off - ease(seat_y), seat_y]])
     if spec["band_m"] > gt.MIN_PIN_BAND_M:
         add("waist", "dash", [[x0 - bl, top - spec["band_m"]], [x0 + br, top - spec["band_m"]]])
     if p["fly"] != "none":
@@ -844,7 +854,7 @@ def _trousers(p, m, reg: Registration, cap_m: float, add, mark) -> None:
         r_t = rows[0][2] * (1.0 + spec["radial_ease"])
         out_l, out_r = [], []
         for y, c, half in rows:
-            w = half + off
+            w = half + off + ease(y)
             if spec["shape_r"]:
                 k, h = spec["shape_r"]
                 target = float(np.interp(y, [anchors["ankle"], anchors["knee"], crotch], [h * r_t, k * r_t, r_t]))
@@ -864,6 +874,7 @@ def _trousers(p, m, reg: Registration, cap_m: float, add, mark) -> None:
             add("cuff", "dash", [[out_l[-1][0], yb + spec["cuff_m"]], [out_r[-1][0], yb + spec["cuff_m"]]])
     mark(x0 + hr + 0.05, top, f"rise {p['rise']}")
     mark(x0 + hr + 0.05, (crotch + hem) / 2, f"{p['leg_shape']} · fit {p['fit']:.2f}")
+    mark(x0 + hr + 0.05, (seat_y + crotch) / 2, f"seat {p['seat']}")
     mark(x0, hem - 0.035, f"{p['trouser_length']} · hem {hem:.2f} m", "middle")
     add("dim", "line", [[x0 + hr + 0.04, top], [x0 + hr + 0.04, hem]])
 
