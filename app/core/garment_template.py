@@ -2258,17 +2258,25 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "coverage" in bake:
         row("bake_coverage", bake["coverage"], THRESHOLDS["bake_coverage"],
             bake["coverage"] > THRESHOLDS["bake_coverage"], gate=False)
-    if "iou" in bake:
-        row("bake_iou", bake["iou"], THRESHOLDS["bake_iou"], bake["iou"] >= THRESHOLDS["bake_iou"], gate=False)
+    iou = _bake_iou(bake)
+    if iou is not None:
+        row("bake_iou", iou, THRESHOLDS["bake_iou"], iou >= THRESHOLDS["bake_iou"], gate=False)
     return rows
+
+
+def _bake_iou(bake: Dict[str, Any]) -> Optional[float]:
+    """The registered silhouette IoU of ``metrics.bake``. A drape baked before the bug round 2026-11-20 stored the
+    arm-pose search scores under ``iou`` as ``{deg: score}`` — no registered IoU, so None."""
+    iou = bake.get("iou")
+    return float(iou) if isinstance(iou, (int, float)) and not isinstance(iou, bool) else None
 
 
 def texture_warning(bake: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The Figure row's texture warning of a drape's ``metrics.bake`` (``TEXTURE_WARN``): ``{coverage, iou,
     low_coverage, low_iou}`` when either is under its mark, else None. A drape baked before the bug round
-    2026-11-20 has no ``iou`` — its coverage alone decides."""
+    2026-11-20 has no registered ``iou`` (absent, or the old ``{deg: score}`` map) — its coverage alone decides."""
     bake = bake or {}
-    cov, iou = bake.get("coverage"), bake.get("iou")
+    cov, iou = bake.get("coverage"), _bake_iou(bake)
     low_cov = cov is not None and float(cov) < TEXTURE_WARN["coverage"]
     low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
     if not (low_cov or low_iou):
