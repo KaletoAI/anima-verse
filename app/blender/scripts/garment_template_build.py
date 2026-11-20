@@ -148,6 +148,10 @@ NECK_ENV_PASSES = 24
 NECK_ROUND_POW = 1.4
 #: A179: where the arm's underside is read (metres out from the arm joint along the upper arm; the lowest counts).
 ARM_UNDER_AT_M = (0.08, 0.12, 0.16)
+#: A236: under the arm the bottom of the armhole is read through every lower layer hanging within this distance below
+#: the arm (a loose short sleeve of a blouse droops 2.6 cm under the T-posed arm; a jacket's armhole read from the arm
+#: itself ran its side through that sleeve — stretch 4.1). The hip below the arm is farther.
+ARM_LAYER_GAP_M = 0.08
 #: A179: passes of the evening-out of the yoke and the upper rows (``build_bodice``).
 RELAX_PASSES = 8
 #: A179: a yoke line leaves the ring at most this far (radians) off the direction of its shoulder-line point.
@@ -251,20 +255,23 @@ def _surface_z(tree, x, y, z_hi, floor):
     return cand
 
 
-def _exit_out(tree, o, d, reach):
+def _exit_out(tree, o, d, reach, gap=None):
     """A179 — the distance from ``o`` (inside the body) along ``d`` to where the ray leaves the body for good within
     ``reach``: the first exit, carried through any re-entry closer than LAYER_GAP_M (a lower garment layer).
-    ``(distance, cosine between the normal there and d)``, or None when ``o`` is not inside along this ray."""
+    ``(distance, cosine between the normal there and d)``, or None when ``o`` is not inside along this ray. ``gap``
+    (A236) replaces LAYER_GAP_M as the widest re-entry carried through."""
+    hits = 6 if gap is None else 16        # A236: a drooping sleeve is several folds of two-sided cloth
+    gap = LAYER_GAP_M if gap is None else gap
     o, d = Vector(o), Vector(d)
     t, out = 0.0, None
-    for _ in range(6):
+    for _ in range(hits):
         hit = tree.ray_cast(o + d * t, d, reach - t)
         if hit[0] is None:
             break
         nd = float(hit[1].dot(d))
         if nd > 0:
             out = (t + hit[3], nd)
-        elif out is None or t + hit[3] - out[0] > LAYER_GAP_M:
+        elif out is None or t + hit[3] - out[0] > gap:
             break                          # an entry: either o was outside, or the layers end here
         t += hit[3] + 1e-4
     return out
@@ -425,7 +432,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008):
             A, E = (_bone_world(arm, n) for n in names)
             t_ = (E - A) / max(1e-9, float(np.linalg.norm(E - A)))
             for d_ in ARM_UNDER_AT_M:
-                ex = _exit_out(ctree, A + t_ * d_, (0.0, 0.0, -1.0), 0.3)
+                ex = _exit_out(ctree, A + t_ * d_, (0.0, 0.0, -1.0), 0.3, gap=ARM_LAYER_GAP_M)
                 if ex is not None:
                     zu = float(A[2] + t_[2] * d_ - ex[0])
                     arm_under = zu if arm_under is None else min(arm_under, zu)
@@ -1960,7 +1967,8 @@ def run(a):
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at, "stretch_p99": round(float(np.percentile(st, 99)), 3),
                       "quality": int(prm.get("drape_quality") or fab["quality"])},
             "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S),
-            "collider_inner": list(gd.COLLIDER_INNER), "pose_shapes": pose_shapes,
+            "collider_inner": list(gd.COLLIDER_INNER), "collider_outer": list(gd.COLLIDER_OUTER),
+            "outer_body_verts": {k: int(v.sum()) for k, v in gd.OUTER_BODY.items()}, "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)),
             "bake": tex, "draped": measured, "measure_wall_s": meas_s, "render_wall_s": round(render_s, 2),
             "script_wall_s": round(time.time() - t_all, 2), "script_cpu_s": round(time.process_time() - c_all, 2)}

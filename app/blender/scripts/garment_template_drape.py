@@ -395,7 +395,12 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     ax = axis_points_on(bco[cand], segs, dom[cand]) if len(cand) else np.zeros((0, 3))
     region = poke = contact = occluded = 0
     poked = []
+    shell = OUTER_BODY.get(body.name)
+    if shell is not None and len(shell) != len(bco):
+        shell = None
     for i, q in zip(cand, ax):
+        if shell is not None and shell[i]:
+            continue                       # A236: hair / a beard lying on the body, no skin
         v = Vector(bco[i])
         if len(rim) and kd.find(v)[2] < RIM_BAND_M:
             continue
@@ -660,6 +665,227 @@ def _remesh(col, faces, segs=()):
         COLLIDER_INNER.append(_drop_inner_walls(col, segs))
 
 
+#: A236: a collider face beyond an AIR GAP wider than this along the ray from the skeleton is an outer shell (hair
+#: lying on the shoulders and back, a beard on the chest) — no skin: the cloth goes under it. The 5 mm voxel fuses
+#: anything closer to the skin anyway.
+OUTER_GAP_M = 0.008
+#: A236: an air gap counts only when the ray enters again through a surface facing it at least this much (cosine): a
+#: ray that skims the body over a dip (from the neck over the trapezius onto the top of a shoulder) re-enters at a
+#: grazing angle (cosines -0.08 .. 0.18 on a bald body), hair lying on the skin faces the ray.
+OUTER_ENTRY_COS = 0.3
+#: A236: only points nearest to these chains are judged (the torso, neck and shoulders, where hair and beards hang),
+#: and only between the two arm joints; between fingers, between the legs or under a bent limb an air gap is the
+#: body's own.
+OUTER_CHAINS = (("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head"),
+                ("Spine2", "LeftShoulder", "LeftArm"), ("Spine2", "RightShoulder", "RightArm"))
+#: A236: the rays start on the spine (the first of OUTER_CHAINS). From the shoulder bones a ray down to the upper chest
+#: passed over the hollow under the collarbone (12-15 cm long, 5 cm of air on a bald body).
+OUTER_RAY_CHAIN = OUTER_CHAINS[0]
+#: A236: above the neck joint a face in front of the neck axis (its direction's share toward the front over this)
+#: is never judged: the chin overhangs the throat with air under it.
+OUTER_FRONT_COS = 0.5
+#: A236: a collider face of body + lower layers counts as an outer shell when the nearest face of the body-only
+#: collider within this distance is one.
+OUTER_MATCH_M = 0.004
+#: A236: per body object name, the mask of its vertices on an outer shell (``measure_pose`` judges no poke there).
+OUTER_BODY = {}
+#: A236: outer-shell faces dropped by each collider build, for the cost record.
+COLLIDER_OUTER = []
+
+
+def _chain_segments(arm, chains, rest=False):
+    """A236 — world joint-to-joint segments ``[k, 2, 3]`` of ``chains`` (``core_segments`` for any chains)."""
+    segs = []
+    for chain in chains:
+        pts = []
+        for name in chain:
+            if rest:
+                bone = arm.data.bones.get(P + name)
+                head = bone.head_local if bone is not None else None
+            else:
+                pb = arm.pose.bones.get(P + name)
+                head = pb.head if pb is not None else None
+            if head is not None:
+                pts.append(np.array(arm.matrix_world @ head))
+        segs += list(zip(pts[:-1], pts[1:]))
+    return np.array(segs, float).reshape(-1, 2, 3)
+
+
+def outer_shell_points(tree, pts, arm, rest=False, origins=None, facing=OUTER_ENTRY_COS):
+    """A236 — per point (world space) whether it lies on an outer shell of the CLOSED, outward-wound collider whose
+    BVH is ``tree``: along the ray from its nearest point on the spine (``OUTER_RAY_CHAIN``; only a point nearest to
+    ``OUTER_CHAINS`` and between the arm joints is judged — never one nearer an arm, a leg or a hand) the ray crosses
+    more than OUTER_GAP_M of air before it reaches the point (``_air_gap``) — between leaving the collider and
+    entering it again, or from its last exit to a point floating in the air (raw strands the voxel remesh kept no
+    volume for). That is hair lying on the shoulders or a beard on the chest of a body whose hair is part of its
+    mesh — the cloth belongs UNDER it: as a collider it held the yoke on its underside (stretch 2.5-3.8 on one
+    body) and its strands counted as skin poking through. Above the neck joint a point in front of the neck is never
+    judged (the chin), nor anything above the head joint. ``facing``: the re-entry cosine of the spine ray's gap
+    (``_air_gap``). ``origins`` (optional, a tuple of per-point arrays): more ray starts, any air on them counts at
+    any angle — for the body's vertices (``drop_outer_shells`` record): the bone ``measure_pose`` casts from and the
+    nearest point of OUTER_CHAINS. Where such a ray crosses air, cloth bridging it reads as skin poking through, so
+    that vertex is not judged; on a bald body this leaves out ~100 vertices on the top of the shoulders, a collider
+    face is never dropped by it."""
+    n = len(pts)
+    out = np.zeros(n, bool)
+    if arm is None or not n:
+        return out
+    judged = _chain_segments(arm, OUTER_CHAINS, rest=rest)
+    spine = _chain_segments(arm, (OUTER_RAY_CHAIN,), rest=rest)
+    every = core_segments(arm, rest=rest)
+    if not len(judged) or not len(every) or not len(spine):
+        return out
+    def head_of(name):
+        if rest:
+            b = arm.data.bones.get(P + name)
+            return None if b is None else np.array(arm.matrix_world @ b.head_local)
+        pb = arm.pose.bones.get(P + name)
+        return None if pb is None else np.array(arm.matrix_world @ pb.head)
+    neck, head = head_of("Neck"), head_of("Head")
+    la, ra = head_of("LeftArm"), head_of("RightArm")
+    q_all = np.concatenate([axis_points(pts[k:k + 4000], every) for k in range(0, n, 4000)])
+    q_j = np.concatenate([axis_points(pts[k:k + 4000], judged) for k in range(0, n, 4000)])
+    q_s = np.concatenate([axis_points(pts[k:k + 4000], spine) for k in range(0, n, 4000)])
+    near_j = np.linalg.norm(pts - q_j, axis=1) <= np.linalg.norm(pts - q_all, axis=1) + 1e-6
+    if la is not None and ra is not None:
+        near_j &= (pts[:, 0] <= max(la[0], ra[0])) & (pts[:, 0] >= min(la[0], ra[0]))
+    for i in np.where(near_j)[0]:
+        c = pts[i]
+        if head is not None and c[2] >= head[2]:
+            continue
+        q = q_s[i]
+        to = c - q
+        dist = float(np.linalg.norm(to))
+        if dist < 1e-6:
+            continue
+        d = to / dist
+        if neck is not None and c[2] > neck[2] and -d[1] > OUTER_FRONT_COS:
+            continue
+        out[i] = _air_gap(tree, q, c, facing) > OUTER_GAP_M or (
+            origins is not None and any(_air_gap(tree, o[i], c, facing=-1.0) > OUTER_GAP_M for o in origins))
+    return out
+
+
+def _air_gap(tree, q, c, facing=OUTER_ENTRY_COS):
+    """A236 — the widest stretch of air (metres) the ray from ``q`` to ``c`` crosses in the closed collider ``tree``:
+    between leaving it and entering it again through a surface that faces the ray at least ``facing`` (cosine), or from
+    its last exit to ``c`` when ``c`` floats in the air."""
+    to = np.asarray(c, float) - np.asarray(q, float)
+    dist = float(np.linalg.norm(to))
+    if dist < 1e-6:
+        return 0.0
+    o, dv = Vector(q), Vector(to / dist)
+    t, last_exit, gap = 0.0, None, 0.0
+    for _ in range(12):
+        hit = tree.ray_cast(o + dv * t, dv, dist + 1e-3 - t)
+        if hit[0] is None:
+            break
+        th = t + hit[3]
+        if hit[1].dot(dv) > 0:
+            last_exit = th
+        elif last_exit is not None:
+            if -hit[1].dot(dv) >= facing:
+                gap = max(gap, th - last_exit)
+            last_exit = None
+        t = th + 1e-4
+    if last_exit is not None:              # the point stands in the air beyond the last exit
+        gap = max(gap, dist - last_exit)
+    return gap
+
+
+def _mesh_arrays(col):
+    """A236 — ``(vertices, face vertex lists, face centres, face normals)`` of ``col`` in world space."""
+    me = col.data
+    mw = np.array(col.matrix_world)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    n = len(me.polygons)
+    cen = np.empty(n * 3, np.float32)
+    nrm = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", cen)
+    me.polygons.foreach_get("normal", nrm)
+    cen = cen.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    nrm = nrm.reshape(-1, 3) @ np.linalg.inv(mw[:3, :3])
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+    return co, [tuple(p.vertices) for p in me.polygons], cen, nrm
+
+
+def _delete_faces(col, idx):
+    """A236 — remove the faces ``idx`` of ``col`` (and the vertices left without a face)."""
+    if not len(idx):
+        return
+    bm = bmesh.new()
+    bm.from_mesh(col.data)
+    bm.faces.ensure_lookup_table()
+    bmesh.ops.delete(bm, geom=[bm.faces[int(i)] for i in idx], context="FACES_ONLY")
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    bm.to_mesh(col.data)
+    bm.free()
+    col.data.update()
+
+
+def drop_outer_shells(col, body, *, layered, faces=80000, rest=False, record=False):
+    """A236 — remove the outer shells (``outer_shell_points`` of the face centres) from the remeshed collider ``col``
+    of ``body``. With ``layered`` (lower garment layers joined into ``col``: a layer stands off the skin too) the
+    shells are judged on a body-only remesh and every face of ``col`` whose nearest body-only face within OUTER_MATCH_M is a shell goes.
+    ``rest``: ``col`` was taken in the bind pose (the skeleton is read there). With ``record`` the body's vertices on a
+    shell (as the body stands now) are recorded in ``OUTER_BODY`` for ``measure_pose``.
+    Returns how many faces went."""
+    arm = armature_of(body)
+    if arm is None:
+        return 0
+    ref = col
+    if layered:
+        dg = bpy.context.evaluated_depsgraph_get()
+        ref = bpy.data.objects.new("collider_body", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
+        ref.matrix_world = body.matrix_world.copy()
+        bpy.context.scene.collection.objects.link(ref)
+        _remesh(ref, faces, core_segments(arm, rest=rest))
+        COLLIDER_INNER.pop()
+    rco, rpolys, rcen, _rn = _mesh_arrays(ref)
+    rtree = BVHTree.FromPolygons([tuple(v) for v in rco], rpolys)
+    shell = outer_shell_points(rtree, rcen, arm, rest=rest)
+    if layered:
+        bpy.data.objects.remove(ref)
+    if not shell.any():
+        drop = np.zeros(0, int)
+    elif layered:
+        _co, _p, cen, _n = _mesh_arrays(col)
+        drop = []
+        for i, c in enumerate(cen):
+            hit = rtree.find_nearest(Vector(c), OUTER_MATCH_M)
+            if hit[0] is not None and shell[hit[2]]:
+                drop.append(i)
+        drop = np.array(drop, int)
+    else:
+        drop = np.where(shell)[0]
+    if record:
+        # a body vertex is no skin when it is a shell point itself, when the collider face nearest to it is a shell, or
+        # when it stands more than OUTER_GAP_M outside the collider (raw strands the voxel remesh kept no volume for)
+        bco, _bn, _bt = world_coords(body)
+        mask = np.zeros(len(bco), bool)
+        if shell.any():
+            # judged from the spine, the nearest chain point and the bone ``measure_pose`` casts its ray from
+            names = []
+            segs = bone_segments(arm, names)
+            dom = axis_points_on(bco, segs, dominant_segments(body, names))
+            near = np.concatenate([axis_points(bco[k:k + 4000], _chain_segments(arm, OUTER_CHAINS, rest=rest))
+                                   for k in range(0, len(bco), 4000)])
+            mask = outer_shell_points(rtree, bco, arm, rest=rest, origins=(dom, near), facing=-1.0)
+            for i, v in enumerate(bco):
+                if mask[i]:
+                    continue
+                p = Vector(v)
+                hit = rtree.find_nearest(p, 0.15)
+                if hit[0] is not None:     # outside and off the surface, or on a shell
+                    mask[i] = bool(shell[hit[2]]) or (hit[3] > OUTER_GAP_M and (p - hit[0]).dot(hit[1]) > 0)
+        OUTER_BODY[body.name] = mask
+    _delete_faces(col, drop)
+    COLLIDER_OUTER.append(int(len(drop)))
+    return int(len(drop))
+
+
 def skinned_collider(body, arm, faces=80000, rest=None):
     """Ruling A144: the body remeshed ONCE in the rest pose (closed, wound outward) and skinned like the body, so a
     pose's collider is an armature evaluation instead of a remesh + decimate (~2 s each). ``rest`` (A179) = the mesh
@@ -676,6 +902,7 @@ def skinned_collider(body, arm, faces=80000, rest=None):
     arm.data.pose_position = "POSE"
     if rest is None:
         _remesh(col, faces, core_segments(arm, rest=True))
+        drop_outer_shells(col, body, layered=False, rest=True)
     bind_to_armature(col, body, arm)
     col.hide_render = True
     return col
@@ -717,6 +944,7 @@ def rest_collider(body, extra=(), faces=80000):
     for ex in extra:
         _join_extra(col, ex, dg)
     _remesh(col, faces, core_segments(armature_of(body)))
+    drop_outer_shells(col, body, layered=bool(extra), faces=faces, record=True)
     tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
     COLLIDER_S.append(round(time.time() - t0, 2))
     return col, tree
@@ -837,6 +1065,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
         for ex in extra:
             _join_extra(col, ex, dg)
         _remesh(col, collider_faces, core_segments(armature_of(body)))
+        drop_outer_shells(col, body, layered=bool(extra), faces=collider_faces)
     if crop_m is not None:
         gco = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
         lo, hi = gco.min(0) - crop_m, gco.max(0) + crop_m
