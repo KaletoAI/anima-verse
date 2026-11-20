@@ -26,6 +26,14 @@ Hand-derived expectations (Blender z-up metres, cx = 0, top = 1.0; ``CROTCH_SLIT
 [C6] the rays: every column x in [-0.005, 0.005] (11 values, step 0.001) is cast straight up (direction (0, 0, 1))
      with reach top - start = 1.0 - 0.71 = 0.29 in C1.
 [C7] every region that reads the crotch passes the body tree: briefs, boxers, tights, trousers.
+[C8] one edge column grazes an inner thigh (Ylva: x = -0.005 hits 0.790, the other ten columns 0.857..0.859): the
+     stub answers x <= -0.0045 at 0.79 and every other column at 0.858 -> the highest per-column lowest hit, 0.858,
+     not the thigh's 0.79 (the min over all hits, the first A239 rule, gave 0.79).
+[C9] a narrow gap off the centre (Rosi: open only from x -0.001 to +0.007; the columns -0.005..-0.002 hit the right
+     inner thigh at 0.715 / 0.724 / 0.733 / 0.749): the stub answers x < -0.0015 at 0.72 and the rest at 0.789 ->
+     0.789 (min over all hits: 0.72, i.e. the rule's 0.74 again).
+[C10] within one column the lowest hit counts (a column that meets the crotch at 0.82 at one y and the buttock's
+     underside at 0.86 at another): the stub answers y > 0.02 at 0.86, the rest at 0.82, in every column -> 0.82.
 [V1] ``garment_template.TEMPLATE_VERSION`` is at least 9 (the same parameters drape differently).
 """
 import ast
@@ -93,6 +101,21 @@ def thighs():
     return co, np.full(len(co), 0.5)
 
 
+class ColumnTree(Tree):
+    """Upward rays answer ``f(x, y)`` (a height, or ``None`` = no hit) within the reach."""
+
+    def __init__(self, f):
+        super().__init__(0.0)
+        self.f = f
+
+    def ray_cast(self, origin, direction, reach):
+        self.calls.append((origin, direction, reach))
+        z = self.f(origin[0], origin[1])
+        if z is None or not origin[2] < z <= origin[2] + reach:
+            return (None, None, None, None)
+        return ((origin[0], origin[1], z), (0.0, 0.0, -1.0), 0, z - origin[2])
+
+
 crotch = ns["_crotch"]
 check("C0 constants", (ns["CROTCH_SLIT_M"], ns["CROTCH_STEP_M"], ns["CROTCH_BELOW_M"]) == (0.005, 0.001, 0.03),
       (ns["CROTCH_SLIT_M"], ns["CROTCH_STEP_M"], ns["CROTCH_BELOW_M"]))
@@ -117,6 +140,12 @@ got = crotch(co, np.zeros(len(co)), 0.0, 1.0, Tree(0.82))
 check("C5 no Hips weight -> top - 0.2", abs(got - 0.8) < 1e-9, got)
 calls = [ln.strip() for ln in SRC.splitlines() if "_crotch(co" in ln and "def " not in ln]
 check("C7 four regions pass the tree", len(calls) == 4 and all(c.endswith(", tree)") for c in calls), calls)
+got = crotch(co, w, 0.0, 1.0, ColumnTree(lambda x, y: 0.79 if x <= -0.0045 else 0.858))
+check("C8 one edge column on a thigh -> the gap's 0.858", abs(got - 0.858) < 1e-9, got)
+got = crotch(co, w, 0.0, 1.0, ColumnTree(lambda x, y: 0.72 if x < -0.0015 else 0.789))
+check("C9 narrow gap off the centre -> 0.789", abs(got - 0.789) < 1e-9, got)
+got = crotch(co, w, 0.0, 1.0, ColumnTree(lambda x, y: 0.86 if y > 0.02 else 0.82))
+check("C10 the lowest hit of a column counts -> 0.82", abs(got - 0.82) < 1e-9, got)
 check("V1 TEMPLATE_VERSION >= 9", gt.TEMPLATE_VERSION >= 9, gt.TEMPLATE_VERSION)
 
 print("ALL OK" if not FAILED else f"FAILED: {FAILED}")

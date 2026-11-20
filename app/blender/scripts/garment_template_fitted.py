@@ -9,6 +9,10 @@ every vertex is laid ``offset_m`` out along the outward body normal, the surface
 only along the border, so a cut through the triangles loses its zigzag) and laid out of the rest collider. The
 caller then pins the returned vertices and runs the short cloth relax (``frames``).
 
+The crotch every leg line and hem is measured from (``_crotch``, A239) is where the body closes over the centre
+line between the thighs — the highest of the per-column lowest hits of upward rays at the centre — never lower than
+the lowest Hips-weighted vertex near the centre (a part rigged to the hips stays covered).
+
 * briefs: waistband plane at ``top_y``; the leg opening per face centroid: under the gusset (|x| < gusset half width)
   the crotch less 5 mm, rising to ``top - side_width`` at the hip's side over a curve shaped by ``leg_cut``; on the
   back the full-height part reaches ``back_coverage`` of the way to the side. Pinned: the waistband and the gusset.
@@ -123,24 +127,29 @@ def _crotch(co, w_hips, cx, top, tree):
     """The crotch height: the lowest vertex within 3 cm of the centre line with Hips weight > 0.3 below the
     waistband (``garment_fit.crotch_height``'s rule; a procedural part rigged to the hips counts — it is covered),
     raised to where the body closes over the centre line (A239). The Hips weight reaches several cm down the inner
-    thighs where they stand apart (Kira 0.742 vs 0.819, Glut 0.737 vs 0.810), so a gusset cut from that height was a
-    tongue of thigh skin between the legs. The closing point is the lowest hit of rays cast straight up at
-    ``cx`` +- ``CROTCH_SLIT_M``; touching thighs or a part hanging lower than the rule (a male bulge) keep the rule's
-    height — the result is never lower than it."""
+    thighs where they stand apart (Kira 0.742 vs 0.819, Glut 0.737 vs 0.811), so a gusset cut from that height was a
+    tongue of thigh skin between the legs. The closing point: per ray column (x within ``cx`` +- ``CROTCH_SLIT_M``,
+    cast straight up at 5 mm steps in y) its lowest hit, and of those the HIGHEST — the column that lies in the gap.
+    A column at the slit's edge may graze an inner thigh where the gap is narrow or off ``cx`` (Ylva 0.790 against
+    0.859, Rosi 0.715 against 0.789); the lowest of all hits was that thigh. Touching thighs or a part hanging lower
+    than the rule (a male bulge) keep the rule's height — the result is never lower than it."""
     m = (np.abs(co[:, 0] - cx) < 0.03) & (w_hips > 0.3) & (co[:, 2] < top)
     if not m.any():
         return top - 0.2
     rule = float(co[m, 2].min())
     start = rule - CROTCH_BELOW_M
     y0, y1 = float(co[m, 1].min()), float(co[m, 1].max())
-    hits = []
+    lowest = []
     n_x = int(round(2 * CROTCH_SLIT_M / CROTCH_STEP_M)) + 1
     for x in np.linspace(cx - CROTCH_SLIT_M, cx + CROTCH_SLIT_M, n_x):
+        hits = []
         for y in np.arange(y0, y1 + 1e-9, 0.005):
             h = _ray(tree, (float(x), float(y), start), (0, 0, 1), top - start)
             if h is not None:
                 hits.append(float(h[2]))
-    return max(rule, min(hits)) if hits else rule
+        if hits:
+            lowest.append(min(hits))
+    return max(rule, max(lowest)) if lowest else rule
 
 
 def briefs_region(f, co, w, cx, cy, tree):

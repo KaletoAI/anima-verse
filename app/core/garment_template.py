@@ -63,9 +63,10 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: (A221 adds the strapless top — a new kind of piece; the existing drapes keep their keys, so no bump.)
 #: 8 (A230): the source pictures are cut by ``garment_matte`` (key + BiRefNet consensus, rim un-mixed and filled from
 #: inside) and the projection bake fills its empty texels by push-pull — CPU only, the stored views stay.
-#: 9 (A239): the fitted kinds' crotch is where the body closes over the centre line (``_crotch``), no longer the
-#: lowest Hips-weighted vertex several cm down the inner thighs — a brief's gusset, a boxer's or a stocking's hem and
-#: a trouser's crotch anchor move up on a body whose thighs stand apart.
+#: 9 (A239): the fitted kinds' crotch is where the body closes over the centre line (``_crotch``: the highest of the
+#: per-column lowest hits of upward rays at the centre, so a column grazing an inner thigh does not decide), no
+#: longer the lowest Hips-weighted vertex several cm down the inner thighs — a brief's gusset, a boxer's or a
+#: stocking's hem and a trouser's crotch anchor move up on a body whose thighs stand apart.
 TEMPLATE_VERSION = 9
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
@@ -170,8 +171,9 @@ COLLARS = ("none", "stand", "lapel")
 #: ankle (above the ankle bone) or full (to the ankle joint, over the top of the shoe).
 TROUSER_LENGTHS = ("shorts", "knee", "capri", "ankle", "full")
 #: The hem height per length: ``(from, to, share, extra_m)`` = from + share x (to - from) + extra_m, the anchors read
-#: off the body per side (``crotch`` the lowest Hips-weighted point at the centre, ``knee`` / ``ankle`` the Leg /
-#: Foot joints). The builder computes the same sum (``garment_template_fitted.trouser_hem``).
+#: off the body per side (``crotch`` where the body closes over the centre line, ``garment_template_fitted._crotch``
+#: A239; ``knee`` / ``ankle`` the Leg / Foot joints). The builder computes the same sum
+#: (``garment_template_fitted.trouser_hem``).
 TROUSER_HEM = {"shorts": ("crotch", "knee", 0.3, 0.0), "knee": ("knee", "ankle", 0.06, 0.0),
                "capri": ("knee", "ankle", 0.5, 0.0), "ankle": ("knee", "ankle", 0.85, 0.0),
                "full": ("knee", "ankle", 1.0, -0.01)}
