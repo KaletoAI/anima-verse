@@ -32,9 +32,9 @@ The path, per (piece, body):
 
 Cache: ``templates/{item}_{tsig}.glb + .json`` under the character's garment
 store; ``tsig`` = md5[:12] over the parameters, ``TEMPLATE_VERSION``, the base
-model sha256, the texture source sha256 and the other worn mesh pieces (the
-lower layers — they become colliders in P3; recorded now so the key does not
-change then). A top's drape also keeps its pattern islands beside it
+model sha256, the texture source sha256 and what the drape is cut against: the worn
+pieces UNDER it (their drape keys / fit identities, a boot it hangs over), the jacket
+allowance and the chest shaping (``key_for``) — never a piece worn over it. A top's drape also keeps its pattern islands beside it
 (``{item}_{tsig}.islands.json``, ``islands_path``; the record's ``islands`` = file, sha256, px_per_cm).
 With the param ``texture`` "cut" the assembly swaps the drape's projection image for the "texture from cut" atlas
 (``atlas_for``; keyed by the islands sha, never by ``tsig`` — ``texture`` is ``TEXTURE_ONLY``).
@@ -1992,7 +1992,8 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
             item: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
     """``(tsig, reason, texture sources)`` of a template piece: tsig None with the left-off
     reason when it cannot be draped (no parameters, a kind not built, no base, no picture). A piece worn over
-    lower template layers (``collider_pieces``) folds their keys into its own: a changed top re-drapes the jacket."""
+    lower template layers (``collider_pieces``) folds their keys into its own: a changed top re-drapes the jacket.
+    ``lower`` is the whole worn set; only the pieces of it under this one enter the key — a piece over it does not."""
     from app.models.inventory import get_item
     item = item if item is not None else get_item(item_id)
     params = params_of(item)
@@ -2029,7 +2030,10 @@ def key_for(character_name: str, item_id: str, *, base_sha: str, lower: List[str
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower)
-    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=lower + under), None, sources
+    # Only what the drape is really cut against keys it: the pieces UNDER it (their drape keys / fit identities, the
+    # boot it hangs over), the jacket allowance, the chest shaping. A piece worn OVER it (or beside it) changes nothing
+    # of this drape — keying by the whole worn set re-draped the shirt when the jacket over it came off (2026-11-20).
+    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources
 
 
 def refused_only_by_time(failed: Dict[str, Any]) -> bool:

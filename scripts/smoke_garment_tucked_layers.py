@@ -9,8 +9,10 @@ piece whose fit record is a split boot with an ``ankle`` shaft, ``shoe`` a footw
 
 [K1] the drape key of a FITTED kind over a collider layer gains the token ``cut:body`` (it is cut from the body
      alone now): trousers over the own-mesh piece ``o1`` with no fit -> under = ["o1:fit:-", "cut:body"], so its
-     key equals ``tsig(params, lower=["o1", "o1:fit:-", "cut:body"])``; a skirt (wrapped, not cut) over the same
-     -> ["o1:fit:-"] only; trousers with no collider -> ``tsig(params, lower=["o1"])`` — unchanged.
+     key equals ``tsig(params, lower=["o1:fit:-", "cut:body"])`` (the worn ids themselves no longer key a drape —
+     only what lies under it, 2026-11-20); a skirt (wrapped, not cut) over the same -> ["o1:fit:-"] only; trousers
+     worn with ``o1`` that is NOT under them (no collider) -> ``tsig(params, lower=[])`` — the key of the trousers
+     worn alone: a piece over or beside them does not re-drape them.
 [B1] ``boot_hem_mode`` / ``boot_collider``: straight trousers + a boot, hem ``over`` -> ("over", "boot", fit path)
      and the boot is a collider; hem ``tucked`` -> ("tucked", ...) and no collider; no hem stored -> ``over``
      (``outfit_options.HEM_DEFAULT``); skinny full trousers (into the shoe anyway) -> None; a shoe without a shaft
@@ -86,15 +88,16 @@ ptr = gt.params_of(ITEMS["tr"])
 tex = gt._md5(["s", "s"])
 key, _r, _s = gt.key_for("c", "tr", base_sha="b" * 64, lower=["o1"], item=ITEMS["tr"])
 check("K1 trousers over a layer: key has cut:body",
-      key == gt.tsig(ptr, base_sha="b" * 64, texture_sha=tex, lower=["o1", "o1:fit:-", "cut:body"]))
+      key == gt.tsig(ptr, base_sha="b" * 64, texture_sha=tex, lower=["o1:fit:-", "cut:body"]))
 ITEMS["sk2"] = tmpl(gt.validate_params({"kind": "skirt"})[0])
 key, _r, _s = gt.key_for("c", "sk2", base_sha="b" * 64, lower=["o1"], item=ITEMS["sk2"])
 check("K1 skirt over a layer: no cut:body",
-      key == gt.tsig(gt.params_of(ITEMS["sk2"]), base_sha="b" * 64, texture_sha=tex, lower=["o1", "o1:fit:-"]))
+      key == gt.tsig(gt.params_of(ITEMS["sk2"]), base_sha="b" * 64, texture_sha=tex, lower=["o1:fit:-"]))
 gt.own_colliders = lambda c, i, k, lower, base_sha: []
 key, _r, _s = gt.key_for("c", "tr", base_sha="b" * 64, lower=["o1"], item=ITEMS["tr"])
-check("K1 trousers with no collider: key unchanged",
-      key == gt.tsig(ptr, base_sha="b" * 64, texture_sha=tex, lower=["o1"]))
+check("K1 trousers with no collider: key of the trousers worn alone",
+      key == gt.tsig(ptr, base_sha="b" * 64, texture_sha=tex, lower=[])
+      and key == gt.key_for("c", "tr", base_sha="b" * 64, lower=[], item=ITEMS["tr"])[0])
 gt.own_colliders = real_own
 
 # [B1]
