@@ -1,7 +1,8 @@
 /**
  * useOpenSteps — `GET /characters/open-steps` (Ruling A112, `figure_build.open_steps`) for the character list:
- * one read on mount and on every roster change, on window focus, on the push topic `generation`, and every
- * 5 s while a Build runs.
+ * one read on mount and on every roster change, on window focus, on the push topic `generation`, every
+ * 5 s while a Build runs or `batchRunning` ("Build all open" — its base steps do not count as building), and
+ * whenever `refreshTick` changes (that run started or ended).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { syncHub } from '@anima/player-ui'
@@ -13,20 +14,20 @@ export interface OpenSteps { building: boolean; base: OpenGroup; outfit: OpenGro
 
 const BUILDING_POLL_MS = 5000
 
-export function useOpenSteps(rosterSize: number) {
+export function useOpenSteps(rosterSize: number, batchRunning = false, refreshTick = 0) {
   const [data, setData] = useState<Record<string, OpenSteps>>({})
   const load = useCallback(() => {
     apiGet<{ characters?: Record<string, OpenSteps> }>('/characters/open-steps')
       .then((r) => setData(r.characters || {}))
       .catch(() => { /* badges are optional; keep the last answer */ })
   }, [])
-  useEffect(() => { load() }, [load, rosterSize])
+  useEffect(() => { load() }, [load, rosterSize, refreshTick])
   useEffect(() => {
     const off = syncHub().onTopics(['generation'], load)
     window.addEventListener('focus', load)
     return () => { off(); window.removeEventListener('focus', load) }
   }, [load])
-  const building = Object.values(data).some((d) => d.building)
+  const building = batchRunning || Object.values(data).some((d) => d.building)
   useEffect(() => {
     if (!building) return
     const id = setInterval(load, BUILDING_POLL_MS)

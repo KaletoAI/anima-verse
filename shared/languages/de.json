@@ -8,6 +8,18 @@
     }
   },
   "translations": {
+    "Media generation is switched off — switch it on first.": "Die Mediengenerierung ist ausgeschaltet — zuerst einschalten.",
+    "No character has open base body or outfit steps.": "Kein Charakter hat offene Grundkörper- oder Outfit-Schritte.",
+    "{n} characters: first the base body, then the outfit, at most 3 characters at once.": "{n} Charaktere: zuerst der Grundkörper, dann das Outfit, höchstens 3 Charaktere gleichzeitig.",
+    "About {n} hub jobs (estimate, retries extra).": "Etwa {n} Hub-Jobs (Schätzung, Wiederholungen extra).",
+    "Runs every character's open base body steps, then its outfit Build — 3 characters at once.": "Führt für jeden Charakter die offenen Grundkörper-Schritte und danach den Outfit-Build aus — 3 Charaktere gleichzeitig.",
+    "Building all…": "Baue alle…",
+    "Build all open": "Alle offenen bauen",
+    "Build all open: collecting characters…": "Alle offenen bauen: Charaktere werden gesammelt…",
+    "Build all open: {done} of {total} finished, {active} running": "Alle offenen bauen: {done} von {total} fertig, {active} laufen",
+    "cancelling — running characters finish": "wird abgebrochen — laufende Charaktere werden fertig",
+    "Build all open finished: {done} done, {failed} failed, {skipped} skipped": "Alle offenen bauen beendet: {done} fertig, {failed} fehlgeschlagen, {skipped} übersprungen",
+    "Build all open?": "Alle offenen bauen?",
     "{n} hub jobs (at most {max} when an attempt is refused)": "{n} Hub-Jobs (höchstens {max}, wenn ein Versuch abgelehnt wird)",
     "Both views exist — Regenerate spends 1 hub job (at most 2) per view": "Beide Ansichten vorhanden — Neu erzeugen kostet 1 Hub-Job (höchstens 2) pro Ansicht",
     "Sheer fabric: the texture is baked only from these views — the fabric alone, nothing behind or through it. Required.": "Durchsichtiger Stoff: Die Textur wird nur aus diesen Ansichten gebacken — der Stoff allein, nichts dahinter oder hindurch. Erforderlich.",

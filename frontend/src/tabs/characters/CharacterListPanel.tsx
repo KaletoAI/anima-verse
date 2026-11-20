@@ -5,6 +5,7 @@ import { ImportButton } from '../../components/ImportExport'
 import { ListPane } from '../../components/ListPane'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import type { CharacterRef } from '../../lib/refs'
+import { BuildAllOpenButton } from './BuildAllOpenButton'
 import { OpenStepsBadges } from './OpenStepsBadges'
 import { useOpenSteps } from './useOpenSteps'
 
@@ -94,7 +95,14 @@ export function CharacterListPanel({
   const [limits, setLimits] = useState<NpcLimits>({})
   const [living, setLiving] = useState<Record<string, LivingNpc>>({})
   // Ruling A112: open Build steps of the base body / outfit per row, planned by the server.
-  const openSteps = useOpenSteps(characters.length)
+  // "Build all open": the badges are re-read while it runs and once more when it ended.
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchTick, setBatchTick] = useState(0)
+  const onBatchRunning = useCallback((running: boolean) => {
+    setBatchRunning(running)
+    setBatchTick((n) => n + 1)
+  }, [])
+  const openSteps = useOpenSteps(characters.length, batchRunning, batchTick)
 
   const loadPool = useCallback(() => {
     apiGet<{ npcs?: LivingNpc[]; pooled?: PooledNpc[]; limits?: NpcLimits }>('/npc/list')
@@ -214,6 +222,7 @@ export function CharacterListPanel({
           />
         </div>
       </div>
+      <BuildAllOpenButton onRunning={onBatchRunning} />
       <ul className="ga-list">
         {regular.length === 0 ? (
           <li className="ga-list-empty">{t('No characters')}</li>
