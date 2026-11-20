@@ -491,7 +491,7 @@ The dynamic cap uses each link's immutable share of the whole-chain budget.
 Longitudinal displacement and
 length scaling are unchanged by the split. Weighted borders blend into the
 anchor. Supported layers are package defaults/attribute profiles, world overrides
-and absolute character overrides; state `bone_pose` has no translate multiplier.
+and absolute character overrides; a declared state pose has no translate multiplier.
 The mesh fingerprint excludes all physics fields. Preview category is `tilt`
 for flatten/stretch/spread/flatten_floor/spill/translate: Tilt exposes posture targets and static translation;
 play a clip for translate's bounce. Flatten/spill hints explicitly state that
@@ -557,7 +557,7 @@ Slot attributes and clothing coverage apply to every rig on that slot.
 The retired singular manifest key is an error and loads no rigs for that slot.
 
 Declared `length` defaults to 1 and accepts [0.5,3]. World and character overrides
-replace it; state `bone_pose.length` values multiply it. The effective result is
+replace it; the `length` of the active states' named poses multiplies it. The effective result is
 clamped to [0.25,4]. Girth starts at 1 before state factors. These are motion-only
 values; fingerprint version 14 identified the pair tip contract, version 16
 the geometry-mode crest search and midline cap of `pair_protrusion`.
@@ -1726,7 +1726,7 @@ tanh; gain scales the saturated displacement, preserving static sag even at zero
 `axis_gain: [lateral, vertical, longitudinal]` defaults to `[1,1,1]`; each
 entry must be a finite number in [0,1] (booleans are rejected). It is supported
 only in package physics, world overrides and absolute character overrides, never
-in `attribute_profiles` multipliers or state `bone_pose`. Both editors expose
+in `attribute_profiles` multipliers or declared state poses. Both editors expose
 all three gains. Static sag, flatten, spill and rest pose are unaffected.
 At each step decompose only `d=p-T'`: longitudinal along `u=unit(T'-head)`,
 vertical along projected bind-pose body up rotated with the anchor, and lateral
@@ -1750,13 +1750,39 @@ since the upright rest shape already carries gravity). Character `motion_gravity
 is visible upright when different from 1; otherwise use Tilt. Group enabled/flip and
 mesh-operation parameters are `rebuild`: they take effect after Rebuild extension bones.
 
-States in `prompt_filters` may carry `bone_pose`, a JSON mapping from loaded
-rig group IDs to sparse values. Game-Admin → States lists the declared groups
-from the same extension-motion endpoint. For example:
+The values belong to the PACKAGE (owner decision 2026-11-20): a rig group may declare
+named poses, and a state in `prompt_filters` only NAMES one per group. The manifest key
+`rigs[].poses` maps pose ids (letters, digits, `_`, `-`) to non-empty mappings of the
+fields below plus an optional `rigid` (0 or 1):
 
-```json
-{"bone_pose":{"example_group":{"rest_deg":24,"gravity":0.5,"freq":0.8,"flatten":2,"spill":0}}}
+```yaml
+rigs:
+  - id: example_group
+    # … id/op/chains/params as usual
+    poses:
+      raised: {rest_deg: 24, gravity: 0.5, freq: 0.8, flatten: 2, spill: 0}
+      held: {rest_deg: 60, length: 1.2, gain: 0, rigid: 1}
 ```
+
+A state's `bone_pose` is then `{"<group id>": "<pose id>"}`, e.g.
+`{"bone_pose":{"example_group":"raised"}}`. Saving, moving and importing a state refuse
+(400 / `ValueError`) a value that is not a string, a group no loaded package declares and a
+pose the group does not declare; the message names the cause (and the declared poses).
+Game-Admin → States offers, per group that declares poses, a dropdown (— none — / the pose
+ids); a group without poses is not offered. A pose is validated with the manifest: unknown
+fields, non-finite or out-of-range numbers, `rigid` other than 0/1 and a field the group's
+`controls` exclude reject the rig (`rigid` is no control). A boot migration
+(`app/core/bone_pose_migration.py`) rewrote stored raw values once: values equal to a declared
+pose (its `rigid` aside) → that id; no match but exactly one pose declared → that id with a
+WARNING naming the dropped values; a group without poses (or several, none matching) → the entry
+removed with a WARNING; a group no visible package declares stays for a later boot.
+
+`rigid: 1` makes the chain a RIGID SHAFT while the pose is active: it moves only at its root
+link — the inner links get no swing, sag share or squash/stretch of their own, and the partner
+contact and the channel's radial guidance turn the whole shaft at the root (the depth scale and
+`straighten_deg` stay as they are). The payload carries `rigid` (0…1, the largest over the
+active poses, 0 without one; part of `motion.rev`); both renderers blend it over 1.5 s like the
+other state fields. The rule is `packages/scene-render/src/secondaryMotion.ts` (RIGID SHAFT).
 
 `rest_deg` is an absolute signed angle in degrees in `[-180,180]`, independent
 of package defaults. Runtime clamps it to ± the effective `rest_max_deg`
@@ -1802,8 +1828,8 @@ opposite direction. Changes blend over 1.5 real seconds with smoothstep.
 multipliers; `freq` multiplies `freq_hz`, not its square. Values may exceed 1.
 Gain/flatten/spill results clamp to [0,1] after all active states. Missing keys
 leave values unchanged; explicit zero is retained. Multiple active states use
-the maximum present rest angle and the product of each multiplier. Group IDs
-from absent packages remain serializable and are ignored by motion resolution.
+the maximum present rest angle, the product of each multiplier and the largest `rigid`.
+A stored pose name a group no longer declares is ignored by motion resolution.
 
 The enabled/tag/evaluated-expression rule is identical to image modifiers.
 Tag and expression transitions, including tag expiry, change `motion.rev`;
@@ -1813,7 +1839,7 @@ particle propagation remains finite. States never change the mesh fingerprint,
 `model_sig` or `model_rev`. State values apply after clothing gain.
 
 World saves, moves between shared and world storage, and states ZIP
-export/import preserve `bone_pose`. Marketplace `states` installation and
+export/import preserve `bone_pose` (the pose names). Marketplace `states` installation and
 plugin `on_load` code using `content_io.import_states_from_zip` use the same
 validated import path; there is no separate state field whitelist for plugins.
 
@@ -1878,7 +1904,7 @@ jump stays within the whole-chain budget `max_deg*1.05`, with each link limited
 by its allocated `max_deg*share_j`; normal motion retains exact propagation.
 Gaps, reset and LOD transitions clear anchor history with particle history.
 
-State `bone_pose[group]` additionally accepts optional `length` and `girth`,
+A declared pose (`rigs[].poses.<id>`) additionally accepts optional `length` and `girth`,
 each finite in [.5,2], default multiplier 1. Active states multiply these fields
 (e.g. length 1.5*.5=.75, girth .8*1.5=1.2), preserving sparse storage and
 ZIP import/export. Effective products blend with smoothstep over 1.5 real
@@ -1927,7 +1953,7 @@ of imported bone axes, and uses the next head or terminal weighted centroid.
 Both `straighten_deg` and `freetext_clothing_gain` are package physics defaults,
 world `extension_motion.groups` overrides and character Advanced overrides
 in `model3d_opts.extension_motion`. Both are included in effective motion payloads
-and `motion.rev`, excluded from mesh fingerprints and state `bone_pose`. Preview
+and `motion.rev`, excluded from mesh fingerprints and declared state poses. Preview
 hints are `live` for straightening and `motion` for free-text clothing gain.
 Non-empty free text without resolved item pieces supplies clothing factor k
 from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override
@@ -1944,12 +1970,11 @@ This declaration does not affect the mesh fingerprint.
 
 The character toolbar, motion editors and States editor show only declared
 controls. Explicit declarations show character motion fields directly;
-otherwise they remain under Advanced. State `bone_pose` fields map `freq`
+otherwise they remain under Advanced. Declared pose fields map `freq`
 to `freq_hz`, `rest_deg` to `rest_max_deg`, and other names to themselves.
-World and character overrides and state saves reject excluded fields for
-known groups. Unknown group ids retain their existing validation behavior.
-At runtime, excluded stored overrides and state fields are ignored, so a
-changed declaration takes effect without rewriting stored data.
+World and character overrides reject excluded fields for known groups, and a
+declared pose that sets one rejects the rig. At runtime, excluded stored overrides
+are ignored, so a changed declaration takes effect without rewriting stored data.
 
 ### Procedural mesh parts
 

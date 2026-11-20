@@ -1,6 +1,4 @@
 import { ValuesPane } from './ValuesPane'
-import { MotionNumberInput } from '../characters/MotionNumberInput'
-import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
@@ -13,12 +11,14 @@ import { IconPicker } from '../../components/IconPicker'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { useDiscardGuard, useDraft } from '../../lib/useDraft'
 
-const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill', 'length', 'girth'] as const
-type PoseField = typeof POSE_FIELDS[number]
-type BonePose = Record<string, Partial<Record<PoseField, number>>>
+/** A state names one pose per extension group (`{group id: pose id}`); the values are the package's (`rigs[].poses`). */
+type BonePose = Record<string, string>
+/** A pose's values as one short line: `rest_deg 80 · length 1.15 · rigid`. */
+const poseSummary = (values: Record<string, number>) => Object.entries(values)
+  .map(([key, value]) => key === 'rigid' ? (value ? 'rigid' : '') : `${key} ${value}`).filter(Boolean).join(' · ')
 /** The two move-clip slots a state may override (server `LOCOMOTION_SLOTS`). */
 type Locomotion = { walk?: string; run?: string }
-interface MotionGroup { id: string; controls?: string[] | null; defaults: { rest_max_deg: number } }
+interface MotionGroup { id: string; controls?: string[] | null; poses?: Record<string, Record<string, number>>; defaults: { rest_max_deg: number } }
 
 interface PromptFilter {
   id: string
@@ -202,14 +202,11 @@ function StatesPane() {
     }
     try {
       const { groups } = await apiGet<{ groups: MotionGroup[] }>('/admin/world-settings/extension-motion')
-      const bonePose = structuredClone(draft.bone_pose)
+      // Only a pose the group declares (a stale name of a removed pose is dropped).
+      const bonePose: BonePose = {}
       for (const group of groups) {
-        if (group.controls != null && bonePose[group.id]) {
-          for (const field of POSE_FIELDS) {
-            const control = field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field
-            if (!group.controls.includes(control)) delete bonePose[group.id][field]
-          }
-        }
+        const pose = draft.bone_pose[group.id]
+        if (typeof pose === 'string' && group.poses && pose in group.poses) bonePose[group.id] = pose
       }
       await apiPost('/admin/prompt-filters/save', {
         id,
@@ -441,21 +438,14 @@ function DraftForm({ draft, blockKeys, statKeys, overrideFields, clipKinds, onUp
       .catch(() => { if (!cancelled) setGroupsError(true) })
     return () => { cancelled = true }
   }, [])
-  const updatePose = (id: string, field: PoseField, text: string) => {
-    const pose = structuredClone(draft.bone_pose)
-    const values = pose[id] || {}
-    if (text === '') delete values[field]
-    else values[field] = Number(text)
-    if (Object.keys(values).length) pose[id] = values
-    else delete pose[id]
-    onUpdate('bone_pose', pose)
+  const updatePose = (id: string, pose: string) => {
+    const next = { ...draft.bone_pose }
+    if (pose) next[id] = pose
+    else delete next[id]
+    onUpdate('bone_pose', next)
   }
-  const poseLabels: Record<PoseField, string> = {
-    rest_deg: t('Rest angle (degrees)'), gravity: t('Gravity multiplier'),
-    freq: t('Frequency multiplier'), zeta: t('Damping multiplier'),
-    length: t('Length multiplier'), girth: t('Diameter multiplier'),
-    gain: t('Gain multiplier'), flatten: t('Flatten multiplier'), spill: t('Spill multiplier'),
-  }
+  // Only a group that declares poses is offered.
+  const posed = groups.filter(group => Object.keys(group.poses || {}).length > 0)
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
 
   // Live condition validation uses the same server function as runtime checks.
@@ -684,38 +674,30 @@ function DraftForm({ draft, blockKeys, statKeys, overrideFields, clipKinds, onUp
       </Field>
 
       <Field label={t('Bone pose')}
-        hint={<>{t('Rest angle is absolute in degrees. Other values are multipliers. Blank leaves the value unchanged; zero is explicit. Active states use the largest rest angle and multiply the other values.')} {t('Clamped per character to its maximum rest angle.')}</>}>
-        {groupsError ? <p>{t('Failed to load motion groups')}</p> : groups.length === 0 ? <p>{t('No motion groups loaded')}</p> : null}
-        {groups.length > 0 && (() => {
-          const controlled = (group: typeof groups[number], field: PoseField) =>
-            group.controls == null || group.controls.includes(field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field)
-          const columns = POSE_FIELDS.filter(field => groups.some(group => controlled(group, field)))
-          return (
-            <div className="ga-bone-pose">
-              <table>
-                <thead><tr>
-                  <th />
-                  {columns.map(field => <th key={field}>{poseLabels[field]}<MotionPreviewHint field={field} /></th>)}
-                </tr></thead>
-                <tbody>
-                  {groups.map(group => (
-                    <tr key={group.id}>
-                      <th scope="row">{group.id}</th>
-                      {columns.map(field => (
-                        <td key={field}>{controlled(group, field) ? (
-                          <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
-                            min={field === 'rest_deg' ? -180 : ['length', 'girth'].includes(field) ? .5 : 0}
-                            max={field === 'rest_deg' ? 180 : ['length', 'girth'].includes(field) ? 2 : undefined}
-                            onCommit={text => updatePose(group.id, field, text)} />
-                        ) : <span className="ga-bone-pose-na">—</span>}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
-        })()}
+        hint={t('Names one of the poses the package declares for each extension group; the pose carries the values. Several active states: the largest rest angle wins, the other values multiply, a rigid pose makes the chain move only at its root.')}>
+        {groupsError ? <p>{t('Failed to load motion groups')}</p> : posed.length === 0 ? <p>{t('No extension group declares a pose')}</p> : null}
+        {posed.length > 0 && (
+          <div className="ga-bone-pose">
+            <table>
+              <tbody>
+                {posed.map(group => (
+                  <tr key={group.id}>
+                    <th scope="row">{group.id}</th>
+                    <td>
+                      <select className="ga-input" aria-label={group.id} value={typeof draft.bone_pose[group.id] === 'string' ? draft.bone_pose[group.id] : ''}
+                        onChange={e => updatePose(group.id, e.target.value)}>
+                        <option value="">{t('— none —')}</option>
+                        {Object.keys(group.poses || {}).sort().map(id => (
+                          <option key={id} value={id}>{id} ({poseSummary(group.poses![id])})</option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Field>
 
     </div>

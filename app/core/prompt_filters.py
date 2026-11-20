@@ -473,31 +473,74 @@ def valid_bone_pose_number(number, *, signed=False):
         return False
 
 
+#: A pose's own flag beside the BONE_POSE_FIELDS values: 1 = the chain is a rigid shaft that moves only at its root
+#: link while the pose is active (the renderers' rule, `secondaryMotion.ts` RIGID SHAFT). Not a control.
+POSE_RIGID = "rigid"
+_POSE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def validate_pose_values(values, controls=None, *, where="pose"):
+    """One named pose of an extension group (package manifest ``rigs[].poses.<id>``): a non-empty mapping of
+    BONE_POSE_FIELDS values plus the optional ``rigid`` 0 | 1. ``rest_deg`` is an absolute signed angle in
+    [-180, 180], ``length`` / ``girth`` multipliers in [0.5, 2], the others finite non-negative multipliers; a field
+    the group's ``controls`` exclude is refused. Returns the values as floats; ValueError otherwise."""
+    if not isinstance(values, dict) or not values:
+        raise ValueError(f"{where} must be a non-empty mapping")
+    unknown = set(values) - set(BONE_POSE_FIELDS) - {POSE_RIGID}
+    if unknown:
+        raise ValueError(f"{where} has unknown field(s): {', '.join(sorted(map(str, unknown)))}")
+    from app.core.extension_rig import control_allowed
+    out = {}
+    for key, number in values.items():
+        if key == POSE_RIGID:
+            if isinstance(number, bool) or number not in (0, 1):
+                raise ValueError(f"{where}.rigid must be 0 or 1")
+            out[key] = float(number)
+            continue
+        if not control_allowed({"controls": controls}, key):
+            raise ValueError(f"{where}.{key} is not allowed by the group's controls")
+        if not valid_bone_pose_number(number, signed=key == "rest_deg"):
+            raise ValueError(f"{where}.{key} must be finite" if key == "rest_deg" else f"{where}.{key} must be finite and non-negative")
+        if key in ("length", "girth") and not .5 <= number <= 2:
+            raise ValueError(f"{where}.{key} must be within [0.5, 2.0]")
+        if key == "rest_deg" and abs(number) > 180:
+            raise ValueError(f"{where}.rest_deg must be within [-180, 180]")
+        out[key] = float(number)
+    return out
+
+
+def validate_pose_id(pose_id, *, where="pose id"):
+    """A pose id: letters, digits, ``_`` and ``-``."""
+    if not isinstance(pose_id, str) or not _POSE_ID.match(pose_id):
+        raise ValueError(f"{where} must be a non-empty string of letters, digits, '_' or '-'")
+    return pose_id
+
+
 def validate_bone_pose(value):
-    """Validate sparse state angles and multipliers; preserve unloaded groups for packs."""
+    """A state's ``bone_pose``: ``{<group id>: <pose id>}`` — the state NAMES one of the poses the group's package
+    declares (``rigs[].poses``); the values belong to the package. An unknown group or a pose the group does not
+    declare is refused."""
     if not isinstance(value, dict):
-        raise ValueError("bone_pose must be an object")
-    from app.core.extension_rig import control_allowed, declared_motion_groups
+        raise ValueError("bone_pose must be an object mapping extension group ids to pose ids")
+    from app.core.extension_rig import declared_motion_groups
     groups = {group["id"]: group for group in declared_motion_groups()}
-    for gid, fields in value.items():
-        if not isinstance(gid, str) or not gid.strip() or not isinstance(fields, dict):
-            raise ValueError("bone_pose groups must be objects with non-empty ids")
-        if set(fields) - set(BONE_POSE_FIELDS):
-            raise ValueError("unknown bone_pose field")
-        for key, number in fields.items():
-            if not control_allowed(groups.get(gid, {}), key):
-                raise ValueError(f"bone_pose.{gid}.{key} is not allowed")
-            if not valid_bone_pose_number(number, signed=key == "rest_deg"):
-                raise ValueError(f"bone_pose.{gid}.{key} must be finite" if key == "rest_deg" else f"bone_pose.{gid}.{key} must be finite and non-negative")
-            if key in ("length", "girth") and not .5 <= number <= 2:
-                raise ValueError(f"bone_pose.{gid}.{key} must be within [0.5, 2.0]")
-            if key == "rest_deg" and abs(number) > 180:
-                raise ValueError(f"bone_pose.{gid}.rest_deg must be within [-180, 180]")
+    for gid, pose in value.items():
+        if not isinstance(gid, str) or not gid.strip():
+            raise ValueError("bone_pose group ids must be non-empty strings")
+        if not isinstance(pose, str) or not pose:
+            raise ValueError(f"bone_pose.{gid} must be a pose id (a string), not {type(pose).__name__}")
+        group = groups.get(gid)
+        if group is None:
+            raise ValueError(f"bone_pose names the unknown extension group '{gid}' (no loaded package declares it)")
+        declared = sorted(group.get("poses") or {})
+        if pose not in declared:
+            raise ValueError(f"extension group '{gid}' declares no pose '{pose}'"
+                             + (f" (declared: {', '.join(declared)})" if declared else " (it declares no poses)"))
     return value
 
 
 def collect_bone_poses(character_name, location_id="", profile=None):
-    """Active ids and sparse pose values for revision hashing, including explicit zero."""
+    """The active states with the poses they name (``{id, bone_pose: {group: pose id}}``), sorted by id."""
     out = [{"id": state["id"], "bone_pose": state.get("bone_pose") or {}}
            for state in _triggered_filters(character_name, location_id, profile)]
     return sorted(out, key=lambda state: state["id"])

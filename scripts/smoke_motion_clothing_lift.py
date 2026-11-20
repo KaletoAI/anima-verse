@@ -34,7 +34,7 @@ Hand derivation (c = clothing product, L = lift):
      L=.5/2=.25 -> gravity .3, rest 7.5.
 [D7] slip: underwear_bottom is covered but not a lift slot -> L=0, rest 0,
      gravity .4 although the piece says lift .9.
-[D8] clamps: state rest 28 + bra lift 7.5 = 35.5 -> clamped to 30. stiff
+[D8] clamps: the state's pose (declared raised {rest_deg 28}) rest 28 + bra lift 7.5 = 35.5 -> clamped to 30. stiff
      (c=0): gain/max_deg/translate/spill 0, freq 2*100=200 -> 20 (upper
      clamp), zeta .5*100=50 -> 10; L=.25 still applies (gravity .3).
 [D9] apply_clothing=False: c=1, L=0 -> the package values unchanged.
@@ -88,7 +88,8 @@ def main():
                'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]],
                'freq_hz': 2, 'zeta': .5, 'gravity': .4, 'gain': 1, 'max_deg': 40,
                'translate': .6, 'spill': .5, 'sag_max_deg': 30, 'rest_max_deg': 30,
-               'clothing_lift_default': {'underwear_top': .25, 'top': 0}}
+               'clothing_lift_default': {'underwear_top': .25, 'top': 0},
+               'poses': {'raised': {'rest_deg': 28}}}
         package = root / 'plugins' / 'sample'
         package.mkdir(parents=True)
         (package / 'plugin.yaml').write_text(yaml.safe_dump({
@@ -158,7 +159,7 @@ def main():
         check(g['gravity'] == .4 and g['rest_deg'] == 0, '[D7] a covered slot without a lift default never lifts')
 
         from app.routes.admin_settings import _prompt_filters_save_sync
-        _prompt_filters_save_sync(None, {'id': 'raised', 'bone_pose': {'sample_group': {'rest_deg': 28}}})
+        _prompt_filters_save_sync(None, {'id': 'raised', 'bone_pose': {'sample_group': 'raised'}})
         g = group({'underwear_top': bra['id']}, preview_states=['raised'])
         check(g['rest_deg'] == 30, '[D8] state rest 28 + lift 7.5 clamps to rest_max_deg 30')
         g = group({'underwear_top': stiff['id']})

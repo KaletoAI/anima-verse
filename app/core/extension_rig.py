@@ -528,6 +528,7 @@ def declared_motion_groups():
     """All loaded declarations, including character-inapplicable groups."""
     from app.plugins import registry
     return sorted([{"id": rig.id, "controls": rig.controls,
+                    "poses": {pose_id: dict(values) for pose_id, values in rig.poses.items()},
                     "defaults": {key: (rig.squash[0] if key == "flatten_floor" and rig.flatten_floor is None else getattr(rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
                    for rig in slot.rigs if rig.chains], key=lambda group: group["id"])
@@ -575,7 +576,11 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     ``lift`` (absent = the group's ``clothing_lift_default`` for that slot,
     half for a partial cover) scales gravity and sag_max_deg by (1 - lift) and
     adds lift * rest_max_deg to the rest angle before its clamp (not for a piece that
-    shapes the chest under it, A228 ``bust_shaping``: its lift is in the rest geometry)."""
+    shapes the chest under it, A228 ``bust_shaping``: its lift is in the rest geometry).
+
+    State: each active state names a pose per group (``bone_pose`` = {group: pose id}); the pose's values come from
+    the group's declaration (``rigs[].poses``): rest angle = the largest, the other fields multiply, ``rigid`` =
+    the largest (0 without a pose). A pose id the group does not declare (any more) is ignored."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -621,7 +626,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                   for slot in slots for rig in slot.rigs}
     coverage = {rig.id: list(slot.covered_by) for slot in
                 slots for rig in slot.rigs}
-    from app.core.prompt_filters import BONE_POSE_FIELDS, collect_bone_poses, valid_bone_pose_number
+    from app.core.prompt_filters import BONE_POSE_FIELDS, POSE_RIGID, collect_bone_poses, valid_bone_pose_number
     if preview_states is not None:
         from app.core.prompt_filters import load_filters
         selected = set(preview_states)
@@ -703,12 +708,20 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         # Lift carries the group: less static sag and a raised rest angle.
         for key in ("gravity", "sag_max_deg"):
             values[key] *= 1 - lift
+        # States NAME a pose the package declares for the group (``rigs[].poses``); its values apply as the raw
+        # state values once did: the largest rest angle, the product of the multipliers, the largest ``rigid``.
         rest = None
+        rigid = 0.0
+        declared_poses = group.get("poses") or {}
         for state in states:
-            pose = state["bone_pose"].get(group["id"], {})
+            pose_id = state["bone_pose"].get(group["id"])
+            pose = declared_poses.get(pose_id) if isinstance(pose_id, str) else None
             if not isinstance(pose, dict):
                 continue
             for field, multiplier in pose.items():
+                if field == POSE_RIGID:
+                    rigid = max(rigid, min(1.0, max(0.0, float(multiplier))))
+                    continue
                 if field not in BONE_POSE_FIELDS or not control_allowed(group, field):
                     continue
                 if not valid_bone_pose_number(multiplier, signed=field == "rest_deg"):
@@ -733,6 +746,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             "op": group["op"],
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
             **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"],
+            # 1 = a rigid shaft moving only at its root link (the active poses' largest ``rigid``; 0 without one).
+            "rigid": rigid,
             "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + rest_lift * values["rest_max_deg"], values["rest_max_deg"])),
         }
     groups.update(hair)

@@ -13148,7 +13148,7 @@ static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
 * sin(max_deg), with angles in radians for sine. Longitudinal displacement and
 length scaling are unchanged by the split. Weighted borders blend into the
 anchor. Supported layers are package defaults/attribute profiles, world overrides
-and absolute character overrides; state `bone_pose` has no translate multiplier.
+and absolute character overrides; a declared state pose has no translate multiplier.
 The mesh fingerprint excludes all physics fields. Preview category is `tilt`
 for flatten/stretch/spread/flatten_floor/spill/translate: Tilt exposes posture targets and static translation;
 play a clip for translate's bounce. Flatten/spill hints explicitly state that
@@ -13161,7 +13161,7 @@ handles critical and overdamped cases. Gaps >.25 s reset `p=T',v=0`.
 
 `axis_gain=[lateral,vertical,longitudinal]` is three finite numbers in [0,1],
 default [1,1,1]. Only package, world and absolute character physics may set it;
-`attribute_profiles` multipliers and state `bone_pose` do not accept this field.
+`attribute_profiles` multipliers and declared state poses do not accept this field.
 Decompose ONLY dynamic `d=p-T'` each step in the rest lever frame:
 `u=unit(T'-head)`, body up = bind-pose up rotated with the current anchor;
 `v=unit(body_up-u*(body_up·u))`. For a vertical lever use the projection of
@@ -13454,15 +13454,17 @@ has identical swing for gravity 0 and 3. Soft limits are monotonic/bounded, prof
 and override order are checked, and revisions change without mesh identity changes.
 
 
-P4 state values are stored as `prompt_filters.bone_pose` JSON:
-`{group_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?, length?, girth?}}`.
+P4 state values belong to the package (since 2026-11-20): a rig group declares named poses
+`rigs[].poses: {pose_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?, length?, girth?, rigid?}}`
+and a state stores only `prompt_filters.bone_pose` = `{group_id: pose_id}` (an unknown group or an undeclared
+pose is refused on save/import; `docs/plugins.md` "State bone pose"). The values below are a declared pose's.
 Angles are absolute signed degrees in `[-180,180]`, independent of package
 limits. Runtime clamps both signs to the effective per-character `rest_max_deg`
 (package → world → attribute profile → character override), carried in the
 payload; scalar fields
 are finite nonnegative multipliers. `freq` multiplies frequency, not omega².
 Multiple enabled states triggered by an id-tag or evaluated expression compose
-by maximum present rest angle and product of present multipliers; absent is
+by maximum present rest angle, product of present multipliers and the largest `rigid`; absent is
 not zero. Gain/flatten/spill clamp to [0,1] after state composition. Unknown
 groups are ignored. Tag/condition changes and expiry are evaluated on every
 motion poll, including states whose changes are masked in effective output.
@@ -13540,7 +13542,7 @@ group) takes its frame from the parent's frame WITHOUT the parent's extension
 scale, while its head position follows the fully deformed parent. So girth,
 length, flatten/stretch and dynamic squash act once per link — a lengthened
 parent carries the child outward, but the child is not widened twice.
-State `bone_pose[group]` additionally accepts optional `length` and `girth`,
+A declared state pose (`rigs[].poses.<id>`, named by a state's `bone_pose[group]`) additionally accepts optional `length` and `girth`,
 each finite in [.5,2], default multiplier 1. Active states multiply these fields
 (e.g. length 1.5*.5=.75, girth .8*1.5=1.2), preserving sparse storage and
 ZIP import/export. Effective products blend with smoothstep over 1.5 real
@@ -13550,6 +13552,33 @@ on top of the static/dynamic deformation; they do not change volume compensation
 State editor hints are `live`. Resolved payloads always include numeric
 `stretch`, `spread`, `flatten_floor`, `length` and `girth`; all five affect only motion
 revision, leaving mesh fingerprints unchanged.
+
+### Rigid shaft (`rigid`, 2026-11-20)
+
+Every resolved package group carries `rigid` ∈ [0,1]: the largest `rigid` of the poses the
+active states name for it (a declared pose sets 0 or 1), 0 without one; it is part of
+`motion.rev`, never of the mesh fingerprint. Hair groups carry none (= 0). Both renderers
+(`packages/scene-render/src/secondaryMotion.ts`, RIGID SHAFT; the native client follows) blend it
+over 1.5 real seconds with smoothstep like the other state fields and apply, per chain of at least
+two simulated links, with r the blended value and own = 1 − r for a link past the root (1 for the
+root):
+
+- static sag: an inner link's droop weight (torque × span) × own before normalisation — the total
+  droop is unchanged, at r = 1 the root carries all of it;
+- swing budget: an inner link's bind share × own, the root's share + r × (1 − share) (the shares
+  still sum to 1); the dynamic limit and the contact/guidance caps use it;
+- an inner link's `gain`, `translate` and lying spill × own (its spring keeps running), its length
+  ratio s → 1 + (s − 1) × own (no squash/stretch at r = 1; state length/girth and `straighten_deg`
+  unchanged);
+- partner/own contact and the channel's radial guidance: an inner link's cap × own; the root keeps
+  outside and guides lerp(own tip, shaft tip, r), the shaft tip being the chain's last tip in the
+  root's bone frame as rendered at the end of the previous update (before the depth scale; at bind
+  before the first), with the own capsules' bind rule taken at that point. The depth scale is unchanged.
+
+r = 0 is the free chain bit for bit. Numeric acceptance: `scripts/smoke_rigid_shaft.mjs` (three
+unit links, total droop atan(e/1.5) = 1.18628° split 4.5 : 2 : .5 at r = 0, 4.5 : 1 : .25 at
+r = .5, all at the root at r = 1; a partner capsule at the shaft's end turned away by the root alone,
+θ = 0.4584°).
 
 ### Independent rig templates and rest-angle straightening
 
@@ -13589,7 +13618,7 @@ of imported bone axes, and uses the next head or terminal weighted centroid.
 Both `straighten_deg` and `freetext_clothing_gain` are package physics defaults,
 world `extension_motion.groups` overrides and character Advanced overrides
 in `model3d_opts.extension_motion`. Both are included in effective motion payloads
-and `motion.rev`, excluded from mesh fingerprints and state `bone_pose`. Preview
+and `motion.rev`, excluded from mesh fingerprints and declared state poses. Preview
 hints are `live` for straightening and `motion` for free-text clothing gain.
 Non-empty free text without resolved item pieces supplies clothing factor k
 from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override

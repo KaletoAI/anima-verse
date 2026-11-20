@@ -4,11 +4,12 @@ the motion it plays for one of them.
 Usage: .venv/bin/python scripts/smoke_base_state_preview.py
 
 Fixture: one character "sample" whose free-text outfit is "a long coat" (no item pieces), one extension group
-``sample_group`` (package gravity .35, gain 1, max_deg 30, rest_max_deg 45, freetext_clothing_gain .5) and four
-states:
-  lifted    label "Lifted"     bone_pose {sample_group: {rest_deg 12, gravity .5, length 1.5}}
-  calm      label ""           bone_pose {sample_group: {rest_deg -6}}
-  elsewhere label "Elsewhere"  bone_pose {other_group: {rest_deg 20}}     (moves no group of this model)
+``sample_group`` (package gravity .35, gain 1, max_deg 30, rest_max_deg 45, freetext_clothing_gain .5) declaring the
+poses lifted {rest_deg 12, gravity .5, length 1.5} and calm {rest_deg -6}, a second declared group ``other_group``
+(pose up {rest_deg 20}) the model does not carry, and four states (each names a declared pose):
+  lifted    label "Lifted"     bone_pose {sample_group: lifted}
+  calm      label ""           bone_pose {sample_group: calm}
+  elsewhere label "Elsewhere"  bone_pose {other_group: up}     (moves no group of this model)
   plain     label "Plain"      no bone_pose
 
 Hand derivation:
@@ -63,18 +64,21 @@ def main():
         from dataclasses import asdict
         group = asdict(RigSpec.parse({'id': 'sample_group', 'op': 'pair_protrusion',
                                       'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]],
-                                      'max_deg': 30, 'rest_max_deg': 45, 'freetext_clothing_gain': .5}))
+                                      'max_deg': 30, 'rest_max_deg': 45, 'freetext_clothing_gain': .5,
+                                      'poses': {'lifted': {'rest_deg': 12, 'gravity': .5, 'length': 1.5},
+                                                'calm': {'rest_deg': -6}}}))
         shared = root / 'shared-filters.json'
         shared.write_text('{"filters": []}')
         states = [
-            {'id': 'lifted', 'label': 'Lifted', 'bone_pose': {'sample_group': {'rest_deg': 12, 'gravity': .5, 'length': 1.5}}},
-            {'id': 'calm', 'label': '', 'bone_pose': {'sample_group': {'rest_deg': -6}}},
-            {'id': 'elsewhere', 'label': 'Elsewhere', 'bone_pose': {'other_group': {'rest_deg': 20}}},
+            {'id': 'lifted', 'label': 'Lifted', 'bone_pose': {'sample_group': 'lifted'}},
+            {'id': 'calm', 'label': '', 'bone_pose': {'sample_group': 'calm'}},
+            {'id': 'elsewhere', 'label': 'Elsewhere', 'bone_pose': {'other_group': 'up'}},
             {'id': 'plain', 'label': 'Plain'},
         ]
         with patch.object(extension_rig, 'rig_groups_for', return_value=[group]), \
                 patch.object(extension_rig, 'declared_motion_groups', return_value=[
-                    {'id': 'sample_group', 'defaults': {'rest_max_deg': 45}}]), \
+                    {'id': 'sample_group', 'poses': group['poses'], 'defaults': {'rest_max_deg': 45}},
+                    {'id': 'other_group', 'poses': {'up': {'rest_deg': 20.0}}, 'defaults': {'rest_max_deg': 45}}]), \
                 patch.object(prompt_filters, '_SHARED_FILE', shared):
             from app.routes.admin_settings import _prompt_filters_save_sync
             from app.models.character import get_character_profile, save_character_profile

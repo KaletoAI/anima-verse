@@ -258,6 +258,16 @@ async def lifespan(app: FastAPI):
     from app.core.skill_drop_migration import migrate_skill_drop_blocks_once
     migrate_skill_drop_blocks_once()
 
+    # Boot migration (2026-11-20): a state's bone_pose names a package pose ({group: pose id}) instead of raw
+    # values; idempotent by format (app/core/bone_pose_migration.py).
+    try:
+        from app.core.bone_pose_migration import migrate_bone_pose_names
+        _bp = migrate_bone_pose_names()
+        if _bp:
+            logger.info("State bone poses: %d state(s) now name a package pose", _bp)
+    except Exception as _bpe:  # noqa: BLE001 — never blocks the boot
+        logger.warning("bone pose migration failed: %s", _bpe)
+
     # Reference pictures a figure uses that were generated/uploaded into the gallery move to
     # model_refs/references (user rule 2026-11-16; idempotent, one log line per file).
     try:

@@ -124,6 +124,22 @@
  *    released chain is exactly where the free one would be. `contactTips`
  *    rows of an engaged chain carry `channel` (id, w, k). No channel in any
  *    partner (today's worlds): nothing of this runs and nothing allocates.
+ *  - RIGID SHAFT (`MotionGroup.rigid` = r ∈ [0, 1], the active state's named pose; blended over 1.5 s like the
+ *    other state fields): the chain moves only at its ROOT link. Per chain of ≥ 2 links, with own = 1 − r for a link
+ *    past the root and 1 for the root:
+ *    · SAG: an inner link's share of the chain's static droop (`data.weight`) × own before the normalisation —
+ *      the total droop is unchanged, at r = 1 all of it turns the root;
+ *    · SWING BUDGET: an inner link's `motionShare` × own, the root's + r × (1 − its share) (`shareOf`; the sum
+ *      stays 1) — the dynamic limit and the contact/guidance caps read it;
+ *    · OWN MOTION of an inner link: `gain`, `translate` and the lying spill × own (the spring itself runs on,
+ *      so leaving the state does not snap), its length ratio s → 1 + (s − 1) × own (no squash/stretch at r = 1;
+ *      the state length/girth extent and `straighten_deg` stay as they are);
+ *    · CONTACT and RADIAL GUIDANCE: an inner link's cap × own (none at r = 1); the root keeps outside / guides
+ *      lerp(its own tip, the SHAFT TIP, r) — the shaft tip is the chain's last tip in the root's bone frame as
+ *      rendered at the end of the last update (before the depth scale; the bind one before the first), and the
+ *      own capsules' bind rule is taken at that point (`shaftFactors`). So the whole shaft turns about the root
+ *      and the inner links stay straight. The DEPTH SCALE is unchanged.
+ *    r = 0 is the free chain bit for bit (every factor is exactly 1, the own tip, the own factors).
  *  - INERT: no driven link, no payload, or far LOD → no binding, no work.
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
@@ -156,6 +172,9 @@ export interface MotionGroup {
   /** The last N links of each chain ride rigidly on their parent: its rotation and
    * position, never its scale, and no rest, sag, stretch, swing or state extent. */
   rigid_tail?: number
+  /** 0 … 1 (absent = 0): the active state's pose makes the chain a RIGID SHAFT that moves only at its root link
+   *  (module docstring RIGID SHAFT); blended like the other state fields. */
+  rigid?: number
   gravity_scale: number
   sag_max_deg: number
   spill_max_deg: number
@@ -524,6 +543,15 @@ interface Particle {
   channels: ChannelState[] | null
   /** Root only: the body joint the chain hangs from (its scale turns `linkR` into world metres); undefined = not looked up. */
   hangJoint?: JointRef | null
+  /** Root of a chain of two links or more only (RIGID SHAFT): the chain's last tip in the root's bone frame — at
+   *  bind (`shaftBind`; null = no shaft) and as rendered at the end of the last update, before the depth scale. */
+  shaftBind: Vector3 | null
+  shaftTip: Vector3 | null
+  /** RIGID SHAFT, own capsules: the root's own tip and the shaft tip in the capsules' bind frame (null = no contacts
+   *  or no shaft), the contacts' bind-rule factors for the own tip, and the rigid fraction `contacts` now carry. */
+  shaftBindTips: [Vec3, Vec3] | null
+  ownFactors: number[]
+  factorRigid: number
 }
 /** The shared partner cull's margin (metres) for a chain root's move between the cull and its own broad phase within
  *  one update: only how often the culled list is read depends on it, never what a chain keeps. */
@@ -533,7 +561,7 @@ const CULL_MIN_CHAINS = 3
 /** Maximum transverse compensation: strong flattening must not inflate the mesh. */
 const SPREAD_CAP = 1.6
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
-const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'length', 'girth'] as const
+const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'length', 'girth', 'rigid'] as const
 /** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
 export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
   const t = Math.max(0, Math.min(1, elapsed / 1.5))
@@ -754,6 +782,13 @@ export function createSecondaryMotion(
         factors = tipBindFactors([bindTip.x, bindTip.y, bindTip.z], bound.map(entry => entry.bind))
       }
       st.contacts = bound.map((entry, i) => ({ bound: entry, factor: factors[i] }))
+      st.ownFactors = factors.slice()
+      st.factorRigid = 0
+      st.shaftBindTips = null
+      if (inverse && st.shaftBind && st.contacts.length) {
+        const shaft = st.shaftBind.clone().applyMatrix4(new three.Matrix4().copy(inverse).invert())
+        st.shaftBindTips = [[bindTip.x, bindTip.y, bindTip.z], [shaft.x, shaft.y, shaft.z]]
+      }
     }
     if (!particles.some(st => st.contacts.length)) collision = null
   }
@@ -924,7 +959,8 @@ export function createSecondaryMotion(
           staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [],
           chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNearKeys: [], partnerNearNows: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null,
-          linkR: 0, linkSurfaceR: 0, channels: null }
+          linkR: 0, linkSurfaceR: 0, channels: null,
+          shaftBind: null, shaftTip: null, shaftBindTips: null, ownFactors: [], factorRigid: 0 }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -1018,6 +1054,18 @@ export function createSecondaryMotion(
     }
     // A link that stopped being a chain root drops its engagements (a root keeps them across a state change).
     for (const st of particles) if (st.chainRoot !== st) st.channels = null
+    // RIGID SHAFT: a chain root's shaft tip at bind — the last link's tip carried through the bind locals up to the
+    // root. The rendered one (`shaftTip`) is kept across a reconfigure of the same chain.
+    for (const st of particles) {
+      if (st.chainRoot !== st || st.chainLinks.length < 2) { st.shaftBind = null; st.shaftTip = null; continue }
+      const last = st.chainLinks[st.chainLinks.length - 1]
+      const carry = new three.Matrix4()
+      for (let n: Object3D | null = last.bind.bone; n && n !== st.bind.bone; n = n.parent) {
+        const link = binds.get(n as Bone)
+        if (link) carry.premultiply(link.local)
+      }
+      st.shaftBind = (st.shaftBind ?? new three.Vector3()).copy(last.tipLocal).applyMatrix4(carry)
+    }
     prepareCollision()
   }
   const reset = () => {
@@ -1067,6 +1115,39 @@ export function createSecondaryMotion(
   const blendHead = new three.Vector3(), blendPos = new three.Vector3(), blendScale = new three.Vector3()
   const contactLocal = new three.Matrix4(), contactInverse = new three.Matrix4(), contactQ = new three.Quaternion()
   const tipAnchor = new three.Vector3(), tipWorld = new three.Vector3(), lever = new three.Vector3(), contactAxis = new three.Vector3()
+  // --- RIGID SHAFT (module docstring) ---
+  /** The chain's rigid fraction r (its root's blended `rigid`, 0 … 1); 0 for a link outside a chain of ≥ 2 links. */
+  const rigidOf = (st: Particle): number => {
+    const chain = st.chain
+    return chain && chain.length >= 2 ? clamp(chain[0].params.rigid ?? 0, 0, 1) : 0
+  }
+  /** The link's share of the chain's swing budget: the root takes r of every inner link's share, which keeps (1 − r). */
+  const shareOf = (st: Particle): number => {
+    const r = rigidOf(st)
+    if (!(r > 0)) return st.motionShare
+    return st.chain![0] === st ? st.motionShare + r * (1 - st.motionShare) : st.motionShare * (1 - r)
+  }
+  const shaftPoint = new three.Vector3()
+  /** The point a link's contact and guidance turns keep outside / guide: its own tip, for a chain root
+   *  `lerp(own tip, shaft tip, r)` (the rendered shaft tip of the last update, else the bind one). */
+  const contactTip = (st: Particle): Vector3 => {
+    const r = st.shaftBind ? rigidOf(st) : 0
+    if (!(r > 0)) return st.tipLocal
+    return shaftPoint.copy(st.shaftTip ?? st.shaftBind!).sub(st.tipLocal).multiplyScalar(r).add(st.tipLocal)
+  }
+  /** The bind-rule factors of a chain root's own capsules for the point `contactTip` uses (recomputed while r moves). */
+  const shaftFactors = (st: Particle) => {
+    if (!st.shaftBindTips) return
+    const r = rigidOf(st)
+    if (r === st.factorRigid) return
+    st.factorRigid = r
+    if (r > 0) {
+      const [o, s] = st.shaftBindTips
+      const factors = tipBindFactors([o[0] + (s[0] - o[0]) * r, o[1] + (s[1] - o[1]) * r, o[2] + (s[2] - o[2]) * r],
+        st.contacts.map(c => c.bound.bind))
+      st.contacts.forEach((c, i) => { c.factor = factors[i] })
+    } else st.contacts.forEach((c, i) => { c.factor = st.ownFactors[i] })
+  }
   /**
    * Keep a link's tip outside its contact capsules (module docstring). The
    * link's frame `T·R(dynamicQ·restQ)·S` (anchor frame) is evaluated at the
@@ -1084,7 +1165,7 @@ export function createSecondaryMotion(
       ({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor }))
     contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
       .premultiply(translationMatrix).multiply(scale)
-    tipAnchor.copy(st.tipLocal).applyMatrix4(contactLocal)
+    tipAnchor.copy(contactTip(st)).applyMatrix4(contactLocal)
     tipWorld.copy(tipAnchor).applyMatrix4(anchor)
     const pushed = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
     const depth0 = Math.hypot(pushed[0] - tipWorld.x, pushed[1] - tipWorld.y, pushed[2] - tipWorld.z)
@@ -1314,7 +1395,7 @@ export function createSecondaryMotion(
     }
     contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
       .premultiply(translationMatrix).multiply(scale)
-    tipAnchor.copy(st.tipLocal).applyMatrix4(contactLocal)
+    tipAnchor.copy(contactTip(st)).applyMatrix4(contactLocal)
     lever.copy(tipAnchor).sub(shiftPart)
     contactInverse.copy(anchor).invert()
     const angle = pairTurn(st, limit, dt, undefined,
@@ -1440,7 +1521,7 @@ export function createSecondaryMotion(
   const linkTipWorld = (st: Particle, dynamic: Quaternion, rest: Quaternion) => {
     contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
       .premultiply(translationMatrix).multiply(scale)
-    tipWorld.copy(st.tipLocal).applyMatrix4(contactLocal).applyMatrix4(anchor)
+    tipWorld.copy(contactTip(st)).applyMatrix4(contactLocal).applyMatrix4(anchor)
   }
   /**
    * RADIAL GUIDANCE of one link, after its dynamics (CHANNELS): per engagement of its chain with w > 0, the turn of
@@ -1731,7 +1812,10 @@ export function createSecondaryMotion(
       if (channeling) stepChannels(partners ?? [], options.interaction ?? null, dt)
       for (const st of particles) {
         const b = st.bind
-        const motionLimit = st.params.max_deg * st.motionShare * Math.PI / 180
+        // RIGID SHAFT: a link past its chain's root keeps (1 − r) of its own motion; the root takes the rest.
+        const share = shareOf(st)
+        const own = st.chain && st.chain.length >= 2 && st.chain[0] !== st ? 1 - rigidOf(st) : 1
+        const motionLimit = st.params.max_deg * share * Math.PI / 180
         anchor.copy(b.local)
         anchorFull.copy(b.local)
         // A driven ancestor contributes its frame WITHOUT its own extension
@@ -1789,6 +1873,7 @@ export function createSecondaryMotion(
           const total = Math.min(originalLever.angleTo(temp.copy(originalLever).add(equilibrium)),
             (st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180)
           let sum = 0
+          const rigid = rigidOf(st)
           // Torques are evaluated on the unsagged configuration (small-angle
           // approximation); this keeps total droop independent of link count
           // and puts the largest bend at the root.
@@ -1800,7 +1885,10 @@ export function createSecondaryMotion(
               data.torque.addScaledVector(temp.copy(distal.sag!.centre).sub(data.head).cross(distal.sag!.force), distal.bind.mass)
             }
             const span = j + 1 < chain.length ? data.head.distanceTo(chain[j + 1].sag!.head) : 2 * data.centre.distanceTo(data.head)
-            data.weight = data.torque.length() * span; sum += data.weight
+            data.weight = data.torque.length() * span
+            // RIGID SHAFT: an inner link's sag share × (1 − r); normalised below, so the root carries the rest.
+            if (j > 0 && rigid > 0) data.weight *= 1 - rigid
+            sum += data.weight
           }
           for (const link of chain) {
             const data = link.sag!
@@ -1854,7 +1942,7 @@ export function createSecondaryMotion(
         staticVector.addScaledVector(bodyVertical, ((st.params.head_sag ?? 1) - 1) * staticVector.dot(bodyVertical))
         staticVector.add(originalLever)
         // Direct paired outward target in radians, independent of force/frequency.
-        const spillAngle = (st.params.spill ?? 0) * (st.params.spill_max_deg ?? st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180 * inward
+        const spillAngle = (st.params.spill ?? 0) * (st.params.spill_max_deg ?? st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180 * inward * own
         if (lateral.lengthSq() > 1e-12) {
           temp.copy(u).cross(lateral).normalize()
           staticVector.applyAxisAngle(temp, spillAngle)
@@ -1926,11 +2014,11 @@ export function createSecondaryMotion(
         // supplies direction. Static length/flatten remain untouched.
         const renderedLength = Math.max(1e-12, base.length() + gains[2] * longitudinal)
         rendered.copy(base).applyQuaternion(dynamicQ).multiplyScalar(renderedLength / base.length())
-        const gain = far ? 0 : st.params.gain
+        const gain = far ? 0 : st.params.gain * own
         rendered.sub(base).multiplyScalar(gain).add(base)
         rendered.normalize().multiplyScalar(Math.max(1e-12, base.length() + gain * gains[2] * longitudinal))
         // Split bounded transverse static and dynamic offsets; axial length is unchanged.
-        const translate = st.params.translate ?? 0
+        const translate = (st.params.translate ?? 0) * own
         headShift.copy(base).sub(originalLever)
         temp.copy(originalLever).normalize()
         headShift.addScaledVector(temp, -headShift.dot(temp))
@@ -1949,7 +2037,9 @@ export function createSecondaryMotion(
         // head_sag acts after force/length limits. Preserve that static target
         // even when it is shorter than squash_min; only dynamics hit the cap.
         const staticRatio = temp.copy(target).applyMatrix4(inverseAnchor).length() / restVector.length()
-        const s = clamp(localRendered.length() / restVector.length(), Math.min(st.params.squash[0], staticRatio), st.params.squash[1])
+        const free = clamp(localRendered.length() / restVector.length(), Math.min(st.params.squash[0], staticRatio), st.params.squash[1])
+        // RIGID SHAFT: an inner link's length ratio moves toward 1 (no squash/stretch of its own at r = 1).
+        const s = own < 1 ? 1 + (free - 1) * own : free
         const spread = st.params.spread ?? 0.5
         const perpendicular = s < 1 ? Math.min(SPREAD_CAP, 1 + spread * (1 / Math.sqrt(s) - 1)) : 1 / Math.sqrt(s)
         u.copy(b.scaleAxis)
@@ -1985,14 +2075,15 @@ export function createSecondaryMotion(
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
+        if (st.shaftBindTips) shaftFactors(st)
         if (pairing && !b.todayBlend) {
-          const limit = Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180
+          const limit = Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * share * Math.PI / 180
           const chain = st.chainRoot ?? st
           const suppress = chain.channels ? guideLink(st, chain, dynamicQ, restQ, limit) : null
           keepTipOutsidePair(st, dynamicQ, restQ, limit, dt, colliding, suppress)
         } else if (colliding && st.contacts.length && !b.todayBlend) {
           keepTipOutside(st, dynamicQ, restQ,
-            Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
+            Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * share * Math.PI / 180)
         }
         b.bone.matrix.copy(blended ? localBase.copy(b.bone.parent!.matrixWorld).invert().multiply(anchor) : b.local)
           .multiply(translationMatrix)
@@ -2008,6 +2099,13 @@ export function createSecondaryMotion(
         // parent's scale: parentFull = anchorFull x local^-1, hence
         // matrix = local x anchorFull^-1 x world.
         if (drivenAncestor) b.bone.matrix.copy(b.local).multiply(inverseAnchor.copy(anchorFull).invert()).multiply(b.bone.matrixWorld)
+        // RIGID SHAFT: the chain's last tip in its root's bone frame as rendered now (before the depth scale), the
+        // point the root's contact and guidance read in the next update.
+        const shaftRoot = st.chainRoot
+        if (shaftRoot && shaftRoot !== st && shaftRoot.shaftBind && st === shaftRoot.chainLinks[shaftRoot.chainLinks.length - 1]) {
+          (shaftRoot.shaftTip ??= new three.Vector3()).copy(st.tipLocal).applyMatrix4(b.bone.matrixWorld)
+            .applyMatrix4(inverseAnchor.copy(shaftRoot.bind.bone.matrixWorld).invert())
+        }
         // The chain's last link is done: its depth scale and the zone for the next engagement step (CHANNELS).
         if (pairing && st.chainRoot?.channels && st === st.chainRoot.chainLinks[st.chainRoot.chainLinks.length - 1]) {
           finishChain(st.chainRoot)

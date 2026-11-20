@@ -148,6 +148,9 @@ class RigSpec:
     # sets no ``outfit_piece.lift`` of its own: ``{clothing slot: 0..1}``.
     # Only the slots named here lift the group at all (``motion_payload``).
     clothing_lift_default: Dict[str, float] = field(default_factory=dict)
+    # Named poses a state may name (``prompt_filters.bone_pose`` = {group: pose id}): {pose id: {BONE_POSE_FIELDS
+    # values, rigid 0|1}} — the values belong to the package (``prompt_filters.validate_pose_values``).
+    poses: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, raw, attributes=None, covered_by=None):
@@ -288,6 +291,13 @@ class RigSpec:
         if covered_by is not None and set(slot.strip() for slot in lift) - set(covered_by):
             raise ValueError("rig.clothing_lift_default may name only the slot's covered_by")
         spec.clothing_lift_default = {slot.strip(): float(value) for slot, value in lift.items()}
+        poses = raw.get("poses", {})
+        if not isinstance(poses, dict):
+            raise ValueError("rig.poses must map pose ids to mappings")
+        from app.core.prompt_filters import validate_pose_id, validate_pose_values
+        spec.poses = {validate_pose_id(pose_id, where="rig.poses id"):
+                      validate_pose_values(values, spec.controls, where=f"rig.poses.{pose_id}")
+                      for pose_id, values in poses.items()}
         return spec
 
 

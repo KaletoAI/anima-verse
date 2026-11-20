@@ -2,6 +2,7 @@
 
 A->B->C requires depth order regardless of ids. Missing A removes B and C;
 cycles have no root and remove every member. Effective enable is conjunction.
+States name poses the source group declares (l15 = length 1.5, l2, l05, g15 = girth 1.5, g2, g05).
 Length 1.4 replaced by world 1.6 then multiplied by state 1.5 gives 2.4;
 three factors of 2 with declared 3 clamp 24 to 4; .5*.5*.5 clamps .125 to .25.
 Girth 1.2 is replaced by world 1.4 then character 1.6; state 1.5 gives 2.4.
@@ -39,7 +40,9 @@ def main():
             try: RigSpec.parse(rig('invalid','Invalid','Hips',controls=controls))
             except ValueError: pass
             else: raise AssertionError('invalid controls accepted')
-        source=rig('z_source','Source','Hips',length=1.4,girth=1.2,scale_axis='bone')
+        source=rig('z_source','Source','Hips',length=1.4,girth=1.2,scale_axis='bone',
+                   poses=dict(l15=dict(length=1.5),l2=dict(length=2),l05=dict(length=.5),
+                              g15=dict(girth=1.5),g2=dict(girth=2),g05=dict(girth=.5)))
         assert RigSpec.parse(rig('default','Default','Hips')).scale_axis=='centroid'
         for invalid in ('other',None,1,[]):
             try: RigSpec.parse(dict(source,scale_axis=invalid))
@@ -91,10 +94,10 @@ def main():
                 return motion_payload('fixture',profile,apply_clothing=False)['groups']['z_source']['length']
         assert payload()==1.4
         assert payload(1.6)==1.6
-        states=[dict(bone_pose={'z_source':{'length':1.5}})]
+        states=[dict(bone_pose={'z_source':'l15'})]
         assert abs(payload(1.6,states)-2.4)<1e-12
-        assert payload(3,[dict(bone_pose={'z_source':{'length':2}})]*3)==4
-        assert payload(.5,[dict(bone_pose={'z_source':{'length':.5}})]*2)==.25
+        assert payload(3,[dict(bone_pose={'z_source':'l2'})]*3)==4
+        assert payload(.5,[dict(bone_pose={'z_source':'l05'})]*2)==.25
         def girth(world=None,character=None,states=()):
             profile['model3d_opts']={'extension_motion':{'z_source':character or {}}}
             with patch.object(config,'get',return_value={'z_source':world or {}}),patch('app.core.prompt_filters.collect_bone_poses',return_value=list(states)):
@@ -104,9 +107,9 @@ def main():
         assert girth()==1.2
         assert girth({'girth':1.4})==1.4
         assert girth({'girth':1.4},{'girth':1.6})==1.6
-        assert abs(girth({'girth':1.4},{'girth':1.6},[dict(bone_pose={'z_source':{'girth':1.5}})])-2.4)<1e-12
-        assert girth({'girth':2},states=[dict(bone_pose={'z_source':{'girth':2}})]*3)==4
-        assert girth({'girth':.5},states=[dict(bone_pose={'z_source':{'girth':.5}})]*2)==.25
+        assert abs(girth({'girth':1.4},{'girth':1.6},[dict(bone_pose={'z_source':'g15'})])-2.4)<1e-12
+        assert girth({'girth':2},states=[dict(bone_pose={'z_source':'g2'})]*3)==4
+        assert girth({'girth':.5},states=[dict(bone_pose={'z_source':'g05'})]*2)==.25
         from app.core.extension_rig import validate_motion_overrides
         for overrides in ({'scale_axis':'bone'},{'girth':2.01}):
             try: validate_motion_overrides({'groups':{'z_source':overrides}})
@@ -116,11 +119,12 @@ def main():
         from app.core.prompt_filters import validate_bone_pose
         before = extension_rig_fingerprint(package_rig_groups_for('fixture', profile))
         data = copy.deepcopy(manifest)
-        data['body_slots'][0]['rigs'][2]['controls'] = ['length']
+        data['body_slots'][0]['rigs'][2]['controls'] = ['length', 'girth']
         load(data)
         assert extension_rig_fingerprint(package_rig_groups_for('fixture', profile)) == before
-        assert next(g for g in declared_motion_groups() if g['id'] == 'z_source')['controls'] == ['length']
+        assert next(g for g in declared_motion_groups() if g['id'] == 'z_source')['controls'] == ['length', 'girth']
         assert next(g for g in declared_motion_groups() if g['id'] == 'a_child')['controls'] is None
+        assert sorted(next(g for g in declared_motion_groups() if g['id'] == 'z_source')['poses']) == ['g05', 'g15', 'g2', 'l05', 'l15', 'l2']
         validate_motion_overrides({'groups': {'unloaded': {'gravity': 1}}})
         for character in (False, True):
             validate_motion_overrides({'groups': {'z_source': {'length': 1.5}}}, character=character)
@@ -130,29 +134,32 @@ def main():
                 else: raise AssertionError('excluded override accepted')
         from app.routes.admin_settings import _prompt_filters_save_sync
         from fastapi import HTTPException
-        try:
-            _prompt_filters_save_sync({}, {'id': 'fixture', 'bone_pose': {'z_source': {'gravity': 1}}})
-        except HTTPException as exc:
-            assert exc.status_code == 400 and 'z_source.gravity' in exc.detail
-        else:
-            raise AssertionError('excluded state field saved')
-        validate_bone_pose({'z_source': {'length': 1.5}})
-        validate_bone_pose({'unloaded': {'freq': 1.5}})
+        # A state names a declared pose; raw values and undeclared poses are refused.
+        for bad in ({'z_source': {'gravity': 1}}, {'z_source': 'undeclared'}, {'unloaded': 'l15'}):
+            try:
+                _prompt_filters_save_sync({}, {'id': 'fixture', 'bone_pose': bad})
+            except HTTPException as exc:
+                assert exc.status_code == 400 and next(iter(bad)) in exc.detail, exc.detail
+            else:
+                raise AssertionError(f'invalid state saved: {bad}')
+        validate_bone_pose({'z_source': 'l15'})
+        # A declared pose may only set the group's controls: a pose with gravity under [length, girth] drops the rig.
         for field in ('gravity', 'freq', 'rest_deg'):
-            try: validate_bone_pose({'z_source': {field: 1}})
-            except ValueError as exc: assert 'z_source' in str(exc) and field in str(exc)
-            else: raise AssertionError('excluded state field accepted')
+            try: RigSpec.parse(dict(source, controls=['length', 'girth'], poses={'p': {field: 1}}))
+            except ValueError as exc: assert field in str(exc)
+            else: raise AssertionError('excluded pose field accepted')
         profile['model3d_opts'] = {'extension_motion': {'z_source': {'gravity': 8, 'bounce': 1.5, 'weight': 1.5, 'length': 1.6}}}
-        states = [{'bone_pose': {'z_source': {'gravity': 0, 'freq': 0, 'rest_deg': 30, 'length': 1.5}}}]
+        states = [{'bone_pose': {'z_source': 'l15'}}]
         with patch.object(config, 'get', return_value={'z_source': {'gravity': 9, 'length': 1.8}}), patch('app.core.prompt_filters.collect_bone_poses', return_value=states):
             effective = motion_payload('fixture', profile, apply_clothing=False)['groups']['z_source']
-        # Only length acts: character 1.6 times state 1.5 = 2.4.
+        # Only length acts: character 1.6 times the pose's 1.5 = 2.4.
         assert abs(effective['length'] - 2.4) < 1e-12
         assert effective['gravity'] == .35 and effective['freq_hz'] == 2.2
-        assert effective['gain'] == 1 and effective['rest_deg'] == 0
+        assert effective['gain'] == 1 and effective['rest_deg'] == 0 and effective['rigid'] == 0
         data['body_slots'][0]['rigs'][2]['controls'] = ['freq_hz', 'rest_max_deg']
+        data['body_slots'][0]['rigs'][2]['poses'] = {'fr': {'freq': 1.5, 'rest_deg': 30}}
         load(data)
-        validate_bone_pose({'z_source': {'freq': 1.5, 'rest_deg': 30}})
+        validate_bone_pose({'z_source': 'fr'})
         for invalid in ([], ['unknown'], ['length', 'length']):
             data['body_slots'][0]['rigs'][2]['controls'] = invalid
             load(data)

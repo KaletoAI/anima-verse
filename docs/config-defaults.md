@@ -414,7 +414,7 @@ a currently absent package are retained and have no effective group to modify.
 
 `axis_gain: [lateral, vertical, longitudinal]` defaults to `[1,1,1]`, with three
 finite entries in [0,1]. Package defaults, world Setup and absolute character
-physics overrides support it; attribute multipliers and state `bone_pose` do not.
+physics overrides support it; attribute multipliers and declared state poses do not.
 It filters only dynamic `p-T'` in the current rest lever frame, before dynamic
 soft angle/gain. Vertical follows projected bind body up rotated with the anchor;
 a vertical lever uses projected bind body front (bind world +Z if geometry
@@ -475,7 +475,7 @@ static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
 * sin(max_deg), with angles in radians for sine. Longitudinal displacement and
 length scaling are unchanged by the split. Weighted borders blend into the
 anchor. Supported layers are package defaults/attribute profiles, world overrides
-and absolute character overrides; state `bone_pose` has no translate multiplier.
+and absolute character overrides; a declared state pose has no translate multiplier.
 The mesh fingerprint excludes all physics fields. Preview category is `tilt`
 for flatten/stretch/spread/flatten_floor/spill/translate: Tilt exposes posture targets and static translation;
 play a clip for translate's bounce. Flatten/spill hints explicitly state that
@@ -486,7 +486,7 @@ stored slot attribute values after world overrides. Unknown values are ignored;
 profile multipliers are finite and nonnegative (frequency strictly positive).
 Unit-interval results cap at 1; angle results cap at 180. Absolute character
 physics overrides in `model3d_opts.extension_motion` apply next, then clothing
-damping scales gain, then active state `bone_pose` multipliers apply (rest angle
+damping scales gain, then the multipliers of the poses the active states name apply (rest angle
 uses the maximum present value). The 3D panel's Extension bones numeric inputs and Reset edit
 these profile overrides via the admin-only character extension-motion endpoint,
 under the character profile lock. The editor shows values before clothing damping and state composition.
@@ -545,7 +545,7 @@ still bounds rendered deviation around the static target. A one-frame 90-degree
 jump stays within `max_deg*1.05`; normal motion retains exact propagation.
 Gaps, reset and LOD transitions clear anchor history with particle history.
 
-State `bone_pose[group]` additionally accepts optional `length` and `girth`,
+A declared state pose (`rigs[].poses.<id>`, named by a state's `bone_pose[group]`) additionally accepts optional `length` and `girth`,
 each finite in [.5,2], default multiplier 1. Active states multiply these fields
 (e.g. length 1.5*.5=.75, girth .8*1.5=1.2), preserving sparse storage and
 ZIP import/export. Effective products blend with smoothstep over 1.5 real

@@ -1,6 +1,9 @@
 """P4 state composition and E3, in temporary storage.
 
 Usage: .venv/bin/python scripts/smoke_extension_rig_p4.py
+Since 2026-11-20 a state NAMES a pose its group declares (``rigs[].poses``; ``bone_pose`` = {group: pose id}); the
+fixture group declares the poses ``first`` / ``second`` the two states name, and the steps below that change "a
+state's values" change the declared pose. The state's own storage only carries the pose id.
 Hand derivation: package gravity .35 * state .5 * state .8 = .14;
 frequency 2.2 * 2 * .5 = 2.2; zeta .7 * .5 * 2 = .7.
 Clothing gain .5 precedes state gain 3, so min(1,.5*3)=1.
@@ -57,15 +60,20 @@ def main():
         from dataclasses import asdict
         group = asdict(RigSpec.parse({'id': 'sample_group', 'op': 'pair_protrusion',
             'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]],
-            'flatten': .4, 'spill': .2, 'zeta': .7, 'rest_max_deg': 45}))
+            'flatten': .4, 'spill': .2, 'zeta': .7, 'rest_max_deg': 45,
+            'poses': {'first': {'rest_deg': 12, 'gravity': .5, 'freq': 2, 'zeta': .5, 'length': 1.5, 'girth': .8},
+                      'second': {'rest_deg': 24, 'gravity': .8, 'freq': .5, 'zeta': 2, 'length': .5, 'girth': 1.5},
+                      'rest_150': {'rest_deg': 150}, 'rest_minus_60': {'rest_deg': -60}}}))
+        # The declared poses — one object shared by the group (motion) and the declaration list (validation).
+        poses = group['poses']
         filters = [
-            {'id': 'first', 'bone_pose': {'sample_group': {'rest_deg': 12, 'gravity': .5, 'freq': 2, 'zeta': .5, 'length': 1.5, 'girth': .8}}},
-            {'id': 'second', 'condition': 'sample>0', 'bone_pose': {'sample_group': {'rest_deg': 24, 'gravity': .8, 'freq': .5, 'zeta': 2, 'length': .5, 'girth': 1.5}}},
+            {'id': 'first', 'bone_pose': {'sample_group': 'first'}},
+            {'id': 'second', 'condition': 'sample>0', 'bone_pose': {'sample_group': 'second'}},
         ]
         shared = root / 'shared-filters.json'
         shared.write_text('{"filters": []}')
         with patch.object(extension_rig, 'rig_groups_for', return_value=[group]),                 patch.object(extension_rig, 'declared_motion_groups', return_value=[
-                    {'id': 'sample_group', 'defaults': {'rest_max_deg': 45}}]),                 patch.object(prompt_filters, '_SHARED_FILE', shared):
+                    {'id': 'sample_group', 'poses': poses, 'defaults': {'rest_max_deg': 45}}]),                 patch.object(prompt_filters, '_SHARED_FILE', shared):
             from app.routes.admin_settings import (_prompt_filters_save_sync,
                                                    _prompt_filters_move_sync)
             from app.core.content_io import export_states_to_zip, import_states_from_zip
@@ -172,18 +180,18 @@ def main():
             _prompt_filters_save_sync(None, filters[0])
             check(values()['rest_deg'] == 0, 'disabled tag ignored')
             filters[0]['enabled'] = True
-            filters[0]['bone_pose']['sample_group'].update(flatten=4, spill=3)
+            poses['first'].update(flatten=4, spill=3)
             _prompt_filters_save_sync(None, filters[0])
             check(values()['flatten'] == 1 and abs(values()['spill'] - .6) < 1e-12, 'flatten and spill multiply and clamp')
             check(values()['gain'] == 1, 'absent gain inherits')
             absent = motion()['rev']
-            filters[0]['bone_pose']['sample_group']['gain'] = 0
+            poses['first']['gain'] = 0
             _prompt_filters_save_sync(None, filters[0])
             check(values()['gain'] == 0 and motion()['rev'] != absent, 'explicit zero differs from absent')
-            filters[0]['bone_pose']['sample_group']['freq'] = 0
+            poses['first']['freq'] = 0
             _prompt_filters_save_sync(None, filters[0])
             check(values()['freq_hz'] == 0, 'explicit zero frequency retained')
-            filters[0]['bone_pose']['sample_group'].update(freq=1, gain=3)
+            poses['first'].update(freq=1, gain=3)
             _prompt_filters_save_sync(None, filters[0])
             from app.models import inventory
             item = inventory.add_item('Cover', category='outfit_piece', item_id='p4_cover',
@@ -194,16 +202,16 @@ def main():
                 change(equipped_pieces={'top': item['id']})
                 check(values()['gain'] == 1, 'state after clothing: .5 x 3 clamps to 1')
             change(equipped_pieces={})
-            filters[0]['bone_pose']['sample_group'].update(freq=1e308, zeta=1e308, gravity=1e308)
-            filters[1]['bone_pose']['sample_group'].update(freq=1e308, zeta=1e308, gravity=1e308)
+            poses['first'].update(freq=1e308, zeta=1e308, gravity=1e308)
+            poses['second'].update(freq=1e308, zeta=1e308, gravity=1e308)
             for state in filters:
                 _prompt_filters_save_sync(None, state)
             change(active_conditions=[{'name': 'first'}, {'name': 'second'}])
             extreme = values()
             check(extreme['freq_hz'] == 20 and extreme['zeta'] == 10 and extreme['gravity'] == 10, 'composed overflow saturates at effective limits')
             json.dumps(motion(), allow_nan=False)
-            filters[0]['bone_pose']['sample_group'].update(freq=1, zeta=.5, gravity=.5)
-            filters[1]['bone_pose']['sample_group'].update(freq=.5, zeta=2, gravity=.8)
+            poses['first'].update(freq=1, zeta=.5, gravity=.5)
+            poses['second'].update(freq=.5, zeta=2, gravity=.8)
             for state in filters:
                 _prompt_filters_save_sync(None, state)
             change(active_conditions=[{'name': 'first'}])
@@ -215,26 +223,36 @@ def main():
             check(next(f for f in prompt_filters._load_world() if f['id'] == 'first')['bone_pose'] == expected, 'move shared to world')
             packed = export_states_to_zip()
             check(import_states_from_zip(packed, replace_all=True)['filters_imported'] == 2, 'pack export/import')
-            check(next(f for f in prompt_filters._load_world() if f['id'] == 'first')['bone_pose'] == expected, 'pack retains sparse values')
+            check(next(f for f in prompt_filters._load_world() if f['id'] == 'first')['bone_pose'] == expected, 'pack retains the pose name')
             from app.routes.content_packs import _dispatch_install
             check(_dispatch_install('states', packed)['filters_imported'] == 2, 'marketplace pack installation carries bone_pose')
-            # Unloaded groups survive storage and never become runtime groups.
-            _prompt_filters_save_sync(None, {'id': 'unknown', 'bone_pose': {'unloaded_group': {'gain': 0}}})
-            change(active_conditions=[{'name': 'unknown'}])
-            check(set(motion()['groups']) == {'sample_group'} and values()['gain'] == 1, 'unloaded group ignored')
-            for angle in (150, -60):
-                _prompt_filters_save_sync(None, {'id': 'signed_rest', 'bone_pose': {'sample_group': {'rest_deg': angle}}})
+            # A group no loaded package declares is refused (the state can only name a declared pose).
+            try:
+                _prompt_filters_save_sync(None, {'id': 'unknown', 'bone_pose': {'unloaded_group': 'first'}})
+            except HTTPException as exc:
+                check(exc.status_code == 400 and 'unloaded_group' in exc.detail, 'unloaded group refused')
+            else:
+                raise AssertionError('unloaded group accepted')
+            for angle, pose_id in ((150, 'rest_150'), (-60, 'rest_minus_60')):
+                _prompt_filters_save_sync(None, {'id': 'signed_rest', 'bone_pose': {'sample_group': pose_id}})
                 for limit in (180, 45):
                     change(model3d_opts={'extension_motion': {'sample_group': {'rest_max_deg': limit}}})
                     resolved = extension_rig.motion_payload('sample', preview_states=['signed_rest'])['groups']['sample_group']
                     check(resolved['rest_deg'] == max(-limit, min(limit, angle)) and resolved['rest_max_deg'] == limit, 'signed rest and effective character limit reach payload')
-            for bad in (None, [], {'sample_group': {'length': .49}}, {'sample_group': {'girth': 2.01}}, {'sample_group': {'length': True}}, {'sample_group': {'axis_gain': [1, 1, .2]}}, {'sample_group': {'rest_deg': 181}},
-                        {'sample_group': {'rest_deg': -181}},
-                        {'sample_group': {'rest_deg': float('nan')}},
-                        {'sample_group': {'gain': -1}}, {'sample_group': {'gain': True}},
-                        {'sample_group': {'gravity': float('nan')}},
-                        {'sample_group': {'freq': float('inf')}}, {'sample_group': {'unknown': 1}}, {'sample_group': {'straighten_deg': 60}}, {'sample_group': {'freetext_clothing_gain': .5}},
-                        {'sample_group': {'gain': 10**500}}):
+            # The value rules now apply to the declared pose (the manifest), the state may only name one.
+            for bad in ({'length': .49}, {'girth': 2.01}, {'length': True}, {'axis_gain': [1, 1, .2]}, {'rest_deg': 181},
+                        {'rest_deg': -181}, {'rest_deg': float('nan')}, {'gain': -1}, {'gain': True},
+                        {'gravity': float('nan')}, {'freq': float('inf')}, {'unknown': 1}, {'straighten_deg': 60},
+                        {'freetext_clothing_gain': .5}, {'gain': 10**500}):
+                try:
+                    RigSpec.parse({'id': 'sample_group', 'op': 'pair_protrusion',
+                                   'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]], 'poses': {'bad': bad}})
+                except ValueError:
+                    check(True, 'invalid declared pose rejected')
+                else:
+                    raise AssertionError(f'invalid declared pose accepted: {bad}')
+            for bad in (None, [], {'sample_group': {'gain': 0}}, {'sample_group': 'undeclared'}, {'sample_group': 1},
+                        {'': 'first'}):
                 try:
                     _prompt_filters_save_sync(None, {'id': 'invalid', 'bone_pose': bad})
                 except HTTPException as exc:
@@ -245,7 +263,7 @@ def main():
             with zipfile.ZipFile(io.BytesIO(packed)) as archive:
                 entries = json.loads(archive.read('db/prompt_filters.json'))
                 manifest = archive.read('manifest.json')
-            entries.append({'id': 'bad_import', 'bone_pose': {'sample_group': {'gain': -1}}})
+            entries.append({'id': 'bad_import', 'bone_pose': {'sample_group': 'undeclared'}})
             stream = io.BytesIO()
             with zipfile.ZipFile(stream, 'w') as archive:
                 archive.writestr('manifest.json', manifest)
