@@ -16,7 +16,8 @@ try {
  const mgr=new NpcManager({pairRootAt:()=>rootPoint},{syncCounters:{},errWindow:{t:[],e:[]}});
  mgr.setPlaceAt(()=>({slots:[{y:6}]}));
  const root=new THREE.Group();root.position.set(1,2,3);
- const figure={root:new THREE.Group(),playPair:()=>true,holdsTravel:false,update(){},
+ // Ruling A129 (d08f3c4b9): the pair fix turns partner B about its bind hips; no stored turn = the identity.
+ const figure={root:new THREE.Group(),playPair:()=>true,holdsTravel:false,update(){},pairHipsBind:[0,0.9,0],pairTurnDeg:[0,0,0],
   faceTowards(dir,snap){assert.equal(snap,true);this.root.rotation.y=Math.atan2(dir.x,dir.z)},setYaw(yaw){this.root.rotation.y=yaw}};
  const npc={name:'avatar',root,figure,target:new THREE.Vector3(),waypoints:[],route:null,ride:null,interaction:null,
   label:{},labelName:{},labelActivity:{},labelBadges:{},travelLine:null,travelKey:''};

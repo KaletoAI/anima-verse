@@ -45,6 +45,17 @@ function placement(m, data) {
   const figure = {
     playPair: () => true, holdsTravel: false, takeTravel: () => {},
     faceTowards: () => {}, setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
+    hasClip: () => true, setFloorY: () => {},
+    // Phase B of the two-phase figure frame (b47a88e29, runFigureFrame's `FramePhaseB`; root angle A158 0418f24ed):
+    // a stand-in without a loaded model — no frame figure, no partners, no channels, no root angle.
+    frameFigure: () => null, partnerSnapshot: () => null, updateSecondary: () => {}, channelOccupants: () => [],
+    applyChannelOpenings: () => {}, hasHairPush: false, setGpuPartners: () => {},
+    setRootAngle: () => {}, clipRootAngle: null, channelReadouts: () => [],
+    // Ruling A129 (d08f3c4b9): the pair fix turns partner B about its bind hips. No stored turn here
+    // (0, 0, 0) — the fix is the identity, so the placement is the anchor rule alone.
+    pairHipsBind: [0, 0.9, 0], pairTurnDeg: [0, 0, 0],
+    // Owner decision 2026-11-20 (686831af3, pairScale.ts): a 1.70 m figure has scale a = 1 — the root path unscaled.
+    height: 1.7,
   };
   const mgr = new m.NpcManager(lib, {
     syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
@@ -60,7 +71,8 @@ function placement(m, data) {
     labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
     waypoints: [], ride: null, route: null, travelling: false, reckon: null,
     interaction: {
-      id: 'p1', clip: data.clip ?? 'handshake__a',
+      id: 'p1', clip: data.clip ?? 'handshake__a', base: data.clip ?? 'handshake__a',
+      kind: (data.clip ?? 'handshake__a').split('__')[0], members: ['A'],
       anchor: { ...data.anchor, placeId: data.placeId },
       elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, stamp: 0,
     },

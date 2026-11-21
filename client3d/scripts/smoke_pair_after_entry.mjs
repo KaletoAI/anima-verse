@@ -81,6 +81,15 @@ try {
     playPropEntry: () => true, finishPropEntry() {}, playPair: () => true,
     setYaw(y) { this.root.rotation.y = y; }, setLean() {}, update() {}, resetSecondaryMotion() {}, setFirstPerson() {},
     faceTowards(dir) { this.root.rotation.y = Math.atan2(dir.x, dir.z); },
+    // the seated knee-raise's floor (98dd20394, P3b) — not measured here
+    setFloorY() {},
+    // Ruling A129 (d08f3c4b9): the pair fix turns partner B about its bind hips; no stored turn = the identity.
+    pairHipsBind: [0, 0.9, 0], pairTurnDeg: [0, 0, 0], height: 1.7,
+    // Phase B of the two-phase figure frame (b47a88e29, runFigureFrame's `FramePhaseB`; root angle A158 0418f24ed):
+    // a stand-in without a loaded model — no frame figure, no partners, no channels, no root angle.
+    frameFigure: () => null, partnerSnapshot: () => null, updateSecondary() {}, channelOccupants: () => [],
+    applyChannelOpenings() {}, hasHairPush: false, setGpuPartners() {},
+    setRootAngle() {}, clipRootAngle: null, channelReadouts: () => [],
   };
   const el = () => ({ textContent: '' });
   const npc = { name: 'Npc B', root, figure, target: new THREE.Vector3(), waypoints: [], route: null, ride: null,
