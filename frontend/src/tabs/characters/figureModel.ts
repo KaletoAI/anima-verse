@@ -311,6 +311,9 @@ export interface TemplateParams {
   leg_cut?: number
   back_coverage?: number
   side_width_m?: number
+  /** Step 3a briefs: the crotch's full width (0.03 … 0.08 m; a thong's is narrow). `leg_cut` past 1 (to 1.5) is a
+   *  high-leg front. */
+  gusset_m?: number
   waistband?: string
   /** A232 briefs: 0 = a brief cut by `leg_cut`; > 0 = short legs this far down the thigh (trunks, boxer briefs,
    *  boxer shorts with `fit`). */
@@ -537,7 +540,8 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   shoulders: 'Shoulders', sleeve_fit: 'Sleeve fit (0 tight … 1 loose)', fit: 'Body fit (0 tight … 1 loose)',
   neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
   opacity: 'Opacity (0.2 sheer … 1 opaque)',
-  rise: 'Rise', leg_cut: 'Leg cut (0 boyshort … 1 high-cut)', back_coverage: 'Seat coverage (0 string … 1 full)',
+  rise: 'Rise', leg_cut: 'Leg cut (0 boyshort … 1 high-cut … 1.5 high-leg)',
+  gusset_m: 'Crotch width', back_coverage: 'Seat coverage (0 string … 1 full)',
   side_width_m: 'Side height', waistband: 'Waistband', leg_length_m: 'Leg length (0 = brief cut)',
   sides: 'Sides', string_width_m: 'Band height',
   cup_style: 'Cups', cup_coverage: 'Cup coverage (0.3 demi … 1 full)', push_up: 'Push-up (0 none … 1 strong)',

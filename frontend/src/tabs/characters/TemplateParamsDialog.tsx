@@ -149,6 +149,7 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'shoulders', 'band_m', 'band_drop_m', 'lacing', 'lace_depth_m', 'fit', 'neckline', 'neck_depth_m', 'sleeves',
   'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
+  'gusset_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
   'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem', 'texture']
 /** Fields shown as a 0…1 number rather than centimetres. */
