@@ -353,7 +353,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const swapTried = useRef('')
   const targetWord = (x: ContactTarget) => targetWordOf(t, x)
   const [paused, setPaused] = useState(false)
-  const [speed, setSpeed] = useState(1)
+  const [speed, setSpeed] = useState(0.2)
   const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
     partners: PartnerInfo | null } | null>(null)
   const [show, setShow] = useState<PartnerShow>(loadShow)
@@ -449,13 +449,18 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
 
   // Default fill and Fill all: built characters first, the mannequin between them (D1), only on places of the
   // clip's place type (placePicker.planFill). Fill all reports what it did — the count, or why nobody was placed.
+  // The assignment a fill just set: until it is rendered, what is shown belongs to the previous clip or to the
+  // empty first render and must not be remembered (it would wipe the memory the fill is about to read).
+  const fillResult = useRef<object | null>(null)
   const fill = (all: boolean) => {
     const names = chars ? [...chars.filter((c) => c.built).map((c) => c.name), MANNEQUIN] : null
     const plan = planFill(places.map((p) => ({ letter: p.letter, markerId: p.marker.id, group: p.marker.group })),
       { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES })
     const next = { ...plan.assign }
     if (!all) {
-      // A129.8: the persons, bodies and states picked on the last clip, per place index, where this clip has the place.
+      // A129.8: the persons, bodies and states picked on the last clip, per place index — only on the places the
+      // default fill gives this clip; a remembered figure never adds a place the clip does not take (a place
+      // remembered from "Fill all" stays empty). A place remembered EMPTY stays empty.
       const rl = solo ? [''] : roleList
       // A150: this page load's memory first, else what this browser remembered.
       const memo = Object.keys(placeMemory.byIndex).length ? placeMemory.byIndex : loadPeople()
@@ -463,13 +468,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       const gone: string[] = []
       places.forEach((p, i) => {
         const m = memo[i]
-        if (!m || !m.character) return
+        if (!m || !(p.letter in plan.assign)) return
+        if (!m.character) { delete next[p.letter]; return }
         if (!known.has(m.character)) { if (!gone.includes(m.character)) gone.push(m.character); return }
         const role = next[p.letter]?.role ?? (rl.includes(m.role) ? m.role : rl[i % rl.length])
         next[p.letter] = { character: m.character, role, body: m.body, state: m.state }
       })
       setGoneNote(gone)
     } else setGoneNote([])
+    fillResult.current = next
     setAssign(next)
     if (all) setFillNote({ count: plan.count, reason: plan.reason })
   }
@@ -484,14 +491,19 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
 
   // A129.8: remember what is shown, per place index.
   useEffect(() => {
-    if (!places.length) return
+    if (!places.length || !filled.current) return
+    if (fillResult.current) {
+      if (assign !== fillResult.current) return
+      fillResult.current = null
+    }
+    // An emptied place is remembered as empty — so "— empty" survives the next clip and the next page load.
     places.forEach((p, i) => {
       const a = assign[p.letter]
-      if (a?.character) placeMemory.byIndex[i] = { character: a.character, role: a.role, body: a.body, state: a.state }
-      else if (a) delete placeMemory.byIndex[i]
+      placeMemory.byIndex[i] = a?.character
+        ? { character: a.character, role: a.role, body: a.body, state: a.state }
+        : { character: '', role: '', body: 'outfit', state: '' }
     })
-    // A150: only once something is shown (an empty first render must not wipe what the browser remembered).
-    if (Object.keys(placeMemory.byIndex).length) savePeople(placeMemory.byIndex)
+    savePeople(placeMemory.byIndex)
   }, [assign, places])
   const assigned = places.filter((p) => assign[p.letter]?.character)
   const plain = usePlainBodies(places.map((p) => assign[p.letter]?.character || ''))
@@ -1542,7 +1554,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         <button type="button" className="ga-btn ga-btn-sm" onClick={() => setPaused((p) => !p)}>
           {paused ? t('▶ Play') : t('⏸ Pause')}
         </button>
-        {[0.5, 1].map((s) => (
+        {[0.2, 0.5, 1].map((s) => (
           <button key={s} type="button" className={`ga-btn ga-btn-sm${speed === s ? ' ga-btn-primary' : ''}`}
             onClick={() => setSpeed(s)}>{`${s}×`}</button>
         ))}
