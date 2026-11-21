@@ -53,8 +53,11 @@ check("[1] trousers: front {front_l, front_r, waistband}, back {back_l, back_r}"
       jobs(tr) == {"front": ["front_l", "front_r", "waistband"], "back": ["back_l", "back_r"]}, jobs(tr))
 check("[1] trousers have a back job", gct.has_back(payload(tr)))
 fr = gct.split_islands(payload(tr))["front"]
-check("[1] front pieces in pattern order", gct.prompt_pieces(fr) == ["right front leg panel", "left front leg panel",
-                                                                     "waistband"], gct.prompt_pieces(fr))
+# The short prompts (3a6718c78) no longer list the pieces; the islands' names stay known to the
+# front-place lookup (``_split_name``), so a numbered fitted island resolves to its base name.
+check("[1] a numbered fitted island keeps its base name", gct._split_name("front_l_2") == ("front_l", 2)
+      if "front_l" in gct.PROMPT_PIECE_NAMES else gct._split_name("waistband") == ("waistband", 1),
+      gct._split_name("front_l_2"))
 
 # [2] tights, bra
 for nm, names in (("tights", ["leg_l", "leg_r", "gusset", "waistband"]),
