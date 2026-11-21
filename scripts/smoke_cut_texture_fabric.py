@@ -6,7 +6,7 @@ Usage:
 
 No server, no world DB, no hub job, no BiRefNet (the key matte). ``app/core/cut_texture_post.py`` (``fabric_colour``,
 ``delta_e00``, ``detail_density``, ``answer_gates``, ``fabric_patch`` / ``mirror_tile`` / ``tile_fill``) and
-``app/core/garment_cut_texture.py`` (``prefill_colour``, ``render_template(fill=…)``, ``layout_words``, the prompts,
+``app/core/garment_cut_texture.py`` (``prefill_colour``, ``render_template(fill=…)``, ``front_place``, ``is_decorated``, the prompts,
 ``fill_fabric``, ``_post_job``). Every expectation is derived by hand below.
 
 [1] ``fabric_colour`` on synthetic pictures (white background, the garment a 300 x 400 block in a 400 x 500 picture):
@@ -45,15 +45,22 @@ No server, no world DB, no hub job, no BiRefNet (the key matte). ``app/core/cut_
     pixels are exactly the island mask (20 000), the outline (mask minus the 2 px erosion: 1 184 px) is the fill x 0.6
     (blue L* 39 >= 30): (18, 54, 103.8 -> 104). A dark fabric (19, 50, 29) (L* 18 < 30) gets an outline 0.4 of the way
     to white: 19 + 236 * 0.4 = 113.4 -> 113, 50 + 205 * 0.4 = 132, 29 + 226 * 0.4 = 119.4 -> 119.
-[6] ``layout_words`` of a front job in a 1000 px atlas: front bbox (20, 20, 500, 450) -> centre (0.26, 0.235): "the
-    large piece at the top left is the front panel"; sleeve_l (20, 700, 450, 950) -> (0.235, 0.825): "the piece at
-    the bottom left is the left sleeve"; sleeve_r (550, 700, 980, 950) -> (0.765, 0.825): "the piece at the bottom
-    right is the right sleeve"; band (200, 970, 800, 990) -> 600 / 20 = 30 >= 6 -> a strip, centre (0.5, 0.98) >
-    0.9: "the long thin strip at the very bottom is the neckband". The front prompt rendered with them contains
-    "In the first image, " + the four joined with "; ", the sleeve sentence "The left sleeve and right sleeve get
-    only the plain fabric", "already filled with the plain fabric colour", "Do not invent text"; the back prompt with
-    the back panel only has no sleeve sentence; ``prompt_compose.compose`` keeps both byte-identical (no negation
-    moved, no warning).
+[6] The prompts (prompt test 2026-11-21, 23 local P-H3 jobs: the short Fable prompts won). ``front_place`` of a front
+    job in a 1000 px atlas: front bbox (20, 20, 500, 450) -> centre (0.26, 0.235): both < 0.36 -> "at the top left"
+    -> "top left"; a front at (400, 400, 600, 600) -> (0.5, 0.5) -> "in the middle" -> "middle"; no front island
+    -> "". ``is_decorated`` (detail > 0.10): Dario's 0.142 True, Tilda's 0.076 False, exactly 0.10 False, None False.
+    The rendered prompts are, word for word, the tested ones (with "<Picture 1>"/"<Picture 2>" written as "the first
+    image"/"the second image" — ``reference_wording`` turns them back for P-H3, so the P-H3 text equals the tested
+    file text):
+    plain front "Texture the sewing pattern in the first image with the fabric of the T-shirt in the second image.
+    Keep every shape, its colour and the white background exactly. Add only the fine weave of the fabric, flat and
+    evenly lit."; decorated front "The top left shape of the first image is the front of the long-sleeve shirt in
+    the second image, laid flat. Paint it as that front: same fabric, same print or embroidery at the same place. The
+    other shapes get plain fabric only. Outlines, colour and white background stay unchanged."; back "Texture the
+    shape in the first image with the fabric on the back of the T-shirt in the second image. Keep the shape, its
+    colour and the white background exactly. Add only the fine weave of the fabric, flat and evenly lit." A decorated
+    front without a place raises ``ValueError``. ``prompt_compose.compose`` keeps all three byte-identical (no
+    negation moved, no warning).
 [7] ``mirror_tile`` of a 3 x 3 patch over 12 x 12: period 6 in both directions; columns 3..5 are the patch mirrored
     left-right, rows 3..5 mirrored up-down; the seam is continuous (tile[:, 2] == tile[:, 3]: a pixel meets its own
     mirror). ``tile_fill`` of a uniform (100, 100, 100) patch onto target Lab of (19, 50, 29): the region becomes
@@ -198,31 +205,47 @@ check("[5] pre-filled template: centre = fill, non-white = mask (20 000), outlin
 check("[5] a dark fabric (19, 50, 29), L* 18 < 30: the outline 0.4 of the way to white = (113, 132, 119)",
       gct.outline_for((19, 50, 29)) == (113, 132, 119), gct.outline_for((19, 50, 29)))
 
-# [6] layout words + prompts
-lay_pl = {"atlas_px": 1000, "islands": [
-    {"name": "front", "bbox_px": [20, 20, 500, 450]}, {"name": "sleeve_l", "bbox_px": [20, 700, 450, 950]},
-    {"name": "sleeve_r", "bbox_px": [550, 700, 980, 950]}, {"name": "band", "bbox_px": [200, 970, 800, 990]}]}
-words = gct.layout_words(lay_pl)
-want_words = ["the large piece at the top left is the front panel", "the piece at the bottom left is the left sleeve",
-              "the piece at the bottom right is the right sleeve",
-              "the long thin strip at the very bottom is the neckband"]
-check("[6] layout words", words == want_words, words)
-pf = gct.render_prompt(piece="T-shirt", pieces=gct.prompt_pieces(lay_pl), layout=words)
-check("[6] front prompt: layout, sleeve rule, pre-fill, no invention",
-      "In the first image, " + "; ".join(want_words) + "." in pf
-      and "The left sleeve and right sleeve get only the plain fabric" in pf
-      and "already filled with the plain fabric colour" in pf and "Do not invent text" in pf
-      and "{{" not in pf and "{%" not in pf, pf)
-pb = gct.render_prompt(piece="T-shirt", pieces=["back panel"], side="back",
-                       layout=["the piece at the top right is the back panel"])
-check("[6] back prompt: its layout, no sleeve sentence", "the piece at the top right is the back panel" in pb
-      and "sleeve" not in pb and "Do not invent text" in pb, pb)
+# [6] the short prompts
+fp_pl = {"atlas_px": 1000, "islands": [
+    {"name": "front", "bbox_px": [20, 20, 500, 450]}, {"name": "sleeve_l", "bbox_px": [20, 700, 450, 950]}]}
+check("[6] front_place: top left / middle / none",
+      (gct.front_place(fp_pl), gct.front_place({"atlas_px": 1000, "islands": [
+          {"name": "front", "bbox_px": [400, 400, 600, 600]}]}), gct.front_place({"atlas_px": 1000, "islands": [
+              {"name": "sleeve_l", "bbox_px": [20, 700, 450, 950]}]}))
+      == ("top left", "middle", ""))
+check("[6] is_decorated: 0.142 / 0.076 / 0.10 / None",
+      [gct.is_decorated(v) for v in (0.142, 0.076, 0.10, None)] == [True, False, False, False])
+want_plain = ("Texture the sewing pattern in the first image with the fabric of the T-shirt in the second image. Keep "
+              "every shape, its colour and the white background exactly. Add only the fine weave of the fabric, flat "
+              "and evenly lit.")
+want_dec = ("The top left shape of the first image is the front of the long-sleeve shirt in the second image, laid "
+            "flat. Paint it as that front: same fabric, same print or embroidery at the same place. The other shapes "
+            "get plain fabric only. Outlines, colour and white background stay unchanged.")
+want_back = ("Texture the shape in the first image with the fabric on the back of the T-shirt in the second image. "
+             "Keep the shape, its colour and the white background exactly. Add only the fine weave of the fabric, "
+             "flat and evenly lit.")
+pf = gct.render_prompt(piece="T-shirt")
+pd = gct.render_prompt(piece="long-sleeve shirt", decorated=True, front_place=gct.front_place(fp_pl))
+pb = gct.render_prompt(piece="T-shirt", side="back")
+check("[6] plain front prompt word for word", pf == want_plain, pf)
+check("[6] decorated front prompt word for word", pd == want_dec, pd)
+check("[6] back prompt word for word", pb == want_back, pb)
+from app.core.prompt_adapters import reference_wording  # noqa: E402
+
+check("[6] P-H3 wording: the tested <Picture N> text",
+      reference_wording(pf, "P-H3-Image").startswith("Texture the sewing pattern in <Picture 1> with the fabric of "
+                                                    "the T-shirt in <Picture 2>."), reference_wording(pf, "P-H3-Image"))
+try:
+    gct.render_prompt(piece="T-shirt", decorated=True)
+    check("[6] decorated without a place raises", False)
+except ValueError:
+    check("[6] decorated without a place raises", True)
 from types import SimpleNamespace  # noqa: E402
 
 from app.core.prompt_compose import compose  # noqa: E402
 
 for fam in ("natural", "keywords"):
-    for label, text in (("front", pf), ("back", pb)):
+    for label, text in (("front", pf), ("decorated front", pd), ("back", pb)):
         c = compose(use_case="garment_cut_texture", subject=text,
                     backend=SimpleNamespace(model="P-H3-Image", image_family=fam))
         check(f"[6] compose keeps the {label} prompt byte-identical ({fam})", c.prompt == text and c.negative == ""

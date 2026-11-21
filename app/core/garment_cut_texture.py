@@ -15,7 +15,7 @@ no drape needed; a drape of the same cut writes the same bytes; this module neve
 
 The PROMPT (Task 6) is the shipped Jinja2 file ``shared/templates/image/garment_cut_texture.md`` — its own tiny
 ``SandboxedEnvironment`` + ``StrictUndefined`` loader here, deliberately not world-overridable (``/admin/templates``
-stays LLM-only); ``layout_words`` names each island by its place in the template. ``PROMPT_SHA`` (md5 of the file
+stays LLM-only), short by the prompt test 2026-11-21; code picks the front variant (``is_decorated``). ``PROMPT_SHA`` (md5 of the file
 text) enters the cut atlas key and the record (``prompt_sha``), so a reworded prompt makes an old atlas stale. The render runs on the occasion
 ``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
@@ -200,7 +200,7 @@ def render_template(islands: dict, size: int | None = None, fill=None) -> Image.
 
 # ---------------------------------------------------------------------------------------------------- prompt
 
-#: English panel name per part, in pattern order (the order the prompt lists the pieces in).
+#: English panel name per part (``_split_name`` knows a split part ``front_2`` by these bases).
 PROMPT_PIECE_NAMES = {
     "front": "front panel", "back": "back panel", "sleeve_l": "left sleeve", "sleeve_r": "right sleeve",
     "band": "neckband", "collar": "collar", "placket": "placket",
@@ -225,22 +225,34 @@ def prompt_template(side: str = "front") -> Template:
     return _PROMPT_ENV.from_string(PROMPT_TEXTS[side])
 
 
-def render_prompt(*, piece: str, pieces: list[str], side: str = "front", layout: list[str] | None = None) -> str:
-    """The cut-texture prompt of the ``side`` job for ``piece`` (e.g. "T-shirt") with the pattern ``pieces`` of that
-    job (English panel names) and the ``layout`` sentences (``layout_words``: which island is which, in words of the
-    template). The sleeves the prompt speaks of are the pieces with "sleeve" in their name. Ordinal wording ("the
-    first image") — the central handoff rewrites it per backend."""
-    pieces = list(pieces)
-    return prompt_template(side).render(piece=piece, pieces=pieces, layout=list(layout or []),
-                                        sleeves=[p for p in pieces if "sleeve" in p]).strip()
+#: Prompt test 2026-11-21 — the item picture's detail density (``cut_texture_post.picture_reference``) above which the
+#: FRONT job gets the decorated prompt (the print / embroidery is painted onto the front panel): Dario's embroidered
+#: shirt 0.142, Kai's plain T-shirt 0.013, Tilda's plain shirt 0.076. Code decides, never the model.
+DECORATED_DETAIL = 0.10
 
 
-#: ``layout_words``: an island centre left of this share of the template is "left", right of 1 - it "right"; the
-#: same for top / bottom; below ``LAYOUT_VERY`` it is "at the very bottom" (the neckband strip under the sleeves).
+def is_decorated(detail_front) -> bool:
+    """Whether the item picture carries a print / embroidery worth the decorated front prompt (``DECORATED_DETAIL``)."""
+    try:
+        return float(detail_front) > DECORATED_DETAIL
+    except (TypeError, ValueError):
+        return False
+
+
+def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "") -> str:
+    """The cut-texture prompt of the ``side`` job for ``piece`` (e.g. "T-shirt"): the short plain prompt, or for a
+    ``decorated`` front the one that names the front island by its ``front_place`` ("top left", ``front_place``).
+    Ordinal wording ("the first image") — the central handoff rewrites it per backend."""
+    if side == "front" and decorated and not front_place:
+        raise ValueError("a decorated front prompt needs the front island's place")
+    return prompt_template(side).render(piece=piece, decorated=bool(decorated),
+                                        front_place=front_place or "").strip()
+
+
+#: ``_place_words``: an island centre left of this share of the template is "left", right of 1 - it "right"; the
+#: same for top / bottom; below ``LAYOUT_VERY`` it is "at the very bottom".
 LAYOUT_SIDE = 0.36
 LAYOUT_VERY = 0.9
-#: An island whose bounding box is this many times wider than high (or higher than wide) is "the long thin strip".
-LAYOUT_STRIP = 6.0
 
 
 def _place_words(cx: float, cy: float) -> str:
@@ -253,34 +265,21 @@ def _place_words(cx: float, cy: float) -> str:
     return f"at the {v} {h}".strip()
 
 
-def layout_words(islands: dict) -> list[str]:
-    """One sentence per island of the job's payload, in pattern order, saying which island of the template is which
-    piece — e.g. "the large piece at the top left is the front panel", "the piece at the bottom left is the left
-    sleeve", "the long thin strip at the very bottom is the neckband" (user test 2026-11-21: the model did not take
-    the wide fan-shaped sleeve islands for sleeves). Positions are the island's bbox centre in the square template
-    (``LAYOUT_SIDE`` / ``LAYOUT_VERY``); "large" marks the island with the largest bbox area when the job has more
-    than one; a bbox ``LAYOUT_STRIP`` times longer than wide is "the long thin strip"."""
+def front_place(islands: dict) -> str:
+    """Where the front panel sits in the job's template, as the decorated prompt says it: the bbox centre of the first
+    island whose part is "front" in ``_place_words`` without its preposition ("top left", "middle right", "very
+    bottom"); "" without a front island."""
     size = float(islands.get("atlas_px") or 2048)
-    names = {n: w for n, w in zip(_pattern_order(islands), prompt_pieces(islands))}
-    boxes = {}
-    for isl in islands.get("islands", []):
-        x0, y0, x1, y1 = (float(v) for v in (isl.get("bbox_px") or _bbox(isl)))
-        boxes[str(isl["name"])] = (x0, y0, x1, y1)
-    if not boxes:
-        return []
-    largest = max(boxes, key=lambda n: (boxes[n][2] - boxes[n][0]) * (boxes[n][3] - boxes[n][1]))
-    out = []
-    for name in _pattern_order(islands):
-        x0, y0, x1, y1 = boxes[name]
-        w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
-        if max(w / h, h / w) >= LAYOUT_STRIP:
-            shape = "the long thin strip"
-        elif name == largest and len(boxes) > 1:
-            shape = "the large piece"
-        else:
-            shape = "the piece"
-        out.append(f"{shape} {_place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)} is the {names[name]}")
-    return out
+    fronts = sorted((i for i in islands.get("islands", []) if part_of(str(i["name"])) == "front"),
+                    key=lambda i: _split_name(str(i["name"]))[1])
+    if not fronts:
+        return ""
+    x0, y0, x1, y1 = (float(v) for v in (fronts[0].get("bbox_px") or _bbox(fronts[0])))
+    words = _place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)
+    for lead in ("at the ", "in the "):
+        if words.startswith(lead):
+            return words[len(lead):]
+    return words
 
 
 def _split_name(name: str) -> tuple[str, int]:
@@ -288,28 +287,6 @@ def _split_name(name: str) -> tuple[str, int]:
     if base and n.isdigit() and base in PROMPT_PIECE_NAMES:
         return base, int(n)
     return str(name), 1
-
-
-def _pattern_key(name: str) -> tuple:
-    base, n = _split_name(name)
-    order = list(PROMPT_PIECE_NAMES)
-    return (order.index(base) if base in PROMPT_PIECE_NAMES else len(order), base, n)
-
-
-def _pattern_order(islands: dict) -> list[str]:
-    """The payload's island names in pattern order (``PROMPT_PIECE_NAMES``, a split part after its first)."""
-    return sorted((str(i["name"]) for i in islands.get("islands", [])), key=_pattern_key)
-
-
-def prompt_pieces(islands: dict) -> list[str]:
-    """The English panel names of the payload's islands in pattern order; a split part keeps its number
-    (``front_2`` -> "front panel 2"); an unknown part name is spoken plainly after the known ones."""
-    out = []
-    for name in _pattern_order(islands):
-        base, n = _split_name(name)
-        word = PROMPT_PIECE_NAMES.get(base, base.replace("_", " "))
-        out.append(word if n == 1 else f"{word} {n}")
-    return out
 
 
 # ---------------------------------------------------------------------------------------------------- debug sheet
@@ -536,6 +513,73 @@ def job_labels(islands: dict, size: int, job: str) -> np.ndarray:
     for name, iid in ids.items():
         keep[iid] = job_of(name) == job
     return np.where(keep[labels], labels, 0).astype(np.uint8)
+
+
+#: Prompt test 2026-11-21 — the BACK job's template is ZOOMED: the back panel took only 14-16 % of the canvas (a
+#: corner of the atlas), and P-H3 filled the empty white with the back-view photo (every short prompt, coverage
+#: 0.84-0.91) or an extra garment (the long prompt). Cropped to the island box + this margin per side, padded white
+#: to a square and scaled to the canvas, the panel fills ~40 % and the short back prompt passed Kai, Dario and Tilda.
+BACK_ZOOM_MARGIN = 0.12
+
+
+def job_frame(islands: dict, job: str, size: int) -> dict | None:
+    """The zoom frame of ``job``'s template (``BACK_ZOOM_MARGIN``; the back job only): ``{"ox", "oy", "side", "k"}``
+    — the atlas square ``[ox, ox + side) x [oy, oy + side)`` (integers, may reach past the atlas edge) is scaled by
+    ``k = size / side`` onto the template. None for the front job, for a job without islands, or when the crop would
+    not enlarge (``side >= size``)."""
+    if job != "back":
+        return None
+    scale = size / float(islands.get("atlas_px") or size)
+    pts = [np.asarray(i.get("verts_px") or [], float).reshape(-1, 2) * scale
+           for i in islands.get("islands", []) if job_of(str(i["name"])) == job]
+    pts = [p for p in pts if len(p)]
+    if not pts:
+        return None
+    allp = np.concatenate(pts)
+    (x0, y0), (x1, y1) = allp.min(0), allp.max(0)
+    side = int(np.ceil(max(x1 - x0, y1 - y0) * (1 + 2 * BACK_ZOOM_MARGIN)))
+    if side <= 0 or side >= size:
+        return None
+    ox = int(np.floor(0.5 * (x0 + x1) - side / 2))
+    oy = int(np.floor(0.5 * (y0 + y1) - side / 2))
+    return {"ox": ox, "oy": oy, "side": side, "k": size / side}
+
+
+def zoom_payload(islands: dict, job: str, frame: dict, size: int) -> dict:
+    """``islands`` with every island of ``job`` moved into the zoom ``frame`` (``(v - (ox, oy)) * k`` in ``size``
+    pixels; the payload's ``atlas_px`` becomes ``size``; ``bbox_px`` dropped) — island names and so the label ids stay
+    those of the atlas. The other jobs' islands keep their names but lose their triangles: in the frame they would
+    land on the zoomed island and overwrite its labels."""
+    import copy
+    out = copy.deepcopy(islands)
+    scale = size / float(islands.get("atlas_px") or size)
+    k, o = float(frame["k"]), np.array([frame["ox"], frame["oy"]], float)
+    for isl in out.get("islands", []):
+        v = np.asarray(isl.get("verts_px") or [], float).reshape(-1, 2) * scale
+        if job_of(str(isl["name"])) == job:
+            isl["verts_px"] = ((v - o) * k).tolist()
+        else:
+            isl["verts_px"], isl["tris"] = [], []
+        isl.pop("bbox_px", None)
+    out["atlas_px"] = size
+    return out
+
+
+def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tuple[np.ndarray, np.ndarray]:
+    """A zoomed job's post-processed ``image`` / ``grown`` (``size`` square, the ``frame``'s view) back in the atlas
+    frame: scaled to ``side`` (Lanczos; the grown mask nearest) and put at ``(ox, oy)``, clipped to the atlas; white /
+    False elsewhere."""
+    side, ox, oy = int(frame["side"]), int(frame["ox"]), int(frame["oy"])
+    small = np.asarray(Image.fromarray(np.asarray(image, np.uint8), "RGB").resize((side, side), Image.LANCZOS))
+    gsmall = np.asarray(Image.fromarray(np.asarray(grown, np.uint8) * 255, "L").resize((side, side), Image.NEAREST)) > 127
+    out = np.full((size, size, 3), 255, np.uint8)
+    g = np.zeros((size, size), bool)
+    x0, y0 = max(ox, 0), max(oy, 0)
+    x1, y1 = min(ox + side, size), min(oy + side, size)
+    if x1 > x0 and y1 > y0:
+        out[y0:y1, x0:x1] = small[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+        g[y0:y1, x0:x1] = gsmall[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+    return out, g
 
 
 def csig(islands_sha: str, item_sha: str, back_sha: str = "") -> str:
@@ -1129,6 +1173,34 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
             "_image": filled, "_grown": grown, "_mask": mask}
 
 
+def job_template(islands: dict, parts: dict, job: str, size: int, fill=None) -> Image.Image:
+    """The template the ``job`` sends as the first image: ``render_template`` of its islands, in its zoom frame
+    (``job_frame``) when it has one."""
+    frame = job_frame(islands, job, size)
+    sub = split_islands(zoom_payload(islands, job, frame, size))[job] if frame else parts[job]
+    return render_template(sub, size, fill=fill)
+
+
+def post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, refs: dict, *,
+             force: bool = False, sleeve_print: str = "plain") -> dict:
+    """``_post_job`` in the job's zoom frame (``job_frame``: the islands moved into it, ``px_per_cm`` times ``k``)
+    and, on "ready", its image / grown area back in the atlas frame (``unzoom``) with the atlas mask — so ``compose``
+    never sees the frame. ``metrics.zoom`` is the frame (None for the front job)."""
+    frame = job_frame(islands, job, size)
+    if frame is None:
+        res = _post_job(answer, islands, size, px_per_cm, job, refs, force=force, sleeve_print=sleeve_print)
+    else:
+        res = _post_job(answer, zoom_payload(islands, job, frame, size), size, px_per_cm * frame["k"], job, refs,
+                        force=force, sleeve_print=sleeve_print)
+        if res["state"] == "ready":
+            mask = job_labels(islands, size, job) > 0
+            image, grown = unzoom(res["_image"], res["_grown"], frame, size)
+            res.update({"_image": image, "_grown": grown | mask, "_mask": mask})
+    res["metrics"]["zoom"] = ({k: (round(v, 4) if isinstance(v, float) else v) for k, v in frame.items()}
+                              if frame else None)
+    return res
+
+
 def references(character_name: str, item_id: str, has_back_panel: bool) -> dict:
     """``_post_job``'s ``refs`` and the pre-fill: ONE ``garment_matte.cut`` of the item picture (BiRefNet,
     ``_item_matte``) for its base fabric colour, its detail and the colour match's fabric; the back view's detail for
@@ -1313,7 +1385,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
             if stopped and job not in reuse:
                 continue
             template_png = _file(stem, f".template_{job}.png")
-            _write_bytes(template_png, _png(render_template(parts[job], size, fill=refs["prefill"])))
+            _write_bytes(template_png, _png(job_template(islands, parts, job, size, fill=refs["prefill"])))
             raw_png = _file(stem, f".raw_{job}.png")
             if job in reuse:
                 answer = raw_png.read_bytes()
@@ -1321,8 +1393,9 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 force = bool(reuse[job].get("accepted"))
             else:
                 _set_progress(key, job)
-                prompt = render_prompt(piece=name, pieces=prompt_pieces(parts[job]), side=job,
-                                       layout=layout_words(parts[job]))
+                place = front_place(parts[job]) if job == "front" else ""
+                decorated = bool(place) and is_decorated(refs["detail"].get("front"))
+                prompt = render_prompt(piece=name, side=job, decorated=decorated, front_place=place)
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
                 try:
@@ -1333,12 +1406,13 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     raise
                 _write_bytes(raw_png, answer)
                 entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
+                         "prompt": "decorated" if decorated else "plain",
                          "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
                          "islands": [str(i["name"]) for i in parts[job]["islands"]]}
                 force = False
             _set_progress(key, "post")
-            res = _post_job(answer, islands, size, px_per_cm, job, refs, force=force,
-                            sleeve_print=record["sleeve_print"])
+            res = post_job(answer, islands, size, px_per_cm, job, refs, force=force,
+                           sleeve_print=record["sleeve_print"])
             record["jobs"][job] = _entry_from_post(entry, res)
             if res["state"] != "ready":
                 stopped = True      # a rejected job stops the flow: the next job that needs a render is not spent
@@ -1415,8 +1489,8 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
         if not wanted or not raw.is_file():
             continue
         force = job == accept or bool(entry.get("accepted"))
-        res = _post_job(raw.read_bytes(), islands, size, px_per_cm, job, refs, force=force,
-                        sleeve_print=record["sleeve_print"])
+        res = post_job(raw.read_bytes(), islands, size, px_per_cm, job, refs, force=force,
+                       sleeve_print=record["sleeve_print"])
         record["jobs"][job] = _entry_from_post(entry, res)
         if res["state"] == "ready":
             results[job] = res

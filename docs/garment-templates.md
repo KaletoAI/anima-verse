@@ -259,13 +259,18 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
 3. Per job the CLEAN model template of its islands (`render_template`: the islands PRE-FILLED with the item's base
    fabric colour — `cut_texture_post.fabric_colour`, see below —, a thin outline inside the mask, white background,
    square, no text) and ONE routed img2img render (template first, reference second) on the
-   occasion `garment_cut_texture`: `routing.run_routed` → `run_on_backend` → `run_on_backend_channel`. The prompts
-   are shipped Jinja2 files (English; they name the piece and the job's real pattern pieces, say which island is
-   which by its place in the template — `layout_words`, e.g. "the large piece at the top left is the front panel" —,
-   that the islands carry the fabric colour already, that only what Picture 2 really shows is copied and nothing is
-   invented, and that sleeves stay plain unless the picture shows a print on them; not world-overridable,
-   `/admin/templates` stays LLM-only). The use case `garment_cut_texture` carries no style, negative or
-   instruction — the prompt is the whole subject.
+   occasion `garment_cut_texture`: `routing.run_routed` → `run_on_backend` → `run_on_backend_channel`. The BACK
+   job's template is ZOOMED (`job_frame`: the back island's box + `BACK_ZOOM_MARGIN` 12 % per side, a white square
+   scaled to the canvas, so the panel fills ~40 % instead of ~15 %); its answer is gated in that frame and put back
+   into the atlas frame (`unzoom`) before the compose. On the un-zoomed template P-H3 filled the empty canvas with the
+   back-view photo or an extra garment. The prompts are shipped Jinja2 files, SHORT by the prompt test 2026-11-21
+   (23 local P-H3 jobs on three real items; the long prompt with layout sentences invented emblems and prints): the
+   front says "texture the sewing pattern with the fabric of the <piece>, keep every shape, its colour and the white
+   background, add only the fine weave"; for a DECORATED item (`is_decorated`: the item picture's detail density >
+   `DECORATED_DETAIL` 0.10 — code decides, never the model) it names the front island by its place (`front_place`,
+   e.g. "top left") and asks for the same print or embroidery at the same place, the other shapes plain; the back
+   prompt is the plain one on the back's fabric. Not world-overridable, `/admin/templates` stays LLM-only. The use
+   case `garment_cut_texture` carries no style, negative or instruction — the prompt is the whole subject.
 4. Post-processing per job (`app/core/cut_texture_post.py`, pure numpy/PIL): resample the answer to the template
    frame and register it raster-to-raster, gate it against the job's islands AND by the answer gates (below), cut it
    with bleed padding, colour-match it to the ITEM fabric (both jobs — one fabric, one colour), then fill the islands
@@ -315,7 +320,7 @@ hold, so:
   `accepted_over`) and composed; a job without an answer stays `skipped` with "Not made yet", and Run all renders just
   that one. Redo front / back stay as they were.
 
-`POST_VERSION` 3 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 5 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -366,8 +371,9 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   so mip-maps and bilinear lookups at a seam never read the background.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 3 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
-  post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill).
+- `POST_VERSION` = 5 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+  post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
+  foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

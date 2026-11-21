@@ -31,12 +31,11 @@ hand below.
     its sides. The footer reads "19.59 px/cm · atlas 2048²". The sheet is never the model template: it differs
     from ``render_template`` of the same payload.
 [4] Occasion + prompt file (plan Task 6): ``CUT_OCCASION`` / ``CUT_USE_CASE`` are "garment_cut_texture" and the
-    occasion is in the catalog. ``prompt_pieces`` of the T-shirt payload (island names back, band, front, sleeve_l,
-    sleeve_r) lists them in pattern order: front panel, back panel, left sleeve, right sleeve, neckband; a split part
-    keeps its number ("front_2" -> "front panel 2"). The prompt renders for piece "T-shirt" and those pieces: it
-    names "T-shirt", joins the pieces with ", ", carries "the first image" and "the second image" and no Jinja
-    leftovers ("{{", "{#"). After ``prompt_adapters.reference_wording`` with model "p-h3-image" it contains
-    "<Picture 1>" and "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" it is byte-identical.
+    occasion is in the catalog. The front prompt (the short plain one since the prompt test 2026-11-21) renders for
+    piece "T-shirt": it names "T-shirt", carries "the first image" and "the second image" and no Jinja leftovers
+    ("{{", "{#"). After ``prompt_adapters.reference_wording`` with model "p-h3-image" it contains "<Picture 1>" and
+    "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" it is byte-identical. The back prompt reads
+    "the fabric on the back of the T-shirt" and names no panel.
     ``PROMPT_SHA`` is the md5 of the shipped file text (32 hex).
 [5] A missing variable raises (StrictUndefined): the template rendered with ``piece`` only raises
     ``jinja2.exceptions.UndefinedError``.
@@ -56,7 +55,8 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     (the answer IS the mask, so the registration finds the identity map: IoU 1.0), ``.atlas.png`` exists at 2048 x
     2048; colour match moves nothing (atlas mean = fabric mean -> dE 0, the centre of the front island stays
     (150, 40, 40) +-2). ``csig`` = md5("|".join([islands sha, item sha, PROMPT_SHA, str(cut_texture_post.POST_VERSION)]))[:12]; the
-    two references are file PATHS (str) in the order template, item; the front prompt says "T-shirt" 4 times (made
+    two references are file PATHS (str) in the order template, item; the front prompt (the short plain one: the
+    fixture item has no detail) says "T-shirt" once ("the fabric of the T-shirt in the second image") (formerly: 4 times (made
     from the front of the T-shirt / the sewing pattern of the T-shirt / the plain fabric colour of the T-shirt / A
     plain T-shirt stays plain); ``run_routed`` got the occasion, has_ref=True
     and the service's pool; the model is P-H3 without ``use_prompt_upsampler: false`` -> ``upsampler_on`` True;
@@ -137,8 +137,10 @@ rules.
     (a split back panel) goes with the back job.
 [12.2] Seams on {front, back, back_2, sleeve_l} with seams 0 front|back, 1 sleeve_l|front, 2 back|back_2: the front
     job keeps [1], the back job [2]; ``cross_seams`` = [0].
-[12.3] ``generate`` -> two image calls; the front prompt names "front panel, left sleeve, right sleeve, neckband" and
-    not "back panel", the back prompt "pieces: back panel." and "from behind"; per-job coverage keys back {1}, front
+[12.3] ``generate`` -> two image calls; the front prompt is the plain one ("Texture the sewing pattern"), the back
+    prompt "the fabric on the back of"; both name no panel (prompt test 2026-11-21). The back job runs ZOOMED: its
+    ``metrics.zoom`` is ``job_frame`` (k > 1), the front's None, and the back template's non-white pixels are the
+    atlas back island's pixel count times k^2 (+-3 %: area scales with the square, edges round); per-job coverage keys back {1}, front
     {2..5}; Picture 2 of the back job is the back view (40, 40, 150) on white; the atlas centre of the back island is
     (150, 40, 40) +-2 (colour-matched to the item); the summary IoU is the worse job's.
 [12.4] ``compose`` on 20 x 20: front island cols 2..7 grown 0..9 (red), back island cols 10..15 grown 8..17 (blue);
@@ -392,16 +394,8 @@ from app.imagegen import occasions as occ  # noqa: E402
 check("[4] occasion constant", gct.CUT_OCCASION == "garment_cut_texture" and gct.CUT_USE_CASE == "garment_cut_texture",
       (getattr(gct, "CUT_OCCASION", None), getattr(gct, "CUT_USE_CASE", None)))
 check("[4] occasion in the catalog", gct.CUT_OCCASION in occ.occasion_ids())
-pieces = gct.prompt_pieces(pl2)
-check("[4] prompt pieces in pattern order", pieces == ["front panel", "back panel", "left sleeve", "right sleeve",
-                                                       "neckband"], pieces)
-check("[4] a split part keeps its number",
-      gct.prompt_pieces({"islands": [{"name": "front_2"}, {"name": "back"}, {"name": "front"}]})
-      == ["front panel", "front panel 2", "back panel"],
-      gct.prompt_pieces({"islands": [{"name": "front_2"}, {"name": "back"}, {"name": "front"}]}))
-want_pieces = ["front panel", "back panel", "left sleeve", "right sleeve", "neckband"]
-prompt = gct.render_prompt(piece="T-shirt", pieces=want_pieces)
-check("[4] prompt names the piece and its pieces", "T-shirt" in prompt and ", ".join(want_pieces) in prompt, prompt)
+prompt = gct.render_prompt(piece="T-shirt")
+check("[4] prompt names the piece", "T-shirt" in prompt, prompt)
 check("[4] prompt has the ordinal wording", "the first image" in prompt and "the second image" in prompt, prompt)
 check("[4] no Jinja leftovers", "{{" not in prompt and "{#" not in prompt and prompt == prompt.strip())
 ph3 = prompt_adapters.reference_wording(prompt, "p-h3-image")
@@ -413,10 +407,9 @@ shipped_back = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture_b
 check("[4] PROMPT_SHA = md5 of both shipped files", gct.PROMPT_SHA
       == hashlib.md5((shipped + "\0" + shipped_back).encode("utf-8")).hexdigest()
       and re.fullmatch(r"[0-9a-f]{32}", gct.PROMPT_SHA) is not None, gct.PROMPT_SHA)
-back_prompt = gct.render_prompt(piece="T-shirt", pieces=["back panel"], side="back")
-check("[4] back prompt: the back panel only, read from behind", "back panel" in back_prompt
-      and "front panel" not in back_prompt and "from behind" in back_prompt and "the second image" in back_prompt
-      and "{{" not in back_prompt, back_prompt)
+back_prompt = gct.render_prompt(piece="T-shirt", side="back")
+check("[4] back prompt: the fabric on the back, no panel named", "the fabric on the back of the T-shirt" in back_prompt
+      and "panel" not in back_prompt and "the second image" in back_prompt and "{{" not in back_prompt, back_prompt)
 
 # [5] StrictUndefined
 import jinja2  # noqa: E402
@@ -740,7 +733,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[8.1] the prompt is the rendered file, ordinal wording kept for the handoff",
           "the first image" in backend.calls[-2]["prompt"] and backend.calls[-2]["negative"] == "",
           backend.calls[-2]["prompt"][:80])
-    check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 4
+    check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 1
           and gct.piece_name("long") == "long-sleeve shirt", gct.piece_name("long"))
     check("[8.1] upsampler_on noted", rec.get("upsampler_on") is True, rec.get("upsampler_on"))
     check("[8.1] applied: figure invalidated once, the assembly scheduled once", len(INVALIDATED) == 1
@@ -1190,10 +1183,19 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     front_call, back_call = backend.calls[n0], backend.calls[n0 + 1]
     check("[12.3] two image jobs, both ready", len(backend.calls) == n0 + 2 and rec_two.get("state") == "ready"
           and all(rec_two["jobs"][j]["state"] == "ready" for j in ("front", "back")), rec_two.get("jobs"))
-    check("[12.3] front prompt: the four front pieces, back prompt: the back panel only",
-          "front panel, left sleeve, right sleeve, neckband" in front_call["prompt"]
-          and "back panel" not in front_call["prompt"] and "pieces: back panel." in back_call["prompt"]
-          and "from behind" in back_call["prompt"], (front_call["prompt"][:60], back_call["prompt"][:60]))
+    check("[12.3] front prompt plain, back prompt the back's fabric, no panel named",
+          front_call["prompt"].startswith("Texture the sewing pattern")
+          and "the fabric on the back of" in back_call["prompt"] and "panel" not in front_call["prompt"]
+          and "panel" not in back_call["prompt"], (front_call["prompt"][:60], back_call["prompt"][:60]))
+    zb, zf = rec_two["jobs"]["back"]["metrics"].get("zoom"), rec_two["jobs"]["front"]["metrics"].get("zoom")
+    stem_z = gct.cut_dir(CHAR) / f"two_{rec_two['csig']}"
+    with Image.open(f"{stem_z}.template_back.png") as tb:
+        tb_nw = int((np.asarray(tb.convert("RGB")) != 255).any(-1).sum())
+    _two_isl = json.loads(Path(gct.current_pattern(CHAR, "two")["islands_path"]).read_text(encoding="utf-8"))
+    back_px = int((gct.job_labels(_two_isl, 2048, "back") > 0).sum())
+    check("[12.3] the back job is zoomed: k > 1, template area = island area x k^2 (+-3 %), the front not",
+          zf is None and isinstance(zb, dict) and zb["k"] > 1
+          and abs(tb_nw - back_px * zb["k"] ** 2) <= 0.03 * back_px * zb["k"] ** 2, (zb, zf, tb_nw, back_px))
     check("[12.3] per-job coverage keys: back = {1}, front = {2, 3, 4, 5}",
           set(rec_two["jobs"]["back"]["metrics"]["islands"]) == {"1"}
           and set(rec_two["jobs"]["front"]["metrics"]["islands"]) == {"2", "3", "4", "5"},

@@ -47,8 +47,9 @@ CLAMP_DE = 25.0
 #: runs per job (front / back) on its own islands and the two are composed (``garment_cut_texture.compose``). 3
 #: (2026-11-21): the islands go pre-filled with the item's fabric colour, the answer gates (``ANSWER_GATE``) and the
 #: sleeves / neckband filled from the front panel's fabric patch. 4 (2026-11-21): the foreground pieces apart from the
-#: islands are dropped before the registration (``drop_strays``).
-POST_VERSION = 4
+#: islands are dropped before the registration (``drop_strays``). 5 (2026-11-21): the back job runs in its zoom frame
+#: (``garment_cut_texture.job_frame``) and is put back into the atlas frame before the compose.
+POST_VERSION = 5
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256
