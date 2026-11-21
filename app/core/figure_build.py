@@ -32,6 +32,15 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    an accepted fit of an own-mesh piece folds into a drape's key (a boot under trousers, A237), and after the
    last pieces step the run re-checks the drapes (``_replan_templates``) so a key the fit moved is draped in the
    same run.
+4c. ``cut_texture`` — one step per worn template top whose ``texture`` is "cut" and whose texture from cut of the
+   current key is not made (``garment_cut_texture.build_state``, user test 2026-11-21): the cut-only run, the back
+   view when missing, the front and back image jobs, the gates and the atlas — its jobs are in the step and in
+   the cost note. It is STARTED in the background just before the piece's drape (``_prestart_cut_texture``: the
+   image jobs run while the CPU drapes) and joined in its own place (``garment_cut_texture.build_join``); it holds
+   the piece's hub-job claim (``piece_jobs``) like the dialog's button, so a flow of the piece another click started
+   is waited for, never submitted twice. A rejected or failed result of the current key is a cached failure
+   ("failed — Retry": a manual Build re-renders only the jobs that did not pass). Its failure never holds the
+   assembly: the figure is assembled with the projection and the step names the reason.
 5. ``hair`` — the worn HairDeck hairstyle whose chain has something to run
    (``run_queued``). A humanoid that owns no hairstyle gets its first one
    (``garment_hair.ensure_hairstyle``) when the Build starts.
@@ -141,13 +150,15 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "pendant", "accessory", "hair",
+STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "cut_texture", "pendant",
+              "accessory", "hair",
               "views", "fits",
               "assemble",
               "collision")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
 DEPENDS = {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
-           "template": {"plain_body"}, "accessory": {"plain_body"}, "hair": {"plain_body"},
+           "template": {"plain_body"}, "cut_texture": {"plain_body"}, "accessory": {"plain_body"},
+           "hair": {"plain_body"},
            "views": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
@@ -371,6 +382,25 @@ def _template_step(character_name: str, item_id: str, delivered, profile: Dict[s
     return None
 
 
+def _cut_texture_step(character_name: str, item_id: str) -> Optional[Step]:
+    """The texture from cut of a worn template top whose ``texture`` is "cut" (user test 2026-11-21:
+    ``garment_cut_texture.build_state``): None when it is made (or not wanted); "failed — Retry" for a cached failure
+    of the current key (a rejected answer, a failed cut, no item picture — a manual Build retries it, an automatic one
+    skips it); else the step with the image jobs it spends (``jobs`` — an estimate while the pattern is not cut yet)."""
+    from app.core import garment_cut_texture as gct
+    st = gct.build_state(character_name, item_id)
+    name = _item_name(item_id)
+    if st["state"] == gct.BUILD_DUE:
+        label = (gct.BUILD_LABEL_ESTIMATE if st["estimate"] else gct.BUILD_LABEL).format(name=name, n=st["jobs"])
+        return Step("cut_texture", label, int(st["jobs"]), item_id)
+    if st["state"] == gct.BUILD_COMPOSE:
+        return Step("cut_texture", gct.BUILD_COMPOSE_LABEL.format(name=name), 0, item_id)
+    if st["state"] == gct.BUILD_FAILED:
+        label = gct.BUILD_LABEL.format(name=name, n=st["jobs"]) + FAILED_SUFFIX
+        return Step("cut_texture", label, int(st["jobs"]), item_id, failed=str(st["reason"] or "failed"))
+    return None
+
+
 #: The label of an accessory build step (Ruling A118): CPU only.
 ACCESSORY_LABEL = "Accessory · {name} (CPU, 0 hub jobs)"
 
@@ -516,6 +546,11 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         step = _template_step(character_name, item_id, delivered, profile)
         if step is not None:
             steps.append(step)
+    for item_id in wanted.template:
+        # User test 2026-11-21: a top whose texture is "cut" is finished by the Build — its image jobs are counted here.
+        step = _cut_texture_step(character_name, item_id)
+        if step is not None:
+            steps.append(step)
     for item_id in wanted.accessory:
         # A225: the pendant's hub job first (manual only); a chain that is current is then built again with it.
         pendant = _pendant_step(character_name, item_id, profile)
@@ -603,6 +638,10 @@ def cost(character_name: str, steps: Optional[List[Step]] = None) -> Dict[str, A
         note = "cost unknown — " + "; ".join(unknown)
     elif steps:
         note = COST_NOTE.format(total=total)
+        cut_jobs = sum(int(s.jobs or 0) for s in steps if s.name == "cut_texture")
+        if cut_jobs:
+            from app.core import garment_cut_texture as gct
+            note += " — " + gct.BUILD_COST_NOTE.format(n=cut_jobs)
     else:
         note = "nothing to build"
     return {"hub_jobs": total, "steps": [s.as_dict() for s in steps], "note": note}
@@ -1266,6 +1305,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                         _check_pin(character_name)
                     if step.name == "plain_body":
                         _wait_base_views(character_name)
+                    _prestart_cut_texture(character_name, step, steps[index:], explicit)
                     error = _run_step(character_name, step, explicit)
                 except BuildPaused:
                     # Ruling A42: the chain of this step waits held in the garment FIFO.
@@ -1750,6 +1790,36 @@ def _run_template(character_name: str, step: Step, explicit: bool = False) -> st
     return "" if state["state"] == "ready" else StepError(str(state["reason"]), state.get("failure"))
 
 
+def _run_cut_texture(character_name: str, step: Step, explicit: bool = False) -> str:
+    """The piece's texture from cut (``garment_cut_texture.build_join``: the run ``_prestart_cut_texture`` began
+    before the drape, else now) — "" when the atlas is made, else the plain reason (a rejected answer names its
+    gate)."""
+    from app.core import garment_cut_texture as gct
+    res = gct.build_join(character_name, step.item_id, explicit=explicit)
+    return "" if res.get("ok") else str(res.get("reason") or "failed")
+
+
+def _prestart_cut_texture(character_name: str, step: Step, rest: List[Step], explicit: bool) -> None:
+    """Before the drape of a template top (``step``) whose cut texture comes later in the plan (``rest``): start that
+    flow in the background so its image jobs run while the CPU drapes — only when its pattern can be cut now (the
+    layers under it are draped) and an automatic Build would run it (no cached failure). Never raises."""
+    if step.name != "template":
+        return
+    later = next((s for s in rest if s.name == "cut_texture" and s.item_id == step.item_id), None)
+    if later is None or (later.failed and not explicit):
+        return
+    try:
+        from app.core import garment_cut_texture as gct
+        from app.core import garment_template_cut as gtc
+        if gtc.cut_key(character_name, step.item_id)["sig"] is None:
+            return
+        if gct.build_start(character_name, step.item_id, explicit=explicit):
+            logger.info("Build %s: the texture from cut of %s starts beside its drape", character_name,
+                        _item_name(step.item_id))
+    except Exception:  # noqa: BLE001 — the step runs it in its place then
+        logger.debug("Build %s: cut texture not pre-started", character_name, exc_info=True)
+
+
 def _run_pendant(character_name: str, step: Step, explicit: bool = False) -> str:
     """A225: the pendant's ONE hub job (``accessory_pendant.run``); only ever planned as a manual step."""
     from app.core import accessory_pendant
@@ -2010,7 +2080,7 @@ ASSEMBLY_SLOW = "Pieces not put on yet — the garment assembly is still running
 
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "base_repair": _run_base_repair, "tip_smoothing": _run_tip_smoothing,
-    "shape": _run_shape, "pieces": _run_pieces, "template": _run_template,
+    "shape": _run_shape, "pieces": _run_pieces, "template": _run_template, "cut_texture": _run_cut_texture,
     "pendant": _run_pendant, "accessory": _run_accessory,
     "hair": _run_hair, "views": _run_views, "fits": _run_fits, "assemble": _run_assemble,
     "collision": _run_collision}
@@ -2216,7 +2286,10 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
     texture_warning (``garment_template.texture_warning``), cut (plan 2026-11-20-template-cut-uv-texture: the "texture
     from cut" state ``{state, reason, iou, de_after, px_per_cm, csig}`` of a ready drape, ``garment_template.cut_info``;
     ``texture`` is then the EFFECTIVE source: "cut" while the cut atlas is in use, else the projection's source)},
-    cost {llm_calls, hub_jobs, cpu_s}}`` — Build never spends the cut job (``hub_jobs`` 0)."""
+    cost {llm_calls, hub_jobs, cpu_s}, cut_build}`` — ``cut_build`` (user test 2026-11-21) the Build's texture-from-cut
+    step of the piece: ``{state ("done" / "due" / "compose" / "failed" / "running"), reason, jobs, estimate, step}``
+    (``garment_cut_texture.build_state``; ``step`` where a running flow is), None when the piece does not want it;
+    its ``jobs`` while due or failed are ``cost.cut_jobs`` (the drape itself stays 0 hub jobs)."""
     from app.core import base_body, garment_template
     stored = garment_template.template_of(item)
     base = base_body.current_base(character_name, profile=profile)
@@ -2247,7 +2320,21 @@ def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wante
                        "texture_warning": garment_template.texture_warning(metrics.get("bake"), cut)}
            if metrics else None,
            "cost": {"llm_calls": 1, "hub_jobs": 0, "cpu_s": garment_template.CPU_ESTIMATE_S}}
+    out["cut_build"] = _cut_build_row(character_name, item_id, item)
+    if out["cut_build"] and out["cut_build"]["state"] in ("due", "failed"):
+        out["cost"]["cut_jobs"] = int(out["cut_build"]["jobs"] or 0)
     return out
+
+
+def _cut_build_row(character_name: str, item_id: str, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``_template_row``'s ``cut_build`` (its docstring). Never raises."""
+    from app.core import garment_cut_texture as gct
+    st = gct.build_state(character_name, item_id, item=item)
+    if st["state"] == gct.BUILD_OFF:
+        return None
+    running = gct.build_running(character_name, item_id) or gct.status(character_name, item_id)["running"]
+    return {**st, "state": "running" if running else st["state"],
+            "step": gct.progress_step(character_name, item_id) if running else ""}
 
 
 def _accepted_by_user(character_name: str, item_id: str, shape: str, profile: Dict[str, Any],

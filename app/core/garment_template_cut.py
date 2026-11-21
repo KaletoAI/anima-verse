@@ -381,3 +381,46 @@ def schedule(character_name: str, item_id: str, *, runner=None) -> Dict[str, Any
 
     threading.Thread(target=work, name=f"template-cut-{item_id}", daemon=True).start()
     return {**now, "state": "cutting", "reason": CUTTING}
+
+
+#: How often ``ensure`` looks whether a cut started elsewhere (the dialog's ``schedule``) has ended.
+ENSURE_POLL_S = 1.0
+
+
+def ensure(character_name: str, item_id: str, *, timeout_s: float = CUT_TIMEOUT_S * 3,
+           poll_s: float = ENSURE_POLL_S, runner=None) -> Dict[str, Any]:
+    """The Build's way to the cut (cut-texture Build step, 2026-11-21): the piece's cut NOW, synchronously — a ready
+    cut is returned as it is; a cut that runs in another thread (the dialog's ``schedule``) is waited for, never
+    started twice; a missing cut is run here under the same ``_running`` mark ``schedule`` honours (a dialog poll
+    meanwhile reads "cutting"). Unlike ``schedule`` a Build ignores ``RETRY_AFTER_S`` (a Build is a deliberate run)
+    and does not re-run a cut that failed for its key. Returns the piece's ``state`` afterwards ("ready" / "failed" /
+    "missing" / "blocked"); "missing" with the waiting reason when ``timeout_s`` ran out."""
+    import time as _time
+    deadline = _time.monotonic() + timeout_s
+    fn = runner or run
+    while True:
+        key = cut_key(character_name, item_id)
+        sig = key["sig"]
+        now = state(character_name, item_id, key=key)
+        if sig is None or now["state"] in ("ready", "failed"):
+            return now
+        k = (character_name, item_id, sig)
+        with _lock:
+            mine = _running.get(k) != "running"
+            if mine:
+                _left.pop(k, None)
+                _running[k] = "running"
+        if mine:
+            try:
+                fn(character_name, item_id)
+            except Exception as e:  # noqa: BLE001 — the state says what is left; the log says why
+                logger.warning("Cut %s %s (Build): %s", character_name, item_id, e)
+                with _lock:
+                    _left[k] = (_time.monotonic(), type(e).__name__)
+            finally:
+                with _lock:
+                    _running.pop(k, None)
+            return state(character_name, item_id)
+        if _time.monotonic() >= deadline:
+            return {**now, "state": "missing", "reason": CUTTING}
+        _time.sleep(poll_s)

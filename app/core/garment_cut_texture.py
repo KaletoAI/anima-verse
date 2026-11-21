@@ -21,7 +21,9 @@ text) enters the cut atlas key and the record (``prompt_sha``), so a reworded pr
 
 The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready CUT with islands
 (``garment_template_cut.state``), an item picture) and runs ``generate`` in a thread — ONE attempt per click, no
-retry, no auto-trigger from Build; it never waits for a drape and may run while the Build drapes the piece. A cut
+retry; it never waits for a drape and may run while the Build drapes the piece. The character's Build runs the same
+flow as its step "cut_texture" for a top whose ``texture`` is "cut" (``build_state`` / ``build_start`` /
+``build_join``, user test 2026-11-21) — no click on the dialog's button is needed. A cut
 atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, ``PROMPT_SHA``,
 ``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
 the state "ready" / "rejected" / "failed". The assembly maps it onto a drape whose islands have the same sha — every
@@ -1200,11 +1202,11 @@ def sleeve_print_of(item_id: str) -> str:
 
 
 def _finish(character_name: str, item_id: str, record: dict, parts: dict, results: dict, islands: dict,
-            size: int, stem: Path) -> dict:
+            size: int, stem: Path, *, apply_after: bool = True) -> dict:
     """The end of a flow and of a re-compose: the missing job entries ("skipped" behind a job that did not pass,
     ``NOT_MADE`` behind passed ones), the record's state (the first job that is not ready gives "rejected" and the
     reason), on "ready" the composed atlas and the seam metrics; the record written, the figure re-assembled on
-    "ready"."""
+    "ready" (``apply_after`` False — the Build's own step: only ``figure.invalidate``, its assembly step comes next)."""
     from app.core.timeutils import utc_now_iso
     blocked = False
     for job in parts:
@@ -1231,9 +1233,12 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
     if atlas is not None:
         _write_bytes(_file(stem, ".atlas.png"), _png(Image.fromarray(atlas, "RGB")))
     _write_record(_file(stem, ".json"), record)
-    if record["state"] == "ready":
+    if record["state"] == "ready" and apply_after:
         _set_progress((character_name, item_id), "apply")
         apply(character_name)
+    else:
+        from app.core import figure
+        figure.invalidate()     # the Figure tab, the plan and the open-steps badges read the new record
     return record
 
 
@@ -1245,7 +1250,7 @@ def _entry_from_post(entry: dict, res: dict) -> dict:
     return entry
 
 
-def generate(character_name: str, item_id: str, *, only: str | None = None) -> dict:
+def generate(character_name: str, item_id: str, *, only: str | None = None, apply_after: bool = True) -> dict:
     """ONE flow (module comment above): -> the record (``state`` "ready", "rejected" or "failed"). A job whose answer
     of the same csig passed (or was accepted, ``use_answer``) is re-used (re-posted from its raw file,
     ``reused_jobs``) — Run all renders only what did not pass; ``only`` "front" / "back" always renders that job and
@@ -1353,7 +1358,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
         return record
     for job in parts:
         record["jobs"].setdefault(job, {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
-    return _finish(character_name, item_id, record, parts, results, islands, size, stem)
+    return _finish(character_name, item_id, record, parts, results, islands, size, stem, apply_after=apply_after)
 
 
 def usable_answers(character_name: str, item_id: str, sig: str | None = None) -> dict:
@@ -1374,7 +1379,7 @@ def usable_answers(character_name: str, item_id: str, sig: str | None = None) ->
     return out
 
 
-def recompose(character_name: str, item_id: str, *, accept: str | None = None) -> dict:
+def recompose(character_name: str, item_id: str, *, accept: str | None = None, apply_after: bool = True) -> dict:
     """The CPU path of "Use this answer" (``accept`` = the job whose shown answer the user puts on the figure, also a
     rejected one: it is marked ``accepted`` with the reason it overrode) and of a changed ``sleeve_print``
     (``accept`` None): every job of the current csig whose answer passed or was accepted is post-processed again from
@@ -1415,7 +1420,7 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None) -
         record["jobs"][job] = _entry_from_post(entry, res)
         if res["state"] == "ready":
             results[job] = res
-    return _finish(character_name, item_id, record, parts, results, islands, size, stem)
+    return _finish(character_name, item_id, record, parts, results, islands, size, stem, apply_after=apply_after)
 
 
 def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None) -> dict:
@@ -1535,6 +1540,231 @@ def _launch(character_name: str, item_id: str, call, *, select: bool) -> bool:
 
     threading.Thread(target=work, name=f"cut-texture-{item_id}", daemon=True).start()
     return True
+
+
+# --- the Build's step (user test 2026-11-21) ------------------------------------------------------------------------
+#
+# Tilda's and Dario's shirts were draped by the Build and stayed on the projection: the texture from cut was made only
+# by the dialog's button. A template top whose ``texture`` is "cut" is now finished by the character's Build
+# (``figure_build``: the step "cut_texture"): the cut-only run, the back view when missing, the front and back image
+# jobs, the gates, the atlas — and the Build's own assembly puts it on. The step starts in the background just before
+# the piece's drape (``build_start``: the hub jobs run while the CPU drapes) and is joined in its place in the plan
+# (``build_join``). It takes the piece's hub-job claim (``piece_jobs``) like the dialog: a dialog flow of the piece that
+# runs is waited for and its record read, never a second submit.
+
+#: The Build step's states (``build_state``).
+BUILD_OFF, BUILD_DONE, BUILD_DUE, BUILD_COMPOSE, BUILD_FAILED = "off", "done", "due", "compose", "failed"
+#: The Build step's labels (English; ``figure_build`` shows them as they are).
+BUILD_LABEL = "Texture from cut · {name} (+{n} image jobs)"
+BUILD_LABEL_ESTIMATE = "Texture from cut · {name} (+{n} image jobs, estimate — the pattern is cut first)"
+BUILD_COMPOSE_LABEL = "Texture from cut · {name}: compose again (CPU, 0 hub jobs)"
+#: The cost note's part of the cut texture (``figure_build.cost``).
+BUILD_COST_NOTE = "+{n} image jobs for the cut texture"
+#: How long the step waits for a cut / a flow of the piece another click started, at most.
+BUILD_WAIT_S = 3 * 3600.0
+BUILD_POLL_S = 2.0
+#: The step's error when the piece stayed claimed by another flow for ``BUILD_WAIT_S``.
+BUILD_BUSY = "The piece stayed busy with another job ({reason}) — Build again once it is done"
+
+_build_runs: dict[tuple[str, str], dict] = {}
+
+
+def _estimate_jobs(character_name: str, item_id: str) -> int:
+    """The image jobs of a flow whose pattern is not cut yet: the back view when missing, the item upscale when the
+    picture is small, the front and the back job (a top with a bodice always has a back panel)."""
+    side = _item_side(item_id)
+    view = 1 if back_view(character_name, item_id) is None else 0
+    return view + (1 if 0 < side < MIN_ITEM_SIDE else 0) + len(JOBS)
+
+
+def build_state(character_name: str, item_id: str, *, item: dict | None = None) -> dict:
+    """What the Build has to do for the piece's texture from cut: ``{state, reason, jobs, estimate}`` —
+
+    - ``off``: the piece does not want it (``texture`` not "cut", not a pattern kind, a strapless top, no parameters
+      or no plain body — the drape step says those);
+    - ``done``: a ready record of the current csig with its atlas, composed with the piece's sleeve option;
+    - ``compose``: a ready record composed with the other sleeve option (``recompose``, CPU, 0 jobs);
+    - ``failed``: the current cut failed, the item has no picture, or the current csig's record is "rejected" /
+      "failed" — a cached failure: an automatic Build skips it, a manual one retries it (Run all: only the jobs that
+      did not pass are rendered again, ``reused_jobs``); ``jobs`` what that retry spends;
+    - ``due``: nothing made for the current csig yet (or the cut not made yet: ``estimate`` True, ``jobs`` from
+      ``_estimate_jobs``).
+
+    Read-only: no Blender, no hub job; never raises (a read error is ``off`` with the reason logged)."""
+    from app.core import garment_template as gt
+    from app.core import garment_template_cut as gtc
+    from app.models.inventory import get_item
+    out = {"state": BUILD_OFF, "reason": "", "jobs": 0, "estimate": False}
+    try:
+        item = item if item is not None else get_item(item_id)
+        params = gt.params_of(item) or {}
+        if params.get("texture") != "cut":
+            return out
+        key = gtc.cut_key(character_name, item_id, item=item)
+        if key["sig"] is None:
+            if key["reason"] == gtc.WAITING_LOWER:
+                return {**out, "state": BUILD_DUE, "reason": key["reason"],
+                        "jobs": _estimate_jobs(character_name, item_id), "estimate": True}
+            return {**out, "reason": key["reason"]}
+        cut = gtc.state(character_name, item_id, key=key)
+        if cut["state"] == "failed":
+            return {**out, "state": BUILD_FAILED, "reason": cut["reason"]}
+        if item_sha(item_id) is None:
+            return {**out, "state": BUILD_FAILED, "reason": BLOCKED_PICTURE}
+        if cut["state"] != "ready":
+            return {**out, "state": BUILD_DUE, "reason": cut["reason"],
+                    "jobs": _estimate_jobs(character_name, item_id), "estimate": True}
+        islands = _islands_of(cut)
+        sig = csig_for(character_name, item_id, cut["islands_sha"], islands)
+        record = read_record(character_name, item_id, sig) if sig else {}
+        plan = job_plan(character_name, item_id, islands, cut["islands_sha"])
+        if record.get("state") == "ready" and atlas_path(character_name, item_id, sig).is_file():
+            if str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain"):
+                return {**out, "state": BUILD_DONE}
+            return {**out, "state": BUILD_COMPOSE}
+        if record.get("state") in ("rejected", "failed"):
+            return {**out, "state": BUILD_FAILED, "reason": str(record.get("reason") or record["state"]),
+                    "jobs": int(plan["total"])}
+        return {**out, "state": BUILD_DUE, "jobs": int(plan["total"])}
+    except Exception as e:  # noqa: BLE001 — a plan never fails on it
+        logger.warning("Cut texture %s %s: Build state not read: %s", character_name, item_id, e)
+        return {**out, "reason": str(e) or type(e).__name__}
+
+
+def _claim_for_build(character_name: str, item_id: str, deadline: float, poll_s: float) -> str:
+    """Claim the piece for the Build's flow (``piece_jobs`` "cut" plus the ``_running`` mark the dialog reads): ""
+    when claimed; else waits while another flow of the piece runs (a dialog's cut texture, a view) and gives the
+    ``BUILD_BUSY`` reason when ``deadline`` passes. The caller re-reads the record after a wait."""
+    import time
+    from app.core import piece_jobs
+    key = (character_name, item_id)
+    while True:
+        with _lock:
+            if _running.get(key) != "running":
+                held = piece_jobs.claim(character_name, item_id, "cut")
+                if not held:
+                    _running[key] = "running"
+                    _progress[key] = ""
+                    return ""
+            else:
+                held = piece_jobs.reason(character_name, item_id) or piece_jobs.REASONS["cut"]
+        if time.monotonic() >= deadline:
+            return BUILD_BUSY.format(reason=held)
+        time.sleep(poll_s)
+
+
+def run_for_build(character_name: str, item_id: str, *, explicit: bool, wait_s: float = BUILD_WAIT_S,
+                  poll_s: float = BUILD_POLL_S) -> dict:
+    """The Build step, synchronously: ``{"ok": bool, "reason", "state", "record"}``. A cached failure
+    (``build_state`` "failed") is only retried by a manual Build (``explicit``). The media switch and the routing are
+    asked first (their reasons are the step's error); the cut is made or waited for (``garment_template_cut.ensure``);
+    the piece is claimed (``_claim_for_build`` — a flow another click started is waited for, then its record decides);
+    then ``generate`` / ``recompose`` with ``apply_after`` False (the Build assembles). Never raises."""
+    import time
+    from app.core import garment_template_cut as gtc
+    from app.core import piece_jobs
+    from app.imagegen import routing as _routing
+    from app.imagegen.base import media_generation_enabled
+    deadline = time.monotonic() + wait_s
+    st = build_state(character_name, item_id)
+    if st["state"] in (BUILD_OFF, BUILD_DONE):
+        return {"ok": True, "reason": st["reason"], "state": st["state"], "record": {}}
+    if st["state"] == BUILD_FAILED and not explicit:
+        return {"ok": False, "reason": st["reason"], "state": st["state"], "record": {}}
+    if st["state"] != BUILD_COMPOSE:
+        if not media_generation_enabled():
+            return {"ok": False, "reason": MEDIA_OFF, "state": BUILD_FAILED, "record": {}}
+        if not _routing.chain_for(CUT_OCCASION):
+            return {"ok": False, "reason": BLOCKED_ROUTING, "state": BUILD_FAILED, "record": {}}
+    _set_build_step(character_name, item_id, "cut")
+    cut = gtc.ensure(character_name, item_id, timeout_s=max(1.0, deadline - time.monotonic()))
+    if cut["state"] != "ready":
+        return {"ok": False, "reason": str(cut.get("reason") or gtc.NOT_CUT), "state": BUILD_FAILED, "record": {}}
+    busy = _claim_for_build(character_name, item_id, deadline, poll_s)
+    if busy:
+        return {"ok": False, "reason": busy, "state": BUILD_FAILED, "record": {}}
+    key = (character_name, item_id)
+    outcome = "done"
+    try:
+        st = build_state(character_name, item_id)      # a flow that ran meanwhile may have made it
+        if st["state"] in (BUILD_OFF, BUILD_DONE):
+            return {"ok": True, "reason": "", "state": st["state"], "record": {}}
+        if st["state"] == BUILD_FAILED and not explicit:
+            return {"ok": False, "reason": st["reason"], "state": st["state"], "record": {}}
+        if st["state"] == BUILD_COMPOSE:
+            record = recompose(character_name, item_id, apply_after=False)
+        else:
+            record = generate(character_name, item_id, apply_after=False)
+        ok = record.get("state") == "ready"
+        if not ok:
+            outcome = str(record.get("reason") or record.get("state") or "failed")
+        return {"ok": ok, "reason": "" if ok else outcome, "state": BUILD_DONE if ok else BUILD_FAILED,
+                "record": record}
+    except Exception as e:  # noqa: BLE001 — the step's error
+        outcome = _failure_reason(e)
+        logger.warning("Cut texture %s %s (Build): %s", character_name, item_id, outcome)
+        return {"ok": False, "reason": outcome, "state": BUILD_FAILED, "record": {}}
+    finally:
+        with _lock:
+            _running[key] = outcome
+            _progress.pop(key, None)
+        piece_jobs.release(character_name, item_id, "cut")
+
+
+def _set_build_step(character_name: str, item_id: str, step: str) -> None:
+    with _lock:
+        entry = _build_runs.get((character_name, item_id))
+        if entry is not None:
+            entry["step"] = step
+
+
+def build_start(character_name: str, item_id: str, *, explicit: bool) -> bool:
+    """Start the Build step in the background (before the piece's drape — the hub jobs run while the CPU drapes):
+    True when a thread started, False when one of the piece already runs (it is reused, never a second flow)."""
+    key = (character_name, item_id)
+    with _lock:
+        entry = _build_runs.get(key)
+        if entry is not None and entry["thread"].is_alive():
+            return False
+        entry = {"result": None, "step": "", "explicit": explicit}
+
+        def work() -> None:
+            res = run_for_build(character_name, item_id, explicit=explicit)
+            with _lock:
+                entry["result"] = res
+        entry["thread"] = threading.Thread(target=work, name=f"cut-texture-build-{item_id}", daemon=True)
+        _build_runs[key] = entry
+    entry["thread"].start()
+    return True
+
+
+def build_join(character_name: str, item_id: str, *, explicit: bool, timeout_s: float = BUILD_WAIT_S) -> dict:
+    """The Build step in its place in the plan: joins the background run ``build_start`` began (or runs it now when
+    none was started) and returns its result (``run_for_build``)."""
+    key = (character_name, item_id)
+    with _lock:
+        entry = _build_runs.get(key)
+    if entry is None:
+        build_start(character_name, item_id, explicit=explicit)
+        with _lock:
+            entry = _build_runs.get(key)
+    entry["thread"].join(timeout_s)
+    with _lock:
+        if entry["thread"].is_alive():
+            return {"ok": False, "reason": "The texture from cut is still running — Build again once it is done",
+                    "state": BUILD_FAILED, "record": {}}
+        if _build_runs.get(key) is entry:
+            _build_runs.pop(key, None)
+        res = entry["result"]
+    return res or {"ok": False, "reason": "The texture from cut ended without a result", "state": BUILD_FAILED,
+                   "record": {}}
+
+
+def build_running(character_name: str, item_id: str) -> bool:
+    """Whether the Build's flow of the piece runs now."""
+    with _lock:
+        entry = _build_runs.get((character_name, item_id))
+        return bool(entry is not None and entry["thread"].is_alive())
 
 
 def status(character_name: str, item_id: str) -> dict:

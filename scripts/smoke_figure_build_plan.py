@@ -483,7 +483,8 @@ def stub_sections():
     check("[6] STOP_STEPS", fb.STOP_STEPS, frozenset({"plain_body", "shape", "views"}))
     check("[6] DEPENDS", fb.DEPENDS, {"base_repair": {"plain_body"}, "tip_smoothing": {"plain_body"},
                                       "shape": {"plain_body"},
-                                      "pieces": {"plain_body"}, "template": {"plain_body"}, "accessory": {"plain_body"}, "hair": {"plain_body"},
+                                      "pieces": {"plain_body"}, "template": {"plain_body"}, "cut_texture": {"plain_body"},
+                                      "accessory": {"plain_body"}, "hair": {"plain_body"},
                                       "views": {"plain_body", "shape"}, "fits": {"plain_body"},
                                       "assemble": {"plain_body", "fits"}})
 

@@ -426,7 +426,11 @@ export interface TemplateInfo {
     /** The "texture from cut" state of a ready drape (`garment_template.cut_info`); `texture` is "cut" while its
      *  atlas is in use. */
     cut?: TemplateCut | null } | null
-  cost: { llm_calls: number; hub_jobs: number; cpu_s: number }
+  cost: { llm_calls: number; hub_jobs: number; cpu_s: number; /** The cut texture's image jobs the Build spends. */
+    cut_jobs?: number }
+  /** User test 2026-11-21: the Build's texture-from-cut step of a top whose texture is "cut"
+   *  (`figure_build._cut_build_row`); null when the piece does not want it. */
+  cut_build?: CutBuild | null
   /** The failed drape of the current key as data (`state` "failed"); null otherwise. */
   failure?: StepFailure | null
 }
@@ -440,6 +444,22 @@ export interface TextureWarning {
   low_iou: boolean
   /** A wanted cut texture the figure cannot use (stale / rejected / failed) — said by `templateCutLine`. */
   cut?: { state: string; reason: string; text: string }
+}
+
+/** The Build's texture-from-cut step of a piece (`garment_cut_texture.build_state`, `running` while a flow runs). */
+export interface CutBuild {
+  state: 'done' | 'due' | 'compose' | 'failed' | 'running'
+  reason: string
+  jobs: number
+  estimate: boolean
+  /** Where a running flow is ("cut", "back_view", "upscale", "front", "back", "post", "apply"). */
+  step: string
+}
+
+/** The words of a running flow's step (`garment_cut_texture._progress`). */
+export const CUT_STEP_LABELS: Record<string, string> = {
+  cut: 'cutting the pattern', back_view: 'back view', upscale: 'item picture', front: 'front job', back: 'back job',
+  post: 'checking the answer', apply: 'putting it on',
 }
 
 /** The figure row's "texture from cut" state (`figure_build._template_row` → `metrics.cut`). */
@@ -456,7 +476,19 @@ export interface TemplateCut {
  *  "… — cut rejected: <reason>" — the figure row's line of a piece whose texture is wanted from the cut; "" when the
  *  piece does not want it (`off`). */
 export function templateCutLine(info: TemplateInfo | null | undefined, t: Tr = EN): string {
+  const b = info?.cut_build
+  if (b?.state === 'running') {
+    const step = CUT_STEP_LABELS[b.step]
+    return step ? t('Texture from cut: being made ({step})').replace('{step}', t(step)) : t('Texture from cut: being made')
+  }
+  if (b?.state === 'due') {
+    return t('Texture: projection — the next Build makes the cut texture (+{n} image jobs)').replace('{n}', String(b.jobs))
+  }
+  if (b?.state === 'compose') return t('Texture: projection — the next Build composes the cut texture again (CPU)')
   const c = info?.state === 'ready' ? info.metrics?.cut : null
+  if ((!c || c.state === 'off') && b?.state === 'failed') {
+    return t('Texture from cut failed: {reason} — Build retries it').replace('{reason}', t(b.reason || 'no reason'))
+  }
   if (!c || c.state === 'off') return ''
   if (c.state === 'ready') {
     return t('Texture: cut (IoU {iou}, ΔE {de})').replace('{iou}', (c.iou ?? 0).toFixed(2))
@@ -646,8 +678,9 @@ export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
 /** The cost line of a template piece (checklist 9): what suggesting and draping spend. */
 export function templateCost(c: TemplateInfo['cost'] | undefined, t: Tr = EN): string {
   const cost = c || { llm_calls: 1, hub_jobs: 0, cpu_s: 20 }
-  return t('Suggest: {n} LLM call · Drape: {jobs} hub jobs, ~{s} s CPU')
+  const line = t('Suggest: {n} LLM call · Drape: {jobs} hub jobs, ~{s} s CPU')
     .replace('{n}', String(cost.llm_calls)).replace('{jobs}', String(cost.hub_jobs)).replace('{s}', String(cost.cpu_s))
+  return cost.cut_jobs ? `${line} · ${t('Texture from cut: {n} image jobs').replace('{n}', String(cost.cut_jobs))}` : line
 }
 
 /** Rulings A141 / A142: the words of the poses a drape carries a corrective shape for. */

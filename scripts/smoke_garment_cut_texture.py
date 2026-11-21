@@ -64,7 +64,8 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     position 1).
 [8.2] A white answer (the [8.1] record removed first, so no passed answer is re-used — [12.12]): ``rejected``, reason
     "coverage 0.00 < 0.97"; the raw answer is kept, no atlas — the atlas of [8.1] (same csig) is gone, so a record
-    never sits next to an atlas it did not make.
+    never sits next to an atlas it did not make. ``figure.invalidate`` runs once more (the Build's plan reads the
+    rejection), no assembly is scheduled.
 [8.3] ``run_routed`` raises NoRouteError("garment_cut_texture", []) (its text points to /admin/settings -> Media
     Generation -> Routing): ``failed``, the reason contains "Routing"; no ``.raw.png`` / ``.atlas.png``, the record
     and the two input PNGs (template, item) exist. ``start`` with an empty ``chain_for`` raises NoRouteError before
@@ -758,7 +759,10 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[8.2] the front answer kept; the back job not spent; no atlas", Path(f"{stem}.raw_front.png").is_file()
           and not Path(f"{stem}.raw_back.png").is_file() and not atlas.is_file()
           and (rec2.get("jobs") or {}).get("back", {}).get("state") == "skipped", files_of("shirt"))
-    check("[8.2] no invalidate on a rejection", len(INVALIDATED) == 1, len(INVALIDATED))
+    # since 2026-11-21 a rejection invalidates the figure too (the Build's plan and the open-steps badges read the
+    # new record: "failed — Retry"), but puts nothing on: no assembly is scheduled for it
+    check("[8.2] a rejection invalidates once more (plan), schedules no assembly",
+          len(INVALIDATED) == 2 and len(SCHEDULED) == 1, (len(INVALIDATED), len(SCHEDULED)))
 
     # [8.3] NoRouteError -> failed
     RAISE["exc"] = NoRouteError("garment_cut_texture", [])
