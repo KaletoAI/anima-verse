@@ -58,6 +58,9 @@ DRAPE_ONLY = ("fabric",)
 UV_PATTERN_FILE = Path(__file__).resolve().parents[1] / "blender" / "scripts" / "uv_pattern.py"
 #: md5[:12] of the flattening code (part of ``cut_sig``; the core never imports the Blender scripts).
 UV_PATTERN_SHA = hashlib.md5(UV_PATTERN_FILE.read_bytes()).hexdigest()[:12]
+FITTED_PATTERN_FILE = UV_PATTERN_FILE.parent / "fitted_pattern.py"
+#: md5[:12] of the fitted kinds' part rules (step 3a; in ``cut_sig`` of a fitted piece only).
+FITTED_PATTERN_SHA = hashlib.md5(FITTED_PATTERN_FILE.read_bytes()).hexdigest()[:12]
 #: A cut that does not end in this many seconds is left (measured ~10 s; the slot wait comes on top).
 CUT_TIMEOUT_S = 180
 #: After a run that judged nothing (timeout, Blender missing or interrupted) the cut is not started again for so
@@ -69,7 +72,8 @@ CUTTING = "Cutting the pattern (CPU, 0 hub jobs)"
 NOT_CUT = "The pattern is not cut yet — it is cut when the dialog opens or the parameters are saved (CPU, 0 hub jobs)"
 CUT_FAILED = "Cutting the pattern failed: {error}"
 CUT_LEFT = "Cutting the pattern stopped ({outcome}) — it is cut again when the dialog is opened"
-NO_PATTERN = "Only a top is cut into pattern pieces for now — this kind keeps its projection texture"
+NO_PATTERN = ("Only a top and the close-fitting kinds are cut into pattern pieces for now — this kind keeps its "
+              "projection texture")
 #: A strapless top (bodice, bustier, corset) has no bodice cut: the builder cuts it on the grid UV, no islands.
 NO_PATTERN_STRAPLESS = ("A strapless top is not cut into pattern pieces yet — it keeps its projection texture")
 #: A lower template layer is not draped yet: the next Build drapes it first and lays this piece out of it, so a cut
@@ -94,6 +98,10 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     from app.core import garment_template as gt
     payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION, "uv_pattern": UV_PATTERN_SHA,
                "base": base_sha, "lower": sorted(lower)}
+    if params.get("kind") in gt.FITTED_KINDS:
+        # step 3a: a fitted piece's cut also follows its own version and the part rules (``fitted_pattern.py``)
+        payload["fitted"] = gt.FITTED_VERSION
+        payload["fitted_pattern"] = FITTED_PATTERN_SHA
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
@@ -115,7 +123,7 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
     from app.core import garment_template as gt
     if params["kind"] not in gt.PATTERN_KINDS:
         return None, NO_PATTERN, []
-    if not gt.has_bodice(params):
+    if params["kind"] not in gt.FITTED_KINDS and not gt.has_bodice(params):
         return None, NO_PATTERN_STRAPLESS, []
     states = gt.collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha)
     if wait and any(sub["state"] == "missing" for _o, _it, sub in states):
@@ -164,7 +172,8 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     if params is None:
         out["reason"] = gt.NEEDS_PARAMS
         return out
-    if params["kind"] not in gt.PATTERN_KINDS or not gt.has_bodice(params):
+    if params["kind"] not in gt.PATTERN_KINDS or (params["kind"] not in gt.FITTED_KINDS
+                                                   and not gt.has_bodice(params)):
         out["reason"] = NO_PATTERN if params["kind"] not in gt.PATTERN_KINDS else NO_PATTERN_STRAPLESS
         return out
     profile = profile if profile is not None else (get_character_profile(character_name) or {})

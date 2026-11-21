@@ -126,6 +126,10 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
      grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
+[16] Step 3a (the fitted kinds' pattern pieces): ``build_args`` sends ``uv_mode`` "pattern" for briefs, bra, gloves,
+     tights and trousers too (``PATTERN_KINDS``); ``FITTED_VERSION`` is 1 and only a fitted kind's ``tsig`` carries it:
+     a top's ``tsig`` equals the one ``garment_template.py`` of the base commit c926b67f0 gives for the same inputs
+     (read with ``git show``; skipped with a note without git), a bra's differs (every fitted drape re-drapes once).
 """
 import json
 import shutil
@@ -627,6 +631,38 @@ for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleev
     check(f"[15] {_kw['kind']} -> uv_mode grid",
           gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "grid")
 check("[15] TEMPLATE_VERSION 10", gt.TEMPLATE_VERSION == 10, gt.TEMPLATE_VERSION)
+
+# [16] step 3a: the fitted kinds are cut into pattern pieces
+# the arm joints of Dario's base body (from scripts/smoke_template_cut_first.py) — gloves are fitted to them
+_mu16 = {**MU, "joints": {"leftarm": [0.2081, 1.508, 0.0138], "leftforearm": [0.4789, 1.5019, 0.0144],
+                          "lefthand": [0.7741, 1.5103, 0.0246], "rightarm": [-0.2161, 1.5154, 0.0044],
+                          "rightforearm": [-0.4825, 1.5129, 0.004], "righthand": [-0.7713, 1.5261, 0.0075]},
+         "arm_len": 0.5607}
+for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
+    _p16, _ = gt.validate_params({"kind": _k16})
+    check(f"[16] {_k16} -> uv_mode pattern",
+          gt.build_args(_p16, gt.panel_spec(_p16, _mu16), item_id="x").get("uv_mode") == "pattern")
+check("[16] FITTED_VERSION 1", gt.FITTED_VERSION == 1, gt.FITTED_VERSION)
+import importlib.util  # noqa: E402
+import subprocess  # noqa: E402
+_src16 = subprocess.run(["git", "show", "c926b67f0:app/core/garment_template.py"], cwd=ROOT, capture_output=True,
+                        text=True)
+if _src16.returncode != 0:
+    print("     [16] base comparison skipped (no git / no base commit)")
+else:
+    _d16 = Path(tempfile.mkdtemp(prefix="smoke-template-base-"))
+    try:
+        (_d16 / "garment_template_base.py").write_text(_src16.stdout)
+        _spec16 = importlib.util.spec_from_file_location("garment_template_base", _d16 / "garment_template_base.py")
+        _gb16 = importlib.util.module_from_spec(_spec16)
+        _spec16.loader.exec_module(_gb16)
+        _kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["a"])
+        _top16, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
+        check("[16] a top's tsig is the base commit's", gt.tsig(_top16, **_kw16) == _gb16.tsig(_top16, **_kw16))
+        _bra16, _ = gt.validate_params({"kind": "bra"})
+        check("[16] a bra's tsig differs from the base commit's", gt.tsig(_bra16, **_kw16) != _gb16.tsig(_bra16, **_kw16))
+    finally:
+        shutil.rmtree(_d16, ignore_errors=True)
 import hashlib  # noqa: E402
 _t15 = Path(tempfile.mkdtemp(prefix="smoke-template-islands-"))
 _saved15 = {k: getattr(gt, k) for k in ("templates_dir", "drape_with_fallback", "texture_sources")}

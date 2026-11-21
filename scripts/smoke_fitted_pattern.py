@@ -19,9 +19,10 @@ below (Blender Z-up metres, front = -Y, the wearer's left = +X, cx = cy = 0).
 [2] Centre seam: a front half ring r 0.30 (y < 0), 24 columns from angle pi to 2 pi (column 12 at x = 0), 2 rings:
     every face whose centroid has x > 0 is ``front_l``, x < 0 ``front_r`` — no corner of a ``front_l`` face lies at
     x < 0 and none of a ``front_r`` face at x > 0 (the bisected centre line is a vertex column).
-[3] Gusset box (briefs): crotch point (0, 0.01, 0.811), gusset half width 0.03, cy 0: a face at (0.02, -0.02, 0.80) ->
-    ``gusset`` (|x| < 0.03, -0.03 < y < 0.09, z < 0.841); (0.02, -0.04, 0.80) -> ``front`` (y < 0.01 - 0.04 = -0.03);
-    (0.04, 0.0, 0.80) -> not the gusset (|x| >= 0.03; y 0 is not < cy 0: ``back``).
+[3] Gusset box (briefs): crotch point (0, 0.01, 0.811), cy 0; the gusset spans the whole crotch (no x bound — its
+    sides are the leg openings): a face at (0.02, -0.02, 0.80) -> ``gusset`` (-0.03 < y < 0.09, z < 0.841);
+    (0.02, -0.04, 0.80) -> ``front`` (y < 0.01 - 0.04 = -0.03); (0.04, 0.0, 0.85) -> not the gusset (z >= 0.841;
+    y 0 is not < cy 0: ``back``); (0.12, 0.0, 0.80) -> ``gusset`` (x far off the centre, inside the box).
 [4] Tube cut reaches the border: a tube r 0.06, 0.60 high (32 columns, 12 face rings) closed by a hemisphere cap
     (6 rings + the pole), opened by ``plane_cut`` on the plane y = 0, half x < 0 (the inner line, column 16), from the
     rim down over the cap to the pole -> ONE island, ``area_ratio`` 0.97..1.03. The same tube with the cut starting
@@ -122,8 +123,10 @@ check("[2] no face straddles the centre line", not bad and {up.PARTS[int(p)] for
 # [3] gusset box
 info3 = {"cx": 0.0, "cy": 0.0, "crotch_z": 0.811, "crotch_y": 0.01}
 spec3 = {"top_y": 1.0, "waistband_m": 0.0, "gusset_half_m": 0.03}
-p3 = fp.parts("briefs", spec3, np.array([(0.02, -0.02, 0.80), (0.02, -0.04, 0.80), (0.04, 0.0, 0.80)]), J, info3)
-check("[3] gusset / front / not the gusset", [up.PARTS[int(p)] for p in p3] == ["gusset", "front", "back"],
+p3 = fp.parts("briefs", spec3, np.array([(0.02, -0.02, 0.80), (0.02, -0.04, 0.80), (0.04, 0.0, 0.85),
+                                         (0.12, 0.0, 0.80)]), J, info3)
+check("[3] gusset / front / not the gusset / wide gusset",
+      [up.PARTS[int(p)] for p in p3] == ["gusset", "front", "back", "gusset"],
       [up.PARTS[int(p)] for p in p3])
 
 
@@ -212,7 +215,7 @@ check("[6] +Z faces back of the hand, -Z and sides palm, nothing else", list(p6)
 # [7] rows / axes / rings
 check("[7] boxers take the trousers' rows", fp.rows("briefs", {"leg_length_m": 0.1}) == up.ROWS["trousers"])
 check("[7] a bandeau its own rows", fp.rows("bra", {"style": "bandeau"}) == up.ROWS["bandeau"])
-check("[7] every fitted part id is named", all(i in up.PARTS for i in range(10, 35)))
+check("[7] every fitted part id is named", all(i in up.PARTS for i in range(10, 37)))
 rg = fp.rings("briefs", {}, J, {"cx": 0.0, "cy": 0.0})
 check("[7] waistband ring: vertical axis through (cx, cy), opened at +Y",
       rg[fp.P["waistband"]] == ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)), rg[fp.P["waistband"]])

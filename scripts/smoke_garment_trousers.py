@@ -26,7 +26,8 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 [T1] the drape key: the trouser fields never enter another kind's key — skirt / tights / top / briefs keys equal
      those of commit f6f881e49 (98dcaeb9f7ea, d7a5c853ad56, afdb42cc49ef, d59cdee6cfa8 for these parameters, base
      "b" x 64, texture "t" x 12, lower ["x"], computed with that commit's TEMPLATE_VERSION 8 — A239 bumped it to 9,
-     which changes every key and is not what this check is about); a trouser's fly is painted (its key does not change), its leg shape is
+     which changes every key and is not what this check is about; and with ``FITTED_VERSION`` 0, i.e. without it —
+     step 3a set it to 1, which changes every fitted kind's key, tights and briefs here); a trouser's fly is painted (its key does not change), its leg shape is
      cut (the key changes).
 """
 import sys
@@ -149,6 +150,7 @@ check("[P1] no fly line without a fly", not any(s["role"] == "fly" for s in gp.s
 
 # [T1]
 _version, gt.TEMPLATE_VERSION = gt.TEMPLATE_VERSION, 8
+_fitted, gt.FITTED_VERSION = gt.FITTED_VERSION, 0
 for raw, key in (({"kind": "skirt", "length_m": 0.45, "flare": 0.4}, "98dcaeb9f7ea"),
                  ({"kind": "tights", "fabric": "sheer", "opacity": 0.5}, "d7a5c853ad56"),
                  ({"kind": "top", "shoulders": "covered", "sleeves": "short"}, "afdb42cc49ef"),
@@ -156,6 +158,7 @@ for raw, key in (({"kind": "skirt", "length_m": 0.45, "flare": 0.4}, "98dcaeb9f7
     got = gt.tsig(gt.validate_params(raw)[0], base_sha="b" * 64, texture_sha="t" * 12, lower=["x"])
     check(f"[T1] {raw['kind']} key as at f6f881e49 ({key})", got == key, got)
 gt.TEMPLATE_VERSION = _version
+gt.FITTED_VERSION = _fitted
 
 
 def key(params):

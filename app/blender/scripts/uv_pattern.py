@@ -38,13 +38,14 @@ from dataclasses import dataclass, field
 import numpy as np
 
 #: Pattern parts by the int ``uv_part`` face attribute. 6..9 are reserved (step 3) and never emitted in step 1.
-#: 10..34 are the fitted kinds' pieces (step 3a, ``fitted_pattern.parts``); "left" / "right" are the WEARER's.
+#: 10..36 are the fitted kinds' pieces (step 3a, ``fitted_pattern.parts``); "left" / "right" are the WEARER's.
 PARTS = {1: "front", 2: "back", 3: "sleeve_l", 4: "sleeve_r", 5: "band", 6: "collar", 7: "placket", 8: "cuff_l",
          9: "cuff_r",
          10: "front_l", 11: "front_r", 12: "back_l", 13: "back_r", 14: "waistband", 15: "gusset", 16: "leg_l",
          17: "leg_r", 18: "cup_l", 19: "cup_r", 20: "cup_top_l", 21: "cup_top_r", 22: "gore", 23: "band_l",
          24: "band_r", 25: "strap_l", 26: "strap_r", 27: "glove_back_l", 28: "glove_back_r", 29: "palm_l",
-         30: "palm_r", 31: "hip_band_l", 32: "hip_band_r", 33: "top_band_l", 34: "top_band_r"}
+         30: "palm_r", 31: "hip_band_l", 32: "hip_band_r", 33: "top_band_l", 34: "top_band_r", 35: "thumb_l",
+         36: "thumb_r"}
 #: Parts that get a strip UV instead of a flattening: the construction strip (``strip_uv``) where the builder gives
 #: rows, else the cylindrical ring strip (``ring_strip_uv``) — the fitted kinds' rings have no construction rows.
 STRIP_PARTS = frozenset({5, 6, 8, 9, 14, 23, 24, 31, 32, 33, 34})
@@ -61,7 +62,7 @@ ROWS = {
     "briefs": (("front", "back"), ("gusset", "waistband", "hip_band_r", "hip_band_l")),
     "bra": (("cup_r", "cup_l", "gore"), ("cup_top_r", "cup_top_l"), ("band_r", "band_l"), ("strap_r", "strap_l")),
     "bandeau": (("front", "back"), ("band_r", "band_l"), ("strap_r", "strap_l")),
-    "gloves": (("glove_back_r", "glove_back_l", "palm_l", "palm_r"), ("cuff_r", "cuff_l")),
+    "gloves": (("glove_back_r", "glove_back_l", "palm_l", "palm_r"), ("thumb_r", "thumb_l", "cuff_r", "cuff_l")),
 }
 #: The payload format of ``islands_payload``.
 PAYLOAD_VERSION = 1
@@ -185,25 +186,158 @@ def _local_frames(xyz, tris):
     return loc, a2
 
 
-def _cg(matvec, b, x0, tol, maxit):
-    """Conjugate gradient for an SPD operator, column-wise on an (n, k) right-hand side."""
+#: the fitted kinds' solves (``pattern_uv`` with a ``tol``): a direct block-banded Cholesky (``_Banded``) for the
+#: LSCM system and the ARAP Laplacian (factored once per island), Jacobi-preconditioned CG where it does not apply.
+#: Plain CG took 520 s on Kira's tights (2 x 12 k vertex leg pieces) and 51-53 s on Lirien's / Kai's trousers.
+FAST_LSCM = {"tol": 1e-8, "precond": True}
+FAST_ARAP = {"cg_tol": 1e-7, "precond": True}
+#: ``ring_strip_uv``: the angular window (each side) over which the ring's radius at an angle is averaged — under the
+#: 5.625 deg of a 64-segment test ring, so its own vertex columns stay exact.
+RING_SMOOTH_RAD = math.radians(5.0)
+#: ``_Banded`` gives up (-> PCG) past this bandwidth after the reverse Cuthill-McKee ordering (a block costs bw^3).
+BAND_MAX = 1500
+#: ``_Banded`` flushes factor entries below this to zero: the fill-in decays geometrically into subnormal floats, and
+#: LAPACK on subnormals ran 100x slower (a 256-block inverse 0.5 s instead of 2 ms).
+TINY = 1e-150
+
+
+def _rcm(n, rows, cols):
+    """Reverse Cuthill-McKee order of the symmetric pattern (rows, cols) over n unknowns: breadth-first from a
+    lowest-degree vertex per component, neighbours by rising degree, reversed. Returns perm (new -> old)."""
+    m = rows != cols
+    r, c = np.concatenate([rows[m], cols[m]]), np.concatenate([cols[m], rows[m]])
+    o = np.lexsort((c, r))
+    r, c = r[o], c[o]
+    start = np.searchsorted(r, np.arange(n + 1))
+    deg = np.diff(start)
+    seen = np.zeros(n, bool)
+
+    def bfs(root):
+        seen[root] = True
+        q = [int(root)]
+        h = 0
+        while h < len(q):
+            v = q[h]
+            h += 1
+            nb = c[start[v]:start[v + 1]]
+            nb = np.unique(nb[~seen[nb]])
+            if len(nb):
+                nb = nb[np.argsort(deg[nb], kind="stable")]
+                seen[nb] = True
+                q.extend(nb.tolist())
+        return q
+
+    order = []
+    for root in np.argsort(deg, kind="stable"):
+        if seen[root]:
+            continue
+        # a pseudo-peripheral root: the last vertex a breadth-first search from ``root`` reaches (from a vertex in
+        # the middle of a long piece the levels are twice as wide — Kira's tights leg: bandwidth > BAND_MAX)
+        comp = bfs(root)
+        seen[comp] = False
+        order.extend(bfs(comp[-1]))
+    return np.array(order[::-1], dtype=np.int64)
+
+
+class _Banded:
+    """Direct solver for a sparse SPD matrix given as COO triplets (duplicates summed; both triangles present):
+    reverse Cuthill-McKee order, then the matrix is block tridiagonal with blocks of its bandwidth, factored by block
+    Cholesky (numpy only — Blender's Python has no scipy). ``ok`` is False when the bandwidth passes ``BAND_MAX`` or
+    the matrix is not positive definite (a clipped negative cotangent); the caller then keeps its CG."""
+
+    def __init__(self, n, rows, cols, vals):
+        self.ok = False
+        rows, cols, vals = np.asarray(rows, np.int64), np.asarray(cols, np.int64), np.asarray(vals, float)
+        if n == 0:
+            return
+        # an unknown no valid triangle touches (a vertex only of degenerate ones) has an empty row: it keeps its
+        # start value (``solve``'s x0), as in the CG, and gets a unit diagonal so the rest factors
+        used = np.zeros(n, bool)
+        used[rows[np.abs(vals) > 0]] = True
+        self.iso = np.flatnonzero(~used)
+        if len(self.iso):
+            rows, cols = np.concatenate([rows, self.iso]), np.concatenate([cols, self.iso])
+            vals = np.concatenate([vals, np.ones(len(self.iso))])
+        perm = _rcm(n, rows, cols)
+        ip = np.empty(n, np.int64)
+        ip[perm] = np.arange(n)
+        pr, pc = ip[rows], ip[cols]
+        b = int(max(np.max(np.abs(pr - pc)) + 1, 8))
+        self.b = b
+        if b > BAND_MAX:
+            return
+        nb = -(-n // b)
+        d = np.zeros((nb, b, b))
+        sub = np.zeros((max(nb - 1, 0), b, b))
+        br, bc = pr // b, pc // b
+        on = br == bc
+        np.add.at(d, (br[on], pr[on] % b, pc[on] % b), vals[on])
+        lo = br == bc + 1
+        np.add.at(sub, (bc[lo], pr[lo] % b, pc[lo] % b), vals[lo])
+        pad = nb * b - n
+        if pad:
+            d[-1, b - pad:, b - pad:] += np.eye(pad)
+        linv = np.empty_like(d)
+        off = np.empty_like(sub)
+        try:
+            for k in range(nb):
+                lk = np.linalg.cholesky(d[k])
+                linv[k] = np.linalg.inv(lk)
+                linv[k][np.abs(linv[k]) < TINY] = 0.0
+                if k < nb - 1:
+                    off[k] = sub[k] @ linv[k].T           # L_{k+1,k} = A_{k+1,k} L_k^-T
+                    off[k][np.abs(off[k]) < TINY] = 0.0
+                    d[k + 1] -= off[k] @ off[k].T
+        except np.linalg.LinAlgError:
+            return
+        self.n, self.b, self.nb, self.perm, self.linv, self.off = n, b, nb, perm, linv, off
+        self.ok = bool(np.all(np.isfinite(linv)))
+
+    def solve(self, rhs, x0=None):
+        rhs = np.asarray(rhs, float)
+        k_ = rhs.shape[1]
+        y = np.zeros((self.nb * self.b, k_))
+        y[:self.n] = rhs[self.perm]
+        y = y.reshape(self.nb, self.b, k_)
+        for k in range(self.nb):
+            t = y[k] if k == 0 else y[k] - self.off[k - 1] @ y[k - 1]
+            y[k] = self.linv[k] @ t
+        for k in range(self.nb - 1, -1, -1):
+            t = y[k] if k == self.nb - 1 else y[k] - self.off[k].T @ y[k + 1]
+            y[k] = self.linv[k].T @ t
+        out = np.empty((self.n, k_))
+        out[self.perm] = y.reshape(-1, k_)[:self.n]
+        out[self.iso] = 0.0 if x0 is None else np.asarray(x0, float)[self.iso]
+        return out
+
+
+def _cg(matvec, b, x0, tol, maxit, diag=None):
+    """Conjugate gradient for an SPD operator, column-wise on an (n, k) right-hand side. ``diag`` (the operator's
+    diagonal, (n,)) = Jacobi-preconditioned CG (the fitted kinds' 24 k vertex leg pieces: unpreconditioned, the LSCM
+    and ARAP solves of Kira's tights took 520 s); None = plain CG, the top's path unchanged. The stop is the plain
+    residual against ``tol`` |b| either way."""
     x = x0.copy()
     r = b - matvec(x)
-    p = r.copy()
-    rs = np.sum(r * r, axis=0)
+    inv = None if diag is None else (1.0 / np.where(np.abs(diag) > 1e-30, diag, 1.0))[:, None]
+    z = r if inv is None else r * inv
+    p = z.copy()
+    rz = np.sum(r * z, axis=0)
+    rr = np.sum(r * r, axis=0)
     stop = (tol * np.maximum(np.sqrt(np.sum(b * b, axis=0)), 1e-30)) ** 2
     for _ in range(maxit):
-        if np.all(rs <= stop):
+        if np.all(rr <= stop):
             break
         ap = matvec(p)
         pap = np.sum(p * ap, axis=0)
-        alpha = np.where(pap > 0, rs / np.where(pap > 0, pap, 1.0), 0.0)
+        alpha = np.where(pap > 0, rz / np.where(pap > 0, pap, 1.0), 0.0)
         x += alpha * p
         r -= alpha * ap
-        rs_new = np.sum(r * r, axis=0)
-        beta = np.where(rs > 0, rs_new / np.where(rs > 0, rs, 1.0), 0.0)
-        p = r + beta * p
-        rs = rs_new
+        z = r if inv is None else r * inv
+        rz_new = np.sum(r * z, axis=0)
+        rr = rz_new if inv is None else np.sum(r * r, axis=0)
+        beta = np.where(rz > 0, rz_new / np.where(rz > 0, rz, 1.0), 0.0)
+        p = z + beta * p
+        rz = rz_new
     return x
 
 
@@ -214,9 +348,10 @@ def _boundary(tris, n):
     return np.unique(np.concatenate([b // n, b % n]))
 
 
-def lscm(xyz, tris):
+def lscm(xyz, tris, tol=1e-12, precond=False):
     """Least-squares conformal map of one island; pins the two boundary vertices farthest apart (3D) at (0, 0) and
-    (d, 0). Returns (n, 2) UV in metres (a similarity of the conformal map — ``arap`` fixes the scale)."""
+    (d, 0). Returns (n, 2) UV in metres (a similarity of the conformal map — ``arap`` fixes the scale). ``tol`` /
+    ``precond``: the CG's relative residual and its Jacobi preconditioner (``_cg``; the fitted kinds: 1e-8, on)."""
     xyz = np.asarray(xyz, float)
     tris = np.asarray(tris, dtype=np.int64)
     n = len(xyz)
@@ -263,7 +398,23 @@ def lscm(xyz, tris):
         return mtm(full)[free][:, None]
 
     rhs = -mtm(xp)[free][:, None]
-    xf = _cg(matvec, rhs, np.zeros_like(rhs), 1e-12, 20 * len(free) + 100)
+    xf = None
+    if precond:
+        # M^T M over the free unknowns: per row of M (2 per triangle, 6 entries each) every pair of its entries
+        r6 = np.argsort(rows, kind="stable")
+        cr, vr = cols[r6].reshape(-1, 6), vals[r6].reshape(-1, 6)
+        idx = -np.ones(2 * n, np.int64)
+        idx[free] = np.arange(len(free))
+        fi = idx[cr]
+        pi, pj = np.repeat(fi, 6, axis=1), np.tile(fi, (1, 6))
+        pv = np.repeat(vr, 6, axis=1) * np.tile(vr, (1, 6))
+        keep = (pi >= 0) & (pj >= 0)
+        solver = _Banded(len(free), pi[keep], pj[keep], pv[keep])
+        if solver.ok:
+            xf = solver.solve(rhs)
+    if xf is None:
+        diag = np.bincount(cols, vals * vals, minlength=2 * n)[free] if precond else None
+        xf = _cg(matvec, rhs, np.zeros_like(rhs), tol, 20 * len(free) + 100, diag=diag)
     full = xp.copy()
     full[free] = xf[:, 0]
     return np.stack([full[:n], full[n:]], axis=1)
@@ -276,14 +427,15 @@ def _signed_uv_area2(uv, tris):
     return d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
 
 
-def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9, tol=None, stats=None):
+def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9, tol=None, stats=None, precond=False):
     """As-rigid-as-possible flattening (local/global, cotangent weights) from ``uv0``. A start whose orientation
     disagrees with the triangles' own frames (an anti-conformal LSCM) is mirrored first, since the local step only
     fits rotations. One vertex is held at its start position.
 
     ``tol`` (step 3a, the fitted kinds' 4-41 k vertex pieces): stop after an iteration whose ARAP energy
     sum w |(u_i - u_j) - R dx_ij|^2 (with that iteration's rotations, at its solved UV) changed by less than ``tol`` of
-    the previous iteration's; ``iters`` stays the cap. None = always ``iters``. ``stats`` (a dict) gets "iters"."""
+    the previous iteration's; ``iters`` stays the cap. None = always ``iters``. ``stats`` (a dict) gets "iters".
+    ``precond``: the global step's CG with the Laplacian's diagonal as Jacobi preconditioner (``_cg``)."""
     xyz = np.asarray(xyz, float)
     tris = np.asarray(tris, dtype=np.int64)
     uv = np.asarray(uv0, float).copy()
@@ -335,6 +487,16 @@ def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9, tol=None, stats=None):
         y[~keep] = 0.0
         return lap(y)
 
+    ldiag = None
+    band = None
+    if precond:
+        ldiag = np.bincount(l_row[l_row == l_col], l_val[l_row == l_col], minlength=n)
+        ldiag[~keep] = 1.0
+        kk = keep[l_row] & keep[l_col]
+        band = _Banded(n, np.concatenate([l_row[kk], [pin]]), np.concatenate([l_col[kk], [pin]]),
+                       np.concatenate([l_val[kk], [1.0]]))
+        if not band.ok:
+            band = None
     done = 0
     e_prev = None
     for _ in range(iters):
@@ -358,7 +520,7 @@ def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9, tol=None, stats=None):
         b[pin] = 0.0
         x0 = uv.copy()
         x0[pin] = 0.0
-        x = _cg(matvec, b, x0, cg_tol, 10 * n + 100)
+        x = band.solve(b, x0) if band is not None else _cg(matvec, b, x0, cg_tol, 10 * n + 100, diag=ldiag)
         x[pin] = uv[pin]
         uv = x
         done += 1
@@ -807,12 +969,15 @@ def ring_strip_uv(island, xyz, axis_p, axis_d, cut_dir):
     Frame: ``e1`` = ``cut_dir`` made orthogonal to ``axis_d``, ``e2`` = ``axis_d`` x ``e1``; the angle
     theta = atan2(rel . e2, rel . e1) in [0, 2 pi) of every vertex about the axis through ``axis_p`` increases to the
     RIGHT as seen from outside with ``axis_d`` up (the tangent of increasing theta at r is ``axis_d`` x r). The ring
-    is cut at theta = 0 (``fitted_pattern.ring_cut``), so a vertex there has two local copies: every corner under pi
-    of a face that spans more than pi in theta (the faces just before the cut) takes theta + 2 pi. u = the chord sum,
-    at the island's mean radius r_m, over the sorted distinct angles up to the vertex's (2 r_m sin(dtheta / 2) per
-    step — a polygon ring of n segments is n chords long, not 2 pi r_m), v = the height (rel . ``axis_d``) less the
-    lowest. A ring whose radius changes with height (a waistband over the hip flare) is stretched by r / r_m along u
-    at its edges — recorded in ``strip_stretch_p95``, not gated."""
+    is cut (``fitted_pattern.ring_cut``), so a vertex there has two local copies: theta = 0 is turned to the cut's
+    direction, and the copy whose faces lie at the far end takes 2 pi + its angle. An island without copies (opened
+    by ``open_islands``): theta from ``cut_dir``, and every corner under pi of a face that spans more than pi takes
+    theta + 2 pi. u = the chord sum
+    over the sorted distinct angles up to the vertex's, each angle at the ring's radius there (the mean radius of the
+    vertices within ``RING_SMOOTH_RAD``: a polygon ring of n segments is n chords long, not 2 pi r; a waist is no
+    circle), v = the height (rel . ``axis_d``) less the lowest. A ring whose radius changes with height (a waistband
+    over the hip flare) is stretched by r / r_mean along u at its edges — recorded in ``strip_stretch_p95``, not
+    gated."""
     xyz = np.asarray(xyz, float)
     ad = np.asarray(axis_d, float)
     ad = ad / np.linalg.norm(ad)
@@ -824,19 +989,57 @@ def ring_strip_uv(island, xyz, axis_p, axis_d, cut_dir):
     h = rel @ ad
     radial = rel - np.outer(h, ad)
     rad = np.linalg.norm(radial, axis=1)
-    th = np.mod(np.arctan2(radial @ e2, radial @ e1), 2 * np.pi)
-    th = np.where(th > 2 * np.pi - 1e-9, 0.0, th)
-    bump = np.zeros(len(th), bool)
-    for poly in island.corner_vid:
-        t = th[list(poly)]
-        if t.max() - t.min() > np.pi:
-            for c, tv in zip(poly, t):
-                if tv < np.pi:
-                    bump[c] = True
-    th = th + 2 * np.pi * bump
-    r_m = float(np.mean(rad)) if len(rad) else 0.0
+    th = np.arctan2(radial @ e2, radial @ e1)
+    vm = np.asarray(island.vmap)
+    gid, cnt = np.unique(vm, return_counts=True)
+    dup = np.isin(vm, gid[cnt > 1])
+    if dup.any() and (~dup).any():
+        # the cut is where the island holds two copies of a vertex: theta = 0 there (its vertices' mean direction
+        # — ``axis_p`` from the geometry need not lie in the cut's plane, and a cut a few degrees off theta = 0
+        # wrapped the faces between them across the whole strip: Kai's waistband, area ratio 1.93); every other
+        # vertex takes [0, 2 pi), a cut copy 2 pi + its angle when its own faces lie at the far end of the strip
+        th0 = math.atan2(float(np.sum(np.sin(th[dup]))), float(np.sum(np.cos(th[dup]))))
+        th = np.angle(np.exp(1j * (th - th0)))
+        far = np.zeros(len(th))
+        cnt_n = np.zeros(len(th))
+        for poly in island.corner_vid:
+            poly = list(poly)
+            ref = [c for c in poly if not dup[c]]
+            if not ref:
+                continue
+            m = float(np.mean(np.mod(th[ref], 2 * np.pi)))
+            for c in poly:
+                if dup[c]:
+                    far[c] += m
+                    cnt_n[c] += 1
+        late = dup & (cnt_n > 0) & (far > np.pi * np.maximum(cnt_n, 1))
+        th = np.where(dup, np.where(late, 2 * np.pi + th, th), np.mod(th, 2 * np.pi))
+        th = th - min(float(th.min()), 0.0)
+    else:
+        th = np.mod(th, 2 * np.pi)
+        th = np.where(th > 2 * np.pi - 1e-9, 0.0, th)
+        bump = np.zeros(len(th), bool)
+        for poly in island.corner_vid:
+            t = th[list(poly)]
+            if t.max() - t.min() > np.pi:
+                for c, tv in zip(poly, t):
+                    if tv < np.pi:
+                        bump[c] = True
+        th = th + 2 * np.pi * bump
     ang = np.unique(np.round(th, 12))
-    cum = np.concatenate([[0.0], np.cumsum(2.0 * r_m * np.sin(np.diff(ang) / 2.0))])
+    # the ring's own radius at each distinct angle: the mean radius of the vertices within RING_SMOOTH_RAD (on the
+    # circle) — a waist is no circle (Lirien's waistband at its mean radius: area ratio 0.83, stretch p95 1.88)
+    tm = np.mod(th, 2 * np.pi)
+    o = np.argsort(tm)
+    ts, rs_ = tm[o], rad[o]
+    ext_t = np.concatenate([ts - 2 * np.pi, ts, ts + 2 * np.pi])
+    csum = np.concatenate([[0.0], np.cumsum(np.tile(rs_, 3))])
+    am = np.mod(ang, 2 * np.pi)
+    lo = np.searchsorted(ext_t, am - RING_SMOOTH_RAD, side="left")
+    hi = np.searchsorted(ext_t, am + RING_SMOOTH_RAD, side="right")
+    r_a = (csum[hi] - csum[lo]) / np.maximum(hi - lo, 1)
+    pts = np.stack([r_a * np.cos(ang), r_a * np.sin(ang)], axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
     u = np.interp(th, ang, cum) if len(ang) > 1 else np.zeros(len(th))
     return np.stack([u, h - (h.min() if len(h) else 0.0)], axis=1)
 
@@ -877,7 +1080,9 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
         else:
             up_, ap, ad = axes.get(isl.part, ((0.0, 0.0, 1.0), lx.mean(axis=0), None))
             st = {}
-            uv = arap(lx, tris, lscm(lx, tris), iters=iters, tol=tol, stats=st)
+            fast = tol is not None      # the fitted kinds (step 3a): preconditioned, looser CG; a top as before
+            uv = arap(lx, tris, lscm(lx, tris, **(FAST_LSCM if fast else {})), iters=iters, tol=tol, stats=st,
+                      **(FAST_ARAP if fast else {}))
             its[isl.name] = st.get("iters", iters)
             uv = orient(uv, lx, tris, np.asarray(up_, float), np.asarray(ap, float),
                         None if ad is None else np.asarray(ad, float))

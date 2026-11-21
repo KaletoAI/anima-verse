@@ -125,6 +125,13 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
 [21] Tops unchanged: ``pattern_uv`` of the hand-made top of [13] gives a byte-identical payload
     (``json.dumps(sort_keys=True)``) with this module and with ``uv_pattern.py`` at the base commit c926b67f0
     (read with ``git show``; skipped with a note when git is not available).
+[22] Ring cut off theta 0: the cylinder of [16] with ``cut_dir`` turned 30 deg (cos 30, sin 30, 0) while its cut stays
+    at +X (vertex 0): theta = 0 follows the cut copies, so u length 0.628066, the copies at u 0 and 0.628066 and the
+    +Y vertex at 0.157017 exactly as in [16] (theta from ``cut_dir`` alone put the vertices between +X and 30 deg at
+    the far end and stretched their faces across the strip).
+[23] Banded direct solve (``_Banded``): the 1-D Poisson system 2 x_i - x_(i-1) - x_(i+1) = 1, i = 1..50, x_0 = x_51 = 0,
+    given in a shuffled order (seed 7) -> x_i = i (51 - i) / 2: x_1 = 25, x_25 = 325, x_50 = 25 (+-1e-9); an extra
+    unknown no entry touches keeps its x0 (3.5).
 """
 import json
 import math
@@ -615,6 +622,37 @@ if src is not None:
         old21 = ub.pattern_uv(f13, p13, seam13, v13, axes=axes13, strips={5: rows13})["payload"]
         check(f"[21] a top's payload is byte-identical to {BASE}'s",
               json.dumps(new21, sort_keys=True) == json.dumps(old21, sort_keys=True))
+
+# [22] ring cut off theta 0
+uv22 = up.ring_strip_uv(isl16[0], rx16, (0, 0, 0), (0, 0, 1),
+                        (math.cos(math.radians(30)), math.sin(math.radians(30)), 0))
+check(f"[22] u length {want16:.6f} with cut_dir 30 deg off", abs(np.ptp(uv22[:, 0]) - want16) < 1e-4,
+      np.ptp(uv22[:, 0]))
+cut22 = sorted(uv22[isl16[0].vmap == 0, 0])
+check("[22] the cut copies at u 0 and the full length",
+      len(cut22) == 2 and abs(cut22[0]) < 1e-9 and abs(cut22[1] - want16) < 1e-4, cut22)
+q22 = uv22[isl16[0].vmap == 16, 0]
+check("[22] the +Y vertex at a quarter (0.157017)", len(q22) == 1 and abs(q22[0] - want16 / 4) < 1e-4, q22)
+
+# [23] banded direct solve
+N23 = 50
+rr, cc, vv = [], [], []
+for i in range(N23):
+    rr.append(i)
+    cc.append(i)
+    vv.append(2.0)
+    if i + 1 < N23:
+        rr += [i, i + 1]
+        cc += [i + 1, i]
+        vv += [-1.0, -1.0]
+sh = np.random.default_rng(7).permutation(N23)          # unknown i is stored as sh[i]
+rr, cc = sh[np.array(rr)], sh[np.array(cc)]
+b23 = up._Banded(N23 + 1, rr, cc, np.array(vv))
+x23 = b23.solve(np.concatenate([np.ones(N23), [0.0]])[:, None], np.full((N23 + 1, 1), 3.5))[:, 0]
+got23 = [float(x23[sh[i - 1]]) for i in (1, 25, 50)]
+check("[23] x_1 25, x_25 325, x_50 25", b23.ok and all(abs(g - w) < 1e-9 for g, w in zip(got23, (25, 325, 25))),
+      got23)
+check("[23] the untouched unknown keeps x0 3.5", abs(x23[N23] - 3.5) < 1e-12, x23[N23])
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

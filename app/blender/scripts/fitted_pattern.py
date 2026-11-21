@@ -70,11 +70,14 @@ def _leg_plane(joints, side):
     return hip, n, ankle
 
 
-def _arm_planes(joints, side):
-    """Gloves (decision D11 a): per side the seam planes of the dorsal / palmar split — (tag, point, normal), the normal
-    pointing to the dorsal side: the upper arm and the forearm (through the bone line, spanned by the horizontal
-    perpendicular), the hand (through Hand, Index1, Pinky1), the thumb (through Thumb1 -> Thumb3, spanned by the hand
-    normal x the thumb direction). Dorsal = the hand normal's side, turned to +Z (palms down in the rest pose)."""
+def _arm_planes(joints, side, centres=None):
+    """Gloves: per side the seam planes of the dorsal / palmar split — (tag, point, normal), the normal pointing to the
+    dorsal side: the upper arm and the forearm (through the bone line, spanned by the horizontal perpendicular), the
+    hand (through Hand, Index1, Pinky1; also the thenar under Thumb1 -> Thumb2). Dorsal = the hand normal's side,
+    turned to +Z (palms down in the rest pose). The planes of neighbouring regions share their joint (ForeArm, Hand),
+    so the split line runs on at the region border. The thumb past Thumb2 is a piece of its own (``_thumb``).
+    ``centres`` ({tag: point}, ``glove_centres``) moves each plane along its normal to the middle of its region's
+    cloth: a bone line lies off the middle of the limb (Glut's forearm: split 8.9 / 16.4 cm through the bone line)."""
     sd = "Left" if side > 0 else "Right"
     j = lambda n: np.asarray(joints[sd + n], float)  # noqa: E731
     hand, idx, pky = j("Hand"), j("HandIndex1"), j("HandPinky1")
@@ -90,14 +93,37 @@ def _arm_planes(joints, side):
             n = -n
         out.append((tag, a, n))
     out.append(("hand", hand, nh))
-    t1, t3 = j("HandThumb1"), j("HandThumb3")
-    td = _unit(t3 - t1)
-    w = np.cross(nh, td)
-    n = _unit(np.cross(td, w))
-    if n @ nh < 0:
-        n = -n
-    out.append(("thumb", t1, n))
+    if centres:
+        out = [(t, p + ((np.asarray(centres[t], float) - p) @ n) * n if t in centres else p, n) for t, p, n in out]
     return out
+
+
+def glove_centres(c, joints, cx):
+    """{str(side): {region tag: the mean of the region's face centroids}} — ``_arm_planes``' ``centres`` (taken at
+    cut time, before the seam planes are bisected; info["arm_centres"])."""
+    c = np.asarray(c, float)
+    out = {}
+    for s in (1, -1):
+        m = (c[:, 0] - cx) * s > 0
+        if not m.any():
+            continue
+        reg = arm_region(c[m], joints, s)
+        out[str(s)] = {t: c[m][reg == t].mean(0) for t in ("upper", "fore", "hand") if (reg == t).sum() >= 10}
+    return out
+
+
+def _thumb(joints, side):
+    """Gloves (decision D11 b, taken by the plan's own rule: the thumb as a lobe of the back / palm stretched to
+    p95 1.56 on Glut's elbow gloves and holed the palm where the thumb's plane met the hand's): the thumb past Thumb2 is
+    one piece (a Bolton thumb). Returns (T2, d = the thumb's direction Thumb2 -> Thumb3, the slit plane's normal, the
+    slit side): the piece starts at the plane through T2 normal to d; it is opened along the line of the thumb that
+    faces the index finger (the plane through the thumb's axis and the direction to Index1)."""
+    sd = "Left" if side > 0 else "Right"
+    t2, t3 = np.asarray(joints[sd + "HandThumb2"], float), np.asarray(joints[sd + "HandThumb3"], float)
+    d = _unit(t3 - t2)
+    to_idx = np.asarray(joints[sd + "HandIndex1"], float) - t2
+    half = _unit(to_idx - (to_idx @ d) * d)
+    return t2, d, _unit(np.cross(d, half)), half
 
 
 def _seg_dist(p, a, b):
@@ -109,7 +135,7 @@ def _seg_dist(p, a, b):
 def arm_region(c, joints, side):
     """Gloves: per point the bone region its nearest bone segment belongs to — "upper" (Arm -> ForeArm), "fore"
     (ForeArm -> Hand), "hand" (Hand -> Middle1 and the four fingers, the last bone extended by its own length), "thumb"
-    (Thumb1 -> Thumb3, extended)."""
+    (Thumb1 -> Thumb3, extended; ``parts`` gives only its part past Thumb2 the thumb piece)."""
     sd = "Left" if side > 0 else "Right"
     j = lambda n: np.asarray(joints[sd + n], float)  # noqa: E731
     segs = [("upper", j("Arm"), j("ForeArm")), ("fore", j("ForeArm"), j("Hand")),
@@ -160,11 +186,8 @@ def seam_planes(kind, f, joints, info):
     elif kind == "briefs":
         top = float(f["top_y"])
         crotch, crotch_y = _brief_crotch(info)
-        g = float(f["gusset_half_m"])
         out.append((np.array([cx, cy, 0.0]), X.copy(), None, None))
         out.append((np.array([cx, cy, 0.0]), Y.copy(), None, None))
-        for x in (cx - g, cx + g):
-            out.append((np.array([x, cy, 0.0]), X.copy(), None, None))
         for y in (crotch_y - GUSSET_FRONT_M, crotch_y + GUSSET_BACK_M):
             out.append((np.array([cx, y, 0.0]), Y.copy(), None, None))
         hz(crotch + GUSSET_RISE_M)
@@ -212,8 +235,13 @@ def seam_planes(kind, f, joints, info):
                     hz(float(info["apex"][key][2]), s, "front")
     elif kind == "gloves":
         for s in (1, -1):
-            for tag, p, n in _arm_planes(joints, s):
+            for tag, p, n in _arm_planes(joints, s, info.get("arm_centres", {}).get(str(s))):
                 out.append((p, n, s, tag))
+                if tag == "hand":
+                    out.append((p, n, s, "thumb"))          # the thenar behind Thumb2 splits by the hand plane
+            t2, d, n_slit, _half = _thumb(joints, s)
+            out.append((t2, d, s, "thumb"))
+            out.append((t2, n_slit, s, "thumb"))
             if f.get("cuff", "none") != "none":
                 p, u = info["cuff_plane"][str(s)]
                 out.append((np.asarray(p, float), np.asarray(u, float), s, None))
@@ -243,16 +271,19 @@ PRE_CUP, PRE_GORE, PRE_STRAP_L, PRE_STRAP_R, PRE_BAND = 1, 2, 3, 4, 5
 
 
 def pre_parts(kind, f, c, info):
-    """The region class of every face whose rule is NO plane, from its centroid BEFORE the seam planes are bisected
-    (the faces ``keep`` kept by these same predicates; ``build_fitted`` stores it in a face layer that the split faces
-    inherit): a bra's cup > gore > strap (the side its path starts on: a cross-back strap crosses the centre) > band.
-    None for the other kinds (every rule of theirs is a bisected plane). A face split by a seam plane keeps its class
-    — its centroid may leave the cup's curved outline, a class read after the bisect would make it a band sliver."""
+    """A bra face's region class (cup > gore > strap — the side its path starts on: a cross-back strap crosses the
+    centre — > band; 0 = none) by ``bra_region``'s predicates on the centroids ``c``. ``build_fitted`` takes it BEFORE
+    the seam planes are bisected (every face then matches a class: ``keep`` kept it by these predicates) and stores it
+    in a face layer the split faces inherit; ``parts`` takes it again AFTER the bisect and falls back to the inherited
+    class only where a split face's centroid left every region (the cup's curved outline) — a plane border (the gore
+    at gore_half, the band at the underbust line) is decided by the new centroid, so no split face is a sliver of the
+    class across the plane. None for the other kinds (every rule of theirs is a bisected plane)."""
     if kind != "bra":
         return None
     c = np.asarray(c, float)
     pred = info["pred"]
-    out = np.full(len(c), PRE_BAND, np.int64)
+    out = np.zeros(len(c), np.int64)
+    out[pred["band"](c)] = PRE_BAND
     st = pred["straps"](c)
     sside = _side(c, float(info["cx"]))
     if info.get("strap_paths"):
@@ -270,11 +301,13 @@ def parts(kind, f, c, joints, info, pre=None):
 
     * trousers / boxers: waistband > cuff (trousers ``hem`` cuffed) > the leg halves by the per-leg plane (front_l /
       front_r / back_l / back_r, the side by x against cx);
-    * briefs: gusset > waistband > hip band (``sides`` string, past the panel corners) > front / back (y against cy);
+    * briefs: gusset (between the planes ``GUSSET_FRONT_M`` before and ``GUSSET_BACK_M`` behind the crotch point, under
+      ``GUSSET_RISE_M`` over it — across the whole crotch: its sides are the leg openings, so no strip beside it is cut
+      off) > waistband > hip band (``sides`` string, past the panel corners) > front / back (y against cy);
     * tights: (full tights) waistband > gusset; (the others) top band; then leg_l / leg_r;
     * bra: cups (balconette: cup / cup_top at the apex height) > gore > straps > band halves; a bandeau: straps >
       front / back;
-    * gloves: cuff > back of the hand (dorsal side of the region's plane) / palm."""
+    * gloves: cuff > thumb (past Thumb2) > back of the hand (dorsal side of the region's plane) / palm."""
     c = np.asarray(c, float)
     n = len(c)
     cx, cy = float(info["cx"]), float(info["cy"])
@@ -304,7 +337,6 @@ def parts(kind, f, c, joints, info, pre=None):
     if kind == "briefs":
         top = float(f["top_y"])
         crotch, crotch_y = _brief_crotch(info)
-        g = float(f["gusset_half_m"])
         out[:] = np.where(c[:, 1] < cy, P["front"], P["back"])
         if f.get("sides") == "string":
             sw = float(f["string_width_m"])
@@ -314,8 +346,8 @@ def parts(kind, f, c, joints, info, pre=None):
         wb = float(f.get("waistband_m") or 0.0)
         if wb > 0:
             out[c[:, 2] > top - wb] = P["waistband"]
-        gus = (np.abs(c[:, 0] - cx) < g) & (c[:, 1] > crotch_y - GUSSET_FRONT_M) \
-            & (c[:, 1] < crotch_y + GUSSET_BACK_M) & (c[:, 2] < crotch + GUSSET_RISE_M)
+        gus = (c[:, 1] > crotch_y - GUSSET_FRONT_M) & (c[:, 1] < crotch_y + GUSSET_BACK_M) \
+            & (c[:, 2] < crotch + GUSSET_RISE_M)
         out[gus] = P["gusset"]
         return out
     if kind == "tights":
@@ -334,7 +366,8 @@ def parts(kind, f, c, joints, info, pre=None):
             out[band] = lr("top_band", band)
         return out
     if kind == "bra":
-        pre = np.asarray(pre if pre is not None else pre_parts(kind, f, c, info))
+        now = pre_parts(kind, f, c, info)
+        pre = np.where(now > 0, now, np.asarray(pre if pre is not None else now))
         if f["style"] == "bandeau":
             out[:] = np.where(c[:, 1] < cy, P["front"], P["back"])
         else:
@@ -353,17 +386,23 @@ def parts(kind, f, c, joints, info, pre=None):
         return out
     if kind == "gloves":
         dors = np.zeros(n, bool)
+        thumb = np.zeros(n, bool)
         for sd in (1, -1):
             m = s == sd
             if not m.any():
                 continue
             reg = arm_region(c[m], joints, sd)
+            t2, d, _n, _h = _thumb(joints, sd)
+            th = (reg == "thumb") & ((c[m] - t2) @ d > 0)
+            reg = np.where((reg == "thumb") & ~th, "hand", reg)
             dm = np.zeros(m.sum(), bool)
-            for tag, p, nrm in _arm_planes(joints, sd):
+            for tag, p, nrm in _arm_planes(joints, sd, info.get("arm_centres", {}).get(str(sd))):
                 r = reg == tag
                 dm[r] = (c[m][r] - p) @ nrm > 0
             dors[m] = dm
+            thumb[np.where(m)[0][th]] = True
         out[:] = np.where(dors, lr("glove_back"), lr("palm"))
+        out[thumb] = lr("thumb", thumb)
         if f.get("cuff", "none") != "none":
             cuff = info["dist"](c) > float(f["reach_m"]) - float(f["cuff_m"])
             out[cuff] = lr("cuff", cuff)
@@ -420,7 +459,8 @@ def cuts(kind, f, faces, part, xyz, joints, info):
     * a waistband (trousers, boxers, briefs, tights): at the centre back (x = cx, y > cy) — never at the fly: ``fly``
       changes the picture only (``TEXTURE_ONLY``), never the cut;
     * a trouser cuff and a tights top band: at the inseam (the leg plane, inner half);
-    * a glove cuff: where the arm planes meet its +Y side (behind the arm in the rest pose);
+    * a glove cuff: where the arm planes meet its +Y side (behind the arm in the rest pose); a glove's thumb: along
+      its line facing the index finger (``_thumb``);
     * a tights leg (decision D2 a): the inseam — the leg plane's inner half from the top down to the ankle, and on a
       closed foot (D3 a) the slit along the sole (the foot plane under the ankle less ``SOLE_BELOW_ANKLE_M``);
       ``open_islands`` joins the two where they do not meet.
@@ -450,11 +490,16 @@ def cuts(kind, f, faces, part, xyz, joints, info):
                 # the sole: under the foot plane's line through the ankle along the foot, the half facing down
                 out |= plane_cut(faces, part, xyz, leg, ankle, fn, ankle, toe - ankle, -Z,
                                  z_hi=float(ankle[2]) - SOLE_BELOW_ANKLE_M, edges=E)
+    if kind == "gloves":
+        for s in (1, -1):
+            t2, d, n_slit, half = _thumb(joints, s)
+            out |= plane_cut(faces, part, xyz, P["thumb_l" if s > 0 else "thumb_r"], t2, n_slit, t2, d, half,
+                             edges=E)
     if kind == "gloves" and f.get("cuff", "none") != "none":
         for s in (1, -1):
             sd = "Left" if s > 0 else "Right"
             bones = {"upper": ("Arm", "ForeArm"), "fore": ("ForeArm", "Hand")}
-            for tag, p, n in _arm_planes(joints, s):
+            for tag, p, n in _arm_planes(joints, s, info.get("arm_centres", {}).get(str(s))):
                 if tag in bones:
                     a, b = (np.asarray(joints[sd + k], float) for k in bones[tag])
                     out |= plane_cut(faces, part, xyz, P["cuff_l" if s > 0 else "cuff_r"], p, n, a, b - a, Y,
@@ -577,6 +622,29 @@ def axes(kind, f, joints, info):
             ax = (tuple(hd - fa), tuple(fa), tuple(hd - fa))
             out[P["glove_back_" + nm]] = ax
             out[P["palm_" + nm]] = ax
+            t2, d, _n, _h = _thumb(joints, s)
+            out[P["thumb_" + nm]] = (tuple(d), tuple(t2), tuple(d))
+    return out
+
+
+def ring_centres(faces, part, xyz):
+    """The axis points of the ring parts, from the labelled geometry: {"vertical": (x, y) — the middle of the bbox of
+    every vertical ring part's vertices together (the waistband, the bra band halves, the hip bands: a half ring's own
+    mean lies off the axis), part id: mean of the part's vertices (a closed limb ring: a cuff, a top band)}. A bone
+    or Spine1's head lies off the middle of the cloth (Glut's bra band round Spine1's y: area ratio 2.40)."""
+    xyz = np.asarray(xyz, float)
+    part = np.asarray(part)
+    vert_ids = {P[n] for n in ("waistband", "band_l", "band_r", "hip_band_l", "hip_band_r")}
+    limb_ids = {P[n] for n in ("cuff_l", "cuff_r", "top_band_l", "top_band_r")}
+    out = {}
+    vs = sorted({v for f, p in zip(faces, part) if int(p) in vert_ids for v in f})
+    if vs:
+        lo, hi = xyz[vs, :2].min(0), xyz[vs, :2].max(0)
+        out["vertical"] = tuple(float(v) for v in (lo + hi) / 2)
+    for pid in limb_ids:
+        vl = sorted({v for f, p in zip(faces, part) if int(p) == pid for v in f})
+        if vl:
+            out[pid] = tuple(float(v) for v in xyz[vl].mean(0))
     return out
 
 
@@ -585,21 +653,23 @@ def rings(kind, f, joints, info):
     bra band / hip bands round the vertical line through (cx, cy), opened at the back; a cuff / top band round its
     limb's axis, opened at the inseam (legs) or behind the arm (gloves)."""
     cx, cy = float(info["cx"]), float(info["cy"])
-    vert = ((cx, cy, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
+    rc = info.get("ring_centres") or {}
+    vx, vy = rc.get("vertical", (cx, cy))
+    vert = ((vx, vy, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))
     out = {P[n]: vert for n in ("waistband", "band_l", "band_r", "hip_band_l", "hip_band_r")}
     if kind in ("trousers", "tights"):
         for s, nm in ((1, "l"), (-1, "r")):
             hip, _n, ankle = _leg_plane(joints, s)
             sd = "Left" if s > 0 else "Right"
             knee = np.asarray(joints[sd + "Leg"], float)
-            ring = (tuple(ankle), tuple(knee - ankle), (-float(s), 0.0, 0.0))
-            out[P["cuff_" + nm]] = ring
-            out[P["top_band_" + nm]] = (tuple(hip), tuple(hip - ankle), (-float(s), 0.0, 0.0))
+            cuff, band = P["cuff_" + nm], P["top_band_" + nm]
+            out[cuff] = (rc.get(cuff, tuple(ankle)), tuple(knee - ankle), (-float(s), 0.0, 0.0))
+            out[band] = (rc.get(band, tuple(hip)), tuple(hip - ankle), (-float(s), 0.0, 0.0))
     if kind == "gloves":
         for s, nm in ((1, "l"), (-1, "r")):
             p, u = info.get("cuff_plane", {}).get(str(s), (None, None))
             if p is not None:
-                out[P["cuff_" + nm]] = (tuple(p), tuple(u), (0.0, 1.0, 0.0))
+                out[P["cuff_" + nm]] = (rc.get(P["cuff_" + nm], tuple(p)), tuple(u), (0.0, 1.0, 0.0))
     return out
 
 

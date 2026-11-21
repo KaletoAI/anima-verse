@@ -77,6 +77,10 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: 10: tops get pattern-piece UVs (front/back/sleeves/band at one px/cm) and an islands output
 #: (``{item}_{tsig}.islands.json`` beside the drape; plan 2026-11-20-template-cut-uv-texture).
 TEMPLATE_VERSION = 10
+#: Step 3a (decision D7 b): the fitted kinds' own version, in the drape key of a ``FITTED_KINDS`` piece only — so a
+#: change of the fitted cut re-drapes the fitted pieces and no top / skirt / dress / jacket.
+#: 1: the fitted kinds get sewing-pattern UV islands (``fitted_pattern``) instead of the planar box UV.
+FITTED_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -248,9 +252,9 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: the front panel's fabric (the model painted a chest embroidery onto one sleeve); "picture": the model's answer,
 #: for an item with a print ON a sleeve. The neckband is always the fabric patch.
 SLEEVE_PRINTS = ("plain", "picture")
-#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut); a jacket and a
-#: dress with a bodice keep the grid UV until step 3 of the pattern plan.
-PATTERN_KINDS = ("top",)
+#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top, and since
+#: step 3a every fitted kind; a jacket and a dress with a bodice keep the grid UV until step 3b of the pattern plan.
+PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
 TEXTURE_ONLY = ("fly", "texture", "sleeve_print")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
@@ -1649,6 +1653,7 @@ def trouser_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]
     waist = params["trouser_waist"]
     skinny = params["leg_shape"] == "skinny"
     return {"top_y": round(top, 4), "band_m": round(max(MIN_PIN_BAND_M, TROUSER_WAIST_M[waist]), 4),
+            "waistband_m": TROUSER_WAIST_M[waist],
             "waist_extra_m": TROUSER_WAIST_EXTRA_M[waist], "length": params["trouser_length"],
             "hem_rule": list(TROUSER_HEM[params["trouser_length"]]), "shape": params["leg_shape"],
             "shape_r": list(LEG_SHAPE_R[params["leg_shape"]]) if LEG_SHAPE_R[params["leg_shape"]] else None,
@@ -1822,6 +1827,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if params.get("kind") == "dress" and not has_bodice(params):
         # A223: a strapless dress's top edge moved under the chest band — only these drapes are due again
         payload["strapless_top_m"] = STRAPLESS_UNDERARM_M
+    if params.get("kind") in FITTED_KINDS and FITTED_VERSION:
+        # step 3a (D7 b): the fitted kinds' own version — only their drapes are due again (0 = the keys before it)
+        payload["fitted"] = FITTED_VERSION
     return _md5(payload)
 
 
@@ -1835,7 +1843,8 @@ def drape_path(character_name: str, item_id: str, sig: str) -> Path:
 
 
 def islands_path(character_name: str, item_id: str, sig: str) -> Path:
-    """The drape's pattern islands (``uv_pattern.islands_payload``) beside its GLB — written for a top only."""
+    """The drape's pattern islands (``uv_pattern.islands_payload``) beside its GLB — written for a ``PATTERN_KINDS``
+    piece (a top with a bodice, every fitted kind)."""
     return templates_dir(character_name) / f"{item_id}_{sig}.islands.json"
 
 
@@ -2389,7 +2398,8 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
-            # pattern-piece UV islands for a top; a jacket and a dress with a bodice keep the grid UV until step 3
+            # pattern-piece UV islands for a top and the fitted kinds; a jacket and a dress with a bodice keep the grid
+            # UV until step 3b
             "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid"}
 
 

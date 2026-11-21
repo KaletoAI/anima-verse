@@ -21,8 +21,9 @@ C) The parts: every name of ``PARTS`` and every id of ``STRIP_PARTS`` (``app/ble
    appears in the document's parts table as a row "| <id> | `<name>` | strip/panel |", with "strip" exactly for
    the ids in ``STRIP_PARTS``.
 D) ``uv_mode``: both values "pattern" and "grid" appear, and the build-arg rule in ``garment_template.py``
-   (``"pattern" if params["kind"] in PATTERN_KINDS else "grid"``, ``PATTERN_KINDS`` = ("top",) read from the source)
-   is still the rule the document states (every kind of ``PATTERN_KINDS``, here "top").
+   (``"pattern" if params["kind"] in PATTERN_KINDS else "grid"``, ``PATTERN_KINDS`` read from the source: "top" and
+   since step 3a the fitted kinds) is still the rule the document states (every kind of ``PATTERN_KINDS`` named
+   within 80 characters after "pattern").
 E) The occasion: ``garment_cut_texture`` with its admin label (the first string of its ``_image(...)`` call in
    ``app/imagegen/occasions.py``), ``min_ref_slots=2`` and ``requires_chain=True`` there, and the document names
    all three.

@@ -45,6 +45,7 @@ import bpy
 import numpy as np
 from mathutils import Vector
 
+import fitted_pattern as fpat
 import garment_template_drape as gd
 
 #: Umbrella passes of the evening (fitted kinds), and the extra ones of a molded cup (it bridges the bust).
@@ -438,6 +439,11 @@ def bra_region(f, co, tree, cx, cy):
         return np.zeros(len(v), bool)
 
     info["band_m"] = round(band, 4)
+    # step 3a: the predicates the pattern parts are taken by (``fitted_pattern.pre_parts``); popped by build_fitted
+    info["_pattern"] = {"pred": {"cups": cups, "gore": gore, "straps": straps,
+                                 "band": lambda c: band_ring(c) & (c[:, 2] >= under - band - 0.01)},
+                        "strap_paths": [p for p in paths if len(p) > 1],
+                        "strap_sides": [s for (s, _a), p in zip(apex.items(), paths) if len(p) > 1]}
     return keep, planes, pins, push, closure, cups, info
 
 
@@ -901,9 +907,99 @@ def _umbrella(bm, passes, movable, boundary_only_along=True):
             bm.verts[i].co = c
 
 
+def _joints(arm):
+    """{bone name without the ``mixamorig:`` prefix: head (Blender world, rest)} of every bone."""
+    return {b.name[len(gd.P):] if b.name.startswith(gd.P) else b.name: np.array(arm.matrix_world @ b.head_local)
+            for b in arm.data.bones}
+
+
+def _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, dist):
+    """Step 3a — the sewing-pattern pieces of a fitted piece, cut on the rest geometry right after the region cut
+    (``fitted_pattern``): the seam planes are bisected (each on its side / region only), then every face gets its
+    ``uv_part`` (int face layer) from its centroid and the ring / tube openings plus what ``open_islands`` adds become
+    ``uv_seam`` edges (int edge layer); both ride through the evening and laying out (positions only) into the mesh.
+    Returns what ``garment_template_build.pattern_uv_of_fitted`` needs: {axes, rings, rows, planes, cut_edges,
+    opened, slivers}."""
+    joints = _joints(arm)
+    pat = extra.pop("_pattern", {}) if kind == "bra" else {}
+    info.pop("_pattern", None)
+    pinfo = {k: v for k, v in info.items()}
+    pinfo.update(pat)
+    pinfo["cx"], pinfo["cy"] = cx, float(extra.get("cy", cy))
+    if kind == "briefs" and "crotch_z" in info:
+        # the crotch point's y: the middle of the body's skin round the centre line at the crotch height
+        m = (np.abs(co[:, 0] - cx) < 0.015) & (np.abs(co[:, 2] - float(info["crotch_z"])) < 0.015)
+        pinfo["crotch_y"] = float(np.median(co[m, 1])) if m.any() else pinfo["cy"]
+        info["crotch_y"] = round(pinfo["crotch_y"], 4)
+    if kind == "gloves":
+        pinfo["dist"] = dist
+        bm.faces.ensure_lookup_table()
+        pinfo["arm_centres"] = fpat.glove_centres(np.array([fa.calc_center_median() for fa in bm.faces]), joints, cx)
+        if f.get("cuff", "none") != "none":
+            cp = {}
+            for side, s in (("Left", 1), ("Right", -1)):
+                sh, el, wr = _arm_chain(arm, side)
+                p, u = point_up_arm(float(f["reach_m"]) - float(f["cuff_m"]), sh, el, wr)
+                cp[str(s)] = (p, u)
+            pinfo["cuff_plane"] = cp
+    bm.verts.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    pre = None
+    if kind == "bra":
+        # a bra's cup / gore / strap class is no plane: taken BEFORE the seam bisects, inherited by the split faces
+        lay_pre = bm.faces.layers.int.new("fp_pre")
+        cls = fpat.pre_parts(kind, f, np.array([fa.calc_center_median() for fa in bm.faces]), pinfo)
+        for fa, c in zip(bm.faces, cls):
+            fa[lay_pre] = int(c)
+    planes = fpat.seam_planes(kind, f, joints, pinfo)
+    for p, n, side, tag in planes:
+        bm.faces.ensure_lookup_table()
+        cent = np.array([fa.calc_center_median() for fa in bm.faces])
+        ok = fpat.in_region(kind, tag, cent, joints, pinfo, side)
+        if side is not None:
+            ok &= (cent[:, 0] - cx) * side > 0
+        faces = [fa for fa, k in zip(bm.faces, ok) if k]
+        if not faces:
+            continue
+        edges = {e for fa in faces for e in fa.edges}
+        verts = {v for fa in faces for v in fa.verts}
+        bmesh.ops.bisect_plane(bm, geom=list(verts) + list(edges) + faces, plane_co=Vector(p),
+                               plane_no=Vector(n), clear_outer=False, clear_inner=False, dist=1e-5)
+    bm.verts.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    cent = np.array([fa.calc_center_median() for fa in bm.faces])
+    if kind == "bra":
+        pre = np.array([fa[lay_pre] for fa in bm.faces])
+        bm.faces.layers.int.remove(lay_pre)
+    part = fpat.parts(kind, f, cent, joints, pinfo, pre=pre)
+    xyz = np.array([v.co for v in bm.verts])
+    faces = [tuple(v.index for v in fa.verts) for fa in bm.faces]
+    cut = fpat.cuts(kind, f, faces, part, xyz, joints, pinfo)
+    seams, opened = fpat.open_islands(faces, part, xyz, cut)
+    slv = fpat.slivers(faces, part, xyz, seams)
+    pinfo["ring_centres"] = fpat.ring_centres(faces, part, xyz)
+    lay_part = bm.faces.layers.int.new("uv_part")
+    lay_seam = bm.edges.layers.int.new("uv_seam")
+    for fa, pid in zip(bm.faces, part):
+        fa[lay_part] = int(pid)
+    for a, b in seams:
+        e = bm.edges.get((bm.verts[a], bm.verts[b]))
+        if e is not None:
+            e[lay_seam] = 1
+    counts = {}
+    for pid in part:
+        nm = fpat.uvp.PARTS.get(int(pid), f"part{int(pid)}")
+        counts[nm] = counts.get(nm, 0) + 1
+    return {"axes": fpat.axes(kind, f, joints, pinfo), "rings": fpat.rings(kind, f, joints, pinfo),
+            "rows": fpat.rows(kind, f), "planes": len(planes), "cut_edges": len(cut), "seam_edges": len(seams),
+            "opened": opened, "slivers": slv, "faces_per_part": counts}
+
+
 def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
-    """The fitted piece as a new mesh object (``prm["node"]``) with planar UVs; returns ``(obj, pin indices,
-    info)``. ``cut`` (A237): the body-only rest collider the faces are cut from when ``col`` / ``ctree`` hold lower
+    """The fitted piece as a new mesh object (``prm["node"]``) with its sewing-pattern parts (``_cut_pattern``: int
+    layers ``uv_part`` / ``uv_seam``, an empty ``UVMap``); returns ``(obj, pin indices, info)`` — ``info["pattern"]``
+    is what ``garment_template_build.pattern_uv_of_fitted`` needs. ``cut`` (A237): the body-only rest collider the faces are cut from when ``col`` / ``ctree`` hold lower
     layers too — the piece is cut from the body and laid out over the layers (``ctree``). ``boots`` (A237): footwear colliders a trouser leg hangs over
     (``_over_boot``)."""
     f = spec["fitted"]
@@ -1035,6 +1131,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     info["dropped_faces"] = len(drop)
     bmesh.ops.delete(bm, geom=drop, context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    # step 3a: the pattern pieces are cut here, on the rest geometry, before anything moves a vertex
+    pattern = _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, locals().get("dist"))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.verts.ensure_lookup_table()
     bm.normal_update()
@@ -1155,16 +1253,9 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         for a in info["apex"].values():
             tip |= np.linalg.norm(V - np.array(a), axis=1) < TIP_PIN_M
         pin_mask = pins(V) | (rim & cups(V)) | (tip & cups(V))
-    # planar UVs: front-facing faces on the left half, back-facing ones on the right (mirrored), x / z of the box
-    lo, hi = V.min(0), V.max(0)
-    uvl = bm.loops.layers.uv.new("UVMap")
-    for fa in bm.faces:
-        back = fa.normal.y > 0
-        for lp in fa.loops:
-            p = lp.vert.co
-            u = (p.x - lo[0]) / max(1e-6, hi[0] - lo[0])
-            u = 0.51 + 0.47 * (1.0 - u) if back else 0.02 + 0.47 * u
-            lp[uvl].uv = (u, 0.02 + 0.96 * (p.z - lo[2]) / max(1e-6, hi[2] - lo[2]))
+    # the UV map is written by ``garment_template_build.pattern_uv_of_fitted`` from the ``uv_part`` / ``uv_seam``
+    # layers after ``clear_of_body`` (step 3a: sewing-pattern islands, no planar box UV)
+    bm.loops.layers.uv.new("UVMap")
     mesh = bpy.data.meshes.new("template")
     bm.to_mesh(mesh)
     bm.free()
@@ -1176,6 +1267,7 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     pin = np.where(pin_mask)[0]
     info["verts"] = len(mesh.vertices)
     info["pinned_share"] = round(len(pin) / max(1, len(mesh.vertices)), 3)
+    info["pattern"] = pattern
     return obj, pin, info
 
 

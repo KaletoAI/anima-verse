@@ -15,9 +15,10 @@ is out of date and is re-draped by the next Build).
 
 ### Which pieces get them — `uv_mode`
 
-`garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for kind `top` (`PATTERN_KINDS`), `"grid"` for every other
-kind that has a bodice (jacket, dress with a bodice). `"grid"` is staging, not a compat path: step 3 of the plan moves
-the other kinds (skirt, dress, trousers, jacket, fitted) to the pattern UV and removes it.
+`garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for `top`, `briefs`, `bra`, `gloves`,
+`tights`, `trousers` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a), `"grid"` for every other
+kind (skirt, jacket, dress). `"grid"` is staging, not a compat path: step 3b of the plan moves the rest to the
+pattern UV and removes it.
 
 ### Parts come from the construction
 
@@ -45,8 +46,35 @@ Parts (`uv_pattern.PARTS`; `STRIP_PARTS` get a construction-strip UV, the rest a
 | 5 | `band` | strip | yes (a neck ring) |
 | 6 | `collar` | strip | no — reserved, step 3 |
 | 7 | `placket` | panel | no — reserved, step 3 |
-| 8 | `cuff_l` | strip | no — reserved, step 3 |
-| 9 | `cuff_r` | strip | no — reserved, step 3 |
+| 8 | `cuff_l` | strip | step 3a (trouser / glove cuff) |
+| 9 | `cuff_r` | strip | step 3a (trouser / glove cuff) |
+| 10 | `front_l` | panel | step 3a (trousers) |
+| 11 | `front_r` | panel | step 3a (trousers) |
+| 12 | `back_l` | panel | step 3a (trousers) |
+| 13 | `back_r` | panel | step 3a (trousers) |
+| 14 | `waistband` | strip | step 3a (trousers, tights, briefs) |
+| 15 | `gusset` | panel | step 3a (briefs, tights) |
+| 16 | `leg_l` | panel | step 3a (tights) |
+| 17 | `leg_r` | panel | step 3a (tights) |
+| 18 | `cup_l` | panel | step 3a (bra) |
+| 19 | `cup_r` | panel | step 3a (bra) |
+| 20 | `cup_top_l` | panel | step 3a (bra) |
+| 21 | `cup_top_r` | panel | step 3a (bra) |
+| 22 | `gore` | panel | step 3a (bra) |
+| 23 | `band_l` | strip | step 3a (bra) |
+| 24 | `band_r` | strip | step 3a (bra) |
+| 25 | `strap_l` | panel | step 3a (bra) |
+| 26 | `strap_r` | panel | step 3a (bra) |
+| 27 | `glove_back_l` | panel | step 3a (gloves) |
+| 28 | `glove_back_r` | panel | step 3a (gloves) |
+| 29 | `palm_l` | panel | step 3a (gloves) |
+| 30 | `palm_r` | panel | step 3a (gloves) |
+| 31 | `hip_band_l` | strip | step 3a (briefs, `sides` string) |
+| 32 | `hip_band_r` | strip | step 3a (briefs, `sides` string) |
+| 33 | `top_band_l` | strip | step 3a (stay-ups) |
+| 34 | `top_band_r` | strip | step 3a (stay-ups) |
+| 35 | `thumb_l` | panel | step 3a (gloves) |
+| 36 | `thumb_r` | panel | step 3a (gloves) |
 
 ### Flattening and orientation
 
@@ -107,7 +135,8 @@ No sig — and no Blender run — while a lower template layer is still to be dr
 drapes it first and lays this piece out of it, so a cut made now would differ from that drape; the dialog says
 "Waiting for the layers under it to be draped" (`WAITING_LOWER`). A failed or blocked lower layer is no collider of
 the drape either, so the cut goes on without it. A strapless top (no bodice: the builder cuts it on the grid UV) and
-every kind but a top get their plain reason (`NO_PATTERN_STRAPLESS` / `NO_PATTERN`) and are never run.
+every kind outside `PATTERN_KINDS` get their plain reason (`NO_PATTERN_STRAPLESS` / `NO_PATTERN`) and are never run;
+a fitted piece needs no bodice (its cut is `build_fitted`'s, section 1a).
 `garment_template_cut.sig_of` is the one rule for the cut and for the drape's record.
 
 Not in it: the views and the item picture (the drape key's texture part), `opacity`, `texture`, `sleeve_print`,
@@ -125,6 +154,55 @@ anew — the next Build drapes it again") and the next Build drapes it again und
 changed for this: putting the cut sig into `tsig` would re-drape every top once; this way only the tops whose cut
 really moved re-drape, and a drape without a recorded `cut_sig` (made before cut-first, or a fallback drape) never
 does.
+
+## 1a. Step 3a: the close-fitting kinds
+
+The fitted kinds (`FITTED_KINDS`: briefs, bra, gloves, tights, trousers — boxers are briefs with a leg) are cut from
+the body's surface in `garment_template_fitted.build_fitted`; their pattern pieces come from that cut
+(`app/blender/scripts/fitted_pattern.py`), the flattening is `uv_pattern.pattern_uv` as for a top. The planar box UV
+these kinds had before is gone (its anisotropy on a cylinder: 27.6 against the pattern UV's 1.0, smoke
+`smoke_uv_pattern.py` [18]).
+
+**Seam planes first, labels after.** `fitted_pattern.seam_planes` gives each kind's seam planes (point, normal,
+optionally one side or one arm region); `build_fitted` bisects the mesh along them (`bmesh.ops.bisect_plane`,
+`clear_outer=False`) and only then labels every face by its centroid (`fitted_pattern.parts`), so every seam is a
+vertex line and no face straddles it. The label is the int face layer `uv_part`, the cut lines the int edge layer
+`uv_seam`; both ride through the evening and laying out into `garment_template_build.pattern_uv_of_fitted`, which
+writes `UVMap` and `islands.json` and removes the layers.
+
+| kind | pieces | seam planes / rule |
+|---|---|---|
+| trousers, boxers | `front_l/r`, `back_l/r`, `waistband`, `cuff_l/r` (hem cuff) | centre front / back (x = cx), the side seam per leg (through hip and ankle, normal turned to −Y), waistband under `top_y`; the waistband opens at the centre back (`fly` is texture only) |
+| tights | `leg_l/r`, `gusset`, `waistband`, `top_band_l/r` (stay-ups) | centre plane, the gusset box (`TIGHTS_GUSSET_HALF_M`, `TIGHTS_GUSSET_DROP_M`); each leg opened along its inseam, a closed foot also along the sole (`SOLE_BELOW_ANKLE_M`) |
+| briefs | `front`, `back`, `gusset`, `waistband`, `hip_band_l/r` (`sides` string) | front / back at cy; the gusset spans the whole crotch between `GUSSET_FRONT_M` before and `GUSSET_BACK_M` behind the crotch point, under `GUSSET_RISE_M` over it (no x bound: its sides are the leg openings) |
+| bra | `cup_l/r`, `cup_top_l/r`, `gore`, `band_l/r`, `strap_l/r` | cup > gore > strap > band by `bra_region`'s own predicates, taken again after the bisect; a split face whose centroid left every region keeps the class it had before (face layer `fp_pre`) |
+| gloves | `glove_back_l/r`, `palm_l/r`, `thumb_l/r`, `cuff_l/r` | per region (upper arm, forearm, hand) a dorsal / palmar plane through the bone line, moved to the middle of that region's cloth (`glove_centres`: the bone lies off the middle of the limb); the thumb past Thumb2 is a piece of its own, opened along its line facing the index finger |
+
+**Every island a disk.** A tube (a leg, a finger, an arm) is opened by `fitted_pattern.cuts` (`plane_cut`: the edges
+on a cut plane, on one half of it); whatever is still no disk (Euler characteristic < 1) is opened by
+`open_islands` along the shortest edge path between its boundary loops. Islands under `MIN_ISLAND_FACES` faces are
+reported (`slivers`), never relabelled.
+
+**Rings are strips.** The waistband, the bra band halves, the hip bands, the cuffs and the stay-up bands are not
+flattened but unrolled (`uv_pattern.ring_strip_uv`): u = the chord sum round the ring (the ring's own radius at each
+angle, averaged over `RING_SMOOTH_RAD`), v = the height; theta = 0 is the ring's cut (the vertices the island holds
+twice). The ring axis comes from the labelled geometry (`fitted_pattern.ring_centres`). Their stretch is recorded
+(`strip_stretch_p95`), not gated.
+
+**Rows.** `uv_pattern.ROWS[kind]` lays the islands out per kind (e.g. trousers: the four panels in one row, the bands
+under them), so one px/cm holds for the whole atlas as for a top.
+
+**Solver.** The fitted pieces are large (a tights leg ≈ 22 k vertices). `pattern_uv` with a `tol` (the fitted kinds:
+`FITTED_ARAP_TOL` = 1e-3) stops ARAP when its energy changes by less than that, and solves LSCM and every ARAP step
+directly (`uv_pattern._Banded`: reverse Cuthill-McKee order, block Cholesky; factor entries under `TINY` flushed —
+subnormal fill-in made LAPACK 100× slower); a bandwidth over `BAND_MAX` or a matrix that does not factor falls back to
+Jacobi-preconditioned CG. A top keeps the plain CG and its payload byte for byte (smoke [21]). Measured: Kira's
+tights 520 s → 22 s in Blender, Lirien's / Kai's trousers 51–53 s → 7–8 s.
+
+**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION`; `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
+`fitted_pattern.py`), so a change of the cut rules re-cuts. Changing `uv_pattern.py` changes `UV_PATTERN_SHA`: every
+top drape with a recorded `cut_sig` counts as `cut_behind` once and re-drapes on the CPU (0 hub jobs; its islands are
+byte-identical, so its cut texture stays valid).
 
 ## 2. Texture from cut (step 2)
 

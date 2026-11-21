@@ -1760,6 +1760,56 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
     return info
 
 
+#: Step 3a: the adaptive stop of ARAP on a fitted piece (4-41 k vertices; decision D12).
+FITTED_ARAP_TOL = 1e-3
+
+
+def pattern_uv_of_fitted(obj, pattern, islands_json):
+    """Pattern-piece UV of a fitted piece (step 3a): read the faces, their ``uv_part`` / ``uv_seam`` layers
+    (``garment_template_fitted._cut_pattern``) and the rest coordinates as ``clear_of_body`` left them, run
+    ``uv_pattern.pattern_uv`` with the kind's axes, ring frames and rows (``fitted_pattern``; panels by LSCM + ARAP with
+    the adaptive stop, rings as strips), write the ``UVMap`` loops and ``islands_json``, drop the helper layers.
+    Returns ``data["uv"]``."""
+    import json
+    t0 = time.time()
+    me = obj.data
+    nv = len(me.vertices)
+    co = np.empty(nv * 3)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    polys = [tuple(p_.vertices) for p_ in me.polygons]
+    part = np.empty(len(me.polygons), np.int32)
+    me.attributes["uv_part"].data.foreach_get("value", part)
+    flag = np.empty(len(me.edges), np.int32)
+    me.attributes["uv_seam"].data.foreach_get("value", flag)
+    ev = np.empty(len(me.edges) * 2, np.int32)
+    me.edges.foreach_get("vertices", ev)
+    ev = ev.reshape(-1, 2)
+    seams = {(int(a_), int(b_)) for (a_, b_), f_ in zip(ev, flag) if f_}
+    res = uvp.pattern_uv(polys, part, seams, co, axes=pattern["axes"], rings=pattern["rings"], rows=pattern["rows"],
+                         size_px=PATTERN_ATLAS_PX, margin_cm=PATTERN_MARGIN_CM, tol=FITTED_ARAP_TOL)
+    flat = np.zeros(len(me.loops) * 2)
+    for p_ in me.polygons:
+        for j, li in enumerate(p_.loop_indices):
+            flat[2 * li:2 * li + 2] = res["corner_uv"][p_.index][j]
+    me.uv_layers["UVMap"].data.foreach_set("uv", flat)
+    for name in ("uv_part", "uv_seam"):
+        me.attributes.remove(me.attributes[name])
+    Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
+    info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
+            "islands": res["islands"], "faces_per_part": res["faces_per_part"],
+            "area_ratio_min": res["area_ratio_min"], "area_ratio_max": res["area_ratio_max"],
+            "stretch_p95_max": res["stretch_p95_max"], "strip_stretch_p95": res["strip_stretch_p95"],
+            "seam_edges": len(seams), "arap_iters": res["arap_iters"], "slivers": pattern.get("slivers", []),
+            "opened": pattern.get("opened", []), "cut_edges": pattern.get("cut_edges"),
+            "uv_s": round(time.time() - t0, 2)}
+    print(f"uv.islands {res['islands']} faces {res['faces_per_part']} px/cm {info['px_per_cm']} "
+          f"area {info['area_ratio_min']}..{info['area_ratio_max']} p95 {info['stretch_p95_max']} "
+          f"strips {info['strip_stretch_p95']} iters {info['arap_iters']} slivers {info['slivers']} "
+          f"opened {info['opened']} {info['uv_s']} s", flush=True)
+    return info
+
+
 def run(a):
     t_all, c_all = time.time(), time.process_time()
     inp, prm = a["inputs"], a["params"]
@@ -1810,8 +1860,8 @@ def run(a):
     fitted = spec.get("fitted")
     uv_info = None
     cut_only = bool(prm.get("cut_only"))
-    if cut_only and (fitted or not bod or (prm.get("uv_mode") or "grid") != "pattern"):
-        raise RuntimeError("cut_only needs a bodice cut with pattern UVs (uv_mode \"pattern\")")
+    if cut_only and not fitted and (not bod or (prm.get("uv_mode") or "grid") != "pattern"):
+        raise RuntimeError("cut_only needs a bodice cut with pattern UVs (uv_mode \"pattern\") or a fitted piece")
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
         col, ctree = gd.rest_collider(body, extra=lower)
@@ -1830,6 +1880,18 @@ def run(a):
             binfo["cut_from"] = "without footwear"
             bpy.data.objects.remove(cut)
         slit_edges = 0
+        # step 3a: the fitted kinds' sewing-pattern islands, from the parts cut in ``build_fitted`` (the drape below
+        # only moves vertices, so a ``cut_only`` run writes the same islands bytes)
+        pattern = binfo.pop("pattern")
+        uv_info = pattern_uv_of_fitted(obj, pattern, out / "islands.json")
+        uv_info["planes"] = pattern["planes"]
+        uv_info["parts_cut"] = pattern["faces_per_part"]
+        if cut_only:
+            return gd._plain({"cut_only": True, "uv": uv_info, "bodice": binfo, "slit_edges": 0,
+                              "lower_layers": len(lower), "verts": len(obj.data.vertices),
+                              "script_wall_s": round(time.time() - t_all, 2),
+                              "script_cpu_s": round(time.process_time() - c_all, 2)}), \
+                {"islands": str(out / "islands.json")}
     elif bod:
         # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)
         # A179: its Y is the arm joints' (the armhole windows open either side of the axis: an axis 3 cm in front of

@@ -6864,7 +6864,7 @@
     "Texture from cut": "Textur aus dem Schnitt",
     "Cutting the pattern (CPU, 0 hub jobs)": "Schnitt wird zugeschnitten (CPU, 0 Hub-Jobs)",
     "The pattern is not cut yet — it is cut when the dialog opens or the parameters are saved (CPU, 0 hub jobs)": "Der Schnitt ist noch nicht zugeschnitten — das geschieht beim Öffnen des Dialogs oder beim Speichern der Parameter (CPU, 0 Hub-Jobs)",
-    "Only a top is cut into pattern pieces for now — this kind keeps its projection texture": "Vorerst wird nur ein Oberteil in Schnittteile zugeschnitten — diese Art behält ihre Projektions-Textur",
+    "Only a top and the close-fitting kinds are cut into pattern pieces for now — this kind keeps its projection texture": "Vorerst werden nur ein Oberteil und die eng anliegenden Arten in Schnittteile zugeschnitten — diese Art behält ihre Projektions-Textur",
     "Cut {at} — pattern pieces ready": "Zugeschnitten {at} — Schnittteile bereit",
     "Cut on the CPU in {s} s, 0 hub jobs — no drape needed": "Auf der CPU in {s} s zugeschnitten, 0 Hub-Jobs — kein Drapieren nötig",
     "Shown once cut": "Sichtbar nach dem Zuschnitt",
