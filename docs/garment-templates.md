@@ -345,7 +345,7 @@ hold, so:
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
 
-`POST_VERSION` 6 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 7 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -394,12 +394,18 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 - `SPILL_CM` = 1.0 cm — foreground closer than that to an island is a smeared edge, not spill.
 - `BLEED_CM` = 1.0 cm — every island is regrown that far past its border (the model's outline is eroded away first),
   so mip-maps and bilinear lookups at a seam never read the background.
+- The erosion is the answer's own outline width (`outline_rim`): ring k = the pixels k px inside the mask; a ring
+  whose share of pixels more than `RIM_DE` 12 (ΔE76) from the median cloth colour 10–20 px deep exceeds that band's
+  own share by `RIM_SHARE` 0.05 still belongs to the outline; the run of such rings from the border plus one pixel,
+  clamped to 3–10 px (`RIM_MIN_PX` / `RIM_MAX_PX`). The record keeps it under `metrics.rim`. Live 2026-11-21:
+  MiniMax-H3 keeps a ~5 px outline and a registration a few pixels off pushes it deeper into one side, which the
+  fixed 3 px left as a grey line along Tilda's side seams (6 px now); a P-H3 answer measures 5 px.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 6 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+- `POST_VERSION` = 7 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
-  plain back is the front's fabric, no back job).
+  plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

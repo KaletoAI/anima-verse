@@ -6,7 +6,7 @@ Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
         [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
-        [--workdir <dir>] [--out <dir>] [--keep]
+        [--backend-set NAME.ATTR=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
     ./.venv/bin/python scripts/e2e_cut_texture.py --world worlds/demo --character demo --dry-run
@@ -54,6 +54,17 @@ on the chain's next entry (docs/edit-prompts.md §7). With it, the image jobs co
 per job that ran a second attempt, at most the plan's ``max``; each job's ``attempts`` and its routing meta are printed
 and checked (attempt 2 aimed at position 2, no ``fallback_from``).
 
+Live, every request body the hub's image endpoints get is recorded (the pictures by count and size only) and
+checked against its backend's dialect (``DIALECT_MARKS``, docs/edit-prompts.md §2): P-H3 opens with
+"Edit <Picture 1>.", MiniMax names ``<Picture 1>``, ``<Picture 2>`` and ``<Subject 1>``, Qwen ``<image1>`` and
+``<image2>`` at 2048x2048 with cfg 1; no request carries another dialect's spelling or ``<ref N>``; two pictures each;
+every attempt of the record names its backend's dialect. The bodies land in ``e2e.json`` (``payloads``).
+``--backend-set NAME.ATTR=JSON`` (repeatable) sets an attribute of a pool backend IN THE PROCESS — the recommended
+texture entry of docs/edit-prompts.md §5 without writing it, e.g. ``--backend-set Qwen2.1.width=2048
+--backend-set Qwen2.1.height=2048 --backend-set 'Qwen2.1.extra_params={"cfg": 1}'``.
+The served figure is rendered from the front and the back (Blender ``figure_front``; the back through a copy turned
+180°) to ``figure_front.png`` / ``figure_back.png`` in ``--out`` (``--no-renders`` skips it).
+
 Exit 0 = every check passed. ``--dry-run`` answers each image job with its own template (the islands pre-filled with
 the fabric colour) and the upscale with a refusal (Lanczos fallback, counted); it renders no piece-only view (so no
 ``--fresh-back-view``).
@@ -76,9 +87,18 @@ from typing import Any, Dict, List
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-#: The image backends a live run may submit to: the local P-H3 / MiniMax aliases and the local upscalers (free, own
-#: GPUs/CPU).
-ALLOWED_BACKENDS = {"P-H3-Image", "MiniMax-H3-Image", "Iris-3B-Upscale", "Real-ESRGAN-CPU"}
+#: The image backends a live run may submit to: the local P-H3 / MiniMax / Qwen2.1 aliases and the local upscalers
+#: (free, own GPUs/CPU).
+ALLOWED_BACKENDS = {"P-H3-Image", "MiniMax-H3-Image", "Qwen2.1", "Iris-3B-Upscale", "Real-ESRGAN-CPU"}
+#: What each dialect's request must carry in its ``prompt`` field (docs/edit-prompts.md §2): P-H3 opens with its edit
+#: prefix, MiniMax names pictures AND subjects, Qwen tags two images ``<image1>`` / ``<image2>``; none of them may
+#: carry another dialect's spelling or the canonical ``<ref N>``.
+DIALECT_MARKS = {
+    "picture_edit": {"starts": "Edit <Picture 1>.", "has": ["<Picture 2>"], "not": ["<image1>", "<Subject", "<ref "]},
+    "picture_subject": {"starts": "", "has": ["<Picture 1>", "<Picture 2>", "<Subject 1>"],
+                        "not": ["<image1>", "<ref ", "Edit <Picture 1>."]},
+    "image_tag": {"starts": "", "has": ["<image1>", "<image2>"], "not": ["<Picture", "<Subject", "<ref "]},
+}
 #: The hub's host (``openai_diffusion`` gateway of the local GPUs).
 HUB_HOSTS = {"192.168.8.10"}
 
@@ -91,6 +111,7 @@ CLICKS: Dict[str, int] = {"figure_build.start": 0, "garment_cut_texture.start": 
                           "garment_cut_texture.start_recompose": 0, "garment_template_views.start": 0}
 CONFIG_WRITES: List[str] = []
 STEPS: List[Dict[str, Any]] = []
+PAYLOADS: List[Dict[str, Any]] = []     # every request body sent to the hub's image endpoints (images by name only)
 
 
 def check(label: str, got: Any, want: Any) -> None:
@@ -172,6 +193,25 @@ def install_job_guard(dry: bool) -> None:
         JOBS.append({"backend": name, "task": k.get("task_type"), "label": k.get("label"), "t": time.time()})
         return real_gpu(self, *a, **k)
     llm_queue.LLMQueue.submit_gpu_task = submit_gpu_task
+
+    from app.imagegen.backends import openai_diffusion
+    real_post = openai_diffusion.OpenAIDiffusionBackend._post_gateway
+
+    def post_gateway(self, endpoint, *, json=None, files=None, data=None):
+        body = dict(json if json is not None else (data or {}))
+        n_images = (sum(1 for f, _v in (files or []) if f == "image") if json is None
+                    else len(body.get("ref_images") or []))
+        for key, value in list(body.items()):       # the pictures by count and size, never their bytes
+            if key != "prompt" and len(str(value)) > 2000:
+                body[key] = (f"<{len(value)} items, {len(str(value))} chars>" if isinstance(value, (list, tuple))
+                             else f"<{len(str(value))} chars>")
+        PAYLOADS.append({"backend": self.name, "endpoint": endpoint, "body": body, "t": time.time(),
+                         "n_images": n_images,
+                         "files": [(f, (v[0] if isinstance(v, tuple) else ""),
+                                    len(v[1]) if isinstance(v, tuple) and len(v) > 1 else 0)
+                                   for f, v in (files or [])]})
+        return real_post(self, endpoint, json=json, files=files, data=data)
+    openai_diffusion.OpenAIDiffusionBackend._post_gateway = post_gateway
 
     def no_llm(*a, **k):
         LLM.append(str(k.get("task") or (a[0] if a else "")))
@@ -387,6 +427,100 @@ def atlas_in_glb(glb: Path, atlas: Path) -> Dict[str, Any]:
     return {"match": best is not None and best < 2.0, "how": "pixels", "mad": best}
 
 
+def apply_backend_sets(sets: List[str]) -> None:
+    """``--backend-set NAME.ATTR=JSON``: the backend instance of the image pool gets ``ATTR`` in THIS process (the
+    test of a recommended entry, e.g. the 2048 / cfg 1 texture entry of docs/edit-prompts.md §5); nothing is
+    written."""
+    from app.imagegen.service import get_image_service
+    pool = get_image_service().pool
+    for spec in sets:
+        target, _, raw = spec.partition("=")
+        name, _, attr = target.rpartition(".")
+        if not name or not attr or not raw:
+            raise SystemExit(f"--backend-set {spec!r}: want NAME.ATTR=JSON")
+        if name not in ALLOWED_BACKENDS:
+            raise SystemExit(f"--backend-set: {name!r} is not allowed")
+        hits = [b for b in pool.backends if b.name == name]
+        if not hits or not hasattr(hits[0], attr):
+            raise SystemExit(f"--backend-set: no backend {name!r} with an attribute {attr!r}")
+        value = json.loads(raw)
+        for b in hits:
+            setattr(b, attr, value)
+        print(f"backend {name}: {attr} = {value!r} (in-process)")
+
+
+def check_dialects(record: Dict[str, Any]) -> None:
+    """Every image request the hub got carries its backend's dialect (``DIALECT_MARKS``), with both pictures; every
+    attempt of the record names the dialect of the backend it ran on."""
+    from app.imagegen.edit_prompt import dialect_of
+    from app.imagegen.service import get_image_service
+    by_name = {b.name: b for b in get_image_service().pool.backends}
+    sent = [p for p in PAYLOADS if p["backend"] in by_name and p["endpoint"] in ("edits", "generations")]
+    check("one hub request per image job (upscales aside)", len(sent),
+          len([j for j in JOBS if j["task"] == "garment_cut_texture"]))
+    for p in sent:
+        dialect = dialect_of(by_name[p["backend"]])
+        prompt = str(p["body"].get("prompt") or "")
+        marks = DIALECT_MARKS.get(dialect)
+        if marks is None:
+            check(f"{p['backend']}: a known dialect", dialect, "picture_edit|picture_subject|image_tag")
+            continue
+        bad = ([f"does not start with {marks['starts']!r}"] if not prompt.startswith(marks["starts"]) else []) + \
+              [f"lacks {m!r}" for m in marks["has"] if m not in prompt] + \
+              [f"carries {m!r}" for m in marks["not"] if m in prompt]
+        check(f"{p['backend']} request in its dialect {dialect}", bad, [])
+        check(f"{p['backend']} request carries two pictures", p["n_images"], 2)
+        if dialect == "image_tag":
+            body = p["body"]
+            check(f"{p['backend']} request size", body.get("size"), "2048x2048")
+            check(f"{p['backend']} request cfg", str(body.get("cfg")), "1")
+    for job, entry in (record.get("jobs") or {}).items():
+        for a in entry.get("attempts") or []:
+            b = by_name.get(str(a.get("backend")))
+            if b is not None:
+                check(f"{job} attempt {a.get('attempt')} dialect = its backend's", a.get("dialect"), dialect_of(b))
+
+
+def _turned_glb(src: Path, dst: Path) -> None:
+    """A copy of ``src`` turned 180° about the up axis (one new root node), so the front camera sees the back."""
+    data = src.read_bytes()
+    off, chunks = 12, []
+    while off < len(data):
+        clen, ctype = struct.unpack_from("<II", data, off)
+        chunks.append([ctype, data[off + 8: off + 8 + clen]])
+        off += 8 + clen
+    doc = json.loads(chunks[0][1].decode("utf-8"))
+    scene = doc["scenes"][doc.get("scene", 0)]
+    doc.setdefault("nodes", []).append({"name": "e2e_turn", "rotation": [0.0, 1.0, 0.0, 0.0],
+                                        "children": list(scene.get("nodes") or [])})
+    scene["nodes"] = [len(doc["nodes"]) - 1]
+    blob = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    chunks[0][1] = blob + b" " * (-len(blob) % 4)
+    body = b"".join(struct.pack("<II", len(c), t) + c for t, c in chunks)
+    dst.write_bytes(struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body)
+
+
+def render_figure(glb: Path, out_dir: Path) -> None:
+    """The served figure from the front and the back (Blender ``figure_front``, EEVEE, CYCLES as its fallback)."""
+    from app.blender import runner
+    work = Path(tempfile.mkdtemp(prefix="e2e-fig-"))
+    try:
+        turned = work / "turned.glb"
+        _turned_glb(glb, turned)
+        for view, model in (("front", glb), ("back", turned)):
+            for engine in ("BLENDER_EEVEE", "CYCLES"):
+                res = runner.run("figure_front", inputs={"model": model}, params={"engine": engine,
+                                                                                   "height_px": 1400},
+                                 out_dir=work / f"{view}-{engine}")
+                if res.get("ok") and (res.get("outputs") or {}).get("front"):
+                    shutil.copyfile(res["outputs"]["front"], out_dir / f"figure_{view}.png")
+                    print(f"figure {view}: {engine} {res.get('seconds')} s")
+                    break
+                print(f"figure {view}: {engine} failed: {res.get('error')}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def wait_quiet(character: str, timeout: float = 4 * 3600.0, settle: float = 4.0) -> None:
     from app.core import figure_build, garment_assembly, model3d
     deadline = time.time() + timeout
@@ -420,6 +554,10 @@ def main() -> int:
     ap.add_argument("--fresh-back-view", action="store_true")
     ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
     ap.add_argument("--reject-attempt", type=int, default=0, help="force the gates of this attempt to 'rejected'")
+    ap.add_argument("--backend-set", action="append", default=[], metavar="NAME.ATTR=JSON",
+                    help="an in-process override of one backend attribute (e.g. 'Qwen2.1.width=2048'); nothing is "
+                         "written")
+    ap.add_argument("--no-renders", action="store_true", help="skip the front/back pictures of the served figure")
     ap.add_argument("--workdir", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--keep", action="store_true")
@@ -449,6 +587,8 @@ def main() -> int:
             real_rules = _routing._rules
             _routing._rules = lambda occasion: list(chain) if occasion == gct.CUT_USE_CASE else real_rules(occasion)
             print(f"chain {gct.CUT_USE_CASE}: {chain} (in-process)")
+        if args.backend_set:
+            apply_backend_sets(args.backend_set)
         if args.reject_attempt:
             from app.imagegen import routing as _routing
             real_post = gct.post_job
@@ -510,6 +650,8 @@ def main() -> int:
                       [args.reject_attempt + 1] * len(tries))
             check("no fallback_from", [a for a in tries if "fallback_from" in (a.get("routing") or {})], [])
         check("image jobs as announced (+ one per second attempt)", len(JOBS), announced + second)
+        if not args.dry_run:
+            check_dialects(rec0)
         check("clicks", CLICKS, {"figure_build.start": 1, "garment_cut_texture.start": 0,
                                  "garment_cut_texture.start_recompose": 0, "garment_template_views.start": 0})
         check("backends refused", REFUSED, [])
@@ -546,8 +688,11 @@ def main() -> int:
         if sig:
             for path in gct.cut_dir(args.character).glob(f"{item_id}_{sig}*"):
                 shutil.copyfile(path, out_dir / path.name)
+        if served and not args.no_renders:
+            render_figure(Path(served), out_dir)
         (out_dir / "e2e.json").write_text(json.dumps({"plan": [s.as_dict() for s in steps], "cost": cost,
-                                                     "jobs": JOBS, "steps": STEPS, "state": state,
+                                                     "jobs": JOBS, "payloads": PAYLOADS,
+                                                     "steps": STEPS, "state": state,
                                                      "prepare": prep, "fails": FAILS}, indent=1, default=str))
         print(f"availability probes blocked (not counted): {len(PROBES)}")
         print(f"files: {out_dir}")

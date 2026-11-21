@@ -1349,13 +1349,14 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     if failures and not force:
         metrics.update({"de_before": None, "de_after": None, "clamped": None})
         return {"state": "rejected", "reason": failures[0], "metrics": metrics, "accepted": False}
-    cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))))
+    rim = post.outline_rim(reg, mask)
+    cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))), erode_px=rim["px"])
     grown = ~np.all(cut == 255, axis=-1) | mask
     matched, cm = post.colour_match(cut, grown, fabric=refs.get("fabric"))
     fabric = panel_fabric(matched, islands, labels, job, px_per_cm)
     filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
-                    "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill})
+                    "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill, "rim": rim})
     return {"state": "ready", "reason": "", "metrics": metrics, "accepted": bool(failures),
             "_image": filled, "_grown": grown, "_mask": mask, "_fabric": fabric}
 

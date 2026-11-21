@@ -50,8 +50,20 @@ CLAMP_DE = 25.0
 #: islands are dropped before the registration (``drop_strays``). 5 (2026-11-21): the back job runs in its zoom frame
 #: (``garment_cut_texture.job_frame``) and is put back into the atlas frame before the compose; the foreground threshold
 #: is the answer's own (``answer_white_tol``). 6 (2026-11-21): a PLAIN back view (``garment_cut_texture.PLAIN_BACK_DETAIL``)
-#: gets no back job — the back panel is the front panel's fabric (``garment_cut_texture.fill_plain_back``).
-POST_VERSION = 6
+#: gets no back job — the back panel is the front panel's fabric (``garment_cut_texture.fill_plain_back``). 7 (2026-11-21):
+#: the erosion before the bleed is the answer's own outline width (``outline_rim``) — MiniMax keeps a ~5 px dark
+#: outline that the fixed 3 px left as a line along every seam.
+POST_VERSION = 7
+
+#: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
+#: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
+#: band ``RIM_REF_PX`` deep inside the islands is off; a ring with ``RIM_SHARE`` more off pixels than that band still
+#: belongs to the outline.
+RIM_MIN_PX = 3
+RIM_MAX_PX = 10
+RIM_DE = 12.0
+RIM_SHARE = 0.05
+RIM_REF_PX = (10, 20)
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256
@@ -393,7 +405,42 @@ def gate(img: np.ndarray, mask: np.ndarray, labels: np.ndarray, px_per_cm: float
 
 # ------------------------------------------------------------------------------------------------------- cut and bleed
 
-def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = 3) -> np.ndarray:
+def outline_rim(img, mask) -> dict:
+    """How far the answer's outline reaches into the islands: ``{"px", "share", "ref"}``. Ring k = the pixels k px
+    inside the mask's border; ``share`` per ring = its pixels more than ``RIM_DE`` from the median colour of the band
+    ``RIM_REF_PX`` deep inside, ``ref`` the same share in that band (the cloth's own weave and print). ``px`` = the
+    length of the unbroken run of rings from the border whose share exceeds ``ref + RIM_SHARE``, plus one pixel of
+    margin (0 when none does), clamped to ``[RIM_MIN_PX, RIM_MAX_PX]``; islands too thin for the band keep
+    ``RIM_MIN_PX``. A SHARE, not a ring median: a registration a few pixels off pushes the outline deep into ONE side
+    only, which a median over the whole ring does not see — and the 3 px erosion before left exactly that side's
+    outline to seed the bleed (live 2026-11-21, Tilda's cream blouse on MiniMax-H3: a grey line along the side seams).
+
+    Hand-measured on the live answers of 2026-11-21 (registered into the template frame): Tilda (MiniMax) ref 0.009,
+    rings 0..4 at 0.82 / 0.65 / 0.35 / 0.19 / 0.062 (> 0.059), ring 5 at 0.007 -> run 5 -> 6 px; Kai's P-H3 answer ref
+    0.053, rings 0..3 at 0.83 / 0.62 / 0.35 / 0.135 (> 0.103), ring 4 at 0.095 -> run 4 -> 5 px."""
+    mask = np.asarray(mask, bool)
+    lab = srgb_to_lab(np.asarray(img)[..., :3])
+    layers = [mask]
+    for _ in range(RIM_REF_PX[1]):
+        layers.append(erode(layers[-1], 1))
+    band = layers[RIM_REF_PX[0]] & ~layers[RIM_REF_PX[1]]
+    if not band.any():
+        return {"px": RIM_MIN_PX, "share": [], "ref": None}
+    dist = np.linalg.norm(lab - np.median(lab[band], axis=0), axis=-1)
+    ref = float((dist[band] > RIM_DE).mean())
+    shares, run, off = [], 0, True
+    for k in range(RIM_MAX_PX):
+        ring = layers[k] & ~layers[k + 1]
+        share = float((dist[ring] > RIM_DE).mean()) if ring.any() else 0.0
+        shares.append(round(share, 3))
+        if off and share > ref + RIM_SHARE:
+            run = k + 1
+        else:
+            off = False
+    return {"px": int(min(RIM_MAX_PX, max(RIM_MIN_PX, run + 1 if run else 0))), "share": shares, "ref": round(ref, 3)}
+
+
+def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.ndarray:
     """The atlas cut to the islands with bleed padding: the mask eroded by ``erode_px`` (the model's outline, drawn
     inside the islands), then regrown ``erode_px + bleed_px`` times by one 8-neighbour ring whose pixels take the mean
     of their already filled neighbours. A part of an island thinner than the erosion keeps its own pixels. Returns
