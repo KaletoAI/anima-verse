@@ -5,7 +5,7 @@ and the textures are not generated").
 Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
-        [--no-redrape] [--fresh-back-view] \
+        [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
         [--workdir <dir>] [--out <dir>] [--keep]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
@@ -47,6 +47,13 @@ What it does, in ONE process, never touching the world it is given:
    - when the drape ran too: the cut texture's first image job started before the drape step ended (side by side).
 7. Copies the record, the answers and the atlas to ``--out`` (default ``~/claude-out/cut-e2e/<stamp>``) for a look.
 
+``--chain a,b`` overrides the ``garment_cut_texture`` routing chain IN THE PROCESS (``routing._rules``; nothing is
+written — the recorder still fails the run on a config write); every entry must be in ``ALLOWED_BACKENDS``.
+``--reject-attempt N`` forces the gates of attempt N to "rejected" (the answer itself is real), so attempt N + 1 runs
+on the chain's next entry (docs/edit-prompts.md §7). With it, the image jobs counted are the announced count plus one
+per job that ran a second attempt, at most the plan's ``max``; each job's ``attempts`` and its routing meta are printed
+and checked (attempt 2 aimed at position 2, no ``fallback_from``).
+
 Exit 0 = every check passed. ``--dry-run`` answers each image job with its own template (the islands pre-filled with
 the fabric colour) and the upscale with a refusal (Lanczos fallback, counted); it renders no piece-only view (so no
 ``--fresh-back-view``).
@@ -69,8 +76,9 @@ from typing import Any, Dict, List
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-#: The image backends a live run may submit to: the local P-H3 alias and the local upscalers (free, own GPUs/CPU).
-ALLOWED_BACKENDS = {"P-H3-Image", "Iris-3B-Upscale", "Real-ESRGAN-CPU"}
+#: The image backends a live run may submit to: the local P-H3 / MiniMax aliases and the local upscalers (free, own
+#: GPUs/CPU).
+ALLOWED_BACKENDS = {"P-H3-Image", "MiniMax-H3-Image", "Iris-3B-Upscale", "Real-ESRGAN-CPU"}
 #: The hub's host (``openai_diffusion`` gateway of the local GPUs).
 HUB_HOSTS = {"192.168.8.10"}
 
@@ -410,6 +418,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-redrape", action="store_true")
     ap.add_argument("--fresh-back-view", action="store_true")
+    ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
+    ap.add_argument("--reject-attempt", type=int, default=0, help="force the gates of this attempt to 'rejected'")
     ap.add_argument("--workdir", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--keep", action="store_true")
@@ -430,6 +440,26 @@ def main() -> int:
               args.u2net_home.resolve())
         from app.core import figure_build, garment_cut_texture as gct, paths
         check("storage is the copy", Path(paths.get_storage_dir()).resolve(), world.resolve())
+        chain = [c.strip() for c in args.chain.split(",") if c.strip()]
+        if chain:
+            bad = [c for c in chain if c not in ALLOWED_BACKENDS]
+            if bad:
+                raise SystemExit(f"--chain: {bad} not allowed (only {sorted(ALLOWED_BACKENDS)})")
+            from app.imagegen import routing as _routing
+            real_rules = _routing._rules
+            _routing._rules = lambda occasion: list(chain) if occasion == gct.CUT_USE_CASE else real_rules(occasion)
+            print(f"chain {gct.CUT_USE_CASE}: {chain} (in-process)")
+        if args.reject_attempt:
+            from app.imagegen import routing as _routing
+            real_post = gct.post_job
+
+            def post_job(*a, **k):
+                res = real_post(*a, **k)
+                if _routing.current_attempt() == args.reject_attempt and not k.get("force") \
+                        and res.get("state") == "ready":
+                    res = {**res, "state": "rejected", "reason": f"e2e: attempt {args.reject_attempt} rejected"}
+                return res
+            gct.post_job = post_job
         if OUTBOUND:
             print(f"setup: {len(OUTBOUND)} connect(s) blocked while starting — not counted: {OUTBOUND[:3]}")
             OUTBOUND.clear()
@@ -463,7 +493,23 @@ def main() -> int:
         # live run 2026-11-21 (Kai): the Build ended with the drape due again ("cut anew") and the assembly due — a
         # second Build would have been needed. Nothing but the local collision channel may be left.
         check("plan afterwards is empty (no second Build)", [s.label for s in after if s.name != "collision"], [])
-        check("image jobs as announced", len(JOBS), announced)
+        rec0 = (gct.dialog_state(args.character, item_id).get("record") or {})
+        second = sum(1 for e in (rec0.get("jobs") or {}).values() if len(e.get("attempts") or []) > 1)
+        for j, e in (rec0.get("jobs") or {}).items():
+            for a in e.get("attempts") or []:
+                print(f"  {j} attempt {a.get('attempt')}: {a.get('backend')} {a.get('dialect')} {a.get('state')} "
+                      f"{a.get('reason') or ''} routing={a.get('routing')}")
+        if args.reject_attempt:
+            tries = [a for e in (rec0.get("jobs") or {}).values() for a in (e.get("attempts") or [])
+                     if a.get("attempt") == args.reject_attempt + 1]
+            check("every job ran the next attempt", bool(tries) and second == len(
+                [e for e in (rec0.get("jobs") or {}).values() if e.get("attempts")]), True)
+            if not args.dry_run:      # the dry render is stubbed: it carries no routing meta
+                check("the next attempt aimed at the next chain entry",
+                      [((a.get("routing") or {}).get("attempt_entry") or {}).get("aimed_position") for a in tries],
+                      [args.reject_attempt + 1] * len(tries))
+            check("no fallback_from", [a for a in tries if "fallback_from" in (a.get("routing") or {})], [])
+        check("image jobs as announced (+ one per second attempt)", len(JOBS), announced + second)
         check("clicks", CLICKS, {"figure_build.start": 1, "garment_cut_texture.start": 0,
                                  "garment_cut_texture.start_recompose": 0, "garment_template_views.start": 0})
         check("backends refused", REFUSED, [])
