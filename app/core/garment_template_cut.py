@@ -19,8 +19,11 @@ The CUT SIGNATURE (``cut_sig``) is exactly what the cut reads (derived from ``ga
   the colliders ``clear_of_body`` lays the panels out of, the jacket allowance shapes ``panel_spec``, the chest
   shaping shapes the body) plus which lower template drapes are READY (only those are handed over as colliders);
   while one is still to be draped there is no sig (``WAITING_LOWER``: the Build drapes it first, ``sig_of``);
-- ``TEMPLATE_VERSION`` and ``UV_PATTERN_SHA`` (md5 of ``app/blender/scripts/uv_pattern.py``: a change of the
-  flattening re-cuts, seconds).
+- ``TEMPLATE_VERSION`` and the flattening's key (``uv_pattern_key``): a fitted piece's is ``UV_PATTERN_SHA`` (md5 of
+  ``app/blender/scripts/uv_pattern.py``: any change of the flattening re-cuts it, seconds); a top's is
+  ``TOP_UV_PATTERN_SHA``, the md5 of the ``uv_pattern.py`` that last changed a top's islands — the step 3a additions
+  (the fitted kinds' parts, rows, ring strips, direct solves) leave a top's islands byte-identical, and keying the top
+  on the whole file re-draped every top once for nothing (decision D7 b).
 
 NOT in it: the views / item picture (the drape key's texture part), ``fabric``, ``opacity``, ``texture``,
 ``sleeve_print``, ``fly``, the drape's frames / quality / poses / shape groups.
@@ -30,7 +33,7 @@ Files under ``templates/cut/`` (beside the cut-texture records, whose 12-hex csi
 ``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``).
 
 A drape records the sig of the cut it was laid out of (``cut_sig``); one whose recorded sig differs from the
-current one (a new ``uv_pattern.py``, a lower layer that became ready) is stale for ``garment_template.drape_state``
+current one (a new flattening, a lower layer that became ready) is stale for ``garment_template.drape_state``
 and the next Build drapes it again — the drape key (``tsig``) stays, so no other drape moves.
 
 A drape of the same cut writes the same islands bytes (``scripts/smoke_template_cut_first.py`` proves it on a real
@@ -58,6 +61,10 @@ DRAPE_ONLY = ("fabric",)
 UV_PATTERN_FILE = Path(__file__).resolve().parents[1] / "blender" / "scripts" / "uv_pattern.py"
 #: md5[:12] of the flattening code (part of ``cut_sig``; the core never imports the Blender scripts).
 UV_PATTERN_SHA = hashlib.md5(UV_PATTERN_FILE.read_bytes()).hexdigest()[:12]
+#: md5[:12] of the ``uv_pattern.py`` that last changed a top's islands (c926b67f0) — a top's cut key. Bump it to the
+#: new file's md5 (and ``scripts/smoke_uv_pattern.py`` [21]'s base commit to the new one) only when a change alters a
+#: top's islands: [21] fails then, as it compares a top's payload with that commit's flattening.
+TOP_UV_PATTERN_SHA = "9f1a4a8ce3b8"
 FITTED_PATTERN_FILE = UV_PATTERN_FILE.parent / "fitted_pattern.py"
 #: md5[:12] of the fitted kinds' part rules (step 3a; in ``cut_sig`` of a fitted piece only).
 FITTED_PATTERN_SHA = hashlib.md5(FITTED_PATTERN_FILE.read_bytes()).hexdigest()[:12]
@@ -93,10 +100,18 @@ def cut_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in gt.keyed_params(params).items() if k not in DRAPE_ONLY}
 
 
+def uv_pattern_key(kind: Any) -> str:
+    """The flattening's part of the cut key (module docstring): ``UV_PATTERN_SHA`` for a fitted kind,
+    ``TOP_UV_PATTERN_SHA`` for every other."""
+    from app.core import garment_template as gt
+    return UV_PATTERN_SHA if kind in gt.FITTED_KINDS else TOP_UV_PATTERN_SHA
+
+
 def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     """The cut signature (module docstring): md5[:12]; ``lower`` = the drape key's lower-layer tokens."""
     from app.core import garment_template as gt
-    payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION, "uv_pattern": UV_PATTERN_SHA,
+    payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION,
+               "uv_pattern": uv_pattern_key(params.get("kind")),
                "base": base_sha, "lower": sorted(lower)}
     if params.get("kind") in gt.FITTED_KINDS:
         # step 3a: a fitted piece's cut also follows its own version and the part rules (``fitted_pattern.py``)
@@ -299,7 +314,7 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
                           over_sleeves=gt.over_sleeved_layer(params["kind"], ready))
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
-                                  "version": gt.TEMPLATE_VERSION, "uv_pattern": UV_PATTERN_SHA,
+                                  "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params["kind"]),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,
                                   "under": key["under"], "colliders": [Path(c[0]).name for c in colliders + own],
                                   **({"shaping": shaping} if shaping else {}),

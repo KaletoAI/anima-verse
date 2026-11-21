@@ -18,8 +18,11 @@ equal.py``. Every expectation is derived by hand below.
           round(6 * 1.5) = 9 for both — the key still differs because ``fabric`` does); ``panel_spec`` of both on a
           real body's measurements (Dario's, a literal below) is the same dict. So ``DRAPE_ONLY`` = ("fabric",).
     [1.3] ``cut_sig`` = md5[:12] of json({"params": keyed_params minus fabric, "version": TEMPLATE_VERSION (10),
-          "uv_pattern": md5(uv_pattern.py)[:12], "base": base sha, "lower": sorted tokens}, sort_keys, compact) —
-          recomputed here from the formula; unchanged by fabric / opacity / texture / sleeve_print / fly and by the
+          "uv_pattern": a top's ``TOP_UV_PATTERN_SHA``, "base": base sha, "lower": sorted tokens}, sort_keys, compact) —
+          recomputed here from the formula; ``TOP_UV_PATTERN_SHA`` = md5[:12] of ``uv_pattern.py`` at c926b67f0 (``git
+          show``; the base the tops were last cut with, so a top's recorded ``cut_sig`` from before step 3a stays the
+          current one — no re-drape of every top, decision D7 b); a fitted piece (briefs) keys md5 of the CURRENT
+          ``uv_pattern.py`` (``UV_PATTERN_SHA``); unchanged by fabric / opacity / texture / sleeve_print / fly and by the
           ORDER of the lower tokens; changed by length_m, sleeves, neckline, fit, neck_depth_m, the base sha and a lower
           token (``slit`` is no top field: ``validate_params`` resets it, so it never reaches a top's key).
           ``tsig`` of the same inputs DOES change with fabric (the drape is keyed by it, the cut is not).
@@ -72,13 +75,16 @@ equal.py``. Every expectation is derived by hand below.
           "tz" (the Build drapes again under the same key — no tsig change, no other drape moves).
     [6.2] a record without cut_sig (before cut-first / a fallback drape) -> "ready" for any current sig.
     [6.3] the current cut has no sig (a lower layer still to be draped) -> "ready" (the Build drapes that layer first).
-    [6.4] finding 2 in full: ``UV_PATTERN_SHA`` changed (patched to "ffffffffffff"), everything else equal -> the sig
-          from ``sig_of`` differs from the recorded one -> ``cut_behind`` True; with the real UV_PATTERN_SHA -> False.
+    [6.4] finding 2 in full: a top's flattening key ``TOP_UV_PATTERN_SHA`` changed (patched to "ffffffffffff"),
+          everything else equal -> the sig from ``sig_of`` differs from the recorded one -> ``cut_behind`` True; with
+          the real key -> False. ``UV_PATTERN_SHA`` patched (a change of ``uv_pattern.py`` that leaves the tops'
+          islands alone — step 3a's) -> a top is NOT behind, a briefs piece's ``cut_sig`` does change.
     [6.5] the bra becomes ready after the top was draped without it (record = wait=False sig of [5.2]) ->
           ``cut_behind`` True (the top is laid out of the bra next Build).
     [6.6] ``_build_drape`` records ``sig_of(..., wait=False)`` (source check: the drape stores what it WAS laid out of).
 """
 import hashlib
+import subprocess
 import json
 import os
 import re
@@ -169,12 +175,24 @@ check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (
       ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS, gt.PATTERN_KINDS)
 
 uvp_sha = hashlib.md5((ROOT / "app" / "blender" / "scripts" / "uv_pattern.py").read_bytes()).hexdigest()[:12]
+try:
+    top_sha = hashlib.md5(subprocess.run(["git", "-C", str(ROOT), "show", "c926b67f0:app/blender/scripts/uv_pattern.py"],
+                                         capture_output=True, check=True).stdout).hexdigest()[:12]
+except (OSError, subprocess.CalledProcessError) as e:
+    print(f"NOTE [1.3] git show c926b67f0 failed ({e}): the top's key is taken from the constant")
+    top_sha = gtc.TOP_UV_PATTERN_SHA
 cp = {k: v for k, v in gt.keyed_params(TOP).items() if k != "fabric"}
-want = hashlib.md5(json.dumps({"params": cp, "version": 10, "uv_pattern": uvp_sha, "base": "b0", "lower": ["a:1", "b:2"]},
+want = hashlib.md5(json.dumps({"params": cp, "version": 10, "uv_pattern": top_sha, "base": "b0", "lower": ["a:1", "b:2"]},
                               sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
 k0 = gtc.cut_sig(TOP, base_sha="b0", lower=["b:2", "a:1"])
 check("[1.3] cut_sig = the formula (lower sorted)", k0 == want and gt.TEMPLATE_VERSION == 10
-      and gtc.UV_PATTERN_SHA == uvp_sha, (k0, want))
+      and gtc.UV_PATTERN_SHA == uvp_sha and gtc.TOP_UV_PATTERN_SHA == top_sha, (k0, want, top_sha))
+BRF = gt.validate_params({"kind": "briefs"})[0]
+cpb = {k: v for k, v in gt.keyed_params(BRF).items() if k != "fabric"}
+wantb = hashlib.md5(json.dumps({"params": cpb, "version": 10, "uv_pattern": uvp_sha, "base": "b0", "lower": [],
+                                "fitted": gt.FITTED_VERSION, "fitted_pattern": gtc.FITTED_PATTERN_SHA},
+                               sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+check("[1.3] a fitted piece keys the current uv_pattern.py", gtc.cut_sig(BRF, base_sha="b0", lower=[]) == wantb)
 same = {"fabric": "stiff", "opacity": 0.9, "texture": "cut", "sleeve_print": "picture", "fly": "buttons"}
 for field, value in same.items():
     k = gtc.cut_sig({**TOP, field: value}, base_sha="b0", lower=["a:1", "b:2"])
@@ -341,7 +359,7 @@ with patch.object(gtc, "cut_key", full_key), patch.object(gtc, "run_blender", fa
     check("[2.5] run: the record (cut sig, wall, islands sha, base)", rec.get("cut_sig") == "r1"
           and rec.get("wall_s") == 11.8 and rec.get("base_model_sha256") == "bsha"
           and (rec.get("islands") or {}).get("sha256") == hashlib.sha256(PAYLOAD_BYTES).hexdigest()
-          and rec.get("uv_pattern") == gtc.UV_PATTERN_SHA, rec)
+          and rec.get("uv_pattern") == gtc.TOP_UV_PATTERN_SHA, rec)
     check("[2.5] run: islands bytes and sheet on disk", gtc.islands_file(CHAR, "run1", "r1").read_bytes()
           == PAYLOAD_BYTES and gtc.sheet_file(CHAR, "run1", "r1").is_file())
     n = len(CALLS)
@@ -570,11 +588,16 @@ with patch.object(gt, "_key", lambda *a, **k: ("tz", None, {}, TOP_PROJ, [])), \
 
 BRA["state"] = "ready"
 rec_sig = gtc.sig_of(CHAR, "top6", TOP, base_sha="b0", lower=["bra1"])[0]
-check("[6.4] the real UV_PATTERN_SHA: not behind", gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP,
+check("[6.4] the real flattening key: not behind", gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP,
                                                                base_sha="b0", lower=["bra1"]) is False)
-with patch.object(gtc, "UV_PATTERN_SHA", "ffffffffffff"):
-    check("[6.4] a new uv_pattern.py: the drape is behind (re-draped by the next Build)",
+with patch.object(gtc, "TOP_UV_PATTERN_SHA", "ffffffffffff"):
+    check("[6.4] a new top flattening: the drape is behind (re-draped by the next Build)",
           gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP, base_sha="b0", lower=["bra1"]) is True)
+kb0 = gtc.cut_sig(BRF, base_sha="b0", lower=[])
+with patch.object(gtc, "UV_PATTERN_SHA", "ffffffffffff"):
+    check("[6.4] uv_pattern.py changed, tops untouched: a top is not behind",
+          gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP, base_sha="b0", lower=["bra1"]) is False)
+    check("[6.4] ... a fitted piece's cut_sig changes", gtc.cut_sig(BRF, base_sha="b0", lower=[]) != kb0)
 check("[6.5] the bra ready after the top was draped without it: behind",
       gt.cut_behind(CHAR, "top6", {"cut_sig": sig_left}, TOP, base_sha="b0", lower=["bra1"]) is True)
 for st in STUBS:

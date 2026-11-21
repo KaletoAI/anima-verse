@@ -119,12 +119,17 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
     4.0 + 1.5 = 103.4 -> px_per_cm = floor_0.01(2048 / 142.5 = 14.372) = 14.37; left to right front_r, front_l,
     back_l, back_r, the waistband under them. Gloves boxes back_r 17.7, back_l 15.8, palm_l 17.7, palm_r 18.9 x 48.5:
     1.5 + 70.1 + 4 * 1.5 = 77.6 (H = 1.5 + 48.5 + 1.5 = 51.5) -> floor_0.01(26.392) = 26.39. ``rows=None`` keeps
-    ``ROW_ORDER`` (the [7] boxes give 19.59 again).
+    ``ROW_ORDER`` (the [7] boxes give 19.59 again). Tights (Kira's measured legs, rounded): leg_r 52.7 x 124.1, leg_l
+    53.1 x 126.5, gusset 7.4 x 25.6 — the gusset rides in the legs' row (it under them cost Kira 25.6 + 1.5 cm of
+    height: 2048 / 156.6 = 13.07): W = 1.5 + 113.2 + 3 * 1.5 = 119.2, H = 1.5 + 126.5 + 1.5 = 129.5 -> floor_0.01(2048
+    / 129.5 = 15.815) = 15.81; left to right leg_r, leg_l, gusset, all top-aligned.
 [20] Adaptive ARAP: the 2400-vertex sector of [6] with ``tol=1e-3`` stops in <= 15 iterations and its
     ``stretch_p95`` is within 0.005 of the 40-iteration result (the iteration count is printed for the ledger).
 [21] Tops unchanged: ``pattern_uv`` of the hand-made top of [13] gives a byte-identical payload
     (``json.dumps(sort_keys=True)``) with this module and with ``uv_pattern.py`` at the base commit c926b67f0
-    (read with ``git show``; skipped with a note when git is not available).
+    (read with ``git show``; skipped with a note when git is not available), and ``garment_template_cut.
+    TOP_UV_PATTERN_SHA`` (a top's cut key) is that file's md5[:12] — so a top's recorded cut stays current while the
+    file changes for the fitted kinds only; a change that alters a top's islands fails here and moves both.
 [22] Ring cut off theta 0: the cylinder of [16] with ``cut_dir`` turned 30 deg (cos 30, sin 30, 0) while its cut stays
     at +X (vertex 0): theta = 0 follows the cut copies, so u length 0.628066, the copies at u 0 and 0.628066 and the
     +Y vertex at 0.157017 exactly as in [16] (theta from ``cut_dir`` alone put the vertices between +X and 30 deg at
@@ -583,6 +588,12 @@ check("[19] front_r, front_l, back_l, back_r left to right, waistband under them
 gb = {"glove_back_r": (17.7, 48.5), "glove_back_l": (15.8, 48.5), "palm_l": (17.7, 48.5), "palm_r": (18.9, 48.5)}
 _pk, s19g = up.pack({k: rect(*v) for k, v in gb.items()}, 2048, 1.5, rows=up.ROWS["gloves"])
 check("[19] gloves px_per_cm 26.39", abs(s19g - 26.39) < 1e-9, s19g)
+tt = {"leg_r": (52.7, 124.1), "leg_l": (53.1, 126.5), "gusset": (7.4, 25.6)}
+pk19k, s19k = up.pack({k: rect(*v) for k, v in tt.items()}, 2048, 1.5, rows=up.ROWS["tights"])
+check("[19] tights px_per_cm 15.81", abs(s19k - 15.81) < 1e-9, s19k)
+xs19k = [pk19k[n][:, 0].min() for n in ("leg_r", "leg_l", "gusset")]
+check("[19] tights: leg_r, leg_l, gusset left to right in one row",
+      xs19k == sorted(xs19k) and len({round(float(pk19k[n][:, 1].min()), 6) for n in tt}) == 1, xs19k)
 _pk, s19t = up.pack({k: rect(*v) for k, v in boxes.items()}, 2048, 1.5, rows=None)
 check("[19] rows=None keeps ROW_ORDER (19.59)", abs(s19t - 19.59) < 1e-9, s19t)
 
@@ -622,6 +633,13 @@ if src is not None:
         old21 = ub.pattern_uv(f13, p13, seam13, v13, axes=axes13, strips={5: rows13})["payload"]
         check(f"[21] a top's payload is byte-identical to {BASE}'s",
               json.dumps(new21, sort_keys=True) == json.dumps(old21, sort_keys=True))
+    import hashlib  # noqa: E402
+    import re  # noqa: E402
+    gtc_src = (ROOT / "app" / "core" / "garment_template_cut.py").read_text(encoding="utf-8")
+    pinned = re.search(r'^TOP_UV_PATTERN_SHA = "([0-9a-f]{12})"', gtc_src, re.M)
+    base_md5 = hashlib.md5(src.encode("utf-8")).hexdigest()[:12]
+    check(f"[21] TOP_UV_PATTERN_SHA is the md5 of {BASE}'s uv_pattern.py",
+          pinned is not None and pinned.group(1) == base_md5, (pinned and pinned.group(1), base_md5))
 
 # [22] ring cut off theta 0
 uv22 = up.ring_strip_uv(isl16[0], rx16, (0, 0, 0), (0, 0, 1),

@@ -58,7 +58,8 @@ _TROUSER_ROWS = (("front_r", "front_l", "back_l", "back_r"), ("waistband", "cuff
 ROWS = {
     "trousers": _TROUSER_ROWS,
     "boxers": _TROUSER_ROWS,
-    "tights": (("leg_r", "leg_l"), ("gusset", "waistband", "top_band_r", "top_band_l")),
+    # the gusset rides in the legs' row (a row of its own under them cost Kira's tights 15.81 -> 13.07 px/cm)
+    "tights": (("leg_r", "leg_l", "gusset"), ("waistband", "top_band_r", "top_band_l")),
     "briefs": (("front", "back"), ("gusset", "waistband", "hip_band_r", "hip_band_l")),
     "bra": (("cup_r", "cup_l", "gore"), ("cup_top_r", "cup_top_l"), ("band_r", "band_l"), ("strap_r", "strap_l")),
     "bandeau": (("front", "back"), ("band_r", "band_l"), ("strap_r", "strap_l")),

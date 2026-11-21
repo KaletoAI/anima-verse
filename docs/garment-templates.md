@@ -129,7 +129,7 @@ Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut read
 | the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec`, `slit` or `uv_mode`; `fabric` reaches the builder only as the cloth settings, read after the cut |
 | the base model sha256 | the body the panels are wrapped round, laid out of and measured on |
 | the drape key's lower-layer tokens (`under_tokens`) plus one `collider:<item>` per lower template drape that is READY | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of (only ready drapes are handed over); the jacket allowance and the chest shaping change the pattern or the body |
-| `TEMPLATE_VERSION`, `UV_PATTERN_SHA` (md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
+| `TEMPLATE_VERSION`, the flattening key (`uv_pattern_key`: a top's `TOP_UV_PATTERN_SHA`, a fitted piece's `UV_PATTERN_SHA` = md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
 
 No sig — and no Blender run — while a lower template layer is still to be draped (state `missing`): the next Build
 drapes it first and lays this piece out of it, so a cut made now would differ from that drape; the dialog says
@@ -212,9 +212,11 @@ elbow-length gloves, knee-high socks, capri trousers, …). The fitted kinds' pr
 them are not part of step 3a's pieces work.
 
 **Keys.** `tsig` of a fitted kind carries `FITTED_VERSION`; `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
-`fitted_pattern.py`), so a change of the cut rules re-cuts. Changing `uv_pattern.py` changes `UV_PATTERN_SHA`: every
-top drape with a recorded `cut_sig` counts as `cut_behind` once and re-drapes on the CPU (0 hub jobs; its islands are
-byte-identical, so its cut texture stays valid).
+`fitted_pattern.py`), so a change of the cut rules re-cuts. A fitted piece's cut also keys `UV_PATTERN_SHA` (md5 of
+`uv_pattern.py`); a top's keys `TOP_UV_PATTERN_SHA` instead — the md5 of the `uv_pattern.py` that last changed a top's
+islands (c926b67f0). Step 3a's additions leave the tops' islands byte-identical, so no top drape counts as
+`cut_behind` for them; a later change that alters a top's islands fails `scripts/smoke_uv_pattern.py` [21] and moves
+the pinned sha and that smoke's base commit together.
 
 ## 2. Texture from cut (step 2)
 
