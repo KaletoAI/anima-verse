@@ -246,7 +246,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
         setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at,
           material: p.material, views: p.views } : p))
         // a texture the server switched (the cut flow selects "From cut") reaches an unchanged draft too
-        setDraft((dr) => (dr && p.params && dr.texture !== p.params.texture ? { ...dr, texture: p.params.texture } : dr))
+        // …and so does the sleeve option the Texture tab sets (its own control, never a field here)
+        setDraft((dr) => (dr && p.params && (dr.texture !== p.params.texture || dr.sleeve_print !== p.params.sleeve_print)
+          ? { ...dr, texture: p.params.texture, sleeve_print: p.params.sleeve_print } : dr))
       })
       .catch(() => { /* the last known progress stays */ })
   }, [path])
@@ -308,7 +310,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       await apiPut(path, { params: draft, source })
       // the texture source alone never re-drapes (TEXTURE_ONLY): only the figure is assembled again
       const textureOnly = !!data?.params && (Object.keys(draft) as (keyof TemplateParams)[])
-        .every((k) => k === 'texture' || draft[k] === data.params?.[k])
+        .every((k) => k === 'texture' || k === 'sleeve_print' || draft[k] === data.params?.[k])
       setSaved(t(textureOnly ? 'Saved — the figure is assembled again with this texture (CPU, 0 hub jobs)'
         : 'Saved — the next Build drapes it (CPU, 0 hub jobs)'))
       toast(t('Template parameters saved'), 'success')

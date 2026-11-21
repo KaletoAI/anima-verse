@@ -14,7 +14,11 @@ into an atlas on the piece's islands:
 - ``cut_and_bleed`` — the model's outline eroded away, the islands regrown past their border (bleed padding, so
   mip-maps and bilinear lookups at a seam never read the white background);
 - ``colour_match`` — a Lab mean/std transfer onto the item's fabric colours, the mean shift clamped at ``CLAMP_DE``;
-- ``seam_continuity`` — the colour jump across the payload's seam pairs (a metric, not a gate).
+- ``seam_continuity`` — the colour jump across the payload's seam pairs (a metric, not a gate);
+- ``fabric_colour`` / ``delta_e00`` / ``detail_density`` / ``answer_gates`` — the item's base fabric colour (the
+  template's pre-fill) and the answer gates against invented colours and content (user test 2026-11-21);
+- ``fabric_patch`` / ``mirror_tile`` / ``tile_fill`` — the sleeves and the neckband filled from the front panel's
+  plainest fabric window instead of the model's answer.
 
 Frame: arrays are (rows, cols) with row 0 at the TOP (the template / atlas frame of ``islands.json``); a pixel
 (i, j) covers ``[j, j + 1) x [i, i + 1)``, its centre is ``(j + 0.5, i + 0.5)``. A map is ``(sx, ox, sy, oy)``:
@@ -40,8 +44,10 @@ SPILL_CM = 1.0
 #: ``colour_match``: the largest mean shift (dE76).
 CLAMP_DE = 25.0
 #: Enters the cut atlas key (``csig``): bump when anything here changes the atlas. 2 (2026-11-20): the post-processing
-#: runs per job (front / back) on its own islands and the two are composed (``garment_cut_texture.compose``).
-POST_VERSION = 2
+#: runs per job (front / back) on its own islands and the two are composed (``garment_cut_texture.compose``). 3
+#: (2026-11-21): the islands go pre-filled with the item's fabric colour, the answer gates (``ANSWER_GATE``) and the
+#: sleeves / neckband filled from the front panel's fabric patch.
+POST_VERSION = 3
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256
@@ -351,15 +357,15 @@ def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = 3) -> np.ndarray:
 
 # --------------------------------------------------------------------------------------------------------- colour match
 
-def fabric_pixels(item_rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -> np.ndarray:
-    """The item's fabric colours (n, 3) float: alpha > 0 after ``garment_matte.cut`` (``matte`` passed through; a
-    smoke passes ``None`` or a stub so no BiRefNet session loads), the darkest and brightest ``FABRIC_TRIM`` of
-    luminance dropped."""
-    px = np.asarray(item_rgba, np.uint8)
+def _rgba(px) -> np.ndarray:
+    px = np.asarray(px, np.uint8)
     if px.ndim == 3 and px.shape[2] == 3:
         px = np.concatenate([px, np.full(px.shape[:2] + (1,), 255, np.uint8)], -1)
-    cut, _info = garment_matte.cut(px, matte=matte)
-    rgb = cut[..., :3][cut[..., 3] > 0].astype(np.float64)
+    return px
+
+
+def _trimmed(rgb: np.ndarray) -> np.ndarray:
+    """The darkest and brightest ``FABRIC_TRIM`` of luminance dropped from (n, 3) colours."""
     if not len(rgb):
         return rgb.reshape(0, 3)
     L = srgb_to_lab(rgb)[:, 0]
@@ -367,10 +373,32 @@ def fabric_pixels(item_rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) 
     return rgb[(L >= lo) & (L <= hi)]
 
 
-def colour_match(img, mask, item_rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -> tuple[np.ndarray, dict]:
+def fabric_pixels(item_rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -> np.ndarray:
+    """The item's fabric colours (n, 3) float: alpha > 0 after ``garment_matte.cut`` (``matte`` passed through; a
+    smoke passes ``None`` or a stub so no BiRefNet session loads), the darkest and brightest ``FABRIC_TRIM`` of
+    luminance dropped."""
+    cut, _info = garment_matte.cut(_rgba(item_rgba), matte=matte)
+    return _trimmed(cut[..., :3][cut[..., 3] > 0].astype(np.float64))
+
+
+def picture_reference(rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -> dict:
+    """What the answer gates and the pre-fill read from a picture (the item picture, the back view), with ONE
+    ``garment_matte.cut``: ``{"colour": fabric_colour of the garment (alpha >= 128), "detail": detail_density of it,
+    "fabric": the colour match's fabric pixels (alpha > 0, trimmed)}``."""
+    cut, _info = garment_matte.cut(_rgba(rgba), matte=matte)
+    rgb, alpha = cut[..., :3], cut[..., 3]
+    garment = alpha >= 128
+    return {"colour": fabric_colour(rgb, garment) if garment.any() else None,
+            "detail": detail_density(rgb, garment) if garment.any() else None,
+            "fabric": _trimmed(rgb[alpha > 0].astype(np.float64))}
+
+
+def colour_match(img, mask, item_rgba: np.ndarray | None = None, *, matte=garment_matte.birefnet_matte,
+                 fabric: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
     """The islands' colours moved onto the item fabric's: per Lab channel ``(x - mu_atlas) * (sigma_item /
     sigma_atlas) + mu_item`` (``sigma_atlas`` floored at ``SIGMA_FLOOR``), the mean shift clamped to ``CLAMP_DE``
-    (dE76). Only mask pixels change. Returns the (h, w, 3) uint8 image and ``{"de_before", "de_after", "clamped"}``
+    (dE76). Only mask pixels change. The fabric colours are ``fabric`` when given (``picture_reference``), else
+    ``fabric_pixels(item_rgba)``. Returns the (h, w, 3) uint8 image and ``{"de_before", "de_after", "clamped"}``
     (``de_*`` = dE76 of the island mean against the fabric mean); nothing to match (no mask, no fabric) -> the image
     unchanged and ``{"skipped": reason}``."""
     rgb = np.asarray(img)[..., :3].astype(np.uint8)
@@ -378,7 +406,7 @@ def colour_match(img, mask, item_rgba: np.ndarray, *, matte=garment_matte.birefn
     out = rgb.copy()
     if not mask.any():
         return out, {"skipped": "empty mask"}
-    fab = fabric_pixels(item_rgba, matte=matte)
+    fab = fabric if fabric is not None else fabric_pixels(item_rgba, matte=matte)
     if not len(fab):
         return out, {"skipped": "no fabric pixels"}
     item_lab = srgb_to_lab(fab)
@@ -395,6 +423,301 @@ def colour_match(img, mask, item_rgba: np.ndarray, *, matte=garment_matte.birefn
     after = srgb_to_lab(out[mask].astype(np.float64)).mean(0)
     return out, {"de_before": round(de_before, 3), "de_after": round(float(np.linalg.norm(after - mu_i)), 3),
                  "clamped": bool(clamped)}
+
+
+# ------------------------------------------------------------------------------------------------------ fabric colour
+#
+# User test 2026-11-21: P-H3 answered Kai's PLAIN blue T-shirt with an invented magenta shirt and a big text print
+# (job adc0d92f) and, with the print words taken out of the prompt, a red one (dd179c81); for Dario it painted the
+# chest embroidery onto one sleeve. The fix is not prompt wording alone: the islands go to the model PRE-FILLED with
+# the item's base fabric colour (``fabric_colour``), the sleeves and the neckband come from a seamless fabric patch of
+# the answer's own front panel (``fabric_patch`` / ``tile_fill``), and two gates measure the answer against the item
+# picture — its base colour (``delta_e00`` of the two ``fabric_colour``) and its detail (``detail_density``).
+
+#: ``fabric_colour``: the long side the picture is measured at (box-filtered down; the measure is a median).
+FABRIC_SIDE = 512
+#: ``fabric_colour``: the mask is eroded by this share of the garment's extent (the anti-aliased outline, the shadow
+#: along the cut-out edge and the white background bleeding in never count).
+FABRIC_ERODE = 0.02
+#: ``fabric_colour``: a pixel whose L* differs from its local mean (a box of ``2r + 1``, r = ``FABRIC_DETAIL_R`` of the
+#: extent) by more than ``FABRIC_DETAIL_L`` is a DETAIL (an embroidery stitch, a print edge, a button, a highlight on a
+#: fold crest); every pixel within r of one is left out. A smooth fold shadow changes L* over many pixels: it stays.
+FABRIC_DETAIL_R = 0.015
+FABRIC_DETAIL_L = 6.0
+#: ``fabric_colour``: under this share of plain pixels the detail filter is dropped (an all-over pattern has no plain
+#: fabric: the mode below still finds its ground colour).
+FABRIC_MIN_PLAIN = 0.05
+#: ``fabric_colour``: the a*b* histogram (bins of ``FABRIC_AB_BIN``, smoothed by one bin) — its peak is the fabric's
+#: chroma; the pixels within ``FABRIC_AB_RADIUS`` of it give the median L*a*b*. A print in another colour forms its own
+#: peak; the larger one (the ground of the fabric) wins.
+FABRIC_AB_BIN = 2.0
+FABRIC_AB_RADIUS = 12.0
+
+
+def _box_down(rgb: np.ndarray, mask: np.ndarray, side: int) -> tuple[np.ndarray, np.ndarray]:
+    """``rgb`` / ``mask`` box-filtered so the long side is at most ``side`` (a mask pixel stays when >= half covered)."""
+    h, w = mask.shape
+    s = side / float(max(h, w))
+    if s >= 1.0:
+        return np.asarray(rgb)[..., :3].astype(np.uint8), np.asarray(mask, bool)
+    size = (max(1, round(w * s)), max(1, round(h * s)))
+    small = np.asarray(Image.fromarray(np.asarray(rgb)[..., :3].astype(np.uint8)).resize(size, Image.BOX))
+    m = np.asarray(Image.fromarray(np.asarray(mask, np.uint8) * 255).resize(size, Image.BOX)) >= 128
+    return small, m
+
+
+def _extent(mask: np.ndarray) -> int:
+    ys, xs = np.nonzero(mask)
+    return int(max(np.ptp(ys), np.ptp(xs))) + 1 if len(ys) else 0
+
+
+def fabric_colour(rgb, mask) -> dict | None:
+    """The BASE fabric colour of the pixels under ``mask`` — robust against shading, highlights and small
+    high-contrast details (prints, embroidery, buttons): box-down to ``FABRIC_SIDE``, erode by ``FABRIC_ERODE``, drop
+    the detail pixels (``FABRIC_DETAIL_L`` / ``FABRIC_DETAIL_R``), then the peak of the a*b* histogram and the median
+    L*a*b* of the pixels within ``FABRIC_AB_RADIUS`` of it. ``{"rgb": [r, g, b] (0..255 ints), "lab": [L, a, b],
+    "plain": share of the eroded mask left after the detail filter, "peak": share of those within the radius,
+    "pixels": n}``; None for an (almost) empty mask."""
+    from scipy import ndimage
+    rgb, mask = _box_down(rgb, mask, FABRIC_SIDE)
+    ext = _extent(mask)
+    if ext < 4:
+        return None
+    m = ndimage.binary_erosion(mask, iterations=max(1, round(FABRIC_ERODE * ext)))
+    if m.sum() < 16:
+        m = mask
+    lab = srgb_to_lab(rgb.astype(np.float64))
+    r = max(2, round(FABRIC_DETAIL_R * ext))
+    L = lab[..., 0]
+    detail = np.abs(L - ndimage.uniform_filter(L, 2 * r + 1)) > FABRIC_DETAIL_L
+    keep = m & ~ndimage.binary_dilation(detail, iterations=r)
+    plain = float(keep.sum() / max(1, m.sum()))
+    if plain < FABRIC_MIN_PLAIN:
+        keep = m
+    px = lab[keep]
+    ab = px[:, 1:]
+    lo = np.floor(ab.min(0) / FABRIC_AB_BIN) - 1
+    idx = np.floor(ab / FABRIC_AB_BIN - lo).astype(int)
+    shape = tuple(int(v) for v in idx.max(0) + 2)
+    hist = np.zeros(shape)
+    np.add.at(hist, (idx[:, 0], idx[:, 1]), 1.0)
+    hist = ndimage.uniform_filter(hist, 3, mode="constant")
+    pi, pj = np.unravel_index(int(np.argmax(hist)), hist.shape)
+    peak = (np.array([pi, pj], float) + lo + 0.5) * FABRIC_AB_BIN
+    near = np.linalg.norm(ab - peak, axis=-1) <= FABRIC_AB_RADIUS
+    sel = px[near] if near.any() else px
+    med = np.median(sel, axis=0)
+    out = np.clip(np.rint(lab_to_srgb(med)), 0, 255).astype(int)
+    return {"rgb": [int(v) for v in out], "lab": [round(float(v), 2) for v in med], "plain": round(plain, 4),
+            "peak": round(float(near.mean()), 4), "pixels": int(len(sel))}
+
+
+def delta_e00(lab1, lab2) -> float:
+    """CIEDE2000 colour difference of two L*a*b* colours (Sharma, Wu, Dalal 2005; kL = kC = kH = 1)."""
+    L1, a1, b1 = (float(v) for v in lab1)
+    L2, a2, b2 = (float(v) for v in lab2)
+    c1, c2 = np.hypot(a1, b1), np.hypot(a2, b2)
+    cm = 0.5 * (c1 + c2)
+    g = 0.5 * (1 - np.sqrt(cm ** 7 / (cm ** 7 + 25.0 ** 7)))
+    a1p, a2p = (1 + g) * a1, (1 + g) * a2
+    c1p, c2p = np.hypot(a1p, b1), np.hypot(a2p, b2)
+    h1p = np.degrees(np.arctan2(b1, a1p)) % 360 if c1p else 0.0
+    h2p = np.degrees(np.arctan2(b2, a2p)) % 360 if c2p else 0.0
+    dL, dC = L2 - L1, c2p - c1p
+    if c1p * c2p == 0:
+        dh = 0.0
+    else:
+        dh = h2p - h1p
+        if dh > 180:
+            dh -= 360
+        elif dh < -180:
+            dh += 360
+    dH = 2 * np.sqrt(c1p * c2p) * np.sin(np.radians(dh / 2))
+    Lm, Cm = 0.5 * (L1 + L2), 0.5 * (c1p + c2p)
+    if c1p * c2p == 0:
+        hm = h1p + h2p
+    elif abs(h1p - h2p) <= 180:
+        hm = 0.5 * (h1p + h2p)
+    else:
+        hm = 0.5 * (h1p + h2p + 360) if h1p + h2p < 360 else 0.5 * (h1p + h2p - 360)
+    t = (1 - 0.17 * np.cos(np.radians(hm - 30)) + 0.24 * np.cos(np.radians(2 * hm))
+         + 0.32 * np.cos(np.radians(3 * hm + 6)) - 0.20 * np.cos(np.radians(4 * hm - 63)))
+    sl = 1 + 0.015 * (Lm - 50) ** 2 / np.sqrt(20 + (Lm - 50) ** 2)
+    sc = 1 + 0.045 * Cm
+    sh = 1 + 0.015 * Cm * t
+    rt = -2 * np.sqrt(Cm ** 7 / (Cm ** 7 + 25.0 ** 7)) * np.sin(np.radians(60 * np.exp(-(((hm - 275) / 25) ** 2))))
+    return float(np.sqrt((dL / sl) ** 2 + (dC / sc) ** 2 + (dH / sh) ** 2 + rt * (dC / sc) * (dH / sh)))
+
+
+#: ``detail_density``: the region is resampled so its long side is ``DETAIL_SIDE`` px (an item picture and a 2048
+#: atlas panel are compared at one scale), smoothed by a Gaussian of ``DETAIL_SIGMA`` px (the photo's noise and weave),
+#: eroded by ``DETAIL_ERODE`` of the side (the cut-out edge is no detail); a pixel is an EDGE when its L* gradient
+#: magnitude exceeds ``DETAIL_EDGE`` per px.
+DETAIL_SIDE = 128
+DETAIL_SIGMA = 1.0
+DETAIL_ERODE = 0.03
+DETAIL_EDGE = 4.0
+
+
+def detail_density(rgb, mask) -> float | None:
+    """The share of EDGE pixels (``DETAIL_EDGE``) inside ``mask`` at the common scale ``DETAIL_SIDE`` — how much
+    print, text, embroidery or pattern the region carries (a plain fabric with soft folds: near 0). None for an empty
+    mask."""
+    from scipy import ndimage
+    mask = np.asarray(mask, bool)
+    ys, xs = np.nonzero(mask)
+    if len(ys) < 16:
+        return None
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    crop = np.asarray(rgb)[y0:y1, x0:x1, :3].astype(np.uint8)
+    cm = mask[y0:y1, x0:x1]
+    s = DETAIL_SIDE / float(max(cm.shape))
+    size = (max(1, round(cm.shape[1] * s)), max(1, round(cm.shape[0] * s)))
+    small = np.asarray(Image.fromarray(crop).resize(size, Image.BOX if s < 1 else Image.BILINEAR), np.float64)
+    m = np.asarray(Image.fromarray(cm.astype(np.uint8) * 255).resize(size, Image.BOX)) >= 128
+    m = ndimage.binary_erosion(m, iterations=max(1, round(DETAIL_ERODE * DETAIL_SIDE)))
+    if m.sum() < 16:
+        return None
+    L = ndimage.gaussian_filter(srgb_to_lab(small)[..., 0], DETAIL_SIGMA)
+    gy, gx = np.gradient(L)
+    edge = np.hypot(gx, gy) > DETAIL_EDGE
+    return round(float(edge[m].mean()), 4)
+
+
+#: The answer gates (user test 2026-11-21), measured on the job's MAIN panel (the front panel of the front job, the
+#: back panel of the back job) of the registered answer, before the colour match moves anything:
+#: - ``de00``: the CIEDE2000 distance of its base fabric colour (``fabric_colour``) from the ITEM picture's. Measured
+#:   on the real answers: Kai's blue shirt (L 39, a 12, b -50) against the invented magenta panel (adc0d92f) 35.0,
+#:   against the red one (dd179c81) 43.5; Dario's green shirt against its right answer 9.9 — P-H3's flat studio light
+#:   lifts a dark fabric (L 18 -> 28.5) and greys it a little, which the colour match corrects (``CLAMP_DE``). 20 sits
+#:   2x above Dario and 1.75x below Kai: a lighting shift passes, another colour does not;
+#: - ``detail``: an "invented content" gate on ``detail_density``: the answer's panel may carry at most
+#:   ``detail_factor`` x the detail of the job's Picture 2 (the item picture, the back view) plus ``detail_slack``.
+#:   Measured at ``DETAIL_SIDE`` 128 (BiRefNet cut of the item): Kai's item 0.0154, its invented print panel 0.471;
+#:   Dario's item 0.0976 (the embroidery and the crinkled weave), its right answer 0.212 — P-H3 draws an embroidery
+#:   bolder than the photo shows it, 2.2x. Factor 4 leaves Dario 2x of room (limit 0.430); Kai's limit is 0.102 and
+#:   the print 4.6x over it. The slack 0.04 lets a plain item (detail ~0) keep a visible weave; a print block of the
+#:   adc0d92f kind on a quarter of a plain panel (~0.12) is still over its limit.
+ANSWER_GATE = {"de00": 20.0, "detail_factor": 4.0, "detail_slack": 0.04}
+
+
+def detail_limit(reference: float | None) -> float | None:
+    """The ``detail`` gate's limit for a Picture 2 of detail density ``reference`` (None: no reference, no gate)."""
+    if reference is None:
+        return None
+    return round(ANSWER_GATE["detail_factor"] * float(reference) + ANSWER_GATE["detail_slack"], 4)
+
+
+def answer_gates(reg: np.ndarray, panel: np.ndarray, item_colour: dict | None,
+                 reference_detail: float | None) -> tuple[list[dict], dict]:
+    """The colour and the invented-content gate (``ANSWER_GATE``) of a registered answer's main ``panel`` mask:
+    ``([{"gate", "ok", "value", "limit", "text"}], {"fabric": {"item", "answer", "de00"}, "detail": {"reference",
+    "answer", "limit"}})``. A gate whose input is missing (no item colour, an empty panel) is left out."""
+    gates: list[dict] = []
+    ans = fabric_colour(reg, panel) if np.asarray(panel).any() else None
+    de = round(delta_e00(item_colour["lab"], ans["lab"]), 2) if ans and item_colour else None
+    if de is not None:
+        lim = ANSWER_GATE["de00"]
+        gates.append({"gate": "colour", "ok": de <= lim, "value": de, "limit": lim,
+                      "text": f"colour \u0394E00 {de:.1f} > {lim:.0f}" if de > lim else ""})
+    det = detail_density(reg, panel) if np.asarray(panel).any() else None
+    lim_d = detail_limit(reference_detail)
+    if det is not None and lim_d is not None:
+        gates.append({"gate": "detail", "ok": det <= lim_d, "value": det, "limit": lim_d,
+                      "text": f"invented content: detail {det:.2f} > {lim_d:.2f}" if det > lim_d else ""})
+    return gates, {"fabric": {"item": item_colour, "answer": ans, "de00": de},
+                   "detail": {"reference": reference_detail, "answer": det, "limit": lim_d}}
+
+
+# ---------------------------------------------------------------------------------------------- the fabric patch
+#
+# Sleeves and neckband are NOT taken from the model by default (Dario 2026-11-21: P-H3 painted the chest embroidery
+# onto one sleeve — it does not recognise the wide fan-shaped sleeve islands as sleeves). They are filled with a
+# seamless patch of the answer's own front panel: its structure and colour, from its plainest window.
+
+#: The patch side in cm of the atlas (``px_per_cm``), clamped to ``PATCH_PX``. 8 cm holds a few repeats of a weave or
+#: a fine check and stays inside a narrow panel.
+PATCH_CM = 8.0
+PATCH_PX = (24, 256)
+#: Windows whose mean is farther than this (dE76) from the panel's base fabric colour are never picked (a plain area
+#: INSIDE a large print — its flat sky, a solid letter — is plain but not the fabric).
+PATCH_MAX_DE = 10.0
+
+
+def _integral(a: np.ndarray) -> np.ndarray:
+    out = np.zeros((a.shape[0] + 1, a.shape[1] + 1))
+    out[1:, 1:] = np.cumsum(np.cumsum(a, 0), 1)
+    return out
+
+
+def _window_sums(ii: np.ndarray, p: int) -> np.ndarray:
+    """Sum of every p x p window (top-left (i, j), i <= h - p, j <= w - p) from an integral image."""
+    return ii[p:, p:] - ii[:-p, p:] - ii[p:, :-p] + ii[:-p, :-p]
+
+
+def fabric_patch(img: np.ndarray, panel: np.ndarray, px_per_cm: float, base_lab=None) -> tuple[np.ndarray, dict] | None:
+    """The plainest square window of ``img`` fully inside ``panel``: side ``PATCH_CM`` (clamped to ``PATCH_PX``,
+    halved while no window fits), the least mean L* gradient energy among the windows whose mean lies within
+    ``PATCH_MAX_DE`` of ``base_lab`` (the panel's base fabric colour; every window when None or none qualifies).
+    ``(patch uint8 (p, p, 3), {"xy": [x, y], "px": p, "energy"})``, None when not even ``PATCH_PX[0]`` fits."""
+    from scipy import ndimage
+    panel = np.asarray(panel, bool)
+    rgb = np.asarray(img)[..., :3]
+    p = int(min(PATCH_PX[1], max(PATCH_PX[0], round(PATCH_CM * float(px_per_cm or 0) or PATCH_PX[1]))))
+    ys, xs = np.nonzero(panel)
+    if not len(ys):
+        return None
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    crop = rgb[y0:y1, x0:x1].astype(np.float64)
+    cm = panel[y0:y1, x0:x1]
+    lab = srgb_to_lab(crop)
+    gy, gx = np.gradient(ndimage.gaussian_filter(lab[..., 0], 1.0))
+    energy = np.hypot(gx, gy)
+    while p >= PATCH_PX[0]:
+        if min(cm.shape) >= p:
+            inside = _window_sums(_integral((~cm).astype(np.float64)), p) == 0
+            if inside.any():
+                break
+        p //= 2
+    else:
+        return None
+    area = float(p * p)
+    e = _window_sums(_integral(energy), p) / area
+    ok = inside.copy()
+    if base_lab is not None:
+        mean = np.stack([_window_sums(_integral(lab[..., k]), p) / area for k in range(3)], -1)
+        near = np.linalg.norm(mean - np.asarray(base_lab, float), axis=-1) <= PATCH_MAX_DE
+        if (inside & near).any():
+            ok &= near
+    score = np.where(ok, e, np.inf)
+    i, j = np.unravel_index(int(np.argmin(score)), score.shape)
+    patch = rgb[y0 + i:y0 + i + p, x0 + j:x0 + j + p].astype(np.uint8).copy()
+    return patch, {"xy": [int(x0 + j), int(y0 + i)], "px": int(p), "energy": round(float(score[i, j]), 4)}
+
+
+def mirror_tile(patch: np.ndarray, h: int, w: int) -> np.ndarray:
+    """``patch`` tiled over (h, w) with every other copy mirrored (left-right, up-down): the tile ``[[P, P|], [P_,
+    P_|]]`` repeats with period 2p and has no seam — each edge meets its own mirror image."""
+    row = np.concatenate([patch, patch[:, ::-1]], 1)
+    tile = np.concatenate([row, row[::-1]], 0)
+    reps = (int(np.ceil(h / tile.shape[0])), int(np.ceil(w / tile.shape[1])), 1)
+    return np.tile(tile, reps)[:h, :w]
+
+
+def tile_fill(img: np.ndarray, region: np.ndarray, patch: np.ndarray, target_lab) -> tuple[np.ndarray, dict]:
+    """``img`` with ``region`` filled by ``mirror_tile(patch)``, the tile's Lab mean moved onto ``target_lab`` (the
+    panel's base fabric colour: the sleeves continue the panel's fabric, not its print). Returns the new uint8 image
+    and ``{"shift": dE76 of the move}``."""
+    out = np.asarray(img)[..., :3].astype(np.uint8).copy()
+    region = np.asarray(region, bool)
+    if not region.any():
+        return out, {"shift": 0.0}
+    h, w = region.shape
+    tile = mirror_tile(patch, h, w)
+    lab = srgb_to_lab(tile[region].astype(np.float64))
+    shift = np.asarray(target_lab, float) - srgb_to_lab(patch.reshape(-1, 3).astype(np.float64)).mean(0)
+    out[region] = np.clip(np.rint(lab_to_srgb(lab + shift)), 0, 255).astype(np.uint8)
+    return out, {"shift": round(float(np.linalg.norm(shift)), 3)}
 
 
 # ------------------------------------------------------------------------------------------------------ seam continuity

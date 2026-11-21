@@ -353,6 +353,9 @@ export interface TemplateParams {
   /** Plan 2026-11-20-template-cut-uv-texture (tops): where the texture comes from — the projection bake of the
    *  piece-only views, or the "texture from cut" atlas. A switch only re-assembles (CPU, no drape). */
   texture?: string
+  /** User test 2026-11-21: the sleeves of the texture from cut — "plain" (the front panel's fabric, default) or
+   *  "picture" (the model's answer). Set in the Texture tab (`…/cut/sleeves`), never a field of the Cut tab. */
+  sleeve_print?: string
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -542,7 +545,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   band_m: 'Elastic band height', band_drop_m: 'Band below the shoulder line', lacing: 'Lacing',
   lace_depth_m: 'Lacing depth',
   trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
-  hem: 'Hem', texture: 'Texture',
+  hem: 'Hem', texture: 'Texture', sleeve_print: 'Sleeves of the texture',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */

@@ -83,11 +83,16 @@ body actions):
   validation errors (nothing stored).
 * ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's Texture tab
   (``garment_cut_texture.dialog_state`` + picture URLs): ``{running, step, error, csig, record, can_generate,
-  blocked_reason, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url}``.
+  blocked_reason, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url, answers,
+  sleeve_print, has_sleeves, option_stale}``.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/generate {only?}`` — the cut flow in the background (the back
   view when missing, the front job, the back job, the atlas applied; ``only`` "front" / "back" redoes one job) and
   the texture set to "cut"; 409 media off / already running / another hub-job flow of the piece (``piece_jobs``),
   503 empty chain (``NoRouteError`` text), 400 without a ready drape with islands or an item picture.
+* ``POST /characters/{c}/figure/template/{item_id}/cut/use {job}`` — "Use this answer": the job's stored answer, also
+  a rejected one, is accepted and the atlas composed on the CPU (0 image jobs); 400 without an answer, 409 running.
+* ``POST /characters/{c}/figure/template/{item_id}/cut/sleeves {sleeve_print}`` — the sleeve option of the texture
+  ("plain" / "picture"), a made atlas composed again on the CPU; 400 unknown value.
 * ``GET  /characters/{c}/figure/template/{item_id}/cut/<kind>.png[?v=<csig>]`` — the record's pictures (``kind``
   one of ``garment_cut_texture.CUT_FILES``); 404 when missing.
 * ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current drape's
@@ -1079,6 +1084,53 @@ def generate_template_cut(character_name: str, item_id: str, body: Optional[Temp
     if not started:
         raise HTTPException(status_code=409, detail="The texture from cut is being made already")
     return _template_cut_payload(character_name, item_id)
+
+
+class TemplateCutUseRequest(BaseModel):
+    #: The job whose shown answer goes on the figure ("front" / "back") — also a rejected one.
+    job: str
+
+
+@router.post("/{character_name}/figure/template/{item_id}/cut/use")
+def use_template_cut_answer(character_name: str, item_id: str, body: TemplateCutUseRequest,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """"Use this answer" (user test 2026-11-21): the job's stored answer — passed or rejected by a gate — is accepted
+    and the atlas composed with it on the CPU in the background (``garment_cut_texture.recompose``, 0 image jobs),
+    then applied to the figure; a job without an answer yet stays for Run all. 400 when the job has no answer or the
+    piece no ready drape, 409 while a flow of this piece runs. Answers the box's payload."""
+    from app.core import garment_cut_texture as gct
+    _template_item(character_name, item_id)
+    try:
+        started = gct.start_recompose(character_name, item_id, accept=body.job)
+    except (gct.NotReady, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except gct.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not started:
+        raise HTTPException(status_code=409, detail="The texture from cut is being made already")
+    return _template_cut_payload(character_name, item_id)
+
+
+class TemplateCutSleevesRequest(BaseModel):
+    #: ``garment_template.SLEEVE_PRINTS``: "plain" (the front panel's fabric) / "picture" (the model's sleeves).
+    sleeve_print: str
+
+
+@router.post("/{character_name}/figure/template/{item_id}/cut/sleeves")
+def set_template_cut_sleeves(character_name: str, item_id: str, body: TemplateCutSleevesRequest,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The Texture tab's sleeve option: stores the piece's ``sleeve_print`` (texture only — no drape) and composes a
+    made atlas again on the CPU (``garment_cut_texture.set_sleeve_print``, 0 image jobs). 400 for an unknown value or
+    a piece without parameters, 409 while a flow of this piece runs. Answers the box's payload plus ``recompose``."""
+    from app.core import garment_cut_texture as gct
+    _template_item(character_name, item_id)
+    try:
+        result = gct.set_sleeve_print(character_name, item_id, body.sleeve_print)
+    except (gct.NotReady, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except gct.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {**_template_cut_payload(character_name, item_id), "recompose": result["recompose"]}
 
 
 @router.get("/{character_name}/figure/template/{item_id}/cut/{kind}.png")

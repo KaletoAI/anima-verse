@@ -6,14 +6,16 @@ This part is the RENDER of a piece's islands, pure numpy + PIL on the drape's ``
 ``app/blender/scripts/uv_pattern.islands_payload``; this module never imports the Blender scripts):
 
 - ``rasterise_islands`` / ``island_mask`` — the island label raster and mask the gate measures against;
-- ``render_template`` — the CLEAN model template (neutral grey islands, a thin outline drawn inside the mask, a white
-  background, square, no text) that goes to the model as the first image;
+- ``render_template`` — the CLEAN model template (islands pre-filled with the item's base fabric colour — neutral grey
+  without one —, a thin outline drawn inside the mask, a white background, square, no text) that goes to the model as
+  the first image;
 - ``render_pattern_sheet`` — the user's DEBUG view of the same islands (pastel fills, part names, sizes in cm, grain
   arrows, seam letters, the sleeve cap height, a px/cm footer). It is never sent to a model.
 
 The PROMPT (Task 6) is the shipped Jinja2 file ``shared/templates/image/garment_cut_texture.md`` — its own tiny
 ``SandboxedEnvironment`` + ``StrictUndefined`` loader here, deliberately not world-overridable (``/admin/templates``
-stays LLM-only). ``PROMPT_SHA`` (md5 of the file text) enters the cut atlas key. The render runs on the occasion
+stays LLM-only); ``layout_words`` names each island by its place in the template. ``PROMPT_SHA`` (md5 of the file
+text) enters the cut atlas key and the record (``prompt_sha``), so a reworded prompt makes an old atlas stale. The render runs on the occasion
 ``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
 The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready drape with islands, an
@@ -150,17 +152,36 @@ def _interior(labels: np.ndarray, r: int) -> np.ndarray:
     return keep
 
 
-def render_template(islands: dict, size: int | None = None) -> Image.Image:
-    """The clean model template: square RGB of ``size`` (default the payload's ``atlas_px``), white background,
-    ``TEMPLATE_FILL`` on the islands and a ``LINE_PX`` outline in ``TEMPLATE_LINE`` drawn INSIDE each island — so
-    the non-white footprint IS the island mask the gate measures against. No text, no arrows."""
+#: ``outline_for``: the outline drawn inside a pre-filled island is the fill times ``OUTLINE_DARK`` (in sRGB, always in
+#: gamut); a fill darker than L* ``OUTLINE_LIGHT_BELOW`` gets ``OUTLINE_LIGHT`` of the way to white instead.
+OUTLINE_DARK = 0.6
+OUTLINE_LIGHT = 0.4
+OUTLINE_LIGHT_BELOW = 30.0
+
+
+def outline_for(fill) -> tuple[int, int, int]:
+    """The outline colour drawn inside islands pre-filled with ``fill``: a darker shade of it (``OUTLINE_DARK``), a
+    lighter one for a dark fabric — the outline shows on any fabric without being a colour of its own."""
+    rgb = np.asarray(fill, np.float64)
+    if float(cut_texture_post.srgb_to_lab(rgb)[0]) < OUTLINE_LIGHT_BELOW:
+        out = rgb + (255.0 - rgb) * OUTLINE_LIGHT
+    else:
+        out = rgb * OUTLINE_DARK
+    return tuple(int(v) for v in np.clip(np.rint(out), 0, 255))
+
+
+def render_template(islands: dict, size: int | None = None, fill=None) -> Image.Image:
+    """The clean model template: square RGB of ``size`` (default the payload's ``atlas_px``), white background, the
+    islands in ``fill`` (the item's base fabric colour, ``cut_texture_post.fabric_colour``; default the neutral
+    ``TEMPLATE_FILL``) and a ``LINE_PX`` outline (``TEMPLATE_LINE``, with a fill ``outline_for``) drawn INSIDE each
+    island — so the non-white footprint IS the island mask the gate measures against. No text, no arrows."""
     size = int(size or islands.get("atlas_px") or 2048)
     labels = rasterise_islands(islands, size)
     inner = _interior(labels, LINE_PX)
     img = np.empty((size, size, 3), np.uint8)
     img[:] = BACKGROUND
-    img[labels > 0] = TEMPLATE_LINE
-    img[inner] = TEMPLATE_FILL
+    img[labels > 0] = TEMPLATE_LINE if fill is None else outline_for(fill)
+    img[inner] = TEMPLATE_FILL if fill is None else tuple(int(v) for v in fill)
     return Image.fromarray(img, "RGB")
 
 
@@ -182,10 +203,62 @@ def prompt_template(side: str = "front") -> Template:
     return _PROMPT_ENV.from_string(PROMPT_TEXTS[side])
 
 
-def render_prompt(*, piece: str, pieces: list[str], side: str = "front") -> str:
+def render_prompt(*, piece: str, pieces: list[str], side: str = "front", layout: list[str] | None = None) -> str:
     """The cut-texture prompt of the ``side`` job for ``piece`` (e.g. "T-shirt") with the pattern ``pieces`` of that
-    job (English panel names). Ordinal wording ("the first image") — the central handoff rewrites it per backend."""
-    return prompt_template(side).render(piece=piece, pieces=list(pieces)).strip()
+    job (English panel names) and the ``layout`` sentences (``layout_words``: which island is which, in words of the
+    template). The sleeves the prompt speaks of are the pieces with "sleeve" in their name. Ordinal wording ("the
+    first image") — the central handoff rewrites it per backend."""
+    pieces = list(pieces)
+    return prompt_template(side).render(piece=piece, pieces=pieces, layout=list(layout or []),
+                                        sleeves=[p for p in pieces if "sleeve" in p]).strip()
+
+
+#: ``layout_words``: an island centre left of this share of the template is "left", right of 1 - it "right"; the
+#: same for top / bottom; below ``LAYOUT_VERY`` it is "at the very bottom" (the neckband strip under the sleeves).
+LAYOUT_SIDE = 0.36
+LAYOUT_VERY = 0.9
+#: An island whose bounding box is this many times wider than high (or higher than wide) is "the long thin strip".
+LAYOUT_STRIP = 6.0
+
+
+def _place_words(cx: float, cy: float) -> str:
+    v = "top" if cy < LAYOUT_SIDE else "bottom" if cy > 1 - LAYOUT_SIDE else "middle"
+    h = "left" if cx < LAYOUT_SIDE else "right" if cx > 1 - LAYOUT_SIDE else ""
+    if v == "bottom" and cy > LAYOUT_VERY and not h:
+        return "at the very bottom"
+    if v == "middle":
+        return f"in the middle {h}".strip() if h else "in the middle"
+    return f"at the {v} {h}".strip()
+
+
+def layout_words(islands: dict) -> list[str]:
+    """One sentence per island of the job's payload, in pattern order, saying which island of the template is which
+    piece — e.g. "the large piece at the top left is the front panel", "the piece at the bottom left is the left
+    sleeve", "the long thin strip at the very bottom is the neckband" (user test 2026-11-21: the model did not take
+    the wide fan-shaped sleeve islands for sleeves). Positions are the island's bbox centre in the square template
+    (``LAYOUT_SIDE`` / ``LAYOUT_VERY``); "large" marks the island with the largest bbox area when the job has more
+    than one; a bbox ``LAYOUT_STRIP`` times longer than wide is "the long thin strip"."""
+    size = float(islands.get("atlas_px") or 2048)
+    names = {n: w for n, w in zip(_pattern_order(islands), prompt_pieces(islands))}
+    boxes = {}
+    for isl in islands.get("islands", []):
+        x0, y0, x1, y1 = (float(v) for v in (isl.get("bbox_px") or _bbox(isl)))
+        boxes[str(isl["name"])] = (x0, y0, x1, y1)
+    if not boxes:
+        return []
+    largest = max(boxes, key=lambda n: (boxes[n][2] - boxes[n][0]) * (boxes[n][3] - boxes[n][1]))
+    out = []
+    for name in _pattern_order(islands):
+        x0, y0, x1, y1 = boxes[name]
+        w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+        if max(w / h, h / w) >= LAYOUT_STRIP:
+            shape = "the long thin strip"
+        elif name == largest and len(boxes) > 1:
+            shape = "the large piece"
+        else:
+            shape = "the piece"
+        out.append(f"{shape} {_place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)} is the {names[name]}")
+    return out
 
 
 def _split_name(name: str) -> tuple[str, int]:
@@ -195,17 +268,26 @@ def _split_name(name: str) -> tuple[str, int]:
     return str(name), 1
 
 
+def _pattern_key(name: str) -> tuple:
+    base, n = _split_name(name)
+    order = list(PROMPT_PIECE_NAMES)
+    return (order.index(base) if base in PROMPT_PIECE_NAMES else len(order), base, n)
+
+
+def _pattern_order(islands: dict) -> list[str]:
+    """The payload's island names in pattern order (``PROMPT_PIECE_NAMES``, a split part after its first)."""
+    return sorted((str(i["name"]) for i in islands.get("islands", [])), key=_pattern_key)
+
+
 def prompt_pieces(islands: dict) -> list[str]:
     """The English panel names of the payload's islands in pattern order; a split part keeps its number
     (``front_2`` -> "front panel 2"); an unknown part name is spoken plainly after the known ones."""
-    order = list(PROMPT_PIECE_NAMES)
-    keyed = []
-    for isl in islands.get("islands", []):
-        base, n = _split_name(isl["name"])
-        rank = order.index(base) if base in PROMPT_PIECE_NAMES else len(order)
+    out = []
+    for name in _pattern_order(islands):
+        base, n = _split_name(name)
         word = PROMPT_PIECE_NAMES.get(base, base.replace("_", " "))
-        keyed.append(((rank, base, n), word if n == 1 else f"{word} {n}"))
-    return [w for _, w in sorted(keyed)]
+        out.append(word if n == 1 else f"{word} {n}")
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------- debug sheet
@@ -849,11 +931,89 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     return out
 
 
-def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, item_rgba: np.ndarray) -> dict:
+#: User test 2026-11-21 — the parts of each job whose pixels come from the model's answer; every other island of the
+#: job (the sleeves, the neckband, the cuffs) is filled with the seamless fabric patch of the job's main panel
+#: (``fill_fabric``). With the piece's ``sleeve_print`` "picture" the sleeves and cuffs come from the answer too.
+MODEL_PARTS = {"front": ("front", "collar", "placket"), "back": ("back",)}
+SLEEVE_PARTS = ("sleeve_l", "sleeve_r", "cuff_l", "cuff_r")
+#: The panel each job's gates measure and its fabric patch is cut from.
+MAIN_PART = {"front": "front", "back": "back"}
+#: A pre-fill nearer to white than this (the largest channel distance) is darkened to it: the gate and the
+#: registration find the islands as "not near-white" (``cut_texture_post.WHITE_TOL`` 24), so a white fabric goes as a
+#: very light grey (the colour match moves the atlas back onto the item's own white).
+PREFILL_MIN_DIST = 40
+
+
+def model_parts(job: str, sleeve_print: str = "plain") -> tuple[str, ...]:
+    """The parts of ``job`` taken from the model's answer (``MODEL_PARTS``, the sleeves with "picture")."""
+    parts = MODEL_PARTS.get(job, ())
+    return parts + SLEEVE_PARTS if job == "front" and sleeve_print == "picture" else parts
+
+
+def prefill_colour(colour: dict | None) -> tuple[int, int, int] | None:
+    """The colour the template's islands are pre-filled with: the item's base fabric colour
+    (``cut_texture_post.fabric_colour``), darkened to ``PREFILL_MIN_DIST`` from white when nearer; None without one."""
+    if not colour:
+        return None
+    rgb = np.asarray(colour["rgb"], np.float64)
+    dist = float((255.0 - rgb).max())
+    if dist < PREFILL_MIN_DIST:
+        rgb = 255.0 - (255.0 - rgb) * (PREFILL_MIN_DIST / dist) if dist > 0 else np.full(3, 255.0 - PREFILL_MIN_DIST)
+    return tuple(int(v) for v in np.clip(np.rint(rgb), 0, 255))
+
+
+def _part_mask(islands: dict, labels: np.ndarray, parts) -> np.ndarray:
+    keep = np.zeros(256, bool)
+    for name, iid in island_ids(islands).items():
+        keep[iid] = part_of(name) in parts
+    return keep[labels]
+
+
+def fill_fabric(img: np.ndarray, labels: np.ndarray, grown: np.ndarray, islands: dict, job: str, px_per_cm: float,
+                sleeve_print: str = "plain") -> tuple[np.ndarray, dict]:
+    """The islands of ``job`` that are not ``model_parts`` (and the bleed around them: the grown pixels whose nearest
+    island is one of them) filled with a seamless patch of the job's main panel (``cut_texture_post.fabric_patch`` on
+    the panel eroded by ``LINE_PX + 1``, ``mirror_tile``, the Lab mean moved onto the panel's base fabric colour).
+    ``labels`` are the job's labels (``job_labels``). Returns the image and ``{"islands", "patch", "base",
+    "shift"}`` ({"islands": []} when there is nothing to fill, {"skipped": reason} when no patch fits)."""
+    from scipy import ndimage
+    post = cut_texture_post
+    keep = model_parts(job, sleeve_print)
+    ids = island_ids(islands)
+    fabric_names = sorted(n for n, iid in ids.items() if job_of(n) == job and part_of(n) not in keep
+                          and (labels == iid).any())
+    if not fabric_names:
+        return img, {"islands": []}
+    panel = _part_mask(islands, labels, (MAIN_PART[job],))
+    if not panel.any():
+        return img, {"islands": fabric_names, "skipped": "no main panel"}
+    base = post.fabric_colour(img, panel)
+    found = post.fabric_patch(img, ndimage.binary_erosion(panel, iterations=LINE_PX + 1), px_per_cm,
+                              base["lab"] if base else None)
+    if found is None or base is None:
+        return img, {"islands": fabric_names, "skipped": "no fabric patch fits the main panel"}
+    patch, info = found
+    _, (iy, ix) = ndimage.distance_transform_edt(labels == 0, return_indices=True)
+    nearest = labels[iy, ix]
+    fab_ids = np.zeros(256, bool)
+    for n in fabric_names:
+        fab_ids[ids[n]] = True
+    region = np.asarray(grown, bool) & fab_ids[nearest]
+    out, tinfo = post.tile_fill(img, region, patch, base["lab"])
+    return out, {"islands": fabric_names, "patch": info, "base": base["rgb"], "shift": tinfo["shift"]}
+
+
+def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, refs: dict, *,
+              force: bool = False, sleeve_print: str = "plain") -> dict:
     """Task 7 on ONE job's answer, against that job's islands only (``job_labels``): register, gate, cut + bleed,
     colour match to the ITEM fabric (both jobs — ruling 2026-11-20: the item picture is the colour truth, the back view
-    a model's copy of it; matching both to it keeps the side seams continuous). ``{"state", "reason", "metrics",
-    "_image", "_grown", "_mask"}`` (the arrays only on ``ready``)."""
+    a model's copy of it; matching both to it keeps the side seams continuous), then the fabric fill of the islands
+    the model does not paint (``fill_fabric``). The gates: the island gate (``cut_texture_post.gate``) and the answer
+    gates of the job's main panel (``cut_texture_post.answer_gates``: its colour against the item's, its detail
+    against the job's Picture 2 — ``refs`` = ``{"colour": item colour, "detail": {job: density}, "fabric": the
+    colour match's fabric pixels}``). ``force`` (the user's "Use this answer") posts a failing answer anyway and marks
+    it ``accepted``. ``{"state", "reason", "metrics", "accepted", "_image", "_grown", "_mask"}`` (the arrays only on
+    ``ready``); ``metrics.failures`` lists every failing gate."""
     post = cut_texture_post
     labels = job_labels(islands, size, job)
     mask = labels > 0
@@ -861,17 +1021,41 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
         im.load()
         reg, reg_info = post.resample_register(im, mask)
     ok, met, reason = post.gate(reg, mask, labels, px_per_cm)
+    panel = _part_mask(islands, labels, (MAIN_PART[job],))
+    gates, answer = post.answer_gates(reg, panel, refs.get("colour"), (refs.get("detail") or {}).get(job))
+    failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
     metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
-               "spill": met["spill"], "registration": reg_info, "islands": met["islands"]}
-    if not ok:
+               "spill": met["spill"], "registration": reg_info, "islands": met["islands"],
+               "gates": gates, "fabric": answer["fabric"], "detail": answer["detail"], "failures": failures}
+    if failures and not force:
         metrics.update({"de_before": None, "de_after": None, "clamped": None})
-        return {"state": "rejected", "reason": reason, "metrics": metrics}
+        return {"state": "rejected", "reason": failures[0], "metrics": metrics, "accepted": False}
     cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))))
     grown = ~np.all(cut == 255, axis=-1) | mask
-    matched, cm = post.colour_match(cut, grown, item_rgba, matte=_item_matte())
+    matched, cm = post.colour_match(cut, grown, fabric=refs.get("fabric"))
+    filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print)
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
-                    "clamped": cm.get("clamped"), "colour": cm})
-    return {"state": "ready", "reason": "", "metrics": metrics, "_image": matched, "_grown": grown, "_mask": mask}
+                    "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill})
+    return {"state": "ready", "reason": "", "metrics": metrics, "accepted": bool(failures),
+            "_image": filled, "_grown": grown, "_mask": mask}
+
+
+def references(character_name: str, item_id: str, has_back_panel: bool) -> dict:
+    """``_post_job``'s ``refs`` and the pre-fill: ONE ``garment_matte.cut`` of the item picture (BiRefNet,
+    ``_item_matte``) for its base fabric colour, its detail and the colour match's fabric; the back view's detail for
+    the back job (its alpha is the cut-out). ``{"colour", "prefill", "detail": {"front", "back"}, "fabric"}``."""
+    post = cut_texture_post
+    with Image.open(_item_path(item_id)) as it:
+        item_rgba = np.asarray(it.convert("RGBA"))
+    item = post.picture_reference(item_rgba, matte=_item_matte())
+    detail = {"front": item["detail"]}
+    if has_back_panel:
+        path = back_view(character_name, item_id)
+        if path is not None:
+            with Image.open(path) as bv:
+                detail["back"] = post.picture_reference(np.asarray(bv.convert("RGBA")), matte=None)["detail"]
+    return {"colour": item["colour"], "prefill": prefill_colour(item["colour"]), "detail": detail,
+            "fabric": item["fabric"]}
 
 
 def compose(results: dict, size: int) -> np.ndarray:
@@ -915,12 +1099,71 @@ def _summary_metrics(jobs: dict, seam: dict | None, cross: dict | None) -> dict:
             "seams": seam, "seams_cross": cross}
 
 
+#: The reason of a job that has no answer yet while the job before it passed (or was accepted by the user).
+NOT_MADE = "Not made yet — Make texture from cut renders it"
+SKIPPED = "Not run — the job before it did not pass"
+
+
+def sleeve_print_of(item_id: str) -> str:
+    """The piece's ``sleeve_print`` param ("plain" without one)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    value = str((gt.params_of(get_item(item_id)) or {}).get("sleeve_print") or "plain")
+    return value if value in gt.SLEEVE_PRINTS else "plain"
+
+
+def _finish(character_name: str, item_id: str, record: dict, parts: dict, results: dict, islands: dict,
+            size: int, stem: Path) -> dict:
+    """The end of a flow and of a re-compose: the missing job entries ("skipped" behind a job that did not pass,
+    ``NOT_MADE`` behind passed ones), the record's state (the first job that is not ready gives "rejected" and the
+    reason), on "ready" the composed atlas and the seam metrics; the record written, the figure re-assembled on
+    "ready"."""
+    from app.core.timeutils import utc_now_iso
+    blocked = False
+    for job in parts:
+        entry = record["jobs"].get(job)
+        if entry is None or entry.get("state") == "skipped":
+            record["jobs"][job] = {**(entry or {}), "state": "skipped", "reason": SKIPPED if blocked else NOT_MADE,
+                                   "reference": JOB_REFERENCE[job]}
+        if record["jobs"][job].get("state") != "ready":
+            blocked = True
+    record["upsampler_on"] = any(j.get("upsampler_on") for j in record["jobs"].values())
+    bad = [(j, record["jobs"][j]) for j in parts if record["jobs"][j]["state"] != "ready" or j not in results]
+    atlas = None
+    if bad:
+        job, entry = bad[0]
+        record.update({"state": "rejected", "reason": f"{job.capitalize()}: {entry.get('reason') or NOT_MADE}"})
+        record["metrics"] = _summary_metrics(record["jobs"], None, None)
+    else:
+        atlas = compose(results, size)
+        seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
+        cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
+        record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
+    record["created_at"] = utc_now_iso()
+    _file(stem, ".atlas.png").unlink(missing_ok=True)
+    if atlas is not None:
+        _write_bytes(_file(stem, ".atlas.png"), _png(Image.fromarray(atlas, "RGB")))
+    _write_record(_file(stem, ".json"), record)
+    if record["state"] == "ready":
+        _set_progress((character_name, item_id), "apply")
+        apply(character_name)
+    return record
+
+
+def _entry_from_post(entry: dict, res: dict) -> dict:
+    entry = {k: v for k, v in entry.items() if k not in ("accepted", "accepted_over")}
+    entry.update({"state": res["state"], "reason": res["reason"], "metrics": res["metrics"]})
+    if res.get("accepted"):
+        entry.update({"accepted": True, "accepted_over": res["metrics"]["failures"][0]})
+    return entry
+
+
 def generate(character_name: str, item_id: str, *, only: str | None = None) -> dict:
     """ONE flow (module comment above): -> the record (``state`` "ready", "rejected" or "failed"). A job whose answer
-    of the same csig passed is re-used (re-posted from its raw file, ``reused_jobs``) — Run all renders only what did
-    not pass; ``only`` "front" / "back" always renders that job and keeps the other's passed answer (without one both
-    run). Raises ``NotReady`` before anything is written when the piece has no ready drape
-    with islands or no picture; every later failure is recorded as "failed" and returned."""
+    of the same csig passed (or was accepted, ``use_answer``) is re-used (re-posted from its raw file,
+    ``reused_jobs``) — Run all renders only what did not pass; ``only`` "front" / "back" always renders that job and
+    keeps the other's passed answer (without one both run). Raises ``NotReady`` before anything is written when the
+    piece has no ready drape with islands or no picture; every later failure is recorded as "failed" and returned."""
     from app.imagegen.routing import route_meta
     key = (character_name, item_id)
     drape = _ready_drape(character_name, item_id)
@@ -932,8 +1175,9 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
     from app.core.timeutils import utc_now_iso
     record: dict = {"islands_sha": drape["islands_sha"], "tsig": drape.get("tsig"), "state": "failed",
                     "reason": "", "metrics": {}, "jobs": {}, "px_per_cm": px_per_cm, "item_px": None,
-                    "upscale": None, "prompt_sha": PROMPT_SHA, "item_sha": _item_sha(item_id),
-                    "back_sha": "", "back_view": {"made": False, "jobs": 0}, "only": only or ""}
+                    "upscale": None, "prompt_sha": PROMPT_SHA, "post_version": cut_texture_post.POST_VERSION,
+                    "item_sha": _item_sha(item_id), "back_sha": "", "back_view": {"made": False, "jobs": 0},
+                    "only": only or "", "sleeve_print": sleeve_print_of(item_id)}
     sig = csig(drape["islands_sha"], record["item_sha"])
     try:
         if "back" in parts:
@@ -966,19 +1210,22 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
             record.update({"item_px": previous.get("item_px"), "upscale": previous.get("upscale")})
         if "back" in parts:
             _write_bytes(back_png, back_source(back_view(character_name, item_id)))
-        with Image.open(_item_path(item_id)) as it:
-            item_rgba = np.asarray(it.convert("RGBA"))
+        refs = references(character_name, item_id, "back" in parts)
+        record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
+                            "detail": refs["detail"]}
         name = piece_name(item_id)
         for job in parts:
             template_png = _file(stem, f".template_{job}.png")
-            _write_bytes(template_png, _png(render_template(parts[job], size)))
+            _write_bytes(template_png, _png(render_template(parts[job], size, fill=refs["prefill"])))
             raw_png = _file(stem, f".raw_{job}.png")
             if job in reuse:
                 answer = raw_png.read_bytes()
                 entry = {k: v for k, v in reuse[job].items() if k not in ("metrics", "state", "reason")}
+                force = bool(reuse[job].get("accepted"))
             else:
                 _set_progress(key, job)
-                prompt = render_prompt(piece=name, pieces=prompt_pieces(parts[job]), side=job)
+                prompt = render_prompt(piece=name, pieces=prompt_pieces(parts[job]), side=job,
+                                       layout=layout_words(parts[job]))
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
                 try:
@@ -991,46 +1238,112 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
                 entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
                          "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
                          "islands": [str(i["name"]) for i in parts[job]["islands"]]}
+                force = False
             _set_progress(key, "post")
-            res = _post_job(answer, islands, size, px_per_cm, job, item_rgba)
-            entry.update({"state": res["state"], "reason": res["reason"], "metrics": res["metrics"]})
-            record["jobs"][job] = entry
+            res = _post_job(answer, islands, size, px_per_cm, job, refs, force=force,
+                            sleeve_print=record["sleeve_print"])
+            record["jobs"][job] = _entry_from_post(entry, res)
             if res["state"] != "ready":
                 break               # a rejected job stops the flow: the next job is not spent
             results[job] = res
-        for job in parts:
-            record["jobs"].setdefault(job, {"state": "skipped", "reason": "Not run — the job before it did not pass",
-                                            "reference": JOB_REFERENCE[job]})
-        record["upsampler_on"] = any(j.get("upsampler_on") for j in record["jobs"].values())
-        bad = [(j, record["jobs"][j]) for j in parts if record["jobs"][j]["state"] != "ready"]
-        if bad:
-            job, entry = bad[0]
-            record.update({"state": "rejected", "reason": f"{job.capitalize()}: {entry['reason']}"})
-            record["metrics"] = _summary_metrics(record["jobs"], None, None)
-            atlas = None
-        else:
-            atlas = compose(results, size)
-            seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
-            cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
-            record.update({"state": "ready", "reason": "",
-                           "metrics": _summary_metrics(record["jobs"], seam, cross)})
     except Exception as e:  # noqa: BLE001 — a job's failure is the record, shown in the dialog
         logger.warning("Cut texture %s %s failed: %s", character_name, item_id, e)
         failed = next((j for j in JOBS if (record["jobs"].get(j) or {}).get("state") == "failed"), "")
         reason = _failure_reason(e)
         record.update({"state": "failed", "reason": f"{failed.capitalize()}: {reason}" if failed else reason})
         for job in parts:
-            record["jobs"].setdefault(job, {"state": "skipped", "reason": "Not run — the job before it did not pass",
-                                            "reference": JOB_REFERENCE[job]})
-        atlas = None
-    record["created_at"] = utc_now_iso()
-    if record["state"] == "ready" and atlas is not None:
-        _write_bytes(_file(stem, ".atlas.png"), _png(Image.fromarray(atlas, "RGB")))
-    _write_record(_file(stem, ".json"), record)
-    if record["state"] == "ready":
-        _set_progress(key, "apply")
-        apply(character_name)
-    return record
+            record["jobs"].setdefault(job, {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
+        record["upsampler_on"] = any(j.get("upsampler_on") for j in record["jobs"].values())
+        record["created_at"] = utc_now_iso()
+        _write_record(_file(stem, ".json"), record)
+        return record
+    for job in parts:
+        record["jobs"].setdefault(job, {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
+    return _finish(character_name, item_id, record, parts, results, islands, size, stem)
+
+
+def usable_answers(character_name: str, item_id: str, sig: str | None = None) -> dict:
+    """Per job of the current csig (``sig``): whether its answer can be put on the figure by hand (``use_answer``) —
+    ``{job: {"raw": the answer file exists, "state", "accepted", "can_use"}}``; ``can_use`` = an answer exists and it
+    was rejected (accept it) or it passed (compose with it again)."""
+    sig = sig or current_csig(character_name, item_id)
+    if not sig:
+        return {}
+    record = read_record(character_name, item_id, sig)
+    stem = _stem(character_name, item_id, sig)
+    out = {}
+    for job, entry in (record.get("jobs") or {}).items():
+        raw = _file(stem, f".raw_{job}.png").is_file()
+        state = str(entry.get("state") or "")
+        out[job] = {"raw": raw, "state": state, "accepted": bool(entry.get("accepted")),
+                    "can_use": raw and state in ("ready", "rejected")}
+    return out
+
+
+def recompose(character_name: str, item_id: str, *, accept: str | None = None) -> dict:
+    """The CPU path of "Use this answer" (``accept`` = the job whose shown answer the user puts on the figure, also a
+    rejected one: it is marked ``accepted`` with the reason it overrode) and of a changed ``sleeve_print``
+    (``accept`` None): every job of the current csig whose answer passed or was accepted is post-processed again from
+    its raw file — no image job — and, when every job has one, the atlas is composed and applied. A job without an
+    answer stays "skipped" (``NOT_MADE`` once the jobs before it are in): Run all renders exactly that one next.
+    Raises ``NotReady`` when the piece has no ready drape, no record or (``accept``) no answer of that job."""
+    drape = _ready_drape(character_name, item_id)
+    islands = json.loads(Path(drape["islands_path"]).read_text(encoding="utf-8"))
+    parts = split_islands(islands)
+    sig = csig_for(character_name, item_id, drape["islands_sha"], islands, has_back_panel="back" in parts)
+    record = read_record(character_name, item_id, sig) if sig else {}
+    if not record:
+        raise NotReady("Nothing to use yet — make the texture from cut first")
+    stem = _stem(character_name, item_id, sig)
+    if accept is not None:
+        if accept not in parts:
+            raise ValueError(f"job must be one of {', '.join(parts)}")
+        entry = record.get("jobs", {}).get(accept) or {}
+        if not _file(stem, f".raw_{accept}.png").is_file() or entry.get("state") not in ("ready", "rejected"):
+            raise NotReady(f"The {accept} job has no answer to use — redo it first")
+    size = int(islands.get("atlas_px") or 2048)
+    px_per_cm = float(islands.get("px_per_cm") or 0.0)
+    record["sleeve_print"] = sleeve_print_of(item_id)
+    _set_progress((character_name, item_id), "post")
+    refs = references(character_name, item_id, "back" in parts)
+    record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
+                        "detail": refs["detail"]}
+    results = {}
+    for job in parts:
+        entry = dict(record["jobs"].get(job) or {})
+        raw = _file(stem, f".raw_{job}.png")
+        wanted = job == accept or entry.get("state") == "ready"
+        if not wanted or not raw.is_file():
+            continue
+        force = job == accept or bool(entry.get("accepted"))
+        res = _post_job(raw.read_bytes(), islands, size, px_per_cm, job, refs, force=force,
+                        sleeve_print=record["sleeve_print"])
+        record["jobs"][job] = _entry_from_post(entry, res)
+        if res["state"] == "ready":
+            results[job] = res
+    return _finish(character_name, item_id, record, parts, results, islands, size, stem)
+
+
+def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None) -> dict:
+    """Store the piece's ``sleeve_print`` ("plain" / "picture", ``TEXTURE_ONLY``: no drape) and, when the current
+    record has a ready atlas or accepted / passed answers, compose it again on the CPU in the background
+    (``recompose`` through ``start_recompose``). ``{"changed": bool, "recompose": bool}``."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    if value not in gt.SLEEVE_PRINTS:
+        raise ValueError(f"sleeve_print must be one of {', '.join(gt.SLEEVE_PRINTS)}")
+    item = get_item(item_id)
+    params = gt.params_of(item)
+    if not params:
+        raise NotReady("The piece has no template parameters yet")
+    changed = str(params.get("sleeve_print") or "plain") != value
+    if changed:
+        source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
+        gt.set_params(item_id, {**params, "sleeve_print": value}, source=source)
+    usable = usable_answers(character_name, item_id)
+    again = any(u["state"] == "ready" and u["raw"] for u in usable.values())
+    started = bool(again and start_recompose(character_name, item_id, run=run))
+    return {"changed": changed, "recompose": started}
 
 
 def apply(character_name: str) -> bool:
@@ -1066,7 +1379,6 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
     in a thread; False when this piece's cut already runs. Raises ``MediaGenerationDisabled`` (media off),
     ``NoRouteError`` (empty chain), ``NotReady`` (no ready drape with islands, no picture) or ``Busy`` (another
     hub-job flow of the piece runs — ``piece_jobs``) before any thread or file exists."""
-    from app.core import piece_jobs
     from app.imagegen import routing as _routing
     from app.imagegen.base import MediaGenerationDisabled, media_generation_enabled
     if only not in (None, *JOBS):
@@ -1077,6 +1389,29 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
         raise _routing.NoRouteError(CUT_OCCASION, [])
     _ready_drape(character_name, item_id)
     _item_path(item_id)
+    fn = run or generate
+    return _launch(character_name, item_id, lambda: fn(character_name, item_id, **({"only": only} if only else {})),
+                   select=True)
+
+
+def start_recompose(character_name: str, item_id: str, *, accept: str | None = None, run=None) -> bool:
+    """"Use this answer" (``accept`` = "front" / "back") or a changed sleeve option (``accept`` None): ``recompose``
+    in a thread — CPU only, so neither the media switch nor the routing is asked. Checked synchronously: a ready
+    drape with islands, a record with that job's answer (``NotReady``), no other hub-job flow of the piece (``Busy``).
+    False when this piece's cut already runs."""
+    if accept is not None and accept not in JOBS:
+        raise ValueError(f"job must be one of {', '.join(JOBS)}")
+    _ready_drape(character_name, item_id)
+    if accept is not None and not (usable_answers(character_name, item_id).get(accept) or {}).get("can_use"):
+        raise NotReady(f"The {accept} job has no answer to use — redo it first")
+    fn = run or recompose
+    return _launch(character_name, item_id, lambda: fn(character_name, item_id, accept=accept), select=accept is not None)
+
+
+def _launch(character_name: str, item_id: str, call, *, select: bool) -> bool:
+    """Claim the piece (``piece_jobs`` "cut", ``Busy`` when another flow holds it), select texture "cut" when
+    ``select``, and run ``call`` in a thread; False when this piece's cut already runs."""
+    from app.core import piece_jobs
     key = (character_name, item_id)
     with _lock:
         if _running.get(key) == "running":
@@ -1086,16 +1421,16 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
             raise Busy(held)
         _running[key] = "running"
         _progress[key] = ""
-    try:
-        select_cut(item_id)
-    except Exception as e:  # noqa: BLE001 — the flow still runs; the user can switch the field by hand
-        logger.warning("Cut texture %s %s: texture not switched to cut: %s", character_name, item_id, e)
-    fn = run or generate
+    if select:
+        try:
+            select_cut(item_id)
+        except Exception as e:  # noqa: BLE001 — the flow still runs; the user can switch the field by hand
+            logger.warning("Cut texture %s %s: texture not switched to cut: %s", character_name, item_id, e)
 
     def work() -> None:
         outcome = "done"
         try:
-            fn(character_name, item_id, **({"only": only} if only else {}))
+            call()
         except Exception as e:  # noqa: BLE001 — shown in the dialog
             logger.warning("Cut texture %s %s: %s", character_name, item_id, e)
             outcome = str(e) or type(e).__name__
@@ -1182,7 +1517,11 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     - ``plan`` — ``job_plan`` (the button's job count, the back view and the upscale included);
     - ``texture`` — the piece's ``texture`` param; ``applied`` — the figure shows the cut atlas now
       (``garment_template.cut_info``), with ``applied_reason`` when not;
-    - ``upscale``, ``islands_sha``, ``files`` (which of ``CUT_FILES`` exist for the current csig)."""
+    - ``upscale``, ``islands_sha``, ``files`` (which of ``CUT_FILES`` exist for the current csig);
+    - ``answers`` — ``usable_answers`` (the "Use this answer" buttons: 0 image jobs, CPU); ``can_use`` False for
+      every job while the button would be refused (a flow runs, another hub-job flow of the piece, no drape);
+    - ``sleeve_print`` — the piece's sleeve option, ``has_sleeves`` whether the pattern has sleeves to choose for,
+      ``option_stale`` whether the ready atlas was composed with the other option (``cut_info`` "option")."""
     from app.core import garment_template as gt
     from app.core import piece_jobs
     from app.imagegen import routing as _routing
@@ -1213,7 +1552,8 @@ def dialog_state(character_name: str, item_id: str) -> dict:
                 # the Pattern step's own line: "" = draped with islands; ``draping`` = a Build drapes it now
                 "drape_reason": drape_reason, "draping": drape_reason == BLOCKED_DRAPING,
                 "draped_at": str((drape.get("record") or {}).get("created_at") or ""),
-                "current": record.get("state") == "ready",
+                "current": record.get("state") == "ready"
+                and str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain"),
                 "plan": job_plan(character_name, item_id, islands, str(drape.get("islands_sha") or ""))
                 if drape["state"] == "ready" else None,
                 "texture": params.get("texture") or "projection",
@@ -1223,6 +1563,15 @@ def dialog_state(character_name: str, item_id: str) -> dict:
                 "has_back": has_back(islands),
                 "islands_sha": str(drape.get("islands_sha") or "") if drape.get("islands_path") else "",
                 "files": {k: bool(stem and _file(stem, f".{k}.png").is_file()) for k in CUT_FILES}})
+    use_off = out["running"] or bool(drape_reason) or bool(held and held != "cut")
+    answers = usable_answers(character_name, item_id, sig) if sig else {}
+    for entry in answers.values():
+        entry["can_use"] = bool(entry["can_use"] and not use_off)
+    sleeve_print = str(params.get("sleeve_print") or "plain")
+    out.update({"answers": answers, "sleeve_print": sleeve_print,
+                "has_sleeves": any(part_of(str(i["name"])) in SLEEVE_PARTS for i in islands.get("islands", [])),
+                "option_stale": record.get("state") == "ready"
+                and str(record.get("sleeve_print") or "plain") != sleeve_print})
     return out
 
 

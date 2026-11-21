@@ -11,8 +11,10 @@
  * re-reads the dialog when the flow ends, so the result shows without a second click.
  *
  * Layout (checklist): one status line per step with a traffic light and the plain reason; Run all with its job count
- * ("Everything is current" at 0) and one Redo per job; the pictures as small thumbnails in a grid, click enlarges
- * (in-app lightbox through `createPortal`). No native dialogs.
+ * ("Everything is current" at 0); per job its checks (island fit, colour, invented content — user test 2026-11-21),
+ * "Use this answer" (0 image jobs, CPU — also for a rejected answer, after an in-app confirmation that names the
+ * reason) and its Redo; the sleeve option (plain fabric / from the picture, CPU); the pictures as small thumbnails in
+ * a grid, click enlarges (in-app lightbox through `createPortal`). No native dialogs.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -28,13 +30,28 @@ interface CutMetrics {
   seam_cross_de?: number | null
 }
 
+/** One answer check (`cut_texture_post.answer_gates`): the colour against the item's, the detail against Picture 2's. */
+interface CutGate {
+  gate: 'colour' | 'detail'
+  ok: boolean
+  value: number
+  limit: number
+  text: string
+}
+
 interface CutJob {
   state?: 'ready' | 'rejected' | 'failed' | 'skipped'
   reason?: string
-  metrics?: CutMetrics
+  metrics?: CutMetrics & { gates?: CutGate[]; failures?: string[] }
   backend?: string
   upsampler_on?: boolean
+  /** Put on the figure by hand ("Use this answer") although a check rejected it — `accepted_over` is that check. */
+  accepted?: boolean
+  accepted_over?: string
 }
+
+/** `garment_cut_texture.usable_answers`: whether "Use this answer" may run for a job now. */
+interface CutAnswer { raw: boolean; state: string; accepted: boolean; can_use: boolean }
 
 interface CutRecord {
   state?: 'ready' | 'rejected' | 'failed'
@@ -83,6 +100,12 @@ export interface TemplateCutState {
   draped_at: string
   urls: Record<string, string>
   pattern_url: string
+  answers?: { front?: CutAnswer; back?: CutAnswer }
+  /** Where the sleeves come from: "plain" (the front panel's fabric) or "picture" (the model's answer). */
+  sleeve_print?: 'plain' | 'picture'
+  has_sleeves?: boolean
+  /** The ready atlas was composed with the other sleeve option (it is composed again on the CPU). */
+  option_stale?: boolean
 }
 
 const THUMB = 104
@@ -181,15 +204,50 @@ function planCost(plan: CutJobPlan, t: (s: string) => string): string {
 function jobLight(job: CutJob | undefined, running: boolean): Light {
   if (running) return 'blue'
   if (!job?.state) return 'grey'
+  if (job.state === 'ready' && job.accepted) return 'yellow'
   return job.state === 'ready' ? 'green' : job.state === 'failed' ? 'red' : job.state === 'skipped' ? 'grey' : 'yellow'
 }
 
 function jobText(job: CutJob | undefined, made: string, t: (s: string) => string, pxPerCm?: number): string {
   if (!job?.state) return t('Not made yet')
+  if (job.state === 'ready' && job.accepted) {
+    return t('Used by hand despite: {reason}').replace('{reason}', job.accepted_over || '')
+  }
   if (job.state === 'ready') return `${t(made)} · ${cutMetricsLine(job.metrics, t, pxPerCm)}`
-  if (job.state === 'skipped') return t('Not run — the job before it did not pass')
+  if (job.state === 'skipped') return t(job.reason || 'Not run — the job before it did not pass')
   return t(job.state === 'rejected' ? 'Rejected: {reason}' : 'Failed: {reason}')
     .replace('{reason}', t(job.reason || 'no reason'))
+}
+
+/** The answer's checks in one line: "fit ✓ · colour ΔE00 9.9 / 20 ✓ · detail 0.21 / 0.43 ✓". */
+function GateLine({ job, t }: { job: CutJob | undefined; t: (s: string) => string }) {
+  const m = job?.metrics
+  if (!m || !job?.state || job.state === 'skipped' || job.state === 'failed') return null
+  const gates = m.gates || []
+  const fitFail = (m.failures || []).filter((f) => !gates.some((g) => g.text === f))
+  const parts: { ok: boolean; text: string; tip: string }[] = [{
+    ok: fitFail.length === 0,
+    text: t('fit'),
+    tip: fitFail.length ? fitFail.join('\n') : t('The answer covers the pattern pieces and nothing beside them'),
+  }]
+  for (const g of gates) {
+    parts.push(g.gate === 'colour'
+      ? { ok: g.ok, text: t('colour ΔE00 {v} / {l}').replace('{v}', g.value.toFixed(1)).replace('{l}', g.limit.toFixed(0)),
+        tip: t('The base fabric colour of the answer against the item picture’s (CIEDE2000); above the limit it is another colour') }
+      : { ok: g.ok, text: t('detail {v} / {l}').replace('{v}', g.value.toFixed(2)).replace('{l}', g.limit.toFixed(2)),
+        tip: t('Print, text and pattern edges of the answer’s main panel against its picture; far above it the model invented content') })
+  }
+  return (
+    <div className="ga-form-hint" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingLeft: 16, fontSize: 11 }}
+      data-cut-gates="">
+      {parts.map((p) => (
+        <span key={p.text} title={p.tip} style={{ color: p.ok ? 'var(--success, #3fb950)' : 'var(--warning, #d29922)', cursor: 'help' }}
+          data-gate-ok={p.ok ? '1' : '0'}>
+          {p.ok ? '✓' : '✗'} {p.text}
+        </span>
+      ))}
+    </div>
+  )
 }
 
 /** The Texture tab's traffic light: running blue · in use green · rejected yellow · failed red · not wanted grey ·
@@ -217,6 +275,8 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const [state, setState] = useState<TemplateCutState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  /** The job whose REJECTED answer waits for the in-app confirmation of "Use this answer". */
+  const [confirm, setConfirm] = useState<'' | 'front' | 'back'>('')
   const wasRunning = useRef(false)
   const reload = useCallback(() => {
     apiGet<TemplateCutState>(`${path}/cut`).then(setState).catch((e) => setError((e as Error).message))
@@ -258,6 +318,33 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
       setBusy(false)
     }
   }
+  /** "Use this answer": the shown answer goes on the figure (CPU, 0 image jobs), a rejected one after `confirm`. */
+  const use = async (job: 'front' | 'back') => {
+    setBusy(true)
+    setError('')
+    setConfirm('')
+    try {
+      setState(await apiPost<TemplateCutState>(`${path}/cut/use`, { job }))
+      toast(t('The answer is being put on the figure (CPU)'), 'success')
+      onChanged()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const setSleeves = async (value: 'plain' | 'picture') => {
+    setBusy(true)
+    setError('')
+    try {
+      setState(await apiPost<TemplateCutState>(`${path}/cut/sleeves`, { sleeve_print: value }))
+      onChanged()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
   if (!state) {
     return error ? <div className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>{error}</div>
       : <div className="ga-hint">{t('Loading…')}</div>
@@ -288,6 +375,10 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
     return t(job === 'front' ? 'Renders the front job again and keeps the back job’s answer'
       : 'Renders the back job again and keeps the front job’s answer')
   }
+  // every answer so far passed or was used by hand: the atlas only waits for a job that has no answer yet
+  const waitingJob = r.state === 'rejected' ? (['front', 'back'] as const).find((j) => jobs[j]?.state === 'skipped'
+    && (['front', 'back'] as const).every((o) => o === j || !jobs[o] || jobs[o]?.state === 'ready' || jobs[o]?.state === 'skipped')
+    && jobs[j]?.reason !== 'Not run — the job before it did not pass') : undefined
   const runLabel = state.current
     ? t('Everything is current')
     : `${t('Make texture from cut')} — ${plan ? planCost(plan, t) : ''}`
@@ -305,7 +396,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 14, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         <div className="ga-hint">
-          {t('The pattern pieces are filled from pictures: the front job paints the front panel, the sleeves and the neckband from the item picture; the back job paints the back panel from the piece’s back view. The atlas replaces the projection without a new drape.')}
+          {t('The pattern pieces are filled from pictures, starting from the item’s fabric colour: the front job paints the front panel from the item picture, the back job the back panel from the piece’s back view; the sleeves and the neckband get the front panel’s fabric. Every answer is checked against the item picture; the atlas replaces the projection without a new drape.')}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} aria-label={t('Steps')}>
           <StepLine testid="drape" label={t('Pattern')}
@@ -319,20 +410,59 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
                 : plan?.back_view ? t('Missing — Make texture from cut renders it first (1 image job, at most 2)')
                   : t('Ready — Picture 2 of the back job (Views tab)')} />
           ) : null}
-          <StepLine testid="front" label={t('Front job')} light={jobLight(jobs.front, step === 'front' || step === 'upscale')}
-            text={step === 'front' || step === 'upscale' ? t(RUN_STEP[step]) : jobText(jobs.front, 'Made', t, r.px_per_cm)}
-            tip={jobs.front?.backend ? `${t('Backend')}: ${jobs.front.backend}` : undefined} />
-          {state.has_back ? (
-            <StepLine testid="back" label={t('Back job')} light={jobLight(jobs.back, step === 'back')}
-              text={step === 'back' ? t(RUN_STEP.back) : jobText(jobs.back, 'Made', t)}
-              tip={jobs.back?.backend ? `${t('Backend')}: ${jobs.back.backend}` : undefined} />
-          ) : null}
+          {(['front', 'back'] as const).filter((job) => job === 'front' || state.has_back).map((job) => {
+            const j = jobs[job]
+            const ans = state.answers?.[job]
+            const redo = job === 'front' ? redoFront : redoBack
+            const canRedo = job === 'front' ? canRedoFront : canRedoBack
+            const live = job === 'front' ? step === 'front' || step === 'upscale' : step === 'back'
+            const rejected = j?.state === 'rejected'
+            return (
+              <div key={job} style={{ display: 'flex', flexDirection: 'column', gap: 2 }} data-cut-job={job}>
+                <StepLine testid={job} label={t(job === 'front' ? 'Front job' : 'Back job')} light={jobLight(j, live)}
+                  text={live ? t(RUN_STEP[step]) : jobText(j, 'Made', t, job === 'front' ? r.px_per_cm : undefined)}
+                  tip={j?.backend ? `${t('Backend')}: ${j.backend}` : undefined} />
+                <GateLine job={j} t={t} />
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 16 }}>
+                  {ans?.raw ? (
+                    <button type="button" className={`ga-btn ga-btn-sm${rejected ? '' : ' ga-btn-primary'}`}
+                      data-cut-use={job} disabled={busy || running || !ans.can_use}
+                      title={!ans.can_use ? offTip || t('Wait until the running job is done')
+                        : rejected ? t('Rejected by a check — you are asked before it goes on the figure')
+                          : t('Composes the atlas with this answer again and puts it on the figure')}
+                      onClick={() => { if (rejected) setConfirm(job); else void use(job) }}>
+                      {`${t('Use this answer')} — ${t('0 image jobs (CPU)')}`}
+                    </button>
+                  ) : null}
+                  <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedo} data-cut-redo={job}
+                    title={offTip || (canRedo ? redoTip(job, redo) : t('Make the texture from cut first'))}
+                    onClick={() => { void make(job) }}>
+                    {`${t(job === 'front' ? 'Redo front job' : 'Redo back job')} — ${redo ? planCost(redo, t) : ''}`}
+                  </button>
+                </div>
+                {confirm === job ? (
+                  <div role="alertdialog" aria-label={t('Use a rejected answer')} data-cut-confirm={job}
+                    style={{ marginLeft: 16, padding: '6px 8px', border: '1px solid var(--warning, #d29922)', borderRadius: 4,
+                      display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                    <span style={{ flex: '1 1 220px' }}>
+                      {t('This answer was rejected: {reason}. Put it on the figure anyway?').replace('{reason}', j?.reason || '')}
+                    </span>
+                    <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => { void use(job) }}>
+                      {t('Use it anyway')}
+                    </button>
+                    <button type="button" className="ga-btn ga-btn-sm" onClick={() => setConfirm('')}>{t('Cancel')}</button>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
           <StepLine testid="atlas" label={t('Atlas')}
             light={step === 'post' ? 'blue' : r.state === 'ready' ? 'green' : r.state ? (r.state === 'failed' ? 'red' : 'yellow') : 'grey'}
             text={step === 'post' ? t(RUN_STEP.post) : r.state === 'ready'
               ? `${t('Composed from both jobs')}${r.metrics?.seam_cross_de != null ? ` · ${t('front/back seams ΔE {n}').replace('{n}', r.metrics.seam_cross_de.toFixed(1))}` : ''}`
-              : r.state ? t(r.state === 'failed' ? 'Failed: {reason}' : 'Rejected: {reason}').replace('{reason}', t(r.reason || 'no reason'))
-                + ` — ${t('the projection stays')}` : t('Not made yet')} />
+              : waitingJob ? t(waitingJob === 'front' ? 'Waiting for the front job — the projection stays' : 'Waiting for the back job — the projection stays')
+                : r.state ? t(r.state === 'failed' ? 'Failed: {reason}' : 'Rejected: {reason}').replace('{reason}', t(r.reason || 'no reason'))
+                  + ` — ${t('the projection stays')}` : t('Not made yet')} />
           <StepLine testid="figure" label={t('On the figure')}
             light={step === 'apply' ? 'blue' : state.applied ? 'green' : r.state === 'ready' ? 'yellow' : 'grey'}
             text={step === 'apply' ? t(RUN_STEP.apply) : appliedText} />
@@ -343,6 +473,24 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
           </div>
         ) : null}
         {state.error ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{t(state.error)}</div> : null}
+        {state.has_sleeves ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }} data-cut-sleeves={state.sleeve_print || 'plain'}>
+            <strong style={{ fontWeight: 600 }}>{t('Sleeves')}</strong>
+            {(['plain', 'picture'] as const).map((v) => (
+              <button key={v} type="button" aria-pressed={(state.sleeve_print || 'plain') === v} disabled={busy || running}
+                className={`ga-btn ga-btn-sm${(state.sleeve_print || 'plain') === v ? ' ga-btn-primary' : ''}`}
+                title={t(v === 'plain'
+                  ? 'The sleeves and the neckband get the front panel’s plain fabric — a print on the chest never lands on a sleeve'
+                  : 'The sleeves come from the answer — only for a garment with a print on a sleeve')}
+                onClick={() => { if ((state.sleeve_print || 'plain') !== v) void setSleeves(v) }}>
+                {t(v === 'plain' ? 'Plain fabric' : 'From the picture')}
+              </button>
+            ))}
+            <span className="ga-form-hint">
+              {state.option_stale ? t('Changed — the atlas is composed again (CPU, 0 image jobs)') : t('A switch composes the atlas again (CPU, 0 image jobs)')}
+            </span>
+          </div>
+        ) : null}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             <button type="button" className="ga-btn ga-btn-primary ga-btn-sm" data-cut-run=""
@@ -350,18 +498,6 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
               onClick={() => { void make('') }}>
               {running ? t(RUN_STEP[step] || 'Starting…') : runLabel}
             </button>
-            <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoFront} data-cut-redo="front"
-              title={offTip || (canRedoFront ? redoTip('front', redoFront) : t('Make the texture from cut first'))}
-              onClick={() => { void make('front') }}>
-              {`${t('Redo front job')} — ${redoFront ? planCost(redoFront, t) : ''}`}
-            </button>
-            {state.has_back ? (
-              <button type="button" className="ga-btn ga-btn-sm" disabled={off || !canRedoBack} data-cut-redo="back"
-                title={offTip || (canRedoBack ? redoTip('back', redoBack) : t('Make the texture from cut first'))}
-                onClick={() => { void make('back') }}>
-                {`${t('Redo back job')} — ${redoBack ? planCost(redoBack, t) : ''}`}
-              </button>
-            ) : null}
           </div>
           {why && !running ? <span className="ga-hint" style={{ color: 'var(--warning, #d29922)' }} data-cut-blocked="">{why}</span> : null}
           {running ? <span className="ga-hint" style={{ color: 'var(--accent, #6aa9ff)' }}>

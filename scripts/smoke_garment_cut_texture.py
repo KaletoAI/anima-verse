@@ -55,7 +55,9 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     (the answer IS the mask, so the registration finds the identity map: IoU 1.0), ``.atlas.png`` exists at 2048 x
     2048; colour match moves nothing (atlas mean = fabric mean -> dE 0, the centre of the front island stays
     (150, 40, 40) +-2). ``csig`` = md5("|".join([islands sha, item sha, PROMPT_SHA, str(cut_texture_post.POST_VERSION)]))[:12]; the
-    two references are file PATHS (str) in the order template, item; ``run_routed`` got the occasion, has_ref=True
+    two references are file PATHS (str) in the order template, item; the front prompt says "T-shirt" 4 times (made
+    from the front of the T-shirt / the sewing pattern of the T-shirt / the plain fabric colour of the T-shirt / A
+    plain T-shirt stays plain); ``run_routed`` got the occasion, has_ref=True
     and the service's pool; the model is P-H3 without ``use_prompt_upsampler: false`` -> ``upsampler_on`` True;
     ``figure.invalidate`` ran once; the record keeps ``routing`` = route_meta (occasion garment_cut_texture,
     position 1).
@@ -79,7 +81,7 @@ Task 9 — the atlas assignment (``garment_template.texture`` / ``cut_info`` / `
 ``garment_assembly._state`` / ``_apply_cut_atlas``, ``figure_build._template_row``), same stubs; the drape record is a
 dict whose ``islands.sha256`` is the [2] payload's sha.
 [9.1] ``PARAM_SPEC["texture"]`` = ("choice", ("projection", "cut"), "projection"), a ``top`` field (another kind is
-    reset to the default), an unknown value is an error; ``TEXTURE_ONLY`` = ("fly", "texture"), so a top's ``tsig``
+    reset to the default), an unknown value is an error; ``TEXTURE_ONLY`` = ("fly", "texture", "sleeve_print"), so a top's ``tsig``
     is the same for texture "projection" and "cut".
 [9.2] ``generate`` with the filled answer -> ready; with the item's texture "cut", ``atlas_for`` returns the
     ``.atlas.png`` bytes and ``{texture "cut", csig, cut_state "ready", metrics (IoU >= 0.98), px_per_cm 19.59}``;
@@ -167,6 +169,22 @@ rules.
     view), and afterwards ``drape_state`` is "ready" with ``stand_in`` and the old tsig. Control: the same with the
     stamp switched off -> "missing" (the piece would drop off). ``remove`` stamps too; a stamped record is not
     written again.
+[13] User test 2026-11-21 (Kai: an invented colour; no way to accept a shown answer):
+[13.1] The item is the (150, 40, 40) block: its base fabric colour is exactly that (uniform -> the median), so the
+    front template's front-island centre is (150, 40, 40) +-1 (Lab round trip) and the outline is that colour x 0.6
+    (its L* 34.3 >= 30): (90, 24, 24). An answer that fills the islands with (40, 150, 40): ΔE00 to the item > 20 -> the
+    front job "rejected" with "colour ΔE00 …", the detail gate passes (both uniform: 0 <= 0.04), the back not spent.
+[13.2] ``dialog_state.answers``: front can_use (its answer exists), back not (none); Use this answer on the back is
+    refused (NotReady). ``recompose(accept="front")``: 0 image calls, the front "ready" + accepted with the colour
+    reason it overrode, the back "skipped" with ``NOT_MADE``, the record "rejected" "Back: <NOT_MADE>", nothing
+    applied; ``job_plan`` = 1 (back), reused ["front"].
+[13.3] Run all: exactly 1 image call (the back), "ready", the front still accepted (re-posted with force), the atlas
+    written, one assembly scheduled; ``cut_info`` texture "cut".
+[13.4] ``start_recompose`` runs the (stubbed) recompose once in its thread with accept "front".
+[13.5] ``set_sleeve_print("picture")``: stored (fake set_params), a re-compose started (accept None); before it runs
+    ``cut_info`` says "option" and the dialog ``option_stale`` True / ``current`` False; ``recompose()`` then: 0 image
+    calls, the record's sleeve_print "picture", ``cut_info`` "cut", and the front job's fabric fill covers only the
+    band (the sleeves are the model's now). "glitter" -> ValueError.
 """
 import os
 import re
@@ -513,6 +531,8 @@ def fake_view_generate(character_name, item_id, view):
 def fake_set_params(item_id, params, *, source="user"):
     SET_PARAMS.append((item_id, params.get("texture")))
     TEXTURES[item_id] = params.get("texture")
+    if params.get("sleeve_print"):
+        SLEEVE_P[item_id] = params["sleeve_print"]
     return {"params": params, "source": source}
 
 
@@ -601,6 +621,7 @@ def files_of(item_id):
 SLEEVES = {"shirt": "short", "long": "long"}
 TEXTURES = {}       # Task 9: the item's stored ``texture`` param (absent = the default "projection")
 FABRICS = {}        # Task 10: the item's fabric (absent = the default)
+SLEEVE_P = {}       # [13]: the item's ``sleeve_print`` (absent = the default "plain")
 
 
 def fake_get_item(iid):
@@ -609,6 +630,8 @@ def fake_get_item(iid):
         params["texture"] = TEXTURES[iid]
     if iid in FABRICS:
         params["fabric"] = FABRICS[iid]
+    if iid in SLEEVE_P:
+        params["sleeve_print"] = SLEEVE_P[iid]
     out = {"id": iid, "category": "outfit_piece",
            "outfit_piece": {"template": {"params": params, "source": "user"}}}
     if ITEM_FILES.get(iid):
@@ -686,7 +709,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[8.1] the prompt is the rendered file, ordinal wording kept for the handoff",
           "the first image" in backend.calls[-2]["prompt"] and backend.calls[-2]["negative"] == "",
           backend.calls[-2]["prompt"][:80])
-    check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 2
+    check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 4
           and gct.piece_name("long") == "long-sleeve shirt", gct.piece_name("long"))
     check("[8.1] upsampler_on noted", rec.get("upsampler_on") is True, rec.get("upsampler_on"))
     check("[8.1] applied: figure invalidated once, the assembly scheduled once", len(INVALIDATED) == 1
@@ -826,7 +849,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[9.1] another kind keeps the default",
           gt.validate_params({"kind": "skirt", "texture": "cut"})[0].get("texture") == "projection")
     check("[9.1] an unknown value is an error", gt.validate_params({"kind": "top", "texture": "paint"})[1] != [])
-    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture"), gt.TEXTURE_ONLY)
+    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print"), gt.TEXTURE_ONLY)
     k_proj = gt.tsig(p_proj, base_sha="b", texture_sha="t", lower=[])
     k_cut = gt.tsig(p_cut, base_sha="b", texture_sha="t", lower=[])
     check("[9.1] switching texture leaves tsig unchanged", k_proj == k_cut, (k_proj, k_cut))
@@ -1407,6 +1430,101 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     backend.answer = answer_filled
     check("[12.12] the tiny item: the upscale is counted only where the front job runs",
           gct.job_plan(CHAR, "tiny")["upscale"] == 1)
+
+    # [13] the answer gates, the pre-filled template and the override path (user test 2026-11-21)
+    def answer_green(params):
+        with Image.open(params["reference_images"]["input_reference_image_1"]) as t:
+            arr = np.asarray(t.convert("RGB")).copy()
+        m = ~rgb_eq(arr, gct.BACKGROUND)
+        arr[:] = 255
+        arr[m] = (40, 150, 40)
+        return _png(Image.fromarray(arr, "RGB"))
+
+    def answer_front_green(params):
+        if params["reference_images"]["input_reference_image_1"].endswith(".template_front.png"):
+            return answer_green(params)
+        return answer_filled(params)
+
+    item_fixture("ov1", texture="cut")
+    backend.answer = answer_front_green
+    n0 = len(backend.calls)
+    rec_ov = gct.generate(CHAR, "ov1")
+    stem_ov = gct.cut_dir(CHAR) / f"ov1_{rec_ov['csig']}"
+    with Image.open(f"{stem_ov}.template_front.png") as tf:
+        tarr = np.asarray(tf.convert("RGB"))
+    fr = next(i for i in pl2["islands"] if i["name"] == "front")
+    fx0, fy0, fx1, fy1 = fr["bbox_px"]
+    tc = tarr[int((fy0 + fy1) / 2), int((fx0 + fx1) / 2)].astype(int)
+    check("[13.1] the template's islands are pre-filled with the item's fabric (150, 40, 40) +-1",
+          np.abs(tc - [150, 40, 40]).max() <= 1 and (rec_ov.get("fabric") or {}).get("prefill") is not None, tc.tolist())
+    check("[13.1] the outline is the fill x 0.6 (L* 34 >= 30): (90, 24, 24)", gct.outline_for((150, 40, 40))
+          == (90, 24, 24), gct.outline_for((150, 40, 40)))
+    gates_ov = {g["gate"]: g for g in rec_ov["jobs"]["front"]["metrics"]["gates"]}
+    check("[13.1] a green answer for a red item: front rejected by the colour gate, the back not spent",
+          rec_ov.get("state") == "rejected" and rec_ov["jobs"]["front"]["reason"].startswith("colour ΔE00")
+          and gates_ov["colour"]["ok"] is False and gates_ov["colour"]["value"] > 20
+          and gates_ov["detail"]["ok"] is True and rec_ov["jobs"]["back"]["state"] == "skipped"
+          and len(backend.calls) == n0 + 1, (rec_ov.get("reason"), gates_ov))
+    use0 = gct.dialog_state(CHAR, "ov1").get("answers") or {}
+    check("[13.2] the dialog offers Use this answer for the shown (rejected) front answer, not for the missing back",
+          (use0.get("front") or {}).get("can_use") is True and (use0.get("back") or {}).get("can_use") is False, use0)
+    try:
+        gct.start_recompose(CHAR, "ov1", accept="back")
+        check("[13.2] Use this answer without an answer is refused", False)
+    except gct.NotReady as e:
+        check("[13.2] Use this answer without an answer is refused", "no answer" in str(e), e)
+    n0 = len(backend.calls)
+    sch0 = len(SCHEDULED)
+    rec_use = gct.recompose(CHAR, "ov1", accept="front")
+    fj = rec_use["jobs"]["front"]
+    check("[13.2] Use this answer: 0 image jobs, the front accepted over its reason, the back next (not made)",
+          len(backend.calls) == n0 and fj.get("state") == "ready" and fj.get("accepted") is True
+          and str(fj.get("accepted_over", "")).startswith("colour ΔE00")
+          and rec_use["jobs"]["back"]["state"] == "skipped" and rec_use["jobs"]["back"]["reason"] == gct.NOT_MADE
+          and rec_use.get("state") == "rejected" and rec_use.get("reason") == f"Back: {gct.NOT_MADE}"
+          and len(SCHEDULED) == sch0, (fj, rec_use.get("reason")))
+    pl_ov = gct.job_plan(CHAR, "ov1")
+    check("[13.2] Run all then spends 1 (the back job), the accepted front is kept",
+          pl_ov["total"] == 1 and pl_ov["back"] == 1 and pl_ov["reused"] == ["front"], pl_ov)
+    rec_ov2 = gct.generate(CHAR, "ov1")
+    check("[13.3] Run all: exactly 1 image call (the back), ready, the front still accepted, atlas written, applied",
+          len(backend.calls) == n0 + 1 and rec_ov2.get("state") == "ready"
+          and rec_ov2["jobs"]["front"].get("accepted") is True
+          and Path(f"{stem_ov}.atlas.png").is_file() and len(SCHEDULED) == sch0 + 1,
+          (len(backend.calls) - n0, rec_ov2.get("state"), rec_ov2.get("reason")))
+    check("[13.3] the figure uses the accepted atlas", gt.cut_info(CHAR, "ov1", DRAPE_REC).get("texture") == "cut",
+          gt.cut_info(CHAR, "ov1", DRAPE_REC))
+    # [13.4] Use this answer through the thread (start_recompose), with the run stubbed
+    RECOMP = []
+    ok_start = gct.start_recompose(CHAR, "ov1", accept="front", run=lambda c, i, accept=None: RECOMP.append(accept))
+    wait_done("ov1")
+    check("[13.4] start_recompose runs recompose(accept) once in the background", ok_start is True
+          and RECOMP == ["front"], (ok_start, RECOMP))
+    # [13.5] the sleeve option: stored as a param, the made atlas composed again (CPU)
+    RECOMP.clear()
+    res_sp = gct.set_sleeve_print(CHAR, "ov1", "picture", run=lambda c, i, accept=None: RECOMP.append(accept))
+    wait_done("ov1")
+    st_sp = gct.dialog_state(CHAR, "ov1")
+    check("[13.5] the sleeve option changed: stored, a CPU re-compose started (accept None)",
+          res_sp == {"changed": True, "recompose": True} and RECOMP == [None] and SLEEVE_P.get("ov1") == "picture",
+          (res_sp, RECOMP))
+    check("[13.5] until it is composed again: cut_info 'option' (projection), the dialog not current",
+          gt.cut_info(CHAR, "ov1", DRAPE_REC).get("cut_state") == "option" and st_sp.get("option_stale") is True
+          and st_sp.get("current") is False and st_sp.get("sleeve_print") == "picture" and st_sp.get("has_sleeves"),
+          (gt.cut_info(CHAR, "ov1", DRAPE_REC), st_sp.get("option_stale")))
+    n0 = len(backend.calls)
+    rec_sp = gct.recompose(CHAR, "ov1")
+    check("[13.5] composed again: 0 image jobs, sleeve_print 'picture' in the record, the figure uses it",
+          len(backend.calls) == n0 and rec_sp.get("state") == "ready" and rec_sp.get("sleeve_print") == "picture"
+          and gt.cut_info(CHAR, "ov1", DRAPE_REC).get("texture") == "cut"
+          and (rec_sp["jobs"]["front"]["metrics"].get("fabric_fill") or {}).get("islands") == ["band"],
+          (rec_sp.get("state"), rec_sp["jobs"]["front"]["metrics"].get("fabric_fill")))
+    try:
+        gct.set_sleeve_print(CHAR, "ov1", "glitter")
+        check("[13.5] an unknown sleeve option is an error", False)
+    except ValueError:
+        check("[13.5] an unknown sleeve option is an error", True)
+    backend.answer = answer_filled
 
     # [12.13] an old drape (no texture_sha) keeps standing in after the FLOW makes the back view (review finding):
     # ``garment_template_views._publish`` stamps the record's texture part BEFORE the view changes. Hand-derived: the

@@ -119,15 +119,20 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
 2. The FULL-RES item picture, flattened on white. Below **`MIN_ITEM_SIDE` = 1024 px** (long side) it first goes
    through the routed `upscale` occasion (one extra job; Lanczos when that fails, and Lanczos tops up a result still
    below the minimum) — tiny item pictures gave a wrong logo.
-3. Per job the CLEAN model template of its islands (`render_template`: neutral grey islands, a thin outline inside the
-   mask, white background, square, no text) and ONE routed img2img render (template first, reference second) on the
+3. Per job the CLEAN model template of its islands (`render_template`: the islands PRE-FILLED with the item's base
+   fabric colour — `cut_texture_post.fabric_colour`, see below —, a thin outline inside the mask, white background,
+   square, no text) and ONE routed img2img render (template first, reference second) on the
    occasion `garment_cut_texture`: `routing.run_routed` → `run_on_backend` → `run_on_backend_channel`. The prompts
-   are shipped Jinja2 files (English; they name the piece and the job's real pattern pieces; not world-overridable,
+   are shipped Jinja2 files (English; they name the piece and the job's real pattern pieces, say which island is
+   which by its place in the template — `layout_words`, e.g. "the large piece at the top left is the front panel" —,
+   that the islands carry the fabric colour already, that only what Picture 2 really shows is copied and nothing is
+   invented, and that sleeves stay plain unless the picture shows a print on them; not world-overridable,
    `/admin/templates` stays LLM-only). The use case `garment_cut_texture` carries no style, negative or
    instruction — the prompt is the whole subject.
 4. Post-processing per job (`app/core/cut_texture_post.py`, pure numpy/PIL): resample the answer to the template
-   frame and register it raster-to-raster, gate it against the job's islands, cut it with bleed padding,
-   colour-match it to the ITEM fabric (both jobs — one fabric, one colour). A rejected or failed job stops the flow:
+   frame and register it raster-to-raster, gate it against the job's islands AND by the answer gates (below), cut it
+   with bleed padding, colour-match it to the ITEM fabric (both jobs — one fabric, one colour), then fill the islands
+   the model does not paint from the job's main panel (`fill_fabric`, below). A rejected or failed job stops the flow:
    the next job is marked `skipped` and not spent; the reason is prefixed `Front:` / `Back:`.
 5. `compose`: the front job's grown islands, then the back job's grown islands outside the front islands, then each
    job's own islands — one atlas. Seam continuity is measured inside the jobs (`seam_de`) and across them
@@ -142,6 +147,35 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
 The job never holds `keyed_lock("character_profile", …)` and never submits from inside a GPU worker. Media off
 (`MediaGenerationDisabled`), an empty chain (`NoRouteError`) and a piece without a ready drape with islands are refused
 synchronously, before any thread or file exists.
+
+### Pre-fill, answer gates and the sleeve fabric (user test 2026-11-21)
+
+Kai's plain blue T-shirt came back as an invented magenta shirt with a big text print, and without the words "graphic
+print design" in the prompt as a red one; Dario's chest embroidery landed on one sleeve. Prompt wording alone does not
+hold, so:
+
+- **Pre-fill** — `cut_texture_post.fabric_colour(rgb, mask)`: the item picture box-filtered to 512 px, the garment
+  mask (BiRefNet cut) eroded by 2 % of its extent, every pixel within r (1.5 % of the extent) of a DETAIL (|L* − local
+  mean| > 6) dropped, then the peak of the a*b* histogram and the median L*a*b* within 12 of it. Kai → (30, 90, 173),
+  Dario → (19, 50, 29). A fill nearer to white than 40 is darkened to it (`PREFILL_MIN_DIST`).
+- **Answer gates** (`ANSWER_GATE`, measured on the job's main panel — front / back — of the registered answer):
+  colour = CIEDE2000 of its `fabric_colour` against the item's, limit **20** (Kai 35.0 / 43.5 rejected, Dario 9.9
+  passes); invented content = `detail_density` (share of L* edges > 4 per px at 128 px) at most **4 × Picture 2's +
+  0.04** (Kai 0.47 > 0.10 rejected, Dario 0.21 < 0.43 passes). The record keeps `metrics.gates`, `fabric`, `detail`
+  and `failures` per job; the dialog shows each check.
+- **Sleeves and neckband** are not taken from the model: `fill_fabric` cuts the plainest `PATCH_CM` = 8 cm window of
+  the main panel (within ΔE76 10 of its base colour), tiles it mirrored (seamless) and moves its Lab mean onto the
+  panel's base colour, over every grown pixel whose nearest island is a sleeve, cuff or the neckband. The template
+  param **`sleeve_print`** (`"plain"` default / `"picture"`, `TEXTURE_ONLY`, set in the Texture tab via
+  `POST …/cut/sleeves`) takes the model's sleeves and cuffs for a garment with a print on a sleeve; a switch composes
+  the atlas again on the CPU (`recompose`); until then `cut_info` says `"option"`. The back job paints the back panel
+  alone anyway.
+- **Use this answer** (`POST …/cut/use {job}`, `start_recompose` → `recompose`, 0 image jobs): the shown answer of a
+  job — also a rejected one, after an in-app confirmation naming the reason — is accepted (`accepted`,
+  `accepted_over`) and composed; a job without an answer stays `skipped` with "Not made yet", and Run all renders just
+  that one. Redo front / back stay as they were.
+
+`POST_VERSION` 3 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -192,8 +226,8 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   so mip-maps and bilinear lookups at a seam never read the background.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 2 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
-  post-processing runs per job and the two answers are composed).
+- `POST_VERSION` = 3 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+  post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`
@@ -216,6 +250,8 @@ row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never 
 |---|---|
 | `GET /characters/{c}/figure/template/{item_id}/cut` | status (`running`, `step`), the current record with both jobs, `can_generate`, `blocked_reason` (ONE true reason: the drape state, picture, media, routing or another flow of the piece), `drape_reason`, `plan` (job count), `current`, `texture`, `applied`, `has_back`, `upscale`, `islands_sha`, which files exist |
 | `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not built / no islands / no picture, 503 no route — all before a thread starts) |
+| `POST /characters/{c}/figure/template/{item_id}/cut/use` | "Use this answer", body `{"job": "front" / "back"}`: the stored answer (also a rejected one) accepted and composed on the CPU, 0 image jobs (400 no answer / not built, 409 a flow of the piece runs) |
+| `POST /characters/{c}/figure/template/{item_id}/cut/sleeves` | the sleeve option, body `{"sleeve_print": "plain" / "picture"}`: stored (no drape), a made atlas composed again on the CPU (400 unknown value) |
 | `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template_front` / `item` / `raw_front` / `template_back` / `back_ref` / `raw_back` / `atlas` of the current (or the `v=`-named) csig |
 | `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current drape's islands (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), rendered on demand and cached as `{item}_{islands sha[:12]}.pattern.png`; 404 when not built or a grid kind. Never sent to a model. |
 

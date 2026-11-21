@@ -242,8 +242,12 @@ TROUSER_FIELDS = ("trouser_length", "leg_shape", "seat", "trouser_waist", "fly",
 #: views (inside the drape GLB, always made) or the "texture from cut" atlas (``garment_cut_texture``), swapped in at
 #: assembly when a ready one matches the current islands and item picture (``atlas_for``).
 TEXTURE_SOURCES = ("projection", "cut")
+#: User test 2026-11-21: where the sleeves of a texture from cut come from — "plain" (default): a seamless patch of
+#: the front panel's fabric (the model painted a chest embroidery onto one sleeve); "picture": the model's answer,
+#: for an item with a print ON a sleeve. The neckband is always the fabric patch.
+SLEEVE_PRINTS = ("plain", "picture")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
-TEXTURE_ONLY = ("fly", "texture")
+TEXTURE_ONLY = ("fly", "texture", "sleeve_print")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
 FABRICS: Dict[str, Dict[str, float]] = {
@@ -340,6 +344,8 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "hem": ("choice", TROUSER_HEMS, "plain"),
     # the texture source (``TEXTURE_SOURCES``): a CPU re-assemble, never a re-drape (``TEXTURE_ONLY``)
     "texture": ("choice", TEXTURE_SOURCES, "projection"),
+    # the sleeves of the texture from cut (``SLEEVE_PRINTS``): a CPU re-compose of the atlas, never a re-drape
+    "sleeve_print": ("choice", SLEEVE_PRINTS, "plain"),
 }
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
@@ -350,7 +356,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
-            *OFF_SHOULDER_FIELDS, "texture"),
+            *OFF_SHOULDER_FIELDS, "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband",
@@ -2396,6 +2402,8 @@ def _bake_iou(bake: Dict[str, Any]) -> Optional[float]:
 #: The Figure row's words for a wanted cut texture the figure cannot use (``texture_warning``; English, the React
 #: client puts them through ``t()``).
 CUT_STALE_TEXT = "Texture from cut is out of date — make it again in the piece dialog (Texture tab)"
+CUT_OPTION_TEXT = ("The sleeve option of the texture from cut changed — use the answer again in the piece dialog "
+                   "(Texture tab, CPU, 0 hub jobs)")
 CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
 CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
 
@@ -2418,7 +2426,8 @@ def texture_warning(bake: Optional[Dict[str, Any]],
     low_cov = cov is not None and float(cov) < TEXTURE_WARN["coverage"]
     low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
     state = cut.get("cut_state")
-    texts = {"stale": CUT_STALE_TEXT, "rejected": CUT_REJECTED_TEXT, "failed": CUT_FAILED_TEXT}
+    texts = {"stale": CUT_STALE_TEXT, "option": CUT_OPTION_TEXT, "rejected": CUT_REJECTED_TEXT,
+             "failed": CUT_FAILED_TEXT}
     cut_warning = None
     if state in texts:
         reason = str(cut.get("reason") or "")
@@ -2442,7 +2451,8 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
       pattern islands — a kind still on the grid UV), "rejected" / "failed" (that csig's record, with its reason),
       "stale" (no record for this csig, but a ready one for an OLDER csig of the item: new islands, a new item
       picture, a new back view, a new prompt or post version — an old atlas is never painted onto new islands),
-      "missing" (nothing made yet, or the item has no picture).
+      "missing" (nothing made yet, or the item has no picture), "option" (a ready atlas composed with another
+      ``sleeve_print`` than the item's now — ``garment_cut_texture.set_sleeve_print`` composes it again on the CPU).
 
     Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut."""
     from app.core import garment_cut_texture as gct
@@ -2469,7 +2479,9 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
         out["metrics"] = rec.get("metrics") or None
         out["px_per_cm"] = rec.get("px_per_cm") or out["px_per_cm"]
     state = rec.get("state")
-    if state == "ready" and gct.atlas_path(character_name, item_id, sig).is_file():
+    if state == "ready" and str(rec.get("sleeve_print") or "plain") != str(params.get("sleeve_print") or "plain"):
+        out.update(cut_state="option", reason=CUT_OPTION_TEXT)
+    elif state == "ready" and gct.atlas_path(character_name, item_id, sig).is_file():
         out.update(texture="cut", cut_state="ready")
     elif state in ("rejected", "failed"):
         out.update(cut_state=state, reason=str(rec.get("reason") or ""))
