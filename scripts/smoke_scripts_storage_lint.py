@@ -185,6 +185,10 @@ INTENTIONAL_REAL_INSTANCE = {
     "migrate_expression_exposure.py":
         "one-time migration CLI (server stopped): the expression render contract "
         "reads the instance's image size; --instance, default <repo>/instance",
+    "e2e_cut_texture.py":
+        "end-to-end harness of the texture from cut in the Build: loads the installation's "
+        "instance READ-ONLY (every config writer replaced by a recorder) on a COPY of one "
+        "character; --instance, default <repo>/instance",
     "smoke_scripts_storage_lint.py":
         "this lint: part 4 calls init_instance() without an argument on purpose "
         "(INSTANCE_DIR popped) to prove it raises, and restores INSTANCE_DIR",
