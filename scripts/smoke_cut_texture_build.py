@@ -54,6 +54,19 @@ step), the outfit model's recorded figure is the delivered one (nothing else to 
     the cut_texture step joins it, the assembly runs after both; ``generate`` ran once. An automatic run of a plan
     whose cut_texture step is a cached failure does not pre-start anything (0 ``build_start`` calls) and records
     the step failed with its reason; a pattern that cannot be cut yet (sig None) is not pre-started either.
+[6] Review minors 2026-11-21:
+    (a) a Build that breaks out between ``_prestart_cut_texture`` and the cut_texture step (the base views change while
+        the drape runs: Ruling A26 b stops it there, cut_texture and assemble skipped) leaves NO entry in ``garment_cut_texture._build_runs`` once the pre-started run ends (it was released by the
+        Build's end); a later ``build_join`` therefore RUNS (generate count 1 -> 2) instead of returning the old
+        result. ``build_release`` of a finished entry -> True and gone; of none -> False.
+    (b) a failed CUT (``build_state`` "failed", ``retry`` "cut", jobs = the estimate: back view present but not
+        measured plain (the stub's back.png does not exist) -> 0 + 0 (1200 px) + front 1 + back 1 = 2, estimate True):
+        an automatic Build -> not ok, ``ensure`` not called; a manual one -> ``ensure`` called with
+        ``retry_failed`` True, the cut is ready again, ``generate`` once, ok. A rejected record -> ``retry`` "jobs";
+        no item picture -> ``retry`` "" and a manual Build runs nothing (no ``ensure``, no ``generate``), reason
+        ``BLOCKED_PICTURE``.
+    (c) the dialog's ``status`` after a Build run whose record came back "rejected": ``error`` "" (the reason is the
+        record's, like a dialog flow), not running; after a run that RAISED: ``error`` = the raised text.
 [5] drop_strays (``cut_texture_post``): mask = a 100 x 100 square (rows/cols 20..119) in a 256 canvas.
     - answer = the square in place + a separate 60 x 60 block (rows/cols 160..219): the kept piece covers the mask
       fully (1.0 >= 0.5) -> the block is dropped; strays = 3600 / 10000 = 0.36; the returned foreground equals the
@@ -400,6 +413,107 @@ def section_run_planned():
     gct.generate = real_gen
 
 
+def section_minors():
+    from app.core import figure_build as fb
+    from app.core import garment_cut_texture as gct
+    print("[6] review minors")
+    # (a) a Build that breaks out after the pre-start
+    install_figure()
+    S.__init__()
+    stub_flows(delay=0.3)
+    template = fb.Step("template", "Template drape · Cream Blouse", 0, ITEM)
+    fb._template_step = lambda c, i, d, p: template
+
+    moved = {"on": False}
+
+    def drape(c, step, explicit=False):
+        moved["on"] = True          # the base views change while it drapes: the Build stops after this step
+        return ""
+    real_drape, real_changed = fb._RUNNERS["template"], fb._base_changed
+    fb._RUNNERS["template"] = drape
+    fb._base_changed = lambda c, snap: ["front"] if moved["on"] else []
+    try:
+        fb._run_planned(CHAR, "test", {}, automatic=False)
+        check("[6a] the Build stopped after the drape", fb.state(CHAR)["skipped"][:1], ["cut_texture"])
+        with gct._lock:
+            entry = gct._build_runs.get((CHAR, ITEM))
+        check("[6a] the pre-started run is released (still running)", bool(entry and entry.get("released")), True)
+        entry["thread"].join(5)
+        with gct._lock:
+            left = (CHAR, ITEM) in gct._build_runs
+        check("[6a] ... and gone once it ended", (left, len(CALLS["generate"])), (False, 1))
+        res = gct.build_join(CHAR, ITEM, explicit=False)
+        check("[6a] the next join runs again", (res["ok"], len(CALLS["generate"])), (True, 2))
+        gct.build_start(CHAR, ITEM, explicit=False)
+        with gct._lock:
+            th = gct._build_runs[(CHAR, ITEM)]["thread"]
+        th.join(5)
+        check("[6a] build_release of a finished run -> True, gone; again -> False",
+              (gct.build_release(CHAR, ITEM), (CHAR, ITEM) in gct._build_runs, gct.build_release(CHAR, ITEM)),
+              (True, False, False))
+    finally:
+        fb._RUNNERS["template"], fb._base_changed = real_drape, real_changed
+        fb._template_step = lambda c, i, d, p: None
+
+    # (b) a manual Build re-runs only what failed
+    from app.core import garment_template_cut as gtc
+    ensured = []
+
+    def ensure(c, i, timeout_s=0, retry_failed=False, **k):
+        ensured.append(retry_failed)
+        if retry_failed:
+            S.cut_state = {"state": "ready", "reason": "", "islands_sha": "isl", "islands_path": Path("x.json")}
+        return dict(S.cut_state)
+    real_ensure = gtc.ensure
+    gtc.ensure = ensure
+    try:
+        S.__init__()
+        stub_flows()
+        S.cut_state = {"state": "failed", "reason": gtc.CUT_FAILED.format(error="boom")}
+        st = gct.build_state(CHAR, ITEM)
+        check("[6b] failed cut: retry cut, jobs 2 (estimate)", (st["state"], st["retry"], st["jobs"], st["estimate"]),
+              ("failed", "cut", 2, True))
+        res = gct.run_for_build(CHAR, ITEM, explicit=False)
+        check("[6b] automatic: skipped, no ensure", (res["ok"], ensured, len(CALLS["generate"])), (False, [], 0))
+        res = gct.run_for_build(CHAR, ITEM, explicit=True)
+        check("[6b] manual: the cut once more, then generate", (res["ok"], ensured, len(CALLS["generate"])),
+              (True, [True], 1))
+        S.__init__()
+        S.record = {"state": "rejected", "reason": "Back: coverage 0.65 < 0.97"}
+        check("[6b] rejected record: retry jobs", gct.build_state(CHAR, ITEM)["retry"], "jobs")
+        S.__init__()
+        stub_flows()
+        ensured.clear()
+        real_sha = gct.item_sha
+        gct.item_sha = lambda iid: None
+        try:
+            st = gct.build_state(CHAR, ITEM)
+            res = gct.run_for_build(CHAR, ITEM, explicit=True)
+        finally:
+            gct.item_sha = real_sha
+        check("[6b] no picture: nothing to re-run", (st["retry"], res["ok"], res["reason"], ensured,
+                                                     len(CALLS["generate"])),
+              ("", False, gct.BLOCKED_PICTURE, [], 0))
+    finally:
+        gtc.ensure = real_ensure
+
+    # (c) the dialog's status after a Build run
+    S.__init__()
+    stub_flows(record_state="rejected")
+    res = gct.run_for_build(CHAR, ITEM, explicit=False)
+    st = gct.status(CHAR, ITEM)
+    check("[6c] rejected record: no flow error", (res["ok"], res["reason"], st["error"], st["running"]),
+          (False, "Back: coverage 0.65 < 0.97", "", False))
+
+    def boom(c, i, *, only=None, apply_after=True):
+        raise RuntimeError("the hub fell over")
+    gct.generate = boom
+    S.__init__()
+    res = gct.run_for_build(CHAR, ITEM, explicit=False)
+    check("[6c] a raised run: its text is the flow error", (res["ok"], gct.status(CHAR, ITEM)["error"]),
+          (False, "the hub fell over"))
+
+
 def section_strays():
     import numpy as np
     from PIL import Image
@@ -441,6 +555,7 @@ def main() -> int:
     section_plan()
     section_run()
     section_run_planned()
+    section_minors()
     section_strays()
     check("network connects", len(CONNECTS), 0)
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")

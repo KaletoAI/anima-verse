@@ -239,6 +239,33 @@ def is_decorated(detail_front) -> bool:
         return False
 
 
+#: Live E2E 2026-11-21 — the BACK view's detail density (the same ``cut_texture_post.picture_reference`` measure as
+#: ``DECORATED_DETAIL``, on the accepted back piece-only view, its alpha the cut-out) at or below which the back is
+#: PLAIN: no back hub job — the back panel gets the front panel's fabric patch, like the sleeves and the neckband
+#: (``fill_plain_back``, 0 image jobs). P-H3 invented a collar and a button placket on Dario's plain back and strong
+#: fold shading plus a colour fringe on Tilda's; neither is in the back view.
+#: Derived like the front threshold, from the measured pictures (``DETAIL_SIDE`` 128). The back views are model renders
+#: with strong fold shading, so a plain back reads higher than a plain item photo: the plain backs of the cut tops
+#: Kai 0.0175, Tilda 0.0536, Dario 0.158 (his dark green shirt's vertical drape folds are every edge pixel — the box
+#: pleat and the yoke are not), the plain knit cardigan 0.246; on the same backs a painted-in back print measured
+#: Kai 0.071 / Tilda 0.198 / Dario 0.229 (a logo on 20 % of the garment), 0.257 / 0.295 / 0.364 (a text print on 35 %).
+#: 0.20 = the front's margin (0.10 = 1.3 x its highest plain item, Tilda 0.076) over the highest plain shirt back
+#: (1.3 x Dario 0.158 = 0.205): every plain shirt back is plain (the knit's rib reads as detail and keeps its job); a
+#: large back print, or a print on a light back, is decorated. What it gives up: a
+#: small back print on a dark folded shirt (Dario + a 20 % logo 0.229 is caught, + a 10 % logo 0.179 is not) is
+#: filled plain — losing a small print is safer than the invented content of the back job.
+PLAIN_BACK_DETAIL = 0.20
+
+
+def is_plain_back(detail_back) -> bool:
+    """Whether the piece's back view is plain (``PLAIN_BACK_DETAIL``): True only for a measured detail at or below
+    the threshold — an unknown detail (no back view, an empty cut-out) is never plain."""
+    try:
+        return float(detail_back) <= PLAIN_BACK_DETAIL
+    except (TypeError, ValueError):
+        return False
+
+
 def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "") -> str:
     """The cut-texture prompt of the ``side`` job for ``piece`` (e.g. "T-shirt"): the short plain prompt, or for a
     ``decorated`` front the one that names the front island by its ``front_place`` ("top left", ``front_place``).
@@ -697,6 +724,47 @@ def back_sha(character_name: str, item_id: str) -> str:
         return ""
 
 
+#: ``back_detail`` per (path, mtime_ns, size) — the plan reads it on every figure read.
+_back_detail_cache: dict[tuple, float | None] = {}
+
+
+def detail_of_view(path: Path) -> float | None:
+    """The detail density of a piece-only view file (``cut_texture_post.picture_reference``, its alpha the cut-out —
+    the measure ``references`` gives the back job's detail gate), cached by the file's stat; None when unreadable."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key in _back_detail_cache:
+        return _back_detail_cache[key]
+    try:
+        with Image.open(path) as bv:
+            rgba = np.asarray(bv.convert("RGBA"))
+        value = cut_texture_post.picture_reference(rgba, matte=None)["detail"]
+    except (OSError, ValueError) as e:
+        logger.warning("Cut texture: the detail of %s not measured: %s", path, e)
+        return None
+    if len(_back_detail_cache) > 256:
+        _back_detail_cache.clear()
+    _back_detail_cache[key] = value
+    return value
+
+
+def back_detail(character_name: str, item_id: str) -> float | None:
+    """The detail density of the piece's accepted back view (``detail_of_view``), None without one."""
+    path = back_view(character_name, item_id)
+    return detail_of_view(path) if path is not None else None
+
+
+def back_plain(character_name: str, item_id: str) -> bool | None:
+    """Whether the piece's back is filled plain (``is_plain_back`` of ``back_detail``): None while there is no back
+    view to measure (the flow makes it first, the counts then assume the back job)."""
+    if back_view(character_name, item_id) is None:
+        return None
+    return is_plain_back(back_detail(character_name, item_id))
+
+
 def has_back(islands: dict) -> bool:
     """Whether the pattern has a back panel (the back job is due)."""
     return any(job_of(str(i["name"])) == "back" for i in islands.get("islands", []))
@@ -1028,6 +1096,7 @@ def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str
     from app.core import garment_template_views as tv
     parts = [j for j in JOBS if j == "front" or has_back(islands)]
     view = 1 if "back" in parts and back_view(character_name, item_id) is None else 0
+    plain = bool("back" in parts and not view and back_plain(character_name, item_id))
     reuse = {}
     sig = None
     if not view and islands_sha:
@@ -1039,18 +1108,19 @@ def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str
     upscale = 1 if 0 < side < MIN_ITEM_SIDE and ("front" in todo or item_png is None or not item_png.is_file()) \
         else 0
     front = 1 if "front" in todo else 0
-    back = 1 if "back" in todo else 0
+    back = 1 if "back" in todo and not plain else 0     # a plain back is the front's fabric: 0 image jobs
     total = view + upscale + front + back
     return {"back_view": view, "upscale": upscale, "front": front, "back": back, "total": total,
-            "max": total + view * (tv.JOBS_PER_VIEW - 1), "reused": sorted(reuse)}
+            "max": total + view * (tv.JOBS_PER_VIEW - 1), "reused": sorted(reuse), "back_plain": plain}
 
 
 def job_plan(character_name: str, item_id: str, islands: dict | None = None, islands_sha: str = "") -> dict:
     """What one click spends now — the buttons' counts, by the same reuse rule ``generate`` runs (``reused_jobs``):
     Run all ``{"back_view" (0 / 1, at most ``JOBS_PER_VIEW``), "upscale" (0 / 1), "front" (0 / 1), "back" (0 / 1),
-    "total", "max", "reused" (the jobs whose answer is kept)}`` (``max``: a refused back-view attempt is made once
-    more) and ``redo`` = the same per Redo button (``{"front": {...}, "back": {...}}``, "back" only with a back
-    panel)."""
+    "total", "max", "reused" (the jobs whose answer is kept), "back_plain"}`` (``max``: a refused back-view attempt is
+    made once more; ``back_plain``: the back view is plain (``back_plain``) — the back is the front's fabric, "back" 0;
+    while the back view is missing the back job is counted) and ``redo`` = the same per Redo button (``{"front":
+    {...}, "back": {...}}``, "back" only with a back panel that is not plain)."""
     if islands is None or not islands_sha:
         try:
             pattern = _ready_pattern(character_name, item_id)
@@ -1060,7 +1130,7 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     side = _item_side(item_id)
     out = _plan_one(character_name, item_id, islands, islands_sha, side, None)
     out["redo"] = {job: _plan_one(character_name, item_id, islands, islands_sha, side, job)
-                   for job in JOBS if job == "front" or has_back(islands)}
+                   for job in JOBS if job == "front" or (has_back(islands) and not out["back_plain"])}
     return out
 
 
@@ -1102,8 +1172,26 @@ def _part_mask(islands: dict, labels: np.ndarray, parts) -> np.ndarray:
     return keep[labels]
 
 
+def panel_fabric(img: np.ndarray, islands: dict, labels: np.ndarray, job: str, px_per_cm: float) -> dict:
+    """The fabric of ``job``'s main panel in ``img`` (``labels`` = the job's labels): its base colour
+    (``cut_texture_post.fabric_colour``) and its plainest seamless patch (``fabric_patch`` on the panel eroded by
+    ``LINE_PX + 1``) — ``{"patch", "info", "base"}``, or ``{"skipped": reason}``. The ONE source of the sleeves', the
+    neckband's and a plain back's fabric (``fill_fabric``, ``fill_plain_back``)."""
+    from scipy import ndimage
+    post = cut_texture_post
+    panel = _part_mask(islands, labels, (MAIN_PART[job],))
+    if not panel.any():
+        return {"skipped": "no main panel"}
+    base = post.fabric_colour(img, panel)
+    found = post.fabric_patch(img, ndimage.binary_erosion(panel, iterations=LINE_PX + 1), px_per_cm,
+                              base["lab"] if base else None)
+    if found is None or base is None:
+        return {"skipped": "no fabric patch fits the main panel"}
+    return {"patch": found[0], "info": found[1], "base": base}
+
+
 def fill_fabric(img: np.ndarray, labels: np.ndarray, grown: np.ndarray, islands: dict, job: str, px_per_cm: float,
-                sleeve_print: str = "plain") -> tuple[np.ndarray, dict]:
+                sleeve_print: str = "plain", fabric: dict | None = None) -> tuple[np.ndarray, dict]:
     """The islands of ``job`` that are not ``model_parts`` (and the bleed around them: the grown pixels whose nearest
     island is one of them) filled with a seamless patch of the job's main panel (``cut_texture_post.fabric_patch`` on
     the panel eroded by ``LINE_PX + 1``, ``mirror_tile``, the Lab mean moved onto the panel's base fabric colour).
@@ -1117,15 +1205,10 @@ def fill_fabric(img: np.ndarray, labels: np.ndarray, grown: np.ndarray, islands:
                           and (labels == iid).any())
     if not fabric_names:
         return img, {"islands": []}
-    panel = _part_mask(islands, labels, (MAIN_PART[job],))
-    if not panel.any():
-        return img, {"islands": fabric_names, "skipped": "no main panel"}
-    base = post.fabric_colour(img, panel)
-    found = post.fabric_patch(img, ndimage.binary_erosion(panel, iterations=LINE_PX + 1), px_per_cm,
-                              base["lab"] if base else None)
-    if found is None or base is None:
-        return img, {"islands": fabric_names, "skipped": "no fabric patch fits the main panel"}
-    patch, info = found
+    fabric = fabric if fabric is not None else panel_fabric(img, islands, labels, job, px_per_cm)
+    if "skipped" in fabric:
+        return img, {"islands": fabric_names, "skipped": fabric["skipped"]}
+    patch, info, base = fabric["patch"], fabric["info"], fabric["base"]
     _, (iy, ix) = ndimage.distance_transform_edt(labels == 0, return_indices=True)
     nearest = labels[iy, ix]
     fab_ids = np.zeros(256, bool)
@@ -1166,11 +1249,12 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))))
     grown = ~np.all(cut == 255, axis=-1) | mask
     matched, cm = post.colour_match(cut, grown, fabric=refs.get("fabric"))
-    filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print)
+    fabric = panel_fabric(matched, islands, labels, job, px_per_cm)
+    filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
                     "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill})
     return {"state": "ready", "reason": "", "metrics": metrics, "accepted": bool(failures),
-            "_image": filled, "_grown": grown, "_mask": mask}
+            "_image": filled, "_grown": grown, "_mask": mask, "_fabric": fabric}
 
 
 def job_template(islands: dict, parts: dict, job: str, size: int, fill=None) -> Image.Image:
@@ -1201,20 +1285,58 @@ def post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str
     return res
 
 
+#: The record entry of a plain back (``fill_plain_back``): no model, no answer file, no hub job.
+PLAIN_BACK_SOURCE = "fabric"
+PLAIN_BACK_REASON = "No fabric patch for the plain back: {reason}"
+
+
+def fill_plain_back(front: dict, islands: dict, size: int, px_per_cm: float, detail: float | None) -> dict:
+    """The BACK of a piece whose back view is plain (``is_plain_back``), with no hub job: the back islands and their
+    bleed (``BLEED_CM``) tiled with the FRONT job's panel fabric — the same patch and base colour the sleeves and the
+    neckband get (``front["_fabric"]``, ``panel_fabric``; ``tile_fill`` moves the tile's mean onto the front panel's
+    base colour, so the side seams meet the same colour). ``front`` is the front job's ``post_job`` result ("ready",
+    atlas frame). Returns a ``post_job``-shaped result: "ready" with ``_image`` / ``_grown`` / ``_mask`` for
+    ``compose``, or "rejected" when no patch fits the front panel."""
+    post = cut_texture_post
+    labels = job_labels(islands, size, "back")
+    mask = labels > 0
+    fabric = front.get("_fabric") or panel_fabric(front["_image"], islands, job_labels(islands, size, "front"),
+                                                  "front", px_per_cm)
+    plain = {"detail": detail, "limit": PLAIN_BACK_DETAIL}
+    names = sorted(str(i["name"]) for i in islands.get("islands", []) if job_of(str(i["name"])) == "back")
+    if "skipped" in fabric:
+        reason = PLAIN_BACK_REASON.format(reason=fabric["skipped"])
+        return {"state": "rejected", "reason": reason, "accepted": False,
+                "metrics": {"plain": plain, "failures": [reason], "zoom": None}}
+    grown = post.dilate(mask, max(1, int(round(post.BLEED_CM * px_per_cm)))) | mask
+    image, tinfo = post.tile_fill(front["_image"], grown, fabric["patch"], fabric["base"]["lab"])
+    metrics = {"plain": plain, "failures": [], "zoom": None,
+               "fabric_fill": {"islands": names, "patch": fabric["info"], "base": fabric["base"]["rgb"],
+                               "shift": tinfo["shift"], "from": "front"}}
+    return {"state": "ready", "reason": "", "metrics": metrics, "accepted": False,
+            "_image": image, "_grown": grown, "_mask": mask}
+
+
+def plain_back_entry(res: dict) -> dict:
+    """The record entry of ``fill_plain_back``'s result."""
+    return {"state": res["state"], "reason": res["reason"], "metrics": res["metrics"],
+            "source": PLAIN_BACK_SOURCE, "reference": JOB_REFERENCE["back"], "prompt": "",
+            "islands": list((res["metrics"].get("fabric_fill") or {}).get("islands") or [])}
+
+
 def references(character_name: str, item_id: str, has_back_panel: bool) -> dict:
     """``_post_job``'s ``refs`` and the pre-fill: ONE ``garment_matte.cut`` of the item picture (BiRefNet,
-    ``_item_matte``) for its base fabric colour, its detail and the colour match's fabric; the back view's detail for
-    the back job (its alpha is the cut-out). ``{"colour", "prefill", "detail": {"front", "back"}, "fabric"}``."""
+    ``_item_matte``) for its base fabric colour, its detail and the colour match's fabric; the BACK VIEW's own detail
+    (``back_detail``, its alpha the cut-out) for the back job — the back job's detail gate and the plain-back decision
+    (``is_plain_back``) read it, never the item picture's. ``{"colour", "prefill", "detail": {"front", "back"},
+    "fabric"}``."""
     post = cut_texture_post
     with Image.open(_item_path(item_id)) as it:
         item_rgba = np.asarray(it.convert("RGBA"))
     item = post.picture_reference(item_rgba, matte=_item_matte())
     detail = {"front": item["detail"]}
-    if has_back_panel:
-        path = back_view(character_name, item_id)
-        if path is not None:
-            with Image.open(path) as bv:
-                detail["back"] = post.picture_reference(np.asarray(bv.convert("RGBA")), matte=None)["detail"]
+    if has_back_panel and back_view(character_name, item_id) is not None:
+        detail["back"] = back_detail(character_name, item_id)
     return {"colour": item["colour"], "prefill": prefill_colour(item["colour"]), "detail": detail,
             "fabric": item["fabric"]}
 
@@ -1359,8 +1481,12 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
     record["csig"] = sig
     stem = _stem(character_name, item_id, sig)
     previous = read_record(character_name, item_id, sig)
+    # a plain back view: the back is the front's fabric (``fill_plain_back``) — no back job, whatever ``only`` says
+    plain = "back" in parts and is_plain_back(back_detail(character_name, item_id))
+    record["back_plain"] = {"plain": bool(plain), "detail": back_detail(character_name, item_id) if "back" in parts
+                            else None, "limit": PLAIN_BACK_DETAIL}
     reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
-    todo = [j for j in parts if j not in reuse]
+    todo = [j for j in parts if j not in reuse and not (plain and j == "back")]
     stale = [_file(stem, ".atlas.png")] + [_file(stem, f".raw_{j}.png") for j in todo]
     for path in stale:
         path.unlink(missing_ok=True)       # this attempt's record never sits next to another attempt's files
@@ -1382,6 +1508,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
         name = piece_name(item_id)
         stopped = False             # a job did not pass: no further image job is spent, re-used answers still post
         for job in parts:
+            if plain and job == "back":
+                continue            # filled from the front's fabric below
             if stopped and job not in reuse:
                 continue
             template_png = _file(stem, f".template_{job}.png")
@@ -1430,9 +1558,23 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
         record["created_at"] = utc_now_iso()
         _write_record(_file(stem, ".json"), record)
         return record
+    if plain:
+        _plain_back_into(record, results, islands, size, px_per_cm)
     for job in parts:
         record["jobs"].setdefault(job, {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
     return _finish(character_name, item_id, record, parts, results, islands, size, stem, apply_after=apply_after)
+
+
+def _plain_back_into(record: dict, results: dict, islands: dict, size: int, px_per_cm: float) -> None:
+    """A plain back (``fill_plain_back``) into the record and the results — once the front job is in; without it
+    the back stays to ``_finish`` ("skipped" behind the front)."""
+    if "front" not in results:
+        record["jobs"].pop("back", None)        # ``_finish`` marks it "skipped" behind the front
+        return
+    res = fill_plain_back(results["front"], islands, size, px_per_cm, (record.get("back_plain") or {}).get("detail"))
+    record["jobs"]["back"] = plain_back_entry(res)
+    if res["state"] == "ready":
+        results["back"] = res
 
 
 def usable_answers(character_name: str, item_id: str, sig: str | None = None) -> dict:
@@ -1481,8 +1623,12 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     refs = references(character_name, item_id, "back" in parts)
     record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
                         "detail": refs["detail"]}
+    plain = "back" in parts and is_plain_back(refs["detail"].get("back"))
+    record["back_plain"] = {"plain": bool(plain), "detail": refs["detail"].get("back"), "limit": PLAIN_BACK_DETAIL}
     results = {}
     for job in parts:
+        if plain and job == "back":
+            continue
         entry = dict(record["jobs"].get(job) or {})
         raw = _file(stem, f".raw_{job}.png")
         wanted = job == accept or entry.get("state") == "ready"
@@ -1494,6 +1640,8 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
         record["jobs"][job] = _entry_from_post(entry, res)
         if res["state"] == "ready":
             results[job] = res
+    if plain:
+        _plain_back_into(record, results, islands, size, px_per_cm)
     return _finish(character_name, item_id, record, parts, results, islands, size, stem, apply_after=apply_after)
 
 
@@ -1645,10 +1793,12 @@ _build_runs: dict[tuple[str, str], dict] = {}
 
 def _estimate_jobs(character_name: str, item_id: str) -> int:
     """The image jobs of a flow whose pattern is not cut yet: the back view when missing, the item upscale when the
-    picture is small, the front and the back job (a top with a bodice always has a back panel)."""
+    picture is small, the front job and the back job (a top with a bodice always has a back panel) — the back job
+    only when the back view is not plain (``back_plain``; a missing back view counts it)."""
     side = _item_side(item_id)
     view = 1 if back_view(character_name, item_id) is None else 0
-    return view + (1 if 0 < side < MIN_ITEM_SIDE else 0) + len(JOBS)
+    back = 0 if not view and back_plain(character_name, item_id) else 1
+    return view + (1 if 0 < side < MIN_ITEM_SIDE else 0) + 1 + back
 
 
 def build_state(character_name: str, item_id: str, *, item: dict | None = None) -> dict:
@@ -1659,8 +1809,10 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
     - ``done``: a ready record of the current csig with its atlas, composed with the piece's sleeve option;
     - ``compose``: a ready record composed with the other sleeve option (``recompose``, CPU, 0 jobs);
     - ``failed``: the current cut failed, the item has no picture, or the current csig's record is "rejected" /
-      "failed" — a cached failure: an automatic Build skips it, a manual one retries it (Run all: only the jobs that
-      did not pass are rendered again, ``reused_jobs``); ``jobs`` what that retry spends;
+      "failed" — a cached failure: an automatic Build skips it; a MANUAL Build re-runs only what failed (``retry``):
+      "cut" — the cut-only run once more (``garment_template_cut.ensure`` ``retry_failed``), then the image jobs
+      (``jobs``, an estimate); "jobs" — only the jobs that did not pass are rendered again (``reused_jobs``; ``jobs``
+      what that spends); "" — nothing a Build can re-run (no item picture);
     - ``due``: nothing made for the current csig yet (or the cut not made yet: ``estimate`` True, ``jobs`` from
       ``_estimate_jobs``).
 
@@ -1668,7 +1820,7 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
     from app.core import garment_template as gt
     from app.core import garment_template_cut as gtc
     from app.models.inventory import get_item
-    out = {"state": BUILD_OFF, "reason": "", "jobs": 0, "estimate": False}
+    out = {"state": BUILD_OFF, "reason": "", "jobs": 0, "estimate": False, "retry": ""}
     try:
         item = item if item is not None else get_item(item_id)
         params = gt.params_of(item) or {}
@@ -1682,7 +1834,8 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
             return {**out, "reason": key["reason"]}
         cut = gtc.state(character_name, item_id, key=key)
         if cut["state"] == "failed":
-            return {**out, "state": BUILD_FAILED, "reason": cut["reason"]}
+            return {**out, "state": BUILD_FAILED, "reason": cut["reason"], "retry": "cut",
+                    "jobs": _estimate_jobs(character_name, item_id), "estimate": True}
         if item_sha(item_id) is None:
             return {**out, "state": BUILD_FAILED, "reason": BLOCKED_PICTURE}
         if cut["state"] != "ready":
@@ -1698,7 +1851,7 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
             return {**out, "state": BUILD_COMPOSE}
         if record.get("state") in ("rejected", "failed"):
             return {**out, "state": BUILD_FAILED, "reason": str(record.get("reason") or record["state"]),
-                    "jobs": int(plan["total"])}
+                    "jobs": int(plan["total"]), "retry": "jobs"}
         return {**out, "state": BUILD_DUE, "jobs": int(plan["total"])}
     except Exception as e:  # noqa: BLE001 — a plan never fails on it
         logger.warning("Cut texture %s %s: Build state not read: %s", character_name, item_id, e)
@@ -1730,10 +1883,14 @@ def _claim_for_build(character_name: str, item_id: str, deadline: float, poll_s:
 def run_for_build(character_name: str, item_id: str, *, explicit: bool, wait_s: float = BUILD_WAIT_S,
                   poll_s: float = BUILD_POLL_S) -> dict:
     """The Build step, synchronously: ``{"ok": bool, "reason", "state", "record"}``. A cached failure
-    (``build_state`` "failed") is only retried by a manual Build (``explicit``). The media switch and the routing are
-    asked first (their reasons are the step's error); the cut is made or waited for (``garment_template_cut.ensure``);
-    the piece is claimed (``_claim_for_build`` — a flow another click started is waited for, then its record decides);
-    then ``generate`` / ``recompose`` with ``apply_after`` False (the Build assembles). Never raises."""
+    (``build_state`` "failed") is only retried by a manual Build (``explicit``), and only what failed (``retry``): a
+    failed cut is cut once more (``garment_template_cut.ensure`` ``retry_failed``), a rejected / failed record renders
+    only the jobs that did not pass; a failure with nothing to re-run (no item picture) stays. The media switch and
+    the routing are asked first (their reasons are the step's error); the cut is made or waited for; the piece is
+    claimed (``_claim_for_build`` — a flow another click started is waited for, then its record decides); then
+    ``generate`` / ``recompose`` with ``apply_after`` False (the Build assembles). The dialog's ``status`` reads the
+    run like one of its own flows: "done" when a record came back (a rejected one says its reason in the record, not
+    as a flow error), the error text only when the run raised. Never raises."""
     import time
     from app.core import garment_template_cut as gtc
     from app.core import piece_jobs
@@ -1743,7 +1900,7 @@ def run_for_build(character_name: str, item_id: str, *, explicit: bool, wait_s: 
     st = build_state(character_name, item_id)
     if st["state"] in (BUILD_OFF, BUILD_DONE):
         return {"ok": True, "reason": st["reason"], "state": st["state"], "record": {}}
-    if st["state"] == BUILD_FAILED and not explicit:
+    if st["state"] == BUILD_FAILED and (not explicit or not st.get("retry")):
         return {"ok": False, "reason": st["reason"], "state": st["state"], "record": {}}
     if st["state"] != BUILD_COMPOSE:
         if not media_generation_enabled():
@@ -1751,7 +1908,8 @@ def run_for_build(character_name: str, item_id: str, *, explicit: bool, wait_s: 
         if not _routing.chain_for(CUT_OCCASION):
             return {"ok": False, "reason": BLOCKED_ROUTING, "state": BUILD_FAILED, "record": {}}
     _set_build_step(character_name, item_id, "cut")
-    cut = gtc.ensure(character_name, item_id, timeout_s=max(1.0, deadline - time.monotonic()))
+    cut = gtc.ensure(character_name, item_id, timeout_s=max(1.0, deadline - time.monotonic()),
+                     retry_failed=bool(explicit and st.get("retry") == "cut"))
     if cut["state"] != "ready":
         return {"ok": False, "reason": str(cut.get("reason") or gtc.NOT_CUT), "state": BUILD_FAILED, "record": {}}
     busy = _claim_for_build(character_name, item_id, deadline, poll_s)
@@ -1763,17 +1921,15 @@ def run_for_build(character_name: str, item_id: str, *, explicit: bool, wait_s: 
         st = build_state(character_name, item_id)      # a flow that ran meanwhile may have made it
         if st["state"] in (BUILD_OFF, BUILD_DONE):
             return {"ok": True, "reason": "", "state": st["state"], "record": {}}
-        if st["state"] == BUILD_FAILED and not explicit:
+        if st["state"] == BUILD_FAILED and (not explicit or not st.get("retry")):
             return {"ok": False, "reason": st["reason"], "state": st["state"], "record": {}}
         if st["state"] == BUILD_COMPOSE:
             record = recompose(character_name, item_id, apply_after=False)
         else:
             record = generate(character_name, item_id, apply_after=False)
         ok = record.get("state") == "ready"
-        if not ok:
-            outcome = str(record.get("reason") or record.get("state") or "failed")
-        return {"ok": ok, "reason": "" if ok else outcome, "state": BUILD_DONE if ok else BUILD_FAILED,
-                "record": record}
+        reason = "" if ok else str(record.get("reason") or record.get("state") or "failed")
+        return {"ok": ok, "reason": reason, "state": BUILD_DONE if ok else BUILD_FAILED, "record": record}
     except Exception as e:  # noqa: BLE001 — the step's error
         outcome = _failure_reason(e)
         logger.warning("Cut texture %s %s (Build): %s", character_name, item_id, outcome)
@@ -1799,13 +1955,16 @@ def build_start(character_name: str, item_id: str, *, explicit: bool) -> bool:
     with _lock:
         entry = _build_runs.get(key)
         if entry is not None and entry["thread"].is_alive():
+            entry["released"] = False           # a Build owns it again (``build_release``)
             return False
-        entry = {"result": None, "step": "", "explicit": explicit}
+        entry = {"result": None, "step": "", "explicit": explicit, "released": False}
 
         def work() -> None:
             res = run_for_build(character_name, item_id, explicit=explicit)
             with _lock:
                 entry["result"] = res
+                if entry["released"] and _build_runs.get(key) is entry:
+                    _build_runs.pop(key, None)      # the Build that started it ended without joining it
         entry["thread"] = threading.Thread(target=work, name=f"cut-texture-build-{item_id}", daemon=True)
         _build_runs[key] = entry
     entry["thread"].start()
@@ -1818,6 +1977,8 @@ def build_join(character_name: str, item_id: str, *, explicit: bool, timeout_s: 
     key = (character_name, item_id)
     with _lock:
         entry = _build_runs.get(key)
+        if entry is not None:
+            entry["released"] = False
     if entry is None:
         build_start(character_name, item_id, explicit=explicit)
         with _lock:
@@ -1832,6 +1993,24 @@ def build_join(character_name: str, item_id: str, *, explicit: bool, timeout_s: 
         res = entry["result"]
     return res or {"ok": False, "reason": "The texture from cut ended without a result", "state": BUILD_FAILED,
                    "record": {}}
+
+
+def build_release(character_name: str, item_id: str) -> bool:
+    """The Build that pre-started the piece's run (``build_start``) ended WITHOUT joining it (it broke out between the
+    drape and the cut_texture step: a stop, a pause, a superseded figure, an error). Its entry never outlives it: a
+    finished run is dropped now, a running one drops itself when it ends (its record is written as usual — the next
+    plan reads it). Without this the next Build's ``build_join`` would return the OLD result without running.
+    True when an entry was released."""
+    key = (character_name, item_id)
+    with _lock:
+        entry = _build_runs.get(key)
+        if entry is None:
+            return False
+        if entry["thread"].is_alive():
+            entry["released"] = True
+        else:
+            _build_runs.pop(key, None)
+    return True
 
 
 def build_running(character_name: str, item_id: str) -> bool:
@@ -1898,7 +2077,9 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     - ``answers`` — ``usable_answers`` (the "Use this answer" buttons: 0 image jobs, CPU); ``can_use`` False for
       every job while the button would be refused (a flow runs, another hub-job flow of the piece, no cut);
     - ``sleeve_print`` — the piece's sleeve option, ``has_sleeves`` whether the pattern has sleeves to choose for,
-      ``option_stale`` whether the ready atlas was composed with the other option (``cut_info`` "option")."""
+      ``option_stale`` whether the ready atlas was composed with the other option (``cut_info`` "option");
+    - ``back_detail`` / ``back_plain`` / ``plain_back_limit`` — the back view's detail, whether it is plain (the back
+      is then the front's fabric, no back job; None without a back view or a back panel) and the threshold."""
     from app.core import garment_template as gt
     from app.core import piece_jobs
     from app.imagegen import routing as _routing
@@ -1947,6 +2128,11 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     for entry in answers.values():
         entry["can_use"] = bool(entry["can_use"] and not use_off)
     sleeve_print = str(params.get("sleeve_print") or "plain")
+    if has_back(islands):
+        out.update({"back_detail": back_detail(character_name, item_id),
+                    "back_plain": back_plain(character_name, item_id), "plain_back_limit": PLAIN_BACK_DETAIL})
+    else:
+        out.update({"back_detail": None, "back_plain": None, "plain_back_limit": PLAIN_BACK_DETAIL})
     out.update({"answers": answers, "sleeve_print": sleeve_print,
                 "has_sleeves": any(part_of(str(i["name"])) in SLEEVE_PARTS for i in islands.get("islands", [])),
                 "option_stale": record.get("state") == "ready"

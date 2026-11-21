@@ -393,21 +393,24 @@ ENSURE_POLL_S = 1.0
 
 
 def ensure(character_name: str, item_id: str, *, timeout_s: float = CUT_TIMEOUT_S * 3,
-           poll_s: float = ENSURE_POLL_S, runner=None) -> Dict[str, Any]:
+           poll_s: float = ENSURE_POLL_S, runner=None, retry_failed: bool = False) -> Dict[str, Any]:
     """The Build's way to the cut (cut-texture Build step, 2026-11-21): the piece's cut NOW, synchronously — a ready
     cut is returned as it is; a cut that runs in another thread (the dialog's ``schedule``) is waited for, never
     started twice; a missing cut is run here under the same ``_running`` mark ``schedule`` honours (a dialog poll
-    meanwhile reads "cutting"). Unlike ``schedule`` a Build ignores ``RETRY_AFTER_S`` (a Build is a deliberate run)
-    and does not re-run a cut that failed for its key. Returns the piece's ``state`` afterwards ("ready" / "failed" /
+    meanwhile reads "cutting"). Unlike ``schedule`` a Build ignores ``RETRY_AFTER_S`` (a Build is a deliberate run).
+    A cut that failed for its key is returned as it is — an automatic Build never re-runs it — unless
+    ``retry_failed`` (a MANUAL Build): then it is run ONCE more here (a run another thread had started meanwhile is
+    waited for instead, and its result stands). Returns the piece's ``state`` afterwards ("ready" / "failed" /
     "missing" / "blocked"); "missing" with the waiting reason when ``timeout_s`` ran out."""
     import time as _time
     deadline = _time.monotonic() + timeout_s
     fn = runner or run
+    retry = bool(retry_failed)
     while True:
         key = cut_key(character_name, item_id)
         sig = key["sig"]
         now = state(character_name, item_id, key=key)
-        if sig is None or now["state"] in ("ready", "failed"):
+        if sig is None or now["state"] == "ready" or (now["state"] == "failed" and not retry):
             return now
         k = (character_name, item_id, sig)
         with _lock:
@@ -415,6 +418,7 @@ def ensure(character_name: str, item_id: str, *, timeout_s: float = CUT_TIMEOUT_
             if mine:
                 _left.pop(k, None)
                 _running[k] = "running"
+        retry = False           # one re-run at most: ours below, or the one running elsewhere
         if mine:
             try:
                 fn(character_name, item_id)

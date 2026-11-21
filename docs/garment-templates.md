@@ -320,7 +320,21 @@ hold, so:
   `accepted_over`) and composed; a job without an answer stays `skipped` with "Not made yet", and Run all renders just
   that one. Redo front / back stay as they were.
 
-`POST_VERSION` 5 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+- **A plain back gets no job** (live E2E 2026-11-21: P-H3 invented a collar and a button placket on Dario's plain
+  back, fold shading and a colour fringe on Tilda's). The back view's detail density (the same
+  `picture_reference` measure as `DECORATED_DETAIL`, `back_detail`, cached by the file's stat) at or below
+  `PLAIN_BACK_DETAIL` **0.20** makes the back plain (`is_plain_back`): no back hub job, the back islands and their
+  bleed are tiled with the FRONT job's panel fabric — the same patch and base colour as the sleeves
+  (`panel_fabric` → `fill_plain_back`), so the side seams meet one colour. Derived like the front threshold from the
+  measured pictures: plain shirt backs Kai 0.018, Tilda 0.054, Dario 0.158 (his drape folds are every edge pixel), the
+  knit cardigan 0.246; a painted-in back print 0.07–0.23 (a logo on 20 % of the garment) and 0.26–0.36 (a text print
+  on 35 %). 0.20 = 1.3 × Dario, the front's margin (0.10 = 1.3 × Tilda's 0.076). It gives up a small print on a dark
+  folded back (filled plain). The record's `back_plain` and `jobs.back.source` `"fabric"` say it; the plan, the
+  Build's cost note and the figure row count 0 back jobs; Redo back is not offered. A DECORATED back keeps its job,
+  its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
+  and the counts assume the back job until it is measured.
+
+`POST_VERSION` 6 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -371,9 +385,10 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   so mip-maps and bilinear lookups at a seam never read the background.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 5 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+- `POST_VERSION` = 6 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
-  foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame).
+  foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
+  plain back is the front's fabric, no back job).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

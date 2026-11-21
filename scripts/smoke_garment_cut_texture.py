@@ -500,8 +500,12 @@ DRAPE_REC = {"islands": {"file": _islands_file.name, "sha256": ISLANDS_SHA, "px_
 DRAPES = {iid: {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
                 "islands_sha": ISLANDS_SHA, "record": DRAPE_REC, "worn": True} for iid in ITEM_FILES}
 
-# the piece's BACK view (``garment_template_views``): a (40, 40, 150) block on transparent — Picture 2 of the back job.
-# Every fixture item has one, except the ones a test makes the flow render it for.
+# the piece's BACK view (``garment_template_views``): a (40, 40, 150) block on transparent with a back PRINT — light
+# (220, 220, 220) stripes 24 px high every 48 px over its middle 400 x 400 — Picture 2 of the back job. The print makes
+# it DECORATED (``is_plain_back``: its detail density is far above ``PLAIN_BACK_DETAIL`` 0.20 — at the 128 px measure
+# scale every stripe edge of the middle 2/3 of the block: 0.47 measured, it only has to be above 0.20), so the back job
+# runs as these sections expect; a PLAIN back (no job) is ``smoke_cut_texture_plain_back.py``. Every fixture item has
+# one, except the ones a test makes the flow render it for.
 _backs = Path(_tmp) / "backs"
 _backs.mkdir()
 
@@ -509,6 +513,8 @@ _backs.mkdir()
 def _back_picture(path, blue=150):
     im = Image.new("RGBA", (800, 800), (0, 0, 0, 0))
     im.paste((40, 40, blue, 255), (100, 100, 700, 700))
+    for y in range(200, 600, 48):
+        im.paste((220, 220, 220, 255), (200, y, 600, y + 24))
     im.save(path)
     return path
 
@@ -1206,8 +1212,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     with Image.open(f"{stem2}.back_ref.png") as br:
         bref = np.asarray(br.convert("RGB"))
     check("[12.3] Picture 2 of the back job is the back view flattened on white",
-          tuple(bref[400, 400]) == (40, 40, 150) and tuple(bref[10, 10]) == (255, 255, 255),
-          (tuple(bref[400, 400]), tuple(bref[10, 10])))
+          tuple(bref[400, 150]) == (40, 40, 150) and tuple(bref[10, 10]) == (255, 255, 255),
+          (tuple(bref[400, 150]), tuple(bref[10, 10])))
     with Image.open(f"{stem2}.atlas.png") as at2:
         atl = np.asarray(at2.convert("RGB")).astype(int)
     bk = next(i for i in pl2["islands"] if i["name"] == "back")

@@ -52,6 +52,8 @@ interface CutJob {
   /** Put on the figure by hand ("Use this answer") although a check rejected it — `accepted_over` is that check. */
   accepted?: boolean
   accepted_over?: string
+  /** "fabric": a plain back, filled with the front panel's fabric — no model, no answer, 0 image jobs. */
+  source?: string
 }
 
 /** `garment_cut_texture.usable_answers`: whether "Use this answer" may run for a job now. */
@@ -111,6 +113,11 @@ export interface TemplateCutState {
   has_sleeves?: boolean
   /** The ready atlas was composed with the other sleeve option (it is composed again on the CPU). */
   option_stale?: boolean
+  /** Live E2E 2026-11-21: the back view's detail and whether it is PLAIN (at or below `plain_back_limit`) — a plain
+   *  back gets no back job, it is the front panel's fabric like the sleeves; null without a back view. */
+  back_detail?: number | null
+  back_plain?: boolean | null
+  plain_back_limit?: number
 }
 
 const THUMB = 104
@@ -373,11 +380,12 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const redoTip = (job: 'front' | 'back', p: CutJobPlan | undefined): string => {
     if (!p) return ''
     const other = job === 'front' ? 'back' : 'front'
-    if (state.has_back && !(p.reused || []).includes(other)) {
+    if (state.has_back && !state.back_plain && !(p.reused || []).includes(other)) {
       return t(job === 'front'
         ? 'Renders both jobs: the back job’s answer did not pass, so there is nothing to keep'
         : 'Renders both jobs: the front job’s answer did not pass, so there is nothing to keep')
     }
+    if (job === 'front' && (!state.has_back || state.back_plain)) return t('Renders the front job again')
     return t(job === 'front' ? 'Renders the front job again and keeps the back job’s answer'
       : 'Renders the back job again and keeps the front job’s answer')
   }
@@ -402,7 +410,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 14, alignItems: 'start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         <div className="ga-hint">
-          {t('The pattern pieces are filled from pictures, starting from the item’s fabric colour: the front job paints the front panel from the item picture, the back job the back panel from the piece’s back view; the sleeves and the neckband get the front panel’s fabric. Every answer is checked against the item picture; the atlas replaces the projection without a new drape.')}
+          {t('The pattern pieces are filled from pictures, starting from the item’s fabric colour: the front job paints the front panel from the item picture, the back job the back panel from the piece’s back view; the sleeves and the neckband get the front panel’s fabric, and so does a plain back (no back job). Every answer is checked against its picture; the atlas replaces the projection without a new drape.')}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} aria-label={t('Steps')}>
           <StepLine testid="pattern" label={t('Pattern')}
@@ -418,7 +426,14 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
                 : plan?.back_view ? t('Missing — Make texture from cut renders it first (1 image job, at most 2)')
                   : t('Ready — Picture 2 of the back job (Views tab)')} />
           ) : null}
-          {(['front', 'back'] as const).filter((job) => job === 'front' || state.has_back).map((job) => {
+          {state.has_back && state.back_plain ? (
+            <StepLine testid="back" label={t('Back panel')}
+              light={step === 'post' ? 'blue' : jobs.back?.state === 'ready' ? 'green' : 'grey'}
+              text={t('Plain back view (detail {d} ≤ {l}) — the front panel’s fabric, like the sleeves (0 image jobs)')
+                .replace('{d}', (state.back_detail ?? 0).toFixed(2)).replace('{l}', (state.plain_back_limit ?? 0).toFixed(2))}
+              tip={t('A plain back is never painted by the model: it invented collars, plackets and folds there')} />
+          ) : null}
+          {(['front', 'back'] as const).filter((job) => job === 'front' || (state.has_back && !state.back_plain)).map((job) => {
             const j = jobs[job]
             const ans = state.answers?.[job]
             const redo = job === 'front' ? redoFront : redoBack

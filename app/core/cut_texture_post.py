@@ -49,8 +49,9 @@ CLAMP_DE = 25.0
 #: sleeves / neckband filled from the front panel's fabric patch. 4 (2026-11-21): the foreground pieces apart from the
 #: islands are dropped before the registration (``drop_strays``). 5 (2026-11-21): the back job runs in its zoom frame
 #: (``garment_cut_texture.job_frame``) and is put back into the atlas frame before the compose; the foreground threshold
-#: is the answer's own (``answer_white_tol``).
-POST_VERSION = 5
+#: is the answer's own (``answer_white_tol``). 6 (2026-11-21): a PLAIN back view (``garment_cut_texture.PLAIN_BACK_DETAIL``)
+#: gets no back job — the back panel is the front panel's fabric (``garment_cut_texture.fill_plain_back``).
+POST_VERSION = 6
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256

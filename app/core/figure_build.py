@@ -396,8 +396,9 @@ def _cut_texture_step(character_name: str, item_id: str) -> Optional[Step]:
     if st["state"] == gct.BUILD_COMPOSE:
         return Step("cut_texture", gct.BUILD_COMPOSE_LABEL.format(name=name), 0, item_id)
     if st["state"] == gct.BUILD_FAILED:
-        label = gct.BUILD_LABEL.format(name=name, n=st["jobs"]) + FAILED_SUFFIX
-        return Step("cut_texture", label, int(st["jobs"]), item_id, failed=str(st["reason"] or "failed"))
+        label = (gct.BUILD_LABEL_ESTIMATE if st["estimate"] else gct.BUILD_LABEL).format(name=name, n=st["jobs"])
+        return Step("cut_texture", label + FAILED_SUFFIX, int(st["jobs"]), item_id,
+                    failed=str(st["reason"] or "failed"))
     return None
 
 
@@ -1259,6 +1260,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
     fresh_failures: List[str] = []   # pieces this run tried and failed (``ASSEMBLE_GATE_STEPS``)
     superseded: Optional[Dict[str, str]] = None
     paused: Optional[Dict[str, str]] = None
+    prestarted: List[str] = []       # pieces whose cut texture this run started beside their drape
     from app.core import generation_pause
     try:
         for index, step in enumerate(steps, 1):
@@ -1305,7 +1307,8 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                         _check_pin(character_name)
                     if step.name == "plain_body":
                         _wait_base_views(character_name)
-                    _prestart_cut_texture(character_name, step, steps[index:], explicit)
+                    if _prestart_cut_texture(character_name, step, steps[index:], explicit):
+                        prestarted.append(step.item_id)
                     error = _run_step(character_name, step, explicit)
                 except BuildPaused:
                     # Ruling A42: the chain of this step waits held in the garment FIFO.
@@ -1372,6 +1375,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     with _lock:
                         _current[character_name]["steps"] = [s.as_dict() for s in steps]
     finally:
+        _release_cut_texture(character_name, prestarted)
         with _lock:
             _pins.pop(character_name, None)
             _last[character_name] = {"failed": failed, "skipped": skipped, "reason": reason,
@@ -1799,25 +1803,45 @@ def _run_cut_texture(character_name: str, step: Step, explicit: bool = False) ->
     return "" if res.get("ok") else str(res.get("reason") or "failed")
 
 
-def _prestart_cut_texture(character_name: str, step: Step, rest: List[Step], explicit: bool) -> None:
+def _prestart_cut_texture(character_name: str, step: Step, rest: List[Step], explicit: bool) -> bool:
     """Before the drape of a template top (``step``) whose cut texture comes later in the plan (``rest``): start that
     flow in the background so its image jobs run while the CPU drapes — only when its pattern can be cut now (the
-    layers under it are draped) and an automatic Build would run it (no cached failure). Never raises."""
+    layers under it are draped) and this Build would run it (an automatic one skips a cached failure). True when a
+    run was started (the caller releases it when the Build ends without joining it, ``_release_cut_texture``).
+    Never raises."""
     if step.name != "template":
-        return
+        return False
     later = next((s for s in rest if s.name == "cut_texture" and s.item_id == step.item_id), None)
     if later is None or (later.failed and not explicit):
-        return
+        return False
     try:
         from app.core import garment_cut_texture as gct
         from app.core import garment_template_cut as gtc
         if gtc.cut_key(character_name, step.item_id)["sig"] is None:
-            return
+            return False
         if gct.build_start(character_name, step.item_id, explicit=explicit):
             logger.info("Build %s: the texture from cut of %s starts beside its drape", character_name,
                         _item_name(step.item_id))
+            return True
     except Exception:  # noqa: BLE001 — the step runs it in its place then
         logger.debug("Build %s: cut texture not pre-started", character_name, exc_info=True)
+    return False
+
+
+def _release_cut_texture(character_name: str, items: List[str]) -> None:
+    """The end of a Build: every cut-texture run it pre-started and did not join (it broke out before the
+    cut_texture step — stopped, paused, superseded, an error) is released (``garment_cut_texture.build_release``), so
+    no entry of it is left for the next Build's join. A joined run is gone already (no-op). Never raises."""
+    if not items:
+        return
+    try:
+        from app.core import garment_cut_texture as gct
+        for item_id in dict.fromkeys(items):
+            if gct.build_release(character_name, item_id):
+                logger.info("Build %s: the texture from cut of %s was not joined — released", character_name,
+                            _item_name(item_id))
+    except Exception:  # noqa: BLE001 — never fails the Build's end
+        logger.debug("Build %s: cut texture runs not released", character_name, exc_info=True)
 
 
 def _run_pendant(character_name: str, step: Step, explicit: bool = False) -> str:

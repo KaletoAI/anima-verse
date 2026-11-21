@@ -452,6 +452,9 @@ export interface CutBuild {
   reason: string
   jobs: number
   estimate: boolean
+  /** What a manual Build re-runs of a failure (an automatic Build skips it): "cut" — the pattern is cut again, then
+   *  the texture is made; "jobs" — only the image jobs that did not pass; "" — nothing (e.g. no item picture). */
+  retry?: '' | 'cut' | 'jobs'
   /** Where a running flow is ("cut", "back_view", "upscale", "front", "back", "post", "apply"). */
   step: string
 }
@@ -472,6 +475,24 @@ export interface TemplateCut {
   csig: string | null
 }
 
+/** A failed texture from cut, saying exactly what the next Build does with it (`CutBuild.retry`): an automatic Build
+ *  skips a cached failure; a click on Build re-runs only what failed. */
+export function cutBuildFailedLine(b: CutBuild, t: Tr = EN): string {
+  const reason = t(b.reason || 'no reason')
+  const n = String(b.jobs || 0)
+  if (b.retry === 'cut') {
+    return t('Texture from cut failed: {reason} — an automatic Build skips it; a click on Build cuts the pattern again, then makes the texture (+{n} image jobs)')
+      .replace('{reason}', reason).replace('{n}', n)
+  }
+  if (b.retry === 'jobs') {
+    return (b.jobs
+      ? t('Texture from cut failed: {reason} — an automatic Build skips it; a click on Build renders only the jobs that did not pass (+{n} image jobs)')
+      : t('Texture from cut failed: {reason} — an automatic Build skips it; a click on Build composes it again from the answers that passed (CPU, 0 image jobs)'))
+      .replace('{reason}', reason).replace('{n}', n)
+  }
+  return t('Texture from cut failed: {reason}').replace('{reason}', reason)
+}
+
 /** "Texture: cut (IoU 0.94, ΔE 3.1)" / "Texture: projection — no cut texture yet" / "… — cut out of date" /
  *  "… — cut rejected: <reason>" — the figure row's line of a piece whose texture is wanted from the cut; "" when the
  *  piece does not want it (`off`). */
@@ -486,9 +507,7 @@ export function templateCutLine(info: TemplateInfo | null | undefined, t: Tr = E
   }
   if (b?.state === 'compose') return t('Texture: projection — the next Build composes the cut texture again (CPU)')
   const c = info?.state === 'ready' ? info.metrics?.cut : null
-  if ((!c || c.state === 'off') && b?.state === 'failed') {
-    return t('Texture from cut failed: {reason} — Build retries it').replace('{reason}', t(b.reason || 'no reason'))
-  }
+  if ((!c || c.state === 'off') && b?.state === 'failed') return cutBuildFailedLine(b, t)
   if (!c || c.state === 'off') return ''
   if (c.state === 'ready') {
     return t('Texture: cut (IoU {iou}, ΔE {de})').replace('{iou}', (c.iou ?? 0).toFixed(2))
