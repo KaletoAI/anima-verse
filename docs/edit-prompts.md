@@ -1,6 +1,10 @@
 # Edit prompts — one pass-through for every render with reference images
 
-Status: DESIGN (2026-11-21), nothing implemented. Branch `eprompt`, base `7fc7c386d`.
+Status (2026-11-21, branch `eprompt`, base `7fc7c386d`): **Phase 1 and Phase 2 implemented** — C1–C9, C11 (only
+`gate_attempts` itself and the cut texture use it) and the dialect column of the routing overview's DATA
+(`_explain_one`). Live E2E on copies of Kai and Dario passed (§10). Open: C10 (the dialog's attempts list — needs a
+frontend build), the overview's dialect column in `static/admin/settings.js`, C11's nine other loops, C12, C13 (an admin
+action), Phases 3–4 (C14–C26).
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -245,6 +249,12 @@ Live E2E (local hub only: `MiniMax-H3-Image`, `P-H3-Image`, Iris upscaler; never
 - Output sheets go to `~/claude-out/edit-prompts/`.
 
 ## 11. Open points
+
+- **Live result 2026-11-21** (`scripts/e2e_cut_texture.py --chain MiniMax-H3-Image,P-H3-Image`, copies): Kai with
+  `--reject-attempt 1` -> attempt 1 MiniMax `picture_subject` (its answer passed the gates; the rejection was forced),
+  attempt 2 P-H3 `picture_edit`, `attempt_entry {2, 2, 2}`, no `fallback_from`, 3 image jobs (upscale + 2). Dario ->
+  MiniMax passes on attempt 1: the chest embroidery on the front panel, sleeves plain fabric, no invented motif. Both
+  backs are plain (fabric fill, no back job) — the MiniMax back on the zoomed template is still untested.
 
 - MiniMax N back on the zoomed template is untested (E2E run 1 decides). If it fails: the MiniMax back job uses the un-zoomed template (`job_frame` gets a per-dialect switch), not a new text.
 - Qwen `image_tag` cut texts are research drafts, untested. They are used only if someone puts Qwen into the chain.
