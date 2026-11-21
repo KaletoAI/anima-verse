@@ -81,6 +81,14 @@ SHEET_PASTELS = (
 PART_LABELS = {
     "front": "Front", "back": "Back", "sleeve_l": "Sleeve left", "sleeve_r": "Sleeve right", "band": "Neckband",
     "collar": "Collar", "placket": "Placket", "cuff_l": "Cuff left", "cuff_r": "Cuff right",
+    # step 3a: the close-fitting kinds' pieces (``uv_pattern.PARTS`` 10..36)
+    "front_l": "Front left", "front_r": "Front right", "back_l": "Back left", "back_r": "Back right",
+    "waistband": "Waistband", "gusset": "Gusset", "leg_l": "Leg left", "leg_r": "Leg right",
+    "cup_l": "Cup left", "cup_r": "Cup right", "cup_top_l": "Upper cup left", "cup_top_r": "Upper cup right",
+    "gore": "Gore", "band_l": "Band left", "band_r": "Band right", "strap_l": "Strap left", "strap_r": "Strap right",
+    "glove_back_l": "Back of hand left", "glove_back_r": "Back of hand right", "palm_l": "Palm left",
+    "palm_r": "Palm right", "thumb_l": "Thumb left", "thumb_r": "Thumb right", "hip_band_l": "Hip band left",
+    "hip_band_r": "Hip band right", "top_band_l": "Top band left", "top_band_r": "Top band right",
 }
 
 
@@ -193,7 +201,16 @@ def render_template(islands: dict, size: int | None = None, fill=None) -> Image.
 #: English panel name per part, in pattern order (the order the prompt lists the pieces in).
 PROMPT_PIECE_NAMES = {
     "front": "front panel", "back": "back panel", "sleeve_l": "left sleeve", "sleeve_r": "right sleeve",
-    "band": "neckband", "collar": "collar", "placket": "placket", "cuff_l": "left cuff", "cuff_r": "right cuff",
+    "band": "neckband", "collar": "collar", "placket": "placket",
+    # step 3a: the close-fitting kinds' pieces (left / right are the wearer's)
+    "front_r": "right front leg panel", "front_l": "left front leg panel", "back_l": "left back leg panel",
+    "back_r": "right back leg panel", "leg_r": "right leg", "leg_l": "left leg", "cup_r": "right cup",
+    "cup_l": "left cup", "cup_top_r": "right upper cup", "cup_top_l": "left upper cup", "gore": "centre gore",
+    "glove_back_r": "back of the right hand", "glove_back_l": "back of the left hand", "palm_l": "left palm",
+    "palm_r": "right palm", "thumb_r": "right thumb", "thumb_l": "left thumb", "gusset": "crotch gusset",
+    "waistband": "waistband", "band_r": "right band", "band_l": "left band", "strap_r": "right strap",
+    "strap_l": "left strap", "hip_band_r": "right hip band", "hip_band_l": "left hip band",
+    "top_band_r": "right top band", "top_band_l": "left top band", "cuff_r": "right cuff", "cuff_l": "left cuff",
 }
 
 _PROMPT_ENV = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined, trim_blocks=True,
@@ -458,11 +475,12 @@ MEDIA_OFF = "Media generation is off — switch it on in /admin/settings → Med
 
 #: The image jobs of the flow, in run order.
 JOBS = ("front", "back")
-#: Ruling 2026-11-20 — the parts the BACK job fills: the back panel alone (``back``, a split ``back_2`` too). Every
-#: other island goes with the FRONT job: the sleeves (the item picture shows them, with any print or cuff detail on
+#: Ruling 2026-11-20 — the parts the BACK job fills: the back panel alone (``back``, a split ``back_2`` too); step 3a
+#: adds a trouser's back leg panels and a glove's palms (the back view shows them; tights and a bra have no back job).
+#: Every other island goes with the FRONT job: the sleeves (the item picture shows them, with any print or cuff detail on
 #: their visible side; a sleeve is one tube whose front and back halves are the same island, so it cannot follow the
 #: back view for one half only), the neckband, collar, placket and cuffs.
-BACK_PARTS = ("back",)
+BACK_PARTS = ("back", "back_l", "back_r", "palm_l", "palm_r")
 #: Picture 2 of each job.
 JOB_REFERENCE = {"front": "item", "back": "back_view"}
 
@@ -788,14 +806,52 @@ def back_source(path: Path) -> bytes:
 
 
 def piece_name(item_id: str) -> str:
-    """The English name of the piece the prompt speaks of, from the template kind and its sleeve length."""
+    """The English name of the piece the prompt speaks of (``piece_name_of`` of the item's template params)."""
     from app.core import garment_template as gt
     from app.models.inventory import get_item
-    params = gt.params_of(get_item(item_id)) or {}
-    kind = str(params.get("kind") or "garment")
+    return piece_name_of(gt.params_of(get_item(item_id)) or {})
+
+
+def piece_name_of(params: dict) -> str:
+    """The English name of a piece from its template params: a top by its sleeve length; step 3a the close-fitting
+    kinds by their cut (briefs: boxer / string / thong / high-leg; a bra by its cup; gloves by fingers and length;
+    tights by style and foot; trousers by length and leg)."""
+    p = params or {}
+    kind = str(p.get("kind") or "garment")
     if kind == "top":
         return {"none": "sleeveless top", "cap": "T-shirt", "short": "T-shirt", "elbow": "elbow-sleeve shirt",
-                "long": "long-sleeve shirt"}.get(str(params.get("sleeves") or "short"), "top")
+                "long": "long-sleeve shirt"}.get(str(p.get("sleeves") or "short"), "top")
+    if kind == "briefs":
+        if float(p.get("leg_length_m") or 0.0) > 0:
+            return "boxer briefs"
+        if p.get("sides") == "string":
+            return "string briefs"
+        if float(p.get("back_coverage", 1.0)) < 0.15:
+            return "thong"
+        return "high-leg briefs" if float(p.get("leg_cut", 0.5)) > 1.0 else "briefs"
+    if kind == "bra":
+        return {"balconette": "balconette bra", "triangle": "triangle bra", "bandeau": "bandeau"}.get(
+            str(p.get("cup_style") or ""), "bra")
+    if kind == "gloves":
+        if p.get("fingers") == "none":
+            return "arm warmers"
+        base = "fingerless gloves" if p.get("fingers") == "fingerless" else "gloves"
+        return {"forearm": "forearm-length ", "elbow": "elbow-length ", "opera": "opera "}.get(
+            str(p.get("length") or "wrist"), "") + base
+    if kind == "tights":
+        style = str(p.get("tights_style") or "tights")
+        if style == "knee_high":
+            return "knee-high socks"
+        if style in ("hold_up", "thigh_high"):
+            return "hold-up stockings" if style == "hold_up" else "thigh-high stockings"
+        return {"footless": "footless tights", "stirrup": "stirrup tights"}.get(str(p.get("feet") or ""), "tights")
+    if kind == "trousers":
+        if p.get("leg_shape") == "skinny" and p.get("hem") == "stirrup":
+            return "stirrup leggings"
+        if p.get("leg_shape") == "skinny" and float(p.get("fit", 0.3)) == 0.0:
+            return "leggings"
+        return {"shorts": "shorts", "knee": "knee-length trousers", "capri": "capri trousers",
+                "ankle": "ankle trousers"}.get(str(p.get("trouser_length") or "full"), "trousers")
     return kind.replace("_", " ")
 
 
