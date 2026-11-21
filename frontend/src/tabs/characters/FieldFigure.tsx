@@ -489,7 +489,7 @@ function CutTextureLine({ character, itemId, template }: {
   const label = t('Texture from cut')
   return (
     <div className="ga-hint" data-cut-line={cut?.state || ''} style={{ display: 'flex', alignItems: 'center', gap: 6,
-      ...(cut && ['stale', 'rejected', 'failed'].includes(cut.state) ? { color: 'var(--ga-warn, #c77d0a)' } : {}) }}>
+      ...(cut && ['stale', 'drape_behind', 'rejected', 'failed'].includes(cut.state) ? { color: 'var(--ga-warn, #c77d0a)' } : {}) }}>
       {src ? (
         <button type="button" onClick={() => setBig(true)} title={`${label}\n${t('click to enlarge')}`}
           style={{ width: 32, height: 32, padding: 0, cursor: 'zoom-in', background: '#fff', flex: '0 0 auto',

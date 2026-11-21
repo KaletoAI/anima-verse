@@ -15,7 +15,7 @@ is out of date and is re-draped by the next Build).
 
 ### Which pieces get them — `uv_mode`
 
-`garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for kind `top`, `"grid"` for every other
+`garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for kind `top` (`PATTERN_KINDS`), `"grid"` for every other
 kind that has a bodice (jacket, dress with a bodice). `"grid"` is staging, not a compat path: step 3 of the plan moves
 the other kinds (skirt, dress, trousers, jacket, fitted) to the pattern UV and removes it.
 
@@ -83,6 +83,36 @@ UV = x/size, 1 − y/size). The payload holds no timing or run data, so its sha 
 Blender writes no island PNG: label rasters and masks are rendered in the core from this file
 (`garment_cut_texture.rasterise_islands` / `island_mask`).
 
+### The cut without the drape (cut-first, 2026-11-21)
+
+The pattern UVs are assigned to the cut panels BEFORE the cloth run (`build_bodice` → `clear_of_body` → `pattern_uv_of`
+in `garment_template_build.run`); the drape only moves vertices. So the islands depend on the cut alone, and
+`app/core/garment_template_cut.py` makes them without a drape: the same builder with the build arg `cut_only` stops
+right after `pattern_uv_of` (no drape, no pose shapes, no bake, no export). CPU, one Blender slot, **0 hub jobs**, and
+never the piece's hub-job claim (`piece_jobs`) — it may run beside a drape. Measured on a copy of Dario's base body
+and shirt: **11.8 s** for the cut against **63.6 s** for the full drape of the same inputs (41.0 s of it Blender),
+and the two `islands.json` are byte-identical (sha256 `387cd15f…`, also the sha of the three drapes the live world
+had made of that shirt; `scripts/smoke_template_cut_islands_equal.py` repeats the proof on any body).
+
+Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut reads:
+
+| input | why |
+|---|---|
+| the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec`, `slit` or `uv_mode`; `fabric` reaches the builder only as the cloth settings, read after the cut |
+| the base model sha256 | the body the panels are wrapped round, laid out of and measured on |
+| the drape key's lower-layer tokens (`under_tokens`) | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of; the jacket allowance and the chest shaping change the pattern or the body |
+| `TEMPLATE_VERSION`, `UV_PATTERN_SHA` (md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
+
+Not in it: the views and the item picture (the drape key's texture part), `opacity`, `texture`, `sleeve_print`,
+`fly`, the drape's frames / quality / poses / shape groups.
+
+Files under `templates/cut/`: `{item}_{cut_sig}.islands.json` (the builder's bytes), `.cut.json` (the record: state,
+metrics, `wall_s`) and `.pattern.png` (the debug sheet). The cut starts when the parameters are saved
+(`PUT …/figure/template/{item_id}`) and whenever the dialog reads its Texture tab (`GET …/cut`), when it is missing —
+never twice for one key, never again for a failed key, and not within 5 minutes after a run that judged nothing
+(timeout, no Blender). A drape records the `cut_sig` it was laid out of when its colliders were the cut's
+(own-mesh colliders shrunk or dropped by `drape_with_fallback` lay the panels out of other colliders: other islands).
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`
@@ -147,8 +177,9 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
    answer of the same csig (1 image job).
 
 The job never holds `keyed_lock("character_profile", …)` and never submits from inside a GPU worker. Media off
-(`MediaGenerationDisabled`), an empty chain (`NoRouteError`) and a piece without a ready drape with islands are refused
-synchronously, before any thread or file exists.
+(`MediaGenerationDisabled`), an empty chain (`NoRouteError`) and a piece without a cut (or without a picture) are
+refused synchronously, before any thread or file exists. The drape is never asked: the flow may run while the Build
+drapes the piece.
 
 ### Pre-fill, answer gates and the sleeve fabric (user test 2026-11-21)
 
@@ -234,7 +265,7 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 
 ### The key `csig`
 
-`csig` = md5 of (`islands_sha` of the drape's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of both prompt files, `POST_VERSION`), 12 hex.
+`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of both prompt files, `POST_VERSION`), 12 hex.
 
 It deliberately does not contain the drape key `tsig`: `tsig` also carries the piece-only views, and a re-rendered
 FRONT view changes nothing the cut atlas depends on. The back view does: a new back view makes the cut stale (the
@@ -242,27 +273,34 @@ Views tab says so next to it). A re-drape with new islands (new body, new params
 new item picture, a changed prompt or post version gives a new `csig`; the figure then shows the projection and the
 row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never painted onto new islands.
 
+The atlas is made from the CUT's islands and mapped onto a drape by the drape's islands sha: every drape of the same
+cut writes the same bytes, so the atlas stays valid across re-drapes (new views, a retry, a new fabric) as long as the
+cut is unchanged. A drape of another cut never gets it: when a ready atlas exists for other islands, made after the
+drape, the row says the drape is of an older cut and the next Build drapes the new one (`cut_info` state
+`drape_behind`).
+
 `garment_template.cut_info` is the one place that decides what a piece shows: `texture` `"cut"` only when the param is
 `"cut"` and a `ready` record with its atlas exists for the current `csig`; otherwise `"projection"` with `cut_state`
-`off` / `missing` / `stale` / `rejected` / `failed`. `atlas_for` returns the atlas bytes for the assembly.
+`off` / `missing` / `stale` / `drape_behind` / `rejected` / `failed` / `option`. `atlas_for` returns the atlas bytes for the assembly.
 
 ### Routes (admin only, prefix `/characters`)
 
 | route | what |
 |---|---|
-| `GET /characters/{c}/figure/template/{item_id}/cut` | status (`running`, `step`), the current record with both jobs, `can_generate`, `blocked_reason` (ONE true reason: the drape state, picture, media, routing or another flow of the piece), `drape_reason`, `plan` (job count), `current`, `texture`, `applied`, `has_back`, `upscale`, `islands_sha`, which files exist |
-| `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not built / no islands / no picture, 503 no route — all before a thread starts) |
-| `POST /characters/{c}/figure/template/{item_id}/cut/use` | "Use this answer", body `{"job": "front" / "back"}`: the stored answer (also a rejected one) accepted and composed on the CPU, 0 image jobs (400 no answer / not built, 409 a flow of the piece runs) |
+| `GET /characters/{c}/figure/template/{item_id}/cut` | status (`running`, `step`), the current record with both jobs, `can_generate`, `blocked_reason` (ONE true reason: the cut state, picture, media, routing or another flow of the piece), `pattern_reason`, `cutting`, `cut_at`, `cut_wall_s`, `plan` (job count), `current`, `texture`, `applied`, `has_back`, `upscale`, `islands_sha`, which files exist |
+| `POST /characters/{c}/figure/template/{item_id}/cut/generate` | start the flow, body `{"only": "" / "front" / "back"}` (409 media off or another flow of the piece runs, 400 not cut / no picture, 503 no route — all before a thread starts) |
+| `POST /characters/{c}/figure/template/{item_id}/cut/use` | "Use this answer", body `{"job": "front" / "back"}`: the stored answer (also a rejected one) accepted and composed on the CPU, 0 image jobs (400 no answer / not cut, 409 a flow of the piece runs) |
 | `POST /characters/{c}/figure/template/{item_id}/cut/sleeves` | the sleeve option, body `{"sleeve_print": "plain" / "picture"}`: stored (no drape), a made atlas composed again on the CPU (400 unknown value) |
 | `GET /characters/{c}/figure/template/{item_id}/cut/{kind}.png` | `kind` = `template_front` / `item` / `raw_front` / `template_back` / `back_ref` / `raw_back` / `atlas` of the current (or the `v=`-named) csig |
-| `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current drape's islands (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), rendered on demand and cached as `{item}_{islands sha[:12]}.pattern.png`; 404 when not built or a grid kind. Never sent to a model. |
+| `GET /characters/{c}/figure/template/{item_id}/pattern.png` | the DEBUG pattern sheet of the current cut (pastel islands, names, cm sizes, grain arrows, seam letters, cap height, px/cm), written by the cut-only run as `templates/cut/{item}_{cut_sig}.pattern.png` (rendered when missing); 404 while not cut or a grid kind. Never sent to a model. |
 
 ### UI
 
 Game-Admin → Characters → Figure → the template parameter dialog, three sub-tabs with a traffic light each (it fits one
 1080p screen): **Cut** (the overlay, presets, the params incl. `texture`, the item picture, the drape status and its
 Build), **Texture** (the cut flow: one status line per step — Pattern, Back view, Front job, Back job, Atlas, On the
-figure — with a traffic light and the plain reason; "Make texture from cut — 2 image jobs (+1 for the back view, at
+figure — with a traffic light and the plain reason; the Pattern line reads "Cut <time> — pattern pieces ready", or
+"Cutting the pattern (CPU, 0 hub jobs)" while the cut runs; "Make texture from cut — 2 image jobs (+1 for the back view, at
 most +2, +1 upscale)" or "Everything is current"; Redo front job / Redo back job, 1 image job each; the note that
 starting sets Texture to "From cut"; thumbnails of the pattern sheet, both templates, both pictures, both answers and
 the atlas, click enlarges) and **Views** (the piece-only views: which one the cut uses, which only feed the

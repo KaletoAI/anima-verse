@@ -46,8 +46,9 @@ hand below.
     sentence or clause with "no"/"without" — the negation guard moves nothing — and has no mid-sentence "no").
     Same for image_family "keywords".
 
-Task 8 — the job (``generate`` / ``start`` / ``status`` / ``item_source``), stubbed: ``current_drape`` returns a ready
-drape whose islands are the [2] payload; ``routing.run_routed`` calls ``render`` once with a fake two-slot P-H3 backend
+Task 8 — the job (``generate`` / ``start`` / ``status`` / ``item_source``), stubbed: ``current_pattern`` returns a ready
+CUT whose islands are the [2] payload (cut sig "cut0"; ``current_drape`` a ready drape of the same islands for the
+figure's ``cut_info``); the routes' ``garment_template_cut.schedule`` is a counter; ``routing.run_routed`` calls ``render`` once with a fake two-slot P-H3 backend
 (or raises); ``get_image_service`` is a counter stub (upscale x4, ``run_on_backend`` / ``run_on_backend_channel`` call
 straight through); ``inventory.get_item_image_path`` serves fixture files; the item matte is key-only (no BiRefNet).
 [8.1] The fake backend answers the template it was given with every island pixel set to (150, 40, 40) (the item's
@@ -107,17 +108,18 @@ rules.
     picture URLs ``…/cut/<kind>.png?v=<c9>`` for every kind of ``CUT_FILES`` (both jobs' templates, references and
     answers, and the atlas); ``pattern_url`` = ``…/pattern.png?v=<islands sha[:12]>``.
     "tiny" (300 x 256) -> ``upscale`` True (the button says "+1 upscale").
-[10.2] Blocked reasons, in this order of precedence: a worn piece without a drape -> ``BLOCKED_BUILD`` (the Build drapes it);
+[10.2] Blocked reasons, in this order of precedence: a piece without a cut -> ``garment_template_cut.NOT_CUT`` (the
+    GET schedules the cut: one ``garment_template_cut.schedule`` call);
     media off -> "Media generation is off"; an empty chain -> "Routing chain for 'Garment — texture from cut' is empty
     — set it in /admin/settings → Media Generation → Routing" (``can_generate`` False each time).
 [10.3] ``POST …/cut/generate``: an empty chain -> HTTP 503 whose detail contains "Routing"; media off ->
-    ``MediaGenerationDisabled`` propagates (409 through the global handler); no ready drape -> HTTP 400; with all in
+    ``MediaGenerationDisabled`` propagates (409 through the global handler); no cut -> HTTP 400; with all in
     place it starts (the answer carries ``running`` True), a second POST while it runs -> HTTP 409.
 [10.4] ``GET …/cut/atlas.png`` of "shirt9" -> 200, the atlas file's bytes; every other kind of ``CUT_FILES`` too; an unknown
     kind -> 404; "shirt4" (nothing made) -> 404.
-[10.5] ``GET …/pattern.png`` of "shirt9" -> 200, a PNG 2048 px wide (the atlas; its footer strip below) cached beside the islands file
-    as ``shirt9_<islands sha[:12]>.pattern.png``; a second GET does not render again (render count 1); a drape without
-    islands -> 404.
+[10.5] ``GET …/pattern.png`` of "shirt9" -> 200, a PNG 2048 px wide (the atlas; its footer strip below) cached beside the cut
+    as ``templates/cut/shirt9_<cut sig>.pattern.png`` (the fixture's cut sig "cut0"); a second GET does not render
+    again (render count 1); a piece without a cut -> 404.
 [10.6] User finding 2026-11-20: the template dialog's source picture is the ITEM picture only (``source`` "item",
     ``/inventory/items/<id>/image``) — even when a worn front view exists on disk; an item without a picture -> "".
 [10.7] User finding 2026-11-20: with texture "cut" the piece-only views are not due — ``garment_template_views.status``
@@ -150,9 +152,10 @@ rules.
 [12.8] ``piece_jobs``: a second claim returns the holder's reason; a view (core and route: 409), Use this and Remove
     (route: 409) while the cut runs; the cut (core and route: 409) while a view runs, and the dialog names the view's
     reason; four racing ``start`` calls -> exactly one True; the claim is released when the flow ends.
-[12.9] ``dialog_state.blocked_reason`` per drape state: ready "", missing + worn BLOCKED_BUILD, missing + not worn
-    BLOCKED_NOT_WORN, a Build draping it BLOCKED_DRAPING (never BLOCKED_BUILD), failed BLOCKED_FAILED, blocked its own
-    reason, ready without islands BLOCKED_NO_ISLANDS; ready -> plan total 2, ``has_back`` True.
+[12.9] Cut-first (2026-11-21): ``dialog_state.blocked_reason`` per CUT state (``current_pattern``): ready "", missing
+    NOT_CUT, cutting CUTTING (and ``cutting`` True, no plan), failed its CUT_FAILED text, blocked its own reason
+    (NO_PATTERN); a ready cut while the Build drapes the piece, with no drape and not worn -> "" (the drape is never
+    asked); ready -> plan total 2, ``has_back`` True, ``cut_at`` the cut's stamp.
 [12.10] ``start`` sets texture "cut" (``set_params``) and, on ready, invalidates the figure once and schedules one
     assembly; the dialog then reads ``applied`` and ``current`` True; the views payload: ``hub_jobs`` 0, ``cut_uses``
     ["back"].
@@ -221,6 +224,7 @@ socket.create_connection = _no_outbound
 
 import uv_pattern as up  # noqa: E402
 from app.core import garment_cut_texture as gct  # noqa: E402
+from app.core import garment_template_cut as gtc  # noqa: E402
 
 FAILS = []
 
@@ -521,6 +525,7 @@ VIEW_REFUSE = {"on": False}
 SCHEDULED = []          # ``garment_assembly.schedule`` calls
 SET_PARAMS = []         # ``garment_template.set_params`` calls (item, texture)
 BUILDING = {}           # ``figure_build.fits_piece``: a Build drapes the piece now
+SCHEDULED_CUTS = []     # ``garment_template_cut.schedule`` calls (the routes start the cut on the CPU)
 
 
 def fake_view_generate(character_name, item_id, view):
@@ -543,6 +548,25 @@ def fake_set_params(item_id, params, *, source="user"):
 def fake_current_drape(character_name, item_id):
     return DRAPES.get(item_id) or {"state": "missing", "reason": "Not draped yet", "tsig": None,
                                    "islands_path": None, "islands_sha": "", "record": {}, "worn": True}
+
+
+#: Cut-first (2026-11-21): the pattern the flow reads is the CUT (``gct.current_pattern``), never the drape. A ready
+#: drape fixture stands for a ready cut of the same islands (a drape of the same cut writes the same bytes); a
+#: ``PATTERNS`` entry overrides it (a cut that runs, failed, or is missing while a drape exists).
+PATTERNS = {}
+
+
+def fake_current_pattern(character_name, item_id):
+    from app.core import garment_template_cut as _gtc
+    if item_id in PATTERNS:
+        return {"state": "missing", "reason": _gtc.NOT_CUT, "cut_sig": "cut0", "islands_path": None,
+                "islands_sha": "", "cut_at": "", "wall_s": None, "record": {}, **PATTERNS[item_id]}
+    d = DRAPES.get(item_id) or {}
+    if d.get("state") == "ready" and d.get("islands_path") is not None and d.get("islands_sha"):
+        return {"state": "ready", "reason": "", "cut_sig": "cut0", "islands_path": d["islands_path"],
+                "islands_sha": d["islands_sha"], "cut_at": "2026-11-21T10:00:00+00:00", "wall_s": 11.8, "record": {}}
+    return {"state": "missing", "reason": _gtc.NOT_CUT, "cut_sig": "cut0", "islands_path": None, "islands_sha": "",
+            "cut_at": "", "wall_s": None, "record": {}}
 
 
 class CutBackend:
@@ -656,6 +680,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         patch("app.core.figure_build.fits_piece", lambda c, i: BUILDING.get(i, False)), \
         patch.object(gct, "back_view", lambda c, i: BACKS.get(i)), \
         patch.object(gct, "current_drape", fake_current_drape), \
+        patch.object(gct, "current_pattern", fake_current_pattern), \
+        patch("app.core.garment_template_cut.schedule", lambda c, i, **k: SCHEDULED_CUTS.append((c, i)) or {}), \
         patch.object(gct, "_item_matte", lambda: None):
 
     item_sha = hashlib.sha256(ITEM_FILES["shirt"].read_bytes()).hexdigest()
@@ -686,7 +712,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         check("[8.1] colour kept (150, 40, 40) +-2", np.abs(cpx - [150, 40, 40]).max() <= 2, cpx.tolist())
     check("[8.1] record on disk", json.loads(Path(f"{stem}.json").read_text()).get("state") == "ready")
     check("[8.1] record fields", rec.get("csig") == want_csig and rec.get("islands_sha") == ISLANDS_SHA
-          and rec.get("tsig") == "tsig0" and rec.get("prompt_sha") == gct.PROMPT_SHA
+          and rec.get("cut_sig") == "cut0" and rec.get("prompt_sha") == gct.PROMPT_SHA
           and rec.get("item_px") == [1200, 1100] and (rec.get("upscale") or {}).get("status") == "not_needed"
           and abs(rec.get("px_per_cm", 0) - 19.59) < 1e-6, rec)
     check("[8.1] metrics keys", set(rec.get("metrics") or {}) >= {"iou", "coverage", "island_coverage", "spill",
@@ -773,16 +799,16 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
                         "islands_sha": "", "record": {}, "worn": True}
     try:
         gct.start(CHAR, "shirt4")
-        check("[8.3] start without a ready drape raises", False, "no exception")
+        check("[8.3] start without a cut raises", False, "no exception")
     except gct.NotReady as e:
-        check("[8.3] start without a ready drape raises NotReady", True, e)
+        check("[8.3] start without a cut raises NotReady (the cut's reason)", str(e) == gtc.NOT_CUT, e)
     DRAPES["shirt4"] = {"state": "ready", "reason": "", "tsig": "t", "islands_path": None, "islands_sha": "",
                         "record": {}, "worn": True}
     try:
         gct.start(CHAR, "shirt4")
-        check("[8.3] start with a drape without islands raises", False, "no exception")
+        check("[8.3] a ready drape without a cut does not start", False, "no exception")
     except gct.NotReady as e:
-        check("[8.3] start with a drape without islands raises NotReady", True, e)
+        check("[8.3] a ready drape without a cut raises NotReady", True, e)
     check("[8.3] still nothing written", files_of("shirt4") == [], files_of("shirt4"))
 
     # [8.7] the thread
@@ -973,9 +999,13 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
                         "islands_sha": "", "record": {}, "worn": True}
     MEDIA["on"] = False
     CHAIN["rows"] = []
+    n_sched = len(SCHEDULED_CUTS)
     b4 = fr.get_template_cut(CHAR, "shirt4", _={})
-    check("[10.2] not draped -> the Build drapes it (and nothing else is said)", b4.get("can_generate") is False
-          and b4.get("blocked_reason") == gct.BLOCKED_BUILD, b4.get("blocked_reason"))
+    check("[10.2] not cut -> the cut's own reason (and nothing else is said)", b4.get("can_generate") is False
+          and b4.get("blocked_reason") == gtc.NOT_CUT and b4.get("pattern_reason") == gtc.NOT_CUT,
+          b4.get("blocked_reason"))
+    check("[10.2] reading the Texture tab schedules the cut (CPU)", SCHEDULED_CUTS[n_sched:] == [(CHAR, "shirt4")],
+          SCHEDULED_CUTS[n_sched:])
     b9m = fr.get_template_cut(CHAR, "shirt9", _={})
     check("[10.2] media off", b9m.get("can_generate") is False and b9m.get("blocked_reason") == "Media generation is off",
           b9m.get("blocked_reason"))
@@ -1046,8 +1076,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     with patch.object(gct, "render_pattern_sheet", counting_sheet):
         p1 = fr.template_pattern_image(CHAR, "shirt9", req(), _={})
         p2 = fr.template_pattern_image(CHAR, "shirt9", req(), _={})
-    sheet_file = _islands_file.with_name(f"shirt9_{ISLANDS_SHA[:12]}.pattern.png")
-    check("[10.5] pattern.png -> 200, cached beside the islands", getattr(p1, "status_code", 0) == 200
+    sheet_file = gtc.sheet_file(CHAR, "shirt9", "cut0")
+    check("[10.5] pattern.png -> 200, cached beside the cut (templates/cut/<item>_<cut sig>.pattern.png)", getattr(p1, "status_code", 0) == 200
           and Path(getattr(p1, "path", "")) == sheet_file and sheet_file.is_file(), getattr(p1, "path", None))
     if sheet_file.is_file():
         with Image.open(sheet_file) as sh:
@@ -1059,9 +1089,9 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
                         "record": {}, "worn": True}
     try:
         fr.template_pattern_image(CHAR, "shirt4", req(), _={})
-        check("[10.5] no islands -> 404", False, "served")
+        check("[10.5] not cut -> 404", False, "served")
     except HTTPException as e:
-        check("[10.5] no islands -> 404", e.status_code == 404, e.status_code)
+        check("[10.5] not cut -> 404", e.status_code == 404, e.status_code)
 
     worn_file = Path(_tmp) / "worn_front.png"
     worn_file.write_bytes(b"png")
@@ -1325,34 +1355,39 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     wait_done("lock1")
     check("[12.8] the claim is released when the flow ends", piece_jobs.holder(CHAR, "lock1") == "")
 
-    # [12.9] the dialog's reason per drape state — each only where it is true
+    # [12.9] cut-first: the dialog's reason per CUT state — each only where it is true; the drape is never asked
     states = {
         "dr_ready": ({}, False, ""),
-        "dr_build": ({"state": "missing", "worn": True}, False, gct.BLOCKED_BUILD),
-        "dr_notworn": ({"state": "missing", "worn": False}, False, gct.BLOCKED_NOT_WORN),
-        "dr_running": ({"state": "missing", "worn": True}, True, gct.BLOCKED_DRAPING),
-        "dr_failed": ({"state": "failed", "worn": True}, False, gct.BLOCKED_FAILED),
-        "dr_blocked": ({"state": "blocked", "worn": True, "reason": "Sheer fabric needs its piece-only views first"},
-                       False, "Sheer fabric needs its piece-only views first"),
-        "dr_noisl": ({"state": "ready", "worn": True, "islands_path": None, "islands_sha": ""}, False,
-                     gct.BLOCKED_NO_ISLANDS),
+        "dr_missing": ({"state": "missing", "reason": gtc.NOT_CUT}, False, gtc.NOT_CUT),
+        "dr_cutting": ({"state": "cutting", "reason": gtc.CUTTING}, False, gtc.CUTTING),
+        "dr_failed": ({"state": "failed", "reason": gtc.CUT_FAILED.format(error="boom")}, False,
+                      gtc.CUT_FAILED.format(error="boom")),
+        "dr_blocked": ({"state": "blocked", "reason": gtc.NO_PATTERN}, False, gtc.NO_PATTERN),
+        # a Build draping the piece, no drape yet, the piece not worn: the ready cut alone decides — nothing blocks
+        "dr_draping": (None, True, ""),
     }
     got = {}
     for iid, (over, building, _want) in states.items():
-        base_d = {"state": "ready", "reason": "", "tsig": "tsig0", "islands_path": _islands_file,
-                  "islands_sha": ISLANDS_SHA, "record": DRAPE_REC, "worn": True}
-        if over.get("state") not in (None, "ready"):
-            base_d.update({"islands_path": None, "islands_sha": "", "record": {}, "tsig": None})
-        base_d.update(over)
-        item_fixture(iid, texture="cut", drape=base_d)
+        drape_d = {"state": "missing", "reason": "Not draped yet", "tsig": None, "islands_path": None,
+                   "islands_sha": "", "record": {}, "worn": False}
+        item_fixture(iid, texture="cut", drape=drape_d)
+        if over:
+            PATTERNS[iid] = over
+        else:
+            PATTERNS[iid] = {"state": "ready", "reason": "", "islands_path": _islands_file,
+                             "islands_sha": ISLANDS_SHA, "cut_at": "2026-11-21T10:00:00+00:00", "wall_s": 11.8}
         BUILDING[iid] = building
         got[iid] = gct.dialog_state(CHAR, iid).get("blocked_reason")
-    check("[12.9] one true reason per state (ready none, missing -> Build, not worn, draping, failed, own, "
-          "no islands)", got == {k: v[2] for k, v in states.items()}, got)
-    check("[12.9] 'not draped' is never said while the Build drapes it", got["dr_running"] != gct.BLOCKED_BUILD)
+    check("[12.9] one true reason per cut state (ready none, missing, cutting, failed, blocked; a drape running or "
+          "missing blocks nothing)", got == {k: v[2] for k, v in states.items()}, got)
+    dcut = gct.dialog_state(CHAR, "dr_cutting")
+    check("[12.9] cutting -> the Pattern line's reason and the cutting flag", dcut.get("cutting") is True
+          and dcut.get("pattern_reason") == gtc.CUTTING and dcut.get("plan") is None, dcut.get("pattern_reason"))
     dready = gct.dialog_state(CHAR, "dr_ready")
-    check("[12.9] ready: the plan says 2 jobs and the back panel", dready.get("plan", {}).get("total") == 2
-          and dready.get("has_back") is True and dready.get("can_generate") is True, dready.get("plan"))
+    check("[12.9] ready without any drape: the plan says 2 jobs and the back panel", dready.get("plan", {}).get("total")
+          == 2 and dready.get("has_back") is True and dready.get("can_generate") is True
+          and dready.get("cut_at") == "2026-11-21T10:00:00+00:00" and dready.get("pattern_reason") == "",
+          dready.get("plan"))
 
     # [12.10] one click applies itself: the texture selected at the start, the figure re-assembled at the end
     item_fixture("auto1", texture="projection")

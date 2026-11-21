@@ -21,7 +21,8 @@ C) The parts: every name of ``PARTS`` and every id of ``STRIP_PARTS`` (``app/ble
    appears in the document's parts table as a row "| <id> | `<name>` | strip/panel |", with "strip" exactly for
    the ids in ``STRIP_PARTS``.
 D) ``uv_mode``: both values "pattern" and "grid" appear, and the build-arg rule in ``garment_template.py``
-   (``"pattern" if params["kind"] == "top" else "grid"``) is still the rule the document states ("top").
+   (``"pattern" if params["kind"] in PATTERN_KINDS else "grid"``, ``PATTERN_KINDS`` = ("top",) read from the source)
+   is still the rule the document states (every kind of ``PATTERN_KINDS``, here "top").
 E) The occasion: ``garment_cut_texture`` with its admin label (the first string of its ``_image(...)`` call in
    ``app/imagegen/occasions.py``), ``min_ref_slots=2`` and ``requires_chain=True`` there, and the document names
    all three.
@@ -111,12 +112,14 @@ def main() -> int:
         check(f"C  part {pid} `{name}` is a {kind}", row is not None)
 
     # D
-    rule = re.search(r'"uv_mode":\s*"pattern" if params\["kind"\] == "(\w+)" else "grid"', gt)
+    rule = re.search(r'"uv_mode":\s*"pattern" if params\["kind"\] in PATTERN_KINDS else "grid"', gt)
     check("D  uv_mode rule found in garment_template.build_args", rule is not None)
-    if rule:
-        check(f"D  doc: uv_mode pattern for kind {rule.group(1)}, grid otherwise",
+    kinds = const(GT, "PATTERN_KINDS")
+    check("D  PATTERN_KINDS is a tuple of kinds", isinstance(kinds, tuple) and len(kinds) >= 1, kinds)
+    for kind in kinds or ():
+        check(f"D  doc: uv_mode pattern for kind {kind}, grid otherwise",
               "`uv_mode`" in doc and '"pattern"' in doc and '"grid"' in doc
-              and re.search(rf'"pattern".{{0,80}}`{rule.group(1)}`', doc, re.S) is not None)
+              and re.search(rf'"pattern".{{0,80}}`{kind}`', doc, re.S) is not None)
 
     # E
     occ = OCC.read_text(encoding="utf-8")

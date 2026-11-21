@@ -2,8 +2,9 @@
 
 Plan: ``docs/superpowers/plans/2026-11-20-template-cut-uv-texture.md`` (Tasks 5–10).
 
-This part is the RENDER of a piece's islands, pure numpy + PIL on the drape's ``islands.json`` payload (written by
-``app/blender/scripts/uv_pattern.islands_payload``; this module never imports the Blender scripts):
+This part is the RENDER of a piece's islands, pure numpy + PIL on the CUT's ``islands.json`` payload (written by
+``app/blender/scripts/uv_pattern.islands_payload`` in the cut-only run of ``garment_template_cut`` — seconds on the CPU,
+no drape needed; a drape of the same cut writes the same bytes; this module never imports the Blender scripts):
 
 - ``rasterise_islands`` / ``island_mask`` — the island label raster and mask the gate measures against;
 - ``render_template`` — the CLEAN model template (islands pre-filled with the item's base fabric colour — neutral grey
@@ -18,11 +19,13 @@ stays LLM-only); ``layout_words`` names each island by its place in the template
 text) enters the cut atlas key and the record (``prompt_sha``), so a reworded prompt makes an old atlas stale. The render runs on the occasion
 ``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
-The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready drape with islands, an
-item picture) and runs ``generate`` in a thread — ONE attempt per click, no retry, no auto-trigger from Build. A
-cut atlas is keyed by ``csig`` (the drape's islands sha, the item picture sha, ``PROMPT_SHA``,
+The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready CUT with islands
+(``garment_template_cut.state``), an item picture) and runs ``generate`` in a thread — ONE attempt per click, no
+retry, no auto-trigger from Build; it never waits for a drape and may run while the Build drapes the piece. A cut
+atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, ``PROMPT_SHA``,
 ``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
-the state "ready" / "rejected" / "failed". Every render goes ``routing.run_routed`` -> ``run_on_backend`` ->
+the state "ready" / "rejected" / "failed". The assembly maps it onto a drape whose islands have the same sha — every
+drape of the same cut (``garment_template.cut_info``). Every render goes ``routing.run_routed`` -> ``run_on_backend`` ->
 ``run_on_backend_channel``; the reference wording is the central handoff's job.
 
 Pixel frame: the payload stores image-frame pixels (x right, y down, row = (1 - v) * atlas_px), so nothing here
@@ -470,7 +473,7 @@ _lock = threading.Lock()
 
 
 class NotReady(ValueError):
-    """The piece has no ready drape with pattern islands yet (a 400 for the route)."""
+    """The piece has no cut pattern (islands) yet, or no picture (a 400 for the route)."""
 
 
 class Busy(RuntimeError):
@@ -516,7 +519,7 @@ def job_labels(islands: dict, size: int, job: str) -> np.ndarray:
 
 
 def csig(islands_sha: str, item_sha: str, back_sha: str = "") -> str:
-    """The cut atlas key: the drape's islands, the item image, the back view the back job read ("" for a pattern
+    """The cut atlas key: the cut's islands, the item image, the back view the back job read ("" for a pattern
     without a back panel, or before the view exists), the prompt files and the post-processing version — NOT
     ``tsig`` (it carries the piece-only views' sha for the projection, which the atlas does not depend on)."""
     raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), PROMPT_SHA,
@@ -562,13 +565,20 @@ def current_drape(character_name: str, item_id: str) -> dict:
             "worn": worn}
 
 
-def _ready_drape(character_name: str, item_id: str) -> dict:
-    drape = current_drape(character_name, item_id)
-    if drape["state"] != "ready":
-        raise NotReady(drape.get("reason") or "The piece has no ready drape yet — build it first")
-    if drape.get("islands_path") is None or not drape.get("islands_sha"):
-        raise NotReady("The piece's drape has no pattern islands — re-drape it (tops only for now)")
-    return drape
+def current_pattern(character_name: str, item_id: str) -> dict:
+    """The piece's CUT now (``garment_template_cut.state``): ``{state ("ready" / "cutting" / "missing" / "failed" /
+    "blocked"), reason, cut_sig, islands_path, islands_sha, cut_at, wall_s, record}`` — the pattern every job, plan
+    and sheet of this module reads. Never the drape's."""
+    from app.core import garment_template_cut as gtc
+    return gtc.state(character_name, item_id)
+
+
+def _ready_pattern(character_name: str, item_id: str) -> dict:
+    pattern = current_pattern(character_name, item_id)
+    if pattern["state"] != "ready" or pattern.get("islands_path") is None or not pattern.get("islands_sha"):
+        from app.core import garment_template_cut as gtc
+        raise NotReady(pattern.get("reason") or gtc.NOT_CUT)
+    return pattern
 
 
 def _item_path(item_id: str) -> Path:
@@ -646,9 +656,10 @@ def has_back_file(path: Path, islands_sha: str) -> bool:
     return hit
 
 
-def _islands_of(drape: dict) -> dict:
+def _islands_of(pattern: dict) -> dict:
     try:
-        return json.loads(Path(drape["islands_path"]).read_text(encoding="utf-8")) if drape.get("islands_path") else {}
+        return json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8")) \
+            if pattern.get("islands_path") else {}
     except (OSError, ValueError):
         return {}
 
@@ -688,13 +699,32 @@ def older_ready(character_name: str, item_id: str, sig: str) -> bool:
     return False
 
 
+def newer_cut_ready(character_name: str, item_id: str, islands_sha: str, since: str) -> bool:
+    """Whether the item has a READY cut record for islands OTHER than ``islands_sha`` (another cut) made after
+    ``since`` (a drape's ``created_at``): the texture was made from a new cut before the drape of it
+    (``garment_template.cut_info`` "drape_behind"). False without ``since`` (a drape of unknown age is no proof)."""
+    folder = cut_dir(character_name)
+    if not since or not folder.is_dir():
+        return False
+    prefix = f"{item_id}_"
+    for path in folder.glob(f"{glob.escape(item_id)}_*.json"):
+        other = path.name[len(prefix):-len(".json")]
+        if not _CSIG_RE.fullmatch(other):
+            continue
+        rec = read_record(character_name, item_id, other)
+        if rec.get("state") == "ready" and str(rec.get("islands_sha") or "") not in ("", islands_sha) \
+                and str(rec.get("created_at") or "") > since:
+            return True
+    return False
+
+
 def current_csig(character_name: str, item_id: str) -> str | None:
-    """The csig the piece would have now (ready drape with islands + item picture), else None."""
+    """The csig the piece would have now (a ready cut + item picture), else None."""
     try:
-        drape = _ready_drape(character_name, item_id)
+        pattern = _ready_pattern(character_name, item_id)
     except NotReady:
         return None
-    return csig_for(character_name, item_id, drape["islands_sha"], _islands_of(drape))
+    return csig_for(character_name, item_id, pattern["islands_sha"], _islands_of(pattern))
 
 
 def _png(im: Image.Image) -> bytes:
@@ -921,8 +951,8 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     panel)."""
     if islands is None or not islands_sha:
         try:
-            drape = _ready_drape(character_name, item_id)
-            islands, islands_sha = _islands_of(drape), drape["islands_sha"]
+            pattern = _ready_pattern(character_name, item_id)
+            islands, islands_sha = _islands_of(pattern), pattern["islands_sha"]
         except NotReady:
             islands, islands_sha = islands or {}, ""
     side = _item_side(item_id)
@@ -1166,28 +1196,28 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
     keeps the other's passed answer (without one both run). A rejected job stops only the jobs that still need a
     render: a re-used answer costs no image job and is posted (and stays "ready") behind it, so "Use this answer" on
     the rejected one composes the atlas without spending the re-used job again. Raises ``NotReady`` before anything is written when the
-    piece has no ready drape with islands or no picture; every later failure is recorded as "failed" and returned."""
+    piece has no ready cut or no picture; every later failure is recorded as "failed" and returned."""
     from app.imagegen.routing import route_meta
     key = (character_name, item_id)
-    drape = _ready_drape(character_name, item_id)
+    pattern = _ready_pattern(character_name, item_id)
     _item_path(item_id)
-    islands = json.loads(Path(drape["islands_path"]).read_text(encoding="utf-8"))
+    islands = json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8"))
     parts = split_islands(islands)
     px_per_cm = float(islands.get("px_per_cm") or 0.0)
     size = int(islands.get("atlas_px") or 2048)
     from app.core.timeutils import utc_now_iso
-    record: dict = {"islands_sha": drape["islands_sha"], "tsig": drape.get("tsig"), "state": "failed",
+    record: dict = {"islands_sha": pattern["islands_sha"], "cut_sig": pattern.get("cut_sig"), "state": "failed",
                     "reason": "", "metrics": {}, "jobs": {}, "px_per_cm": px_per_cm, "item_px": None,
                     "upscale": None, "prompt_sha": PROMPT_SHA, "post_version": cut_texture_post.POST_VERSION,
                     "item_sha": _item_sha(item_id), "back_sha": "", "back_view": {"made": False, "jobs": 0},
                     "only": only or "", "sleeve_print": sleeve_print_of(item_id)}
-    sig = csig(drape["islands_sha"], record["item_sha"])
+    sig = csig(pattern["islands_sha"], record["item_sha"])
     try:
         if "back" in parts:
             _set_progress(key, "back_view")
             record["back_view"] = _ensure_back_view(character_name, item_id)
             record["back_sha"] = back_sha(character_name, item_id)
-        sig = csig(drape["islands_sha"], record["item_sha"], record["back_sha"])
+        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"])
     except Exception as e:  # noqa: BLE001 — the flow's failure is the record
         logger.warning("Cut texture %s %s: back view: %s", character_name, item_id, e)
         record.update({"csig": sig, "state": "failed", "reason": _failure_reason(e), "created_at": utc_now_iso()})
@@ -1294,11 +1324,11 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None) -
     (``accept`` None): every job of the current csig whose answer passed or was accepted is post-processed again from
     its raw file — no image job — and, when every job has one, the atlas is composed and applied. A job without an
     answer stays "skipped" (``NOT_MADE`` once the jobs before it are in): Run all renders exactly that one next.
-    Raises ``NotReady`` when the piece has no ready drape, no record or (``accept``) no answer of that job."""
-    drape = _ready_drape(character_name, item_id)
-    islands = json.loads(Path(drape["islands_path"]).read_text(encoding="utf-8"))
+    Raises ``NotReady`` when the piece has no ready cut, no record or (``accept``) no answer of that job."""
+    pattern = _ready_pattern(character_name, item_id)
+    islands = json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8"))
     parts = split_islands(islands)
-    sig = csig_for(character_name, item_id, drape["islands_sha"], islands, has_back_panel="back" in parts)
+    sig = csig_for(character_name, item_id, pattern["islands_sha"], islands, has_back_panel="back" in parts)
     record = read_record(character_name, item_id, sig) if sig else {}
     if not record:
         raise NotReady("Nothing to use yet — make the texture from cut first")
@@ -1385,7 +1415,7 @@ def select_cut(item_id: str) -> bool:
 def start(character_name: str, item_id: str, *, run=None, only: str | None = None) -> bool:
     """Check SYNCHRONOUSLY (so the HTTP answer carries the reason), select the texture "cut" and start ``generate``
     in a thread; False when this piece's cut already runs. Raises ``MediaGenerationDisabled`` (media off),
-    ``NoRouteError`` (empty chain), ``NotReady`` (no ready drape with islands, no picture) or ``Busy`` (another
+    ``NoRouteError`` (empty chain), ``NotReady`` (no ready cut, no picture) or ``Busy`` (another
     hub-job flow of the piece runs — ``piece_jobs``) before any thread or file exists."""
     from app.imagegen import routing as _routing
     from app.imagegen.base import MediaGenerationDisabled, media_generation_enabled
@@ -1395,7 +1425,7 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
         raise MediaGenerationDisabled(MEDIA_OFF)
     if not _routing.chain_for(CUT_OCCASION):
         raise _routing.NoRouteError(CUT_OCCASION, [])
-    _ready_drape(character_name, item_id)
+    _ready_pattern(character_name, item_id)
     _item_path(item_id)
     fn = run or generate
     return _launch(character_name, item_id, lambda: fn(character_name, item_id, **({"only": only} if only else {})),
@@ -1405,11 +1435,11 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
 def start_recompose(character_name: str, item_id: str, *, accept: str | None = None, run=None) -> bool:
     """"Use this answer" (``accept`` = "front" / "back") or a changed sleeve option (``accept`` None): ``recompose``
     in a thread — CPU only, so neither the media switch nor the routing is asked. Checked synchronously: a ready
-    drape with islands, a record with that job's answer (``NotReady``), no other hub-job flow of the piece (``Busy``).
+    cut, a record with that job's answer (``NotReady``), no other hub-job flow of the piece (``Busy``).
     False when this piece's cut already runs."""
     if accept is not None and accept not in JOBS:
         raise ValueError(f"job must be one of {', '.join(JOBS)}")
-    _ready_drape(character_name, item_id)
+    _ready_pattern(character_name, item_id)
     if accept is not None and not (usable_answers(character_name, item_id).get(accept) or {}).get("can_use"):
         raise NotReady(f"The {accept} job has no answer to use — redo it first")
     fn = run or recompose
@@ -1452,8 +1482,8 @@ def _launch(character_name: str, item_id: str, call, *, select: bool) -> bool:
 
 
 def status(character_name: str, item_id: str) -> dict:
-    """``{running, step, error, csig, record}``: ``csig`` the piece's current key (None without a ready drape with
-    islands), ``record`` that key's record ({} when none was made yet), ``step`` where a running flow is."""
+    """``{running, step, error, csig, record}``: ``csig`` the piece's current key (None without a ready cut),
+    ``record`` that key's record ({} when none was made yet), ``step`` where a running flow is."""
     with _lock:
         state = _running.get((character_name, item_id), "")
         step = _progress.get((character_name, item_id), "") if state == "running" else ""
@@ -1469,13 +1499,11 @@ def status(character_name: str, item_id: str) -> dict:
 # not, the ONE reason that is true now and what fixes it (English; the React client puts it through ``t()``). User
 # finding 2026-11-20 (Dario): "Build the template first" came while the Build was draping the piece and after a new
 # view had only made the dialog's state stale — every reason below is now said only in the state it describes.
+# Cut-first (2026-11-21): the Pattern step is the CUT (``garment_template_cut``, seconds on the CPU), never the drape —
+# its reasons are ``garment_template_cut``'s (``CUTTING``, ``NOT_CUT``, ``CUT_FAILED``, ``CUT_LEFT``, ``NO_PATTERN``
+# and the key's own: no parameters, no plain body); a Build draping the piece keeps nothing from starting.
 
-#: The button's disabled reasons (``dialog_state``), one per state of the piece's drape — never another's.
-BLOCKED_NOT_WORN = "Not worn now — put the piece on; the Build drapes it then (CPU, 0 hub jobs)"
-BLOCKED_BUILD = "Not draped yet — the Build drapes it (CPU, 0 hub jobs); the cut needs its pattern pieces"
-BLOCKED_DRAPING = "The Build is draping the piece — the cut can start when the drape is done"
-BLOCKED_FAILED = "The drape failed — see the Drape status in the Cut tab"
-BLOCKED_NO_ISLANDS = "This drape has no pattern pieces — the Build drapes it again with them (CPU, 0 hub jobs)"
+#: The button's other disabled reasons (``dialog_state``).
 BLOCKED_MEDIA = "Media generation is off"
 BLOCKED_ROUTING = ("Routing chain for 'Garment — texture from cut' is empty — set it in /admin/settings → Media "
                    "Generation → Routing")
@@ -1493,41 +1521,22 @@ def _item_side(item_id: str) -> int:
         return 0
 
 
-def _drape_reason(character_name: str, item_id: str, drape: dict) -> str:
-    """The ONE reason the piece's drape keeps the cut from starting, "" when it does not: a Build draping it now,
-    not worn, not draped, failed, a blocked key (its own reason), a ready drape without islands."""
-    if drape["state"] == "ready":
-        return "" if drape.get("islands_path") is not None and drape.get("islands_sha") else BLOCKED_NO_ISLANDS
-    from app.core import figure_build
-    from app.core import garment_template as gt
-    if gt.live_progress(character_name, item_id) is not None or (
-            drape.get("worn") and figure_build.fits_piece(character_name, item_id)):
-        return BLOCKED_DRAPING
-    if drape["state"] == "blocked":
-        return drape.get("reason") or BLOCKED_BUILD
-    if not drape.get("worn"):
-        return BLOCKED_NOT_WORN
-    if drape["state"] == "failed":
-        return BLOCKED_FAILED
-    return BLOCKED_BUILD
-
-
 def dialog_state(character_name: str, item_id: str) -> dict:
     """``status`` plus:
 
     - ``can_generate`` / ``blocked_reason`` — "" when the button may start; else the ONE true reason, in the order
-      the user has to fix them: the drape (``_drape_reason``), ``BLOCKED_PICTURE``, ``BLOCKED_MEDIA``,
-      ``BLOCKED_ROUTING``, another hub-job flow of the piece (``piece_jobs.reason``). A running cut is no "blocked"
-      reason: the button says it runs;
-    - ``drape_reason`` / ``draping`` / ``draped_at`` — the Pattern step's own line (only the drape's reason, never
-      the media switch's or the routing's);
+      the user has to fix them: the cut (``current_pattern``'s reason), ``BLOCKED_PICTURE``, ``BLOCKED_MEDIA``,
+      ``BLOCKED_ROUTING``, another hub-job flow of the piece (``piece_jobs.reason``). A running cut-texture flow is
+      no "blocked" reason: the button says it runs. The drape is never asked: the flow may run while it drapes;
+    - ``pattern_reason`` / ``cutting`` / ``cut_at`` / ``cut_wall_s`` — the Pattern step's own line (only the cut's
+      reason, never the media switch's or the routing's; ``cutting`` while ``garment_template_cut`` cuts it);
     - ``current`` — a ready record exists for the current csig (Run all says "Everything is current");
     - ``plan`` — ``job_plan`` (the button's job count, the back view and the upscale included);
     - ``texture`` — the piece's ``texture`` param; ``applied`` — the figure shows the cut atlas now
       (``garment_template.cut_info``), with ``applied_reason`` when not;
     - ``upscale``, ``islands_sha``, ``files`` (which of ``CUT_FILES`` exist for the current csig);
     - ``answers`` — ``usable_answers`` (the "Use this answer" buttons: 0 image jobs, CPU); ``can_use`` False for
-      every job while the button would be refused (a flow runs, another hub-job flow of the piece, no drape);
+      every job while the button would be refused (a flow runs, another hub-job flow of the piece, no cut);
     - ``sleeve_print`` — the piece's sleeve option, ``has_sleeves`` whether the pattern has sleeves to choose for,
       ``option_stale`` whether the ready atlas was composed with the other option (``cut_info`` "option")."""
     from app.core import garment_template as gt
@@ -1536,11 +1545,13 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     from app.imagegen.base import media_generation_enabled
     from app.models.inventory import get_item
     out = status(character_name, item_id)
+    pattern = current_pattern(character_name, item_id)
     drape = current_drape(character_name, item_id)
-    islands = _islands_of(drape) if drape["state"] == "ready" else {}
+    cut_ready = pattern["state"] == "ready"
+    islands = _islands_of(pattern) if cut_ready else {}
     side = _item_side(item_id)
-    drape_reason = _drape_reason(character_name, item_id, drape)
-    blocked = drape_reason
+    pattern_reason = "" if cut_ready else str(pattern.get("reason") or "")
+    blocked = pattern_reason
     if not blocked and not side:
         blocked = BLOCKED_PICTURE
     if not blocked and not media_generation_enabled():
@@ -1557,21 +1568,21 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     info = gt.cut_info(character_name, item_id, drape.get("record"), item=item) if drape["state"] == "ready" else {}
     record = out.get("record") or {}
     out.update({"can_generate": not blocked and not out["running"], "blocked_reason": blocked,
-                # the Pattern step's own line: "" = draped with islands; ``draping`` = a Build drapes it now
-                "drape_reason": drape_reason, "draping": drape_reason == BLOCKED_DRAPING,
-                "draped_at": str((drape.get("record") or {}).get("created_at") or ""),
+                # the Pattern step's own line: "" = cut with islands; ``cutting`` = the cut-only run cuts it now
+                "pattern_reason": pattern_reason, "cutting": pattern["state"] == "cutting",
+                "cut_at": str(pattern.get("cut_at") or ""), "cut_wall_s": pattern.get("wall_s"),
                 "current": record.get("state") == "ready"
                 and str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain"),
-                "plan": job_plan(character_name, item_id, islands, str(drape.get("islands_sha") or ""))
-                if drape["state"] == "ready" else None,
+                "plan": job_plan(character_name, item_id, islands, str(pattern.get("islands_sha") or ""))
+                if cut_ready else None,
                 "texture": params.get("texture") or "projection",
                 "applied": info.get("texture") == "cut",
                 "applied_state": info.get("cut_state") or "",
                 "upscale": 0 < side < MIN_ITEM_SIDE,
                 "has_back": has_back(islands),
-                "islands_sha": str(drape.get("islands_sha") or "") if drape.get("islands_path") else "",
+                "islands_sha": str(pattern.get("islands_sha") or "") if cut_ready else "",
                 "files": {k: bool(stem and _file(stem, f".{k}.png").is_file()) for k in CUT_FILES}})
-    use_off = out["running"] or bool(drape_reason) or bool(held and held != "cut")
+    use_off = out["running"] or bool(pattern_reason) or bool(held and held != "cut")
     answers = usable_answers(character_name, item_id, sig) if sig else {}
     for entry in answers.values():
         entry["can_use"] = bool(entry["can_use"] and not use_off)
@@ -1597,15 +1608,15 @@ def cut_file(character_name: str, item_id: str, kind: str, sig: str | None = Non
 
 
 def pattern_sheet_file(character_name: str, item_id: str) -> Path | None:
-    """The DEBUG pattern sheet (``render_pattern_sheet``) of the piece's CURRENT ready drape, rendered on demand and
-    cached beside its ``islands.json`` as ``{item}_{islands sha[:12]}.pattern.png`` (a re-drape with new islands gets
-    a new file; the dialog's URL carries the same sha). None when the piece is not built or has no islands (a kind
-    still on the grid UV)."""
-    drape = current_drape(character_name, item_id)
-    path, sha = drape.get("islands_path"), str(drape.get("islands_sha") or "")
-    if drape["state"] != "ready" or path is None or not sha:
+    """The DEBUG pattern sheet (``render_pattern_sheet``) of the piece's CURRENT cut — written by the cut-only run
+    beside its islands (``templates/cut/{item}_{cutsig}.pattern.png``), rendered here when missing. None while the
+    piece is not cut (the dialog's URL carries the islands sha, so a new cut is a new URL)."""
+    from app.core import garment_template_cut as gtc
+    pattern = current_pattern(character_name, item_id)
+    path, sig = pattern.get("islands_path"), pattern.get("cut_sig")
+    if pattern["state"] != "ready" or path is None or not sig:
         return None
-    sheet = Path(path).with_name(f"{item_id}_{sha[:12]}.pattern.png")
+    sheet = gtc.sheet_file(character_name, item_id, sig)
     if not sheet.is_file():
         islands = json.loads(Path(path).read_text(encoding="utf-8"))
         _write_bytes(sheet, _png(render_pattern_sheet(islands)))

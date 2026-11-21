@@ -79,24 +79,24 @@ body actions):
 * ``POST /characters/{c}/figure/template/{item_id}/preview {params}`` — A188: the draft drawn on the plain base-body
   front (``garment_preview.overlay``), pixel polygons; nothing saved.
 * ``PUT  /characters/{c}/figure/template/{item_id} {params, source}`` — store the parameters on the ITEM
-  (every wearer; ``garment_template.set_params``); spends nothing — the next Build re-drapes. 400 with the
-  validation errors (nothing stored).
+  (every wearer; ``garment_template.set_params``); spends no hub job — the next Build re-drapes, and a top's cut
+  is started on the CPU at once (``garment_template_cut.schedule``). 400 with the validation errors (nothing stored).
 * ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's Texture tab
-  (``garment_cut_texture.dialog_state`` + picture URLs): ``{running, step, error, csig, record, can_generate,
-  blocked_reason, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url, answers,
+  (``garment_cut_texture.dialog_state`` + picture URLs; starts the piece's cut on the CPU when it is missing):
+  ``{running, step, error, csig, record, can_generate, blocked_reason, pattern_reason, cutting, cut_at, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url, answers,
   sleeve_print, has_sleeves, option_stale}``.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/generate {only?}`` — the cut flow in the background (the back
   view when missing, the front job, the back job, the atlas applied; ``only`` "front" / "back" redoes one job) and
   the texture set to "cut"; 409 media off / already running / another hub-job flow of the piece (``piece_jobs``),
-  503 empty chain (``NoRouteError`` text), 400 without a ready drape with islands or an item picture.
+  503 empty chain (``NoRouteError`` text), 400 without a cut pattern or an item picture (never waits for a drape).
 * ``POST /characters/{c}/figure/template/{item_id}/cut/use {job}`` — "Use this answer": the job's stored answer, also
   a rejected one, is accepted and the atlas composed on the CPU (0 image jobs); 400 without an answer, 409 running.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/sleeves {sleeve_print}`` — the sleeve option of the texture
   ("plain" / "picture"), a made atlas composed again on the CPU; 400 unknown value.
 * ``GET  /characters/{c}/figure/template/{item_id}/cut/<kind>.png[?v=<csig>]`` — the record's pictures (``kind``
   one of ``garment_cut_texture.CUT_FILES``); 404 when missing.
-* ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current drape's
-  islands (rendered on demand, cached by the islands sha); 404 while not built or without islands.
+* ``GET  /characters/{c}/figure/template/{item_id}/pattern.png`` — the debug pattern sheet of the current cut
+  (written by the cut-only run, rendered when missing); 404 while the piece is not cut.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -604,7 +604,19 @@ def put_template_params(character_name: str, item_id: str, body: TemplateParamsR
         record = gt.set_params(item_id, body.params, source=body.source)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _schedule_cut(character_name, item_id)
     return {"item_id": item_id, **record}
+
+
+def _schedule_cut(character_name: str, item_id: str) -> None:
+    """Cut-first (2026-11-21): start the piece's cut-only run when its pattern is missing (``garment_template_cut``,
+    CPU, 0 hub jobs, no piece claim) — after a parameter save and whenever the dialog reads its Texture tab. Never
+    fails the request."""
+    from app.core import garment_template_cut as gtc
+    try:
+        gtc.schedule(character_name, item_id)
+    except Exception as e:  # noqa: BLE001 — the dialog shows the missing cut and its reason
+        logger.warning("Cut of %s for %s not scheduled: %s", item_id, character_name, e)
 
 
 class TemplatePreviewRequest(BaseModel):
@@ -1036,6 +1048,7 @@ def _template_cut_payload(character_name: str, item_id: str) -> Dict[str, Any]:
     debug sheet of the current islands, "" without islands)."""
     from urllib.parse import quote
     from app.core import garment_cut_texture as gct
+    _schedule_cut(character_name, item_id)
     state = gct.dialog_state(character_name, item_id)
     base = f"/characters/{quote(character_name, safe='')}/figure/template/{quote(item_id, safe='')}"
     sig = state.get("csig")
@@ -1067,7 +1080,7 @@ def generate_template_cut(character_name: str, item_id: str, body: Optional[Temp
     missing, a routed upscale of a small item picture, the front job, the back job, then the atlas applied to the
     figure; ``only`` redoes one job). Selects the texture "cut" on the piece. Checked before the thread starts: media
     off -> 409 through the global ``MediaGenerationDisabled`` handler, an empty chain -> 503 with the ``NoRouteError``
-    text, no ready drape with islands or no item picture -> 400, already running or another hub-job flow of this
+    text, no cut pattern or no item picture -> 400, already running or another hub-job flow of this
     piece running (``piece_jobs``) -> 409 with its reason. Answers the box's payload."""
     from app.core import garment_cut_texture as gct
     from app.imagegen.routing import NoRouteError
@@ -1097,7 +1110,7 @@ def use_template_cut_answer(character_name: str, item_id: str, body: TemplateCut
     """"Use this answer" (user test 2026-11-21): the job's stored answer — passed or rejected by a gate — is accepted
     and the atlas composed with it on the CPU in the background (``garment_cut_texture.recompose``, 0 image jobs),
     then applied to the figure; a job without an answer yet stays for Run all. 400 when the job has no answer or the
-    piece no ready drape, 409 while a flow of this piece runs. Answers the box's payload."""
+    piece no cut pattern, 409 while a flow of this piece runs. Answers the box's payload."""
     from app.core import garment_cut_texture as gct
     _template_item(character_name, item_id)
     try:
@@ -1150,12 +1163,12 @@ def template_cut_image(character_name: str, item_id: str, kind: str, request: Re
 @router.get("/{character_name}/figure/template/{item_id}/pattern.png")
 def template_pattern_image(character_name: str, item_id: str, request: Request,
                            _: Dict[str, Any] = Depends(require_admin)):
-    """The debug pattern sheet of the piece's current drape (``garment_cut_texture.pattern_sheet_file``: rendered on
-    demand, cached beside its islands by the islands sha); 404 while the piece is not built or has no islands."""
+    """The debug pattern sheet of the piece's current cut (``garment_cut_texture.pattern_sheet_file``: written by the
+    cut-only run beside its islands, rendered when missing); 404 while the piece is not cut."""
     from app.core import garment_cut_texture as gct
     from app.core.http_files import etag_file_response
     _template_item(character_name, item_id)
     path = gct.pattern_sheet_file(character_name, item_id)
     if path is None:
-        raise HTTPException(status_code=404, detail="The piece has no pattern islands yet — build it first")
+        raise HTTPException(status_code=404, detail="The piece's pattern is not cut yet")
     return etag_file_response(path, request, "image/png")

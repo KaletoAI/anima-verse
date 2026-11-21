@@ -20,6 +20,13 @@ cloth-drape on the voxel-remeshed posed body (spike ``drape``), measure stretch,
 Solidify 1.5 mm, project the views onto the panel UVs, skin by Data Transfer,
 measure the poses, export armature + garment. Wall and CPU seconds are reported
 for the drape and the whole script.
+
+``cut_only`` (a top with ``uv_mode`` "pattern"; ``app.core.garment_template_cut``): the run stops right after the
+panels are cut, laid out of the body (``clear_of_body``) and given their pattern UVs — no drape, no pose shapes, no
+bake, no export. Its only output is ``islands.json``, byte-identical to the one the full run writes for the same
+inputs (the UVs are assigned before the cloth run, which only moves vertices). The inputs the cut reads are the body,
+the lower layers (colliders), ``spec``, ``torso_half_m``, ``thickness``, ``slit`` and ``uv_mode``; ``fabric``,
+``drape_quality``, ``frames``, ``poses``, ``shape_groups``, ``render`` and the views are read only after it.
 """
 import math
 import sys
@@ -1802,6 +1809,9 @@ def run(a):
     centre = sl[:, :2].mean(0) if len(sl) else bco[:, :2].mean(0)
     fitted = spec.get("fitted")
     uv_info = None
+    cut_only = bool(prm.get("cut_only"))
+    if cut_only and (fitted or not bod or (prm.get("uv_mode") or "grid") != "pattern"):
+        raise RuntimeError("cut_only needs a bodice cut with pattern UVs (uv_mode \"pattern\")")
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
         col, ctree = gd.rest_collider(body, extra=lower)
@@ -1886,6 +1896,14 @@ def run(a):
             uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json")
             uv_info["parts_built"] = parts_built
             uv_info["parts_kept"] = parts_kept
+            if cut_only:
+                # the cut ends here: the panels are cut, laid out of the body and given their pattern UVs — the drape
+                # below only moves vertices, so the islands it would write are these bytes
+                return gd._plain({"cut_only": True, "uv": uv_info, "bodice": binfo, "slit_edges": int(slit_edges),
+                                  "lower_layers": len(lower), "verts": len(obj.data.vertices),
+                                  "script_wall_s": round(time.time() - t_all, 2),
+                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), \
+                    {"islands": str(out / "islands.json")}
     else:
         binfo = {}
         col = None

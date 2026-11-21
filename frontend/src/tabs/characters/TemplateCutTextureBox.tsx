@@ -6,6 +6,10 @@
  *   back view (when missing) → front job (front panel, sleeves, neckband + the item picture) → back job (the back
  *   panel alone + the piece's back view) → post-processing per job → one atlas → applied to the figure (CPU).
  *
+ * The Pattern step is the CUT (cut-first 2026-11-21, `garment_template_cut`): the pattern pieces are cut on the CPU
+ * in seconds when the dialog opens or the parameters are saved — never waiting for a drape, so the flow may run while
+ * the Build drapes the piece.
+ *
  * The click also selects Texture "From cut" (the result's only use) — said next to the button. While the flow runs
  * every job button of the piece is off (the server refuses a second flow with 409, `piece_jobs`); the tab polls and
  * re-reads the dialog when the flow ends, so the result shows without a second click.
@@ -94,10 +98,11 @@ export interface TemplateCutState {
   upscale: boolean
   has_back: boolean
   islands_sha: string
-  /** The Pattern step's own reason ("" = draped with pattern pieces); `draping`: a Build drapes it now. */
-  drape_reason: string
-  draping: boolean
-  draped_at: string
+  /** The Pattern step's own reason ("" = cut into pattern pieces); `cutting`: the cut runs now (CPU, seconds). */
+  pattern_reason: string
+  cutting: boolean
+  cut_at: string
+  cut_wall_s?: number | null
   urls: Record<string, string>
   pattern_url: string
   answers?: { front?: CutAnswer; back?: CutAnswer }
@@ -283,6 +288,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   }, [path])
   useEffect(() => { reload() }, [reload, refreshKey])
   const running = !!state?.running
+  const cutting = !!state?.cutting
   useEffect(() => {
     if (!state || !onLight) return
     const tip = state.running ? t(RUN_STEP[state.step] || 'Starting…')
@@ -301,10 +307,10 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
     }
   }, [running, onChanged])
   useEffect(() => {
-    // poll while the flow runs; slowly otherwise, so a Build started elsewhere or a second tab shows up
-    const id = window.setInterval(reload, running ? 2000 : 8000)
+    // poll while the flow or the cut runs; slowly otherwise, so a Build started elsewhere or a second tab shows up
+    const id = window.setInterval(reload, running || cutting ? 2000 : 8000)
     return () => window.clearInterval(id)
-  }, [running, reload])
+  }, [running, cutting, reload])
   const make = async (only: '' | 'front' | 'back') => {
     setBusy(true)
     setError('')
@@ -354,8 +360,8 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const plan = state.plan
   const step = state.running ? state.step : ''
   const off = busy || running || !state.can_generate
-  // the drape's reason is said by the Pattern line; under the button only what else keeps it off
-  const why = state.blocked_reason && state.blocked_reason !== state.drape_reason ? t(state.blocked_reason) : ''
+  // the cut's reason is said by the Pattern line; under the button only what else keeps it off
+  const why = state.blocked_reason && state.blocked_reason !== state.pattern_reason ? t(state.blocked_reason) : ''
   const offTip = state.blocked_reason ? t(state.blocked_reason) : ''
   const u = state.urls || {}
   // a Redo is offered once there is something to redo; its label carries the server's count (`plan.redo`), which is 2
@@ -399,10 +405,12 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
           {t('The pattern pieces are filled from pictures, starting from the item’s fabric colour: the front job paints the front panel from the item picture, the back job the back panel from the piece’s back view; the sleeves and the neckband get the front panel’s fabric. Every answer is checked against the item picture; the atlas replaces the projection without a new drape.')}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} aria-label={t('Steps')}>
-          <StepLine testid="drape" label={t('Pattern')}
-            light={state.draping ? 'blue' : state.drape_reason ? 'yellow' : 'green'}
-            text={state.drape_reason ? t(state.drape_reason)
-              : t('Draped {at} — the pattern pieces are ready').replace('{at}', state.draped_at.replace('T', ' ').slice(0, 16))} />
+          <StepLine testid="pattern" label={t('Pattern')}
+            light={state.cutting ? 'blue' : state.pattern_reason ? 'yellow' : 'green'}
+            text={state.pattern_reason ? t(state.pattern_reason)
+              : t('Cut {at} — pattern pieces ready').replace('{at}', state.cut_at.replace('T', ' ').slice(0, 16))}
+            tip={state.cut_wall_s != null && !state.pattern_reason
+              ? t('Cut on the CPU in {s} s, 0 hub jobs — no drape needed').replace('{s}', state.cut_wall_s.toFixed(1)) : undefined} />
           {state.has_back ? (
             <StepLine testid="back_view" label={t('Back view')}
               light={step === 'back_view' ? 'blue' : plan?.back_view ? 'yellow' : 'green'}
@@ -509,7 +517,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(4, ${THUMB}px)`, gap: '6px 8px' }} data-cut-thumbs="">
-        <Thumb src={state.pattern_url} label={t('Pattern pieces')} empty={t('Shown once draped')} />
+        <Thumb src={state.pattern_url} label={t('Pattern pieces')} empty={t('Shown once cut')} />
         <Thumb src={u.template_front || ''} label={t('Front template')} />
         <Thumb src={u.item || ''} label={t('Item picture')} tip={t('Picture 2 of the front job')} />
         <Thumb src={u.raw_front || ''} label={t('Front answer')} />

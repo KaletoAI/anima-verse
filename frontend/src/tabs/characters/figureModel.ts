@@ -441,7 +441,7 @@ export interface TextureWarning {
 
 /** The figure row's "texture from cut" state (`figure_build._template_row` → `metrics.cut`). */
 export interface TemplateCut {
-  state: 'ready' | 'off' | 'missing' | 'stale' | 'rejected' | 'failed'
+  state: 'ready' | 'off' | 'missing' | 'stale' | 'drape_behind' | 'rejected' | 'failed'
   reason: string
   iou: number | null
   de_after: number | null
@@ -461,6 +461,7 @@ export function templateCutLine(info: TemplateInfo | null | undefined, t: Tr = E
   }
   if (c.state === 'missing') return t('Texture: projection — no cut texture yet')
   if (c.state === 'stale') return t('Texture: projection — cut out of date')
+  if (c.state === 'drape_behind') return t('Texture: projection — the drape is of an older cut; the next Build drapes the new one')
   return t(c.state === 'rejected' ? 'Texture: projection — cut rejected: {reason}' : 'Texture: projection — cut failed: {reason}')
     .replace('{reason}', t(c.reason || 'no reason'))
 }

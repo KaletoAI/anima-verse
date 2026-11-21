@@ -37,7 +37,9 @@ pieces UNDER it (their drape keys / fit identities, a boot it hangs over), the j
 allowance and the chest shaping (``key_for``) — never a piece worn over it. A top's drape also keeps its pattern islands beside it
 (``{item}_{tsig}.islands.json``, ``islands_path``; the record's ``islands`` = file, sha256, px_per_cm).
 With the param ``texture`` "cut" the assembly swaps the drape's projection image for the "texture from cut" atlas
-(``atlas_for``; keyed by the islands sha, never by ``tsig`` — ``texture`` is ``TEXTURE_ONLY``).
+(``atlas_for``; keyed by the islands sha, never by ``tsig`` — ``texture`` is ``TEXTURE_ONLY``). The islands do not
+wait for the drape: ``garment_template_cut`` cuts the pattern alone (the same builder with ``cut_only``, seconds) and
+a drape of the same cut writes the same bytes (its record's ``cut_sig``).
 A failed drape is recorded in ``templates/failed/`` and the piece
 is left off with its reason until Retry. 0 hub jobs; the only paid call is the
 one parameter suggestion.
@@ -246,6 +248,9 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: the front panel's fabric (the model painted a chest embroidery onto one sleeve); "picture": the model's answer,
 #: for an item with a print ON a sleeve. The neckband is always the fabric patch.
 SLEEVE_PRINTS = ("plain", "picture")
+#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut); a jacket and a
+#: dress with a bodice keep the grid UV until step 3 of the pattern plan.
+PATTERN_KINDS = ("top",)
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
 TEXTURE_ONLY = ("fly", "texture", "sleeve_print")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
@@ -1790,8 +1795,10 @@ def _md5(payload: Any) -> str:
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
-def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
-    """The cache key of one drape (module docstring)."""
+def keyed_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """The parameters a drape is keyed by (``tsig``): without ``MATERIAL_ONLY`` / ``TEXTURE_ONLY`` and the fields
+    that mean nothing for the piece's kind; the leather finishes share one drape fabric. ``garment_template_cut``
+    keys the cut by the same set less the drape-only fields."""
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY and k not in TEXTURE_ONLY}
     if params.get("kind") != "trousers":                # A233: the trouser fields key only trousers
         params = {k: v for k, v in params.items() if k not in TROUSER_FIELDS}
@@ -1804,6 +1811,12 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
         params.pop("string_width_m", None)
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
+    return params
+
+
+def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
+    """The cache key of one drape (module docstring)."""
+    params = keyed_params(params)
     payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
                "lower": sorted(lower)}
     if params.get("kind") == "dress" and not has_bodice(params):
@@ -2033,6 +2046,18 @@ def _key(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
             return None, tv.SHEER_NEEDS_VIEWS, {}, None, []
         return None, NEEDS_PARAMS.replace("parameters", "picture"), {}, None, []
     tex = texture_sha_of(sources)
+    under = under_tokens(character_name, item_id, params, base_sha=base_sha, lower=lower, item=item)
+    # Only what the drape is really cut against keys it: the pieces UNDER it (their drape keys / fit identities, the
+    # boot it hangs over), the jacket allowance, the chest shaping. A piece worn OVER it (or beside it) changes nothing
+    # of this drape — keying by the whole worn set re-draped the shirt when the jacket over it came off (2026-11-20).
+    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources, params, under
+
+
+def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
+                 item: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The ``lower`` part of a drape key (``_key``) — what the piece is cut and draped against: the template drapes
+    under it (their keys), the own-mesh fits under it (their identities), the jacket allowance, the fitted cut's
+    mark, the chest shaping. ``garment_template_cut`` keys the cut by the same tokens. Read-only."""
     under = []
     ready = []
     for other, it, sub in collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha):
@@ -2053,10 +2078,7 @@ def _key(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower)
-        # Only what the drape is really cut against keys it: the pieces UNDER it (their drape keys / fit identities, the
-    # boot it hangs over), the jacket allowance, the chest shaping. A piece worn OVER it (or beside it) changes nothing
-    # of this drape — keying by the whole worn set re-draped the shirt when the jacket over it came off (2026-11-20).
-    return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources, params, under
+    return under
 
 
 def cut_stand_in(character_name: str, item_id: str, *, base_sha: str, params: Dict[str, Any],
@@ -2341,7 +2363,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
             # pattern-piece UV islands for a top; a jacket and a dress with a bodice keep the grid UV until step 3
-            "uv_mode": "pattern" if params["kind"] == "top" else "grid"}
+            "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid"}
 
 
 def work_wall_s(data: Dict[str, Any]) -> Optional[float]:
@@ -2406,6 +2428,8 @@ CUT_OPTION_TEXT = ("The sleeve option of the texture from cut changed — use th
                    "(Texture tab, CPU, 0 hub jobs)")
 CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
 CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
+CUT_DRAPE_BEHIND_TEXT = ("Texture from cut is made for a newer cut than this drape — the next Build drapes the new "
+                         "cut (CPU, 0 hub jobs)")
 
 
 def texture_warning(bake: Optional[Dict[str, Any]],
@@ -2427,7 +2451,7 @@ def texture_warning(bake: Optional[Dict[str, Any]],
     low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
     state = cut.get("cut_state")
     texts = {"stale": CUT_STALE_TEXT, "option": CUT_OPTION_TEXT, "rejected": CUT_REJECTED_TEXT,
-             "failed": CUT_FAILED_TEXT}
+             "failed": CUT_FAILED_TEXT, "drape_behind": CUT_DRAPE_BEHIND_TEXT}
     cut_warning = None
     if state in texts:
         reason = str(cut.get("reason") or "")
@@ -2452,9 +2476,14 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
       "stale" (no record for this csig, but a ready one for an OLDER csig of the item: new islands, a new item
       picture, a new back view, a new prompt or post version — an old atlas is never painted onto new islands),
       "missing" (nothing made yet, or the item has no picture), "option" (a ready atlas composed with another
-      ``sleeve_print`` than the item's now — ``garment_cut_texture.set_sleeve_print`` composes it again on the CPU).
+      ``sleeve_print`` than the item's now — ``garment_cut_texture.set_sleeve_print`` composes it again on the CPU),
+      "drape_behind" (cut-first, 2026-11-21: a ready atlas exists for OTHER islands — another cut — made after this
+      drape: the texture was made from the new cut before the Build draped it; the atlas never goes onto this drape,
+      the next Build drapes the new cut).
 
-    Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut."""
+    Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut,
+    and every drape of the same cut writes the same islands bytes (``garment_template_cut``), so an atlas made from
+    the cut alone fits each of them and no drape of another cut."""
     from app.core import garment_cut_texture as gct
     if item is None:
         from app.models.inventory import get_item
@@ -2485,6 +2514,9 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
         out.update(texture="cut", cut_state="ready")
     elif state in ("rejected", "failed"):
         out.update(cut_state=state, reason=str(rec.get("reason") or ""))
+    elif gct.newer_cut_ready(character_name, item_id, str(islands["sha256"]),
+                             str((record or {}).get("created_at") or "")):
+        out.update(cut_state="drape_behind", reason=CUT_DRAPE_BEHIND_TEXT)
     elif gct.older_ready(character_name, item_id, sig):
         out.update(cut_state="stale", reason=CUT_STALE_TEXT)
     else:
@@ -2883,6 +2915,13 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
+        # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``) — only when
+        # its colliders were the cut's ("full": an own-mesh collider shrunk or dropped laid the panels out of others)
+        cut_sig = None
+        if params["kind"] in PATTERN_KINDS and inner["mode"] == "full":
+            from app.core import garment_template_cut
+            cut_sig = garment_template_cut.cut_sig(params, base_sha=base_sha, lower=under_tokens(
+                character_name, item_id, params, base_sha=base_sha, lower=lower, item=item))
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,
@@ -2897,7 +2936,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                   "pose_shapes": (result["data"] or {}).get("pose_shapes"),
                   **({"shaping": shaping} if shaping else {}),
                   **({"shaping_note": shaping_note} if shaping_note else {}),
-                  **({"layer_ease": JACKET_SLEEVE_EASE} if layer_ease(params, over) else {})}
+                  **({"layer_ease": JACKET_SLEEVE_EASE} if layer_ease(params, over) else {}),
+                  **({"cut_sig": cut_sig} if cut_sig else {})}
         if result["ok"]:
             target = drape_path(character_name, item_id, sig)
             shutil.move(str(result["glb"]), str(target))
