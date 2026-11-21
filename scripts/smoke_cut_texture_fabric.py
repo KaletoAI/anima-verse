@@ -31,7 +31,8 @@ No server, no world DB, no hub job, no BiRefNet (the key matte). ``app/core/cut_
     Phi(-0.5)) = 50 * (0.93319 - 0.30854) = 31.2; c = 1.5: 50 * (Phi(2.5) - Phi(0.5)) = 15.1; c = 2.5: 50 * (Phi(3.5) -
     Phi(1.5)) = 3.33 < 4 -> 4 edge columns (62..65); the eroded mask (4 px = round(0.03 * 128)) is 120 x 120 -> 4 *
     120 / 14 400 = 0.0333 (+-0.001).
-    ``detail_limit``: 4 x reference + 0.04 -> 0.0154 (Kai's item) -> 0.1016, 0.0976 (Dario's) -> 0.4304, None -> None.
+    ``detail_limit``: 3 x reference + 0.04 (factor 3 since 2026-11-21) -> 0.0154 (Kai's item) -> 0.0862, 0.0976
+    (Dario's) -> 0.3328, None -> None.
 [4] ``answer_gates`` on a 200 x 200 panel against a blue item colour (30, 90, 173) and a reference detail 0.0:
     the panel in the item's blue -> colour ok (dE00 <= 1), detail 0.0 <= 0.04 ok; in red (181, 22, 30) -> colour fails
     (dE00 > 20, the text "colour ΔE00 …"); blue with a 4 px black/white stripe print over its whole area -> the detail
@@ -148,8 +149,8 @@ step[:, 128:] = 255
 dd = post.detail_density(step, np.ones((256, 256), bool))
 check("[3] a black | white step -> 4 x 120 / 14 400 = 0.0333", dd is not None and abs(dd - 4 * 120 / 14400) <= 0.001,
       dd)
-check("[3] detail_limit 0.0154 -> 0.1016, 0.0976 -> 0.4304, None -> None",
-      post.detail_limit(0.0154) == 0.1016 and post.detail_limit(0.0976) == 0.4304 and post.detail_limit(None) is None,
+check("[3] detail_limit 0.0154 -> 0.0862, 0.0976 -> 0.3328, None -> None",
+      post.detail_limit(0.0154) == 0.0862 and post.detail_limit(0.0976) == 0.3328 and post.detail_limit(None) is None,
       (post.detail_limit(0.0154), post.detail_limit(0.0976)))
 
 # [4] answer gates

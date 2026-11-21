@@ -46,8 +46,9 @@ CLAMP_DE = 25.0
 #: Enters the cut atlas key (``csig``): bump when anything here changes the atlas. 2 (2026-11-20): the post-processing
 #: runs per job (front / back) on its own islands and the two are composed (``garment_cut_texture.compose``). 3
 #: (2026-11-21): the islands go pre-filled with the item's fabric colour, the answer gates (``ANSWER_GATE``) and the
-#: sleeves / neckband filled from the front panel's fabric patch.
-POST_VERSION = 3
+#: sleeves / neckband filled from the front panel's fabric patch. 4 (2026-11-21): the foreground pieces apart from the
+#: islands are dropped before the registration (``drop_strays``).
+POST_VERSION = 4
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256
@@ -270,6 +271,7 @@ def resample_register(out: Image.Image, mask: np.ndarray) -> tuple[np.ndarray, d
     fg = foreground(arr)
     if not fg.any() or not mask.any():
         return arr.copy(), {"registered": False, "iou": 0.0, "size_in": size_in}
+    arr, fg, strays = drop_strays(arr, fg, mask)
     mp, grid_iou, box_iou = register_raster(mask, fg)
     sx, ox, sy, oy = mp
     xs = np.arange(w) + 0.5
@@ -281,7 +283,43 @@ def resample_register(out: Image.Image, mask: np.ndarray) -> tuple[np.ndarray, d
     union = (f2 | mask).sum()
     iou = float((f2 & mask).sum() / union) if union else 0.0
     return got, {"registered": True, "iou": round(iou, 4), "size_in": size_in,
-                 "map": [round(float(x), 6) for x in mp], "grid_iou": grid_iou, "box_iou": box_iou}
+                 "map": [round(float(x), 6) for x in mp], "grid_iou": grid_iou, "box_iou": box_iou,
+                 "strays": strays}
+
+
+#: ``drop_strays``: the answer's foreground pieces that touch the islands must cover at least this share of the mask
+#: before the pieces that do not touch them are dropped as strays (below it the model moved the panel and the
+#: registration has to find it in the whole foreground).
+STRAY_KEEP_COVERAGE = 0.5
+
+
+def drop_strays(arr: np.ndarray, fg: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """The answer without the foreground pieces that lie apart from the islands (user test 2026-11-21, Kai's and
+    Tilda's back jobs: the model kept the panel in place AND drew a whole extra garment beside it — the foreground's
+    box then spanned both, the registration scaled the template 2.4x onto the extra garment and the gate read
+    "coverage 0.65"). A connected foreground piece (8-neighbourhood) that shares no pixel with ``mask`` (in the
+    template frame, before any map) is painted white — but only when the pieces that do touch the mask already cover
+    ``STRAY_KEEP_COVERAGE`` of it, i.e. the model kept the template's frame; otherwise nothing is dropped. Pieces apart
+    from the islands never reach the atlas (``cut_and_bleed`` keeps the islands only), so this changes what the
+    registration and the gate measure, never a pixel of a kept answer. ``(arr, fg, strays)`` — ``strays`` the dropped
+    foreground as a share of the mask area (0.0 when nothing was dropped)."""
+    from scipy import ndimage
+    labels, count = ndimage.label(fg, structure=np.ones((3, 3), bool))
+    if count < 2:
+        return arr, fg, 0.0
+    touching = np.zeros(count + 1, bool)
+    touching[np.unique(labels[mask & fg])] = True
+    touching[0] = False
+    keep = touching[labels]
+    area = int(mask.sum())
+    if not area or float((keep & mask).sum()) / area < STRAY_KEEP_COVERAGE:
+        return arr, fg, 0.0
+    drop = fg & ~keep
+    if not drop.any():
+        return arr, fg, 0.0
+    out = arr.copy()
+    out[drop] = 255
+    return out, keep, round(float(drop.sum()) / area, 4)
 
 
 # ------------------------------------------------------------------------------------------------------------------ gate
@@ -598,7 +636,10 @@ def detail_density(rgb, mask) -> float | None:
 #:   bolder than the photo shows it, 2.2x. Factor 4 leaves Dario 2x of room (limit 0.430); Kai's limit is 0.102 and
 #:   the print 4.6x over it. The slack 0.04 lets a plain item (detail ~0) keep a visible weave; a print block of the
 #:   adc0d92f kind on a quarter of a plain panel (~0.12) is still over its limit.
-ANSWER_GATE = {"de00": 20.0, "detail_factor": 4.0, "detail_slack": 0.04}
+#:   Factor 3 since 2026-11-21 (POST_VERSION 4): Tilda's plain cream back view (0.0536) got an invented illustration on
+#:   its back panel at 0.236 — under factor 4's limit 0.254, over factor 3's 0.201. The right answers stay far below
+#:   factor 3: Dario 0.138 / 0.013 against 0.467 / 0.514, Kai 0.007 / 0.0 against 0.080 / 0.093.
+ANSWER_GATE = {"de00": 20.0, "detail_factor": 3.0, "detail_slack": 0.04}
 
 
 def detail_limit(reference: float | None) -> float | None:

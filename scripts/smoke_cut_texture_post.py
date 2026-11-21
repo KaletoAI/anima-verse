@@ -28,7 +28,10 @@ channel distance from white exceeds ``WHITE_TOL`` (24); the synthetic answers pa
         finds the true map: the mapped mask then covers the drawn islands up to edge rounding, and the only
         foreground outside it is the blob (400 px): IoU >= (123 600 - 2 * 2 * (206 + 309)) / (123 600 + 400)
         = 121 540 / 124 000 = 0.98 on the islands' own pixels; checked as >= 0.97 against the full mask after
-        resampling, the scales 1.03 +- 0.01, and the grid IoU above the box-fit IoU.
+        resampling, the scales 1.03 +- 0.01.
+        Since POST_VERSION 4 (``drop_strays``) the blob shares no pixel with the mask while the drawn islands cover
+        most of it (>= 0.5), so it is dropped BEFORE the box fit: ``strays`` = 400 / 120 000 = 0.0033 and the box fit
+        is then already the true map (box IoU >= 0.99, the search keeps it).
 [2] Gate coverage. Two equal islands (labels 1 and 2, 100 x 100 each, 20 000 px of mask), the answer fills only
     island 1: coverage = 10 000 / 20 000 = 0.50 < 0.97 -> rejected; the reason (the first failing gate in the order
     coverage, island_coverage, iou, spill) reads exactly "coverage 0.50 < 0.97".
@@ -125,7 +128,8 @@ src[inside] = mask_c[np.floor(ys_[inside]).astype(int), np.floor(xs_[inside]).as
 pic_c[src] = GREY
 pic_c[450:470, 330:350] = GREY
 img_c, info_c = ctp.resample_register(Image.fromarray(pic_c), mask_c)
-check("[1c] grid IoU above the box-fit IoU", info_c["grid_iou"] > info_c["box_iou"], str(info_c))
+check("[1c] the blob is dropped before the box fit (strays 0.0033, box IoU >= 0.99)",
+      info_c["strays"] == 0.0033 and info_c["box_iou"] >= 0.99, str(info_c))
 check("[1c] registered IoU >= 0.97 despite the stray blob", info_c["iou"] >= 0.97, str(info_c))
 check("[1c] map scales 1.03 +- 0.01", abs(info_c["map"][0] - 1.03) <= 0.01 and abs(info_c["map"][2] - 1.03) <= 0.01,
       str(info_c["map"]))
