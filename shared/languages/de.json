@@ -3054,6 +3054,7 @@
     "{inviter} suggests {pose} to {invitee}.": "{inviter} lädt {invitee} zum {pose} ein.",
     "{invitee} does not feel like {pose} with {inviter} right now.": "{invitee} hat gerade keine Lust auf das {pose} mit {inviter}.",
     "{actor} and {partner} start {pose}.": "{actor} und {partner} fangen mit dem {pose} an.",
+    "{actor} and {partner} switch to {pose}.": "{actor} und {partner} wechseln zum {pose}.",
     "{actor} and {partner} stop {pose}.": "{actor} und {partner} hören mit dem {pose} auf.",
     "{actor} sits down on the {prop}.": "{actor} setzt sich hin ({prop}).",
     "{actor} lies down on the {prop}.": "{actor} legt sich hin ({prop}).",

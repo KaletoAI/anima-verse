@@ -2217,6 +2217,17 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     blocked = IE.check_can_pair(avatar, partner, pose)
     if blocked:
         raise HTTPException(status_code=409, detail=blocked)
+    # Another pose for the free pair the two already play with consent: the
+    # consent carries and it switches in place without a question — the
+    # free-pose twin of the furniture switch (switch_consent_carries).
+    if IE.switch_consent_carries(avatar, partner, pose):
+        try:
+            IE.start_interaction(avatar, partner, pose)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        _interact_charge(avatar)
+        return {"ok": True, "status": "started", "partner": partner, "pose": pose,
+                "consent_carried": True}
     # create_invite emits ``interaction.invited``; the package that owns the
     # pair verb gives an NPC invitee its turn. Nothing to do here.
     invite_id = IE.create_invite(avatar, partner, pose)

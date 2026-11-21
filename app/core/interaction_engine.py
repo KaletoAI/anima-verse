@@ -408,6 +408,65 @@ def partner_poses() -> List[Tuple[str, str]]:
 
 # ------------------------------------------------------------------ pairing
 
+def together_in(actor: str, partner: str) -> Optional[Dict[str, Any]]:
+    """The free pair ``actor`` and ``partner`` play WITH EACH OTHER right now,
+    or None: one live interaction on both, the two of them and nobody else,
+    not a furniture run (those switch through ``prop_action_engine``).
+    Another free pair pose for exactly these two switches in place
+    (:func:`start_interaction`) instead of being refused as "busy"."""
+    from app.models.character import get_character_profile
+    if not actor or not partner or actor == partner:
+        return None
+    mine = get_interaction(actor, get_character_profile(actor) or {})
+    theirs = get_interaction(partner, get_character_profile(partner) or {})
+    if not mine or not theirs or mine["id"] != theirs["id"]:
+        return None
+    if mine.get("execution_kind") == "prop_action":
+        return None
+    if set(members_of(mine).values()) != {actor, partner}:
+        return None
+    return mine
+
+
+def _pose_definition(pose_key: str) -> Dict[str, Any]:
+    """What a free pair switch hands the ``prop_action.consent_carries``
+    contributors instead of an action definition (one rule for both kinds)."""
+    return {"ability": "pose", "pose_key": (pose_key or "").strip().lower()}
+
+
+def switch_consent_carries(actor: str, partner: str, pose_key: str) -> bool:
+    """Whether ``actor`` may switch the free pair it plays with ``partner`` to
+    ``pose_key`` WITHOUT asking — the free-pose twin of
+    ``prop_action_engine._consent_carries``:
+
+    * the two play one free pair together (:func:`together_in`), and the
+      pose is a different one;
+    * that pair began with consent — an invitation between the two of them
+      that was accepted ("ask"); the partner of a "react" pair never agreed,
+      and a pair without such a record asks again;
+    * no package refuses (``prop_action.consent_carries``, called with
+      ``{"ability": "pose", "pose_key": …}`` for the old and the new pose —
+      ``intimacy`` never carries into an intimate pose from a non-intimate one).
+    """
+    inter = together_in(actor, partner)
+    pose_key = (pose_key or "").strip().lower()
+    if not inter or not pose_key or pose_key == str(inter.get("pose_key") or "").lower():
+        return False
+    invite = get_invite(str(inter.get("invite_id") or ""))
+    if (not invite or invite["status"] != "accepted" or invite["consent"] == "react"
+            or {invite["inviter"], invite["invitee"]} != {actor, partner}):
+        return False
+    from app.core.hooks import get_providers
+    for fn in get_providers("prop_action.consent_carries"):
+        try:
+            if fn(_pose_definition(inter["pose_key"]), _pose_definition(pose_key)) is not True:
+                return False
+        except Exception as e:
+            logger.warning("consent provider %s failed: %s", getattr(fn, "__qualname__", fn), e)
+            return False
+    return True
+
+
 def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
     """Why ``actor`` and ``partner`` cannot pair up right now — "" when they
     can. The checks that do NOT depend on a pose or on the exact metres:
@@ -420,6 +479,10 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
     question) and by ``start_interaction`` (asked again on acceptance,
     because minutes may have passed). The distance and the seat stay with
     the start alone — an invitation is meant to survive the walk over.
+
+    Two who already play a free pair WITH EACH OTHER (:func:`together_in`)
+    are not "busy" for another pose — that is a switch in place
+    (:func:`start_interaction`); the same pose again is refused.
     """
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -428,13 +491,16 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
     from app.core.travel_engine import get_journey
     if not actor or not partner or actor == partner:
         return "an interaction needs two different characters"
+    together = together_in(actor, partner) if pose_key else None
+    if together and str(together.get("pose_key") or "").lower() == pose_key.strip().lower():
+        return f"{actor} and {partner} are already doing that"
     for name in (actor, partner):
         prof = get_character_profile(name)
         if prof is None:
             return f"{name} does not exist"
         if get_journey(name, profile=prof):
             return f"{name} is travelling"
-        if get_interaction(name, prof):
+        if get_interaction(name, prof) and not together:
             return f"{name} is already busy with someone"
         if is_character_sleeping(name):
             return f"{name} is asleep"
@@ -835,6 +901,10 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     blocked = check_can_pair(actor, partner, pose_key)
     if blocked:
         raise ValueError(blocked)
+    # The two already play a free pair together: this is a switch IN PLACE —
+    # the same interaction (id, consent record) goes on with the new clip,
+    # nobody walks, nobody stands up, no end and no new start is announced.
+    switch_from = together_in(actor, partner)
 
     profiles = {n: get_character_profile(n) or {} for n in (actor, partner)}
     # Who plays which half: by gender when the clip assigns its halves, else
@@ -850,7 +920,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     if not pa or not pb:
         raise ValueError("both characters need a map position")
     dist = math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"]))
-    if dist > MAX_START_DISTANCE_M:
+    if dist > MAX_START_DISTANCE_M and not switch_from:
         raise TooFarApart(f"{partner} is too far away ({dist:.1f} m)")
 
     # Furniture is exclusively an exact prop action capability
@@ -860,8 +930,22 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     if needs_place(group_of(pose_key)):
         raise ValueError("This pair action requires an explicit prop action.")
     held = held_participant(actor, partner)
-    frame = _held_frame(held, who_a, who_b, meta, {actor: pa, partner: pb}) if held else None
-    if frame:
+    frame = (_held_frame(held, who_a, who_b, meta, {actor: pa, partner: pb})
+             if held and not switch_from else None)
+    if switch_from:
+        # Same place, same facing as the pose they leave. Beside a held avatar
+        # the frame is shifted so that the avatar's new first frame lands on
+        # where it stands — it is not moved, as at any start.
+        old = switch_from.get("anchor") or {}
+        yaw = float(old.get("yaw") or 0.0)
+        ax, az = float(old.get("x") or 0.0), float(old.get("z") or 0.0)
+        start = _role_start(meta, "a" if held == who_a else "b") if held else None
+        if start:
+            hx, hz = _rotate(*start, yaw)
+            here = pa if held == actor else pb
+            ax, az = here["x"] - hx, here["z"] - hz
+        anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4), "place_id": None}
+    elif frame:
         laid, points = frame
         other = partner if held == actor else actor
         here = pa if other == actor else pb
@@ -878,7 +962,10 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
                   "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
                   "place_id": None}
-    inter_id = uuid.uuid4().hex[:12]
+    inter_id = switch_from["id"] if switch_from else uuid.uuid4().hex[:12]
+    if switch_from and not invite_id:
+        # A carried consent keeps the record it carries (switch_consent_carries).
+        invite_id = str(switch_from.get("invite_id") or "")
     started = game_time().canonical()
     from app.core.timeutils import utc_now_iso
     started_sys = utc_now_iso("microseconds")
@@ -890,6 +977,13 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # not be half-written, or the other half sees a partner that is not bound.
     stored = True
     with pair_profile_locks(who_a, who_b):
+        if switch_from:
+            # Checked again under the locks, for BOTH before either is written:
+            # a pair that ended or changed in between is not switched.
+            for name, _role, _other in halves:
+                cur = (get_character_profile(name) or {}).get("interaction") or {}
+                if cur.get("id") != switch_from["id"]:
+                    raise ValueError("the pair changed in the meantime")
         for name, role, other in halves:
             prof = profiles[name] = get_character_profile(name) or {}
             prof["interaction"] = {
@@ -926,11 +1020,13 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # The room has to SEE it. Without a line in the perception stream the
     # pair is a 3D animation nobody in the fiction ever noticed — including
     # the two doing it, who read the stream as their own memory of the scene.
-    _narrate(actor, "{actor} and {partner} start {pose}.",
+    _narrate(actor, "{actor} and {partner} switch to {pose}." if switch_from
+             else "{actor} and {partner} start {pose}.",
              actor=actor, partner=partner, pose_key=pose_key)
-    logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)",
+    logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)%s",
                 inter_id, who_a, who_b, kind, clip_duration,
-                "cycle" if loop else "one-shot")
+                "cycle" if loop else "one-shot",
+                f" — switched from '{switch_from['pose_key']}'" if switch_from else "")
     if not stored:
         raise ValueError("pair_profile_write_failed")
     return profiles[actor]["interaction"]
