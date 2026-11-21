@@ -113,6 +113,13 @@ class OutfitChangeSkill(BaseSkill):
                 for s in (res.get("cleared_slots") or [slot]):
                     forbidden.add(s)
                     forced.pop(s, None)
+            elif res.get("reason") == "not_equipped":
+                # Already empty (e.g. the chat extraction took it off first):
+                # the goal is reached, so it counts as success and the slot
+                # is still marked intentionally empty.
+                results.append(f"Slot '{slot}' war schon leer")
+                forbidden.add(slot)
+                forced.pop(slot, None)
             else:
                 errors.append(f"Slot '{slot}': {res.get('reason', 'unbekannt')}")
 
@@ -135,6 +142,15 @@ class OutfitChangeSkill(BaseSkill):
                     for s in (r.get("cleared_slots") or []):
                         forbidden.add(s)
                         forced.pop(s, None)
+            elif (r.get("reason") == "not_equipped"
+                  and any(e.get("item_id") == iid for e in inv_items)):
+                # Owned but already off: the goal is reached. A forced piece
+                # entry for it would contradict that, so it goes too.
+                results.append(f"'{self._item_label(iid)}' war schon abgelegt")
+                for s, fid in list(forced.items()):
+                    if fid == iid:
+                        forced.pop(s, None)
+                        forbidden.add(s)
             else:
                 errors.append(f"'{token}': {r.get('reason', 'nicht equipped')}")
 
