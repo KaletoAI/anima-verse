@@ -199,6 +199,18 @@ subnormal fill-in made LAPACK 100× slower); a bandwidth over `BAND_MAX` or a ma
 Jacobi-preconditioned CG. A top keeps the plain CG and its payload byte for byte (smoke [21]). Measured: Kira's
 tights 520 s → 22 s in Blender, Lirien's / Kai's trousers 51–53 s → 7–8 s.
 
+**Briefs (D8, D9).** `leg_cut` reaches 1.5: past 1 the leg line meets the side's height `reach` from the centre
+instead of at the hip's side (`garment_template.brief_leg_shape`: reach = hip_half − (leg_cut − 1) / 0.5 × `HIGH_LEG`
+(0.6) × (hip_half − g), the power held at 0.4 — Glut: 16.87 cm at 1.0, 8.55 cm at 1.5). `gusset_m` (0.03–0.08,
+default 0.06) is the crotch's full width (`fitted_spec`'s `gusset_half_m` = half of it); the back's half width at the
+crotch is `brief_back_width` = 0.4 g + back_coverage × 0.9 × (hip_half − 0.4 g). At the default it leaves the drape
+key as it was, and it keys no other kind. The dialog shows it as "Crotch width".
+
+**Texture from cut (data).** Every fitted part has a prompt name (`PROMPT_PIECE_NAMES`, left / right are the
+wearer's) and a sheet label (`PART_LABELS`); `piece_name_of` names the piece by its cut (high-leg briefs, thong,
+elbow-length gloves, knee-high socks, capri trousers, …). The fitted kinds' prompt files and the `texture` choice for
+them are not part of step 3a's pieces work.
+
 **Keys.** `tsig` of a fitted kind carries `FITTED_VERSION`; `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
 `fitted_pattern.py`), so a change of the cut rules re-cuts. Changing `uv_pattern.py` changes `UV_PATTERN_SHA`: every
 top drape with a recorded `cut_sig` counts as `cut_behind` once and re-drapes on the CPU (0 hub jobs; its islands are
@@ -228,7 +240,7 @@ The cut is made by TWO routed image jobs (`JOBS` = front, back; `split_islands`)
 | job | islands | Picture 2 | prompt |
 |---|---|---|---|
 | front | every island except the back panel: front panel, sleeves, neckband, collar, cuffs | the item picture | `shared/templates/image/garment_cut_texture.md` |
-| back | the back panel alone (`BACK_PARTS`) | the piece's back view (`garment_template_views`, occasion `garment_view`) | `shared/templates/image/garment_cut_texture_back.md` |
+| back | the back panel (`BACK_PARTS`: `back`; step 3a also a trouser's `back_l` / `back_r` and a glove's `palm_l` / `palm_r` — tights and a bra have no back job) | the piece's back view (`garment_template_views`, occasion `garment_view`) | `shared/templates/image/garment_cut_texture_back.md` |
 
 **Sleeve rule:** sleeves (and band, collar, placket, cuffs) go with the front job — the item picture shows the front,
 and a sleeve seen from the front carries its fabric there; only the back panel needs the back view. A pattern without a
