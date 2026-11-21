@@ -439,7 +439,8 @@ def render_pattern_sheet(islands: dict, size: int | None = None) -> Image.Image:
 # 6. on "ready": ``figure.invalidate`` + ``garment_assembly.schedule`` — the figure is re-assembled on the CPU with
 #    the atlas (``start`` already set the piece's ``texture`` to "cut": the flow's only purpose).
 #
-# A job that fails or is rejected stops the flow: the next job is not spent. Files under ``cut_dir`` per (item,
+# A job that fails or is rejected stops the flow: the next job that needs a render is not spent (a re-used passed
+# answer still keeps its "ready" entry). Files under ``cut_dir`` per (item,
 # csig): ``{item}_{csig}.json`` (the record), ``.template_front.png`` / ``.template_back.png`` (each template carries
 # ONLY its job's islands, at their atlas positions), ``.item.png`` (Picture 2 of the front job), ``.back_ref.png``
 # (Picture 2 of the back job), ``.raw_front.png`` / ``.raw_back.png`` (the answers) and ``.atlas.png``. The record is
@@ -1162,7 +1163,9 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
     """ONE flow (module comment above): -> the record (``state`` "ready", "rejected" or "failed"). A job whose answer
     of the same csig passed (or was accepted, ``use_answer``) is re-used (re-posted from its raw file,
     ``reused_jobs``) — Run all renders only what did not pass; ``only`` "front" / "back" always renders that job and
-    keeps the other's passed answer (without one both run). Raises ``NotReady`` before anything is written when the
+    keeps the other's passed answer (without one both run). A rejected job stops only the jobs that still need a
+    render: a re-used answer costs no image job and is posted (and stays "ready") behind it, so "Use this answer" on
+    the rejected one composes the atlas without spending the re-used job again. Raises ``NotReady`` before anything is written when the
     piece has no ready drape with islands or no picture; every later failure is recorded as "failed" and returned."""
     from app.imagegen.routing import route_meta
     key = (character_name, item_id)
@@ -1214,7 +1217,10 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
         record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
                             "detail": refs["detail"]}
         name = piece_name(item_id)
+        stopped = False             # a job did not pass: no further image job is spent, re-used answers still post
         for job in parts:
+            if stopped and job not in reuse:
+                continue
             template_png = _file(stem, f".template_{job}.png")
             _write_bytes(template_png, _png(render_template(parts[job], size, fill=refs["prefill"])))
             raw_png = _file(stem, f".raw_{job}.png")
@@ -1244,15 +1250,17 @@ def generate(character_name: str, item_id: str, *, only: str | None = None) -> d
                             sleeve_print=record["sleeve_print"])
             record["jobs"][job] = _entry_from_post(entry, res)
             if res["state"] != "ready":
-                break               # a rejected job stops the flow: the next job is not spent
+                stopped = True      # a rejected job stops the flow: the next job that needs a render is not spent
+                continue
             results[job] = res
     except Exception as e:  # noqa: BLE001 — a job's failure is the record, shown in the dialog
         logger.warning("Cut texture %s %s failed: %s", character_name, item_id, e)
         failed = next((j for j in JOBS if (record["jobs"].get(j) or {}).get("state") == "failed"), "")
         reason = _failure_reason(e)
         record.update({"state": "failed", "reason": f"{failed.capitalize()}: {reason}" if failed else reason})
-        for job in parts:
-            record["jobs"].setdefault(job, {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
+        for job in parts:       # a re-used answer that was not posted yet keeps its passed entry (its raw file stays)
+            record["jobs"].setdefault(job, dict(reuse[job]) if job in reuse else
+                                      {"state": "skipped", "reason": SKIPPED, "reference": JOB_REFERENCE[job]})
         record["upsampler_on"] = any(j.get("upsampler_on") for j in record["jobs"].values())
         record["created_at"] = utc_now_iso()
         _write_record(_file(stem, ".json"), record)

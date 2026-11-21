@@ -185,6 +185,10 @@ rules.
     ``cut_info`` says "option" and the dialog ``option_stale`` True / ``current`` False; ``recompose()`` then: 0 image
     calls, the record's sleeve_print "picture", ``cut_info`` "cut", and the front job's fabric fill covers only the
     band (the sleeves are the model's now). "glitter" -> ValueError.
+[13.6] Review finding 2026-11-21: a fresh item, both jobs pass (2 image calls, "ready"). Redo front with the green
+    answer: 1 image call, the front "rejected", the back re-used from its raw file (0 calls) and still "ready" — not
+    "skipped" — and its raw file on disk; the dialog offers Use this answer for both. ``recompose(accept="front")``:
+    0 image calls, "ready", the atlas written, one assembly scheduled; ``job_plan`` then 0 with both reused.
 """
 import os
 import re
@@ -1524,6 +1528,35 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
         check("[13.5] an unknown sleeve option is an error", False)
     except ValueError:
         check("[13.5] an unknown sleeve option is an error", True)
+    # [13.6] Redo front over two passed answers, rejected, then Use this answer (review finding 2026-11-21)
+    item_fixture("ov2", texture="cut")
+    backend.answer = answer_filled
+    n0 = len(backend.calls)
+    rec_b = gct.generate(CHAR, "ov2")
+    stem_o2 = gct.cut_dir(CHAR) / f"ov2_{rec_b['csig']}"
+    check("[13.6] both jobs pass first: 2 image calls, ready", len(backend.calls) == n0 + 2
+          and rec_b.get("state") == "ready", (len(backend.calls) - n0, rec_b.get("reason")))
+    backend.answer = answer_front_green
+    n0 = len(backend.calls)
+    rec_rf = gct.generate(CHAR, "ov2", only="front")
+    check("[13.6] Redo front, rejected: 1 image call, the re-used back stays 'ready' and its answer on disk",
+          len(backend.calls) == n0 + 1 and rec_rf.get("state") == "rejected"
+          and rec_rf["jobs"]["front"]["state"] == "rejected" and rec_rf["jobs"]["back"]["state"] == "ready"
+          and Path(f"{stem_o2}.raw_back.png").is_file(),
+          (len(backend.calls) - n0, rec_rf.get("reason"), rec_rf["jobs"]["back"].get("state")))
+    use2 = gct.dialog_state(CHAR, "ov2").get("answers") or {}
+    check("[13.6] the dialog offers Use this answer for both shown answers",
+          (use2.get("front") or {}).get("can_use") is True and (use2.get("back") or {}).get("can_use") is True, use2)
+    sch0 = len(SCHEDULED)
+    rec_u2 = gct.recompose(CHAR, "ov2", accept="front")
+    check("[13.6] Use this answer: 0 image calls, ready, the atlas composed, the figure re-assembled",
+          len(backend.calls) == n0 + 1 and rec_u2.get("state") == "ready"
+          and rec_u2["jobs"]["front"].get("accepted") is True and rec_u2["jobs"]["back"]["state"] == "ready"
+          and Path(f"{stem_o2}.atlas.png").is_file() and len(SCHEDULED) == sch0 + 1,
+          (rec_u2.get("state"), rec_u2.get("reason")))
+    pl_o2 = gct.job_plan(CHAR, "ov2")
+    check("[13.6] Run all then spends nothing: both answers are kept",
+          pl_o2["total"] == 0 and pl_o2["reused"] == ["back", "front"], pl_o2)
     backend.answer = answer_filled
 
     # [12.13] an old drape (no texture_sha) keeps standing in after the FLOW makes the back view (review finding):

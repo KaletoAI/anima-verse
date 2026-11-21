@@ -133,7 +133,9 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
    frame and register it raster-to-raster, gate it against the job's islands AND by the answer gates (below), cut it
    with bleed padding, colour-match it to the ITEM fabric (both jobs — one fabric, one colour), then fill the islands
    the model does not paint from the job's main panel (`fill_fabric`, below). A rejected or failed job stops the flow:
-   the next job is marked `skipped` and not spent; the reason is prefixed `Front:` / `Back:`.
+   the next job that needs a render is marked `skipped` and not spent, while a re-used passed answer (0 image jobs)
+   keeps its `ready` entry, so "Use this answer" on the rejected one composes the atlas without rendering it again;
+   the reason is prefixed `Front:` / `Back:`.
 5. `compose`: the front job's grown islands, then the back job's grown islands outside the front islands, then each
    job's own islands — one atlas. Seam continuity is measured inside the jobs (`seam_de`) and across them
    (`cross_seams` → `seam_cross_de`, the front/back side seams); both are metrics, not gates.
