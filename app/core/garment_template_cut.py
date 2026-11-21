@@ -17,7 +17,8 @@ The CUT SIGNATURE (``cut_sig``) is exactly what the cut reads (derived from ``ga
 - the base model sha256 (the body the panels are wrapped round and laid out of; ``measure_body`` reads it too);
 - the lower-layer tokens of the drape key (``garment_template.under_tokens``: the drapes / fits under the piece are
   the colliders ``clear_of_body`` lays the panels out of, the jacket allowance shapes ``panel_spec``, the chest
-  shaping shapes the body);
+  shaping shapes the body) plus which lower template drapes are READY (only those are handed over as colliders);
+  while one is still to be draped there is no sig (``WAITING_LOWER``: the Build drapes it first, ``sig_of``);
 - ``TEMPLATE_VERSION`` and ``UV_PATTERN_SHA`` (md5 of ``app/blender/scripts/uv_pattern.py``: a change of the
   flattening re-cuts, seconds).
 
@@ -27,6 +28,10 @@ NOT in it: the views / item picture (the drape key's texture part), ``fabric``, 
 Files under ``templates/cut/`` (beside the cut-texture records, whose 12-hex csig names never end in these suffixes):
 ``{item}_{cutsig}.islands.json`` (the builder's bytes), ``.cut.json`` (the record: state, metrics, wall seconds) and
 ``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``).
+
+A drape records the sig of the cut it was laid out of (``cut_sig``); one whose recorded sig differs from the
+current one (a new ``uv_pattern.py``, a lower layer that became ready) is stale for ``garment_template.drape_state``
+and the next Build drapes it again — the drape key (``tsig``) stays, so no other drape moves.
 
 A drape of the same cut writes the same islands bytes (``scripts/smoke_template_cut_first.py`` proves it on a real
 body), so the cut atlas — keyed by the islands sha (``garment_cut_texture.csig``) — fits every drape of that cut and
@@ -65,6 +70,11 @@ NOT_CUT = "The pattern is not cut yet — it is cut when the dialog opens or the
 CUT_FAILED = "Cutting the pattern failed: {error}"
 CUT_LEFT = "Cutting the pattern stopped ({outcome}) — it is cut again when the dialog is opened"
 NO_PATTERN = "Only a top is cut into pattern pieces for now — this kind keeps its projection texture"
+#: A strapless top (bodice, bustier, corset) has no bodice cut: the builder cuts it on the grid UV, no islands.
+NO_PATTERN_STRAPLESS = ("A strapless top is not cut into pattern pieces yet — it keeps its projection texture")
+#: A lower template layer is not draped yet: the next Build drapes it first and lays this piece out of it, so a cut
+#: made now would differ from the drape the Build makes.
+WAITING_LOWER = "Waiting for the layers under it to be draped — the next Build drapes them, then the pattern is cut"
 
 _lock = threading.Lock()
 #: (character, item, cut sig) -> "running"
@@ -85,6 +95,35 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION, "uv_pattern": UV_PATTERN_SHA,
                "base": base_sha, "lower": sorted(lower)}
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+
+
+def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
+           item: Optional[Dict[str, Any]] = None, wait: bool = True) -> Tuple[Optional[str], str, List[str]]:
+    """``(cut sig | None, reason, under tokens)`` of a piece within the worn set ``lower`` — the ONE rule for the cut
+    (``cut_key``) and for the cut a drape was laid out of (``garment_template._build_drape``, its record's
+    ``cut_sig``; ``garment_template.drape_state`` compares the two).
+
+    - not a ``PATTERN_KINDS`` kind -> ``NO_PATTERN``; a strapless top (no bodice: the builder cuts it on the grid UV)
+      -> ``NO_PATTERN_STRAPLESS`` — never a Blender run;
+    - ``wait`` and a lower template layer in state "missing" (the next Build drapes it first and lays this piece out
+      of it) -> ``WAITING_LOWER``: a cut made now would differ from the drape the Build makes;
+    - else the sig of ``under_tokens`` plus one ``collider:<item>`` token per lower template layer that is READY —
+      the colliders a cut / a drape is really handed (a failed or blocked layer is none). A layer that becomes ready
+      later (a Retry, the same drape key) so changes the cut, and the drape laid out without it is stale.
+    ``wait=False`` (the drape's record) gives the sig of what the drape WAS laid out of even when a layer was left
+    due."""
+    from app.core import garment_template as gt
+    if params["kind"] not in gt.PATTERN_KINDS:
+        return None, NO_PATTERN, []
+    if not gt.has_bodice(params):
+        return None, NO_PATTERN_STRAPLESS, []
+    states = gt.collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha)
+    if wait and any(sub["state"] == "missing" for _o, _it, sub in states):
+        return None, WAITING_LOWER, []
+    under = gt.under_tokens(character_name, item_id, params, base_sha=base_sha, lower=lower, item=item,
+                            states=states)
+    tokens = under + [f"collider:{other}" for other, _it, sub in states if sub["state"] == "ready"]
+    return cut_sig(params, base_sha=base_sha, lower=tokens), "", under
 
 
 def cut_dir(character_name: str) -> Path:
@@ -111,7 +150,8 @@ def sheet_file(character_name: str, item_id: str, sig: str) -> Path:
 def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
             item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the piece's cut is made of now: ``{sig, reason, params, base, base_sha, lower, under, item}`` — ``sig``
-    None with the plain ``reason`` when it cannot be cut (no parameters, not a pattern kind, no plain body). ``lower``
+    None with the plain ``reason`` when it cannot be cut (no parameters, not a pattern kind or a strapless top, no
+    plain body, a lower layer still to be draped — ``sig_of``). ``lower``
     is the worn set under the rule of the drape key (``garment_template.lower_layers``; [] while not worn)."""
     from app.core import base_body, figure
     from app.core import garment_template as gt
@@ -124,8 +164,8 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     if params is None:
         out["reason"] = gt.NEEDS_PARAMS
         return out
-    if params["kind"] not in gt.PATTERN_KINDS:
-        out["reason"] = NO_PATTERN
+    if params["kind"] not in gt.PATTERN_KINDS or not gt.has_bodice(params):
+        out["reason"] = NO_PATTERN if params["kind"] not in gt.PATTERN_KINDS else NO_PATTERN_STRAPLESS
         return out
     profile = profile if profile is not None else (get_character_profile(character_name) or {})
     base = base_body.current_base(character_name, profile=profile)
@@ -135,9 +175,8 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     sets = figure.worn_sets(character_name, profile=profile)
     worn = item_id in set(sets.pieces.values())
     lower = gt.lower_layers(sets.own, item_id) if worn else []
-    under = gt.under_tokens(character_name, item_id, params, base_sha=base[1], lower=lower, item=item)
-    out.update(sig=cut_sig(params, base_sha=base[1], lower=under), base=base, base_sha=base[1], lower=lower,
-               under=under)
+    sig, reason, under = sig_of(character_name, item_id, params, base_sha=base[1], lower=lower, item=item)
+    out.update(sig=sig, reason=reason, base=base, base_sha=base[1], lower=lower, under=under)
     return out
 
 

@@ -100,8 +100,15 @@ Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut read
 |---|---|
 | the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec`, `slit` or `uv_mode`; `fabric` reaches the builder only as the cloth settings, read after the cut |
 | the base model sha256 | the body the panels are wrapped round, laid out of and measured on |
-| the drape key's lower-layer tokens (`under_tokens`) | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of; the jacket allowance and the chest shaping change the pattern or the body |
+| the drape key's lower-layer tokens (`under_tokens`) plus one `collider:<item>` per lower template drape that is READY | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of (only ready drapes are handed over); the jacket allowance and the chest shaping change the pattern or the body |
 | `TEMPLATE_VERSION`, `UV_PATTERN_SHA` (md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
+
+No sig — and no Blender run — while a lower template layer is still to be draped (state `missing`): the next Build
+drapes it first and lays this piece out of it, so a cut made now would differ from that drape; the dialog says
+"Waiting for the layers under it to be draped" (`WAITING_LOWER`). A failed or blocked lower layer is no collider of
+the drape either, so the cut goes on without it. A strapless top (no bodice: the builder cuts it on the grid UV) and
+every kind but a top get their plain reason (`NO_PATTERN_STRAPLESS` / `NO_PATTERN`) and are never run.
+`garment_template_cut.sig_of` is the one rule for the cut and for the drape's record.
 
 Not in it: the views and the item picture (the drape key's texture part), `opacity`, `texture`, `sleeve_print`,
 `fly`, the drape's frames / quality / poses / shape groups.
@@ -112,6 +119,12 @@ metrics, `wall_s`) and `.pattern.png` (the debug sheet). The cut starts when the
 never twice for one key, never again for a failed key, and not within 5 minutes after a run that judged nothing
 (timeout, no Blender). A drape records the `cut_sig` it was laid out of when its colliders were the cut's
 (own-mesh colliders shrunk or dropped by `drape_with_fallback` lay the panels out of other colliders: other islands).
+A ready drape whose recorded `cut_sig` differs from the current one (a new `uv_pattern.py`, a lower layer that became
+ready after it) counts as not draped (`garment_template.cut_behind`; `drape_state` "missing" with "The pattern was cut
+anew — the next Build drapes it again") and the next Build drapes it again under the same `tsig`. The drape key is NOT
+changed for this: putting the cut sig into `tsig` would re-drape every top once; this way only the tops whose cut
+really moved re-drape, and a drape without a recorded `cut_sig` (made before cut-first, or a fallback drape) never
+does.
 
 ## 2. Texture from cut (step 2)
 
@@ -276,12 +289,14 @@ row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never 
 The atlas is made from the CUT's islands and mapped onto a drape by the drape's islands sha: every drape of the same
 cut writes the same bytes, so the atlas stays valid across re-drapes (new views, a retry, a new fabric) as long as the
 cut is unchanged. A drape of another cut never gets it: when a ready atlas exists for other islands, made after the
-drape, the row says the drape is of an older cut and the next Build drapes the new one (`cut_info` state
-`drape_behind`).
+drape, the row says either that the drape is of an older cut and the next Build drapes the new one (`cut_info` state
+`drape_behind` — only when the drape's recorded `cut_sig` differs from the current cut's, `cut_behind`), or that the
+drape was laid out of other layers than the cut and the cut texture does not fit it (`drape_other`: a fallback drape
+or one without a recorded `cut_sig`, which no Build re-drapes for the cut).
 
 `garment_template.cut_info` is the one place that decides what a piece shows: `texture` `"cut"` only when the param is
 `"cut"` and a `ready` record with its atlas exists for the current `csig`; otherwise `"projection"` with `cut_state`
-`off` / `missing` / `stale` / `drape_behind` / `rejected` / `failed` / `option`. `atlas_for` returns the atlas bytes for the assembly.
+`off` / `missing` / `stale` / `drape_behind` / `drape_other` / `rejected` / `failed` / `option`. `atlas_for` returns the atlas bytes for the assembly.
 
 ### Routes (admin only, prefix `/characters`)
 

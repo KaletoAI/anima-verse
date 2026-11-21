@@ -2054,13 +2054,17 @@ def _key(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
 
 
 def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
-                 item: Optional[Dict[str, Any]] = None) -> List[str]:
+                 item: Optional[Dict[str, Any]] = None,
+                 states: Optional[List[Tuple[str, Dict[str, Any], Dict[str, Any]]]] = None) -> List[str]:
     """The ``lower`` part of a drape key (``_key``) — what the piece is cut and draped against: the template drapes
     under it (their keys), the own-mesh fits under it (their identities), the jacket allowance, the fitted cut's
-    mark, the chest shaping. ``garment_template_cut`` keys the cut by the same tokens. Read-only."""
+    mark, the chest shaping. ``garment_template_cut`` keys the cut by the same tokens. ``states`` = the
+    ``collider_states`` the caller already read (else they are read here). Read-only."""
     under = []
     ready = []
-    for other, it, sub in collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha):
+    if states is None:
+        states = collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha)
+    for other, it, sub in states:
         under.append(f"{other}:{sub['tsig'] or '-'}")
         if sub["state"] == "ready":
             ready.append(it)
@@ -2163,8 +2167,8 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     """``{state, reason, tsig, path, record}`` — ``ready`` (the drape GLB of the current key exists
     and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``, plus ``failure`` =
     ``failure_info`` of the record),
-    ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``) or ``blocked`` (no key: reason
-    from ``key_for``). Read-only."""
+    ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``; ``CUT_REDRAPE`` for a drape of
+    another cut, ``cut_behind``) or ``blocked`` (no key: reason from ``key_for``). Read-only."""
     from app.core.garment_store import read_record
     sig, reason, _sources, params, key_lower = _key(character_name, item_id, base_sha=base_sha, lower=lower,
                                                     item=item)
@@ -2172,18 +2176,41 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
         return {"state": "blocked", "reason": reason, "tsig": None, "path": None, "record": {}}
     path = drape_path(character_name, item_id, sig)
     record = read_record(path.with_suffix(".json"))
+    behind = False
     if path.is_file() and record.get("accepted") is True:
-        return {"state": "ready", "reason": "", "tsig": sig, "path": path, "record": record}
+        if not cut_behind(character_name, item_id, record, params, base_sha=base_sha, lower=lower, item=item):
+            return {"state": "ready", "reason": "", "tsig": sig, "path": path, "record": record}
+        behind = True
     if params and params.get("texture") == "cut":
         # the texture from cut replaces the projection: a drape that differs only in its texture part stands in
         stand = cut_stand_in(character_name, item_id, base_sha=base_sha, params=params, key_lower=key_lower)
-        if stand is not None:
+        if stand is not None and not cut_behind(character_name, item_id, stand["record"], params, base_sha=base_sha,
+                                                lower=lower, item=item):
             return {"state": "ready", "reason": "", **stand, "stand_in": True}
     failed = read_record(failed_path(character_name, item_id, sig))
     if failed and not refused_only_by_time(failed):
         return {"state": "failed", "reason": DRAPE_FAILED.format(error=failed.get("error") or "?"), "tsig": sig,
                 "path": None, "record": failed, "failure": failure_info(failed)}
-    return {"state": "missing", "reason": NOT_DRAPED, "tsig": sig, "path": None, "record": {}}
+    return {"state": "missing", "reason": CUT_REDRAPE if behind else NOT_DRAPED, "tsig": sig, "path": None,
+            "record": {}}
+
+
+def cut_behind(character_name: str, item_id: str, record: Dict[str, Any], params: Optional[Dict[str, Any]], *,
+               base_sha: str, lower: List[str], item: Optional[Dict[str, Any]] = None) -> bool:
+    """Cut-first review (2026-11-21): whether a drape ``record`` was laid out of ANOTHER cut than the piece's current
+    one — its recorded ``cut_sig`` differs from ``garment_template_cut.sig_of`` now (a new ``uv_pattern.py``, a lower
+    layer that became ready after the drape). Such a drape counts as not draped (``drape_state`` "missing",
+    ``CUT_REDRAPE``) and the next Build drapes it again under the SAME ``tsig`` — no other drape moves, and the
+    islands it writes are the current cut's, so the cut texture lands on it. False for a record without
+    ``cut_sig`` (a drape from before cut-first, or one laid out of shrunk / dropped own-mesh colliders: neither is
+    re-draped for it — ``cut_info`` "drape_other" says so) and while the current cut has no sig (not a pattern
+    piece, a lower layer still to be draped: the Build drapes that first)."""
+    recorded = (record or {}).get("cut_sig")
+    if not recorded or not params or params.get("kind") not in PATTERN_KINDS:
+        return False
+    from app.core import garment_template_cut
+    now = garment_template_cut.sig_of(character_name, item_id, params, base_sha=base_sha, lower=lower, item=item)[0]
+    return now is not None and now != recorded
 
 
 # --- live progress of a drape in flight (A172) ---------------------------------------
@@ -2430,6 +2457,12 @@ CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
 CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
 CUT_DRAPE_BEHIND_TEXT = ("Texture from cut is made for a newer cut than this drape — the next Build drapes the new "
                          "cut (CPU, 0 hub jobs)")
+#: A drape that no Build re-drapes for the cut (``cut_info`` "drape_other"): laid out of shrunk / dropped own-mesh
+#: colliders, or made before drapes recorded their cut.
+CUT_DRAPE_OTHER_TEXT = ("Texture from cut does not fit this drape — it was laid out of other layers under it than "
+                        "the cut, or before the cut was recorded, so its pattern pieces differ")
+#: ``drape_state``'s reason for a drape of another cut than the piece's current one (``cut_behind``).
+CUT_REDRAPE = "The pattern was cut anew — the next Build drapes it again (CPU, 0 hub jobs)"
 
 
 def texture_warning(bake: Optional[Dict[str, Any]],
@@ -2451,7 +2484,7 @@ def texture_warning(bake: Optional[Dict[str, Any]],
     low_iou = iou is not None and float(iou) < TEXTURE_WARN["iou"]
     state = cut.get("cut_state")
     texts = {"stale": CUT_STALE_TEXT, "option": CUT_OPTION_TEXT, "rejected": CUT_REJECTED_TEXT,
-             "failed": CUT_FAILED_TEXT, "drape_behind": CUT_DRAPE_BEHIND_TEXT}
+             "failed": CUT_FAILED_TEXT, "drape_behind": CUT_DRAPE_BEHIND_TEXT, "drape_other": CUT_DRAPE_OTHER_TEXT}
     cut_warning = None
     if state in texts:
         reason = str(cut.get("reason") or "")
@@ -2478,8 +2511,10 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
       "missing" (nothing made yet, or the item has no picture), "option" (a ready atlas composed with another
       ``sleeve_print`` than the item's now — ``garment_cut_texture.set_sleeve_print`` composes it again on the CPU),
       "drape_behind" (cut-first, 2026-11-21: a ready atlas exists for OTHER islands — another cut — made after this
-      drape: the texture was made from the new cut before the Build draped it; the atlas never goes onto this drape,
-      the next Build drapes the new cut).
+      drape, and the drape's recorded ``cut_sig`` differs from the current cut's: ``cut_behind``, the next Build
+      drapes the new cut — ``drape_state`` already calls such a drape not draped, so this is the moment between),
+      "drape_other" (the same atlas, but the drape carries no ``cut_sig`` or the current one: laid out of shrunk /
+      dropped own-mesh colliders, or made before drapes recorded their cut — no Build re-drapes it for the cut).
 
     Keyed by the islands sha and never by ``tsig``: a re-drape that only re-rendered a piece-only view keeps the cut,
     and every drape of the same cut writes the same islands bytes (``garment_template_cut``), so an atlas made from
@@ -2516,7 +2551,13 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
         out.update(cut_state=state, reason=str(rec.get("reason") or ""))
     elif gct.newer_cut_ready(character_name, item_id, str(islands["sha256"]),
                              str((record or {}).get("created_at") or "")):
-        out.update(cut_state="drape_behind", reason=CUT_DRAPE_BEHIND_TEXT)
+        from app.core import garment_template_cut
+        recorded = (record or {}).get("cut_sig")
+        now = garment_template_cut.cut_key(character_name, item_id, item=item)["sig"] if recorded else None
+        if recorded and now and now != recorded:
+            out.update(cut_state="drape_behind", reason=CUT_DRAPE_BEHIND_TEXT)
+        else:
+            out.update(cut_state="drape_other", reason=CUT_DRAPE_OTHER_TEXT)
     elif gct.older_ready(character_name, item_id, sig):
         out.update(cut_state="stale", reason=CUT_STALE_TEXT)
     else:
@@ -2919,9 +2960,11 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         # its colliders were the cut's ("full": an own-mesh collider shrunk or dropped laid the panels out of others)
         cut_sig = None
         if params["kind"] in PATTERN_KINDS and inner["mode"] == "full":
+            # ``wait=False``: the sig of the colliders really handed over, also when a lower layer was left due — the
+            # layer's drape later makes the current sig differ, and ``cut_behind`` re-drapes this one
             from app.core import garment_template_cut
-            cut_sig = garment_template_cut.cut_sig(params, base_sha=base_sha, lower=under_tokens(
-                character_name, item_id, params, base_sha=base_sha, lower=lower, item=item))
+            cut_sig = garment_template_cut.sig_of(character_name, item_id, params, base_sha=base_sha, lower=lower,
+                                                  item=item, wait=False)[0]
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,

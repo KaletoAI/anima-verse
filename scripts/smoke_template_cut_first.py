@@ -46,9 +46,36 @@ equal.py``. Every expectation is derived by hand below.
 [4] The atlas across drapes (``garment_template.cut_info`` / ``atlas_for``): a ready cut record + atlas for csig(A)
     (A = the [2.3] islands sha, made 2026-11-21T10:00): drape 1 (islands A, tsig t1, 09:00) -> texture "cut", the
     atlas bytes; a RE-DRAPE of the same cut (islands A, tsig t2 — new views, 11:00) -> "cut", the same csig and bytes;
-    a drape of ANOTHER cut (islands B) made 09:00, before the atlas -> "projection", cut_state "drape_behind" with
-    CUT_DRAPE_BEHIND_TEXT, ``atlas_for`` None, ``texture_warning`` carries it; the same drape B made 11:00 (after the
-    atlas: the cut changed since) -> "stale" (the atlas is out of date), never the atlas.
+    a drape of ANOTHER cut (islands B) made 09:00, before the atlas, whose record carries cut_sig "old0" while the
+    piece's cut is "c1" (a Build re-drapes it, ``cut_behind``) -> "projection", cut_state "drape_behind" with
+    CUT_DRAPE_BEHIND_TEXT, ``atlas_for`` None, ``texture_warning`` carries it; the same drape WITHOUT a cut_sig (a
+    fallback drape, or one from before cut-first) and one whose cut_sig IS the current "c1" -> "drape_other" with
+    CUT_DRAPE_OTHER_TEXT (no Build re-drapes them, so the row must not promise one); the same drape B made 11:00
+    (after the atlas: the cut changed since) -> "stale" (the atlas is out of date), never the atlas.
+[5] Review findings 2026-11-21 — what the cut is keyed by (``sig_of`` / ``cut_key``), collider states stubbed
+    (``collider_states``: one lower template layer "bra1" with drape key "tb"; no own-mesh fit; no chest shaping):
+    [5.1] a strapless top (kind top, shoulders strapless: ``has_bodice`` False) -> ``cut_key`` sig None with
+          NO_PATTERN_STRAPLESS before any profile / body is read; ``state`` "blocked"; ``schedule`` runs nothing;
+          ``sig_of`` the same reason. A skirt keeps NO_PATTERN.
+    [5.2] the bra "missing" (the next Build drapes it first) -> ``sig_of`` (None, WAITING_LOWER); with
+          ``wait=False`` (the drape's record) the sig of tokens ["bra1:tb"] = cut_sig(TOP, "b0", ["bra1:tb"]).
+    [5.3] the bra "ready" -> tokens ["bra1:tb", "collider:bra1"] (under_tokens gives "bra1:tb"; the top is no fitted
+          kind and has no jacket allowance, so nothing more); the bra "failed" -> ["bra1:tb"] (a failed layer is no
+          collider of the drape either, so the cut goes on without it) — so ready != failed, and failed == the
+          wait=False sig of [5.2].
+    [5.4] ``cut_key`` of a worn top over the missing bra (base "b0", worn set stubbed) -> sig None, WAITING_LOWER;
+          ``state`` "blocked" with it; ``schedule`` starts nothing.
+[6] A drape of another cut is stale (``garment_template.cut_behind`` in ``drape_state``; ``_key`` stubbed to tsig
+    "tz", a ready accepted drape GLB + record of "tz" on disk):
+    [6.1] record cut_sig "cA", current sig "cA" -> "ready"; current "cB" -> "missing" with CUT_REDRAPE, ``tsig`` still
+          "tz" (the Build drapes again under the same key — no tsig change, no other drape moves).
+    [6.2] a record without cut_sig (before cut-first / a fallback drape) -> "ready" for any current sig.
+    [6.3] the current cut has no sig (a lower layer still to be draped) -> "ready" (the Build drapes that layer first).
+    [6.4] finding 2 in full: ``UV_PATTERN_SHA`` changed (patched to "ffffffffffff"), everything else equal -> the sig
+          from ``sig_of`` differs from the recorded one -> ``cut_behind`` True; with the real UV_PATTERN_SHA -> False.
+    [6.5] the bra becomes ready after the top was draped without it (record = wait=False sig of [5.2]) ->
+          ``cut_behind`` True (the top is laid out of the bra next Build).
+    [6.6] ``_build_drape`` records ``sig_of(..., wait=False)`` (source check: the drape stores what it WAS laid out of).
 """
 import hashlib
 import json
@@ -409,7 +436,7 @@ with patch.object(gtc, "cut_key", key_stub), \
     pb["islands"][0]["verts_px"][1][0] += 10            # another cut: the front panel 1 cm wider
     b_bytes = json.dumps(pb, sort_keys=True, separators=(",", ":")).encode()
     sha_b = hashlib.sha256(b_bytes).hexdigest()
-    d3 = drape_rec(sha_b, b_bytes, "t3", "2026-11-21T09:00:00+00:00")
+    d3 = {**drape_rec(sha_b, b_bytes, "t3", "2026-11-21T09:00:00+00:00"), "cut_sig": "old0"}
     a3, i3 = gt.atlas_for(CHAR, ITEM, d3)
     check("[4] a drape of another, older cut never gets it: drape_behind", a3 is None
           and i3.get("texture") == "projection" and i3.get("cut_state") == "drape_behind"
@@ -417,10 +444,144 @@ with patch.object(gtc, "cut_key", key_stub), \
     w3 = gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i3)
     check("[4] the figure row says why", (w3 or {}).get("cut", {}).get("state") == "drape_behind"
           and w3["cut"]["text"] == gt.CUT_DRAPE_BEHIND_TEXT, w3)
+    for label, rec in (("no cut_sig", {k: v for k, v in d3.items() if k != "cut_sig"}),
+                       ("the current cut_sig", {**d3, "cut_sig": "c1"})):
+        a5, i5 = gt.atlas_for(CHAR, ITEM, rec)
+        check(f"[4] a drape of another cut with {label}: drape_other, no promised re-drape", a5 is None
+              and i5.get("cut_state") == "drape_other" and i5.get("reason") == gt.CUT_DRAPE_OTHER_TEXT
+              and (gt.texture_warning({"coverage": 0.9, "iou": 0.9}, i5) or {}).get("cut", {}).get("text")
+              == gt.CUT_DRAPE_OTHER_TEXT, i5)
     d4 = drape_rec(sha_b, b_bytes, "t4", "2026-11-21T11:00:00+00:00")
     a4, i4 = gt.atlas_for(CHAR, ITEM, d4)
     check("[4] a drape of a NEWER cut than the atlas: stale, never the atlas", a4 is None
           and i4.get("cut_state") == "stale", i4)
+
+# ---------------------------------------------------------------------------------------------------- [5]
+STRAPLESS = gt.validate_params({"kind": "top", "shoulders": "strapless", "length_m": 0.3})[0]
+check("[5.1] the strapless top has no bodice", gt.has_bodice(STRAPLESS) is False and STRAPLESS["kind"] == "top")
+
+
+def tmpl_item(params):
+    return {"id": "x", "category": "outfit_piece", "outfit_piece": {"template": {"params": params, "source": "user"}}}
+
+
+def no_profile(*_a, **_k):
+    raise AssertionError("cut_key read the profile / body for a piece that is never cut")
+
+
+with patch("app.models.character.get_character_profile", no_profile), \
+        patch("app.core.base_body.current_base", no_profile):
+    k51 = gtc.cut_key(CHAR, "strap1", item=tmpl_item(STRAPLESS), profile=None)
+    check("[5.1] strapless: no sig, NO_PATTERN_STRAPLESS, no profile read", k51["sig"] is None
+          and k51["reason"] == gtc.NO_PATTERN_STRAPLESS, k51["reason"])
+    s51 = gtc.state(CHAR, "strap1", key=k51)
+    check("[5.1] strapless: state blocked with the plain reason", s51["state"] == "blocked"
+          and s51["reason"] == gtc.NO_PATTERN_STRAPLESS, s51)
+    ksk = gtc.cut_key(CHAR, "skirt1", item=tmpl_item({"kind": "skirt"}), profile=None)
+    check("[5.1] a skirt keeps NO_PATTERN", ksk["sig"] is None and ksk["reason"] == gtc.NO_PATTERN, ksk["reason"])
+n = len(RUNS)
+with patch.object(gtc, "cut_key", lambda c, i, **k: k51):
+    check("[5.1] strapless: schedule runs nothing", gtc.schedule(CHAR, "strap1", runner=fake_cut_run)["state"]
+          == "blocked" and len(RUNS) == n)
+check("[5.1] sig_of: the same reason for a strapless top",
+      gtc.sig_of(CHAR, "strap1", STRAPLESS, base_sha="b0", lower=[]) == (None, gtc.NO_PATTERN_STRAPLESS, []))
+
+BRA = {"state": "missing", "tsig": "tb"}
+
+
+def bra_states(*_a, **_k):
+    return [("bra1", {"id": "bra1"}, dict(BRA))]
+
+
+STUBS = (patch("app.core.garment_template.collider_states", bra_states),
+         patch("app.core.garment_template.own_colliders", lambda *a, **k: []),
+         patch("app.core.bust_shaping.key_tokens", lambda *a, **k: []))
+for st in STUBS:
+    st.start()
+check("[5.3] the top is no fitted kind (no cut:body token)", "top" not in gt.FITTED_KINDS)
+BRA["state"] = "missing"
+check("[5.2] a lower layer still to be draped: no sig, WAITING_LOWER",
+      gtc.sig_of(CHAR, "top1", TOP, base_sha="b0", lower=["bra1"]) == (None, gtc.WAITING_LOWER, []))
+sig_left = gtc.sig_of(CHAR, "top1", TOP, base_sha="b0", lower=["bra1"], wait=False)[0]
+check("[5.2] wait=False: the sig of what the drape was laid out of", sig_left == gtc.cut_sig(TOP, base_sha="b0",
+      lower=["bra1:tb"]), sig_left)
+BRA["state"] = "ready"
+sig_ready, _r, under_ready = gtc.sig_of(CHAR, "top1", TOP, base_sha="b0", lower=["bra1"])
+check("[5.3] a ready layer: its token plus collider:bra1", sig_ready == gtc.cut_sig(
+      TOP, base_sha="b0", lower=["bra1:tb", "collider:bra1"]) and under_ready == ["bra1:tb"], (sig_ready, under_ready))
+BRA["state"] = "failed"
+sig_failed = gtc.sig_of(CHAR, "top1", TOP, base_sha="b0", lower=["bra1"])[0]
+check("[5.3] a failed layer is no collider: ready != failed == the left-due sig", sig_failed != sig_ready
+      and sig_failed == sig_left, (sig_failed, sig_ready, sig_left))
+
+
+class _Worn:
+    pieces = {"top": "top1", "underwear_top": "bra1"}
+    own = ["bra1", "top1"]
+
+
+BRA["state"] = "missing"
+with patch("app.core.base_body.current_base", lambda *a, **k: ("base0", "b0")), \
+        patch("app.core.figure.worn_sets", lambda *a, **k: _Worn()), \
+        patch("app.core.garment_template.lower_layers", lambda own, item_id: ["bra1"]):
+    k54 = gtc.cut_key(CHAR, "top1", item=tmpl_item(TOP), profile={"name": CHAR})
+    check("[5.4] cut_key over a missing bra: no sig, WAITING_LOWER", k54["sig"] is None
+          and k54["reason"] == gtc.WAITING_LOWER and k54["lower"] == ["bra1"], (k54["sig"], k54["reason"]))
+    s54 = gtc.state(CHAR, "top1", key=k54)
+    n = len(RUNS)
+    with patch.object(gtc, "cut_key", lambda c, i, **k: k54):
+        sch = gtc.schedule(CHAR, "top1", runner=fake_cut_run)
+    check("[5.4] state blocked, schedule starts nothing", s54["state"] == "blocked"
+          and s54["reason"] == gtc.WAITING_LOWER and sch["state"] == "blocked" and len(RUNS) == n, (s54, sch))
+
+# ---------------------------------------------------------------------------------------------------- [6]
+from app.core.garment_store import write_record  # noqa: E402
+
+tz = gt.drape_path(CHAR, "top6", "tz")
+tz.parent.mkdir(parents=True, exist_ok=True)
+tz.write_bytes(b"glb")
+CUR = {"sig": "cA"}
+
+
+def set_record(**extra):
+    write_record(tz.with_suffix(".json"), {"item_id": "top6", "tsig": "tz", "accepted": True,
+                                          "created_at": "2026-11-21T09:00:00+00:00", **extra})
+
+
+TOP_PROJ = {**TOP, "texture": "projection"}
+with patch.object(gt, "_key", lambda *a, **k: ("tz", None, {}, TOP_PROJ, [])), \
+        patch.object(gtc, "sig_of", lambda *a, **k: (CUR["sig"], "", [])):
+    set_record(cut_sig="cA")
+    d61 = gt.drape_state(CHAR, "top6", base_sha="b0", lower=[])
+    check("[6.1] same cut -> ready", d61["state"] == "ready" and d61["tsig"] == "tz", d61["state"])
+    CUR["sig"] = "cB"
+    d61b = gt.drape_state(CHAR, "top6", base_sha="b0", lower=[])
+    check("[6.1] another cut -> missing with CUT_REDRAPE under the same tsig", d61b["state"] == "missing"
+          and d61b["reason"] == gt.CUT_REDRAPE and d61b["tsig"] == "tz", d61b)
+    set_record()
+    check("[6.2] a record without cut_sig -> ready", gt.drape_state(CHAR, "top6", base_sha="b0", lower=[])["state"]
+          == "ready")
+    set_record(cut_sig="cA")
+    CUR["sig"] = None
+    check("[6.3] no current sig (a layer still to be draped) -> ready",
+          gt.drape_state(CHAR, "top6", base_sha="b0", lower=[])["state"] == "ready")
+
+BRA["state"] = "ready"
+rec_sig = gtc.sig_of(CHAR, "top6", TOP, base_sha="b0", lower=["bra1"])[0]
+check("[6.4] the real UV_PATTERN_SHA: not behind", gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP,
+                                                               base_sha="b0", lower=["bra1"]) is False)
+with patch.object(gtc, "UV_PATTERN_SHA", "ffffffffffff"):
+    check("[6.4] a new uv_pattern.py: the drape is behind (re-draped by the next Build)",
+          gt.cut_behind(CHAR, "top6", {"cut_sig": rec_sig}, TOP, base_sha="b0", lower=["bra1"]) is True)
+check("[6.5] the bra ready after the top was draped without it: behind",
+      gt.cut_behind(CHAR, "top6", {"cut_sig": sig_left}, TOP, base_sha="b0", lower=["bra1"]) is True)
+for st in STUBS:
+    st.stop()
+GT_SRC = (ROOT / "app" / "core" / "garment_template.py").read_text(encoding="utf-8")
+bd = GT_SRC[GT_SRC.index("def _build_drape("):]
+bd = bd[:bd.index("\ndef ")]
+check("[6.6] _build_drape records sig_of(..., wait=False)", "garment_template_cut.sig_of(" in bd
+      and "wait=False" in bd and "garment_template_cut.cut_sig(" not in bd)
 
 print()
 print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
