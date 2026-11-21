@@ -97,6 +97,34 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
     (0, -0.14) beyond it; the right side mirrored. Side point y = (-0.07 + 0.005) / 2 = -0.0325 -> shoulder_dy =
     |0 - 0.005| = 0.50 cm, neck_dy = |-0.04 + 0.0325| = 0.75 cm, neck_fwd = 0.005 + 0.0325 = 3.75 cm, max_dy =
     |-0.04 - 0.005| = 4.50 cm, both sides. Without a ring the neck fields are None.
+[16] Ring strip, cylinder (step 3a, ``ring_strip_uv``): r 0.10 m, h 0.04 m, 64 segments, one ring of quads (part 14,
+    the waistband), cut at angle 0 (``rings`` = {14: (origin, +Z, +X)}) -> u length = the chord sum of the mid line
+    64 * 2 * 0.10 * sin(pi / 64) = 12.8 * 0.0490677 = 0.628066 m (+-1e-4), v = 0.040 (+-1e-6), ``strip_stretch_p95``
+    <= 1.001. The cut vertex's two copies sit at u = 0 and u = 0.628066; the vertex at angle pi / 2 (+Y) at a quarter
+    (16 chords: 0.157017) — the angle grows from +X toward +Z x +X = +Y.
+[17] Ring strip, cone (a waistband over the hip flare): r 0.11 at z 0 to 0.10 at z 0.04: mean r 0.105 -> u =
+    64 * 0.21 * 0.0490677 = 0.659470 m (+-1e-4); its edge stretch is 0.105 / 0.10 = 1.05 at the top and
+    0.11 / 0.105 = 1.0476 at the bottom -> ``strip_stretch_p95`` printed (recorded, not gated; 1.03..1.07 accepted).
+    The same band flattened by LSCM + ARAP (part 1) is an annular sector instead (decision D6): slant s =
+    sqrt(0.04^2 + 0.01^2) = 0.0412311, radii R1 = 0.10 s / 0.01 = 0.412311 (top) and R2 = 0.453542, developed angle
+    phi = 64 * 2 asin(sin(pi / 64) * 0.10 / R1) = 1.523305 rad; with the grain up the sector is symmetric about the
+    vertical, so its bbox height = R2 - R1 cos(phi / 2) = 0.453542 - 0.412311 * 0.723784 = 0.155120 m (+-0.002) —
+    3.9 x the band's 0.04 (the plan's "> 4 x" was a guess: hand-derived it is 3.88 x).
+[18] Box UV against the pattern (the glove bug): a flat 1.62 x 0.12 m rectangle in the XZ plane (60 x 6 quads) with
+    the old box rule (u = 0.02 + 0.47 x / 1.62, v = 0.02 + 0.96 z / 0.12) has sigma_u = 0.47 / 1.62 = 0.290123 and
+    sigma_v = 0.96 / 0.12 = 8.0 per metre -> texel anisotropy sigma_1 / sigma_2 = 27.574 (+-0.01) on every triangle;
+    ``pattern_uv`` of the same rectangle -> 1.000 +- 0.001.
+[19] Rows (``pack(rows=ROWS[kind])``): trousers boxes front_r 31.9 x 94.9, front_l 32.8 x 94.5, back_l 35.1 x 93.9,
+    back_r 35.2 x 94.3, waistband 65.0 x 4.0, margin 1.5: row A = 1.5 + 135.0 + 4 * 1.5 = 142.5, H = 1.5 + 94.9 + 1.5 +
+    4.0 + 1.5 = 103.4 -> px_per_cm = floor_0.01(2048 / 142.5 = 14.372) = 14.37; left to right front_r, front_l,
+    back_l, back_r, the waistband under them. Gloves boxes back_r 17.7, back_l 15.8, palm_l 17.7, palm_r 18.9 x 48.5:
+    1.5 + 70.1 + 4 * 1.5 = 77.6 (H = 1.5 + 48.5 + 1.5 = 51.5) -> floor_0.01(26.392) = 26.39. ``rows=None`` keeps
+    ``ROW_ORDER`` (the [7] boxes give 19.59 again).
+[20] Adaptive ARAP: the 2400-vertex sector of [6] with ``tol=1e-3`` stops in <= 15 iterations and its
+    ``stretch_p95`` is within 0.005 of the 40-iteration result (the iteration count is printed for the ledger).
+[21] Tops unchanged: ``pattern_uv`` of the hand-made top of [13] gives a byte-identical payload
+    (``json.dumps(sort_keys=True)``) with this module and with ``uv_pattern.py`` at the base commit c926b67f0
+    (read with ``git show``; skipped with a note when git is not available).
 """
 import json
 import math
@@ -469,6 +497,124 @@ else:
     nr = sm(np.array(pts), list(range(6)), (0.0, 0.005), None)
     check("[15] no ring: neck fields None", all(nr[s_]["neck_dy_cm"] is None and nr[s_]["neck_fwd_cm"] is None
                                                 and abs(nr[s_]["max_dy_cm"] - 4.5) < 1e-6 for s_ in ("l", "r")), nr)
+
+# [16] ring strip, cylinder
+def ring_mesh(r_bot, r_top, h, n=64, part=14):
+    pts = [(r_bot * math.cos(2 * math.pi * k / n), r_bot * math.sin(2 * math.pi * k / n), 0.0) for k in range(n)]
+    pts += [(r_top * math.cos(2 * math.pi * k / n), r_top * math.sin(2 * math.pi * k / n), h) for k in range(n)]
+    fs = [(k, (k + 1) % n, n + (k + 1) % n, n + k) for k in range(n)]
+    return np.array(pts), fs, np.full(n, part), {(0, n)}
+
+
+rx16, rf16, rp16, rs16 = ring_mesh(0.10, 0.10, 0.04)
+r16 = up.pattern_uv(rf16, rp16, rs16, rx16, rings={14: ((0, 0, 0), (0, 0, 1), (1, 0, 0))})
+i16 = r16["payload"]["islands"]
+s16 = r16["payload"]["px_per_cm"]
+isl16 = up.split_islands(len(rx16), rf16, rp16, rs16, xyz=rx16)
+uv16 = up.ring_strip_uv(isl16[0], rx16, (0, 0, 0), (0, 0, 1), (1, 0, 0))
+want16 = 64 * 2 * 0.10 * math.sin(math.pi / 64)
+check("[16] one island 'waistband'", [i["name"] for i in i16] == ["waistband"], [i["name"] for i in i16])
+check(f"[16] u length {want16:.6f}", abs(np.ptp(uv16[:, 0]) - want16) < 1e-4, np.ptp(uv16[:, 0]))
+check("[16] v 0.040", abs(np.ptp(uv16[:, 1]) - 0.04) < 1e-6, np.ptp(uv16[:, 1]))
+check("[16] strip_stretch_p95 <= 1.001", r16["strip_stretch_p95"]["waistband"] <= 1.001, r16["strip_stretch_p95"])
+cut16 = sorted(uv16[isl16[0].vmap == 0, 0])
+check("[16] the cut vertex's copies at u 0 and the full length",
+      len(cut16) == 2 and abs(cut16[0]) < 1e-9 and abs(cut16[1] - want16) < 1e-4, cut16)
+q16 = uv16[isl16[0].vmap == 16, 0]
+check("[16] the +Y vertex at a quarter (0.157017)", len(q16) == 1 and abs(q16[0] - want16 / 4) < 1e-4, q16)
+
+# [17] ring strip, cone; the same band by ARAP
+rx17, rf17, rp17, rs17 = ring_mesh(0.11, 0.10, 0.04)
+r17 = up.pattern_uv(rf17, rp17, rs17, rx17, rings={14: ((0, 0, 0), (0, 0, 1), (1, 0, 0))})
+isl17 = up.split_islands(len(rx17), rf17, rp17, rs17, xyz=rx17)
+uv17 = up.ring_strip_uv(isl17[0], rx17, (0, 0, 0), (0, 0, 1), (1, 0, 0))
+want17 = 64 * 0.21 * math.sin(math.pi / 64)
+check(f"[17] cone u length {want17:.6f}", abs(np.ptp(uv17[:, 0]) - want17) < 1e-4, np.ptp(uv17[:, 0]))
+st17 = r17["strip_stretch_p95"]["waistband"]
+print(f"     [17] cone strip_stretch_p95 {st17:.4f} (recorded)")
+check("[17] cone strip stretch within 1.03..1.07", 1.03 <= st17 <= 1.07, st17)
+a17 = up.pattern_uv(rf17, np.ones(64, int), rs17, rx17, axes={1: ((0, 0, 1), (0, 0, 0), None)})
+bb17 = a17["payload"]["islands"][0]["bbox_px"]
+h17 = (bb17[3] - bb17[1]) / a17["payload"]["px_per_cm"] / 100.0
+check("[17] the same band by ARAP: an arc 0.155120 m high", abs(h17 - 0.155120) < 0.002, h17)
+
+
+# [18] box UV against the pattern
+def aniso(uv, xyz, tris):
+    loc, a2 = up._local_frames(np.asarray(xyz, float), np.asarray(tris))
+    q = np.asarray(uv, float)[np.asarray(tris)]
+    f = np.stack([q[:, 1] - q[:, 0], q[:, 2] - q[:, 0]], axis=2)
+    x = np.stack([loc[:, 1] - loc[:, 0], loc[:, 2] - loc[:, 0]], axis=2)
+    sv = np.linalg.svd(f @ np.linalg.inv(x), compute_uv=False)
+    return sv[:, 0] / sv[:, 1]
+
+
+gx18 = np.array([(1.62 * i / 60, 0.0, 0.12 * j / 6) for j in range(7) for i in range(61)])
+gf18 = [(j * 61 + i, j * 61 + i + 1, (j + 1) * 61 + i + 1, (j + 1) * 61 + i) for j in range(6) for i in range(60)]
+gt18 = np.array([t for f_ in gf18 for t in up.fan(f_)])
+box18 = np.stack([0.02 + 0.47 * gx18[:, 0] / 1.62, 0.02 + 0.96 * gx18[:, 2] / 0.12], axis=1)
+an18 = aniso(box18, gx18, gt18)
+check("[18] box UV anisotropy 27.574", abs(an18.min() - 27.574) < 0.01 and abs(an18.max() - 27.574) < 0.01,
+      (an18.min(), an18.max()))
+p18 = up.pattern_uv(gf18, np.full(len(gf18), 27), set(), gx18, axes={27: ((1, 0, 0), (0.81, 1.0, 0.06), None)})
+cuv18 = np.zeros((len(gx18), 2))
+for f_, cu in zip(gf18, p18["corner_uv"]):
+    for v_, c_ in zip(f_, cu):
+        cuv18[v_] = c_
+an18p = aniso(cuv18, gx18, gt18)
+check("[18] pattern UV anisotropy 1.000", abs(an18p.min() - 1) < 1e-3 and abs(an18p.max() - 1) < 1e-3,
+      (an18p.min(), an18p.max()))
+
+# [19] per-kind rows
+tb = {"front_r": (31.9, 94.9), "front_l": (32.8, 94.5), "back_l": (35.1, 93.9), "back_r": (35.2, 94.3),
+      "waistband": (65.0, 4.0)}
+pk19, s19 = up.pack({k: rect(*v) for k, v in tb.items()}, 2048, 1.5, rows=up.ROWS["trousers"])
+check("[19] trousers px_per_cm 14.37", abs(s19 - 14.37) < 1e-9, s19)
+xs19 = [pk19[n][:, 0].min() for n in ("front_r", "front_l", "back_l", "back_r")]
+check("[19] front_r, front_l, back_l, back_r left to right, waistband under them",
+      xs19 == sorted(xs19) and pk19["waistband"][:, 1].min() > max(pk19[n][:, 1].max() for n in tb if n != "waistband"))
+gb = {"glove_back_r": (17.7, 48.5), "glove_back_l": (15.8, 48.5), "palm_l": (17.7, 48.5), "palm_r": (18.9, 48.5)}
+_pk, s19g = up.pack({k: rect(*v) for k, v in gb.items()}, 2048, 1.5, rows=up.ROWS["gloves"])
+check("[19] gloves px_per_cm 26.39", abs(s19g - 26.39) < 1e-9, s19g)
+_pk, s19t = up.pack({k: rect(*v) for k, v in boxes.items()}, 2048, 1.5, rows=None)
+check("[19] rows=None keeps ROW_ORDER (19.59)", abs(s19t - 19.59) < 1e-9, s19t)
+
+# [20] adaptive ARAP
+st20 = {}
+isl20 = up.split_islands(len(pv), pf, np.ones(len(pf), int), set(), xyz=pv)[0]
+lx20 = pv[isl20.vmap]
+tr20 = tris_of(isl20)
+t0 = time.perf_counter()
+uv20 = up.arap(lx20, tr20, up.lscm(lx20, tr20), iters=40, tol=1e-3, stats=st20)
+dt20 = time.perf_counter() - t0
+uv20f = up.arap(lx20, tr20, up.lscm(lx20, tr20), iters=40)
+p20, p20f = up.distortion(uv20, lx20, tr20)["stretch_p95"], up.distortion(uv20f, lx20, tr20)["stretch_p95"]
+print(f"     [20] adaptive ARAP: {st20.get('iters')} iterations, {dt20:.2f} s, p95 {p20:.5f} vs 40 it. {p20f:.5f}")
+check("[20] stops in <= 15 iterations", st20.get("iters", 99) <= 15, st20)
+check("[20] p95 within 0.005 of 40 iterations", abs(p20 - p20f) <= 0.005, (p20, p20f))
+
+# [21] tops byte-identical against the base commit
+import importlib.util  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+BASE = "c926b67f0"
+try:
+    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{BASE}:app/blender/scripts/uv_pattern.py"],
+                         capture_output=True, text=True, check=True).stdout
+except (OSError, subprocess.CalledProcessError) as e:
+    src = None
+    print(f"NOTE [21] skipped: git show {BASE} failed ({e})")
+if src is not None:
+    with tempfile.TemporaryDirectory() as td:
+        bp = Path(td) / "uv_pattern_base.py"
+        bp.write_text(src)
+        spec = importlib.util.spec_from_file_location("uv_pattern_base", bp)
+        ub = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ub)
+        new21 = up.pattern_uv(f13, p13, seam13, v13, axes=axes13, strips={5: rows13})["payload"]
+        old21 = ub.pattern_uv(f13, p13, seam13, v13, axes=axes13, strips={5: rows13})["payload"]
+        check(f"[21] a top's payload is byte-identical to {BASE}'s",
+              json.dumps(new21, sort_keys=True) == json.dumps(old21, sort_keys=True))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

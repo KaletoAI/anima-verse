@@ -16,7 +16,9 @@ never assigns or relabels a part. It only:
   rotate it so the grain (``up``) points to +v.
 * ``strip_uv`` — the construction-strip UV of a BAND island (u = arc length of the mid line, v = across).
 * ``distortion`` — area ratio and the 95th percentile stretch of a flattening.
-* ``pack`` — all islands at ONE px/cm into a square atlas, in rows (``ROW_ORDER``), in IMAGE-frame pixels.
+* ``pack`` — all islands at ONE px/cm into a square atlas, in rows (``ROW_ORDER``, a fitted kind's ``ROWS``), in
+  IMAGE-frame pixels.
+* ``ring_strip_uv`` — the cylindrical strip UV of a RING island without construction rows (the fitted kinds' bands).
 * ``seam_samples`` — matched point pairs along every duplicated border (the two sides of a seam), for the seam
   continuity check and the seam letters of the debug pattern sheet.
 * ``cap_height`` — the signed sleeve cap height (shoulder point over the underarm seam ends).
@@ -36,13 +38,31 @@ from dataclasses import dataclass, field
 import numpy as np
 
 #: Pattern parts by the int ``uv_part`` face attribute. 6..9 are reserved (step 3) and never emitted in step 1.
+#: 10..34 are the fitted kinds' pieces (step 3a, ``fitted_pattern.parts``); "left" / "right" are the WEARER's.
 PARTS = {1: "front", 2: "back", 3: "sleeve_l", 4: "sleeve_r", 5: "band", 6: "collar", 7: "placket", 8: "cuff_l",
-         9: "cuff_r"}
-#: Parts that get the construction-strip UV (``strip_uv``) instead of a flattening.
-STRIP_PARTS = frozenset({5, 6, 8, 9})
+         9: "cuff_r",
+         10: "front_l", 11: "front_r", 12: "back_l", 13: "back_r", 14: "waistband", 15: "gusset", 16: "leg_l",
+         17: "leg_r", 18: "cup_l", 19: "cup_r", 20: "cup_top_l", 21: "cup_top_r", 22: "gore", 23: "band_l",
+         24: "band_r", 25: "strap_l", 26: "strap_r", 27: "glove_back_l", 28: "glove_back_r", 29: "palm_l",
+         30: "palm_r", 31: "hip_band_l", 32: "hip_band_r", 33: "top_band_l", 34: "top_band_r"}
+#: Parts that get a strip UV instead of a flattening: the construction strip (``strip_uv``) where the builder gives
+#: rows, else the cylindrical ring strip (``ring_strip_uv``) — the fitted kinds' rings have no construction rows.
+STRIP_PARTS = frozenset({5, 6, 8, 9, 14, 23, 24, 31, 32, 33, 34})
 
 #: Atlas rows of ``pack`` (island names). A name in no row goes to an extra last row, sorted.
 ROW_ORDER = (("front", "front_2", "back"), ("sleeve_l", "sleeve_r"), ("band", "collar", "placket", "cuff_l", "cuff_r"))
+#: The fitted kinds' rows (``pack(rows=ROWS[kind])``; a top keeps ``ROW_ORDER``). Fronts as seen from the front (the
+#: wearer's right at image left), backs as seen from behind.
+_TROUSER_ROWS = (("front_r", "front_l", "back_l", "back_r"), ("waistband", "cuff_r", "cuff_l"))
+ROWS = {
+    "trousers": _TROUSER_ROWS,
+    "boxers": _TROUSER_ROWS,
+    "tights": (("leg_r", "leg_l"), ("gusset", "waistband", "top_band_r", "top_band_l")),
+    "briefs": (("front", "back"), ("gusset", "waistband", "hip_band_r", "hip_band_l")),
+    "bra": (("cup_r", "cup_l", "gore"), ("cup_top_r", "cup_top_l"), ("band_r", "band_l"), ("strap_r", "strap_l")),
+    "bandeau": (("front", "back"), ("band_r", "band_l"), ("strap_r", "strap_l")),
+    "gloves": (("glove_back_r", "glove_back_l", "palm_l", "palm_r"), ("cuff_r", "cuff_l")),
+}
 #: The payload format of ``islands_payload``.
 PAYLOAD_VERSION = 1
 
@@ -256,10 +276,14 @@ def _signed_uv_area2(uv, tris):
     return d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
 
 
-def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9):
+def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9, tol=None, stats=None):
     """As-rigid-as-possible flattening (local/global, cotangent weights) from ``uv0``. A start whose orientation
     disagrees with the triangles' own frames (an anti-conformal LSCM) is mirrored first, since the local step only
-    fits rotations. One vertex is held at its start position."""
+    fits rotations. One vertex is held at its start position.
+
+    ``tol`` (step 3a, the fitted kinds' 4-41 k vertex pieces): stop after an iteration whose ARAP energy
+    sum w |(u_i - u_j) - R dx_ij|^2 (with that iteration's rotations, at its solved UV) changed by less than ``tol`` of
+    the previous iteration's; ``iters`` stays the cap. None = always ``iters``. ``stats`` (a dict) gets "iters"."""
     xyz = np.asarray(xyz, float)
     tris = np.asarray(tris, dtype=np.int64)
     uv = np.asarray(uv0, float).copy()
@@ -311,6 +335,8 @@ def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9):
         y[~keep] = 0.0
         return lap(y)
 
+    done = 0
+    e_prev = None
     for _ in range(iters):
         du = uv[he_i] - uv[he_j]
         s = np.zeros((len(t), 2, 2))
@@ -335,6 +361,15 @@ def arap(xyz, tris, uv0, iters=40, cg_tol=1e-9):
         x = _cg(matvec, b, x0, cg_tol, 10 * n + 100)
         x[pin] = uv[pin]
         uv = x
+        done += 1
+        if tol is not None:
+            res = (uv[he_i] - uv[he_j]) - np.einsum("hab,hb->ha", r[he_t], he_dx)
+            e = float(np.sum(he_w * np.sum(res * res, axis=1)))
+            if e_prev is not None and abs(e_prev - e) <= tol * max(abs(e_prev), 1e-30):
+                break
+            e_prev = e
+    if stats is not None:
+        stats["iters"] = done
     return uv
 
 
@@ -428,10 +463,10 @@ def _floor2(x):
     return math.floor(x * 100.0 + 1e-6) / 100.0
 
 
-def pack(islands_uv_m, size_px=2048, margin_cm=1.5):
+def pack(islands_uv_m, size_px=2048, margin_cm=1.5, rows=None):
     """Pack islands (name -> (n, 2) UV in metres, v up) at ONE density into a ``size_px`` square atlas.
 
-    Rows follow ``ROW_ORDER`` (names in no row: one extra last row, sorted). A row is ``margin`` + (island width +
+    Rows follow ``rows`` (None = ``ROW_ORDER``, a top's; names in no row: one extra last row, sorted). A row is ``margin`` + (island width +
     ``margin``) per island wide and as high as its tallest island; rows stack from the top margin with ``margin``
     between them, each row centred horizontally within the widest row, islands TOP-aligned inside their row.
     ``s`` = floor_0.01(size / max(W, H)) px/cm with W, H the layout extent in cm.
@@ -443,8 +478,9 @@ def pack(islands_uv_m, size_px=2048, margin_cm=1.5):
         uv = np.asarray(uv, float)
         lo, hi = uv.min(axis=0), uv.max(axis=0)
         ext[name] = (lo, hi, (hi - lo) * 100.0)
-    known = [n for row in ROW_ORDER for n in row]
-    rows = [[n for n in row if n in ext] for row in ROW_ORDER]
+    order = ROW_ORDER if rows is None else rows
+    known = [n for row in order for n in row]
+    rows = [[n for n in row if n in ext] for row in order]
     rows.append(sorted(n for n in ext if n not in known))
     rows = [r for r in rows if r]
     row_w = [margin_cm + sum(ext[n][2][0] + margin_cm for n in r) for r in rows]
@@ -667,18 +703,19 @@ def _r(x, nd=3):
     return [round(float(v), nd) for v in x]
 
 
-def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap_heights=None, step_cm=1.0):
+def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap_heights=None, step_cm=1.0,
+                    rows=None):
     """The ``islands.json`` dict of a piece.
 
     ``islands`` = the ``split_islands`` list, ``islands_uv_m`` = {name: (n, 2) oriented UV in metres},
-    ``xyz`` = the global rest coordinates, ``cap_heights`` = {name: signed cm} for the sleeves. Packs the islands
-    (``pack``) and returns {"version", "atlas_px", "px_per_cm", "margin_cm", "islands": [{"name", "part",
+    ``xyz`` = the global rest coordinates, ``cap_heights`` = {name: signed cm} for the sleeves, ``rows`` = the row
+    layout (``ROWS[kind]``; None = ``ROW_ORDER``). Packs the islands (``pack``) and returns {"version", "atlas_px", "px_per_cm", "margin_cm", "islands": [{"name", "part",
     "bbox_px" [x0, y0, x1, y1], "loops_px" [[[x, y], ...], ...], "verts_px", "tris" (the fan triangles, local ids
     into verts_px), "area_cm2" (UV area), "distortion", "cap_height_cm"?}], "seams": ``seam_samples``}. Pixels are
     image-frame (row = (1 - v) * size), rounded to 1/1000 px; no timing or run data, so equal geometry gives a
     byte-equal payload."""
     xyz = np.asarray(xyz, float)
-    px, s = pack(islands_uv_m, size_px, margin_cm)
+    px, s = pack(islands_uv_m, size_px, margin_cm, rows=rows)
     caps = cap_heights or {}
     items = []
     for isl in islands:
@@ -763,8 +800,49 @@ def strip_island_uv(island, rows, xyz):
     return uv
 
 
+def ring_strip_uv(island, xyz, axis_p, axis_d, cut_dir):
+    """The strip UV of a RING island without construction rows (the fitted kinds' waistband, cuffs, grip bands, hip
+    bands, bra band; decision D6): (n, 2) metres per local vertex.
+
+    Frame: ``e1`` = ``cut_dir`` made orthogonal to ``axis_d``, ``e2`` = ``axis_d`` x ``e1``; the angle
+    theta = atan2(rel . e2, rel . e1) in [0, 2 pi) of every vertex about the axis through ``axis_p`` increases to the
+    RIGHT as seen from outside with ``axis_d`` up (the tangent of increasing theta at r is ``axis_d`` x r). The ring
+    is cut at theta = 0 (``fitted_pattern.ring_cut``), so a vertex there has two local copies: every corner under pi
+    of a face that spans more than pi in theta (the faces just before the cut) takes theta + 2 pi. u = the chord sum,
+    at the island's mean radius r_m, over the sorted distinct angles up to the vertex's (2 r_m sin(dtheta / 2) per
+    step — a polygon ring of n segments is n chords long, not 2 pi r_m), v = the height (rel . ``axis_d``) less the
+    lowest. A ring whose radius changes with height (a waistband over the hip flare) is stretched by r / r_m along u
+    at its edges — recorded in ``strip_stretch_p95``, not gated."""
+    xyz = np.asarray(xyz, float)
+    ad = np.asarray(axis_d, float)
+    ad = ad / np.linalg.norm(ad)
+    e1 = np.asarray(cut_dir, float)
+    e1 = e1 - (e1 @ ad) * ad
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(ad, e1)
+    rel = xyz[island.vmap] - np.asarray(axis_p, float)
+    h = rel @ ad
+    radial = rel - np.outer(h, ad)
+    rad = np.linalg.norm(radial, axis=1)
+    th = np.mod(np.arctan2(radial @ e2, radial @ e1), 2 * np.pi)
+    th = np.where(th > 2 * np.pi - 1e-9, 0.0, th)
+    bump = np.zeros(len(th), bool)
+    for poly in island.corner_vid:
+        t = th[list(poly)]
+        if t.max() - t.min() > np.pi:
+            for c, tv in zip(poly, t):
+                if tv < np.pi:
+                    bump[c] = True
+    th = th + 2 * np.pi * bump
+    r_m = float(np.mean(rad)) if len(rad) else 0.0
+    ang = np.unique(np.round(th, 12))
+    cum = np.concatenate([[0.0], np.cumsum(2.0 * r_m * np.sin(np.diff(ang) / 2.0))])
+    u = np.interp(th, ang, cum) if len(ang) > 1 else np.zeros(len(th))
+    return np.stack([u, h - (h.min() if len(h) else 0.0)], axis=1)
+
+
 def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, size_px=2048, margin_cm=1.5,
-               iters=40):
+               iters=40, rows=None, rings=None, tol=None):
     """The pattern UV of one garment mesh.
 
     ``faces`` = vertex-id tuples (the mesh's polygons, in their loop order), ``part`` = their ``uv_part``,
@@ -773,28 +851,34 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
     through its own centroid); ``strips`` = {part: rows} (``strip_island_uv``) for the parts in ``STRIP_PARTS``;
     ``caps`` = {part: (armhole loop ids, shoulder id, underarm id)} — the underarm vertex lies on the seam, so the
     island holds two copies of it, the cap is measured against both (``cap_height``); a cap whose vertices did not
-    survive is left out.
+    survive is left out. Step 3a (the fitted kinds): ``rings`` = {part: (axis_p, axis_d, cut_dir)} for the
+    ``STRIP_PARTS`` without construction rows (``ring_strip_uv``), ``rows`` = the atlas row layout (``ROWS[kind]``,
+    None = a top's ``ROW_ORDER``), ``tol`` = ``arap``'s adaptive stop (None = always ``iters``).
 
     Returns {"payload": ``islands_payload``, "corner_uv": per input face the Blender UV of each corner (x / size,
     1 - y / size of the payload's pixels), "islands": names, "faces_per_part": {name: faces}, "area_ratio_min",
     "area_ratio_max", "stretch_p95_max" (panels), "strip_stretch_p95": {name: value} (bands: recorded, not gated),
-    "cap_height_cm": {name: cm}}."""
+    "cap_height_cm": {name: cm}, "arap_iters": {name: iterations} (panels)}."""
     xyz = np.asarray(xyz, float)
     part = np.asarray(part, dtype=np.int64)
-    axes, strips, caps = axes or {}, strips or {}, caps or {}
+    axes, strips, caps, rings = axes or {}, strips or {}, caps or {}, rings or {}
     islands = split_islands(len(xyz), faces, part, seam_edges, xyz=xyz)
-    uv_m, cap_cm = {}, {}
+    uv_m, cap_cm, its = {}, {}, {}
     for isl in islands:
         lx = xyz[isl.vmap]
         tris = np.array([t for poly in isl.corner_vid for t in fan(poly)], dtype=np.int64).reshape(-1, 3)
         if isl.part in STRIP_PARTS and isl.part in strips:
             uv = strip_island_uv(isl, strips[isl.part], xyz)
             uv = uv - uv.min(axis=0)
+        elif isl.part in STRIP_PARTS and isl.part in rings and len(isl.vmap) >= 3:
+            uv = ring_strip_uv(isl, xyz, *rings[isl.part])
         elif len(tris) == 0 or len(isl.vmap) < 3:
             uv = np.zeros((len(isl.vmap), 2))
         else:
             up_, ap, ad = axes.get(isl.part, ((0.0, 0.0, 1.0), lx.mean(axis=0), None))
-            uv = arap(lx, tris, lscm(lx, tris), iters=iters)
+            st = {}
+            uv = arap(lx, tris, lscm(lx, tris), iters=iters, tol=tol, stats=st)
+            its[isl.name] = st.get("iters", iters)
             uv = orient(uv, lx, tris, np.asarray(up_, float), np.asarray(ap, float),
                         None if ad is None else np.asarray(ad, float))
         uv_m[isl.name] = uv
@@ -806,7 +890,8 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
             loc_ua = [l for l in range(len(isl.vmap)) if int(isl.vmap[l]) == int(ua)]
             if loc_sh and loc_ua and int(sh) in loop_g and int(ua) in loop_g:
                 cap_cm[isl.name] = cap_height(uv * 100.0, loc_loop, loc_sh[0], loc_ua)
-    payload = islands_payload(islands, uv_m, xyz, size_px=size_px, margin_cm=margin_cm, cap_heights=cap_cm)
+    payload = islands_payload(islands, uv_m, xyz, size_px=size_px, margin_cm=margin_cm, cap_heights=cap_cm,
+                              rows=rows)
     corner_uv = [None] * len(faces)
     by_name = {i["name"]: i for i in payload["islands"]}
     for isl in islands:
@@ -823,4 +908,4 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
             "stretch_p95_max": max((i["distortion"]["stretch_p95"] for i in panels), default=None),
             "strip_stretch_p95": {i["name"]: i["distortion"]["stretch_p95"] for i in payload["islands"]
                                   if i["part"] in STRIP_PARTS},
-            "cap_height_cm": {k: round(float(v), 3) for k, v in cap_cm.items()}}
+            "cap_height_cm": {k: round(float(v), 3) for k, v in cap_cm.items()}, "arap_iters": its}
