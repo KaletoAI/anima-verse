@@ -37,7 +37,8 @@ I) The routes: every ``@router`` path in ``app/routes/figure.py`` that contains 
    the document, with ``{character_name}`` shortened to ``{c}``.
 J) The P-H3 backend entry: ``"use_prompt_upsampler": false`` appears (the string ``_upsampler_on`` tests for).
 K) Both prompt files the document names exist: ``PROMPT_FILE`` and ``PROMPT_FILE_BACK`` of ``garment_cut_texture.py``;
-   the document states the sleeve rule and ``BACK_PARTS`` is ("back",) (only the back panel goes with the back job).
+   the document states the sleeve rule and names every part of ``BACK_PARTS`` (the back panel; since step 3a also a
+   trouser's back leg panels and a glove's palms).
 L) The param ``texture``: its choices ``TEXTURE_SOURCES`` and that it is in ``TEXTURE_ONLY``
    (``garment_template.py``) — the document says "TEXTURE_ONLY".
 M) The file names: ``{item}_{tsig}.islands.json`` (``islands_path``) and ``templates/cut/`` (``cut_dir``).
@@ -179,7 +180,8 @@ def main() -> int:
         rel = f"shared/templates/image/{bm.group(1)}"
         check(f"K  doc names {rel} and it exists", rel in doc and (REPO / rel).is_file())
     check("K  doc states the sleeve rule and the back parts", "**Sleeve rule:**" in doc
-          and tuple(const(GCT, "BACK_PARTS")) == ("back",) and "`BACK_PARTS`" in doc)
+          and "`BACK_PARTS`" in doc
+          and all(f"`{part}`" in doc for part in const(GCT, "BACK_PARTS")))   # step 3a: + back_l/r, palm_l/r
 
     # L
     sources, only = const(GT, "TEXTURE_SOURCES"), const(GT, "TEXTURE_ONLY")
