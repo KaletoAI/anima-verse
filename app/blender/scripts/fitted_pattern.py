@@ -39,6 +39,11 @@ TIGHTS_GUSSET_DROP_M = 0.02
 MIN_ISLAND_FACES = 30
 #: A vertex this close to a seam plane lies on it (``bisect_plane`` leaves its cut vertices within 1e-5).
 ON_PLANE_M = 1e-4
+#: ``plane_cut``: a face whose centroid lies this close to a seam plane counts to its -normal side. Far under
+#: ``ON_PLANE_M`` on purpose: a real face next to the seam (two corners on the plane, the third 10..300 um off it —
+#: Kira's tights) has its centroid a few um off the plane and must keep its side; only a face lying IN the plane (its
+#: corners all bisect vertices, ~0.01 um off) is undecided.
+FACE_ON_PLANE_M = 1e-6
 #: Gloves: the cuff ring at the reach edge (``garment_template.CUFF_M``).
 #: Tights / trousers: the closed foot's sole slit is taken this far under the ankle joint and lower.
 SOLE_BELOW_ANKLE_M = 0.03
@@ -430,19 +435,33 @@ def _edges_of(faces):
 def plane_cut(faces, part, xyz, pids, plane_p, plane_n, line_p, line_d, half_dir, z_lo=-9.0, z_hi=9.0, edges=None):
     """The seam edges of a ring / tube opening: every edge shared by two faces whose parts are both in ``pids``, both
     of its vertices on the plane (``plane_p``, ``plane_n``; within ``ON_PLANE_M`` — ``bisect_plane`` put them there),
-    its midpoint on the ``half_dir`` side of the line (``line_p``, ``line_d``) that lies in the plane, and its midpoint
-    height within [``z_lo``, ``z_hi``]. Returns {(a, b)} (a < b)."""
+    its midpoint on the ``half_dir`` side of the line (``line_p``, ``line_d``) that lies in the plane, its midpoint
+    height within [``z_lo``, ``z_hi``], and its two faces on opposite sides of the plane by their centroids. A face
+    whose centroid lies on the plane (within ``FACE_ON_PLANE_M``: a face ``bisect_plane`` left lying in the seam plane)
+    counts to the -``plane_n`` side. The cut is thus the border between the two sides' faces: a tiny face next to the
+    seam whose corners all lie within ``ON_PLANE_M`` no longer has every edge cut and becomes no 1-face island (Kira's
+    tights: 21 slivers on the inseam). Returns {(a, b)} (a < b)."""
     xyz = np.asarray(xyz, float)
     part = np.asarray(part)
     pids = set(int(p) for p in np.atleast_1d(pids))
     pp, pn = np.asarray(plane_p, float), _unit(plane_n)
     lp, ld, hd = np.asarray(line_p, float), _unit(line_d), np.asarray(half_dir, float)
     on = np.abs((xyz - pp) @ pn) < ON_PLANE_M
+    side = {}
+
+    def side_of(fi):
+        if fi not in side:
+            d = float((xyz[list(faces[fi])].mean(0) - pp) @ pn)
+            side[fi] = 1 if d > FACE_ON_PLANE_M else -1
+        return side[fi]
+
     out = set()
     for (a, b), fs in (edges if edges is not None else _edges_of(faces)).items():
         if len(fs) != 2 or not (on[a] and on[b]):
             continue
         if int(part[fs[0]]) not in pids or int(part[fs[1]]) not in pids:
+            continue
+        if side_of(fs[0]) == side_of(fs[1]):
             continue
         m = 0.5 * (xyz[a] + xyz[b])
         if not (z_lo <= m[2] <= z_hi):

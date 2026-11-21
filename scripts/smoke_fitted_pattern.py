@@ -37,6 +37,18 @@ below (Blender Z-up metres, front = -Y, the wearer's left = +X, cx = cy = 0).
     (Index1 - Hand) x (Pinky1 - Hand) = (0, 0, 0.0054) = +Z, dorsal): ``parts`` gives ``glove_back_l`` (27) for every
     +Z face and ``palm_l`` (29) for every -Z face; the side faces (centroid on the hand plane, not on its + side) go
     to the palm; nothing else.
+[8] A zero-area face in the seam plane (Kira's tights, 2026-11-21: ``bisect_plane`` left 21 single-face slivers on the
+    inseam): the closed tube of [4], the cut edge (112, 144) of column 16 (x = -r, y = 0, rows 3 and 4) gets its
+    midpoint m (vertex 577 = 18 rows * 32 + the pole + 1, on the plane); the face k = 15 on the +Y side (centroid angle 15.5 / 32 * 2 pi < pi)
+    becomes the pentagon (111, 112, m, 144, 143) and the collinear triangle (144, m, 112) fills the gap to the face
+    k = 16 on the -Y side. All three of the triangle's edges lie on the plane. A face whose centroid lies on the plane
+    (within ``FACE_ON_PLANE_M`` 1e-6) counts to the -normal side, so the cut takes 112-m and m-144 (pentagon + /
+    triangle -), not 112-144 (triangle - / face k = 16 -): len(full) - 1 + 2 = len(full) + 1 edges, ONE island, no
+    sliver (the old rule, both ends on the plane, cut all three and left the triangle as a 1-face island).
+    Second, m 40 um off the plane at +Y (what Kira's tights had: a third corner 10..300 um off, inside ``ON_PLANE_M``
+    1e-4 so all three edges still count as on the plane): the triangle's centroid lies 40 / 3 = 13.3 um on the + side
+    > 1e-6, so it keeps its side (+, with the pentagon) and the cut is exactly ``full`` (112-144 between the triangle
+    and face k = 16) — one island, no sliver.
 [7] Rows / axes / rings: ``rows("briefs", {leg_length_m: 0.1})`` are the boxers' (trousers') rows; ``rows("bra",
     {style: bandeau})`` the bandeau's; every part id ``parts`` can emit has a name in ``uv_pattern.PARTS``; ``rings``
     gives the waistband the vertical axis through (cx, cy) opened at +Y.
@@ -173,6 +185,27 @@ r4o = up.pattern_uv(f4, pa4, opened, x4)
 ar4o = r4o["payload"]["islands"][0]["distortion"]["area_ratio"]
 check("[4] opened: a disk with area ratio 0.97..1.03",
       fp._euler(up.split_islands(len(x4), f4, pa4, opened, xyz=x4)[0]) == 1 and 0.97 <= ar4o <= 1.03, ar4o)
+
+# [8] a zero-area face in the seam plane
+x8 = np.vstack([x4, 0.5 * (x4[112] + x4[144])])
+m8 = len(x4)
+f8 = [f for f in f4 if f not in ((111, 112, 144, 143), (112, 113, 145, 144))]
+f8 += [(111, 112, m8, 144, 143), (144, m8, 112), (112, 113, 145, 144)]
+check("[8] the edits hit the faces of [4]", len(f8) == len(f4) + 1 and abs(x8[m8, 1]) < 1e-12, len(f8))
+pa8 = np.full(len(f8), fp.P["leg_l"])
+c8 = fp.plane_cut(f8, pa8, x8, fp.P["leg_l"], np.zeros(3), Y, np.zeros(3), Z, -X)
+check("[8] cut: 112-m and m-144, not 112-144",
+      c8 == (full - {(112, 144)}) | {(112, m8), (144, m8)}, sorted(c8 ^ ((full - {(112, 144)}) | {(112, m8), (144, m8)})))
+isl8 = up.split_islands(len(x8), f8, pa8, c8, xyz=x8)
+check("[8] one island, no sliver", len(isl8) == 1 and fp.slivers(f8, pa8, x8, c8) == [],
+      [(i.name, len(i.faces)) for i in isl8])
+
+x8b = x8.copy()
+x8b[m8, 1] = 4e-5
+c8b = fp.plane_cut(f8, pa8, x8b, fp.P["leg_l"], np.zeros(3), Y, np.zeros(3), Z, -X)
+check("[8] m 40 um at +Y: the triangle keeps its side, the cut is exactly full", c8b == full, sorted(c8b ^ full))
+check("[8] m 40 um at +Y: one island, no sliver",
+      len(up.split_islands(len(x8b), f8, pa8, c8b, xyz=x8b)) == 1 and fp.slivers(f8, pa8, x8b, c8b) == [])
 
 # [5] ring cut
 x5 = np.array([(0.10 * math.cos(2 * math.pi * k / 64), 0.10 * math.sin(2 * math.pi * k / 64), z)
