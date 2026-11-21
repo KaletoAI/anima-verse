@@ -82,6 +82,11 @@ equal.py``. Every expectation is derived by hand below.
     [6.5] the bra becomes ready after the top was draped without it (record = wait=False sig of [5.2]) ->
           ``cut_behind`` True (the top is laid out of the bra next Build).
     [6.6] ``_build_drape`` records ``sig_of(..., wait=False)`` (source check: the drape stores what it WAS laid out of).
+    [6.7] Live E2E 2026-11-21 (Kai): the chest shaping's token comes from the ITEM (``bust_shaping.key_tokens`` —
+          stubbed here to give "shape:x" only when it is handed an item). ``sig_of`` with ``item`` None reads the item
+          (``inventory.get_item`` stubbed) -> the same sig as with the item handed = cut_sig(TOP, "b0", ["bra1:tb",
+          "shape:x", "collider:bra1"]), and a drape recorded with it is NOT behind for ``cut_behind(..., item=None)``
+          (the Build's plan) — before, every Build re-drapes the shirt as "cut anew".
 """
 import hashlib
 import subprocess
@@ -602,6 +607,19 @@ check("[6.5] the bra ready after the top was draped without it: behind",
       gt.cut_behind(CHAR, "top6", {"cut_sig": sig_left}, TOP, base_sha="b0", lower=["bra1"]) is True)
 for st in STUBS:
     st.stop()
+_SHAPED = {"id": "top7", "outfit_piece": {"template": {"params": dict(TOP)}}}
+with patch("app.core.garment_template.collider_states", bra_states), \
+        patch("app.core.garment_template.own_colliders", lambda *a, **k: []), \
+        patch("app.core.bust_shaping.key_tokens", lambda iid, item, lower: ["shape:x"] if item else []), \
+        patch("app.models.inventory.get_item", lambda iid: _SHAPED):
+    BRA["state"] = "ready"
+    s_item = gtc.sig_of(CHAR, "top7", TOP, base_sha="b0", lower=["bra1"], item=_SHAPED)[0]
+    s_none = gtc.sig_of(CHAR, "top7", TOP, base_sha="b0", lower=["bra1"])[0]
+    check("[6.7] sig_of reads the item when none is handed: the shaping token counts",
+          s_none == s_item == gtc.cut_sig(TOP, base_sha="b0", lower=["bra1:tb", "shape:x", "collider:bra1"]),
+          (s_none, s_item))
+    check("[6.7] a drape recorded with it is not behind for the Build's plan (item None)",
+          gt.cut_behind(CHAR, "top7", {"cut_sig": s_item}, TOP, base_sha="b0", lower=["bra1"]) is False)
 GT_SRC = (ROOT / "app" / "core" / "garment_template.py").read_text(encoding="utf-8")
 bd = GT_SRC[GT_SRC.index("def _build_drape("):]
 bd = bd[:bd.index("\ndef ")]

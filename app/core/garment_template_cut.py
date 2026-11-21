@@ -134,8 +134,13 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
       the colliders a cut / a drape is really handed (a failed or blocked layer is none). A layer that becomes ready
       later (a Retry, the same drape key) so changes the cut, and the drape laid out without it is stale.
     ``wait=False`` (the drape's record) gives the sig of what the drape WAS laid out of even when a layer was left
-    due."""
+    due. ``item`` None reads the item (live E2E 2026-11-21, Kai: ``drape_state`` / the Build's plan pass none, and
+    without it the chest shaping's token was missing — the sig differed from the drape's recorded ``cut_sig``, so
+    every Build re-draped the shirt as "cut anew")."""
     from app.core import garment_template as gt
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(item_id)
     if params["kind"] not in gt.PATTERN_KINDS:
         return None, NO_PATTERN, []
     if params["kind"] not in gt.FITTED_KINDS and not gt.has_bodice(params):

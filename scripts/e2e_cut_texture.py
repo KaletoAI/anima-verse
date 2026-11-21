@@ -37,7 +37,8 @@ What it does, in ONE process, never touching the world it is given:
    - the image jobs submitted equal the announced count (live: every ``submit_gpu_task`` onto the backends allowed
      — ``P-H3-Image`` and the local upscalers; any other backend is REFUSED before it is queued; dry: every stubbed
      render / upscale / view call);
-   - the Build's state is not running and has no failed step; its plan afterwards has no cut_texture step;
+   - the Build's state is not running and has no failed step; its plan afterwards is empty (the local collision
+     channel aside) — no second Build;
    - the atlas exists (``garment_cut_texture.atlas_path`` of the current csig) and the dialog reads it as done
      (``dialog_state``: ``current`` and ``applied`` True), the Figure row's ``cut_build`` is "done";
    - the SERVED GLB is the assembly (``garment_assembly.served`` of the bare model) and carries the atlas: one of its images decodes to the atlas's pixels (mean absolute
@@ -458,6 +459,9 @@ def main() -> int:
         check("Build failed steps", state["failed"], {})
         after = figure_build.plan(args.character)
         check("plan afterwards has no cut_texture step", [s.label for s in after if s.name == "cut_texture"], [])
+        # live run 2026-11-21 (Kai): the Build ended with the drape due again ("cut anew") and the assembly due — a
+        # second Build would have been needed. Nothing but the local collision channel may be left.
+        check("plan afterwards is empty (no second Build)", [s.label for s in after if s.name != "collision"], [])
         check("image jobs as announced", len(JOBS), announced)
         check("clicks", CLICKS, {"figure_build.start": 1, "garment_cut_texture.start": 0,
                                  "garment_cut_texture.start_recompose": 0, "garment_template_views.start": 0})
