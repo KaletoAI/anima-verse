@@ -211,7 +211,9 @@ wearer's) and a sheet label (`PART_LABELS`); `piece_name_of` names the piece by 
 elbow-length gloves, knee-high socks, capri trousers, …). The fitted kinds' prompt files and the `texture` choice for
 them are not part of step 3a's pieces work.
 
-**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION`; `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
+**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION` when it is not 0. It is held at 0 for now: a new fitted
+drape gets the pattern islands, an existing one is not re-draped for them while its texture is still the projection;
+1 goes in with the fitted kinds' texture choice. `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
 `fitted_pattern.py`), so a change of the cut rules re-cuts. A fitted piece's cut also keys `UV_PATTERN_SHA` (md5 of
 `uv_pattern.py`); a top's keys `TOP_UV_PATTERN_SHA` instead — the md5 of the `uv_pattern.py` that last changed a top's
 islands (c926b67f0). Step 3a's additions leave the tops' islands byte-identical, so no top drape counts as

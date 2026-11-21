@@ -79,8 +79,12 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 TEMPLATE_VERSION = 10
 #: Step 3a (decision D7 b): the fitted kinds' own version, in the drape key of a ``FITTED_KINDS`` piece only — so a
 #: change of the fitted cut re-drapes the fitted pieces and no top / skirt / dress / jacket.
-#: 1: the fitted kinds get sewing-pattern UV islands (``fitted_pattern``) instead of the planar box UV.
-FITTED_VERSION = 1
+#: 0 (held, review 2026-11-21): the fitted kinds' sewing-pattern UV islands (``fitted_pattern``) replace the planar
+#: box UV in every NEW fitted drape, but no existing one is re-draped for it yet: their texture is still the
+#: projection (the cut texture is not offered for them), so a forced re-drape only changed every user's briefs, bra,
+#: gloves, tights and trousers before anything could use the islands. 1 goes in with the fitted kinds' texture
+#: choice (one release): then every fitted drape is re-draped once and gets its islands.
+FITTED_VERSION = 0
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
