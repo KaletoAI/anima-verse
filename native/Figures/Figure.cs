@@ -260,6 +260,8 @@ public partial class Figure : Node3D
     {
         Secondary?.Release();
         Secondary = null;
+        GarmentPush?.Release();
+        GarmentPush = null;
         _secondaryPlaced = false;
         SetStrandSource(null);   // a new body: the old strand handle and its source belonged to the old one
         Ghost?.Dispose();
@@ -301,6 +303,8 @@ public partial class Figure : Node3D
         // figures.ts Figure constructor: createSecondaryMotion(THREE, this.root, this.motion, model.template).
         _secondaryRev = Motion?.Rev;
         if (isGlb && skeleton is not null) Secondary = SecondaryMotionModifier.TryCreate(body, skeleton, Motion, collision: Collision);
+        // figureRuntime.ts: createGarmentCollision(three, inst, opts.collision) — only with --garment-push (null otherwise).
+        if (isGlb && skeleton is not null) GarmentPush = GarmentPushModifier.TryCreate(body, skeleton, Collision, CollidePrimitives);
         InitFirstPersonBody();
     }
 
@@ -313,6 +317,10 @@ public partial class Figure : Node3D
     public CollisionPayload? Collision { get; set; }
     /// <summary>The secondary motion of the body (null = no extension bone of the payload on this rig, or no rig).</summary>
     public SecondaryMotionModifier? Secondary { get; private set; }
+    /// <summary>The GPU garment push of the body (<c>--garment-push</c>; null = off, or nothing to push).</summary>
+    public GarmentPushModifier? GarmentPush { get; private set; }
+    /// <summary>The GLB primitives with a <c>_COLLIDE</c> weight (the template's; empty = weight 1), set before the body.</summary>
+    public IReadOnlyList<StrandGlbPrimitive> CollidePrimitives { get; set; } = Array.Empty<StrandGlbPrimitive>();
     /// <summary>This frame's <c>frozen</c> (the world's <c>game_rate</c> 0; a pair at rate 0) for the secondary motion.</summary>
     public bool SecondaryFrozen { get; set; }
     /// <summary>The check steps the motion itself (<see cref="SecondaryMotionModifier.StepNow"/>).</summary>
@@ -344,7 +352,12 @@ public partial class Figure : Node3D
         {
             _secondaryRev = rev;
             if (Secondary is { } s) s.Configure(motionNow);
-            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, motionNow, collision: Collision);
+            else if (IsGlb)
+            {
+                Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, motionNow, collision: Collision);
+                // The push reads the bones as the secondary motion left them: it stays after it.
+                if (Secondary is not null) GarmentPush?.KeepOrder();
+            }
         }
         if (Secondary is not { } motion) return;
         var position = IsInsideTree() ? GlobalPosition : Position;

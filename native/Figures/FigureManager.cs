@@ -193,6 +193,8 @@ public partial class FigureManager : Node3D
         public IReadOnlyList<string> Sets { get; init; } = Array.Empty<string>();
         /// <summary>The primitives of the GLB that carry strand attributes (<see cref="StrandGlb.Read"/>; empty for FBX).</summary>
         public IReadOnlyList<StrandGlbPrimitive> Strands { get; set; } = Array.Empty<StrandGlbPrimitive>();
+        /// <summary>The primitives of the GLB that carry the garment push weight <c>_COLLIDE</c> (read only with <c>--garment-push</c>).</summary>
+        public IReadOnlyList<StrandGlbPrimitive> Collide { get; set; } = Array.Empty<StrandGlbPrimitive>();
         /// <summary>Wall time of the build's own fit (plan + the clips fitted at build).</summary>
         public double FitMs { get; init; }
         /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
@@ -1314,6 +1316,7 @@ public partial class FigureManager : Node3D
         var importWatch = System.Diagnostics.Stopwatch.StartNew();
         Node3D root;
         IReadOnlyList<StrandGlbPrimitive> strands = Array.Empty<StrandGlbPrimitive>();
+        IReadOnlyList<StrandGlbPrimitive> collide = Array.Empty<StrandGlbPrimitive>();
         if (IsFbx(info.Format, url))
         {
             using ((_source as AnimaApi)?.Measurements.Time("character GLB", "parse"))
@@ -1325,7 +1328,8 @@ public partial class FigureManager : Node3D
         {
             // Decoded and PARSED off the main thread (Task 35b: the parse — buffers, meshes, images — was most of a model's
             // 35–40 ms main-thread import); only the scene (nodes) is generated here.
-            var (doc, state, _, strandPrims) = await Task.Run(() =>
+            bool pushOn = GarmentPushModifier.Enabled;
+            var (doc, state, _, strandPrims, collidePrims) = await Task.Run(() =>
             {
                 using var parse = (_source as AnimaApi)?.Measurements.Time("character GLB", "parse");
                 var plain = GlbLoader.Prepare(bytes);
@@ -1337,10 +1341,18 @@ public partial class FigureManager : Node3D
                     _log($"model {url}: strand attributes unreadable ({e.Message}) — no per-strand hair");
                     found = Array.Empty<StrandGlbPrimitive>();
                 }
+                // The garment push weight (--garment-push only; the switch off reads nothing more).
+                IReadOnlyList<StrandGlbPrimitive> weights = Array.Empty<StrandGlbPrimitive>();
+                if (pushOn)
+                {
+                    try { weights = StrandGlb.Read(plain, GarmentPushModifier.WeightAttribute); }
+                    catch (Exception e) { _log($"model {url}: {GarmentPushModifier.WeightAttribute} unreadable ({e.Message}) — weight 1"); }
+                }
                 var (d, s, c) = GlbLoader.Parse(plain, url);
-                return (d, s, c, found);
+                return (d, s, c, found, weights);
             });
             strands = strandPrims;
+            collide = collidePrims;
             importWatch.Restart();
             using ((_source as AnimaApi)?.Measurements.Time("character GLB", "generate"))
             using (Ui.HitchLog.Time("figure generate"))
@@ -1393,7 +1405,7 @@ public partial class FigureManager : Node3D
             if (own.Count == 0)
             {
                 _log($"model {url}: {info.Format}/{info.Rig}, no takes, raw height {raw:0.###} m — procedural gait");
-                return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind, Strands = strands };
+                return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind, Strands = strands, Collide = collide };
             }
             var ownLib = new AnimationLibrary();
             var actionKinds = new List<string>();
@@ -1403,7 +1415,7 @@ public partial class FigureManager : Node3D
                 if (ownLib.AddAnimation(kind, byKind[clip]) == Error.Ok) actionKinds.Add(kind);
             _log($"model {url}: {info.Format}/{info.Rig}, raw height {raw:0.###} m, {own.Count} takes → {actionKinds.Count} actions "
                  + $"[{string.Join(", ", actionKinds.Select(k => ownLib.GetAnimation(k).LoopMode == Animation.LoopModeEnum.None ? k + " (once)" : k))}]");
-            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = actionKinds, BindBox = bind, Strands = strands };
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = actionKinds, BindBox = bind, Strands = strands, Collide = collide };
         }
 
         await Clips.WaitClipsAsync();
@@ -1457,7 +1469,7 @@ public partial class FigureManager : Node3D
         {
             Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = lazy.ClipSets,
             BoundTracks = lazy.PlannedTracks, Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = lazy.PlannedKeys,
-            FitMs = fitMs, Sets = sets.ToArray(), LibraryFits = lazy.PlannedClips > 0, Lazy = lazy, Strands = strands,
+            FitMs = fitMs, Sets = sets.ToArray(), LibraryFits = lazy.PlannedClips > 0, Lazy = lazy, Strands = strands, Collide = collide,
         };
     }
 
@@ -2007,6 +2019,7 @@ public partial class FigureManager : Node3D
         // the box itself (scaled, before that shift — `findLegChains(inst, box)`) and `model.height` feed the gait.
         V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
+        fig.CollidePrimitives = t.Collide;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
                     box, t.RawHeight * scale, fitClip: fitClip, refreshClipKinds: () => t.Kinds);
         // figures.ts makeFigure: the strand record of a full-tier model (hairStrands: tier === 'full' only).

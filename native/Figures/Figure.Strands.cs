@@ -68,6 +68,7 @@ public partial class Figure
         }
         handle.Manual = SecondaryManual;
         StrandHair = handle;
+        GarmentPush?.KeepOrder();
         return true;
     }
 
@@ -79,10 +80,13 @@ public partial class Figure
         if (want == _strandOn || StrandHair is not { } handle) return;
         _strandOn = want;
         handle.SetEnabled(want);
+        // figureRuntime.ts setStrandHair: the strand-run hair leaves the GPU push while it runs (excludeMesh).
+        GarmentPush?.Exclude(handle.Mesh, want);
     }
 
     private void DropStrandHair()
     {
+        if (_strandOn && StrandHair is { } running) GarmentPush?.Exclude(running.Mesh, false);
         StrandHair?.Release();
         StrandHair = null;
         _strandOn = false;

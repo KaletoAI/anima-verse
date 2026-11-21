@@ -203,7 +203,8 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
             for (int s = 0; s < mesh.GetSurfaceCount(); s++)
             {
                 var previous = mi.GetSurfaceOverrideMaterial(s);
-                var source = previous ?? mi.MaterialOverride ?? mesh.SurfaceGetMaterial(s);
+                // A garment-push material (--garment-push) is seen through: the twin corrects what it wraps, the push wraps the twin again.
+                var source = GarmentPushModifier.Unwrap(previous) ?? mi.MaterialOverride ?? mesh.SurfaceGetMaterial(s);
                 if (mesh is ArrayMesh am && (am.SurfaceGetFormat(s) & Mesh.ArrayFormat.FlagUse8BoneWeights) != 0)
                 {
                     Skipped.Add($"{mi.Name}/{s}: 8 bone weights");

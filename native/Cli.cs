@@ -33,6 +33,8 @@ namespace AnimaNative;
 ///   --plain-ground              the S1a one-colour terrain instead of the browser's ground surfaces (Task S3b)
 ///   --no-hud                    no React HUD over the world (default: the HUD via gdCEF when native/cef_artifacts is linked)
 ///   --no-water                  no water (the terrain's water variant off; = &amp;water=0)
+///   --garment-push              the GPU garment push ON (default off): garment and card-hair vertices pushed out of the
+///                               body's collision capsules in their vertex shader (garmentCollision.ts; README "Garment push")
 ///   --offline=DIR               build the world from a payload dump (native/tools/dump_payloads.py) instead of a
 ///                               server: no login, no HUD; prints the world/scatter/figure summary lines, then quits
 ///                               (with --bench: runs the drive, then quits)
@@ -97,6 +99,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public bool NoHud { get; init; }
     /// <summary><c>--no-water</c>: no water lift / water variant — the browser bench's <c>&amp;water=0</c> (Task S3c).</summary>
     public bool NoWater { get; init; }
+    /// <summary><c>--garment-push</c>: the GPU garment push on (<see cref="Figures.GarmentPushModifier.Enabled"/>); default off.</summary>
+    public bool GarmentPush { get; init; }
     /// <summary><c>--offline=DIR</c>: the payload dump to build from (Task S3c), null = online.</summary>
     public string? Offline { get; init; }
     /// <summary>true = keep V-sync during the bench run (<c>--vsync=on</c>).</summary>
@@ -145,7 +149,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
-        bool noWater = false, verify = false, fogCompute = true, clearCache = false, showVersion = false;
+        bool noWater = false, garmentPush = false, verify = false, fogCompute = true, clearCache = false, showVersion = false;
         string? matrix = null;
         string? offline = null, checkOnly = null, cacheDir = null;
         Vector2I? size = null;
@@ -183,6 +187,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             else if (arg == "--no-hud") noHud = true;
             else if (arg == "--plain-ground") plainGround = true;
             else if (arg == "--no-water") noWater = true;
+            else if (arg == "--garment-push") garmentPush = true;
             else if (TryValue(arg, "--offline", out var off)) offline = off;
             else if (TryValue(arg, "--fly", out var flyArg)) fly = ParseFly(flyArg);
             else if (TryValue(arg, "--server", out var v))
@@ -216,6 +221,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             NoHud = noHud,
             PlainGround = plainGround,
             NoWater = noWater,
+            GarmentPush = garmentPush,
             Offline = string.IsNullOrWhiteSpace(offline) ? null : offline,
             Vsync = vsync,
             Size = size,

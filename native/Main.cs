@@ -151,6 +151,9 @@ public partial class Main : Node3D
                 GetTree().Quit();
                 return;
             }
+            // --garment-push: the GPU garment push (off by default; README "Garment push").
+            AnimaNative.Figures.GarmentPushModifier.Enabled = _options.GarmentPush;
+            if (_options.GarmentPush) Log("garment push: ON (--garment-push) — garment and card-hair vertices pushed out of the body capsules on the GPU");
             if (!_options.Check && !_cacheStartupPrepared)
             {
                 _diskCacheEnabled = AnimaNative.Cache.DiskCache.PrepareRoot(CacheRoot, _options.ClearCache);

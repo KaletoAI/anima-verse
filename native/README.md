@@ -425,6 +425,7 @@ Arguments after `--` (no .env; all optional):
 | `--plain-ground` | keep the S1a one-colour terrain (no `/play/terrain-layers`, no surface textures); the bench result's `ground` key says `ground[plain: --plain-ground]` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
+| `--garment-push` | the GPU garment push ON (default off): garment and card-hair vertices pushed out of the body capsules in the vertex shader; see "Garment push" for what to look for |
 | `--msaa=0\|2\|4\|8` | 3D multisample anti-aliasing of the main view; overrides the menu's Graphics tab for the whole run. Not given: the stored Graphics tab level (`av3d.view.graphics.v1`, default 2×), a bench run 4× as before; `0` for a weak GPU or a bench comparison (the bench start line logs it) |
 | `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
 | `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`), plus each mount's `places[…]` line (Task 19) |
@@ -1154,12 +1155,79 @@ cases, 1e-8 m), generated from the TypeScript by `scripts/export_hair_vectors.mj
 `tests/HairVectorTests.cs`, and by `--check secondary` H1–H3 (`Check/HairCheck.cs`, GLBs built in the check:
 a chain tip kept out of the head capsule, 16 mm → ≤ 1 mm; today's skin following the payload rows).
 
-**Not ported yet:** the garment push shader (stage 3: cloth and card hair pushed out of the body capsules on the
-GPU — not started, no shader exists; skinned garments draw unpushed), partner contact (another figure's capsules, the `channels` of the
-payload), and the contact of the extension tips that are not hair (the browser keeps those outside too).
+**Not ported yet:** partner contact (another figure's capsules, the `channels` of the
+payload), and the contact of the extension tips that are not hair (the browser keeps those outside too). The garment
+push shader (stage 3) is ported but OFF by default, see "Garment push" below.
 **Accepted deviations:** the collision bind space is the skinned geometry space (Godot's bind poses; three's
 `bindMatrix` = identity, the mesh instance assumed to sit in the skeleton's frame); distances use `Math.Sqrt`
 where the TypeScript uses `Math.hypot` (last-bit differences, inside the tolerances).
+
+### Garment push (stage 3, OFF by default: `--garment-push`)
+
+The browser's GPU garment push (`packages/scene-render/src/garmentCollision.ts`): the vertices of every skinned garment
+mesh (card hair included) are pushed out of the figure's own collision capsules in the vertex shader, after
+skinning. **Ported, OFF unless the client is started with `--garment-push`** (no rebuild needed; the start log says
+`garment push: ON`). Off, nothing is created and no mesh or material of a figure changes (not even the GLB's
+`_COLLIDE` is read). There is no Graphics-tab entry: that tab lives in the shared React HUD
+(`packages/player-ui`, outside `native/`), so the switch is the command-line flag only.
+
+- **Pure half** (`Core/Figures/GarmentPush.cs`, Godot-free): `garmentKind` from the name (`garment_<kind>_…`; the
+  runtime reads `extras.garment.kind` first), `garmentCapsules` (hair → `HAIR_REGIONS`; footwear / accessory → none;
+  every other kind → all but `CLOTH_EXCLUDED_REGIONS` = arm + hair-only + partner-only regions; at most
+  `COLLIDE_MAX` 16), and the GLSL. That GLSL is a line-by-line transcription of the browser's `GLSL_PASS_OWN` /
+  `glslAxisOffset` / `GLSL_SETUP_OWN` / `glslSqueezeFunction` (own list), with `COLLIDE_PASSES` 2, the bind rule, and
+  the `SQUEEZE` for hair. Every constant comes from `Collision` as a `#define`. `Inject` puts the declarations and
+  the function before `vertex()` and `VERTEX = mix(VERTEX, collidePush(VERTEX, CUSTOM0.xyz), clamp(CUSTOM0.w, 0, 1))`
+  as its last statement (three: `patchCollisionVertexShader`). It refuses a shader it cannot carry (already patched,
+  `skip_vertex_transform` / `world_vertex_coords`, `CUSTOM0` in use, a `return` in `vertex()`).
+- **Runtime** (`Figures/GarmentPushModifier.cs`, one per figure body, created in `Figure.SetBody`): each surface of a
+  pushed garment wears a per-figure `ShaderMaterial` that is its own material's shader plus the push. A
+  StandardMaterial3D goes through the generator port `StandardShaderCode` and is fed by
+  `CutMaterials.FeedStandard`, the same port and values as the room cut. A ShaderMaterial, such as the secondary
+  motion's skinned-normal twin, keeps its own code and every parameter (its `skin_linear` is copied each frame).
+  The mesh is a per-template copy with `CUSTOM0` = RGBA float: the unskinned position, plus the GLB's `_COLLIDE` in w
+  (read from the GLB bytes like the strand attributes, matched to Godot's vertex order by position; default 1). Each
+  frame a `SkeletonModifier3D` runs after the secondary motion and the strand hair, and before the first-person head.
+  It writes the capsules into the space `VERTEX` is in at the end of `vertex()`: world capsule (skeleton global ·
+  bone global pose, the CPU twins' convention) → mesh global⁻¹, radius × linear scale. The bind capsules are
+  the binding's, in geometry space. While the per-strand hair runs on a mesh, that mesh wears its own materials
+  again (the browser's `excludeMesh`). Godot draws the shadow pass with the same material's `vertex()`, so the
+  shadow is pushed too, and no second material exists.
+
+Checked by `tests/GarmentPushTests.cs`. That suite runs the shader TEXT itself through a small GLSL interpreter
+(`tests/GlslMini.cs`) on every `pushOutOfCapsules` case of `collision_core.json` and on 300 random cases, both
+squeeze and plain. Each result is compared with the C# twin `Collision.PushOutOfCapsules` within 1e-12. The suite
+also checks the `#define`s against the C# constants textually, with no other number literal allowed, and checks
+that `Inject` only adds text. It covers the refusals and the capsule sets per kind as well. `--check secondary` G1–G7
+(`Check/GarmentPushCheck.cs`, on a GLB built in the check) proves these points:
+
+- Off, every mesh and override is the same object.
+- On, hair and shirt are pushed and the boots and body are not. The capsule counts are 4 and 2 (≤ 16).
+- `CUSTOM0` holds the position and the right `_COLLIDE`.
+- Each material is the source text plus the push, compiles, and keeps every uniform and value. The hair keeps
+  scissor 0.15, `cull_disabled` and the vertex-colour albedo.
+- The uniform ends equal Godot's own skinning of the bind ends (≤ 1e-4 m) on a figure that is scaled, turned
+  and posed.
+- A pose change moves the uniforms but not the bind uniforms.
+- A secondary twin is wrapped again. Exclude and release restore the meshes and materials.
+
+**What to look for when judging (`./native … -- --garment-push`):**
+
+- **Success:** hair and clothes no longer sink into the shoulders, chest or upper arms, in motion and in the shadow.
+- **Failure modes:**
+  - A garment that turns invisible or magenta: the shader did not compile on the real backend. The log may show
+    `shader garment-push[…]: FAILED`, but only the driver's compiler sees SPIR-V.
+  - Garment vertices exploding or stretching to a fixed point: the capsules are in the wrong space.
+  - A garment that differs in colour, alpha or sidedness from the run without the flag: the look was not
+    preserved.
+
+**Unverified headlessly:** pixels and the backend compile. The dummy renderer runs Godot's shader-language parser
+and type checker, which the check uses (a deliberately broken push is refused), but not the GLSL/SPIR-V
+generation or the driver. Also unverified are the cost per frame on a GPU, and meshes whose instance does not sit in
+the skeleton's frame (every glTF import does).
+**Not ported:** partner capsules (another figure's body, stage later); the per-garment-mesh LODs and shadow meshes
+make a garment skip the push (logged), as does a surface whose material is neither a supported StandardMaterial3D
+nor a spatial ShaderMaterial.
 
 ### Rigid shaft (`MotionGroup.rigid`)
 
@@ -1270,8 +1338,8 @@ time.
 is read from the source, not seen. The clone's skinned AABB is the template's (Godot keeps per-bone AABBs from the
 surface data), so a long hair falling far outside the bind pose could be culled at a screen edge.
 **Not ported:** partners (other figures' capsules, `StrandHair.setPartners`), the check-only metrics
-`scalpExposure` / the raster cameras, and the push shader of the garment meshes (stage 3, above) — the strand hair
-mesh needs none (the browser excludes it from the push). **Deviation:** the record is fetched only when the
+`scalpExposure` / the raster cameras. The strand hair mesh leaves the garment push (stage 3, above) while it runs,
+as the browser excludes it. **Deviation:** the record is fetched only when the
 template's GLB carries a strand primitive (the browser fetches it for every full-tier `hair_strands` model and
 refuses at binding).
 

@@ -260,7 +260,7 @@ public static class CutMaterials
     /// (material.cpp: <c>set_albedo</c>, <c>set_texture</c> + <c>albedo_texture_size</c>, the channel masks of
     /// <c>_get_texture_mask</c>, <c>emission_energy</c> = multiplier × intensity only with physical light units, …).
     /// </summary>
-    private static void FeedStandard(ShaderMaterial mat, StandardMaterial3D m, StandardShaderSpec spec)
+    public static void FeedStandard(ShaderMaterial mat, StandardMaterial3D m, StandardShaderSpec spec)
     {
         static Vector4 Mask(StandardShaderSpec.Channel ch)
         {
