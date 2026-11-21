@@ -234,8 +234,14 @@ Build does not count them as due and a sheer piece is not blocked without them
 
 ### The job — one click, two image jobs
 
-One click in the template dialog = one flow (`garment_cut_texture.start` → `generate` in a thread; no retry, no
-automatic start from the Build). Starting it sets the param `texture` to `"cut"` (`select_cut` — the result has no
+One click in the template dialog = one flow (`garment_cut_texture.start` → `generate` in a thread; the Build runs
+the same flow as its step "cut_texture"). Each texture job renders up to `CUT_ATTEMPTS` = 2 times: a GATE rejection
+of attempt 1 renders attempt 2 on the routing chain's SECOND entry (`routing.gate_attempts`, route meta
+`attempt_entry`, never `fallback_from`; a single-entry chain renders it on the same backend with the seed +
+`ATTEMPT_SEED_STEP` 1000). A failure (busy, media off, no route, a dead backend after `run_routed`'s own re-runs) is
+never retried; a failed attempt 2 keeps attempt 1's rejected answer. Every attempt's answer stays as
+`.raw_{job}.a{n}.png`, the job's record entry lists them (`attempts`: backend, dialect, routing, state, reason,
+metrics) and "Use this answer" can take either (`recompose(accept=job, attempt=n)`, route body `attempt`). Starting it sets the param `texture` to `"cut"` (`select_cut` — the result has no
 other use) and the flow ends by applying itself (`apply`: `figure.invalidate` + `garment_assembly.schedule`, CPU) —
 no second click (user finding 2026-11-20).
 
@@ -243,7 +249,7 @@ The cut is made by TWO routed image jobs (`JOBS` = front, back; `split_islands`)
 
 | job | islands | Picture 2 | prompt |
 |---|---|---|---|
-| front | every island except the back panel: front panel, sleeves, neckband, collar, cuffs | the item picture | `shared/templates/image/garment_cut_texture.md` |
+| front | every island except the back panel: front panel, sleeves, neckband, collar, cuffs | the item picture | `shared/templates/image/garment_cut_texture_front_plain.md`, `shared/templates/image/garment_cut_texture_front_decorated.md` |
 | back | the back panel (`BACK_PARTS`: `back`; step 3a also a trouser's `back_l` / `back_r` and a glove's `palm_l` / `palm_r` — tights and a bra have no back job) | the piece's back view (`garment_template_views`, occasion `garment_view`) | `shared/templates/image/garment_cut_texture_back.md` |
 
 **Sleeve rule:** sleeves (and band, collar, placket, cuffs) go with the front job — the item picture shows the front,
@@ -263,7 +269,12 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
    job's template is ZOOMED (`job_frame`: the back island's box + `BACK_ZOOM_MARGIN` 12 % per side, a white square
    scaled to the canvas, so the panel fills ~40 % instead of ~15 %); its answer is gated in that frame and put back
    into the atlas frame (`unzoom`) before the compose. On the un-zoomed template P-H3 filled the empty canvas with the
-   back-view photo or an extra garment. The prompts are shipped Jinja2 files, SHORT by the prompt test 2026-11-21
+   back-view photo or an extra garment. The prompts are three shipped SECTIONED edit-prompt templates
+   (`PROMPT_FILES`; one section per dialect of `app/imagegen/edit_prompt.py`, `docs/edit-prompts.md` §6): the render
+   picks the section of the backend it lands on (`edit_prompt.dialect_of`, inside the routed render, so attempt 2 on
+   another backend gets its own wording) and records it (`dialect`). MiniMax-H3-Image (`picture_subject`) gets its own
+   subject-format paragraph (candidate N of the MiniMax A/B 2026-11-21, with the piece list, `layout_words` and the
+   plain sleeves); P-H3 (`picture_edit`) and every other backend the SHORT prompts of the prompt test 2026-11-21
    (23 local P-H3 jobs on three real items; the long prompt with layout sentences invented emblems and prints): the
    front says "texture the sewing pattern with the fabric of the <piece>, keep every shape, its colour and the white
    background, add only the fine weave"; for a DECORATED item (`is_decorated`: the item picture's detail density >
@@ -359,7 +370,7 @@ Admin label **"Garment — texture from cut"** (`app/imagegen/occasions.py`), wo
 1-slot backend never fits. `requires_chain` is set: an empty chain is `NoRouteError` (pointing to /admin/settings →
 Media Generation → Routing), never a cheapest — possibly paid — pick. The occasion catalog has 41 occasions with it.
 
-Required backend entry for P-H3-Image (references as `<Picture 1>` / `<Picture 2>`, written by the central handoff):
+Required backend entry for P-H3-Image (references as `<Picture 1>` / `<Picture 2>`, dialect `picture_edit`):
 `ref_slot_count` ≥ 2, category `img2img`, and
 
 ```json
@@ -367,7 +378,7 @@ Required backend entry for P-H3-Image (references as `<Picture 1>` / `<Picture 2
 ```
 
 The upsampler rewrites the prompt; a P-H3 backend without that entry still runs, and the record marks
-`upsampler_on: true`.
+`upsampler_on: true` (`edit_prompt.lint_backend` code `upsampler_on`, also shown in the routing overview).
 
 ### The gate and the post-processing constants
 

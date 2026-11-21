@@ -36,7 +36,8 @@ H) ``MIN_ITEM_SIDE`` (``app/core/garment_cut_texture.py``) appears with its valu
 I) The routes: every ``@router`` path in ``app/routes/figure.py`` that contains "/cut" or "pattern.png" appears in
    the document, with ``{character_name}`` shortened to ``{c}``.
 J) The P-H3 backend entry: ``"use_prompt_upsampler": false`` appears (the string ``_upsampler_on`` tests for).
-K) Both prompt files the document names exist: ``PROMPT_FILE`` and ``PROMPT_FILE_BACK`` of ``garment_cut_texture.py``;
+K) Every prompt file of ``PROMPT_FILES`` in ``garment_cut_texture.py`` (three: front plain, front decorated, back)
+   exists and the document names it;
    the document states the sleeve rule and names every part of ``BACK_PARTS`` (the back panel; since step 3a also a
    trouser's back leg panels and a glove's palms).
 L) The param ``texture``: its choices ``TEXTURE_SOURCES`` and that it is in ``TEXTURE_ONLY``
@@ -169,15 +170,11 @@ def main() -> int:
     check('J  "use_prompt_upsampler": false', '"use_prompt_upsampler": false' in doc)
 
     # K
-    pm = re.search(r'PROMPT_FILE = .*?"shared" / "templates" / "image" / "([^"]+)"', gct)
-    check("K  PROMPT_FILE found", pm is not None)
-    if pm:
-        rel = f"shared/templates/image/{pm.group(1)}"
-        check(f"K  doc names {rel} and it exists", rel in doc and (REPO / rel).is_file())
-    bm = re.search(r'PROMPT_FILE_BACK = PROMPT_FILE\.with_name\("([^"]+)"\)', gct)
-    check("K  PROMPT_FILE_BACK found", bm is not None)
-    if bm:
-        rel = f"shared/templates/image/{bm.group(1)}"
+    block = re.search(r"PROMPT_FILES = \{(.*?)\}", gct, re.DOTALL)
+    names = re.findall(r'_PROMPT_DIR / "([^"]+)"', block.group(1)) if block else []
+    check("K  PROMPT_FILES has three files", len(names) == 3, names)
+    for name in names:
+        rel = f"shared/templates/image/{name}"
         check(f"K  doc names {rel} and it exists", rel in doc and (REPO / rel).is_file())
     check("K  doc states the sleeve rule and the back parts", "**Sleeve rule:**" in doc
           and "`BACK_PARTS`" in doc

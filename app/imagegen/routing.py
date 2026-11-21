@@ -30,7 +30,7 @@ import contextlib
 import contextvars
 import fnmatch
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.imagegen.occasions import (backend_fits, catalog_payload, get_occasion,
@@ -135,6 +135,19 @@ def retry_attempt(attempt: int):
 
 def current_attempt() -> int:
     return _ATTEMPT.get()
+
+
+def gate_attempts(n: int) -> Iterator[int]:
+    """The attempts of a quality-gated step: yields 1..``n``, the loop body of attempt k running inside
+    ``retry_attempt(k)`` — attempt 1 on the chain's first usable entry, attempt 2 on its second (clamped to the last).
+    The caller ``break``s when an attempt passes its gate; a raise ends the loop too (a failure is never retried
+    here — ``run_routed`` has re-run a dead backend already). Outside the loop body the attempt is back to 1."""
+    for attempt in range(1, max(1, int(n or 1)) + 1):
+        token = _ATTEMPT.set(attempt)
+        try:
+            yield attempt
+        finally:
+            _ATTEMPT.reset(token)
 
 
 def attempt_order(n_entries: int, attempt: int) -> List[int]:

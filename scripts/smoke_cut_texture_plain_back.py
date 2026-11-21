@@ -293,14 +293,14 @@ def section_generate(tmp: Path, plain: Path, printed: Path):
         name = "FakeCut"
         extra_params = {}
 
-    def routed(item_id, side, prompt, template_png, ref_png, seed):
+    def routed(item_id, side, prompt_for, template_png, ref_png, seed):
         renders.append(side)
         with Image.open(template_png) as t:
             arr = np.asarray(t.convert("RGB")).copy()
         arr[(255 - arr.astype(int)).max(-1) > 24] = A
         buf = io.BytesIO()
         Image.fromarray(arr).save(buf, format="PNG")
-        return buf.getvalue(), Backend(), None
+        return buf.getvalue(), Backend(), None, "ordinal", prompt_for("ordinal")
     gct._routed_render = routed
 
     Stubs.back, Stubs.side = plain, 1200

@@ -302,7 +302,8 @@ def compose(*, use_case: str, subject: str, backend: Any,
             hints: Optional[List[ShapeHint]] = None,
             negative_extra: str = "",
             style_override: Optional[str] = None,
-            conditions: str = "") -> Composed:
+            conditions: str = "",
+            keep_negations: bool = False) -> Composed:
     """Build the final prompt for one render occasion.
 
     ``backend`` supplies the family (``image_family``/``model``); ``None`` is
@@ -310,6 +311,10 @@ def compose(*, use_case: str, subject: str, backend: Any,
     the use case's style (the dialog hands back an edited one).
     ``conditions`` is the open-air weather clause from
     :func:`outdoor_conditions` — empty for every indoor render.
+    ``keep_negations``: the subject is a tuned edit prompt
+    (``app/imagegen/edit_prompt.EditPrompt``) whose negation clauses are part
+    of the tested text ("… lies flat, without folds, wrinkles …") — the
+    negation guard leaves it untouched.
     """
     from app.core import config as _cfg
     from app.core.prompt_adapters import get_target_model
@@ -326,8 +331,9 @@ def compose(*, use_case: str, subject: str, backend: Any,
     subject = (subject or "").strip()
     warnings: List[str] = []
 
-    # 1. Negation guard — subject only, never the style.
-    subject, moved, inline = split_negations(subject)
+    # 1. Negation guard — subject only, never the style; never a tuned edit
+    # prompt (keep_negations).
+    subject, moved, inline = (subject, [], []) if keep_negations else split_negations(subject)
     if moved:
         listed = ", ".join(moved)
         msg = f"Moved negated items to the negative prompt: {listed}."

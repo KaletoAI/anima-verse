@@ -1102,6 +1102,8 @@ def generate_template_cut(character_name: str, item_id: str, body: Optional[Temp
 class TemplateCutUseRequest(BaseModel):
     #: The job whose shown answer goes on the figure ("front" / "back") — also a rejected one.
     job: str
+    #: The render attempt whose answer it is (``attempts`` of the job's record entry); None = the job's current one.
+    attempt: Optional[int] = None
 
 
 @router.post("/{character_name}/figure/template/{item_id}/cut/use")
@@ -1114,7 +1116,7 @@ def use_template_cut_answer(character_name: str, item_id: str, body: TemplateCut
     from app.core import garment_cut_texture as gct
     _template_item(character_name, item_id)
     try:
-        started = gct.start_recompose(character_name, item_id, accept=body.job)
+        started = gct.start_recompose(character_name, item_id, accept=body.job, attempt=body.attempt)
     except (gct.NotReady, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except gct.Busy as e:

@@ -36,9 +36,9 @@ hand below.
     ("{{", "{#"). After ``edit_prompt.normalise`` (two slots) with model "p-h3-image" it contains "<Picture 1>" and
     "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" (ordinal) it is byte-identical. The back prompt reads
     "the fabric on the back of the T-shirt" and names no panel.
-    ``PROMPT_SHA`` is the md5 of the shipped file text (32 hex).
-[5] A missing variable raises (StrictUndefined): the template rendered with ``piece`` only raises
-    ``jinja2.exceptions.UndefinedError``.
+    ``PROMPT_SHA`` is the md5 of the three shipped files joined by NUL in ``PROMPT_FILES`` order (32 hex).
+[5] A missing variable raises (StrictUndefined): the plain front file through ``edit_prompt.from_template`` with
+    ``piece`` only (no ``pieces`` for its subject section) raises ``jinja2.exceptions.UndefinedError``.
 [6] ``prompt_compose.compose(use_case="garment_cut_texture", subject=<rendered>, backend=<model "P-H3-Image",
     image_family "natural">)``: the use case has empty style / negative / instruction for both families, so the
     prompt is the rendered text byte-identical, the negative is "" and there are no warnings (the prompt opens no
@@ -56,7 +56,8 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
     2048; colour match moves nothing (atlas mean = fabric mean -> dE 0, the centre of the front island stays
     (150, 40, 40) +-2). ``csig`` = md5("|".join([islands sha, item sha, PROMPT_SHA, str(cut_texture_post.POST_VERSION)]))[:12]; the
     two references are file PATHS (str) in the order template, item; the front prompt (the short plain one: the
-    fixture item has no detail) says "T-shirt" once ("the fabric of the T-shirt in the second image") (formerly: 4 times (made
+    fixture item has no detail) says "T-shirt" once ("the fabric of the T-shirt in <Picture 2>", the picture_edit
+    section — the fake backend's model is P-H3-Image) (formerly: 4 times (made
     from the front of the T-shirt / the sewing pattern of the T-shirt / the plain fabric colour of the T-shirt / A
     plain T-shirt stays plain); ``run_routed`` got the occasion, has_ref=True
     and the service's pool; the model is P-H3 without ``use_prompt_upsampler: false`` -> ``upsampler_on`` True;
@@ -137,7 +138,8 @@ rules.
     (a split back panel) goes with the back job.
 [12.2] Seams on {front, back, back_2, sleeve_l} with seams 0 front|back, 1 sleeve_l|front, 2 back|back_2: the front
     job keeps [1], the back job [2]; ``cross_seams`` = [0].
-[12.3] ``generate`` -> two image calls; the front prompt is the plain one ("Texture the sewing pattern"), the back
+[12.3] ``generate`` -> two image calls; the front prompt is the plain one in the P-H3 dialect ("Edit <Picture 1>.
+    Texture the sewing pattern"), the back
     prompt "the fabric on the back of"; both name no panel (prompt test 2026-11-21). The back job runs ZOOMED: its
     ``metrics.zoom`` is ``job_frame`` (k > 1), the front's None, and the back template's non-white pixels are the
     atlas back island's pixel count times k^2 (+-3 %: area scales with the square, edges round); per-job coverage keys back {1}, front
@@ -148,7 +150,8 @@ rules.
 [12.5] A white back answer: "rejected", reason "Back: coverage 0.00 < 0.97", both raw answers kept, no atlas.
 [12.6] ``only="back"`` -> 1 image call with the back references, ready; ``only="front"`` without a back answer of
     this csig -> 2 calls.
-[12.7] No back view: ``job_plan`` = {back_view 1, upscale 0, front 1, back 1, total 3, max 4}; ``generate`` renders the
+[12.7] No back view: ``job_plan`` = {back_view 1, upscale 0, front 1, back 1, total 3, max 6 (3 + the view's second
+    attempt 1 + attempt 2 of each texture job 2)}; ``generate`` renders the
     view once (VIEW_JOBS + ("mk1", "back")) and keys the cut with it (csig != the csig without a back view); after it
     the plan totals 0 (every answer passed; each Redo 1); the tiny item adds +1 upscale; a refused view -> "failed" with "back view was refused", 0 image
     calls.
@@ -179,7 +182,9 @@ rules.
 [13.1] The item is the (150, 40, 40) block: its base fabric colour is exactly that (uniform -> the median), so the
     front template's front-island centre is (150, 40, 40) +-1 (Lab round trip) and the outline is that colour x 0.6
     (its L* 34.3 >= 30): (90, 24, 24). An answer that fills the islands with (40, 150, 40): ΔE00 to the item > 20 -> the
-    front job "rejected" with "colour ΔE00 …", the detail gate passes (both uniform: 0 <= 0.04), the back not spent.
+    front job "rejected" with "colour ΔE00 …", the detail gate passes (both uniform: 0 <= 0.04), the back not spent;
+    2 image calls — the rejected front is rendered a second time (``CUT_ATTEMPTS`` 2; the fake chain has one entry,
+    so attempt 2 runs on the same backend with seed + 1000, and is rejected the same way).
 [13.2] ``dialog_state.answers``: front can_use (its answer exists), back not (none); Use this answer on the back is
     refused (NotReady). ``recompose(accept="front")``: 0 image calls, the front "ready" + accepted with the colour
     reason it overrode, the back "skipped" with ``NOT_MADE``, the record "rejected" "Back: <NOT_MADE>", nothing
@@ -192,7 +197,7 @@ rules.
     calls, the record's sleeve_print "picture", ``cut_info`` "cut", and the front job's fabric fill covers only the
     band (the sleeves are the model's now). "glitter" -> ValueError.
 [13.6] Review finding 2026-11-21: a fresh item, both jobs pass (2 image calls, "ready"). Redo front with the green
-    answer: 1 image call, the front "rejected", the back re-used from its raw file (0 calls) and still "ready" — not
+    answer: 2 image calls (attempt 1 and 2, both rejected), the front "rejected", the back re-used from its raw file (0 calls) and still "ready" — not
     "skipped" — and its raw file on disk; the dialog offers Use this answer for both. ``recompose(accept="front")``:
     0 image calls, "ready", the atlas written, one assembly scheduled; ``job_plan`` then 0 with both reused.
 """
@@ -405,10 +410,11 @@ ph3 = normalise(prompt, _two, SimpleNamespace(model="p-h3-image"))[0]
 check("[4] P-H3 wording", "<Picture 1>" in ph3 and "<Picture 2>" in ph3 and "first image" not in ph3
       and "second image" not in ph3, ph3)
 check("[4] other backends keep the text", normalise(prompt, _two, SimpleNamespace(model="qwen-edit"))[0] == prompt)
-shipped = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture.md").read_text(encoding="utf-8")
-shipped_back = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture_back.md").read_text(encoding="utf-8")
-check("[4] PROMPT_SHA = md5 of both shipped files", gct.PROMPT_SHA
-      == hashlib.md5((shipped + "\0" + shipped_back).encode("utf-8")).hexdigest()
+_img = ROOT / "shared" / "templates" / "image"
+shipped = "\0".join((_img / f).read_text(encoding="utf-8") for f in (
+    "garment_cut_texture_front_plain.md", "garment_cut_texture_front_decorated.md", "garment_cut_texture_back.md"))
+check("[4] PROMPT_SHA = md5 of the three shipped files", gct.PROMPT_SHA
+      == hashlib.md5(shipped.encode("utf-8")).hexdigest()
       and re.fullmatch(r"[0-9a-f]{32}", gct.PROMPT_SHA) is not None, gct.PROMPT_SHA)
 back_prompt = gct.render_prompt(piece="T-shirt", side="back")
 check("[4] back prompt: the fabric on the back, no panel named", "the fabric on the back of the T-shirt" in back_prompt
@@ -417,8 +423,10 @@ check("[4] back prompt: the fabric on the back, no panel named", "the fabric on 
 # [5] StrictUndefined
 import jinja2  # noqa: E402
 
+from app.imagegen.edit_prompt import Ref, from_template  # noqa: E402
+
 try:
-    gct.prompt_template().render(piece="T-shirt")
+    from_template(gct.PROMPT_FILES["front_plain"], [Ref(1, "canvas"), Ref(2, "material")], piece="T-shirt")
     check("[5] a missing variable raises", False, "rendered without 'pieces'")
 except jinja2.exceptions.UndefinedError as e:
     check("[5] a missing variable raises", True, e)
@@ -739,9 +747,9 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           refs_b == {"input_reference_image_1": f"{stem}.template_back.png",
                      "input_reference_image_2": f"{stem}.back_ref.png"}, refs_b)
     check("[8.1] no image_use_case in params", all("image_use_case" not in c["params"] for c in backend.calls))
-    check("[8.1] the prompt is the rendered file, ordinal wording kept for the handoff",
-          "the first image" in backend.calls[-2]["prompt"] and backend.calls[-2]["negative"] == "",
-          backend.calls[-2]["prompt"][:80])
+    check("[8.1] the prompt is the rendered file in the backend's dialect (P-H3: picture_edit)",
+          backend.calls[-2]["prompt"].startswith("Edit <Picture 1>. Texture the sewing pattern in <Picture 1>")
+          and backend.calls[-2]["negative"] == "", backend.calls[-2]["prompt"][:80])
     check("[8.1] piece name from kind + sleeves", backend.calls[-2]["prompt"].count("T-shirt") == 1
           and gct.piece_name("long") == "long-sleeve shirt", gct.piece_name("long"))
     check("[8.1] upsampler_on noted", rec.get("upsampler_on") is True, rec.get("upsampler_on"))
@@ -1193,7 +1201,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     check("[12.3] two image jobs, both ready", len(backend.calls) == n0 + 2 and rec_two.get("state") == "ready"
           and all(rec_two["jobs"][j]["state"] == "ready" for j in ("front", "back")), rec_two.get("jobs"))
     check("[12.3] front prompt plain, back prompt the back's fabric, no panel named",
-          front_call["prompt"].startswith("Texture the sewing pattern")
+          front_call["prompt"].startswith("Edit <Picture 1>. Texture the sewing pattern")
           and "the fabric on the back of" in back_call["prompt"] and "panel" not in front_call["prompt"]
           and "panel" not in back_call["prompt"], (front_call["prompt"][:60], back_call["prompt"][:60]))
     zb, zf = rec_two["jobs"]["back"]["metrics"].get("zoom"), rec_two["jobs"]["front"]["metrics"].get("zoom")
@@ -1283,7 +1291,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     plan = gct.job_plan(CHAR, "mk1")
     check("[12.7] plan with the back view missing: 1 view + 0 upscale + front + back = 3 jobs, at most 4",
           {k: plan.get(k) for k in ("back_view", "upscale", "front", "back", "total", "max", "reused")}
-          == {"back_view": 1, "upscale": 0, "front": 1, "back": 1, "total": 3, "max": 4, "reused": []}, plan)
+          == {"back_view": 1, "upscale": 0, "front": 1, "back": 1, "total": 3, "max": 6, "reused": []}, plan)
     v0 = len(VIEW_JOBS)
     rec_mk = gct.generate(CHAR, "mk1")
     want_mk = gct.csig(ISLANDS_SHA, hashlib.sha256(ITEM_FILES["mk1"].read_bytes()).hexdigest(),
@@ -1518,7 +1526,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           rec_ov.get("state") == "rejected" and rec_ov["jobs"]["front"]["reason"].startswith("colour ΔE00")
           and gates_ov["colour"]["ok"] is False and gates_ov["colour"]["value"] > 20
           and gates_ov["detail"]["ok"] is True and rec_ov["jobs"]["back"]["state"] == "skipped"
-          and len(backend.calls) == n0 + 1, (rec_ov.get("reason"), gates_ov))
+          and len(backend.calls) == n0 + 2, (rec_ov.get("reason"), gates_ov))
     use0 = gct.dialog_state(CHAR, "ov1").get("answers") or {}
     check("[13.2] the dialog offers Use this answer for the shown (rejected) front answer, not for the missing back",
           (use0.get("front") or {}).get("can_use") is True and (use0.get("back") or {}).get("can_use") is False, use0)
@@ -1589,8 +1597,8 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     backend.answer = answer_front_green
     n0 = len(backend.calls)
     rec_rf = gct.generate(CHAR, "ov2", only="front")
-    check("[13.6] Redo front, rejected: 1 image call, the re-used back stays 'ready' and its answer on disk",
-          len(backend.calls) == n0 + 1 and rec_rf.get("state") == "rejected"
+    check("[13.6] Redo front, rejected: 2 image calls (attempt 2), the re-used back stays 'ready' and its answer on disk",
+          len(backend.calls) == n0 + 2 and rec_rf.get("state") == "rejected"
           and rec_rf["jobs"]["front"]["state"] == "rejected" and rec_rf["jobs"]["back"]["state"] == "ready"
           and Path(f"{stem_o2}.raw_back.png").is_file(),
           (len(backend.calls) - n0, rec_rf.get("reason"), rec_rf["jobs"]["back"].get("state")))
@@ -1600,7 +1608,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
     sch0 = len(SCHEDULED)
     rec_u2 = gct.recompose(CHAR, "ov2", accept="front")
     check("[13.6] Use this answer: 0 image calls, ready, the atlas composed, the figure re-assembled",
-          len(backend.calls) == n0 + 1 and rec_u2.get("state") == "ready"
+          len(backend.calls) == n0 + 2 and rec_u2.get("state") == "ready"
           and rec_u2["jobs"]["front"].get("accepted") is True and rec_u2["jobs"]["back"]["state"] == "ready"
           and Path(f"{stem_o2}.atlas.png").is_file() and len(SCHEDULED) == sch0 + 1,
           (rec_u2.get("state"), rec_u2.get("reason")))

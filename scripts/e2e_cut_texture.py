@@ -184,9 +184,10 @@ def install_dry_hub() -> None:
         model = "P-H3-Image"
         extra_params = {"use_prompt_upsampler": False}
 
-    def routed(item_id, side, prompt, template_png, ref_png, seed):
+    def routed(item_id, side, prompt_for, template_png, ref_png, seed):
+        prompt = prompt_for("ordinal")
         JOBS.append({"backend": "dry", "task": f"cut:{side}", "label": prompt[:60], "t": time.time()})
-        return Path(template_png).read_bytes(), DryBackend(), None
+        return Path(template_png).read_bytes(), DryBackend(), None, "ordinal", prompt
     gct._routed_render = routed
 
     def upscale(self, *a, **k):

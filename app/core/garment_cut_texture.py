@@ -13,22 +13,25 @@ no drape needed; a drape of the same cut writes the same bytes; this module neve
 - ``render_pattern_sheet`` — the user's DEBUG view of the same islands (pastel fills, part names, sizes in cm, grain
   arrows, seam letters, the sleeve cap height, a px/cm footer). It is never sent to a model.
 
-The PROMPT (Task 6) is the shipped Jinja2 file ``shared/templates/image/garment_cut_texture.md`` — its own tiny
-``SandboxedEnvironment`` + ``StrictUndefined`` loader here, deliberately not world-overridable (``/admin/templates``
-stays LLM-only), short by the prompt test 2026-11-21; code picks the front variant (``is_decorated``). ``PROMPT_SHA`` (md5 of the file
-text) enters the cut atlas key and the record (``prompt_sha``), so a reworded prompt makes an old atlas stale. The render runs on the occasion
-``CUT_OCCASION`` with the use case ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
+The PROMPT is one of three shipped SECTIONED templates (``PROMPT_FILES``: front plain, front decorated, back; one
+section per edit-prompt dialect, ``app/imagegen/edit_prompt.py``, ``docs/edit-prompts.md`` §6) — deliberately not
+world-overridable (``/admin/templates`` stays LLM-only). Code picks the variant (``is_decorated``, the side); the
+backend the render lands on picks the dialect, inside the routed render, so attempt 2 on another backend gets its own
+wording. ``PROMPT_SHA`` (md5 of the three file texts) enters the cut atlas key and the record (``prompt_sha``), so a
+reworded section makes an old atlas stale. The render runs on the occasion ``CUT_OCCASION`` with the use case
+``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
 The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready CUT with islands
-(``garment_template_cut.state``), an item picture) and runs ``generate`` in a thread — ONE attempt per click, no
-retry; it never waits for a drape and may run while the Build drapes the piece. The character's Build runs the same
+(``garment_template_cut.state``), an item picture) and runs ``generate`` in a thread — per job up to ``CUT_ATTEMPTS``
+renders: a gate rejection of attempt 1 renders attempt 2 on the routing chain's SECOND entry
+(``routing.gate_attempts``); a failure (busy, media off, no route, a dead backend) never does. It never waits for a drape and may run while the Build drapes the piece. The character's Build runs the same
 flow as its step "cut_texture" for a top whose ``texture`` is "cut" (``build_state`` / ``build_start`` /
 ``build_join``, user test 2026-11-21) — no click on the dialog's button is needed. A cut
 atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, ``PROMPT_SHA``,
 ``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
 the state "ready" / "rejected" / "failed". The assembly maps it onto a drape whose islands have the same sha — every
 drape of the same cut (``garment_template.cut_info``). Every render goes ``routing.run_routed`` -> ``run_on_backend`` ->
-``run_on_backend_channel``; the reference wording is the central handoff's job.
+``run_on_backend_channel``; the central handoff's ``edit_prompt.normalise`` finds the section already in its dialect.
 
 Pixel frame: the payload stores image-frame pixels (x right, y down, row = (1 - v) * atlas_px), so nothing here
 re-derives the Blender UV flip.
@@ -45,8 +48,6 @@ import threading
 from pathlib import Path
 
 import numpy as np
-from jinja2 import StrictUndefined, Template
-from jinja2.sandbox import SandboxedEnvironment
 from PIL import Image, ImageDraw, ImageFont
 
 from app.core import cut_texture_post
@@ -59,14 +60,20 @@ logger = get_logger("garment_cut_texture")
 CUT_OCCASION = "garment_cut_texture"
 CUT_USE_CASE = "garment_cut_texture"
 
-PROMPT_FILE = Path(__file__).resolve().parents[2] / "shared" / "templates" / "image" / "garment_cut_texture.md"
-#: The back job's prompt (the back panel alone, filled from the piece's back view).
-PROMPT_FILE_BACK = PROMPT_FILE.with_name("garment_cut_texture_back.md")
-PROMPT_TEXTS = {"front": PROMPT_FILE.read_text(encoding="utf-8"),
-                "back": PROMPT_FILE_BACK.read_text(encoding="utf-8")}
-PROMPT_TEXT = PROMPT_TEXTS["front"]
-#: md5 of both shipped prompt file texts — part of the cut atlas key, so a reworded prompt makes an atlas stale.
-PROMPT_SHA = hashlib.md5((PROMPT_TEXTS["front"] + "\0" + PROMPT_TEXTS["back"]).encode("utf-8")).hexdigest()
+_PROMPT_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "image"
+#: The three prompt variants, each a sectioned edit-prompt template (``edit_prompt.from_template``): the front job of a
+#: plain item, the front job of a decorated one (``is_decorated``), the back job (the back panel alone).
+PROMPT_FILES = {"front_plain": _PROMPT_DIR / "garment_cut_texture_front_plain.md",
+                "front_decorated": _PROMPT_DIR / "garment_cut_texture_front_decorated.md",
+                "back": _PROMPT_DIR / "garment_cut_texture_back.md"}
+PROMPT_TEXTS = {variant: path.read_text(encoding="utf-8") for variant, path in PROMPT_FILES.items()}
+#: md5 of the three shipped files (every section) — part of the cut atlas key, so a reworded section makes an atlas
+#: stale.
+PROMPT_SHA = hashlib.md5("\0".join(PROMPT_TEXTS[v] for v in PROMPT_FILES).encode("utf-8")).hexdigest()
+#: Renders per job: a gate rejection of attempt 1 renders attempt 2 on the chain's second entry (docs/edit-prompts.md
+#: §7); a single-entry chain renders it on the same backend with ``ATTEMPT_SEED_STEP`` added to the seed.
+CUT_ATTEMPTS = 2
+ATTEMPT_SEED_STEP = 1000
 
 TEMPLATE_FILL = (190, 190, 190)
 TEMPLATE_LINE = (80, 80, 80)
@@ -215,15 +222,6 @@ PROMPT_PIECE_NAMES = {
     "top_band_r": "right top band", "top_band_l": "left top band", "cuff_r": "right cuff", "cuff_l": "left cuff",
 }
 
-_PROMPT_ENV = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined, trim_blocks=True,
-                                   lstrip_blocks=True, keep_trailing_newline=False)
-
-
-def prompt_template(side: str = "front") -> Template:
-    """The shipped prompt file of the ``side`` job ("front" / "back") as a StrictUndefined template (a missing
-    variable raises)."""
-    return _PROMPT_ENV.from_string(PROMPT_TEXTS[side])
-
 
 #: Prompt test 2026-11-21 — the item picture's detail density (``cut_texture_post.picture_reference``) above which the
 #: FRONT job gets the decorated prompt (the print / embroidery is painted onto the front panel): Dario's embroidered
@@ -266,20 +264,50 @@ def is_plain_back(detail_back) -> bool:
         return False
 
 
-def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "") -> str:
-    """The cut-texture prompt of the ``side`` job for ``piece`` (e.g. "T-shirt"): the short plain prompt, or for a
-    ``decorated`` front the one that names the front island by its ``front_place`` ("top left", ``front_place``).
-    Ordinal wording ("the first image") — the central handoff rewrites it per backend."""
+def prompt_variant(side: str = "front", decorated: bool = False) -> str:
+    """The ``PROMPT_FILES`` key of a job: "back", "front_decorated" or "front_plain"."""
+    if side == "back":
+        return "back"
+    return "front_decorated" if decorated else "front_plain"
+
+
+def _prompt_refs(side: str, piece: str):
+    """The slots of every cut-texture render: the job's template is the canvas, its Picture 2 the material source."""
+    from app.imagegen.edit_prompt import Ref
+    canvas = (f"the flat sewing pattern of the back panel of a {piece}" if side == "back"
+              else f"the flat sewing pattern of a {piece}")
+    source = f"the back of the {piece}" if side == "back" else f"the {piece}"
+    return [Ref(1, "canvas", canvas), Ref(2, "material", source)]
+
+
+def edit_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
+                pieces=(), layout=(), sleeves=()):
+    """The cut-texture prompt of the ``side`` job as an ``EditPrompt`` (every dialect rendered): the variant's
+    sectioned file (``prompt_variant``) with ``piece`` (e.g. "T-shirt"), the job's ``pieces`` (``prompt_pieces``),
+    ``layout`` (``layout_words``), the ``sleeves`` whose fabric stays plain and, for a ``decorated`` front, the front
+    island's ``front_place`` ("top left"). A missing variable raises (StrictUndefined)."""
+    from app.imagegen.edit_prompt import from_template
     if side == "front" and decorated and not front_place:
         raise ValueError("a decorated front prompt needs the front island's place")
-    return prompt_template(side).render(piece=piece, decorated=bool(decorated),
-                                        front_place=front_place or "").strip()
+    variant = prompt_variant(side, decorated)
+    return from_template(PROMPT_FILES[variant], _prompt_refs(side, piece), piece=piece,
+                         front_place=front_place or "", pieces=list(pieces), layout=list(layout or []),
+                         sleeves=list(sleeves or []))
+
+
+def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
+                  pieces=(), layout=(), sleeves=(), dialect: str = "ordinal") -> str:
+    """``edit_prompt(...)`` rendered in ``dialect`` (``edit_prompt.dialect_of`` of the backend it runs on)."""
+    return edit_prompt(piece=piece, side=side, decorated=decorated, front_place=front_place, pieces=pieces,
+                       layout=layout, sleeves=sleeves).render(dialect)
 
 
 #: ``_place_words``: an island centre left of this share of the template is "left", right of 1 - it "right"; the
 #: same for top / bottom; below ``LAYOUT_VERY`` it is "at the very bottom".
 LAYOUT_SIDE = 0.36
 LAYOUT_VERY = 0.9
+#: An island whose bounding box is this many times wider than high (or higher than wide) is "the long thin strip".
+LAYOUT_STRIP = 6.0
 
 
 def _place_words(cx: float, cy: float) -> str:
@@ -315,6 +343,65 @@ def _split_name(name: str) -> tuple[str, int]:
         return base, int(n)
     return str(name), 1
 
+
+def _pattern_key(name: str) -> tuple:
+    base, n = _split_name(name)
+    order = list(PROMPT_PIECE_NAMES)
+    return (order.index(base) if base in PROMPT_PIECE_NAMES else len(order), base, n)
+
+
+def _pattern_order(islands: dict) -> list[str]:
+    """The payload's island names in pattern order (``PROMPT_PIECE_NAMES``, a split part after its first)."""
+    return sorted((str(i["name"]) for i in islands.get("islands", [])), key=_pattern_key)
+
+
+def prompt_pieces(islands: dict) -> list[str]:
+    """The English panel names of the payload's islands in pattern order; a split part keeps its number
+    (``front_2`` -> "front panel 2"); an unknown part name is spoken plainly after the known ones. Only the subject-form
+    and the image-tag sections name the pieces (the short P-H3 prompts do not)."""
+    out = []
+    for name in _pattern_order(islands):
+        base, n = _split_name(name)
+        word = PROMPT_PIECE_NAMES.get(base, base.replace("_", " "))
+        out.append(word if n == 1 else f"{word} {n}")
+    return out
+
+
+def layout_words(islands: dict) -> list[str]:
+    """One sentence per island of the job's payload, in pattern order, saying which island of the template is which
+    piece — e.g. "the large piece at the top left is the front panel", "the piece at the bottom left is the left
+    sleeve", "the long thin strip at the very bottom is the neckband". Positions are the island's bbox centre in the
+    square template (``LAYOUT_SIDE`` / ``LAYOUT_VERY``); "large" marks the island with the largest bbox area when the
+    job has more than one; a bbox ``LAYOUT_STRIP`` times longer than wide is "the long thin strip"."""
+    size = float(islands.get("atlas_px") or 2048)
+    names = dict(zip(_pattern_order(islands), prompt_pieces(islands)))
+    boxes = {}
+    for isl in islands.get("islands", []):
+        x0, y0, x1, y1 = (float(v) for v in (isl.get("bbox_px") or _bbox(isl)))
+        boxes[str(isl["name"])] = (x0, y0, x1, y1)
+    if not boxes:
+        return []
+    largest = max(boxes, key=lambda n: (boxes[n][2] - boxes[n][0]) * (boxes[n][3] - boxes[n][1]))
+    out = []
+    for name in _pattern_order(islands):
+        x0, y0, x1, y1 = boxes[name]
+        w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+        if max(w / h, h / w) >= LAYOUT_STRIP:
+            shape = "the long thin strip"
+        elif name == largest and len(boxes) > 1:
+            shape = "the large piece"
+        else:
+            shape = "the piece"
+        out.append(f"{shape} {_place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)} is the {names[name]}")
+    return out
+
+
+def prompt_sleeves(islands: dict, sleeve_print: str = "plain") -> list[str]:
+    """The sleeve pieces the subject-form prompt keeps plain: every piece name with "sleeve" in it, none when the
+    piece's ``sleeve_print`` is "picture" (the sleeves then come from the answer, ``model_parts``)."""
+    if sleeve_print == "picture":
+        return []
+    return [p for p in prompt_pieces(islands) if "sleeve" in p]
 
 # ---------------------------------------------------------------------------------------------------- debug sheet
 
@@ -1016,20 +1103,30 @@ def _failure_reason(e: BaseException) -> str:
     return str(e) or type(e).__name__
 
 
-def _routed_render(item_id: str, side: str, prompt: str, template_png: Path, ref_png: Path, seed: int):
-    """ONE routed img2img render of a job's template + its Picture 2 -> ``(answer bytes, backend, route)``."""
+def _routed_render(item_id: str, side: str, prompt_for, template_png: Path, ref_png: Path, seed: int):
+    """ONE routed img2img render of a job's template + its Picture 2 -> ``(answer bytes, backend, route, dialect,
+    prompt)``. ``prompt_for(dialect)`` gives the job's prompt in the dialect of the backend the route lands on
+    (``edit_prompt.dialect_of``) — chosen inside the render, so a re-run on the next entry gets its own wording."""
     from app.core.prompt_compose import compose
     from app.imagegen import routing as _routing
+    from app.imagegen.edit_prompt import dialect_of
     from app.imagegen.service import get_image_service
     svc = get_image_service()
+    chosen: dict = {}
 
     def _render(b):
-        composed = compose(use_case=CUT_USE_CASE, subject=prompt, backend=b)
+        dialect = dialect_of(b)
+        prompt = prompt_for(dialect)
+        chosen.update(dialect=dialect, prompt=prompt)
+        composed = compose(use_case=CUT_USE_CASE, subject=prompt, backend=b, keep_negations=True)
         for warning in composed.warnings:
             logger.info("Prompt composer (%s): %s", CUT_USE_CASE, warning)
         params = {"seed": seed,
                   "reference_images": {"input_reference_image_1": str(template_png),
-                                       "input_reference_image_2": str(ref_png)}}
+                                       "input_reference_image_2": str(ref_png)},
+                  "reference_roles": {"input_reference_image_1": {"role": "canvas", "label": f"{side} template"},
+                                      "input_reference_image_2": {"role": "material",
+                                                                  "label": JOB_REFERENCE[side]}}}
         log_meta = {"agent_name": f"Cut texture {item_id} ({side})", "original_prompt": prompt,
                     "auto_enhance": False, "compose": composed.meta}
 
@@ -1043,7 +1140,13 @@ def _routed_render(item_id: str, side: str, prompt: str, template_png: Path, ref
     (images, used), route = _routing.run_routed(CUT_OCCASION, _render, has_ref=True, pool=svc.pool)
     if not isinstance(images, (list, tuple)) or not images or not isinstance(images[0], (bytes, bytearray)):
         raise RuntimeError("the cut-texture render delivered no image")
-    return bytes(images[0]), used, route
+    return bytes(images[0]), used, route, chosen.get("dialect", ""), chosen.get("prompt", "")
+
+
+def attempt_seed(seed: int, attempt: int) -> int:
+    """The seed of render ``attempt`` (1-based): ``seed`` + ``ATTEMPT_SEED_STEP`` per later attempt — a single-entry
+    chain clamps attempt 2 onto the same backend, and the same seed would give the same answer."""
+    return (int(seed) + ATTEMPT_SEED_STEP * (int(attempt) - 1)) % 2 ** 31
 
 
 def _set_progress(key: tuple[str, str], step: str) -> None:
@@ -1110,14 +1213,15 @@ def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str
     back = 1 if "back" in todo and not plain else 0     # a plain back is the front's fabric: 0 image jobs
     total = view + upscale + front + back
     return {"back_view": view, "upscale": upscale, "front": front, "back": back, "total": total,
-            "max": total + view * (tv.JOBS_PER_VIEW - 1), "reused": sorted(reuse), "back_plain": plain}
+            "max": total + view * (tv.JOBS_PER_VIEW - 1) + (front + back) * (CUT_ATTEMPTS - 1),
+            "reused": sorted(reuse), "back_plain": plain}
 
 
 def job_plan(character_name: str, item_id: str, islands: dict | None = None, islands_sha: str = "") -> dict:
     """What one click spends now — the buttons' counts, by the same reuse rule ``generate`` runs (``reused_jobs``):
     Run all ``{"back_view" (0 / 1, at most ``JOBS_PER_VIEW``), "upscale" (0 / 1), "front" (0 / 1), "back" (0 / 1),
     "total", "max", "reused" (the jobs whose answer is kept), "back_plain"}`` (``max``: a refused back-view attempt is
-    made once more; ``back_plain``: the back view is plain (``back_plain``) — the back is the front's fabric, "back" 0;
+    made once more, and each texture job may render ``CUT_ATTEMPTS`` times — attempt 2 after a gate rejection; ``back_plain``: the back view is plain (``back_plain``) — the back is the front's fabric, "back" 0;
     while the back view is missing the back job is counted) and ``redo`` = the same per Redo button (``{"front":
     {...}, "back": {...}}``, "back" only with a back panel that is not plain)."""
     if islands is None or not islands_sha:
@@ -1486,7 +1590,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                             else None, "limit": PLAIN_BACK_DETAIL}
     reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
     todo = [j for j in parts if j not in reuse and not (plain and j == "back")]
-    stale = [_file(stem, ".atlas.png")] + [_file(stem, f".raw_{j}.png") for j in todo]
+    stale = [_file(stem, ".atlas.png")] + [_file(stem, f".raw_{j}.png") for j in todo] \
+        + [_file(stem, f".raw_{j}.a{a}.png") for j in todo for a in range(1, CUT_ATTEMPTS + 1)]
     for path in stale:
         path.unlink(missing_ok=True)       # this attempt's record never sits next to another attempt's files
     results: dict = {}
@@ -1505,6 +1610,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
         record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
                             "detail": refs["detail"]}
         name = piece_name(item_id)
+        from app.imagegen import routing as _routing
         stopped = False             # a job did not pass: no further image job is spent, re-used answers still post
         for job in parts:
             if plain and job == "back":
@@ -1522,21 +1628,51 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 _set_progress(key, job)
                 place = front_place(parts[job]) if job == "front" else ""
                 decorated = bool(place) and is_decorated(refs["detail"].get("front"))
-                prompt = render_prompt(piece=name, side=job, decorated=decorated, front_place=place)
+                ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
+                                 pieces=prompt_pieces(parts[job]), layout=layout_words(parts[job]),
+                                 sleeves=prompt_sleeves(parts[job], record["sleeve_print"]))
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
-                try:
-                    answer, used, route = _routed_render(item_id, job, prompt, template_png, ref, seed)
-                except Exception as e:  # noqa: BLE001 — the job's failure stops the flow
-                    record["jobs"][job] = {"state": "failed", "reason": _failure_reason(e),
-                                           "reference": JOB_REFERENCE[job]}
-                    raise
-                _write_bytes(raw_png, answer)
-                entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
-                         "prompt": "decorated" if decorated else "plain",
-                         "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
-                         "islands": [str(i["name"]) for i in parts[job]["islands"]]}
-                force = False
+                attempts: list = []
+                for attempt in _routing.gate_attempts(CUT_ATTEMPTS):
+                    try:
+                        answer, used, route, dialect, _prompt = _routed_render(
+                            item_id, job, ep.render, template_png, ref, attempt_seed(seed, attempt))
+                    except Exception as e:  # noqa: BLE001 — a failure is never retried: it stops the flow
+                        attempts.append({"attempt": attempt, "state": "failed", "reason": _failure_reason(e)})
+                        if attempt > 1:
+                            # attempt 1's rejected answer stays the job's answer ("Use this answer" can take it)
+                            logger.warning("Cut texture %s %s: %s attempt %d failed: %s", character_name, item_id,
+                                           job, attempt, e)
+                            break
+                        record["jobs"][job] = {"state": "failed", "reason": _failure_reason(e),
+                                               "reference": JOB_REFERENCE[job], "attempts": attempts}
+                        raise
+                    _write_bytes(_file(stem, f".raw_{job}.a{attempt}.png"), answer)
+                    _write_bytes(raw_png, answer)
+                    entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
+                             "dialect": dialect, "prompt": "decorated" if decorated else "plain",
+                             "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
+                             "islands": [str(i["name"]) for i in parts[job]["islands"]], "attempt": attempt}
+                    _set_progress(key, "post")
+                    res = post_job(answer, islands, size, px_per_cm, job, refs, force=False,
+                                   sleeve_print=record["sleeve_print"])
+                    attempts.append({"attempt": attempt, "backend": entry["backend"], "dialect": dialect,
+                                     "routing": entry["routing"], "state": res["state"], "reason": res["reason"],
+                                     "metrics": res["metrics"]})
+                    if res["state"] == "ready":
+                        break
+                    if attempt < CUT_ATTEMPTS:
+                        logger.info("Cut texture %s %s: %s attempt %d rejected on %s (%s) — attempt %d",
+                                    character_name, item_id, job, attempt, entry["backend"], res["reason"],
+                                    attempt + 1)
+                entry["attempts"] = attempts
+                record["jobs"][job] = _entry_from_post(entry, res)
+                if res["state"] != "ready":
+                    stopped = True
+                    continue
+                results[job] = res
+                continue
             _set_progress(key, "post")
             res = post_job(answer, islands, size, px_per_cm, job, refs, force=force,
                            sleeve_print=record["sleeve_print"])
@@ -1594,12 +1730,16 @@ def usable_answers(character_name: str, item_id: str, sig: str | None = None) ->
     return out
 
 
-def recompose(character_name: str, item_id: str, *, accept: str | None = None, apply_after: bool = True) -> dict:
+def recompose(character_name: str, item_id: str, *, accept: str | None = None, attempt: int | None = None,
+              apply_after: bool = True) -> dict:
     """The CPU path of "Use this answer" (``accept`` = the job whose shown answer the user puts on the figure, also a
     rejected one: it is marked ``accepted`` with the reason it overrode) and of a changed ``sleeve_print``
     (``accept`` None): every job of the current csig whose answer passed or was accepted is post-processed again from
     its raw file — no image job — and, when every job has one, the atlas is composed and applied. A job without an
     answer stays "skipped" (``NOT_MADE`` once the jobs before it are in): Run all renders exactly that one next.
+    ``attempt`` (with ``accept``): the answer of that render attempt (``.raw_{job}.a{n}.png``, its backend / dialect /
+    routing from the job's ``attempts``) becomes the job's answer first — "Use this answer" on attempt 1 after a
+    rejected attempt 2, or the other way round.
     Raises ``NotReady`` when the piece has no ready cut, no record or (``accept``) no answer of that job."""
     pattern = _ready_pattern(character_name, item_id)
     islands = json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8"))
@@ -1613,6 +1753,9 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
         if accept not in parts:
             raise ValueError(f"job must be one of {', '.join(parts)}")
         entry = record.get("jobs", {}).get(accept) or {}
+        if attempt is not None:
+            _take_attempt(record, stem, accept, int(attempt))
+            entry = record["jobs"][accept]
         if not _file(stem, f".raw_{accept}.png").is_file() or entry.get("state") not in ("ready", "rejected"):
             raise NotReady(f"The {accept} job has no answer to use — redo it first")
     size = int(islands.get("atlas_px") or 2048)
@@ -1642,6 +1785,20 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     if plain:
         _plain_back_into(record, results, islands, size, px_per_cm)
     return _finish(character_name, item_id, record, parts, results, islands, size, stem, apply_after=apply_after)
+
+
+def _take_attempt(record: dict, stem: Path, job: str, attempt: int) -> None:
+    """Make render ``attempt``'s answer the ``job``'s answer (its raw file and its backend / dialect / routing / state
+    from the job's ``attempts``); ``NotReady`` when that attempt has no answer."""
+    entry = dict(record.get("jobs", {}).get(job) or {})
+    tried = next((a for a in entry.get("attempts") or [] if a.get("attempt") == attempt), None)
+    raw = _file(stem, f".raw_{job}.a{attempt}.png")
+    if tried is None or not raw.is_file() or tried.get("state") not in ("ready", "rejected"):
+        raise NotReady(f"Attempt {attempt} of the {job} job has no answer to use")
+    _write_bytes(_file(stem, f".raw_{job}.png"), raw.read_bytes())
+    entry.update({k: tried[k] for k in ("backend", "dialect", "routing", "state", "reason", "metrics") if k in tried})
+    entry["attempt"] = attempt
+    record["jobs"][job] = entry
 
 
 def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None) -> dict:
@@ -1714,7 +1871,8 @@ def start(character_name: str, item_id: str, *, run=None, only: str | None = Non
                    select=True)
 
 
-def start_recompose(character_name: str, item_id: str, *, accept: str | None = None, run=None) -> bool:
+def start_recompose(character_name: str, item_id: str, *, accept: str | None = None, attempt: int | None = None,
+                    run=None) -> bool:
     """"Use this answer" (``accept`` = "front" / "back") or a changed sleeve option (``accept`` None): ``recompose``
     in a thread — CPU only, so neither the media switch nor the routing is asked. Checked synchronously: a ready
     cut, a record with that job's answer (``NotReady``), no other hub-job flow of the piece (``Busy``).
@@ -1724,8 +1882,18 @@ def start_recompose(character_name: str, item_id: str, *, accept: str | None = N
     _ready_pattern(character_name, item_id)
     if accept is not None and not (usable_answers(character_name, item_id).get(accept) or {}).get("can_use"):
         raise NotReady(f"The {accept} job has no answer to use — redo it first")
+    if attempt is not None:
+        if accept is None:
+            raise ValueError("an attempt needs its job")
+        sig = current_csig(character_name, item_id)
+        entry = (read_record(character_name, item_id, sig).get("jobs") or {}).get(accept) or {} if sig else {}
+        if not any(a.get("attempt") == attempt and a.get("state") in ("ready", "rejected")
+                   for a in entry.get("attempts") or []) \
+                or not _file(_stem(character_name, item_id, sig), f".raw_{accept}.a{attempt}.png").is_file():
+            raise NotReady(f"Attempt {attempt} of the {accept} job has no answer to use")
     fn = run or recompose
-    return _launch(character_name, item_id, lambda: fn(character_name, item_id, accept=accept), select=accept is not None)
+    kwargs = {"accept": accept} if attempt is None else {"accept": accept, "attempt": int(attempt)}
+    return _launch(character_name, item_id, lambda: fn(character_name, item_id, **kwargs), select=accept is not None)
 
 
 def _launch(character_name: str, item_id: str, call, *, select: bool) -> bool:
