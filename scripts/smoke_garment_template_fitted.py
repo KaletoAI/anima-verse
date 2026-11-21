@@ -7,7 +7,7 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
 
 [B1] briefs top_y = hip + RISE_SHARE x (waist - hip): low 0.90 + 0.3 x 0.15 = 0.945; mid 0.90 + 0.65 x 0.15 = 0.9975;
      high = 1.05. Pinned band: thin 0.012, wide 0.030, none -> MIN_PIN_BAND_M 0.012 (waistband_m 0).
-[B2] validate: leg_cut 1.4 -> clamped to 1.0 and reported; side_width_m 0.2 -> 0.10; an unknown rise -> "mid" + error.
+[B2] validate: leg_cut 1.7 -> clamped to 1.5 (step 3a: high-leg up to 1.5) and reported; side_width_m 0.2 -> 0.10; an unknown rise -> "mid" + error.
 [B3] a briefs answer keeps only its kind's fields: length_m 0.9 given -> back to the default 0.5.
 [B4] default_kind: slots [underwear_bottom] -> briefs; [bottom, underwear_bottom] named "Schuppenslip" -> briefs;
      "Bikini bottom" on [bottom] -> briefs; jeans on [bottom] -> trousers; a skirt on [bottom] -> skirt.
@@ -23,6 +23,17 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
      only on thigh-highs. [T2] kind guess (legs / hosiery words). [T3] drawing fills, tab top = 0.80 - 0.07 + 0.04.
 [B6] the drawing: briefs give one cloth fill whose top edge lies at top_y (the registration's y of 0.945 m) and whose
      lowest point is the gusset (crotch = hip joints 0.86 - 0.06 = 0.80 m, the lowest y of the fill).
+[B7] Step 3a, the high-leg cut (``brief_leg_shape``; Glut: hip_half 0.1687, gusset half g 0.03, so hip_half - g =
+     0.1387, HIGH_LEG 0.6): reach(1.0) = 0.1687; reach(1.25) = 0.1687 - 0.25 / 0.5 x 0.6 x 0.1387 = 0.1687 - 0.04161 =
+     0.12709; reach(1.5) = 0.1687 - 0.6 x 0.1387 = 0.08548 (+-1e-5); the power past 1 stays 0.4 (1.6 - 1.2 x 1), the
+     side share 1; at leg_cut 0.5: share 0.5, power 1.0, reach 0.1687.
+[B8] The back's half width (``brief_back_width`` = 0.4 g + bc x 0.9 x (hip_half - 0.4 g)): gusset_m 0.03 (g 0.015),
+     bc 0 -> 0.4 x 0.015 = 0.006 (a 1.2 cm string); gusset_m 0.06 (g 0.03), bc 0.2, hip_half 0.1687 ->
+     0.012 + 0.18 x (0.1687 - 0.012) = 0.012 + 0.18 x 0.1567 = 0.040206.
+[B9] A default brief's ``fitted_spec``: gusset_half_m = 0.06 / 2 = 0.03 (the deleted constant's value: the default
+     drape shape is unchanged), high_leg 0.6; gusset_m 0.03 -> 0.015.
+[B10] The drawing of a leg_cut 1.5 brief on M: the front fill reaches the side's height at x = reach short of the hip's
+     side and then runs along it to the side (one point more on each leg than at leg_cut 1.0: 10 instead of 9).
 """
 import math
 import sys
@@ -70,8 +81,8 @@ for band, want, wb in (("thin", 0.012, 0.012), ("wide", 0.03, 0.03), ("none", 0.
 check("[B1] briefs are built", "briefs" in gt.BUILT_KINDS and "briefs" in gt.FITTED_KINDS)
 
 # [B2]
-p, e = gt.validate_params({"kind": "briefs", "leg_cut": 1.4, "side_width_m": 0.2, "rise": "ultra"})
-check("[B2] leg_cut clamped to 1.0 + reported", p["leg_cut"] == 1.0 and any("leg_cut" in x for x in e), (p, e))
+p, e = gt.validate_params({"kind": "briefs", "leg_cut": 1.7, "side_width_m": 0.2, "rise": "ultra"})
+check("[B2] leg_cut clamped to 1.5 + reported", p["leg_cut"] == 1.5 and any("leg_cut" in x for x in e), (p, e))
 check("[B2] side_width_m clamped to 0.10", p["side_width_m"] == 0.1, p["side_width_m"])
 check("[B2] unknown rise -> mid + error", p["rise"] == "mid" and any("rise" in x for x in e), e)
 
@@ -209,6 +220,27 @@ sh = [s for s in gp.shapes(tights(tights_style="thigh_high", garters="tabs"), M,
 check("[T3] thigh-high with tabs: 4 fills", len(sh) == 4, len(sh))
 tab_top = max(2.0 - q[1] / 1000.0 for s in sh for q in s["points"])
 check("[T3] tab top 0.77", close(tab_top, 0.77), tab_top)
+
+# [B7] high-leg reach
+for lc, want in ((1.0, 0.1687), (1.25, 0.12709), (1.5, 0.08548)):
+    sh_, pw_, re_ = gt.brief_leg_shape(lc, 0.1687, 0.03)
+    check(f"[B7] reach({lc}) = {want}", abs(re_ - want) < 1e-5 and abs(pw_ - 0.4) < 1e-12 and sh_ == 1.0, (sh_, pw_, re_))
+sh_, pw_, re_ = gt.brief_leg_shape(0.5, 0.1687, 0.03)
+check("[B7] leg_cut 0.5: share 0.5, power 1.0, reach 0.1687", (sh_, round(pw_, 9), re_) == (0.5, 1.0, 0.1687),
+      (sh_, pw_, re_))
+# [B8] back width
+check("[B8] w_back(g 0.015, bc 0) = 0.006", abs(gt.brief_back_width(0.015, 0.0, 0.1687) - 0.006) < 1e-9,
+      gt.brief_back_width(0.015, 0.0, 0.1687))
+check("[B8] w_back(g 0.03, bc 0.2, 0.1687) = 0.040206", abs(gt.brief_back_width(0.03, 0.2, 0.1687) - 0.040206) < 1e-9,
+      gt.brief_back_width(0.03, 0.2, 0.1687))
+# [B9] the spec
+f = gt.fitted_spec(briefs(), M)["fitted"]
+check("[B9] default gusset_half_m 0.03, high_leg 0.6", f["gusset_half_m"] == 0.03 and f["high_leg"] == 0.6, f)
+check("[B9] gusset_m 0.03 -> 0.015", gt.fitted_spec(briefs(gusset_m=0.03), M)["fitted"]["gusset_half_m"] == 0.015)
+# [B10] the drawing
+n10 = {lc: [len(s["points"]) for s in gp.shapes(briefs(leg_cut=lc), M, Reg())["shapes"] if s["kind"] == "fill"]
+       for lc in (1.0, 1.5)}
+check("[B10] high-leg front: 2 points more (one per leg)", n10[1.5][0] == n10[1.0][0] + 2, n10)
 
 print()
 print("all checks passed" if not FAILED else f"{len(FAILED)} FAILED: {FAILED}")

@@ -173,7 +173,7 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "opacity": 0.4,
                                                   # A223: the fitted kinds' fields (at their defaults on a skirt)
                                                   "rise": "mid", "leg_cut": 0.5, "back_coverage": 1.0,
-                                                  "side_width_m": 0.05, "waistband": "thin", "leg_length_m": 0.0, "sides": "fabric", "string_width_m": 0.008, "cup_style": "molded",
+                                                  "side_width_m": 0.05, "gusset_m": 0.06, "waistband": "thin", "leg_length_m": 0.0, "sides": "fabric", "string_width_m": 0.008, "cup_style": "molded",
                                                   "cup_coverage": 0.7, "push_up": 0.0, "underband_m": 0.02,
                                                   "center_gore": "narrow", "closure": "back_hook", "straps": "thin",
                                                   "fingers": "full", "length": "wrist", "cuff": "none",
@@ -657,10 +657,13 @@ else:
         _gb16 = importlib.util.module_from_spec(_spec16)
         _spec16.loader.exec_module(_gb16)
         _kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["a"])
-        _top16, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
-        check("[16] a top's tsig is the base commit's", gt.tsig(_top16, **_kw16) == _gb16.tsig(_top16, **_kw16))
-        _bra16, _ = gt.validate_params({"kind": "bra"})
-        check("[16] a bra's tsig differs from the base commit's", gt.tsig(_bra16, **_kw16) != _gb16.tsig(_bra16, **_kw16))
+        # each module validates its own way (the base has no ``gusset_m`` yet)
+        _raw16 = {"kind": "top", "sleeves": "short"}
+        check("[16] a top's tsig is the base commit's", gt.tsig(gt.validate_params(_raw16)[0], **_kw16)
+              == _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
+        _raw16 = {"kind": "bra"}
+        check("[16] a bra's tsig differs from the base commit's", gt.tsig(gt.validate_params(_raw16)[0], **_kw16)
+              != _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
     finally:
         shutil.rmtree(_d16, ignore_errors=True)
 import hashlib  # noqa: E402

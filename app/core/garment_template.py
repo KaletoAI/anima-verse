@@ -319,9 +319,12 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "opacity": ("number", (0.2, 1.0), 0.4),          # A204: sheer only — how much of the cloth's colour covers
     # A223 briefs
     "rise": ("choice", RISES, "mid"),
-    "leg_cut": ("number", (0.0, 1.0), 0.5),          # 0 boyshort .. 0.5 classic .. 1 high-cut (French cut)
+    # 0 boyshort .. 0.5 classic .. 1 high-cut (French cut) .. 1.5 high-leg (step 3a: the front narrows at the leg
+    # line, ``brief_leg_shape``)
+    "leg_cut": ("number", (0.0, 1.5), 0.5),
     "back_coverage": ("number", (0.0, 1.0), 1.0),    # 0 string .. 0.3 Brazilian .. 1 full seat
     "side_width_m": ("number", (0.01, 0.10), 0.05),  # the side panel between the waistband and the leg opening
+    "gusset_m": ("number", (0.03, 0.08), 0.06),      # step 3a: the crotch's full width (a thong's is narrow)
     "waistband": ("choice", WAISTBANDS, "thin"),
     # A232: 0 = a brief cut by ``leg_cut``; > 0 = short legs this far down the thigh from the crotch (trunks,
     # boxer briefs, boxer shorts with ``fit``)
@@ -368,8 +371,8 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
             *OFF_SHOULDER_FIELDS, "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
-    "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "waistband",
-               "leg_length_m", "fit", "sides", "string_width_m"),
+    "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "gusset_m",
+               "waistband", "leg_length_m", "fit", "sides", "string_width_m"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
             "straps"),
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit"),
@@ -1550,10 +1553,30 @@ FITTED_THICKNESS_M = 0.0015
 FINGER_OFFSET_M = 0.0015
 #: The cloth frames of a fitted piece's relax run (it starts on the body: a few frames settle it).
 FITTED_FRAMES = 15
-#: Briefs: the gusset's half width at the crotch, and where the leg opening reaches at the side when ``leg_cut`` is 0
-#: (a boyshort: this far below the crotch).
-GUSSET_HALF_M = 0.03
+#: Briefs: where the leg opening reaches at the side when ``leg_cut`` is 0 (a boyshort: this far below the crotch).
+#: The gusset's width is the param ``gusset_m`` (step 3a; its half is ``fitted_spec``'s ``gusset_half_m``).
 BOYSHORT_DROP_M = 0.03
+#: Step 3a (D8): past ``leg_cut`` 1 the leg line meets the side's height this share of (hip_half - gusset half) nearer
+#: the gusset at ``leg_cut`` 1.5 (``brief_leg_shape``) — a high-leg / thong front.
+HIGH_LEG = 0.6
+
+
+def brief_leg_shape(leg_cut: float, hip_half: float, g: float, high_leg: float = HIGH_LEG) -> Tuple[float, float, float]:
+    """A brief's leg line (``briefs_region``'s ``leg_line``, the drawing's curve): ``(side share, power, reach)`` —
+    the line rises from the gusset (half width ``g``) as t^power to the side's height ``low + share x (side - low)``,
+    reached ``reach`` from the centre. Up to ``leg_cut`` 1: share = leg_cut, power = 1.6 - 1.2 leg_cut, reach =
+    hip_half. Past it (step 3a, D8): share 1, power 0.4 (its value at 1), reach = hip_half - (leg_cut - 1) / 0.5 x
+    high_leg x (hip_half - g)."""
+    lc = float(leg_cut)
+    share = min(lc, 1.0)
+    power = max(0.4, 1.6 - 1.2 * share)
+    reach = hip_half - max(lc - 1.0, 0.0) / 0.5 * high_leg * (hip_half - g)
+    return share, power, reach
+
+
+def brief_back_width(g: float, back_coverage: float, hip_half: float) -> float:
+    """The back panel's half width at the crotch: 0.4 g + back_coverage x 0.9 x (hip_half - 0.4 g) (a string at 0)."""
+    return g * 0.4 + float(back_coverage) * 0.9 * (hip_half - g * 0.4)
 #: Briefs / bra: the band at the top that is pinned at the least (metres).
 MIN_PIN_BAND_M = 0.012
 #: Bra: a bra without an underband (``underband_m`` 0) still has a strap this high round the back (it holds it).
@@ -1692,7 +1715,8 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
         fit.update({"top_y": round(top, 4), "band_m": round(max(MIN_PIN_BAND_M, WAISTBAND_M[params["waistband"]]), 4),
                     "waistband_m": WAISTBAND_M[params["waistband"]], "leg_cut": params["leg_cut"],
                     "back_coverage": params["back_coverage"], "side_width_m": params["side_width_m"],
-                    "gusset_half_m": GUSSET_HALF_M, "boyshort_drop_m": BOYSHORT_DROP_M})
+                    "gusset_half_m": round(float(params["gusset_m"]) / 2.0, 4), "high_leg": HIGH_LEG,
+                    "boyshort_drop_m": BOYSHORT_DROP_M})
         if params.get("sides") == "string":
             # A235: front and back panel only, thin hip bands ``string_width_m`` high under the waist line
             fit.update({"sides": "string", "string_width_m": round(float(params["string_width_m"]), 4),
@@ -1814,6 +1838,8 @@ def keyed_params(params: Dict[str, Any]) -> Dict[str, Any]:
     if params.get("sides") != "string":                 # A235: a brief with side panels keeps the key it had
         params.pop("sides", None)
         params.pop("string_width_m", None)
+    if params.get("kind") != "briefs" or params.get("gusset_m") == PARAM_SPEC["gusset_m"][2]:
+        params.pop("gusset_m", None)                    # step 3a: only a brief's own crotch width keys it
     if params.get("fabric") in DRAPE_FABRIC:          # A214: the leather finishes share one drape
         params["fabric"] = DRAPE_FABRIC[params["fabric"]]
     return params

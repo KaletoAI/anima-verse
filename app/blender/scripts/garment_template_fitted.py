@@ -169,8 +169,12 @@ def briefs_region(f, co, w, cx, cy, tree):
     side = top - float(f["side_width_m"])
     lc = float(f["leg_cut"])
     low_side = crotch - float(f["boyshort_drop_m"])
-    l_side = low_side + lc * (side - low_side)
-    power = 1.6 - 1.2 * lc                       # a high cut rises soon past the gusset, a boyshort stays low
+    # a high cut rises soon past the gusset, a boyshort stays low; past leg_cut 1 (step 3a, D8) the line meets the
+    # side's height ``reach`` from the centre instead of at the hip's side (``garment_template.brief_leg_shape``)
+    share = min(lc, 1.0)
+    power = max(0.4, 1.6 - 1.2 * share)
+    reach_f = hip_half - max(lc - 1.0, 0.0) / 0.5 * float(f.get("high_leg", 0.6)) * (hip_half - g)
+    l_side = low_side + share * (side - low_side)
     bc = float(f["back_coverage"])
     w_back = g * 0.4 + bc * 0.9 * (hip_half - g * 0.4)
     string = f.get("sides") == "string"
@@ -180,12 +184,12 @@ def briefs_region(f, co, w, cx, cy, tree):
         sw = float(f["string_width_m"])
         l_side = top - sw
         c_min, c_span = (float(v) for v in f["string_corner"])
-        corner_f = g + (hip_half - g) * (c_min + c_span * (1.0 - lc))
+        corner_f = g + (reach_f - g) * (c_min + c_span * (1.0 - share))
         corner_b = w_back + (hip_half - w_back) * c_min
 
     def leg_line(ax, back):
         wid = np.where(back, w_back, g)
-        reach = np.where(back, corner_b, corner_f) if string else hip_half
+        reach = np.where(back, corner_b, corner_f) if string else np.where(back, hip_half, reach_f)
         t = np.clip((ax - wid) / np.maximum(reach - wid, 1e-3), 0.0, 1.0)
         rise = t ** power
         if bc < 0.999:

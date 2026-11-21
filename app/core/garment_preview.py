@@ -807,18 +807,19 @@ def briefs_back_line(p: Dict[str, Any], spec: Dict[str, Any], crotch: float, top
     """The back panel's leg line seen through the body (metres, left hip -> right hip), ``briefs_region``'s back
     ``leg_line``: the back is ``w_back`` = g 0.4 + back_coverage x 0.9 (hip_half - g 0.4) wide at the crotch and
     climbs as t^power to the side's height — under full coverage within 3 cm past its width (a string / Brazilian)."""
+    from app.core import garment_template as gt
     g = float(spec["gusset_half_m"])
     lc, bc = float(p["leg_cut"]), float(p["back_coverage"])
     hip_half = 0.5 * (hip[0] + hip[1])
     base = crotch - 0.005
-    w_back = g * 0.4 + bc * 0.9 * (hip_half - g * 0.4)
-    power = 1.6 - 1.2 * lc
+    w_back = gt.brief_back_width(g, bc, hip_half)
+    share, power, _reach = gt.brief_leg_shape(lc, hip_half, g, float(spec.get("high_leg", gt.HIGH_LEG)))
     if spec.get("sides") == "string":
         side = top - float(spec["string_width_m"])
         reach = w_back + (hip_half - w_back) * float(spec["string_corner"][0])
     else:
         low = crotch - float(spec["boyshort_drop_m"])
-        side = low + lc * (top - float(spec["side_width_m"]) - low)
+        side = low + share * (top - float(spec["side_width_m"]) - low)
         reach = hip_half
     pts = []
     for i in range(CURVE_N + 1):
@@ -856,29 +857,33 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
         bl, br = reg.body_half(top, cap_m)
         g = spec["gusset_half_m"]
         low = crotch - spec["boyshort_drop_m"]
-        side = low + p["leg_cut"] * (top - p["side_width_m"] - low)
-        power = 1.6 - 1.2 * p["leg_cut"]
+        hl = float(spec.get("high_leg", gt.HIGH_LEG))
+        share, power, reach_r = gt.brief_leg_shape(p["leg_cut"], br, g, hl)
+        reach_l = gt.brief_leg_shape(p["leg_cut"], bl, g, hl)[2]
+        side = low + share * (top - p["side_width_m"] - low)
         leg_r, leg_l = [], []
         for t in [i / 8 for i in range(9)]:
             y = crotch + (side - crotch) * t ** power
-            leg_r.append([x0 + g + (br - g) * t, y])
-            leg_l.append([x0 - g - (bl - g) * t, y])
+            leg_r.append([x0 + g + (reach_r - g) * t, y])
+            leg_l.append([x0 - g - (reach_l - g) * t, y])
+        if reach_r < br - 1e-6:
+            # step 3a (D8): a high-leg front meets the side's height short of the hip's side
+            leg_r.append([x0 + br, side])
+            leg_l.append([x0 - bl, side])
         if spec.get("sides") == "string":
             # A235: the front panel to its top corners, then only the hip bands ``string_width_m`` high to the sides
             sw = spec["string_width_m"]
             c_min, c_span = spec["string_corner"]
-            share = c_min + c_span * (1.0 - p["leg_cut"])
+            cs = c_min + c_span * (1.0 - share)
+            cr, cl = g + (reach_r - g) * cs, g + (reach_l - g) * cs
             leg_r, leg_l = [], []
             for t in [i / 8 for i in range(9)]:
                 y = crotch + (top - sw - crotch) * t ** power
-                leg_r.append([x0 + g + (br - g) * share * t, y])
-                leg_l.append([x0 - g - (bl - g) * share * t, y])
-            add("body", "fill", [[x0 - g - (bl - g) * share, top], [x0 + g + (br - g) * share, top]]
-                + leg_r[::-1] + leg_l)
-            add("band", "fill", [[x0 + g + (br - g) * share, top], [x0 + br, top], [x0 + br, top - sw],
-                                 [x0 + g + (br - g) * share, top - sw]])
-            add("band", "fill", [[x0 - g - (bl - g) * share, top], [x0 - bl, top], [x0 - bl, top - sw],
-                                 [x0 - g - (bl - g) * share, top - sw]])
+                leg_r.append([x0 + g + (cr - g) * t, y])
+                leg_l.append([x0 - g - (cl - g) * t, y])
+            add("body", "fill", [[x0 - cl, top], [x0 + cr, top]] + leg_r[::-1] + leg_l)
+            add("band", "fill", [[x0 + cr, top], [x0 + br, top], [x0 + br, top - sw], [x0 + cr, top - sw]])
+            add("band", "fill", [[x0 - cl, top], [x0 - bl, top], [x0 - bl, top - sw], [x0 - cl, top - sw]])
             add("back_edge", "dash", briefs_back_line(p, spec, crotch, top, reg.body_half(m["hip_y"], cap_m), x0))
             mark(x0 + br + 0.03, top, f"rise {p['rise']} · string {round(sw * 1000)} mm")
             mark(x0, crotch - 0.04, f"back {p['back_coverage']:.2f} · {p['fabric']}", "middle")
