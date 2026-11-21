@@ -1153,7 +1153,7 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     with Image.open(io.BytesIO(answer)) as im:
         im.load()
         reg, reg_info = post.resample_register(im, mask)
-    ok, met, reason = post.gate(reg, mask, labels, px_per_cm)
+    ok, met, reason = post.gate(reg, mask, labels, px_per_cm, reg_info.get("white_tol", post.WHITE_TOL))
     panel = _part_mask(islands, labels, (MAIN_PART[job],))
     gates, answer = post.answer_gates(reg, panel, refs.get("colour"), (refs.get("detail") or {}).get(job))
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]

@@ -61,6 +61,17 @@ channel distance from white exceeds ``WHITE_TOL`` (24); the synthetic answers pa
 [8] Seam continuity: an atlas whose left half is (200, 60, 60), right half white, lower-right quarter grey 128.
     Seam 0: three pairs, both points in the red half -> median 0.0. Seam 1: three pairs, white against grey 128 ->
     median 46.41 (+-0.05). Overall median over the six pairs = (0 + 46.41) / 2 = 23.21 (+-0.05).
+[9] The answer's own foreground threshold (``answer_white_tol``, live run 2026-11-21: Tilda's cream back painted
+    lighter than the pre-fill read "coverage 0.79"). 400 x 400 canvas, mask rows/cols 100..299 (200 x 200 = 40 000).
+    BG_AWAY 0.03 * 400 = 12 px -> the background is outside the square 88..311 (224 x 224): 160 000 - 50 176 =
+    109 824 px.
+    a) white background (255), the island light cream (248, 244, 238) — distance from white 17 < WHITE_TOL 24: the
+       background's 99th percentile 0 + BG_MARGIN 6 = 6 -> clamped up to MIN_WHITE_TOL 8. ``gate`` with tol 8:
+       coverage 1.00 (17 > 8); with the old fixed 24: coverage 0.00. ``resample_register`` reports ``white_tol`` 8
+       and registers onto the mask (IoU 1.0).
+    b) the same plus a grey (225) band over rows 0..5, the whole width: 2 400 px = 2.19 % of the background > 1 % ->
+       the 99th percentile is 30 -> 36 -> clamped down to WHITE_TOL 24 (a shadowed background keeps the old rule).
+    c) a mask over the whole canvas (no background left) -> WHITE_TOL 24.
 """
 import os
 import sys
@@ -237,6 +248,26 @@ check("[8] seam 0 median 0.0", abs(sc["per_seam"]["0"]) < 1e-6, str(sc))
 check("[8] seam 1 median 46.41", abs(sc["per_seam"]["1"] - 46.41) <= 0.05, str(sc))
 check("[8] overall median 23.21", abs(sc["median"] - 23.21) <= 0.05 and sc["pairs"] == 6, str(sc))
 check("[8] no seams -> median None", ctp.seam_continuity(atlas, [])["median"] is None, "")
+
+# [9] the answer's own foreground threshold
+m9 = np.zeros((400, 400), bool)
+m9[100:300, 100:300] = True
+lab9 = m9.astype(np.uint8)
+a9 = np.full((400, 400, 3), 255, np.uint8)
+a9[m9] = (248, 244, 238)
+check("[9a] clean white background -> tol 8", ctp.answer_white_tol(a9, m9) == 8, str(ctp.answer_white_tol(a9, m9)))
+ok9, met9, _ = ctp.gate(a9, m9, lab9, 10.0, 8)
+ok9o, met9o, _ = ctp.gate(a9, m9, lab9, 10.0)
+check("[9a] light cream: coverage 1.00 with tol 8, 0.00 with the fixed 24",
+      ok9 and met9["coverage"] == 1.0 and met9o["coverage"] == 0.0, f"{met9['coverage']} / {met9o['coverage']}")
+reg9, info9 = ctp.resample_register(Image.fromarray(a9), m9)
+check("[9a] resample_register: white_tol 8, IoU 1.0", info9.get("white_tol") == 8 and info9.get("iou") == 1.0,
+      str({k: info9.get(k) for k in ("white_tol", "iou")}))
+b9 = a9.copy()
+b9[0:6, :] = 225
+check("[9b] a 2.19 % grey band in the background -> tol 24", ctp.answer_white_tol(b9, m9) == 24,
+      str(ctp.answer_white_tol(b9, m9)))
+check("[9c] no background -> WHITE_TOL", ctp.answer_white_tol(a9, np.ones((400, 400), bool)) == ctp.WHITE_TOL)
 
 print()
 if FAILS:

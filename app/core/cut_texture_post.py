@@ -48,7 +48,8 @@ CLAMP_DE = 25.0
 #: (2026-11-21): the islands go pre-filled with the item's fabric colour, the answer gates (``ANSWER_GATE``) and the
 #: sleeves / neckband filled from the front panel's fabric patch. 4 (2026-11-21): the foreground pieces apart from the
 #: islands are dropped before the registration (``drop_strays``). 5 (2026-11-21): the back job runs in its zoom frame
-#: (``garment_cut_texture.job_frame``) and is put back into the atlas frame before the compose.
+#: (``garment_cut_texture.job_frame``) and is put back into the atlas frame before the compose; the foreground threshold
+#: is the answer's own (``answer_white_tol``).
 POST_VERSION = 5
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
@@ -67,10 +68,36 @@ SIGMA_FLOOR = 1.0
 
 # ---------------------------------------------------------------------------------------------------------------- masks
 
-def foreground(img: np.ndarray) -> np.ndarray:
-    """Bool (h, w): the largest channel distance from white exceeds ``WHITE_TOL``."""
+def foreground(img: np.ndarray, tol: int = WHITE_TOL) -> np.ndarray:
+    """Bool (h, w): the largest channel distance from white exceeds ``tol`` (default ``WHITE_TOL``)."""
     rgb = np.asarray(img)[..., :3].astype(np.int16)
-    return (255 - rgb).max(-1) > WHITE_TOL
+    return (255 - rgb).max(-1) > tol
+
+
+#: ``answer_white_tol``: the background of an answer is the canvas farther than this share of its side from the
+#: template's islands; its ``BG_PERCENTILE`` distance from white plus ``BG_MARGIN`` is the answer's own foreground
+#: threshold, never below ``MIN_WHITE_TOL`` nor above ``WHITE_TOL``.
+BG_AWAY = 0.03
+BG_PERCENTILE = 99.0
+BG_MARGIN = 6
+MIN_WHITE_TOL = 8
+
+
+def answer_white_tol(arr: np.ndarray, mask: np.ndarray) -> int:
+    """The foreground threshold of ONE answer (live run 2026-11-21, Tilda's cream back: P-H3 painted the pre-filled
+    cream island LIGHTER — median distance from white 34, folds' highlights 14 — on a clean white background (99.99 %
+    of it within 2), and the fixed ``WHITE_TOL`` 24 read 23 % of a fully painted panel as uncovered: "coverage 0.79").
+    The background's ``BG_PERCENTILE`` distance (the canvas ``BG_AWAY`` of its side away from ``mask``) +
+    ``BG_MARGIN``, clamped to ``MIN_WHITE_TOL`` .. ``WHITE_TOL``: a clean white background lets a light fabric count,
+    a background with grey shadows or a stray drawing keeps the old threshold. ``WHITE_TOL`` without background."""
+    mask = np.asarray(mask, bool)
+    r = max(1, int(round(BG_AWAY * max(mask.shape))))
+    away = ~dilate(mask, r)
+    if not away.any():
+        return WHITE_TOL
+    dist = (255 - np.asarray(arr)[..., :3].astype(np.int16)).max(-1)[away]
+    tol = int(np.ceil(np.percentile(dist, BG_PERCENTILE))) + BG_MARGIN
+    return int(min(WHITE_TOL, max(MIN_WHITE_TOL, tol)))
 
 
 def _shift_or(m: np.ndarray, di: int, dj: int) -> np.ndarray:
@@ -269,9 +296,10 @@ def resample_register(out: Image.Image, mask: np.ndarray) -> tuple[np.ndarray, d
     if im.size != (w, h):
         im = im.resize((w, h), Image.LANCZOS)
     arr = np.asarray(im, np.uint8)
-    fg = foreground(arr)
+    tol = answer_white_tol(arr, mask) if mask.any() else WHITE_TOL
+    fg = foreground(arr, tol)
     if not fg.any() or not mask.any():
-        return arr.copy(), {"registered": False, "iou": 0.0, "size_in": size_in}
+        return arr.copy(), {"registered": False, "iou": 0.0, "size_in": size_in, "white_tol": tol}
     arr, fg, strays = drop_strays(arr, fg, mask)
     mp, grid_iou, box_iou = register_raster(mask, fg)
     sx, ox, sy, oy = mp
@@ -280,12 +308,12 @@ def resample_register(out: Image.Image, mask: np.ndarray) -> tuple[np.ndarray, d
     U = np.broadcast_to(sx * xs[None, :] + ox, (h, w))
     V = np.broadcast_to(sy * ys[:, None] + oy, (h, w))
     got = np.clip(np.rint(_sample_bilinear(arr.astype(np.float64), U, V)), 0, 255).astype(np.uint8)
-    f2 = foreground(got)
+    f2 = foreground(got, tol)
     union = (f2 | mask).sum()
     iou = float((f2 & mask).sum() / union) if union else 0.0
     return got, {"registered": True, "iou": round(iou, 4), "size_in": size_in,
                  "map": [round(float(x), 6) for x in mp], "grid_iou": grid_iou, "box_iou": box_iou,
-                 "strays": strays}
+                 "strays": strays, "white_tol": tol}
 
 
 #: ``drop_strays``: the answer's foreground pieces that touch the islands must cover at least this share of the mask
@@ -325,15 +353,17 @@ def drop_strays(arr: np.ndarray, fg: np.ndarray, mask: np.ndarray) -> tuple[np.n
 
 # ------------------------------------------------------------------------------------------------------------------ gate
 
-def gate(img: np.ndarray, mask: np.ndarray, labels: np.ndarray, px_per_cm: float) -> tuple[bool, dict, str]:
+def gate(img: np.ndarray, mask: np.ndarray, labels: np.ndarray, px_per_cm: float,
+         tol: int = WHITE_TOL) -> tuple[bool, dict, str]:
     """``(ok, metrics, reason)`` of a registered answer against the island mask: ``coverage`` (share of the mask that
     is foreground), ``island_coverage`` (the worst island's share; ``islands`` = per label id), ``iou``, ``spill``
     (foreground beyond ``SPILL_CM`` outside the mask, as a share of the mask area). ``reason`` = the first failing
     gate in that order as ``"<name> <value> < <limit>"`` (``">"`` for spill), "" when it passes; every failure is in
-    ``metrics["failures"]``."""
+    ``metrics["failures"]``. ``tol``: the answer's foreground threshold (``answer_white_tol``, the registration's
+    ``white_tol``)."""
     mask = np.asarray(mask, bool)
     labels = np.asarray(labels)
-    fg = foreground(img)
+    fg = foreground(img, tol)
     area = int(mask.sum())
     inter = int((fg & mask).sum())
     union = int((fg | mask).sum())
