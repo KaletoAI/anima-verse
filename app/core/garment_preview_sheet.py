@@ -91,7 +91,7 @@ def option_sets() -> List[Dict[str, Any]]:
     numbers = {"length_m": (0.3, 0.55, 0.8), "flare": (0.0, 0.5, 1.0), "slit_m": (0.1, 0.25, 0.45),
                "band_m": (0.01, 0.03, 0.05), "band_drop_m": (0.02, 0.05, 0.08), "lace_depth_m": (0.05, 0.15, 0.3),
                "sleeve_fit": (0.0, 0.5, 1.0), "fit": (0.0, 0.5, 1.0), "neck_depth_m": (0.05, 0.12, 0.22),
-               "leg_cut": (0.0, 0.5, 1.0), "back_coverage": (0.0, 0.3, 1.0), "side_width_m": (0.01, 0.05, 0.1),
+               "leg_cut": (0.0, 0.5, 1.0, 1.5), "gusset_m": (0.03, 0.08), "back_coverage": (0.0, 0.3, 1.0), "side_width_m": (0.01, 0.05, 0.1),
                "leg_length_m": (0.0, 0.1, 0.25), "string_width_m": (0.004, 0.01, 0.02),
                "cup_coverage": (0.3, 0.7, 1.0), "push_up": (0.0, 0.5, 1.0), "underband_m": (0.0, 0.03, 0.08)}
     out = []
