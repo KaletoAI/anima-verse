@@ -3006,7 +3006,7 @@ def _flatten_to_env(config: dict) -> None:
                      "checkpoint", "poll_interval", "max_wait", "max_queue_wait",
                      "disable_safety",
                      "scheduler", "clip_skip", "image_family",
-                     "supports_negative_prompt", "timeout",
+                     "supports_negative_prompt", "prompt_dialect", "timeout",
                      "max_concurrent", "serialize_group", "accepts_overflow",
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count", "prompt_char_limit",

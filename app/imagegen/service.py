@@ -3180,6 +3180,9 @@ class ImageService:
                 # writes it into the log meta of the successful attempt).
                 "final_prompt": _log_meta.get("final_prompt", "") if isinstance(_log_meta, dict) else "",
             }
+            # What the edit-prompt normaliser did (reference images only).
+            if isinstance(_log_meta, dict) and _log_meta.get("edit_prompt"):
+                _meta["edit_prompt"] = _log_meta["edit_prompt"]
             # Store thread-local (for parallel callers)
             # + mirror on the instance (backward compat for non-threaded callers)
             self._meta_tls.last_image_meta = _meta

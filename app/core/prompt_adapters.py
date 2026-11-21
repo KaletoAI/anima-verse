@@ -15,7 +15,6 @@ Architektur:
 from __future__ import annotations
 
 import os
-import re
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.log import get_logger
@@ -26,41 +25,6 @@ logger = get_logger("prompt_adapters")
 
 # Valid target-model values. Set via the backend config field `image_family`.
 TARGET_MODELS = ("z_image", "qwen", "flux")
-
-#: Backends (by model id substring, lower-case) whose edit model addresses its
-#: reference images as ``<Picture N>`` blocks instead of "the first image":
-#: P-H3-Image and MiniMax-H3-Image (both MiniMax-H3) — its edit upsampler and
-#: text encoder know the pictures only by that token (review 2026-11-11). The ordinal wording of
-#: every edit prompt (``base_body.DRAFT_PROMPTS`` — the dressed drafts and
-#: an own-mesh piece's worn back draft —, the base views) is rewritten by ``reference_wording`` at the
-#: central handoff, so the prompt constants stay ONE wording.
-PICTURE_REFERENCE_MODELS = ("p-h3", "minimax-h3")
-_PICTURE_WORDING = (
-    (re.compile(r"\bthe first image\b", re.IGNORECASE), "<Picture 1>"),
-    (re.compile(r"\bthe second image\b", re.IGNORECASE), "<Picture 2>"),
-    (re.compile(r"\bthe third image\b", re.IGNORECASE), "<Picture 3>"),
-    (re.compile(r"\bthe reference image\b", re.IGNORECASE), "<Picture 1>"),
-)
-
-
-def uses_picture_references(backend_model: str) -> bool:
-    """Whether the backend's model addresses references as ``<Picture N>``."""
-    bm = (backend_model or "").lower()
-    return any(token in bm for token in PICTURE_REFERENCE_MODELS)
-
-
-def reference_wording(prompt: str, backend_model: str) -> str:
-    """``prompt`` with its reference ordinals in the backend's own wording:
-    "the first image" -> "<Picture 1>", "the second image" -> "<Picture 2>",
-    "the third image" -> "<Picture 3>", "the reference image" ->
-    "<Picture 1>" for a ``PICTURE_REFERENCE_MODELS`` backend; every other
-    backend gets the prompt back untouched."""
-    if not prompt or not uses_picture_references(backend_model):
-        return prompt
-    out = prompt
-    for pattern, token in _PICTURE_WORDING:
-        out = pattern.sub(token, out)
-    return out
 
 
 def get_target_model(image_family: str = "", backend_model: str = "") -> str:

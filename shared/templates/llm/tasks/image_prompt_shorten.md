@@ -11,7 +11,7 @@ placeholders:
 You shorten prompts for an image generation model that rejects any prompt longer than a fixed number of characters. You get one prompt and a character budget. Rewrite the prompt so it fits the budget and still produces the same picture.
 
 Keep exactly, word for word where possible:
-1. Every reference to an input image: "<Picture 1>", "<Picture 2>", "the first image", "the second image", "the reference image" and the instruction attached to it (what to keep from it, what to change).
+1. Every reference to an input image: "<Picture 1>", "<Picture 2>", "<image1>", "<image2>", "<Subject 1>", "the first image", "the second image", "the reference image" and the instruction attached to it (what to keep from it, what to change).
 2. Every person's name and their appearance: face, hair, skin, body, height, age, distinguishing marks.
 3. The clothing: every garment with its colour, material and fit, or the absence of clothing.
 4. The pose, the action and the framing the prompt asks for.

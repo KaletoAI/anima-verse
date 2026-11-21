@@ -55,6 +55,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
 from app.core.log import get_logger
+from app.imagegen.edit_prompt import TOKEN_RE
 
 logger = get_logger("prompt_limit")
 
@@ -88,12 +89,11 @@ _MIN_BOUNDARY_SHARE = 0.5
 #: content — the cut of the original is the safer prompt.
 _MIN_ANSWER_SHARE = 0.3
 
-#: Reference wording an edit prompt addresses its images with (see
-#: ``prompt_adapters.reference_wording``). The LLM must keep each one, and the
-#: cut never ends inside one.
-REFERENCE_TOKEN = re.compile(
-    r"<Picture\s*\d+>|\bthe (?:first|second|third|fourth|fifth|reference) image\b",
-    re.IGNORECASE)
+#: Reference wording an edit prompt addresses its images with — the one token
+#: pattern of ``app/imagegen/edit_prompt.py`` (``<Picture N>``, ``<imageN>``,
+#: ``<Subject N>``, ordinals). The LLM must keep each one, and the cut never
+#: ends inside one.
+REFERENCE_TOKEN = TOKEN_RE
 #: Spans the cut must not split: reference wording and any ``<…>`` token.
 _PROTECTED = re.compile(REFERENCE_TOKEN.pattern + r"|<[^<>\n]{1,40}>", re.IGNORECASE)
 #: Cut boundaries: a comma/semicolon/line break (dropped), a sentence end

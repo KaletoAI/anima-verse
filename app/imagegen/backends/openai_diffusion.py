@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
+from app.imagegen.edit_prompt import ordered_references
 from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
                                is_gateway_busy_502, retry_after_seconds)
 from app.imagegen.backends.localai import LocalAIBackend
@@ -214,12 +215,13 @@ class OpenAIDiffusionBackend(LocalAIBackend):
     def _collect_ref_bytes(self, params: Dict[str, Any]) -> List[tuple]:
         """Reference images as an ordered (title, bytes) list for the edits upload.
 
-        Order = insertion order of params['reference_images']. The caller
+        Order = ``ordered_references`` (the slots by N, then the rest — the
+        edit prompt's ``<Picture N>`` is the N-th image). The caller
         distinguishes by title: 'input_mask' -> mask field, everything else ->
         image field (canvas/references).
         """
         out: List[tuple] = []
-        for title, path in (params.get("reference_images") or {}).items():
+        for title, path in ordered_references(params):
             if not path:
                 continue
             sp = str(path)

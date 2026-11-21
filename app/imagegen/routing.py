@@ -552,11 +552,18 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         status, live, names = _evaluate(oid, spec, backends, set(), has_ref)
         b = _cheapest_no_rotation(live) if status == STATUS_OK else None
         _skip, allowed, _names = _config_filter(oid, spec, backends)
-        chain.append({"spec": spec, "source": source, "position": pos,
-                      "status": status, "status_text": STATUS_TEXT[status],
-                      "backend": b.name if b else "", "matches": names,
-                      "overflow_targets": [b.name for b in allowed
-                                           if getattr(b, "accepts_overflow", False)]})
+        row_out = {"spec": spec, "source": source, "position": pos,
+                   "status": status, "status_text": STATUS_TEXT[status],
+                   "backend": b.name if b else "", "matches": names,
+                   "overflow_targets": [x.name for x in allowed
+                                        if getattr(x, "accepts_overflow", False)]}
+        if b is not None:
+            # the reference wording this entry's prompts get, and what its
+            # request parameters set against it (app/imagegen/edit_prompt.py)
+            from app.imagegen.edit_prompt import lint_backend, resolve_dialect
+            row_out["dialect"], row_out["dialect_source"] = resolve_dialect(b)
+            row_out["dialect_notes"] = lint_backend(b)
+        chain.append(row_out)
         if b is not None and resolved is None:
             resolved, position = b.name, pos
     if not entries:

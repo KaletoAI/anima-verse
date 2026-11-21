@@ -53,7 +53,8 @@ def log_image_prompt(
     pose_checked_from: str = "",
     prompt_char_limit: Optional[int] = None,
     shorten_method: str = "",
-    unshortened_prompt: str = ""):
+    unshortened_prompt: str = "",
+    edit_prompt: Optional[Dict[str, Any]] = None):
     """Log one image-generation prompt as a JSONL line.
 
     Args:
@@ -88,6 +89,10 @@ def log_image_prompt(
             was fitted to that limit. Empty = not a central send (no field).
         unshortened_prompt: the final prompt BEFORE shortening (only when
             it was shortened; ``final_prompt`` is what was sent).
+        edit_prompt: what the edit-prompt normaliser did to a render with
+            reference images (app/imagegen/edit_prompt.normalise: dialect,
+            refs, rewrites, dropped sentences, notes, roles). None = no
+            reference image (no field).
     """
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
@@ -150,6 +155,8 @@ def log_image_prompt(
         entry["shorten_method"] = shorten_method
     if unshortened_prompt:
         entry["unshortened_prompt"] = unshortened_prompt
+    if edit_prompt:
+        entry["edit_prompt"] = edit_prompt
 
     # JSONL schreiben
     with _lock:

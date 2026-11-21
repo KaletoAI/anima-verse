@@ -33,7 +33,8 @@ Expected values, derived by hand from the rules in the module doc / design §3:
     "Picture 2" (capital P) -> "the second image" in lower case ([7]).
 [5] P-H3 lead-in: F = "Edit the image. Make it blue, keep the rest." (1 slot, PH3): no mention; the separate
     "Edit the image." sentence is removed, then the prefix -> "Edit <Picture 1>. Make it blue, keep the rest."
-    A text already starting "Edit <Picture 2> ..." gets no prefix (the engine node keeps it verbatim).
+    A text already starting "Edit <Picture 2> ..." gets no prefix (the engine node keeps it verbatim); one starting
+    "edit the first image with …" becomes "Edit <Picture 1> with …" (capital E, the node's own form, no prefix).
 [6] 0 slots: "Put the hat from the second image on the first image." comes back byte-identical, meta refs [].
     input_mask is not a reference: {input_reference_image_1, input_mask} -> refs [1].
 [7] Every spelling of slot 2 (2 slots), in "Take the colour from X." for X in
@@ -159,6 +160,9 @@ out, meta = norm("Edit the image. Make it blue, keep the rest.", refs(1), PH3)
 check("one prefix", out, "Edit <Picture 1>. Make it blue, keep the rest.")
 out, meta = norm("Edit <Picture 2> so the hat is red. Keep the rest.", refs(1, 2), PH3)
 check("verbatim edit kept", (out, meta["prefixed"]), ("Edit <Picture 2> so the hat is red. Keep the rest.", False))
+out, meta = norm("edit the first image with the hat of the second image, keep the rest", refs(1, 2), PH3)
+check("lower-case edit", (out, meta["prefixed"]),
+      ("Edit <Picture 1> with the hat of <Picture 2>, keep the rest", False))
 
 print("[6] no slot")
 out, meta = norm(A, {}, PH3)

@@ -50,8 +50,8 @@ No server, no world DB, no hub job, no BiRefNet (the key matte). ``app/core/cut_
     -> "top left"; a front at (400, 400, 600, 600) -> (0.5, 0.5) -> "in the middle" -> "middle"; no front island
     -> "". ``is_decorated`` (detail > 0.10): Dario's 0.142 True, Tilda's 0.076 False, exactly 0.10 False, None False.
     The rendered prompts are, word for word, the tested ones (with "<Picture 1>"/"<Picture 2>" written as "the first
-    image"/"the second image" — ``reference_wording`` turns them back for P-H3, so the P-H3 text equals the tested
-    file text):
+    image"/"the second image" — ``edit_prompt.normalise`` turns them back for P-H3, so the P-H3 text equals the tested
+    file text behind the "Edit <Picture 1>. " the engine node put in front of it anyway):
     plain front "Texture the sewing pattern in the first image with the fabric of the T-shirt in the second image.
     Keep every shape, its colour and the white background exactly. Add only the fine weave of the fabric, flat and
     evenly lit."; decorated front "The top left shape of the first image is the front of the long-sleeve shirt in
@@ -230,11 +230,15 @@ pb = gct.render_prompt(piece="T-shirt", side="back")
 check("[6] plain front prompt word for word", pf == want_plain, pf)
 check("[6] decorated front prompt word for word", pd == want_dec, pd)
 check("[6] back prompt word for word", pb == want_back, pb)
-from app.core.prompt_adapters import reference_wording  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
-check("[6] P-H3 wording: the tested <Picture N> text",
-      reference_wording(pf, "P-H3-Image").startswith("Texture the sewing pattern in <Picture 1> with the fabric of "
-                                                    "the T-shirt in <Picture 2>."), reference_wording(pf, "P-H3-Image"))
+from app.imagegen.edit_prompt import normalise  # noqa: E402
+
+_two = {"reference_images": {"input_reference_image_1": "t.png", "input_reference_image_2": "i.png"}}
+_ph3 = normalise(pf, _two, SimpleNamespace(model="P-H3-Image"))[0]
+check("[6] P-H3 wording: the tested <Picture N> text behind the node's own prefix",
+      _ph3.startswith("Edit <Picture 1>. Texture the sewing pattern in <Picture 1> with the fabric of "
+                      "the T-shirt in <Picture 2>."), _ph3)
 try:
     gct.render_prompt(piece="T-shirt", decorated=True)
     check("[6] decorated without a place raises", False)

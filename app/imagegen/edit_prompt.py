@@ -75,7 +75,10 @@ TOKEN_RE = re.compile(
     re.IGNORECASE)
 
 _SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+|\n+)")
-_PH3_VERBATIM = re.compile(r"\s*Edit <Picture \d+>")
+#: The engine node's own test (ComfyUI ``nodes_minimax_h3.PH3_IMAGE_EDIT_VERBATIM``): a prompt starting like this is
+#: encoded as it is; any other gets ``Edit <Picture 1>. `` in front.
+_PH3_VERBATIM = re.compile(r"\s*(Edit <Picture \d+>|subject_definitions:)")
+_PH3_LOWER_EDIT = re.compile(r"^(\s*)edit(?= <Picture \d+>)", re.IGNORECASE)
 _EDIT_THE_IMAGE = re.compile(r"^\s*Edit the image\.\s*", re.IGNORECASE)
 
 
@@ -171,6 +174,18 @@ def slots_of(params: Optional[Dict[str, Any]]) -> List[int]:
         if m and value:
             out.append(int(m.group(1)))
     return sorted(set(out))
+
+
+def ordered_references(params: Optional[Dict[str, Any]]) -> List[Tuple[str, Any]]:
+    """``params["reference_images"]`` as ``(key, value)`` pairs in the order a backend sends them: the
+    ``input_reference_image_N`` slots by N, then every other key (``input_mask``) in its own order — so ``<ref N>``
+    rendered as position N is the N-th image the engine sees."""
+    items = list(((params or {}).get("reference_images") or {}).items())
+
+    def key(kv: Tuple[str, Any]) -> Tuple[int, int]:
+        m = _SLOT_KEY.match(str(kv[0]))
+        return (0, int(m.group(1))) if m else (1, 0)
+    return sorted(items, key=key)
 
 
 def _mention_position(m: "re.Match[str]", slots: Sequence[int]) -> Optional[int]:
@@ -277,6 +292,8 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
     notes: List[str] = []
     prefixed = False
     if dialect == "picture_edit":
+        if not _PH3_VERBATIM.match(text) and _PH3_LOWER_EDIT.match(text):
+            text = _PH3_LOWER_EDIT.sub(r"\1Edit", text, count=1)      # "edit <Picture 1> …": the node's own form
         if not _PH3_VERBATIM.match(text):
             text = "Edit <Picture 1>. " + _EDIT_THE_IMAGE.sub("", text, count=1).lstrip()
             prefixed = True

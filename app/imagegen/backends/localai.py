@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
+from app.imagegen.edit_prompt import ordered_references
 from app.imagegen.base import BackendBusyError
 from app.imagegen.backends.together import TogetherBackend
 
@@ -151,10 +152,11 @@ class LocalAIBackend(TogetherBackend):
         IMPORTANT: LocalAI/Flux expects raw base64 in the ref_images field
         WITHOUT a "data:<mime>;base64," prefix — a data URI is not recognized
         as an image server-side and silently ignored.
+        Order = ``ordered_references``: the slots by N, so the edit prompt's
+        ``<ref N>`` / ``<Picture N>`` is the N-th image the engine sees.
         """
-        refs = params.get("reference_images") or {}
         out: List[str] = []
-        for _title, path in refs.items():
+        for _title, path in ordered_references(params):
             if not path:
                 continue
             sp = str(path)

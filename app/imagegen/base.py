@@ -392,6 +392,13 @@ class ImageBackend(ABC):
         self.negative_prompt_setting = os.environ.get(
             f"{env_prefix}SUPPORTS_NEGATIVE_PROMPT", "").strip()
 
+        # How the model addresses its reference images (config field
+        # prompt_dialect: auto / picture_edit / picture_subject / image_tag /
+        # ordinal). The RAW setting; app/imagegen/edit_prompt.resolve_dialect
+        # owns the rule (auto = its one model table).
+        self.prompt_dialect_setting = os.environ.get(
+            f"{env_prefix}PROMPT_DIALECT", "").strip()
+
         # Purpose category (txt2img / img2img / inpaint / img2mesh) — set for
         # EVERY backend type, so an inpaint alias on any api_type is kept out
         # of normal matching and offered as an inpaint target. Backends that
@@ -670,11 +677,15 @@ class ImageBackend(ABC):
         # the prompt — applies to ALL backends/paths as soon as a LoRA is active.
         final_prompt, trigger_words = self._inject_lora_triggers(prompt, params)
 
-        # A backend that addresses its reference images its own way (P-H3:
-        # "<Picture N>") gets the ordinal wording rewritten — the ONE place
-        # every prompt passes on its way to an engine.
-        from app.core.prompt_adapters import reference_wording
-        final_prompt = reference_wording(final_prompt, getattr(self, "model", "") or "")
+        # Every render with reference images passes the edit-prompt
+        # normaliser: each mention of a reference (<ref N>, "the first
+        # image", <Picture N>, <imageN> ...) in this backend's dialect, a
+        # mention of a slot that is not sent never reaches the engine, the
+        # P-H3 prefix written out — the ONE place every prompt passes on its
+        # way to an engine (app/imagegen/edit_prompt.py). No reference = the
+        # prompt stays byte-identical.
+        from app.imagegen.edit_prompt import normalise
+        final_prompt, edit_meta = normalise(final_prompt, params, self)
 
         # The negative: sent (a negative input exists), folded into the
         # prompt as negations (no input), or dropped (the engine would ignore
@@ -737,9 +748,12 @@ class ImageBackend(ABC):
         # Central logging only on real success (images produced). The caller's
         # ``log_meta`` also gets the prompt the engine really received
         # (``final_prompt``: LoRA triggers, reference wording, folded
-        # negatives) — the image service stores it in the image meta.
+        # negatives) and, with reference images, the normaliser's record
+        # (``edit_prompt``) — the image service stores both in the image meta.
         if log_meta is not None and isinstance(result, list) and result:
             log_meta["final_prompt"] = final_prompt
+            if edit_meta.get("refs"):
+                log_meta["edit_prompt"] = edit_meta
             self._log_generation(final_prompt, negative_prompt, params,
                                  _time.time() - _t0, log_meta,
                                  negative_folded=negative_folded, fit=fit)

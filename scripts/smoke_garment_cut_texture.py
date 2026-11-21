@@ -33,8 +33,8 @@ hand below.
 [4] Occasion + prompt file (plan Task 6): ``CUT_OCCASION`` / ``CUT_USE_CASE`` are "garment_cut_texture" and the
     occasion is in the catalog. The front prompt (the short plain one since the prompt test 2026-11-21) renders for
     piece "T-shirt": it names "T-shirt", carries "the first image" and "the second image" and no Jinja leftovers
-    ("{{", "{#"). After ``prompt_adapters.reference_wording`` with model "p-h3-image" it contains "<Picture 1>" and
-    "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" it is byte-identical. The back prompt reads
+    ("{{", "{#"). After ``edit_prompt.normalise`` (two slots) with model "p-h3-image" it contains "<Picture 1>" and
+    "<Picture 2>" and no "first image"/"second image"; with "qwen-edit" (ordinal) it is byte-identical. The back prompt reads
     "the fabric on the back of the T-shirt" and names no panel.
     ``PROMPT_SHA`` is the md5 of the shipped file text (32 hex).
 [5] A missing variable raises (StrictUndefined): the template rendered with ``piece`` only raises
@@ -388,8 +388,10 @@ check("[3] cylinder sheet renders", csheet.size[0] == 2048, csheet.size)
 # [4] occasion + prompt file
 import hashlib  # noqa: E402
 
-from app.core import prompt_adapters  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
 from app.imagegen import occasions as occ  # noqa: E402
+from app.imagegen.edit_prompt import normalise  # noqa: E402
 
 check("[4] occasion constant", gct.CUT_OCCASION == "garment_cut_texture" and gct.CUT_USE_CASE == "garment_cut_texture",
       (getattr(gct, "CUT_OCCASION", None), getattr(gct, "CUT_USE_CASE", None)))
@@ -398,10 +400,11 @@ prompt = gct.render_prompt(piece="T-shirt")
 check("[4] prompt names the piece", "T-shirt" in prompt, prompt)
 check("[4] prompt has the ordinal wording", "the first image" in prompt and "the second image" in prompt, prompt)
 check("[4] no Jinja leftovers", "{{" not in prompt and "{#" not in prompt and prompt == prompt.strip())
-ph3 = prompt_adapters.reference_wording(prompt, "p-h3-image")
+_two = {"reference_images": {"input_reference_image_1": "t.png", "input_reference_image_2": "i.png"}}
+ph3 = normalise(prompt, _two, SimpleNamespace(model="p-h3-image"))[0]
 check("[4] P-H3 wording", "<Picture 1>" in ph3 and "<Picture 2>" in ph3 and "first image" not in ph3
       and "second image" not in ph3, ph3)
-check("[4] other backends keep the text", prompt_adapters.reference_wording(prompt, "qwen-edit") == prompt)
+check("[4] other backends keep the text", normalise(prompt, _two, SimpleNamespace(model="qwen-edit"))[0] == prompt)
 shipped = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture.md").read_text(encoding="utf-8")
 shipped_back = (ROOT / "shared" / "templates" / "image" / "garment_cut_texture_back.md").read_text(encoding="utf-8")
 check("[4] PROMPT_SHA = md5 of both shipped files", gct.PROMPT_SHA

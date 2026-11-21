@@ -976,11 +976,10 @@ def _item_matte():
 
 
 def _upsampler_on(b) -> bool:
-    """A P-H3 backend whose entry does not switch the prompt upsampler off (a warning, not a block)."""
-    from app.core.prompt_adapters import uses_picture_references
-    if not uses_picture_references(str(getattr(b, "model", "") or "")):
-        return False
-    return (getattr(b, "extra_params", None) or {}).get("use_prompt_upsampler") is not False
+    """A ``picture_edit`` backend whose entry does not switch the prompt upsampler off (``edit_prompt.lint_backend``;
+    a warning, not a block)."""
+    from app.imagegen.edit_prompt import lint_backend
+    return any(note["code"] == "upsampler_on" for note in lint_backend(b))
 
 
 def _write_record(path: Path, record: dict) -> None:

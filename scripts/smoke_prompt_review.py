@@ -28,13 +28,15 @@ written, 1-based, split on whitespace).
     the negative _NEG_TPOSE_BACK + BASE_NEGATIVE (246 words with a pack's slot
     negatives in the log, 346 words after the fold) would fold to more than
     300 words — with the no-fold rule it stays 27 words.
-[2] Reference wording (prompt_adapters.reference_wording): on a model whose
-    id contains "p-h3" the ordinals become <Picture N> ("edit the first image
-    with what the person in the second image wears, and nothing else" ->
-    "edit <Picture 1> with what the person in <Picture 2> wears, and nothing
-    else", "the reference image" -> "<Picture 1>"); on
-    "Qwen2.1-Turbo" the text is unchanged. (The sample is the former fit
-    prompt, a literal here since the fit is gone — Task 11g.)
+[2] Reference wording (app/imagegen/edit_prompt.normalise, two slots): on a
+    model whose id contains "p-h3" the ordinals become <Picture N> and the
+    lead "edit" the node's own "Edit" ("edit the first image with what the
+    person in the second image wears, and nothing else" -> "Edit <Picture 1>
+    with what the person in <Picture 2> wears, and nothing else"); on
+    "Qwen2.1-Turbo" they become <image1>/<image2> ("edit <image1> with what
+    the person in <image2> wears, and nothing else"). Every other spelling and
+    dialect: scripts/smoke_edit_prompt_dialects.py. (The sample is the former
+    fit prompt, a literal here since the fit is gone — Task 11g.)
 [3] Style join: join_style_prompt("style", "prompt", None) == "style, prompt"
     (the historic single space is gone).
 [4] Base front: the natural style of use case base_front with the block
@@ -180,13 +182,15 @@ def main() -> int:
         check("a fold would have made it >= 300 words", len(words(folded)) >= 300, True)
 
         print("[2] reference wording")
-        from app.core.prompt_adapters import reference_wording
+        from types import SimpleNamespace
+
+        from app.imagegen.edit_prompt import normalise
         two_images = "edit the first image with what the person in the second image wears, and nothing else"
-        check("P-H3 two images", reference_wording(two_images, "P-H3-Image"),
-              "edit <Picture 1> with what the person in <Picture 2> wears, and nothing else")
-        check("P-H3 reference image", reference_wording("as in the reference image, the third image", "p-h3-x"),
-              "as in <Picture 1>, <Picture 3>")
-        check("Qwen untouched", reference_wording(two_images, "Qwen2.1-Turbo"), two_images)
+        two = {"reference_images": {"input_reference_image_1": "a.png", "input_reference_image_2": "b.png"}}
+        check("P-H3 two images", normalise(two_images, two, SimpleNamespace(model="P-H3-Image"))[0],
+              "Edit <Picture 1> with what the person in <Picture 2> wears, and nothing else")
+        check("Qwen image tags", normalise(two_images, two, SimpleNamespace(model="Qwen2.1-Turbo"))[0],
+              "edit <image1> with what the person in <image2> wears, and nothing else")
 
         print("[3] style join")
         check("comma join", config.join_style_prompt("style", "prompt", None), "style, prompt")
