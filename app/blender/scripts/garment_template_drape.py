@@ -916,16 +916,104 @@ def skinned_collider(body, arm, faces=80000, rest=None):
     return col
 
 
+#: How close (metres) the nearest collider point must lie to an open edge of the collider to count as ON it
+#: (``signed_out``). The voxel remesh is 5 mm; this is only the float noise of a nearest-point query.
+RIM_TOL_M = 1e-5
+
+
+class ColliderTree:
+    """The BVH of a collider object together with its OPEN RIM: per face index, the boundary edges (world segments)
+    that touch one of the face's vertices. ``drop_outer_shells`` (A236) cuts hair lying on the shoulders out of the
+    voxel collider and leaves an open edge where it was; the crop in ``drape`` leaves another. Everything else of the
+    BVH is passed through (``find_nearest``, ``ray_cast``, ...)."""
+
+    __slots__ = ("tree", "rim")
+
+    def __init__(self, tree, rim):
+        self.tree = tree
+        self.rim = rim
+
+    def __getattr__(self, name):
+        return getattr(self.tree, name)
+
+
+def rim_segments(obj):
+    """Per face index of ``obj``'s mesh the world segments ``(a, b)`` of the boundary edges (one face only) that touch
+    one of that face's vertices; {} for a closed mesh."""
+    me = obj.data
+    ne, nl = len(me.edges), len(me.loops)
+    if not ne or not nl:
+        return {}
+    le = np.empty(nl, np.int64)
+    me.loops.foreach_get("edge_index", le)
+    bnd = np.where(np.bincount(le, minlength=ne) == 1)[0]
+    if not len(bnd):
+        return {}
+    ev = np.empty(ne * 2, np.int64)
+    me.edges.foreach_get("vertices", ev)
+    ev = ev.reshape(-1, 2)
+    lv = np.empty(nl, np.int64)
+    me.loops.foreach_get("vertex_index", lv)
+    np_ = len(me.polygons)
+    start = np.empty(np_, np.int64)
+    total = np.empty(np_, np.int64)
+    me.polygons.foreach_get("loop_start", start)
+    me.polygons.foreach_get("loop_total", total)
+    loop_poly = np.empty(nl, np.int64)
+    loop_poly[np.repeat(start, total) + _ramp(total)] = np.repeat(np.arange(np_), total)
+    mw = obj.matrix_world
+    by_vert = {}
+    for e in bnd:
+        a, b = (int(i) for i in ev[e])
+        seg = (mw @ me.vertices[a].co, mw @ me.vertices[b].co)
+        by_vert.setdefault(a, []).append(seg)
+        by_vert.setdefault(b, []).append(seg)
+    rim = {}
+    for li in np.where(np.isin(lv, np.fromiter(by_vert, np.int64)))[0]:
+        rim.setdefault(int(loop_poly[li]), []).extend(by_vert[int(lv[li])])
+    return rim
+
+
+def _ramp(total):
+    """0, 1, .. total[i]-1 for every polygon in a row (the loop offsets inside each polygon)."""
+    ends = np.cumsum(total)
+    return np.arange(int(ends[-1])) - np.repeat(ends - total, total) if len(total) else np.zeros(0, np.int64)
+
+
+def collider_tree(obj):
+    """The ``ColliderTree`` of a collider object (evaluated, so a COLLISION modifier changes nothing)."""
+    tree = BVHTree.FromObject(obj, bpy.context.evaluated_depsgraph_get())
+    return ColliderTree(tree, rim_segments(obj))
+
+
+def _on_rim(tree, face, loc):
+    """Whether ``loc`` (the nearest point of face ``face``) lies on an open edge of the collider of ``tree``."""
+    from mathutils.geometry import intersect_point_line
+    for a, b in (getattr(tree, "rim", None) or {}).get(face, ()):
+        q, t = intersect_point_line(loc, a, b)
+        q = a if t <= 0.0 else b if t >= 1.0 else q
+        if (q - loc).length <= RIM_TOL_M:
+            return True
+    return False
+
+
 def signed_out(tree, p, reach):
     """A178 — the nearest collider point to ``p`` and the unit direction "out" there: from that point towards ``p``
     when ``p`` lies on the outer side of the nearest face, else the face normal. The plain offset . normal read a
     point 33 mm in front of a navel as 8 mm out (the nearest face is the navel's side wall), and the push then moved
-    it INTO the navel. Returns ``(None, None)`` when nothing is within ``reach``."""
-    loc, nrm, _f, _d = tree.find_nearest(p, reach)
+    it INTO the navel. Returns ``(None, None)`` when nothing is within ``reach``.
+
+    A point whose nearest collider point lies ON an open edge of the collider (``ColliderTree.rim``: where
+    ``drop_outer_shells`` cut hair away) is outside too: it stands beyond the edge of the surface, and the side of
+    the one face there says nothing. That face decided it before, and which of the faces meeting at the edge the BVH
+    returned changed between two trees of the same collider: a pinned yoke vertex 7.95 mm out beside the cut on
+    Tilda's shoulder read 0.66 mm INSIDE in ``drape``, the pre-inflate moved it 11 mm after the rest lengths were
+    taken, and the pinned edge next to it was stretched 2.3-fold (bug round 2026-11-21)."""
+    loc, nrm, face, _d = tree.find_nearest(p, reach)
     if loc is None:
         return None, None
     off = p - loc
-    if off.dot(nrm) > 0 and off.length > 1e-9:
+    if off.length > 1e-9 and (off.dot(nrm) > 0 or _on_rim(tree, face, loc)):
         return loc, off.normalized()
     return loc, nrm
 
@@ -953,7 +1041,7 @@ def rest_collider(body, extra=(), faces=80000):
         _join_extra(col, ex, dg)
     _remesh(col, faces, core_segments(armature_of(body)))
     drop_outer_shells(col, body, layered=bool(extra), faces=faces, record=True)
-    tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
+    tree = collider_tree(col)
     COLLIDER_S.append(round(time.time() - t0, 2))
     return col, tree
 
@@ -1115,7 +1203,7 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
     sc.frame_start, sc.frame_end = 1, frames
     # pre-inflate: nothing may start inside the collider (an initial intersection is
     # what explodes a cloth); push to thickness + 3 mm along the collider normal
-    ctree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
+    ctree = collider_tree(col)
     mwi = obj.matrix_world.inverted()
     pushed = 0
     pin_set = set(int(i) for i in pin_idx)
