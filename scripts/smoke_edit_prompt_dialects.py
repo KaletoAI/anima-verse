@@ -26,8 +26,21 @@ Expected values, derived by hand from the rules in the module doc / design §3:
 [3] Never invent — 2 slots, C = "Use the fabric of <ref 2>. Add the badge from <ref 3>."
     slot 3 is not sent; another sentence remains -> "Add the badge from <ref 3>." dropped with the space before it;
     FX -> "Use the fabric of the second image."  dropped == ["Add the badge from <ref 3>."], unused [1].
-    A lone sentence D = "Add the badge from <ref 3>." cannot be dropped -> ordinal wording of slot 3:
-    FX -> "Add the badge from the third image."  notes contain "unresolved", unused [1, 2].
+    A lone sentence D = "Add the badge from <ref 3>." cannot be dropped on FX -> only the mention phrase goes, with
+    its leading preposition: FX -> "Add the badge."  dropped ["from <ref 3>"], notes contain "unresolved", unused
+    [1, 2]. An unresolved mention is never rendered as a token (no "the third image" anywhere).
+[3b] The lone unresolved sentence on every dialect, 2 slots, G = "Put the hat from <ref 3> on the first image.":
+    PH3: the prefix is always in the output and counts as the other sentence -> G is dropped whole:
+         "Edit <Picture 1>."  dropped [G], prefixed. (A second pass sees "Edit <Picture 1>." verbatim: no change.)
+    MM:  "from <ref 3>" goes -> "Put the hat on <Picture 1>."   QW: "Put the hat on <image1>."
+    FX:  "Put the hat on the first image."
+    The same with the ordinal spelling of the missing slot, "the third image" instead of "<ref 3>": identical outputs.
+    One slot, H = "Only <ref 4> here" (no preposition before the mention): PH3 "Edit <Picture 1>."; MM / QW / FX
+    "Only here".
+    Clause: 2 slots, K = "Use the fabric of the first image, add the badge from <ref 3>." -> the second clause goes:
+    QW "Use the fabric of <image1>."  dropped ["add the badge from <ref 3>"]; MM "Use the fabric of <Picture 1>.";
+    PH3 drops K whole -> "Edit <Picture 1>.".
+    No output of [3]/[3b] contains "third" or "fourth"; all of them enter the [11] idempotence loop.
 [4] Capitalisation: E = "<ref 1> stays; the second image gives the colour." (2 slots, FX)
     -> "The first image stays; the second image gives the colour." (sentence start -> capital T); mid-sentence
     "Picture 2" (capital P) -> "the second image" in lower case ([7]).
@@ -148,8 +161,36 @@ check("dropped", meta["dropped"], ["Add the badge from <ref 3>."])
 check("unused", meta["unused"], [1])
 D = "Add the badge from <ref 3>."
 out, meta = norm(D, refs(1, 2), FX)
-check("lone sentence kept, ordinal", out, "Add the badge from the third image.")
-check("unresolved note", ("unresolved" in meta["notes"], meta["unused"]), (True, [1, 2]))
+check("lone sentence: mention phrase removed", out, "Add the badge.")
+check("unresolved note", ("unresolved" in meta["notes"], meta["unused"], meta["dropped"]),
+      (True, [1, 2], ["from <ref 3>"]))
+
+print("[3b] the lone unresolved sentence on every dialect")
+G = "Put the hat from <ref 3> on the first image."
+G2 = "Put the hat from the third image on the first image."
+WANT_G = {"PH3": "Edit <Picture 1>.", "MM": "Put the hat on <Picture 1>.", "QW": "Put the hat on <image1>.",
+          "FX": "Put the hat on the first image."}
+NEVER = ("third", "fourth", "<ref")
+for prompt in (G, G2):
+    for label, b in (("PH3", PH3), ("MM", MM), ("QW", QW), ("FX", FX)):
+        out, meta = norm(prompt, refs(1, 2), b)
+        check(f"{prompt[:24]!r} -> {label}", out, WANT_G[label])
+        check(f"{prompt[:24]!r} -> {label} no unsent token", any(w in out for w in NEVER), False)
+        check(f"{prompt[:24]!r} -> {label} unresolved note", "unresolved" in meta["notes"], True)
+out, meta = norm(G, refs(1, 2), PH3)
+check("PH3 dropped whole", (meta["dropped"], meta["prefixed"]), ([G], True))
+H = "Only <ref 4> here"
+for label, b, want in (("PH3", PH3, "Edit <Picture 1>."), ("MM", MM, "Only here"), ("QW", QW, "Only here"),
+                       ("FX", FX, "Only here")):
+    out, _ = norm(H, refs(1), b)
+    check(f"H -> {label}", out, want)
+K = "Use the fabric of the first image, add the badge from <ref 3>."
+out, meta = norm(K, refs(1, 2), QW)
+check("K -> QW", (out, meta["dropped"]), ("Use the fabric of <image1>.", ["add the badge from <ref 3>"]))
+out, _ = norm(K, refs(1, 2), MM)
+check("K -> MM", out, "Use the fabric of <Picture 1>.")
+out, _ = norm(K, refs(1, 2), PH3)
+check("K -> PH3", out, "Edit <Picture 1>.")
 
 print("[4] capitalisation")
 out, _ = norm("<ref 1> stays; the second image gives the colour.", refs(1, 2), FX)

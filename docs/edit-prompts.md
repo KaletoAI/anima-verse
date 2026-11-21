@@ -84,7 +84,7 @@ Hook: `app/imagegen/base.py` `ImageBackend.generate`. It replaces the `reference
 2. **Recognise mentions** with ONE regex table `_MENTIONS`, all mapped to a slot number:
    `<ref N>` · `<Picture N>` · `Picture N` · `<imageN>` · `@imageN` · `image N` / `picture N` / `reference image N` · `the (first|second|third|fourth|fifth) (image|picture|reference image|reference picture)` · `the reference image` / `the reference picture` (→ 1, only when exactly one slot). Vague phrases ("as the reference", "the person in the picture") are NOT guessed. Their producers are fixed instead (§8, rows P5/P6).
 3. **Render** each mention with `render_ref(n, dialect, len(slots))`. Capitalisation follows the sentence start. With `image_tag` and one slot, "the first image" becomes "the image".
-4. **Never invent**: a mention of N not in `slots` is not turned into a token. The SENTENCE that holds it is dropped when the prompt still has at least one other sentence (this closes gap G3, `base_body.picture_edit_prompt` on a 1-slot backend), and the meta records `dropped`. Nothing else is ever added except the P-H3 prefix (step 5).
+4. **Never invent**: a mention of N not in `slots` is never turned into a token, in any wording. The SENTENCE that holds it is dropped when the prompt still has at least one other sentence (this closes gap G3, `base_body.picture_edit_prompt` on a 1-slot backend); with `picture_edit` the prefix of step 5 counts as that other sentence, so the first pass already gives what a second pass would. A lone sentence loses only the clause (`,` / `;`) holding the mention, else only the mention with its leading preposition (`"Put the hat from <ref 3> on the first image."` → `"Put the hat on <image1>."`). The meta records each removed piece in `dropped`, note `unresolved`. Nothing else is ever added except the P-H3 prefix (step 5).
 5. **Dialect checks**:
    - `picture_edit`: a prompt that does not start with `Edit <Picture \d+>` gets `Edit <Picture 1>. ` in front. That is exactly what the node would add, so the logged `final_prompt` is what the engine encodes. An `Edit the image.` lead-in, as a separate sentence, is removed first. A missing `Keep` sentence is only a note.
    - `picture_subject`: free text is not turned into subject form (that needs the structured object). Note `form: free_text`.
@@ -221,6 +221,7 @@ Smokes (standalone, expected values derived by hand in the docstring, no server,
    Further cases:
    - 1 slot with image_tag: `"the first image"` → `"the image"`.
    - `"from <ref 3>"` with 2 slots: the sentence is dropped, `dropped` has 1 entry.
+   - The lone unresolved sentence on all four dialects (and "the third image" spelled out): no token of a missing slot in any output, each output idempotent.
    - `<ref` never appears in any output.
    - `normalise(normalise(x)) == normalise(x)` for every case.
    - 0 slots: byte-identical.

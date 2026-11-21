@@ -220,6 +220,54 @@ def _split_sentences(text: str) -> List[str]:
     return _SENTENCE_SPLIT.split(text)
 
 
+_CLAUSE_SPLIT = re.compile(r"(\s*[,;]\s*)")
+_TAIL = re.compile(r"[.!?]*\s*$")
+_LEAD_PREP = re.compile(r"\b(?:from|of|on|onto|in|into|with|to|at|by|like|as)\s+$", re.IGNORECASE)
+
+
+def _strip_unresolved(sentence: str, is_bad) -> Tuple[str, List[str]]:
+    """``sentence`` without its unresolved mentions: the clauses (split at ``,`` / ``;``) holding one are removed
+    when another clause remains, else each mention goes with its leading preposition. ``(text, removed pieces)``."""
+    lead = sentence[:len(sentence) - len(sentence.lstrip())]
+    core = sentence.strip()
+    tail_m = _TAIL.search(core)
+    body, tail = core[:tail_m.start()], core[tail_m.start():]
+    starts_upper = body[:1].isupper()
+    pieces = _CLAUSE_SPLIT.split(body)
+    clauses, seps = pieces[0::2], pieces[1::2]
+    has_bad = [any(is_bad(m) for m in _MENTIONS.finditer(c)) for c in clauses]
+    removed: List[str] = []
+    if len(clauses) > 1 and not all(has_bad):
+        kept: List[str] = []
+        for i, c in enumerate(clauses):
+            if has_bad[i]:
+                removed.append(c.strip())
+                continue
+            if kept:
+                kept.append(seps[i - 1])
+            kept.append(c)
+        body = "".join(kept)
+    else:
+        out: List[str] = []
+        last = 0
+        for m in _MENTIONS.finditer(body):
+            if not is_bad(m):
+                continue
+            start = m.start()
+            prep = _LEAD_PREP.search(body[last:start])
+            if prep:
+                start = last + prep.start()
+            removed.append(body[start:m.end()].strip())
+            out.append(body[last:start])
+            last = m.end()
+        out.append(body[last:])
+        body = re.sub(r"\s+([,;:])", r"\1", re.sub(r"\s{2,}", " ", "".join(out))).strip(" ,;:")
+    body = body.strip()
+    if starts_upper and body[:1].isalpha():
+        body = body[0].upper() + body[1:]
+    return (lead + body + tail if body else ""), removed
+
+
 def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tuple[str, Dict[str, Any]]:
     """The pass-through every render with reference images takes (``ImageBackend.generate``): ``(prompt, meta)``.
 
@@ -241,15 +289,23 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
     def valid(pos: Optional[int]) -> bool:
         return pos is not None and 1 <= pos <= total
 
-    # 1. sentences holding a mention of a slot that is not sent are dropped (while another sentence remains)
+    def bad(m: "re.Match[str]") -> bool:
+        pos = _mention_position(m, slots)
+        return pos is not None and not valid(pos)
+
+    # 1. sentences holding a mention of a slot that is not sent are dropped while another sentence remains. The
+    #    picture_edit prefix counts as that other sentence (it is always in the output), so the first pass already
+    #    gives what a second pass over its own output would.
     parts = _split_sentences(prompt)
     sentences = [i for i in range(0, len(parts), 2) if parts[i].strip()]
     dropped: List[str] = []
+    unresolved: List[str] = []
     keep_idx = set(range(len(parts)))
+    floor = 0 if dialect == "picture_edit" else 1
     for i in sentences:
-        bad = [m.group(0) for m in _MENTIONS.finditer(parts[i])
-               if _mention_position(m, slots) is not None and not valid(_mention_position(m, slots))]
-        if bad and len([j for j in sentences if j in keep_idx]) > 1:
+        bad_here = [m.group(0) for m in _MENTIONS.finditer(parts[i]) if bad(m)]
+        if bad_here and len([j for j in sentences if j in keep_idx]) > floor:
+            unresolved += bad_here
             dropped.append(parts[i].strip())
             keep_idx.discard(i)
             # the separator after it (or, for the last sentence, the one before it) goes with it
@@ -257,30 +313,31 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
                 keep_idx.discard(i + 1)
             elif i - 1 >= 0:
                 keep_idx.discard(i - 1)
-    text = "".join(parts[i] for i in range(len(parts)) if i in keep_idx) if dropped else prompt
+    if dropped:
+        parts = [parts[i] if i in keep_idx else "" for i in range(len(parts))]
+        if not "".join(parts).strip():
+            parts = [""]
+    # 1b. a lone sentence that still holds one loses only the clause holding it, else only the mention phrase —
+    #     an unresolved mention is never rendered as a token
+    for i in range(0, len(parts), 2):
+        if any(bad(m) for m in _MENTIONS.finditer(parts[i])):
+            unresolved += [m.group(0) for m in _MENTIONS.finditer(parts[i]) if bad(m)]
+            parts[i], removed = _strip_unresolved(parts[i], bad)
+            dropped += removed
+    text = "".join(parts) if dropped else prompt
 
     # 2. render every mention
     rewrites = 0
-    unresolved: List[str] = []
     named: set = set()
     out: List[str] = []
     last = 0
     for m in _MENTIONS.finditer(text):
         pos = _mention_position(m, slots)
-        if pos is None:
+        if not valid(pos):
             continue
         original = m.group(0)
-        if valid(pos):
-            named.add(slots[pos - 1])
-            token = render_ref(pos, dialect, total)
-        elif m.lastgroup == "ref":
-            unresolved.append(original)
-            n = int(re.search(r"\d+", original).group(0))
-            token = render_ref(n, "ordinal", max(2, n))
-        else:
-            unresolved.append(original)
-            continue
-        token = _cased(token, _at_sentence_start(text, m.start()))
+        named.add(slots[pos - 1])
+        token = _cased(render_ref(pos, dialect, total), _at_sentence_start(text, m.start()))
         out.append(text[last:m.start()])
         out.append(token)
         last = m.end()
@@ -295,7 +352,8 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
         if not _PH3_VERBATIM.match(text) and _PH3_LOWER_EDIT.match(text):
             text = _PH3_LOWER_EDIT.sub(r"\1Edit", text, count=1)      # "edit <Picture 1> …": the node's own form
         if not _PH3_VERBATIM.match(text):
-            text = "Edit <Picture 1>. " + _EDIT_THE_IMAGE.sub("", text, count=1).lstrip()
+            rest = _EDIT_THE_IMAGE.sub("", text, count=1).lstrip()
+            text = "Edit <Picture 1>." + (" " + rest if rest else "")
             prefixed = True
         if not re.search(r"\bkeep\b", text, re.IGNORECASE):
             notes.append("keep_missing")
