@@ -79,10 +79,8 @@ CUTTING = "Cutting the pattern (CPU, 0 hub jobs)"
 NOT_CUT = "The pattern is not cut yet — it is cut when the dialog opens or the parameters are saved (CPU, 0 hub jobs)"
 CUT_FAILED = "Cutting the pattern failed: {error}"
 CUT_LEFT = "Cutting the pattern stopped ({outcome}) — it is cut again when the dialog is opened"
-NO_PATTERN = ("Only a top and the close-fitting kinds are cut into pattern pieces for now — this kind keeps its "
-              "projection texture")
-#: A strapless top (bodice, bustier, corset) has no bodice cut: the builder cuts it on the grid UV, no islands.
-NO_PATTERN_STRAPLESS = ("A strapless top is not cut into pattern pieces yet — it keeps its projection texture")
+NO_PATTERN = ("Only a top, a skirt and the close-fitting kinds are cut into pattern pieces for now — this kind keeps "
+              "its projection texture")
 #: A lower template layer is not draped yet: the next Build drapes it first and lays this piece out of it, so a cut
 #: made now would differ from the drape the Build makes.
 WAITING_LOWER = "Waiting for the layers under it to be draped — the next Build drapes them, then the pattern is cut"
@@ -100,23 +98,28 @@ def cut_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in gt.keyed_params(params).items() if k not in DRAPE_ONLY}
 
 
-def uv_pattern_key(kind: Any) -> str:
-    """The flattening's part of the cut key (module docstring): ``UV_PATTERN_SHA`` for a fitted kind,
-    ``TOP_UV_PATTERN_SHA`` for every other."""
+def uv_pattern_key(params: Dict[str, Any]) -> str:
+    """The flattening's part of the cut key (module docstring): ``UV_PATTERN_SHA`` for a fitted kind and a panel piece
+    (step 3b, ``garment_template.panel_piece``: a skirt, a strapless top), ``TOP_UV_PATTERN_SHA`` for a top with a
+    bodice."""
     from app.core import garment_template as gt
-    return UV_PATTERN_SHA if kind in gt.FITTED_KINDS else TOP_UV_PATTERN_SHA
+    live = params.get("kind") in gt.FITTED_KINDS or gt.panel_piece(params)
+    return UV_PATTERN_SHA if live else TOP_UV_PATTERN_SHA
 
 
 def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     """The cut signature (module docstring): md5[:12]; ``lower`` = the drape key's lower-layer tokens."""
     from app.core import garment_template as gt
     payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION,
-               "uv_pattern": uv_pattern_key(params.get("kind")),
+               "uv_pattern": uv_pattern_key(params),
                "base": base_sha, "lower": sorted(lower)}
     if params.get("kind") in gt.FITTED_KINDS:
         # step 3a: a fitted piece's cut also follows its own version and the part rules (``fitted_pattern.py``)
         payload["fitted"] = gt.FITTED_VERSION
         payload["fitted_pattern"] = FITTED_PATTERN_SHA
+    if gt.panel_piece(params):
+        # step 3b (B16): a panel piece's cut follows the panel version (``garment_template.PANEL_VERSION``)
+        payload["panels"] = gt.PANEL_VERSION
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
@@ -126,8 +129,8 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
     (``cut_key``) and for the cut a drape was laid out of (``garment_template._build_drape``, its record's
     ``cut_sig``; ``garment_template.drape_state`` compares the two).
 
-    - not a ``PATTERN_KINDS`` kind -> ``NO_PATTERN``; a strapless top (no bodice: the builder cuts it on the grid UV)
-      -> ``NO_PATTERN_STRAPLESS`` — never a Blender run;
+    - not a ``PATTERN_KINDS`` kind -> ``NO_PATTERN`` — never a Blender run (step 3b: a strapless top is cut by
+      ``wrap``);
     - ``wait`` and a lower template layer in state "missing" (the next Build drapes it first and lays this piece out
       of it) -> ``WAITING_LOWER``: a cut made now would differ from the drape the Build makes;
     - else the sig of ``under_tokens`` plus one ``collider:<item>`` token per lower template layer that is READY —
@@ -143,8 +146,6 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
         item = get_item(item_id)
     if params["kind"] not in gt.PATTERN_KINDS:
         return None, NO_PATTERN, []
-    if params["kind"] not in gt.FITTED_KINDS and not gt.has_bodice(params):
-        return None, NO_PATTERN_STRAPLESS, []
     states = gt.collider_states(character_name, item_id, params["kind"], lower, base_sha=base_sha)
     if wait and any(sub["state"] == "missing" for _o, _it, sub in states):
         return None, WAITING_LOWER, []
@@ -192,9 +193,8 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     if params is None:
         out["reason"] = gt.NEEDS_PARAMS
         return out
-    if params["kind"] not in gt.PATTERN_KINDS or (params["kind"] not in gt.FITTED_KINDS
-                                                   and not gt.has_bodice(params)):
-        out["reason"] = NO_PATTERN if params["kind"] not in gt.PATTERN_KINDS else NO_PATTERN_STRAPLESS
+    if params["kind"] not in gt.PATTERN_KINDS:
+        out["reason"] = NO_PATTERN
         return out
     profile = profile if profile is not None else (get_character_profile(character_name) or {})
     base = base_body.current_base(character_name, profile=profile)
@@ -319,7 +319,7 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
                           over_sleeves=gt.over_sleeved_layer(params["kind"], ready))
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
-                                  "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params["kind"]),
+                                  "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,
                                   "under": key["under"], "colliders": [Path(c[0]).name for c in colliders + own],
                                   **({"shaping": shaping} if shaping else {}),

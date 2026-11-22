@@ -48,15 +48,22 @@ import uv_pattern as uvp  # noqa: E402
 sys.path.pop(0)
 
 #: Angle of each slit side (0 = +X = the character's left, front = -Y).
-SLIT_ANGLE = {"left": 0.0, "back": math.pi / 2, "right": math.pi, "front": 3 * math.pi / 2}
+#: Step 3b (B3): front left / right lie 6 columns (6 * pi / 40 = 0.471239 rad) either side of the front centre, on a
+#: column of the 2 x 40-step wrap, so ``split_slit`` (half a column of tolerance) finds them.
+SLIT_ANGLE = {"left": 0.0, "back": math.pi / 2, "right": math.pi, "front": 3 * math.pi / 2,
+              "front_left": 3 * math.pi / 2 + 6 * math.pi / 40, "front_right": 3 * math.pi / 2 - 6 * math.pi / 40}
 TOP_CLEAR_M = 0.006
 ROW_CLEAR_M = 0.02
 
 
-def wrap(spec, btree, centre):
+def wrap(spec, btree, centre, band_rows=0):
     """Vertices / quads / UVs of the panels wrapped round the body axis, and the indices of the top row (the pin).
     A221: ``spec["top_drop"]`` {panel: [metres per column]} lowers a panel's top edge per column (a sweetheart
-    dip); the rows of that column are pressed together linearly between the hem (unmoved) and the lowered top."""
+    dip); the rows of that column are pressed together linearly between the hem (unmoved) and the lowered top.
+    Step 3b (plan group B): the ``band_rows`` vertex rows under the top (a skirt's waistband,
+    ``uv_pattern.wrap_parts``) hug the body like the top row (``TOP_CLEAR_M``) — a waistband is fitted, and a band
+    standing off by ``ROW_CLEAR_M`` under a top row at 6 mm was a cone its ring strip could not unroll (area 0.59-0.71,
+    stretch p95 1.6-4.4 on five skirts)."""
     rows, cols = spec["rows"], spec["cols"]
     row_y = spec["row_y"]
     drops = spec.get("top_drop") or {}
@@ -79,7 +86,7 @@ def wrap(spec, btree, centre):
                     top.append(len(verts))
                 ang = a0 + (a1 - a0) * c / (cols - 1)
                 body_r = gd.body_radius(btree, centre, ang, z)
-                if r == 0:
+                if r <= band_rows:
                     rad = body_r + TOP_CLEAR_M if body_r > 0 else circ / (2 * math.pi)
                 else:
                     rad = max(circ / (2 * math.pi), body_r + ROW_CLEAR_M)
@@ -1822,6 +1829,83 @@ def pattern_uv_of_fitted(obj, pattern, islands_json):
     return info
 
 
+def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
+    """Pattern-piece UV of a piece cut by ``wrap`` (step 3b, plan group B: a skirt, a strapless top, a strapless
+    dress): read the faces, their ``uv_part`` / ``uv_seam`` layers (``uv_pattern.wrap_parts``, set before the side
+    seams were merged) and the rest coordinates, run ``uv_pattern.pattern_uv`` — the panels flattened round the
+    vertical line through ``centre`` (+Z up), the waistband a ring strip opened at the back centre (+Y) round the same
+    line at ``top_z``, the layout ``ROWS[rows_key]`` or ``ROWS_ALT[rows_key]`` (the larger px/cm) — write the ``UVMap``
+    loops and ``islands_json``, drop the helper layers. Returns ``data["uv"]``. ``band`` = the waistband's vertex rows
+    as construction ids (``wrap_parts``): mapped through ``uv_cid`` (a side-seam vertex merged onto its twin takes the
+    twin's id, ``_wrap_twin``) into a construction strip (``uv_pattern.rows_strip_uv``)."""
+    import json
+    t0 = time.time()
+    me = obj.data
+    nv = len(me.vertices)
+    co = np.empty(nv * 3)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    polys = [tuple(p_.vertices) for p_ in me.polygons]
+    part = _int_layer(me, "uv_part", len(me.polygons))
+    flag = _int_layer(me, "uv_seam", len(me.edges))
+    cid = _int_layer(me, "uv_cid", nv)
+    ev = np.empty(len(me.edges) * 2, np.int32)
+    me.edges.foreach_get("vertices", ev)
+    ev = ev.reshape(-1, 2)
+    seams = {(int(a_), int(b_)) for (a_, b_), f_ in zip(ev, flag) if f_}
+    cmap = {int(c): i for i, c in enumerate(cid)}
+    bands = {}
+    if band:
+        bands[14] = [[cmap.get(int(c), cmap.get(_wrap_twin(int(c)), -1)) for c in row] for row in band]
+        if any(g < 0 for row in bands[14] for g in row):
+            raise RuntimeError("the waistband lost a vertex in the seam merge")
+    cx, cy = float(centre[0]), float(centre[1])
+    vertical = ((0.0, 0.0, 1.0), (cx, cy, 0.0), None)
+    axes = {p_: vertical for p_ in (1, 2, 37, 38)}
+    rings = {14: ((cx, cy, float(top_z)), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))}
+    res = uvp.pattern_uv(polys, part, seams, co, axes=axes, rings=rings, rows=uvp.ROWS.get(rows_key),
+                         rows_alt=uvp.ROWS_ALT.get(rows_key), size_px=PATTERN_ATLAS_PX,
+                         margin_cm=PATTERN_MARGIN_CM, tol=FITTED_ARAP_TOL, bands=bands)
+    flat = np.zeros(len(me.loops) * 2)
+    for p_ in me.polygons:
+        for j, li in enumerate(p_.loop_indices):
+            flat[2 * li:2 * li + 2] = res["corner_uv"][p_.index][j]
+    me.uv_layers["UVMap"].data.foreach_set("uv", flat)
+    _drop_layers(me, ("uv_part", "uv_seam", "uv_cid"))
+    Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
+    info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
+            "islands": res["islands"], "faces_per_part": res["faces_per_part"],
+            "area_ratio_min": res["area_ratio_min"], "area_ratio_max": res["area_ratio_max"],
+            "stretch_p95_max": res["stretch_p95_max"], "strip_stretch_p95": res["strip_stretch_p95"],
+            "strip_area_ratio": {i["name"]: i["distortion"]["area_ratio"] for i in res["payload"]["islands"]
+                                 if i["part"] in uvp.STRIP_PARTS},
+            "seam_edges": len(seams), "arap_iters": res["arap_iters"], "rows": rows_key,
+            "uv_s": round(time.time() - t0, 2)}
+    print(f"uv.islands {res['islands']} faces {res['faces_per_part']} px/cm {info['px_per_cm']} "
+          f"area {info['area_ratio_min']}..{info['area_ratio_max']} p95 {info['stretch_p95_max']} "
+          f"strips {info['strip_stretch_p95']} {info['uv_s']} s", flush=True)
+    return info
+
+
+#: Step 3b: the atlas rows of a piece cut by ``wrap`` (``uv_pattern.ROWS`` key) per kind.
+WRAP_ROWS = {"skirt": "skirt", "top": "strapless", "dress": "dress"}
+_WRAP_GRID = {}
+
+
+def _wrap_twin(cid):
+    """The construction id of the side-seam twin of ``cid`` (``wrap``: the front's last column lies on the back's first,
+    the back's last on the front's first), -1 for a vertex off the side seams. ``_WRAP_GRID`` = {rows, cols} of the
+    current ``wrap``."""
+    rows, cols = _WRAP_GRID["rows"], _WRAP_GRID["cols"]
+    p, rem = divmod(cid, rows * cols)
+    r, c = divmod(rem, cols)
+    if c == cols - 1:
+        return (1 - p) * rows * cols + r * cols
+    if c == 0:
+        return (1 - p) * rows * cols + r * cols + cols - 1
+    return -1
+
+
 def run(a):
     t_all, c_all = time.time(), time.process_time()
     inp, prm = a["inputs"], a["params"]
@@ -1872,8 +1956,8 @@ def run(a):
     fitted = spec.get("fitted")
     uv_info = None
     cut_only = bool(prm.get("cut_only"))
-    if cut_only and not fitted and (not bod or (prm.get("uv_mode") or "grid") != "pattern"):
-        raise RuntimeError("cut_only needs a bodice cut with pattern UVs (uv_mode \"pattern\") or a fitted piece")
+    if cut_only and not fitted and (prm.get("uv_mode") or "grid") != "pattern":
+        raise RuntimeError("cut_only needs a cut with pattern UVs (uv_mode \"pattern\") or a fitted piece")
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
         col, ctree = gd.rest_collider(body, extra=lower)
@@ -1981,7 +2065,15 @@ def run(a):
     else:
         binfo = {}
         col = None
-        verts, faces, uvs, angles, top_ids = wrap(spec, btree, centre)
+        wrap_pattern = (prm.get("uv_mode") or "grid") == "pattern"
+        if wrap_pattern:
+            # step 3b: the part of every face and the waistband's back-centre cut (``uv_pattern.wrap_parts``)
+            fpart, fseams, winfo = uvp.wrap_parts(spec["rows"], spec["cols"], spec["row_y"], prm.get("kind"),
+                                                  float(prm.get("waistband_m") or 0.0),
+                                                  (spec.get("outline") or {}).get("waist_y"))
+            binfo["wrap_parts"] = winfo
+        verts, faces, uvs, angles, top_ids = wrap(spec, btree, centre,
+                                                  band_rows=winfo["waistband_rows"] if wrap_pattern else 0)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         uvl = me.uv_layers.new(name="UVMap")
@@ -1994,11 +2086,36 @@ def run(a):
             obj.vertex_groups.new(name="pin_top").add(top_ids, 1.0, "REPLACE")
         bm = bmesh.new()
         bm.from_mesh(me)
+        if wrap_pattern:
+            # set on the bmesh BEFORE the side seams are merged (face / edge custom data rides through
+            # remove_doubles and split_slit)
+            lay_part = bm.faces.layers.int.new("uv_part")
+            lay_seam = bm.edges.layers.int.new("uv_seam")
+            lay_cid = bm.verts.layers.int.new("uv_cid")
+            bm.verts.ensure_lookup_table()
+            for f, fp in zip(bm.faces, fpart):
+                f[lay_part] = int(fp)
+            for v in bm.verts:
+                v[lay_cid] = v.index
+            _WRAP_GRID.update(rows=spec["rows"], cols=spec["cols"])
+            for a_, b_ in fseams:
+                e = bm.edges.get((bm.verts[a_], bm.verts[b_]))
+                if e is not None:
+                    e[lay_seam] = 1
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.004)   # the two side seams
         bm.to_mesh(me)
         bm.free()
         hem_z = spec["row_y"][-1]
         slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre)
+        if wrap_pattern:
+            uv_info = pattern_uv_of_wrap(obj, centre, top_z, WRAP_ROWS.get(prm.get("kind"), "skirt"),
+                                         out / "islands.json", band=winfo["band"])
+            if cut_only:
+                return gd._plain({"cut_only": True, "uv": uv_info, "bodice": binfo, "slit_edges": int(slit_edges),
+                                  "lower_layers": len(lower), "verts": len(obj.data.vertices),
+                                  "script_wall_s": round(time.time() - t_all, 2),
+                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), \
+                    {"islands": str(out / "islands.json")}
     me = obj.data
     co0 = np.array([v.co for v in me.vertices])
     # outward normals (Solidify and the projection side test read them)

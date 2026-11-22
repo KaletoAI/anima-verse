@@ -137,6 +137,26 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
 [23] Banded direct solve (``_Banded``): the 1-D Poisson system 2 x_i - x_(i-1) - x_(i+1) = 1, i = 1..50, x_0 = x_51 = 0,
     given in a shuffled order (seed 7) -> x_i = i (51 - i) / 2: x_1 = 25, x_25 = 325, x_50 = 25 (+-1e-9); an extra
     unknown no entry touches keeps its x0 (3.5).
+[24] Step 3b layout choice (``pack(rows=ROWS["skirt"], rows_alt=ROWS_ALT["skirt"])``, margin 1.5 cm, 2048 px), the
+     islands as flat rectangles (cm): Gelina — panels 95.1 x 78.8 (x2), band 85.5 x 3.0. One row: W = 1.5 + 95.1 + 1.5 +
+     95.1 + 1.5 = 194.7 (H = 1.5 + 78.8 + 1.5 + 3.0 + 1.5 = 86.3) -> floor_0.01(2048 / 194.7 = 10.519) = 10.51. Stacked:
+     W = 1.5 + 95.1 + 1.5 = 98.1, H = 1.5 + 78.8 + 1.5 + 78.8 + 1.5 + 3.0 + 1.5 = 166.6 -> floor(12.2929) = 12.29 ->
+     stacked wins (skirt_back's top at y = (1.5 + 78.8 + 1.5) * 12.29 = 81.8 * 12.29 = 1005.322 px). Kira — 49.2 x 34.0, 48.8 x 33.9,
+     band 63.3 x 3.0: one row W = 1.5 + 49.2 + 1.5 + 48.8 + 1.5 = 102.5 -> 19.98; stacked W = 1.5 + 63.3 + 1.5 = 66.3,
+     H = 1.5 + 34.0 + 1.5 + 33.9 + 1.5 + 3.0 + 1.5 = 76.9 -> floor(26.632) = 26.63 -> stacked. A tie keeps ``rows``
+     (the same layout passed twice: s equal, positions those of ``rows``); no ``rows_alt`` = the layout as before.
+[25] ``wrap_parts`` on a 5-row, 41-column wrap, row_y 1.000 .. 0.940 (step 0.015): a skirt with ``waistband_m`` 0.03 ->
+     nb = round(2.0) = 2 waistband face rows: 320 faces = per panel 2 x 40 band (14) + 2 x 40 panel (37 front, 38
+     back); seams = the back panel's column 20 from row 0 to 2: (205 + 20, 205 + 41 + 20) = (225, 266) and (266, 307);
+     ``band`` = 3 rows of 20 + 40 + 21 = 81 ids, the first and last both 225 + 41 r (the cut). thin 0.012 -> nb =
+     round(0.8) = 1. A strapless top: 160 faces front (1) and 160 back (2), no seams. A strapless dress, waist_y 0.962:
+     the nearest row is 3 (|0.955 - 0.962| = 0.007 < |0.970 - 0.962| = 0.008) -> rows 0..2 front/back (1/2), row 3
+     skirt (37/38).
+[26] ``rows_strip_uv`` on a ring of 80 segments, radius 0.10, three vertex rows at z 0.030 / 0.015 / 0 (two face rows),
+     cut at column 0 (``split_islands`` with the column's two edges as seams): u length = 80 chords = 80 x 2 x 0.10 x
+     sin(pi / 80) = 16 x 0.0392598 = 0.628157 m (+-1e-4), v = 0.030 (+-1e-6), area ratio 1.000 and stretch p95 <= 1.001
+     (a cylinder is developable onto the strip). A cone (bottom row radius 0.11, top 0.10, height 0.03): v = the slant
+     sqrt(0.01^2 + 0.03^2) = 0.031623 (+-1e-6) up every column.
 """
 import json
 import math
@@ -671,6 +691,68 @@ got23 = [float(x23[sh[i - 1]]) for i in (1, 25, 50)]
 check("[23] x_1 25, x_25 325, x_50 25", b23.ok and all(abs(g - w) < 1e-9 for g, w in zip(got23, (25, 325, 25))),
       got23)
 check("[23] the untouched unknown keeps x0 3.5", abs(x23[N23] - 3.5) < 1e-12, x23[N23])
+
+# [24] step 3b: the layout choice
+def rect24(w_cm, h_cm):
+    return np.array([[0, 0], [w_cm / 100, 0], [w_cm / 100, h_cm / 100], [0, h_cm / 100]], float)
+
+
+gel24 = {"skirt_front": rect24(95.1, 78.8), "skirt_back": rect24(95.1, 78.8), "waistband": rect24(85.5, 3.0)}
+px24, s24 = up.pack(gel24, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"])
+check("[24] Gelina: stacked 12.29 px/cm", s24 == 12.29, s24)
+check("[24] Gelina: one row alone 10.51", up.pack(gel24, 2048, 1.5, rows=up.ROWS["skirt"])[1] == 10.51)
+check("[24] Gelina: skirt_back's top at y 1005.322", abs(px24["skirt_back"][:, 1].min() - 1005.322) < 0.01,
+      px24["skirt_back"][:, 1].min())
+kira24 = {"skirt_front": rect24(49.2, 34.0), "skirt_back": rect24(48.8, 33.9), "waistband": rect24(63.3, 3.0)}
+check("[24] Kira: one row 19.98", up.pack(kira24, 2048, 1.5, rows=up.ROWS["skirt"])[1] == 19.98)
+check("[24] Kira: stacked 26.63", up.pack(kira24, 2048, 1.5, rows=up.ROWS["skirt"],
+                                          rows_alt=up.ROWS_ALT["skirt"])[1] == 26.63)
+tie24 = up.pack(kira24, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS["skirt"])
+one24 = up.pack(kira24, 2048, 1.5, rows=up.ROWS["skirt"])
+check("[24] a tie keeps rows", tie24[1] == one24[1] and all(np.array_equal(tie24[0][n], one24[0][n]) for n in kira24))
+
+# [25] wrap_parts
+ry25 = [1.0, 0.985, 0.97, 0.955, 0.94]
+fp25, sm25, in25 = up.wrap_parts(5, 41, ry25, "skirt", 0.03)
+check("[25] skirt: 320 faces, 2 band rows", len(fp25) == 320 and in25["waistband_rows"] == 2, in25["waistband_rows"])
+check("[25] skirt: parts per panel", fp25[:160] == [14] * 80 + [37] * 80 and fp25[160:] == [14] * 80 + [38] * 80)
+check("[25] skirt: seams (225, 266), (266, 307)", sm25 == [(225, 266), (266, 307)], sm25)
+check("[25] skirt: band 3 rows x 81, cut at 225 + 41 r", len(in25["band"]) == 3
+      and all(len(r) == 81 and r[0] == r[-1] == 225 + 41 * k for k, r in enumerate(in25["band"])))
+check("[25] thin: one band row", up.wrap_parts(5, 41, ry25, "skirt", 0.012)[2]["waistband_rows"] == 1)
+fpt25, smt25, _ = up.wrap_parts(5, 41, ry25, "top")
+check("[25] strapless top: 1 / 2, no seams", fpt25 == [1] * 160 + [2] * 160 and smt25 == [])
+fpd25, _, ind25 = up.wrap_parts(5, 41, ry25, "dress", waist_y=0.962)
+check("[25] strapless dress: waist row 3", ind25["waist_row"] == 3
+      and fpd25[:160] == [1] * 120 + [37] * 40 and fpd25[160:] == [2] * 120 + [38] * 40, ind25["waist_row"])
+
+
+# [26] rows_strip_uv
+def ring26(r_top, r_bot, h=0.03, n=80):
+    zs = (h, h / 2, 0.0)
+    rs = (r_top, (r_top + r_bot) / 2, r_bot)
+    xyz = np.array([[rr * math.cos(2 * math.pi * k / n), rr * math.sin(2 * math.pi * k / n), z]
+                    for z, rr in zip(zs, rs) for k in range(n)])
+    faces = [(r * n + k, r * n + (k + 1) % n, (r + 1) * n + (k + 1) % n, (r + 1) * n + k)
+             for r in range(2) for k in range(n)]
+    isl = up.split_islands(len(xyz), faces, [14] * len(faces), [(0, n), (n, 2 * n)], xyz=xyz)
+    rows = [[r * n + k for k in range(n)] + [r * n] for r in range(3)]
+    return isl, rows, xyz, faces
+
+
+isl26, rows26, xyz26, _f26 = ring26(0.10, 0.10)
+check("[26] one island", len(isl26) == 1, len(isl26))
+uv26 = up.rows_strip_uv(isl26[0], rows26, xyz26)
+ext26 = uv26.max(axis=0) - uv26.min(axis=0)
+check("[26] u length 0.628157", abs(ext26[0] - 0.628157) < 1e-4, ext26[0])
+check("[26] v 0.030", abs(ext26[1] - 0.030) < 1e-6, ext26[1])
+tri26 = np.array([t for poly in isl26[0].corner_vid for t in up.fan(poly)])
+d26 = up.distortion(uv26, xyz26[isl26[0].vmap], tri26)
+check("[26] area 1.000, p95 <= 1.001", abs(d26["area_ratio"] - 1.0) < 1e-3 and d26["stretch_p95"] <= 1.001, d26)
+iscone, rowscone, xyzcone, _fc = ring26(0.10, 0.11)
+uvc = up.rows_strip_uv(iscone[0], rowscone, xyzcone)
+check("[26] cone: v = slant 0.031623", abs((uvc.max(axis=0) - uvc.min(axis=0))[1] - 0.031623) < 1e-6,
+      (uvc.max(axis=0) - uvc.min(axis=0))[1])
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

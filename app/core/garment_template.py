@@ -84,6 +84,12 @@ TEMPLATE_VERSION = 10
 #: bra, gloves, tights and trousers drape is re-draped ONCE (CPU, 0 hub jobs) on the next Build and gets its islands.
 #: (0 held the key of the drapes made before the islands while nothing could use them.)
 FITTED_VERSION = 1
+#: Step 3b (plan group B, B16): the panel kinds' own version, in the drape key AND the cut key of a ``panel_piece``
+#: only (``PANEL_KINDS`` and the strapless top) — so their pattern pieces re-drape these pieces once (CPU, 0 hub jobs)
+#: and no other top or fitted kind.
+#: 1: pattern-piece UVs for skirts and strapless tops (``uv_pattern.wrap_parts``: front / back panels, the waistband a
+#: ring strip; a skirt's ``waistband`` field).
+PANEL_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -109,7 +115,9 @@ UPPER_KINDS = ("top", "jacket")
 LAYER_RANK = {"skirt": 1, "trousers": 1, "dress": 1, "top": 1, "jacket": 2, "briefs": 0, "bra": 0, "gloves": 1,
               "tights": 0}
 WAIST_HEIGHTS = ("high", "natural", "low")
-SLIT_SIDES = ("none", "left", "right", "front", "back")
+#: Step 3b (B3): "front_left" / "front_right" = a slit 6 columns (0.471 rad) beside the front centre (a slit skirt, a
+#: wrap skirt's overlap edge).
+SLIT_SIDES = ("none", "left", "right", "front", "back", "front_left", "front_right")
 SLEEVES = ("none", "cap", "short", "elbow", "long")
 #: Sleeve length as a share of the arm (shoulder joint to wrist joint): a cap sleeve just covers the shoulder
 #: joint, a short one reaches a third down the upper arm, elbow = the elbow joint (half the arm on the reference
@@ -258,9 +266,12 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: ``garment_cut_texture.TRIM_PARTS``): plain = the main panels' fabric patch, picture = the answer, for an item whose
 #: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
-#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top, and since
-#: step 3a every fitted kind; a jacket and a dress with a bodice keep the grid UV until step 3b of the pattern plan.
-PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers")
+#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top (since
+#: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt; a jacket
+#: and a dress keep the grid UV until their phase of plan group B.
+PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers", "skirt")
+#: Step 3b: the kinds whose pattern pieces come from the panel construction (``PANEL_VERSION``, ``panel_piece``).
+PANEL_KINDS = ("skirt",)
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
 TEXTURE_ONLY = ("fly", "texture", "sleeve_print")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
@@ -368,7 +379,8 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
 #: The fields that mean something per kind (the dialog shows these; ``validate_params`` resets the others to their
 #: defaults so a stale field never changes the drape key).
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
-    "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
+    "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "waistband",
+              "texture", "sleeve_print"),
     "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "seat", "fit", "trouser_waist",
                  "fly", "hem", "texture", "sleeve_print"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
@@ -472,6 +484,13 @@ def has_bodice(params: Dict[str, Any]) -> bool:
 def strapless_top(params: Dict[str, Any]) -> bool:
     """A221: a top with nothing over the shoulders (bodice, bustier, corset)."""
     return params["kind"] == "top" and params["shoulders"] == "strapless"
+
+
+def panel_piece(params: Dict[str, Any]) -> bool:
+    """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a strapless
+    top. Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live ``uv_pattern.py``."""
+    return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
+                                                 and params.get("shoulders") == "strapless")
 
 
 def corset_top(params: Dict[str, Any]) -> bool:
@@ -879,7 +898,8 @@ def tucked_into_shoes(params: Optional[Dict[str, Any]]) -> bool:
 #: shows for a piece with no stored parameters and what a kind change resets to. Lengths are measured as in
 #: ``PARAM_SPEC`` (top / jacket from the shoulder line down: 0.6 m ends at the hip on the 1.70 m reference body).
 KIND_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "skirt": {},
+    # step 3b (B2): every skirt picture of the world shows a waistband
+    "skirt": {"waistband": "wide"},
     "trousers": {"fabric": "stiff"},
     "dress": {"length_m": 0.6, "shoulders": "straps"},
     "top": {"length_m": 0.6, "sleeves": "short", "fit": 0.4, "shoulders": "covered"},
@@ -1862,6 +1882,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if params.get("kind") in FITTED_KINDS and FITTED_VERSION:
         # step 3a (D7 b): the fitted kinds' own version — only their drapes are due again (0 = the keys before it)
         payload["fitted"] = FITTED_VERSION
+    if panel_piece(params):
+        # step 3b (B16): the panel kinds' own version — only skirts and strapless tops are due again
+        payload["panels"] = PANEL_VERSION
     return _md5(payload)
 
 
@@ -2430,9 +2453,11 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
-            # pattern-piece UV islands for a top and the fitted kinds; a jacket and a dress with a bodice keep the grid
-            # UV until step 3b
-            "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid"}
+            # pattern-piece UV islands for a top, the fitted kinds and a skirt; a jacket and a dress keep the grid UV
+            # until their phase of plan group B
+            "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid",
+            # step 3b (B2): a skirt's waistband rows (``uv_pattern.wrap_parts``); read before the cut
+            **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {})}
 
 
 def work_wall_s(data: Dict[str, Any]) -> Optional[float]:

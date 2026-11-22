@@ -16,9 +16,9 @@ is out of date and is re-draped by the next Build).
 ### Which pieces get them — `uv_mode`
 
 `garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for `top`, `briefs`, `bra`, `gloves`,
-`tights`, `trousers` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a), `"grid"` for every other
-kind (skirt, jacket, dress). `"grid"` is staging, not a compat path: step 3b of the plan moves the rest to the
-pattern UV and removes it.
+`tights`, `trousers`, `skirt` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a; a skirt and a
+strapless top since step 3b, section 1b), `"grid"` for every other kind (jacket, dress). `"grid"` is staging, not a
+compat path: the later phases of plan group B move the rest to the pattern UV and remove it.
 
 ### Parts come from the construction
 
@@ -75,6 +75,10 @@ Parts (`uv_pattern.PARTS`; `STRIP_PARTS` get a construction-strip UV, the rest a
 | 34 | `top_band_r` | strip | step 3a (stay-ups) |
 | 35 | `thumb_l` | panel | step 3a (gloves) |
 | 36 | `thumb_r` | panel | step 3a (gloves) |
+| 37 | `skirt_front` | panel | step 3b (skirt; a dress's skirt part) |
+| 38 | `skirt_back` | panel | step 3b (skirt; a dress's skirt part) — back job |
+| 39 | `left_front` | panel | step 3b (an open jacket's left front; reserved) |
+| 40 | `right_front` | panel | step 3b (an open jacket's right front; reserved) |
 
 ### Flattening and orientation
 
@@ -134,9 +138,9 @@ Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut read
 No sig — and no Blender run — while a lower template layer is still to be draped (state `missing`): the next Build
 drapes it first and lays this piece out of it, so a cut made now would differ from that drape; the dialog says
 "Waiting for the layers under it to be draped" (`WAITING_LOWER`). A failed or blocked lower layer is no collider of
-the drape either, so the cut goes on without it. A strapless top (no bodice: the builder cuts it on the grid UV) and
-every kind outside `PATTERN_KINDS` get their plain reason (`NO_PATTERN_STRAPLESS` / `NO_PATTERN`) and are never run;
-a fitted piece needs no bodice (its cut is `build_fitted`'s, section 1a).
+the drape either, so the cut goes on without it. Every kind outside `PATTERN_KINDS` gets its plain reason
+(`NO_PATTERN`) and is never run; a fitted piece needs no bodice (its cut is `build_fitted`'s, section 1a), a skirt and a
+strapless top are cut by `wrap` (section 1b).
 `garment_template_cut.sig_of` is the one rule for the cut and for the drape's record.
 
 Not in it: the views and the item picture (the drape key's texture part), `opacity`, `texture`, `sleeve_print`,
@@ -244,12 +248,45 @@ islands (c926b67f0). Step 3a's additions leave the tops' islands byte-identical,
 `cut_behind` for them; a later change that alters a top's islands fails `scripts/smoke_uv_pattern.py` [21] and moves
 the pinned sha and that smoke's base commit together.
 
+## 1b. Step 3b: skirts and strapless tops (plan group B, phase A)
+
+A skirt and a strapless top (`shoulders` strapless: bodice, bustier, corset) are built by `wrap` — two pygarment panels
+(front, back; each 41 columns over half the circumference, a column = pi / 40) wrapped round the body axis, their side
+seams merged by `remove_doubles`. `uv_pattern.wrap_parts` labels every face BEFORE that merge (the bmesh int layers
+`uv_part` / `uv_seam` / `uv_cid` ride through it and through `split_slit`):
+
+- skirt: front panel `skirt_front` (37), back panel `skirt_back` (38); the waistband (14) is the top
+  `max(1, round(WAISTBAND_M[waistband] / row step))` face rows of both panels (thin 1.2 cm -> 1 row of 1.5 cm, wide
+  3 cm -> 2 rows), opened at the back centre (the back panel's column 20 = pi / 2). The band's vertex rows hug the
+  body like the pinned top row (`TOP_CLEAR_M`, 6 mm): a band standing off by `ROW_CLEAR_M` under a top row at 6 mm was
+  a cone its strip could not unroll. Its UV is a construction strip over all its rows (`rows_strip_uv`: u along the
+  mid line, v the slant up each column); on a low (hip) waist the band is still a cone — stretch p95 1.2–1.5 there,
+  recorded, not gated (the band is filled with the panels' fabric unless `sleeve_print` is "picture").
+- strapless top: front `front` (1), back `back` (2); a sweetheart dip stays in the front panel.
+- a strapless dress (staged for phase D): the bodice above the row nearest `outline.waist_y` front / back, the skirt
+  part under it `skirt_front` / `skirt_back`.
+
+The panels are flattened round the vertical line through the body centre (+Z up). Layout: `pack` tries the kind's rows
+(`ROWS["skirt"]` = the two panels side by side, the band under them; `ROWS["strapless"]` = front, back) AND
+`ROWS_ALT["skirt"]` (the panels stacked) and keeps the larger px/cm — a wide skirt fills the square stacked.
+New slit sides `front_left` / `front_right` (`SLIT_SIDES`): 6 columns (0.471 rad) beside the front centre
+(`SLIT_ANGLE`) — a slit skirt, a wrap skirt's overlap edge; `left` / `right` lie on the side seams.
+
+**Keys.** `PANEL_VERSION` = **1** is in `tsig` AND `cut_sig` of a panel piece (`panel_piece`: `PANEL_KINDS` =
+(`skirt`,) and the strapless top), so every existing skirt and strapless top is re-draped ONCE on the next Build (CPU,
+0 hub jobs); no other top and no fitted kind moves. Their cut keys the live `UV_PATTERN_SHA`. A skirt's new fields:
+`waistband` (a new skirt defaults to `wide`; a saved skirt keeps the `thin` it was filled with) and `texture`.
+
+Measured on copies of the world's bodies (cut only, 0 hub jobs): Kira's slit skirt 24.56 px/cm, Rosi's pencil skirt
+20.25, Gelina's circle skirt 12.02 (stacked), Ylva's wrap skirt 13.30, Tilda's wool skirt 13.88, Rosi's corset top
+16.82; panels area 0.97–1.00, stretch p95 1.03–1.28.
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`
 
 The template param `texture` chooses where a pattern piece's texture comes from (a top; since group A every fitted
-kind, section 1a): `"projection"` (default — the projection bake
+kind, section 1a; since group B a skirt, section 1b): `"projection"` (default — the projection bake
 of the piece-only views, always made and always inside the drape GLB) or `"cut"` (the cut atlas, swapped in at
 assembly). It is in `TEXTURE_ONLY`: changing it costs no drape and no job, only a CPU re-assemble
 (`garment_assembly` keeps `texture` = `"projection"` / `"cut:<csig>"` in its assembly state, `_apply_cut_atlas` puts

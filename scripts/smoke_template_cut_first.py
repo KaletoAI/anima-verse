@@ -58,9 +58,10 @@ equal.py``. Every expectation is derived by hand below.
     (after the atlas: the cut changed since) -> "stale" (the atlas is out of date), never the atlas.
 [5] Review findings 2026-11-21 — what the cut is keyed by (``sig_of`` / ``cut_key``), collider states stubbed
     (``collider_states``: one lower template layer "bra1" with drape key "tb"; no own-mesh fit; no chest shaping):
-    [5.1] a strapless top (kind top, shoulders strapless: ``has_bodice`` False) -> ``cut_key`` sig None with
-          NO_PATTERN_STRAPLESS before any profile / body is read; ``state`` "blocked"; ``schedule`` runs nothing;
-          ``sig_of`` the same reason. A skirt keeps NO_PATTERN.
+    [5.1] a jacket (not a ``PATTERN_KINDS`` kind until phase C of plan group B) -> ``cut_key`` sig None with
+          NO_PATTERN before any profile / body is read; ``state`` "blocked"; ``schedule`` runs nothing; ``sig_of``
+          the same reason. Step 3b: a strapless top (``has_bodice`` False) and a skirt are pattern pieces now
+          (``panel_piece``, ``PATTERN_KINDS``) — no reason stops them before the profile.
     [5.2] the bra "missing" (the next Build drapes it first) -> ``sig_of`` (None, WAITING_LOWER); with
           ``wait=False`` (the drape's record) the sig of tokens ["bra1:tb"] = cut_sig(TOP, "b0", ["bra1:tb"]).
     [5.3] the bra "ready" -> tokens ["bra1:tb", "collider:bra1"] (under_tokens gives "bra1:tb"; the top is no fitted
@@ -142,7 +143,7 @@ cut_at = run_src.rindex("if cut_only:")
 before = run_src[:cut_at]
 read = set(re.findall(r'prm\["(\w+)"\]', before)) | set(re.findall(r'prm\.get\("(\w+)"', before))
 allowed = {"progress_file", "spec", "lower_offsets", "lower_shapes", "torso_half_m", "thickness", "uv_mode", "node",
-           "slit", "cut_only"}
+           "slit", "cut_only", "kind", "waistband_m"}
 check("[1.1] the cut reads only the cut's build args", read <= allowed and "spec" in read and "slit" in read,
       sorted(read))
 drape_only_args = {"fabric", "drape_quality", "frames", "poses", "shape_groups", "smooth_weights", "render"}
@@ -176,8 +177,8 @@ diff = {k for k in set(ba_m) | set(ba_s) if json.dumps(ba_m.get(k), sort_keys=Tr
 check("[1.2] fabric changes only the cloth args (fabric, drape_quality)", diff <= {"fabric", "drape_quality"}
       and "fabric" in diff, sorted(diff))
 check("[1.2] DRAPE_ONLY is ('fabric',)", gtc.DRAPE_ONLY == ("fabric",), gtc.DRAPE_ONLY)
-check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (step 3a)",
-      ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS, gt.PATTERN_KINDS)
+check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (step 3a) + skirt (step 3b)",
+      ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS + ("skirt",), gt.PATTERN_KINDS)
 
 uvp_sha = hashlib.md5((ROOT / "app" / "blender" / "scripts" / "uv_pattern.py").read_bytes()).hexdigest()[:12]
 try:
@@ -483,6 +484,7 @@ with patch.object(gtc, "cut_key", key_stub), \
 
 # ---------------------------------------------------------------------------------------------------- [5]
 STRAPLESS = gt.validate_params({"kind": "top", "shoulders": "strapless", "length_m": 0.3})[0]
+JACKET = gt.validate_params({"kind": "jacket"})[0]
 check("[5.1] the strapless top has no bodice", gt.has_bodice(STRAPLESS) is False and STRAPLESS["kind"] == "top")
 
 
@@ -496,20 +498,20 @@ def no_profile(*_a, **_k):
 
 with patch("app.models.character.get_character_profile", no_profile), \
         patch("app.core.base_body.current_base", no_profile):
-    k51 = gtc.cut_key(CHAR, "strap1", item=tmpl_item(STRAPLESS), profile=None)
-    check("[5.1] strapless: no sig, NO_PATTERN_STRAPLESS, no profile read", k51["sig"] is None
-          and k51["reason"] == gtc.NO_PATTERN_STRAPLESS, k51["reason"])
-    s51 = gtc.state(CHAR, "strap1", key=k51)
-    check("[5.1] strapless: state blocked with the plain reason", s51["state"] == "blocked"
-          and s51["reason"] == gtc.NO_PATTERN_STRAPLESS, s51)
-    ksk = gtc.cut_key(CHAR, "skirt1", item=tmpl_item({"kind": "skirt"}), profile=None)
-    check("[5.1] a skirt keeps NO_PATTERN", ksk["sig"] is None and ksk["reason"] == gtc.NO_PATTERN, ksk["reason"])
+    k51 = gtc.cut_key(CHAR, "jack1", item=tmpl_item(JACKET), profile=None)
+    check("[5.1] jacket: no sig, NO_PATTERN, no profile read", k51["sig"] is None
+          and k51["reason"] == gtc.NO_PATTERN, k51["reason"])
+    s51 = gtc.state(CHAR, "jack1", key=k51)
+    check("[5.1] jacket: state blocked with the plain reason", s51["state"] == "blocked"
+          and s51["reason"] == gtc.NO_PATTERN, s51)
 n = len(RUNS)
 with patch.object(gtc, "cut_key", lambda c, i, **k: k51):
-    check("[5.1] strapless: schedule runs nothing", gtc.schedule(CHAR, "strap1", runner=fake_cut_run)["state"]
+    check("[5.1] jacket: schedule runs nothing", gtc.schedule(CHAR, "jack1", runner=fake_cut_run)["state"]
           == "blocked" and len(RUNS) == n)
-check("[5.1] sig_of: the same reason for a strapless top",
-      gtc.sig_of(CHAR, "strap1", STRAPLESS, base_sha="b0", lower=[]) == (None, gtc.NO_PATTERN_STRAPLESS, []))
+check("[5.1] sig_of: the same reason for a jacket",
+      gtc.sig_of(CHAR, "jack1", JACKET, base_sha="b0", lower=[]) == (None, gtc.NO_PATTERN, []))
+check("[5.1] step 3b: a strapless top and a skirt are pattern pieces (no NO_PATTERN reason before the profile)",
+      gt.panel_piece(STRAPLESS) and "skirt" in gt.PATTERN_KINDS)
 
 BRA = {"state": "missing", "tsig": "tb"}
 

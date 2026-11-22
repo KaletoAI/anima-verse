@@ -891,7 +891,7 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           and "texture" in gt.KIND_FIELDS["top"] and p_cut.get("texture") == "cut" and not e_proj and not e_cut
           and gt.validate_params({"kind": "top"})[0].get("texture") == "projection", gt.PARAM_SPEC.get("texture"))
     check("[9.1] another kind keeps the default",
-          gt.validate_params({"kind": "skirt", "texture": "cut"})[0].get("texture") == "projection")
+          gt.validate_params({"kind": "jacket", "texture": "cut"})[0].get("texture") == "projection")
     check("[9.1] an unknown value is an error", gt.validate_params({"kind": "top", "texture": "paint"})[1] != [])
     check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print"), gt.TEXTURE_ONLY)
     k_proj = gt.tsig(p_proj, base_sha="b", texture_sha="t", lower=[])

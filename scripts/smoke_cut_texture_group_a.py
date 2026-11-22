@@ -12,7 +12,8 @@ Hand-derived expectations:
     trousers' ``tsig`` equals md5 of ``{params, version, base, texture, lower, fitted: 1}`` and differs from the same
     payload without the key; a top's ``tsig`` has no such key (md5 of the payload without it). ``texture`` is
     ``TEXTURE_ONLY``: "cut" and "projection" give the same trousers ``tsig``.
-[3] Prompt families: ``prompt_family`` "top" for top / dress, "fitted" for the five fitted kinds; ``PROMPT_SHA`` (the
+[3] Prompt families: ``prompt_family`` "top" for a top with a bodice, "fitted" for the five fitted kinds (and since
+    group B a skirt and a strapless top, ``item_kind`` "strapless"); ``PROMPT_SHA`` (the
     top's) is still md5 of the three top files joined by NUL — a top atlas keeps its csig; the fitted sha is md5 of the
     three fitted files and differs; ``csig`` of the same inputs differs between the two families.
 [4] ``main_words`` on a hand-made trousers FRONT payload (2048 px): front_r bbox [100, 100, 500, 1000] area 3000 cm²,
@@ -23,8 +24,8 @@ Hand-derived expectations:
     A bra whose right strap (area 300) is larger than the left cup (area 200): the cups are not the two largest, so
     the phrase names their places — cup_r centre (300, 200) -> "at the top left", cup_l centre (1700, 200) -> "at the
     top right": "the shapes at the top left and at the top right".
-[5] Parts: the front job's MAIN parts are front / front_l / front_r / leg_* / cup_* / glove_back_*, the back job's
-    back / back_l / back_r / palm_*; ``model_parts("front", "plain")`` holds front_l, cup_top_r (a balconette's upper
+[5] Parts: the front job's MAIN parts are front / front_l / front_r / leg_* / cup_* / glove_back_* (group B adds
+    skirt_front / left_front / right_front), the back job's back / back_l / back_r / palm_* (group B: skirt_back); ``model_parts("front", "plain")`` holds front_l, cup_top_r (a balconette's upper
     cup), collar, but no waistband / gusset / strap / thumb / sleeve; with "picture" all of ``TRIM_PARTS`` join
     (waistband, gusset, strap_l, thumb_r, sleeve_l, cuff_r) — and a top's neckband "band" is never one of them.
 [6] The fabric patch is cut from the MAIN parts: on a 100 px raster of the trousers payload scaled 1/20.48
@@ -104,8 +105,8 @@ check("[2] texture is TEXTURE_ONLY", gt.tsig({**tp, "texture": "cut"}, base_sha=
       gt.tsig({**tp, "texture": "projection"}, base_sha="b", texture_sha="t", lower=[]))
 
 # [3]
-check("[3] families", [gct.prompt_family(k) for k in ("top", "dress", *gt.FITTED_KINDS)],
-      ["top", "top"] + ["fitted"] * len(gt.FITTED_KINDS))
+check("[3] families", [gct.prompt_family(k) for k in ("top", "skirt", "strapless", *gt.FITTED_KINDS)],
+      ["top", "fitted", "fitted"] + ["fitted"] * len(gt.FITTED_KINDS))
 top_texts = [gct.PROMPT_FILES[v].read_text(encoding="utf-8") for v in ("front_plain", "front_decorated", "back")]
 fit_texts = [gct.FITTED_PROMPT_FILES[v].read_text(encoding="utf-8") for v in ("front_plain", "front_decorated", "back")]
 check("[3] PROMPT_SHA = md5 of the top files", gct.PROMPT_SHA, hashlib.md5("\0".join(top_texts).encode()).hexdigest())
@@ -138,8 +139,9 @@ check("[4] bra (a strap larger than a cup)", gct.main_words(BRA, "front")["phras
 
 # [5]
 check("[5] main front", gct.MAIN_PARTS["front"], ("front", "front_r", "front_l", "leg_r", "leg_l", "cup_r", "cup_l",
-                                                  "glove_back_r", "glove_back_l"))
-check("[5] main back", gct.MAIN_PARTS["back"], ("back", "back_l", "back_r", "palm_l", "palm_r"))
+                                                  "glove_back_r", "glove_back_l", "skirt_front", "left_front",
+                                                  "right_front"))
+check("[5] main back", gct.MAIN_PARTS["back"], ("back", "back_l", "back_r", "palm_l", "palm_r", "skirt_back"))
 plain = gct.model_parts("front", "plain")
 check("[5] plain model parts", [p in plain for p in ("front_l", "cup_top_r", "collar", "waistband", "gusset", "strap_l",
                                                      "thumb_r", "sleeve_l")],

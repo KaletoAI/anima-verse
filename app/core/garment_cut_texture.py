@@ -110,6 +110,8 @@ PART_LABELS = {
     "glove_back_l": "Back of hand left", "glove_back_r": "Back of hand right", "palm_l": "Palm left",
     "palm_r": "Palm right", "thumb_l": "Thumb left", "thumb_r": "Thumb right", "hip_band_l": "Hip band left",
     "hip_band_r": "Hip band right", "top_band_l": "Top band left", "top_band_r": "Top band right",
+    # step 3b (plan group B): a skirt's panels, an open jacket's fronts
+    "skirt_front": "Skirt front", "skirt_back": "Skirt back", "left_front": "Left front", "right_front": "Right front",
 }
 
 
@@ -125,10 +127,10 @@ def island_ids(islands: dict) -> dict[str, int]:
 
 
 def prompt_family(kind) -> str:
-    """The prompt family of a pattern kind: "fitted" for the close-fitting kinds (``garment_template.FITTED_KINDS``),
-    "top" for every other."""
-    from app.core import garment_template as gt
-    return "fitted" if str(kind or "") in gt.FITTED_KINDS else "top"
+    """The prompt family of a piece's prompt kind (``item_kind``): "top" for a top with a bodice — its tested files —,
+    "fitted" for every other (the close-fitting kinds since group A; since group B a skirt and a strapless top,
+    ``item_kind`` "strapless": their main pieces are named by where they lie, their small pieces kept plain)."""
+    return "top" if str(kind or "") == "top" else "fitted"
 
 
 def prompt_sha_of(kind) -> str:
@@ -244,6 +246,9 @@ PROMPT_PIECE_NAMES = {
     "waistband": "waistband", "band_r": "right band", "band_l": "left band", "strap_r": "right strap",
     "strap_l": "left strap", "hip_band_r": "right hip band", "hip_band_l": "left hip band",
     "top_band_r": "right top band", "top_band_l": "left top band", "cuff_r": "right cuff", "cuff_l": "left cuff",
+    # step 3b (plan group B)
+    "skirt_front": "front skirt panel", "skirt_back": "back skirt panel", "left_front": "left front panel",
+    "right_front": "right front panel",
 }
 
 
@@ -780,7 +785,7 @@ JOBS = ("front", "back")
 #: Every other island goes with the FRONT job: the sleeves (the item picture shows them, with any print or cuff detail on
 #: their visible side; a sleeve is one tube whose front and back halves are the same island, so it cannot follow the
 #: back view for one half only), the neckband, collar, placket and cuffs.
-BACK_PARTS = ("back", "back_l", "back_r", "palm_l", "palm_r")
+BACK_PARTS = ("back", "back_l", "back_r", "palm_l", "palm_r", "skirt_back")
 #: Picture 2 of each job.
 JOB_REFERENCE = {"front": "item", "back": "back_view"}
 
@@ -1092,10 +1097,14 @@ def _islands_of(pattern: dict) -> dict:
 
 
 def item_kind(item_id: str) -> str:
-    """The piece's template kind ("" without parameters)."""
+    """The piece's prompt kind: its template kind, "strapless" for a strapless top (cut by ``wrap`` into a front and a
+    back panel, group B) — "" without parameters."""
     from app.core import garment_template as gt
     from app.models.inventory import get_item
-    return str((gt.params_of(get_item(item_id)) or {}).get("kind") or "")
+    params = gt.params_of(get_item(item_id)) or {}
+    if params.get("kind") == "top" and params.get("shoulders") == "strapless":
+        return "strapless"
+    return str(params.get("kind") or "")
 
 
 def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict | None = None,
@@ -1230,14 +1239,28 @@ def piece_name(item_id: str) -> str:
 
 
 def piece_name_of(params: dict) -> str:
-    """The English name of a piece from its template params: a top by its sleeve length; step 3a the close-fitting
-    kinds by their cut (briefs: boxer / string / thong / high-leg; a bra by its cup; gloves by fingers and length;
+    """The English name of a piece from its template params: a top by its sleeve length (a strapless one: "corset top" /
+    "strapless top"), a skirt by its flare and length (group B); step 3a the close-fitting kinds by their cut (briefs: boxer / string / thong / high-leg; a bra by its cup; gloves by fingers and length;
     tights by style and foot; trousers by length and leg)."""
     p = params or {}
     kind = str(p.get("kind") or "garment")
+    if kind == "top" and p.get("shoulders") == "strapless":
+        # group B (A4): a straight / sweetheart edge cut tight is a corset top
+        tight = float(p.get("fit", 0.4)) <= 0.2 and p.get("neckline") in ("straight", "sweetheart")
+        return "corset top" if tight else "strapless top"
     if kind == "top":
         return {"none": "sleeveless top", "cap": "T-shirt", "short": "T-shirt", "elbow": "elbow-sleeve shirt",
                 "long": "long-sleeve shirt"}.get(str(p.get("sleeves") or "short"), "top")
+    if kind == "skirt":
+        # group B (A4): by flare and length; a slit does not change the name
+        flare, length = float(p.get("flare", 0.3)), float(p.get("length_m", 0.5))
+        if flare >= 0.6:
+            base = "circle skirt"
+        elif flare <= 0.1:
+            base = "pencil skirt" if length <= 0.45 else "straight skirt"
+        else:
+            base = "A-line skirt"
+        return f"long {base}" if length >= 0.75 and base != "pencil skirt" else base
     if kind == "briefs":
         if float(p.get("leg_length_m") or 0.0) > 0:
             return "boxer briefs"
@@ -1456,11 +1479,12 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
 #: The MAIN pieces of each job — what its gates measure (colour, detail), what its fabric patch is cut from, what a
 #: decorated prompt names: a top's front / back panel; group A (2026-11-21) the close-fitting kinds' large pieces —
 #: the trousers' (and boxers') front_l + front_r / back_l + back_r, a brief's front / back, the tights' legs, the
-#: bra's cups (a bandeau's front / back), the gloves' backs of the hand / palms. Part names are unique across kinds,
-#: so a pattern finds its own without its kind.
+#: bra's cups (a bandeau's front / back), the gloves' backs of the hand / palms; group B a skirt's skirt_front /
+#: skirt_back (a dress's skirt part beside its bodice) and an open jacket's left_front + right_front. Part names are
+#: unique across kinds, so a pattern finds its own without its kind.
 MAIN_PARTS = {"front": ("front", "front_r", "front_l", "leg_r", "leg_l", "cup_r", "cup_l", "glove_back_r",
-                        "glove_back_l"),
-              "back": ("back", "back_l", "back_r", "palm_l", "palm_r")}
+                        "glove_back_l", "skirt_front", "left_front", "right_front"),
+              "back": ("back", "back_l", "back_r", "palm_l", "palm_r", "skirt_back")}
 #: User test 2026-11-21 — the parts of each job whose pixels come from the model's answer: the main pieces, a top's
 #: collar and placket, a balconette's upper cups (the lace / trim sits on them); every other island of the job (the
 #: sleeves, the neckband, the cuffs; group A's small pieces ``TRIM_PARTS``) is filled with the seamless fabric patch

@@ -121,8 +121,8 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
        1.17638 * 0.66 / 0.76 = 0.92774 < 0.9178 + 0.02 = 0.9378 -> 0.9378; y 0.80 (h 0.64): cone 1.94933 -
        0.99063 = 0.95870 > 0.9459 -> 0.9587. Knots: hem + the 13 samples 0.66 .. 0.90 + top = 15.
 [15] Pattern-piece UVs (plan 2026-11-20-template-cut-uv-texture, Task 3): ``build_args`` sends ``uv_mode`` "pattern"
-     for a top and "grid" for a jacket, a covered dress with sleeves and a skirt (they keep the grid UV until step
-     3). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
+     for a top and "grid" for a jacket and a covered dress with sleeves (they keep the grid UV until their phase of
+     plan group B; a skirt is a pattern kind since step 3b, [17]). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
      ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
      grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
@@ -134,6 +134,18 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      briefs, bra, gloves, tights and trousers alike. A top carries no ``fitted`` component: its ``tsig`` still equals
      the one ``garment_template.py`` of the base commit c926b67f0 gives (read with ``git show``; skipped with a note
      without git) — no top re-drapes.
+[17] Step 3b (plan group B, Phase A — skirts and strapless tops cut into pattern pieces):
+     [17.1] ``build_args`` sends ``uv_mode`` "pattern" for a skirt and a strapless top, and a skirt's
+            ``waistband_m`` = ``WAISTBAND_M[waistband]`` (wide 0.03, thin 0.012); a top with a bodice gets no
+            ``waistband_m`` key.
+     [17.2] ``PANEL_VERSION`` is 1: a skirt's / a strapless top's ``tsig`` is md5 of the [16] payload PLUS
+            ``"panels": 1`` (and differs from it); a top with sleeves carries none (its key is the base commit's,
+            [16]); a fitted kind none either.
+     [17.3] ``validate_params({"kind": "skirt"})`` keeps the PARAM_SPEC waistband "thin" (a saved skirt is unchanged);
+            ``kind_defaults("skirt")["waistband"]`` is "wide" (a new skirt, B2); "waistband" and "texture" are skirt
+            fields; ``slit`` "front_left" / "front_right" are valid (not reset to "none").
+     [17.4] The builder's ``SLIT_ANGLE`` (read from the source, evaluated with ``math``): front_left - 1.5 pi =
+            6 * pi / 40 = 0.471239 (+-1e-6) = 6 columns of ``split_slit``'s pi / 40 step; front_right = 1.5 pi - the same.
 """
 import json
 import shutil
@@ -630,7 +642,7 @@ check("[14] Gelina: panel top row = 0.8417 / 2", close(gg[0][-1][0] - gg[0][0][0
 # [15] pattern-piece UVs: uv_mode, the islands file beside the drape
 _top15, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
 check("[15] top -> uv_mode pattern", gt.build_args(_top15, gt.panel_spec(_top15, MU), item_id="x").get("uv_mode") == "pattern")
-for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleeves": "short"}, {"kind": "skirt"}):
+for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleeves": "short"}):
     _p15, _ = gt.validate_params(_kw)
     check(f"[15] {_kw['kind']} -> uv_mode grid",
           gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "grid")
@@ -673,6 +685,39 @@ else:
               == _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
     finally:
         shutil.rmtree(_d16, ignore_errors=True)
+# [17] step 3b: skirts and strapless tops
+_sk17 = gt.validate_params({"kind": "skirt", "waistband": "wide"})[0]
+_ba17 = gt.build_args(_sk17, gt.panel_spec(_sk17, MU), item_id="x")
+check("[17.1] skirt -> uv_mode pattern, waistband_m 0.03", _ba17.get("uv_mode") == "pattern"
+      and _ba17.get("waistband_m") == 0.03, (_ba17.get("uv_mode"), _ba17.get("waistband_m")))
+_sl17 = gt.validate_params({"kind": "top", "shoulders": "strapless"})[0]
+check("[17.1] strapless top -> uv_mode pattern, no waistband_m",
+      gt.build_args(_sl17, gt.panel_spec(_sl17, MU), item_id="x").get("uv_mode") == "pattern"
+      and "waistband_m" not in gt.build_args(_sl17, gt.panel_spec(_sl17, MU), item_id="x"))
+check("[17.1] a top with a bodice: no waistband_m", "waistband_m" not in gt.build_args(
+    _top15, gt.panel_spec(_top15, MU), item_id="x"))
+check("[17.2] PANEL_VERSION is 1", gt.PANEL_VERSION == 1, gt.PANEL_VERSION)
+for _p17 in (_sk17, _sl17):
+    _pre17 = {"params": gt.keyed_params(_p17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+              "lower": ["a", "b"]}
+    _got17 = gt.tsig(_p17, **_kw16)
+    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1",
+          _got17 == gt._md5({**_pre17, "panels": 1}) and _got17 != gt._md5(_pre17))
+check("[17.2] a top with sleeves and a fitted kind are no panel piece",
+      not gt.panel_piece(_top15) and not gt.panel_piece(gt.validate_params({"kind": "briefs"})[0]))
+check("[17.3] a saved skirt keeps waistband thin", gt.validate_params({"kind": "skirt"})[0]["waistband"] == "thin")
+check("[17.3] a new skirt: waistband wide", gt.kind_defaults("skirt")["waistband"] == "wide")
+check("[17.3] waistband + texture are skirt fields", {"waistband", "texture"} <= set(gt.KIND_FIELDS["skirt"]))
+for _side17 in ("front_left", "front_right"):
+    check(f"[17.3] slit {_side17} is valid",
+          gt.validate_params({"kind": "skirt", "slit": _side17, "slit_m": 0.2})[0]["slit"] == _side17)
+import math as _m17  # noqa: E402
+import re as _re17  # noqa: E402
+_b17 = (ROOT / "app" / "blender" / "scripts" / "garment_template_build.py").read_text(encoding="utf-8")
+_sa17 = eval(_re17.search(r"^SLIT_ANGLE = (\{.*?\})$", _b17, _re17.S | _re17.M).group(1), {"math": _m17})
+check("[17.4] SLIT_ANGLE front_left - 1.5 pi = 0.471239", abs(_sa17["front_left"] - 1.5 * _m17.pi - 0.471239) < 1e-6,
+      _sa17["front_left"] - 1.5 * _m17.pi)
+check("[17.4] SLIT_ANGLE front_right = 1.5 pi - 0.471239", abs(1.5 * _m17.pi - _sa17["front_right"] - 0.471239) < 1e-6)
 import hashlib  # noqa: E402
 _t15 = Path(tempfile.mkdtemp(prefix="smoke-template-islands-"))
 _saved15 = {k: getattr(gt, k) for k in ("templates_dir", "drape_with_fallback", "texture_sources")}
