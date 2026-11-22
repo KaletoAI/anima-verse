@@ -3,9 +3,10 @@
 Status (2026-11-21, branch `eprompt`, base `7fc7c386d`): **Phase 1 and Phase 2 implemented** — C1–C9, C11 (only
 `gate_attempts` itself and the cut texture use it) and the dialect column of the routing overview's DATA
 (`_explain_one`). Live E2E on copies of Kai and Dario passed (§10). Open: C10 (the dialog's attempts list — needs a
-frontend build), the overview's dialect column in `static/admin/settings.js`, C11's nine other loops, C12, C13 (an admin
+frontend build), the overview's dialect column in `static/admin/settings.js`, C13 (an admin
 action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_backend path) and C17–C19 (re-renders, scene view, pose check; the
-secret-diary pack line of C18 is a patch for the private repo) landed on branch `chatimg` (§4).
+secret-diary pack line of C18 is a patch for the private repo) landed on branch `chatimg` (§4), and so did C11's other loops
+and C12 (§7, smoke `scripts/smoke_gate_attempt_entries.py`).
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -194,7 +195,8 @@ the top's `PROMPT_SHA` is unchanged.
 
 Mechanism (exists): `routing.retry_attempt(n)` aims `run_routed` at the n-th USABLE entry (clamped to the last). `route_meta` writes `attempt_entry {attempt, aimed_position, position}`. Landing on the aimed entry is not `fallback_from`; landing behind it is. An explicit pick ignores the attempt.
 
-- New `routing.gate_attempts(n: int) -> Iterator[int]`. It yields 1..n, each inside `retry_attempt`, and stops at the caller's `break`. It replaces the loops in `garment_images.py:987-992`/`:1905-1917`, `garment_beard.py:256`, `garment_template_views.py:301`, `shell_base_views.py:233`, and `base_body.py:1450`/`:3401`/`:4538`/`:4547`, with the same behaviour.
+- `routing.gate_attempts(n: int) -> Iterator[int]` yields 1..n, the loop body of attempt k running as `retry_attempt(k)`, and stops at the caller's `break` (or a raise / `return`). The gated loops run on it: `garment_images._render_edit_step` (ghost edit) and `_drafted_back` (draft + composite; attempt 1 may be the stored draft), `garment_beard.beard_free_input`, `garment_template_views.generate` (`_render` no longer sets the attempt), `shell_base_views.ensure`, `base_body.generate_base_images` (hand gate on the front) and `base_body._dress_view` (attempt 1 may be the stored draft's composite: `if n < first: continue`). Each loop keeps its own gate, records and files.
+- **Nested attempts continue the count.** `gate_attempts` started inside attempt m of an outer step runs its attempt k as `m + k - 1`. The view guard (`base_body._guard_dressed_views`) is a single second try, not a loop, and keeps `retry_attempt(2)` around its re-render; that re-render of a back or side view runs `_dress_view`'s draft loop, which used to set attempt 1 again and so put the guard's second try back on entry 1 of `outfit_back_draft` / `outfit_side_draft` (and of `outfit_back_turn`). Now its first draft runs on entry 2. A loop outside any attempt behaves as before.
 - **Cut texture** (`garment_cut_texture.generate`, the job loop): `for attempt in gate_attempts(CUT_ATTEMPTS=2)`:
   - `_routed_render` → `post_job`; break on `"ready"`.
   - A gate rejection → attempt 2. Failures without attempt 2: `BackendBusyError`, `MediaGenerationDisabled`, `NoRouteError`, and a `BackendFailedError` after `run_routed`'s own re-runs.
@@ -202,7 +204,7 @@ Mechanism (exists): `routing.retry_attempt(n)` aims `run_routed` at the n-th USA
   - Each attempt is recorded in `record.jobs[job]["attempts"] = [{attempt, backend, dialect, routing: route_meta(route), state, reason, metrics}]`, and the job's top-level fields are those of the last attempt. The raw answer goes to `.raw_{job}.a{n}.png`, so "Use this answer" can choose either attempt (`use_answer(…, attempt=n)`).
   - `_plan_one` / `job_plan` count `max` = 2 × jobs, so the Build button count stays honest. A manual re-run starts at attempt 1 again.
   - The module doc ("ONE attempt per click") is updated.
-- **footwear_source** `_edit` (:408-431): today the attempt number only changes the seed. It switches to `gate_attempts(EMPTY_ATTEMPTS)`, the same rule.
+- **footwear_source** `_step_empty`: `for attempt in gate_attempts(EMPTY_ATTEMPTS)` — attempt 2 after an `empty_gate` refusal runs on entry 2 of `footwear_empty` (before, only the seed changed, on the same backend). The seed stays `seed * 1000 + attempt`, which already differs per attempt, so a one-entry chain (clamped) still gets a new seed. Each `empty.try{n}.json` carries `routing` and, for attempt 2, `attempt_entry`; landing on the aimed entry writes no `fallback_from`. A failure (busy, no route, dead backend) still ends the step without attempt 2.
 - Improvements `fallback_rerender` reads only gallery/profile metas. Cut records keep `route_meta` as information (no change).
 
 ## 8. Change plan — every place the new prompts touch
@@ -224,8 +226,8 @@ Phases; each one ends with its smokes green.
 | C8 | `shared/templates/image/garment_cut_texture_{front_plain,front_decorated,back}.md` | 3 × 4 sections (§6) |
 | C9 | `app/core/garment_cut_texture.py` | `render_prompt(dialect)`, restored `prompt_pieces`/`layout_words`, prompt inside `_render(b)`, `PROMPT_SHA`, attempts, `.raw_{job}.a{n}.png`, `_plan_one` ×2, `_upsampler_on` → lint |
 | C10 | `frontend` cut-texture dialog (Figure tab) | per job: attempts list (backend, dialect, gates), "Use this answer" per attempt; `npm run build` |
-| C11 | `app/imagegen/routing.py` | `gate_attempts`; the 9 callers of §7 switch to it |
-| C12 | `app/core/footwear_source.py:408` | `gate_attempts` |
+| C11 | `app/imagegen/routing.py` | `gate_attempts` (nested: continues the outer attempt); the loops of §7 switch to it — done on `chatimg` |
+| C12 | `app/core/footwear_source.py` `_step_empty` | `gate_attempts` — done on `chatimg` |
 | C13 | instance config (admin UI, not code) | chain `garment_cut_texture` = `MiniMax-H3-Image, P-H3-Image` after C8/C9 |
 
 **Phase 3 — persons get slot numbers**

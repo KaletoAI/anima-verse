@@ -291,15 +291,13 @@ def check_file(character_name: str, item: Dict[str, Any], src: Path, dst: Path) 
 
 def _render(character_name: str, item_id: str, view: str, *, prompt: str, negative: str, source: Path,
             target: Path, attempt: int) -> Optional[Path]:
-    """ONE image job: the item picture edited into the piece-only view (occasion ``garment_view``). Stubbed in the
-    smokes. The rendered file cut back to the picture's frame at ``target`` — at the render's resolution
-    (``crop_back(native=True)``) — or None when the render failed."""
+    """ONE image job: the item picture edited into the piece-only view (occasion ``garment_view``; the chain entry
+    of the caller's ``gate_attempts`` attempt). Stubbed in the smokes. The rendered file cut back to the picture's
+    frame at ``target`` — at the render's resolution (``crop_back(native=True)``) — or None when the render failed."""
     from app.core import expression_regen
     from app.core import garment_images as gi
     from app.core.model_refs import get_model_refs_dir
-    from app.imagegen import routing as _image_routing
-    with _image_routing.retry_attempt(attempt), \
-            gi.square_reference(source, get_model_refs_dir(character_name)) as (reference, side, offset, size):
+    with gi.square_reference(source, get_model_refs_dir(character_name)) as (reference, side, offset, size):
         path = expression_regen.render_character_image(
             character_name, output_stem=target.with_suffix(""), equipped_pieces={}, equipped_items=[],
             pose_prompt="", expression_prompt="", bare_prompt=prompt, extra_negative=negative,
@@ -342,6 +340,7 @@ def generate(character_name: str, item_id: str, view: str) -> Path:
     the view. ``ViewRefused`` when every attempt is refused (they stay offered). Attempt slots are reused oldest
     first."""
     from app.core import base_body
+    from app.imagegen import routing as _image_routing
     from app.models.inventory import get_item, get_item_image_path
     item = get_item(item_id) or {}
     picture = get_item_image_path(item_id)
@@ -350,7 +349,7 @@ def generate(character_name: str, item_id: str, view: str) -> Path:
     prompt, negative = prompt_for(item, view)
     views_dir(character_name).mkdir(parents=True, exist_ok=True)
     records: List[Dict[str, Any]] = []
-    for attempt in range(1, JOBS_PER_VIEW + 1):
+    for attempt in _image_routing.gate_attempts(JOBS_PER_VIEW):
         target = attempt_path(character_name, item_id, view, attempt)
         rendered = _render(character_name, item_id, view, prompt=prompt, negative=negative, source=Path(picture),
                            target=target, attempt=attempt)

@@ -115,7 +115,8 @@ class Route:
 
 
 # Gate-retry attempt of the current render (1 = first try). Set by the retry
-# loops of quality-gated steps through ``retry_attempt``; read only by
+# loops of quality-gated steps through ``gate_attempts`` (a single second try
+# outside a loop, the view guard's re-render: ``retry_attempt``); read only by
 # ``run_routed``. An explicit backend pick never consults it.
 _ATTEMPT: contextvars.ContextVar[int] = contextvars.ContextVar("image_route_attempt", default=1)
 
@@ -125,7 +126,9 @@ def retry_attempt(attempt: int):
     """Run the routed renders inside the block as gate-retry ``attempt``
     (1-based): attempt N aims at the N-th entry of the occasion's chain,
     clamped to the last entry — the second try of a gated step runs on the
-    SECOND backend of its chain. A single-entry or empty chain is unchanged."""
+    SECOND backend of its chain. A single-entry or empty chain is unchanged.
+    A loop of attempts uses ``gate_attempts``; this is the single second try
+    of a step whose first try ran elsewhere (``base_body._guard_dressed_views``)."""
     token = _ATTEMPT.set(max(1, int(attempt or 1)))
     try:
         yield
@@ -141,9 +144,16 @@ def gate_attempts(n: int) -> Iterator[int]:
     """The attempts of a quality-gated step: yields 1..``n``, the loop body of attempt k running inside
     ``retry_attempt(k)`` — attempt 1 on the chain's first usable entry, attempt 2 on its second (clamped to the last).
     The caller ``break``s when an attempt passes its gate; a raise ends the loop too (a failure is never retried
-    here — ``run_routed`` has re-run a dead backend already). Outside the loop body the attempt is back to 1."""
+    here — ``run_routed`` has re-run a dead backend already). Outside the loop body the attempt is back to what it
+    was before the loop.
+
+    Nested: a gated step that runs inside an attempt of an outer one (the view guard's re-render of a dressed back
+    under ``retry_attempt(2)`` runs the draft loop of ``base_body._dress_view``) continues the outer count — its
+    attempt k runs as attempt ``outer + k - 1``. The yielded number stays 1..``n`` (the step's own records and
+    files); only the chain entry moves on, so the outer second try never lands back on entry 1."""
+    outer = current_attempt()
     for attempt in range(1, max(1, int(n or 1)) + 1):
-        token = _ATTEMPT.set(attempt)
+        token = _ATTEMPT.set(outer + attempt - 1)
         try:
             yield attempt
         finally:

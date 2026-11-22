@@ -227,11 +227,10 @@ def ensure(character_name: str, view: str, bsig: str, variant: str, base: Path) 
         size = im.size
     records = []
     _clear_attempts(character_name, view, bsig, variant)   # A210 review L1: no attempt of an earlier run is listed
-    for attempt in range(1, ATTEMPTS + 1):
+    for attempt in image_routing.gate_attempts(ATTEMPTS):
         kept = attempt_path(character_name, view, bsig, variant, attempt)
         stem = kept.with_suffix("")
-        with image_routing.retry_attempt(attempt), square_reference(base, refs_dir) as (reference, side, offset,
-                                                                                         source_size):
+        with square_reference(base, refs_dir) as (reference, side, offset, source_size):
             rendered = expression_regen.render_character_image(
                 character_name, output_stem=stem, equipped_pieces={}, equipped_items=[],
                 pose_prompt="", expression_prompt="", bare_prompt=prompt, extra_negative=negative,

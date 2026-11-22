@@ -984,13 +984,12 @@ def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, v
     if allowed <= 0:
         raise GateRefused(step, view, [{"view": view, "ok": False, "budget": True,
                                         "reasons": [BUDGET_SPENT.format(n=GHOST_RUN_JOBS)]}])
-    for attempt in range(1, allowed + 1):
+    for attempt in _image_routing.gate_attempts(allowed):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
         stem = target.with_suffix("")
         if _capped(kind, step):
             _spend(character_name, item_id, fsig, step, view)
-        with _image_routing.retry_attempt(attempt), \
-                square_reference(source, refs_dir) as (reference, side, offset, source_size):
+        with square_reference(source, refs_dir) as (reference, side, offset, source_size):
             path = expression_regen.render_character_image(
                 character_name,
                 output_stem=stem,
@@ -1902,7 +1901,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     if stored_only and not reuse:
         raise StoredDraftUnusable(f"The {step} {view} has no stored draft made from the current front")
     records: List[Dict[str, Any]] = []
-    for attempt in range(1, ATTEMPTS + 1):
+    for attempt in _image_routing.gate_attempts(ATTEMPTS):
         if attempt == 1 and reuse:
             draft = stored   # Ruling C2: the stored draft of this front, composited again — no hub job
             drafted_with = stored_record.get("prompt")
@@ -1914,12 +1913,11 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             # draft is the one the last attempt was composited from.
             prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id, view=view)
             drafted_with = prompt[0]
-            with _image_routing.retry_attempt(attempt):
-                draft = base_body.render_draft(
-                    character_name, view, stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
-                    profile=profile, common=common,
-                    sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
-                                   "front_sha256": front_sha})
+            draft = base_body.render_draft(
+                character_name, view, stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
+                profile=profile, common=common,
+                sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
+                               "front_sha256": front_sha})
         if draft is None:
             raise RuntimeError(f"The {step} {view} draft rendered nothing")
         draft = Path(draft)

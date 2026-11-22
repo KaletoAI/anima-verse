@@ -16,8 +16,9 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
 - ``empty`` -> ``empty.png``: one empty shoe in side view — always the routed
   image edit ``EDIT_OCCASION`` with the upscaled image as reference (one image
   job per item; the side view is part of what the edit makes, an item image
-  is never used as it is), up to ``EMPTY_ATTEMPTS`` times; every attempt keeps
-  ``empty.try{n}.png/.json``.
+  is never used as it is), up to ``EMPTY_ATTEMPTS`` times — attempt n on the n-th entry of the occasion's chain
+  (``routing.gate_attempts``; clamped to the last) with seed ``seed * 1000 + n``; every attempt keeps
+  ``empty.try{n}.png/.json`` with its ``routing`` / ``attempt_entry`` meta.
 - ``cutout`` -> ``cutout.png``: the BiRefNet-DIS cut-out of ``empty.png``
   (local, no hub job), cropped to a square around the shoe like the garment
   cut-out, Lanczos up to ``MIN_SIDE``.
@@ -441,14 +442,16 @@ def _edit(iid: str, upscaled: Path, seed: int, attempt: int):
 def _step_empty(iid: str, ssig: str, seed: int, d: Path) -> None:
     from app.core.footwear_gates import empty_gate
     from app.core.garment_store import write_record
-    from app.imagegen.routing import route_meta
+    from app.imagegen.routing import gate_attempts, route_meta
     upscaled = d / "upscaled.png"
     if not upscaled.is_file():
         raise FileNotFoundError("the upscaled item image is missing — run the source step first")
     item_matte = _matte(upscaled.read_bytes())
 
     attempts: List[Dict[str, Any]] = []
-    for attempt in range(1, EMPTY_ATTEMPTS + 1):
+    # Attempt 2 after a gate refusal runs on the chain's SECOND entry (``gate_attempts``; a one-entry chain clamps it
+    # onto the same backend, where the seed already differs: ``seed * 1000 + attempt``).
+    for attempt in gate_attempts(EMPTY_ATTEMPTS):
         try:
             data, used, route = _edit(iid, upscaled, seed, attempt)
         except Exception as e:  # noqa: BLE001 — recorded with the attempts before it, the step fails

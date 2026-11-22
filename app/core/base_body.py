@@ -1447,12 +1447,11 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
             attempts: List[Tuple[Path, Dict[str, Any]]] = []
             with tempfile.TemporaryDirectory(prefix=".handgate_", dir=refs_dir,
                                              ignore_cleanup_errors=True) as staging:
-                for n in range(1, HAND_GATE_ATTEMPTS + 1):
+                for n in _image_routing.gate_attempts(HAND_GATE_ATTEMPTS):
                     stem = Path(staging) / f"attempt{n}" / final.name
                     stem.parent.mkdir()
                     try:
-                        with _image_routing.retry_attempt(n):
-                            path = draw("front", stem, reference)
+                        path = draw("front", stem, reference)
                     except Exception as e:  # noqa: BLE001 — keep what was rendered
                         if not attempts:
                             raise
@@ -3388,7 +3387,9 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                         character_name, signature, "passed" if attempt[1]["ok"] else "failed",
                         view_composite.summary(attempt[1]["composite"]), attempt[1]["guard"].get("best"),
                         attempt[1]["noise"].get("score"))
-        for n in range(first, DRAFT_ATTEMPTS + 1):
+        for n in _image_routing.gate_attempts(DRAFT_ATTEMPTS):
+            if n < first:
+                continue    # attempt 1 was the stored draft's composite above (Ruling C2)
             if attempts and attempts[-1][1]["ok"]:
                 break
             if remake and kept is not None and attempts and (attempts[0][1]["composite"] or {}).get("ok"):
@@ -3398,29 +3399,28 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
             draft_stem.parent.mkdir()
             try:
-                with _image_routing.retry_attempt(n):
-                    # Ruling A175: TURN the dressed front (step 1), CUT it OUT (step 2), then DRESS the
-                    # base view with the cut-out as the second picture and no clothing list (step 3).
-                    turn_stem = Path(staging) / f"turn{n}" / f"{kind}_{signature}_turn"
-                    turn_stem.parent.mkdir()
-                    second = turned_cutout(character_name, view, stem=turn_stem, front=front, refs_dir=refs_dir,
-                                           common=common, sidecar_extra={"dressed": True, f"{view}_turn": True,
-                                                                         "front_sha256": file_sha256(front)})
-                    if second is None:
-                        raise OutfitError(f"Dressed {view} turn failed")
-                    draft = render_view_edit(
-                        character_name, view, stem=draft_stem, base_view=base_view,
-                        second=second, refs_dir=refs_dir,
-                        prompt=(picture_edit_prompt(character_name, view, profile=profile, bald=bald, hair=hair)
-                                if not hair_edit else
-                                _view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
-                                                  items=items, profile=profile, bald=bald, hair=hair,
-                                                  hair_edit=hair_edit)),
-                        occasion=DRAFT_OCCASIONS[view], common=common,
-                        sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
-                                       "draft_method": DRAFT_BASE_EDIT, "turned_second": True,
-                                       "front_sha256": file_sha256(front),
-                                       **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
+                # Ruling A175: TURN the dressed front (step 1), CUT it OUT (step 2), then DRESS the
+                # base view with the cut-out as the second picture and no clothing list (step 3).
+                turn_stem = Path(staging) / f"turn{n}" / f"{kind}_{signature}_turn"
+                turn_stem.parent.mkdir()
+                second = turned_cutout(character_name, view, stem=turn_stem, front=front, refs_dir=refs_dir,
+                                       common=common, sidecar_extra={"dressed": True, f"{view}_turn": True,
+                                                                     "front_sha256": file_sha256(front)})
+                if second is None:
+                    raise OutfitError(f"Dressed {view} turn failed")
+                draft = render_view_edit(
+                    character_name, view, stem=draft_stem, base_view=base_view,
+                    second=second, refs_dir=refs_dir,
+                    prompt=(picture_edit_prompt(character_name, view, profile=profile, bald=bald, hair=hair)
+                            if not hair_edit else
+                            _view_edit_prompt(character_name, view, text=text, front=front, pieces=pieces,
+                                              items=items, profile=profile, bald=bald, hair=hair,
+                                              hair_edit=hair_edit)),
+                    occasion=DRAFT_OCCASIONS[view], common=common,
+                    sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
+                                   "draft_method": DRAFT_BASE_EDIT, "turned_second": True,
+                                   "front_sha256": file_sha256(front),
+                                   **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
             except Exception as e:  # noqa: BLE001 — a later draft never loses an earlier composite
                 if not attempts or (raise_load and _is_load(e)):
                     raise
