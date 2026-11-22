@@ -127,10 +127,14 @@ def island_ids(islands: dict) -> dict[str, int]:
 
 
 def prompt_family(kind) -> str:
-    """The prompt family of a piece's prompt kind (``item_kind``): "top" for a top with a bodice — its tested files —,
-    "fitted" for every other (the close-fitting kinds since group A; since group B a skirt and a strapless top,
-    ``item_kind`` "strapless": their main pieces are named by where they lie, their small pieces kept plain)."""
-    return "top" if str(kind or "") == "top" else "fitted"
+    """The prompt family of a piece's prompt kind (``item_kind``): "fitted" for the close-fitting kinds
+    (``garment_template.FITTED_KINDS``, group A) and the panel kinds with held trims (``HELD_TRIM_KINDS``, group B: a
+    skirt, ``item_kind`` "strapless" — their main pieces are named by where they lie, their small pieces kept plain);
+    "top" for every other, a piece without template parameters ("") included — its csig, seed and stem stay as
+    before group B."""
+    from app.core import garment_template as gt
+    k = str(kind or "")
+    return "fitted" if k in gt.FITTED_KINDS or k in HELD_TRIM_KINDS else "top"
 
 
 def prompt_sha_of(kind) -> str:
