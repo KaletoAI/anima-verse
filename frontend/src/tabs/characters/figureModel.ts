@@ -359,6 +359,10 @@ export interface TemplateParams {
   /** User test 2026-11-21: the sleeves of the texture from cut — "plain" (the front panel's fabric, default) or
    *  "picture" (the model's answer). Set in the Texture tab (`…/cut/sleeves`), never a field of the Cut tab. */
   sleeve_print?: string
+  /** Plan group B (B10): what closes a top's / dress's / jacket's front — painted by code along the cut's marks
+   *  ("none" / "buttons" / "zip" / "lacing"); `buttons` 0 = automatic. Both TEXTURE_ONLY: a switch re-assembles. */
+  placket?: string
+  buttons?: number
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -572,6 +576,7 @@ export const TEMPLATE_FIELD_CHOICE_LABELS: Partial<Record<keyof TemplateParams, 
   trouser_length: { full: 'Full length' },
   leg_shape: { straight: 'Straight leg', wide: 'Wide leg', flared: 'Flared (bootcut)' },
   seat: { fitted: 'Fitted (second skin)', regular: 'Regular', relaxed: 'Relaxed (roomy seat)' },
+  placket: { lacing: 'Lacing' },
 }
 
 /** Bug round 2026-11-20: the dialog's presets (`presets` of the GET) — their button words and hints. */
@@ -604,6 +609,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   lace_depth_m: 'Lacing depth',
   trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
   hem: 'Hem', texture: 'Texture', sleeve_print: 'Sleeves of the texture',
+  placket: 'Placket (painted)', buttons: 'Buttons (0 = automatic)',
 }
 
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */

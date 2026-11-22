@@ -7002,6 +7002,9 @@
     "A switch composes the atlas again (CPU, 0 image jobs)": "Ein Wechsel setzt den Atlas neu zusammen (CPU, 0 Bild-Jobs)",
     "Not made yet — Make texture from cut renders it": "Noch nicht erzeugt — „Textur aus Schnitt erzeugen“ rendert ihn",
     "Sleeves of the texture": "Ärmel der Textur",
+    "Placket (painted)": "Knopfleiste (gemalt)",
+    "Buttons (0 = automatic)": "Knöpfe (0 = automatisch)",
+    "Painted onto the texture from cut along the front; a switch only re-assembles the figure (0 hub jobs).": "Wird entlang der Vorderkante auf die Schnitt-Textur gemalt; ein Wechsel setzt nur die Figur neu zusammen (0 Hub-Jobs).",
     "Waiting for the front job — the projection stays": "Wartet auf den Vorderseiten-Job — die Projektion bleibt",
     "Waiting for the back job — the projection stays": "Wartet auf den Rückseiten-Job — die Projektion bleibt",
     "{n} image job": "{n} Bild-Job"

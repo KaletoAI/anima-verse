@@ -151,7 +151,10 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
   'gusset_m',
   'cup_style', 'cup_coverage', 'push_up', 'underband_m', 'center_gore', 'closure', 'straps', 'fingers', 'length', 'cuff',
-  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem', 'texture']
+  'tights_style', 'feet', 'garters', 'trouser_length', 'leg_shape', 'seat', 'trouser_waist', 'fly', 'hem', 'placket', 'buttons',
+  'texture']
+/** `garment_template.TEXTURE_ONLY`: a save that changes only these re-assembles, it never re-drapes. */
+const TEXTURE_ONLY_FIELDS: (keyof TemplateParams)[] = ['texture', 'sleeve_print', 'placket', 'buttons', 'fly']
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -196,6 +199,8 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   // A223: garter tabs only on thigh-high stockings, a waistband only on full tights
   if (key === 'garters' && p.kind === 'tights' && p.tights_style !== 'thigh_high') return false
   if (key === 'waistband' && p.kind === 'tights' && p.tights_style !== 'tights') return false
+  // B10: the button count only for a buttoned placket
+  if (key === 'buttons' && p.placket !== 'buttons') return false
   return true
 }
 
@@ -311,7 +316,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
       await apiPut(path, { params: draft, source })
       // the texture source alone never re-drapes (TEXTURE_ONLY): only the figure is assembled again
       const textureOnly = !!data?.params && (Object.keys(draft) as (keyof TemplateParams)[])
-        .every((k) => k === 'texture' || k === 'sleeve_print' || draft[k] === data.params?.[k])
+        .every((k) => TEXTURE_ONLY_FIELDS.includes(k) || draft[k] === data.params?.[k])
       setSaved(t(textureOnly ? 'Saved — the figure is assembled again with this texture (CPU, 0 hub jobs)'
         : 'Saved — the next Build drapes it (CPU, 0 hub jobs)'))
       toast(t('Template parameters saved'), 'success')
@@ -399,10 +404,12 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                           </select>
                         ) : (
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <input type="range" min={f.min} max={f.max} step={f.max - f.min < 0.05 ? 0.001 : 0.01} style={{ flex: 1, minWidth: 0 }}
+                            <input type="range" min={f.min} max={f.max}
+                              step={key === 'buttons' ? 1 : f.max - f.min < 0.05 ? 0.001 : 0.01} style={{ flex: 1, minWidth: 0 }}
                               value={Number(draft[key])} onChange={(e) => set(key, Number(e.target.value))} />
                             <span style={{ width: 52, textAlign: 'right' }}>
-                              {SHARES.has(key) ? Number(draft[key]).toFixed(2)
+                              {key === 'buttons' ? (Number(draft[key]) > 0 ? String(Number(draft[key])) : t('auto'))
+                                : SHARES.has(key) ? Number(draft[key]).toFixed(2)
                                 : key === 'string_width_m' ? `${Math.round(Number(draft[key]) * 1000)} mm`
                                   : cm(Number(draft[key]))}
                             </span>
@@ -430,6 +437,11 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         {key === 'collar' && lapelNeck(draft) ? (
                           <span className="ga-form-hint" data-lapel-note="">
                             {t('A lapel opens the front in a V down to the chest; it replaces the neckline.')}
+                          </span>
+                        ) : null}
+                        {key === 'placket' ? (
+                          <span className="ga-form-hint" data-placket-note="">
+                            {t('Painted onto the texture from cut along the front; a switch only re-assembles the figure (0 hub jobs).')}
                           </span>
                         ) : null}
                         {key === 'texture' ? (
