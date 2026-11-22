@@ -356,6 +356,40 @@ public class PairPlayTests
     }
 
     [Fact]
+    public void TheSoloSceneHeldClockRunsOnThePlaceBlock()
+    {
+        // Hand-derived (client3d smoke_pair_clip_tempo.mjs [7]): adopt 2.0 at tempo 0.5; dt 1 → 2.5; frozen stays 2.5;
+        // the same poll again (clip_s 2.0, 0.5 off) is not reconciled; poll 2: clip_s 2.7 (0.2 off) kept, tempo 0.25;
+        // poll 3: clip_s 3.0 (0.5 off) snaps; dt 2 at 0.25 → 3.5; another scene adopts fresh; no block → null.
+        using var map = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new { characters = new object[] {
+            new { name = "S", place = new { id = "bench", slot = 0, scene_id = "S", clip_s = 2.0, tempo = 0.5 } },
+            new { name = "N", place = new { id = "bench", slot = 1 } },
+        }}));
+        var rows = CharacterRow.ParseList(map.RootElement);
+        Assert.Equal(new SoloSceneClock("S", 2.0, 0.5), rows[0].SceneClock);
+        Assert.Null(rows[1].SceneClock);
+        Assert.Equal(new PlaceRef("bench", 0), rows[0].Place);
+        var held = HeldClock.Adopt(null, rows[0].SceneClock, 1)!;
+        Assert.Equal(new HeldClock("S", 2.0, 0.5, 1), held);
+        held = held.Step(1, false);
+        Assert.Equal(2.5, held.ClipT, 12);
+        held = held.Step(1, true);
+        Assert.Equal(2.5, held.ClipT, 12);
+        held = HeldClock.Adopt(held, new SoloSceneClock("S", 2.0, 0.5), 1)!;
+        Assert.Equal(2.5, held.ClipT, 12);
+        held = HeldClock.Adopt(held, new SoloSceneClock("S", 2.7, 0.25), 2)!;
+        Assert.Equal(2.5, held.ClipT, 12);
+        Assert.Equal(0.25, held.Tempo, 12);
+        held = HeldClock.Adopt(held, new SoloSceneClock("S", 3.0, 0.25), 3)!;
+        Assert.Equal(3.0, held.ClipT, 12);
+        held = held.Step(2, false);
+        Assert.Equal(3.5, held.ClipT, 12);
+        Assert.Equal(new HeldClock("T", 0.4, 0.25, 4), HeldClock.Adopt(held, new SoloSceneClock("T", 0.4, 0.25), 4));
+        Assert.Null(HeldClock.Adopt(held, null, 5));
+        Assert.Equal(1, HeldClock.Adopt(null, new SoloSceneClock("U", 1, 5), 6)!.Tempo, 12);
+    }
+
+    [Fact]
     public void PlacementLadderSeatRoomGround()
     {
         var p = PairPlay.Adopt(null, Row(ax: 10, az: 22, yaw: Math.PI / 2), 1, out _)!;

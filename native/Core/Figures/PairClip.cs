@@ -136,6 +136,39 @@ public sealed record PairInteraction(string Id, string Kind, string Role, IReadO
     public string Clip => ClipLibraryRules.IndexName(Kind, Role, Alt);
 }
 
+/// <summary>
+/// The worldmap <c>place</c> block's scene clock (§ A8a): a place a SOLO furniture run seated the figure on carries
+/// that scene's <c>scene_id</c>, <c>clip_s</c> and <c>tempo</c> (clamped, 1 when the row lacks it).
+/// </summary>
+public sealed record SoloSceneClock(string SceneId, double ClipS, double Tempo);
+
+/// <summary>
+/// The held clip's local clock of a SOLO furniture scene (client3d/src/game/pairClip.ts <c>HeldClock</c>,
+/// <c>adoptHeldClock</c> / <c>stepHeldClock</c>): CLIP seconds since the clip began, the tempo, the scene and the poll
+/// stamp it was last reconciled with — the pair rule (<see cref="PairClip.Phase"/>) without a wrap; the figure wraps
+/// against the clip it plays.
+/// </summary>
+public sealed record HeldClock(string SceneId, double ClipT, double Tempo, long Stamp)
+{
+    /// <summary>
+    /// No clock in the row = none; a new scene adopts <c>clip_s</c> as it is; the same scene takes the tempo at once and
+    /// reconciles the clock only for a NEW poll (<paramref name="stamp"/>), snapping beyond <see cref="PairClip.SnapS"/>.
+    /// </summary>
+    public static HeldClock? Adopt(HeldClock? prev, SoloSceneClock? block, long stamp)
+    {
+        if (block is null || block.SceneId.Length == 0 || !double.IsFinite(block.ClipS)) return null;
+        double tempo = PairClip.ClipTempo(block.Tempo);
+        if (prev is null || prev.SceneId != block.SceneId) return new HeldClock(block.SceneId, Math.Max(0, block.ClipS), tempo, stamp);
+        if (prev.Stamp == stamp) return prev with { Tempo = tempo };
+        double clipT = PairClip.Phase(new PairClipInput(block.ClipS, tempo, false, true, 0, prev.ClipT)).ClipT;
+        return new HeldClock(prev.SceneId, clipT, tempo, stamp);
+    }
+
+    /// <summary>One frame: <c>dt · tempo</c> CLIP seconds, nothing in a frozen world.</summary>
+    public HeldClock Step(double dt, bool frozen)
+        => this with { ClipT = PairClip.Phase(new PairClipInput(null, Tempo, frozen, true, 0, ClipT, Dt: dt)).ClipT };
+}
+
 /// <summary>The pair's anchor: world x/z, the yaw of the clip frame (three's Y rotation) and the place it sits on (null = ground).</summary>
 public readonly record struct PairAnchor(double X, double Z, double Yaw, string? PlaceId);
 

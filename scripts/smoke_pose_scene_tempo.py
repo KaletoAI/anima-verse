@@ -52,6 +52,17 @@ EXPECTATIONS, DERIVED BY HAND
     answer 0.4 at M = 0, then a payload read of a blob with
     execution_kind "prop_action", execution_ref R at M = 5 -> clip_s
     5 * 0.4 = 2.0, tempo 0.4. The free scene I was not touched by it.
+[6] A SOLO FURNITURE RUN (fix wave) carries its clock on the worldmap's
+    `place` block (`world_ops._place_payload` -> `pose_scene.solo_clock`),
+    scene id = its execution id S, clip = "<held pose>|solo". The run of
+    `setup_run()` (one person P, no invitee) is active after its approach;
+    its stored place names S. Clock cleared, provider answers 0.5:
+    M = 0: beat of S (kind prop_action, members [P]) -> clip_s 0, tempo 0.5.
+    M = 4: the place block says scene_id S, clip_s 4 * 0.5 = 2.0, tempo 0.5.
+    M = 10: clip_s 2.0 + 6 * 0.5 = 5.0. The run cancelled -> no place, no
+    clock (`solo_clock(P, S)` is None: the run is no longer active).
+    A pair run is NOT timed here: `solo_clock` of a run with an invitee is
+    None (its `interaction` block carries the clock, [5]).
 """
 import sys
 from datetime import timedelta
@@ -211,6 +222,38 @@ class SceneTempo(unittest.TestCase):
             self.assertEqual((row["clip_s"], row["tempo"]), (2.0, 0.4))
             self.assertEqual(block(a)["tempo"], 1.0)
             self.assertEqual(block(a)["clip_s"], free["clip_s"] + 5.0)
+
+    def test_6_solo_furniture_place(self):
+        from app.core import world_ops as WO
+        from app.core import prop_action_engine as A
+        from app.core import prop_action_store as R
+        name, target, _pid = RUNS.setup_run()
+        result = RUNS.request(name, target)
+        RUNS.tick(30)
+        RUNS.tick(2)
+        sid = result["execution_id"]
+        run = R.get(sid)
+        self.assertEqual(run["status"], "active")
+        self.assertEqual(run["members"], [])
+        profile = F.C.get_character_profile(name)
+        self.assertEqual(profile["place"]["execution_id"], sid)
+        S._clocks.clear()
+        provide(0.5)
+        with motion(0):
+            S.emit_active(scene_id=sid, kind="prop_action", members=[name], roles={},
+                          pose_key=A._held_pose(run), delta_game_s=1.0)
+        self.assertEqual((SEEN[0]["scene_id"], SEEN[0]["members"]), (sid, [name]))
+        with motion(4):
+            place = WO._place_payload(name, F.C.get_character_profile(name))
+            self.assertEqual((place["scene_id"], place["clip_s"], place["tempo"]), (sid, 2.0, 0.5))
+        with motion(10):
+            self.assertEqual(WO._place_payload(name, F.C.get_character_profile(name))["clip_s"], 5.0)
+        pair_run = dict(run, members=["someone"])
+        with patch.object(S, "_furniture_run", lambda _sid: pair_run):
+            self.assertIsNone(S.solo_clock(name, sid))
+        A.cancel(name, sid)
+        self.assertIsNone(S.solo_clock(name, sid))
+        self.assertIsNone(WO._place_payload(name, F.C.get_character_profile(name)))
 
 
 if __name__ == "__main__":

@@ -232,6 +232,8 @@ public partial class FigureManager
             else if(playback.FinaleOn || playback.PoseKey!=poseKey) {
                 if(figure.FinishPropEntry(pose)) { playback.PoseKey=poseKey; playback.FinaleOn=false; }
             }
+            // The held clip of a solo scene on the scene's clip clock and tempo (§ A8a, place.clip_s).
+            if(!playback.Cancel && !playback.FinaleOn && figure.Held is { } heldClock) figure.HoldClipAt(heldClock.ClipT,heldClock.Tempo,WorldFrozen);
             if(!playback.Cancel && !playback.AnchorLogged) {
                 playback.AnchorLogged=true;
                 _log($"[prop] motion seated on anchor {PropActionMotion.Text(plan["anchor"]?["place_id"])}/{PropActionMotion.Number(plan["anchor"]?["slot"])}");

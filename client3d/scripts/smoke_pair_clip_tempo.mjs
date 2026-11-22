@@ -42,6 +42,18 @@
  *     Real time spent playing: 4 + 0.2 = 4.2 s >= 4.132 — and one cycle lasted
  *     1.033 / 0.5 = 2.066 real s. A block without tempo plays at 1 (t += dt);
  *     tempo 5 is clamped to 1; the adopted play carries tempo 0.5.
+ * [7] A SOLO FURNITURE SCENE (fix wave): the row's `place` block carries
+ *     `scene_id`, `clip_s`, `tempo` (adoptHeldClock / stepHeldClock).
+ *     place {scene_id S, clip_s 2.0, tempo 0.5}, stamp 1, no clock yet
+ *       -> adopted as it is: clipT 2.0, tempo 0.5.
+ *     frame dt 1 -> 2.0 + 1 · 0.5 = 2.5; frozen dt 1 -> stays 2.5.
+ *     same poll again (stamp 1, clip_s 2.0 is 0.5 off) -> NOT reconciled: 2.5.
+ *     new poll (stamp 2) clip_s 2.7 (0.2 off) -> kept 2.5; tempo 0.25 -> 0.25.
+ *     new poll (stamp 3) clip_s 3.0 (0.5 off) -> snapped to 3.0.
+ *     a frame at tempo 0.25, dt 2 -> 3.0 + 2 · 0.25 = 3.5.
+ *     another scene T (clip_s 0.4) -> adopted fresh: 0.4.
+ *     place without clip_s, or no place -> null (the clip runs on its own).
+ *     tempo 5 on a new scene -> 1 (clamped).
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -55,7 +67,7 @@ async function load(path, fallback) {
     module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   return import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 }
-const { pairClipPhase, clipTempo } = await load(process.argv[2], '../src/game/pairClip.ts');
+const { pairClipPhase, clipTempo, adoptHeldClock, stepHeldClock } = await load(process.argv[2], '../src/game/pairClip.ts');
 const { adoptFinale, stepFinale } = await load(process.argv[3], '../src/game/finaleClip.ts');
 
 let failed = 0;
@@ -113,6 +125,29 @@ check('[6] no tempo plays at 1, tempo 5 at 1', () => {
     assert.equal(play.tempo, 1);
     close(stepFinale(play, 0.5, false).play.t, 0.5);
   }
+});
+
+check('[7] solo scene clock on the place block', () => {
+  let held = adoptHeldClock(null, { scene_id: 'S', clip_s: 2.0, tempo: 0.5 }, 1);
+  assert.deepEqual(held, { sceneId: 'S', clipT: 2.0, tempo: 0.5, stamp: 1 });
+  held = stepHeldClock(held, 1, false);
+  close(held.clipT, 2.5);
+  held = stepHeldClock(held, 1, true);
+  close(held.clipT, 2.5);
+  held = adoptHeldClock(held, { scene_id: 'S', clip_s: 2.0, tempo: 0.5 }, 1);
+  close(held.clipT, 2.5);
+  held = adoptHeldClock(held, { scene_id: 'S', clip_s: 2.7, tempo: 0.25 }, 2);
+  close(held.clipT, 2.5);
+  assert.equal(held.tempo, 0.25);
+  held = adoptHeldClock(held, { scene_id: 'S', clip_s: 3.0, tempo: 0.25 }, 3);
+  close(held.clipT, 3.0);
+  held = stepHeldClock(held, 2, false);
+  close(held.clipT, 3.5);
+  held = adoptHeldClock(held, { scene_id: 'T', clip_s: 0.4, tempo: 0.25 }, 4);
+  assert.deepEqual(held, { sceneId: 'T', clipT: 0.4, tempo: 0.25, stamp: 4 });
+  assert.equal(adoptHeldClock(held, { id: 'p' }, 5), null);
+  assert.equal(adoptHeldClock(held, null, 5), null);
+  assert.equal(adoptHeldClock(null, { scene_id: 'U', clip_s: 1, tempo: 5 }, 6).tempo, 1);
 });
 
 console.log(`\n${passed} ok, ${failed} failed`);

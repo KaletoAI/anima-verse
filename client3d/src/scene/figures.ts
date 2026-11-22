@@ -3108,6 +3108,25 @@ export class Figure {
     return true;
   }
 
+  /** The held clip of a SOLO furniture scene runs on the scene's clip clock
+   *  (§ A8a, `place.clip_s`): the clip playing now is re-seeked to `t` CLIP
+   *  seconds (wrapped by its length when it cycles, clamped a millisecond
+   *  short of the end when not) once its own time drifted more than
+   *  PAIR_RESYNC_S, and runs at `speed` (the tempo; 0 frozen) between
+   *  seeks — `playPair`'s rule on the clip `play` chose. Nothing while a
+   *  bridge holds the body. */
+  holdClipAt(t: number, speed: number, frozen: boolean): void {
+    const action = this.current;
+    if (!action || this.transition) return;
+    const duration = action.getClip().duration || 1;
+    const loop = action.loop === THREE.LoopRepeat;
+    const clipT = Math.max(t, 0);
+    const want = loop ? clipT % duration : Math.min(clipT, duration - 1e-3);
+    const raw = Math.abs(action.time - want);
+    if ((loop ? Math.min(raw, duration - raw) : raw) > PAIR_RESYNC_S) action.time = want;
+    action.timeScale = frozen ? 0 : speed;
+  }
+
   /** The speed the clip playing now runs at (a solo finale at its tempo,
    *  § A8c); the next clip `play` starts sets its own. Not during a bridge. */
   setClipSpeed(speed: number): void {

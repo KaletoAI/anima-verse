@@ -45,6 +45,9 @@ public sealed record CharacterRow(
     /// <summary><c>place</c>: the place the server seated the character on (id + slot), null = none.</summary>
     public PlaceRef? Place { get; init; }
 
+    /// <summary><c>place.scene_id/clip_s/tempo</c>: the SOLO furniture scene's clip clock on that place (§ A8a); null = none.</summary>
+    public SoloSceneClock? SceneClock { get; init; }
+
     /// <summary><c>movement_target_id</c>: where the character means to go ("" = nowhere) — a standing figure faces it.</summary>
     public string MovementTargetId { get; init; } = "";
 
@@ -108,8 +111,11 @@ public sealed record CharacterRow(
             : new List<string>();
         string? rev = c.TryGetProperty("model_rev", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
         PlaceRef? place = null;
+        SoloSceneClock? sceneClock = null;
         if (c.TryGetProperty("place", out var pl) && pl.ValueKind == JsonValueKind.Object && Json.Str(pl, "id") is { Length: > 0 } pid)
         {
+            if (Json.Str(pl, "scene_id") is { Length: > 0 } sceneId && Json.NumOrNull(pl, "clip_s") is { } clipS)
+                sceneClock = new SoloSceneClock(sceneId, clipS, PairClip.ClipTempo(Json.NumOrNull(pl, "tempo")));
             // slot: a number, or 'pair' (the mean of the slots, PlaceSlots.SlotFor(null)); anything else reads as slot 0.
             int? slot = pl.TryGetProperty("slot", out var sl) && sl.ValueKind == JsonValueKind.String && sl.GetString() == "pair" ? null
                 : sl.ValueKind == JsonValueKind.Number ? (int)sl.GetDouble() : 0;
@@ -127,6 +133,7 @@ public sealed record CharacterRow(
             ModelRev = rev,
             RoomId = Json.Str(c, "room_id"),
             Place = place,
+            SceneClock = sceneClock,
             MovementTargetId = Json.Str(c, "movement_target_id"),
             AvatarUrl = Json.Str(c, "avatar_url"),
             Travelling = OverviewLabels.TagTravelling(TagTravel.FromJson(c)),

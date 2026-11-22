@@ -6,7 +6,7 @@ import type { SyncCounters } from '../game/perfstats';
 import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, pairBlendOrigin, BLEND_S, type PairPose } from '../game/pairBlend';
-import { PAIR_SNAP_S, clipTempo, pairClipPhase } from '../game/pairClip';
+import { PAIR_SNAP_S, adoptHeldClock, clipTempo, pairClipPhase, stepHeldClock, type HeldClock } from '../game/pairClip';
 import { adoptFinale, stepFinale, type FinalePlay } from '../game/finaleClip';
 import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
@@ -142,6 +142,10 @@ interface Npc {
    *  `game/finaleClip.ts`); `finaleSeen` = the last finale id taken over */
   finale: FinalePlay | null;
   finaleSeen: string;
+  /** the clip clock of the SOLO furniture scene whose place this figure
+   *  holds (§ A8a, `place.clip_s` / `tempo`, `game/pairClip.ts`
+   *  `adoptHeldClock`); null = none, the held clip runs on its own */
+  held: HeldClock | null;
   /** AV3D-6: the animation category the server delivered (authoritative) */
   animation?: string;
   surfaceGroup?: string;
@@ -396,6 +400,9 @@ export class NpcManager {
    *  drawn headless as the own body where its rig has a head bone
    *  (`Figure.setFirstPerson`), hidden whole where it has none. */
   private firstPersonName: string | null = null;
+  /** the world freeze of the frame `tick` runs (its `frozen`), for the
+   *  paths it hands a figure to */
+  private worldFrozen = false;
   /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
   private playerDriven: string | null = null;
   private serverDriven = new Set<string>();
@@ -995,6 +1002,11 @@ export class NpcManager {
       // decides below; the action ending (no pair, no place) ends it.
       ({ play: npc.finale, seen: npc.finaleSeen } = adoptFinale(npc.finale, npc.finaleSeen,
         st.char.finale, !!(st.char.interaction || st.char.place)));
+      // A solo furniture scene's clip clock rides on the place (§ A8a): taken
+      // over per poll; when it goes the clip runs at its own speed again.
+      const hadHeld = !!npc.held;
+      npc.held = adoptHeldClock(npc.held, st.char.place, st.stamp ?? 0);
+      if (hadHeld && !npc.held) npc.figure?.setClipSpeed(1);
       // The two server words about HOW a figure moves (§ A11): the journey's
       // gait and the states' move-clip override. Taken for every row, the
       // player's own included — its free walk uses the override as well.
@@ -1315,7 +1327,7 @@ export class NpcManager {
       labelBadges: badgeEl, badgeKey: badges.key,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, sprint: false, face: st.face ?? null, waypoints: [], route: null,
-      travelling: false, gait: 'walk', locomotion: null, reckon: null, interaction: null, finale: null, finaleSeen: '', entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
+      travelling: false, gait: 'walk', locomotion: null, reckon: null, interaction: null, finale: null, finaleSeen: '', held: null, entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       surfaceGroup: st.surfaceGroup,
       travelLine: null, travelKey: '',
@@ -1833,6 +1845,8 @@ export class NpcManager {
             motion.finaleOn = false;
             npc.figure.playPair(heldClip, 0, false, true);
           }
+          // the held clip of a solo scene on the scene's clip clock and tempo
+          if (npc.held) npc.figure.holdClipAt(npc.held.clipT, npc.held.tempo, this.worldFrozen);
         }
       }
       if (!paired) npc.figure?.update(dt, { frozen: sample.phase === 'frozen' });
@@ -1935,6 +1949,7 @@ export class NpcManager {
        firstPerson: { name: string; viewYaw: number } | null = null) {
     const firstPersonName = firstPerson?.name ?? null;
     this.firstPersonName = firstPersonName;
+    this.worldFrozen = frozen;
     const now = performance.now();
     for (const npc of this.npcs.values()) {
       if (npc.bubbleUntil && now >= npc.bubbleUntil) {
@@ -1955,6 +1970,8 @@ export class NpcManager {
       // subtree); the rule states it all the same, for the native client.
       const labelVisible = tagVisible(camDist, !npc.root.visible, own);
       this.clearPairFix(npc);
+      // a solo scene's clip clock runs whatever path draws the figure
+      if (npc.held) npc.held = stepHeldClock(npc.held, dt, frozen);
       if (npc.name === this.photoHeldName) {
         npc.figure?.update(0, { frozen: true });
         npc.label.visible = false;
@@ -2368,6 +2385,9 @@ export class NpcManager {
         // the finale's clip runs at its tempo (§ A8c); the pose's own clip,
         // back the frame it is over, starts at its own speed again
         if (finaleClip) npc.figure.setClipSpeed(finaleTempo);
+        // a solo furniture scene's held clip: on the scene's clip clock, at
+        // its tempo (§ A8a, `place.clip_s`) — like a pair half
+        else if (npc.held && !moving) npc.figure.holdClipAt(npc.held.clipT, npc.held.tempo, frozen);
         npc.figure.update(dt, { frozen });
       } else if (npc.sprite) {
         if (moving) {

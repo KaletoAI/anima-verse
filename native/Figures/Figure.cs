@@ -683,6 +683,8 @@ public partial class Figure : Node3D
     /// <summary>The per-person finale clock and consumed id survive polls, body swaps and cached placement.</summary>
     public FinalePlay? Finale { get; set; }
     public string FinaleSeen { get; set; } = "";
+    /// <summary>The clip clock of the SOLO furniture scene whose place this figure holds (§ A8a); null = none.</summary>
+    public HeldClock? Held { get; set; }
     public string FinaleStartedId { get; set; } = "";
 
     /// <summary>
@@ -738,6 +740,32 @@ public partial class Figure : Node3D
         _finaleClip = false;
         p.SpeedScale = frozen ? 0 : (float)speed;
         return true;
+    }
+
+    /// <summary>
+    /// figures.ts <c>holdClipAt(t, speed, frozen)</c>: the held clip of a SOLO furniture scene runs on the scene's clip
+    /// clock (§ A8a, <c>place.clip_s</c>) — the clip playing now is re-seeked to <paramref name="t"/> CLIP seconds
+    /// (wrapped by its length when it cycles, clamped a millisecond short of the end when not) once its own time drifted
+    /// more than <see cref="PairClip.ResyncS"/>, and the player runs at <paramref name="speed"/> (the tempo; 0 frozen)
+    /// between seeks. Nothing while a bridge or a finale holds the body.
+    /// </summary>
+    public void HoldClipAt(double t, double speed, bool frozen)
+    {
+        if (Player is not { } p || Bridging || _finaleClip || CurrentClip.Length == 0) return;
+        string name = p.AssignedAnimation.ToString();
+        if (name.Length == 0 || !p.HasAnimation(name)) return;
+        var anim = p.GetAnimation(name);
+        double duration = anim.Length > 0 ? anim.Length : 1;
+        bool loop = anim.LoopMode != Animation.LoopModeEnum.None;
+        double clipT = Math.Max(t, 0);
+        double want = loop ? clipT % duration : Math.Min(clipT, duration - 1e-3);
+        double raw = Math.Abs(p.CurrentAnimationPosition - want);
+        if ((loop ? Math.Min(raw, duration - raw) : raw) > PairClip.ResyncS)
+        {
+            if (!p.IsPlaying()) p.Play(name);
+            p.Seek(want, false);
+        }
+        p.SpeedScale = frozen ? 0 : (float)speed;
     }
 
     /// <summary>The time the figure's player stands at (the action's own clock), for the check; NaN without a clip.</summary>

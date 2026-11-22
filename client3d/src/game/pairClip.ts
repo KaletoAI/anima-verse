@@ -94,6 +94,49 @@ export function pairClipPhase(input: PairClipInput): PairClipTime {
   return { clipT, ...clipPhaseAt(clipT, loop, clipDurationS, input.loopCount) };
 }
 
+/** The worldmap `place` block's scene clock (§ A8a): a place a SOLO
+ *  furniture run seated the figure on carries that scene's `scene_id`,
+ *  `clip_s` and `tempo` — the held clip runs on it like a pair half. */
+export interface HeldClockBlock {
+  scene_id?: string;
+  clip_s?: number;
+  tempo?: number;
+}
+
+/** The held clip's local clock: CLIP seconds since the clip began, the tempo
+ *  it runs at, the scene it belongs to and the poll stamp it was last
+ *  reconciled with. */
+export interface HeldClock {
+  sceneId: string;
+  clipT: number;
+  tempo: number;
+  stamp: number;
+}
+
+/** Takes a row's `place` block over: no clock in it (no solo scene) = none;
+ *  a new scene adopts `clip_s` as it is; the same scene takes the tempo at
+ *  once and reconciles the clock only for a NEW poll (`stamp`), snapping
+ *  beyond PAIR_SNAP_S — the pair rule (`pairClipPhase`), no wrap: the
+ *  figure wraps against the clip it plays. */
+export function adoptHeldClock(prev: HeldClock | null, place: HeldClockBlock | null | undefined,
+  stamp: number): HeldClock | null {
+  const clipS = place?.clip_s;
+  if (!place || !place.scene_id || typeof clipS !== 'number' || !Number.isFinite(clipS)) return null;
+  const tempo = clipTempo(place.tempo);
+  if (!prev || prev.sceneId !== place.scene_id) return { sceneId: place.scene_id, clipT: Math.max(0, clipS), tempo, stamp };
+  if (prev.stamp === stamp) return { ...prev, tempo };
+  const { clipT } = pairClipPhase({ clipS, tempo, frozen: false, loop: true, clipDurationS: 0, localClipT: prev.clipT });
+  return { sceneId: prev.sceneId, clipT, tempo, stamp };
+}
+
+/** One frame of the held clip's clock: `dt · tempo` CLIP seconds, nothing
+ *  in a frozen world. */
+export function stepHeldClock(held: HeldClock, dt: number, frozen: boolean): HeldClock {
+  const { clipT } = pairClipPhase({ clipS: null, tempo: held.tempo, frozen, dt, loop: true, clipDurationS: 0,
+    localClipT: held.clipT });
+  return { ...held, clipT };
+}
+
 /** The clip clock mapped onto the clip: a cycle replays, a one-shot holds its
  *  last frame, a counted loop replays `loopCount` times and then holds its
  *  last frame. Without a length there is nothing to wrap in. */

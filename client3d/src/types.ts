@@ -315,7 +315,12 @@ export interface MapCharacter {
    *  the room's markers) and chooses nothing. `x`/`z` are WORLD metres from
    *  the server (the scene payload's marker slots are tile-local; for a
    *  pair the point is the place's centre, its anchor). */
-  place?: { id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string } | null;
+  place?: {
+    id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string;
+    /** a SOLO furniture scene's clip clock (§ A8a): its id, CLIP seconds
+     *  since the held clip began, and the tempo it runs at (0.2..1) */
+    scene_id?: string; clip_s?: number; tempo?: number;
+  } | null;
   avatar_url?: string;
   /** Change key of the 3D MESH the server would serve for this character
    *  (§ A11a) — the very string `GET /characters/<name>/model3d` reports as

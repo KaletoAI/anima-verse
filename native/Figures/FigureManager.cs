@@ -342,6 +342,10 @@ public partial class FigureManager : Node3D
             }
             // Finale adoption precedes placement ownership, including the seated own B1 avatar.
             AdoptFinale(fig!, row);
+            // A solo furniture scene's clip clock rides on the place (§ A8a): per poll; when it goes, the clip's own pace.
+            bool hadHeld = fig!.Held is not null;
+            fig.Held = HeldClock.Adopt(fig.Held, row.SceneClock, Stats.Polls);
+            if (hadHeld && fig.Held is null && fig.Player is { } heldPlayer) heldPlayer.SpeedScale = (float)fig.CurrentPace;
             if (!fresh && row.Name == PlayerDriven && HoldAvatarPlacement) continue;
             if (row.HeightCm is > 30 and < 400) fig!.HeightM = row.HeightCm.Value / 100.0;
             if (row.AnimationSets.Count > 0) fig!.Sets = row.AnimationSets;   // setCharacterSets: only a non-empty chain
@@ -742,6 +746,8 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        // A solo scene's clip clock runs whatever path draws the figure (npcs.ts tick: stepHeldClock).
+        if (fig.Held is { } heldClip) fig.Held = heldClip.Step(dt, WorldFrozen);
         if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
         if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
         {
@@ -844,6 +850,8 @@ public partial class FigureManager : Node3D
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY,
                     plan.Moving ? "ground" : fig.SurfaceGroup, finale is not null, finale?.Start ?? false);
         if (finale is { } playing && fig.Player is { } finalePlayer) finalePlayer.SpeedScale = WorldFrozen ? 0 : (float)playing.Speed;
+        // A solo furniture scene's held clip: on the scene's clip clock, at its tempo (§ A8a, place.clip_s) — like a pair half.
+        else if (fig.Held is { } heldClock && !plan.Moving) fig.HoldClipAt(heldClock.ClipT, heldClock.Tempo, WorldFrozen);
         fig.SecondaryFrozen = WorldFrozen;
         fig.UpdateFigure(finale?.Start == true ? 0 : dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);

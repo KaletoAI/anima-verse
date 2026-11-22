@@ -650,6 +650,21 @@ def clip_clock(scene_id: str, clip: str) -> tuple:
     return round(clock["clip_s"], 3), round(clock["tempo"], 3)
 
 
+def solo_clock(name: str, execution_id) -> dict | None:
+    """The clip clock of ``name``'s SOLO furniture scene for the worldmap's
+    ``place`` block (§ A8a): ``{scene_id, clip_s, tempo}`` while the
+    furniture run ``execution_id`` that seated ``name`` is active, has no
+    invitee and is no sleep; None otherwise. A pair or group run is timed
+    through its ``interaction`` block instead. The clip is the held pose
+    (``"<pose_key>|solo"``), so a combined run's next phase starts at 0."""
+    run = _furniture_run(execution_id)
+    if (run is None or run["status"] != "active" or run["members"] or run["actor"] != name
+            or run["definition"]["ability"] == "sleep"):
+        return None
+    clip_s, tempo = clip_clock(execution_id, f"{_engine()._held_pose(run)}|solo")
+    return dict(scene_id=execution_id, clip_s=clip_s, tempo=tempo)
+
+
 def scene_tempo(scene_id, members, roles, pose_key, lead_role) -> float:
     """The tempo a package gives the scene now (provider ``scene.tempo``),
     clamped to [0.2, 1]; 1 without a provider, without an answer or when it

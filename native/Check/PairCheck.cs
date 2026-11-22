@@ -415,6 +415,31 @@ public static class PairCheck
         Expect("F96 missing clip logged once", logs.Count(l => l.Contains("id=missing-96") && l.Contains("missing clip")) == 1, "skip count");
         Expect("F96 missing solo logged once", logs.Count(l => l.Contains("id=missing-solo-96") && l.Contains("missing clip")) == 1, "solo skip count");
 
+        // Fix wave (pair scene): a SOLO furniture scene's held clip runs on the place's clip clock at its tempo. The place
+        // block says clip_s 0.5, tempo 0.5; the player is first put half a clip away (circular distance len/2 > 0.2: the
+        // drift reseeks). Tick(0): clock 0.5, clip at 0.5 mod len. Twelve frames of 1/30 s: 0.5 + 12/30 · 0.5 = 0.7, the
+        // player in step at speed 0.5. A poll with clip_s 3.0 (2.3 off > 0.3) snaps the clock to 3.0. Without the clock
+        // the clip runs at its own pace again (1).
+        gilRow["finale"] = null;
+        var gilPlace = gilRow["place"]!.AsObject();
+        gilPlace["scene_id"] = "solo-run-96"; gilPlace["clip_s"] = 0.5; gilPlace["tempo"] = 0.5;
+        double gilLen = gil.Player!.GetAnimation(gil.Player.AssignedAnimation).Length;
+        gil.Player.Seek((0.5 + gilLen / 2) % gilLen, true);
+        await Poll(); mgr.Tick(0);
+        NearD("T5 solo held clock adopts place.clip_s", gil.Held?.ClipT ?? double.NaN, 0.5, 1e-9);
+        NearD("T5 solo held clip is seeked to the clock", gil.ClipTime, 0.5 % gilLen, ClipTol);
+        for (int i = 0; i < 12; i++) mgr.Tick(Dt);
+        NearD("T5 solo clock advances by dt · tempo", gil.Held!.ClipT, 0.5 + 12 * Dt * 0.5, 1e-9);
+        NearD("T5 solo player runs at the tempo", gil.Player.SpeedScale, 0.5, 1e-6);
+        NearD("T5 solo clip follows the clock", gil.ClipTime, (0.5 + 12 * Dt * 0.5) % gilLen, ClipTol);
+        gilPlace["clip_s"] = 3.0;
+        await Poll(); mgr.Tick(0);
+        NearD("T5 a poll beyond the snap threshold snaps the solo clock", gil.Held!.ClipT, 3.0, 1e-9);
+        gilPlace.Remove("scene_id"); gilPlace.Remove("clip_s"); gilPlace.Remove("tempo");
+        await Poll(); mgr.Tick(0);
+        Expect("T5 without the clock the held clip runs at its own pace", gil.Held is null && Math.Abs(gil.Player.SpeedScale - 1) < 1e-6,
+            $"{gil.Held} {gil.Player.SpeedScale}");
+
         cyRow["finale"]!["id"] = "end-96"; cyRow["finale"]!["kind"] = "greeting-hug";
         await Poll(); mgr.Tick(0);
         Expect("F96 new id starts again", cy.CurrentClip == "greeting-hug__a", cy.CurrentClip);

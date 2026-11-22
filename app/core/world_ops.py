@@ -258,13 +258,23 @@ def build_locations_payload_3d() -> Dict[str, Any]:
 def _place_payload(name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The worldmap's ``place`` block: the held place validated against the
     room's inventory, reduced to what a renderer needs (id, slot, the
-    slot's metre point, facing, room). None when the character holds none."""
+    slot's metre point, facing, room). None when the character holds none.
+    A place a SOLO furniture run seated the character on also carries that
+    scene's clip clock (``scene_id``, ``clip_s``, ``tempo``,
+    ``pose_scene.solo_clock``, § A8a) — the held clip plays by it."""
     from app.core import places
+    from app.core import pose_scene
     p = places.place_of(name, profile)
     if not p:
         return None
-    return {"id": p["id"], "slot": p["slot"], "x": p["x"], "z": p["z"],
-            "facing": p.get("facing"), "room_id": p["room_id"]}
+    block = {"id": p["id"], "slot": p["slot"], "x": p["x"], "z": p["z"],
+             "facing": p.get("facing"), "room_id": p["room_id"]}
+    execution_id = (profile.get("place") or {}).get("execution_id")
+    if execution_id:
+        clock = pose_scene.solo_clock(name, execution_id)
+        if clock:
+            block.update(clock)
+    return block
 
 
 #: ``name -> (cheap change token, model signature, selected path)`` for
