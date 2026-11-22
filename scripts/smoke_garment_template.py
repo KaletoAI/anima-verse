@@ -127,11 +127,13 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
      grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
 [16] Step 3a (the fitted kinds' pattern pieces): ``build_args`` sends ``uv_mode`` "pattern" for briefs, bra, gloves,
-     tights and trousers too (``PATTERN_KINDS``); ``FITTED_VERSION`` is held at 0 (review 2026-11-21: no fitted drape
-     is re-draped before the fitted kinds' texture choice exists), so no ``tsig`` carries it: a top's and every fitted
-     kind's default ``tsig`` (briefs, bra, gloves, tights, trousers) equal the ones ``garment_template.py`` of the base
-     commit c926b67f0 gives for the same inputs (read with ``git show``; skipped with a note without git) — no
-     existing drape re-drapes for step 3a. With ``FITTED_VERSION`` patched to 1 a bra's differs.
+     tights and trousers too (``PATTERN_KINDS``). ``FITTED_VERSION`` is 1 since the fitted kinds' texture choice was
+     released (group A, one re-drape of every fitted drape): a fitted kind's ``tsig`` is md5 of the payload
+     ``{params: keyed_params, version: TEMPLATE_VERSION, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
+     it differs from the pre-release key (the same payload without ``fitted``) in exactly that one component, for
+     briefs, bra, gloves, tights and trousers alike. A top carries no ``fitted`` component: its ``tsig`` still equals
+     the one ``garment_template.py`` of the base commit c926b67f0 gives (read with ``git show``; skipped with a note
+     without git) — no top re-drapes.
 """
 import json
 import shutil
@@ -644,7 +646,15 @@ for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _p16, _ = gt.validate_params({"kind": _k16})
     check(f"[16] {_k16} -> uv_mode pattern",
           gt.build_args(_p16, gt.panel_spec(_p16, _mu16), item_id="x").get("uv_mode") == "pattern")
-check("[16] FITTED_VERSION held at 0", gt.FITTED_VERSION == 0, gt.FITTED_VERSION)
+check("[16] FITTED_VERSION is 1", gt.FITTED_VERSION == 1, gt.FITTED_VERSION)
+_kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["b", "a"])
+for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
+    _pp16 = gt.validate_params({"kind": _k16})[0]
+    _pre16 = {"params": gt.keyed_params(_pp16), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+              "lower": ["a", "b"]}
+    _got16 = gt.tsig(_pp16, **_kw16)
+    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1", _got16 == gt._md5({**_pre16, "fitted": 1}))
+    check(f"[16] ... and differs from the pre-release key", _got16 != gt._md5(_pre16))
 import importlib.util  # noqa: E402
 import subprocess  # noqa: E402
 _src16 = subprocess.run(["git", "show", "c926b67f0:app/core/garment_template.py"], cwd=ROOT, capture_output=True,
@@ -658,22 +668,9 @@ else:
         _spec16 = importlib.util.spec_from_file_location("garment_template_base", _d16 / "garment_template_base.py")
         _gb16 = importlib.util.module_from_spec(_spec16)
         _spec16.loader.exec_module(_gb16)
-        _kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["a"])
-        # each module validates its own way (the base has no ``gusset_m`` yet)
         _raw16 = {"kind": "top", "sleeves": "short"}
         check("[16] a top's tsig is the base commit's", gt.tsig(gt.validate_params(_raw16)[0], **_kw16)
               == _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
-        for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
-            _raw16 = {"kind": _k16}
-            check(f"[16] a default {_k16}'s tsig is the base commit's", gt.tsig(gt.validate_params(_raw16)[0], **_kw16)
-                  == _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
-        _raw16 = {"kind": "bra"}
-        _fv16, gt.FITTED_VERSION = gt.FITTED_VERSION, 1
-        try:
-            check("[16] FITTED_VERSION 1: a bra's tsig differs from the base commit's",
-                  gt.tsig(gt.validate_params(_raw16)[0], **_kw16) != _gb16.tsig(_gb16.validate_params(_raw16)[0], **_kw16))
-        finally:
-            gt.FITTED_VERSION = _fv16
     finally:
         shutil.rmtree(_d16, ignore_errors=True)
 import hashlib  # noqa: E402
