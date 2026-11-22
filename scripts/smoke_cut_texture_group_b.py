@@ -17,7 +17,10 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
 [2] Jobs and parts: ``job_of("skirt_back")`` is "back", ``job_of("skirt_front")`` / ``job_of("waistband")`` "front";
     ``kind_has_back`` of a skirt and of a strapless top True (back panels exist before the cut).
 [3] Families: ``prompt_family`` of "skirt" and "strapless" is "fitted" (``prompt_sha_of`` = the fitted family's sha),
-    of "top" "top" — a top's atlases keep their csig (``PROMPT_SHA`` unchanged).
+    of "top" "top" — a top's atlases keep their csig (``PROMPT_SHA`` unchanged). ``prompt_kind``: Rosi's corset
+    params "strapless", a skirt "skirt", a covered top "top", None ""; ``garment_template.cut_info`` looks the atlas
+    up with it (live test 2026-11-22: with the template kind "top" it asked for the top family's csig, so Rosi's
+    ready corset atlas was never applied).
 [4] A skirt payload laid out as Kira's real cut (2048 px): skirt_front bbox [238, 38, 1547, 920], skirt_back
     [84, 958, 1701, 1935], waistband [38, 1973, 1747, 2010]. ``split_islands`` puts skirt_front + waistband into the
     front job and skirt_back alone into the back job. The front job's main island is skirt_front alone; its bbox
@@ -88,6 +91,11 @@ check("[2] kind_has_back", [gct.kind_has_back(skirt(0.5, 0.3)), gct.kind_has_bac
 
 # [3]
 check("[3] families", [gct.prompt_family(k) for k in ("skirt", "strapless", "top")], ["fitted", "fitted", "top"])
+check("[3] prompt_kind", [gct.prompt_kind(corset), gct.prompt_kind(skirt(0.5, 0.3)), gct.prompt_kind(
+    gt.validate_params({"kind": "top", "shoulders": "covered", "sleeves": "short"})[0]), gct.prompt_kind(None)],
+      ["strapless", "skirt", "top", ""])
+check("[3] cut_info keys the atlas by the prompt kind",
+      "kind=gct.prompt_kind(params)" in (ROOT / "app/core/garment_template.py").read_text(encoding="utf-8"), True)
 check("[3] shas", [gct.prompt_sha_of("skirt") == gct.PROMPT_SHAS["fitted"], gct.prompt_sha_of("top") == gct.PROMPT_SHA],
       [True, True])
 

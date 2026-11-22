@@ -2599,7 +2599,7 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
     sig = gct.csig_for(character_name, item_id, str(islands["sha256"]),
                        has_back_panel=gct.has_back_file(templates_dir(character_name) / str(islands.get("file") or ""),
                                                         str(islands["sha256"])),
-                       kind=str(params.get("kind") or ""))
+                       kind=gct.prompt_kind(params))
     if sig is None:
         out.update(cut_state="missing", reason=f"The item {item_id!r} has no picture")
         return out

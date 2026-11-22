@@ -1097,15 +1097,21 @@ def _islands_of(pattern: dict) -> dict:
         return {}
 
 
-def item_kind(item_id: str) -> str:
-    """The piece's prompt kind: its template kind, "strapless" for a strapless top (cut by ``wrap`` into a front and a
-    back panel, group B) — "" without parameters."""
-    from app.core import garment_template as gt
-    from app.models.inventory import get_item
-    params = gt.params_of(get_item(item_id)) or {}
+def prompt_kind(params: dict | None) -> str:
+    """The prompt kind of template ``params``: the template kind, "strapless" for a strapless top (cut by ``wrap`` into
+    a front and a back panel, group B) — "" without parameters. Every csig of a piece is keyed by it
+    (``prompt_sha_of``): the record's and the one ``garment_template.cut_info`` looks the atlas up with."""
+    params = params or {}
     if params.get("kind") == "top" and params.get("shoulders") == "strapless":
         return "strapless"
     return str(params.get("kind") or "")
+
+
+def item_kind(item_id: str) -> str:
+    """The piece's prompt kind (``prompt_kind`` of its params)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    return prompt_kind(gt.params_of(get_item(item_id)))
 
 
 def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict | None = None,
