@@ -39,6 +39,10 @@ CUT_GATE = {"iou": 0.90, "coverage": 0.97, "island_coverage": 0.90, "spill": 0.0
 WHITE_TOL = 24
 #: Bleed padding grown around every island (``cut_and_bleed``), in cm of the atlas.
 BLEED_CM = 1.0
+#: ``fill_pockets``: background this close to the islands + their bleed is filled too (nearest colour), and every
+#: background pocket they enclose — the round notch between two leg islands at the crotch stayed white past the 1 cm
+#: bleed (Lirien's trousers, live 2026-11-22: ~25 px of white beside the seam, a white spot on the figure).
+POCKET_CM = 3.0
 #: Foreground closer than this to an island is a smeared edge, not spill.
 SPILL_CM = 1.0
 #: ``colour_match``: the largest mean shift (dE76).
@@ -54,8 +58,9 @@ CLAMP_DE = 25.0
 #: the erosion before the bleed is the answer's own outline width (``outline_rim``) — MiniMax keeps a ~5 px dark
 #: outline that the fixed 3 px left as a line along every seam. 8 (2026-11-21): only a whole island thinner than the
 #: erosion keeps its own pixels; a thin part of an island with a core (a jagged fitted border's teeth, a corner) is
-#: regrown from the core — the teeth kept the light outline as bleed seed (``cut_and_bleed``).
-POST_VERSION = 8
+#: regrown from the core — the teeth kept the light outline as bleed seed (``cut_and_bleed``). 9 (2026-11-22): the
+#: composed atlas fills the background pockets near and between the islands (``fill_pockets``).
+POST_VERSION = 9
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -485,6 +490,67 @@ def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.nd
     out = np.full(rgb.shape, 255, np.uint8)
     out[filled] = np.clip(np.rint(col[filled]), 0, 255).astype(np.uint8)
     return out
+
+
+def fill_pockets(img, filled, reach_px: int) -> tuple[np.ndarray, np.ndarray]:
+    """The composed atlas with its background pockets filled: every pixel outside ``filled`` (islands + bleed) that
+    lies within ``reach_px`` of it, or in a hole ``filled`` encloses, takes the colour of its nearest ``filled`` pixel
+    (exact Euclidean distance transform). Returns ``(image, pocket mask)``; the rest stays as it was (white)."""
+    from scipy import ndimage
+
+    out = np.asarray(img).copy()
+    filled = np.asarray(filled, bool)
+    if not filled.any():
+        return out, np.zeros(filled.shape, bool)
+    holes = ndimage.binary_fill_holes(filled) & ~filled
+    dist, (iy, ix) = ndimage.distance_transform_edt(~filled, return_indices=True)
+    pocket = ~filled & ((dist <= float(reach_px)) | holes)
+    out[pocket] = out[iy[pocket], ix[pocket]]
+    return out, pocket
+
+
+#: ``lace_alpha``: a SHEER piece's cut atlas whose fabric shows skin in this share of its fabric pixels or more is lace
+#: (Kira's lace tights, live 2026-11-22: the model painted opaque skin into every gap of the lace although the
+#: prompt said "without skin" — on the figure the legs read as grey-beige pantyhose). Below it the atlas is a plain
+#: sheer cloth and keeps the uniform opacity. Above ``LACE_SKIN_MAX`` the cloth ITSELF is skin-coloured (the YCrCb
+#: box holds browns too: Lirien's brown leather is 99 % "skin"), no lace either.
+LACE_SKIN_SHARE = 0.10
+LACE_SKIN_MAX = 0.70
+#: Bumped when ``lace_alpha`` changes (part of the assembly's texture identity, ``garment_assembly._texture_state``).
+LACE_VERSION = 1
+
+
+def lace_alpha(rgb, opacity: float, skin_mask) -> tuple[np.ndarray | None, dict]:
+    """The RGBA atlas of a sheer lace piece: the skin the model painted into the lace's gaps becomes the sheer base
+    cloth — its colour the threads' (the median of the non-skin fabric pixels), its alpha ``opacity`` — and the
+    threads stay opaque (alpha 1). ``skin_mask`` = ``garment_template.skin_mask`` (YCrCb box). Fabric pixels = not
+    near white (min channel < 235: the white background is no fabric). The gap mask is softened by a 3 x 3 box so the
+    thread edges are not stair-stepped. Returns ``(None, info)`` when the skin share of the fabric pixels is under
+    ``LACE_SKIN_SHARE`` or over ``LACE_SKIN_MAX`` (no lace: the caller keeps the uniform opacity), else
+    ``(rgba uint8, info)``; ``info`` =
+    ``{"skin_share", "thread_rgb", "opacity"}``."""
+    rgb = np.asarray(rgb)[..., :3].astype(np.uint8)
+    fabric = rgb.min(axis=-1) < 235
+    skin = np.asarray(skin_mask(rgb), bool) & fabric
+    n = int(fabric.sum())
+    share = float(skin.sum()) / n if n else 0.0
+    info = {"skin_share": round(share, 4), "thread_rgb": None, "opacity": float(opacity)}
+    threads = fabric & ~skin
+    if not LACE_SKIN_SHARE <= share <= LACE_SKIN_MAX or not threads.any():
+        return None, info
+    thread = np.median(rgb[threads], axis=0)
+    info["thread_rgb"] = [int(round(v)) for v in thread]
+    w = skin.astype(np.float64)
+    pw = np.pad(w, 1, mode="edge")
+    soft = sum(pw[1 + di:1 + di + w.shape[0], 1 + dj:1 + dj + w.shape[1]]
+               for di in (-1, 0, 1) for dj in (-1, 0, 1)) / 9.0
+    soft = np.where(skin, np.maximum(soft, 0.5), soft * (soft > 0.5))
+    col = rgb.astype(np.float64) * (1.0 - soft[..., None]) + thread[None, None, :] * soft[..., None]
+    alpha = 1.0 - (1.0 - float(opacity)) * soft
+    out = np.empty(rgb.shape[:2] + (4,), np.uint8)
+    out[..., :3] = np.clip(np.rint(col), 0, 255).astype(np.uint8)
+    out[..., 3] = np.clip(np.rint(alpha * 255), 0, 255).astype(np.uint8)
+    return out, info
 
 
 # --------------------------------------------------------------------------------------------------------- colour match

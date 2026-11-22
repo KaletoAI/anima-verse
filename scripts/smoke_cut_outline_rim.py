@@ -110,6 +110,6 @@ strip = np.zeros_like(mask)
 strip[180:183, 40:160] = True
 check("5 a coreless strip keeps its own pixels", int((np.all(out == LINE, axis=-1) & strip).sum()), 360)
 
-check("POST_VERSION", post.POST_VERSION, 8)
+check("POST_VERSION (9 since fill_pockets)", post.POST_VERSION, 9)
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

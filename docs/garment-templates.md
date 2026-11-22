@@ -372,7 +372,7 @@ hold, so:
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
 
-`POST_VERSION` 8 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 9 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -429,12 +429,26 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   fixed 3 px left as a grey line along Tilda's side seams (6 px now); a P-H3 answer measures 5 px.
 - `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
   moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 7 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+- `POST_VERSION` = 9 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
   plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`; 8: only a whole island thinner than the erosion keeps
   its own pixels, a thin part of a cored island — a fitted border's jagged teeth, a corner — is regrown from the core:
-  the teeth kept the light outline as bleed seed, a pale zigzag along Kai's jeans waist seam, live 2026-11-21).
+  the teeth kept the light outline as bleed seed, a pale zigzag along Kai's jeans waist seam, live 2026-11-21; 9: the
+  composed atlas fills its background pockets, `fill_pockets`).
+- `POCKET_CM` = 3.0 cm — after the compose, every background pixel this close to the islands + bleed, and every
+  pocket they enclose, takes its nearest filled colour (`fill_pockets`, exact distance transform): the round notch
+  between the two front leg islands of Lirien's trousers stayed white past the 1 cm bleed and showed as a white spot
+  at the crotch seam (live 2026-11-22).
+- A SHEER piece (fabric `sheer`) whose cut atlas shows skin in the gaps of a lace (`lace_alpha`: 10–70 %
+  of the fabric pixels skin-coloured, `LACE_SKIN_SHARE` / `LACE_SKIN_MAX`, the YCrCb box of `skin_mask`) is keyed
+  into an RGBA atlas at assembly (`garment_assembly._lace_keyed`): the gaps become the sheer base cloth — the
+  threads' median colour at the piece's `opacity` — the threads stay opaque, and the material's base colour alpha
+  is 1 (the texture's alpha carries the opacity). The stored atlas stays RGB; `LACE_VERSION` is part of the
+  assembly's texture identity. The model paints skin into the gaps although the prompt says "without skin"
+  (Kira's lace tights, live 2026-11-22: grey-beige pantyhose on the figure). Outside that range — a plain sheer
+  cloth, or a cloth that is itself skin-coloured (brown leather is 99 % "skin" in that box) — the uniform opacity
+  stays.
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

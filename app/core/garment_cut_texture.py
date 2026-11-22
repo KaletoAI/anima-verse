@@ -414,31 +414,138 @@ def prompt_pieces(islands: dict) -> list[str]:
     return out
 
 
-def layout_words(islands: dict) -> list[str]:
+def _box_of(isl: dict) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = (float(v) for v in (isl.get("bbox_px") or _bbox(isl)))
+    return x0, y0, x1, y1
+
+
+def _shape_word(box, largest: bool, many: bool) -> str:
+    x0, y0, x1, y1 = box
+    w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
+    if max(w / h, h / w) >= LAYOUT_STRIP:
+        return "the long thin strip"
+    return "the large piece" if largest and many else "the piece"
+
+
+#: The fitted family's cells (``fitted_places``): thirds of the square template on both axes.
+FITTED_CELL = 1.0 / 3.0
+_ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth")
+
+
+def _fitted_cell(cx: float, cy: float) -> str:
+    v = "top" if cy < FITTED_CELL else "bottom" if cy > 1 - FITTED_CELL else "middle"
+    h = "left" if cx < FITTED_CELL else "right" if cx > 1 - FITTED_CELL else "centre"
+    if v == "middle":
+        return "in the centre" if h == "centre" else f"in the middle {h}"
+    return f"at the {v} {h}"
+
+
+#: Row words of a cell whose pieces lie in 2 or 3 rows (``_rows_of``).
+_ROW_WORDS = {2: ("upper", "lower"), 3: ("upper", "middle", "lower")}
+
+
+def _rows_of(names: list, boxes: dict) -> list[list[str]]:
+    """``names`` grouped into rows, top to bottom: pieces whose bbox height ranges overlap share a row (chained)."""
+    rows: list[list[str]] = []
+    bottom = -1.0
+    for n in sorted(names, key=lambda n: boxes[n][1]):
+        if rows and boxes[n][1] < bottom:
+            rows[-1].append(n)
+            bottom = max(bottom, boxes[n][3])
+        else:
+            rows.append([n])
+            bottom = boxes[n][3]
+    return rows
+
+
+def _ranked_refs(names: list, centre: dict, order: list, axis: int, group: str, single: str = "") -> dict:
+    """The refs of ``names`` (one cell, or one row of it) ordered along ``axis`` (0 = x, 1 = y): one piece ->
+    ``single``; two -> "the left one of the two {group}" / "the right one ..." ("upper" / "lower" along y); more ->
+    "the second from the left of the three {group}" (or "from the top")."""
+    ranked = sorted(names, key=lambda n: (centre[n][axis], centre[n][1 - axis], order.index(n)))
+    if len(ranked) == 1:
+        return {ranked[0]: single}
+    out = {}
+    for k, n in enumerate(ranked):
+        if len(ranked) == 2:
+            side = ("left", "right")[k] if axis == 0 else ("upper", "lower")[k]
+            out[n] = f"the {side} one of the two {group}"
+        else:
+            word = _ORDINALS[k] if k < len(_ORDINALS) else f"number {k + 1}"
+            count = _COUNT_WORDS.get(len(ranked), str(len(ranked)))
+            out[n] = f"the {word} from the {('left', 'top')[axis]} of the {count} {group}"
+    return out
+
+
+def fitted_places(islands: dict) -> dict[str, dict]:
+    """Where every island of a fitted job's payload lies, as a phrase NO other island of the job shares (review
+    2026-11-22: "the piece at the top left" named both front leg panels of Lirien's trousers, the cup and the gore of
+    a bra, both backs of the hand). ``{name: {"cell", "alone", "ref"}}`` (a piece that shares its cell also
+    carries ``group`` — "the two upper pieces at the top centre" — and the sorted ``members`` of it): ``cell`` = the third of the square template
+    its bbox centre lies in on both axes (``FITTED_CELL``: "at the top left", "at the top centre", "in the middle
+    right", "in the centre"); ``alone`` = no other island in that cell; ``ref`` = the noun phrase that picks it out —
+    alone: "the piece at the top left" (``_shape_word``: "the long thin strip" / "the large piece" for the job's
+    largest bbox). Several in a cell whose bboxes lie in 2 or 3 rows (``_rows_of``, height ranges that do not
+    overlap): per row "the upper piece at the top right" (one), "the left one of the two upper pieces at the top
+    centre" (two), "the second from the left of the three lower pieces ..." (more). Otherwise ordered along the axis
+    their centres spread more on (x on a tie): "the left one of the two pieces at the top left" / "the right one ..."
+    ("upper" / "lower" along y); three or more: "the second from the left of the three pieces at the bottom centre"
+    (or "from the top")."""
+    size = float(islands.get("atlas_px") or 2048)
+    order = _pattern_order(islands)
+    boxes = {str(i["name"]): _box_of(i) for i in islands.get("islands", [])}
+    if not boxes:
+        return {}
+    largest = max(boxes, key=lambda n: (boxes[n][2] - boxes[n][0]) * (boxes[n][3] - boxes[n][1]))
+    centre = {n: (0.5 * (b[0] + b[2]) / size, 0.5 * (b[1] + b[3]) / size) for n, b in boxes.items()}
+    cells: dict[str, list[str]] = {}
+    for name in order:
+        cells.setdefault(_fitted_cell(*centre[name]), []).append(name)
+    out = {}
+    for cell, names in cells.items():
+        if len(names) == 1:
+            n = names[0]
+            out[n] = {"cell": cell, "alone": True,
+                      "ref": f"{_shape_word(boxes[n], n == largest, len(boxes) > 1)} {cell}"}
+            continue
+        rows = _rows_of(names, boxes)
+        if 2 <= len(rows) <= len(_ROW_WORDS[len(rows)]):
+            for row, word in zip(rows, _ROW_WORDS[len(rows)]):
+                group = f"the {_COUNT_WORDS.get(len(row), str(len(row)))} {word} pieces {cell}"
+                for n, ref in _ranked_refs(row, centre, order, 0, f"{word} pieces {cell}",
+                                           single=f"the {word} piece {cell}").items():
+                    out[n] = {"cell": cell, "alone": False, "ref": ref, "group": group, "members": sorted(row)}
+            continue
+        xs = [centre[n][0] for n in names]
+        ys = [centre[n][1] for n in names]
+        axis = 0 if (max(xs) - min(xs)) >= (max(ys) - min(ys)) else 1
+        group = f"the {_COUNT_WORDS.get(len(names), str(len(names)))} pieces {cell}"
+        for n, ref in _ranked_refs(names, centre, order, axis, f"pieces {cell}").items():
+            out[n] = {"cell": cell, "alone": False, "ref": ref, "group": group, "members": sorted(names)}
+    return out
+
+
+def layout_words(islands: dict, family: str = "top") -> list[str]:
     """One sentence per island of the job's payload, in pattern order, saying which island of the template is which
     piece — e.g. "the large piece at the top left is the front panel", "the piece at the bottom left is the left
     sleeve", "the long thin strip at the very bottom is the neckband". Positions are the island's bbox centre in the
     square template (``LAYOUT_SIDE`` / ``LAYOUT_VERY``); "large" marks the island with the largest bbox area when the
-    job has more than one; a bbox ``LAYOUT_STRIP`` times longer than wide is "the long thin strip"."""
-    size = float(islands.get("atlas_px") or 2048)
+    job has more than one; a bbox ``LAYOUT_STRIP`` times longer than wide is "the long thin strip".
+    The ``fitted`` family names every island by ``fitted_places`` instead — a phrase no other island of the job
+    shares ("the left one of the two pieces at the top left is the right front leg panel")."""
     names = dict(zip(_pattern_order(islands), prompt_pieces(islands)))
-    boxes = {}
-    for isl in islands.get("islands", []):
-        x0, y0, x1, y1 = (float(v) for v in (isl.get("bbox_px") or _bbox(isl)))
-        boxes[str(isl["name"])] = (x0, y0, x1, y1)
+    if family == "fitted":
+        places = fitted_places(islands)
+        return [f"{places[n]['ref']} is the {names[n]}" for n in _pattern_order(islands)]
+    size = float(islands.get("atlas_px") or 2048)
+    boxes = {str(i["name"]): _box_of(i) for i in islands.get("islands", [])}
     if not boxes:
         return []
     largest = max(boxes, key=lambda n: (boxes[n][2] - boxes[n][0]) * (boxes[n][3] - boxes[n][1]))
     out = []
     for name in _pattern_order(islands):
         x0, y0, x1, y1 = boxes[name]
-        w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
-        if max(w / h, h / w) >= LAYOUT_STRIP:
-            shape = "the long thin strip"
-        elif name == largest and len(boxes) > 1:
-            shape = "the large piece"
-        else:
-            shape = "the piece"
+        shape = _shape_word(boxes[name], name == largest, len(boxes) > 1)
         out.append(f"{shape} {_place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)} is the {names[name]}")
     return out
 
@@ -471,35 +578,36 @@ def main_islands(islands: dict, job: str) -> list[str]:
 
 def main_words(islands: dict, job: str) -> dict:
     """How a fitted prompt names ``job``'s main pieces in its template (``islands`` = the job's payload, as the model
-    sees it): ``{"phrase", "count", "names"}``. One main island: "the {place} shape" (``_place_words`` of its bbox
-    centre); several that are the largest by area (``area_cm2``): "the two largest shapes"; several that are not:
-    "the shapes at the top left and the top right". ``names``: their prompt names joined with "and", each with "the"
-    ("the right front leg panel and the left front leg panel"). ``{"phrase": "", "count": 0, "names": ""}`` without
-    one."""
+    sees it): ``{"phrase", "count", "names"}``. One main island alone in its cell (``fitted_places``): "the {cell}
+    shape" ("the top left shape"); one that shares its cell: its ``ref`` ("the left one of the two pieces at the top
+    left"). Several that are the largest by area (``area_cm2``): "the two largest shapes"; several that are not, each
+    alone in its cell: "the shapes at the top left and at the top right"; exactly the pieces of one row or cell: its
+    group ("the two upper pieces at the top centre"); otherwise their refs joined with "and".
+    ``names``: their prompt names joined with "and", each with "the" ("the right front leg panel and the left front
+    leg panel"). ``{"phrase": "", "count": 0, "names": ""}`` without one."""
     mains = main_islands(islands, job)
     if not mains:
         return {"phrase": "", "count": 0, "names": ""}
-    size = float(islands.get("atlas_px") or 2048)
     by_name = {str(i["name"]): i for i in islands.get("islands", [])}
     words = dict(zip(_pattern_order(islands), prompt_pieces(islands)))
-
-    def place(name):
-        x0, y0, x1, y1 = (float(v) for v in (by_name[name].get("bbox_px") or _bbox(by_name[name])))
-        return _place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)
+    places = fitted_places(islands)
     names = " and ".join(f"the {words[n]}" for n in mains)
     if len(mains) == 1:
-        where = place(mains[0])
-        for lead in ("at the ", "in the "):
-            if where.startswith(lead):
-                where = where[len(lead):]
-        return {"phrase": f"the {where} shape", "count": 1, "names": names}
+        p = places[mains[0]]
+        if p["alone"]:
+            where = p["cell"].split(" ", 2)[-1]       # "at the top left" -> "top left", "in the centre" -> "centre"
+            return {"phrase": f"the {where} shape", "count": 1, "names": names}
+        return {"phrase": p["ref"], "count": 1, "names": names}
     area = {n: float(by_name[n].get("area_cm2") or 0.0) for n in by_name}
     largest = sorted(area, key=lambda n: -area[n])[:len(mains)]
     if set(largest) == set(mains) and len(mains) in _COUNT_WORDS:
         phrase = f"the {_COUNT_WORDS[len(mains)]} largest shapes"
+    elif all(places[n]["alone"] for n in mains):
+        phrase = "the shapes " + " and ".join(places[n]["cell"] for n in mains)
+    elif places[mains[0]].get("members") == sorted(mains):
+        phrase = places[mains[0]]["group"]             # the mains are exactly one row / cell: "the two upper pieces …"
     else:
-        spots = [place(n) for n in mains]
-        phrase = "the shapes " + " and ".join(spots)
+        phrase = " and ".join(places[n]["ref"] for n in mains)
     return {"phrase": phrase, "count": len(mains), "names": names}
 
 # ---------------------------------------------------------------------------------------------------- debug sheet
@@ -1567,10 +1675,12 @@ def references(character_name: str, item_id: str, has_back_panel: bool) -> dict:
             "fabric": item["fabric"]}
 
 
-def compose(results: dict, size: int) -> np.ndarray:
+def compose(results: dict, size: int, px_per_cm: float = 0.0) -> np.ndarray:
     """The one atlas from the jobs' post-processed images: white, then the FRONT job inside its grown area (islands +
     bleed), then the BACK job inside its grown area wherever the front's islands are not, then the back's own islands
-    — an island's own pixels always beat the other job's bleed (the islands are disjoint)."""
+    — an island's own pixels always beat the other job's bleed (the islands are disjoint). Last the background
+    pockets near and between the grown areas are filled (``cut_texture_post.fill_pockets``, ``POCKET_CM``; none
+    without ``px_per_cm``)."""
     out = np.full((size, size, 3), 255, np.uint8)
     order = [j for j in JOBS if j in results]
     for job in order:
@@ -1583,6 +1693,11 @@ def compose(results: dict, size: int) -> np.ndarray:
     for job in order:
         m = results[job]["_mask"]
         out[m] = results[job]["_image"][m]
+    if px_per_cm > 0 and order:
+        grown = np.zeros((size, size), bool)
+        for job in order:
+            grown |= results[job]["_grown"] | results[job]["_mask"]
+        out, _ = cut_texture_post.fill_pockets(out, grown, max(1, int(round(cut_texture_post.POCKET_CM * px_per_cm))))
     return out
 
 
@@ -1644,7 +1759,7 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
         record.update({"state": "rejected", "reason": f"{job.capitalize()}: {entry.get('reason') or NOT_MADE}"})
         record["metrics"] = _summary_metrics(record["jobs"], None, None)
     else:
-        atlas = compose(results, size)
+        atlas = compose(results, size, float(islands.get("px_per_cm") or record.get("px_per_cm") or 0.0))
         seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
         cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
         record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
@@ -1759,7 +1874,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 plain_pieces = (prompt_sleeves(parts[job], record["sleeve_print"]) if family == "top"
                                 else prompt_plain_pieces(parts[job], record["sleeve_print"]))
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
-                                 pieces=prompt_pieces(parts[job]), layout=layout_words(parts[job]),
+                                 pieces=prompt_pieces(parts[job]), layout=layout_words(parts[job], family),
                                  sleeves=plain_pieces, family=family, main=main)
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png

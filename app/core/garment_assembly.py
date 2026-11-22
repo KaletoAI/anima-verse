@@ -645,7 +645,12 @@ def _texture_key(character_name: str, garment: Dict[str, Any]) -> str:
     from app.core import garment_template
     info = garment_template.cut_info(character_name, garment["item_id"], garment.get("record"),
                                      item=garment.get("item"))
-    return f"cut:{info['csig']}" if info["texture"] == "cut" else "projection"
+    if info["texture"] != "cut":
+        return "projection"
+    from app.core import cut_texture_post
+    # a sheer piece's cut atlas is keyed into alpha at assembly (``_apply_cut_atlas``): its version re-assembles
+    lace = f":lace{cut_texture_post.LACE_VERSION}" if _is_sheer(garment) else ""
+    return f"cut:{info['csig']}{lace}"
 
 
 def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) -> Dict[str, Any]:
@@ -655,9 +660,34 @@ def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) ->
     from app.core import garment_template
     atlas, info = garment_template.atlas_for(character_name, garment["item_id"], garment.get("record"),
                                              item=garment.get("item"))
-    if atlas is not None:
-        mesh.image, mesh.mime = atlas, "image/png"
+    if atlas is None:
+        return info
+    opacity = garment_template.sheer_opacity(_template_params(garment))
+    if opacity is not None:
+        atlas, info = _lace_keyed(atlas, opacity, info)
+    mesh.image, mesh.mime = atlas, "image/png"
     return info
+
+
+def _lace_keyed(atlas: bytes, opacity: float, info: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
+    """Live 2026-11-22 (Kira's lace tights): a SHEER piece's cut atlas that shows skin in the lace's gaps
+    (``cut_texture_post.lace_alpha``) is keyed into an RGBA atlas — the gaps the sheer base cloth at ``opacity``, the
+    threads opaque — and ``info["lace"]`` carries the key's numbers; the graft then sets the base colour's alpha to 1
+    (the texture's alpha holds the opacity). Without lace the atlas and the uniform opacity stay as they were."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from app.core import cut_texture_post, garment_template
+    with Image.open(io.BytesIO(atlas)) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    rgba, lace = cut_texture_post.lace_alpha(rgb, opacity, garment_template.skin_mask)
+    if rgba is None:
+        return atlas, {**info, "lace": None}
+    buf = io.BytesIO()
+    Image.fromarray(rgba, "RGBA").save(buf, format="PNG")
+    return buf.getvalue(), {**info, "lace": lace}
 
 
 def _merge_overrides(base: Optional[Dict[str, Any]], extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1238,7 +1268,9 @@ def _build(character_name: str, directory: Path, bare: Path,
         if garment.get("template"):
             from app.core import garment_template
             overrides = _merge_overrides(overrides, garment_template.material_overrides(_template_params(garment)))
-            _apply_cut_atlas(character_name, garment, mesh)
+            if _apply_cut_atlas(character_name, garment, mesh).get("lace"):
+                # the keyed atlas's alpha holds the sheer opacity: the factor must not multiply it a second time
+                overrides = _merge_overrides(overrides, {"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}})
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
             # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the

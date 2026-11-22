@@ -90,7 +90,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -442,19 +442,23 @@ def glb_images(path: Path) -> List[bytes]:
     return out
 
 
-def atlas_in_glb(glb: Path, atlas: Path) -> Dict[str, Any]:
+def atlas_in_glb(glb: Path, atlas: Path, keyed: Optional[bytes] = None) -> Dict[str, Any]:
+    """Whether one of the GLB's images is the atlas — or, for a sheer lace piece, the RGBA atlas the assembly keyed
+    from it (``keyed``, ``garment_assembly._lace_keyed``; compared with its alpha)."""
     import numpy as np
     from PIL import Image
-    want_sha = hashlib.sha256(atlas.read_bytes()).hexdigest()
-    with Image.open(atlas) as a:
-        ref = a.convert("RGB")
+    data = keyed if keyed is not None else atlas.read_bytes()
+    mode = "RGBA" if keyed is not None else "RGB"
+    want_sha = hashlib.sha256(data).hexdigest()
+    with Image.open(io.BytesIO(data)) as a:
+        ref = a.convert(mode)
     best = None
     for blob in glb_images(glb):
         if hashlib.sha256(blob).hexdigest() == want_sha:
             return {"match": True, "how": "bytes", "mad": 0.0}
         try:
             with Image.open(io.BytesIO(blob)) as im:
-                got = np.asarray(im.convert("RGB"), np.float64)
+                got = np.asarray(im.convert(mode), np.float64)
         except Exception:  # noqa: BLE001 — not a picture we can read
             continue
         want = np.asarray(ref.resize((got.shape[1], got.shape[0]), Image.LANCZOS), np.float64)
@@ -726,7 +730,14 @@ def main() -> int:
             atlas = gct.atlas_path(args.character, item_id, sig) if sig else None
             check(f"{item_id} atlas exists", bool(atlas and atlas.is_file()), True)
             if atlas and atlas.is_file() and served:
-                found = atlas_in_glb(Path(served), atlas)
+                from app.core import garment_template as _gt
+                opacity = _gt.sheer_opacity(_gt.params_of(get_item(item_id)))
+                keyed = None
+                if opacity is not None:
+                    kb, kinfo = garment_assembly._lace_keyed(atlas.read_bytes(), opacity, {})
+                    print(f"{item_id} sheer {opacity}: lace key {kinfo.get('lace')}")
+                    keyed = kb if kinfo.get("lace") else None
+                found = atlas_in_glb(Path(served), atlas, keyed)
                 print(f"{item_id} atlas in the served GLB: {found}")
                 check(f"{item_id}: the served GLB carries the atlas", found["match"], True)
             if sig:
