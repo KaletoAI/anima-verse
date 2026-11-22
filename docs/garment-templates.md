@@ -370,7 +370,7 @@ hold, so:
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
 
-`POST_VERSION` 7 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 8 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -430,7 +430,9 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 - `POST_VERSION` = 7 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
-  plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`).
+  plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`; 8: only a whole island thinner than the erosion keeps
+  its own pixels, a thin part of a cored island — a fitted border's jagged teeth, a corner — is regrown from the core:
+  the teeth kept the light outline as bleed seed, a pale zigzag along Kai's jeans waist seam, live 2026-11-21).
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

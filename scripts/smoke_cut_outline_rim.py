@@ -1,5 +1,5 @@
 """Smoke: the erosion before the bleed is the answer's own outline width (``cut_texture_post.outline_rim``,
-POST_VERSION 7).
+POST_VERSION 7; the per-island thin rule of POST_VERSION 8 in case 5).
 
 Usage: ./.venv/bin/python scripts/smoke_cut_outline_rim.py
 
@@ -91,6 +91,25 @@ check("3 clamped to RIM_MAX_PX", rim["px"], post.RIM_MAX_PX)
 img, mask = canvas(92, 108)
 check("4 too thin for the band -> RIM_MIN_PX", post.outline_rim(img, mask), {"px": 3, "share": [], "ref": None})
 
-check("POST_VERSION", post.POST_VERSION, 7)
+# 5 -------------------------------------------------------------------------------------------------------------
+# A jagged border: the square (rows / cols 40..159) plus a TOOTH on its top edge, rows 34..39 x cols 80..82 (6 x 3 =
+# 18 px), all of it outline colour, the square itself cloth; and a separate STRIP island rows 180..182 x cols 40..159
+# (3 x 120 = 360 px, outline colour too). Erosion 3: the tooth (3 px wide) erodes away, the square keeps a core, so
+# the tooth is regrown from that core: all 18 px cloth (the old per-pixel rule kept them: 18 px outline). The strip
+# has no core at all (3 px thick < 2 * 3 + 1) and keeps its own 360 px of outline colour.
+img, mask = canvas(40, 160)
+mask[34:40, 80:83] = True
+img[34:40, 80:83] = LINE
+mask[180:183, 40:160] = True
+img[180:183, 40:160] = LINE
+out = post.cut_and_bleed(img, mask, 2, erode_px=3)
+tooth = np.zeros_like(mask)
+tooth[34:40, 80:83] = True
+check("5 tooth regrown from the core (px of cloth colour)", int((np.all(out == CLOTH, axis=-1) & tooth).sum()), 18)
+strip = np.zeros_like(mask)
+strip[180:183, 40:160] = True
+check("5 a coreless strip keeps its own pixels", int((np.all(out == LINE, axis=-1) & strip).sum()), 360)
+
+check("POST_VERSION", post.POST_VERSION, 8)
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

@@ -52,8 +52,10 @@ CLAMP_DE = 25.0
 #: is the answer's own (``answer_white_tol``). 6 (2026-11-21): a PLAIN back view (``garment_cut_texture.PLAIN_BACK_DETAIL``)
 #: gets no back job — the back panel is the front panel's fabric (``garment_cut_texture.fill_plain_back``). 7 (2026-11-21):
 #: the erosion before the bleed is the answer's own outline width (``outline_rim``) — MiniMax keeps a ~5 px dark
-#: outline that the fixed 3 px left as a line along every seam.
-POST_VERSION = 7
+#: outline that the fixed 3 px left as a line along every seam. 8 (2026-11-21): only a whole island thinner than the
+#: erosion keeps its own pixels; a thin part of an island with a core (a jagged fitted border's teeth, a corner) is
+#: regrown from the core — the teeth kept the light outline as bleed seed (``cut_and_bleed``).
+POST_VERSION = 8
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -443,17 +445,30 @@ def outline_rim(img, mask) -> dict:
 def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.ndarray:
     """The atlas cut to the islands with bleed padding: the mask eroded by ``erode_px`` (the model's outline, drawn
     inside the islands), then regrown ``erode_px + bleed_px`` times by one 8-neighbour ring whose pixels take the mean
-    of their already filled neighbours. A part of an island thinner than the erosion keeps its own pixels. Returns
-    (h, w, 3) uint8, white outside the grown area."""
+    of their already filled neighbours, until every mask pixel is filled. An ISLAND thinner than the erosion (no core
+    left, a strap or a band) keeps its own pixels; a thin part of an island with a core is regrown from that core —
+    the jagged border of a fitted piece's island (bisected triangles: teeth 10-30 px deep at 2048) held the model's
+    light outline in every tooth, and the old per-pixel rule (``mask & ~dilate(core)``) kept it as seed: a pale
+    zigzag along the waist seam of Kai's jeans (live 2026-11-21). Returns (h, w, 3) uint8, white outside the grown
+    area."""
+    from scipy import ndimage
+
     rgb = np.asarray(img)[..., :3].astype(np.float64)
     mask = np.asarray(mask, bool)
     core = erode(mask, erode_px)
-    core |= mask & ~dilate(core, erode_px)
+    labels, count = ndimage.label(mask, structure=np.ones((3, 3), bool))
+    if count:
+        cored = np.zeros(count + 1, bool)
+        cored[np.unique(labels[core])] = True
+        cored[0] = True
+        core |= mask & ~cored[labels]
     filled = core.copy()
     col = np.where(filled[..., None], rgb, 0.0)
     h, w = mask.shape
     offs = [(di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj]
-    for _ in range(int(erode_px) + int(bleed_px)):
+    steps = 0
+    while steps < int(erode_px) + int(bleed_px) or (mask & ~filled).any():
+        steps += 1
         ring = dilate(filled, 1) & ~filled
         if not ring.any():
             break
