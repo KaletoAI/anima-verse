@@ -37,11 +37,15 @@ B. Key numbers on a synthetic body, derived by hand from the build's rules:
      0.025 under their tops (crotch 0.92 - 0.06 = 0.86 -> stocking top 0.86 - 0.07 = 0.79; knee 0.48 - 0.05 = 0.43).
    * Trousers stirrup: the leg ends at 0.07 too.
    * Skirt: the hem sags SKIRT_HEM_DIP_M = 0.02 at the centre (from the hem height of ``garment_template.outline``).
+     The waistband (step 3b: the panels' top face rows, ``WAISTBAND_M``) is drawn as one line ``band_edge`` under the
+     skirt's top: thin top - 0.012, wide top - 0.030; none draws no line.
 
 C. Pairwise distinctness: for every parameter of every kind (``garment_preview_sheet.option_sets``), every two
    options differ — the cloth's mask IoU <= 0.97, or the guides' (lines / dashes) IoU <= 0.9, or a patch of cloth of at
    least 4 cm^2 (2 x 2 cm) is in one and not the other (a lacing, a gore, a slit). EXCEPTIONS are the options
-   the build itself does not tell apart in a front view (listed below with their reason).
+   the build itself does not tell apart in a front view (listed below with their reason): the fabric, and the
+   texture-only fields ``texture`` / ``sleeve_print`` (``garment_template.TEXTURE_ONLY`` — where the texture comes
+   from, no drape: the cut is the same; ``fly`` is texture-only too but drawn, so it stays checked).
 """
 import ast
 import os
@@ -290,12 +294,18 @@ body = [REG.metres(*q) for s in d["shapes"] if s["role"] == "body" for q in s["p
 shape = gt.outline(sk, MEAS)
 hem_y = shape["top_y"] - shape["knots"][-1][0]
 check("B skirt hem sag", hem_y - min(y for _x, y in body), gp.SKIRT_HEM_DIP_M, 2e-3)
+for wb, below in (("thin", 0.012), ("wide", 0.030)):
+    check(f"B skirt waistband {wb} edge", role_ys(drawn(P(kind="skirt", waistband=wb)), "band_edge"),
+          [round(shape["top_y"] - below, 3)], 2e-3)
+check("B skirt waistband none draws no edge", role_ys(drawn(P(kind="skirt", waistband="none")), "band_edge"), [])
 
 # --- C. pairwise distinctness ------------------------------------------------------------------------------------
 #: (kind, param, a, b) the build does not tell apart from the front, and why.
 EXCEPTIONS = {
     # the fabric is the cloth run's (drape) and the material's only — the cut is the same (``FABRICS``)
     **{(k, "fabric"): "drape / material only" for k in gt.BUILT_KINDS},
+    # where the texture comes from (``TEXTURE_ONLY``): no drape, the cut is the same
+    **{(k, f): "texture only" for k in gt.BUILT_KINDS for f in ("texture", "sleeve_print")},
 }
 #: The smallest patch of cloth that counts as a visible difference (2 x 2 cm).
 XOR_MIN_CM2 = 4.0

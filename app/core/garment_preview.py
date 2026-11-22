@@ -712,6 +712,14 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
             else:
                 add("slit", "dash", [[x0, hem_y - dip], [x0, top_s]])
             mark(x0 + 0.03, top_s, f"slit {s} {round(p['slit_m'] * 100)} cm")
+    # the skirt's waistband (step 3b): the top face rows of both panels, ``WAISTBAND_M`` high under the skirt's top —
+    # its lower edge as a line across the piece, so none / thin / wide differ in the dialog as they do in the drape
+    if kind == "skirt":
+        wb = gt.WAISTBAND_M.get(p.get("waistband", "none"), 0.0)
+        if wb > 0:
+            yb = top_y - wb
+            add("band_edge", "line", [_at(left, yb), _at(right, yb)])
+            mark(_at(left, yb)[0] - 0.02, yb, f"waistband {p['waistband']} {round(wb * 100, 1)} cm", "end")
     # the dimension: the length beside the piece, the hem height under it
     outer = max(q[0] for q in right) + 0.06
     dim_top = waist_y if kind in ("skirt", "dress") else top_y
