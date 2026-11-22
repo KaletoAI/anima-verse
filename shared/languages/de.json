@@ -7004,6 +7004,8 @@
     "Sleeves of the texture": "Ärmel der Textur",
     "Placket (painted)": "Knopfleiste (gemalt)",
     "Buttons (0 = automatic)": "Knöpfe (0 = automatisch)",
+    "Saved — the next Build cuts the pattern again and renders the texture from cut again (image jobs)": "Gespeichert — der nächste Build schneidet den Schnitt neu zu und erzeugt die Schnitt-Textur neu (Bild-Jobs)",
+    "Painted onto the texture from cut along the front. On a top, switching it on or off cuts the pattern again (the next Build renders the texture from cut again, image jobs); the style and the button count only re-assemble the figure.": "Wird entlang der Vorderkante auf die Schnitt-Textur gemalt. Bei einem Oberteil schneidet das Ein- oder Ausschalten den Schnitt neu zu (der nächste Build erzeugt die Schnitt-Textur neu, Bild-Jobs); Art und Knopfzahl setzen nur die Figur neu zusammen.",
     "Painted onto the texture from cut along the front; a switch only re-assembles the figure (0 hub jobs).": "Wird entlang der Vorderkante auf die Schnitt-Textur gemalt; ein Wechsel setzt nur die Figur neu zusammen (0 Hub-Jobs).",
     "Waiting for the front job — the projection stays": "Wartet auf den Vorderseiten-Job — die Projektion bleibt",
     "Waiting for the back job — the projection stays": "Wartet auf den Rückseiten-Job — die Projektion bleibt",

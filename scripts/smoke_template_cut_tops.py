@@ -8,8 +8,10 @@ Work on a COPY of a character's base body (``model3d/base*.glb``), never on a li
 goes into a temp folder. Each case is a cut-only run (``build_args`` + ``cut_only``) of ``validate_params`` of its
 params, no lower layers.
 
-What the rules of ``garment_template_build.build_bodice`` give a ``top`` since phases E + F (B8 / B9 / B10 now for
-every kind with a bodice), derived from them:
+What the rules of ``garment_template_build.build_bodice`` give a ``top`` since phases E + F (B8 / B9 / B10 for every
+jacket and dress, and for a top with a ``collar`` or a ``placket`` — ``garment_template.neck_rules``; cases [2]-[4]
+set ``placket`` "buttons" for it; a top with neither keeps its cut from before the phases:
+``smoke_template_cut_tops_main.py``), derived from them:
 
 [1] covered, elbow sleeves, crew, ``collar`` stand (B9): a collar is the binding, so no ``band``; the collar is a strip
     cut at the back centre and relaxed like the waistband: islands exactly {front, back, sleeve_l, sleeve_r, collar},
@@ -64,9 +66,9 @@ _TOP = {"kind": "top", "fabric": "medium", "shoulders": "covered", "sleeves": "e
         "length_m": 0.29}
 CASES = {
     "1_stand_collar": dict(_TOP, neckline="crew", collar="stand"),
-    "2_v": dict(_TOP, neckline="v", neck_depth_m=0.05),
-    "3_deep_crew": dict(_TOP, neckline="crew", neck_depth_m=0.15),
-    "4_crew": dict(_TOP, neckline="crew"),
+    "2_v": dict(_TOP, neckline="v", neck_depth_m=0.05, placket="buttons"),
+    "3_deep_crew": dict(_TOP, neckline="crew", neck_depth_m=0.15, placket="buttons"),
+    "4_crew": dict(_TOP, neckline="crew", placket="buttons"),
 }
 ISLANDS = {
     "1_stand_collar": {"front", "back", "sleeve_l", "sleeve_r", "collar"},

@@ -441,9 +441,10 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
     yoke on the body's top surface (``_surface_z``), every meridian laid along the collider (``_lay_path``). Without
     it the A144 rules stand (torso-only radius, a circle round the neck joint).
 
-    Step 3c / 3d (plan group B, phases C and D) — ``kind`` "jacket" or "dress", and since phases E + F a "top" (a
-    covered top: ``garment_template.NECK_VERSION``; an off-shoulder or strapped top has no neck ring and is unchanged
-    byte for byte): an open front's two fronts are ``left_front`` (39, columns c < N/4, the wearer's left, +X) and
+    Step 3c / 3d (plan group B, phases C and D) — ``kind`` "jacket" or "dress", and since phases E + F a "top" with a
+    collar or a placket (``garment_template.neck_rules``, the build arg ``neck_rules``; a top without either is built
+    with ``kind`` None, its islands the bytes from before the phases; an off-shoulder or strapped top has no neck ring
+    and is unchanged byte for byte either way): an open front's two fronts are ``left_front`` (39, columns c < N/4, the wearer's left, +X) and
     ``right_front`` (40, c >= 3N/4) (B7); the innermost yoke ring is the band only for a closed front without a collar
     and a crew / boat neckline or a scoop at most ``BAND_SCOOP_MAX_M`` deep (B8), else it belongs to the panel of its
     column; a dress's torso faces at or under the row nearest ``waist_y`` (the outline's waist, world Z) are the skirt
@@ -2150,9 +2151,12 @@ def run(a):
         thickness = float(prm.get("thickness", 0.004))
         col, ctree = gd.rest_collider(body, extra=lower)
         uv_mode = prm.get("uv_mode") or "grid"
+        # phases E + F: a top is cut by the neck-ring rules only with a collar or a placket (``neck_rules``); without
+        # them it takes the path from before the phases (kind None), its islands the same bytes
+        bodice_kind = prm.get("kind") if prm.get("kind") != "top" or prm.get("neck_rules") else None
         verts, faces, fuv, binfo = build_bodice(spec, btree, ftree, centre, arm, ctree=ctree,
                                                 clear=thickness + gd.BUILD_CLEAR_EXTRA_M, uv_mode=uv_mode,
-                                                kind=prm.get("kind"),
+                                                kind=bodice_kind,
                                                 waist_y=(spec.get("outline") or {}).get("waist_y"))
         pattern = {k: binfo.pop(k) for k in ("face_part", "seam_edges", "band_strip", "uv_caps", "collar_rows",
                                              "marks")}
@@ -2207,7 +2211,7 @@ def run(a):
             hem_b = float(min(v.co.z for v in obj.data.vertices))
             slit_edges = split_slit(obj, None, prm.get("slit") or {}, hem_b, centre)
         if uv_mode == "pattern":
-            uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json", kind=prm.get("kind"))
+            uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json", kind=bodice_kind)
             uv_info["parts_built"] = parts_built
             uv_info["parts_kept"] = parts_kept
             if cut_only:

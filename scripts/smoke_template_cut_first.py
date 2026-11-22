@@ -10,7 +10,8 @@ equal.py``. Every expectation is derived by hand below.
 [1] The cut signature's content — what ``garment_template_build.run`` reads before the ``cut_only`` return:
     [1.1] the builder: every ``prm[...]`` / ``prm.get(...)`` key read in ``run`` before the top's ``if cut_only:`` (the
           last one in ``run``; the fitted kinds' branch returns at the first, step 3a) is one of
-          progress_file, spec, lower_offsets, lower_shapes, torso_half_m, thickness, uv_mode, node, slit, cut_only —
+          progress_file, spec, lower_offsets, lower_shapes, torso_half_m, thickness, uv_mode, node, slit, cut_only,
+          kind, waistband_m, neck_rules (a top with a collar or a placket, phases E + F) —
           none of fabric, drape_quality, frames, poses, shape_groups, smooth_weights, render (read after it); and
           ``inp["front"]`` / ``inp["back"]`` (the views) only after it.
     [1.2] the parameters: ``build_args`` of a top with fabric "medium" and with "stiff" (same spec) differ in exactly
@@ -18,8 +19,9 @@ equal.py``. Every expectation is derived by hand below.
           round(6 * 1.5) = 9 for both — the key still differs because ``fabric`` does); ``panel_spec`` of both on a
           real body's measurements (Dario's, a literal below) is the same dict. So ``DRAPE_ONLY`` = ("fabric",).
     [1.3] ``cut_sig`` = md5[:12] of json({"params": keyed_params minus fabric, "version": TEMPLATE_VERSION (10),
-          "uv_pattern": a top's ``TOP_UV_PATTERN_SHA``, "base": base sha, "lower": sorted tokens, and for a covered top
-          (phases E + F, ``NECK_VERSION``) "neck": 1}, sort_keys, compact) —
+          "uv_pattern": a top's ``TOP_UV_PATTERN_SHA``, "base": base sha, "lower": sorted tokens}, sort_keys, compact) —
+          a covered top WITHOUT a collar or a placket carries no "neck" (phases E + F key only a top cut by the neck
+          rules: ``smoke_template_cut_tops_main.py``), so its key is the one it had before them —
           recomputed here from the formula; ``TOP_UV_PATTERN_SHA`` = md5[:12] of ``uv_pattern.py`` at c926b67f0 (``git
           show``; the base the tops were last cut with, so a top's recorded ``cut_sig`` from before step 3a stays the
           current one — no re-drape of every top, decision D7 b); a fitted piece (briefs) keys md5 of the CURRENT
@@ -149,7 +151,7 @@ cut_at = run_src.rindex("if cut_only:")
 before = run_src[:cut_at]
 read = set(re.findall(r'prm\["(\w+)"\]', before)) | set(re.findall(r'prm\.get\("(\w+)"', before))
 allowed = {"progress_file", "spec", "lower_offsets", "lower_shapes", "torso_half_m", "thickness", "uv_mode", "node",
-           "slit", "cut_only", "kind", "waistband_m"}
+           "slit", "cut_only", "kind", "waistband_m", "neck_rules"}
 check("[1.1] the cut reads only the cut's build args", read <= allowed and "spec" in read and "slit" in read,
       sorted(read))
 drape_only_args = {"fabric", "drape_quality", "frames", "poses", "shape_groups", "smooth_weights", "render"}
@@ -196,8 +198,7 @@ except (OSError, subprocess.CalledProcessError) as e:
     print(f"NOTE [1.3] git show c926b67f0 failed ({e}): the top's key is taken from the constant")
     top_sha = gtc.TOP_UV_PATTERN_SHA
 cp = {k: v for k, v in gt.keyed_params(TOP).items() if k != "fabric"}
-want = hashlib.md5(json.dumps({"params": cp, "version": 10, "uv_pattern": top_sha, "base": "b0", "lower": ["a:1", "b:2"],
-                               "neck": 1},
+want = hashlib.md5(json.dumps({"params": cp, "version": 10, "uv_pattern": top_sha, "base": "b0", "lower": ["a:1", "b:2"]},
                               sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
 k0 = gtc.cut_sig(TOP, base_sha="b0", lower=["b:2", "a:1"])
 check("[1.3] cut_sig = the formula (lower sorted)", k0 == want and gt.TEMPLATE_VERSION == 10

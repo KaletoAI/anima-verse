@@ -151,10 +151,12 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
             a stand collar on an off-shoulder or strapped top becomes "none" (no neck ring to stand on).
      [18.2] ``placket`` / ``buttons`` are ``TEXTURE_ONLY``: a top's ``tsig`` with placket "buttons", 7 buttons equals the
             one without; ``collar`` "stand" changes it (a new geometry).
-     [18.3] ``NECK_VERSION`` is 1: the cut key of a covered top (a neck ring: the B8 neckband rule, the stand-collar
-            strip, the placket line) is md5 of the payload ``{params: cut_params, version, uv_pattern, base, lower}``
-            PLUS ``"neck": 1``; an off-shoulder top and a top with straps (no neck ring: their islands are byte-identical,
-            ``smoke_template_cut_tops.py`` [5]) carry none — their cuts and atlases stay.
+     [18.3] ``NECK_VERSION`` is 1: the cut key of a covered top cut by the neck rules (``neck_rules``: a collar or a
+            placket — the B8 neckband rule, the stand-collar strip, the placket line) is md5 of the payload
+            ``{params: cut_params, version, uv_pattern, base, lower}`` PLUS ``"neck": 1``; a covered top with neither
+            is cut as before and carries none (``smoke_template_cut_tops_main.py``: byte-identical to 84feba712); an
+            off-shoulder top and a top with straps (no neck ring: their islands are byte-identical,
+            ``smoke_template_cut_tops.py`` [5]) carry none, with a placket too — their cuts and atlases stay.
 """
 import json
 import shutil
@@ -807,12 +809,18 @@ def _md18(payload):
     return _h18.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
-check("[18.3] a covered top's cut key = payload + neck 1",
-      gtc.cut_sig(_t18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_t18), "neck": 1}))
+check("[18.3] a covered top without collar / placket: the key before the phases (no neck)",
+      gtc.cut_sig(_t18, base_sha="b" * 64, lower=["x"]) == _md18(_cut18(_t18)))
+for _extra18 in ({"placket": "buttons"}, {"collar": "stand"}):
+    _n18 = dict(_t18, **_extra18)
+    check(f"[18.3] a covered top with {_extra18}: payload + neck 1",
+          gtc.cut_sig(_n18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_n18), "neck": 1}))
 for _sh18 in ("off_shoulder", "straps"):
     _o18 = gt.validate_params({"kind": "top", "shoulders": _sh18, "sleeves": "elbow"})[0]
-    check(f"[18.3] a {_sh18} top's cut key carries no neck",
-          gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18(_cut18(_o18)))
+    check(f"[18.3] a {_sh18} top's cut key carries no neck, with a placket too",
+          gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18(_cut18(_o18))
+          and gtc.cut_sig(dict(_o18, placket="buttons"), base_sha="b" * 64, lower=["x"])
+          == _md18(_cut18(dict(_o18, placket="buttons"))))
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)

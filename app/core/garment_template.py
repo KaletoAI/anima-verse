@@ -91,10 +91,11 @@ FITTED_VERSION = 1
 #: ring strip; a skirt's ``waistband`` field). Phases C and D (2026-11-22): the jacket and the dress join at the same
 #: version — their keys gain it, so each re-drapes once; a skirt's or a strapless top's key stays.
 PANEL_VERSION = 1
-#: Phases E + F (plan group B): a covered top's neck ring — the neckband only for a closed crew / boat / scoop at most
-#: 8 cm deep without a collar (B8), a stand collar as a relaxed strip laid out of the neck as a smooth ring (B9), and
-#: the placket's centre line (``marks.json``, B10). Part of the CUT key of a covered top only (``neck_piece``): its
-#: islands change, so its cut and atlas are due once; an off-shoulder / strapped top keeps its key and its bytes.
+#: Phases E + F (plan group B): the neck ring by the phase rules (``neck_rules``) — the neckband only for a closed
+#: crew / boat / scoop at most 8 cm deep without a collar (B8), a stand collar as a relaxed strip laid out of the neck
+#: as a smooth ring (B9), and the placket's lines (``marks.json``, B10). Part of the CUT key (``neck_piece``) of every
+#: jacket and dress and of a covered top with a collar or a placket: their islands follow these rules. A top with
+#: neither is cut as before, its key and bytes unchanged; an off-shoulder / strapped top keeps its key and its bytes.
 NECK_VERSION = 1
 #: Phase G (plan group B): a strapless top's front is cut open at the centre and at two bust darts in its UV
 #: (``app/blender/scripts/corset_darts.py``; the mesh stays whole) and its back centre is the placket line. Part of the
@@ -513,9 +514,25 @@ def panel_piece(params: Dict[str, Any]) -> bool:
                                                  and params.get("shoulders") == "strapless")
 
 
+def neck_rules(params: Dict[str, Any]) -> bool:
+    """Phases E + F: whether the builder cuts a piece's neck ring by the phase rules (``build_args`` ``neck_rules``:
+    the B8 neckband, the relaxed band and stand-collar strips, the placket's lines) — every jacket and dress, and a top
+    only with a ``collar`` or a ``placket`` set. A top with neither keeps the cut it had before the phases, byte for
+    byte (its band and all: ``scripts/smoke_template_cut_tops_main.py``)."""
+    kind = params.get("kind")
+    if kind in ("jacket", "dress"):
+        return True
+    return kind == "top" and (str(params.get("collar") or "none") != "none"
+                              or str(params.get("placket") or "none") != "none")
+
+
 def neck_piece(params: Dict[str, Any]) -> bool:
-    """Phases E + F: a top with a neck ring (shoulders covered) — its cut key carries ``NECK_VERSION``."""
-    return params.get("kind") == "top" and params.get("shoulders") == "covered"
+    """Phases E + F: a piece whose CUT key carries ``NECK_VERSION`` — a jacket, a dress, and a covered top cut by the
+    phase rules (``neck_rules``: a collar or a placket). An off-shoulder / strapped top with a placket keeps its key:
+    its islands are the same bytes either way, only its placket line is written (B11)."""
+    if params.get("kind") in ("jacket", "dress"):
+        return True
+    return neck_rules(params) and params.get("shoulders") == "covered"
 
 
 def corset_top(params: Dict[str, Any]) -> bool:
@@ -2483,11 +2500,13 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
-            # pattern-piece UV islands for a top, the fitted kinds and a skirt; a jacket and a dress keep the grid UV
-            # until their phase of plan group B
+            # pattern-piece UV islands for every ``PATTERN_KINDS`` kind
             "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid",
             # step 3b (B2): a skirt's waistband rows (``uv_pattern.wrap_parts``); read before the cut
-            **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {})}
+            **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {}),
+            # phases E + F: a top with a collar or a placket is cut by the neck-ring rules (``neck_rules``); without
+            # them the arguments are the ones before the phases
+            **({"neck_rules": True} if params["kind"] == "top" and neck_rules(params) else {})}
 
 
 def work_wall_s(data: Dict[str, Any]) -> Optional[float]:

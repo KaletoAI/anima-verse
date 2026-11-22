@@ -155,6 +155,10 @@ const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m'
   'texture']
 /** `garment_template.TEXTURE_ONLY`: a save that changes only these re-assembles, it never re-drapes. */
 const TEXTURE_ONLY_FIELDS: (keyof TemplateParams)[] = ['texture', 'sleeve_print', 'placket', 'buttons', 'fly']
+/** `garment_template.neck_piece`: a covered top is cut by the neck-ring rules only with a collar or a placket — a
+ *  placket switched on or off there is a new cut (its key gains or loses "neck"), not a re-assembly. */
+const neckCut = (p: TemplateParams | undefined | null): boolean => !!p && p.kind === 'top' && p.shoulders === 'covered'
+  && ((p.collar || 'none') !== 'none' || (p.placket || 'none') !== 'none')
 /** Fields shown as a 0…1 number rather than centimetres. */
 const SHARES = new Set<keyof TemplateParams>(['flare', 'fit', 'sleeve_fit', 'opacity', 'leg_cut', 'back_coverage', 'cup_coverage', 'push_up'])
 
@@ -317,10 +321,13 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     try {
       await apiPut(path, { params: draft, source })
       // the texture source alone never re-drapes (TEXTURE_ONLY): only the figure is assembled again
-      const textureOnly = !!data?.params && (Object.keys(draft) as (keyof TemplateParams)[])
+      const recut = !!data?.params && neckCut(draft) !== neckCut(data.params)
+      const textureOnly = !!data?.params && !recut && (Object.keys(draft) as (keyof TemplateParams)[])
         .every((k) => TEXTURE_ONLY_FIELDS.includes(k) || draft[k] === data.params?.[k])
-      setSaved(t(textureOnly ? 'Saved — the figure is assembled again with this texture (CPU, 0 hub jobs)'
-        : 'Saved — the next Build drapes it (CPU, 0 hub jobs)'))
+      setSaved(t(recut && draft.texture === 'cut'
+        ? 'Saved — the next Build cuts the pattern again and renders the texture from cut again (image jobs)'
+        : textureOnly ? 'Saved — the figure is assembled again with this texture (CPU, 0 hub jobs)'
+          : 'Saved — the next Build drapes it (CPU, 0 hub jobs)'))
       toast(t('Template parameters saved'), 'success')
       onSaved()
       reloadProgress()
@@ -443,7 +450,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         ) : null}
                         {key === 'placket' ? (
                           <span className="ga-form-hint" data-placket-note="">
-                            {t('Painted onto the texture from cut along the front; a switch only re-assembles the figure (0 hub jobs).')}
+                            {draft.kind === 'top' && draft.shoulders === 'covered'
+                              ? t('Painted onto the texture from cut along the front. On a top, switching it on or off cuts the pattern again (the next Build renders the texture from cut again, image jobs); the style and the button count only re-assemble the figure.')
+                              : t('Painted onto the texture from cut along the front; a switch only re-assembles the figure (0 hub jobs).')}
                           </span>
                         ) : null}
                         {key === 'texture' ? (
