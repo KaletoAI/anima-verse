@@ -78,6 +78,18 @@ ROWS_ALT = {
     "skirt": (("skirt_front",), ("skirt_back",), ("waistband",)),
     "dress": (("front", "back", "sleeve_r", "sleeve_l"), ("skirt_front", "skirt_back"), ("collar", "band")),
 }
+#: Stage 1 after step 3b (2026-11-22): the kinds whose PAIR of panels ``pack`` may also nest (``nest_layouts``) — the
+#: two panels placed by their real outlines instead of their boxes: the second beside the first at a vertical offset,
+#: or below it at a horizontal offset (both upright, never turned: a turned panel would reach its job's model upside
+#: down), the trim either in a row under the pair or standing upright to its right. Measured on the world's skirts
+#: (rows / alt -> nested): Kira's slit skirt 24.40 -> 26.08 (the band upright beside the stacked panels), Tilda's wool
+#: skirt 13.88 -> 15.03 (the back panel's narrow top beside the front's hem), Ylva's wrap skirt 13.26 -> 15.35,
+#: Gelina's circle skirt 11.89 -> 12.66; Rosi's pencil skirt stays 20.41 (its band is the widest island: a tie keeps
+#: the rows).
+NEST = {"skirt": {"pair": ("skirt_front", "skirt_back"), "trim": "waistband"}}
+#: ``nest_layouts``: the outline profiles' band height and the offset search step, cm.
+NEST_STEP_CM = 0.25
+NEST_SEARCH_CM = 0.5
 #: The payload format of ``islands_payload``.
 PAYLOAD_VERSION = 1
 
@@ -663,7 +675,105 @@ def _layout(ext, order, size_px, margin_cm):
     return rows, row_w, row_h, width, _floor2(size_px / max(width, height, 1e-9))
 
 
-def pack(islands_uv_m, size_px=2048, margin_cm=1.5, rows=None, rows_alt=None):
+def _profile(pts, tris, step):
+    """Per horizontal band ``[k * step, (k + 1) * step)`` of an island given in local cm (x right, y down, (n, 2)
+    ``pts``, (m, 3) ``tris``): the leftmost and rightmost x of its triangles inside the band (+inf / -inf where the
+    band is empty). Exact for the triangle union: a triangle's extreme in a band lies on a band line or at a vertex."""
+    n = int(math.ceil(float(pts[:, 1].max()) / step)) + 1
+    lo = np.full(n, np.inf)
+    hi = np.full(n, -np.inf)
+    ys = np.arange(n + 1) * step
+    for t in np.asarray(tris, int):
+        tri = pts[t]
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            (x0, y0), (x1, y1) = tri[a], tri[b]
+            if y1 < y0:
+                x0, y0, x1, y1 = x1, y1, x0, y0
+            ks = np.nonzero((ys >= y0) & (ys <= y1))[0]
+            if len(ks):
+                xs = x0 + (x1 - x0) * ((ys[ks] - y0) / (y1 - y0) if y1 > y0 else 0.0)
+                for kk in (np.minimum(ks, n - 1), np.maximum(ks - 1, 0)):
+                    np.minimum.at(lo, kk, xs)
+                    np.maximum.at(hi, kk, xs)
+        for x, y in tri:
+            k = min(int(y // step), n - 1)
+            lo[k] = min(lo[k], x)
+            hi[k] = max(hi[k], x)
+    return lo, hi
+
+
+def _beside(a_hi, b_lo, shift, margin, step):
+    """The smallest x offset of island B (left profile ``b_lo``) placed ``shift`` bands lower than island A (right
+    profile ``a_hi``) so that every point of B stays ``margin`` cm from A (bands ``g`` apart are ``(g - 1) * step``
+    apart at least; one band of slack for the profile sampling)."""
+    need = -np.inf
+    r = int(math.ceil(margin / step)) + 1
+    for g in range(-r, r + 1):
+        gap = max(0.0, (abs(g) - 1) * step)
+        if gap >= margin:
+            continue
+        d = math.sqrt(margin * margin - gap * gap) + step
+        # B band j sits beside A band i = j + shift + g
+        j = np.arange(len(b_lo))
+        i = j + shift + g
+        ok = (i >= 0) & (i < len(a_hi))
+        if ok.any():
+            v = a_hi[i[ok]] - b_lo[j[ok]]
+            v = v[np.isfinite(v)]
+            if len(v):
+                need = max(need, float(v.max()) + d)
+    return need
+
+
+def nest_layouts(local, tris, spec, margin_cm):
+    """The nested layouts of ``NEST[kind]`` (``spec``): ``local`` = {name: (n, 2) island outline in cm, x right, y
+    down, its box at the origin}, ``tris`` = {name: (m, 3)}. For every offset (step ``NEST_SEARCH_CM``) the second
+    panel beside the first (vertical offset) or below it (horizontal offset) as close as its OUTLINE allows
+    (``_profile`` / ``_beside``), then the trim in a row under the pair or turned upright to its right. Returns
+    ``[(extent_cm, {name: (x, y, turned)})]`` — each layout's larger side incl. the outer margins, the islands' box
+    corners in cm (``turned``: the trim turned 90 degrees, its left end on top). None when the islands are not the
+    spec's pair (+ its trim)."""
+    a, b = spec["pair"]
+    trim = spec.get("trim")
+    names = set(local)
+    if not {a, b} <= names or not names <= {a, b, trim}:
+        return None
+    step, m = NEST_STEP_CM, float(margin_cm)
+    sz = {n: local[n].max(axis=0) for n in local}
+    swap = lambda p: p[:, ::-1]
+    prof = {(n, ax): _profile(local[n] if ax == 0 else swap(local[n]), tris[n], step) for n in (a, b) for ax in (0, 1)}
+    out = []
+    for ax in (0, 1):
+        # ax 0: B beside A (offset down the rows); ax 1: B below A (offset along the columns), on swapped axes
+        wa, ha = (sz[a] if ax == 0 else sz[a][::-1])
+        wb, hb = (sz[b] if ax == 0 else sz[b][::-1])
+        lo_s = -int(math.floor(hb / NEST_SEARCH_CM))
+        hi_s = int(math.floor(ha / NEST_SEARCH_CM))
+        for q in range(lo_s, hi_s + 1):
+            off = q * NEST_SEARCH_CM
+            shift = int(round(off / step))
+            dx = _beside(prof[(a, ax)][1], prof[(b, ax)][0], shift, m, step)
+            if not np.isfinite(dx):
+                continue
+            x0, y0 = min(0.0, dx), min(0.0, off)
+            x1, y1 = max(wa, dx + wb), max(ha, off + hb)
+            pos = {a: (-x0, -y0), b: (dx - x0, off - y0)}
+            w, h = x1 - x0, y1 - y0
+            if ax == 1:
+                pos = {n: (p[1], p[0]) for n, p in pos.items()}
+                w, h = h, w
+            if trim not in local:
+                out.append((max(w, h) + 2 * m, {n: (p[0], p[1], False) for n, p in pos.items()}))
+                continue
+            tw, th = sz[trim]
+            below = dict({n: (p[0], p[1], False) for n, p in pos.items()}, **{trim: (0.0, h + m, False)})
+            out.append((max(max(w, tw), h + m + th) + 2 * m, below))
+            right = dict({n: (p[0], p[1], False) for n, p in pos.items()}, **{trim: (w + m, 0.0, True)})
+            out.append((max(w + m + th, max(h, tw)) + 2 * m, right))
+    return out
+
+
+def pack(islands_uv_m, size_px=2048, margin_cm=1.5, rows=None, rows_alt=None, nest=None, tris=None):
     """Pack islands (name -> (n, 2) UV in metres, v up) at ONE density into a ``size_px`` square atlas.
 
     Rows follow ``rows`` (None = ``ROW_ORDER``, a top's; names in no row: one extra last row, sorted). A row is ``margin`` + (island width +
@@ -671,7 +781,9 @@ def pack(islands_uv_m, size_px=2048, margin_cm=1.5, rows=None, rows_alt=None):
     between them, each row centred horizontally within the widest row, islands TOP-aligned inside their row.
     ``s`` = floor_0.01(size / max(W, H)) px/cm with W, H the layout extent in cm. ``rows_alt`` (step 3b,
     ``ROWS_ALT[kind]``): a second layout tried the same way — the one with the larger ``s`` is packed, a tie keeps
-    ``rows``.
+    ``rows``. ``nest`` (``NEST[kind]``, with ``tris`` = {name: (m, 3) local triangles}): the nested layouts
+    (``nest_layouts``) are tried after both — one wins only with a STRICTLY larger ``s`` (the first of equals), so a
+    piece the rows already serve best keeps its pixels.
 
     Returns ({name: (n, 2) IMAGE-frame pixels, x right, y down}, s). Blender UV of a pixel = (x / size,
     1 - y / size)."""
@@ -685,6 +797,26 @@ def pack(islands_uv_m, size_px=2048, margin_cm=1.5, rows=None, rows_alt=None):
         alt = _layout(ext, rows_alt, size_px, margin_cm)
         if alt[4] > s:
             rows, row_w, row_h, width, s = alt
+    if nest is not None and tris is not None:
+        local = {}
+        for name, uv in islands_uv_m.items():
+            lo, hi, _size = ext[name]
+            uv = np.asarray(uv, float)
+            local[name] = np.stack([(uv[:, 0] - lo[0]) * 100.0, (hi[1] - uv[:, 1]) * 100.0], axis=1)
+        best = None
+        for extent, pos in nest_layouts(local, tris, nest, margin_cm) or []:
+            sn = _floor2(size_px / max(extent, 1e-9))
+            if sn > s and (best is None or sn > best[0]):
+                best = (sn, pos)
+        if best is not None:
+            s, pos = best
+            out = {}
+            for name, (x, y, turned) in pos.items():
+                p = local[name]
+                if turned:
+                    p = np.stack([local[name][:, 1].max() - local[name][:, 1], local[name][:, 0]], axis=1)
+                out[name] = (p + np.array([margin_cm + x, margin_cm + y])) * s
+            return out, s
     out = {}
     y_cm = margin_cm
     for r, rw, rh in zip(rows, row_w, row_h):
@@ -901,7 +1033,7 @@ def _r(x, nd=3):
 
 
 def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap_heights=None, step_cm=1.0,
-                    rows=None, rows_alt=None):
+                    rows=None, rows_alt=None, nest=None):
     """The ``islands.json`` dict of a piece.
 
     ``islands`` = the ``split_islands`` list, ``islands_uv_m`` = {name: (n, 2) oriented UV in metres},
@@ -912,7 +1044,10 @@ def islands_payload(islands, islands_uv_m, xyz, size_px=2048, margin_cm=1.5, cap
     image-frame (row = (1 - v) * size), rounded to 1/1000 px; no timing or run data, so equal geometry gives a
     byte-equal payload."""
     xyz = np.asarray(xyz, float)
-    px, s = pack(islands_uv_m, size_px, margin_cm, rows=rows, rows_alt=rows_alt)
+    tris_of = {isl.name: np.array([t for poly in isl.corner_vid for t in fan(poly)], dtype=np.int64).reshape(-1, 3)
+               for isl in islands}
+    px, s = pack(islands_uv_m, size_px, margin_cm, rows=rows, rows_alt=rows_alt, nest=nest,
+                 tris=tris_of if nest is not None else None)
     caps = cap_heights or {}
     items = []
     for isl in islands:
@@ -1129,7 +1264,7 @@ def ring_strip_uv(island, xyz, axis_p, axis_d, cut_dir):
 
 
 def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, size_px=2048, margin_cm=1.5,
-               iters=40, rows=None, rings=None, tol=None, rows_alt=None, bands=None):
+               iters=40, rows=None, rings=None, tol=None, rows_alt=None, bands=None, nest=None):
     """The pattern UV of one garment mesh.
 
     ``faces`` = vertex-id tuples (the mesh's polygons, in their loop order), ``part`` = their ``uv_part``,
@@ -1142,7 +1277,7 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
     ``STRIP_PARTS`` without construction rows (``ring_strip_uv``), ``rows`` = the atlas row layout (``ROWS[kind]``,
     None = a top's ``ROW_ORDER``; ``rows_alt`` = ``ROWS_ALT[kind]``, step 3b), ``tol`` = ``arap``'s adaptive stop
     (None = always ``iters``). Step 3b: ``bands`` = {part: vertex rows top to bottom} for a ``STRIP_PARTS`` band of
-    several rows (``rows_strip_uv``).
+    several rows (``rows_strip_uv``); ``nest`` = ``NEST[kind]`` (``pack``: the panel pair nested by its outline).
 
     Returns {"payload": ``islands_payload``, "corner_uv": per input face the Blender UV of each corner (x / size,
     1 - y / size of the payload's pixels), "islands": names, "faces_per_part": {name: faces}, "area_ratio_min",
@@ -1196,7 +1331,7 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
             if loc_sh and loc_ua and int(sh) in loop_g and int(ua) in loop_g:
                 cap_cm[isl.name] = cap_height(uv * 100.0, loc_loop, loc_sh[0], loc_ua)
     payload = islands_payload(islands, uv_m, xyz, size_px=size_px, margin_cm=margin_cm, cap_heights=cap_cm,
-                              rows=rows, rows_alt=rows_alt)
+                              rows=rows, rows_alt=rows_alt, nest=nest)
     corner_uv = [None] * len(faces)
     by_name = {i["name"]: i for i in payload["islands"]}
     for isl in islands:

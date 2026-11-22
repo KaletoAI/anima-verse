@@ -269,7 +269,13 @@ seams merged by `remove_doubles`. `uv_pattern.wrap_parts` labels every face BEFO
 
 The panels are flattened round the vertical line through the body centre (+Z up). Layout: `pack` tries the kind's rows
 (`ROWS["skirt"]` = the two panels side by side, the band under them; `ROWS["strapless"]` = front, back) AND
-`ROWS_ALT["skirt"]` (the panels stacked) and keeps the larger px/cm — a wide skirt fills the square stacked.
+`ROWS_ALT["skirt"]` (the panels stacked) and keeps the larger px/cm — a wide skirt fills the square stacked. Then
+(stage 1, `NEST["skirt"]`, `uv_pattern.nest_layouts`) the two panels are placed by their OUTLINES instead of their
+boxes: the back beside the front at a vertical offset or below it at a horizontal offset (0.5 cm search steps, the
+outline gap from 0.25 cm band profiles + 0.25 cm slack, never under the 1.5 cm margin), both upright (a turned panel
+would reach its job's model upside down), the waistband in a row under the pair or standing upright to its right. A
+nested layout wins only with a STRICTLY larger px/cm, so a piece the rows serve best keeps its pixels (Rosi's pencil
+skirt: byte-equal islands; its 97 cm band is the widest island either way).
 New slit sides `front_left` / `front_right` (`SLIT_SIDES`): 6 columns (0.471 rad) beside the front centre
 (`SLIT_ANGLE`) — a slit skirt, a wrap skirt's overlap edge; `left` / `right` lie on the side seams.
 
@@ -283,16 +289,17 @@ Measured on copies of the world's bodies (cut only, 0 hub jobs) against the plan
 
 | piece | px/cm (minimum) | panels area / p95 | waistband p95 | accepted |
 |---|---|---|---|---|
-| Kira, slit skirt | 24.40 (25.3) | 0.993–0.999 / 1.13 | 1.02 | no — density |
+| Kira, slit skirt | 25.76 nested (25.3; rows 24.40) | 0.993–0.999 / 1.13 | 1.02 | yes |
 | Rosi, pencil skirt | 20.41 (19.7) | 0.998–0.999 / 1.05 | 1.04 | yes |
-| Gelina, circle skirt (stacked) | 11.89 (11.7) | 1.000 / 1.04 | 1.03 | yes |
-| Ylva, wrap skirt | 13.26 (18.4) | 0.993–0.999 / 1.13 | 1.03 | no — density |
-| Tilda, wool skirt | 13.88 (14.4) | 0.994–0.999 / 1.14 | 1.01 | no — density |
+| Gelina, circle skirt | 12.62 nested (11.7; stacked 11.89) | 1.000 / 1.04 | 1.03 | yes |
+| Ylva, wrap skirt | 15.26 nested (18.4; rows 13.26) | 0.993–0.999 / 1.13 | 1.03 | no — density |
+| Tilda, wool skirt | 14.85 nested (14.4; rows 13.88) | 0.994–0.999 / 1.14 | 1.01 | yes |
 | Rosi, corset top | 16.82 (15.0) | 0.969–0.992 / 1.28 | — | no — front panel p95 and area |
 
-The density misses are the layout's, not the flattening's: Ylva's draped back panel flares to 95.7 cm at the hem, and
-Tilda's panels (65.4 + 77.5 cm wide, 85 cm long) fit the square neither side by side nor stacked; Kira's stacked
-layout is 83.9 cm high for 81.0 allowed. The corset's front over the lifted bust needs a dart or a princess seam
+Before the nesting the density misses were the layout's: Tilda's panels (65.4 + 77.5 cm wide, 85 cm long) fit the
+square neither side by side nor stacked, Kira's stacked layout was 83.9 cm high for 81.0 allowed. Ylva's remaining miss
+is the geometry's: her back panel flares to 95.7 cm at the hem beside a 54 x 70 cm front, the plan's 18.4 (from a
+demo back of 51 cm) needs a 111 cm square — no upright arrangement of these two outlines reaches it. The corset's front over the lifted bust needs a dart or a princess seam
 (phase G). A piece that misses its numbers keeps `texture` "projection" (the default) — nothing switches it.
 
 **Texture from cut (live 2026-11-22).** A skirt and a strapless top run the fitted prompt family under their prompt kind
@@ -303,8 +310,8 @@ the atlas frame afterwards — a 21 px waistband strip beside the panel was thic
 Live on copies (chain MiniMax-H3-Image, P-H3-Image; 11 image jobs): Tilda's wool skirt, Rosi's corset and pencil skirt
 (one Build), Gelina's circle skirt (stacked layout) — iou 0.997–0.999, colour dE 0.6–3.2, every back plain (fabric).
 After the band relaxation (2 + 2 jobs): Rosi's pencil skirt clean; Gelina's front answer was split by a white vertical
-line (MiniMax painted the picture's slit as a cut through the panel) and the gates passed it — a gate for
-background-coloured lines inside a piece is still missing.
+line (MiniMax painted the picture's slit as a cut through the panel) and the gates passed it — the split gate (§ 2,
+`SPLIT_GATE`) rejects such an answer now.
 
 ## 2. Texture from cut (step 2)
 

@@ -169,6 +169,21 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
      (+-2e-3) and no taller than 0.030 + 0.003 (not tilted: ``_align_to``). Its direction is the strip's: u grows with
      the column (vertex 1 left of vertex 40 on the top row, pixel x right), the top row above the bottom row (pixel y
      down, column 20).
+[28] Stage 1 (``NEST["skirt"]``, ``pack(..., nest=, tris=)``): flat rectangles (cm), two triangles each, margin 1.5,
+     2048 px, profile band ``NEST_STEP_CM`` 0.25 (one band of slack: an outline gap is margin + 0.25 = 1.75 cm), offset
+     step 0.5. Front 50 x 30, back 60 x 35, band 63 x 2. Rows: W = 1.5 + 50 + 1.5 + 60 + 1.5 = 114.5 -> 17.88. Alt:
+     H = 1.5 + 30 + 1.5 + 35 + 1.5 + 2 + 1.5 = 73, W = 1.5 + 63 + 1.5 = 66 -> floor(28.054) = 28.05. Nested, back BELOW
+     the front (horizontal offset ``off`` of the back's box against the front's): the back's top 30 + 1.75 = 31.75
+     under the front's top, the pair h = 66.75; for off <= 0 the front sits at x = -off and the pair is
+     w = max(60, 50 - off) wide; band upright to the right (2 wide, 63 high): extent = max(w + 1.5 + 2, 66.75, 63) + 3. It
+     stays 69.75 while w + 3.5 <= 66.75, i.e. w <= 63.25 -> off >= -13.25; the search runs off upward from -60 in
+     steps of 0.5, so the first strict best is off = -13.0 (w 63): 2048 / 69.75 = 29.362 -> 29.36 > 28.05 -> nested.
+     Pixels: the front's box corner (1.5 + 13, 1.5) x 29.36 = (425.72, 44.04), the back's (1.5, 1.5 + 31.75) x 29.36 =
+     (44.04, 976.22), the band (turned: 2 wide, 63 high) from x (1.5 + 63 + 1.5) x 29.36 = 1937.76 to 68 x 29.36 =
+     1996.48, y 44.04 to 64.5 x 29.36 = 1893.72. Every island pair >= 1.5 cm apart.
+     A tie keeps the rows (Rosi-like): front 56 x 24, back 58 x 27, band 97 x 4.6 — alt H = 1.5 + 24 + 1.5 + 27 + 1.5 +
+     4.6 + 1.5 = 61.6, W = 100 -> floor(20.48) = 20.48; any nested layout is >= 97 + 3 = 100 on one side (the band lies
+     or stands) -> at best 20.48, a tie -> the pixels equal ``pack`` without ``nest``. No ``tris`` -> no search.
 """
 import json
 import math
@@ -790,6 +805,36 @@ _loc = {int(g): l for l, g in enumerate(_isl.vmap)}
 check("[27] u grows with the column", _px[_loc[1], 0] < _px[_loc[40], 0], (_px[_loc[1]], _px[_loc[40]]))
 check("[27] top row above the bottom row", _px[_loc[20], 1] < _px[_loc[2 * _n27 + 20], 1],
       (_px[_loc[20]], _px[_loc[2 * _n27 + 20]]))
+
+# [28] stage 1: the nested skirt layout
+check("[28] NEST skirt spec", up.NEST["skirt"] == {"pair": ("skirt_front", "skirt_back"), "trim": "waistband"}
+      and up.NEST_STEP_CM == 0.25 and up.NEST_SEARCH_CM == 0.5)
+_t28 = np.array([[0, 1, 2], [0, 2, 3]])
+n28 = {"skirt_front": rect24(50, 30), "skirt_back": rect24(60, 35), "waistband": rect24(63, 2)}
+tris28 = {k: _t28 for k in n28}
+check("[28] rows 17.88, alt 28.05", up.pack(n28, 2048, 1.5, rows=up.ROWS["skirt"])[1] == 17.88
+      and up.pack(n28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"])[1] == 28.05)
+px28, s28 = up.pack(n28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"], nest=up.NEST["skirt"],
+                    tris=tris28)
+check("[28] nested 29.36", s28 == 29.36, s28)
+_mn = {k: v.min(axis=0) for k, v in px28.items()}
+_mx = {k: v.max(axis=0) for k, v in px28.items()}
+check("[28] front at (425.72, 44.04)", np.allclose(_mn["skirt_front"], [425.72, 44.04], atol=0.01), _mn["skirt_front"])
+check("[28] back at (44.04, 976.22)", np.allclose(_mn["skirt_back"], [44.04, 976.22], atol=0.01), _mn["skirt_back"])
+check("[28] band upright 1937.76..1996.48 x 44.04..1893.72",
+      np.allclose(_mn["waistband"], [1937.76, 44.04], atol=0.01)
+      and np.allclose(_mx["waistband"], [1996.48, 1893.72], atol=0.01), (_mn["waistband"], _mx["waistband"]))
+_gap = min(max(_mn[b][0] - _mx[a][0], _mn[a][0] - _mx[b][0], _mn[b][1] - _mx[a][1], _mn[a][1] - _mx[b][1])
+           for a in px28 for b in px28 if a < b) / s28
+check("[28] every pair >= 1.5 cm apart", _gap >= 1.5 - 1e-6, _gap)
+r28 = {"skirt_front": rect24(56, 24), "skirt_back": rect24(58, 27), "waistband": rect24(97, 4.6)}
+_plain = up.pack(r28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"])
+_nest = up.pack(r28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"], nest=up.NEST["skirt"],
+                tris={k: _t28 for k in r28})
+check("[28] Rosi-like tie 20.48 keeps the rows' pixels", _plain[1] == _nest[1] == 20.48
+      and all(np.array_equal(_plain[0][n], _nest[0][n]) for n in r28), (_plain[1], _nest[1]))
+check("[28] no tris -> no search", up.pack(n28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"],
+                                           nest=up.NEST["skirt"])[1] == 28.05)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

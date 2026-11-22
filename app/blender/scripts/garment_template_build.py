@@ -1834,7 +1834,8 @@ def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
     dress): read the faces, their ``uv_part`` / ``uv_seam`` layers (``uv_pattern.wrap_parts``, set before the side
     seams were merged) and the rest coordinates, run ``uv_pattern.pattern_uv`` — the panels flattened round the
     vertical line through ``centre`` (+Z up), the waistband a ring strip opened at the back centre (+Y) round the same
-    line at ``top_z``, the layout ``ROWS[rows_key]`` or ``ROWS_ALT[rows_key]`` (the larger px/cm) — write the ``UVMap``
+    line at ``top_z``, the layout ``ROWS[rows_key]``, ``ROWS_ALT[rows_key]`` or a nested one (``NEST[rows_key]``; the
+    larger px/cm) — write the ``UVMap``
     loops and ``islands_json``, drop the helper layers. Returns ``data["uv"]``. ``band`` = the waistband's vertex rows
     as construction ids (``wrap_parts``): mapped through ``uv_cid`` (a side-seam vertex merged onto its twin takes the
     twin's id, ``_wrap_twin``) into a construction strip (``uv_pattern.rows_strip_uv``)."""
@@ -1865,7 +1866,8 @@ def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
     rings = {14: ((cx, cy, float(top_z)), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))}
     res = uvp.pattern_uv(polys, part, seams, co, axes=axes, rings=rings, rows=uvp.ROWS.get(rows_key),
                          rows_alt=uvp.ROWS_ALT.get(rows_key), size_px=PATTERN_ATLAS_PX,
-                         margin_cm=PATTERN_MARGIN_CM, tol=FITTED_ARAP_TOL, bands=bands)
+                         margin_cm=PATTERN_MARGIN_CM, tol=FITTED_ARAP_TOL, bands=bands,
+                         nest=uvp.NEST.get(rows_key))
     flat = np.zeros(len(me.loops) * 2)
     for p_ in me.polygons:
         for j, li in enumerate(p_.loop_indices):
