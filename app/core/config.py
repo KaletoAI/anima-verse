@@ -567,17 +567,21 @@ _DEFAULT_IMAGE_USE_CASES = {
     # The render slots the profile portrait as its identity reference, and an
     # edit model copies that portrait's light along with the face — hence the
     # explicit "relit instead of keeping the reference's lighting" (2026-10-15).
+    # It stays prose ("the reference image"), never <ref 1>: without a profile
+    # image (or on a 0-slot backend) nothing is slotted, and the no-slot
+    # normaliser would drop the token's whole sentence — the style, the A-pose
+    # clause and the character block's start are one comma sentence.
     # The medium is a REALISTIC 3D FIGURE, not a photo (user decision
     # 2026-09-01): the render feeds a mesher, and a clean 3D-character look
     # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },

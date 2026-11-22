@@ -40,6 +40,15 @@ C25. Expected values, derived by hand from the rules:
     E2 view "front" from ANOTHER variant's picture (a new version of the object): the picture is slotted, no
        sentence, no reference_roles (that prompt says what changes itself).
     E3 view "back" on a 0-slot backend: nothing slotted, sent == stored.
+[F] the main T-pose render slots the profile image only when one exists (and a 0-slot backend sends nothing), so its
+    style must survive WITHOUT a slot. The tpose style (both families) therefore stays prose ("of the reference
+    image"), like the profile style: no ``<ref``. Docs §3 step 1: no slot and no token -> byte-identical. With a token
+    the no-slot path drops the whole sentence holding it once another remains, and the style, the A-pose clause and
+    the start of the character block are ONE comma sentence — an appearance text with ". " would lose all three.
+    F1 no ``<ref`` in tpose natural/keywords nor in profile natural/keywords (clothed and unclothed).
+    F2 joined = join_style_prompt(tpose natural style, get_tpose_prompt() + ", Mia, slender, long red hair. She wears
+       a blue summer dress and white sneakers, neutral relaxed facial expression"); normalise with NO slot on Qwen2.1
+       and Flux2-9B returns ``joined`` unchanged, and it holds "A-pose" and "both feet entirely inside the frame".
 """
 import asyncio
 import os
@@ -244,6 +253,23 @@ check("E2 front from another variant: slotted, no sentence",
       (True, True, False))
 ok, e3, e3_stored = run_prop(FakeBackend("Flux1-Dev", "flux1", 0), "back")
 check("E3 no slot: no sentence", (e3["prompt"] == e3_stored, "reference_images" in e3["params"]), (True, False))
+
+# ------------------------------------------------------------------------------------------------ [F]
+print("[F] tpose without a reference")
+from app.core import config, model_refs  # noqa: E402
+
+carrying = [(uc, fam, clothed) for uc in ("tpose", "profile") for fam in ("natural", "keywords")
+            for clothed in (True, False)
+            if "<ref" in config.get_use_case_prompts(uc, fam, clothed=clothed)["prompt_style"]]
+check("F1 slot-optional styles carry no <ref", carrying, [])
+tpose_style = config.get_use_case_prompts("tpose", "natural", clothed=True)["prompt_style"]
+joined = config.join_style_prompt(
+    tpose_style, model_refs.get_tpose_prompt() + ", Mia, slender, long red hair. She wears a blue summer dress and "
+    "white sneakers, neutral relaxed facial expression", None)
+for label, be in (("Qwen2.1", FakeBackend(*QWEN, 10)), ("Flux2-9B", FakeBackend(*FLUX, 1))):
+    sent = ep.normalise(joined, {}, be)[0]
+    check(f"F2 {label} no slot: byte-identical, A-pose and framing kept",
+          (sent == joined, "A-pose" in sent, "both feet entirely inside the frame" in sent), (True, True, True))
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

@@ -8,9 +8,9 @@ action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_back
 secret-diary pack line of C18 is a patch for the private repo) landed on branch `chatimg` (§4), and so did C11's other loops
 and C12 (§7, smoke `scripts/smoke_gate_attempt_entries.py`). Phase 4 landed on `chatimg` 2026-11-22 as far as it does
 not age stored work: C22 (T-pose back/side and face-view texts), C23 for `garment_beard` and `footwear_source`, C24 for the
-tpose/tpose_side/base_side styles and `base_front_edit`, and C25 in full (role sentences on the SENT prompt only; smoke
+tpose_side/base_side styles and `base_front_edit`, and C25 in full (role sentences on the SENT prompt only; smoke
 `scripts/smoke_world_ref_roles.py`). Every change had a same-seed, same-reference A/B on its routed local backend, none
-was worse. Left as they are on purpose (see §8 Phase 4 note): C21, the fingerprinted parts of C23, the profile style of C24.
+was worse. Left as they are on purpose (see §8 Phase 4 note): C21, the fingerprinted parts of C23, the profile and the main tpose style of C24 (both render without a reference too).
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -252,7 +252,8 @@ Phases; each one ends with its smokes green.
 | C26 | the anatomy pack's base-front cleanup text (private repo) | wording check only there |
 
 Phase 4 status (2026-11-22): **done** — C22 (except `TPOSE_REFERENCE_HAIR_CLAUSE`), C23 `garment_beard.PROMPT` +
-`footwear_source.EMPTY_PROMPT`, C24 tpose/tpose_side/base_side "of <ref 1>" and base_front_edit "the character in <ref 1>",
+`footwear_source.EMPTY_PROMPT`, C24 tpose_side/base_side "of <ref 1>" (the main `tpose` style stays prose — it renders without a slot when
+there is no profile image, and the no-slot path would drop its whole first sentence: style, A-pose clause, framing) and base_front_edit "the character in <ref 1>",
 C25 (`edit_prompt.with_role_sentence`: props back/side + building/room views → `view_reference_sentence(noun)`, day/night
 variant → `world_ops.TIME_VARIANT_KEEP`, event → `event_images.EVENT_PLACE_SENTENCE`; the stored prompt stays
 token-free; a variant FRONT made from another variant gets no sentence). **Not changed, on purpose:** C21 base_body

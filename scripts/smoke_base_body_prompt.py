@@ -151,7 +151,8 @@ frag text — an unfilled placeholder drops the fragment.
     old source by exec of their assignments) equal today's. A tpose payload
     without "style_character" joins as f"{style} {prompt}". The one wording
     change since then is the edit-prompt token (stage 4, 2026-11-22): "of the
-    reference image" -> "of <ref 1>" in the tpose styles and "the same figure
+    reference image" -> "of <ref 1>" in the tpose_side / base_side styles (the main tpose style keeps the
+    prose: it renders without a reference too) and "the same figure
     turned" -> "the same figure as in <ref 1>, turned" in the two view texts;
     ``before_ref_tokens`` writes those two back, everything else compares as it is.
 """
