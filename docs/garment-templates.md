@@ -281,6 +281,14 @@ Measured on copies of the world's bodies (cut only, 0 hub jobs): Kira's slit ski
 20.25, Gelina's circle skirt 12.02 (stacked), Ylva's wrap skirt 13.30, Tilda's wool skirt 13.88, Rosi's corset top
 16.82; panels area 0.97–1.00, stretch p95 1.03–1.28.
 
+**Texture from cut (live 2026-11-22).** A skirt and a strapless top run the fitted prompt family under their prompt kind
+(`garment_cut_texture.prompt_kind`: "skirt" / "strapless" — every csig of the piece, and `cut_info`'s look-up, is keyed
+by it). Their plain trims (the waistband) are HELD (`HELD_TRIM_KINDS`): the template, the prompt's words and the gates
+hold the model's parts only, the front job is zoomed like the back, and the trims are filled with the panel's fabric in
+the atlas frame afterwards — a 21 px waistband strip beside the panel was thickened by MiniMax and dropped by P-H3.
+Live on copies (chain MiniMax-H3-Image, P-H3-Image; 11 image jobs): Tilda's wool skirt, Rosi's corset and pencil skirt
+(one Build), Gelina's circle skirt (stacked layout) — iou 0.997–0.999, colour dE 0.6–3.2, every back plain (fabric).
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`
