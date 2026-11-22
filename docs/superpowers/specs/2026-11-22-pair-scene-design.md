@@ -102,7 +102,7 @@ client (with a server estimate when no client is open), and a pose's **lead role
 - **No measurement** (no report, no estimate possible — e.g. no collision record): the package gets no readout
   for that key and treats its factors as neutral.
 - **Finale timing**: the finale clip plays at a tempo the package gives with `begin_finale` (default 1; the
-  package uses 0.5 — user 2026-11-22: "Höhepunkt ist zu schnell"); its real length is clip length × cycles /
+  package uses 0.5 — user decision 2026-11-22: the closing clip at full speed is too fast); its real length is clip length × cycles /
   tempo. "End N seconds later" counts from the moment the finale clip has fully played (all `loop_count` cycles).
 - **Which narration leaves the chat** (user 2026-11-22): only the start / switch / end lines, and only for poses a
   package marks as such (a provider, e.g. `pair_scene.quiet_narration(pose_key) -> bool`). Invitations,
