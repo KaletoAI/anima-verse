@@ -312,6 +312,12 @@ Live on copies (chain MiniMax-H3-Image, P-H3-Image; 11 image jobs): Tilda's wool
 After the band relaxation (2 + 2 jobs): Rosi's pencil skirt clean; Gelina's front answer was split by a white vertical
 line (MiniMax painted the picture's slit as a cut through the panel) and the gates passed it — the split gate (§ 2,
 `SPLIT_GATE`) rejects such an answer now.
+Stage 1 live (8 image jobs, same chain): Gelina's skirt again (nested layout) — no split line (split 0.006), but
+MiniMax painted a low-contrast floral embroidery the item does not have (the "decorated" prompt, chosen by the
+glitter's detail 0.16; the detail gate read the answer at 0.0002) — not accepted, the piece stays "projection";
+Tilda's wool skirt (nested, 14.85) and Kira's slit skirt (band upright, 25.76; worn alone — with the pinstripe suit
+over it the atlas was not applied in a dry run) clean in attempt 1; Glut's scale bra (group A, after the colour-gate
+fix) ready in attempt 1 — scales on the cups, the straps and band carry the panel's scale fabric.
 
 ## 2. Texture from cut (step 2)
 
