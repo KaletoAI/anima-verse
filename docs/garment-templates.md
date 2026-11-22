@@ -260,8 +260,9 @@ seams merged by `remove_doubles`. `uv_pattern.wrap_parts` labels every face BEFO
   3 cm -> 2 rows), opened at the back centre (the back panel's column 20 = pi / 2). The band's vertex rows hug the
   body like the pinned top row (`TOP_CLEAR_M`, 6 mm): a band standing off by `ROW_CLEAR_M` under a top row at 6 mm was
   a cone its strip could not unroll. Its UV is a construction strip over all its rows (`rows_strip_uv`: u along the
-  mid line, v the slant up each column); on a low (hip) waist the band is still a cone — stretch p95 1.2–1.5 there,
-  recorded, not gated (the band is filled with the panels' fabric unless `sleeve_print` is "picture").
+  mid line, v the slant up each column), then relaxed by `arap` from that strip and turned back onto it (`_align_to`,
+  no mirror): a draped band's columns lean, and the bare strip stretched 1.2–1.5 there; relaxed 1.01–1.04, the band
+  bowing 0.5–1.8 cm on a low waist (the band is filled with the panels' fabric unless `sleeve_print` is "picture").
 - strapless top: front `front` (1), back `back` (2); a sweetheart dip stays in the front panel.
 - a strapless dress (staged for phase D): the bodice above the row nearest `outline.waist_y` front / back, the skirt
   part under it `skirt_front` / `skirt_back`.
@@ -277,9 +278,22 @@ New slit sides `front_left` / `front_right` (`SLIT_SIDES`): 6 columns (0.471 rad
 0 hub jobs); no other top and no fitted kind moves. Their cut keys the live `UV_PATTERN_SHA`. A skirt's new fields:
 `waistband` (a new skirt defaults to `wide`; a saved skirt keeps the `thin` it was filled with) and `texture`.
 
-Measured on copies of the world's bodies (cut only, 0 hub jobs): Kira's slit skirt 24.56 px/cm, Rosi's pencil skirt
-20.25, Gelina's circle skirt 12.02 (stacked), Ylva's wrap skirt 13.30, Tilda's wool skirt 13.88, Rosi's corset top
-16.82; panels area 0.97–1.00, stretch p95 1.03–1.28.
+Measured on copies of the world's bodies (cut only, 0 hub jobs) against the plan's acceptance (A5: panels area
+0.97–1.03 and stretch p95 <= 1.25, waistband p95 <= 1.10, a minimum px/cm per piece):
+
+| piece | px/cm (minimum) | panels area / p95 | waistband p95 | accepted |
+|---|---|---|---|---|
+| Kira, slit skirt | 24.40 (25.3) | 0.993–0.999 / 1.13 | 1.02 | no — density |
+| Rosi, pencil skirt | 20.41 (19.7) | 0.998–0.999 / 1.05 | 1.04 | yes |
+| Gelina, circle skirt (stacked) | 11.89 (11.7) | 1.000 / 1.04 | 1.03 | yes |
+| Ylva, wrap skirt | 13.26 (18.4) | 0.993–0.999 / 1.13 | 1.03 | no — density |
+| Tilda, wool skirt | 13.88 (14.4) | 0.994–0.999 / 1.14 | 1.01 | no — density |
+| Rosi, corset top | 16.82 (15.0) | 0.969–0.992 / 1.28 | — | no — front panel p95 and area |
+
+The density misses are the layout's, not the flattening's: Ylva's draped back panel flares to 95.7 cm at the hem, and
+Tilda's panels (65.4 + 77.5 cm wide, 85 cm long) fit the square neither side by side nor stacked; Kira's stacked
+layout is 83.9 cm high for 81.0 allowed. The corset's front over the lifted bust needs a dart or a princess seam
+(phase G). A piece that misses its numbers keeps `texture` "projection" (the default) — nothing switches it.
 
 **Texture from cut (live 2026-11-22).** A skirt and a strapless top run the fitted prompt family under their prompt kind
 (`garment_cut_texture.prompt_kind`: "skirt" / "strapless" — every csig of the piece, and `cut_info`'s look-up, is keyed
