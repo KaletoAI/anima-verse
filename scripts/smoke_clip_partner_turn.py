@@ -58,14 +58,14 @@ def main():
         a = fixture("pair__a", {})
         fixture("pair__b", {})
         shared = root / "free/pair.json"
-        shared.write_text(json.dumps({"pair": True, "geometry": {"partner_shift_cm": [5, 0, -10]}}))
+        shared.write_text(json.dumps({"pair": True, "geometry": {"role_shift_cm": {"b": [5, 0, -10]}}}))
         fbx = a.read_bytes()
         rows = turn("pair__a.fbx", [10, -5])
         assert len(rows) == 2 and all(r["orientation"]["partner_turn_deg"] == [10, -5] for r in rows), rows
         rows = turn("pair__b.fbx", [-2.5, 1])
         assert all(r["orientation"]["partner_turn_deg"] == [7.5, -4] for r in rows)
         geo = json.loads(shared.read_text())["geometry"]
-        assert geo["partner_turn_deg"] == [7.5, -4] and geo["partner_shift_cm"] == [5, 0, -10]
+        assert geo["partner_turn_deg"] == [7.5, -4] and geo["role_shift_cm"] == {"b": [5, 0, -10]}
         turn("pair__a.fbx", [-7.5, 4])
         assert "partner_turn_deg" not in json.loads(shared.read_text())["geometry"]
         assert a.read_bytes() == fbx

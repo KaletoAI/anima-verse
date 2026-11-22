@@ -274,11 +274,12 @@ export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './con
 export { fixPoint, fixSample, fixRoot, turnMatrix, matrixTurn,
   findContact, contactSampleOf, turnAxes, partnerTurnFix, partnerYawFix, fixPivot,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, supportDelta, bendFrameOf, solveLinear } from './pairFit'
-export { solveAlign, alignByPasses, keyFrames, keyRow, keyReport, keyLamp, moveSample, alignMovers, alignCap, relativeOf, joinDelta,
+export { solveAlign, alignByPasses, keyFrames, keyRow, keyReport, keyLamp, keyReasons, keyWorstMm, moveSample, axisError, depthTarget,
+  alignMovers, alignCap, relativeOf, joinDelta,
   ALIGN_RANGE_CM_DEFAULT, ALIGN_SIDE_CM, ALIGN_ANGLE_DEG, JOIN_WEIGHT, ALIGN_LIMIT_WEIGHT, ALIGN_MARGIN_M, ALIGN_RIDGE, ALIGN_PASSES,
-  KEY_GREEN_MM, KEY_YELLOW_MM } from './pairAlign'
-export type { AlignCap, AlignLamp, AlignBound, AlignSample, AlignRelation, AlignProblem, AlignSolution, KeyRow, KeyReport, AlignState,
-  AlignMeasure, AlignPass } from './pairAlign'
+  ALIGN_AXIS_LEVER_M, ALIGN_DEPTH_WEIGHT, ALIGN_CROSS_MIN, KEY_GREEN_MM, KEY_YELLOW_MM, KEY_SHALLOWER_MM } from './pairAlign'
+export type { AlignCap, AlignLamp, AlignBound, AlignSample, AlignRelation, AlignProblem, AlignSolution, KeyRow, KeyReport, KeyReason,
+  AlignState, AlignMeasure, AlignPass } from './pairAlign'
 export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
   postureReport } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'

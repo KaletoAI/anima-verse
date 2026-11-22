@@ -56,9 +56,20 @@ export const OPENING_BUDGET = 1
 
 const NO_PARTNERS: readonly PartnerSnapshot[] = []
 
-/** Run phase B for `entries` (module docstring). Names must be unique per frame. */
+/** Run phase B for `entries` (module docstring). Names must be unique per frame. `isolated`: every figure steps
+ *  WITHOUT partners — no partner capsules, no channel engagement or guidance, no opening pass, no GPU partners — so a
+ *  frame depends only on the figure's own motion (Auto-align samples this way, history-independent of what the
+ *  partner channels did before). */
 export function runFigureFrame(entries: readonly FrameEntry[], state: FrameLoopState,
-  openingBudget = OPENING_BUDGET): void {
+  openingBudget = OPENING_BUDGET, opts: { isolated?: boolean } = {}): void {
+  if (opts.isolated) {
+    for (const e of entries) {
+      e.figure?.updateSecondary(NO_PARTNERS, null)
+      e.figure?.applyChannelOpenings([], { left: 0 })
+      e.figure?.setGpuPartners(null)
+    }
+    return
+  }
   const byName = new Map<string, FrameEntry>()
   for (const e of entries) byName.set(e.name, e)
   const frames: FrameFigure[] = []

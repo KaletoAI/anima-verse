@@ -1,18 +1,26 @@
 /**
- * KEY-FRAME AUTO-ALIGN (Ruling A212, the owner's procedure of 2026-11-20) — Auto-align only ADJUSTS a pair/group clip
- * around the arrangement the user set, and it does so at TWO frames of the loop:
+ * KEY-FRAME AUTO-ALIGN (Ruling A212, the owner's procedure of 2026-11-20; objective of 2026-11-22) — Auto-align only
+ * ADJUSTS a pair/group clip around the arrangement the user set, and it does so at TWO frames of the loop:
  *   1. the frame of MAXIMUM penetration (the largest axial coordinate s of the tip, `keyFrames` "deep"): there the
- *      attached part must be IN the channel while its ROOT is outside — s_root < 0 < s_tip ≤ depth − r_tip;
+ *      attached part goes IN AS FAR AS IT CAN — its root joint just outside the opening, unless the channel's bottom
+ *      stops the tip first (THE DEPTH TARGET);
  *   2. the frame of MINIMUM penetration ("shallow"): there the part is drawn STRAIGHT out along the axis.
- * At both the rigid shaft — the part's root joint P_0 and its tip — must lie ON the channel's axis line: then the
- * render-time chain bend (`chainBend.ts`) has nothing left to do. One clip has ONE stored partner offset and ONE root
- * angle, so both frames are ONE least-squares problem. The other frames of the loop are reported, not fitted.
+ * At both the rigid shaft — the line from the part's root joint P_0 through its tip — must run along the channel's
+ * axis and through its opening: then the render-time chain bend (`chainBend.ts`) has nothing left to do. One clip
+ * has ONE stored offset per role and ONE root angle, so both frames are ONE least-squares problem. The other frames
+ * of the loop are reported, not fitted.
+ *
+ * ONE RELATION, ONE MOVER (2026-11-22): a click aligns one contact relation (one part role against one receiving
+ * role) by moving ONE of its two roles — the part's carrier (the default) or the receiving role. Moving the receiving
+ * role moves ITS channel: the opening o and the axis u turn and shift about the receiving figure's own pivot, with its
+ * own tilt/roll axes, while the part stays (`moveSample` with `AlignSample.mover` = 'receiver') — never the part
+ * moved by the negated fix, which would turn about the wrong pivot. Every other role stays where it is.
  *
  * RIGID: the solve never bends the part. The bend is a render step after it; `keyRow` reports what it would still do
  * at a key frame (`bendSample`, with the state's limit).
  *
  * THE UNKNOWNS (increments z on top of the measured state, totals = start + z):
- *   x = (side, up, forward) — the moving figure's offset in metres of its clip frame, relative to the base arrangement;
+ *   x = (side, up, forward) — the moving role's offset in metres of its clip frame, relative to the base arrangement;
  *       world shift = B·x for the caller's row-major 3×3 `basis` (the vertical through the hips-drop gain);
  *   α_k — a pair only: tilt/roll in degrees about the caller's `axes`, relative to the base (yaw is never an unknown);
  *   (pitch, yaw) — the clip's ROOT ANGLE (Ruling A158, `chainBend.ts` THE ROOT ANGLE), absolute degrees, when `root`
@@ -24,25 +32,44 @@
  *
  * THE CAP (`alignCap`): totals, never per step — |x_forward|, |x_up| ≤ range (default `ALIGN_RANGE_CM_DEFAULT` = 8 cm,
  * per clip in the sidecar `align_range_cm`), |x_side| ≤ min(3 cm, range), |α_k| ≤ 10° (or the place type's posture
- * cap), |pitch| ≤ `ROOT_PITCH_MAX_DEG`, |yaw| ≤ `ROOT_YAW_MAX_DEG` (the slider ranges). The receiving figure never moves.
+ * cap), |pitch| ≤ `ROOT_PITCH_MAX_DEG`, |yaw| ≤ `ROOT_YAW_MAX_DEG` (the slider ranges). Only the mover moves.
  * An unknown that ends on its bound is a HIT (`AlignBound`), named in the result; a hit makes the lamp red.
  *
- * THE RESIDUALS (`solveAlign`), per relation, at its deep and its shallow frame (one frame when they coincide):
- *   P(P'_0 − O), P(T' − O)                      the root joint and the tip off the axis line (P = I − uuᵀ; weight 1)
- *   deep frame, a channel only (inequalities — only a VIOLATED one costs, `ALIGN_LIMIT_WEIGHT` per metre):
- *     max(0, m − s_tip)                        the tip not inside
- *     max(0, s_tip − (depth − r_tip) + m)       the tip past the bottom (when the sample knows the depth)
- *     max(0, s_root + m)                       the root not outside
- *   with the margin m = `ALIGN_MARGIN_M`. The depth is NOT pulled to a target: a correct stroke is never moved along
- *   the axis. Plus, unchanged from before: the posture band of a key frame with a support (Ruling A150,
- *   `POSTURE.weight`, and `POSTURE.turnCostM`·√N per radian of turn), the JOIN of end clips (√(`JOIN_WEIGHT`·N)·(B·x − j),
- *   j the world shift that puts the moving figure where the base clip's last frame left it).
- * THE NULL DIRECTIONS: the forward shift moves nothing laterally, and a partner tilt/roll turns the body about its
- * own hips at every frame, so to first order it equals a shift plus a root-angle change — the two-frame problem does
- * not decide them. A small ridge on the increments (`ALIGN_RIDGE`: shift 1e-5 per metre, tilt/roll 1e-5 m per degree,
- * root angle 1e-7 m per degree) holds a null direction where it stands and makes the root angle the cheap lever: tilt/roll
- * move only when the root angle's range or the posture asks for it. Its bias on the decided directions is below 1e-4
- * of the answer (the smoke's recovery checks hold it).
+ * THE RESIDUALS (`solveAlign`), per relation, at its deep and its shallow frame (one frame when they coincide). With
+ * the rigid shaft's direction d = (T' − P'_0)/|T' − P'_0| (T' the tip, P'_0 the root joint, both after the trial):
+ *   a channel (the declared channels and the mouth, `AlignSample.channel`) — THE AXIS ERROR (weight 1):
+ *     P(Q − O)                                   the shaft line's OFFSET where it crosses the opening plane: Q = P'_0 +
+ *                                                t·d, t = −s_root·c / max(c², c_min²), c = d·u, c_min =
+ *                                                `ALIGN_CROSS_MIN` (P = I − uuᵀ). From c_min up, t = −s_root/c puts Q
+ *                                                exactly on the opening plane; below it the travel shrinks linearly to
+ *                                                the root joint itself at c = 0 (and stays there for c ≤ 0), so the
+ *                                                offset is CONTINUOUS in the shaft angle — a hard switch at c_min
+ *                                                jumped by 0.17 m on a clip whose shaft sat at 78.5° to the axis
+ *     L·(d − u)                                  the shaft-to-axis ANGLE at a fixed lever L = `ALIGN_AXIS_LEVER_M`:
+ *                                                |d − u| = 2 sin(θ/2) ≈ θ, so a degree costs L·π/180 metres
+ *   a point target (hands, `isPointTarget`): P(P'_0 − O), P(T' − O) — the root joint and the tip off the target's line,
+ *     as before (no opening plane, no depth).
+ *   deep frame, a channel only — THE DEPTH TARGET (weight `ALIGN_DEPTH_WEIGHT`):
+ *     s_root − s*,  s* = min(−m, (depth − r_tip) − m − (s_tip − s_root))
+ *     the root joint just outside the opening (−m), or further out when the shaft would otherwise push the tip past
+ *     the bottom (whichever binds first; without a known depth s* = −m). Plus the inequalities (only a VIOLATED one
+ *     costs, `ALIGN_LIMIT_WEIGHT` per metre): max(0, m − s_tip) the tip not inside, max(0, s_tip − (depth − r_tip) + m)
+ *     past the bottom, max(0, s_root + m) the root not outside; the margin m = `ALIGN_MARGIN_M`.
+ *   Why (the diagnosis of 2026-11-21, crouching-doggy): the receiving axis turns between the key frames (8° there), so
+ *   the two frames' axis LINES cross — 0.2 m outside the opening. The old residuals (root and tip off the line, at both
+ *   frames) were least where both lines are close, i.e. near that crossing, outside; only the "tip inside" inequality
+ *   held the part back, and it stopped at its margin: 2.0 mm deep. Measured at the opening plane plus the angle, the
+ *   axis error no longer prefers any depth, and the depth is a target of its own.
+ *   Plus, unchanged: the posture band of a key frame with a support (Ruling A150, `POSTURE.weight`, and
+ *   `POSTURE.turnCostM`·√N per radian of turn), the JOIN of end clips (√(`JOIN_WEIGHT`·N)·(B·x − j), j the world shift
+ *   that puts the moving role where the base clip's last frame left it).
+ * THE NULL DIRECTIONS: a shift along the axis moves neither the opening-plane offset nor the angle — the depth target
+ * alone decides it. A tilt/roll of the moving role turns it about its own hips at every frame, so to first order it
+ * equals a shift plus a root-angle change — the two-frame problem does not decide them. A small ridge on the
+ * increments (`ALIGN_RIDGE`: shift 1e-5 per metre, tilt/roll 1e-5 m per degree, root angle 1e-7 m per degree) holds a
+ * null direction where it stands and makes the root angle the cheap lever: tilt/roll move only when the root angle's
+ * range or the posture asks for it. Its bias on the decided directions is below 1e-4 of the answer (the smoke's
+ * recovery checks hold it).
  *
  * THE SOLVE: Gauss–Newton with forward differences (step 1e-6), a line search and an active set — an unknown held on
  * its bound whose descent points outward is frozen and the rest re-solved (`solveBounded`). Several relations of one
@@ -51,9 +78,12 @@
  * THE PASSES (`alignByPasses`): measure → solve → apply → measure again, at most `ALIGN_PASSES` times, until the
  * increment is below 0.05 mm / 0.01°. The key frames are picked afresh from every measurement.
  *
- * THE LAMP (`keyLamp`): green when at both key frames the root and the tip lie within `KEY_GREEN_MM` (3 mm) of the
- * axis and the deep frame holds step 1 (a channel: root outside, tip inside, not past the bottom); yellow within
- * `KEY_YELLOW_MM` (10 mm) with step 1 holding; red otherwise, or when an unknown hit its cap/slider range.
+ * THE LAMP (`keyLamp`, the reasons `keyReasons`): a channel is green when at both key frames the axis error — the
+ * opening-plane offset and the angle's lever L·2 sin(θ/2) — is within `KEY_GREEN_MM` (3 mm) and the deep frame holds
+ * step 1 (root outside, tip inside, not past the bottom); yellow within `KEY_YELLOW_MM` (10 mm) with step 1 holding;
+ * red otherwise, when an unknown hit its cap/slider range, or when the deepest frame ended SHALLOWER than it started
+ * (by more than `KEY_SHALLOWER_MM`; a start past the bottom is exempt — there going back out is the fix). A point
+ * target reads the root joint and the tip off its line instead of the axis error.
  */
 import type { Vec3 } from './collision'
 import { bendSample, fixPoint, solveLinear, supportDelta, turnMatrix, type FitSample, type PairFix } from './pairFit'
@@ -68,12 +98,20 @@ export const JOIN_WEIGHT = 1
 /** The inequality weight (per metre of violation) and the margin the inequalities keep (metres). */
 export const ALIGN_LIMIT_WEIGHT = 10
 export const ALIGN_MARGIN_M = 0.002
+/** The fixed lever the shaft-to-axis angle is weighted by (metres per radian), and the depth target's weight. */
+export const ALIGN_AXIS_LEVER_M = 0.1
+export const ALIGN_DEPTH_WEIGHT = 1
+/** Below this d·u the shaft runs too far across the axis for an exact opening-plane crossing: the travel along the
+ *  shaft tapers off linearly to the root joint (`axisError`). */
+export const ALIGN_CROSS_MIN = 0.2
 /** The ridge on the increments (module docstring THE NULL DIRECTIONS). */
 export const ALIGN_RIDGE = Object.freeze({ shiftPerM: 1e-5, turnMPerDeg: 1e-5, rootMPerDeg: 1e-7 })
 /** At most this many measure → solve passes (module docstring THE PASSES). */
 export const ALIGN_PASSES = 5
 export const KEY_GREEN_MM = 3
 export const KEY_YELLOW_MM = 10
+/** A deepest frame this much shallower after the run than before turns the lamp red (THE LAMP). */
+export const KEY_SHALLOWER_MM = 0.5
 
 export interface AlignCap { sideM: number; upM: number; forwardM: number; angleDeg: number }
 export type AlignLamp = 'green' | 'yellow' | 'red'
@@ -96,6 +134,10 @@ export interface AlignSample extends FitSample {
   tipRadiusM?: number
   /** 0 … 1 of the loop (reported). */
   phase?: number
+  /** Which role the trial moves (ONE RELATION, ONE MOVER): 'part' (absent) = the part's carrier — chain, tip, base,
+   *  support and body axes move about `pivot`; 'receiver' = the receiving role — its opening `o` and axis `u` move
+   *  about `pivot` (then the RECEIVING figure's pivot) and `support` is the receiving figure's. */
+  mover?: 'part' | 'receiver'
 }
 /** A contact relation's samples over the loop; `rooted` = its chain is the one the clip's root angle turns. */
 export interface AlignRelation { samples: readonly AlignSample[]; rooted?: boolean }
@@ -156,9 +198,11 @@ export function keyFrames(samples: readonly { tip: Vec3; o: Vec3; u: Vec3 }[]): 
   return { deep, shallow }
 }
 
-/** The sample under a partner `fix` and, for a rooted sample with body axes, the root angle changed from `from` to
- *  `to` (module docstring THE UNKNOWNS): chain, tip, base, support and body axes moved; o, u (the receiving figure's)
- *  and the pivot unchanged. */
+/** The sample under the mover's `fix` and, for a rooted sample with body axes, the root angle changed from `from` to
+ *  `to` (module docstring THE UNKNOWNS). The root angle always re-poses the PART's chain (about its root joint, the
+ *  part's body axes). Then the fix moves the mover about `pivot`: the part's carrier (default) — chain, tip, base,
+ *  support and body axes, o and u unchanged; the receiving role (`mover` 'receiver') — o and u (u turned only) and
+ *  its support, the part unchanged. The pivot itself stays. */
 export function moveSample(s: AlignSample, fix: PairFix, from?: RootAngle | null, to?: RootAngle | null): AlignSample {
   let chain: Vec3[] = s.chain && s.chain.length >= 2 ? s.chain : [s.base, s.tip]
   if (s.body && to && !sameAngle(from, to)) {
@@ -168,10 +212,32 @@ export function moveSample(s: AlignSample, fix: PairFix, from?: RootAngle | null
     chain = chain.map((p, k) => (k === 0 ? p : add(p0, quatRotate(dq, sub(p, p0)))))
   }
   const R = turnMatrix(fix.turn)
+  const support = s.support ? { support: { ...s.support, pts: s.support.pts.map((p) => fixPoint(fix, s.pivot, p)) } } : {}
+  if (s.mover === 'receiver') {
+    return { ...s, tip: chain[chain.length - 1], base: chain[0], ...(s.chain && s.chain.length >= 2 ? { chain } : {}),
+      o: fixPoint(fix, s.pivot, s.o), u: mulM(R, s.u), ...support }
+  }
   const moved = chain.map((p) => fixPoint(fix, s.pivot, p))
   return { ...s, tip: moved[moved.length - 1], base: moved[0], ...(s.chain && s.chain.length >= 2 ? { chain: moved } : {}),
-    ...(s.support ? { support: { ...s.support, pts: s.support.pts.map((p) => fixPoint(fix, s.pivot, p)) } } : {}),
-    ...(s.body ? { body: { side: mulM(R, s.body.side), up: mulM(R, s.body.up) } } : {}) }
+    ...support, ...(s.body ? { body: { side: mulM(R, s.body.side), up: mulM(R, s.body.up) } } : {}) }
+}
+
+/** THE AXIS ERROR of a channel sample (module docstring THE RESIDUALS): the shaft line's offset where it crosses the
+ *  opening plane (lateral to u) and the angle's lever L·(d − u). */
+export function axisError(s: { o: Vec3; u: Vec3; tip: Vec3 }, root: Vec3): { offset: Vec3; lever: Vec3 } {
+  const d0 = sub(s.tip, root), l = Math.hypot(d0[0], d0[1], d0[2])
+  const d: Vec3 = l > 1e-12 ? scale(d0, 1 / l) : s.u
+  const c = dot(d, s.u)
+  const t = c > 0 ? -axial(s, root) * c / Math.max(c * c, ALIGN_CROSS_MIN * ALIGN_CROSS_MIN) : 0
+  const q = add(root, scale(d, t))
+  return { offset: lateral(sub(q, s.o), s.u), lever: scale(sub(d, s.u), ALIGN_AXIS_LEVER_M) }
+}
+/** THE DEPTH TARGET of a deep channel sample (metres along u): where the root joint should be. */
+export function depthTarget(s: { o: Vec3; u: Vec3; tip: Vec3; depthM?: number; tipRadiusM?: number }, root: Vec3): number {
+  const m = ALIGN_MARGIN_M
+  if (!((s.depthM ?? 0) > 0)) return -m
+  const bottom = (s.depthM ?? 0) - (s.tipRadiusM ?? 0)
+  return Math.min(-m, bottom - m - (axial(s, s.tip) - axial(s, root)))
 }
 
 /** The active-set Gauss–Newton of the module docstring THE SOLVE: the increment z with (start + z) within ±half that
@@ -269,16 +335,22 @@ export function solveAlign(p: AlignProblem): AlignSolution {
     for (const k of picks) {
       const s = moveSample(k.s, fix, k.rooted ? root0 : null, k.rooted ? to : null)
       const r0 = s.chain?.[0] ?? s.base
-      const lr = lateral(sub(r0, s.o), s.u), lt = lateral(sub(s.tip, s.o), s.u)
-      out.push(lr[0], lr[1], lr[2], lt[0], lt[1], lt[2])
+      if (k.s.channel) {
+        const e = axisError(s, r0)
+        out.push(e.offset[0], e.offset[1], e.offset[2], e.lever[0], e.lever[1], e.lever[2])
+      } else {
+        const lr = lateral(sub(r0, s.o), s.u), lt = lateral(sub(s.tip, s.o), s.u)
+        out.push(lr[0], lr[1], lr[2], lt[0], lt[1], lt[2])
+      }
       if (k.deep && k.s.channel) {
         const st = axial(s, s.tip), sr = axial(s, r0)
+        out.push(ALIGN_DEPTH_WEIGHT * (sr - depthTarget(s, r0)))
         out.push(W * Math.max(0, m - st), W * Math.max(0, sr + m))
         const bottom = (k.s.depthM ?? 0) - (k.s.tipRadiusM ?? 0)
         if ((k.s.depthM ?? 0) > 0) out.push(W * Math.max(0, st - bottom + m))
       }
       if (posture) {
-        const d = supportDelta(k.s, fix)
+        const d = supportDelta(k.s, fix)   // the mover's support about the mover's pivot
         if (d !== null) out.push(POSTURE.weight * postureExcess(d))
       }
     }
@@ -310,6 +382,9 @@ export interface KeyRow {
   depthMm: number; rootDepthMm: number
   rootOutside: boolean; tipInside: boolean; pastBottom: boolean
   tipOffMm: number; rootOffMm: number; shaftDeg: number
+  /** THE AXIS ERROR: the shaft line's offset at the opening plane and the angle's lever L·2 sin(θ/2) (mm); the depth
+   *  target of the root joint (mm along the axis, + = inside). */
+  openOffMm: number; leverMm: number; rootTargetMm: number
   /** The bend at this frame (degrees; null = no limits or no chain), the turn it wanted and whether the limit cut it. */
   bendDeg: number | null; bendWantDeg: number | null; bendAtLimit: boolean
 }
@@ -323,8 +398,10 @@ export function keyRow(s: AlignSample, index: number, limits?: BendLimits | null
   const bend = limits ? bendSample(s, limits).bend : null
   const bottom = (s.depthM ?? 0) > 0 ? (s.depthM ?? 0) - (s.tipRadiusM ?? 0) : Infinity
   const off = (p: Vec3) => { const v = lateral(sub(p, s.o), s.u); return Math.hypot(v[0], v[1], v[2]) * 1000 }
+  const ax = axisError(s, r0), mm = (v: Vec3) => Math.hypot(v[0], v[1], v[2]) * 1000
   return { index, phase: s.phase ?? 0, depthMm: st * 1000, rootDepthMm: sr * 1000, rootOutside: sr < 0, tipInside: st > 0,
     pastBottom: st > bottom, tipOffMm: off(s.tip), rootOffMm: off(r0), shaftDeg: Math.acos(clampTo(cos, -1, 1)) * 180 / Math.PI,
+    openOffMm: mm(ax.offset), leverMm: mm(ax.lever), rootTargetMm: depthTarget(s, r0) * 1000,
     bendDeg: bend ? bend.deg : null, bendWantDeg: bend ? bend.wantDeg : null, bendAtLimit: !!bend?.atLimit }
 }
 /** The deep and the shallow frame of measured samples (`keyFrames`), null for none. */
@@ -332,13 +409,35 @@ export function keyReport(samples: readonly AlignSample[], limits?: BendLimits |
   const k = keyFrames(samples)
   return k ? { deep: keyRow(samples[k.deep], k.deep, limits), shallow: keyRow(samples[k.shallow], k.shallow, limits) } : null
 }
-/** The lamp of a key report (module docstring THE LAMP); `inside` = a channel (step 1 applies). */
-export function keyLamp(rep: KeyReport | null, hits: readonly AlignBound[], inside: boolean): AlignLamp {
-  if (!rep || hits.length) return 'red'
-  const holds = !inside || (rep.deep.rootOutside && rep.deep.tipInside && !rep.deep.pastBottom)
-  if (!holds) return 'red'
-  const worst = Math.max(rep.deep.tipOffMm, rep.deep.rootOffMm, rep.shallow.tipOffMm, rep.shallow.rootOffMm)
-  return worst <= KEY_GREEN_MM ? 'green' : worst <= KEY_YELLOW_MM ? 'yellow' : 'red'
+/** The worst axis error of a key report (mm): a channel's opening-plane offset and lever, a point target's root joint
+ *  and tip off its line. */
+export function keyWorstMm(rep: KeyReport, inside: boolean): number {
+  const rows = [rep.deep, rep.shallow]
+  return Math.max(...rows.map((r) => (inside ? Math.max(r.openOffMm, r.leverMm) : Math.max(r.tipOffMm, r.rootOffMm))))
+}
+/** Why a key report's lamp is not green (module docstring THE LAMP), in a fixed order: the caps hit, 'shallower' (the
+ *  deepest frame ended shallower than `before`), 'root_inside', 'tip_outside', 'past_bottom', 'off_axis' (beyond the
+ *  green limit). Empty = green. */
+export type KeyReason = 'caps' | 'shallower' | 'root_inside' | 'tip_outside' | 'past_bottom' | 'off_axis'
+export function keyReasons(rep: KeyReport | null, hits: readonly AlignBound[], inside: boolean,
+  before?: KeyReport | null): KeyReason[] {
+  if (!rep) return ['off_axis']
+  const out: KeyReason[] = []
+  if (hits.length) out.push('caps')
+  if (inside && before && !before.deep.pastBottom && rep.deep.depthMm < before.deep.depthMm - KEY_SHALLOWER_MM) out.push('shallower')
+  if (inside && !rep.deep.rootOutside) out.push('root_inside')
+  if (inside && !rep.deep.tipInside) out.push('tip_outside')
+  if (inside && rep.deep.pastBottom) out.push('past_bottom')
+  if (keyWorstMm(rep, inside) > KEY_GREEN_MM) out.push('off_axis')
+  return out
+}
+/** The lamp of a key report (module docstring THE LAMP); `inside` = a channel (step 1 applies); `before` = the report
+ *  before the run (a shallower deepest frame is red). */
+export function keyLamp(rep: KeyReport | null, hits: readonly AlignBound[], inside: boolean, before?: KeyReport | null): AlignLamp {
+  if (!rep) return 'red'
+  const why = keyReasons(rep, hits, inside, before)
+  if (why.some((r) => r !== 'off_axis')) return 'red'
+  return keyWorstMm(rep, inside) <= KEY_GREEN_MM ? 'green' : keyWorstMm(rep, inside) <= KEY_YELLOW_MM ? 'yellow' : 'red'
 }
 
 /** What a pass applies: the totals of the unknowns (offset relative to the base, tilt/roll, the root angle). */
@@ -388,8 +487,9 @@ export function joinDelta(frame: readonly number[], rel: Vec3, hips: Vec3, ancho
   return [w[0] - (hips[0] - anchor[0]), w[1] - (hips[1] - anchor[1]), w[2] - (hips[2] - anchor[2])]
 }
 
-/** THE MOVERS: the contact hits grouped by the figure that carries the attached part (`e`) — one bounded solve per
- *  group, all its relations at once. A receiving figure (`r`) is never a key unless it carries a part itself. */
+/** THE MOVERS of a run over ALL relations ("Align all", end clips): the contact hits grouped by the figure that
+ *  carries the attached part (`e`) — one bounded solve per group, all its relations at once. A receiving figure (`r`)
+ *  is never a key unless it carries a part itself. (A single click aligns one relation with the mover it names.) */
 export function alignMovers<T extends { e: number; r: number }>(hits: readonly T[]): Map<number, T[]> {
   const out = new Map<number, T[]>()
   for (const h of hits) out.set(h.e, [...(out.get(h.e) ?? []), h])

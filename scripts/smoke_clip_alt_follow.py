@@ -235,7 +235,7 @@ def test_record():
     print("[A] orient_clip records every bake in order")
     write_pair(FREE, "tw", rebuild=rebuild(), frames=300, anchors=PRE_ANCHORS)
     clips.orient_clip("free", "tw__a.fbx", tilt_deg=10.0, height_cm=5.0, with_finales=False)
-    clips.orient_clip("free", "tw__a.fbx", yaw_deg=90.0, partner_shift_cm=[5.0, 0.0, -10.0],
+    clips.orient_clip("free", "tw__a.fbx", yaw_deg=90.0, role_shift_cm={"b": [5.0, 0.0, -10.0]},
                       with_finales=False)
     clips.orient_clip("free", "tw__b.fbx", shift_cm=[25, -40], with_finales=False)
     got = sidecar(FREE, "tw")["source"]["rebuild"]["orient_bakes"]

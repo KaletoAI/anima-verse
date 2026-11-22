@@ -114,21 +114,25 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
 
 [9] ALL DIALS AT 0 IS A NO-OP: no Blender start, the file's bytes unchanged.
 
-[10] THE PARTNER SHIFT MOVES ONLY B, BEFORE THE TURN. A fresh copy of the
-    pair, `partner_shift_cm` [5, 0, -10] (side +5 = +X, forward -10 = -Z):
+[10] A PAIR'S ROLE SHIFT MOVES ONLY THAT ROLE, BEFORE THE TURN. A fresh copy
+    of the pair, `role_shift_cm` {"b": [5, 0, -10]} (side +5 = +X, forward
+    -10 = -Z):
         A frame 1 (10, 20) unchanged          -> start  (0.100, 0.200) m
         A frame 2 (12, 23) unchanged          -> anchor (0.120, 0.230) m
         B frame 1 (70, 20) + (5, -10) = (75, 10) -> start  (0.750, 0.100) m
         B frame 2 (72, 23) + (5, -10) = (77, 13) -> anchor (0.770, 0.130) m
         root_distance_m = |(0.12, 0.23) - (0.77, 0.13)|
                         = sqrt(0.65^2 + 0.10^2) = sqrt(0.4325) = 0.658
-    The sidecar records `partner_shift_cm` [5.0, 0.0, -10.0]; the opposite
+    The sidecar records `role_shift_cm` {"b": [5.0, 0.0, -10.0]}; the opposite
     shift brings it back to zero and DROPS the field. The up axis is a lift
     of B alone: one run over B's file with slot_shift [0, 3, 0] puts frame 1
-    at (70, 43, 20).
+    at (70, 43, 20). Role A of a pair moves the same way (2026-11-22):
+    {"a": [5, 0, -10]} on a fresh copy:
+        A frame 1 (10, 20) + (5, -10) = (15, 10) -> start  (0.150, 0.100) m
+        B frame 1 (70, 20) unchanged             -> start  (0.700, 0.200) m
 
 [11] SHIFT AND TURN TOGETHER: the shift lives in the frame the dials turn.
-    Another fresh copy, yaw 90 plus partner_shift_cm [5, 0, -10]:
+    Another fresh copy, yaw 90 plus role_shift_cm {"b": [5, 0, -10]}:
         B frame 1 (70, 40, 20) + (5, 0, -10) = (75, 40, 10)
         Ry(90): x' =  75 . 0 + 10 . 1 =  10,  z' = -75 . 1 + 10 . 0 = -75
                                        -> start (0.100, -0.750) m
@@ -137,7 +141,7 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
     measurements without changing them or rotating the calibration. A later
     shift-only [-5,10] yields [20,-30], leaving both FBX files byte-identical.
 
-[12] A SOLO CLIP REFUSES THE PARTNER SHIFT (ClipLibraryError, file untouched).
+[12] A SOLO CLIP REFUSES A ROLE SHIFT (ClipLibraryError, file untouched).
 
 [13] A GROUP MOVES ANY ROLE. A group of three, `grp__a`/`grp__b` = the pair
     fixture's halves and `grp__c` = a second copy of A, with
@@ -151,9 +155,8 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
         root_distance_m = |(0.12, 0.28) - (0.72, 0.23)|
                         = sqrt(0.60^2 + 0.05^2) = sqrt(0.3625) = 0.602
     The sidecar records `role_shift_cm` {a: [0.0, 0.0, 5.0], c: [-5.0, 0.0,
-    0.0]}; moving C back by [5, 0, 0] drops C and keeps A. The partner shift
-    is refused on the group, `role_shift_cm` on the pair and on a role the
-    group does not have (ClipLibraryError each).
+    0.0]}; moving C back by [5, 0, 0] drops C and keeps A. A role the pair or
+    the group does not have is refused (ClipLibraryError each).
 """
 import json
 import math
@@ -464,9 +467,9 @@ def main() -> int:
             "geometry": {"anchor_frame": 1, "anchor_s": 0.033, "root_distance_m": 9.99,
                          "floor_shift_cm": 0.0}}, indent=1), encoding="utf-8")
 
-    print("\n[10] the partner shift moves only B, before the turn")
+    print("\n[10] a pair's role shift moves only that role, before the turn")
     fresh_pair("shift")
-    ac.orient_clip("free", "shift__a.fbx", partner_shift_cm=[5.0, 0.0, -10.0])
+    ac.orient_clip("free", "shift__a.fbx", role_shift_cm={"b": [5.0, 0.0, -10.0]})
     geo = json.loads((FREE / "shift.json").read_text(encoding="utf-8"))["geometry"]
     roles = geo.get("roles") or {}
     want = {("a", "start_xz_m"): [0.100, 0.200], ("a", "anchor_xz_m"): [0.120, 0.230],
@@ -476,11 +479,12 @@ def main() -> int:
         check(f"{role}.{field} x", got[0], w[0], TOL_M)
         check(f"{role}.{field} z", got[1], w[1], TOL_M)
     check("root_distance_m re-measured", float(geo.get("root_distance_m", 0.0)), 0.658, TOL_M)
-    check_true("partner_shift_cm recorded", geo.get("partner_shift_cm") == [5.0, 0.0, -10.0],
-               str(geo.get("partner_shift_cm")))
-    ac.orient_clip("free", "shift__b.fbx", partner_shift_cm=[-5.0, 0.0, 10.0])
+    check_true("role_shift_cm.b recorded", geo.get("role_shift_cm") == {"b": [5.0, 0.0, -10.0]},
+               str(geo.get("role_shift_cm")))
+    check_true("no partner_shift_cm written", "partner_shift_cm" not in geo, str(sorted(geo)))
+    ac.orient_clip("free", "shift__b.fbx", role_shift_cm={"b": [-5.0, 0.0, 10.0]})
     geo = json.loads((FREE / "shift.json").read_text(encoding="utf-8"))["geometry"]
-    check_true("the opposite shift drops the field", "partner_shift_cm" not in geo, str(sorted(geo)))
+    check_true("the opposite shift drops the field", "role_shift_cm" not in geo, str(sorted(geo)))
     b = ((geo.get("roles") or {}).get("b") or {}).get("start_xz_m") or [0.0, 0.0]
     check("B start x back at 0.700", b[0], 0.700, TOL_M)
     check("B start z back at 0.200", b[1], 0.200, TOL_M)
@@ -490,11 +494,20 @@ def main() -> int:
                      params={"slot_shift_cm": {"src": [0.0, 3.0, 0.0]}}, out_dir=out, timeout_s=900)
     d = (res.get("data") or {}).get("clips", {}).get("src") or {}
     check_xyz("up 3 lifts B alone: frame 1", d.get("root_after") or [0, 0, 0], [70.0, 43.0, 20.0])
+    fresh_pair("shifta")
+    ac.orient_clip("free", "shifta__b.fbx", role_shift_cm={"a": [5.0, 0.0, -10.0]})
+    geo = json.loads((FREE / "shifta.json").read_text(encoding="utf-8"))["geometry"]
+    for role, w in (("a", [0.150, 0.100]), ("b", [0.700, 0.200])):
+        got = ((geo.get("roles") or {}).get(role) or {}).get("start_xz_m") or [0.0, 0.0]
+        check(f"pair A shift: {role}.start_xz_m x", got[0], w[0], TOL_M)
+        check(f"pair A shift: {role}.start_xz_m z", got[1], w[1], TOL_M)
+    check_true("role_shift_cm.a recorded", geo.get("role_shift_cm") == {"a": [5.0, 0.0, -10.0]},
+               str(geo.get("role_shift_cm")))
 
     print("\n[11] shift and turn together")
     fresh_pair("both")
     ac.orient_clip("free", "both__a.fbx", yaw_deg=90.0,
-                   partner_shift_cm=[5.0, 0.0, -10.0], shift_cm=[25, -40])
+                   role_shift_cm={"b": [5.0, 0.0, -10.0]}, shift_cm=[25, -40])
     geometry = json.loads((FREE / "both.json").read_text(encoding="utf-8"))["geometry"]
     roles = geometry.get("roles") or {}
     check_true("whole-clip shift stays in placement frame", geometry.get("shift_cm") == [25, -40], str(geometry))
@@ -511,10 +524,10 @@ def main() -> int:
     check_true("shift-only keeps both FBX files", before == [
         (FREE / f"both__{role}.fbx").read_bytes() for role in ("a", "b")], "changed FBX")
 
-    print("\n[12] a solo clip refuses the partner shift")
+    print("\n[12] a solo clip refuses a role shift")
     was = (FREE / "turn.fbx").read_bytes()
     try:
-        ac.orient_clip("free", "turn.fbx", partner_shift_cm=[5.0, 0.0, 0.0])
+        ac.orient_clip("free", "turn.fbx", role_shift_cm={"a": [5.0, 0.0, 0.0]})
         check_true("refused", False, "no error")
     except ac.ClipLibraryError:
         check_true("refused", True)
@@ -547,8 +560,7 @@ def main() -> int:
     check_true("C back at zero drops out, A stays",
                geo.get("role_shift_cm") == {"a": [0.0, 0.0, 5.0]}, str(geo.get("role_shift_cm")))
     for label, call in (
-            ("partner shift on a group", lambda: ac.orient_clip("free", "grp__a.fbx", partner_shift_cm=[5.0, 0.0, 0.0])),
-            ("role shift on a pair", lambda: ac.orient_clip("free", "pair__a.fbx", role_shift_cm={"a": [5.0, 0.0, 0.0]})),
+            ("a role the pair lacks", lambda: ac.orient_clip("free", "pair__a.fbx", role_shift_cm={"c": [5.0, 0.0, 0.0]})),
             ("a role the group lacks", lambda: ac.orient_clip("free", "grp__a.fbx", role_shift_cm={"e": [5.0, 0.0, 0.0]}))):
         try:
             call()

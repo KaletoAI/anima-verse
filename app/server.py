@@ -136,6 +136,15 @@ try:
 except Exception as _ble:
     logger.warning("bend limits migration failed: %s", _ble)
 
+# Boot migration (2026-11-22): a pair's partner B shift is its role b shift (role_shift_cm, like a group's).
+try:
+    from app.core.animation_clips import migrate_partner_shift_roles
+    _ps = migrate_partner_shift_roles()
+    if _ps:
+        logger.info("Clip role shifts: partner_shift_cm moved to role_shift_cm.b in %d clip sidecar(s)", _ps)
+except Exception as _pse:
+    logger.warning("partner shift migration failed: %s", _pse)
+
 # Boot migration (2026-11-02): pose field solo -> participants in the world layer.
 from app.core.pose_catalog import migrate_participants_once
 _pm = migrate_participants_once()

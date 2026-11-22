@@ -6,7 +6,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { hasInside, targetWordOf } from './contactWords'
 import { LampDot } from './StatusLamp'
-import type { AlignBound } from '@anima/scene-render'
+import type { AlignBound, KeyReason } from '@anima/scene-render'
 import type { AutoAlignResult, KeyAlign } from './PlacePreview'
 
 type Ok = Extract<AutoAlignResult, { ok: true }>
@@ -59,7 +59,8 @@ function KeyTable({ keys, inside }: { keys: KeyAlign; inside: boolean }) {
     <table data-testid="align-keys" style={{ borderCollapse: 'collapse' }}>
       <thead><tr><th style={{ textAlign: 'left' }}>{t('Frame')}</th>
         {inside ? <th style={CELL} title={t('How deep the tip is along the axis (+ = inside).')}>{t('depth')}</th> : null}
-        {inside ? <th style={CELL} title={t('Whether the root joint of the part lies in front of the opening.')}>{t('root outside')}</th> : null}
+        {inside ? <th style={CELL} title={t('How deep the root joint of the part is along the axis (− = in front of the opening); in brackets where Auto-align aims it: just outside, or further out when the bottom stops the tip.')}>{t('root depth')}</th> : null}
+        {inside ? <th style={CELL} title={t('Where the shaft line crosses the opening plane, off the axis.')}>{t('off at opening')}</th> : null}
         <th style={CELL} title={t('How far the tip is off the target’s axis.')}>{t('tip off axis')}</th>
         <th style={CELL} title={t('How far the root joint of the part is off the target’s axis line.')}>{t('root off axis')}</th>
         <th style={CELL} title={t('The rigid shaft (root joint to tip) against the axis.')}>{t('shaft')}</th>
@@ -67,8 +68,10 @@ function KeyTable({ keys, inside }: { keys: KeyAlign; inside: boolean }) {
       <tbody>{rows.map(([key, label, r, rb]) => (
         <tr key={key} data-key={key}><td>{label}</td>
           {inside ? <td style={CELL} title={was(rb?.depthMm, 'mm')}>{mm(r.depthMm)}</td> : null}
-          {inside ? <td style={{ ...CELL, color: key === 'deep' && !r.rootOutside ? 'var(--danger, #f85149)' : undefined }}>
-            {r.rootOutside ? t('yes') : t('no')}</td> : null}
+          {inside ? <td style={{ ...CELL, color: key === 'deep' && !r.rootOutside ? 'var(--danger, #f85149)' : undefined }}
+            title={was(rb?.rootDepthMm, 'mm')}>
+            {mm(r.rootDepthMm)}{key === 'deep' ? ` (${(Math.round(r.rootTargetMm) || 0).toFixed(0)})` : ''}</td> : null}
+          {inside ? <td style={CELL} title={was(rb?.openOffMm, 'mm')}>{mm(r.openOffMm)}</td> : null}
           <td style={CELL} title={was(rb?.tipOffMm, 'mm')}>{mm(r.tipOffMm)}</td>
           <td style={CELL} title={was(rb?.rootOffMm, 'mm')}>{mm(r.rootOffMm)}</td>
           <td style={CELL} title={was(rb?.shaftDeg, '°')}>{r.shaftDeg.toFixed(1)}°</td>
@@ -76,6 +79,18 @@ function KeyTable({ keys, inside }: { keys: KeyAlign; inside: boolean }) {
       ))}</tbody>
     </table>
   )
+}
+
+/** Why the contact lamp is not green (`keyReasons`), in words. */
+function reasonWord(t: (s: string) => string, r: KeyReason): string {
+  switch (r) {
+    case 'caps': return t('a cap or slider range stopped it')
+    case 'shallower': return t('the deepest frame ended shallower than before')
+    case 'root_inside': return t('the root joint is inside the opening at the deepest frame')
+    case 'tip_outside': return t('the tip is not inside at the deepest frame')
+    case 'past_bottom': return t('the tip is past the bottom at the deepest frame')
+    case 'off_axis': return t('the shaft is more than 3 mm off the axis')
+  }
 }
 
 /** The names of the unknowns that hit their cap or slider range. */
@@ -103,16 +118,29 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
     <div data-testid="align-auto-result" data-result={JSON.stringify(r)} style={{ fontSize: 11, lineHeight: 1.35 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <LampDot lamp={r.lamp} title={r.lamp === 'green'
-          ? t('At the deepest and the shallowest frame the root joint and the tip lie within 3 mm of the axis; at the deepest the root is outside and the tip inside.')
+          ? t('At the deepest and the shallowest frame the shaft runs within 3 mm of the axis through the opening; at the deepest the root is outside and the tip inside.')
           : r.lamp === 'yellow' ? t('At both key frames within 10 mm of the axis, the root outside and the tip inside at the deepest.')
-            : t('More than 10 mm off the axis, the root or the tip on the wrong side of the opening, or a cap or slider range was hit.')} />
+            : t('More than 10 mm off the axis, the root or the tip on the wrong side of the opening, the deepest frame shallower than before, or a cap or slider range was hit.')} />
         <LampDot lamp={r.clearLamp} title={(r.clearLamp === 'green'
           ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
           : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
             .replace('{mm}', r.overlapAfterMm.toFixed(0)).replace('{pair}', r.clearWorst || '–'))} />
         <span>{t('{by} → {of}: {channel}').replace('{by}', r.by).replace('{of}', r.of)
           .replace('{channel}', r.target === 'channel' ? (r.channel.split(':').pop() || r.channel) : targetWordOf(t, r.target))}</span>
+        {r.movers.length === 1 ? (
+          <span data-testid="align-moved" style={{ opacity: 0.8 }}>· {(r.movers[0].mover === 'receiver'
+            ? t('{role} moved (receiving role)') : t('{role} moved (part role)')).replace('{role}', r.movers[0].role.toUpperCase())}</span>
+        ) : null}
       </div>
+      {r.reasons.length ? (
+        <div data-testid="align-reasons" style={{ color: r.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
+          {t('Contact lamp {lamp}: {why}.').replace('{lamp}', r.lamp === 'red' ? t('red') : r.lamp === 'yellow' ? t('yellow') : t('green'))
+            .replace('{why}', r.reasons.map((x) => reasonWord(t, x)).join('; '))}</div>
+      ) : null}
+      {r.rootShared.length ? (
+        <div data-testid="align-root-shared" style={{ color: 'var(--warning, #d29922)' }}>
+          {t('The root angle is one per clip: it also turns the part of {rels}.').replace('{rels}', r.rootShared.join(', '))}</div>
+      ) : null}
       {r.movers.map((m) => {
         const v3 = (v: number[]) => v.map((x) => x.toFixed(1)).join(' / ')
         const limit = t('Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
@@ -195,7 +223,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
         ) : null}
       </details>
       <div className="ga-form-hint" style={{ margin: 0 }}>
-        {t('Measured on two 1.70 m figures; in the game every figure is scaled about the contact pivot by its own height. Save stores the partner dials, the root angle and the contact pivot.')}
+        {t('Measured on two 1.70 m figures; in the game every figure is scaled about the contact pivot by its own height. Save stores the role dials, the root angle and the contact pivot.')}
       </div>
     </div>
   )

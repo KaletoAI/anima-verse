@@ -47,11 +47,11 @@ export function placeInteraction(kind: string, markerId: string, members: readon
 }
 
 /** Phase B for the frame's figures, then, when `inspect`, every figure's inspection (entry order) and the frame's
- *  readout (null otherwise). */
+ *  readout (null otherwise). `isolated`: without partners (`runFigureFrame`), as Auto-align samples. */
 export function placePhaseB(entries: readonly { name: string; interaction: ReturnType<typeof placeInteraction> | null;
-  figure: FigureRuntime }[], state: FrameLoopState, inspect: boolean):
+  figure: FigureRuntime }[], state: FrameLoopState, inspect: boolean, opts: { isolated?: boolean } = {}):
   { figures: { name: string; inspection: FigureInspection | null }[]; frame: FrameInspection } | null {
-  runFigureFrame(entries, state)
+  runFigureFrame(entries, state, undefined, opts)
   if (!inspect) return null
   const figures = entries.map((e) => ({ name: e.name, inspection: e.figure.inspect() }))
   return { figures, frame: inspectFrame(figures) }

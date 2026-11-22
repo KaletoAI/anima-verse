@@ -2814,14 +2814,15 @@ Beim Import (`POST /assets/clips-inbox/import|preview`):
 
 `role_gender` einer Gruppe nennt JEDE Rolle (`male`/`female`), nicht alle
 gleich, sonst gilt sie als nicht zugeordnet. Der Import leitet sie aus den
-Take- bzw. Dateinamen ab („Female…“ / „Male…“). Eine Gruppe lässt sich nicht
-per `partner_shift_cm` ausrichten. Ihre Rollen werden beim Import
+Take- bzw. Dateinamen ab („Female…“ / „Male…“). Ihre Rollen werden beim Import
 ausgerichtet und danach per `role_shift_cm` (`POST …/orient`,
 `{role: [side, up, forward]}` cm je Rolle, auch A): Jede genannte Rolle
 rückt mitsamt ihren Alt-Hälften vor der Drehung in der Datei. Die Summe steht
 in `geometry.role_shift_cm`, die Rollenpunkte werden an der geschriebenen
-Datei neu gemessen. Ein Paar lehnt `role_shift_cm` ab
-(`scripts/smoke_clip_orient.py` [13]).
+Datei neu gemessen. Seit 2026-11-22 gilt das für ein Paar genauso (Rolle a
+oder b); das frühere `partner_shift_cm` des Paars wird beim Start einmal nach
+`role_shift_cm.b` übertragen (`migrate_partner_shift_roles`) und von
+`…/orient` abgelehnt (`scripts/smoke_clip_orient.py` [13]).
 
 **Gruppen abspielen (G3, 2026-11-03).** Eine Gruppe spielt wie ein Paar, nur
 mit mehr Figuren:
@@ -10517,12 +10518,11 @@ sum may exceed that range. An all-zero request is rejected. The clip listing
 exposes the saved sum as `orientation.shift_cm`. A shift-only edit needs no
 Blender and leaves FBX tracks and measured root/anchor geometry untouched.
 A pair writes its shared `<kind>.json` once; both halves use that correction,
-even when either half has its own sidecar. `partner_shift_cm` remains the
-independent baked adjustment of B against A, `role_shift_cm` the same per role
-of a group.
+even when either half has its own sidecar. `role_shift_cm` remains the
+independent baked adjustment of each role of a pair or group.
 
 **Finale clips follow (2026-11-03).** Every `…/orient` edit (angles, lift,
-`partner_shift_cm`, `role_shift_cm`, `shift_cm`) and every `height_offsets_cm` PATCH of a clip is
+`role_shift_cm`, `shift_cm`) and every `height_offsets_cm` PATCH of a clip is
 applied the same way to its finale clips — the `finale_animation` (or the
 package-derived finale) of every pose whose `animation` is that clip, in the same
 library and set and of the same shape (a pair's finale a pair). The answer's

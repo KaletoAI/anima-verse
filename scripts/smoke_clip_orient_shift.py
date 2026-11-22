@@ -5,8 +5,21 @@ Usage: ./.venv/bin/python scripts/smoke_clip_orient_shift.py
 
 Hand derivation: [25,-40] + [-5,10] = [20,-30] cm. Adding [-20,30]
 removes the correction. A pair has ONE common correction, never a change
-to its authored root separation or partner_shift_cm. Dummy FBX bytes make
+to its authored root separation or role_shift_cm. Dummy FBX bytes make
 an accidental Blender invocation fail. Invalid/zero edits must write nothing.
+
+[M] THE BOOT MIGRATION migrate_partner_shift_roles (2026-11-22): a pair's
+former geometry.partner_shift_cm is added to geometry.role_shift_cm.b and
+removed, nothing re-baked (the FBX bytes stay):
+    m1: partner [5, 0, -10], no role shifts        -> {"b": [5.0, 0.0, -10.0]}
+    m2: partner [2, 0, 0],   b [-2, 0, 1], a [0, 1, 0]
+        b = [-2 + 2, 0 + 0, 1 + 0] = [0, 0, 1]      -> {"a": [0, 1, 0], "b": [0.0, 0.0, 1.0]}
+    m3: partner [1.5, 0, 0], b [-1.5, 0, 0]: b = [0, 0, 0] drops out, and with
+        it the whole field                           -> no role_shift_cm
+    m4: no partner_shift_cm                          -> untouched (not counted)
+  The first run changes 3 files, the second 0 (idempotent). The listing's
+  orientation has no partner_shift_cm key; POST …/orient with
+  partner_shift_cm is a 400 that writes nothing.
 """
 import asyncio
 import json
@@ -65,11 +78,11 @@ def main():
         fixture("pair__b", {"geometry": {"shift_cm": [-99, -99]}})
         shared = root / "free/pair.json"
         shared.write_text(json.dumps({"pair": True, "geometry": {
-            "roles": roles, "partner_shift_cm": [5, 0, -10], "root_distance_m": .6}}))
+            "roles": roles, "role_shift_cm": {"b": [5, 0, -10]}, "root_distance_m": .6}}))
         rows = apply("pair__b.fbx", [25, -40])
         assert len(rows) == 2 and all(r["orientation"]["shift_cm"] == [25, -40] for r in rows)
         data = json.loads(shared.read_text())["geometry"]
-        assert data["roles"] == roles and data["partner_shift_cm"] == [5, 0, -10]
+        assert data["roles"] == roles and data["role_shift_cm"] == {"b": [5, 0, -10]}
         assert data["root_distance_m"] == .6
         listing = assets.list_animation_clips()["clips"]
         assert all(r["orientation"]["shift_cm"] == [25, -40] for r in listing if r["kind"] == "pair")
@@ -95,7 +108,38 @@ def main():
                 pass
             else:
                 raise AssertionError(f"core accepted invalid shift: {value}")
-        print("OK: cumulative shift, pair/shared sidecar, sets, unchanged roots/FBX, boundaries and validation")
+        # [M] the boot migration
+        mig = root / "free" / "mig"
+        mig.mkdir()
+        cases = {"m1": ({"partner_shift_cm": [5, 0, -10]}, {"b": [5.0, 0.0, -10.0]}),
+                 "m2": ({"partner_shift_cm": [2, 0, 0], "role_shift_cm": {"a": [0, 1, 0], "b": [-2, 0, 1]}},
+                        {"a": [0, 1, 0], "b": [0.0, 0.0, 1.0]}),
+                 "m3": ({"partner_shift_cm": [1.5, 0, 0], "role_shift_cm": {"b": [-1.5, 0, 0]}}, None),
+                 "m4": ({"role_shift_cm": {"b": [1, 2, 3]}}, {"b": [1, 2, 3]})}
+        for name, (geo, _want) in cases.items():
+            for r in ("a", "b"):
+                (mig / f"{name}__{r}.fbx").write_bytes(b"never rewrite this FBX")
+            (mig / f"{name}.json").write_text(json.dumps({"pair": True, "geometry": dict(geo)}))
+        fbx_before = {p.name: p.read_bytes() for p in mig.glob("*.fbx")}
+        assert ac.migrate_partner_shift_roles() == 3
+        for name, (_geo, want) in cases.items():
+            g = json.loads((mig / f"{name}.json").read_text())["geometry"]
+            assert "partner_shift_cm" not in g, (name, g)
+            assert g.get("role_shift_cm") == want, (name, g)
+        assert ac.migrate_partner_shift_roles() == 0
+        assert fbx_before == {p.name: p.read_bytes() for p in mig.glob("*.fbx")}
+        listing = assets.list_animation_clips()["clips"]
+        assert all("partner_shift_cm" not in (r.get("orientation") or {}) for r in listing)
+        before = {str(p): p.read_bytes() for p in (root / "free").rglob("*") if p.is_file()}
+        try:
+            asyncio.run(request("pair__a.fbx", {"partner_shift_cm": [5, 0, 0]}))
+        except HTTPException as error:
+            assert error.status_code == 400, error
+        else:
+            raise AssertionError("partner_shift_cm accepted")
+        assert before == {str(p): p.read_bytes() for p in (root / "free").rglob("*") if p.is_file()}
+        print("OK: cumulative shift, pair/shared sidecar, sets, unchanged roots/FBX, boundaries, validation, "
+              "partner shift migration")
 
 
 if __name__ == "__main__":

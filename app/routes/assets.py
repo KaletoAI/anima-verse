@@ -330,14 +330,14 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     """Turns an already imported clip — the import's orientation dial,
     applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?, partner_shift_cm?, role_shift_cm?, shift_cm?, partner_turn_deg?, partner_yaw_deg?}``,
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, role_shift_cm?, shift_cm?, partner_turn_deg?, partner_yaw_deg?}``,
     at least
     one of them non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)``
-    about the origin of the clip frame on the floor. ``partner_shift_cm`` is
-    ``[side, up, forward]`` centimetres (clip frame, −100..100) that move a
-    PAIR's B half against its A half before the turn; a solo clip answers 400.
-    ``role_shift_cm`` is ``{role: [side, up, forward]}`` for a GROUP — every
-    named role moves, with its alt halves (``orient_clip``). Surface heights use the PATCH route's
+    about the origin of the clip frame on the floor. ``role_shift_cm`` is
+    ``{role: [side, up, forward]}`` centimetres (clip frame, −100..100) for a
+    PAIR or a GROUP — every named role moves before the turn, with its alt
+    halves (``orient_clip``); a solo clip answers 400. The former
+    ``partner_shift_cm`` is refused (a pair's B shift is ``role_shift_cm.b``). Surface heights use the PATCH route's
     ``height_offsets_cm`` instead. ``shift_cm`` is the renderer-only cumulative
     [side, forward] correction in cm (-200..200 per edit), shared by both halves.
     ``partner_turn_deg`` (Ruling A129) is a pair's renderer-only cumulative [tilt, roll] of partner B
@@ -381,13 +381,9 @@ def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise HTTPException(status_code=400, detail=f"{field} must be a number")
         dials[field] = float(raw)
-    shift = body.get("partner_shift_cm")
-    if shift is not None:
-        if (not isinstance(shift, list) or len(shift) != 3
-                or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in shift)):
-            raise HTTPException(status_code=400,
-                                detail="partner_shift_cm must be [side, up, forward] numbers")
-        shift = [float(v) for v in shift]
+    if "partner_shift_cm" in body:
+        raise HTTPException(status_code=400,
+                            detail="partner_shift_cm is gone: a pair moves its roles with role_shift_cm {a|b: [side, up, forward]}")
     role_shift = body.get("role_shift_cm")
     if role_shift is not None:
         if (not isinstance(role_shift, dict) or any(
@@ -412,23 +408,23 @@ def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[
             checked = validate_orientation_check(body["checked"])
         except ClipLibraryError as e:
             raise _clip_edit_error(e)
-        if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal, *turn, pyaw)):
+        if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn, pyaw)):
             # Nothing to bake: the admin saved a place check that already reads green.
             try:
                 return {"clips": mark_clip_checked(library, rel, checked), "seconds": 0}
             except ClipLibraryError as e:
                 raise _clip_edit_error(e)
-    if not any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves, *horizontal, *turn, pyaw)):
+    if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn, pyaw)):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg, partner_shift_cm, role_shift_cm, shift_cm, partner_turn_deg, partner_yaw_deg "
+            detail="one of yaw_deg, tilt_deg, roll_deg, role_shift_cm, shift_cm, partner_turn_deg, partner_yaw_deg "
                    "must be non-zero")
-    if any(abs(v) > 1e-9 for v in (*dials.values(), *(shift or ()), *role_moves)) and not blender_runner.is_available():
+    if any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves)) and not blender_runner.is_available():
         raise HTTPException(status_code=503,
                             detail="Blender is not available on this server")
     started = time.monotonic()
     try:
-        clips = orient_clip(library, rel, **dials, partner_shift_cm=shift,
+        clips = orient_clip(library, rel, **dials,
                             role_shift_cm=role_shift, shift_cm=horizontal, partner_turn_deg=turn,
                             partner_yaw_deg=pyaw, checked=checked)
     except ClipLibraryError as e:

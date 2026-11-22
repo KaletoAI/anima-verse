@@ -1434,10 +1434,10 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # Owner decision 2026-11-20 (§ A8a): the contact pivot [side, forward] cm real figure heights scale about
         # (None = the clip frame's origin; always None for a solo clip).
         "pair_pivot_cm": clip_pair_pivot(meta) if entry["role"] else None,
-        # Saved orientation and renderer calibration. Angles and partner B
+        # Saved orientation and renderer calibration. Angles and role
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
-                        ORIENT_ANGLES + ("floor_shift_cm", "partner_shift_cm", "role_shift_cm")
+                        ORIENT_ANGLES + ("floor_shift_cm", "role_shift_cm")
                         } | {"shift_cm": horizontal,
                              # Ruling A129: partner B's renderer-only tilt/roll [deg], applied at placement.
                              "partner_turn_deg": read_partner_turn(shift_geometry.get("partner_turn_deg")
@@ -2333,6 +2333,49 @@ def migrate_bend_limits_total() -> int:
     return changed
 
 
+def migrate_partner_shift_roles() -> int:
+    """Boot migration (2026-11-22): a pair moves its roles like a group (``role_shift_cm``), so every sidecar of both
+    libraries whose ``geometry.partner_shift_cm`` still records partner B's baked total gets it added to
+    ``geometry.role_shift_cm.b`` (rounded like :func:`orient_clip` rounds, a total back at zero drops out) and the old
+    field removed. Nothing is re-baked: the FBX already carries the shift. Idempotent; returns how many files changed."""
+    changed = 0
+    for library in LIBRARIES:
+        try:
+            root = library_root(library)
+        except Exception:  # noqa: BLE001 — a library that is not configured has nothing to migrate
+            continue
+        if not root.is_dir():
+            continue
+        for sidecar in sorted(root.rglob("*.json")):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            geometry = data.get("geometry") if isinstance(data, dict) else None
+            if not isinstance(geometry, dict) or "partner_shift_cm" not in geometry:
+                continue
+            old = geometry.pop("partner_shift_cm")
+            vals = [float(v) for v in old] if isinstance(old, (list, tuple)) and len(old) == 3 \
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in old) else None
+            if vals is not None:
+                book = geometry.get("role_shift_cm")
+                book = dict(book) if isinstance(book, dict) else {}
+                total = [round(float(a) + b, 1) for a, b in zip(book.get("b") or (0.0, 0.0, 0.0), vals)]
+                if any(abs(v) >= 0.05 for v in total):
+                    book["b"] = total
+                else:
+                    book.pop("b", None)
+                if book:
+                    geometry["role_shift_cm"] = {r: book[r] for r in CLIP_ROLES if r in book}
+                else:
+                    geometry.pop("role_shift_cm", None)
+            _write_json_atomic(sidecar, data)
+            changed += 1
+    if changed:
+        reload_clip_caches()
+    return changed
+
+
 #: Ruling A158: the attached part's DIRECT root angle per pair clip (degrees): pitch about the body's side axis
 #: (+ = up toward the belly, − = down) and turn about the body's up axis (+ = the figure's right, − = its left).
 #: Applied always, before any bend; Auto-align never changes it.
@@ -2810,7 +2853,6 @@ def record_orient_bake(meta: Dict[str, Any], bake: Dict[str, Any]) -> bool:
 def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 tilt_deg: float = 0.0, roll_deg: float = 0.0,
                 height_cm: float = 0.0,
-                partner_shift_cm: Optional[Sequence[float]] = None,
                 role_shift_cm: Optional[Dict[str, Sequence[float]]] = None,
                 shift_cm: Optional[Sequence[float]] = None,
                 partner_turn_deg: Optional[Sequence[float]] = None,
@@ -2836,22 +2878,17 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     appended to ``source.rebuild.orient_bakes`` (:func:`record_orient_bake`),
     which an alt import replays in order on its new half.
 
-    ``partner_shift_cm`` is ``[side, up, forward]`` in the clip frame (+X =
-    the clip's left, +Y up, +Z forward), centimetres: it moves the B half of
-    a PAIR against the A half — the import's ``offsets_m``, after the fact,
-    for a pack whose halves turn out misaligned. It is applied before the
-    turn (``clip_orient.py``), so it lives in the frame the dials turn, and
-    adds up in ``geometry.partner_shift_cm``. A solo clip refuses it, and so
-    does a group (three roles and more): which role should move is not
-    one answer there — a group names it.
-
-    ``role_shift_cm`` is that answer for a GROUP: ``{role: [side, up,
-    forward]}`` centimetres per role (``a``..``e``, any of them, −100..100),
-    the import's ``offsets_m`` after the fact. Each role's files — its own
-    half and its alt halves — move by its shift, before the turn like the
-    partner shift, and the totals add up per role in
-    ``geometry.role_shift_cm`` (a role back at zero drops out). A pair
-    refuses it (``partner_shift_cm`` is the pair's), so does a solo clip.
+    ``role_shift_cm`` moves the roles of a PAIR or a GROUP: ``{role: [side,
+    up, forward]}`` centimetres per role (``a``..``e``, any of them,
+    −100..100) in the clip frame (+X = the clip's left, +Y up, +Z forward) —
+    the import's ``offsets_m`` after the fact, for a pack whose roles turn
+    out misaligned. Each role's files — its own half and its alt halves —
+    move by its shift before the turn (``clip_orient.py``), so it lives in
+    the frame the dials turn, and the totals add up per role in
+    ``geometry.role_shift_cm`` (a role back at zero drops out). A pair moves
+    either role like a group does (2026-11-22; the former pair-only
+    ``partner_shift_cm`` became ``role_shift_cm.b``, see
+    :func:`migrate_partner_shift_roles`). A solo clip refuses it.
 
     ``partner_turn_deg`` (Ruling A129) is a pair's cumulative renderer-only
     [tilt, roll] of partner B in degrees (``geometry.partner_turn_deg``),
@@ -2888,9 +2925,6 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         raise ClipNotFound(f"{rel} does not exist in the {library} library")
     yaw, tilt, roll = float(yaw_deg or 0.0), float(tilt_deg or 0.0), float(roll_deg or 0.0)
     height = float(height_cm or 0.0)
-    shift = [float(v) for v in (partner_shift_cm or (0.0, 0.0, 0.0))]
-    if len(shift) != 3 or not all(math.isfinite(v) and abs(v) <= 100 for v in shift):
-        raise ClipLibraryError("partner_shift_cm must be three numbers from -100 to 100")
     horizontal = validate_clip_shift(shift_cm)
     turn = validate_partner_turn(partner_turn_deg)
     pyaw = validate_partner_yaw(partner_yaw_deg)
@@ -2904,21 +2938,14 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     kind, _role = parse_clip_role(path.name)
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
-    if not per_role and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift, *horizontal, *turn, pyaw)):
+    if not per_role and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *horizontal, *turn, pyaw)):
         return [_view_of(path, cset, library)]               # nothing dialled
 
     siblings = _role_siblings(path)
-    if not siblings and any(abs(v) > 1e-9 for v in shift):
-        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair has a partner to move")
-    if len(siblings) > 1 and any(abs(v) > 1e-9 for v in shift):
-        raise ClipLibraryError(
-            f"'{kind}' is a group clip — move its roles with role_shift_cm")
     if any(abs(v) > 1e-9 for v in (*turn, pyaw)) and len(siblings) != 1:
         raise ClipLibraryError(f"'{kind}' is not a pair clip — only a pair turns partner B")
-    if per_role and len(siblings) < 2:
-        raise ClipLibraryError(
-            f"'{kind}' is not a group clip — only a group moves single roles"
-            + (" (a pair moves partner B)" if siblings else ""))
+    if per_role and not siblings:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair or a group moves single roles")
     present = {_split_stem(p.stem)[1] for p in [path] + siblings}
     if set(per_role) - present:
         raise ClipLibraryError(f"'{kind}' has no role {', '.join(sorted(set(per_role) - present))}")
@@ -2941,19 +2968,15 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     # The alt halves turn with the scene — they live in its frame.
     targets = [path] + siblings + (_alt_files(path) if siblings else [])
     slots = {f"src_{i}": p for i, p in enumerate(targets)}
-    baked = bool(per_role) or any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *shift))
+    baked = bool(per_role) or any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height))
     data: Dict[str, Any] = {}
     shifted: Dict[str, Any] = {}
     if baked:
         inputs: Dict[str, Path] = {"rig": get_rig_file()}
         inputs.update(slots)
-        # Only the B half moves; the addressed file may be either half. In a
-        # group every named role moves, with its alt halves.
-        shifted = {slot: shift for slot, target in slots.items()
-                   if any(abs(v) > 1e-9 for v in shift)
-                   and _split_stem(target.stem)[1].split(ALT_SEPARATOR)[0] == "b"}
-        shifted.update({slot: per_role[base] for slot, target in slots.items()
-                        if (base := _split_stem(target.stem)[1].split(ALT_SEPARATOR)[0]) in per_role})
+        # Every named role moves, with its alt halves; the addressed file may be any role's.
+        shifted = {slot: per_role[base] for slot, target in slots.items()
+                   if (base := _split_stem(target.stem)[1].split(ALT_SEPARATOR)[0]) in per_role}
         with tempfile.TemporaryDirectory(prefix="clip-orient-") as tmp:
             res = runner.run("clip_orient", inputs=inputs, params={
                 "yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
@@ -2993,24 +3016,14 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         else:
             meta["pair_pivot_cm"] = turned
     if baked:
-        role_shift = dict(per_role)
-        if shifted and any(abs(v) > 1e-9 for v in shift):
-            role_shift["b"] = shift                 # a pair's partner shift is role b's
         record_orient_bake(meta, {"yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
-                                  "height_cm": height, "role_shift_cm": role_shift})
+                                  "height_cm": height, "role_shift_cm": dict(per_role)})
     for field, delta in zip(ORIENT_ANGLES, (yaw, tilt, roll)):
         if abs(delta) > 1e-9:
             _bump_angle(geometry, field, delta)
     if abs(height) > 1e-9:
         geometry["floor_shift_cm"] = round(
             float(geometry.get("floor_shift_cm") or 0.0) + height, 2)
-    if shifted and any(abs(v) > 1e-9 for v in shift):
-        total = [round(float(a) + b, 1) for a, b in
-                 zip(geometry.get("partner_shift_cm") or (0.0, 0.0, 0.0), shift)]
-        if any(abs(v) >= 0.05 for v in total):
-            geometry["partner_shift_cm"] = total
-        else:
-            geometry.pop("partner_shift_cm", None)
     if per_role:
         book = geometry.get("role_shift_cm")
         book = dict(book) if isinstance(book, dict) else {}
@@ -3080,9 +3093,9 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     reload_clip_caches()
     logger.info("clip oriented: %s%s (%s) yaw %+.1f tilt %+.1f roll %+.1f "
-                "height %+.1f cm partner %s cm roles %s cm shift %s cm -> %s; lowest point now %s cm",
+                "height %+.1f cm roles %s cm shift %s cm -> %s; lowest point now %s cm",
                 f"{cset}/" if cset else "", kind, library, yaw, tilt, roll,
-                height, shift if any(abs(v) > 1e-9 for v in shift) else "-", per_role or "-",
+                height, per_role or "-",
                 horizontal, ", ".join(p.name for p in targets),
                 (data.get("src_0") or {}).get("floor_min_cm_after"))
     views = [_view_of(p, cset, library) for p in targets]
@@ -3091,7 +3104,6 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             try:
                 views += orient_clip(library, _rel_in(finale, library), yaw_deg=yaw, tilt_deg=tilt,
                                      roll_deg=roll, height_cm=height,
-                                     partner_shift_cm=shift if any(abs(v) > 1e-9 for v in shift) else None,
                                      role_shift_cm=per_role or None,
                                      shift_cm=horizontal, partner_turn_deg=turn,
                                      partner_yaw_deg=pyaw, with_finales=False)

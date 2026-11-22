@@ -62,9 +62,8 @@ export interface ApiClipRow {
   height_offsets_cm?: ClipHeightOffsetsCm
   /** What the FILE already carries: the import's orientation dial plus every
    *  later "Apply orientation" (`geometry.yaw_deg` / `tilt_deg` / `roll_deg`
-   *  in degrees, `floor_shift_cm` in centimetres, a pair's
-   *  `partner_shift_cm` = B's [side, up, forward] offset in centimetres, a
-   *  group's `role_shift_cm` the same per role). A
+   *  in degrees, `floor_shift_cm` in centimetres, `role_shift_cm` = each
+   *  role's [side, up, forward] offset in centimetres, a pair's as a group's). A
    *  field the sidecar never wrote is absent — an unturned clip carries no
    *  angle at all. */
   orientation?: {
@@ -72,12 +71,11 @@ export interface ApiClipRow {
     tilt_deg?: number | null
     roll_deg?: number | null
     floor_shift_cm?: number | null
-    partner_shift_cm?: [number, number, number] | null
     /** Ruling A129: partner B's renderer-only [tilt, roll] degrees. */
     partner_turn_deg?: [number, number] | null
     /** Ruling A165: partner B's renderer-only yaw about its own vertical axis, degrees. */
     partner_yaw_deg?: number | null
-    /** A group's per-role [side, up, forward] offsets in centimetres. */
+    /** A pair's or group's per-role [side, up, forward] offsets in centimetres. */
     role_shift_cm?: Record<string, [number, number, number]> | null
     /** Cumulative renderer-only [side, forward] centimetres. */
     shift_cm?: [number, number] | null
