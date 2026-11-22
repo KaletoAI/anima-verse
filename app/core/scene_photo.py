@@ -43,11 +43,27 @@ class PhotoView(BaseModel):
     camera: PhotoCamera
 
 
+#: The screenshot is slot 1 (``input_reference_image_1``; the people follow from slot 2), so the sentence names it by
+#: its slot: the edit-prompt normaliser renders ``<ref 1>`` in the backend's dialect (``<Picture 1>``, ``<image1>``,
+#: "the first image"; "The image" with one slot). The plain "The reference image" stayed unrewritten with two or more
+#: slots, so the model did not know which picture was meant (docs/edit-prompts.md, change plan point 0).
 _SCREENSHOT_SENTENCE = (
-    "The reference image gives only composition, camera angle and poses; "
+    "<ref 1> gives only composition, camera angle and poses; "
     "its 3D/CGI look must not be copied.")
+#: Every spelling of the sentence a stored prompt may carry (the slot token as any dialect wrote it, the older
+#: "The reference image") — ``with_screenshot_sentence`` drops each before it appends the current one once.
+_SCREENSHOT_ANY = re.compile(
+    r"(?:<ref\s*1>|<picture\s*1>|<image\s*1>|the\s+(?:reference|first)\s+image|the\s+image)"
+    r" gives only composition, camera angle and poses; its 3D/CGI look must not be copied\.",
+    re.IGNORECASE)
 _SCREENSHOT_NEGATIVE = "3d render, cgi, video game screenshot, low poly, plastic skin, game engine"
 _CAMERA_HOLDER = re.compile(r"\bselfie\b|\btaken\s+by\b", re.IGNORECASE)
+
+
+def with_screenshot_sentence(prompt: str) -> str:
+    """``prompt`` with the screenshot sentence (``_SCREENSHOT_SENTENCE``) once at its end: every earlier copy, in any
+    spelling (``_SCREENSHOT_ANY``), is removed first — a regenerate of a stored prompt never carries it twice."""
+    return f"{_SCREENSHOT_ANY.sub('', prompt or '').strip()}\n{_SCREENSHOT_SENTENCE}".strip()
 
 
 def _view_framing(view: PhotoView, visible: List[PhotoVisible]) -> str:
@@ -298,8 +314,7 @@ def take_scene_photo(avatar: str,
             prompt = prep["prompt"]
 
     if source_path:
-        prompt = prompt.replace(_SCREENSHOT_SENTENCE, "").strip()
-        prompt = f"{prompt}\n{_SCREENSHOT_SENTENCE}".strip()
+        prompt = with_screenshot_sentence(prompt)
 
     # Only a backend the user PICKED is explicit. The dialog's preselection
     # (prep["default_backend"]) is display only — the one-click photo runs on

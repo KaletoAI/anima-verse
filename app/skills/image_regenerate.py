@@ -292,11 +292,10 @@ def regenerate_image(character_name: str,
     screenshot_photo = bool(use_source_as_reference and (
         _screenshot_source or (occasion == "photo" and source_image_path)))
     if screenshot_photo:
-        from app.core.scene_photo import _SCREENSHOT_SENTENCE, _SCREENSHOT_NEGATIVE
+        from app.core.scene_photo import _SCREENSHOT_NEGATIVE, with_screenshot_sentence
         if _screenshot_source:
             source_image_path = str(_screenshot_source)
-        final_prompt = final_prompt.replace(_SCREENSHOT_SENTENCE, "").strip()
-        final_prompt = f"{final_prompt}\n{_SCREENSHOT_SENTENCE}".strip()
+        final_prompt = with_screenshot_sentence(final_prompt)
         negative_prompt_extra = f"{negative_prompt_extra}, {_SCREENSHOT_NEGATIVE}".strip(", ")
     screenshot_subjects = screenshot_photo and character_names is not None
 

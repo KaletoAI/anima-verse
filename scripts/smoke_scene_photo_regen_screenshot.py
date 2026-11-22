@@ -157,11 +157,14 @@ class ScreenshotRegen(unittest.TestCase):
     def test_regenerate_composition_people_negative_and_prompt(self):
         self.photo()
         companion = self.companion()
-        self.meta["prompt"] += "\n" + scene_photo._SCREENSHOT_SENTENCE
+        # the current sentence and the older spelling a stored prompt may still carry (change plan point 0)
+        self.meta["prompt"] += "\n" + scene_photo._SCREENSHOT_SENTENCE + "\nThe reference image gives only " \
+            "composition, camera angle and poses; its 3D/CGI look must not be copied."
         output, (prompt, negative, refs) = self.regen(negative_prompt_override="soft focus, CGI")
         self.assertEqual(output, self.image)
         self.assertEqual(list(refs.values()), [str(companion), REFS["Ann"], REFS["Bob"]])
         self.assertEqual(prompt.count(scene_photo._SCREENSHOT_SENTENCE), 1)
+        self.assertEqual(prompt.count("gives only composition"), 1)
         terms = [t.strip().casefold() for t in negative.split(",")]
         for term in ("soft focus", "cgi", "3d render", "game engine"):
             self.assertEqual(terms.count(term), 1)
