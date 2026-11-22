@@ -1308,7 +1308,7 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
         info["fabric_l"] = round(float(fab[0]), 2)
         info["lines"].append(name)
         side = 0.0
-        if name != "centre_front":
+        if not name.startswith("centre_"):
             side = _inward(p, s, sel, px_per_cm)
         off = side * width / 2.0
 
@@ -1320,7 +1320,7 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
             info["button_l"] = round(col["disc_l"], 2)
             info["rim_l"] = round(col["rim_l"], 2)
             d_px = BUTTON_D_CM.get(kind, 1.1) * px_per_cm
-            if name == "centre_front" and width > 0:
+            if name.startswith("centre_") and width > 0:
                 stitch = _shade(fab, STITCH_DL)
                 for sgn in (1, -1):
                     pts = [shifted(t, sgn * width / 2.0)[0] for t in np.linspace(0.0, s[-1], 64)]
@@ -1342,7 +1342,7 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
                 info["buttons"].append([round(float(c[0]), 2), round(float(c[1]), 2)])
         elif style == "zip":
             zw = ZIP_W_CM * px_per_cm
-            zoff = side * zw / 2.0 if name != "centre_front" else 0.0
+            zoff = side * zw / 2.0 if not name.startswith("centre_") else 0.0
             metal = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L, 0.0, 0.0]))), 0, 255).astype(np.uint8)
             lo = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L - 10, 0.0, 0.0]))), 0, 255).astype(np.uint8)
             pts = [shifted(t, zoff)[0] for t in np.linspace(0.0, s[-1], 128)]

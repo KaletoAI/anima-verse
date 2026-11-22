@@ -60,6 +60,9 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     side (grey 128) — or, where that pixel is a detail (the print: the pixel (100, 100) ON the line reads x 62, the
     print's), the median fabric of the ring 19..38 px out (grey 128). So (102, 100), (100, 100) and (98, 30) are grey; the code's buttons and stitch are exactly
     [4]'s; the print 38 px off the line (> 19) and the other island are unchanged.
+[11] Phase G — a corset's ``centre_back`` line (the back panel's centre column) is a centre line like ``centre_front``:
+    the same line on an island named "back" gives pixel for pixel [4]'s result for buttons, lacing and zip (no inward
+    offset, the placket's stitch lines either side, the zip on the line).
 """
 import io
 import json
@@ -251,6 +254,13 @@ check("[10] the print 3.8 cm off the line and the other island are kept",
       tuple(out5[100, 60]) == (40, 40, 40) and (out5[:, 150:] == atlas5[:, 150:]).all())
 check("[10] the wipe's half width: 1.5 + 0.4 cm = 19 px for jacket buttons", post.placket_clear_px(
     "jacket", "buttons", 10.0) == 19.0, post.placket_clear_px("jacket", "buttons", 10.0))
+
+# [11]
+for st11 in ("buttons", "lacing", "zip"):
+    ref11, _ = post.draw_placket(atlas, {"front": isl}, marks, kind="top", style=st11, buttons=0, px_per_cm=10)
+    got11, _ = post.draw_placket(atlas, {"back": isl}, {"centre_back": dict(marks["centre_front"], island="back")},
+                                 kind="top", style=st11, buttons=0, px_per_cm=10)
+    check(f"[11] centre_back is drawn as a centre line ({st11})", (ref11 == got11).all())
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

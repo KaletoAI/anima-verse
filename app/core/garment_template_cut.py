@@ -69,6 +69,9 @@ TOP_UV_PATTERN_SHA = "9f1a4a8ce3b8"
 FITTED_PATTERN_FILE = UV_PATTERN_FILE.parent / "fitted_pattern.py"
 #: md5[:12] of the fitted kinds' part rules (step 3a; in ``cut_sig`` of a fitted piece only).
 FITTED_PATTERN_SHA = hashlib.md5(FITTED_PATTERN_FILE.read_bytes()).hexdigest()[:12]
+CORSET_DARTS_FILE = UV_PATTERN_FILE.parent / "corset_darts.py"
+#: md5[:12] of the corset top's dart rules (phase G; in ``cut_sig`` of a strapless top only).
+CORSET_DARTS_SHA = hashlib.md5(CORSET_DARTS_FILE.read_bytes()).hexdigest()[:12]
 #: A cut that does not end in this many seconds is left (measured ~10 s; the slot wait comes on top).
 CUT_TIMEOUT_S = 180
 #: After a run that judged nothing (timeout, Blender missing or interrupted) the cut is not started again for so
@@ -124,6 +127,10 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.panel_piece(params):
         # step 3b (B16): a panel piece's cut follows the panel version (``garment_template.PANEL_VERSION``)
         payload["panels"] = gt.PANEL_VERSION
+    if params.get("kind") == "top" and gt.panel_piece(params):
+        # phase G: a strapless top's darts and back line (``corset_darts.py``)
+        payload["corset"] = gt.CORSET_VERSION
+        payload["corset_rules"] = CORSET_DARTS_SHA
     if gt.neck_piece(params):
         # phases E + F: a covered top's neck ring (the B8 neckband, the stand-collar strip, the placket line)
         payload["neck"] = gt.NECK_VERSION

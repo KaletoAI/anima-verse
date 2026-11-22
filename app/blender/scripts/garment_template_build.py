@@ -45,6 +45,7 @@ import bake_register as br  # noqa: E402
 import garment_template_fitted as gf  # noqa: E402
 import stretch_gate as sg  # noqa: E402
 import uv_pattern as uvp  # noqa: E402
+import corset_darts as cdarts  # noqa: E402
 sys.path.pop(0)
 
 #: Angle of each slit side (0 = +X = the character's left, front = -Y).
@@ -1970,7 +1971,7 @@ def pattern_uv_of_fitted(obj, pattern, islands_json):
     return info
 
 
-def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
+def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None, marks=None):
     """Pattern-piece UV of a piece cut by ``wrap`` (step 3b, plan group B: a skirt, a strapless top, a strapless
     dress): read the faces, their ``uv_part`` / ``uv_seam`` layers (``uv_pattern.wrap_parts``, set before the side
     seams were merged) and the rest coordinates, run ``uv_pattern.pattern_uv`` — the panels flattened round the
@@ -1979,7 +1980,9 @@ def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
     larger px/cm) — write the ``UVMap``
     loops and ``islands_json``, drop the helper layers. Returns ``data["uv"]``. ``band`` = the waistband's vertex rows
     as construction ids (``wrap_parts``): mapped through ``uv_cid`` (a side-seam vertex merged onto its twin takes the
-    twin's id, ``_wrap_twin``) into a construction strip (``uv_pattern.rows_strip_uv``)."""
+    twin's id, ``_wrap_twin``) into a construction strip (``uv_pattern.rows_strip_uv``). Phase G: ``marks`` =
+    {line: (part, construction ids top to bottom)} (a corset top's ``centre_back``) -> ``marks.json`` beside
+    ``islands_json`` as ``pattern_uv_of`` writes it."""
     import json
     t0 = time.time()
     me = obj.data
@@ -2005,10 +2008,12 @@ def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
     vertical = ((0.0, 0.0, 1.0), (cx, cy, 0.0), None)
     axes = {p_: vertical for p_ in (1, 2, 37, 38)}
     rings = {14: ((cx, cy, float(top_z)), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))}
+    lines = {k: (int(p_), [g for g in (cmap.get(int(c), cmap.get(_wrap_twin(int(c)), -1)) for c in ids) if g >= 0])
+             for k, (p_, ids) in (marks or {}).items()}
     res = uvp.pattern_uv(polys, part, seams, co, axes=axes, rings=rings, rows=uvp.ROWS.get(rows_key),
                          rows_alt=uvp.ROWS_ALT.get(rows_key), size_px=PATTERN_ATLAS_PX,
                          margin_cm=PATTERN_MARGIN_CM, tol=FITTED_ARAP_TOL, bands=bands,
-                         nest=uvp.NEST.get(rows_key))
+                         nest=uvp.NEST.get(rows_key), marks=lines or None)
     flat = np.zeros(len(me.loops) * 2)
     for p_ in me.polygons:
         for j, li in enumerate(p_.loop_indices):
@@ -2016,12 +2021,17 @@ def pattern_uv_of_wrap(obj, centre, top_z, rows_key, islands_json, band=None):
     me.uv_layers["UVMap"].data.foreach_set("uv", flat)
     _drop_layers(me, ("uv_part", "uv_seam", "uv_cid"))
     Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
+    if res.get("marks"):
+        Path(islands_json).with_name("marks.json").write_text(json.dumps(
+            {"version": 1, "atlas_px": res["payload"]["atlas_px"], "px_per_cm": res["payload"]["px_per_cm"],
+             "lines": res["marks"]}, sort_keys=True, separators=(",", ":")))
     info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
             "islands": res["islands"], "faces_per_part": res["faces_per_part"],
             "area_ratio_min": res["area_ratio_min"], "area_ratio_max": res["area_ratio_max"],
             "stretch_p95_max": res["stretch_p95_max"], "strip_stretch_p95": res["strip_stretch_p95"],
             "strip_area_ratio": {i["name"]: i["distortion"]["area_ratio"] for i in res["payload"]["islands"]
                                  if i["part"] in uvp.STRIP_PARTS},
+            "marks": sorted(res.get("marks") or {}),
             "seam_edges": len(seams), "arap_iters": res["arap_iters"], "rows": rows_key,
             "uv_s": round(time.time() - t0, 2)}
     print(f"uv.islands {res['islands']} faces {res['faces_per_part']} px/cm {info['px_per_cm']} "
@@ -2220,6 +2230,12 @@ def run(a):
                                                   float(prm.get("waistband_m") or 0.0),
                                                   (spec.get("outline") or {}).get("waist_y"))
             binfo["wrap_parts"] = winfo
+            wrap_marks = None
+            if prm.get("kind") == "top":
+                # phase G: a corset top's front is cut open at the centre and two bust darts (UV only), its back
+                # centre is the placket line (``corset_darts``)
+                fseams = list(fseams) + cdarts.dart_seams(spec["rows"], spec["cols"])
+                wrap_marks = {"centre_back": (2, cdarts.back_line(spec["rows"], spec["cols"]))}
         verts, faces, uvs, angles, top_ids = wrap(spec, btree, centre,
                                                   band_rows=winfo["waistband_rows"] if wrap_pattern else 0)
         me = bpy.data.meshes.new("template")
@@ -2257,13 +2273,15 @@ def run(a):
         slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre)
         if wrap_pattern:
             uv_info = pattern_uv_of_wrap(obj, centre, top_z, WRAP_ROWS.get(prm.get("kind"), "skirt"),
-                                         out / "islands.json", band=winfo["band"])
+                                         out / "islands.json", band=winfo["band"], marks=wrap_marks)
             if cut_only:
+                files = {"islands": str(out / "islands.json")}
+                if (out / "marks.json").is_file():
+                    files["marks"] = str(out / "marks.json")
                 return gd._plain({"cut_only": True, "uv": uv_info, "bodice": binfo, "slit_edges": int(slit_edges),
                                   "lower_layers": len(lower), "verts": len(obj.data.vertices),
                                   "script_wall_s": round(time.time() - t_all, 2),
-                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), \
-                    {"islands": str(out / "islands.json")}
+                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), files
     me = obj.data
     co0 = np.array([v.co for v in me.vertices])
     # outward normals (Solidify and the projection side test read them)

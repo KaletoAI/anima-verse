@@ -29,6 +29,12 @@ Every case [1]-[4]: panels area 0.97-1.03, stretch p95 <= 1.30 (B24, bodice pane
     them — the ``islands.json`` bytes of this checkout equal the base checkout's (the same body, the same args; the base
     is run with its own ``garment_template`` and builder in a subprocess).
 
+[6] with ``--corset-body``: phase G — a strapless corset top (sweetheart 10 cm, fit 0, 0.42 m) cut by ``wrap`` with
+    the darts of ``corset_darts`` (centre cut + two bust darts, UV only): islands exactly {front, back}, both panels area
+    0.97-1.03 and stretch p95 <= 1.25 (the plan's acceptance for this piece; without the darts Rosi's front read 1.28 /
+    0.969), ``marks.json`` holds exactly ``centre_back`` on ``back``, at least 10 points, top first (the last at least
+    20 cm under the first: the 0.42 m panel's centre column).
+
 Measured 2026-11-22 (copies of the world's base bodies): Dario's body passes [1]-[5] (the stand collar p95 1.09 since
 the collar's rings are laid out of the neck as a smooth ring; built inside it and pushed out vertex by vertex it read
 1.24). Tilda's body fails [1]-[4]: hair is part of her body mesh at the nape, the neck rim zig-zags 3 cm round it —
@@ -107,6 +113,7 @@ def main() -> int:
     ap.add_argument("--body", required=True)
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--base-repo")
+    ap.add_argument("--corset-body")
     ap.add_argument("--instance", default=str(ROOT / "instance"), help="the instance dir (Blender's settings), read")
     a = ap.parse_args()
     tmp = Path(tempfile.mkdtemp(prefix="smoke-cut-tops-"))
@@ -152,6 +159,29 @@ def main() -> int:
               set(lines) == {"centre_front"} and cf.get("island") == "front" and len(px) >= 5
               and px[-1][1] - px[0][1] >= 10 * pay["px_per_cm"],
               {k: (v["island"], len(v["px"])) for k, v in lines.items()})
+    if a.corset_body and not (a.only and "6_corset" not in a.only):
+        params = gt.validate_params({"kind": "top", "shoulders": "strapless", "neckline": "sweetheart",
+                                     "neck_depth_m": 0.1, "fit": 0.0, "length_m": 0.42, "fabric": "medium"})[0]
+        cbody = Path(a.corset_body)
+        spec = gt.panel_spec(params, gt.measure_body(cbody.read_bytes()))
+        args = gt.build_args(params, spec, item_id="corset")
+        args["cut_only"] = True
+        out = tmp / "6_corset"
+        out.mkdir(parents=True)
+        res = runner.run(gt.SCRIPT, inputs={"body": cbody}, params=args, out_dir=out, timeout_s=600)
+        check("[6_corset] runs", bool(res.get("ok")) and (out / "islands.json").is_file(), str(res.get("error"))[:300])
+        if (out / "islands.json").is_file():
+            pay = json.loads((out / "islands.json").read_text())
+            isl = {i["name"]: i["distortion"] for i in pay["islands"]}
+            check("[6_corset] islands {back, front}", set(isl) == {"front", "back"}, sorted(isl))
+            check("[6_corset] panels area 0.97-1.03, p95 <= 1.25", all(
+                0.97 <= d["area_ratio"] <= 1.03 and d["stretch_p95"] <= 1.25 for d in isl.values()), isl)
+            lines = (json.loads((out / "marks.json").read_text()) if (out / "marks.json").is_file() else {}).get(
+                "lines") or {}
+            cb = (lines.get("centre_back") or {}).get("px") or []
+            check("[6_corset] marks: one centre_back line on back, top first", set(lines) == {"centre_back"}
+                  and lines["centre_back"]["island"] == "back" and len(cb) >= 10
+                  and cb[-1][1] - cb[0][1] >= 20 * pay["px_per_cm"], {k: len(v["px"]) for k, v in lines.items()})
     if a.base_repo:
         for name, raw in SAME.items():
             if a.only and name not in a.only:

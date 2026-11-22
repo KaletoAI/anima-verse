@@ -96,6 +96,10 @@ PANEL_VERSION = 1
 #: the placket's centre line (``marks.json``, B10). Part of the CUT key of a covered top only (``neck_piece``): its
 #: islands change, so its cut and atlas are due once; an off-shoulder / strapped top keeps its key and its bytes.
 NECK_VERSION = 1
+#: Phase G (plan group B): a strapless top's front is cut open at the centre and at two bust darts in its UV
+#: (``app/blender/scripts/corset_darts.py``; the mesh stays whole) and its back centre is the placket line. Part of the
+#: CUT key of a strapless top only: its islands change once; its drape (the same mesh) does not.
+CORSET_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
