@@ -70,6 +70,9 @@ ROWS = {
     "skirt": (("skirt_front", "skirt_back"), ("waistband",)),
     "strapless": (("front", "back"),),
     "dress": (("front", "back"), ("skirt_front", "skirt_back"), ("sleeve_r", "sleeve_l", "collar", "band")),
+    # step 3c: a jacket — an open one's right front (the wearer's right, image left as seen from the front), a closed
+    # one's front, the left front, the back; the sleeves; the collar and the band
+    "jacket": (("right_front", "front", "left_front", "back"), ("sleeve_r", "sleeve_l"), ("collar", "band")),
 }
 #: Step 3b (B5): a second layout ``pack`` tries beside ``ROWS[kind]`` — the larger px/cm wins, a tie keeps ``ROWS``.
 #: A wide skirt's panels side by side make a flat, wide atlas (Gelina 10.51 px/cm); stacked they fill the square
@@ -77,6 +80,7 @@ ROWS = {
 ROWS_ALT = {
     "skirt": (("skirt_front",), ("skirt_back",), ("waistband",)),
     "dress": (("front", "back", "sleeve_r", "sleeve_l"), ("skirt_front", "skirt_back"), ("collar", "band")),
+    "jacket": (("right_front", "front", "left_front", "back"), ("sleeve_r", "sleeve_l", "collar", "band")),
 }
 #: Stage 1 after step 3b (2026-11-22): the kinds whose PAIR of panels ``pack`` may also nest (``nest_layouts``) — the
 #: two panels placed by their real outlines instead of their boxes: the second beside the first at a vertical offset,
@@ -1263,8 +1267,29 @@ def ring_strip_uv(island, xyz, axis_p, axis_d, cut_dir):
     return np.stack([u, h - (h.min() if len(h) else 0.0)], axis=1)
 
 
+def mark_px(islands, payload, part, ids):
+    """Step 3c (B11): a construction line (global vertex ids, top to bottom) as atlas pixels — ``{"island", "px"}``.
+    Every id is taken from the island of ``part`` that holds the most of them (a vertex on a seam has a copy in each
+    island it borders: the line's own island decides); ids that island does not hold are left out. None when no
+    island of ``part`` holds any."""
+    by_name = {i["name"]: i for i in payload["islands"]}
+    best, best_n = None, 0
+    for isl in islands:
+        if isl.part != part:
+            continue
+        held = {int(g) for g in isl.vmap}
+        n = sum(1 for g in ids if int(g) in held)
+        if n > best_n:
+            best, best_n = isl, n
+    if best is None:
+        return None
+    local = {int(g): l for l, g in enumerate(best.vmap)}
+    vp = by_name[best.name]["verts_px"]
+    return {"island": best.name, "px": [list(vp[local[int(g)]]) for g in ids if int(g) in local]}
+
+
 def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, size_px=2048, margin_cm=1.5,
-               iters=40, rows=None, rings=None, tol=None, rows_alt=None, bands=None, nest=None):
+               iters=40, rows=None, rings=None, tol=None, rows_alt=None, bands=None, nest=None, marks=None):
     """The pattern UV of one garment mesh.
 
     ``faces`` = vertex-id tuples (the mesh's polygons, in their loop order), ``part`` = their ``uv_part``,
@@ -1278,6 +1303,8 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
     None = a top's ``ROW_ORDER``; ``rows_alt`` = ``ROWS_ALT[kind]``, step 3b), ``tol`` = ``arap``'s adaptive stop
     (None = always ``iters``). Step 3b: ``bands`` = {part: vertex rows top to bottom} for a ``STRIP_PARTS`` band of
     several rows (``rows_strip_uv``); ``nest`` = ``NEST[kind]`` (``pack``: the panel pair nested by its outline).
+    Step 3c: ``marks`` = {line: (part, global vertex ids top to bottom)} -> the result's ``marks`` = {line: ``mark_px``}
+    (lines no island holds are left out) — never part of the payload, so its bytes do not depend on them.
 
     Returns {"payload": ``islands_payload``, "corner_uv": per input face the Blender UV of each corner (x / size,
     1 - y / size of the payload's pixels), "islands": names, "faces_per_part": {name: faces}, "area_ratio_min",
@@ -1348,7 +1375,9 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
             "stretch_p95_max": max((i["distortion"]["stretch_p95"] for i in panels), default=None),
             "strip_stretch_p95": {i["name"]: i["distortion"]["stretch_p95"] for i in payload["islands"]
                                   if i["part"] in STRIP_PARTS},
-            "cap_height_cm": {k: round(float(v), 3) for k, v in cap_cm.items()}, "arap_iters": its}
+            "cap_height_cm": {k: round(float(v), 3) for k, v in cap_cm.items()}, "arap_iters": its,
+            "marks": {k: m for k, m in ((k, mark_px(islands, payload, p_, ids)) for k, (p_, ids) in (marks or {}).items())
+                      if m is not None and m["px"]}}
 
 
 def wrap_parts(rows, cols, row_y, kind, waistband_m=0.0, waist_y=None):

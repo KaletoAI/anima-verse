@@ -185,6 +185,9 @@ MIN_COS = 0.35
 #: Ruling A144: a stand collar runs only where the neckline is cut less than this (down a V it stood as a 3 mm band
 #: the lower layer stretched to 4x).
 COLLAR_CUT_MAX_M = 0.03
+#: Step 3c (B8): the deepest scoop that keeps a jacket's / dress's neckband (a deeper one, a V, an open front or a
+#: collar: the innermost yoke ring belongs to the panels — a band there measured area 1.3-1.5, stretch p95 3-4 and up).
+BAND_SCOOP_MAX_M = 0.08
 #: Pattern UV (``uv_mode`` "pattern"): the atlas edge in pixels and the margin round every island.
 PATTERN_ATLAS_PX = 2048
 PATTERN_MARGIN_CM = 1.5
@@ -413,7 +416,7 @@ def sleeve_ring_count(girths, loop_n):
     return min(int(loop_n), max(12, int(round(float(np.mean(girths)) / SLEEVE_EDGE_M))))
 
 
-def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mode="grid"):
+def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mode="grid", kind=None, waist_y=None):
     """Ruling A142 — the vertices, faces and per-corner UVs of a piece with a bodice (Blender world, Z up, front =
     -Y): the torso rows wrapped round the body like a skirt (row 0 = the shoulder line), a yoke ("cap") from the
     shoulder line in to the neck opening, laid on the shoulders, the armholes cut at the side seams with the sleeves
@@ -435,7 +438,18 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
     is built at least ``clear`` outside it: the rows above the armhole's bottom from the full body section
     (``section_row``), the armhole loop on the arm root, the neck opening from the neck surface (``neck_ring``), the
     yoke on the body's top surface (``_surface_z``), every meridian laid along the collider (``_lay_path``). Without
-    it the A144 rules stand (torso-only radius, a circle round the neck joint)."""
+    it the A144 rules stand (torso-only radius, a circle round the neck joint).
+
+    Step 3c / 3d (plan group B, phases C and D) — ``kind`` "jacket" or "dress" (a top keeps the rules above byte for
+    byte): an open front's two fronts are ``left_front`` (39, columns c < N/4, the wearer's left, +X) and
+    ``right_front`` (40, c >= 3N/4) (B7); the innermost yoke ring is the band only for a closed front without a collar
+    and a crew / boat neckline or a scoop at most ``BAND_SCOOP_MAX_M`` deep (B8), else it belongs to the panel of its
+    column; a dress's torso faces at or under the row nearest ``waist_y`` (the outline's waist, world Z) are the skirt
+    part (37 front, 38 back; B6); a stand collar is cut at the back centre (``info["seam_edges"]``) when its ring is
+    whole and its rows go to ``info["collar_rows"]`` (top to bottom, construction ids, u order) for a strip relaxed
+    like the waistband (B9); ``info["marks"]`` = {line: (part, construction ids top to bottom)} — the closed front's
+    centre line, an open front's two edges, from the neckline down to the hem (a dress: to the waist seam) — for the
+    painted placket (B10, ``uv_pattern.mark_px``)."""
     rows, cols = spec["rows"], spec["cols"]
     bod = spec["bodice"]
     N = 2 * (cols - 1)
@@ -457,9 +471,25 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
     r_band = max(r for r in range(rows) if row_y[r] >= band_y - 1e-6) if any(y >= band_y for y in row_y) else rows - 1
     side_c = {"l": N // 4, "r": 3 * N // 4}
 
+    panel_kind = kind in ("jacket", "dress")
+    fronts = panel_kind and open_front
+
     def col_part(c):
-        """The pattern part of a torso / yoke face of column c: front (1) or back (2), the side seams at N/4, 3N/4."""
+        """The pattern part of a torso / yoke face of column c: front (1) or back (2), the side seams at N/4, 3N/4;
+        an open jacket's fronts left_front (39) / right_front (40) (B7)."""
+        if fronts:
+            return 39 if c < side_c["l"] else 40 if c >= side_c["r"] else 2
         return 1 if c < side_c["l"] or c >= side_c["r"] else 2
+    waist_row = None
+    if kind == "dress" and waist_y is not None:
+        waist_row = int(min(range(rows), key=lambda r: abs(float(row_y[r]) - float(waist_y))))
+
+    def torso_part(r, c):
+        """A torso face's part: a dress's faces at or under the waist row are its skirt part (B6)."""
+        p_ = col_part(c)
+        if waist_row is not None and r >= waist_row:
+            return 37 if p_ == 1 else 38
+        return p_
     straps = bod["shoulders"] == "straps"
     # A179 — the armhole's bottom row lies UNDER the arms. The chest band is a share of the body height: on a body
     # with thick upper arms it met the T-posed arm's underside (5 mm above it on one copy), so the band's row ran 10
@@ -717,6 +747,10 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
             keep = [r for r in low if row_y[r] <= z_lo]
             if len(keep) < 2:
                 continue                   # never on a sane body: the cut would eat the column
+            if waist_row is not None and any(r <= waist_row for r in keep):
+                # B6: a dress's re-spaced stretch ends at its waist row at the latest — the waist seam is a construction
+                # row, and rows re-spaced past it carried the skirt part's top up into a deep V (Ylva: an 8 cm notch)
+                keep = [r for r in keep if r <= waist_row]
             # A178: the re-spaced stretch reaches down until its vertices stand NECK_MIN_STEP_M apart (crowded into
             # a short arc under a deep front cut they stood 4-7 mm apart, and a short edge takes the drape's pull as
             # a large ratio: p99 1.23 against 1.03 for 14-30 mm edges on the copies)
@@ -780,7 +814,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
             if r < r_band and c in window:
                 continue
             faces.append((tid[r, c], tid[r, c2], tid[r + 1, c2], tid[r + 1, c]))
-            face_part.append(col_part(c))
+            face_part.append(torso_part(r, c))
             if grid_uv:
                 u1 = u_of(c + 1)
                 fuv.append(((u_of(c), v_rows(r)), (u1, v_rows(r)), (u1, v_rows(r + 1)), (u_of(c), v_rows(r + 1))))
@@ -792,8 +826,13 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
             sh = 0.97 ** (k - K)
             cid[k, c] = len(verts)
             verts.append((ncx + (x - ncx) * sh, ncy + (y - ncy) * sh, z + COLLAR_STEP_M * (k - K)))
-    # the band: the innermost yoke ring, whenever the piece has a neck ring
+    # the band: the innermost yoke ring, whenever the piece has a neck ring; a jacket's / dress's only under B8
     neck_band = not straps and not bod.get("off_shoulder")
+    if panel_kind:
+        nl, dep = bod.get("neckline"), float(bod.get("depth_m") or 0.0)
+        neck_band = neck_band and not open_front and bod.get("collar") in (None, "none") and (
+            nl in ("crew", "boat") or (nl == "scoop" and dep <= BAND_SCOOP_MAX_M + 1e-9))
+    collar_cols = set()
     for k in range(nring):
         v0 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * k / K if k < K else UV_COLLAR[0]
         v1 = UV_CAP[0] + (UV_CAP[1] - UV_CAP[0]) * (k + 1) / K if k + 1 <= K else UV_COLLAR[1]
@@ -801,6 +840,8 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
             c2 = (c + 1) % nc
             if k >= K and max(cut_s[c], cut_s[c2]) > COLLAR_CUT_MAX_M:
                 continue                   # the collar ends where the neckline runs down the front (its gorge)
+            if k >= K:
+                collar_cols.add(c)
             faces.append((cid[k, c], cid[k, c2], cid[k + 1, c2], cid[k + 1, c]))
             face_part.append(6 if k >= K else 5 if (k == K - 1 and neck_band) else col_part(c))
             if grid_uv:
@@ -815,6 +856,26 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
         band_strip = [[int(cid[K - 1, c]) for c in order], [int(cid[K, c]) for c in order]]
         if not open_front:
             seam_edges.append((int(cid[K - 1, N // 2]), int(cid[K, N // 2])))
+    collar_rows = None
+    if panel_kind and bod.get("collar") == "stand" and collar_cols:
+        # B9: the stand collar is a strip (``uv_pattern.rows_strip_uv``), u in the band's order (c growing: from the
+        # back centre through the wearer's right, the front and the left — to the right as seen from outside); a
+        # whole ring is cut at the back centre, a ring the gorge opened runs from the gorge's left edge round the back
+        # to its right edge
+        if len(collar_cols) == span and not open_front:
+            order = [(N // 2 + i) % N for i in range(N + 1)]
+            seam_edges.extend((int(cid[k, N // 2]), int(cid[k + 1, N // 2])) for k in range(K, nring))
+        else:
+            starts = [c for c in sorted(collar_cols) if (c - 1) % nc not in collar_cols]
+            order = []
+            if len(starts) == 1:           # one piece of collar (two would be two islands: flattened as panels)
+                c = starts[0]
+                while c in collar_cols:
+                    order.append(c)
+                    c = (c + 1) % nc
+                order.append(c)
+        if order:
+            collar_rows = [[int(cid[k, c]) for c in order] for k in range(nring, K - 1, -1)]
     # the binding: the neck rim and the next ring in (the innermost two rings of every meridian, or the collar)
     rib_ids = sorted({int(cid[k, c]) for c in range(nc) for k in (nring, nring - 1)})
     # sleeves: ring 0 = the armhole loop
@@ -1006,11 +1067,24 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, uv_mo
     upper = {int(i) for i in tid[:r_band].ravel()} - loops
     regions = {"yoke": yoke, "upper_rows": upper, "armhole": loops, "sleeves": slv,
                "lower_rows": {int(i) for i in tid[r_band:].ravel()} - loops}
+    marks = {}
+    if panel_kind:
+        # B10 / B11: the placket's lines as construction ids, top (the neckline) to bottom (the hem; a dress: the waist
+        # seam) — a closed front's centre meridian (column 0), an open front's two edges (columns 0 and nc - 1)
+        last = waist_row if waist_row is not None else rows - 1
+
+        def meridian(c):
+            return [int(cid[k, c]) for k in range(K, 0, -1)] + [int(tid[r, c]) for r in range(last + 1)]
+        if open_front:
+            marks = {"edge_left": (39, meridian(0)), "edge_right": (40, meridian(nc - 1))}
+        else:
+            marks = {"centre_front": (1, meridian(0))}
     info = {"cap_ids": cap_ids, "rib_ids": sorted(set(rib_ids) & used),
             "regions": {k: sorted(v & used) for k, v in regions.items()},
             "cut_s": [round(x, 3) for x in cut_s], "sleeve_rings": {k: len(v) - 1 for k, v in sleeve_rows.items()}, "cap_rings": K,
             "collar_rings": nring - K, "columns": nc, "window_cols": wcols, "r_band": r_band, "arm_under_z": None if arm_under is None else round(arm_under, 4), "section_rows": sections, "neck_ring": ring_info,
-            "face_part": face_part, "seam_edges": seam_edges, "band_strip": band_strip, "uv_caps": uv_caps}
+            "face_part": face_part, "seam_edges": seam_edges, "band_strip": band_strip, "uv_caps": uv_caps,
+            "collar_rows": collar_rows, "marks": marks, "waist_row": waist_row}
     return verts, faces, fuv, info
 
 
@@ -1708,7 +1782,7 @@ def _drop_layers(me, names):
             me.attributes.remove(me.attributes[name])
 
 
-def pattern_uv_of(obj, arm, centre, pattern, islands_json):
+def pattern_uv_of(obj, arm, centre, pattern, islands_json, kind=None):
     """Pattern-piece UV of a bodice (``uv_mode`` "pattern"): read the faces, their ``uv_part`` / ``uv_seam`` /
     ``uv_cid`` layers and the rest coordinates as ``clear_of_body`` (and a slit) left them, run
     ``uv_pattern.pattern_uv`` (panels flattened, the band a construction strip, every island at one px/cm), write the
@@ -1716,7 +1790,13 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
 
     Axes (``orient``): front / back +Z up round the vertical line through ``centre``; a sleeve up from the hand to the
     shoulder round the arm line A -> H of its Arm / Hand bones. The construction ids of ``pattern`` (band rows, cut
-    edges, cap vertices) are mapped through ``uv_cid``; a vertex ``dissolve_degenerate`` merged away maps to -1."""
+    edges, cap vertices) are mapped through ``uv_cid``; a vertex ``dissolve_degenerate`` merged away maps to -1.
+
+    Step 3c / 3d (``kind`` "jacket" / "dress"): the kind's rows (``uv_pattern.ROWS`` / ``ROWS_ALT``), the skirt part
+    and an open front's fronts flattened round the same vertical line, a stand collar's rows as a relaxed strip
+    (``bands``), and the placket lines (``pattern["marks"]``) written to ``marks.json`` beside ``islands_json`` —
+    ``{"version", "atlas_px", "px_per_cm", "lines": {line: {"island", "px"}}}`` (never part of the islands' bytes).
+    A top keeps its call byte for byte."""
     import json
     t0 = time.time()
     me = obj.data
@@ -1740,6 +1820,10 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
         return [cmap.get(int(c), -1) for c in ids]
     axes = {1: ((0.0, 0.0, 1.0), (float(centre[0]), float(centre[1]), 0.0), None),
             2: ((0.0, 0.0, 1.0), (float(centre[0]), float(centre[1]), 0.0), None)}
+    panel_kind = kind in ("jacket", "dress")
+    if panel_kind:
+        for p_ in (37, 38, 39, 40):
+            axes[p_] = axes[1]
     caps = {}
     for side, part_id, names in (("l", 3, ("LeftArm", "LeftHand")), ("r", 4, ("RightArm", "RightHand"))):
         A, H = (np.asarray(_bone_world(arm, n), float) for n in names)
@@ -1748,12 +1832,29 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
             loop, sh, ua = pattern["uv_caps"][side]
             caps[part_id] = ([g for g in m(loop) if g >= 0], cmap.get(sh, -1), cmap.get(ua, -1))
     strips = {5: [m(r_) for r_ in pattern["band_strip"]]} if pattern["band_strip"] else {}
-    res = uvp.pattern_uv(polys, part, seams, co, axes=axes, strips=strips, caps=caps, size_px=PATTERN_ATLAS_PX,
-                         margin_cm=PATTERN_MARGIN_CM)
+    if panel_kind:
+        bands = {}
+        if strips:
+            # B24: a jacket's / dress's neckband is relaxed from its strip like the waistband (the bare one-row strip
+            # stretched 1.57 round Vallerie's crew neck); ``rows_strip_uv`` wants the rows top (the neck edge) first
+            bands[5] = strips.pop(5)[::-1]
+        if pattern.get("collar_rows"):
+            rows6 = [m(r_) for r_ in pattern["collar_rows"]]
+            if all(g >= 0 for r_ in rows6 for g in r_):
+                bands[6] = rows6
+            else:
+                print("uv.collar a collar vertex was merged away: the collar is flattened as a panel", flush=True)
+        marks = {k: (int(p_), [g for g in m(ids) if g >= 0]) for k, (p_, ids) in (pattern.get("marks") or {}).items()}
+        res = uvp.pattern_uv(polys, part, seams, co, axes=axes, strips=strips, caps=caps, size_px=PATTERN_ATLAS_PX,
+                             margin_cm=PATTERN_MARGIN_CM, rows=uvp.ROWS.get(kind), rows_alt=uvp.ROWS_ALT.get(kind),
+                             bands=bands, marks=marks)
+    else:
+        res = uvp.pattern_uv(polys, part, seams, co, axes=axes, strips=strips, caps=caps, size_px=PATTERN_ATLAS_PX,
+                             margin_cm=PATTERN_MARGIN_CM)
     # the shoulder seam: the yoke ("cap" group) vertices shared by front and back. It runs the yoke meridian of the
     # side column from the top of the armhole to the neck ring's side point (the high point of the shoulder); a neck
     # standing in front of the torso centre takes its neck end that far forward (``uv_pattern.shoulder_seam``)
-    fr = {v for p_, f in zip(part, polys) if p_ == 1 for v in f}
+    fr = {v for p_, f in zip(part, polys) if p_ in (1, 39, 40) for v in f}
     bk = {v for p_, f in zip(part, polys) if p_ == 2 for v in f}
     gi = obj.vertex_groups["cap"].index if "cap" in obj.vertex_groups else None
     yoke = {v.index for v in me.vertices if any(g.group == gi for g in v.groups)} if gi is not None else set()
@@ -1766,10 +1867,17 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
     me.uv_layers["UVMap"].data.foreach_set("uv", flat)
     _drop_layers(me, ("uv_part", "uv_seam", "uv_cid"))
     Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
+    if res.get("marks"):
+        Path(islands_json).with_name("marks.json").write_text(json.dumps(
+            {"version": 1, "atlas_px": res["payload"]["atlas_px"], "px_per_cm": res["payload"]["px_per_cm"],
+             "lines": res["marks"]}, sort_keys=True, separators=(",", ":")))
     info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
             "islands": res["islands"], "faces_per_part": res["faces_per_part"],
             "area_ratio_min": res["area_ratio_min"], "area_ratio_max": res["area_ratio_max"],
             "stretch_p95_max": res["stretch_p95_max"], "strip_stretch_p95": res["strip_stretch_p95"],
+            "strip_area_ratio": {i["name"]: i["distortion"]["area_ratio"] for i in res["payload"]["islands"]
+                                 if i["part"] in uvp.STRIP_PARTS},
+            "marks": sorted(res.get("marks") or {}),
             "cap_height_cm": {n: res["cap_height_cm"].get(n) for n in ("sleeve_l", "sleeve_r")},
             "seam_edges": len(seams),
             "shoulder_seam_dy_cm": max((v["max_dy_cm"] for v in seam.values()), default=None),
@@ -2000,8 +2108,11 @@ def run(a):
         col, ctree = gd.rest_collider(body, extra=lower)
         uv_mode = prm.get("uv_mode") or "grid"
         verts, faces, fuv, binfo = build_bodice(spec, btree, ftree, centre, arm, ctree=ctree,
-                                                clear=thickness + gd.BUILD_CLEAR_EXTRA_M, uv_mode=uv_mode)
-        pattern = {k: binfo.pop(k) for k in ("face_part", "seam_edges", "band_strip", "uv_caps")}
+                                                clear=thickness + gd.BUILD_CLEAR_EXTRA_M, uv_mode=uv_mode,
+                                                kind=prm.get("kind"),
+                                                waist_y=(spec.get("outline") or {}).get("waist_y"))
+        pattern = {k: binfo.pop(k) for k in ("face_part", "seam_edges", "band_strip", "uv_caps", "collar_rows",
+                                             "marks")}
         binfo["inside"] = inside_report(ctree, verts, binfo.pop("regions"), thickness)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
@@ -2053,17 +2164,19 @@ def run(a):
             hem_b = float(min(v.co.z for v in obj.data.vertices))
             slit_edges = split_slit(obj, None, prm.get("slit") or {}, hem_b, centre)
         if uv_mode == "pattern":
-            uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json")
+            uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json", kind=prm.get("kind"))
             uv_info["parts_built"] = parts_built
             uv_info["parts_kept"] = parts_kept
             if cut_only:
                 # the cut ends here: the panels are cut, laid out of the body and given their pattern UVs — the drape
                 # below only moves vertices, so the islands it would write are these bytes
+                files = {"islands": str(out / "islands.json")}
+                if (out / "marks.json").is_file():
+                    files["marks"] = str(out / "marks.json")
                 return gd._plain({"cut_only": True, "uv": uv_info, "bodice": binfo, "slit_edges": int(slit_edges),
                                   "lower_layers": len(lower), "verts": len(obj.data.vertices),
                                   "script_wall_s": round(time.time() - t_all, 2),
-                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), \
-                    {"islands": str(out / "islands.json")}
+                                  "script_cpu_s": round(time.process_time() - c_all, 2)}), files
     else:
         binfo = {}
         col = None

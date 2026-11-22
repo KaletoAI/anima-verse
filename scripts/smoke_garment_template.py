@@ -121,8 +121,8 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
        1.17638 * 0.66 / 0.76 = 0.92774 < 0.9178 + 0.02 = 0.9378 -> 0.9378; y 0.80 (h 0.64): cone 1.94933 -
        0.99063 = 0.95870 > 0.9459 -> 0.9587. Knots: hem + the 13 samples 0.66 .. 0.90 + top = 15.
 [15] Pattern-piece UVs (plan 2026-11-20-template-cut-uv-texture, Task 3): ``build_args`` sends ``uv_mode`` "pattern"
-     for a top and "grid" for a jacket and a covered dress with sleeves (they keep the grid UV until their phase of
-     plan group B; a skirt is a pattern kind since step 3b, [17]). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
+     for a top, and since plan group B phases C / D for a jacket and a covered dress with sleeves too (a skirt is a
+     pattern kind since step 3b, [17]). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
      ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
      grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
@@ -185,7 +185,8 @@ check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0
                                                   "waist_height": "natural", "slit": "none", "slit_m": 0.0,
                                                   "shoulders": "strapless", "sleeves": "none", "sleeve_fit": 0.3,
                                                   "fit": 0.3, "neckline": "crew", "neck_depth_m": 0.0,
-                                                  "front": "closed", "collar": "none", "fabric": "medium",
+                                                  "front": "closed", "collar": "none", "placket": "none",
+                                                  "buttons": 0, "fabric": "medium",
                                                   "opacity": 0.4,
                                                   # A223: the fitted kinds' fields (at their defaults on a skirt)
                                                   "rise": "mid", "leg_cut": 0.5, "back_coverage": 1.0,
@@ -644,8 +645,8 @@ _top15, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
 check("[15] top -> uv_mode pattern", gt.build_args(_top15, gt.panel_spec(_top15, MU), item_id="x").get("uv_mode") == "pattern")
 for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleeves": "short"}):
     _p15, _ = gt.validate_params(_kw)
-    check(f"[15] {_kw['kind']} -> uv_mode grid",
-          gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "grid")
+    check(f"[15] {_kw['kind']} -> uv_mode pattern (phases C / D)",
+          gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "pattern")
 check("[15] TEMPLATE_VERSION 10", gt.TEMPLATE_VERSION == 10, gt.TEMPLATE_VERSION)
 
 # [16] step 3a: the fitted kinds are cut into pattern pieces

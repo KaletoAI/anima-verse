@@ -184,6 +184,17 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
      A tie keeps the rows (Rosi-like): front 56 x 24, back 58 x 27, band 97 x 4.6 — alt H = 1.5 + 24 + 1.5 + 27 + 1.5 +
      4.6 + 1.5 = 61.6, W = 100 -> floor(20.48) = 20.48; any nested layout is >= 97 + 3 = 100 on one side (the band lies
      or stands) -> at best 20.48, a tie -> the pixels equal ``pack`` without ``nest``. No ``tris`` -> no search.
+[29] Step 3c placket marks (``pattern_uv(marks=)``, ``mark_px``): the flat 0.40 x 0.60 m grid (8 x 12 quads, 5 cm
+     cells, XZ plane, normal -Y), part 1, axis behind it (0.20, 1.0, 0): ONE island, an isometry (seen from -Y: +X at
+     image right, +Z up). Packed alone: W = 1.5 + 40 + 1.5 = 43, H = 1.5 + 60 + 1.5 = 63 cm -> floor_0.01(2048 / 63 =
+     32.508) = 32.50 px/cm. The mark = the grid column x = 0.10 m (i = 2), rows z 0.55 down to 0 (12 ids, top first)
+     plus one id the mesh does not have (left out -> 12 points): pixel x = (1.5 + 10.0) x 32.50 = 373.75 for every
+     point (+-0.5), y from (1.5 + 5.0) x 32.5 = 211.25 (z 0.55, 5 cm under the top edge) down to 61.5 x 32.5 = 1998.75
+     (z 0), increasing — top first. A line of a part no island has (39) is no entry. The payload bytes are the same with and without ``marks``
+     (the marks never enter ``islands.json``, B11).
+[30] Step 3c rows: ``ROWS["jacket"]`` = (right_front, front, left_front, back) / (sleeve_r, sleeve_l) / (collar, band) —
+     an open front's right front (the wearer's right) at image left; ``ROWS_ALT["jacket"]`` puts the sleeves and the
+     trims in one row.
 """
 import json
 import math
@@ -835,6 +846,31 @@ check("[28] Rosi-like tie 20.48 keeps the rows' pixels", _plain[1] == _nest[1] =
       and all(np.array_equal(_plain[0][n], _nest[0][n]) for n in r28), (_plain[1], _nest[1]))
 check("[28] no tris -> no search", up.pack(n28, 2048, 1.5, rows=up.ROWS["skirt"], rows_alt=up.ROWS_ALT["skirt"],
                                            nest=up.NEST["skirt"])[1] == 28.05)
+
+# [29] placket marks
+_x29, _f29, _v29 = grid(nx=8, nz=12, w=0.40, h=0.60)
+_ids29 = [_v29(2, j) for j in range(12, -1, -1)]
+_kw29 = dict(axes={1: ((0.0, 0.0, 1.0), (0.20, 1.0, 0.0), None)}, size_px=2048, margin_cm=1.5)
+_r29 = up.pattern_uv(_f29, np.ones(len(_f29), int), set(), _x29, marks={"centre_front": (1, _ids29[1:] + [9999]),
+                                                                       "edge_left": (39, _ids29)}, **_kw29)
+_r29b = up.pattern_uv(_f29, np.ones(len(_f29), int), set(), _x29, **_kw29)
+check("[29] 32.50 px/cm", _r29["payload"]["px_per_cm"] == 32.5, _r29["payload"]["px_per_cm"])
+_m29 = _r29["marks"].get("centre_front") or {}
+_p29 = np.array(_m29.get("px") or [[0, 0]], float)
+check("[29] 12 points on the front island, x = 373.75", _m29.get("island") == "front" and len(_p29) == 12
+      and np.allclose(_p29[:, 0], 373.75, atol=0.5), _m29)
+check("[29] top first: y 211.25 .. 1998.75 (z 0.55 .. 0)", abs(_p29[0, 1] - (1.5 + 5.0) * 32.5) < 0.5
+      and abs(_p29[-1, 1] - 1998.75) < 0.5 and np.all(np.diff(_p29[:, 1]) > 0), (_p29[0], _p29[-1]))
+check("[29] a line of a part no island has: no entry", "edge_left" not in _r29["marks"], sorted(_r29["marks"]))
+check("[29] the payload is the same with and without marks",
+      json.dumps(_r29["payload"], sort_keys=True) == json.dumps(_r29b["payload"], sort_keys=True))
+
+# [30] jacket rows
+check("[30] ROWS jacket", up.ROWS["jacket"] == (("right_front", "front", "left_front", "back"), ("sleeve_r", "sleeve_l"),
+                                                 ("collar", "band")), up.ROWS.get("jacket"))
+check("[30] ROWS_ALT jacket", up.ROWS_ALT["jacket"] == (("right_front", "front", "left_front", "back"),
+                                                         ("sleeve_r", "sleeve_l", "collar", "band")),
+      up.ROWS_ALT.get("jacket"))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

@@ -30,7 +30,8 @@ NOT in it: the views / item picture (the drape key's texture part), ``fabric``, 
 
 Files under ``templates/cut/`` (beside the cut-texture records, whose 12-hex csig names never end in these suffixes):
 ``{item}_{cutsig}.islands.json`` (the builder's bytes), ``.cut.json`` (the record: state, metrics, wall seconds) and
-``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``).
+``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``); a jacket's / dress's cut also
+``.marks.json`` (step 3c, B11: the placket lines in atlas pixels, ``marks_file``; never part of the islands' bytes).
 
 A drape records the sig of the cut it was laid out of (``cut_sig``); one whose recorded sig differs from the
 current one (a new flattening, a lower layer that became ready) is stale for ``garment_template.drape_state``
@@ -79,8 +80,7 @@ CUTTING = "Cutting the pattern (CPU, 0 hub jobs)"
 NOT_CUT = "The pattern is not cut yet — it is cut when the dialog opens or the parameters are saved (CPU, 0 hub jobs)"
 CUT_FAILED = "Cutting the pattern failed: {error}"
 CUT_LEFT = "Cutting the pattern stopped ({outcome}) — it is cut again when the dialog is opened"
-NO_PATTERN = ("Only a top, a skirt and the close-fitting kinds are cut into pattern pieces for now — this kind keeps "
-              "its projection texture")
+NO_PATTERN = "This kind is not cut into pattern pieces — it keeps its projection texture"
 #: A lower template layer is not draped yet: the next Build drapes it first and lays this piece out of it, so a cut
 #: made now would differ from the drape the Build makes.
 WAITING_LOWER = "Waiting for the layers under it to be draped — the next Build drapes them, then the pattern is cut"
@@ -166,6 +166,12 @@ def _file(character_name: str, item_id: str, sig: str, suffix: str) -> Path:
 
 def islands_file(character_name: str, item_id: str, sig: str) -> Path:
     return _file(character_name, item_id, sig, ".islands.json")
+
+
+def marks_file(character_name: str, item_id: str, sig: str) -> Path:
+    """Step 3c (B11): the placket lines of a jacket's / dress's cut (``marks.json`` of the builder; not part of the
+    islands' bytes or sha)."""
+    return _file(character_name, item_id, sig, ".marks.json")
 
 
 def record_file(character_name: str, item_id: str, sig: str) -> Path:
@@ -271,10 +277,12 @@ def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     res = runner.run(gt.SCRIPT, inputs=inputs, params=args, out_dir=Path(out_dir), timeout_s=timeout_s)
     islands = (res.get("outputs") or {}).get("islands")
+    marks = (res.get("outputs") or {}).get("marks")
     wait = float(res.get("slot_wait_s") or 0.0)
     return {"ok": bool(res.get("ok")) and bool(islands) and Path(islands).is_file(),
             "outcome": res.get("outcome"), "error": str(res.get("error") or ("" if islands else "no islands written")),
             "data": dict(res.get("data") or {}), "islands": Path(islands) if islands else None,
+            "marks": Path(marks) if marks and Path(marks).is_file() else None,
             "log_tail": res.get("log_tail") or "", "wall_s": round(time.time() - started - wait, 2),
             "slot_wait_s": round(wait, 2), "measure_s": measure_s}
 
@@ -328,6 +336,8 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
         if res["ok"]:
             raw = res["islands"].read_bytes()
             _write_atomic(islands_file(character_name, item_id, sig), raw)
+            if res.get("marks"):
+                _write_atomic(marks_file(character_name, item_id, sig), res["marks"].read_bytes())
             try:
                 from app.core import garment_cut_texture as gct
                 _write_atomic(sheet_file(character_name, item_id, sig),

@@ -58,8 +58,8 @@ equal.py``. Every expectation is derived by hand below.
     (after the atlas: the cut changed since) -> "stale" (the atlas is out of date), never the atlas.
 [5] Review findings 2026-11-21 — what the cut is keyed by (``sig_of`` / ``cut_key``), collider states stubbed
     (``collider_states``: one lower template layer "bra1" with drape key "tb"; no own-mesh fit; no chest shaping):
-    [5.1] a jacket (not a ``PATTERN_KINDS`` kind until phase C of plan group B) -> ``cut_key`` sig None with
-          NO_PATTERN before any profile / body is read; ``state`` "blocked"; ``schedule`` runs nothing; ``sig_of``
+    [5.1] a kind outside ``PATTERN_KINDS`` (since phases C / D every kind is one: the jacket with ``PATTERN_KINDS``
+          narrowed to the top) -> ``cut_key`` sig None with NO_PATTERN before any profile / body is read; ``state`` "blocked"; ``schedule`` runs nothing; ``sig_of``
           the same reason. Step 3b: a strapless top (``has_bodice`` False) and a skirt are pattern pieces now
           (``panel_piece``, ``PATTERN_KINDS``) — no reason stops them before the profile.
     [5.2] the bra "missing" (the next Build drapes it first) -> ``sig_of`` (None, WAITING_LOWER); with
@@ -177,8 +177,10 @@ diff = {k for k in set(ba_m) | set(ba_s) if json.dumps(ba_m.get(k), sort_keys=Tr
 check("[1.2] fabric changes only the cloth args (fabric, drape_quality)", diff <= {"fabric", "drape_quality"}
       and "fabric" in diff, sorted(diff))
 check("[1.2] DRAPE_ONLY is ('fabric',)", gtc.DRAPE_ONLY == ("fabric",), gtc.DRAPE_ONLY)
-check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (step 3a) + skirt (step 3b)",
-      ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS + ("skirt",), gt.PATTERN_KINDS)
+check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (step 3a) + skirt (step 3b) + jacket,"
+      " dress (phases C / D) = every kind",
+      ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS + ("skirt", "jacket", "dress")
+      and set(gt.PATTERN_KINDS) == set(gt.KINDS), gt.PATTERN_KINDS)
 
 uvp_sha = hashlib.md5((ROOT / "app" / "blender" / "scripts" / "uv_pattern.py").read_bytes()).hexdigest()[:12]
 try:
@@ -496,6 +498,9 @@ def no_profile(*_a, **_k):
     raise AssertionError("cut_key read the profile / body for a piece that is never cut")
 
 
+# since phases C / D every kind is cut: the guard is proved on a jacket with PATTERN_KINDS narrowed to the top
+_NARROW = patch.object(gt, "PATTERN_KINDS", ("top",))
+_NARROW.start()
 with patch("app.models.character.get_character_profile", no_profile), \
         patch("app.core.base_body.current_base", no_profile):
     k51 = gtc.cut_key(CHAR, "jack1", item=tmpl_item(JACKET), profile=None)
@@ -510,6 +515,7 @@ with patch.object(gtc, "cut_key", lambda c, i, **k: k51):
           == "blocked" and len(RUNS) == n)
 check("[5.1] sig_of: the same reason for a jacket",
       gtc.sig_of(CHAR, "jack1", JACKET, base_sha="b0", lower=[]) == (None, gtc.NO_PATTERN, []))
+_NARROW.stop()
 check("[5.1] step 3b: a strapless top and a skirt are pattern pieces (no NO_PATTERN reason before the profile)",
       gt.panel_piece(STRAPLESS) and "skirt" in gt.PATTERN_KINDS)
 

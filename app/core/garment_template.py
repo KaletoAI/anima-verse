@@ -88,7 +88,8 @@ FITTED_VERSION = 1
 #: only (``PANEL_KINDS`` and the strapless top) — so their pattern pieces re-drape these pieces once (CPU, 0 hub jobs)
 #: and no other top or fitted kind.
 #: 1: pattern-piece UVs for skirts and strapless tops (``uv_pattern.wrap_parts``: front / back panels, the waistband a
-#: ring strip; a skirt's ``waistband`` field).
+#: ring strip; a skirt's ``waistband`` field). Phases C and D (2026-11-22): the jacket and the dress join at the same
+#: version — their keys gain it, so each re-drapes once; a skirt's or a strapless top's key stays.
 PANEL_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
@@ -190,6 +191,11 @@ TIGHTS_STYLES = ("tights", "hold_up", "thigh_high", "knee_high")
 TIGHTS_FEET = ("closed", "footless", "stirrup")
 GARTERS = ("none", "tabs")
 COLLARS = ("none", "stand", "lapel")
+#: Step 3c (plan group B, B10): what closes the front — painted into the cut atlas by code after the colour match
+#: (``cut_texture_post.draw_placket`` along the cut's ``marks.json`` lines), never a pattern piece, never the model's.
+PLACKETS = ("none", "buttons", "zip", "lacing")
+#: B12: the button count when ``buttons`` is 0 (automatic) = max(1, round(line length / pitch)), cm.
+BUTTON_PITCH_CM = {"top": 7.0, "dress": 7.0, "jacket": 10.0}
 # --- A233: trousers --------------------------------------------------------------------------------------------
 #: How far a trouser leg reaches: shorts (a third of the way from the crotch to the knee), knee, capri (mid-calf),
 #: ankle (above the ankle bone) or full (to the ankle joint, over the top of the shoe).
@@ -267,13 +273,14 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
 #: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top (since
-#: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt; a jacket
-#: and a dress keep the grid UV until their phase of plan group B.
-PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers", "skirt")
-#: Step 3b: the kinds whose pattern pieces come from the panel construction (``PANEL_VERSION``, ``panel_piece``).
-PANEL_KINDS = ("skirt",)
+#: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt, since step
+#: 3c / 3d (plan group B, phases C and D) a jacket and a dress — every kind.
+PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers", "skirt", "jacket", "dress")
+#: Step 3b: the kinds whose pattern pieces come from the panel construction (``PANEL_VERSION``, ``panel_piece``);
+#: step 3c / 3d (plan group B, phases C and D) the jacket and the dress.
+PANEL_KINDS = ("skirt", "jacket", "dress")
 #: The fields that change neither the drape nor the material (painted by the picture): never in ``tsig``.
-TEXTURE_ONLY = ("fly", "texture", "sleeve_print")
+TEXTURE_ONLY = ("fly", "texture", "sleeve_print", "placket", "buttons")
 #: Fabric presets of the cloth run (Blender cloth settings). Stiff = holds a
 #: shape (denim, wool), medium = cotton, flowing = silk / chiffon / jersey.
 FABRICS: Dict[str, Dict[str, float]] = {
@@ -331,7 +338,10 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "neckline": ("choice", NECKLINES, "crew"),
     "neck_depth_m": ("number", (0.0, 0.35), 0.0),    # 0 = the neckline's usual depth (NECK_DEPTH)
     "front": ("choice", FRONTS, "closed"),           # jacket: open front
-    "collar": ("choice", COLLARS, "none"),           # jacket
+    "collar": ("choice", COLLARS, "none"),           # jacket (a dress: none / stand)
+    # step 3c (B10): the painted placket and its button count (0 = automatic, ``BUTTON_PITCH_CM``) — texture only
+    "placket": ("choice", PLACKETS, "none"),
+    "buttons": ("number", (0, 12), 0),
     "fabric": ("choice", tuple(FABRICS), "medium"),
     "opacity": ("number", (0.2, 1.0), 0.4),          # A204: sheer only — how much of the cloth's colour covers
     # A223 briefs
@@ -384,11 +394,12 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "seat", "fit", "trouser_waist",
                  "fly", "hem", "texture", "sleeve_print"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
-              "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
+              "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons",
+              "texture", "sleeve_print"),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
             *OFF_SHOULDER_FIELDS, "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
-               "collar"),
+               "collar", "placket", "buttons", "texture", "sleeve_print"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "gusset_m",
                "waistband", "leg_length_m", "fit", "sides", "string_width_m", "texture", "sleeve_print"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
@@ -829,6 +840,11 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
             params[key] = PARAM_SPEC[key][2]
     if kind == "jacket":
         params["shoulders"] = "covered"
+    if kind == "dress" and params["collar"] == "lapel":
+        params["collar"] = "stand"     # B9: a lapel is a jacket's; a dress's collar stands
+    if kind == "dress" and params["shoulders"] != "covered":
+        params["collar"] = "none"      # a collar needs a neck ring (no straps, not strapless, not off-shoulder)
+    params["buttons"] = int(round(params["buttons"]))
     if corset_top(params):
         params["sleeves"] = "none"
         if params["neckline"] not in STRAPLESS_NECKLINES:
@@ -1448,7 +1464,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any], *, over_sleeves: b
         top_edge = {"neckline": neckline, "dip_m": sweetheart_depth(params) if neckline == "sweetheart" else 0.0,
                     "half_rad": SWEETHEART_HALF_RAD}
         neckline = "crew"
-    collar = params["collar"] if params["kind"] == "jacket" else "none"
+    collar = params["collar"] if params["kind"] in ("jacket", "dress") else "none"
     front_open = params["kind"] == "jacket" and (params["front"] == "open" or collar == "lapel")
     depth = params["neck_depth_m"] or NECK_DEPTH[neckline]
     if collar == "lapel":

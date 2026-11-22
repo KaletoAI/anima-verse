@@ -6899,7 +6899,7 @@
     "putting it on": "wird angelegt",
     "Cutting the pattern (CPU, 0 hub jobs)": "Schnitt wird zugeschnitten (CPU, 0 Hub-Jobs)",
     "The pattern is not cut yet — it is cut when the dialog opens or the parameters are saved (CPU, 0 hub jobs)": "Der Schnitt ist noch nicht zugeschnitten — das geschieht beim Öffnen des Dialogs oder beim Speichern der Parameter (CPU, 0 Hub-Jobs)",
-    "Only a top, a skirt and the close-fitting kinds are cut into pattern pieces for now — this kind keeps its projection texture": "Vorerst werden nur ein Oberteil, ein Rock und die eng anliegenden Arten in Schnittteile zugeschnitten — diese Art behält ihre Projektions-Textur",
+    "This kind is not cut into pattern pieces — it keeps its projection texture": "Diese Art wird nicht in Schnittteile zugeschnitten — sie behält ihre Projektions-Textur",
     "Cut {at} — pattern pieces ready": "Zugeschnitten {at} — Schnittteile bereit",
     "Cut on the CPU in {s} s, 0 hub jobs — no drape needed": "Auf der CPU in {s} s zugeschnitten, 0 Hub-Jobs — kein Drapieren nötig",
     "Shown once cut": "Sichtbar nach dem Zuschnitt",
