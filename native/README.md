@@ -1089,9 +1089,11 @@ A worldmap row's `interaction` (§ A8a) runs the browser's pair (npcs.ts `adoptI
 figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase.json`, `pair_clip_geometry.json`,
 `pair_height.json`, `pair_blend.json`):
 - **Adoption** per poll (the stamp is the poll count: the 1 Hz pass over the cached map reconciles nothing): a new id
-  adopts the clip clock `elapsed_s / rate` and drops the figure's stations and climb; the same id takes rate and anchor
-  at once and snaps its local clock only when a NEW poll is more than 0.3 s off.
-- **Every frame**: the clip clock runs in REAL seconds while `rate > 0` (frozen = the player stands, `SpeedScale 0`);
+  (or a new clip of the same id — a pose switch, the entry blend kept) adopts the server's clip clock `clip_s` and drops
+  the figure's stations and climb; the same id takes rate, `tempo` and anchor at once and snaps its local clock only
+  when a NEW poll's `clip_s` is more than 0.3 clip s off (frozen too: the server's clock stands with it).
+- **Every frame**: the clip clock runs by real dt · `tempo` (0.2..1, missing = 1) while `rate > 0`, and the player
+  at `SpeedScale = tempo` (frozen = the player stands, `SpeedScale 0`);
   the half `<kind>__<role>` plays at the phase (cycle wrapped, one-shot clamped a millisecond short of its end) and
   re-seeks only beyond 0.2 s of drift; a running bridge ends there and its travel is dropped; the root stands at
   `anchor + R_y(yaw) · pairRootAt(phase)` — at the place's first slot when the anchor names one, else the room's stand
@@ -1115,7 +1117,8 @@ figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase
 - `--check pairs` (`Check/PairCheck.cs`, `fixtures/pairs/`, README there).
 
 A row's `finale` (§ A8c, Task 96) plays once per id, starting at frame zero regardless of `elapsed_s`.
-`Core/Figures/FinaleClip.cs` owns its independent frame clock (frozen with the world); `FinaleClipTests`
+`Core/Figures/FinaleClip.cs` owns its independent frame clock (frozen with the world), in CLIP seconds: it advances by
+dt · the block's `tempo` and ends at `duration_s · tempo` (the player runs at `SpeedScale = tempo`); `FinaleClipTests`
 uses the same hand-derived numbers as browser smoke [1]–[9]. A pair half uses its own root path at the
 interaction anchor while the action clock continues underneath. A solo temporarily replaces the place pose;
 the arrived own B1 avatar uses seeked playback and returns to its held clip. Finales use the figure's set

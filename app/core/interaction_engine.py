@@ -273,12 +273,19 @@ def interaction_state(inter: Dict[str, Any], now_game: GameTime) -> Dict[str, An
 def payload_for(character_name: str, profile: Dict[str, Any],
                 now_game: GameTime, rate: float = 0.0) -> Optional[Dict[str, Any]]:
     """The per-character ``interaction`` block of the worldmap payload.
-    ``rate`` is the game-speed factor (GAME seconds per REAL second) so a
-    client can advance the clip between polls; 0 = frozen."""
+    ``rate`` is the game-speed factor (GAME seconds per REAL second); 0 =
+    frozen. The clip itself is timed by its scene's clip clock
+    (``pose_scene.clip_clock``): ``clip_s`` CLIP seconds into the clip, run
+    on at ``tempo`` clip seconds per real second — one clock per scene, a
+    furniture pair's being its run's (``execution_ref``)."""
+    from app.core.pose_scene import clip_clock
     inter = get_interaction(character_name, profile)
     if not inter:
         return None
     st = interaction_state(inter, now_game)
+    scene_id = (str(inter.get("execution_ref") or "") if inter.get("execution_kind") == "prop_action"
+                else "") or inter["id"]
+    clip_s, tempo = clip_clock(scene_id, f'{inter.get("pose_key") or ""}|{inter["kind"]}')
     return {
         "id": inter["id"],
         "kind": inter["kind"],
@@ -295,6 +302,11 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         # None = endless (always None for a one-shot)
         "loop_count": inter.get("loop_count") if inter.get("loop") else None,
         "rate": round(float(rate or 0.0), 4),
+        # the clip clock (CLIP seconds since this clip began) and the tempo it
+        # runs at (clip seconds per REAL second, 0.2..1): clients advance
+        # clip_s by dt * tempo (0 frozen) and snap beyond PAIR_SNAP_S
+        "clip_s": clip_s,
+        "tempo": tempo,
         # the ALT half this one plays instead of its role's own ("" = none):
         # the clip is <kind>__<role>~<alt>, same anchor, same phase (§ A8a)
         "alt": str(inter.get("alt") or ""),

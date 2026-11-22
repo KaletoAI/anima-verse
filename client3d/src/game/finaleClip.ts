@@ -15,8 +15,15 @@
  * the finale is over and the figure is back in the action's clip, whose own
  * phase never stopped counting. The action ending ends the finale too.
  *
- * CYCLES. `duration_s` is the WHOLE finale; a counted loop (`loop_count` N)
- * plays N cycles of `duration_s / N` each. The time handed out is the time IN
+ * TEMPO. The block's `tempo` (0.2..1, 1 = the clip's own speed; missing = 1)
+ * is the clip seconds a real second plays: the clock `t` counts CLIP seconds,
+ * advanced by `dt · tempo`, and `duration_s` — the WHOLE finale in REAL
+ * seconds, clip length × cycles / tempo on the server — is
+ * `duration_s · tempo` clip seconds long.
+ *
+ * CYCLES. A counted loop (`loop_count` N) plays N cycles of
+ * `duration_s · tempo / N` clip seconds each — the clip's own length; each
+ * lasts `clip length / tempo` real seconds. The time handed out is the time IN
  * the current cycle, with `loop` true while a further cycle follows — so the
  * mixer repeats — and false in the last one, which holds its end like a
  * one-shot instead of wrapping to frame 0 for a frame before the finale ends.
@@ -40,10 +47,12 @@ export interface FinaleBlock {
   duration_s: number;
   /** cycles of the clip; missing or not a whole number >= 1 = one */
   loop_count?: number;
+  /** clip seconds per real second, 0.2..1; missing = 1 */
+  tempo?: number;
 }
 
-/** A finale this figure is playing: `t` real seconds into a finale of
- *  `duration` (all `loopCount` cycles). */
+/** A finale this figure is playing: `t` CLIP seconds into a finale of
+ *  `duration` REAL seconds (all `loopCount` cycles) played at `tempo`. */
 export interface FinalePlay {
   id: string;
   kind: string;
@@ -54,6 +63,8 @@ export interface FinalePlay {
   duration: number;
   /** cycles of the clip, >= 1 */
   loopCount: number;
+  /** clip seconds per real second, 0.2..1 */
+  tempo: number;
 }
 
 /** Take a poll's block. A NEW id (not `seen`) starts from 0 whatever its
@@ -72,12 +83,14 @@ export function adoptFinale(current: FinalePlay | null, seen: string,
     const alt = role && typeof block.alt === 'string' && ALT_RE.test(block.alt) ? block.alt : '';
     const n = block.loop_count;
     const loopCount = typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : 1;
-    play = { id: block.id, kind: block.kind, role, alt, t: 0, duration, loopCount };
+    const tempo = typeof block.tempo === 'number' && Number.isFinite(block.tempo)
+      ? Math.min(1, Math.max(0.2, block.tempo)) : 1;
+    play = { id: block.id, kind: block.kind, role, alt, t: 0, duration, loopCount, tempo };
   }
   return { play, seen: block.id };
 }
 
-/** One frame: advance by `dt` unless frozen and say which clip plays at which
+/** One frame: advance by `dt · tempo` clip seconds unless frozen and say which clip plays at which
  *  time — `<kind>__<role>` for a pair half, `<kind>__<role>~<alt>` for an
  *  alt half, `<kind>` for a solo clip — or null once the finale is over (the
  *  figure is back in the action's clip). `base` is the role's own half: what
@@ -89,12 +102,15 @@ export function adoptFinale(current: FinalePlay | null, seen: string,
 export function stepFinale(play: FinalePlay | null, dt: number, frozen: boolean):
   { play: FinalePlay | null; clip: string | null; base: string | null; t: number; loop: boolean } {
   if (!play) return { play: null, clip: null, base: null, t: 0, loop: false };
-  const t = play.t + (frozen || !(dt > 0) ? 0 : dt);
-  if (t >= play.duration) return { play: null, clip: null, base: null, t: 0, loop: false };
+  const tempo = play.tempo > 0 ? play.tempo : 1;
+  const t = play.t + (frozen || !(dt > 0) ? 0 : dt * tempo);
+  // the whole finale in CLIP seconds: its real length at this tempo
+  const total = play.duration * tempo;
+  if (t >= total) return { play: null, clip: null, base: null, t: 0, loop: false };
   const next = { ...play, t };
   const base = play.role ? `${play.kind}__${play.role}` : play.kind;
   const cycles = play.loopCount >= 1 ? Math.floor(play.loopCount) : 1;
-  const cycle = play.duration / cycles;
+  const cycle = total / cycles;
   const index = Math.min(cycles - 1, Math.floor(t / cycle));
   return { play: next, clip: play.role && play.alt ? `${base}~${play.alt}` : base, base,
     t: Math.min(t - index * cycle, cycle - 1e-3), loop: index < cycles - 1 };

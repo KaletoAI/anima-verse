@@ -4,15 +4,18 @@ using System.Text.RegularExpressions;
 
 namespace AnimaNative.Figures;
 
-/// <summary><c>PairClipInput</c> of client3d/src/game/pairClip.ts: the server's game-clock numbers and the local clip clock.</summary>
-/// <param name="ElapsedGameS">GAME seconds since the interaction began, as of the last poll; null BETWEEN polls</param>
-/// <param name="Rate">game seconds per real second (0 = frozen world)</param>
+/// <summary><c>PairClipInput</c> of client3d/src/game/pairClip.ts: the server's clip clock and the local one.</summary>
+/// <param name="ClipS">the server's clip clock <c>clip_s</c> (CLIP seconds since the clip began) as of the last poll;
+/// null BETWEEN polls</param>
+/// <param name="Tempo">clip seconds per real second (<c>tempo</c>; <see cref="PairClip.ClipTempo"/> clamps it)</param>
+/// <param name="Frozen">a frozen world (rate 0): the local clock stands</param>
 /// <param name="Loop">does the clip repeat, or hold its last frame</param>
 /// <param name="ClipDurationS">the clip's own length (0 / unknown = no wrap, no clamp)</param>
-/// <param name="LocalClipT">the clip clock this figure carries, REAL seconds; null = adopt a fresh interaction</param>
+/// <param name="LocalClipT">the clip clock this figure carries, CLIP seconds; null = adopt a fresh interaction</param>
 /// <param name="SnapS">drift threshold of the snap; null = <see cref="PairClip.SnapS"/></param>
-public readonly record struct PairClipInput(double? ElapsedGameS, double Rate, bool Loop, double ClipDurationS,
-                                            double? LocalClipT = null, double? SnapS = null);
+/// <param name="Dt">REAL seconds this frame adds to the local clock (times the tempo)</param>
+public readonly record struct PairClipInput(double? ClipS, double Tempo, bool Frozen, bool Loop, double ClipDurationS,
+                                            double? LocalClipT = null, double? SnapS = null, double Dt = 0);
 
 /// <summary>One horizontal track of a raw pair clip half (three's <c>KeyframeTrack</c>: name, times, flat values).</summary>
 public sealed record PairTrack(string Name, float[] Times, float[] Values);
@@ -26,27 +29,35 @@ public sealed record PairTrack(string Name, float[] Times, float[] Values);
 /// </summary>
 public static class PairClip
 {
-    /// <summary><c>PAIR_SNAP_S</c>: drift (real seconds) between the local clip clock and a fresh poll beyond which it snaps.</summary>
+    /// <summary><c>PAIR_SNAP_S</c>: drift (clip seconds) between the local clip clock and a fresh poll beyond which it snaps.</summary>
     public const double SnapS = 0.3;
     /// <summary>figures.ts <c>PAIR_RESYNC_S</c>: the figure re-seeks its action only when its own time drifted more than this.</summary>
     public const double ResyncS = 0.2;
     /// <summary>The browser's clip files are Mixamo centimetres (three's FBXLoader keeps the file unit): /100 = metres.</summary>
     public const double BrowserUnitsPerMetre = 100;
 
+    /// <summary><c>clipTempo</c>: a finite tempo clamped to [0.2, 1]; 1 for anything else (a row without one).</summary>
+    public static double ClipTempo(double? tempo)
+        => tempo is { } t && double.IsFinite(t) ? Math.Min(1, Math.Max(0.2, t)) : 1;
+
     /// <summary>
-    /// <c>pairClipPhase(input)</c>: the server's clip clock is <c>elapsed / rate</c> (real seconds, only with a finite
-    /// elapsed and rate &gt; 0); a missing local clock adopts it (else 0), a local clock more than the snap threshold off
-    /// snaps to it (strict), otherwise the local clock stays; clamped at 0. The phase wraps a cycle and clamps a one-shot
-    /// against a positive length.
+    /// <c>pairClipPhase(input)</c>: the local clock advances by <c>dt · tempo</c> (nothing while frozen); the server's
+    /// <c>clip_s</c> (finite, clamped at 0) is adopted when there is no local clock (else 0) and snapped to when the
+    /// advanced local clock is more than the snap threshold off (strict), otherwise the local clock stays; clamped at 0.
+    /// The phase wraps a cycle and clamps a one-shot against a positive length.
     /// </summary>
     public static (double ClipT, double Phase) Phase(PairClipInput input)
     {
         double snapS = input.SnapS ?? SnapS;
-        double? serverT = input.ElapsedGameS is { } e && double.IsFinite(e) && input.Rate > 0 ? Math.Max(0, e / input.Rate) : null;
+        double step = !input.Frozen && input.Dt > 0 ? input.Dt * ClipTempo(input.Tempo) : 0;
+        double? serverT = input.ClipS is { } c && double.IsFinite(c) ? Math.Max(0, c) : null;
         double clipT;
         if (input.LocalClipT is not { } local || !double.IsFinite(local)) clipT = serverT ?? 0;
-        else if (serverT is { } s && Math.Abs(local - s) > snapS) clipT = s;
-        else clipT = local;
+        else
+        {
+            double advanced = local + step;
+            clipT = serverT is { } s && Math.Abs(advanced - s) > snapS ? s : advanced;
+        }
         clipT = Math.Max(0, clipT);
         return (clipT, PhaseAt(clipT, input.Loop, input.ClipDurationS));
     }
@@ -115,6 +126,10 @@ public sealed record PairInteraction(string Id, string Kind, string Role, IReadO
                                      double ClipDurationS, bool Loop, double Rate)
 {
     public string Alt { get; init; } = "";
+    /// <summary><c>clip_s</c>: the scene's clip clock, CLIP seconds since this clip began (null when the row lacks it).</summary>
+    public double? ClipS { get; init; }
+    /// <summary><c>tempo</c>: clip seconds per real second, clamped to [0.2, 1] (1 when the row lacks it).</summary>
+    public double Tempo { get; init; } = 1;
     /// <summary>The role's own half, used when this rig lacks the alternative.</summary>
     public string Base => ClipLibraryRules.IndexName(Kind, Role);
     /// <summary>The requested half, including the optional alternative suffix.</summary>
@@ -126,8 +141,8 @@ public readonly record struct PairAnchor(double X, double Z, double Yaw, string?
 
 /// <summary>
 /// A pair interaction as the renderer runs it (npcs.ts <c>PairPlay</c>): the anchor, the game-clock elapsed of the last
-/// poll and ONE local number — the clip clock in REAL seconds — advanced by the frame time and reconciled against each
-/// NEW poll (<see cref="PairClip.Phase"/>).
+/// poll and ONE local number — the clip clock in CLIP seconds — advanced by the frame time × the scene's tempo and
+/// reconciled against each NEW poll's <c>clip_s</c> (<see cref="PairClip.Phase"/>).
 /// </summary>
 public sealed class PairPlay
 {
@@ -142,18 +157,21 @@ public sealed class PairPlay
     public PairAnchor Anchor { get; set; }
     /// <summary>Interaction time in GAME seconds as of the last poll, advanced by dt·rate between polls.</summary>
     public double Elapsed { get; set; }
-    /// <summary>REAL seconds since the interaction started: the clip's own clock.</summary>
+    /// <summary>CLIP seconds since the clip began: the clip's own clock, advanced by dt·tempo.</summary>
     public double ClipT { get; set; }
+    /// <summary>Clip seconds per real second (the scene's <c>tempo</c>, 0.2..1).</summary>
+    public double Tempo { get; set; } = 1;
     public double ClipDuration { get; init; }
     public bool Loop { get; init; }
     public double Rate { get; set; }
     public long Stamp { get; set; }
 
     /// <summary>
-    /// npcs.ts <c>adoptInteraction</c>: no block = none; a new id (or a different half) is adopted whole — the clip clock
-    /// from the server's numbers, <paramref name="fresh"/> = the caller drops route, stations and climb; the same id takes
-    /// the rate and the anchor at once and reconciles the clip clock only for a NEW poll (<paramref name="stamp"/>): the
-    /// elapsed snaps when it is more than the snap threshold off, the clock through <see cref="PairClip.Phase"/>.
+    /// npcs.ts <c>adoptInteraction</c>: no block = none; a new id (or a different half — a pose switch) is adopted whole —
+    /// the clip clock from the server's <c>clip_s</c>, <paramref name="fresh"/> = the caller drops route, stations and
+    /// climb; the same id takes the rate, the tempo and the anchor at once and reconciles the clip clock only for a NEW
+    /// poll (<paramref name="stamp"/>): the elapsed snaps when it is more than the snap threshold off, the clock through
+    /// <see cref="PairClip.Phase"/>.
     /// </summary>
     public static PairPlay? Adopt(PairPlay? cur, PairInteraction? it, long stamp, out bool fresh)
     {
@@ -167,16 +185,18 @@ public sealed class PairPlay
             {
                 Blend = cur?.Id == it.Id ? cur.Blend : null,
                 Id = it.Id, Clip = clip, Base = it.Base, Anchor = it.Anchor, Elapsed = it.ElapsedS, Rate = it.Rate, Stamp = stamp,
-                ClipT = PairClip.Phase(new PairClipInput(it.ElapsedS, it.Rate, it.Loop, it.ClipDurationS)).ClipT,
+                Tempo = PairClip.ClipTempo(it.Tempo),
+                ClipT = PairClip.Phase(new PairClipInput(it.ClipS, it.Tempo, it.Rate <= 0, it.Loop, it.ClipDurationS)).ClipT,
                 ClipDuration = it.ClipDurationS, Loop = it.Loop,
             };
         }
         cur.Rate = it.Rate;
+        cur.Tempo = PairClip.ClipTempo(it.Tempo);
         cur.Anchor = it.Anchor;
         if (cur.Stamp != stamp)
         {
             if (Math.Abs(cur.Elapsed - it.ElapsedS) > PairClip.SnapS) cur.Elapsed = it.ElapsedS;
-            cur.ClipT = PairClip.Phase(new PairClipInput(it.ElapsedS, cur.Rate, cur.Loop, cur.ClipDuration, cur.ClipT)).ClipT;
+            cur.ClipT = PairClip.Phase(new PairClipInput(it.ClipS, cur.Tempo, cur.Rate <= 0, cur.Loop, cur.ClipDuration, cur.ClipT)).ClipT;
             cur.Stamp = stamp;
         }
         return cur;
@@ -184,13 +204,14 @@ public sealed class PairPlay
 
     /// <summary>
     /// The clock part of <c>tickInteraction</c>: the game clock runs by dt·rate, the CLIP clock by the frame's real dt
-    /// only while rate &gt; 0 (a frozen world stands still); returns the phase the half is seeked to.
+    /// times the tempo only while rate &gt; 0 (a frozen world stands still); returns the phase the half is seeked to.
     /// </summary>
     public double Advance(double dt)
     {
         Elapsed += dt * Rate;
-        if (Rate > 0) ClipT += dt;
-        return PairClip.Phase(new PairClipInput(null, Rate, Loop, ClipDuration, ClipT)).Phase;
+        var (clipT, phase) = PairClip.Phase(new PairClipInput(null, Tempo, Rate <= 0, Loop, ClipDuration, ClipT, Dt: dt));
+        ClipT = clipT;
+        return phase;
     }
 
     /// <summary>

@@ -74,7 +74,7 @@ function placement(m, data) {
       id: 'p1', clip: data.clip ?? 'handshake__a', base: data.clip ?? 'handshake__a',
       kind: (data.clip ?? 'handshake__a').split('__')[0], members: ['A'],
       anchor: { ...data.anchor, placeId: data.placeId },
-      elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, stamp: 0,
+      elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, tempo: 1, stamp: 0,
     },
     activity: '', travelLine: null, travelKey: '', bobPhase: 0, settle: null,
   };
@@ -92,8 +92,7 @@ export async function pairVectorDispatch() {
     pairFrames: (input, frames, field) => {
       let result;
       for (const dt of frames) {
-        input.localClipT += input.rate > 0 ? dt : 0;
-        result = m.pairClipPhase(input);
+        result = m.pairClipPhase({ ...input, dt });
         input.localClipT = result.clipT;
       }
       return result[field];

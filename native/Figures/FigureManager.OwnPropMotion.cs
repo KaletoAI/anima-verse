@@ -228,7 +228,7 @@ public partial class FigureManager
             if(role is "a" or "b" or "c" or "d" or "e" && !pose.EndsWith("__"+role,StringComparison.Ordinal)) pose+="__"+role;
             string poseKey=$"{pose}|{figure.Player?.GetInstanceId()}";
             var finale=!playback.Cancel && figure.Finale is { Role:null } ? StepFinale(figure,dt,WorldFrozen) : null;
-            if(finale is { } solo && figure.PlayPair(solo.Clip,solo.T,WorldFrozen,false,restart:solo.Start,frameStep:solo.Start ? 0 : dt)) playback.FinaleOn=true;
+            if(finale is { } solo && figure.PlayPair(solo.Clip,solo.T,WorldFrozen,false,restart:solo.Start,frameStep:solo.Start ? 0 : dt*solo.Speed,speed:solo.Speed)) playback.FinaleOn=true;
             else if(playback.FinaleOn || playback.PoseKey!=poseKey) {
                 if(figure.FinishPropEntry(pose)) { playback.PoseKey=poseKey; playback.FinaleOn=false; }
             }

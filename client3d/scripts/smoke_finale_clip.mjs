@@ -63,7 +63,7 @@ const block = (id, extra = {}) => ({ id, kind: 'standing-dancer-climax', role: '
 // [1]
 let { play, seen } = adoptFinale(null, '', block('f1'), true);
 assert.deepEqual(play, { id: 'f1', kind: 'standing-dancer-climax', role: 'b', alt: '', t: 0, duration: 1.033,
-  loopCount: 1 });
+  loopCount: 1, tempo: 1 });
 assert.equal(seen, 'f1');
 
 // [2]

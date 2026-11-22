@@ -3039,15 +3039,6 @@ export class Figure {
     return this.actions.has(kind);
   }
 
-  /** Play the half of a PAIR clip (§ A8a). `t` is the clip time in REAL
-   *  seconds — the phase `game/pairClip.ts` derived from the server's
-   *  game-clock numbers: the clip always runs at its authored speed (E1), and
-   *  the game-speed factor only says whether it advances at all. `frozen`
-   *  (rate 0) stops the mixer where it stands; `loop` repeats the clip, a
-   *  one-shot holds its last frame instead. Re-seeks only when the action's
-   *  own time drifted more than PAIR_RESYNC_S from `t`, so a poll never makes
-   *  the figure stutter. Returns false when the half is not bound on this rig
-   *  — the caller then falls back to a solo clip. */
   /** The floor this figure is seated ON, in world units — the owner's stand
    *  height at the root's xz (`roomStandAt` / `groundY`), set whenever it
    *  plays a `seat` group clip; read by the seated knee-raise in `update`. */
@@ -3055,7 +3046,17 @@ export class Figure {
     this.floorY = y;
   }
 
-  playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string): boolean {
+  /** Play the half of a PAIR clip (§ A8a). `t` is the clip time in CLIP
+   *  seconds — the phase `game/pairClip.ts` derived from the server's clip
+   *  clock; between two seeks the mixer runs at `speed` (the scene's tempo,
+   *  0.2..1, or a finale's), in real time (E1) — the game-speed factor only
+   *  says whether it advances at all. `frozen` (rate 0) stops the mixer where
+   *  it stands; `loop` repeats the clip, a one-shot holds its last frame
+   *  instead. Re-seeks only when the action's own time drifted more than
+   *  PAIR_RESYNC_S from `t`, so a poll never makes the figure stutter.
+   *  Returns false when the half is not bound on this rig — the caller then
+   *  falls back to a solo clip. */
+  playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
     // The pair takes the body over: a running bridge ends HERE, not at its
@@ -3103,8 +3104,14 @@ export class Figure {
       const raw = Math.abs(action.time - want);
       if ((loop ? Math.min(raw, duration - raw) : raw) > PAIR_RESYNC_S) action.time = want;
     }
-    action.timeScale = frozen ? 0 : 1;
+    action.timeScale = frozen ? 0 : speed;
     return true;
+  }
+
+  /** The speed the clip playing now runs at (a solo finale at its tempo,
+   *  § A8c); the next clip `play` starts sets its own. Not during a bridge. */
+  setClipSpeed(speed: number): void {
+    if (this.current && !this.transition) this.current.timeScale = speed;
   }
 
   /** Exact public entry: seek the measured clip, without transition lookup or

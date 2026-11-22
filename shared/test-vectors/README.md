@@ -359,13 +359,13 @@ production implementation; they are not converted into passing vectors.
 
 ## Pair clips and figure normalisation (Task 32)
 
-`smoke_pair_vectors.mjs` runs all 107 cases without live tables, model files,
+`smoke_pair_vectors.mjs` runs all 110 cases without live tables, model files,
 network or a DOM. The canonical source smokes also run their own vectors:
 
 | JSON | Source smoke | Cases |
 |---|---|---:|
 | `pair_blend.json` | `smoke_pair_blend.mjs` | 12 |
-| `pair_clip_phase.json` | `smoke_pair_realtime.mjs` | 32 |
+| `pair_clip_phase.json` | `smoke_pair_realtime.mjs` | 30 |
 | `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 28 |
 | `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
 | `figure_normalisation.json` | `smoke_figure_normalisation.mjs` | 4 |
@@ -398,12 +398,14 @@ Native-facing adapter signatures (all distances metres except raw track
 values in centimetres; all times seconds, yaw radians):
 
 - `pairClipValue(input, field) -> number`: selects `clipT` or `phase` from
-  `pairClipPhase(input)`. `input` has `elapsedGameS` (number/null), `rate`,
-  `loop`, `clipDurationS`, optional `localClipT`, optional `snapS`.
-  Omitted local time means adoption. `pairSnapS() -> number` reads the
-  production constant. `pairFrames(input, frames, field)` advances local time
-  by each real frame dt only when rate > 0, then reconciles and carries the
-  returned clock to the next frame, exactly like the original smoke.
+  `pairClipPhase(input)`. `input` has `clipS` (the server's clip clock,
+  number/null), `tempo`, `frozen`, `loop`, `clipDurationS`, optional
+  `localClipT`, optional `dt` (real frame seconds, advanced by dt · tempo
+  unless frozen), optional `snapS`. Omitted local time means adoption.
+  `pairSnapS() -> number` reads the production constant.
+  `pairFrames(input, frames, field)` calls `pairClipPhase` once per real
+  frame with that frame as `dt` and no server value, carrying the returned
+  clock to the next frame.
 - `isPairClipName(name) -> boolean` calls production directly.
 - `extractPairRootPath(tracks) -> {times,xz}` constructs an AnimationClip of
   VectorKeyframeTracks (`{name,times,values}`), calls `extractRootPath`, and

@@ -7,11 +7,16 @@ namespace AnimaNative.Figures;
 public sealed record FinaleBlock(string Id, string Kind, string? Role, double ElapsedS, double DurationS)
 {
     public string Alt { get; init; } = "";
+    /// <summary><c>tempo</c>: clip seconds per real second, 0.2..1 (null when the row lacks it = 1).</summary>
+    public double? Tempo { get; init; }
 }
-/// <summary>A locally played finale, timed in real frame seconds, independently of the action underneath.</summary>
+/// <summary>A locally played finale: <c>T</c> CLIP seconds into a finale of <c>Duration</c> REAL seconds played at
+/// <c>Tempo</c> (the whole finale is <c>Duration · Tempo</c> clip seconds), independently of the action underneath.</summary>
 public sealed record FinalePlay(string Id, string Kind, string? Role, double T, double Duration)
 {
     public string Alt { get; init; } = "";
+    /// <summary>Clip seconds per real second, 0.2..1.</summary>
+    public double Tempo { get; init; } = 1;
     public string Base => ClipLibraryRules.IndexName(Kind, Role);
     public string Clip => ClipLibraryRules.IndexName(Kind, Role, Alt);
     public string? ResolveClip(Func<string, bool> usable) => ClipLibraryRules.SelectClip(Clip, Base, usable);
@@ -34,17 +39,21 @@ public static class FinaleClip
             play = new FinalePlay(block.Id, block.Kind, IsRole(block.Role) ? block.Role : null, 0, block.DurationS)
             {
                 Alt = IsRole(block.Role) && AltName.IsMatch(block.Alt) ? block.Alt : "",
+                Tempo = PairClip.ClipTempo(block.Tempo),
             };
         return (play, block.Id);
     }
 
-    /// <summary>Advance unless frozen, end at duration, and cap the sampled time one millisecond before the end.</summary>
+    /// <summary>Advance by <c>dt · tempo</c> clip seconds unless frozen, end at the whole finale's clip length
+    /// (<c>Duration · Tempo</c>: its real length at that tempo), and cap the sampled time one millisecond before it.</summary>
     public static (FinalePlay? Play, string? Clip, string? Base, double T) Step(FinalePlay? play, double dt, bool frozen)
     {
         if (play is null) return (null, null, null, 0);
-        double t = play.T + (frozen || !(dt > 0) ? 0 : dt);
-        if (t >= play.Duration) return (null, null, null, 0);
+        double tempo = play.Tempo > 0 ? play.Tempo : 1;
+        double t = play.T + (frozen || !(dt > 0) ? 0 : dt * tempo);
+        double total = play.Duration * tempo;
+        if (t >= total) return (null, null, null, 0);
         return (play with { T = t }, play.Clip, play.Base,
-                Math.Min(t, play.Duration - 1e-3));
+                Math.Min(t, total - 1e-3));
     }
 }

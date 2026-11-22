@@ -18,7 +18,7 @@ namespace AnimaNative.Tests;
 ///   TS fn                   C#                                     shape translation
 ///   pairClipValue           PairClip.Phase                         (PairClipInput, 'clipT' | 'phase')
 ///   pairSnapS               PairClip.SnapS
-///   pairFrames              PairClip.Phase per frame               local clock += dt while rate &gt; 0, written back
+///   pairFrames              PairClip.Phase per frame               each frame as Dt (no server value), clock written back
 ///   isPairClipName          PairClip.IsPairClipName
 ///   extractPairRootPath     PairClip.ExtractRootPath (/100)        tracks {name, times, values} → {times, xz}
 ///   pairRootPathValue       BridgeTravel.RootPathAt                ({times, xz}, t, 'x' | 'z')
@@ -43,8 +43,9 @@ internal static class PairVectorAdapters
     public static PairClipInput Input(JsonNode? node)
     {
         var o = (JsonObject)node!;
-        return new PairClipInput(NumOpt(o, "elapsedGameS"), N(o["rate"]), o["loop"]!.GetValue<bool>(), N(o["clipDurationS"]),
-                                 NumOpt(o, "localClipT"), NumOpt(o, "snapS"));
+        return new PairClipInput(NumOpt(o, "clipS"), NumOpt(o, "tempo") ?? 1, o["frozen"]?.GetValue<bool>() ?? false,
+                                 o["loop"]!.GetValue<bool>(), N(o["clipDurationS"]), NumOpt(o, "localClipT"), NumOpt(o, "snapS"),
+                                 NumOpt(o, "dt") ?? 0);
     }
 
     public static JsonNode? Field((double ClipT, double Phase) r, JsonNode? field) => Str(field) switch
@@ -138,8 +139,7 @@ internal static class PairVectorAdapters
             (double ClipT, double Phase) result = default;
             foreach (var dt in (JsonArray)a[1]!)
             {
-                input = input with { LocalClipT = input.LocalClipT + (input.Rate > 0 ? N(dt) : 0) };
-                result = PairClip.Phase(input);
+                result = PairClip.Phase(input with { Dt = N(dt) });
                 input = input with { LocalClipT = result.ClipT };
             }
             return Field(result, a[2]);
@@ -252,14 +252,17 @@ public class FigureNormalisationVectorTests
 /// </summary>
 public class PairPlayTests
 {
+    /// <summary>A row whose clip clock is <paramref name="clipS"/> (default: the elapsed — rate-1 rows, where they agree).</summary>
     private static PairInteraction Row(string id = "p1", double elapsed = 3, double rate = 1, bool loop = true, double dur = 2,
-                                       string role = "a", double ax = 10, double az = 22, double yaw = 0)
-        => new(id, "greeting-hug", role, new Dictionary<string, string> { ["a"] = "A", ["b"] = "B" }, new PairAnchor(ax, az, yaw, null), elapsed, dur, loop, rate);
+                                       string role = "a", double ax = 10, double az = 22, double yaw = 0,
+                                       double? clipS = null, double? tempo = null)
+        => new(id, "greeting-hug", role, new Dictionary<string, string> { ["a"] = "A", ["b"] = "B" }, new PairAnchor(ax, az, yaw, null), elapsed, dur, loop, rate)
+        { ClipS = clipS ?? elapsed, Tempo = PairClip.ClipTempo(tempo) };
 
     [Fact]
     public void AdoptionTakesTheServerClockAndKeepsItBetweenPolls()
     {
-        // A new id: clipT = elapsed / rate = 3 / 1 = 3; fresh.
+        // A new id: clipT = clip_s = 3; fresh.
         var p = PairPlay.Adopt(null, Row(), 1, out bool fresh)!;
         Assert.True(fresh);
         Assert.Equal("greeting-hug__a", p.Clip);
@@ -296,11 +299,60 @@ public class PairPlayTests
         for (int i = 0; i < 5; i++) p.Advance(0.1);
         Assert.Equal(1, p.ClipT, 12);
         Assert.Equal(1, p.Elapsed, 12);
-        // rate 2: the game clock runs twice as fast, the CLIP clock in real time (E1): 0.5 s → elapsed +1, clipT +0.5.
+        // rate 2: the game clock runs twice as fast, the CLIP clock in real time at tempo 1 (E1): 0.5 s → elapsed +1, clipT +0.5.
         PairPlay.Adopt(p, Row(elapsed: 1, rate: 2), 1, out _);
         for (int i = 0; i < 5; i++) p.Advance(0.1);
         Assert.Equal(1.5, p.ClipT, 12);
         Assert.Equal(2, p.Elapsed, 12);
+    }
+
+    [Fact]
+    public void TheClipClockRunsAtTheSceneTempo()
+    {
+        // clip_s 2, tempo 0.5: adopted at 2; ten frames of 0.1 s add 1 · 0.5 → 2.5; in a 2 s cycle the phase is 0.5.
+        var p = PairPlay.Adopt(null, Row(clipS: 2, tempo: 0.5), 1, out _)!;
+        Assert.Equal(0.5, p.Tempo, 12);
+        double phase = 0;
+        for (int i = 0; i < 10; i++) phase = p.Advance(0.1);
+        Assert.Equal(2.5, p.ClipT, 12);
+        Assert.Equal(0.5, phase, 12);
+        // A new poll, same id: the tempo is taken at once; clip_s 2.7 is 0.2 off → kept, 3.0 is 0.5 off → snapped.
+        PairPlay.Adopt(p, Row(clipS: 2.7, tempo: 1), 2, out _);
+        Assert.Equal(1, p.Tempo, 12);
+        Assert.Equal(2.5, p.ClipT, 12);
+        PairPlay.Adopt(p, Row(clipS: 3.0, tempo: 1), 3, out _);
+        Assert.Equal(3.0, p.ClipT, 12);
+        // Frozen (rate 0): ten frames add nothing.
+        PairPlay.Adopt(p, Row(clipS: 3.0, rate: 0), 3, out _);
+        for (int i = 0; i < 10; i++) p.Advance(0.1);
+        Assert.Equal(3.0, p.ClipT, 12);
+        // The tempo is clamped: 5 → 1, 0.05 → 0.2, none → 1 (one 1 s frame each from 0).
+        foreach (var (tempo, expected) in new[] { (5.0, 1.0), (0.05, 0.2) })
+        {
+            var q = PairPlay.Adopt(null, Row(id: $"t{tempo}", clipS: 0, tempo: tempo), 1, out _)!;
+            q.Advance(1);
+            Assert.Equal(expected, q.ClipT, 12);
+        }
+        // A pose switch (same id, another clip) is adopted whole from the new clip_s 0; the blend stays.
+        p.Blend = (new PairPose(1, 2, 3, 0), 4);
+        var switched = PairPlay.Adopt(p, Row(clipS: 0) with { Kind = "greeting-handshake" }, 4, out bool fresh)!;
+        Assert.True(fresh);
+        Assert.Equal(0, switched.ClipT, 12);
+        Assert.Equal(p.Blend, switched.Blend);
+    }
+
+    [Fact]
+    public void WorldmapRowCarriesClipClockAndTempo()
+    {
+        using var map = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new { characters = new[] {
+            new { name = "B", interaction = new { id = "p1", kind = "greeting-hug", role = "b", alt = "",
+                anchor = new { x = 10, z = 22, yaw = 0 }, elapsed_s = 9, clip_s = 1.25, tempo = 0.5, rate = 1, loop = true, clip_duration_s = 2 } }
+        }}));
+        var it = CharacterRow.ParseList(map.RootElement)[0].Interaction!;
+        Assert.Equal(1.25, it.ClipS);
+        Assert.Equal(0.5, it.Tempo, 12);
+        // The clip clock is clip_s, never elapsed / rate: adopted at 1.25.
+        Assert.Equal(1.25, PairPlay.Adopt(null, it, 1, out _)!.ClipT, 12);
     }
 
     [Fact]
@@ -325,7 +377,7 @@ public class PairPlayTests
     {
         using var map = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new { characters = new[] {
             new { name = "B", interaction = new { id = "p1", kind = "greeting-hug", role = "b", alt,
-                anchor = new { x = 10, z = 22, yaw = 0 }, elapsed_s = 3, rate = 1, loop = true, clip_duration_s = 2 } }
+                anchor = new { x = 10, z = 22, yaw = 0 }, elapsed_s = 3, clip_s = 3, rate = 1, loop = true, clip_duration_s = 2 } }
         }}));
         var row = CharacterRow.ParseList(map.RootElement)[0];
         var play = PairPlay.Adopt(null, row.Interaction, 1, out _)!;

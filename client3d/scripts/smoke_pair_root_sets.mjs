@@ -92,7 +92,7 @@ function place(height) {
     labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
     waypoints: [], ride: null, route: null, travelling: false, reckon: null,
     interaction: {id: 'p1', clip: 'handshake__a', base: 'handshake__a', anchor: {x: 10, z: 22, yaw: Math.PI / 2, placeId: null},
-      elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, stamp: 0},
+      elapsed: 0, clipT: 0, clipDuration: 2, loop: true, rate: 1, tempo: 1, stamp: 0},
     activity: '', travelLine: null, travelKey: '', bobPhase: 0, settle: null,
   };
   mgr.npcs.set('A', npc);

@@ -387,6 +387,12 @@ export interface MapInteraction {
   loop_count?: number | null;
   /** GAME seconds per REAL second right now (0 = frozen world) */
   rate: number;
+  /** the scene's clip clock: CLIP seconds since this clip began (a pose
+   *  switch starts it at 0), every second at the tempo it ran at — what the
+   *  clip is seeked to; advance it by dt · `tempo` (0 frozen) between polls */
+  clip_s?: number;
+  /** clip seconds per REAL second, 0.2..1 (1 = the clip's own speed) */
+  tempo?: number;
   /** the ALT half this figure plays instead of its role's own (G6): the clip
    *  is `<kind>__<role>~<alt>`; "" or missing = the role's own half */
   alt?: string;

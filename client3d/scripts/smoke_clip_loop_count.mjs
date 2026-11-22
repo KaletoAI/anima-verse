@@ -123,7 +123,7 @@ close(r.obj.position.x, 1.0, 'spell held');
 
 // [4]
 const pair = (clipT, loop, loopCount) => {
-  const { phase, cycling } = pairClipPhase({ elapsedGameS: clipT, rate: 1, loop, loopCount, clipDurationS: 2.0 });
+  const { phase, cycling } = pairClipPhase({ clipS: clipT, tempo: 1, frozen: false, loop, loopCount, clipDurationS: 2.0 });
   return [Math.round(phase * 1e6) / 1e6, cycling];
 };
 assert.deepEqual(pair(1.0, true, 3), [1.0, true]);

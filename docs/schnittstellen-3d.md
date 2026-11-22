@@ -2968,7 +2968,7 @@ Bild (s. u.).
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
   "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "loop_count": null,
-  "rate": 1.0, "alt": ""
+  "rate": 1.0, "clip_s": 0.8, "tempo": 1.0, "alt": ""
 }
 ```
 `members` = Rolle → Name ALLER Beteiligten, die eigene Figur eingeschlossen
@@ -2983,13 +2983,31 @@ Realsekunde (0 = Freeze), `clip_duration_s` die eigene Länge des Clips aus
 seinem Sidecar und `loop` sein Kennzeichen (Poses-Tab → Library, E5),
 `loop_count` die Wiederholungen eines Loops (`null` = endlos, beim Einmal-Clip
 immer `null`; beim Start der Interaktion aus dem Sidecar übernommen). Ein
-Ende-Feld gibt es NICHT.
+Ende-Feld gibt es NICHT. `clip_s` ist die CLIP-Uhr der laufenden Szene
+(`pose_scene.clip_clock`, Plan Paar-Szene Task 4): Clipsekunden seit Beginn
+DIESES Clips, `tempo` das Abspieltempo 0.2..1 (Clipsekunden pro Realsekunde,
+1 = Eigentempo des Clips). Eine Uhr pro Szene — Szenen-Id = Interaktions-Id,
+bei einem Möbel-Paar die `execution_id` seines Laufs —, beide Figuren lesen
+also dieselben Zahlen.
 
-**Der Clip läuft in ECHTZEIT** — unabhängig vom Spieluhr-Faktor, genau wie ein
-Solo-Clip. Der Client leitet die Clip-Phase als `elapsed_s / rate` her (das
-sind REALsekunden seit dem Start) und zählt zwischen zwei Polls mit der realen
-Frame-Zeit weiter; sein Mixer läuft immer mit `timeScale 1`. `rate = 0` friert
-die Phase ein (kein Serverwert zum Teilen, die lokale Phase bleibt stehen).
+**Der Clip läuft in ECHTZEIT, im Tempo der Szene** — unabhängig vom
+Spieluhr-Faktor. Der Server integriert die Clip-Uhr bei jedem Beat und jedem
+Payload-Lesen: `clip_s += Δ(reale, nicht eingefrorene Sekunden) · tempo` (das
+Tempo VOR dem Schritt; Grundlage ist die Bewegungsuhr `motion_time`, ein Freeze
+hält sie an). Das Tempo erneuert jeder Beat aus dem Provider
+`scene.tempo(scene_id, members, roles, pose_key, lead_role) -> float | None`,
+geklemmt auf [0.2, 1]; ohne Provider oder Antwort 1. Ein Posenwechsel (gleiche
+Id, neue Pose bzw. neuer Clip) startet die Uhr bei 0 und behält das Tempo. Die
+Uhr lebt im Serverprozess: eine Szene, die er zum ersten Mal sieht (Start oder
+erster Zugriff nach einem Serverstart), zählt ab 0.
+Der Client übernimmt `clip_s` bei einer neuen Interaktion (bzw. einem neuen
+Clip derselben Id — der Übergang wird dabei NICHT neu gestartet), zählt
+zwischen zwei Polls mit `dt · tempo` weiter (`rate = 0`: gar nicht) und
+schnappt bei einem neuen Poll nur, wenn `clip_s` mehr als `PAIR_SNAP_S` (0,3
+Clipsekunden) abweicht — auch eingefroren, denn die Serveruhr steht dann mit.
+Sein Mixer läuft zwischen den Seeks mit `timeScale = tempo` (eingefroren 0).
+`elapsed_s`/`rate` bleiben für alles andere im Block; die Clip-Phase leitet
+niemand mehr daraus ab.
 Ein Loop-Clip wiederholt sich (`Phase mod clip_duration_s`), ein Einmal-Clip
 hält sein letztes Bild (`min(Phase, clip_duration_s)`), ein gezählter Loop
 (`loop_count` N) wiederholt sich N-mal und hält dann sein letztes Bild — ab
@@ -2998,7 +3016,8 @@ die ersten N−1 Durchläufe und spielt den letzten als Einmal-Clip, damit er ni
 für ein Bild auf den Anfang springt (`pairClip.ts` → `cycling`). Die Spieluhr entscheidet
 also nur, WO der Clip bei einem Poll steht und ob er überhaupt weiterläuft.
 Regel und handgerechnete Zahlen: `client3d/src/game/pairClip.ts` +
-`client3d/scripts/smoke_pair_realtime.mjs`.
+`client3d/scripts/smoke_pair_realtime.mjs` + `client3d/scripts/smoke_pair_clip_tempo.mjs`
+(Server: `scripts/smoke_pose_scene_tempo.py`); native `Core/Figures/PairClip.cs`.
 
 Daneben `place: {id, slot, x, z, facing?, room_id} | null` — der Platz
 (Raum- oder Prop-Marker, plan-posen-plaetze.md § 4), auf den der Server die
@@ -3088,16 +3107,18 @@ freien Paars (`scene_id` = Interaktions-ID). Der Charakter-Eintrag trägt dann
 Abschluss gilt die Zahl, ob der Clip loopt oder nicht (Poses → Clip-Bibliothek zeigt das Feld „Times played as
 a finale“ auch ohne Loop-Schalter); sonst einen — auch ein Loop-Clip OHNE Zahl spielt einen, denn ein Abschluss
 endet immer. Der Server rechnet `duration_s = Cliplänge × N / tempo` und hält Feld, Sperre und das Paket (das an `duration_s − elapsed_s`
-das Ende der Aktion knüpft) an dieser Länge fest. Der Client teilt `duration_s` in N gleiche Durchläufe, seekt
-die Zeit IM Durchlauf und lässt den Mixer bis zum vorletzten wiederholen; den letzten spielt er als Einmal-Clip,
-der sein Ende hält (`finaleClip.ts` → `stepFinale().loop`).
+das Ende der Aktion knüpft) an dieser Länge fest. Der Client spielt den Abschluss im `tempo` des Felds: seine Uhr
+zählt CLIPsekunden (`dt · tempo`), der ganze Abschluss ist `duration_s · tempo` = Cliplänge × N Clipsekunden
+lang, jeder der N gleichen Durchläufe also genau eine Cliplänge (real `Cliplänge / tempo`); sein Mixer läuft mit
+`timeScale = tempo`. Er seekt die Zeit IM Durchlauf und lässt den Mixer bis zum vorletzten wiederholen; den
+letzten spielt er als Einmal-Clip, der sein Ende hält (`finaleClip.ts` → `stepFinale().loop`).
 
 Der Client spielt den Abschluss **einmal pro `id`, von vorn, sobald er das Feld zum ersten Mal sieht** — die
 Clips dauern um eine Sekunde, ein Poll alle 3 s: ein Abspielen ab `elapsed_s` zeigte meist nichts, und ein
 Versatz von bis zu einem Poll zwischen zwei Clients fällt bei einem Einmal-Clip nicht auf. Paar: die Hälfte
 `role` des Paars `kind` am Anker der laufenden Aktion (`interaction.anchor`, Wurzel aus der Abschluss-Hälfte wie
 in § A8a); Solo: der Clip `kind` (Set-Kette der Figur) an ihrem Platz. Danach zurück in den Clip der Aktion,
-dessen Phase aus `interaction.elapsed_s` bzw. der Platz-Pose unverändert weitergelaufen ist. Der Partner bleibt
+dessen Phase aus `interaction.clip_s` bzw. der Platz-Pose unverändert weitergelaufen ist. Der Partner bleibt
 in seiner Schleife — der Abschluss gehört nur einer Person. Die Uhr des Clients für den Clip läuft auf der
 Frame-Zeit und steht in einer eingefrorenen Welt wie die Paar-Uhr daneben; der Server zählt `elapsed_s` und das
 Anzeigefenster in Systemzeit. Fehlt der Figur der Clip, entfällt der Abschluss — nie die Aktion. Endet die Aktion (kein `interaction`/`place` mehr), endet auch
@@ -6102,7 +6123,8 @@ sie produziert.
 | `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Seeufer-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
-| `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| `client3d/scripts/smoke_pair_clip_tempo.mjs` | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge) |
 | `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
 | `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |

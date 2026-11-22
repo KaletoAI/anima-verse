@@ -169,13 +169,15 @@ public sealed record CharacterRow(
         if (!c.TryGetProperty("finale", out var f) || f.ValueKind != JsonValueKind.Object) return null;
         string role = Json.Str(f, "role");
         return new FinaleBlock(Json.Str(f, "id"), Json.Str(f, "kind"), FinaleClip.IsRole(role) ? role : null,
-                               Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0) { Alt = Json.Str(f, "alt") };
+                               Json.NumOrNull(f, "elapsed_s") ?? 0, Json.NumOrNull(f, "duration_s") ?? 0)
+        { Alt = Json.Str(f, "alt"), Tempo = Json.NumOrNull(f, "tempo") };
     }
 
     /// <summary>
     /// § A8a <c>interaction</c> as npcs.ts <c>adoptInteraction</c> reads it: no block or no <c>anchor</c> = none;
     /// <c>rate ?? 0</c>, <c>clip_duration_s ?? 0</c>, <c>!!loop</c>, <c>anchor.place_id ?? null</c>; a missing
-    /// <c>elapsed_s</c> is NaN (the browser's <c>undefined</c>: no server clock to adopt).
+    /// <c>elapsed_s</c> is NaN (the browser's <c>undefined</c>); a missing <c>clip_s</c> is null (no server clip clock to
+    /// adopt), a missing <c>tempo</c> 1.
     /// </summary>
     private static PairInteraction? ParseInteraction(JsonElement c)
     {
@@ -186,7 +188,8 @@ public sealed record CharacterRow(
         return new PairInteraction(Json.Str(it, "id"), Json.Str(it, "kind"), Json.Str(it, "role"), ParseMembers(it),
                                    new PairAnchor(Json.Num(a, "x"), Json.Num(a, "z"), Json.Num(a, "yaw"), place),
                                    Json.NumOrNull(it, "elapsed_s") ?? double.NaN, Json.NumOrNull(it, "clip_duration_s") ?? 0,
-                                   loop, Json.NumOrNull(it, "rate") ?? 0) { Alt = Json.Str(it, "alt") };
+                                   loop, Json.NumOrNull(it, "rate") ?? 0)
+        { Alt = Json.Str(it, "alt"), ClipS = Json.NumOrNull(it, "clip_s"), Tempo = PairClip.ClipTempo(Json.NumOrNull(it, "tempo")) };
     }
 }
 

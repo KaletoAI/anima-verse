@@ -686,8 +686,9 @@ public partial class Figure : Node3D
     public string FinaleStartedId { get; set; } = "";
 
     /// <summary>
-    /// <c>playPair(clipName, t, frozen, loop)</c>: play the half of a PAIR clip at the clip time <paramref name="t"/> (REAL
-    /// seconds, the phase <see cref="PairClip.Phase"/> derived). The pair takes the body over: a running bridge ends HERE
+    /// <c>playPair(clipName, t, frozen, loop, speed)</c>: play the half of a PAIR clip at the clip time <paramref name="t"/>
+    /// (CLIP seconds, the phase <see cref="PairClip.Phase"/> derived); between seeks the player runs at
+    /// <paramref name="speed"/> (the scene's tempo or a finale's, 0.2..1). The pair takes the body over: a running bridge ends HERE
     /// (its clip fades out), the ground drop is 0. The time is wrapped (cycle) or clamped a millisecond short of the end
     /// (one-shot) against the length the loaded clip has; a new half starts with the 0.25 s fade at that time, the same
     /// half re-seeks only when its own time drifted more than <see cref="PairClip.ResyncS"/> (measured on the circle for
@@ -695,7 +696,7 @@ public partial class Figure : Node3D
     /// A finale supplies <paramref name="frameStep"/> for exact frame sampling and <paramref name="restart"/> for a new id.
     /// </summary>
     public bool PlayPair(string clipName, double t, bool frozen, bool loop, string? surfaceGroup = null, bool restart = false,
-                         double? frameStep = null)
+                         double? frameStep = null, double speed = 1)
     {
         if (Player is not { } p || !HasAction(clipName) || !EnsureClip(clipName)) return false;
         ReleaseBridge();
@@ -735,7 +736,7 @@ public partial class Figure : Node3D
         }
         CurrentPace = 1;
         _finaleClip = false;
-        p.SpeedScale = frozen ? 0 : 1;
+        p.SpeedScale = frozen ? 0 : (float)speed;
         return true;
     }
 

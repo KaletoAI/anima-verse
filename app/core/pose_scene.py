@@ -24,6 +24,16 @@ Neither engine keeps a copy of what lives here (plan pair scene, Task 3):
   number of REAL seconds after that person's finale has fully played.
 - the METERS row and HOLD (providers ``scene.meters`` / ``scene.meter_hold``)
   and the alt half a member plays (:func:`set_alt`).
+- the TEMPO and the CLIP CLOCK: per scene one clock in CLIP seconds,
+  ``clip_s += Δreal_unfrozen · tempo`` (the tempo before the step) on every
+  beat and every payload read (:func:`clip_clock`). The tempo is refreshed on
+  each beat from the provider ``scene.tempo(scene_id, members, roles,
+  pose_key, lead_role) -> float | None``, clamped to [0.2, 1]; 1 without a
+  provider or an answer. A pose switch (same scene, new pose) restarts the
+  clock at 0 and keeps the tempo. Animation time is REAL time: the clock runs
+  on the motion clock, so a frozen world stops it. It lives in this process:
+  a scene first seen (its start, or the first touch after a server start)
+  counts from 0.
 """
 import math
 import uuid
@@ -32,7 +42,7 @@ from threading import Lock
 
 from app.core.game_time import GameTime
 from app.core.log import get_logger
-from app.core.timeutils import game_speed_factor, game_time, utc_now
+from app.core.timeutils import game_speed_factor, game_time, motion_time, utc_now
 
 logger = get_logger("pose_scene")
 
@@ -57,6 +67,9 @@ _finales = {}
 _pending_ends = {}
 #: free scene id -> {"game": GameTime of its last beat, "real": utc of it}
 _beats = {}
+#: scene id -> its clip clock {clip_s, tempo, motion: motion_time of the last
+#: step, clip: what the payload last named it plays (None = not yet)}
+_clocks = {}
 #: The game time of this process's first step (:func:`advance`): a free scene
 #: started before it gets no credit for the time the server was down.
 _boot = {"game": None}
@@ -318,12 +331,14 @@ def finale_for(name: str) -> dict | None:
 
 
 def end_finales(scene_id=None, *, expired_only=False):
-    """Drops the finales of one scene (its end) or every expired one; the
-    ``scene.finale_done(scene_id, name, kind, pose_key)`` events fire after
-    the locks."""
+    """Drops the finales of one scene (its end — its clip clock goes too) or
+    every expired one; the ``scene.finale_done(scene_id, name, kind,
+    pose_key)`` events fire after the locks."""
     from app.core.keyed_lock import _after_locks
     from app.core.hooks import emit
     with _mutex:
+        if scene_id is not None and not expired_only:
+            _clocks.pop(scene_id, None)
         done = [(name, f) for name, f in _finales.items()
                 if (scene_id is None or f["scene_id"] == scene_id)
                 and not (expired_only and _finale_live(f))]
@@ -529,17 +544,96 @@ def meters(scene_id: str, name: str = "") -> list:
                       _free_since_s(scene_id, inter, game_time()))
 
 
+# ---------------------------------------------------------------- tempo / clip clock
+
+def _step_clock(scene_id, clip=None):
+    """Integrates the clip clock of ``scene_id`` up to now and returns a
+    copy. ``clip`` (the payload's name of what the clients play) restarts
+    the clock at 0 when it differs from the one stored — a pose switch; a
+    beat passes None and never judges it (the payload knows the clip)."""
+    now = motion_time()
+    with _mutex:
+        clock = _clocks.get(scene_id)
+        if clock is None:
+            clock = _clocks[scene_id] = dict(clip_s=0.0, tempo=TEMPO_MAX, motion=now, clip=clip)
+        elif clip is not None and clock["clip"] is not None and clock["clip"] != clip:
+            clock.update(clip_s=0.0, motion=now, clip=clip)
+        else:
+            clock["clip_s"] += max(0.0, now - clock["motion"]) * clock["tempo"]
+            clock["motion"] = now
+            if clip is not None:
+                clock["clip"] = clip
+        return dict(clock)
+
+
+def clip_clock(scene_id: str, clip: str) -> tuple:
+    """``(clip_s, tempo)`` of a running scene as the worldmap's
+    ``interaction`` block states it (§ A8a): the clip clock stepped up to now
+    (CLIP seconds since the clip began, every second at the tempo it ran at)
+    and the tempo it runs at now. ``clip`` names what the clients play
+    (pose and clip kind); a different one than last time is a pose switch and
+    starts at 0."""
+    clock = _step_clock(scene_id, clip)
+    return round(clock["clip_s"], 3), round(clock["tempo"], 3)
+
+
+def scene_tempo(scene_id, members, roles, pose_key, lead_role) -> float:
+    """The tempo a package gives the scene now (provider ``scene.tempo``),
+    clamped to [0.2, 1]; 1 without a provider, without an answer or when it
+    fails."""
+    from app.core.hooks import get_provider
+    provider = get_provider("scene.tempo")
+    if provider is None:
+        return TEMPO_MAX
+    try:
+        answer = provider(scene_id=scene_id, members=list(members), roles=dict(roles or {}),
+                          pose_key=pose_key, lead_role=lead_role)
+    except Exception as exc:
+        logger.debug("scene.tempo provider failed for %s: %s", scene_id, exc)
+        return TEMPO_MAX
+    return clamp_tempo(answer) if answer is not None else TEMPO_MAX
+
+
+def _beat_tempo(beat):
+    """A beat steps the scene's clip clock at the old tempo, then takes the new one."""
+    _step_clock(beat["scene_id"])
+    tempo = scene_tempo(beat["scene_id"], beat["members"], beat["roles"], beat["pose_key"],
+                        beat["lead_role"])
+    with _mutex:
+        clock = _clocks.get(beat["scene_id"])
+        if clock is not None:
+            clock["tempo"] = tempo
+
+
+def _prune_clocks(free_ids):
+    """Drops the clocks of scenes that no longer run (a free scene that is
+    gone, a furniture run that ended or vanished)."""
+    from app.core import prop_action_store as store
+    with _mutex:
+        ids = [scene_id for scene_id in _clocks if scene_id not in free_ids]
+    for scene_id in ids:
+        run = _furniture_run(scene_id)
+        if run is None or run["status"] in store.TERMINAL:
+            with _mutex:
+                _clocks.pop(scene_id, None)
+
+
 # ---------------------------------------------------------------- beats
 
 def emit_active(*, scene_id, kind, members, roles, pose_key, delta_game_s, readouts=None):
-    """Fires ``scene.active`` for one scene after every lock is released."""
+    """Fires ``scene.active`` for one scene after every lock is released —
+    first stepping its clip clock and refreshing its tempo (provider
+    ``scene.tempo``, asked outside every lock)."""
     from app.core.hooks import emit
     from app.core.keyed_lock import _after_locks
     from app.core.pose_catalog import lead_role_of
     beat = dict(scene_id=scene_id, kind=kind, members=list(members), roles=dict(roles or {}),
                 pose_key=pose_key, lead_role=lead_role_of(pose_key),
                 delta_game_s=delta_game_s, readouts=list(readouts or []))
-    _after_locks(lambda: emit("scene.active", **beat))
+    def fire():
+        _beat_tempo(beat)
+        emit("scene.active", **beat)
+    _after_locks(fire)
 
 
 def _baseline(scene_id, inter):
@@ -599,6 +693,7 @@ def advance(now: GameTime, *, due_only: bool = False) -> int:
     with _mutex:
         for gone in set(_beats) - set(scenes):
             _beats.pop(gone, None)
+    _prune_clocks(set(scenes))
     if is_world_frozen():
         return 0
     real_now = utc_now()

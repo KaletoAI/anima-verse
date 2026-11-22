@@ -67,6 +67,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 3.2,
+    "clip_s": 3.2,
     "clip_duration_s": 3.533,
     "loop": false,
     "rate": 1
@@ -97,6 +98,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 3.2,
+    "clip_s": 3.2,
     "clip_duration_s": 3.533,
     "loop": false,
     "rate": 1
@@ -127,6 +129,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 2.0,
+    "clip_s": 2.0,
     "clip_duration_s": 4.033,
     "loop": true,
     "rate": 0
@@ -157,6 +160,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 2.0,
+    "clip_s": 2.0,
     "clip_duration_s": 4.033,
     "loop": true,
     "rate": 0
@@ -187,6 +191,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:05",
     "elapsed_s": 0.0,
+    "clip_s": 0.0,
     "clip_duration_s": 3.533,
     "loop": false,
     "rate": 1
@@ -217,6 +222,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:05",
     "elapsed_s": 0.0,
+    "clip_s": 0.0,
     "clip_duration_s": 3.533,
     "loop": false,
     "rate": 1
@@ -247,6 +253,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 0.0,
+    "clip_s": 0.0,
     "clip_duration_s": 4.833,
     "loop": true,
     "rate": 1
@@ -277,6 +284,7 @@
     },
     "started_at_game": "Y0001-D001T08:00:00",
     "elapsed_s": 0.0,
+    "clip_s": 0.0,
     "clip_duration_s": 4.833,
     "loop": true,
     "rate": 1

@@ -6,7 +6,7 @@ import type { SyncCounters } from '../game/perfstats';
 import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, pairBlendOrigin, BLEND_S, type PairPose } from '../game/pairBlend';
-import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
+import { PAIR_SNAP_S, clipTempo, pairClipPhase } from '../game/pairClip';
 import { adoptFinale, stepFinale, type FinalePlay } from '../game/finaleClip';
 import { handBackYaw, entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
@@ -249,9 +249,9 @@ export interface TravelRoute {
 }
 
 /** A pair interaction as the renderer runs it (§ A8a): the anchor the two
- *  halves are placed at, and ONE number — the clip clock in REAL seconds —
- *  advanced locally with the frame time and reconciled against each new poll
- *  (`game/pairClip.ts`). */
+ *  halves are placed at, and ONE number — the clip clock in CLIP seconds —
+ *  advanced locally by the frame time × the scene's tempo and reconciled
+ *  against each new poll's `clip_s` (`game/pairClip.ts`). */
 export interface PairPlay {
   blend?: { from: PairPose; at: number };
   id: string;
@@ -269,12 +269,14 @@ export interface PairPlay {
    *  figures stand at its slot height, not on the ground; null = halfway
    *  on the ground. */
   anchor: { x: number; z: number; yaw: number; placeId: string | null };
-  /** interaction time in GAME seconds as of the last poll — what the local
-   *  clip clock is reconciled against; it has no end (E4). */
+  /** interaction time in GAME seconds as of the last poll, advanced by
+   *  dt·rate; it has no end (E4). Not the clip's clock. */
   elapsed: number;
-  /** REAL seconds since the interaction started: the clip's own clock (E1),
-   *  independent of the game-speed factor. */
+  /** CLIP seconds since the clip began: the clip's own clock (E1), advanced
+   *  by dt·tempo, independent of the game-speed factor. */
   clipT: number;
+  /** clip seconds per real second (the scene's `tempo`, 0.2..1) */
+  tempo: number;
   /** the clip's own length — a looping clip replays every clipDuration */
   clipDuration: number;
   loop: boolean;
@@ -1398,12 +1400,13 @@ export class NpcManager {
     return !!this.npcs.get(name)?.interaction;
   }
 
-  /** Take the interaction block of a worldmap row (§ A8a). A new id is a new
-   *  interaction and is adopted whole; the same id keeps the locally advanced
-   *  clip clock and only snaps it when a genuinely NEW poll disagrees by more
-   *  than PAIR_SNAP_S (`game/pairClip.ts` — the server counts game seconds,
-   *  the clip runs in real ones). The rate is authoritative on every update —
-   *  a freeze must stop the mixer at once. */
+  /** Take the interaction block of a worldmap row (§ A8a). A new id (or a
+   *  new clip — a pose switch) is adopted whole from the server's `clip_s`;
+   *  the same id and clip keep the locally advanced clip clock and only snap
+   *  it when a genuinely NEW poll's `clip_s` disagrees by more than
+   *  PAIR_SNAP_S (`game/pairClip.ts`). The same id never restarts the blend.
+   *  Rate and tempo are authoritative on every update — a freeze must stop
+   *  the mixer at once. */
   private adoptInteraction(npc: Npc, st: NpcState) {
     const it = st.interaction;
     if (!it || !it.anchor) {
@@ -1415,6 +1418,7 @@ export class NpcManager {
     const stamp = st.stamp ?? 0;
     if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
       const rate = it.rate ?? 0;
+      const tempo = clipTempo(it.tempo);
       const clipDuration = it.clip_duration_s ?? 0;
       const loop = !!it.loop;
       const loopCount = loop && typeof it.loop_count === 'number' ? it.loop_count : null;
@@ -1429,8 +1433,9 @@ export class NpcManager {
       npc.interaction = {
         blend, id: it.id, kind: it.kind, members: Object.values(it.members ?? {}), clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
-        elapsed: it.elapsed_s, rate, stamp,
-        clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, loopCount, clipDurationS: clipDuration }).clipT,
+        elapsed: it.elapsed_s, rate, tempo, stamp,
+        clipT: pairClipPhase({ clipS: it.clip_s ?? null, tempo, frozen: rate <= 0, loop, loopCount,
+          clipDurationS: clipDuration }).clipT,
         clipDuration, loop, loopCount,
       };
       if (newId) this.pairPreviews.delete(npc.name);
@@ -1444,12 +1449,13 @@ export class NpcManager {
     cur.kind = it.kind;
     cur.members = Object.values(it.members ?? {});
     cur.rate = it.rate ?? 0;
+    cur.tempo = clipTempo(it.tempo);
     cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null };
     if (cur.stamp !== stamp) {
       if (Math.abs(cur.elapsed - it.elapsed_s) > PAIR_SNAP_S) cur.elapsed = it.elapsed_s;
       cur.clipT = pairClipPhase({
-        elapsedGameS: it.elapsed_s, rate: cur.rate, loop: cur.loop, loopCount: cur.loopCount,
-        clipDurationS: cur.clipDuration, localClipT: cur.clipT,
+        clipS: it.clip_s ?? null, tempo: cur.tempo, frozen: cur.rate <= 0, loop: cur.loop,
+        loopCount: cur.loopCount, clipDurationS: cur.clipDuration, localClipT: cur.clipT,
       }).clipT;
       cur.stamp = stamp;
     }
@@ -1460,8 +1466,9 @@ export class NpcManager {
    *  its clip half at the phase `t`. A pair the server seated on a
    *  PLACE (`anchor.placeId`) stands at that place's slot height — the
    *  couple on the sofa, not on the floor under it; the slots of one place
-   *  share their height, so slot 0 stands for the place. The clip time is
-   *  REAL seconds (E1): the game-speed factor only freezes it. Returns false
+   *  share their height, so slot 0 stands for the place. The clip time runs
+   *  in REAL seconds at the scene's tempo (E1): the game-speed factor only
+   *  freezes it. Returns false
    *  when the half is not bound on this rig (or the figure has no rig) — then
    *  the ordinary placement runs, the clip falls back to the activity kind. */
   private tickInteraction(npc: Npc, dt: number, labelVisible: boolean, frozen: boolean, ownAnchor?: PropActionMotion['anchor']): boolean {
@@ -1469,15 +1476,15 @@ export class NpcManager {
     if (!npc.figure || !this.figures) return false;
     // the GAME clock — unbounded, there is nothing to clamp it against
     it.elapsed += dt * it.rate;
-    // the CLIP clock: the frame's real seconds, unscaled — a frozen world
-    // (rate 0) adds nothing and the clip stands where it is.
-    if (it.rate > 0) it.clipT += dt;
+    // the CLIP clock: the frame's real seconds times the scene's tempo — a
+    // frozen world (rate 0) adds nothing and the clip stands where it is.
     // A counted loop repeats its first N−1 cycles and holds the end of the
     // last one (`cycling` false from then on) — that is the mode `playPair` sets.
-    const { phase: loopPhase, cycling } = pairClipPhase({
-      elapsedGameS: null, rate: it.rate, loop: it.loop, loopCount: it.loopCount,
+    const { clipT, phase: loopPhase, cycling } = pairClipPhase({
+      clipS: null, tempo: it.tempo, frozen: it.rate <= 0, dt, loop: it.loop, loopCount: it.loopCount,
       clipDurationS: it.clipDuration, localClipT: it.clipT,
     });
+    it.clipT = clipT;
     // An ALT half (G6) this rig lacks plays as the role's own half — the
     // same anchor and phase, only the motion differs.
     const usable = (name: string, t: number) =>
@@ -1490,7 +1497,10 @@ export class NpcManager {
     // falls back to the role's own.
     let phase = loopPhase;
     let loop = cycling;
+    // the mixer's speed between seeks: the scene's tempo, a finale's own
+    let speed = it.tempo;
     if (npc.finale?.role) {
+      const finaleTempo = npc.finale.tempo;
       const step = stepFinale(npc.finale, dt, it.rate <= 0);
       npc.finale = step.play;
       const closing = step.clip && usable(step.clip, step.t) ? step.clip
@@ -1499,6 +1509,7 @@ export class NpcManager {
         clip = closing;
         phase = step.t;
         loop = step.loop;
+        speed = finaleTempo;
       } else {
         npc.finale = null;
       }
@@ -1513,7 +1524,7 @@ export class NpcManager {
     // bed when the handshake came): its height, turn and travel let go with it.
     const seat = !ownAnchor && it.anchor.placeId
       ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
-    if (!npc.figure.playPair(clip, phase, it.rate <= 0, loop, seat?.group)) return false;
+    if (!npc.figure.playPair(clip, phase, it.rate <= 0, loop, seat?.group, speed)) return false;
     // A bridge travel nobody took yet has no meaning here: the ANCHOR places
     // the figure, absolutely, every frame — kept on the instance it would
     // stand the body beside its anchor for the whole interaction.
@@ -1800,9 +1811,11 @@ export class NpcManager {
       // seeked one here (`finishPropEntry`), so the finale is seeked as well
       // and the held clip comes back from its start once it is over.
       if (!paired && sample.phase === 'arrived' && !motion.cancel && npc.figure) {
+        const finaleTempo = npc.finale?.tempo ?? 1;
         const step = npc.finale && !npc.finale.role ? stepFinale(npc.finale, dt, false) : null;
         if (step) npc.finale = step.play;
-        if (step?.clip && npc.figure.hasClip(step.clip) && npc.figure.playPair(step.clip, step.t, false, step.loop)) {
+        if (step?.clip && npc.figure.hasClip(step.clip)
+            && npc.figure.playPair(step.clip, step.t, false, step.loop, undefined, finaleTempo)) {
           motion.finaleOn = true;
         } else {
           if (step) npc.finale = null;
@@ -2328,6 +2341,7 @@ export class NpcManager {
         // A solo finale (§ A8c) replaces the place pose's clip once; the
         // pose's own clip comes back the frame it is over.
         let finaleClip: string | null = null;
+        const finaleTempo = npc.finale?.tempo ?? 1;
         if (npc.finale && !npc.finale.role) {
           const step = stepFinale(npc.finale, dt, frozen);
           npc.finale = step.play;
@@ -2341,6 +2355,9 @@ export class NpcManager {
             reckoning ? npc.gait === 'run' : dist > RUN_DISTANCE || npc.sprint)
             : finaleClip ?? standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
           moving || standIdle ? 'ground' : npc.surfaceGroup);
+        // the finale's clip runs at its tempo (§ A8c); the pose's own clip,
+        // back the frame it is over, starts at its own speed again
+        if (finaleClip) npc.figure.setClipSpeed(finaleTempo);
         npc.figure.update(dt, { frozen });
       } else if (npc.sprite) {
         if (moving) {

@@ -261,7 +261,7 @@ public static class PairCheck
             NearV("Q84 first sighting holds the initial rendered point at age zero", firstFigure.Position,
                 firstShown.X, firstShown.Y, firstShown.Z, PosTol);
             var interaction = blendRow["interaction"]!.AsObject();
-            interaction["id"] = "task84-frozen"; interaction["rate"] = 0; interaction["elapsed_s"] = 0;
+            interaction["id"] = "task84-frozen"; interaction["rate"] = 0; interaction["elapsed_s"] = 0; interaction["clip_s"] = 0;
             ann.SnapTo(new Vector3(10, 2, 30)); ann.FaceTowards(new Vector3(0, 0, 1), snap: true);
             await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
             mgr.Tick(.2);
@@ -269,7 +269,7 @@ public static class PairCheck
                 (30 + 40 + ra.X) / 2, PosTol);
             NearD("Q84 frozen clip clock stays zero", ann.Pair!.ClipT, 0, 1e-9);
             NearD("Q84 yaw halfway on the shortest arc", ann.Yaw, -Math.PI / 4, 1e-6);
-            interaction["rate"] = 2; interaction["elapsed_s"] = 20;
+            interaction["rate"] = 2; interaction["elapsed_s"] = 20; interaction["clip_s"] = 10;
             interaction["anchor"]!["x"] = 24;
             await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
             mgr.Tick(0);
@@ -281,6 +281,20 @@ public static class PairCheck
             interaction["anchor"]!["x"] = 28;
             await mgr.Apply(JsonSerializer.SerializeToElement(blendMap)); mgr.Tick(0);
             NearD("Q84 same id after completion does not blend again", ann.Position.X, 28, PosTol);
+
+            // Pair scene Task 4: the clip clock and the player run at the scene's tempo. A new poll with clip_s 10 and
+            // tempo 0.5 (the local clock stands within 0.3 s of it: kept); twelve frames of 1/30 s add 12/30 · 0.5 = 0.2
+            // clip s, and the player runs at speed 0.5 between seeks (the handshake is a one-shot long past its end here,
+            // so its own time holds — the speed is what the check reads).
+            interaction["tempo"] = 0.5;
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
+            double tempoFrom = ann.Pair!.ClipT;
+            for (int i = 0; i < 12; i++) mgr.Tick(Dt);
+            NearD("T4 the clip clock advances by dt · tempo", ann.Pair.ClipT, tempoFrom + 12 * Dt * 0.5, 1e-9);
+            NearD("T4 the scene tempo is taken from the row", ann.Pair.Tempo, 0.5, 1e-12);
+            NearD("T4 the player runs at the tempo", ann.Player!.SpeedScale, 0.5, 1e-6);
+            interaction["tempo"] = 1;
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
 
             // Visual invite feedback belongs only to the own avatar; steering wins over late HTTP answers.
             var avatar = f[mgr.AvatarName];
@@ -343,6 +357,8 @@ public static class PairCheck
         NearV("F96 solo stays at its place", gil.Position, soloAt.X, soloAt.Y, soloAt.Z, PosTol);
         double pairT = cy.ClipTime, soloT = gil.ClipTime;
         map["game_rate"] = 0; cyRow["interaction"]!["rate"] = 0; deeRow["interaction"]!["rate"] = 0;
+        // the server's clip clock stopped where the action stands (0.5 + 0.5)
+        cyRow["interaction"]!["clip_s"] = 1; deeRow["interaction"]!["clip_s"] = 1;
         cyRow["finale"]!["elapsed_s"] = 3.2;
         await Poll(); mgr.Tick(.5);
         NearD("F96 frozen pair finale stands", cy.ClipTime, pairT, ClipTol);
@@ -350,6 +366,7 @@ public static class PairCheck
         NearD("F96 frozen action clock stands", cy.Pair.ClipT, 1, 1e-9);
         map["game_rate"] = 1; cyRow["interaction"]!["rate"] = 1; deeRow["interaction"]!["rate"] = 1;
         cyRow["interaction"]!["elapsed_s"] = 1; deeRow["interaction"]!["elapsed_s"] = 1;
+        cyRow["interaction"]!["clip_s"] = 1; deeRow["interaction"]!["clip_s"] = 1;
         await Poll(); mgr.Tick(.5); mgr.Tick(.04);
         Expect("F96 pair returns to action loop", cy.CurrentClip == "greeting-handshake__a", cy.CurrentClip);
         NearD("F96 returned loop has the uninterrupted phase", cy.Pair.ClipT, 1.54, 1e-9);
@@ -475,6 +492,7 @@ public static class PairCheck
             rows[i]!["interaction"]!["kind"] = "greeting-handshake";
             rows[i]!["interaction"]!["alt"] = "missing";
             rows[i]!["interaction"]!["elapsed_s"] = 1;
+            rows[i]!["interaction"]!["clip_s"] = 1;
             rows[i]!["interaction"]!["clip_duration_s"] = 3.533;
             rows[i]!["finale"] = new JsonObject { ["id"] = "alt-finale-112-" + i, ["kind"] = "greeting-hug",
                 ["role"] = i == 0 ? "a" : "b", ["alt"] = i == 0 ? "wave" : "missing", ["elapsed_s"] = .9, ["duration_s"] = 1.033 };

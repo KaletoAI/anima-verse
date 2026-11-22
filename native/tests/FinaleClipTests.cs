@@ -22,6 +22,29 @@ public sealed class FinaleClipTests
     }
 
     [Fact]
+    public void FinalePlaysAtItsTempo()
+    {
+        // The server: clip 1.033 s, 2 cycles, tempo 0.5 → duration_s 1.033 · 2 / 0.5 = 4.132 real s. The play clock counts
+        // CLIP seconds (dt · 0.5); the whole finale is 4.132 · 0.5 = 2.066 clip s.
+        var (play, _) = FinaleClip.Adopt(null, "", Block("t1", 4.132) with { Tempo = 0.5 }, true);
+        Assert.Equal(0.5, play!.Tempo);
+        var step = FinaleClip.Step(play, 1, false);
+        Assert.Equal(.5, step.T, 9);
+        step = FinaleClip.Step(step.Play, 1, true);
+        Assert.Equal(.5, step.T, 9);
+        foreach (var t in new[] { 1.0, 1.5, 2.0 })
+        {
+            step = FinaleClip.Step(step.Play, 1, false);
+            Assert.Equal(t, step.T, 9);
+        }
+        // 4 + 0.2 real s ≥ 4.132: over.
+        Assert.Equal((null, null, null, 0d), FinaleClip.Step(step.Play, .2, false));
+        // Out of range or missing: tempo 1.
+        Assert.Equal(1, FinaleClip.Adopt(null, "", Block("t2") with { Tempo = 5 }, true).Play!.Tempo);
+        Assert.Equal(1, FinaleClip.Adopt(null, "", Block("t3"), true).Play!.Tempo);
+    }
+
+    [Fact]
     public void FramesFreezeAndFinishThenSameIdNeverRestarts()
     {
         var (play, seen) = FinaleClip.Adopt(null, "", Block("f1"), true);

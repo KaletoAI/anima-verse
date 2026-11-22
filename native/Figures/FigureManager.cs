@@ -587,8 +587,9 @@ public partial class FigureManager : Node3D
         => (fig.Finale, fig.FinaleSeen) = FinaleClip.Adopt(fig.Finale, fig.FinaleSeen, row.Finale,
                                                        row.Interaction is not null || row.Place is not null);
 
-    /// <summary>Exact clip lookup, lazy fitting, local clock and one start/skip log. A pending fit keeps frame zero.</summary>
-    private (string Clip, double T, bool Start)? StepFinale(Figure fig, double dt, bool frozen)
+    /// <summary>Exact clip lookup, lazy fitting, local clock and one start/skip log. A pending fit keeps frame zero.
+    /// <c>Speed</c> is the finale's tempo: the player runs at it between seeks.</summary>
+    private (string Clip, double T, bool Start, double Speed)? StepFinale(Figure fig, double dt, bool frozen)
     {
         if (fig.Finale is not { } finale) return null;
         string? clip = finale.ResolveClip(name => fig.HasClip(name)
@@ -611,7 +612,7 @@ public partial class FigureManager : Node3D
             fig.FinaleStartedId = finale.Id;
             _log($"[figures] finale {fig.CharacterName} {finale.Kind} role={finale.Role ?? "null"} id={finale.Id}");
         }
-        return (clip, step.T, start);
+        return (clip, step.T, start, finale.Tempo);
     }
 
     /// <summary>
@@ -833,7 +834,7 @@ public partial class FigureManager : Node3D
         }
         bool run = !reckoning && (player ? fig.Sprint : plan.Dist > NpcWalk.RunDistance);
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
-        (string Clip, double T, bool Start)? finale = null;
+        (string Clip, double T, bool Start, double Speed)? finale = null;
         if (fig.Finale is { Role: null })
         {
             if (plan.Moving) fig.Finale = null;
@@ -842,7 +843,7 @@ public partial class FigureManager : Node3D
         PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : finale?.Clip ?? standingClip,
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY,
                     plan.Moving ? "ground" : fig.SurfaceGroup, finale is not null, finale?.Start ?? false);
-        if (finale is not null && fig.Player is { } finalePlayer) finalePlayer.SpeedScale = WorldFrozen ? 0 : 1;
+        if (finale is { } playing && fig.Player is { } finalePlayer) finalePlayer.SpeedScale = WorldFrozen ? 0 : (float)playing.Speed;
         fig.SecondaryFrozen = WorldFrozen;
         fig.UpdateFigure(finale?.Start == true ? 0 : dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
@@ -851,8 +852,8 @@ public partial class FigureManager : Node3D
     private double PairViewTime => AutoTick ? _source.MonotonicMs / 1000 : _clock;
 
     /// <summary>
-    /// npcs.ts <c>tickInteraction</c>: one frame of a pair interaction — the clock advances (<see cref="PairPlay.Advance"/>),
-    /// the half plays at the phase (<see cref="Figure.PlayPair"/>, which also ends a running bridge; a travel nobody took
+    /// npcs.ts <c>tickInteraction</c>: one frame of a pair interaction — the clock advances (<see cref="PairPlay.Advance"/>,
+    /// dt · tempo), the half plays at the phase and the tempo (<see cref="Figure.PlayPair"/>, which also ends a running bridge; a travel nobody took
     /// is dropped: the ANCHOR places the figure), the root stands at <c>anchor + R_y(yaw)·scaled(pairRootAt(phase))</c> (the half's
     /// root scaled by the figure's size about the clip's contact pivot, <see cref="PairScale.ScaleRoot"/>) at the
     /// place's slot height, else the room's stand, else the ground (<see cref="PairPlay.Place"/>), turned to the anchor's
@@ -866,10 +867,12 @@ public partial class FigureManager : Node3D
         string? clip = it.ResolveClip(name => fig.HasClip(name) && Clips.PairRootAt(name, phase, fig.Sets) is not null);
         bool loop = it.Loop, restart = false;
         double? finaleFrame = null;
+        // the player's speed between seeks: the scene's tempo, a finale's own
+        double speed = it.Tempo;
         if (fig.Finale is { Role: not null } && StepFinale(fig, dt, it.Rate <= 0) is { } finale)
         {
-            clip = finale.Clip; phase = finale.T; loop = false; restart = finale.Start;
-            finaleFrame = restart ? 0 : dt;
+            clip = finale.Clip; phase = finale.T; loop = false; restart = finale.Start; speed = finale.Speed;
+            finaleFrame = restart ? 0 : dt * speed;
         }
         if (clip is null || Clips.PairRootAt(clip, phase, fig.Sets) is not { } unscaled) return false;
         // Owner decision 2026-11-20 (scene-render pairScale.ts): the half's root path was measured for a 1.70 m figure; this
@@ -890,7 +893,7 @@ public partial class FigureManager : Node3D
             && slot.Places.Markers.TryGetValue(placedRow.RoomId, out var markers)
             && markers.TryGetValue(placeId, out var marker) && marker.Slots.Length > 0)
             surfaceGroup = ClipHeightOffsets.Surface(marker.Group);
-        if (!fig.PlayPair(clip, phase, it.Rate <= 0, loop, surfaceGroup, restart, finaleFrame)) return false;
+        if (!fig.PlayPair(clip, phase, it.Rate <= 0, loop, surfaceGroup, restart, finaleFrame, speed)) return false;
         if (fig.HoldsTravel) fig.TakeTravel();
         var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
         var at = it.Place(root, (id, x, z) => ownAnchorY ?? SeatYAt?.Invoke(room, id, x, z),

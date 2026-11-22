@@ -22,14 +22,14 @@ try {
  const npc={name:'avatar',root,figure,target:new THREE.Vector3(),waypoints:[],route:null,ride:null,interaction:null,
   label:{},labelName:{},labelActivity:{},labelBadges:{},travelLine:null,travelKey:''};
  mgr.npcs.set('avatar',npc);
- const state={stamp:1,interaction:{id:'one',kind:'handshake',role:'a',anchor:{x:5,z:7,yaw:2,place_id:'bench'},elapsed_s:0,rate:0,loop:true,clip_duration_s:2}};
+ const state={stamp:1,interaction:{id:'one',kind:'handshake',role:'a',anchor:{x:5,z:7,yaw:2,place_id:'bench'},elapsed_s:0,clip_s:0,tempo:1,rate:0,loop:true,clip_duration_s:2}};
  mgr.adoptInteraction(npc,state);
  assert.deepEqual(root.position.toArray(),[1,2,3]);
  now+=100;mgr.tickInteraction(npc,.1,true,true);
  assert.deepEqual(root.position.toArray(),[1.625,2.625,3.625],'new pair blends rendered position including seat height');
  assert.ok(Math.abs(figure.root.rotation.y-.3125)<1e-9);
  assert.equal(npc.interaction.clipT,0,'frozen clip stays at start while view blends');
- state.stamp++;state.interaction.anchor.x=9;state.interaction.rate=2;state.interaction.elapsed_s=20;
+ state.stamp++;state.interaction.anchor.x=9;state.interaction.rate=2;state.interaction.elapsed_s=20;state.interaction.clip_s=10;
  mgr.adoptInteraction(npc,state);
  now+=100;mgr.tickInteraction(npc,0,true,false);
  assert.deepEqual(root.position.toArray(),[5,4,5],'same id reseek follows moving target without restarting blend');

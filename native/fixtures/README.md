@@ -1579,6 +1579,9 @@ Frames of 1/30 s. The anchor formula (§ A8a): x = ax + rx·cos(yaw) + rz·sin(y
 | Eve Solo (a) / Fay Solo (b) | comforting `cf1`, anchor (30.5, 40), yaw 0, Eve's half missing | Eve on her own point (30, g = 1.5625, 40) with `idle`; Fay (30.8, g = 1.5875, 40) with `comforting__b` |
 | Box Low | free (40, 40) | root (40, g = 1.875, 40), body bottom on it |
 
+Every `interaction` block carries `clip_s` equal to its `elapsed_s` (all fixture rows run at rate 1, or were frozen
+there): the clip clock the renderer adopts and snaps to (§ A8a, pair scene tempo); no `tempo` = 1.
+
 **Poll 2** (stamp 2): the handshake's `elapsed_s` 2.5 for Ann AND Ben (Ben's block arrives now); Cy/Dee 1.6; Gil's
 activity "" (stand). One frame:
 - Ann: |2.0 − 2.5| = 0.5 > 0.3 → snapped; Ben adopts 2.5; both clocks **2.5333**; Ann's player (2.0333) is 0.5 > 0.2

@@ -53,7 +53,7 @@ public class PairAltSelectionTests
     public void AlternativeUsesOwnBaseOnlyWhenUnavailable(bool haveAlt, bool haveBase, string? expected)
     {
         var row = new PairInteraction("p", "group", "e", new Dictionary<string, string>(),
-            new PairAnchor(10, 22, Math.PI / 2, "seat"), 3, 2, true, 1) { Alt = "wave" };
+            new PairAnchor(10, 22, Math.PI / 2, "seat"), 3, 2, true, 1) { Alt = "wave", ClipS = 3 };
         var play = PairPlay.Adopt(null, row, 1, out _)!;
         bool Usable(string name) => name == "group__e~wave" ? haveAlt : name == "group__e" && haveBase;
         Assert.Equal("group__e", play.Base);
@@ -66,7 +66,7 @@ public class PairAltSelectionTests
     [Fact]
     public void SameIdAlternativeChangeRetainsEntryBlend()
     {
-        var row = new PairInteraction("p", "pair", "b", new Dictionary<string, string>(), new PairAnchor(10, 22, 0, null), 3, 2, true, 1);
+        var row = new PairInteraction("p", "pair", "b", new Dictionary<string, string>(), new PairAnchor(10, 22, 0, null), 3, 2, true, 1) { ClipS = 3 };
         var play = PairPlay.Adopt(null, row, 1, out _)!;
         play.Blend = (new PairPose(1, 2, 3, 0), 4);
         var alt = PairPlay.Adopt(play, row with { Alt = "wave" }, 2, out var fresh)!;
