@@ -345,7 +345,27 @@ dress 7, `BUTTON_D_CM`, the disc L* 25 and the rim L* 40 from the fabric; an ope
 front's edge, the holes inside the left's). It is drawn at **assembly** onto the record's atlas
 (`garment_cut_texture.placket_atlas` from `garment_assembly._apply_cut_atlas`; the assembly key gains
 `:placket<PLACKET_VERSION>-<style>-<buttons>`), so switching it is a CPU re-assembly and never changes `csig`
-(`scripts/smoke_cut_texture_placket.py`).
+(`scripts/smoke_cut_texture_placket.py`: `draw_placket` on synthetic arrays, `placket_atlas` on a fixture cut —
+islands + marks + atlas PNG —, the assembly key per placket / button count with `cut_sig` one value, "none" and a
+missing marks file returning the bytes unchanged, lacing's eyelet count). `scripts/e2e_cut_texture.py --set-param
+ITEM.placket='"zip"'` checks it on the served GLB; live 2026-11-22 on Kai's open leather jacket (zip, P-H3 in attempt
+2 after MiniMax's colour 20.3 > 20): a metal band inside each front edge, nothing outside the fronts changed.
+
+Measured 2026-11-22 (copies, CPU):
+
+- **Tilda's cardigan** (open, V, long sleeves over her cream blouse and wool skirt) drapes at stretch_max **1.462**
+  (limit 1.3) — the SAME number with the jacket as a pattern kind, with it kept on the grid UV, and on the code of
+  84feba712 (before phases C / D). The phases are not the cause. The cause is the layer under it: over the blouse's
+  older drape (6baaf8156136, short sleeves, 2026-11-20) the cardigan drapes at 1.206 / 1.18; over its current one
+  (35f3e4eb6b39, `sleeves` "elbow", 0.29 m since 2026-11-21) at 1.462 / 1.396, the worst edge at the cardigan's
+  underarm (x 0.38, z 1.19), whichever skirt lies under it. `JACKET_SLEEVE_EASE` 0.12 and 0.15 instead of 0.10 both
+  still fail (1.369). The live world already holds a refused drape of it (2026-11-20 20:43, 1.509). Open: the jacket
+  sleeve over an elbow-length sleeve under it.
+- **Lirien's dress**: seam index 2 of its record (median ΔE 9.23, the others 2.1-4.4) is one of the two 3-pair
+  front / back seams at the strap tops, not the waist seam (index 5, front / skirt_front, ΔE 2.59). The waist line on
+  the figure is the bodice's lower edge and the skirt part's upper edge — darker rim pixels of the answer and
+  light-green streaks in the bleed between the islands, not a mean colour jump; the straps are jagged and flaps hang
+  at the armpits (drape geometry). It stays "projection" until those are fixed.
 
 **Cut texture.** Both kinds are `HELD_TRIM_KINDS` (fitted family): the model paints the front / back panels (a
 dress's bodice and skirt parts, an open jacket's two fronts); sleeves, neckband and collar are filled with the
