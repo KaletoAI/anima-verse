@@ -259,8 +259,10 @@ from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
 from app.core.view_prompts import (EXTRA_VIEWS, VIEWS, is_view,
-                                   view_subject, view_use_case)
+                                   view_reference_sentence, view_subject,
+                                   view_use_case)
 from app.core.world_ops import _capacity, _place_id, _slot_axis, _spacing
+from app.imagegen.edit_prompt import with_role_sentence
 
 logger = get_logger(__name__)
 
@@ -6681,6 +6683,15 @@ def _render_source(prop_id: str, backend_glob: str,
                             "renders without reference", prop_id, b.name, view)
             else:
                 params["reference_images"] = {"input_reference_image_1": str(front)}
+        # An extra view's slotted front gets its role sentence (edit-prompt
+        # C25) — on the SENT prompt only; ``p`` (stored, shown in the dialog)
+        # stays without it. A FRONT made from another variant's picture says
+        # what changes in its own prompt and gets no sentence here.
+        sent = p
+        if params.get("reference_images") and view != "front":
+            params["reference_roles"] = {"input_reference_image_1": {"role": "view_source",
+                                                                     "label": "the front"}}
+            sent = with_role_sentence(p, view_reference_sentence("object"))
         # The prompt is final here (composed above, or edited in the dialog)
         # — the metablock records the use case, not a fresh compose.
         _log_meta = {"agent_name": f"Prop {prop_id}", "original_prompt": p,
@@ -6691,7 +6702,7 @@ def _render_source(prop_id: str, backend_glob: str,
             # Through the service's ONE handoff — the per-backend channel and
             # the world's media master switch live there.
             return svc.run_on_backend_channel(
-                bb, lambda: bb.generate(p, n, params, log_meta=_log_meta),
+                bb, lambda: bb.generate(sent, n, params, log_meta=_log_meta),
                 task_type=("prop_source" if view == "front" else f"prop_source_{view}"),
                 agent_name="system",
                 label=(f"Prop source: {prop_id}" if view == "front"

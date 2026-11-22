@@ -160,7 +160,7 @@ ANIMAL_VIEW_PROMPT_DEFAULTS = {
 # upper body — back toward the camera. So the text says what the camera DOES
 # see (back of the head, upper back, shoulder blades) and where the head
 # points, instead of the old "face not visible", which named the face itself.
-# "the same figure turned around" speaks to the reference: every extra view
+# "the same figure as in <ref 1>, turned around" names the reference: every extra view
 # slots the main T-pose render (not the frontal profile portrait), so an
 # edit-capable backend turns THAT figure around. The hair follows the
 # reference (2026-10-25, user report): the old "hair clear of the back" made
@@ -170,7 +170,8 @@ ANIMAL_VIEW_PROMPT_DEFAULTS = {
 # needs it in the same place in every view. The hair slot's back_values say
 # where (body slot mesh_input_prompt).
 TPOSE_BACK_PROMPT_DEFAULT = (
-    "the same figure turned around, back view, seen directly from behind, "
+    "the same figure as in <ref 1>, turned around, back view, seen directly "
+    "from behind, "
     "the back of the head, the upper back and the shoulder blades facing the "
     "camera, the head facing straight away from the camera in the same "
     "direction as the body, standing upright in A-pose, arms straight and "
@@ -187,10 +188,11 @@ TPOSE_BACK_PROMPT_DEFAULT = (
 # behind the body, the near arm clear of the torso and NOT foreshortened
 # toward the camera (that was the T-pose profile, whose arm pointed at the
 # lens). The forward failure modes are pushed away in _NEG_TPOSE_SIDE.
-# "the same figure turned sideways" speaks to the reference — like the back
+# "the same figure as in <ref 1>, turned sideways" names the reference — like the back
 # view, a profile slots the main pose render.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
-    "the same figure turned sideways, strict {side} side profile view, the "
+    "the same figure as in <ref 1>, turned sideways, strict {side} side "
+    "profile view, the "
     "whole body in profile facing the {side} edge of the frame, standing "
     "upright in A-pose, the far arm partly hidden behind the body, the near "
     "arm straight and angled down and away from the body, not touching the "
@@ -207,8 +209,8 @@ TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
 # 208 words). Order: subject, identity (bald, the reference's face), view,
 # frame, background, light — everything once.
 FACE_VIEW_PROMPT_DEFAULT = (
-    "a realistic 3D portrait of the head only of the same person as the reference, completely bald with a "
-    "smooth bare scalp, the same eyebrows, eyelashes, skin tone, complexion and makeup as the reference, seen "
+    "a realistic 3D portrait of the head only of the same person as in <ref 1>, completely bald with a "
+    "smooth bare scalp, the same eyebrows, eyelashes, skin tone, complexion and makeup as <ref 1>, seen "
     "straight from the front, looking into the camera, eyes open, mouth closed, neutral relaxed "
     "expression, the face filling most of the frame and the image ending just below the chin, plain neutral "
     "background, relit by soft perfectly uniform colour-neutral ambient light with both halves of the face "
@@ -222,7 +224,7 @@ FACE_VIEW_PROMPT_DEFAULT = (
 # shipped prompt (an admin override without it is used as it is); the
 # negative loses its hair terms (``face_view_drop_negative``).
 FACE_VIEW_BALD = "completely bald with a smooth bare scalp"
-FACE_VIEW_HAIR = "the same hairstyle, hair length and hair colour as the reference"
+FACE_VIEW_HAIR = "the same hairstyle, hair length and hair colour as <ref 1>"
 FACE_VIEW_HAIR_NEGATIVE = ("hair", "bangs", "fringe", "hair strands", "ponytail")
 
 TPOSE_VIEW_PROMPT_DEFAULTS = {

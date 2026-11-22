@@ -572,12 +572,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -652,12 +652,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # would only fight the view.
     "tpose_side": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character's body and hair in side profile on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character's body and hair in side profile on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
@@ -694,19 +694,20 @@ _DEFAULT_IMAGE_USE_CASES = {
     # build): an edit of the profile image — or of an outfit's own reference,
     # the dressed front — whose style opens with the edit instruction of the
     # user's validated hub job c265fd78 ("change the view and position of the
-    # character in the picture to"), then the ``{character}`` block
+    # character in the picture to", since 2026-11-22 "... in <ref 1> to" so the
+    # normaliser names the slot per dialect), then the ``{character}`` block
     # (base_body.edit_character / outfit_edit_character: the head and the
     # body text, never the build words — the picture shows the build), then
     # the framing and lighting clauses of ``base_front``. The pose text
     # follows after a comma. Negatives as ``base_front``.
     "base_front_edit": {
         "keywords": {
-            "prompt_style": "change the view and position of the character in the picture to {character}, full body view, head to toe, both feet and both hands fully inside the frame, empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus, high detail",
+            "prompt_style": "change the view and position of the character in <ref 1> to {character}, full body view, head to toe, both feet and both hands fully inside the frame, empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "",
         },
         "natural": {
-            "prompt_style": "change the view and position of the character in the picture to {character}, the whole figure from head to feet inside the frame with both hands inside it and empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus",
+            "prompt_style": "change the view and position of the character in <ref 1> to {character}, the whole figure from head to feet inside the frame with both hands inside it and empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "",
         },
@@ -745,12 +746,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     "base_side": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of <ref 1>, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },

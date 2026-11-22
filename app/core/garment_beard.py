@@ -43,7 +43,7 @@ logger = get_logger("garment_beard")
 #: Bumped when the edit (prompt, negative, gate meaning) changes: part of the hsig and of the cache key.
 BEARD_FREE_VERSION = 1
 #: The whole edit prompt (short and positive: Qwen re-invents what a long prompt describes).
-PROMPT = "Keep the image exactly as it is. Remove the beard; the chin and cheeks are clean-shaven."
+PROMPT = "Keep <ref 1> exactly as it is. Remove the beard; the chin and cheeks are clean-shaven."
 #: Added to the ``garment_edit`` negative.
 NEGATIVE = "beard, moustache, stubble"
 #: The cached result in the HairDeck job folder (``garment_store.hairdeck_dir``).

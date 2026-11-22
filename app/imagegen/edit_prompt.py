@@ -536,6 +536,20 @@ def mark_refs(prompt: str, roles: Optional[Dict[str, Dict[str, str]]]) -> str:
     return text
 
 
+def with_role_sentence(prompt: str, sentence: str) -> str:
+    """``prompt`` with ``sentence`` (a role sentence that says what a slotted picture is for, ``<ref N>`` in it) as its
+    last sentence — once: a prompt that already ends with it comes back unchanged. The caller appends it only to the
+    prompt it SENDS with that picture slotted; the stored prompt stays without it (``strip_refs`` form), so a dialog
+    that sends a stored prompt back never carries the sentence twice."""
+    body = (prompt or "").rstrip()
+    sentence = sentence.strip()
+    if not sentence or body.endswith(sentence):
+        return prompt
+    if not body:
+        return sentence
+    return f"{body if body[-1] in '.!?' else body + '.'} {sentence}"
+
+
 # ---------------------------------------------------------------------------------------------------- structured
 
 

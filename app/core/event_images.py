@@ -38,8 +38,12 @@ from typing import Any, Dict, Optional
 
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
+from app.imagegen.edit_prompt import with_role_sentence
 
 logger = get_logger("event_images")
+
+#: The role sentence of the location background an event image slots (edit-prompt C25): the event happens THERE.
+EVENT_PLACE_SENTENCE = "It happens in the place shown in <ref 1>: keep its layout and architecture."
 
 
 # ---------------------------------------------------------------------------
@@ -305,8 +309,12 @@ def _do_generate(event_id: str,
         }
         # The location background as the reference — where the backend has
         # a slot for it.
+        sent = composed.prompt
         if int(getattr(b, "ref_slot_count", 0) or 0) >= 1:
             params["reference_images"] = {"input_reference_image_1": str(bg_path)}
+            params["reference_roles"] = {"input_reference_image_1": {"role": "room", "label": "the place"}}
+            # Its role sentence (edit-prompt C25), on the sent prompt only.
+            sent = with_role_sentence(composed.prompt, EVENT_PLACE_SENTENCE)
         _log_meta = {"agent_name": f"Event {event_id}",
                      "original_prompt": image_prompt, "auto_enhance": False,
                      "compose": composed.meta,
@@ -316,7 +324,7 @@ def _do_generate(event_id: str,
             # EVERY backend goes through the backend's GPU channel — two
             # generations must never run in parallel on one backend.
             return svc.run_on_backend_channel(
-                bb, lambda: bb.generate(composed.prompt, composed.negative, params,
+                bb, lambda: bb.generate(sent, composed.negative, params,
                                         log_meta=_log_meta),
                 task_type="event_image", agent_name="system",
                 label=f"Event: {event_id}{' (after)' if resolved else ''}")

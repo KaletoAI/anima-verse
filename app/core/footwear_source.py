@@ -94,7 +94,7 @@ TARGET_TRIS = 60000
 FACE_NUM = 100000
 #: The edit instruction. The exclusion clause comes LAST: the composer's negation guard moves only that clause
 #: (``foot``, ``leg``) into the negative prompt and keeps the instruction before it positive.
-EMPTY_PROMPT = ("the same shoe, alone and empty, seen exactly from the side, toe pointing to the left, "
+EMPTY_PROMPT = ("the same shoe as in <ref 1>, alone and empty, seen exactly from the side, toe pointing to the left, "
                 "plain white background, no foot or leg")
 ITEM_STEPS: Tuple[str, ...] = ("source", "empty", "cutout", "mesh", "insole")
 #: Square crop around the shoe in the cut-out (``garment_images.CUTOUT_PAD``).

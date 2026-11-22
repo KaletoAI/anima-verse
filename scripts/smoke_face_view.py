@@ -100,7 +100,7 @@ def render_contract(refs, profile, sig, meta):
             # ... and the reference's skin tone and makeup kept (user, same day: "white
             # light / matte / albedo" made the face pale and stripped the makeup).
             assert 'perfectly uniform' in payload['prompt'] and 'colour-neutral ambient light' in payload['prompt']
-            assert 'skin tone' in payload['prompt'] and 'makeup as the reference' in payload['prompt']
+            assert 'skin tone' in payload['prompt'] and 'makeup as <ref 1>' in payload['prompt']
             assert all(w not in payload['prompt'] for w in ('no shadows', 'white', 'albedo', 'matte'))
             # The reference's own side light is not inherited (user: light from the right).
             assert 'relit by soft perfectly uniform' in payload['prompt'] and 'equally bright' in payload['prompt']

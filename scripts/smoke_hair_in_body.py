@@ -73,9 +73,10 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      The clothing worn negative: "a blue shirt" -> the garment terms with
      "hair" last; with keep_hair no "hair".
      Face view: Long's prompt has "the same hairstyle, hair length and hair
-     colour as the reference" in place of "completely bald with a smooth bare
+     colour as <ref 1>" in place of "completely bald with a smooth bare
      scalp", and the drop list is (hair, bangs, fringe, hair strands,
-     ponytail); Deck's prompt = the start hash's FACE_VIEW_PROMPT_DEFAULT,
+     ponytail); Deck's prompt = the start hash's FACE_VIEW_PROMPT_DEFAULT
+     with "the reference" written "<ref 1>" (edit-prompt stage 4, 2026-11-22),
      drop list (). resolve_negative_prompt with the drop list on "hair,
      bangs, fringe, hair strands, ponytail, hat, cap" -> "hat, cap"; an
      explicit negative_prompt is kept as it is; without a drop list the output
@@ -337,10 +338,14 @@ def main() -> int:
         check("worn negative keep_hair", garment_clothing._worn_negative("a blue shirt", keep_hair=True),
               "loose clothing, baggy, skirt, dress, jacket, shoes, socks")
 
+        # Edit-prompt stage 4 (2026-11-22): the face view names its picture "<ref 1>" where the start hash said
+        # "the reference" — the one wording change since then.
         old_face = old_names("app/core/model_refs.py", {"FACE_VIEW_PROMPT_DEFAULT"})["FACE_VIEW_PROMPT_DEFAULT"]
+        old_face = old_face.replace("same person as the reference", "same person as in <ref 1>").replace(
+            "makeup as the reference", "makeup as <ref 1>")
         check("Long face prompt", model_refs.get_face_view_prompt("Long"),
               old_face.replace("completely bald with a smooth bare scalp",
-                               "the same hairstyle, hair length and hair colour as the reference"))
+                               "the same hairstyle, hair length and hair colour as <ref 1>"))
         check("Long face drop", model_refs.face_view_drop_negative("Long"),
               ("hair", "bangs", "fringe", "hair strands", "ponytail"))
         check(f"Deck face == {START}", (model_refs.get_face_view_prompt("Deck"),

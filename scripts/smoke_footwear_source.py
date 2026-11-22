@@ -51,7 +51,7 @@ Expected, by hand:
      drops out -> 1.0.
      -> accepted at attempt 1: 1 edit call, occasion "footwear_empty", has_ref True, pool = svc.pool,
      params seed 0*1000 + 1 = 1, reference_images {"input_reference_image_1": <upscaled.png>}, the prompt
-     carries the use case style "product photo, single shoe" and "the same shoe, alone and empty";
+     carries the use case style "product photo, single shoe" and "the same shoe as in <ref 1>, alone and empty";
      empty.try1.png + .json written, empty.png = the try; record routing.position 1.
      Item R = worn(1) with the stub answering worn(4) both times -> leg both times -> refused after
      exactly 2 calls (seeds 1, 2), run_source {ok False, step "empty"}, record empty accepted False with
@@ -342,7 +342,7 @@ def main():
                   (2, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 60000, 100000,
                    ("source", "empty", "cutout", "mesh", "insole")))
             check("EMPTY_PROMPT", fs.EMPTY_PROMPT,
-                  "the same shoe, alone and empty, seen exactly from the side, "
+                  "the same shoe as in <ref 1>, alone and empty, seen exactly from the side, "
                   "toe pointing to the left, plain white background, no foot or leg")
 
             print("[S9] item_dir safety")
@@ -391,7 +391,7 @@ def main():
                                      "skipped" in rec), (True, 1, None, False))
             check("A step_done empty", fs.step_done("shoe_a", ssig_a, "empty"), True)
             check("A prompt", edit.calls[-1]["prompt"],
-                  "product photo, single shoe, plain white background, even studio light, the same shoe, "
+                  "product photo, single shoe, plain white background, even studio light, the same shoe as in <ref 1>, "
                   "alone and empty, seen exactly from the side, toe pointing to the left, plain white background")
             check("A negative", edit.calls[-1]["negative"],
                   "foot, leg, skin, person, pair of shoes, second shoe, shadow clutter")
@@ -429,7 +429,7 @@ def main():
             check("W reference", call["params"].get("reference_images"),
                   {"input_reference_image_1": str(dw / "upscaled.png")})
             check("W prompt style", "product photo, single shoe" in call["prompt"], True)
-            check("W prompt subject", "the same shoe, alone and empty" in call["prompt"], True)
+            check("W prompt subject", "the same shoe as in <ref 1>, alone and empty" in call["prompt"], True)
             rec = fs.step_record("shoe_w", ssig_w, "empty")
             check("W empty record", (rec.get("accepted"), len(rec.get("attempts") or []),
                                      (rec.get("routing") or {}).get("position")), (True, 1, 1))

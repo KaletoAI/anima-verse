@@ -19,6 +19,7 @@ from app.core import scene_recipe
 from app.core.scatter_curves import curve_map, tessellate
 from app.core.world_geometry import polygon_plan_width_m, polygon_signed_area
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+from app.imagegen.edit_prompt import with_role_sentence
 
 if TYPE_CHECKING:  # type-only — the composer is imported where it is used
     from app.core.prompt_compose import ShapeHint
@@ -3596,6 +3597,17 @@ def gallery_use_case(location: Dict[str, Any], room_id: str,
     return "location"
 
 
+#: What a building-view use case shows, for the role sentence of its slotted front
+#: (``view_prompts.view_reference_sentence``) — longest prefix first.
+_VIEW_NOUNS = (("room_model_outdoor", "open-air area"), ("room_model", "set piece"),
+               ("building_outdoor", "outdoor scene"), ("building", "building"))
+
+
+def _view_noun(use_case: str) -> str:
+    """The noun of ``use_case`` in ``_VIEW_NOUNS`` ("subject" for any other)."""
+    return next((noun for prefix, noun in _VIEW_NOUNS if (use_case or "").startswith(prefix)), "subject")
+
+
 def is_outdoor_room(location: Dict[str, Any], room_id: str) -> bool:
     """Indoor/outdoor of a room (falls back to the location's own flag)."""
     from app.models.world import resolve_indoor_flag
@@ -3947,10 +3959,18 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     if _front_path.exists():
                         params["reference_images"] = {
                             "input_reference_image_1": str(_front_path)}
+                        params["reference_roles"] = {"input_reference_image_1": {
+                            "role": "view_source", "label": "the front"}}
                         logger.info("Front reference in slot 1 for %s view: %s",
                                     _view, _front_ref)
                     else:
                         logger.warning("front_reference missing: %s", _front_ref)
+            # The slotted front gets its role sentence (edit-prompt C25) — on
+            # the SENT prompt only; the stored gallery prompt stays without it.
+            sent_prompt = full_prompt
+            if (params.get("reference_roles") or {}).get("input_reference_image_1", {}).get("role") == "view_source":
+                from app.core.view_prompts import view_reference_sentence
+                sent_prompt = with_role_sentence(full_prompt, view_reference_sentence(_view_noun(_uc_name)))
             # Context for the CENTRAL logging in backend.generate() (final
             # prompt, backend, model, LoRAs, refs and duration are set there).
             _log_meta = {"agent_name": _agent, "original_prompt": prompt,
@@ -3969,7 +3989,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                                            provider=bb.name)
                     except Exception:
                         pass
-                    return bb.generate(full_prompt, negative, params, log_meta=_log_meta)
+                    return bb.generate(sent_prompt, negative, params, log_meta=_log_meta)
                 return img_skill.run_on_backend_channel(bb, _gen, task_type="image_gen",
                                                         agent_name=_agent)
             images, used = img_skill.run_on_backend(b, op=_op)
@@ -4108,6 +4128,12 @@ _TIME_VARIANT_CLAUSES = {
 }
 
 
+#: The role sentence of the day/night variant's source image (edit-prompt C25):
+#: the picture is the edit's canvas, only the light changes.
+TIME_VARIANT_KEEP = ("Keep the layout, every building and object, and the camera angle of <ref 1> exactly as "
+                     "they are; change only the time of day and the light.")
+
+
 async def generate_time_variant_core(location_name: str, image_name: str,
                                      target_type: str, backend_name: str,
                                      custom_prompt: str) -> Dict[str, Any]:
@@ -4221,6 +4247,11 @@ async def generate_time_variant_core(location_name: str, image_name: str,
         params = {"width": _location_image_width(), "height": _location_image_height(),
                   "seed": _rnd.randint(1, 2**31 - 1),
                   "reference_images": {"input_reference_image_1": str(source_path)}}
+        params["reference_roles"] = {"input_reference_image_1": {"role": "canvas",
+                                                                 "label": "the place"}}
+        # The source image's role sentence (edit-prompt C25) — on the SENT
+        # prompt only; the stored gallery prompt stays without it.
+        sent_prompt = with_role_sentence(composed.prompt, TIME_VARIANT_KEEP)
         _log_meta = {"agent_name": _agent, "original_prompt": prompt,
                      "auto_enhance": False, "compose": composed.meta}
 
@@ -4234,7 +4265,7 @@ async def generate_time_variant_core(location_name: str, image_name: str,
                                        provider=bb.name)
                 except Exception:
                     pass
-                return bb.generate(composed.prompt, composed.negative, params,
+                return bb.generate(sent_prompt, composed.negative, params,
                                    log_meta=_log_meta)
             return img_skill.run_on_backend_channel(bb, _gen, task_type="image_gen",
                                                     agent_name=_agent)

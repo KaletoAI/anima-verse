@@ -23,8 +23,10 @@ Expected, by hand (subject -> cleaned, moved, inline):
      ["foot", "leg"]; cleaned = the subject without it: "the same shoe, alone
      and empty, seen exactly from the side, toe pointing to the left, plain
      white background"; inline [].
-[N2] the same with the clause LAST (footwear_source.EMPTY_PROMPT): same
-     cleaned text, moved ["foot", "leg"].
+[N2] the same with the clause LAST: same cleaned text, moved ["foot", "leg"].
+     footwear_source.EMPTY_PROMPT is that text with its picture named ("the
+     same shoe as in <ref 1>, …", edit-prompt stage 4) and the clause last;
+     split -> the token stays in the positive, moved ["foot", "leg"].
 [N3] "A cozy kitchen, no tables, no chairs." -> two clauses, moved
      ["tables", "chairs"], cleaned "A cozy kitchen." (the terminator kept).
 [N4] "A cozy kitchen. Ohne Tische und Stühle." -> the second sentence IS a
@@ -61,7 +63,9 @@ def main():
           (positive, ["foot", "leg"], []))
     check("[N2] negation last", split_negations(positive + ", no foot or leg"), (positive, ["foot", "leg"], []))
     from app.core.footwear_source import EMPTY_PROMPT
-    check("[N2] EMPTY_PROMPT ends with the exclusion clause", EMPTY_PROMPT, positive + ", no foot or leg")
+    named = positive.replace("the same shoe,", "the same shoe as in <ref 1>,", 1)
+    check("[N2] EMPTY_PROMPT ends with the exclusion clause", EMPTY_PROMPT, named + ", no foot or leg")
+    check("[N2] EMPTY_PROMPT split keeps the picture token", split_negations(EMPTY_PROMPT), (named, ["foot", "leg"], []))
     check("[N3] two clauses", split_negations("A cozy kitchen, no tables, no chairs."),
           ("A cozy kitchen.", ["tables", "chairs"], []))
     check("[N4] negation sentence", split_negations("A cozy kitchen. Ohne Tische und Stühle."),

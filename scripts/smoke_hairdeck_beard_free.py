@@ -37,7 +37,7 @@ EXPECTED VALUES, DERIVED BY HAND
        outside_dRGB > 7 (the stripes swap in the hair) -> refused with both reasons.
     c. the unchanged picture -> beard_dRGB 0.0 < 4 -> refused "beard not removed".
 [4] beard_free_input (job folder F): cached(F, P) None first; one render call with bare_prompt = PROMPT =
-    "Keep the image exactly as it is. Remove the beard; the chin and cheeks are clean-shaven.",
+    "Keep <ref 1> exactly as it is. Remove the beard; the chin and cheeks are clean-shaven.",
     extra_negative "beard, moustache, stubble", occasion "garment_view", image_use_case "garment_edit",
     character_loras False, postprocess False, 640×640 -> accepted, F/beard_free.png, record {accepted True,
     version 1, source_sha256 = sha256(P), attempt 1}. Again: no render call (cache by sha), same path.
@@ -231,7 +231,7 @@ def main() -> int:
 
         # --- [4] edit + cache -------------------------------------------------------
         print("[4] beard_free_input")
-        check("prompt", gb.PROMPT, "Keep the image exactly as it is. Remove the beard; the chin and cheeks are "
+        check("prompt", gb.PROMPT, "Keep <ref 1> exactly as it is. Remove the beard; the chin and cheeks are "
                                    "clean-shaven.")
         pics = root / "pics"
         pics.mkdir()

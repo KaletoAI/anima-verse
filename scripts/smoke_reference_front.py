@@ -16,7 +16,7 @@ RGBA picture, transparent but for one opaque pixel); ``DemoBare`` the same witho
 base_signature(Demo).
 
 Expected, derived by hand from the user's decisions (brief of Ruling A74b) and the validated hub job c265fd78
-(prompt: "change the view and position of the character in the picture to " + the bald head + the body text +
+(prompt: "change the view and position of the character in <ref 1> to " + the bald head + the body text +
 the base front's framing/light tail + the pose text; no gender, age, height or build words):
 
 [1] The service gate. A payload with ``require_reference`` and a reference override:
@@ -37,7 +37,7 @@ the base front's framing/light tail + the pose text; no gender, age, height or b
     hair; no post-process edit text) — so no "female", no "30 years old", no "average height", no
     "athletic build" in it. The composed natural-family prompt (config.join_style_prompt over the use case's
     style with that block, then the pose text) starts with
-    "change the view and position of the character in the picture to " + BALD_HEAD + ", " + SAME_FACE_BODY +
+    "change the view and position of the character in <ref 1> to " + BALD_HEAD + ", " + SAME_FACE_BODY +
     ", natural matte look" +
     ", the whole figure from head to feet inside the frame with both hands inside it and empty margin above
     the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure
@@ -78,7 +78,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OLD = "d1ca15228"
-PREFIX = "change the view and position of the character in the picture to "
+PREFIX = "change the view and position of the character in <ref 1> to "
 FAILS = []
 OUTBOUND = []
 

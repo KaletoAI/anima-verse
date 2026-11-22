@@ -53,6 +53,18 @@ def view_prefix(view: str) -> str:
     return _VIEW_PREFIX[view]
 
 
+#: The role sentence of an extra view that slots the FRONT render as its appearance reference (edit-prompt C25):
+#: what that picture is for. Appended to the SENT prompt only (``edit_prompt.with_role_sentence``); ``<ref 1>`` is
+#: rendered per backend ("the image" on a one-slot ordinal backend such as Flux).
+VIEW_REFERENCE_SENTENCE = ("<ref 1> shows the same {noun} from the front: keep its shape, proportions, materials and "
+                           "colours.")
+
+
+def view_reference_sentence(noun: str) -> str:
+    """``VIEW_REFERENCE_SENTENCE`` for ``noun`` ("object", "building", …)."""
+    return VIEW_REFERENCE_SENTENCE.format(noun=(noun or "subject").strip())
+
+
 def view_subject(view: str, subject: str) -> str:
     """``subject`` with the view phrase in front of it — the front unchanged."""
     prefix = view_prefix(view)

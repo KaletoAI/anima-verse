@@ -149,7 +149,11 @@ frag text — an unfilled placeholder drops the fragment.
     render around) changed on purpose — and the T-pose pose constants of model_refs.py at
     bda7bd17 (TPOSE_PROMPT_DEFAULT, TPOSE_VIEW_PROMPT_DEFAULTS, read from the
     old source by exec of their assignments) equal today's. A tpose payload
-    without "style_character" joins as f"{style} {prompt}".
+    without "style_character" joins as f"{style} {prompt}". The one wording
+    change since then is the edit-prompt token (stage 4, 2026-11-22): "of the
+    reference image" -> "of <ref 1>" in the tpose styles and "the same figure
+    turned" -> "the same figure as in <ref 1>, turned" in the two view texts;
+    ``before_ref_tokens`` writes those two back, everything else compares as it is.
 """
 import json
 import os
@@ -261,6 +265,21 @@ def final_prompt(config, use_case, family, block, prompt):
     """What ImageService.generate_on_backend sends for a caller-built render."""
     style = config.get_use_case_prompts(use_case, family, clothed=False, character=block)["prompt_style"]
     return config.join_style_prompt(style, prompt, block) if style else prompt
+
+
+#: Edit-prompt stage 4 (2026-11-22): today's token wording -> the wording of before, for the comparisons of [13].
+_REF_TOKEN_WORDING = (("of <ref 1>", "of the reference image"),
+                      ("the same figure as in <ref 1>, turned", "the same figure turned"))
+
+
+def before_ref_tokens(value):
+    """``value`` (a str, or a dict of them) with ``_REF_TOKEN_WORDING`` written back."""
+    if isinstance(value, dict):
+        return {k: before_ref_tokens(v) for k, v in value.items()}
+    if isinstance(value, str):
+        for new, old in _REF_TOKEN_WORDING:
+            value = value.replace(new, old)
+    return value
 
 
 def old_source(path: str) -> str:
@@ -533,11 +552,12 @@ def main() -> int:
         diffs = [(uc, fam, clothed) for uc in old_ucs for fam in ("natural", "keywords") for clothed in (True, False)
                  if uc not in ("face_view", "profile", "tpose_back", "tpose_side")
                  and old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
-                 != config.get_use_case_prompts(uc, fam, clothed=clothed)]
+                 != before_ref_tokens(config.get_use_case_prompts(uc, fam, clothed=clothed))]
         check("every other old use case resolves byte-identically", diffs, [])
         a29 = [(uc, fam) for uc in ("tpose_back", "tpose_side") for fam in ("natural", "keywords")
                if {k: v for k, v in old_cfg.get_use_case_prompts(uc, fam).items() if k != "prompt_instruction"}
-               != {k: v for k, v in config.get_use_case_prompts(uc, fam).items() if k != "prompt_instruction"}]
+               != {k: before_ref_tokens(v) for k, v in config.get_use_case_prompts(uc, fam).items()
+                   if k != "prompt_instruction"}]
         check("tpose_back / tpose_side: only the instruction changed (Ruling A29)", a29, [])
         import ast
         tree = ast.parse(old_source("app/core/model_refs.py"))
@@ -549,12 +569,13 @@ def main() -> int:
             if isinstance(node, ast.Assign) and any(getattr(t, "id", "") in wanted for t in node.targets):
                 exec(compile(ast.Module([node], []), "model_refs_" + BEFORE, "exec"), old_ns)
         check("old pose constants read", sorted(old_ns.keys() - {"__builtins__"}), sorted(wanted))
-        check("T-pose pose texts unchanged", [old_ns[k] == getattr(model_refs, k) for k in wanted],
+        check("T-pose pose texts unchanged", [old_ns[k] == before_ref_tokens(getattr(model_refs, k)) for k in wanted],
               [True] * len(wanted))
         style = config.get_use_case_prompts("tpose", "natural", clothed=False)["prompt_style"]
         old_style = old_cfg.get_use_case_prompts("tpose", "natural", clothed=False)["prompt_style"]
         tpose_prompt = model_refs.get_tpose_prompt()
-        check("tpose join: the old style, a comma, the pose", config.join_style_prompt(style, tpose_prompt, None),
+        check("tpose join: the old style, a comma, the pose",
+              before_ref_tokens(config.join_style_prompt(style, tpose_prompt, None)),
               f"{old_style}, {tpose_prompt}")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")

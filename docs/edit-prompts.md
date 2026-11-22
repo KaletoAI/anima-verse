@@ -6,7 +6,11 @@ Status (2026-11-21, branch `eprompt`, base `7fc7c386d`): **Phase 1 and Phase 2 i
 frontend build), the overview's dialect column in `static/admin/settings.js`, C13 (an admin
 action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_backend path) and C17–C19 (re-renders, scene view, pose check; the
 secret-diary pack line of C18 is a patch for the private repo) landed on branch `chatimg` (§4), and so did C11's other loops
-and C12 (§7, smoke `scripts/smoke_gate_attempt_entries.py`).
+and C12 (§7, smoke `scripts/smoke_gate_attempt_entries.py`). Phase 4 landed on `chatimg` 2026-11-22 as far as it does
+not age stored work: C22 (T-pose back/side and face-view texts), C23 for `garment_beard` and `footwear_source`, C24 for the
+tpose/tpose_side/base_side styles and `base_front_edit`, and C25 in full (role sentences on the SENT prompt only; smoke
+`scripts/smoke_world_ref_roles.py`). Every change had a same-seed, same-reference A/B on its routed local backend, none
+was worse. Left as they are on purpose (see §8 Phase 4 note): C21, the fingerprinted parts of C23, the profile style of C24.
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -246,6 +250,18 @@ Phases; each one ends with its smokes green.
 | C24 | `config.py:642/647/657/662/1032` use-case styles "the reference image" | `<ref 1>` |
 | C25 | `props.py:6644`, `world_ops.py:3911-3944/:4204`, `event_images.py:309` | a short role sentence through `EditPrompt` (back/side view of `<ref 1>`; time variant of `<ref 1>`; event in the place of `<ref 1>`) — each needs its own A/B before it goes live |
 | C26 | the anatomy pack's base-front cleanup text (private repo) | wording check only there |
+
+Phase 4 status (2026-11-22): **done** — C22 (except `TPOSE_REFERENCE_HAIR_CLAUSE`), C23 `garment_beard.PROMPT` +
+`footwear_source.EMPTY_PROMPT`, C24 tpose/tpose_side/base_side "of <ref 1>" and base_front_edit "the character in <ref 1>",
+C25 (`edit_prompt.with_role_sentence`: props back/side + building/room views → `view_reference_sentence(noun)`, day/night
+variant → `world_ops.TIME_VARIANT_KEEP`, event → `event_images.EVENT_PLACE_SENTENCE`; the stored prompt stays
+token-free; a variant FRONT made from another variant gets no sentence). **Not changed, on purpose:** C21 base_body
+texts, `TPOSE_REFERENCE_HAIR_CLAUSE`, `base_skin` SKIN_KEEP, `shell_base_views` KEEP, `garment_template_views`
+BACK_LINE and the garment draft texts — all of them are part of a stored fingerprint or are compared with stored
+records, so a reword would mark every built base/garment as outdated (rulings A111/A155: wording must not age
+anything); on the 1-slot Qwen/Flux backends they route to, "the picture/the image" is already what the engine reads.
+The profile style (`config.py` "lit as in the reference image") stays because a profile renders without a reference
+too, and the normaliser would then drop the clause from every txt2img profile.
 
 Not affected (no prompt or no reference): `generate_video`, `upscale_image`, `generate_face_retexture`, `generate_hair`, `generate_mesh*`, `generate_rig`, `openai_motion_transition`, every txt2img path.
 
