@@ -64,6 +64,9 @@ CLAMP_DE = 25.0
 #: fabric (``colour_match`` ``base``); the erosion before the bleed also takes a soft shading band inside the outline
 #: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20).
 POST_VERSION = 10
+#: The version of ``draw_placket``'s painting: part of the assembly key of a piece with a placket (it is drawn onto
+#: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job).
+PLACKET_VERSION = 1
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -1071,3 +1074,229 @@ def seam_continuity(atlas, seams) -> dict:
     return {"median": round(float(np.median(de)), 3),
             "per_seam": {k: round(float(np.median(v)), 3) for k, v in sorted(per.items())},
             "pairs": len(seams)}
+
+
+# ------------------------------------------------------------------------------------------------------------ placket
+
+#: Plan group B, B10-B13 (phase C): what closes a front is painted by code into the composed atlas along the cut's
+#: ``marks.json`` lines — never a pattern piece, never the model's. Button pitch for an automatic count, button
+#: diameter and the placket's width per kind (cm); a lapel jacket has no placket band (buttons only).
+BUTTON_PITCH_CM = {"top": 7.0, "dress": 7.0, "jacket": 10.0}
+BUTTON_D_CM = {"top": 1.1, "dress": 1.1, "jacket": 1.8}
+PLACKET_W_CM = {"top": 3.0, "dress": 3.0, "jacket": 3.0}
+#: B13: a button's disc is the fabric's L* moved by BUTTON_DL (darker on a light fabric, L* >= 50; lighter on a dark
+#: one), its rim by BUTTON_RIM_DL; two holes in the rim's L*, 0.22 of the diameter apart. The placket's edges are
+#: stitch lines STITCH_DL darker / lighter, 1 px wide.
+BUTTON_DL = 25.0
+BUTTON_RIM_DL = 40.0
+STITCH_DL = 12.0
+#: A zip: a ZIP_W_CM wide metal band of L* ZIP_L (a* = b* = 0), teeth across it every ZIP_TOOTH_CM (L* +-10), a pull
+#: ZIP_PULL_CM (w x h) at its top.
+ZIP_W_CM = 0.8
+ZIP_L = 60.0
+ZIP_TOOTH_CM = 0.25
+ZIP_PULL_CM = (1.0, 2.2)
+#: Lacing: eyelet pairs LACE_HALF_CM either side of the line every LACE_PITCH_CM, the cord crossing between them
+#: (L* +-LACE_DL), eyelets LACE_EYE_CM across with a metal ring.
+LACE_HALF_CM = 1.2
+LACE_PITCH_CM = 2.5
+LACE_DL = 30.0
+LACE_EYE_CM = 0.5
+
+
+def _polyline(px) -> tuple[np.ndarray, np.ndarray]:
+    """A line's points (x, y) and the cumulative arc length at each."""
+    p = np.asarray(px, np.float64).reshape(-1, 2)
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
+    return p, s
+
+
+def _at(p: np.ndarray, s: np.ndarray, t: float) -> tuple[np.ndarray, np.ndarray]:
+    """The point at arc length ``t`` and the unit tangent there."""
+    t = float(min(max(t, 0.0), s[-1]))
+    k = int(min(max(np.searchsorted(s, t, side="right") - 1, 0), len(p) - 2))
+    seg = p[k + 1] - p[k]
+    ln = float(np.linalg.norm(seg)) or 1.0
+    return p[k] + seg * ((t - s[k]) / ln), seg / ln
+
+
+def _shade(base_lab, dl: float) -> np.ndarray:
+    """``base_lab`` with L* moved by ``dl`` away from the fabric (darker when L* >= 50) as sRGB uint8."""
+    lab = np.asarray(base_lab, np.float64).copy()
+    lab[0] = float(np.clip(lab[0] - dl if lab[0] >= 50.0 else lab[0] + dl, 0.0, 100.0))
+    return np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
+
+
+def button_colours(base_lab) -> dict:
+    """B13: the disc and the rim of a button on a fabric of ``base_lab`` -> {"disc": L*, "rim": L*, sRGB both}."""
+    disc, rim = _shade(base_lab, BUTTON_DL), _shade(base_lab, BUTTON_RIM_DL)
+    return {"disc": disc, "rim": rim, "disc_l": float(srgb_to_lab(disc)[0]), "rim_l": float(srgb_to_lab(rim)[0])}
+
+
+def button_centres(length_px: float, px_per_cm: float, kind: str, buttons: int = 0) -> list[float]:
+    """B12: the arc lengths of the buttons along a line ``length_px`` long: ``buttons`` of them (0 = automatic:
+    max(1, round(length in cm / ``BUTTON_PITCH_CM[kind]``))), the j-th at (j + 0.5) x length / n."""
+    n = int(buttons) if int(buttons or 0) > 0 else max(1, int(round(length_px / px_per_cm / BUTTON_PITCH_CM.get(kind, 7.0))))
+    return [(j + 0.5) * length_px / n for j in range(n)]
+
+
+def _disc(out: np.ndarray, sel: np.ndarray, centre, radius: float, rgb) -> None:
+    h, w = sel.shape
+    r = int(np.ceil(radius)) + 1
+    x0, x1 = max(0, int(centre[0]) - r), min(w, int(centre[0]) + r + 1)
+    y0, y1 = max(0, int(centre[1]) - r), min(h, int(centre[1]) + r + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    m = ((xx + 0.5 - centre[0]) ** 2 + (yy + 0.5 - centre[1]) ** 2 <= radius * radius) & sel[y0:y1, x0:x1]
+    out[y0:y1, x0:x1][m] = rgb
+
+
+def _band(out: np.ndarray, sel: np.ndarray, a, b, half: float, rgb) -> None:
+    """Paint the pixels within ``half`` of the segment a-b."""
+    h, w = sel.shape
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    r = int(np.ceil(half)) + 1
+    x0, x1 = max(0, int(min(a[0], b[0])) - r), min(w, int(max(a[0], b[0])) + r + 1)
+    y0, y1 = max(0, int(min(a[1], b[1])) - r), min(h, int(max(a[1], b[1])) + r + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    q = np.stack([xx + 0.5, yy + 0.5], -1)
+    ab = b - a
+    t = np.clip(((q - a) @ ab) / max(float(ab @ ab), 1e-9), 0.0, 1.0)
+    d = np.linalg.norm(q - (a + t[..., None] * ab), axis=-1)
+    m = (d <= half) & sel[y0:y1, x0:x1]
+    out[y0:y1, x0:x1][m] = rgb
+
+
+def _inward(p: np.ndarray, s: np.ndarray, mask: np.ndarray, px_per_cm: float) -> float:
+    """+1 / -1: the side of the line (left normal (-ty, tx) = +1) on which its island lies — the side whose points
+    1 cm off the line fall inside ``mask`` more often (an open front's edge is the island's border)."""
+    h, w = mask.shape
+    score = 0
+    for t in np.linspace(0.1, 0.9, 9) * s[-1]:
+        c, tg = _at(p, s, t)
+        nrm = np.array([-tg[1], tg[0]])
+        for sign in (1, -1):
+            q = c + sign * nrm * px_per_cm
+            i, j = int(q[1]), int(q[0])
+            if 0 <= i < h and 0 <= j < w and mask[i, j]:
+                score += sign
+    return 1.0 if score >= 0 else -1.0
+
+
+def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, style: str, buttons: int,
+                 px_per_cm: float, lapel: bool = False) -> tuple[np.ndarray, dict]:
+    """Paint the placket ``style`` (``garment_template.PLACKETS``: buttons / zip / lacing; "none" draws nothing) of a
+    ``kind`` piece into ``atlas`` along the cut's ``marks`` lines (``marks.json`` ``lines``: ``centre_front`` of a
+    closed front; ``edge_left`` / ``edge_right`` of an open one), each only inside the pixels of its own island
+    (``masks`` = {island name: bool mask}) — nothing outside an island changes. The fabric is read under the line
+    (the median L*a*b* of the island's pixels within one placket width of it).
+
+    - buttons, closed front: the placket's two edges stitched ``PLACKET_W_CM`` apart (none for a ``lapel``), the
+      buttons on the line (``button_centres``, ``BUTTON_D_CM``, ``button_colours``, two holes);
+    - buttons, open front: the buttons half a placket width inside the RIGHT front's edge (``edge_right``), the
+      button holes (a slit of the diameter, the rim's L*) as far inside the LEFT front's edge — fixed sides, no
+      wearer parameter (B12);
+    - zip: a ``ZIP_W_CM`` metal band on the line (an open front: inside each edge), teeth, the pull at the top;
+    - lacing: eyelet pairs ``LACE_HALF_CM`` either side of the line every ``LACE_PITCH_CM``, the cord crossing.
+
+    Returns the new atlas and ``{"lines", "buttons": [[x, y], ...], "style", "fabric_l"}``."""
+    out = np.array(atlas, copy=True)
+    info: dict = {"style": style, "lines": [], "buttons": [], "holes": []}
+    if style in (None, "", "none") or not marks or px_per_cm <= 0:
+        return out, info
+    lines = {k: v for k, v in marks.items() if v.get("px") and len(v["px"]) >= 2 and v.get("island") in masks}
+    if not lines:
+        return out, info
+    width = 0.0 if lapel else PLACKET_W_CM.get(kind, 3.0) * px_per_cm
+    for name, line in sorted(lines.items()):
+        sel = np.asarray(masks[line["island"]], bool)
+        p, s = _polyline(line["px"])
+        if s[-1] <= 1.0:
+            continue
+        # the fabric under the line
+        near = np.zeros_like(sel)
+        for t in np.linspace(0.0, s[-1], max(2, int(s[-1] // max(1.0, px_per_cm)) + 1)):
+            c, _ = _at(p, s, t)
+            _disc(near, np.ones_like(sel), c, max(width, 2 * px_per_cm), True)
+        pick = near & sel
+        fab = np.median(srgb_to_lab(np.asarray(atlas, np.float64)[pick]), axis=0) if pick.any() \
+            else np.array([50.0, 0.0, 0.0])
+        info["fabric_l"] = round(float(fab[0]), 2)
+        info["lines"].append(name)
+        side = 0.0
+        if name != "centre_front":
+            side = _inward(p, s, sel, px_per_cm)
+        off = side * width / 2.0
+
+        def shifted(t, d=off):
+            c, tg = _at(p, s, t)
+            return c + np.array([-tg[1], tg[0]]) * d, tg
+        if style == "buttons":
+            col = button_colours(fab)
+            info["button_l"] = round(col["disc_l"], 2)
+            info["rim_l"] = round(col["rim_l"], 2)
+            d_px = BUTTON_D_CM.get(kind, 1.1) * px_per_cm
+            if name == "centre_front" and width > 0:
+                stitch = _shade(fab, STITCH_DL)
+                for sgn in (1, -1):
+                    pts = [shifted(t, sgn * width / 2.0)[0] for t in np.linspace(0.0, s[-1], 64)]
+                    for a, b in zip(pts, pts[1:]):
+                        _band(out, sel, a, b, 0.5, stitch)
+            for t in button_centres(s[-1], px_per_cm, kind, buttons):
+                c, tg = shifted(t)
+                if name == "edge_left":            # the holes side: a slit across the edge, the button's length
+                    nrm = np.array([-tg[1], tg[0]])
+                    _band(out, sel, c - nrm * d_px / 2.0, c + nrm * d_px / 2.0, max(1.0, 0.08 * d_px), col["rim"])
+                    info["holes"].append([round(float(c[0]), 2), round(float(c[1]), 2)])
+                    continue
+                _disc(out, sel, c, d_px / 2.0, col["rim"])
+                _disc(out, sel, c, d_px / 2.0 * 0.82, col["disc"])
+                hole = 0.11 * d_px
+                nrm = np.array([-tg[1], tg[0]])
+                for sg in (1, -1):
+                    _disc(out, sel, c + nrm * sg * hole, max(1.0, 0.09 * d_px), col["rim"])
+                info["buttons"].append([round(float(c[0]), 2), round(float(c[1]), 2)])
+        elif style == "zip":
+            zw = ZIP_W_CM * px_per_cm
+            zoff = side * zw / 2.0 if name != "centre_front" else 0.0
+            metal = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L, 0.0, 0.0]))), 0, 255).astype(np.uint8)
+            lo = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L - 10, 0.0, 0.0]))), 0, 255).astype(np.uint8)
+            pts = [shifted(t, zoff)[0] for t in np.linspace(0.0, s[-1], 128)]
+            for a, b in zip(pts, pts[1:]):
+                _band(out, sel, a, b, zw / 2.0, metal)
+            step = ZIP_TOOTH_CM * px_per_cm
+            for k_, t in enumerate(np.arange(step / 2.0, s[-1], step)):
+                if k_ % 2:
+                    continue
+                c, tg = shifted(t, zoff)
+                nrm = np.array([-tg[1], tg[0]])
+                _band(out, sel, c - nrm * zw * 0.4, c + nrm * zw * 0.4, max(0.5, step * 0.25), lo)
+            c, tg = shifted(ZIP_PULL_CM[1] * px_per_cm / 2.0, zoff)
+            nrm = np.array([-tg[1], tg[0]])
+            pull = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L - 5, 0.0, 0.0]))), 0, 255).astype(np.uint8)
+            _band(out, sel, c - tg * ZIP_PULL_CM[1] * px_per_cm / 2.0, c + tg * ZIP_PULL_CM[1] * px_per_cm / 2.0,
+                  ZIP_PULL_CM[0] * px_per_cm / 2.0, pull)
+            info["zip_l"] = ZIP_L
+        elif style == "lacing":
+            cord = _shade(fab, LACE_DL)
+            ring = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L, 0.0, 0.0]))), 0, 255).astype(np.uint8)
+            half = LACE_HALF_CM * px_per_cm
+            step = LACE_PITCH_CM * px_per_cm
+            ts = list(np.arange(step / 2.0, s[-1], step))
+            pairs = []
+            for t in ts:
+                c, tg = shifted(t)
+                nrm = np.array([-tg[1], tg[0]])
+                pairs.append((c + nrm * half, c - nrm * half))
+            for (a1, b1), (a2, b2) in zip(pairs, pairs[1:]):
+                _band(out, sel, a1, b2, max(1.0, 0.12 * px_per_cm), cord)
+                _band(out, sel, b1, a2, max(1.0, 0.12 * px_per_cm), cord)
+            for a, b in pairs:
+                for e in (a, b):
+                    _disc(out, sel, e, LACE_EYE_CM * px_per_cm / 2.0, ring)
+                    _disc(out, sel, e, LACE_EYE_CM * px_per_cm / 4.0, cord)
+            info["eyelets"] = 2 * len(pairs)
+    return out, info

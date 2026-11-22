@@ -83,8 +83,9 @@ straight through); ``inventory.get_item_image_path`` serves fixture files; the i
 Task 9 — the atlas assignment (``garment_template.texture`` / ``cut_info`` / ``atlas_for`` / ``texture_warning``,
 ``garment_assembly._state`` / ``_apply_cut_atlas``, ``figure_build._template_row``), same stubs; the drape record is a
 dict whose ``islands.sha256`` is the [2] payload's sha.
-[9.1] ``PARAM_SPEC["texture"]`` = ("choice", ("projection", "cut"), "projection"), a ``top`` field (another kind is
-    reset to the default), an unknown value is an error; ``TEXTURE_ONLY`` = ("fly", "texture", "sleeve_print"), so a top's ``tsig``
+[9.1] ``PARAM_SPEC["texture"]`` = ("choice", ("projection", "cut"), "projection"), a ``top`` field (since group B
+    phase C a jacket's too: it keeps "cut"), an unknown value is an error; ``TEXTURE_ONLY`` = ("fly", "texture",
+    "sleeve_print", "placket", "buttons") (the placket is painted, B10), so a top's ``tsig``
     is the same for texture "projection" and "cut".
 [9.2] ``generate`` with the filled answer -> ready; with the item's texture "cut", ``atlas_for`` returns the
     ``.atlas.png`` bytes and ``{texture "cut", csig, cut_state "ready", metrics (IoU >= 0.98), px_per_cm 19.59}``;
@@ -890,10 +891,10 @@ with patch("app.models.inventory.get_item_image_path", lambda iid: str(ITEM_FILE
           gt.PARAM_SPEC.get("texture") == ("choice", ("projection", "cut"), "projection")
           and "texture" in gt.KIND_FIELDS["top"] and p_cut.get("texture") == "cut" and not e_proj and not e_cut
           and gt.validate_params({"kind": "top"})[0].get("texture") == "projection", gt.PARAM_SPEC.get("texture"))
-    check("[9.1] another kind keeps the default",
-          gt.validate_params({"kind": "jacket", "texture": "cut"})[0].get("texture") == "projection")
+    check("[9.1] a jacket takes cut too (group B phase C: every kind is cut into pattern pieces)",
+          gt.validate_params({"kind": "jacket", "texture": "cut"})[0].get("texture") == "cut")
     check("[9.1] an unknown value is an error", gt.validate_params({"kind": "top", "texture": "paint"})[1] != [])
-    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print"), gt.TEXTURE_ONLY)
+    check("[9.1] texture is TEXTURE_ONLY", gt.TEXTURE_ONLY == ("fly", "texture", "sleeve_print", "placket", "buttons"), gt.TEXTURE_ONLY)
     k_proj = gt.tsig(p_proj, base_sha="b", texture_sha="t", lower=[])
     k_cut = gt.tsig(p_cut, base_sha="b", texture_sha="t", lower=[])
     check("[9.1] switching texture leaves tsig unchanged", k_proj == k_cut, (k_proj, k_cut))

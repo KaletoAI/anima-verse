@@ -650,7 +650,9 @@ def _texture_key(character_name: str, garment: Dict[str, Any]) -> str:
     from app.core import cut_texture_post
     # a sheer piece's cut atlas is keyed into alpha at assembly (``_apply_cut_atlas``): its version re-assembles
     lace = f":lace{cut_texture_post.LACE_VERSION}" if _is_sheer(garment) else ""
-    return f"cut:{info['csig']}{lace}"
+    # plan group B, C3: a placket is painted onto the atlas at assembly (``_apply_cut_atlas``)
+    from app.core import garment_cut_texture
+    return f"cut:{info['csig']}{lace}{garment_cut_texture.placket_key(garment['item_id'])}"
 
 
 def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) -> Dict[str, Any]:
@@ -662,6 +664,10 @@ def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) ->
                                              item=garment.get("item"))
     if atlas is None:
         return info
+    from app.core import garment_cut_texture
+    atlas, placket = garment_cut_texture.placket_atlas(character_name, garment["item_id"], atlas)
+    if placket is not None:
+        info = {**info, "placket": placket}
     opacity = garment_template.sheer_opacity(_template_params(garment))
     if opacity is not None:
         atlas, info = _lace_keyed(atlas, opacity, info)

@@ -1251,7 +1251,8 @@ def piece_name(item_id: str) -> str:
 
 def piece_name_of(params: dict) -> str:
     """The English name of a piece from its template params: a top by its sleeve length (a strapless one: "corset top" /
-    "strapless top"), a skirt by its flare and length (group B); step 3a the close-fitting kinds by their cut (briefs: boxer / string / thong / high-leg; a bra by its cup; gloves by fingers and length;
+    "strapless top"), a skirt by its flare and length (group B), a jacket by its collar, fabric and front, a dress by
+    its length and sleeves (group B, phases C / D); step 3a the close-fitting kinds by their cut (briefs: boxer / string / thong / high-leg; a bra by its cup; gloves by fingers and length;
     tights by style and foot; trousers by length and leg)."""
     p = params or {}
     kind = str(p.get("kind") or "garment")
@@ -1272,6 +1273,24 @@ def piece_name_of(params: dict) -> str:
         else:
             base = "A-line skirt"
         return f"long {base}" if length >= 0.75 and base != "pencil skirt" else base
+    if kind == "jacket":
+        # phase C (C4): a lapel collar is a blazer's, leather a leather jacket's, an open front without a collar a
+        # cardigan's
+        if p.get("collar") == "lapel":
+            return "blazer"
+        if str(p.get("fabric") or "").startswith("leather"):
+            return "leather jacket"
+        return "cardigan" if p.get("front") == "open" and p.get("collar") in (None, "none") else "jacket"
+    if kind == "dress":
+        # phase D (D2): by its length from the waist (mini < 0.40 m, knee-length < 0.65, midi < 0.85, else long) and
+        # its sleeves (long -> "long-sleeve", any other -> "short-sleeve", none -> no word)
+        length = float(p.get("length_m", 0.6))
+        base = ("mini dress" if length < 0.40 else "knee-length dress" if length < 0.65
+                else "midi dress" if length < 0.85 else "long dress")
+        sleeves = str(p.get("sleeves") or "none")
+        if p.get("shoulders") not in ("covered", "off_shoulder") or sleeves == "none":
+            return base
+        return ("long-sleeve " if sleeves == "long" else "short-sleeve ") + base
     if kind == "briefs":
         if float(p.get("leg_length_m") or 0.0) > 0:
             return "boxer briefs"
@@ -1497,18 +1516,19 @@ MAIN_PARTS = {"front": ("front", "front_r", "front_l", "leg_r", "leg_l", "cup_r"
                         "glove_back_l", "skirt_front", "left_front", "right_front"),
               "back": ("back", "back_l", "back_r", "palm_l", "palm_r", "skirt_back")}
 #: User test 2026-11-21 — the parts of each job whose pixels come from the model's answer: the main pieces, a top's
-#: collar and placket, a balconette's upper cups (the lace / trim sits on them); every other island of the job (the
+#: placket (reserved), a balconette's upper cups (the lace / trim sits on them); every other island of the job (the
 #: sleeves, the neckband, the cuffs; group A's small pieces ``TRIM_PARTS``) is filled with the seamless fabric patch
 #: of the job's main pieces (``fill_fabric``). With the piece's ``sleeve_print`` "picture" the sleeves, cuffs and
 #: small pieces come from the answer too.
-MODEL_PARTS = {"front": MAIN_PARTS["front"] + ("collar", "placket", "cup_top_r", "cup_top_l"),
+MODEL_PARTS = {"front": MAIN_PARTS["front"] + ("placket", "cup_top_r", "cup_top_l"),
                "back": MAIN_PARTS["back"]}
 SLEEVE_PARTS = ("sleeve_l", "sleeve_r", "cuff_l", "cuff_r")
 #: The parts ``sleeve_print`` decides about: a top's sleeves and cuffs, group A's small pieces — waistband, cuffs,
-#: bra bands, straps and gore, gusset, glove thumbs, a string brief's hip bands, a stocking's top bands. A top's
-#: neckband is never one (always the fabric patch).
+#: bra bands, straps and gore, gusset, glove thumbs, a string brief's hip bands, a stocking's top bands; phases C / D a
+#: jacket's / dress's collar (a 3.7 cm strip: held like the waistband, no top emits one yet). A neckband is never one
+#: (always the fabric patch).
 TRIM_PARTS = SLEEVE_PARTS + ("waistband", "gusset", "gore", "band_r", "band_l", "strap_r", "strap_l", "thumb_r",
-                             "thumb_l", "hip_band_r", "hip_band_l", "top_band_r", "top_band_l")
+                             "thumb_l", "hip_band_r", "hip_band_l", "top_band_r", "top_band_l", "collar")
 #: A pre-fill nearer to white than this (the largest channel distance) is darkened to it: the gate and the
 #: registration find the islands as "not near-white" (``cut_texture_post.WHITE_TOL`` 24), so a white fabric goes as a
 #: very light grey (the colour match moves the atlas back onto the item's own white).
@@ -1637,7 +1657,9 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
 #: prompt kinds the plain trims are HELD: the template and the gates hold the model's parts only (zoomed like the
 #: back job), the trims are filled with the panel's fabric in the atlas frame afterwards. The tops and group A keep
 #: their tested templates.
-HELD_TRIM_KINDS = ("skirt", "strapless")
+#: Phases C / D (2026-11-22): a jacket and a dress hold their sleeves, neckband and collar the same way — the model
+#: paints the front / back panels (a dress's bodice and skirt part, an open jacket's two fronts) only.
+HELD_TRIM_KINDS = ("skirt", "strapless", "jacket", "dress")
 
 
 def held_trims(kind, sleeve_print: str = "plain") -> bool:
@@ -2728,3 +2750,54 @@ def pattern_sheet_file(character_name: str, item_id: str) -> Path | None:
         islands = json.loads(Path(path).read_text(encoding="utf-8"))
         _write_bytes(sheet, _png(render_pattern_sheet(islands)))
     return sheet
+
+
+# ----------------------------------------------------------------------------------------------- placket (phase C3)
+
+def placket_of(item_id: str) -> tuple[str, int, str, str]:
+    """The piece's (``placket``, ``buttons``, ``kind``, ``collar``) params ("none", 0, ... without them)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    p = gt.params_of(get_item(item_id)) or {}
+    style = str(p.get("placket") or "none")
+    return (style if style in gt.PLACKETS else "none", int(p.get("buttons") or 0), str(p.get("kind") or ""),
+            str(p.get("collar") or "none"))
+
+
+def placket_key(item_id: str) -> str:
+    """The assembly key part of a piece's painted placket ("" without one): a changed style, button count or
+    ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and csig stay."""
+    style, buttons, _, _ = placket_of(item_id)
+    if style == "none":
+        return ""
+    return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}"
+
+
+def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[bytes, dict | None]:
+    """Plan group B, C3 (B10-B13): the composed cut atlas with the piece's placket painted along the cut's
+    ``marks.json`` lines (``cut_texture_post.draw_placket``) — drawn at assembly, so switching the placket or the
+    button count is a CPU re-assembly without an image job. Unchanged (info None) without a placket, without a ready
+    cut or without a marks file (a kind whose cut writes none: a top)."""
+    style, buttons, kind, collar = placket_of(item_id)
+    if style == "none":
+        return atlas, None
+    try:
+        pattern = _ready_pattern(character_name, item_id)
+    except NotReady:
+        return atlas, None
+    ipath = Path(pattern["islands_path"])
+    mpath = ipath.with_name(ipath.name[:-len(".islands.json")] + ".marks.json")
+    if not mpath.is_file():
+        return atlas, {"style": style, "skipped": "no marks"}
+    islands = json.loads(ipath.read_text(encoding="utf-8"))
+    marks = json.loads(mpath.read_text(encoding="utf-8")).get("lines") or {}
+    with Image.open(io.BytesIO(atlas)) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    size = rgb.shape[0]
+    labels = rasterise_islands(islands, size)
+    ids = island_ids(islands)
+    masks = {n: labels == ids[n] for n in {str(v.get("island")) for v in marks.values()} if n in ids}
+    out, info = cut_texture_post.draw_placket(rgb, masks, marks, kind=kind, style=style, buttons=buttons,
+                                              px_per_cm=float(islands.get("px_per_cm") or 0.0),
+                                              lapel=collar == "lapel")
+    return _png(Image.fromarray(out, "RGB")), info

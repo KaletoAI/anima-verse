@@ -26,7 +26,8 @@ Hand-derived expectations:
     top right": "the shapes at the top left and at the top right".
 [5] Parts: the front job's MAIN parts are front / front_l / front_r / leg_* / cup_* / glove_back_* (group B adds
     skirt_front / left_front / right_front), the back job's back / back_l / back_r / palm_* (group B: skirt_back); ``model_parts("front", "plain")`` holds front_l, cup_top_r (a balconette's upper
-    cup), collar, but no waistband / gusset / strap / thumb / sleeve; with "picture" all of ``TRIM_PARTS`` join
+    cup), but no collar (group B phases C / D: a jacket's / dress's collar strip is a held trim like the waistband;
+    no top emits one), no waistband / gusset / strap / thumb / sleeve; with "picture" all of ``TRIM_PARTS`` join
     (waistband, gusset, strap_l, thumb_r, sleeve_l, cuff_r) — and a top's neckband "band" is never one of them.
 [6] The fabric patch is cut from the MAIN parts: on a 100 px raster of the trousers payload scaled 1/20.48
     (front_r [5, 5, 24, 49) -> 19 x 44 px, front_l [29, 5, 49, 49) -> 20 x 44 px, waistband [5, 54, 78, 57) -> 73 x 3
@@ -145,7 +146,7 @@ check("[5] main back", gct.MAIN_PARTS["back"], ("back", "back_l", "back_r", "pal
 plain = gct.model_parts("front", "plain")
 check("[5] plain model parts", [p in plain for p in ("front_l", "cup_top_r", "collar", "waistband", "gusset", "strap_l",
                                                      "thumb_r", "sleeve_l")],
-      [True, True, True, False, False, False, False, False])
+      [True, True, False, False, False, False, False, False])
 pic = gct.model_parts("front", "picture")
 check("[5] picture adds the trims", all(p in pic for p in ("waistband", "gusset", "strap_l", "thumb_r", "sleeve_l",
                                                            "cuff_r")), True)

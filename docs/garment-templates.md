@@ -16,9 +16,9 @@ is out of date and is re-draped by the next Build).
 ### Which pieces get them — `uv_mode`
 
 `garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for `top`, `briefs`, `bra`, `gloves`,
-`tights`, `trousers`, `skirt` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a; a skirt and a
-strapless top since step 3b, section 1b), `"grid"` for every other kind (jacket, dress). `"grid"` is staging, not a
-compat path: the later phases of plan group B move the rest to the pattern UV and remove it.
+`tights`, `trousers`, `skirt`, and `"pattern"` for `jacket`, `dress` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a;
+a skirt and a strapless top since step 3b, section 1b; a jacket and a dress since phases C / D, section 1c) —
+every kind today; `"grid"` is left only as the builder's unused branch until plan group B's B17 removes it.
 
 ### Parts come from the construction
 
@@ -318,6 +318,40 @@ glitter's detail 0.16; the detail gate read the answer at 0.0002) — not accept
 Tilda's wool skirt (nested, 14.85) and Kira's slit skirt (band upright, 25.76; worn alone — with the pinstripe suit
 over it the atlas was not applied in a dry run) clean in attempt 1; Glut's scale bra (group A, after the colour-gate
 fix) ready in attempt 1 — scales on the cups, the straps and band carry the panel's scale fabric.
+
+## 1c. Jackets and dresses (plan group B, phases C / D)
+
+`build_bodice` gets the template `kind` and, for a dress, the outline's `waist_y`, and labels by construction:
+
+- an **open front** of a jacket or dress: the columns left of the left side seam are `left_front` (39), right of the
+  right one `right_front` (40) — never `front` / `front_2`; a closed front stays `front` (1);
+- a **dress's** torso faces at and under the row nearest `waist_y` are `skirt_front` (37) / `skirt_back` (38); a V
+  neckline's re-spaced rows end at that row (Ylva's skirt front had an 8 cm notch otherwise);
+- the **neckband** (5) of a jacket / dress only for a closed front without a collar and a crew / boat neck or a scoop
+  at most `BAND_SCOOP_MAX_M` (8 cm) deep (B8); relaxed like a waistband (rows, ARAP, turned back onto the strip);
+- a **stand collar** (6) is one strip cut at the back centre (a full ring) or at its gap, relaxed the same way; a
+  dress's lapel is validated to a stand collar, a dress without covered shoulders has no collar.
+
+The same run writes `marks.json` beside `islands.json` (`templates/cut/{item}_{cut_sig}.marks.json`, never part of
+the islands' bytes or sha): `{"version", "atlas_px", "px_per_cm", "lines": {name: {"island", "px"}}}` — a closed
+front's `centre_front` (yoke + torso column 0 down to the waist row or the hem), an open front's `edge_left` /
+`edge_right`. Rows: `jacket` = (right_front, front, left_front, back) / (sleeves) / (collar, band), alternative with
+the strips beside the sleeves; `dress` as section 1b. Both kinds are `PANEL_KINDS` (`PANEL_VERSION` 1: each saved
+jacket / dress re-drapes once). `scripts/smoke_template_cut_panels.py` checks six cases in Blender.
+
+**Placket** (`placket` none / buttons / zip / lacing, `buttons` 0-12, both `TEXTURE_ONLY`): painted by code, never
+by the model, along the marks inside each island (`cut_texture_post.draw_placket`, `BUTTON_PITCH_CM` jacket 10 /
+dress 7, `BUTTON_D_CM`, the disc L* 25 and the rim L* 40 from the fabric; an open front's buttons inside the right
+front's edge, the holes inside the left's). It is drawn at **assembly** onto the record's atlas
+(`garment_cut_texture.placket_atlas` from `garment_assembly._apply_cut_atlas`; the assembly key gains
+`:placket<PLACKET_VERSION>-<style>-<buttons>`), so switching it is a CPU re-assembly and never changes `csig`
+(`scripts/smoke_cut_texture_placket.py`).
+
+**Cut texture.** Both kinds are `HELD_TRIM_KINDS` (fitted family): the model paints the front / back panels (a
+dress's bodice and skirt parts, an open jacket's two fronts); sleeves, neckband and collar are filled with the
+fabric patch (`collar` is a `TRIM_PARTS` member). Names (`piece_name_of`): a jacket "blazer" (lapel), "leather
+jacket" (a leather fabric), "cardigan" (open, no collar), else "jacket"; a dress "mini" (< 0.40 m) / "knee-length"
+(< 0.65) / "midi" (< 0.85) / "long dress", "long-sleeve " / "short-sleeve " in front on covered shoulders.
 
 ## 2. Texture from cut (step 2)
 
