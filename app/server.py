@@ -729,6 +729,17 @@ async def lifespan(app: FastAPI):
     except Exception as _lfe:
         logger.warning("Linked family repair at boot failed: %s", _lfe)
 
+    # Boot migration (pair scene spec 2026-11-22): multi-person poses without a
+    # lead role ask a package's `pose.lead_role_default` once. AFTER the packages
+    # loaded, so the provider is registered; a stored answer is never asked again.
+    try:
+        from app.core.pose_lead_role_migration import migrate_lead_role_once
+        _lr = migrate_lead_role_once()
+        if _lr:
+            logger.info("Pose catalog: lead role pre-filled on %d multi-person poses", _lr)
+    except Exception as _lre:
+        logger.warning("Lead role migration failed: %s", _lre)
+
     # Migration (hair-from-body spec 2026-11-11, § Design 6): the hair a
     # character no longer uses goes — every hair item, fit and HairDeck job of
     # a character whose hair method is ``body``, and every edit-chain /

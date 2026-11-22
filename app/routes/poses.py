@@ -161,10 +161,14 @@ def _set_participants(entry: Dict[str, Any], participants: int, body: Any, *,
     a create or approval must SAY the slot count; an update keeps the stored
     one when the body leaves it out (clamped to the new head count)."""
     if participants == 1:
-        for field in ("participants", "places", "yaw_offset"):
+        for field in ("participants", "places", "yaw_offset", "lead_role"):
             entry.pop(field, None)
         return
     entry["participants"] = participants
+    # A lead role the new head count no longer has goes (lead_role_of falls
+    # back to role "a").
+    if entry.get("lead_role") not in (None, *pose_catalog.ROLES[:participants]):
+        entry.pop("lead_role", None)
     if require_places or "places" in body:
         entry["places"] = _places(body.get("places"), participants)
     else:
@@ -182,6 +186,21 @@ def _finale_animation(raw: Any) -> str:
     value = (raw or "").strip().lower()
     if len(value) > 120 or any(c in value for c in "/\\"):
         raise HTTPException(status_code=400, detail="finale_animation must be a clip kind")
+    return value
+
+
+def _lead_role(raw: Any, participants: int) -> str:
+    """A pose's optional lead role (``pose_catalog.lead_role_of``): one of
+    the clip roles of a multi-person pose; "" clears it. A solo pose has
+    none."""
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="lead_role must be a clip role")
+    value = (raw or "").strip().lower()
+    if value and value not in pose_catalog.ROLES[:participants if participants > 1 else 0]:
+        raise HTTPException(
+            status_code=400,
+            detail=("lead_role is only for a multi-person pose" if participants < 2 else
+                    f"lead_role must be one of {', '.join(pose_catalog.ROLES[:participants])}"))
     return value
 
 
@@ -404,6 +423,8 @@ def list_entries(axis: str = Query("pose"),
             # The follow pose: the stored field, and what applies without it
             # (provider or place type) — per clip role for a multi-person pose.
             row["follow_pose"] = entry.get("follow_pose", "")
+            # The stored lead role ("" = role a applies, multi-person only).
+            row["lead_role"] = entry.get("lead_role", "")
             row["follow_auto"] = ("" if row["follow_pose"] else
                                   pose_catalog.follow_pose_for(key) if row["participants"] == 1 else
                                   {r: pose_catalog.follow_pose_for(key, r)
@@ -490,6 +511,9 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 follow = _follow_pose(body.get("follow_pose"))
                 if follow:
                     entry["follow_pose"] = follow
+                lead = _lead_role(body.get("lead_role"), int(entry.get("participants") or 1))
+                if lead:
+                    entry["lead_role"] = lead
             data["entries"][key] = entry
             write_store(axis, data, store)
         return {"status": "success", "key": key, "axis": axis, "store": store}
@@ -814,6 +838,12 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                     entry["follow_pose"] = follow
                 else:
                     entry.pop("follow_pose", None)
+            if "lead_role" in body and axis == "pose":
+                lead = _lead_role(body["lead_role"], int(entry.get("participants") or 1))
+                if lead:
+                    entry["lead_role"] = lead
+                else:
+                    entry.pop("lead_role", None)
             if store == was:
                 data["entries"][key] = entry
                 write_store(axis, data, store)
@@ -1068,6 +1098,9 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                     # silently approve every group candidate with defaults.
                     _set_participants(entry, _participants(body.get("participants")), body,
                                       require_places=True)
+                    lead = _lead_role(body.get("lead_role"), int(entry.get("participants") or 1))
+                    if lead:
+                        entry["lead_role"] = lead
                 data["entries"][key] = entry
 
             write_store(axis, data, store)

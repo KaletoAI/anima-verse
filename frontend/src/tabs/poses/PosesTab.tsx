@@ -154,6 +154,8 @@ interface Entry {
   /** what applies with the field empty: a package's answer, else the place
    *  type's `follow` (read-only) */
   follow_auto?: string | RoleFollow
+  /** the clip role that leads a multi-person scene; "" = role a */
+  lead_role?: string
   /** which layer the entry lives in: the tracked catalog file, or this
    *  world's own layer in its world.db for entries that must never be
    *  committed */
@@ -775,6 +777,8 @@ export function PosesTab() {
               follow_pose: people > 1
                 ? Object.fromEntries(ROLES.slice(0, people).map((r) => [r, followOf(draft.follow_pose, r)]))
                 : followOf(draft.follow_pose, ''),
+              lead_role: people > 1 && ROLES.slice(0, people).includes(draft.lead_role as Role)
+                ? draft.lead_role : '',
               // Group fields only: a solo pose occupies one place and never
               // turns, and the server drops them for one participant.
               ...(people > 1
@@ -1889,6 +1893,23 @@ export function PosesTab() {
                         )
                       })}
                     </Field>
+                    {(draft.participants || 1) > 1 ? (
+                      <Field
+                        label={t('Lead role')}
+                        tip={t('The clip role that leads the running scene: its state sets the pace of the whole pose. Left empty, role A leads.')}
+                      >
+                        <select
+                          className="ga-input"
+                          value={draft.lead_role || ''}
+                          onChange={(e) => upd('lead_role', e.target.value)}
+                        >
+                          <option value="">— (a)</option>
+                          {ROLES.slice(0, draft.participants || 1).map((r) => (
+                            <option key={r} value={r}>{r}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    ) : null}
                     <Field
                       label={t('Place type')}
                       tip={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}

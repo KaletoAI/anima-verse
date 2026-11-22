@@ -449,6 +449,11 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             # The solo pose a participant goes into after a NORMAL end
             # (follow_pose_for): one key, or ``{a, b, …}`` per clip role.
             norm["follow_pose"] = normalize_follow(entry.get("follow_pose"))
+            # The clip role that leads a multi-person scene (pair scene spec
+            # 2026-11-22) — "" when not stored or not one of the pose's roles;
+            # lead_role_of supplies the fallback. A solo pose has no lead role.
+            lead = str(entry.get("lead_role") or "").strip().lower()
+            norm["lead_role"] = lead if lead in ROLES[:participants] and not solo else ""
         out[str(key).strip().lower()] = norm
     return out
 
@@ -762,6 +767,16 @@ def pose_yaw_offset(pose_key: str) -> float:
     """Degrees the group clip's frame turns against the marker facing (0 solo)."""
     entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
     return float(entry.get("yaw_offset") or 0.0)
+
+
+def lead_role_of(pose_key: str) -> str:
+    """The clip role that leads a multi-person pose: the stored
+    ``lead_role``, else role "a" (the first participant's). "" for a solo
+    pose or an unknown key."""
+    entry = get_catalog("pose").get((pose_key or "").strip().lower())
+    if not entry or int(entry.get("participants") or 1) < 2:
+        return ""
+    return entry.get("lead_role") or ROLES[0]
 
 
 def validate_catalog(axis: str) -> List[str]:
