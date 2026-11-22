@@ -27,6 +27,9 @@ SWEETHEART_HALF_RAD 0.5, COLS 41).
 [5] bodice_spec of a top with straps + sweetheart: neckline built as "crew", top_edge {neckline "sweetheart",
     dip_m 0.05, half_rad 0.5}; straps + straight: dip_m 0.0; a covered top: top_edge None.
 [6] the LLM template names the values: "strapless", "straps", "straight", "sweetheart".
+[6b] the placket rule for a strapless top: its cut writes only the ``centre_back`` line (``corset_darts.back_line``),
+    so the template says it laces only at the centre back and that a corset laced down the front is "none" — a
+    front-laced corset must not get a code-painted lacing on its back.
 [7] de.json translates "Sweetheart"; figureModel.ts labels "straight" / "sweetheart".
 """
 import math
@@ -104,6 +107,8 @@ check("[5] covered none", gt.bodice_spec(v(kind="top"), bm)["top_edge"] is None)
 
 md = (ROOT / "shared/templates/llm/tasks/garment_template_params.md").read_text()
 check("[6] LLM template", all(f'"{w}"' in md for w in ("strapless", "straps", "straight", "sweetheart")))
+check("[6b] strapless lacing", 'A "strapless" top laces only at the centre back' in md
+      and '"none" for a bodice, bustier or corset laced down the front' in md and 'a corset laced down the front is "lacing"' not in md)
 check("[7] de.json", '"Sweetheart":' in (ROOT / "shared/languages/de.json").read_text())
 fm = (ROOT / "frontend/src/tabs/characters/figureModel.ts").read_text()
 check("[7] labels", "sweetheart: 'Sweetheart'" in fm and "straight: 'Straight'" in fm)
