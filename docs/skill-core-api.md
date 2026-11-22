@@ -1206,7 +1206,7 @@ renders itself calls `apply`.
 | Function | Semantics |
 |---|---|
 | `app.imagegen.pose_check.apply(occasion, prompt, *, override=None, character='') -> Tuple[str, bool]` | `(prompt, checked)`. `override` True/False wins over the occasion switch, None follows it; an occasion without people never checks. Blocking (one LLM call). |
-| `check_pose(prompt, *, character='') -> str` | The rewrite alone; the original on any failure, empty answer or an answer under half the length (dropped content / refusal). |
+| `check_pose(prompt, *, character='') -> str` | The rewrite alone; the original on any failure, empty answer, an answer under half the length (dropped content / refusal) or an answer that lost a reference token of the prompt (`<ref N>`, `<imageN>`, `<Picture N>` — it binds a person to its picture). |
 | `parse_override(value) -> bool \| None` | A request body's `pose_check` field. |
 | `supported(occasion)` / `enabled_for(occasion)` | Whether the occasion offers the check / its routing switch is on. |
 

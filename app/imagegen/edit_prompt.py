@@ -268,40 +268,16 @@ def _strip_unresolved(sentence: str, is_bad) -> Tuple[str, List[str]]:
     return (lead + body + tail if body else ""), removed
 
 
-def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tuple[str, Dict[str, Any]]:
-    """The pass-through every render with reference images takes (``ImageBackend.generate``): ``(prompt, meta)``.
-
-    1. No slotted reference -> the prompt comes back byte-identical (meta ``{"refs": []}``).
-    2. Every recognised mention (``_MENTIONS``) is rendered in the backend's dialect (``render_ref`` of its position).
-    3. Never invents: a mention of a slot that is not sent drops its SENTENCE while another sentence remains
-       (``dropped``); a lone sentence keeps it, in ordinal wording (``unresolved`` note). Nothing else is added except
-       the ``picture_edit`` prefix ``Edit <Picture 1>. `` (what the engine node would prepend).
-    4. Notes only: ``unused`` slots (sent, never named), ``free_text`` (picture_subject without subject form),
-       ``role_missing`` (image_tag, two or more images, no canvas named), ``keep_missing`` (picture_edit).
-    Idempotent: ``normalise`` of its own output changes nothing."""
-    slots = slots_of(params)
-    dialect, source = resolve_dialect(backend)
-    meta: Dict[str, Any] = {"dialect": dialect, "dialect_source": source, "refs": list(slots)}
-    if not slots or not prompt:
-        return prompt, meta
-    total = len(slots)
-
-    def valid(pos: Optional[int]) -> bool:
-        return pos is not None and 1 <= pos <= total
-
-    def bad(m: "re.Match[str]") -> bool:
-        pos = _mention_position(m, slots)
-        return pos is not None and not valid(pos)
-
-    # 1. sentences holding a mention of a slot that is not sent are dropped while another sentence remains. The
-    #    picture_edit prefix counts as that other sentence (it is always in the output), so the first pass already
-    #    gives what a second pass over its own output would.
+def _drop_unresolved(prompt: str, bad, floor: int) -> Tuple[str, List[str], List[str]]:
+    """Normaliser step 1 (``(text, dropped, unresolved)``): a sentence holding a ``bad`` mention is dropped while more
+    than ``floor`` other sentences remain (the picture_edit prefix counts as one, so its floor is 0 and the first pass
+    already gives what a second pass over its own output would); a lone sentence loses only the clause holding it,
+    else only the mention phrase — an unresolved mention is never rendered as a token."""
     parts = _split_sentences(prompt)
     sentences = [i for i in range(0, len(parts), 2) if parts[i].strip()]
     dropped: List[str] = []
     unresolved: List[str] = []
     keep_idx = set(range(len(parts)))
-    floor = 0 if dialect == "picture_edit" else 1
     for i in sentences:
         bad_here = [m.group(0) for m in _MENTIONS.finditer(parts[i]) if bad(m)]
         if bad_here and len([j for j in sentences if j in keep_idx]) > floor:
@@ -325,6 +301,48 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
             parts[i], removed = _strip_unresolved(parts[i], bad)
             dropped += removed
     text = "".join(parts) if dropped else prompt
+    return text, dropped, unresolved
+
+
+def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tuple[str, Dict[str, Any]]:
+    """The pass-through every render with reference images takes (``ImageBackend.generate``): ``(prompt, meta)``.
+
+    1. No slotted reference -> the prompt comes back byte-identical (meta ``{"refs": []}``) — unless it carries the
+       producers' ``<ref N>``: that token never reaches an engine and is removed as in 3 (note ``unresolved``).
+    2. Every recognised mention (``_MENTIONS``) is rendered in the backend's dialect (``render_ref`` of its position).
+    3. Never invents: a mention of a slot that is not sent drops its SENTENCE while another sentence remains
+       (``dropped``); a lone sentence keeps it, in ordinal wording (``unresolved`` note). Nothing else is added except
+       the ``picture_edit`` prefix ``Edit <Picture 1>. `` (what the engine node would prepend).
+    4. Notes only: ``unused`` slots (sent, never named), ``free_text`` (picture_subject without subject form),
+       ``role_missing`` (image_tag, two or more images, no canvas named), ``keep_missing`` (picture_edit).
+    Idempotent: ``normalise`` of its own output changes nothing."""
+    slots = slots_of(params)
+    dialect, source = resolve_dialect(backend)
+    meta: Dict[str, Any] = {"dialect": dialect, "dialect_source": source, "refs": list(slots)}
+    if not prompt:
+        return prompt, meta
+    if not slots:
+        # No picture is sent. Prose ("the first image") stays byte-identical, but the producers' own token never
+        # reaches an engine: a ``<ref N>`` is unresolved here like any slot that is not sent (step 3).
+        if not CANONICAL_REF.search(prompt):
+            return prompt, meta
+        text, dropped, unresolved = _drop_unresolved(prompt, lambda m: m.lastgroup == "ref", floor=1)
+        meta.update({"rewrites": 0, "prefixed": False, "dropped": dropped, "unused": [],
+                     "unresolved": unresolved, "notes": ["unresolved"],
+                     "roles": dict((params or {}).get("reference_roles") or {})})
+        logger.info("%s: no reference image sent — %d reference token(s) removed from the prompt",
+                    getattr(backend, "name", "?"), len(unresolved))
+        return text, meta
+    total = len(slots)
+
+    def valid(pos: Optional[int]) -> bool:
+        return pos is not None and 1 <= pos <= total
+
+    def bad(m: "re.Match[str]") -> bool:
+        pos = _mention_position(m, slots)
+        return pos is not None and not valid(pos)
+
+    text, dropped, unresolved = _drop_unresolved(prompt, bad, floor=0 if dialect == "picture_edit" else 1)
 
     # 2. render every mention
     rewrites = 0
@@ -388,39 +406,134 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
 
 #: The canonical token producers write (``<ref N>``), any spacing.
 CANONICAL_REF = re.compile(r"<ref\s*\d+>", re.IGNORECASE)
+#: Every bracket token a prompt may carry, canonical or as an engine dialect wrote it — what ``strip_refs`` removes.
+#: Ordinal prose ("the first image") is no token: a person may have written it, it is left as it is.
+ANY_REF = re.compile(r"<ref\s*\d+>|<picture\s*\d+>|<image\s*\d+>|<subject\s*\d+>|@image\d+\b", re.IGNORECASE)
+#: The P-H3 engine prefix the normaliser writes (``Edit <Picture 1>. ``) — a sentence of its own, removed whole.
+_EDIT_PREFIX = re.compile(r"^\s*Edit <Picture\s*\d+>\.\s*", re.IGNORECASE)
 _PAREN = re.compile(r"\s*\(([^()]*)\)")
 
 
 def _strip_paren(m: "re.Match[str]") -> str:
-    """A parenthesis keeps its ``;``-parts without a ``<ref N>``; one left empty goes with its leading space."""
+    """A parenthesis keeps its ``;``-parts without a token; one left empty goes with its leading space."""
     inner = m.group(1)
-    if not CANONICAL_REF.search(inner):
+    if not ANY_REF.search(inner):
         return m.group(0)
-    kept = [p.strip() for p in inner.split(";") if p.strip() and not CANONICAL_REF.search(p)]
+    kept = [p.strip() for p in inner.split(";") if p.strip() and not ANY_REF.search(p)]
     lead = m.group(0)[:len(m.group(0)) - len(m.group(0).lstrip())]
     return f"{lead}({'; '.join(kept)})" if kept else ""
 
 
 def strip_refs(text: str) -> str:
-    """``text`` without its canonical ``<ref N>`` tokens — the form a prompt is STORED in (gallery prompt, Instagram
-    post, template prompt), so a later re-render plans its own slots instead of inheriting this render's. A
-    parenthesis loses its ``;``-parts that hold a token (an emptied one goes); any other clause (``,``) holding one
-    goes, and a line left without words goes too. Text without ``<ref`` comes back byte-identical."""
-    if not text or not CANONICAL_REF.search(text):
+    """``text`` without its reference tokens — the form a prompt is STORED in (gallery prompt, Instagram post,
+    template prompt) and the form every RE-render starts from (``image_regenerate``), so a re-render plans its own
+    slots instead of inheriting another render's numbers. Removes the canonical ``<ref N>`` and every engine spelling
+    (``<Picture N>``, ``<imageN>``, ``<Subject N>``, ``@imageN``; a prompt copied from a log's ``final_prompt``) and
+    the P-H3 prefix ``Edit <Picture 1>.``. A parenthesis loses its ``;``-parts that hold a token (an emptied one goes);
+    any other clause (``,``) holding one goes, and a line left without words goes too. Text without a token comes back
+    byte-identical."""
+    if not text or not ANY_REF.search(text):
         return text
+    text = _EDIT_PREFIX.sub("", text, count=1)
     text = _PAREN.sub(_strip_paren, text)
     lines = []
     for line in text.split("\n"):
-        if CANONICAL_REF.search(line):
+        if ANY_REF.search(line):
             body = line.rstrip()
             end = body[-1] if body and body[-1] in ".!?" else ""
-            clauses = [c for c in re.split(r",\s*", body[:-1] if end else body) if not CANONICAL_REF.search(c)]
+            clauses = [c for c in re.split(r",\s*", body[:-1] if end else body) if not ANY_REF.search(c)]
             line = ", ".join(clauses).rstrip() + end if clauses else ""
             if not re.search(r"[A-Za-z]", line.split(":", 1)[-1] if ":" in line else line):
                 continue
         lines.append(line)
     out = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+def reference_mentions(text: str) -> set:
+    """The reference mentions of ``text`` (every ``_MENTIONS`` spelling), each as its lower-case text without spaces —
+    what a rewrite of the prompt (``pose_check``) must keep: a lost one unbinds a person from its picture."""
+    return {re.sub(r"\s+", "", m.group(0)).lower() for m in _MENTIONS.finditer(text or "")}
+
+
+# ---------------------------------------------------------------------------------------------------- mark
+
+#: What a person's marker says (the same words the chat-photo renderer writes, ``prompt_adapters._person_ref``).
+PERSON_MARK = "the person in <ref {n}>"
+ROOM_MARK = "the place shown in <ref {n}>"
+
+
+def _slot_number(key: str) -> int:
+    m = _SLOT_KEY.match(str(key))
+    return int(m.group(1)) if m else 0
+
+
+def _mark_name(text: str, name: str, mark: str) -> Tuple[str, bool]:
+    """``text`` with ``mark`` bound to the FIRST whole-word mention of ``name`` — a list line that starts with it
+    (``- Kai, …``, ``- Kai: …``) first, else the first mention anywhere. ``Kai (…)`` gets the mark as the parenthesis' first part
+    (``Kai (the person in <ref 2>; …)``); otherwise ``Kai (the person in <ref 2>)``. A possessive (``Kai's``) or a
+    longer word (``Kaira``) is no mention."""
+    word = rf"(?<![\w'’]){re.escape(name)}(?![\w'’])"
+    m = re.search(rf"(?m)^[ \t]*[-*•][ \t]*({word})", text) or re.search(f"({word})", text)
+    if not m:
+        return text, False
+    end = m.end(1)
+    paren = re.match(r"[ \t]*\(", text[end:])
+    if paren:
+        at = end + paren.end()
+        return f"{text[:at]}{mark}; {text[at:]}", True
+    return f"{text[:end]} ({mark}){text[end:]}", True
+
+
+def mark_refs(prompt: str, roles: Optional[Dict[str, Dict[str, str]]]) -> str:
+    """``prompt`` (token-free, ``strip_refs``) with the slots of a slot manifest (``reference_roles``,
+    ``{input_reference_image_N: {"role", "label"}}``) named in it — what a re-render sends after it planned its own
+    slots (``image_regenerate``):
+
+    - ``identity`` (label = the person's name): ``_mark_name`` with ``the person in <ref N>``; a person in a slot whose
+      name the text never mentions gets one line ``Kai (the person in <ref N>) is in the picture too.``;
+    - ``room``: ``Setting: the place shown in <ref N>, …`` on the first ``setting:`` label, else a line
+      ``Setting: the place shown in <ref N>.``;
+    - ``item`` (label = the item name): one line ``Objects: the lamp from <ref N>.``;
+    - the added lines stand before a closing ``Style:`` paragraph (the labelled layout), else at the end;
+    - every other role (``composition``, ``material``, …) is named by its own caller's sentence, nothing here.
+    A slot already named in the prompt (``<ref N>``) is left alone. Without a manifest the prompt comes back as it
+    is."""
+    if not prompt or not roles:
+        return prompt
+    text = prompt
+    named = {int(n) for n in re.findall(r"<ref\s*(\d+)>", text, re.IGNORECASE)}
+    extra: List[str] = []
+    items: List[str] = []
+    for key, role in sorted((roles or {}).items(), key=lambda kv: _slot_number(kv[0])):
+        n = _slot_number(key)
+        if not n or n in named:
+            continue
+        kind = str((role or {}).get("role") or "")
+        label = str((role or {}).get("label") or "").strip()
+        if kind == "identity" and label:
+            text, found = _mark_name(text, label, PERSON_MARK.format(n=n))
+            if not found:
+                extra.append(f"{label} ({PERSON_MARK.format(n=n)}) is in the picture too.")
+        elif kind == "room":
+            setting = re.search(r"\bsetting:[ \t]*", text, re.IGNORECASE)
+            if setting:
+                text = f"{text[:setting.end()]}{ROOM_MARK.format(n=n)}, {text[setting.end():]}"
+            else:
+                extra.append(f"Setting: {ROOM_MARK.format(n=n)}.")
+        elif kind == "item" and label:
+            items.append(f"the {label} from <ref {n}>")
+    if items:
+        extra.append(f"Objects: {', '.join(items)}.")
+    if extra:
+        # before a closing "Style:" paragraph (the labelled layout of a stored chat photo), else at the end
+        style = list(re.finditer(r"(?m)^Style:", text))
+        if style and "\n\n" in text[:style[-1].start()]:
+            at = style[-1].start()
+            text = f"{text[:at]}{chr(10).join(extra)}\n\n{text[at:]}"
+        else:
+            text = text.rstrip() + "\n" + "\n".join(extra)
+    return text
 
 
 # ---------------------------------------------------------------------------------------------------- structured

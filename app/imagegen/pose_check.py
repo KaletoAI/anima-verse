@@ -7,6 +7,8 @@ the prompt so every person's limbs, the framing and the spatial arrangement
 are physically possible and unambiguous — without changing WHAT the image
 shows (people, clothing or nudity, the action). It neither censors nor tones
 anything down; route its task at a model that handles the world's content.
+A reference token the prompt carries (``<ref 2>``, ``<image2>``, ``<Picture 2>``) binds a person or the place to
+its picture; an answer that loses one is not used (the prompt before the check renders).
 
 Where it runs:
   * automatically, per image-routing occasion: ``image_generation.pose_check``
@@ -130,6 +132,13 @@ def check_pose(prompt: str, *, character: str = "") -> str:
         logger.warning("Pose check answer is too short (%d < %d chars of image text) — "
                        "looks like dropped content or a refusal; rendering the original prompt",
                        len(checked), measured)
+        return prompt
+    from app.imagegen.edit_prompt import reference_mentions
+    lost = reference_mentions(original) - reference_mentions(checked)
+    if lost:
+        # A lost "<ref 2>" unbinds that person from its picture — the prompt before the check is the safer render.
+        logger.warning("Pose check answer lost reference token(s) %s — rendering the original prompt",
+                       ", ".join(sorted(lost)))
         return prompt
     logger.info("Pose check rewrote the prompt: %s", checked[:160])
     return checked

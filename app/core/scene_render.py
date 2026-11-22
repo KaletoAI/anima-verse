@@ -49,15 +49,15 @@ logger = get_logger("scene_render")
 # {people} = person list. KEEP IN SYNC with the schema defaults in
 # config_schema.py.
 PROMPT_MULTI_REF_DEFAULT = (
-    "The exact {setting} from the first reference image, keeping its "
+    "The exact {setting} from <ref 1>, keeping its "
     "layout, lighting and perspective. Compose {count} into the scene "
     "and NO ONE else — each of them appears exactly once, no additional "
-    "people or animals, no duplicates. A subject's reference image pins "
+    "people or animals, no duplicates. A subject's own picture pins "
     "their FACE/IDENTITY ONLY — their appearance, outfit and pose follow "
-    "the text; IGNORE the pose, outfit and background the reference shows. "
+    "the text; IGNORE the pose, outfit and background that picture shows. "
     "Subjects: {people}")
 PROMPT_ONLY_BG_DEFAULT = (
-    "The exact {setting} from the reference image, keeping its layout, "
+    "The exact {setting} from <ref 1>, keeping its layout, "
     "lighting and perspective. Compose {count} into the scene and NO ONE "
     "else — each of them appears exactly once, no additional people or "
     "animals, no duplicates. Subjects: {people}")
@@ -472,7 +472,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
             part = c["name"]
             bits = []
             if c["name"] in ref_slot_of:
-                bits.append(f"identity from reference image {ref_slot_of[c['name']]}")
+                bits.append(f"shown in <ref {ref_slot_of[c['name']]}>")
             desc = _appearance_text(c["name"])
             if desc:
                 bits.append(desc)
@@ -495,7 +495,7 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                 label=state["label"], count=count_word,
                 setting=state["setting"], people="; ".join(lines))
         else:
-            subject = (f"The exact {state['setting']} from the reference image, "
+            subject = (f"The exact {state['setting']} from <ref 1>, "
                        f"keeping its layout, lighting and perspective")
         if _ev:
             subject += f" Ongoing event shaping this scene: {_ev}"

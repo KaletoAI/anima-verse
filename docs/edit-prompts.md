@@ -4,7 +4,8 @@ Status (2026-11-21, branch `eprompt`, base `7fc7c386d`): **Phase 1 and Phase 2 i
 `gate_attempts` itself and the cut texture use it) and the dialect column of the routing overview's DATA
 (`_explain_one`). Live E2E on copies of Kai and Dario passed (§10). Open: C10 (the dialog's attempts list — needs a
 frontend build), the overview's dialect column in `static/admin/settings.js`, C11's nine other loops, C12, C13 (an admin
-action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_backend path) landed on branch `chatimg` (§4).
+action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_backend path) and C17–C19 (re-renders, scene view, pose check; the
+secret-diary pack line of C18 is a patch for the private repo) landed on branch `chatimg` (§4).
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -80,7 +81,7 @@ def normalise(prompt: str, params: dict, backend) -> tuple[str, dict]   # §3
 Hook: `app/imagegen/base.py` `ImageBackend.generate`. It replaces the `reference_wording` call (today :676-677) with `final_prompt, ep_meta = edit_prompt.normalise(final_prompt, params, self)`. It stays before the negative fold and before `prompt_limit.fit_prompt`, so shortening protects the new tokens.
 
 `normalise` does, in order:
-1. `slots` = the sorted N of `params["reference_images"]` keys `input_reference_image_N` (`input_mask` is not counted). **No slot → nothing to do**: the prompt comes back byte-identical, meta `{"refs": 0}`. Txt2img, mesh and video therefore stay untouched.
+1. `slots` = the sorted N of `params["reference_images"]` keys `input_reference_image_N` (`input_mask` is not counted). **No slot → nothing to do**: the prompt comes back byte-identical, meta `{"refs": 0}`. Txt2img, mesh and video therefore stay untouched. The one exception: a canonical `<ref N>` (a fixed producer text such as the scene-view default, on a backend without slots) is removed by the rule of step 4, note `unresolved` — the producers' token never reaches an engine.
 2. **Recognise mentions** with ONE regex table `_MENTIONS`, all mapped to a slot number:
    `<ref N>` · `<Picture N>` · `Picture N` · `<imageN>` · `@imageN` · `image N` / `picture N` / `reference image N` · `the (first|second|third|fourth|fifth) (image|picture|reference image|reference picture)` · `the reference image` / `the reference picture` (→ 1, only when exactly one slot). Vague phrases ("as the reference", "the person in the picture") are NOT guessed. Their producers are fixed instead (§8, rows P5/P6).
 3. **Render** each mention with `render_ref(n, dialect, len(slots))`. Capitalisation follows the sentence start. With `image_tag` and one slot, "the first image" becomes "the image".
@@ -105,7 +106,7 @@ The order is already decided in ONE place per path. Only its result has to reach
 | Path | Who knows slot → who | Change |
 |---|---|---|
 | `service.generate_on_backend` (photo, instagram, story, video start frame, frame, profile; Agent > extra edit pictures > Room > others > Items) | `PromptBuilder._plan_qwen_slots` (`prompt_builder.py:1297`) | Rename it to the public `plan_reference_slots`. Call it BEFORE the prompt is rendered (today the render is at `service.py:2794`/`2882`, the slots at `:2977`), with `max_slots=backend.ref_slot_count`. Store `pv.slot_of = {name: N}`, `pv.room_slot`, `pv.item_slot_of`. `_resolve_qwen_slots` reuses that plan instead of planning again. |
-| `image_regenerate.regenerate_image` (screenshot photo = slot 1, persons from 2, self-ref into the first free slot) | its own code `:471-501` | Fill the same `slot_of` from what it slotted. The stored original prompt gets `<ref N>` after the names through `edit_prompt.mark_persons(prompt, slot_of)` (whole word, first mention only). |
+| `image_regenerate.regenerate_image` (screenshot photo = slot 1, persons from 2, self-ref into the first free slot) | its own code `:471-501` | Fill the same `slot_of` from what it slotted. The stored original prompt gets `<ref N>` after the names through `edit_prompt.mark_refs(prompt, reference_roles)` (whole word, first mention only). |
 | `scene_render` (:480-543) / `secret_diary/presentation.py` | `ref_slot_of` | Write `<ref N>` instead of "reference image N" / "the first reference image". This touches the config defaults `scene_prompt_multi_ref` / `scene_prompt_only_background` (`config_schema.py:45-50`, `:942`) too. |
 
 **Landed (change plan point 1, generate_on_backend path).** `PromptBuilder.plan_reference_slots` is the public
@@ -131,7 +132,26 @@ What the renderers write (only for what really sits in a slot of THIS backend):
 - The normaliser notes `role_missing` only for an edit (no manifest, or a `canvas` / `view_source` / `material` role in it), not for
   a new composition.
 Guard: `scripts/smoke_chat_photo_slots.py`. A/B on the local hub: `~/claude-out/chat-bilder/stufe1/`.
-`pose_check.apply` (LLM rewrite of scene/event/photo) has to keep `<ref N>`, so its prompt template names the token. If a token is lost anyway, step 6 reports it as `unused`.
+
+**Landed (change plan points 2 and 3, re-renders, scene view, pose check).**
+- `image_regenerate.regenerate_image` (gallery and Instagram regenerate, the scene photo, both Improvements re-renders)
+  starts from `strip_refs(without_screenshot_sentence(prompt))`. `strip_refs` removes every bracket spelling (`<ref N>`,
+  `<Picture N>`, `<imageN>`, `<Subject N>`, `@imageN`) and the P-H3 prefix `Edit <Picture 1>.`; ordinal prose ("the
+  first image") is left alone. Per backend, `_render` builds the slot manifest of what it really sent (identity /
+  room from `resolve_reference_slots`; the screenshot and the self-reference as `composition`), puts it into
+  `params["reference_roles"]` and names it in the text with `edit_prompt.mark_refs`: `- Kai (the person in <ref 3>), …`
+  (a `- Name` list line first, else the first whole-word mention; `Name (…)` gets the mark as the parenthesis' first
+  part; a slotted person the text never names gets `Kai (the person in <ref 3>) is in the picture too.`), the room
+  `Setting: the place shown in <ref 2>, …` on a `setting:` label, else its own paragraph before `Style:`, items
+  `Objects: the lamp from <ref 4>.`. The screenshot sentence (`<ref 1> gives only composition …`) is added there too,
+  only when slot 1 holds the screenshot. The returned and stored prompt stays token-free.
+- Scene view: the defaults say `from <ref 1>` and `Kai (shown in <ref 2>; …)` ("shown in", because a subject may be an
+  animal); the previous defaults went to `SCENE_PROMPT_LEGACY_DEFAULTS`, the schema placeholders equal the code defaults.
+  The secret-diary pack gets the same words (`the person in <ref N>`) from a patch for the private repo.
+- Pose check: `image_pose_check.md` tells the LLM to keep every reference token; `check_pose` compares
+  `edit_prompt.reference_mentions` before and after and renders the prompt from before the check when one is lost
+  (logged). In `regenerate_image` the check runs on the token-free prompt, before `mark_refs`.
+Guard: `scripts/smoke_regen_ref_marks.py`. A/B on the local hub: `~/claude-out/chat-bilder/stufe2/`.
 
 ## 5. Request parameters per dialect (D5)
 
@@ -192,7 +212,7 @@ Phases; each one ends with its smokes green.
 **Phase 1 — core (no visible change except Qwen tokens)**
 | ID | File / function | Change |
 |---|---|---|
-| C1 | new `app/imagegen/edit_prompt.py` | table, `Ref/Transfer/EditPrompt`, renderers, `normalise`, `lint_backend`, `TOKEN_RE`, `mark_persons` |
+| C1 | new `app/imagegen/edit_prompt.py` | table, `Ref/Transfer/EditPrompt`, renderers, `normalise`, `lint_backend`, `TOKEN_RE`, `strip_refs`, `mark_refs` |
 | C2 | `app/imagegen/base.py:676` `generate` | `normalise` instead of `reference_wording`; `edit_prompt` into `log_meta` / `_log_generation` |
 | C3 | `app/core/prompt_adapters.py:30-62` | delete `PICTURE_REFERENCE_MODELS`, `_PICTURE_WORDING`, `uses_picture_references`, `reference_wording` |
 | C4 | `app/imagegen/prompt_limit.py:94` + `llm/tasks/image_prompt_shorten.md` | `TOKEN_RE` |
@@ -212,9 +232,9 @@ Phases; each one ends with its smokes green.
 | C14 | `app/core/prompt_builder.py:1297` | `plan_reference_slots` public, `slot_of` on `PromptVariables` |
 | C15 | `app/imagegen/service.py:2758-2980` `generate_on_backend` | plan slots before render; `reference_roles`; `_with_extra_reference_prompt` stays (the normaliser covers the rest) |
 | C16 | `app/core/prompt_adapters.py:189`/`:262` renderers | `(<ref N>)` after names, room/item slots |
-| C17 | `app/skills/image_regenerate.py:440-536`, `app/core/scene_photo.py:46-88` | `slot_of`, `mark_persons`; `_SCREENSHOT_SENTENCE` → `<ref 1>` |
+| C17 | `app/skills/image_regenerate.py:440-536`, `app/core/scene_photo.py:46-88` | `strip_refs` at the start, the slot manifest + `mark_refs` per backend; `_SCREENSHOT_SENTENCE` → `<ref 1>`, added per backend |
 | C18 | `app/core/scene_render.py:51/59/493`, `config_schema.py:45-50/:942`, `plugins/secret_diary/presentation.py:139` (pack, private repo) | `<ref N>` |
-| C19 | `app/imagegen/pose_check.py` template | keep `<ref N>` |
+| C19 | `app/imagegen/pose_check.py` template | keep `<ref N>`; a lost token → the prompt before the check |
 | C20 | `plugins/take_photo/skill.py:99`, `plugins/instagram/skill_post.py:451`, `story_engine.py:401`, `routes/story.py:580`, `video_generation_skill.py:140` | nothing, they inherit C15/C16 (a smoke checks them) |
 
 **Phase 4 — the remaining edit producers say `<ref N>` (wording only)**

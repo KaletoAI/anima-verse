@@ -60,9 +60,18 @@ _SCREENSHOT_NEGATIVE = "3d render, cgi, video game screenshot, low poly, plastic
 _CAMERA_HOLDER = re.compile(r"\bselfie\b|\btaken\s+by\b", re.IGNORECASE)
 
 
+def without_screenshot_sentence(prompt: str) -> str:
+    """``prompt`` without the screenshot sentence in any spelling (``_SCREENSHOT_ANY``) — the form a re-render starts
+    from (``image_regenerate``); prompts without it come back byte-identical."""
+    if not prompt or not _SCREENSHOT_ANY.search(prompt):
+        return prompt
+    return re.sub(r"\n{3,}", "\n\n", _SCREENSHOT_ANY.sub("", prompt)).strip()
+
+
 def with_screenshot_sentence(prompt: str) -> str:
     """``prompt`` with the screenshot sentence (``_SCREENSHOT_SENTENCE``) once at its end: every earlier copy, in any
-    spelling (``_SCREENSHOT_ANY``), is removed first — a regenerate of a stored prompt never carries it twice."""
+    spelling (``_SCREENSHOT_ANY``), is removed first — a regenerate of a stored prompt never carries it twice.
+    ``image_regenerate`` adds it per render, only when slot 1 really holds the screenshot."""
     return f"{_SCREENSHOT_ANY.sub('', prompt or '').strip()}\n{_SCREENSHOT_SENTENCE}".strip()
 
 
@@ -313,8 +322,7 @@ def take_scene_photo(avatar: str,
         if not prompt:
             prompt = prep["prompt"]
 
-    if source_path:
-        prompt = with_screenshot_sentence(prompt)
+    # The screenshot sentence is added by regenerate_image, per backend, only when slot 1 holds the screenshot.
 
     # Only a backend the user PICKED is explicit. The dialog's preselection
     # (prep["default_backend"]) is display only — the one-click photo runs on

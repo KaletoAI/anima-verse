@@ -211,7 +211,12 @@ def regenerate_image(character_name: str,
         (success, final_prompt, actual_output_path) — final_prompt is the
         prompt actually used.
     """
-    final_prompt = original_prompt
+    # 1a. A re-render plans its own slots: the stored prompt loses every reference token (any dialect) and the
+    # screenshot sentence (any spelling) first — both are added again in _render for exactly the pictures this
+    # backend gets, so a token never points at another render's slot (docs/edit-prompts.md §4, plan point 2).
+    from app.core.scene_photo import with_screenshot_sentence, without_screenshot_sentence
+    from app.imagegen.edit_prompt import mark_refs, strip_refs
+    final_prompt = strip_refs(without_screenshot_sentence(original_prompt))
 
     # 1b. Improve the prompt when the user gave feedback
     if improvement_request:
@@ -292,10 +297,10 @@ def regenerate_image(character_name: str,
     screenshot_photo = bool(use_source_as_reference and (
         _screenshot_source or (occasion == "photo" and source_image_path)))
     if screenshot_photo:
-        from app.core.scene_photo import _SCREENSHOT_NEGATIVE, with_screenshot_sentence
+        from app.core.scene_photo import _SCREENSHOT_NEGATIVE
         if _screenshot_source:
             source_image_path = str(_screenshot_source)
-        final_prompt = with_screenshot_sentence(final_prompt)
+        # the sentence naming the screenshot (<ref 1>) is added in _render, only when slot 1 holds it
         negative_prompt_extra = f"{negative_prompt_extra}, {_SCREENSHOT_NEGATIVE}".strip(", ")
     screenshot_subjects = screenshot_photo and character_names is not None
 
@@ -379,6 +384,9 @@ def regenerate_image(character_name: str,
                     warn_dropped_loras(b.name, dropped, character_name)
                 params["lora_inputs"] = kept
         face_refs: Dict[str, Any] = {"reference_images": {}, "has_reference_slots": False}
+        # The slot manifest of THIS render ({slot key: {"role", "label"}}): what mark_refs names in the text and
+        # what the normaliser logs (params["reference_roles"]).
+        roles: Dict[str, Dict[str, str]] = {}
         _ref_slots = getattr(b, "ref_slot_count", 0)
         if screenshot_photo:
             # Reserve composition before resolving people. Even a failed person
@@ -386,6 +394,7 @@ def regenerate_image(character_name: str,
             if _ref_slots > 0:
                 face_refs = {"reference_images": {"input_reference_image_1": source_image_path},
                              "has_reference_slots": True}
+                roles["input_reference_image_1"] = {"role": "composition", "label": "the screenshot"}
             else:
                 logger.info("Screenshot photo: backend %s has no reference slots — text-only", b.name)
             params["reference_images"] = face_refs["reference_images"]
@@ -472,13 +481,15 @@ def regenerate_image(character_name: str,
                                   for idx, p in enumerate(persons, 1)
                                   if idx in _regen_pv.ref_images]
                     budget = max(0, _ref_slots - 1)
-                    for slot, (_, ref) in enumerate(candidates[:budget], 2):
+                    for slot, (name, ref) in enumerate(candidates[:budget], 2):
                         face_refs["reference_images"][f"input_reference_image_{slot}"] = ref
+                        roles[f"input_reference_image_{slot}"] = {"role": "identity", "label": name}
                     if _ref_slots > 0 and len(candidates) > budget:
                         logger.info("Screenshot photo: dropped person references (max %d slots): %s",
                                     _ref_slots, ", ".join(name for name, _ in candidates[budget:]))
                 else:
                     face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
+                    roles.update(face_refs.get("reference_roles") or {})
 
                 # Self-reference (current image) into the first free slot — the
                 # dialog already caps the selection to the slot budget, here it
@@ -492,6 +503,8 @@ def regenerate_image(character_name: str,
                         for _n in range(1, _ref_slots + 1):
                             if _n not in _used:
                                 _refs[f"input_reference_image_{_n}"] = source_image_path
+                                roles[f"input_reference_image_{_n}"] = {"role": "composition",
+                                                                       "label": "the current image"}
                                 face_refs["reference_images"] = _refs
                                 face_refs["has_reference_slots"] = True
                                 logger.info("Self-reference in slot %d: %s", _n, Path(source_image_path).name)
@@ -504,12 +517,21 @@ def regenerate_image(character_name: str,
                 params["reference_images"] = face_refs["reference_images"]
             except Exception as e:
                 logger.warning(f"Reference resolution error: {e}")
+        # Name each slotted picture in the text (person after its name, the room on the setting) and, when slot 1
+        # holds the screenshot, the sentence about it — for exactly the slots THIS backend gets.
+        _sent = params.get("reference_images") or {}
+        roles = {k: v for k, v in roles.items() if _sent.get(k)}
+        subject_prompt = mark_refs(final_prompt, roles)
+        if screenshot_photo and _sent.get("input_reference_image_1") == source_image_path:
+            subject_prompt = with_screenshot_sentence(subject_prompt)
+        if roles:
+            params["reference_roles"] = roles
         # Use-case style for THIS backend (the prompt is stored without affixes).
         from app.core import config as _cfg
         _ucp = _cfg.resolve_use_case_style(
             "character", backend_model=getattr(b, "model", "") or "",
             backend_family=getattr(b, "image_family", ""))
-        gen_prompt = final_prompt
+        gen_prompt = subject_prompt
         if _ucp.get("prompt_style"):
             gen_prompt = f"{_ucp['prompt_style']} {gen_prompt}"
         # Negative: the call's override wins, otherwise the use case's.
@@ -522,8 +544,8 @@ def regenerate_image(character_name: str,
             for term in terms:
                 unique.setdefault(term.casefold(), term)
             gen_neg = ", ".join(unique.values())
-        logger.info("Backend=%s, prompt (clean): %s...", b.name, final_prompt[:120])
-        if gen_prompt != final_prompt:
+        logger.info("Backend=%s, prompt (clean): %s...", b.name, subject_prompt[:120])
+        if gen_prompt != subject_prompt:
             logger.info("Prompt (with affixes): %s...", gen_prompt[:120])
 
         def _op(bb):
