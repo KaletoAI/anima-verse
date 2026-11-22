@@ -408,6 +408,14 @@ hold, so:
   2026-11-21: the faithful red MiniMax answers were rejected at ΔE00 26.9 / 30.6); invented content = `detail_density` (share of L* edges > 4 per px at 128 px) at most **4 × Picture 2's +
   0.04** (Kai 0.47 > 0.10 rejected, Dario 0.21 < 0.43 passes). The record keeps `metrics.gates`, `fabric`, `detail`
   and `failures` per job; the dialog shows each check.
+- **Split gate** (`SPLIT_GATE`, `cut_texture_post.split_gate`, live 2026-11-22: MiniMax painted Gelina's front skirt
+  panel as two pieces with a white line between them — coverage and iou 0.97 passed): inside every main island
+  eroded by 1 cm, a background-coloured component (not foreground at the answer's own `white_tol`) whose box's long
+  side is ≥ **0.4** of the island's extent along it and whose mean width is ≤ **3 cm** rejects the answer, so attempt 2
+  runs. Gelina 0.97 rejected; over the 40 saved live answers it flags only two more, both bad (Rosi's pencil skirt
+  painted as three pieces, Glut's bra answer 2), the right ones score ≤ 0.15. Skipped when ≥ 2 % of the item's own
+  fabric pixels are background-coloured (a white stripe can be the fabric). A pure reject gate: `POST_VERSION`
+  unchanged, no ready atlas goes stale.
 - **Sleeves and neckband** are not taken from the model: `fill_fabric` cuts the plainest `PATCH_CM` = 8 cm window of
   the main panel (within ΔE76 10 of its base colour), tiles it mirrored (seamless) and moves its Lab mean onto the
   panel's base colour, over every grown pixel whose nearest island is a sleeve, cuff or the neckband. The template

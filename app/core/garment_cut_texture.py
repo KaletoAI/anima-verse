@@ -1607,6 +1607,10 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     ok, met, reason = post.gate(reg, mask, labels, px_per_cm, reg_info.get("white_tol", post.WHITE_TOL))
     panel = _part_mask(islands, labels, MAIN_PARTS[job])
     gates, answer = post.answer_gates(reg, panel, refs.get("colour"), (refs.get("detail") or {}).get(job))
+    split = post.split_gate(reg, np.where(panel, labels, 0), px_per_cm,
+                            reg_info.get("white_tol", post.WHITE_TOL), refs.get("fabric"))
+    if split is not None:
+        gates.append(split)
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
     metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
                "spill": met["spill"], "registration": reg_info, "islands": met["islands"],

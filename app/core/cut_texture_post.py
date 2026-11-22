@@ -893,6 +893,68 @@ def answer_gates(reg: np.ndarray, panel: np.ndarray, item_colour: dict | None,
                    "detail": {"reference": reference_detail, "answer": det, "limit": lim_d}}
 
 
+#: The split gate (``split_gate``, live run 2026-11-22, Gelina's moon silk skirt): MiniMax read the side slit of the
+#: item picture as a cut and painted the front panel as TWO pieces with a white line between them (~1.7 cm wide, the
+#: whole panel high) — coverage 0.97 and iou 0.97 still passed, and the line was on the figure. A background-coloured
+#: component (not ``foreground`` at the answer's own ``white_tol``) inside a main island, the island eroded by
+#: ``edge_cm`` (the outline and a smeared border are not a line), is a split when its bounding box's long side is at
+#: least ``length`` x the island's own extent along that axis and its mean width (area / long side) at most
+#: ``width_cm``. A fabric speck, a sparkle or a round hole is short; a line through the panel is long and thin.
+#: Skipped when the ITEM's own fabric pixels are background-coloured in at least ``item_share`` of them (a white
+#: stripe, a white print): there a white line can be the fabric.
+SPLIT_GATE = {"edge_cm": 1.0, "length": 0.4, "width_cm": 3.0, "item_share": 0.02}
+
+
+def split_gate(reg: np.ndarray, panel_labels: np.ndarray, px_per_cm: float, tol: int,
+               item_fabric: np.ndarray | None = None) -> dict | None:
+    """The split gate (``SPLIT_GATE``) of a registered answer over the job's main islands (``panel_labels``: the
+    island ids of the main panel, 0 elsewhere): ``{"gate": "split", "ok", "value", "limit", "text", "lines"}`` —
+    ``value`` the longest background line as a share of its island's extent, ``lines`` every split found as
+    ``{"island", "length", "width_cm"}``; ``skipped`` when the item's fabric is background-coloured
+    (``item_share``). None without a main island."""
+    from scipy import ndimage
+    labels = np.asarray(panel_labels)
+    ids = [int(i) for i in np.unique(labels[labels > 0])]
+    if not ids:
+        return None
+    g = SPLIT_GATE
+    lim = g["length"]
+    if item_fabric is not None and len(item_fabric):
+        px = np.asarray(item_fabric, np.float64).reshape(-1, 3)
+        share = float(((255.0 - px).max(-1) <= tol).mean())
+        if share >= g["item_share"]:
+            return {"gate": "split", "ok": True, "value": 0.0, "limit": lim, "skipped": True, "text": "",
+                    "lines": [], "note": f"the item's fabric is background-coloured in {share:.3f} of its pixels"}
+    fg = foreground(reg, tol)
+    r = max(1, int(round(g["edge_cm"] * float(px_per_cm))))
+    width_px = g["width_cm"] * float(px_per_cm)
+    best, lines = 0.0, []
+    for lid in ids:
+        inner = erode(labels == lid, r)
+        if not inner.any():
+            continue
+        ys, xs = np.nonzero(inner)
+        ext = (int(ys.max() - ys.min() + 1), int(xs.max() - xs.min() + 1))
+        comp, n = ndimage.label(inner & ~fg, structure=np.ones((3, 3), bool))
+        if not n:
+            continue
+        for k, sl in enumerate(ndimage.find_objects(comp), start=1):
+            h, w = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
+            along = 0 if h >= w else 1
+            length = max(h, w)
+            share = length / float(ext[along])
+            area = int((comp[sl] == k).sum())
+            if area / float(length) > width_px:
+                continue
+            best = max(best, share)
+            if share >= lim:
+                lines.append({"island": lid, "length": round(share, 3),
+                              "width_cm": round(area / float(length) / float(px_per_cm), 2)})
+    ok = not lines
+    return {"gate": "split", "ok": ok, "value": round(best, 3), "limit": lim, "lines": lines,
+            "text": "" if ok else f"split line through a panel: {best:.2f} of its extent"}
+
+
 # ---------------------------------------------------------------------------------------------- the fabric patch
 #
 # Sleeves and neckband are NOT taken from the model by default (Dario 2026-11-21: P-H3 painted the chest embroidery
