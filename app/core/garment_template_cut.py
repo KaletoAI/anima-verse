@@ -30,8 +30,8 @@ NOT in it: the views / item picture (the drape key's texture part), ``fabric``, 
 
 Files under ``templates/cut/`` (beside the cut-texture records, whose 12-hex csig names never end in these suffixes):
 ``{item}_{cutsig}.islands.json`` (the builder's bytes), ``.cut.json`` (the record: state, metrics, wall seconds) and
-``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``); a jacket's / dress's cut also
-``.marks.json`` (step 3c, B11: the placket lines in atlas pixels, ``marks_file``; never part of the islands' bytes).
+``.pattern.png`` (the debug pattern sheet, ``garment_cut_texture.render_pattern_sheet``); a jacket's / dress's / covered
+top's cut also ``.marks.json`` (step 3c, B11: the placket lines in atlas pixels, ``marks_file``; never part of the islands' bytes).
 
 A drape records the sig of the cut it was laid out of (``cut_sig``); one whose recorded sig differs from the
 current one (a new flattening, a lower layer that became ready) is stale for ``garment_template.drape_state``
@@ -120,6 +120,9 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.panel_piece(params):
         # step 3b (B16): a panel piece's cut follows the panel version (``garment_template.PANEL_VERSION``)
         payload["panels"] = gt.PANEL_VERSION
+    if gt.neck_piece(params):
+        # phases E + F: a covered top's neck ring (the B8 neckband, the stand-collar strip, the placket line)
+        payload["neck"] = gt.NECK_VERSION
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 

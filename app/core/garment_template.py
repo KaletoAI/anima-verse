@@ -91,6 +91,11 @@ FITTED_VERSION = 1
 #: ring strip; a skirt's ``waistband`` field). Phases C and D (2026-11-22): the jacket and the dress join at the same
 #: version — their keys gain it, so each re-drapes once; a skirt's or a strapless top's key stays.
 PANEL_VERSION = 1
+#: Phases E + F (plan group B): a covered top's neck ring — the neckband only for a closed crew / boat / scoop at most
+#: 8 cm deep without a collar (B8), a stand collar as a relaxed strip laid out of the neck as a smooth ring (B9), and
+#: the placket's centre line (``marks.json``, B10). Part of the CUT key of a covered top only (``neck_piece``): its
+#: islands change, so its cut and atlas are due once; an off-shoulder / strapped top keeps its key and its bytes.
+NECK_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -397,7 +402,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons",
               "texture", "sleeve_print"),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
-            *OFF_SHOULDER_FIELDS, "texture", "sleeve_print"),
+            *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons", "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar", "placket", "buttons", "texture", "sleeve_print"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "gusset_m",
@@ -502,6 +507,11 @@ def panel_piece(params: Dict[str, Any]) -> bool:
     top. Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live ``uv_pattern.py``."""
     return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
                                                  and params.get("shoulders") == "strapless")
+
+
+def neck_piece(params: Dict[str, Any]) -> bool:
+    """Phases E + F: a top with a neck ring (shoulders covered) — its cut key carries ``NECK_VERSION``."""
+    return params.get("kind") == "top" and params.get("shoulders") == "covered"
 
 
 def corset_top(params: Dict[str, Any]) -> bool:
@@ -840,9 +850,9 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
             params[key] = PARAM_SPEC[key][2]
     if kind == "jacket":
         params["shoulders"] = "covered"
-    if kind == "dress" and params["collar"] == "lapel":
-        params["collar"] = "stand"     # B9: a lapel is a jacket's; a dress's collar stands
-    if kind == "dress" and params["shoulders"] != "covered":
+    if kind in ("dress", "top") and params["collar"] == "lapel":
+        params["collar"] = "stand"     # B9: a lapel is a jacket's; a dress's / top's collar stands
+    if kind in ("dress", "top") and params["shoulders"] != "covered":
         params["collar"] = "none"      # a collar needs a neck ring (no straps, not strapless, not off-shoulder)
     params["buttons"] = int(round(params["buttons"]))
     if corset_top(params):
@@ -1464,7 +1474,7 @@ def bodice_spec(params: Dict[str, Any], meas: Dict[str, Any], *, over_sleeves: b
         top_edge = {"neckline": neckline, "dip_m": sweetheart_depth(params) if neckline == "sweetheart" else 0.0,
                     "half_rad": SWEETHEART_HALF_RAD}
         neckline = "crew"
-    collar = params["collar"] if params["kind"] in ("jacket", "dress") else "none"
+    collar = params["collar"] if params["kind"] in ("jacket", "dress", "top") else "none"
     front_open = params["kind"] == "jacket" and (params["front"] == "open" or collar == "lapel")
     depth = params["neck_depth_m"] or NECK_DEPTH[neckline]
     if collar == "lapel":

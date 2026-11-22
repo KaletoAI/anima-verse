@@ -146,6 +146,15 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
             fields; ``slit`` "front_left" / "front_right" are valid (not reset to "none").
      [17.4] The builder's ``SLIT_ANGLE`` (read from the source, evaluated with ``math``): front_left - 1.5 pi =
             6 * pi / 40 = 0.471239 (+-1e-6) = 6 columns of ``split_slit``'s pi / 40 step; front_right = 1.5 pi - the same.
+[18] Phases E + F (plan group B — a top's collar, placket and neckband):
+     [18.1] "collar", "placket", "buttons" are top fields; a top's "lapel" becomes "stand" (B9: a lapel is a jacket's);
+            a stand collar on an off-shoulder or strapped top becomes "none" (no neck ring to stand on).
+     [18.2] ``placket`` / ``buttons`` are ``TEXTURE_ONLY``: a top's ``tsig`` with placket "buttons", 7 buttons equals the
+            one without; ``collar`` "stand" changes it (a new geometry).
+     [18.3] ``NECK_VERSION`` is 1: the cut key of a covered top (a neck ring: the B8 neckband rule, the stand-collar
+            strip, the placket line) is md5 of the payload ``{params: cut_params, version, uv_pattern, base, lower}``
+            PLUS ``"neck": 1``; an off-shoulder top and a top with straps (no neck ring: their islands are byte-identical,
+            ``smoke_template_cut_tops.py`` [5]) carry none — their cuts and atlases stay.
 """
 import json
 import shutil
@@ -769,6 +778,41 @@ finally:
         setattr(gt, _k, _v)
     _bs15.prepare = _prep15
     shutil.rmtree(_t15, ignore_errors=True)
+
+# ---------------------------------------------------------------------------------------------------- [18] E + F
+check("[18.1] collar, placket, buttons are top fields", {"collar", "placket", "buttons"} <= set(gt.KIND_FIELDS["top"]))
+check("[18.1] a top's lapel -> stand", gt.validate_params({"kind": "top", "shoulders": "covered",
+                                                        "collar": "lapel"})[0]["collar"] == "stand")
+for _sh18 in ("off_shoulder", "straps"):
+    check(f"[18.1] a {_sh18} top: collar none", gt.validate_params({"kind": "top", "shoulders": _sh18,
+                                                                  "collar": "stand"})[0]["collar"] == "none")
+_t18 = gt.validate_params({"kind": "top", "shoulders": "covered", "sleeves": "elbow"})[0]
+_kw18 = {"base_sha": "a" * 64, "texture_sha": "t1", "lower": []}
+check("[18.2] placket / buttons do not key the drape",
+      gt.tsig(dict(_t18, placket="buttons", buttons=7), **_kw18) == gt.tsig(_t18, **_kw18))
+check("[18.2] a stand collar keys the drape", gt.tsig(dict(_t18, collar="stand"), **_kw18) != gt.tsig(_t18, **_kw18))
+from app.core import garment_template_cut as gtc  # noqa: E402
+check("[18.3] NECK_VERSION is 1", getattr(gt, "NECK_VERSION", None) == 1)
+
+
+def _cut18(p):
+    return {"params": gtc.cut_params(p), "version": gt.TEMPLATE_VERSION, "uv_pattern": gtc.uv_pattern_key(p),
+            "base": "b" * 64, "lower": ["x"]}
+
+
+import hashlib as _h18  # noqa: E402
+
+
+def _md18(payload):
+    return _h18.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+
+
+check("[18.3] a covered top's cut key = payload + neck 1",
+      gtc.cut_sig(_t18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_t18), "neck": 1}))
+for _sh18 in ("off_shoulder", "straps"):
+    _o18 = gt.validate_params({"kind": "top", "shoulders": _sh18, "sleeves": "elbow"})[0]
+    check(f"[18.3] a {_sh18} top's cut key carries no neck",
+          gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18(_cut18(_o18)))
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)
