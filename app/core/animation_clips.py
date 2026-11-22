@@ -974,7 +974,7 @@ def _leaving_kinds(rules: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, str
         finale = entry.get("finale_animation") or ""
         if not finale:
             try:
-                from app.core.prop_action_engine import auto_finale
+                from app.core.pose_scene import auto_finale
                 finale = auto_finale(key, entry)
             except Exception:
                 finale = ""
@@ -1131,6 +1131,17 @@ def valid_loop_count(raw: Any) -> Optional[int]:
     if not 1 <= raw <= LOOP_COUNT_MAX:
         raise ClipLibraryError(f"loop_count must lie between 1 and {LOOP_COUNT_MAX}")
     return raw
+
+
+def stored_loop_count(meta: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The sidecar's ``loop_count`` as stored, whether the clip loops or
+    not (None without a valid one). A finale plays it either way
+    (``pose_scene.finale_cycles``); a looped clip reads it through
+    :func:`clip_loop_count`."""
+    try:
+        return valid_loop_count((meta or {}).get("loop_count"))
+    except ClipLibraryError:
+        return None
 
 
 def clip_loop_count(meta: Optional[Dict[str, Any]]) -> Optional[int]:
@@ -1351,6 +1362,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # How many cycles a looped clip plays before it holds its last frame;
         # None = endless (and always None for a one-shot).
         "loop_count": clip_loop_count(meta),
+        # The stored count whatever the loop switch: how often the clip plays
+        # when a pose closes with it (pose_scene.finale_cycles); None = once.
+        "finale_loop_count": stored_loop_count(meta),
         "height_offsets_cm": clip_height_offsets(_height_meta(
             path, entry["kind"], library_root(entry["source"]).resolve(),
             pair=bool(entry["role"]))),
@@ -1511,9 +1525,9 @@ def _alt_files(path: Path) -> List[Path]:
 def finale_kinds_of(kind: str) -> List[str]:
     """The finale clip kinds of the poses that play ``kind``: a pose's own
     ``finale_animation``, else what a package derives for it
-    (``prop_action_engine.auto_finale``). Unchecked against the files."""
+    (``pose_scene.auto_finale``). Unchecked against the files."""
     from app.core.pose_catalog import get_catalog
-    from app.core.prop_action_engine import auto_finale
+    from app.core.pose_scene import auto_finale
     out: List[str] = []
     for key, entry in get_catalog("pose").items():
         if (entry or {}).get("animation") != kind:
@@ -1849,8 +1863,9 @@ def set_clip_loop_count(library: str, rel: str, loop_count: Any) -> List[Dict[st
     frame (``loop_count``, 1..``LOOP_COUNT_MAX``); ``None`` removes the
     count — the loop is endless again. Same place and reach as the loop flag
     (:func:`set_clip_loop`): the shared ``<kind>.json`` and every variant's
-    own sidecar. A count on a clip without loop is stored but has no effect
-    (:func:`clip_loop_count`) — it comes back with the loop switch.
+    own sidecar. A count on a clip without loop does not repeat the clip's
+    own play (:func:`clip_loop_count`), but a FINALE plays it either way
+    (``pose_scene.finale_cycles``).
     ``ClipLibraryError`` for anything but an integer in range or None."""
     count = valid_loop_count(loop_count)
 

@@ -118,7 +118,7 @@ from smoke_prop_action_runs import A, F, R, tick
 from smoke_prop_action_runs import clips, pose_catalog
 # Use the shared fixture's private world for the direct app imports below.
 F.paths.init(F.ROOT / "world")
-from app.core import hooks                                              # noqa: E402
+from app.core import hooks, pose_scene as PS                           # noqa: E402
 
 
 def authored_trio(genders=None, role_gender=None, *, roles=3, people=3, kind="run-trio"):
@@ -329,10 +329,10 @@ class Smaller(unittest.TestCase):
             self.assertEqual((inter["members"], inter["role"]), ({"a": a, "c": b, "e": c}, role), who)
         self.assertEqual(row(a, eid)["roles"]["clip"], {"a": a, "c": b, "e": c})
         self.assertEqual([kw["members"] for kw in started], [[a, b, c]])
-        self.assertEqual(A.begin_finale(eid, b), {"ok": True, "reason": ""})
-        self.assertEqual(A.finale_for(b)["role"], "c")
-        self.assertEqual(A.begin_finale(eid, c), {"ok": True, "reason": ""})
-        self.assertEqual(A.finale_for(c)["role"], "e")
+        self.assertEqual(PS.begin_finale(eid, b), {"ok": True, "reason": ""})
+        self.assertEqual(PS.finale_for(b)["role"], "c")
+        self.assertEqual(PS.begin_finale(eid, c), {"ok": True, "reason": ""})
+        self.assertEqual(PS.finale_for(c)["role"], "e")
 
     def test_13_head_counts(self):
         from app.core import interaction_engine as I
@@ -533,21 +533,21 @@ class Alts(unittest.TestCase):
         inter = F.C.get_character_profile(c)["interaction"]
         ax, az = inter["anchor"]["x"], inter["anchor"]["z"]
         before = F.C.get_character_pos(c)
-        self.assertEqual(A.set_alt(eid, c, "wave"), {"ok": True, "reason": ""})
+        self.assertEqual(PS.set_alt(eid, c, "wave"), {"ok": True, "reason": ""})
         self.assertEqual(F.C.get_character_profile(c)["interaction"]["alt"], "wave")
         from app.core.timeutils import game_time
         self.assertEqual(I.payload_for(c, F.C.get_character_profile(c), game_time())["alt"], "wave")
         moved = F.C.get_character_pos(c)
         self.assertAlmostEqual(math.dist((moved["x"], moved["z"]), (before["x"], before["z"])), .5, places=3)
         self.assertAlmostEqual(math.dist((moved["x"], moved["z"]), (ax, az)), math.hypot(.6, .5), places=3)
-        self.assertEqual(A.begin_finale(eid, c), {"ok": True, "reason": ""})
-        self.assertEqual(A.finale_for(c)["alt"], "wave")
-        self.assertEqual(A.begin_finale(eid, b), {"ok": True, "reason": ""})
-        self.assertEqual(A.finale_for(b)["alt"], "")
-        self.assertEqual(A.set_alt(eid, c, "nope")["reason"], "unknown_alt")
-        self.assertEqual(A.set_alt(eid, b, "gone")["reason"], "unknown_alt")
-        self.assertEqual(A.set_alt(eid, "Nobody", "wave")["reason"], "not_participant")
-        self.assertEqual(A.set_alt(eid, c, ""), {"ok": True, "reason": ""})
+        self.assertEqual(PS.begin_finale(eid, c), {"ok": True, "reason": ""})
+        self.assertEqual(PS.finale_for(c)["alt"], "wave")
+        self.assertEqual(PS.begin_finale(eid, b), {"ok": True, "reason": ""})
+        self.assertEqual(PS.finale_for(b)["alt"], "")
+        self.assertEqual(PS.set_alt(eid, c, "nope")["reason"], "unknown_alt")
+        self.assertEqual(PS.set_alt(eid, b, "gone")["reason"], "unknown_alt")
+        self.assertEqual(PS.set_alt(eid, "Nobody", "wave")["reason"], "not_participant")
+        self.assertEqual(PS.set_alt(eid, c, ""), {"ok": True, "reason": ""})
         self.assertNotIn("alt", F.C.get_character_profile(c)["interaction"])
         back = F.C.get_character_pos(c)
         self.assertAlmostEqual(math.dist((back["x"], back["z"]), (ax, az)), .6, places=3)

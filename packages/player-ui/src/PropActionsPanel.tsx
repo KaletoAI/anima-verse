@@ -6,7 +6,7 @@ import { useI18n } from './I18nProvider'
 import { propActionErrorText, propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
 import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyLocalPropActionChange, requestPropAction, respondPropAction, setPropActionAlt,
-  type PropActionChoice, type PropActionConsent, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
+  type PropActionChoice, type PropActionConsent, type PropActionAlt, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
 export interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
 export interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
@@ -269,6 +269,60 @@ function useMeterValues(meters: PropActionMeter[] | undefined) {
   return (meter: PropActionMeter) => Math.max(0, Math.min(100, meter.value + (meter.rate || 0) * since))
 }
 
+/**
+ * The running scene's gauges (with the viewer's own Hold back switch) and the
+ * viewer's alt halves — ONE row for a furniture run and a free pair
+ * (`pose_scene` on the server). `onHold(held)` / `onAlt(id)` call the route
+ * of the scene's kind.
+ */
+export function SceneMeters({ meters, viewer, alt, busy, onHold, onAlt }: {
+  meters?: PropActionMeter[]
+  /** whose gauge may be held back here: the viewer's own */
+  viewer?: string
+  alt?: PropActionAlt | null
+  busy: boolean
+  onHold: (held: boolean) => void
+  onAlt: (id: string) => void
+}) {
+  const { t } = useI18n()
+  const meterValue = useMeterValues(meters)
+  return <>
+    {meters?.map(meter => {
+      const value = meterValue(meter)
+      // Only the viewer's own gauge can be held back — the own side of the scene.
+      const own = viewer === meter.name
+      return <span key={`meter:${meter.name}`} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+        <HoverHint text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
+          <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <span>{meter.name}</span>
+            <span className={`player-prop-meter${meter.held ? ' held' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={Math.round(value)} aria-label={`${meter.name} · ${meter.label || t('Finale')}`}>
+              <span className="player-prop-meter-fill" style={{ width: `${value}%` }} />
+            </span>
+          </span>
+        </HoverHint>
+        {own && meter.holdable && <HoverHint text={t('Slows your own gauge while on')}>
+          <button type="button" className={`player-chip${meter.held ? ' on' : ''}`} disabled={busy}
+            aria-pressed={!!meter.held}
+            onClick={() => onHold(!meter.held)}>
+            {t('Hold back')}
+          </button>
+        </HoverHint>}
+      </span>
+    })}
+    {alt && alt.options.length > 1 && <span role="group"
+      aria-label={t('Your part')} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <span>{t('Your part')}:</span>
+      {alt.options.map(option => <button key={`alt:${option.id}`} type="button"
+        className={`player-chip${alt.current === option.id ? ' on' : ''}`} disabled={busy}
+        aria-pressed={alt.current === option.id}
+        onClick={() => alt.current !== option.id && onAlt(option.id)}>
+        {option.id ? option.label : t('Default')}
+      </button>)}
+    </span>}
+  </>
+}
+
 export function PropActionExecutionRow({ run, kind, busy, perform }: {
   run: PropActionExecution
   kind: 'incoming' | 'outgoing' | 'current' | 'result'
@@ -276,7 +330,6 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
   perform: (operation: () => Promise<unknown>) => void
 }) {
   const { t } = useI18n()
-  const meterValue = useMeterValues(run.meters)
   const state = run.phase === 'entry' && run.status === 'approaching' ? 'Entering'
     : run.status === 'approaching' && run.own_role === 'actor' && run.reaction === 'pending' ? 'Waiting for reaction'
     : ({ awaiting_consent: 'Awaiting consent', approaching: 'Approaching', active: 'Active', sleeping: 'Sleeping',
@@ -297,39 +350,9 @@ export function PropActionExecutionRow({ run, kind, busy, perform }: {
     </>}
     {run.can_cancel && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(() => cancelPropAction(run.execution_id))}>{t(run.can_resist ? 'Push away' : kind === 'outgoing' ? 'Withdraw' : 'Stop')}</button>}
-    {run.status === 'active' && run.meters?.map(meter => {
-      const value = meterValue(meter)
-      // Only the viewer's own gauge can be held back — the own side of the run.
-      const own = run.viewer === meter.name
-      return <span key={`meter:${meter.name}`} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-        <HoverHint text={`${meter.name} · ${meter.label || t('Finale')}: ${Math.round(value)} %`}>
-          <span className="player-prop-meter-row" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            <span>{meter.name}</span>
-            <span className={`player-prop-meter${meter.held ? ' held' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100}
-              aria-valuenow={Math.round(value)} aria-label={`${meter.name} · ${meter.label || t('Finale')}`}>
-              <span className="player-prop-meter-fill" style={{ width: `${value}%` }} />
-            </span>
-          </span>
-        </HoverHint>
-        {own && meter.holdable && <HoverHint text={t('Slows your own gauge while on')}>
-          <button type="button" className={`player-chip${meter.held ? ' on' : ''}`} disabled={busy}
-            aria-pressed={!!meter.held}
-            onClick={() => perform(() => holdPropActionMeter(run.execution_id, !meter.held))}>
-            {t('Hold back')}
-          </button>
-        </HoverHint>}
-      </span>
-    })}
-    {run.status === 'active' && run.alt && run.alt.options.length > 1 && <span role="group"
-      aria-label={t('Your part')} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-      <span>{t('Your part')}:</span>
-      {run.alt.options.map(option => <button key={`alt:${option.id}`} type="button"
-        className={`player-chip${run.alt!.current === option.id ? ' on' : ''}`} disabled={busy}
-        aria-pressed={run.alt!.current === option.id}
-        onClick={() => run.alt!.current !== option.id && perform(() => setPropActionAlt(run.execution_id, option.id))}>
-        {option.id ? option.label : t('Default')}
-      </button>)}
-    </span>}
+    {run.status === 'active' && <SceneMeters meters={run.meters} viewer={run.viewer} alt={run.alt} busy={busy}
+      onHold={held => perform(() => holdPropActionMeter(run.execution_id, held))}
+      onAlt={id => perform(() => setPropActionAlt(run.execution_id, id))} />}
     {run.status === 'sleeping' && <button type="button" className="player-chip" disabled={busy}
       onClick={() => perform(async () => {
         // Existing player wake path; Core clears sleep and semantic bed ownership.

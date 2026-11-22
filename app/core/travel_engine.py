@@ -2334,6 +2334,11 @@ def _next_beat_s() -> float:
     due = engine.due_in_s(game_time()) if engine is not None else None
     if due is not None:
         soonest = min(soonest, max(0.0, due) + _MIN_BEAT_S)
+    from app.core.pose_scene import next_end_in_s
+    end = next_end_in_s()
+    if end is not None:
+        # A scene that ends after its finale (pose_scene.end_after_finale).
+        soonest = min(soonest, max(0.0, end) + _MIN_BEAT_S)
     return max(_MIN_BEAT_S, soonest)
 
 
@@ -2345,14 +2350,17 @@ def _prop_action_engine():
 
 
 def _advance_due_prop_actions() -> None:
-    """Run the prop-action clock once a timed step of a run is due."""
+    """Run the prop-action clock once a timed step of a run is due, then the
+    scene layer's due step (``pose_scene.advance(due_only=True)``: the gauge
+    beat of a free scene, a pending end after a finale)."""
+    from app.core import pose_scene
     engine = _prop_action_engine()
-    if engine is None:
-        return
     now = game_time()
-    due = engine.due_in_s(now)
-    if due is not None and due <= 0:
-        engine.advance(now)
+    if engine is not None:
+        due = engine.due_in_s(now)
+        if due is not None and due <= 0:
+            engine.advance(now)
+    pose_scene.advance(now, due_only=True)
 
 
 _ticker: TravelTicker | None = None

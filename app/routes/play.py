@@ -417,6 +417,15 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         interaction = ({"members": _IE.members_of(_run), "pose_key": _run["pose_key"],
                         "pose_label": pose_label(_run["pose_key"], lang)}
                        if _run else None)
+        if interaction is not None:
+            # A FREE pair is its own scene (pose_scene): its id for hold/alt,
+            # the gauges a package fills and the avatar's alt halves. A pair a
+            # furniture run owns shows those on its run row instead.
+            from app.core import pose_scene as _scene
+            _free = _run.get("execution_kind") != "prop_action"
+            interaction["scene_id"] = _run["id"] if _free else ""
+            interaction["meters"] = _scene.meters(_run["id"], avatar) if _free else []
+            interaction["alt"] = _IE.alt_choices(avatar) if _free else None
         # Who of the present is in a pair WITHOUT the avatar: the action
         # drawer greys their free pair poses (the Others card's "busy").
         present_busy = []
@@ -2331,6 +2340,43 @@ def play_interact_end(user=Depends(get_current_user)):
     return {"ok": end_interaction(avatar, reason="avatar")}
 
 
+def _scene_answer(result: Dict[str, Any]) -> Dict[str, Any]:
+    """``{ok, reason}`` of a pose_scene call as HTTP: a refusal is 403 for an
+    outsider, 409 otherwise — the same mapping as the furniture run routes."""
+    if not result.get("ok"):
+        raise HTTPException(status_code=403 if result.get("reason") == "not_participant" else 409,
+                            detail=result)
+    return result
+
+
+@router.post("/play/interact/hold")
+async def play_interact_hold(request: Request, user=Depends(get_current_user)):
+    """The avatar holds its own gauge back in its free pair scene (or lets
+    go) — ``{scene_id, hold}`` (schnittstellen-3d § A8c, pose_scene.hold)."""
+    import asyncio
+    from app.core import pose_scene
+    body = await request.json() or {}
+    scene_id, hold = body.get("scene_id"), body.get("hold")
+    if not isinstance(scene_id, str) or not scene_id or not isinstance(hold, bool):
+        raise HTTPException(status_code=400, detail="scene_id (string) and hold (boolean) required")
+    avatar = _require_avatar()
+    return _scene_answer(await asyncio.to_thread(pose_scene.hold, scene_id, avatar, hold))
+
+
+@router.post("/play/interact/alt")
+async def play_interact_alt(request: Request, user=Depends(get_current_user)):
+    """The avatar plays an alt half of its role in its free pair scene
+    (``""`` = its own half) — ``{scene_id, alt}`` (§ A8a, pose_scene.set_alt)."""
+    import asyncio
+    from app.core import pose_scene
+    body = await request.json() or {}
+    scene_id, alt = body.get("scene_id"), body.get("alt")
+    if not isinstance(scene_id, str) or not scene_id or not isinstance(alt, str):
+        raise HTTPException(status_code=400, detail="scene_id and alt (strings) required")
+    avatar = _require_avatar()
+    return _scene_answer(await asyncio.to_thread(pose_scene.set_alt, scene_id, avatar, alt))
+
+
 # How long the delayed silence check waits for the room's respond turns
 # (SYSTEM seconds). Long enough for a slow chat model plus a queued chime,
 # short enough that the narration still belongs to the same beat.
@@ -2768,9 +2814,14 @@ def _state_block(name: str, lang: str = "en") -> dict:
         from app.core.pose_catalog import pose_label
         run = get_interaction(name)
         if run:
+            from app.core import pose_scene
             blk["interaction"] = {"members": members_of(run),
                                   "pose_key": run["pose_key"],
-                                  "pose_label": pose_label(run["pose_key"], lang)}
+                                  "pose_label": pose_label(run["pose_key"], lang),
+                                  # the free pair's gauges (pose_scene); a
+                                  # furniture run's are on its run row
+                                  "meters": (pose_scene.meters(run["id"], name)
+                                             if run.get("execution_kind") != "prop_action" else [])}
     except Exception:
         pass
     try:

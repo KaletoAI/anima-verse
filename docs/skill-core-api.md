@@ -862,7 +862,7 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 | `last_answer_of(inviter) -> Optional[dict]` / `dismiss_answer(invite_id, inviter) -> bool` | Read the newest fresh own declined/failed answer (`invite_id`, `invitee`, `pose_key`, `status`, `reason`); dismiss only an own declined/failed row as cancelled |
 | `end_interaction(character_name, reason='ended', *, interaction_id='', keep_places=()) -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended. After a normal end (`reason` `ended`/`avatar`/`cancelled`) a free pair's partners take their follow pose (`follow_pose_for`); `keep_places` (furniture pairs only) names partners whose place the ending run keeps for theirs |
 | `pair_profile_locks(a, b)` | Der EINZIGE sanktionierte Weg, zwei Profil-Locks zu halten (sortierte Namensreihenfolge, siehe „Sperren") |
-| `alt_choices(character_name, profile=None) -> Optional[dict]` | Die Alt-Hälften der eigenen Clip-Rolle in der laufenden Interaktion (G6, schnittstellen-3d.md § A8a): `{current, options: [{id, label}]}`, erste Option `""` = die eigene Hälfte der Rolle; None ohne Interaktion oder ohne Alt-Hälfte der Rolle. Gesetzt wird über `prop_action_engine.set_alt` |
+| `alt_choices(character_name, profile=None) -> Optional[dict]` | Die Alt-Hälften der eigenen Clip-Rolle in der laufenden Interaktion (G6, schnittstellen-3d.md § A8a): `{current, options: [{id, label}]}`, erste Option `""` = die eigene Hälfte der Rolle; None ohne Interaktion oder ohne Alt-Hälfte der Rolle. Gesetzt wird über `pose_scene.set_alt` |
 
 The core emits `interaction.invited` for the question and
 `interaction.invite_started` only after consent has actually started its pair
@@ -932,28 +932,36 @@ Every other refusal stays listed, blocked, with its reason.
 | `app.core.participation.offered(kind, key, members, location_id="", room_id="") -> bool` | Whether a menu lists the entry at all: False only for a `NOT_OFFERED` refusal (asked with `offer=True`) |
 | `app.core.participation.onlookers(members, location_id, room_id) -> list[str]` | The PEOPLE besides `members` who are there: the room inside a location, everyone within earshot of a member in the open (`perception.addressable_for`); not humanoid = nobody. Sorted |
 
-## Abschluss-Clip einer laufenden Aktion — `app.core.prop_action_engine` ✅
+## Laufende Szene: Takt, Abschluss-Clip, Füllstände — `app.core.pose_scene` ✅
 
-Eine Pose kann im Katalog einen Abschluss-Clip nennen (`finale_animation`); WANN ihn eine Person spielt,
-entscheidet ein Paket (Payload `finale`, schnittstellen-3d.md § A8c). Den Takt dafür liefert das Event
-`prop_action.active`, die Anzeige der Provider `prop_action.meters`.
+Eine SZENE ist jede laufende Pose-Interaktion, die ein Paket taktet: ein freies Paar oder eine freie Gruppe
+(`interaction_engine`, Szenen-ID = die ID der Interaktion, die ein Posenwechsel behält) und ein Möbel-Lauf
+(`prop_action_engine`, Szenen-ID = seine `execution_id`; Paar, Gruppe oder Solo). Beide Engines rufen dieses
+Modul; keine hält eine eigene Kopie. Eine Pose kann im Katalog einen Abschluss-Clip nennen (`finale_animation`);
+WANN ihn eine Person spielt, entscheidet ein Paket (Payload `finale`, schnittstellen-3d.md § A8c). Den Takt
+dafür liefert das Event `scene.active`, die Anzeige der Provider `scene.meters`.
 
 | Funktion | Semantik |
 |---|---|
+| `scene_of(name, profile=None) -> dict \| None` | `{scene_id, kind, members, roles, pose_key}` der Szene, in der `name` gerade spielt: ein AKTIVER Möbel-Lauf (nicht Schlaf, `kind` `prop_action`, `roles` = `{Clip-Rolle: Name}`, `{}` solo), sonst ein freies Paar (`kind` `interaction`); None ohne |
 | `auto_finale(pose_key, entry=None) -> str` | Was der Provider `pose.finale_animation` (Kwargs `pose_key`, `animation`, `participants`; Antwort: ein Clip-Kind) für eine Pose ohne eigenes `finale_animation` ableitet (z. B. eine Namensregel des Pakets); ungeprüft, "" ohne Provider |
 | `finale_kind(pose_key, name='', *, profile=None) -> str` | Das Abschluss-Kind der Pose (Katalogfeld, sonst `auto_finale`), "" ohne eines oder wenn der Clip in der nötigen Form fehlt (Paar-Pose: vollständiges Paar; Solo-Pose: Solo-Clip — für `name`s Figur, wenn gegeben) |
-| `begin_finale(execution_id, name) -> dict` | Startet `name`s Abschluss in der laufenden Aktion: `{ok, reason}`; `reason` ∈ `not_active`, `not_participant`, `no_finale`, `finale_playing`, `invalid`. Nur `name` spielt ihn, der Partner bleibt in seinem Clip. Benachrichtigt die Teilnehmer; `prop_action.finale_started` nach allen Sperren. Nimmt die Sperre des Laufs — nie mit einer Profil-Sperre aufrufen |
-| `hold_meter(execution_id, name, hold) -> dict` | `name` hält den eigenen Füllstand zurück (oder lässt los): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `unsupported` (kein Paket nimmt es), `invalid`. Was Zurückhalten bedeutet, entscheidet der Provider `prop_action.meter_hold` (Kwargs `execution_id`, `name`, `hold`; Antwort `True` = übernommen). Route `POST /play/prop-actions/hold` für den Avatar des Spielers |
-| `finale_for(name) -> dict \| None` | Der Abschluss `{id, kind, role, alt, elapsed_s, duration_s, loop_count}` — bis 4 s nach seinem Ende (`FINALE_SHOW_S`) — oder None. `duration_s` = der GANZE Abschluss (Cliplänge × `loop_count`, die Durchläufe eines gezählten Loop-Clips, sonst 1) — `duration_s − elapsed_s` ist also die Zeit bis zum Ende des letzten Durchlaufs. `alt` = die Alt-Hälfte, in der er schließt (die laufende Alt-Hälfte, wenn der Abschluss-Clip sie für die Rolle hat), sonst `""` |
-| `set_alt(execution_id, name, alt) -> dict` | `name` spielt ab jetzt die Alt-Hälfte `alt` seiner Clip-Rolle (`""` = wieder die eigene): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `not_interacting`, `unknown_alt` (die Rolle hat sie nicht als Datei), `not_saved`, `invalid`. Die Spielposition rückt auf den Alt-Punkt (`geometry.alts`). Nimmt die Sperre des Laufs, dann die Profil-Sperre — nie mit einer Profil-Sperre aufrufen. Route `POST /play/prop-actions/alt` für den Avatar des Spielers |
+| `begin_finale(scene_id, name, *, tempo=1.0) -> dict` | Startet `name`s Abschluss in der laufenden Szene im TEMPO `tempo` (auf 0.2..1 begrenzt, 1 = Eigentempo des Clips): `{ok, reason}`; `reason` ∈ `not_active`, `not_participant` (Möbel-Lauf), `no_scene` (keine freie Szene von `name` mit dieser ID), `no_finale`, `finale_playing`, `invalid`. Der Clip läuft `loop_count` Mal — der Sidecar-Wert, ob der Clip loopt oder nicht, sonst 1 —, ECHTE Länge = Cliplänge × Durchläufe / Tempo. Nur `name` spielt ihn, der Partner bleibt in seinem Clip. Benachrichtigt die Teilnehmer; `scene.finale_started` nach allen Sperren. Nimmt die Sperre des Laufs — nie mit einer Profil-Sperre aufrufen |
+| `finale_for(name) -> dict \| None` | Der Abschluss `{id, kind, role, alt, elapsed_s, duration_s, loop_count, tempo}` — bis 4 s nach seinem Ende (`FINALE_SHOW_S`) — oder None. `duration_s` = der GANZE Abschluss in echten Sekunden (Cliplänge × `loop_count` / `tempo`) — `duration_s − elapsed_s` ist also die Zeit bis zum Ende des letzten Durchlaufs. `alt` = die Alt-Hälfte, in der er schließt (die laufende Alt-Hälfte, wenn der Abschluss-Clip sie für die Rolle hat), sonst `""` |
+| `end_after_finale(scene_id, name, delay_s) -> bool` | Beendet die Szene `delay_s` ECHTE Sekunden, nachdem `name`s Abschluss in ihr ganz gespielt ist (ohne Abschluss: ab jetzt). False, wenn `scene_id` nicht `name`s laufende Szene ist. Fällig jetzt = sofort; sonst erledigt es der Travel-Ticker (`advance`). Eine Szene, die inzwischen endete oder die ID wechselte, bleibt unberührt (frei: `interaction_engine.end_interaction` mit `interaction_id`, Möbel: `prop_action_engine.cancel`) |
+| `hold(scene_id, name, hold) -> dict` | `name` hält den eigenen Füllstand zurück (oder lässt los): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `no_scene`, `unsupported` (kein Paket nimmt es), `invalid`. Was Zurückhalten bedeutet, entscheidet der Provider `scene.meter_hold` (Kwargs `scene_id`, `name`, `hold`; Antwort `True` = übernommen). Routen `POST /play/prop-actions/hold {execution_id, hold}` (Möbel) und `POST /play/interact/hold {scene_id, hold}` (freies Paar) für den Avatar des Spielers |
+| `set_alt(scene_id, name, alt) -> dict` | `name` spielt ab jetzt die Alt-Hälfte `alt` seiner Clip-Rolle (`""` = wieder die eigene): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `no_scene`, `not_interacting`, `unknown_alt` (die Rolle hat sie nicht als Datei), `not_saved`, `invalid`. Die Spielposition rückt auf den Alt-Punkt (`geometry.alts`). Nimmt die Sperre des Laufs, dann die Profil-Sperre — nie mit einer Profil-Sperre aufrufen. Routen `POST /play/prop-actions/alt` und `POST /play/interact/alt {scene_id, alt}` |
+| `meters(scene_id, name='') -> list` | Die Füllstand-Zeile einer laufenden Szene (Möbel-Lauf über seine ID, freie Szene über ein Mitglied `name`); `[]` sonst |
+| `advance(now, *, due_only=False) -> int` | Ein Scheduler-Schritt der Szenen-Schicht: fällige Enden (`end_after_finale`), abgelaufene Abschlüsse, und der Takt jeder FREIEN Szene (Möbel-Läufe takten aus `prop_action_engine.advance`). `due_only` (Travel-Ticker): nur Szenen mit Füllständen, höchstens alle `METER_BEAT_REAL_S` |
 
-Provider `prop_action.meters` (Kwargs `execution_id`, `members`, `pose_key`; Antwort: `[{name, value, label, rate?}]`): die Füllstände
-einer laufenden Aktion für die HUD-Zeile (`GET /play/prop-actions/state` → `meters`); `value` wird auf
-0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler ergibt `[]`. `rate` = Punkte pro SPIELsekunde
-(fehlt/ungültig = 0): der Kern rechnet `value` vom letzten Takt des Laufs bis jetzt hoch und gibt `rate` pro
-ECHTER Sekunde weiter (eingefrorene Welt = 0). Ein Lauf, der Füllstände hat, bekommt alle
-`METER_BEAT_REAL_S` (5 s) einen Takt (`due_in_s`, echte Sekunden), damit der Abschluss pünktlich kommt. Optional `holdable`/`held` (nur
-echtes `True` zählt): das HUD bietet der eigenen Zeile dann einen Zurückhalten-Schalter an (`hold_meter`).
+Provider `scene.meters` (Kwargs `scene_id`, `members`, `pose_key`; Antwort: `[{name, value, label, rate?}]`): die Füllstände
+einer laufenden Szene für die HUD-Zeile (`GET /play/prop-actions/state` → `meters` beim Möbel-Lauf, `/play/scene` →
+`interaction.meters` beim freien Paar); `value` wird auf 0..100 begrenzt, ungültige Zeilen fallen weg, ein Fehler
+ergibt `[]`. `rate` = Punkte pro SPIELsekunde (fehlt/ungültig = 0): der Kern rechnet `value` vom letzten Takt der
+Szene bis jetzt hoch und gibt `rate` pro ECHTER Sekunde weiter (eingefrorene Welt = 0). Eine Szene, die Füllstände
+hat, bekommt alle `METER_BEAT_REAL_S` (5 s) einen Takt (Möbel: `due_in_s`; frei: der Travel-Ticker), damit der
+Abschluss pünktlich kommt. Optional `holdable`/`held` (nur echtes `True` zählt): das HUD bietet der eigenen Zeile
+dann einen Zurückhalten-Schalter an (`hold`).
 
 ## Folge-Pose nach dem Ende — `app.core.pose_catalog` ✅
 
@@ -1224,9 +1232,9 @@ Events, die der Core heute feuert:
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
 | `interaction.ended` | `character`, `members` (everyone, clip-role order), `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair or group is cleared, its memories and relationship rows written. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
-| `prop_action.active` | `execution_id`, `members` (Namen), `pose_key` (die gehaltene Pose), `delta_game_s`; einmal pro Scheduler-Schritt für jede aktive Möbel-Aktion (nicht Schlaf), die ONLINE Spielzeit verbracht hat — eine eingefrorene Welt und Offline-Zeit liefern keinen Takt. Nach allen Sperren |
+| `scene.active` | `scene_id`, `kind` (`interaction` = freies Paar/freie Gruppe, `prop_action` = Möbel-Lauf), `members` (Namen, Rollen-Reihenfolge), `roles` (`{Clip-Rolle: Name}`, `{}` solo), `pose_key` (die gehaltene Pose), `lead_role` (`pose_catalog.lead_role_of`, "" solo), `delta_game_s`, `readouts` (`[]`, bis Clients sie melden); einmal pro Scheduler-Schritt für jede laufende Szene (nicht Schlaf), die ONLINE Spielzeit verbracht hat — eine eingefrorene Welt und Offline-Zeit liefern keinen Takt (`app.core.pose_scene`). Nach allen Sperren |
 | `prop_action.started` / `prop_action.ended` | `execution_id`, `members`, `pose_key`; `started` zusätzlich `ability` (`pose`, `pair`, `combined`, `sleep`), wenn ein Lauf aktiv wird; `ended` zusätzlich `status`, `reason`, wenn ein AKTIVER Lauf endet (auch beim Wechsel auf eine andere Aktion: erst `ended`, dann `started`). Nach allen Sperren — der Ort, an dem ein Paket mit einer Solo-Aktion einen eigenen Zustand beginnt und beendet |
-| `prop_action.finale_started` / `prop_action.finale_done` | `execution_id`, `name`, `kind`, `pose_key`; Start nach `begin_finale`, Ende 4 s nach dem Abschluss (Cliplänge × `loop_count`, `FINALE_SHOW_S`) oder mit dem Ende der Aktion. Nach allen Sperren |
+| `scene.finale_started` / `scene.finale_done` | `scene_id`, `name`, `kind`, `pose_key`; Start nach `pose_scene.begin_finale`, Ende 4 s nach dem Abschluss (Cliplänge × `loop_count` / Tempo, `FINALE_SHOW_S`) oder mit dem Ende der Szene. Nach allen Sperren |
 | `prop_action.group_started` | `execution_id`, `interaction`, `actor`, `members` (everyone, the initiator first); emitted after a furniture pair or group action has started the real interaction (consent was the run's, so there is no `invite_started`); delivered after all locks. Its end is the ordinary `interaction.ended` |
 | `interaction.invite_failed` | `invite_id`, `inviter`, `invitee`, `pose_key`, `reason`; emitted by the core on every failed yes, retaining the actual cause for an owned undertaking |
 | `instagram.post_created` | `poster_name`, `post` |

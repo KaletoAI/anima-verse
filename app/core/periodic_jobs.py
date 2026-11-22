@@ -591,12 +591,16 @@ def _sub_npc_wanderers():
 
 
 def _sub_prop_action_runs():
-    """Internal opt-in only; Task6 owns production activation of the cutover."""
+    """The scheduler step of the furniture runs (when that engine is loaded)
+    and of every running pose scene (``pose_scene.advance``: free-pair beats,
+    finale expiry, pending scene ends)."""
     import sys
+    from app.core import pose_scene
+    from app.core.timeutils import game_time
     engine = sys.modules.get("app.core.prop_action_engine")
     if engine is not None:
-        from app.core.timeutils import game_time
         engine.advance(game_time())
+    pose_scene.advance(game_time())
 
 
 def _sub_linked_families():

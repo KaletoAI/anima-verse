@@ -16,7 +16,7 @@
  * the host slots it in via the `photoDialog` prop.
  */
 import { othersIn, type InteractionMembers } from './interactionMembers'
-import { respondPair } from './pairInteractions'
+import { holdPairMeter, respondPair, setPairAlt } from './pairInteractions'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
   type ReactNode } from 'react'
@@ -30,8 +30,9 @@ import { ScenesRecap } from './ScenesRecap'
 import { useQueue } from './useQueue'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
-import { PropActionsPanel } from './PropActionsPanel'
-import { onPropActionChanged } from './propActions'
+import { PropActionsPanel, SceneMeters } from './PropActionsPanel'
+import { propActionErrorText } from './propActionReasons'
+import { onPropActionChanged, type PropActionAlt, type PropActionMeter } from './propActions'
 
 export type { SceneLine }
 
@@ -122,8 +123,11 @@ export interface SceneData {
   interaction_approaching?: {
     invite_id: string; partner: string; pose_key: string; pose_label?: string; walking: boolean
   } | null
-  /** The running interaction; `members` includes the avatar. */
-  interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string } | null
+  /** The running interaction; `members` includes the avatar. A FREE pair is
+   *  its own scene: `scene_id` ("" for a pair a furniture run owns — its run
+   *  row shows those), its gauges and the avatar's alt halves. */
+  interaction?: { members: InteractionMembers; pose_key: string; pose_label?: string
+    scene_id?: string; meters?: PropActionMeter[]; alt?: PropActionAlt | null } | null
   /** Who of `present` is in a pair without the avatar (the action drawer
    *  greys their free pair poses). */
   present_busy?: string[]
@@ -559,6 +563,18 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     await refreshScene()
   }, [refreshScene])
 
+  /** Hold back / an alt half in the free pair scene — the same row the
+   *  furniture run shows (`SceneMeters`); a refusal is shown as its reason. */
+  const [sceneBusy, setSceneBusy] = useState(false)
+  const handleSceneChange = useCallback(async (operation: () => Promise<void>) => {
+    if (sceneBusy) return
+    setSceneBusy(true)
+    try { await operation() }
+    catch (e) { toast(propActionErrorText(e, t), 'error') }
+    await refreshScene()
+    setSceneBusy(false)
+  }, [sceneBusy, refreshScene, toast, t])
+
   // `id` is carried through: it is the stable key of a row and what a host
   // addresses a row by (`data-scene-id`). `volume` stays dropped on purpose —
   // handing it over would switch on SceneView's whisper/shout formatting,
@@ -731,6 +747,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 <button onClick={handleInteractEnd} className="player-chip">
                   {t('Stop')}
                 </button>
+                {data.interaction.scene_id ? (
+                  <SceneMeters meters={data.interaction.meters} viewer={data.avatar}
+                    alt={data.interaction.alt} busy={sceneBusy}
+                    onHold={(held) => handleSceneChange(() => holdPairMeter(data!.interaction!.scene_id!, held))}
+                    onAlt={(id) => handleSceneChange(() => setPairAlt(data!.interaction!.scene_id!, id))} />
+                ) : null}
               </span>
             )}
           </div>

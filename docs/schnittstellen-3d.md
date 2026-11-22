@@ -3069,23 +3069,25 @@ des Mixamo-Skeletts sind nicht die der Schauspieler (Handschlag: Hände ~25 cm
 statt 11 cm auseinander); Körpergrößen-Unterschiede (`height_cm`) skalieren die
 Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
 
-## A8c. Abschluss-Clip einer laufenden Aktion (`finale`)
+## A8c. Abschluss-Clip einer laufenden Szene (`finale`)
 
 Eine Pose darf im Katalog einen **Abschluss-Clip** nennen (`finale_animation`, Clip-Kind): bei einer
 Paar-Pose ein vollständiges Paar (§ A8a), bei einer Gruppen-Pose ein Clip mit allen Rollen der Pose (auch wenn die
 laufende Gruppe Rollen leer lässt, § A8a — jedes Mitglied schließt in der Hälfte SEINER Rolle, eine leere Rolle
 hat keinen Abschluss), bei einer Solo-Pose ein Solo-Clip. Ohne das Feld darf ein Paket
 einen ableiten (Provider `pose.finale_animation`). WANN er spielt, entscheidet
-nicht der Client und nicht der Kern, sondern ein Paket über `prop_action_engine.begin_finale(execution_id,
-name)` — für EINE Person der laufenden Aktion. Der Charakter-Eintrag trägt dann
+nicht der Client und nicht der Kern, sondern ein Paket über `pose_scene.begin_finale(scene_id, name,
+tempo=…)` — für EINE Person der laufenden Szene: eines Möbel-Laufs (`scene_id` = `execution_id`) oder eines
+freien Paars (`scene_id` = Interaktions-ID). Der Charakter-Eintrag trägt dann
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `finale` | `{id, kind, role, alt, elapsed_s, duration_s, loop_count}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `alt` = deren Alt-Hälfte (§ A8a, G6; `""` = keine, dann `<kind>__<role>`); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = Länge des GANZEN Abschlusses (Cliplänge × `loop_count`); `loop_count` = Durchläufe des Clips (≥ 1) |
+| `finale` | `{id, kind, role, alt, elapsed_s, duration_s, loop_count, tempo}` \| `null` | `id` = dieser eine Abschluss; `kind` = Abschluss-Clip; `role` = die Hälfte, die DIESE Person spielt (`a`..`e`, `null` bei Solo); `alt` = deren Alt-Hälfte (§ A8a, G6; `""` = keine, dann `<kind>__<role>`); `elapsed_s` = Systemsekunden seit dem Start, `duration_s` = echte Länge des GANZEN Abschlusses (Cliplänge × `loop_count` / `tempo`); `loop_count` = Durchläufe des Clips (≥ 1); `tempo` = Abspieltempo 0.2..1 (1 = Eigentempo des Clips; das Paket gibt es mit `begin_finale`) |
 
-**Durchläufe.** Ist der Abschluss-Clip ein gezählter Loop (Sidecar `loop: true` + `loop_count` N, § A8), spielt
-er N Durchläufe, sonst einen — auch ein Loop-Clip OHNE Zahl spielt einen, denn ein Abschluss endet immer. Der
-Server rechnet `duration_s = Cliplänge × N` und hält Feld, Sperre und das Paket (das an `duration_s − elapsed_s`
+**Durchläufe.** Trägt der Abschluss-Clip im Sidecar `loop_count` N (§ A8), spielt er N Durchläufe — als
+Abschluss gilt die Zahl, ob der Clip loopt oder nicht (Poses → Clip-Bibliothek zeigt das Feld „Times played as
+a finale“ auch ohne Loop-Schalter); sonst einen — auch ein Loop-Clip OHNE Zahl spielt einen, denn ein Abschluss
+endet immer. Der Server rechnet `duration_s = Cliplänge × N / tempo` und hält Feld, Sperre und das Paket (das an `duration_s − elapsed_s`
 das Ende der Aktion knüpft) an dieser Länge fest. Der Client teilt `duration_s` in N gleiche Durchläufe, seekt
 die Zeit IM Durchlauf und lässt den Mixer bis zum vorletzten wiederholen; den letzten spielt er als Einmal-Clip,
 der sein Ende hält (`finaleClip.ts` → `stepFinale().loop`).
@@ -3103,13 +3105,16 @@ ein noch laufender Abschluss. Der Server lässt das Feld bis **4 s nach Clipende
 einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange steht, lehnt er einen neuen
 Abschluss derselben Person ab.
 
-`GET /play/prop-actions/state` liefert pro laufender Zeile zusätzlich `has_finale` (die gehaltene Pose hat
+`GET /play/prop-actions/state` liefert pro laufender Zeile eines Möbel-Laufs zusätzlich `has_finale` (die gehaltene Pose hat
 einen Abschluss-Clip) und `meters: [{name, value 0..100, rate, label, holdable, held}]` (Füllstände eines Pakets,
 `value` auf jetzt hochgerechnet, `rate` = Punkte pro echter Sekunde — das HUD lässt den Balken damit zwischen zwei
 Abrufen weiterlaufen, 0 = steht;
-Provider `prop_action.meters`; `holdable` = die Person kann ihren Füllstand per `POST /play/prop-actions/hold`
+Provider `scene.meters`; `holdable` = die Person kann ihren Füllstand per `POST /play/prop-actions/hold`
 `{execution_id, hold}` zurückhalten, `held` = sie tut es gerade — das HUD zeigt der eigenen Zeile den Schalter); ein Angebot trägt `finale` (die Pose der Aktion hat einen Abschluss-Clip) — das HUD
-markiert es.
+markiert es. Ein FREIES Paar zeigt dieselbe Zeile (`SceneMeters`) aus `/play/scene` → `interaction`:
+`scene_id` ("" bei einem Paar, das ein Möbel-Lauf besitzt — dessen Lauf-Zeile zeigt es), `meters` (gleiche Form)
+und `alt` (`alt_choices`); Zurückhalten per `POST /play/interact/hold {scene_id, hold}`, Alt-Hälfte per
+`POST /play/interact/alt {scene_id, alt}` (403 für Außenstehende, 409 für andere Ablehnungen wie `no_scene`).
 
 ## A9. Terrain & Oberflächen (AV3D-13 v2)
 

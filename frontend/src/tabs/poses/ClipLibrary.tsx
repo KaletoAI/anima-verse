@@ -159,11 +159,14 @@ function GroupGenders({ roles, value, disabled, onApply, t }: {
  *  last frame. Empty = endless; a whole number 1..99 otherwise. Saved on
  *  blur or Enter, never per keystroke; a value the server would refuse is
  *  not sent. */
-function LoopCountField({ value, disabled, onApply, t }: {
+function LoopCountField({ value, disabled, onApply, t, finale = false }: {
   value: number | null | undefined
   disabled: boolean
   onApply: (v: number | null) => void
   t: (s: string) => string
+  /** the field of a finale clip without the Loop switch: the same stored
+   *  count, read as how often a pose's finale plays the clip */
+  finale?: boolean
 }) {
   const saved = value == null ? '' : String(value)
   const [draft, setDraft] = useState(saved)
@@ -177,8 +180,10 @@ function LoopCountField({ value, disabled, onApply, t }: {
   }
   return (
     <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, marginLeft: 22 }}
-      title={t('How many times the clip plays before it holds its last frame — for every variant of the kind in this set.')}>
-      <span>{t('Repeats')}</span>
+      title={finale
+        ? t('How many times the clip plays when a pose closes with it — for every variant of the kind in this set.')
+        : t('How many times the clip plays before it holds its last frame — for every variant of the kind in this set.')}>
+      <span>{finale ? t('Times played as a finale') : t('Repeats')}</span>
       <input
         type="number"
         className="ga-input"
@@ -187,14 +192,14 @@ function LoopCountField({ value, disabled, onApply, t }: {
         max={99}
         step={1}
         value={draft}
-        placeholder="∞"
+        placeholder={finale ? '1' : '∞'}
         disabled={disabled}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') commit() }}
       />
       <span className="ga-form-hint" style={valid ? undefined : { color: 'var(--danger, #f85149)' }}>
-        {valid ? t('empty = endless') : t('a whole number from 1 to 99, or empty')}
+        {valid ? (finale ? t('empty = once') : t('empty = endless')) : t('a whole number from 1 to 99, or empty')}
       </span>
     </label>
   )
@@ -976,6 +981,11 @@ export function ClipLibrary({
       : t('Orientation not checked on a place yet — Save while every place reads green.')
   }
 
+  /** The kinds a pose closes with (its `finale_animation`, else what a
+   *  package derives): such a clip shows its play count without the Loop switch. */
+  const finaleClipKinds = new Set(poses
+    .map((p) => (p.finale_animation || p.finale_auto || '').trim().toLowerCase()).filter(Boolean))
+
   const clipNode = (clip: ApiClipRow) => {
     const lib = libraryOf(clip)
     const rel = `${lib}/${relOf(clip)}`
@@ -1037,6 +1047,10 @@ export function ClipLibrary({
         </label>
         {clip.loop ? (
           <LoopCountField value={clip.loop_count} t={t}
+            disabled={busy || clip.has_sidecar === false}
+            onApply={(v) => run(clip, { loop_count: v })} />
+        ) : finaleClipKinds.has(clip.kind) ? (
+          <LoopCountField value={clip.finale_loop_count} t={t} finale
             disabled={busy || clip.has_sidecar === false}
             onApply={(v) => run(clip, { loop_count: v })} />
         ) : null}

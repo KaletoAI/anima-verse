@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 from app.core.auth_dependency import get_current_user, require_admin
-from app.core import prop_actions, prop_action_engine as engine, places, props
+from app.core import prop_actions, prop_action_engine as engine, places, pose_scene, props
 
 from app.core.log import get_logger
 
@@ -180,7 +180,7 @@ def cancel(body: CancelRequest, user=Depends(get_current_user)):
 @router.post("/play/prop-actions/hold")
 def hold(body: HoldRequest, user=Depends(get_current_user)):
     """The player's avatar holds its own gauge back (schnittstellen-3d § A8c)."""
-    result = engine.hold_meter(body.execution_id, _avatar(user), body.hold)
+    result = pose_scene.hold(body.execution_id, _avatar(user), body.hold)
     if not result["ok"]:
         raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
     return result
@@ -189,7 +189,7 @@ def hold(body: HoldRequest, user=Depends(get_current_user)):
 @router.post("/play/prop-actions/alt")
 def alt(body: AltRequest, user=Depends(get_current_user)):
     """The player's avatar plays an alt half of its role (§ A8a), ``""`` = its own."""
-    result = engine.set_alt(body.execution_id, _avatar(user), body.alt)
+    result = pose_scene.set_alt(body.execution_id, _avatar(user), body.alt)
     if not result["ok"]:
         raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
     return result

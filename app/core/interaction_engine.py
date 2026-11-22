@@ -1132,6 +1132,11 @@ def end_interaction(character_name: str, reason: str = "ended", *,
                 stand_up(name)
     publish("interaction_ended", character_name, members=members,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
+    if inter.get("execution_kind") != "prop_action":
+        # The scene ends: a finale still shown goes with it (a furniture run
+        # drops its own when the run ends).
+        from app.core.pose_scene import end_finales
+        end_finales(inter["id"])
     from app.core import sync_topics
     for name in saved_names:
         sync_topics.changed_at(name)

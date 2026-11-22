@@ -36,3 +36,15 @@ export function invitePair(partner: string, pose: string, consent: PropActionCon
 export function respondPair(inviteId: string, accept: boolean, partner?: string): Promise<unknown> {
   return request('/play/interact/respond', { invite_id: inviteId, accept }, accept ? partner : undefined)
 }
+
+/** The own avatar holds its gauge back in its free pair scene (or lets go) —
+ *  the free-pair twin of `holdPropActionMeter` (server `pose_scene.hold`). */
+export async function holdPairMeter(sceneId: string, hold: boolean): Promise<void> {
+  await apiPost('/play/interact/hold', { scene_id: sceneId, hold })
+}
+
+/** The own avatar plays an alt half of its role in its free pair scene
+ *  ("" = its own half again; server `pose_scene.set_alt`). */
+export async function setPairAlt(sceneId: string, alt: string): Promise<void> {
+  await apiPost('/play/interact/alt', { scene_id: sceneId, alt })
+}

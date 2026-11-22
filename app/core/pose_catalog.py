@@ -443,7 +443,7 @@ def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, di
             norm["_stray_pair_fields"] = solo and ("places" in entry
                                                    or "yaw_offset" in entry)
             # The closing clip a participant plays once before going back to
-            # the pose's own loop (prop_action_engine.begin_finale) — a pair
+            # the pose's own loop (pose_scene.begin_finale) — a pair
             # kind for a pair pose, a solo kind for a solo one.
             norm["finale_animation"] = str(entry.get("finale_animation") or "").strip().lower()
             # The solo pose a participant goes into after a NORMAL end

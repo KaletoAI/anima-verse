@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The FINALE of a running prop action — one participant's closing clip
-(`prop_action_engine.begin_finale` / `finale_for`, the `prop_action.active`
-beat, the `prop_action.meters` gauges, the catalog field `finale_animation`).
+(`pose_scene.begin_finale` / `finale_for`, the `scene.active` beat of a
+furniture run, the `scene.meters` gauges, the catalog field `finale_animation`).
 
 Usage:
     ./.venv/bin/python scripts/smoke_prop_action_finale.py
@@ -14,7 +14,7 @@ THE FIXTURE
 The pair pose `run-pair` (loop `run-pair`, 2 s) gets `finale_animation`
 `run-pair-end`: a complete pair, sidecar `duration_s` 1.5. The solo pose
 `sitting` gets `run-end`: a solo clip in the neutral set, `duration_s` 0.8.
-The SYSTEM clock of the engine (`utc_now`) is pinned to t0 and moved by hand;
+The SYSTEM clock of `pose_scene` (`utc_now`) is pinned to t0 and moved by hand;
 the game clock moves only through `tick(seconds)`.
 
 EXPECTATIONS, DERIVED BY HAND
@@ -25,20 +25,21 @@ EXPECTATIONS, DERIVED BY HAND
 [2] PAIR FINALE. Both active, `begin_finale(run, partner)` -> ok. The
     partner's block at t0 + 0.4 s is
         {id <12 hex>, kind run-pair-end, role <its clip role>, alt "" (no alt half),
-        elapsed_s 0.4, duration_s 1.5, loop_count 1} (a one-shot plays once)
+        elapsed_s 0.4, duration_s 1.5, loop_count 1, tempo 1.0} (a one-shot
+        without a count plays once, at the clip's own speed)
     and the actor has none (the partner alone closes, the actor plays on).
     A second begin for the partner -> `finale_playing`; an outsider ->
-    `not_participant`. `prop_action.finale_started` fired once, with the pose
+    `not_participant`. `scene.finale_started` fired once, with the pose
     `run-pair`.
 [3] IT ENDS ON ITS OWN. The block stays shown FINALE_SHOW_S (4 s) past the
     clip: at t0 + 5.4 it is still there (same id, elapsed 5.4) and a new
     begin is refused; at t0 + 5.5 (1.5 + 4.0) it is gone; a tick at t0 + 5.6
-    drops it and fires `prop_action.finale_done` for the partner; a begin
+    drops it and fires `scene.finale_done` for the partner; a begin
     afterwards works again with a NEW id.
-[4] THE BEAT. `tick(5)` fires `prop_action.active` for the run with members
+[4] THE BEAT. `tick(5)` fires `scene.active` (scene_id = the run) with members
     [actor, partner], pose `run-pair` and delta_game_s 5.0 (game seconds
     since the previous tick). A frozen world fires none.
-[5] GAUGES. A `prop_action.meters` provider answering 130 / -5 / "x" gives
+[5] GAUGES. A `scene.meters` provider answering 130 / -5 / "x" gives
     the HUD row [{actor, 100.0}, {partner, 0.0}] (clamped, the junk row
     dropped) and `has_finale` true; without a provider the row says [].
 [9] LIFECYCLE. A pair run turning active fires `prop_action.started` once
@@ -53,13 +54,13 @@ EXPECTATIONS, DERIVED BY HAND
     due_in_s = (5 real s · 2 = 10 game s − 20 since) / 2 = −5 REAL s (due). Without
     the provider the active run waits on no clock (None); a frozen world
     (factor 0) neither carries forward (value 10.0, rate 0.0) nor beats.
-[10] HOLD. Without a provider `hold_meter` -> unsupported; an outsider ->
+[10] HOLD. Without a provider `hold` -> unsupported; an outsider ->
     not_participant; with a provider answering True -> ok and the provider
     saw (run, partner, True); a row's holdable/held pass through as booleans.
 [6] THE RUN ENDS -> the finale ends. Cancelling the run while the partner's
     finale plays drops it at once and fires `finale_done`.
 [7] SOLO. The pose action on `sitting` (finale `run-end`): `begin_finale`
-    -> ok, block {kind run-end, role None, alt "", duration_s 0.8, loop_count 1}; the offer of the
+    -> ok, block {kind run-end, role None, alt "", duration_s 0.8, loop_count 1, tempo 1.0}; the offer of the
     action carries `finale` true, and false once the pose names no finale.
 [8] AUTOMATIC. Without the catalog field a provider `pose.finale_animation`
     answering "<animation>-end" (asked with participants 2) makes `run-pair`
@@ -73,7 +74,8 @@ EXPECTATIONS, DERIVED BY HAND
     t0 + 4.5 + 4.0 − 0.1 = 8.4 and gone at 8.5. The same clip `loop: true`
     WITHOUT a count (an endless loop) closes after ONE cycle — a finale
     always ends: duration_s 1.5, loop_count 1. `loop: false` with a stored
-    `loop_count: 3` is a one-shot: 1.5 / 1 (the count belongs to a loop).
+    `loop_count: 3` plays 3 times AS A FINALE (the count is the finale's,
+    whether the clip loops or not — pair scene design): 4.5 / 3.
 """
 import json
 import sys
@@ -88,19 +90,19 @@ import smoke_prop_action_runs as RUNS                                 # noqa: E4
 F, A, R, clips, pose_catalog = RUNS.F, RUNS.A, RUNS.R, RUNS.clips, RUNS.pose_catalog
 # Use the shared fixture's private world for the direct app imports below.
 F.paths.init(F.ROOT / "world")
-from app.core import hooks, prop_actions as P                           # noqa: E402
+from app.core import hooks, pose_scene as S, prop_actions as P             # noqa: E402
 from app.core.timeutils import utc_now                                  # noqa: E402
 from app.core.game_time import GameDuration                             # noqa: E402
 
 T0 = utc_now()
 EVENTS = []
-for event in ("prop_action.finale_started", "prop_action.finale_done", "prop_action.active",
+for event in ("scene.finale_started", "scene.finale_done", "scene.active",
               "prop_action.started", "prop_action.ended"):
     hooks.register(event, lambda event=event, **kw: EVENTS.append((event, kw)), tag="smoke.finale")
 
 
 def clock(seconds):
-    return patch.object(A, "utc_now", lambda: T0 + timedelta(seconds=seconds))
+    return patch.object(S, "utc_now", lambda: T0 + timedelta(seconds=seconds))
 
 
 def set_finale(pose, kind):
@@ -165,30 +167,30 @@ class Finale(RUNS.Runs):
         eid = run["execution_id"]
         role = next(r for r, m in run["data"]["clip_roles"].items() if m == partner)
         with clock(0):
-            self.assertEqual(A.begin_finale(eid, partner), dict(ok=True, reason=""))
-            self.assertEqual(A.begin_finale(eid, partner)["reason"], "finale_playing")
-            self.assertEqual(A.begin_finale(eid, "nobody")["reason"], "not_participant")
+            self.assertEqual(S.begin_finale(eid, partner), dict(ok=True, reason=""))
+            self.assertEqual(S.begin_finale(eid, partner)["reason"], "finale_playing")
+            self.assertEqual(S.begin_finale(eid, "nobody")["reason"], "not_participant")
         with clock(0.4):
-            block = A.finale_for(partner)
+            block = S.finale_for(partner)
             first = block.pop("id")
             self.assertRegex(first, r"^[0-9a-f]{12}$")
             self.assertEqual(block, dict(kind="run-pair-end", role=role, alt="", elapsed_s=0.4, duration_s=1.5,
-                                         loop_count=1))
-            self.assertIsNone(A.finale_for(name))
-        started = events("prop_action.finale_started")
+                                         loop_count=1, tempo=1.0))
+            self.assertIsNone(S.finale_for(name))
+        started = events("scene.finale_started")
         self.assertEqual(len(started), 1)
         self.assertEqual((started[0]["name"], started[0]["pose_key"]), (partner, "run-pair"))
         with clock(5.4):
-            self.assertEqual((A.finale_for(partner)["id"], A.finale_for(partner)["elapsed_s"]), (first, 5.4))
-            self.assertEqual(A.begin_finale(eid, partner)["reason"], "finale_playing")
+            self.assertEqual((S.finale_for(partner)["id"], S.finale_for(partner)["elapsed_s"]), (first, 5.4))
+            self.assertEqual(S.begin_finale(eid, partner)["reason"], "finale_playing")
         with clock(5.5):
-            self.assertIsNone(A.finale_for(partner))
+            self.assertIsNone(S.finale_for(partner))
         with clock(5.6):
             RUNS.tick(1)
-            done = events("prop_action.finale_done")
+            done = events("scene.finale_done")
             self.assertEqual([d["name"] for d in done], [partner])
-            self.assertTrue(A.begin_finale(eid, partner)["ok"])
-            self.assertNotEqual(A.finale_for(partner)["id"], first)
+            self.assertTrue(S.begin_finale(eid, partner)["ok"])
+            self.assertNotEqual(S.finale_for(partner)["id"], first)
         with clock(12):
             RUNS.tick(1)
 
@@ -198,21 +200,21 @@ class Finale(RUNS.Runs):
         sidecar = F.ROOT / "clips" / "run-pair-end.json"
         cases = [(dict(loop=True, loop_count=3), 4.5, 3),
                  (dict(loop=True), 1.5, 1),
-                 (dict(loop=False, loop_count=3), 1.5, 1)]
+                 (dict(loop=False, loop_count=3), 4.5, 3)]
         try:
             for i, (flags, duration, cycles) in enumerate(cases):
                 sidecar.write_text(json.dumps(dict(kind="run-pair-end", pair=True, duration_s=1.5, **flags)))
                 clips._clear_entries_cache()
                 base = 100.0 * (i + 1)
                 with clock(base):
-                    self.assertTrue(A.begin_finale(eid, partner)["ok"], flags)
+                    self.assertTrue(S.begin_finale(eid, partner)["ok"], flags)
                 with clock(base + 0.1):
-                    block = A.finale_for(partner)
+                    block = S.finale_for(partner)
                     self.assertEqual((block["duration_s"], block["loop_count"]), (duration, cycles), flags)
                 with clock(base + duration + 4.0 - 0.1):
-                    self.assertIsNotNone(A.finale_for(partner), flags)
+                    self.assertIsNotNone(S.finale_for(partner), flags)
                 with clock(base + duration + 4.0):
-                    self.assertIsNone(A.finale_for(partner), flags)
+                    self.assertIsNone(S.finale_for(partner), flags)
                     RUNS.tick(1)
         finally:
             finale_clips()
@@ -221,7 +223,7 @@ class Finale(RUNS.Runs):
         name, partner, run = active_pair()
         EVENTS.clear()
         RUNS.tick(5)
-        beats = [b for b in events("prop_action.active") if b["execution_id"] == run["execution_id"]]
+        beats = [b for b in events("scene.active") if b["scene_id"] == run["execution_id"]]
         self.assertEqual(len(beats), 1)
         self.assertEqual(beats[0]["members"], [name, partner])
         self.assertEqual(beats[0]["pose_key"], "run-pair")
@@ -229,14 +231,14 @@ class Finale(RUNS.Runs):
         EVENTS.clear()
         F.W.set_world_frozen(True)
         RUNS.tick(5)
-        self.assertFalse(events("prop_action.active"))
+        self.assertFalse(events("scene.active"))
 
     def test_5_gauges(self):
         name, partner, run = active_pair()
         row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == run["execution_id"])
         self.assertEqual(row["meters"], [])
         self.assertTrue(row["has_finale"])
-        hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
+        hooks.register_provider("scene.meters", lambda scene_id, members, pose_key: [
             dict(name=members[0], value=130, label="x"), dict(name=members[1], value=-5),
             dict(name="junk", value="x")])
         try:
@@ -245,35 +247,35 @@ class Finale(RUNS.Runs):
                 dict(name=name, value=100.0, rate=0.0, label="x", holdable=False, held=False),
                 dict(name=partner, value=0.0, rate=0.0, label="", holdable=False, held=False)])
         finally:
-            hooks._providers.pop("prop_action.meters", None)
+            hooks._providers.pop("scene.meters", None)
 
     def test_11_rate_and_beat(self):
         name, partner, run = active_pair()
         eid = run["execution_id"]
         F.set_game_time(F.game_time() + GameDuration.of(seconds=20))
         self.assertIsNone(A.due_in_s(F.game_time()))
-        hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
+        hooks.register_provider("scene.meters", lambda scene_id, members, pose_key: [
             dict(name=members[0], value=10, rate=0.5), dict(name=members[1], value=90, rate=0.5)])
         try:
-            with patch.object(A, "game_speed_factor", lambda: 2.0):
+            with patch.object(A, "game_speed_factor", lambda: 2.0), patch.object(S, "game_speed_factor", lambda: 2.0):
                 row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
                 self.assertEqual([(m["name"], m["value"], m["rate"]) for m in row["meters"]],
                                  [(name, 20.0, 1.0), (partner, 100.0, 1.0)])
                 self.assertAlmostEqual(A.due_in_s(F.game_time()), -5.0, places=6)
-            with patch.object(A, "game_speed_factor", lambda: 0.0):
+            with patch.object(A, "game_speed_factor", lambda: 0.0), patch.object(S, "game_speed_factor", lambda: 0.0):
                 row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
                 self.assertEqual([(m["value"], m["rate"]) for m in row["meters"]], [(10.0, 0.0), (90.0, 0.0)])
                 self.assertIsNone(A.due_in_s(F.game_time()))
         finally:
-            hooks._providers.pop("prop_action.meters", None)
+            hooks._providers.pop("scene.meters", None)
 
     def test_6_run_end_ends_finale(self):
         name, partner, run = active_pair()
         with clock(0):
-            self.assertTrue(A.begin_finale(run["execution_id"], partner)["ok"])
+            self.assertTrue(S.begin_finale(run["execution_id"], partner)["ok"])
             A.cancel(name, run["execution_id"])
-            self.assertIsNone(A.finale_for(partner))
-        self.assertEqual([d["name"] for d in events("prop_action.finale_done")], [partner])
+            self.assertIsNone(S.finale_for(partner))
+        self.assertEqual([d["name"] for d in events("scene.finale_done")], [partner])
 
     def test_7_solo_finale_and_offer_flag(self):
         name, target, _ = RUNS.setup_run()
@@ -286,12 +288,12 @@ class Finale(RUNS.Runs):
         RUNS.tick(2)
         self.assertEqual(R.get(result["execution_id"])["status"], "active")
         with clock(0):
-            self.assertTrue(A.begin_finale(result["execution_id"], name)["ok"])
+            self.assertTrue(S.begin_finale(result["execution_id"], name)["ok"])
         with clock(0.2):
-            block = A.finale_for(name)
+            block = S.finale_for(name)
             block.pop("id")
             self.assertEqual(block, dict(kind="run-end", role=None, alt="", elapsed_s=0.2, duration_s=0.8,
-                                         loop_count=1))
+                                         loop_count=1, tempo=1.0))
         A.cancel(name, result["execution_id"])
         set_finale("sitting", "")
         P._offers_cache.clear()
@@ -326,21 +328,21 @@ class Lifecycle(RUNS.Runs):
     def test_10_hold(self):
         name, partner, run = active_pair()
         eid = run["execution_id"]
-        self.assertEqual(A.hold_meter(eid, partner, True)["reason"], "unsupported")
-        self.assertEqual(A.hold_meter(eid, "nobody", True)["reason"], "not_participant")
+        self.assertEqual(S.hold(eid, partner, True)["reason"], "unsupported")
+        self.assertEqual(S.hold(eid, "nobody", True)["reason"], "not_participant")
         seen = []
-        hooks.register_provider("prop_action.meter_hold", lambda **kw: seen.append(kw) or True)
-        hooks.register_provider("prop_action.meters", lambda execution_id, members, pose_key: [
+        hooks.register_provider("scene.meter_hold", lambda **kw: seen.append(kw) or True)
+        hooks.register_provider("scene.meters", lambda scene_id, members, pose_key: [
             dict(name=members[0], value=10, holdable=True, held="yes")])
         try:
-            self.assertEqual(A.hold_meter(eid, partner, True), dict(ok=True, reason=""))
-            self.assertEqual(seen, [dict(execution_id=eid, name=partner, hold=True)])
+            self.assertEqual(S.hold(eid, partner, True), dict(ok=True, reason=""))
+            self.assertEqual(seen, [dict(scene_id=eid, name=partner, hold=True)])
             row = next(r for r in A.state_for(name)["current"] if r["execution_id"] == eid)
             self.assertEqual(row["meters"][0]["holdable"], True)
             self.assertEqual(row["meters"][0]["held"], False)
         finally:
-            hooks._providers.pop("prop_action.meter_hold", None)
-            hooks._providers.pop("prop_action.meters", None)
+            hooks._providers.pop("scene.meter_hold", None)
+            hooks._providers.pop("scene.meters", None)
 
 
 class Automatic(RUNS.Runs):
@@ -356,17 +358,17 @@ class Automatic(RUNS.Runs):
         def provider(pose_key, animation, participants):
             calls.append((pose_key, animation, participants))
             return f"{animation}-end"
-        self.assertEqual(A.finale_kind("run-pair"), "")
+        self.assertEqual(S.finale_kind("run-pair"), "")
         hooks.register_provider("pose.finale_animation", provider)
         try:
-            self.assertEqual(A.finale_kind("run-pair"), "run-pair-end")
+            self.assertEqual(S.finale_kind("run-pair"), "run-pair-end")
             self.assertIn(("run-pair", "run-pair", 2), calls)
-            self.assertEqual(A.finale_kind("sitting"), "")
+            self.assertEqual(S.finale_kind("sitting"), "")
             set_finale("run-pair", "run-end")
-            self.assertEqual(A.finale_kind("run-pair"), "")
+            self.assertEqual(S.finale_kind("run-pair"), "")
             set_finale("run-pair", "")
             hooks.register_provider("pose.finale_animation", lambda **kw: "run-end")
-            self.assertEqual(A.finale_kind("run-pair"), "")
+            self.assertEqual(S.finale_kind("run-pair"), "")
         finally:
             hooks._providers.pop("pose.finale_animation", None)
 

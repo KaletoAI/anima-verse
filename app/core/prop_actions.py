@@ -377,7 +377,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     Read only: use published geometry without bbox/LOD/door generation. Never
     call request or reserve a slot to discover whether an action is possible.
     """
-    from app.core import places, props, prop_action_engine as engine
+    from app.core import places, props, pose_scene, prop_action_engine as engine
     from app.core.room_recipe import compose_recipe
     from app.core.i18n import localized
     from app.models.world import get_location_by_id
@@ -485,7 +485,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                # The body pose the action holds (ability "pose" only).
                                pose_key=(action.get("pose_key") or "") if action.get("ability") == "pose" else "",
                                # Its pose closes with a finale clip — the HUD marks it.
-                               finale=any(engine.finale_kind(key) for key in
+                               finale=any(pose_scene.finale_kind(key) for key in
                                           ([ph.get("pose_key") for ph in action.get("phases") or []]
                                            if action.get("ability") == "combined"
                                            else [action.get("pose_key")]) if isinstance(key, str))))

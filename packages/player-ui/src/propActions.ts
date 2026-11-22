@@ -49,7 +49,7 @@ export interface PropActionOffer {
   finale?: boolean
 }
 /** One participant's gauge of a running action, 0..100 — a package's
- *  (provider `prop_action.meters`); `label` empty = the neutral word. */
+ *  (provider `scene.meters`); `label` empty = the neutral word. */
 export interface PropActionMeter {
   name: string
   value: number
