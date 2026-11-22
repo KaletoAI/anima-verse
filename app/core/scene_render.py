@@ -514,6 +514,11 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                                   "seed": random.randint(1, 2**31 - 1)}
         if refs:
             params["reference_images"] = refs
+            # the slot manifest (logged by the normaliser): slot 1 the room, then one identity per slotted subject
+            params["reference_roles"] = {
+                "input_reference_image_1": {"role": "room", "label": state["label"]},
+                **{f"input_reference_image_{n}": {"role": "identity", "label": name}
+                   for name, n in ref_slot_of.items()}}
         track_id = _tq.track_start("scene_render", f"Scene: {state['label']}",
                                    agent_name=avatar, provider=b.name)
         _log_meta = {"agent_name": avatar or "scene", "original_prompt": subject,
