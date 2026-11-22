@@ -43,8 +43,8 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     ``{"style": "buttons", "skipped": "no marks"}``; a lapel collar draws no stitch lines (pixel (85, 100) stays grey
     128 — the button discs only).
 [8] The assembly key (``garment_assembly._texture_key``, ``cut_info`` stubbed to texture "cut", csig "0123456789ab"):
-    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket1-buttons-0"; buttons / 4 ->
-    "...:placket1-buttons-4"; zip -> "...:placket1-zip-0" (``PLACKET_VERSION`` 1) — every one a different key, so a
+    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket2-buttons-0"; buttons / 4 ->
+    "...:placket2-buttons-4"; zip -> "...:placket2-zip-0" (``PLACKET_VERSION`` 2, phase E: the wipe) — every one a different key, so a
     switch re-assembles. The cut keys do NOT change: ``garment_template_cut.cut_sig`` of the four param sets is one value
     (``placket`` / ``buttons`` are ``TEXTURE_ONLY``, out of ``keyed_params``), and ``garment_cut_texture.csig`` takes no
     params at all (islands, item picture, back view, prompt, post version) — so no image job and no new atlas.
@@ -53,6 +53,13 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     (12 px) either side of x 100.5: x 88.5 and 112.5. Pixel (88, 32) is that eyelet's centre: the inner disc (r 1.25
     px) in the cord colour, the fabric L* 53.6 - ``LACE_DL`` 30 = 23.6; pixel (86, 32) lies 2 px from it — outside the
     inner disc, inside the ring (r 2.5 px): the metal L* 60.
+[10] Phase E — the model's own placket is wiped before the code paints one (no second placket): [4]'s atlas with a dark
+    band (40) x 97..104 along the line, a light "button" x/y 96..104 at y 100 and a dark print at x 58..62, y 98..102.
+    The wipe's half width for jacket buttons is max(placket 3 cm / 2, button 1.8 cm / 2) + ``PLACKET_CLEAR_CM`` 0.4
+    = 1.9 cm = 19 px (``placket_clear_px``); every island pixel within it takes the pixel 2 x 19 px further out on its
+    side (grey 128) — or, where that pixel is a detail (the print: the pixel (100, 100) ON the line reads x 62, the
+    print's), the median fabric of the ring 19..38 px out (grey 128). So (102, 100), (100, 100) and (98, 30) are grey; the code's buttons and stitch are exactly
+    [4]'s; the print 38 px off the line (> 19) and the other island are unchanged.
 """
 import io
 import json
@@ -211,8 +218,8 @@ for style, n in (("none", 0), ("buttons", 0), ("buttons", 4), ("zip", 0)):
     PARAMS.update(placket=style, buttons=n)
     keys[(style, n)] = ga._texture_key("Demo", {"item_id": "item_fx", "template": True})
     cut_sigs.add(gtc.cut_sig(gt.params_of(inventory.get_item("item_fx")), base_sha="b", lower=[]))
-want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket1-buttons-0",
-        ("buttons", 4): "cut:0123456789ab:placket1-buttons-4", ("zip", 0): "cut:0123456789ab:placket1-zip-0"}
+want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket2-buttons-0",
+        ("buttons", 4): "cut:0123456789ab:placket2-buttons-4", ("zip", 0): "cut:0123456789ab:placket2-zip-0"}
 for k, v in want.items():
     check(f"[8] _texture_key {k} -> {v}", keys[k] == v, keys[k])
 check("[8] cut_sig is one value for all four", len(cut_sigs) == 1, cut_sigs)
@@ -227,6 +234,23 @@ cord_l = float(lab(out4[32, 88])[0])
 check("[9] pixel (88, 32) is the cord, L* 23.6", abs(cord_l - (grey_l - 30.0)) <= 0.6, (cord_l, grey_l - 30.0))
 ring_l = float(lab(out4[32, 86])[0])
 check("[9] pixel (86, 32) is the ring, L* 60", abs(ring_l - 60.0) <= 0.6, ring_l)
+
+# [10]
+atlas5 = atlas.copy()
+atlas5[20:181, 97:105] = (40, 40, 40)          # the model's own placket band, 0.8 cm wide, along the line
+atlas5[96:105, 96:105] = (230, 230, 230)       # and a button of its own between the code's two
+atlas5[98:103, 58:63] = (40, 40, 40)           # a print 3.8 cm left of the line: beyond the wipe
+out5, info5 = post.draw_placket(atlas5, {"front": isl}, marks, kind="jacket", style="buttons", buttons=0, px_per_cm=10)
+check("[10] the model's band and button are wiped (fabric between the code's buttons)",
+      tuple(out5[100, 102]) == (128, 128, 128) and tuple(out5[100, 100]) == (128, 128, 128)
+      and tuple(out5[30, 98]) == (128, 128, 128), (tuple(out5[100, 102]), tuple(out5[100, 100]), tuple(out5[30, 98])))
+check("[10] the code's placket as on a clean atlas ([4]): same buttons, same stitch",
+      info5["buttons"] == info["buttons"] and tuple(out5[60, 100]) == tuple(col["disc"])
+      and tuple(out5[100, 85]) == tuple(out[100, 85]), (info5["buttons"], tuple(out5[100, 85])))
+check("[10] the print 3.8 cm off the line and the other island are kept",
+      tuple(out5[100, 60]) == (40, 40, 40) and (out5[:, 150:] == atlas5[:, 150:]).all())
+check("[10] the wipe's half width: 1.5 + 0.4 cm = 19 px for jacket buttons", post.placket_clear_px(
+    "jacket", "buttons", 10.0) == 19.0, post.placket_clear_px("jacket", "buttons", 10.0))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

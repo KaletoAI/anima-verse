@@ -2777,7 +2777,7 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     """Plan group B, C3 (B10-B13): the composed cut atlas with the piece's placket painted along the cut's
     ``marks.json`` lines (``cut_texture_post.draw_placket``) — drawn at assembly, so switching the placket or the
     button count is a CPU re-assembly without an image job. Unchanged (info None) without a placket, without a ready
-    cut or without a marks file (a kind whose cut writes none: a top)."""
+    cut or without a marks file (a cut that wrote no line; an old top cut is cut once more for it, B11)."""
     style, buttons, kind, collar = placket_of(item_id)
     if style == "none":
         return atlas, None

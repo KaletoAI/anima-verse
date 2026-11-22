@@ -65,8 +65,9 @@ CLAMP_DE = 25.0
 #: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20).
 POST_VERSION = 10
 #: The version of ``draw_placket``'s painting: part of the assembly key of a piece with a placket (it is drawn onto
-#: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job).
-PLACKET_VERSION = 1
+#: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job). 2: phase E,
+#: the model's own placket is wiped first.
+PLACKET_VERSION = 2
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -1186,13 +1187,84 @@ def _inward(p: np.ndarray, s: np.ndarray, mask: np.ndarray, px_per_cm: float) ->
     return 1.0 if score >= 0 else -1.0
 
 
+#: Phase E: before the code paints a placket, the model's own (a picture of a buttoned shirt or a laced front shows one,
+#: whatever the prompt says) is wiped — every island pixel within the painted placket's half width plus this margin
+#: of the line takes the pixel twice that distance further out on its side (the weave goes on, nothing doubles).
+PLACKET_CLEAR_CM = 0.4
+#: ``_wipe_line``: a source pixel farther than this (largest channel) from the ring's median fabric is a detail.
+PLACKET_CLEAR_DETAIL = 40
+
+
+def placket_clear_px(kind: str, style: str, px_per_cm: float, lapel: bool = False) -> float:
+    """The wipe's half width in pixels: the widest thing ``draw_placket`` paints across the line for ``style`` (the
+    placket band / a button, the zip's pull, the eyelets) + ``PLACKET_CLEAR_CM``."""
+    if style == "buttons":
+        half = max(0.0 if lapel else PLACKET_W_CM.get(kind, 3.0) / 2.0, BUTTON_D_CM.get(kind, 1.1) / 2.0)
+    elif style == "zip":
+        half = max(ZIP_W_CM, ZIP_PULL_CM[0]) / 2.0
+    elif style == "lacing":
+        half = LACE_HALF_CM + LACE_EYE_CM / 2.0
+    else:
+        return 0.0
+    return round((half + PLACKET_CLEAR_CM) * px_per_cm, 6)
+
+
+def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray, half: float) -> None:
+    """Replace the ``sel`` pixels within ``half`` of the polyline ``p`` with the pixel 2 x ``half`` further out along
+    their own direction from the line (read from ``src``); one whose source lies off the island (or off the atlas) or
+    is a detail (``PLACKET_CLEAR_DETAIL`` off the median) takes the median colour of the island's pixels between ``half`` and 2 x ``half`` of the line."""
+    h, w = sel.shape
+    r = int(np.ceil(2 * half)) + 2
+    x0, x1 = max(0, int(p[:, 0].min()) - r), min(w, int(p[:, 0].max()) + r + 1)
+    y0, y1 = max(0, int(p[:, 1].min()) - r), min(h, int(p[:, 1].max()) + r + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    q = np.stack([xx + 0.5, yy + 0.5], -1).reshape(-1, 2)
+    best = np.full(len(q), np.inf)
+    near = np.zeros((len(q), 2))
+    for a, b in zip(p[:-1], p[1:]):
+        ab = b - a
+        t = np.clip(((q - a) @ ab) / max(float(ab @ ab), 1e-9), 0.0, 1.0)
+        c = a + t[:, None] * ab
+        d = np.linalg.norm(q - c, axis=1)
+        m = d < best
+        best[m], near[m] = d[m], c[m]
+    tg = p[-1] - p[0]
+    tg = tg / max(float(np.linalg.norm(tg)), 1e-9)
+    nrm = np.array([-tg[1], tg[0]])
+    off = q - near
+    ln = np.linalg.norm(off, axis=1)
+    side = np.where(ln[:, None] > 1e-6, off / np.maximum(ln, 1e-6)[:, None], nrm[None, :] * np.sign(off @ nrm + 1e-9)[:, None])
+    inside = sel[y0:y1, x0:x1].reshape(-1)
+    wipe = inside & (best <= half)
+    ring = inside & (best > half) & (best <= 2 * half)
+    if not wipe.any():
+        return
+    fallback = np.median(src[y0:y1, x0:x1].reshape(-1, 3)[ring], axis=0) if ring.any() else None
+    s_ = np.rint(q[wipe] + side[wipe] * 2 * half - 0.5).astype(int)
+    ok = (s_[:, 0] >= 0) & (s_[:, 0] < w) & (s_[:, 1] >= 0) & (s_[:, 1] < h)
+    ok[ok] = sel[s_[ok, 1], s_[ok, 0]]
+    tgt = np.argwhere(wipe.reshape(y1 - y0, x1 - x0)) + np.array([y0, x0])
+    vals = np.empty((len(tgt), 3), out.dtype)
+    vals[ok] = src[s_[ok, 1], s_[ok, 0]]
+    if fallback is not None:
+        # a source pixel that is a detail (a print, an embroidery stitch) is not copied in: the median fabric instead
+        far = np.abs(vals.astype(np.int32) - fallback.astype(np.int32)).max(axis=1) > PLACKET_CLEAR_DETAIL
+        ok &= ~far
+    if (~ok).any():
+        vals[~ok] = fallback if fallback is not None else src[tgt[~ok, 0], tgt[~ok, 1]]
+    out[tgt[:, 0], tgt[:, 1]] = vals
+
+
 def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, style: str, buttons: int,
                  px_per_cm: float, lapel: bool = False) -> tuple[np.ndarray, dict]:
     """Paint the placket ``style`` (``garment_template.PLACKETS``: buttons / zip / lacing; "none" draws nothing) of a
     ``kind`` piece into ``atlas`` along the cut's ``marks`` lines (``marks.json`` ``lines``: ``centre_front`` of a
     closed front; ``edge_left`` / ``edge_right`` of an open one), each only inside the pixels of its own island
     (``masks`` = {island name: bool mask}) — nothing outside an island changes. The fabric is read under the line
-    (the median L*a*b* of the island's pixels within one placket width of it).
+    (the median L*a*b* of the island's pixels within one placket width of it). Phase E: first the model's own placket
+    is wiped along every line (``placket_clear_px``, ``_wipe_line``), so the code's placket is the only one.
 
     - buttons, closed front: the placket's two edges stitched ``PLACKET_W_CM`` apart (none for a ``lapel``), the
       buttons on the line (``button_centres``, ``BUTTON_D_CM``, ``button_colours``, two holes);
@@ -1211,6 +1283,15 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
     if not lines:
         return out, info
     width = 0.0 if lapel else PLACKET_W_CM.get(kind, 3.0) * px_per_cm
+    # phase E: the model's own placket goes first (a second one beside the painted one was the risk)
+    clean = np.array(atlas, copy=True)
+    clear_px = placket_clear_px(kind, style, px_per_cm, lapel=lapel)
+    for name, line in sorted(lines.items()):
+        p, s = _polyline(line["px"])
+        if s[-1] > 1.0 and clear_px > 0:
+            _wipe_line(clean, np.asarray(atlas), np.asarray(masks[line["island"]], bool), p, clear_px)
+    out = np.array(clean, copy=True)
+    atlas = clean
     for name, line in sorted(lines.items()):
         sel = np.asarray(masks[line["island"]], bool)
         p, s = _polyline(line["px"])
