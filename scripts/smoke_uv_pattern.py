@@ -157,6 +157,18 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
      sin(pi / 80) = 16 x 0.0392598 = 0.628157 m (+-1e-4), v = 0.030 (+-1e-6), area ratio 1.000 and stretch p95 <= 1.001
      (a cylinder is developable onto the strip). A cone (bottom row radius 0.11, top 0.10, height 0.03): v = the slant
      sqrt(0.01^2 + 0.03^2) = 0.031623 (+-1e-6) up every column.
+[27] ``pattern_uv`` relaxes a several-row band (``bands``) by ``arap`` from its strip and turns it back onto it (A5
+     review: a draped waistband's columns lean — the bare strip set them upright, stretch p95 1.2-1.5 on the world's
+     skirts). A TWISTED ring: radius 0.10, 80 segments, the rows of [26] at z 0.030 / 0.015 / 0 turned by +delta/2, 0,
+     -delta/2, delta = 2 segments = 0.157080 rad, so the top row sits R delta = 0.015708 m along the ring from the
+     bottom one. Unrolled (s along the ring, z up) the strip maps u = s - 0.015708 (z / 0.03 - 0.5) and v = z x the
+     column's slant factor 2 sqrt(0.015^2 + (0.10 x 2 sin(delta / 4))^2) / 0.03 = 1.1290: J = [[1, -0.5236], [0,
+     1.1290]], J J^T = [[1.2742, -0.5912], [-0.5912, 1.2746]] -> sigma^2 = (2.5488 +- 1.1824) / 2 -> sigma_1 1.3659,
+     1 / sigma_2 1.2098: strip p95 1.366 (+-0.01, chords). A twisted cylinder is developable: relaxed
+     ``strip_stretch_p95`` <= 1.01, area 1.00 (+-0.01), the band a parallelogram 0.628157 + 0.015708 = 0.643865 m wide
+     (+-2e-3) and no taller than 0.030 + 0.003 (not tilted: ``_align_to``). Its direction is the strip's: u grows with
+     the column (vertex 1 left of vertex 40 on the top row, pixel x right), the top row above the bottom row (pixel y
+     down, column 20).
 """
 import json
 import math
@@ -753,6 +765,31 @@ iscone, rowscone, xyzcone, _fc = ring26(0.10, 0.11)
 uvc = up.rows_strip_uv(iscone[0], rowscone, xyzcone)
 check("[26] cone: v = slant 0.031623", abs((uvc.max(axis=0) - uvc.min(axis=0))[1] - 0.031623) < 1e-6,
       (uvc.max(axis=0) - uvc.min(axis=0))[1])
+
+# [27] the band relaxed by arap from its strip
+_n27, _d27 = 80, 2 * 2 * math.pi / 80
+xyz27 = np.array([[0.10 * math.cos(2 * math.pi * k / _n27 + o), 0.10 * math.sin(2 * math.pi * k / _n27 + o), z]
+                  for z, o in zip((0.03, 0.015, 0.0), (_d27 / 2, 0.0, -_d27 / 2)) for k in range(_n27)])
+faces27 = [(r * _n27 + k, r * _n27 + (k + 1) % _n27, (r + 1) * _n27 + (k + 1) % _n27, (r + 1) * _n27 + k)
+           for r in range(2) for k in range(_n27)]
+seams27 = [(0, _n27), (_n27, 2 * _n27)]
+rows27 = [[r * _n27 + k for k in range(_n27)] + [r * _n27] for r in range(3)]
+_isl = up.split_islands(len(xyz27), faces27, [14] * len(faces27), seams27, xyz=xyz27)[0]
+_tri = np.array([t for poly in _isl.corner_vid for t in up.fan(poly)])
+dstrip = up.distortion(up.rows_strip_uv(_isl, rows27, xyz27), xyz27[_isl.vmap], _tri)
+check("[27] twisted strip p95 1.366", abs(dstrip["stretch_p95"] - 1.366) <= 0.01, dstrip)
+res27 = up.pattern_uv(faces27, [14] * len(faces27), seams27, xyz27, bands={14: rows27})
+isl27 = res27["payload"]["islands"][0]
+check("[27] relaxed band p95 <= 1.01", res27["strip_stretch_p95"][isl27["name"]] <= 1.01, res27["strip_stretch_p95"])
+check("[27] relaxed band area 1.00", abs(isl27["distortion"]["area_ratio"] - 1.0) <= 0.01, isl27["distortion"])
+_px = np.asarray(isl27["verts_px"])
+_ext = (_px.max(axis=0) - _px.min(axis=0)) / res27["payload"]["px_per_cm"] / 100.0
+check("[27] a parallelogram 0.643865 wide, <= 0.033 high", abs(_ext[0] - 0.643865) <= 2e-3 and _ext[1] <= 0.033,
+      _ext)
+_loc = {int(g): l for l, g in enumerate(_isl.vmap)}
+check("[27] u grows with the column", _px[_loc[1], 0] < _px[_loc[40], 0], (_px[_loc[1]], _px[_loc[40]]))
+check("[27] top row above the bottom row", _px[_loc[20], 1] < _px[_loc[2 * _n27 + 20], 1],
+      (_px[_loc[20]], _px[_loc[2 * _n27 + 20]]))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

@@ -434,6 +434,16 @@ def lscm(xyz, tris, tol=1e-12, precond=False):
     return np.stack([full[:n], full[n:]], axis=1)
 
 
+def _align_to(uv, ref):
+    """``uv`` turned (a rotation, no mirror) and moved onto ``ref`` (same vertices) in the least-squares sense — the
+    2D Procrustes angle atan2(sum a x b, sum a . b) over the centred points."""
+    a = uv - uv.mean(axis=0)
+    b = ref - ref.mean(axis=0)
+    ang = math.atan2(float(np.sum(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0])), float(np.sum(a * b)))
+    c, s_ = math.cos(ang), math.sin(ang)
+    return a @ np.array([[c, s_], [-s_, c]]) + ref.mean(axis=0)
+
+
 def _signed_uv_area2(uv, tris):
     q = uv[tris]
     d1 = q[:, 1] - q[:, 0]
@@ -1147,7 +1157,18 @@ def pattern_uv(faces, part, seam_edges, xyz, axes=None, strips=None, caps=None, 
         lx = xyz[isl.vmap]
         tris = np.array([t for poly in isl.corner_vid for t in fan(poly)], dtype=np.int64).reshape(-1, 3)
         if isl.part in STRIP_PARTS and isl.part in bands:
+            # the construction strip, then relaxed by ``arap`` from it (A5 review: a low waist's band is a cone —
+            # the bare strip stretched 1.2-1.5 at its edges; relaxed 1.03-1.06, the band bowing ~1-2 cm)
+            # (``arap`` mirrors a start it reads as anti-conformal: u is mirrored back, so the band keeps the strip's
+            # direction — u growing to the right as seen from outside, v up — and ``_align_to`` turns it back onto
+            # the strip: ``arap`` holds one vertex only, a twisted band came out tilted 17 degrees)
             uv = rows_strip_uv(isl, bands[isl.part], xyz)
+            if len(tris):
+                flip = np.sum(_signed_uv_area2(uv, tris)) < 0
+                relaxed = arap(lx, tris, uv, iters=iters, tol=tol)
+                if flip:
+                    relaxed[:, 0] = -relaxed[:, 0]
+                uv = _align_to(relaxed, uv)
             uv = uv - uv.min(axis=0)
         elif isl.part in STRIP_PARTS and isl.part in strips:
             uv = strip_island_uv(isl, strips[isl.part], xyz)
