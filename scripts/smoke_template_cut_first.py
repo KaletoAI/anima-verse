@@ -626,6 +626,17 @@ bd = bd[:bd.index("\ndef ")]
 check("[6.6] _build_drape records sig_of(..., wait=False)", "garment_template_cut.sig_of(" in bd
       and "wait=False" in bd and "garment_template_cut.cut_sig(" not in bd)
 
+# [7] Plan group B, B23 — a bodice cut without one marked seam (Lirien's strapped dress with a slit: measured at
+#     223dd9ee0 a ``KeyError: 'uv_seam' not found`` — the all-zero edge layer was dropped by ``split_slit``'s bmesh
+#     round trip) reads its helper layers through ``_int_layer`` (zeros when the layer is gone) and drops them through
+#     ``_drop_layers``: no direct ``me.attributes["uv_seam"]`` access is left in the builder.
+check("[7] no direct uv_seam attribute access in the builder", 'attributes["uv_seam"]' not in BUILD)
+for fn in ("def pattern_uv_of(", "def pattern_uv_of_fitted("):
+    body = BUILD[BUILD.index(fn):]
+    body = body[:body.index("\ndef ")]
+    check(f"[7] {fn[4:-1]} reads uv_seam through _int_layer and drops through _drop_layers",
+          '_int_layer(me, "uv_seam"' in body and "_drop_layers(me," in body)
+
 print()
 print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
 sys.exit(1 if FAILS else 0)

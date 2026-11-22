@@ -1685,6 +1685,22 @@ def _part_counts(parts):
     return out
 
 
+def _int_layer(me, name, n):
+    """The int attribute ``name`` of ``me`` as an (n,) array — zeros when the mesh has no such layer: a bodice without
+    one marked cut (Lirien's strapped dress with a slit) wrote an all-zero ``uv_seam`` edge layer, and Blender's
+    bmesh round trip in ``split_slit`` dropped it (plan group B, B23)."""
+    out = np.zeros(n, np.int32)
+    if name in me.attributes:
+        me.attributes[name].data.foreach_get("value", out)
+    return out
+
+
+def _drop_layers(me, names):
+    for name in names:
+        if name in me.attributes:
+            me.attributes.remove(me.attributes[name])
+
+
 def pattern_uv_of(obj, arm, centre, pattern, islands_json):
     """Pattern-piece UV of a bodice (``uv_mode`` "pattern"): read the faces, their ``uv_part`` / ``uv_seam`` /
     ``uv_cid`` layers and the rest coordinates as ``clear_of_body`` (and a slit) left them, run
@@ -1706,8 +1722,7 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
     me.attributes["uv_part"].data.foreach_get("value", part)
     cid = np.empty(nv, np.int32)
     me.attributes["uv_cid"].data.foreach_get("value", cid)
-    flag = np.empty(len(me.edges), np.int32)
-    me.attributes["uv_seam"].data.foreach_get("value", flag)
+    flag = _int_layer(me, "uv_seam", len(me.edges))
     ev = np.empty(len(me.edges) * 2, np.int32)
     me.edges.foreach_get("vertices", ev)
     ev = ev.reshape(-1, 2)
@@ -1742,8 +1757,7 @@ def pattern_uv_of(obj, arm, centre, pattern, islands_json):
         for j, li in enumerate(p_.loop_indices):
             flat[2 * li:2 * li + 2] = res["corner_uv"][p_.index][j]
     me.uv_layers["UVMap"].data.foreach_set("uv", flat)
-    for name in ("uv_part", "uv_seam", "uv_cid"):
-        me.attributes.remove(me.attributes[name])
+    _drop_layers(me, ("uv_part", "uv_seam", "uv_cid"))
     Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
     info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
             "islands": res["islands"], "faces_per_part": res["faces_per_part"],
@@ -1780,8 +1794,7 @@ def pattern_uv_of_fitted(obj, pattern, islands_json):
     polys = [tuple(p_.vertices) for p_ in me.polygons]
     part = np.empty(len(me.polygons), np.int32)
     me.attributes["uv_part"].data.foreach_get("value", part)
-    flag = np.empty(len(me.edges), np.int32)
-    me.attributes["uv_seam"].data.foreach_get("value", flag)
+    flag = _int_layer(me, "uv_seam", len(me.edges))
     ev = np.empty(len(me.edges) * 2, np.int32)
     me.edges.foreach_get("vertices", ev)
     ev = ev.reshape(-1, 2)
@@ -1793,8 +1806,7 @@ def pattern_uv_of_fitted(obj, pattern, islands_json):
         for j, li in enumerate(p_.loop_indices):
             flat[2 * li:2 * li + 2] = res["corner_uv"][p_.index][j]
     me.uv_layers["UVMap"].data.foreach_set("uv", flat)
-    for name in ("uv_part", "uv_seam"):
-        me.attributes.remove(me.attributes[name])
+    _drop_layers(me, ("uv_part", "uv_seam"))
     Path(islands_json).write_text(json.dumps(res["payload"], sort_keys=True, separators=(",", ":")))
     info = {"mode": "pattern", "px_per_cm": res["payload"]["px_per_cm"], "atlas_px": res["payload"]["atlas_px"],
             "islands": res["islands"], "faces_per_part": res["faces_per_part"],
