@@ -6,7 +6,7 @@ Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>[,<item id>...]] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
         [--wear <item id>[,<item id>...]] [--take-off <item id>[,...]] [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
-        [--backend-set NAME.ATTR=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
+        [--backend-set NAME.ATTR=JSON] [--set-param ITEM.KEY=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
     ./.venv/bin/python scripts/e2e_cut_texture.py --world worlds/demo --character demo --dry-run
@@ -54,6 +54,10 @@ What it does, in ONE process, never touching the world it is given:
 its ``slots``, the piece worn there before is taken off) — for a template piece the character owns but does not wear;
 ``--take-off a,b`` takes pieces off in the copy (e.g. a cut-texture top over the trousers, whose cut would change with
 the layer under it and spend its own image jobs).
+
+``--set-param ITEM.KEY=JSON`` (repeatable) sets one template parameter of a piece in the COPY (validated); a painted
+placket (``placket`` / ``buttons``, plan group B C3) is checked on the served GLB: the atlas it carries is the
+assembly's ``placket_atlas`` of the record's atlas (written beside it to ``--out`` as ``<stem>.placket.png``).
 
 ``--chain a,b`` overrides the ``garment_cut_texture`` routing chain IN THE PROCESS (``routing._rules``; nothing is
 written — the recorder still fails the run on a config write); every entry must be in ``ALLOWED_BACKENDS``.
@@ -378,6 +382,22 @@ def wear(character: str, items: List[str], off: List[str] = ()) -> Dict[str, str
     return worn
 
 
+def set_param(spec: str) -> str:
+    """``--set-param ITEM.KEY=JSON``: one template parameter of a piece set in the COPY's item (``set_params``,
+    validated) — e.g. a placket to see it painted with no image job (``--dry-run --replay``)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    target, _, raw = spec.partition("=")
+    item_id, _, key = target.rpartition(".")
+    item = get_item(item_id)
+    params = gt.params_of(item)
+    if not item_id or not key or params is None:
+        raise SystemExit(f"--set-param {spec!r}: no template piece {item_id!r} or no key")
+    gt.set_params(item_id, {**params, key: json.loads(raw)},
+                  source=((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user")
+    return f"{item_id}.{key} = {(gt.params_of(get_item(item_id)) or {}).get(key)!r}"
+
+
 def pick_items(character: str, wanted: str) -> List[str]:
     """The pieces of the run: ``wanted`` (a comma list of worn template pieces), else the first worn pattern piece
     whose ``texture`` is "cut" (else the first worn pattern piece)."""
@@ -460,13 +480,14 @@ def glb_images(path: Path) -> List[bytes]:
     return out
 
 
-def atlas_in_glb(glb: Path, atlas: Path, keyed: Optional[bytes] = None) -> Dict[str, Any]:
-    """Whether one of the GLB's images is the atlas — or, for a sheer lace piece, the RGBA atlas the assembly keyed
-    from it (``keyed``, ``garment_assembly._lace_keyed``; compared with its alpha)."""
+def atlas_in_glb(glb: Path, atlas: Path, keyed: Optional[bytes] = None, alpha: bool = True) -> Dict[str, Any]:
+    """Whether one of the GLB's images is the atlas — or the atlas the assembly made of it (``keyed``: a placket
+    painted on it, ``garment_cut_texture.placket_atlas``; for a sheer lace piece the RGBA atlas
+    ``garment_assembly._lace_keyed`` keyed, compared with its alpha — ``alpha``)."""
     import numpy as np
     from PIL import Image
     data = keyed if keyed is not None else atlas.read_bytes()
-    mode = "RGBA" if keyed is not None else "RGB"
+    mode = "RGBA" if keyed is not None and alpha else "RGB"
     want_sha = hashlib.sha256(data).hexdigest()
     with Image.open(io.BytesIO(data)) as a:
         ref = a.convert(mode)
@@ -612,6 +633,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--wear", default="", help="comma list: pieces put on in the copy first")
     ap.add_argument("--take-off", default="", help="comma list: pieces taken off in the copy first")
+    ap.add_argument("--set-param", action="append", default=[], metavar="ITEM.KEY=JSON",
+                    help="set one template parameter of a piece IN THE COPY first (repeatable)")
     ap.add_argument("--no-redrape", action="store_true")
     ap.add_argument("--fresh-back-view", action="store_true")
     ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
@@ -672,6 +695,8 @@ def main() -> int:
         if OUTBOUND:
             print(f"setup: {len(OUTBOUND)} connect(s) blocked while starting — not counted: {OUTBOUND[:3]}")
             OUTBOUND.clear()
+        for spec in args.set_param:
+            print("param (copy): " + set_param(spec))
         if args.wear or args.take_off:
             print("worn now (copy): " + str(wear(args.character, [w for w in args.wear.split(",") if w.strip()],
                                                   [w for w in args.take_off.split(",") if w.strip()])))
@@ -758,11 +783,18 @@ def main() -> int:
                 from app.core import garment_template as _gt
                 opacity = _gt.sheer_opacity(_gt.params_of(get_item(item_id)))
                 keyed = None
+                # the assembly's order (``garment_assembly._apply_cut_atlas``): the placket first, then the lace key
+                pb, pinfo = gct.placket_atlas(args.character, item_id, atlas.read_bytes())
+                if pinfo is not None:
+                    print(f"{item_id} placket: {pinfo}")
+                    check(f"{item_id}: the placket was painted", bool(pinfo.get("lines")), True)
+                    keyed = pb
+                    (out_dir / f"{atlas.name[:-len('.atlas.png')]}.placket.png").write_bytes(pb)
                 if opacity is not None:
-                    kb, kinfo = garment_assembly._lace_keyed(atlas.read_bytes(), opacity, {})
+                    kb, kinfo = garment_assembly._lace_keyed(pb, opacity, {})
                     print(f"{item_id} sheer {opacity}: lace key {kinfo.get('lace')}")
-                    keyed = kb if kinfo.get("lace") else None
-                found = atlas_in_glb(Path(served), atlas, keyed)
+                    keyed = kb if kinfo.get("lace") else keyed
+                found = atlas_in_glb(Path(served), atlas, keyed, alpha=opacity is not None and keyed is not pb)
                 print(f"{item_id} atlas in the served GLB: {found}")
                 check(f"{item_id}: the served GLB carries the atlas", found["match"], True)
             if sig:
