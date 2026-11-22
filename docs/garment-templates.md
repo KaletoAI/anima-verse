@@ -390,12 +390,15 @@ top or a top with straps has no neck ring and its islands are byte-identical to 
   vertex it was wavy (Dario's collar p95 1.24 -> 1.09; Kai's jacket collar unchanged 1.055).
 - **Merged rim vertices:** `pattern_uv_of` maps a construction vertex merged away by the degenerate dissolve to its
   nearest surviving neighbour in its row (`m_row`) for the collar rows and the band strip — a -1 in a band row split
-  Tilda's crew band in two (p95 2.6 / 3.7).
+  a crew band in two. This holds on Dario's body; on **Tilda's** it does not: her blouse's cut (crew, `cut_sig`
+  a1f1274c4de8, 18.72 px/cm) still has the islands front, sleeve_l, sleeve_r, **band, band_2**, band p95 1.134
+  (limit 1.10) and back p95 1.304 (limit 1.30) — `smoke_template_cut_tops.py --only 4_crew` on a copy of her body.
 - `scripts/smoke_template_cut_tops.py --body <copy> [--base-repo <checkout>] [--corset-body <copy>]`: stand collar,
   V 5 cm, crew 15 cm, crew; the byte identity of off-shoulder and straps tops; the corset [6].
   Dario's body passes all; **Tilda's body does not** — hair is part of her body mesh at the nape, the neck rim
   zig-zags 3 cm round it: collar p95 1.61, back panel 1.30–1.36, and a stand collar's DRAPE fails (stretch 2.65 at
-  z 1.39, the nape). Her blouse runs without a collar until the body is fixed.
+  z 1.39, the nape). Her blouse misses the acceptance with or without a collar and stays `texture` "projection"
+  until the body is fixed.
 
 **An old cut without its placket line (B11).** A ready cut of a piece that wants a placket, whose record has no
 `marks` key and no marks file, reads "missing" (`MARKS_MISSING`: CPU, 0 hub jobs) and is cut once more under the same
@@ -414,15 +417,23 @@ columns either side of it, down a sixth (`app/blender/scripts/corset_darts.py`).
 dart from the hem gained nothing (1.258). Rosi's Red Corset Top: front p95 1.276 / area 0.969 -> **1.187 / 0.986**
 (lifted bust 1.262 / 0.975 -> 1.125 / 0.994) — the acceptance p95 <= 1.25 and area >= 0.97 is met. The back panel's
 centre column is the placket line `centre_back` (a corset laces at the back), drawn like `centre_front` (no inward
-offset). The cut key of a strapless top gains `"corset"` = `CORSET_VERSION` 1 and `"corset_rules"` (md5 of
+offset). A strapless top has no front line, so the parameter prompt (`garment_template_params.md`) asks for `placket`
+"lacing" only for a lacing down the back and "none" for a corset laced down the front — its painted front lacing stays
+where the picture shows it and no second lacing is drawn on the back. The cut key of a strapless top gains `"corset"` = `CORSET_VERSION` 1 and `"corset_rules"` (md5 of
 `corset_darts.py`); skirts and dresses are unchanged (`scripts/smoke_corset_darts.py`, `smoke_cut_texture_placket.py`
 [11]).
 
 **Live 2026-11-22** (copies, chain MiniMax-H3-Image, P-H3-Image; 7 image jobs, every one MiniMax in attempt 1):
 Tilda's buttoned blouse (placket buttons, 7; no collar — see above): plain cream, seven buttons on the centre line, no
-second placket; Dario's worn linen shirt (placket buttons): six buttons, one placket, the picture's lacing at the neck
-not painted (the template has no lacing above buttons); the back answer is a coarser grey-cream weave than the front's
-stripes (dE about 2.5 — a visible change of weave at the side and armhole seams); Rosi's corset with darts over her
+second placket — but its cut is the split one above (band + band_2, jagged strips in the pattern), so it is **not
+accepted** and stays "projection"; Dario's worn linen shirt (placket buttons): six buttons, one placket, the picture's
+lacing at the neck not painted (the template has no lacing above buttons); the back answer is a coarser, speckled
+grey-cream weave than the front's stripes (back detail 0.348 against the front's 0.215): seam_de median **4.61**
+(per seam up to 10.37), seam_cross_de **5.97** against 1.2-1.4 on the other pieces — a visible seam jump, **not
+accepted**, it stays "projection" (open: a gate that rejects a back answer whose detail level differs from the
+front's); Dario's embroidered green shirt was not run live — its cut changes here (`NECK_VERSION`, band removed) and
+`_wipe_line` takes the median fabric within about 1.9 cm of the centre line, which may erase embroidery near the
+placket: it stays "projection" until a live run; Rosi's corset with darts over her
 pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
 time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back centre.
 
