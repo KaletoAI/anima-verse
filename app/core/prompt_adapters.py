@@ -261,6 +261,58 @@ def _clean_location_for_prompt(loc: str) -> str:
     return s.strip(", .").strip()
 
 
+#: The head nouns that make a style's first comma token a NOUN PHRASE ("RAW photo", "photorealistic portrait") rather
+#: than an adjective ("photorealistic"). A noun phrase names the picture itself, so the summary line must not stack
+#: a second picture noun onto it ("A RAW photo group photo of …").
+_PICTURE_NOUNS = frozenset((
+    "photo", "photograph", "photography", "portrait", "shot", "snapshot", "selfie", "picture", "image", "scene",
+    "render", "rendering", "view", "painting", "illustration", "drawing", "artwork", "still", "frame", "model",
+))
+_NUM_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
+
+
+def _with_article(phrase: str) -> str:
+    """``phrase`` with a capitalised indefinite article in front ("An oil painting", "A RAW photo")."""
+    return ("An " if phrase[:1].lower() in "aeiou" else "A ") + phrase
+
+
+def summary_line(style_word: str, persons: int, location: str = "") -> str:
+    """The first line of a labeled-sections prompt: what the picture is, who is in it, and where.
+
+    ``style_word`` is the first comma token of the use case's style and comes in two kinds:
+
+    * an ADJECTIVE ("photorealistic", the old default) — it qualifies the picture noun the line adds itself:
+      "A photorealistic group photo of two people in a cafe." (unchanged since the format exists);
+    * a NOUN PHRASE — it starts with an article ("a candid photograph taken with a 35mm lens", every natural-family
+      style) or ends in a picture noun ("RAW photo", "photorealistic portrait"). It already names the picture, so
+      the line names the subject after it instead of adding a second picture noun:
+      "A candid photograph taken with a 35mm lens, showing a group of two people in a cafe."
+
+    ``persons`` = 0 is a scene without people, 1 one person, more a group. The caller strips the location.
+    """
+    words = style_word.split()
+    first = words[0].lower() if words else ""
+    last = words[-1].lower().strip(".:;") if words else ""
+    if first in ("a", "an", "the") and len(words) > 1:
+        head = words[0][:1].upper() + style_word[1:]
+    elif last in _PICTURE_NOUNS:
+        head = _with_article(style_word)
+    else:
+        # Adjective form — byte-identical to the line before the noun-phrase rule.
+        if persons == 0:
+            line = f"{_with_article(style_word)} scene"
+        elif persons == 1:
+            line = f"{_with_article(style_word)} photo of a person"
+        else:
+            line = f"{_with_article(style_word)} group photo of {_NUM_WORDS.get(persons, str(persons))} people"
+        return (f"{line} in {location}" if location else line) + "."
+    if persons == 0:
+        line = f"{head}, set in {location}" if location else head
+        return line + "."
+    who = "a person" if persons == 1 else f"a group of {_NUM_WORDS.get(persons, str(persons))} people"
+    return f"{head}, showing {who}" + (f" in {location}" if location else "") + "."
+
+
 def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
     """Gemeinsames Labeled-Sections-Format fuer Qwen und Flux.
 
@@ -283,22 +335,9 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
     # "photorealistic, 8k, cinematic lighting").
     style_full = pv.prompt_style.strip().rstrip(".").strip() or "photorealistic"
     style_word = style_full.split(",", 1)[0].strip() or "photorealistic"
-    article = "An" if style_word[:1].lower() in "aeiou" else "A"
-
     n = len([p for p in pv.prompt_persons.values() if p])
-    _num_words = {2: "two", 3: "three", 4: "four", 5: "five",
-                  6: "six", 7: "seven", 8: "eight", 9: "nine"}
-    if n == 0:
-        summary = f"{article} {style_word} scene"
-    elif n == 1:
-        summary = f"{article} {style_word} photo of a person"
-    else:
-        count_word = _num_words.get(n, str(n))
-        summary = f"{article} {style_word} group photo of {count_word} people"
     _loc_clean = _clean_location_for_prompt(pv.prompt_location)
-    if _loc_clean:
-        summary += f" in {_loc_clean}"
-    sections.append(summary + ".")
+    sections.append(summary_line(style_word, n, _loc_clean))
 
     # --- Characters ---
     if pv.prompt_persons:
