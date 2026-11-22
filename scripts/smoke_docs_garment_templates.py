@@ -43,6 +43,11 @@ K) Every prompt file of ``PROMPT_FILES`` in ``garment_cut_texture.py`` (three: f
 L) The param ``texture``: its choices ``TEXTURE_SOURCES`` and that it is in ``TEXTURE_ONLY``
    (``garment_template.py``) — the document says "TEXTURE_ONLY".
 M) The file names: ``{item}_{tsig}.islands.json`` (``islands_path``) and ``templates/cut/`` (``cut_dir``).
+N) Plan group B, phases E / F / G (section 1d): ``NECK_VERSION`` and ``CORSET_VERSION`` (``garment_template.py``) and
+   ``PLACKET_VERSION`` (``cut_texture_post.py``) — the document says "`NECK_VERSION`", "`CORSET_VERSION`" and
+   "`PLACKET_VERSION` <n>" with the code's n; ``PLACKET_CLEAR_CM`` appears as "<value> cm" and ``PLACKET_CLEAR_DETAIL``
+   with its value; ``BAND_SCOOP_MAX_M`` (``garment_template_build.py``) as "<value x 100> cm"; the dart rule names
+   ``corset_darts.py`` and that file exists.
 """
 import ast
 import re
@@ -189,6 +194,19 @@ def main() -> int:
     # M
     check("M  islands file name", "{item}_{tsig}.islands.json" in gt and "{item}_{tsig}.islands.json" in doc)
     check("M  templates/cut/", '"templates" / "cut"' in gct and "templates/cut/" in doc)
+
+    # N
+    check("N  doc names NECK_VERSION and CORSET_VERSION", const(GT, "NECK_VERSION") >= 1 and const(GT, "CORSET_VERSION")
+          >= 1 and "`NECK_VERSION`" in doc and "`CORSET_VERSION`" in doc)
+    pv = const(POST, "PLACKET_VERSION")
+    check(f"N  doc: PLACKET_VERSION {pv}", f"`PLACKET_VERSION` {pv}" in doc)
+    cc, cd_ = const(POST, "PLACKET_CLEAR_CM"), const(POST, "PLACKET_CLEAR_DETAIL")
+    check(f"N  doc: PLACKET_CLEAR_CM {cc} cm, PLACKET_CLEAR_DETAIL {cd_}",
+          f"`PLACKET_CLEAR_CM` {cc} cm" in doc and f"`PLACKET_CLEAR_DETAIL` {cd_}" in doc)
+    bs = const(BUILD, "BAND_SCOOP_MAX_M")
+    check(f"N  doc: BAND_SCOOP_MAX_M {bs * 100:g} cm", f"`BAND_SCOOP_MAX_M` ({bs * 100:g} cm)" in doc)
+    check("N  doc names corset_darts.py and it exists", "corset_darts.py" in doc
+          and (REPO / "app" / "blender" / "scripts" / "corset_darts.py").is_file())
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     if _failures:

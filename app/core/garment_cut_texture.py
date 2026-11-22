@@ -1525,7 +1525,7 @@ MODEL_PARTS = {"front": MAIN_PARTS["front"] + ("placket", "cup_top_r", "cup_top_
 SLEEVE_PARTS = ("sleeve_l", "sleeve_r", "cuff_l", "cuff_r")
 #: The parts ``sleeve_print`` decides about: a top's sleeves and cuffs, group A's small pieces — waistband, cuffs,
 #: bra bands, straps and gore, gusset, glove thumbs, a string brief's hip bands, a stocking's top bands; phases C / D a
-#: jacket's / dress's collar (a 3.7 cm strip: held like the waistband, no top emits one yet). A neckband is never one
+#: jacket's / dress's collar (a 3.7 cm strip: held like the waistband; a covered top's too since phase E). A neckband is never one
 #: (always the fabric patch).
 TRIM_PARTS = SLEEVE_PARTS + ("waistband", "gusset", "gore", "band_r", "band_l", "strap_r", "strap_l", "thumb_r",
                              "thumb_l", "hip_band_r", "hip_band_l", "top_band_r", "top_band_l", "collar")

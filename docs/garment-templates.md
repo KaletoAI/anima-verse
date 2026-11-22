@@ -294,7 +294,8 @@ Measured on copies of the world's bodies (cut only, 0 hub jobs) against the plan
 | Gelina, circle skirt | 12.62 nested (11.7; stacked 11.89) | 1.000 / 1.04 | 1.03 | yes |
 | Ylva, wrap skirt | 15.26 nested (18.4; rows 13.26) | 0.993–0.999 / 1.13 | 1.03 | no — density |
 | Tilda, wool skirt | 14.85 nested (14.4; rows 13.88) | 0.994–0.999 / 1.14 | 1.01 | yes |
-| Rosi, corset top | 16.82 (15.0) | 0.969–0.992 / 1.28 | — | no — front panel p95 and area |
+| Rosi, corset top | 16.82 (15.0) | 0.969–0.992 / 1.28 | — | no — front panel p95 and area (before phase G) |
+| Rosi, corset top, darts (phase G, § 1d) | 17.72 (lifted 18.49) | 0.986–0.992 / 1.19 (lifted 0.990–0.994 / 1.19) | — | yes |
 
 Before the nesting the density misses were the layout's: Tilda's panels (65.4 + 77.5 cm wide, 85 cm long) fit the
 square neither side by side nor stacked, Kira's stacked layout was 83.9 cm high for 81.0 allowed. Ylva's remaining miss
@@ -372,6 +373,58 @@ dress's bodice and skirt parts, an open jacket's two fronts); sleeves, neckband 
 fabric patch (`collar` is a `TRIM_PARTS` member). Names (`piece_name_of`): a jacket "blazer" (lapel), "leather
 jacket" (a leather fabric), "cardigan" (open, no collar), else "jacket"; a dress "mini" (< 0.40 m) / "knee-length"
 (< 0.65) / "midi" (< 0.85) / "long dress", "long-sleeve " / "short-sleeve " in front on covered shoulders.
+
+## 1d. Tops: collar, neckband, placket; the corset's darts (plan group B, phases E / F / G)
+
+**Tops are panel kinds too** (`build_bodice`: `panel_kind` = jacket, dress, top). A `top` with covered shoulders has
+`collar` (none / stand; a lapel is validated to stand, a top without covered shoulders has no collar), `placket` and
+`buttons` (`KIND_FIELDS["top"]`, the dialog hides the collar off covered shoulders). Its cut key carries `"neck"` =
+`NECK_VERSION` 1 (`garment_template.neck_piece`: kind top, shoulders covered) — its islands changed once; an off-shoulder
+top or a top with straps has no neck ring and its islands are byte-identical to before.
+
+- **B8 for every kind:** the neckband is kept for a closed front without a collar and a crew / boat / scoop neckline
+  whose depth is at most `BAND_SCOOP_MAX_M` (8 cm) — the depth limit now applies to crew and boat too (a 15 cm crew
+  band read area 1.31, p95 2.99). A V never keeps it.
+- **The collar** is laid out of the neck as a smooth ring: per ring the rim's radius x 0.97^k, raised to what clears the
+  body (`_exit_out`) and smoothed three times, never below the clearance. Built inside the neck and pushed out vertex by
+  vertex it was wavy (Dario's collar p95 1.24 -> 1.09; Kai's jacket collar unchanged 1.055).
+- **Merged rim vertices:** `pattern_uv_of` maps a construction vertex merged away by the degenerate dissolve to its
+  nearest surviving neighbour in its row (`m_row`) for the collar rows and the band strip — a -1 in a band row split
+  Tilda's crew band in two (p95 2.6 / 3.7).
+- `scripts/smoke_template_cut_tops.py --body <copy> [--base-repo <checkout>] [--corset-body <copy>]`: stand collar,
+  V 5 cm, crew 15 cm, crew; the byte identity of off-shoulder and straps tops; the corset [6].
+  Dario's body passes all; **Tilda's body does not** — hair is part of her body mesh at the nape, the neck rim
+  zig-zags 3 cm round it: collar p95 1.61, back panel 1.30–1.36, and a stand collar's DRAPE fails (stretch 2.65 at
+  z 1.39, the nape). Her blouse runs without a collar until the body is fixed.
+
+**An old cut without its placket line (B11).** A ready cut of a piece that wants a placket, whose record has no
+`marks` key and no marks file, reads "missing" (`MARKS_MISSING`: CPU, 0 hub jobs) and is cut once more under the same
+sig; islands that come out different fail that cut (`MARKS_ISLANDS_CHANGED`, the old islands kept) instead of
+replacing the atlas's frame (`scripts/smoke_template_cut_first.py` [2.6]).
+
+**No second placket.** A picture of a buttoned shirt or a laced front shows its own placket whatever the prompt says.
+Before `draw_placket` paints, every island pixel within `placket_clear_px` of a line (the widest painted thing — the
+placket band or a button / the zip's pull / the eyelets — halved, + `PLACKET_CLEAR_CM` 0.4 cm) takes the pixel twice
+that far out on its own side; a detail there (more than `PLACKET_CLEAR_DETAIL` 40 off the ring's median) and a pixel
+off the island take the median fabric (`_wipe_line`, `PLACKET_VERSION` 2; `smoke_cut_texture_placket.py` [10]).
+
+**The corset's darts (phase G).** A strapless top's front panel (`wrap`, panel 0) is cut open in its UV only — the
+mesh stays whole — at the centre front from the top edge down a third of the panel and at two bust darts 8 of 40
+columns either side of it, down a sixth (`app/blender/scripts/corset_darts.py`). The strain sits at the top edge: a
+dart from the hem gained nothing (1.258). Rosi's Red Corset Top: front p95 1.276 / area 0.969 -> **1.187 / 0.986**
+(lifted bust 1.262 / 0.975 -> 1.125 / 0.994) — the acceptance p95 <= 1.25 and area >= 0.97 is met. The back panel's
+centre column is the placket line `centre_back` (a corset laces at the back), drawn like `centre_front` (no inward
+offset). The cut key of a strapless top gains `"corset"` = `CORSET_VERSION` 1 and `"corset_rules"` (md5 of
+`corset_darts.py`); skirts and dresses are unchanged (`scripts/smoke_corset_darts.py`, `smoke_cut_texture_placket.py`
+[11]).
+
+**Live 2026-11-22** (copies, chain MiniMax-H3-Image, P-H3-Image; 7 image jobs, every one MiniMax in attempt 1):
+Tilda's buttoned blouse (placket buttons, 7; no collar — see above): plain cream, seven buttons on the centre line, no
+second placket; Dario's worn linen shirt (placket buttons): six buttons, one placket, the picture's lacing at the neck
+not painted (the template has no lacing above buttons); the back answer is a coarser grey-cream weave than the front's
+stripes (dE about 2.5 — a visible change of weave at the side and armhole seams); Rosi's corset with darts over her
+pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
+time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back centre.
 
 ## 2. Texture from cut (step 2)
 
