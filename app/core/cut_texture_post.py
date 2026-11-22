@@ -936,23 +936,43 @@ def answer_gates(reg: np.ndarray, panel: np.ndarray, item_colour: dict | None,
 SPLIT_GATE = {"edge_cm": 1.0, "length": 0.4, "width_cm": 3.0, "item_share": 0.02}
 
 
-#: The weave gate (``weave_level`` / ``weave_gate``, review of stage 3: Dario's Worn Linen Shirt, live 2026-11-22): the
-#: back job painted a coarser, grey-speckled linen than the front job's fine stripes — every answer gate passed (its
-#: detail density 0.0: ``DETAIL_SIGMA`` smooths a weave away), and the side and arm seams showed the jump (seam_cross_de
-#: 5.97). ``weave_level`` = the std of L* minus its Gaussian of ``sigma_cm`` (the weave and the motif, without the
-#: shading) over the main panel resampled to ``px_per_cm`` and eroded by ``erode_cm``. A back answer is rejected when
-#: its level exceeds ``factor`` x the FRONT answer's + ``slack`` (one-sided: a plain back behind a decorated front is
-#: lower, never a fault). Measured on the saved answers (front -> back, the largest island of each job's template):
-#: Dario's linen 4.71 -> 7.64 (rejected: limit 1.25 x 4.71 + 1.0 = 6.88); the good pairs Glut's gloves 12.57 -> 14.43
-#: (limit 16.71: scales on both, 1.15 x), Glut's scale brief 13.73 -> 11.82, Lirien's dress 0.77 -> 1.28 (limit 1.97),
-#: Dario's linen on main 5.24 -> 5.67 (limit 7.55), Dario's embroidered shirt 10.41 -> 2.69, Kai's T-shirt 4.28 -> 0.98.
-#: ``factor`` 1.25 sits over the largest legitimate rise (1.15, the same scales front and back), ``slack`` 1.0 is two
-#: plain panels' noise (Lirien 0.5).
-WEAVE_GATE = {"sigma_cm": 0.5, "px_per_cm": 10.0, "erode_cm": 1.0, "factor": 1.25, "slack": 1.0}
+#: The weave gate (``weave_levels`` / ``weave_gates``, review of stage 3: Dario's Worn Linen Shirt, live 2026-11-22): the
+#: back job painted a grey-speckled, cross-woven linen behind the front job's fine vertical stripes — every answer gate
+#: passed (its detail density 0.0: ``DETAIL_SIGMA`` smooths a weave away), and the side and arm seams showed the jump.
+#: ``weave_levels`` reads the high-pass ``hp`` = L* minus its Gaussian of ``sigma_cm`` over the main panel resampled to
+#: ``px_per_cm`` and eroded by ``erode_cm``, twice:
+#:   - ``level`` = the std of ``hp`` — the AMPLITUDE of the weave and the motif;
+#:   - ``grain`` = the root of the mean MINOR eigenvalue of ``hp``'s structure tensor (its gradient products under a
+#:     Gaussian of ``sigma_cm``) — the energy that has NO preferred direction. Stripes, a rib or a twill line put their
+#:     whole gradient across the line (minor 0), a speckle or a cross weave puts it into both axes (minor = major).
+#: The amplitude alone cannot separate the structure: the world's atlas of the same shirt (csig 3fbadeae2a1f, a
+#: speckled back) reads level 5.03 -> 4.94 and passed, while the live run's comparable back 3.20 -> 5.35 failed — only
+#: the front's random stripe contrast differed. The grain of the striped fronts is stable (0.50 / 0.54 in two
+#: independent fronts whose level differs by 36 %), the speckled backs read 2.63-3.47: the grain is the cloth's
+#: structure, not one front sample's contrast. A back answer is rejected when its level exceeds ``factor`` x the front
+#: answer's + ``slack`` OR its grain exceeds ``grain_factor`` x the front answer's + ``grain_slack`` (one-sided: a
+#: plainer back behind a decorated front is lower, never a fault). Measured on the saved answers (front -> back,
+#: level / grain; the three linen pairs through ``post_job`` on main's islands cdacdafeb5b1 where they exist, the rest
+#: registered to the template they were sent with, its main panel):
+#:   bad  — Dario's linen, stage 3: 3.45 / 2.57 -> 6.06 / 3.47 (level limit 5.32: rejected); the world atlas
+#:          3fbadeae2a1f: 5.03 / 0.50 -> 4.94 / 2.74 (grain limit 1.12: rejected); live 2026-11-22: 3.20 / 0.54 ->
+#:          MiniMax 4.69 / 2.63, P-H3 5.35 / 3.47 (grain limit 1.17: both rejected); Tilda's cardigan 0.36 / 0.35 ->
+#:          10.90 / 3.86 (an invented motif) and 8.78 / 3.22 (a rib the front lacks); Tilda's blouse be2b0531102e
+#:          0.12 / 0.19 -> 12.59 / 5.36 (an invented illustration);
+#:   good — Glut's gloves 12.40 / 5.08 -> 14.19 / 5.62 (limits 16.50 / 6.85), Glut's scale brief 13.28 / 6.03 ->
+#:          11.78 / 5.16, Lirien's dress 0.60 / 0.44 -> 0.88 / 0.61 (limits 1.75 / 1.04), Kai's T-shirt
+#:          2.41 / 1.29 -> 0.26 / 0.29, Dario's embroidered shirt (three atlases) 10.61 / 3.04 -> 0.72 / 0.42,
+#:          5.93 / 2.31 -> 2.95 / 1.77, 5.99 / 2.18 -> 2.44 / 1.24.
+#: ``factor`` 1.25 sits over the largest legitimate amplitude rise (1.15 x, the same scales front and back), ``slack``
+#: 1.0 is two plain panels' noise; ``grain_factor`` 1.25 over the largest legitimate grain rise (1.11 x, the gloves),
+#: ``grain_slack`` 0.5 over a plain panel's grain noise (Lirien +0.17). The world atlas 3fbadeae2a1f is a NEGATIVE
+#: case. ``scripts/smoke_cut_texture_detail_gates.py``.
+WEAVE_GATE = {"sigma_cm": 0.5, "px_per_cm": 10.0, "erode_cm": 1.0, "factor": 1.25, "slack": 1.0,
+              "grain_factor": 1.25, "grain_slack": 0.5}
 
 
-def weave_level(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> float | None:
-    """The weave level of ``mask`` (``WEAVE_GATE``): None for a region too small to measure."""
+def weave_levels(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> dict | None:
+    """``{"level", "grain"}`` of ``mask`` (``WEAVE_GATE``): None for a region too small to measure."""
     from scipy import ndimage
     mask = np.asarray(mask, bool)
     if px_per_cm <= 0 or mask.sum() < 16:
@@ -969,19 +989,32 @@ def weave_level(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> float | 
     m = ndimage.binary_erosion(m, iterations=max(1, int(round(g["erode_cm"] * g["px_per_cm"]))))
     if m.sum() < 16:
         return None
+    sigma = g["sigma_cm"] * g["px_per_cm"]
     L = srgb_to_lab(small)[..., 0]
-    hp = L - ndimage.gaussian_filter(L, g["sigma_cm"] * g["px_per_cm"])
-    return round(float(hp[m].std()), 3)
+    hp = L - ndimage.gaussian_filter(L, sigma)
+    gy, gx = np.gradient(hp)
+    sxx, syy, sxy = (ndimage.gaussian_filter(a, sigma) for a in (gx * gx, gy * gy, gx * gy))
+    minor = (sxx + syy) / 2.0 - np.sqrt(((sxx - syy) / 2.0) ** 2 + sxy ** 2)
+    return {"level": round(float(hp[m].std()), 3), "grain": round(float(np.sqrt(max(minor[m].mean(), 0.0))), 3)}
 
 
-def weave_gate(back: float | None, front: float | None) -> dict | None:
-    """The weave gate of a back answer (``WEAVE_GATE``) against the front answer's level; None without both."""
-    if back is None or front is None:
-        return None
-    lim = round(WEAVE_GATE["factor"] * float(front) + WEAVE_GATE["slack"], 3)
-    ok = float(back) <= lim
-    return {"gate": "weave", "ok": ok, "value": back, "limit": lim, "front": front,
-            "text": "" if ok else f"back weave {back:.2f} > {lim:.2f} (the front's {front:.2f})"}
+def weave_gates(back: dict | None, front: dict | None) -> list[dict]:
+    """The weave gates of a back answer (``WEAVE_GATE``) against the front answer's levels: ``weave`` (the level) and
+    ``grain``; [] without both (a level of another shape — a float — is none)."""
+    if not isinstance(back, dict) or not isinstance(front, dict):
+        return []
+    g = WEAVE_GATE
+    out = []
+    for gate, key, factor, slack in (("weave", "level", g["factor"], g["slack"]),
+                                     ("grain", "grain", g["grain_factor"], g["grain_slack"])):
+        if back.get(key) is None or front.get(key) is None:
+            continue
+        b, f = float(back[key]), float(front[key])
+        lim = round(factor * f + slack, 3)
+        ok = b <= lim
+        out.append({"gate": gate, "ok": ok, "value": b, "limit": lim, "front": f,
+                    "text": "" if ok else f"back {gate} {b:.2f} > {lim:.2f} (the front's {f:.2f})"})
+    return out
 
 
 def split_gate(reg: np.ndarray, panel_labels: np.ndarray, px_per_cm: float, tol: int,

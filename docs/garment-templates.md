@@ -443,8 +443,8 @@ accepted** and stays "projection"; Dario's worn linen shirt (placket buttons): s
 lacing at the neck not painted (the template has no lacing above buttons); the back answer is a coarser, speckled
 grey-cream weave than the front's stripes (back detail 0.348 against the front's 0.215): seam_de median **4.61**
 (per seam up to 10.37), seam_cross_de **5.97** against 1.2-1.4 on the other pieces — a visible seam jump, **not
-accepted**, it stays "projection" (open: a gate that rejects a back answer whose detail level differs from the
-front's); Dario's embroidered green shirt was not run live — its cut changes here (`NECK_VERSION`, band removed) and
+accepted**, it stays "projection" (since the review: the weave gate's grain rejects such a back, see
+*Weave gate*); Dario's embroidered green shirt was not run live — its cut changes here (`NECK_VERSION`, band removed) and
 `_wipe_line` takes the median fabric within about 1.9 cm of the centre line, which may erase embroidery near the
 placket: it stays "projection" until a live run; Rosi's corset with darts over her
 pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
@@ -563,13 +563,21 @@ hold, so:
   painted as three pieces, Glut's bra answer 2), the right ones score ≤ 0.15. Skipped when ≥ 2 % of the item's own
   fabric pixels are background-coloured (a white stripe can be the fabric). A pure reject gate: `POST_VERSION`
   unchanged, no ready atlas goes stale.
-- **Weave gate** (`WEAVE_GATE`, `cut_texture_post.weave_level` / `weave_gate`, review of group B stage 3: P-H3
-  painted Dario's linen back coarser and grey-speckled while the front kept fine stripes — the detail density reads
-  0.0 for both, it smooths a weave away): the std of L* minus its 0.5 cm Gaussian over the main panel at 10 px/cm,
-  eroded 1 cm, is stored as `metrics.weave`; the back answer is rejected above **1.25 × the front answer's + 1.0**,
-  so attempt 2 runs. Saved answers: Dario 4.71 → 7.64 rejected (limit 6.88); Glut's gloves 12.57 → 14.43, Lirien's
-  dress 0.77 → 1.28, Dario on main 5.24 → 5.67 pass; a back below its front always passes. Without a front level (a
-  reused front from an older record) the gate is skipped. A pure reject gate: `POST_VERSION` unchanged.
+- **Weave gate** (`WEAVE_GATE`, `cut_texture_post.weave_levels` / `weave_gates`, review of group B stage 3: the
+  back of Dario's linen came out as a grey, cross-woven speckle behind the front's fine vertical stripes — the detail
+  density reads 0.0 for both, it smooths a weave away). Over the main panel at 10 px/cm, eroded 1 cm, the high-pass
+  `hp` = L* minus its 0.5 cm Gaussian gives two numbers, stored as `metrics.weave` = `{level, grain}`: **level** =
+  std(hp), the amplitude; **grain** = the root of the mean minor eigenvalue of hp's structure tensor, the energy WITHOUT
+  a preferred direction (stripes, rib, twill: ≈ 0; speckle, cross weave: = the amplitude). The back answer is rejected
+  above **1.25 × the front's level + 1.0** or **1.25 × the front's grain + 0.5**, so attempt 2 runs. The amplitude alone
+  was not enough: the world's atlas `3fbadeae2a1f` of the same shirt (a speckled back, a NEGATIVE case) reads level
+  5.03 → 4.94 and passed, a comparable live back 3.20 → 5.35 failed only because that front's stripes were paler; the
+  grain of both striped fronts is 0.50 / 0.54, of the speckled backs 2.63–3.47 (limits 1.12 / 1.17: all rejected).
+  Stage 3's speckled front 3.45 / 2.57 → 6.06 / 3.47 is caught by the level (limit 5.32). Good saved pairs pass both:
+  Glut's gloves 12.40 / 5.08 → 14.19 / 5.62, Lirien's dress 0.60 / 0.44 → 0.88 / 0.61, Kai's T-shirt and Dario's
+  embroidered shirt (backs lower). Without front levels (a reused front from an older record) the gates are skipped.
+  A pure reject gate: `POST_VERSION` unchanged. A back legitimately busier than its front (a print on the back only)
+  would be rejected too — none in the world; "Use this answer" takes it.
 - **Sleeves and neckband** are not taken from the model: `fill_fabric` cuts the plainest `PATCH_CM` = 8 cm window of
   the main panel (within ΔE76 10 of its base colour), tiles it mirrored (seamless) and moves its Lab mean onto the
   panel's base colour, over every grown pixel whose nearest island is a sleeve, cuff or the neckband. The template

@@ -1644,11 +1644,9 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     if split is not None:
         gates.append(split)
     # review of stage 3: the back's weave against the front answer's (``cut_texture_post.WEAVE_GATE``)
-    weave = post.weave_level(reg, panel, px_per_cm) if panel.any() else None
+    weave = post.weave_levels(reg, panel, px_per_cm) if panel.any() else None
     if job == "back":
-        wg = post.weave_gate(weave, refs.get("front_weave"))
-        if wg is not None:
-            gates.append(wg)
+        gates.extend(post.weave_gates(weave, refs.get("front_weave")))
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
     metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
                "spill": met["spill"], "registration": reg_info, "islands": met["islands"],
