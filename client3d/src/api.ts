@@ -17,6 +17,7 @@ import type {
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
 import { emptyManifest, readManifest, type AudioManifest } from './game/soundtrack';
+import type { ReadoutReport } from './game/readoutReports';
 
 /**
  * The session is gone (401) — NOT a server that cannot be reached.
@@ -291,6 +292,20 @@ export async function postPos(x: number, z: number, signal: AbortSignal | undefi
   }
   if (!res.ok) throw await refusal(res);
   return res.json() as Promise<PosReport>;
+}
+
+/** A channel readout report of a running scene (`game/readoutReports.ts`). Fire and forget: the server answers
+ *  `{accepted}` and drops what it may not take; a lost report is one lost sample, never an error to show. */
+export async function postSceneReadouts(report: ReadoutReport): Promise<void> {
+  try {
+    await fetch('/play/scene/readouts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report),
+    });
+  } catch {
+    // offline or aborted: the next second sends again
+  }
 }
 
 /** Freebody activity and legitimate room-marker poses only.

@@ -49,6 +49,9 @@
  *        s 0.01, ratio 0.0033 / 0.0303 = 0.1089109; the link does not cross the plane → stretchOpening 0; front
  *        0.1236, of D 0.618.
  *     f. an oblique link (x 0.01 → 0.03, z 0 → 0.04) counts by its s only: front 0.04 + 0.02 = 0.06.
+ *     partRadiusM = the largest r over the links that reach s ≥ 0 (the same links as the stretch), 0 when none:
+ *     a 0 and b 0 (no link reaches the plane), c max(0.034, 0.025) = 0.034 (the first link ends at s = 0), d 0.03,
+ *     e 0.0336, f 0.02.
  *     No segments → null.
  *     g. Nothing past the bottom at D 0.20 (compress_min 0.8): the thickest and longest stored entering part (core
  *        r_c 0.0356, chain 0.1264 m) fully in from the opening (s_e 0, tip s 0.1264): floor D − r_c = 0.1644 ≥
@@ -161,6 +164,10 @@ async function main() {
     JSON.stringify(e6))
   const f6 = ro([link(0, 0.04, 0.02, 0.01, 0.03)])
   check('[6f] oblique: front by s only, 0.06', near(f6.insertionM, 0.06, 1e-12), JSON.stringify(f6))
+  check('[6] partRadiusM a 0, b 0, c 0.034, d 0.03, e 0.0336, f 0.02',
+    a6.partRadiusM === 0 && b6.partRadiusM === 0 && c6.partRadiusM === 0.034 && d6.partRadiusM === 0.03
+    && e6.partRadiusM === 0.0336 && f6.partRadiusM === 0.02,
+    JSON.stringify([a6, b6, c6, d6, e6, f6].map((v) => v.partRadiusM)))
   check('[6] no segments → null', RO.channelReadout(dch, []) === null)
   const pelvis = { ...ch, depth: 0.20, r: 0.0303, compressMin: 0.8 }
   check('[6g] k 1 for the longest stored part fully in', C.depthScale(0.1264, 0, pelvis, 0.0356) === 1,

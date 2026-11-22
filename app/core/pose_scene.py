@@ -7,8 +7,8 @@ Neither engine keeps a copy of what lives here (plan pair scene, Task 3):
 - the BEAT: hook ``scene.active(scene_id, kind, members, roles, pose_key,
   lead_role, delta_game_s, readouts)`` once per scheduler step for each scene
   that spent online GAME time running (``kind`` "interaction" | "prop_action";
-  ``roles`` = ``{clip role: name}``, ``{}`` for a solo run; ``readouts`` []
-  until the clients report them). A frozen world beats not at all. Furniture
+  ``roles`` = ``{clip role: name}``, ``{}`` for a solo run; ``readouts`` =
+  :func:`readouts`, what the clients reported). A frozen world beats not at all. Furniture
   beats come from ``prop_action_engine.advance`` through :func:`emit_active`
   (its run keeps its own game clock across restarts); free scenes beat from
   :func:`advance`, whose clock is this process's memory: the first step after
@@ -34,6 +34,12 @@ Neither engine keeps a copy of what lives here (plan pair scene, Task 3):
   on the motion clock, so a frozen world stops it. It lives in this process:
   a scene first seen (its start, or the first touch after a server start)
   counts from 0.
+- the CHANNEL READOUTS (:func:`report_readouts`, route
+  ``POST /play/scene/readouts``): a 3D client that renders the scene reports
+  a summary per (receiver, channel, entering) at most once a second; the
+  latest per key, no older than READOUT_FRESH_S, rides on every beat, its
+  ``reaches`` summed since the previous beat. Measurements only — what they
+  mean is the package's. They live in this process.
 """
 import math
 import uuid
@@ -58,6 +64,18 @@ TEMPO_MIN, TEMPO_MAX = 0.2, 1.0
 METER_BEAT_REAL_S = 5.0
 #: A ticker step a little early still beats (the ticker itself runs every 5 s).
 _BEAT_SLACK = 0.8
+#: SYSTEM seconds a client readout stays usable: an older one is no
+#: measurement any more (the client closed, the figure left the view).
+READOUT_FRESH_S = 5.0
+#: SYSTEM seconds between two accepted reports of one key. The clients send
+#: once a second; the network may bring two of them closer together, so the
+#: floor is a little lower than 1 s (_BEAT_SLACK) — a report lost to jitter
+#: would lose the reaches it carries.
+READOUT_MIN_INTERVAL_S = 1.0 * _BEAT_SLACK
+#: The most rows one report may carry (a scene has a few channels).
+READOUT_MAX_ROWS = 32
+#: The number fields of a report row, each finite and >= 0.
+_READOUT_NUMBERS = ("insertion_of_depth", "part_radius_m", "rest_radius_m", "depth_m")
 
 _mutex = Lock()
 #: name -> the finale it plays: {id, scene_id, kind, role, alt, pose_key,
@@ -70,6 +88,9 @@ _beats = {}
 #: scene id -> its clip clock {clip_s, tempo, motion: motion_time of the last
 #: step, clip: what the payload last named it plays (None = not yet)}
 _clocks = {}
+#: scene id -> {(receiver, channel, entering): the latest accepted row +
+#: "at" (utc of it) + "reaches" (summed since the last read)}
+_readouts = {}
 #: The game time of this process's first step (:func:`advance`): a free scene
 #: started before it gets no credit for the time the server was down.
 _boot = {"game": None}
@@ -339,6 +360,7 @@ def end_finales(scene_id=None, *, expired_only=False):
     with _mutex:
         if scene_id is not None and not expired_only:
             _clocks.pop(scene_id, None)
+            _readouts.pop(scene_id, None)
         done = [(name, f) for name, f in _finales.items()
                 if (scene_id is None or f["scene_id"] == scene_id)
                 and not (expired_only and _finale_live(f))]
@@ -606,32 +628,146 @@ def _beat_tempo(beat):
 
 
 def _prune_clocks(free_ids):
-    """Drops the clocks of scenes that no longer run (a free scene that is
-    gone, a furniture run that ended or vanished)."""
+    """Drops the clocks and readouts of scenes that no longer run (a free
+    scene that is gone, a furniture run that ended or vanished)."""
     from app.core import prop_action_store as store
     with _mutex:
-        ids = [scene_id for scene_id in _clocks if scene_id not in free_ids]
+        ids = [scene_id for scene_id in {*_clocks, *_readouts} if scene_id not in free_ids]
     for scene_id in ids:
         run = _furniture_run(scene_id)
         if run is None or run["status"] in store.TERMINAL:
             with _mutex:
                 _clocks.pop(scene_id, None)
+                _readouts.pop(scene_id, None)
+
+
+# ---------------------------------------------------------------- readouts
+
+def _readout_row(raw):
+    """A report row as stored (``reaches`` included), None when it is not
+    one: names non-empty strings, the receiver not the entering figure, the
+    numbers finite and >= 0, ``reaches`` a whole number >= 0."""
+    if not isinstance(raw, dict):
+        return None
+    names = [raw.get(field) for field in ("receiver", "channel", "entering")]
+    if not all(isinstance(name, str) and name for name in names) or names[0] == names[2]:
+        return None
+    row = dict(receiver=names[0], channel=names[1], entering=names[2])
+    for field in _READOUT_NUMBERS:
+        value = raw.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        if not (math.isfinite(value) and value >= 0):
+            return None
+        row[field] = value
+    reaches = raw.get("reaches")
+    if isinstance(reaches, bool) or not isinstance(reaches, int) or reaches < 0:
+        return None
+    row["reaches"] = reaches
+    return row
+
+
+def _may_watch(viewer, members) -> bool:
+    """``viewer`` (a user's avatar) sees the scene: it plays in it, or one of
+    its members is someone it can address (``perception.addressable_for``:
+    the same room, or within earshot out in the open)."""
+    if not viewer:
+        return False
+    if viewer in members:
+        return True
+    from app.core.perception import addressable_for
+    return bool(set(addressable_for(viewer)) & set(members))
+
+
+def report_readouts(scene_id: str, rows, *, viewer: str = "", admin: bool = False) -> int:
+    """Stores a client's readout report of the running scene ``scene_id`` —
+    the number of rows taken. A row is taken when it is well formed
+    (:func:`_readout_row`), its receiver and entering figure are members of
+    that scene while it runs (an active furniture run, or a free scene;
+    :func:`scene_of` of the receiver), the reporting user is an admin or its
+    avatar ``viewer`` watches the scene (:func:`_may_watch`), and its key
+    (receiver, channel, entering) took no report in the last
+    READOUT_MIN_INTERVAL_S. Everything else is dropped silently. A taken
+    row replaces the key's values and adds its ``reaches``."""
+    if not isinstance(scene_id, str) or not scene_id or not isinstance(rows, list):
+        return 0
+    taken = []
+    members_of_receiver = {}
+    for raw in rows[:READOUT_MAX_ROWS]:
+        row = _readout_row(raw)
+        if row is None:
+            continue
+        receiver = row["receiver"]
+        if receiver not in members_of_receiver:
+            scene = scene_of(receiver)
+            members = scene["members"] if scene and scene["scene_id"] == scene_id else None
+            members_of_receiver[receiver] = (members if members and (admin or _may_watch(viewer, members))
+                                             else None)
+        members = members_of_receiver[receiver]
+        if not members or row["entering"] not in members:
+            continue
+        taken.append(row)
+    if not taken:
+        return 0
+    now = utc_now()
+    accepted = 0
+    with _mutex:
+        stored = _readouts.setdefault(scene_id, {})
+        for row in taken:
+            key = (row["receiver"], row["channel"], row["entering"])
+            last = stored.get(key)
+            if last and (now - last["at"]).total_seconds() < READOUT_MIN_INTERVAL_S:
+                continue
+            reaches = row.pop("reaches") + (last["reaches"] if last else 0)
+            stored[key] = dict(row, at=now, reaches=reaches)
+            accepted += 1
+    return accepted
+
+
+def readouts(scene_id: str) -> list:
+    """The readouts of a scene for its beat: per key the latest report no
+    older than READOUT_FRESH_S (``{receiver, channel, entering,
+    insertion_of_depth, part_radius_m, rest_radius_m, depth_m, reaches,
+    source: "client"}``, sorted by key), ``reaches`` summed since the
+    previous call — which resets them. Older ones are forgotten. [] when
+    nothing was reported."""
+    now = utc_now()
+    out = []
+    with _mutex:
+        stored = _readouts.get(scene_id)
+        if not stored:
+            return []
+        for key in sorted(stored):
+            row = stored[key]
+            if (now - row["at"]).total_seconds() > READOUT_FRESH_S:
+                del stored[key]
+                continue
+            out.append(dict(receiver=row["receiver"], channel=row["channel"], entering=row["entering"],
+                            **{field: row[field] for field in _READOUT_NUMBERS},
+                            reaches=row["reaches"], source="client"))
+            row["reaches"] = 0
+        if not stored:
+            _readouts.pop(scene_id, None)
+    return out
 
 
 # ---------------------------------------------------------------- beats
 
-def emit_active(*, scene_id, kind, members, roles, pose_key, delta_game_s, readouts=None):
+def emit_active(*, scene_id, kind, members, roles, pose_key, delta_game_s):
     """Fires ``scene.active`` for one scene after every lock is released —
     first stepping its clip clock and refreshing its tempo (provider
-    ``scene.tempo``, asked outside every lock)."""
+    ``scene.tempo``, asked outside every lock), then taking its client
+    readouts (:func:`readouts`)."""
     from app.core.hooks import emit
     from app.core.keyed_lock import _after_locks
     from app.core.pose_catalog import lead_role_of
     beat = dict(scene_id=scene_id, kind=kind, members=list(members), roles=dict(roles or {}),
                 pose_key=pose_key, lead_role=lead_role_of(pose_key),
-                delta_game_s=delta_game_s, readouts=list(readouts or []))
+                delta_game_s=delta_game_s, readouts=[])
     def fire():
         _beat_tempo(beat)
+        beat["readouts"] = readouts(scene_id)
         emit("scene.active", **beat)
     _after_locks(fire)
 

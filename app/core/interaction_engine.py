@@ -288,6 +288,10 @@ def payload_for(character_name: str, profile: Dict[str, Any],
     clip_s, tempo = clip_clock(scene_id, f'{inter.get("pose_key") or ""}|{inter["kind"]}')
     return {
         "id": inter["id"],
+        # the SCENE it plays in (pose_scene): the interaction id, or the
+        # furniture run's execution id — what a client names in a readout
+        # report (POST /play/scene/readouts)
+        "scene_id": scene_id,
         "kind": inter["kind"],
         "role": inter["role"],
         "members": members_of(inter),

@@ -22,6 +22,8 @@
  *   `stretchOpeningM` = the same excess over the links that cross the opening plane (min s ≤ 0 ≤ max s) — the
  *   stretch AT the opening; 0 when no link crosses it (the part is all in front of it or all inside).
  *   `stretchDiameterM` = 2 · stretchM, `stretchRatio` = stretchM / R.
+ * - `partRadiusM` = the largest r over the links that reach s ≥ 0 (the same links as the stretch), 0 when none — the
+ *   part's own width inside, so a part thinner than R ("not filled") is measurable too.
  *   The opening itself holds the wall at r + `OPENING_MARGIN_M` from the part's axis; the readout measures the part's
  *   surface against R, without that skin margin.
  *
@@ -42,6 +44,7 @@ export interface ChannelReadoutValues {
   stretchRatio: number
   stretchAtM: number
   stretchOpeningM: number
+  partRadiusM: number
 }
 
 /** One readout with its owners: `receiver` holds the channel, `entering` is the figure whose chain is in it, `w` the
@@ -60,7 +63,7 @@ export function channelReadout(ch: { o: Vec3; u: Vec3; depth: number; r: number 
   const sOf = (p: Vec3) => (p[0] - ch.o[0]) * ch.u[0] + (p[1] - ch.o[1]) * ch.u[1] + (p[2] - ch.o[2]) * ch.u[2]
   const R = ch.r
   let front = 0, total = 0, inside = 0
-  let stretch = 0, stretchAt = 0, opening = 0
+  let stretch = 0, stretchAt = 0, opening = 0, partR = 0
   for (const seg of segments) {
     const sa = sOf(seg.a), sb = sOf(seg.b)
     const lo = Math.min(sa, sb), hi = Math.max(sa, sb)
@@ -70,6 +73,7 @@ export function channelReadout(ch: { o: Vec3; u: Vec3; depth: number; r: number 
     total += length
     if (hi >= 0) {
       inside += lo >= 0 ? length : hi - lo > 1e-12 ? length * hi / (hi - lo) : length
+      partR = Math.max(partR, r)
       const excess = Math.max(0, r - R)
       if (excess > stretch) { stretch = excess; stretchAt = Math.max(0, lo) }
       if (lo <= 0) opening = Math.max(opening, excess)
@@ -83,7 +87,7 @@ export function channelReadout(ch: { o: Vec3; u: Vec3; depth: number; r: number 
     insertionOfLength: total > 0 ? inside / total : 0,
     compressK: k,
     stretchM: stretch, stretchDiameterM: 2 * stretch, stretchRatio: R > 0 ? stretch / R : 0,
-    stretchAtM: stretchAt, stretchOpeningM: opening,
+    stretchAtM: stretchAt, stretchOpeningM: opening, partRadiusM: partR,
   }
 }
 

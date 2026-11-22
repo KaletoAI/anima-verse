@@ -38,7 +38,7 @@ def _spectator_lens(user: Dict[str, Any]) -> str:
 def _avatar_write_guard(request: Request):
     """World inspection stays available; character mutations require control."""
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
-        "/play/bench-result", "/play/scene-preview",
+        "/play/bench-result", "/play/scene-preview", "/play/scene/readouts",
     }:
         _require_avatar()
 
@@ -2375,6 +2375,37 @@ async def play_interact_alt(request: Request, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="scene_id and alt (strings) required")
     avatar = _require_avatar()
     return _scene_answer(await asyncio.to_thread(pose_scene.set_alt, scene_id, avatar, alt))
+
+
+@router.post("/play/scene/readouts")
+async def play_scene_readouts(request: Request, user=Depends(get_current_user)):
+    """A 3D client's channel readouts of a running scene (§ A8a,
+    ``pose_scene.report_readouts``): ``{scene_id, readouts: [{receiver,
+    channel, entering, insertion_of_depth, part_radius_m, rest_radius_m,
+    depth_m, reaches}]}`` -> ``{accepted: n}``. A report the user may not
+    make (its avatar does not watch the scene, and it is no admin), of a scene
+    that does not run, or too soon after the last one of a key is dropped
+    silently — 200 with ``accepted`` 0, never 403. Measurements, not a
+    character mutation: a spectator without an avatar (an admin) reports too."""
+    import asyncio
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="JSON body required")
+    return await asyncio.to_thread(_play_scene_readouts_sync, user, body)
+
+
+def _play_scene_readouts_sync(user: Dict[str, Any], body: Any) -> Dict[str, Any]:
+    from app.core import pose_scene
+    from app.models.account import get_active_character
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+    scene_id, rows = body.get("scene_id"), body.get("readouts")
+    if not isinstance(scene_id, str) or not scene_id or not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="scene_id (string) and readouts (list) required")
+    viewer = (get_active_character() or "").strip()
+    admin = (user or {}).get("role") == "admin"
+    return {"accepted": pose_scene.report_readouts(scene_id, rows, viewer=viewer, admin=admin)}
 
 
 # How long the delayed silence check waits for the room's respond turns

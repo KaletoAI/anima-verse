@@ -362,6 +362,9 @@ export interface NameBadge {
  *  turned by `yaw` — the body's facing inside the clip comes from the clip. */
 export interface MapInteraction {
   id: string;
+  /** the running SCENE it plays in: the interaction id, or the furniture run's execution id — what the channel
+   *  readout reports name (`POST /play/scene/readouts`, `game/readoutReports.ts`) */
+  scene_id?: string;
   kind: string;
   /** this figure's own clip role */
   role: 'a' | 'b' | 'c' | 'd' | 'e';

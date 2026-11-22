@@ -26,6 +26,8 @@ import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
 import type { ChannelReadout, ContactRelation, PlaceEntry } from '@anima/scene-render';
 import { createReadoutPublisher } from '../game/channelReadouts';
+import { createReadoutReporter } from '../game/readoutReports';
+import { postSceneReadouts } from '../api';
 import { setChannelReadouts } from '../hud/bus';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
@@ -255,6 +257,9 @@ export interface TravelRoute {
 export interface PairPlay {
   blend?: { from: PairPose; at: number };
   id: string;
+  /** the scene it plays in (`MapInteraction.scene_id`; the id when the server names none) — the channel readout
+   *  reports name it */
+  sceneId: string;
   /** the interaction's kind (`MapInteraction.kind`) — what a partner snapshot names */
   kind: string;
   /** every character of the interaction, this figure included (`MapInteraction.members`) —
@@ -350,6 +355,10 @@ export class NpcManager {
    *  throttled publisher onto the HUD bus (`game/channelReadouts.ts`: ≤ 10 Hz, only while engaged, a final null). */
   private readoutsNow: ChannelReadout[] = [];
   private readonly publishReadouts = createReadoutPublisher(setChannelReadouts);
+  /** The same raw readouts summarised once a second per key for the server (`game/readoutReports.ts`), named by
+   *  the scene the receiving figure plays in. */
+  private readonly reportReadouts = createReadoutReporter((report) => { void postSceneReadouts(report); },
+    (receiver) => this.npcs.get(receiver)?.interaction?.sceneId ?? '');
   /** A102b: the rotating start of the opening pass (`runFigureFrame`, from `tickSecondary`). */
   private readonly frameState: FrameLoopState = { openingTurn: 0 };
   onPropEntryError: ((message: string) => void) | null = null;
@@ -1431,7 +1440,7 @@ export class NpcManager {
         at: performance.now(),
       };
       npc.interaction = {
-        blend, id: it.id, kind: it.kind, members: Object.values(it.members ?? {}), clip, base,
+        blend, id: it.id, sceneId: it.scene_id || it.id, kind: it.kind, members: Object.values(it.members ?? {}), clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, tempo, stamp,
         clipT: pairClipPhase({ clipS: it.clip_s ?? null, tempo, frozen: rate <= 0, loop, loopCount,
@@ -1446,6 +1455,7 @@ export class NpcManager {
       return;
     }
     const cur = npc.interaction;
+    cur.sceneId = it.scene_id || it.id;
     cur.kind = it.kind;
     cur.members = Object.values(it.members ?? {});
     cur.rate = it.rate ?? 0;
@@ -2383,7 +2393,8 @@ export class NpcManager {
    *      pose (their own phase B included) and 5. handed to its hair push,
    *      which reads them at render time — no lag;
    *   6. the channel readouts of every receiving figure collected
-   *      (`channelReadouts()`) and published, throttled, on the HUD bus. */
+   *      (`channelReadouts()`) and published, throttled, on the HUD bus,
+   *      and reported once a second to the server (`readoutReports.ts`). */
   private tickSecondary() {
     const entries: FrameEntry[] = [];
     for (const npc of this.npcs.values()) {
@@ -2396,7 +2407,9 @@ export class NpcManager {
     for (const npc of this.npcs.values()) {
       for (const r of npc.figure?.channelReadouts() ?? []) this.readoutsNow.push({ ...r, receiver: npc.name });
     }
-    this.publishReadouts(this.readoutsNow, performance.now());
+    const now = performance.now();
+    this.publishReadouts(this.readoutsNow, now);
+    this.reportReadouts(this.readoutsNow, now);
   }
 
   /** The channel readouts of the last phase B, raw (unthrottled): how far each entering part is in which figure's

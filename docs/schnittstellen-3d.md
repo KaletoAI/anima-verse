@@ -2963,7 +2963,7 @@ Bild (s. u.).
 
 ```json
 "interaction": {
-  "id": "049b7a009533", "kind": "handshake", "role": "a",
+  "id": "049b7a009533", "scene_id": "049b7a009533", "kind": "handshake", "role": "a",
   "members": {"a": "Ann", "b": "Bob"},
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
@@ -2988,7 +2988,27 @@ Ende-Feld gibt es NICHT. `clip_s` ist die CLIP-Uhr der laufenden Szene
 DIESES Clips, `tempo` das Abspieltempo 0.2..1 (Clipsekunden pro Realsekunde,
 1 = Eigentempo des Clips). Eine Uhr pro Szene — Szenen-Id = Interaktions-Id,
 bei einem Möbel-Paar die `execution_id` seines Laufs —, beide Figuren lesen
-also dieselben Zahlen.
+also dieselben Zahlen. `scene_id` names that scene id.
+
+**Channel readout reports** (plan pair scene Task 5). A client that renders a
+running scene reports what its figures measure (`channelReadout.ts`, § the
+scene-render README) as `POST /play/scene/readouts` with
+`{scene_id, readouts: [{receiver, channel, entering, insertion_of_depth,
+part_radius_m, rest_radius_m, depth_m, reaches}]}` → `{accepted: n}`.
+`client3d/src/game/readoutReports.ts` sends at most one row per (scene,
+receiver, channel, entering) and second: the MEANS of `insertionOfDepth` and
+`partRadiusM` over that second, the last `restRadiusM`/`depthM`, and
+`reaches` = how often `insertionOfDepth ≥ 1` started in it. The server
+(`pose_scene.report_readouts`) takes a row only for a running scene whose
+members are `receiver` and `entering`, from an admin or a user whose avatar
+watches the scene (a member, or someone `perception.addressable_for` reaches:
+same room, earshot in the open), and not sooner than 0.8 s after that key's
+last one (the clients send once a second; the floor leaves room for network
+jitter). Anything else is dropped silently — 200 with `accepted` 0, never 403.
+Every beat of the scene (`scene.active`) carries `readouts`: per key the
+latest report no older than 5 s with `source: "client"`, `reaches` summed
+since the previous beat. Hand-computed: `client3d/scripts/smoke_readout_reports.mjs`,
+`scripts/smoke_scene_readouts.py`.
 
 **Der Clip läuft in ECHTZEIT, im Tempo der Szene** — unabhängig vom
 Spieluhr-Faktor. Der Server integriert die Clip-Uhr bei jedem Beat und jedem
@@ -6125,6 +6145,7 @@ sie produziert.
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
 | `client3d/scripts/smoke_pair_clip_tempo.mjs` | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge) |
+| `client3d/scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
 | `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
 | `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
