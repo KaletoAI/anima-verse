@@ -509,7 +509,10 @@ back panel runs the front job only. Each job keeps the atlas frame (same size, s
    (23 local P-H3 jobs on three real items; the long prompt with layout sentences invented emblems and prints): the
    front says "texture the sewing pattern with the fabric of the <piece>, keep every shape, its colour and the white
    background, add only the fine weave"; for a DECORATED item (`is_decorated`: the item picture's detail density >
-   `DECORATED_DETAIL` 0.10 — code decides, never the model) it names the front island by its place (`front_place`,
+   `DECORATED_DETAIL` 0.10 — code decides, never the model; a SHEER piece is measured without the body seen through
+   it, `decor_detail` / `cut_texture_post.BODY_SEEN`: skin-toned pixels plus a 0.6 % rim — Gelina's sheer skirt read
+   0.146 from the legs' outlines, got the decorated prompt and an invented floral; without the legs 0.032, plain;
+   Kira's lace tights keep 0.240) it names the front island by its place (`front_place`,
    e.g. "top left") and asks for the same print or embroidery at the same place, the other shapes plain; the back
    prompt is the plain one on the back's fabric. Not world-overridable, `/admin/templates` stays LLM-only. The use
    case `garment_cut_texture` carries no style, negative or instruction — the prompt is the whole subject.
@@ -560,6 +563,13 @@ hold, so:
   painted as three pieces, Glut's bra answer 2), the right ones score ≤ 0.15. Skipped when ≥ 2 % of the item's own
   fabric pixels are background-coloured (a white stripe can be the fabric). A pure reject gate: `POST_VERSION`
   unchanged, no ready atlas goes stale.
+- **Weave gate** (`WEAVE_GATE`, `cut_texture_post.weave_level` / `weave_gate`, review of group B stage 3: P-H3
+  painted Dario's linen back coarser and grey-speckled while the front kept fine stripes — the detail density reads
+  0.0 for both, it smooths a weave away): the std of L* minus its 0.5 cm Gaussian over the main panel at 10 px/cm,
+  eroded 1 cm, is stored as `metrics.weave`; the back answer is rejected above **1.25 × the front answer's + 1.0**,
+  so attempt 2 runs. Saved answers: Dario 4.71 → 7.64 rejected (limit 6.88); Glut's gloves 12.57 → 14.43, Lirien's
+  dress 0.77 → 1.28, Dario on main 5.24 → 5.67 pass; a back below its front always passes. Without a front level (a
+  reused front from an older record) the gate is skipped. A pure reject gate: `POST_VERSION` unchanged.
 - **Sleeves and neckband** are not taken from the model: `fill_fabric` cuts the plainest `PATCH_CM` = 8 cm window of
   the main panel (within ΔE76 10 of its base colour), tiles it mirrored (seamless) and moves its Lab mean onto the
   panel's base colour, over every grown pixel whose nearest island is a sleeve, cuff or the neckband. The template

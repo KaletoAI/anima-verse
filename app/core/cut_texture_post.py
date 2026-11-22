@@ -616,15 +616,41 @@ def fabric_pixels(item_rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) 
     return _trimmed(cut[..., :3][cut[..., 3] > 0].astype(np.float64))
 
 
+#: ``body_seen``: a pixel of a picture is the BODY seen through a sheer cloth when its colour is skin-like — chroma at
+#: least ``C_MIN``, hue angle (a*b*, degrees) within ``HUE``, L* at least ``L_MIN`` — and everything within ``RIM`` x
+#: the picture's long side of such a pixel goes with it (the cloth's outline over the leg). Review of stage 3
+#: (Gelina's Moon Silk Skirt): her sheer skirt's picture read detail 0.146 (> ``DECORATED_DETAIL`` 0.10) — the legs'
+#: outlines through the cloth, 28 % of its pixels skin-like —, so the front got the decorated prompt and MiniMax
+#: painted a floral embroidery the skirt does not have. Without the body it reads 0.032 (plain; the glitter is fine
+#: surface). Kira's lace stockings keep 0.240 (decorated), the lace thong 0.266. Measured on the item pictures with
+#: the same matte (``scripts/smoke_cut_texture_detail_gates.py``).
+BODY_SEEN = {"C_MIN": 15.0, "HUE": (25.0, 75.0), "L_MIN": 25.0, "RIM": 0.006}
+
+
+def body_seen(rgb: np.ndarray) -> np.ndarray:
+    """The ``BODY_SEEN`` mask of an (h, w, 3) picture: its skin-like pixels and their rim."""
+    from scipy import ndimage
+    lab = srgb_to_lab(np.asarray(rgb)[..., :3].astype(np.float64))
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    hue = np.degrees(np.arctan2(lab[..., 2], lab[..., 1]))
+    b = BODY_SEEN
+    skin = (chroma >= b["C_MIN"]) & (hue >= b["HUE"][0]) & (hue <= b["HUE"][1]) & (lab[..., 0] >= b["L_MIN"])
+    rim = max(1, int(round(b["RIM"] * max(skin.shape))))
+    return ndimage.binary_dilation(skin, iterations=rim) if skin.any() else skin
+
+
 def picture_reference(rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -> dict:
     """What the answer gates and the pre-fill read from a picture (the item picture, the back view), with ONE
     ``garment_matte.cut``: ``{"colour": fabric_colour of the garment (alpha >= 128), "detail": detail_density of it,
-    "fabric": the colour match's fabric pixels (alpha > 0, trimmed)}``."""
+    "detail_cloth": detail_density of it without the body seen through it (``body_seen``; None when nothing else is
+    left), "fabric": the colour match's fabric pixels (alpha > 0, trimmed)}``."""
     cut, _info = garment_matte.cut(_rgba(rgba), matte=matte)
     rgb, alpha = cut[..., :3], cut[..., 3]
     garment = alpha >= 128
+    cloth = garment & ~body_seen(rgb) if garment.any() else garment
     return {"colour": fabric_colour(rgb, garment) if garment.any() else None,
             "detail": detail_density(rgb, garment) if garment.any() else None,
+            "detail_cloth": detail_density(rgb, cloth) if cloth.any() else None,
             "fabric": _trimmed(rgb[alpha > 0].astype(np.float64))}
 
 
@@ -908,6 +934,54 @@ def answer_gates(reg: np.ndarray, panel: np.ndarray, item_colour: dict | None,
 #: Skipped when the ITEM's own fabric pixels are background-coloured in at least ``item_share`` of them (a white
 #: stripe, a white print): there a white line can be the fabric.
 SPLIT_GATE = {"edge_cm": 1.0, "length": 0.4, "width_cm": 3.0, "item_share": 0.02}
+
+
+#: The weave gate (``weave_level`` / ``weave_gate``, review of stage 3: Dario's Worn Linen Shirt, live 2026-11-22): the
+#: back job painted a coarser, grey-speckled linen than the front job's fine stripes — every answer gate passed (its
+#: detail density 0.0: ``DETAIL_SIGMA`` smooths a weave away), and the side and arm seams showed the jump (seam_cross_de
+#: 5.97). ``weave_level`` = the std of L* minus its Gaussian of ``sigma_cm`` (the weave and the motif, without the
+#: shading) over the main panel resampled to ``px_per_cm`` and eroded by ``erode_cm``. A back answer is rejected when
+#: its level exceeds ``factor`` x the FRONT answer's + ``slack`` (one-sided: a plain back behind a decorated front is
+#: lower, never a fault). Measured on the saved answers (front -> back, the largest island of each job's template):
+#: Dario's linen 4.71 -> 7.64 (rejected: limit 1.25 x 4.71 + 1.0 = 6.88); the good pairs Glut's gloves 12.57 -> 14.43
+#: (limit 16.71: scales on both, 1.15 x), Glut's scale brief 13.73 -> 11.82, Lirien's dress 0.77 -> 1.28 (limit 1.97),
+#: Dario's linen on main 5.24 -> 5.67 (limit 7.55), Dario's embroidered shirt 10.41 -> 2.69, Kai's T-shirt 4.28 -> 0.98.
+#: ``factor`` 1.25 sits over the largest legitimate rise (1.15, the same scales front and back), ``slack`` 1.0 is two
+#: plain panels' noise (Lirien 0.5).
+WEAVE_GATE = {"sigma_cm": 0.5, "px_per_cm": 10.0, "erode_cm": 1.0, "factor": 1.25, "slack": 1.0}
+
+
+def weave_level(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> float | None:
+    """The weave level of ``mask`` (``WEAVE_GATE``): None for a region too small to measure."""
+    from scipy import ndimage
+    mask = np.asarray(mask, bool)
+    if px_per_cm <= 0 or mask.sum() < 16:
+        return None
+    g = WEAVE_GATE
+    ys, xs = np.nonzero(mask)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    crop = np.asarray(rgb)[y0:y1, x0:x1, :3].astype(np.uint8)
+    cm = mask[y0:y1, x0:x1]
+    s = g["px_per_cm"] / float(px_per_cm)
+    size = (max(1, round(cm.shape[1] * s)), max(1, round(cm.shape[0] * s)))
+    small = np.asarray(Image.fromarray(crop).resize(size, Image.BOX if s < 1 else Image.BILINEAR), np.float64)
+    m = np.asarray(Image.fromarray(cm.astype(np.uint8) * 255).resize(size, Image.BOX)) >= 128
+    m = ndimage.binary_erosion(m, iterations=max(1, int(round(g["erode_cm"] * g["px_per_cm"]))))
+    if m.sum() < 16:
+        return None
+    L = srgb_to_lab(small)[..., 0]
+    hp = L - ndimage.gaussian_filter(L, g["sigma_cm"] * g["px_per_cm"])
+    return round(float(hp[m].std()), 3)
+
+
+def weave_gate(back: float | None, front: float | None) -> dict | None:
+    """The weave gate of a back answer (``WEAVE_GATE``) against the front answer's level; None without both."""
+    if back is None or front is None:
+        return None
+    lim = round(WEAVE_GATE["factor"] * float(front) + WEAVE_GATE["slack"], 3)
+    ok = float(back) <= lim
+    return {"gate": "weave", "ok": ok, "value": back, "limit": lim, "front": front,
+            "text": "" if ok else f"back weave {back:.2f} > {lim:.2f} (the front's {front:.2f})"}
 
 
 def split_gate(reg: np.ndarray, panel_labels: np.ndarray, px_per_cm: float, tol: int,

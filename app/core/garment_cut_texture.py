@@ -262,6 +262,18 @@ PROMPT_PIECE_NAMES = {
 DECORATED_DETAIL = 0.10
 
 
+def decor_detail(detail: dict, params: dict | None):
+    """The detail ``is_decorated`` reads: the item picture's (``detail["front"]``); for a sheer piece (``params``, the
+    item's template params) the picture's WITHOUT the body seen through the cloth (``detail["front_cloth"]``,
+    ``cut_texture_post.BODY_SEEN``; the whole picture's when nothing is left — a skin-toned sheer piece) — the legs'
+    outlines through a sheer skirt are no decoration. Only for sheer: on an opaque light linen the cloth itself is
+    skin-coloured (Dario's Worn Linen Shirt 0.277 would read 0.0)."""
+    detail = detail or {}
+    if str((params or {}).get("fabric") or "") == "sheer" and detail.get("front_cloth") is not None:
+        return detail["front_cloth"]
+    return detail.get("front")
+
+
 def is_decorated(detail_front) -> bool:
     """Whether the item picture carries a print / embroidery worth the decorated front prompt (``DECORATED_DETAIL``)."""
     try:
@@ -1631,10 +1643,17 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
                             reg_info.get("white_tol", post.WHITE_TOL), refs.get("fabric"))
     if split is not None:
         gates.append(split)
+    # review of stage 3: the back's weave against the front answer's (``cut_texture_post.WEAVE_GATE``)
+    weave = post.weave_level(reg, panel, px_per_cm) if panel.any() else None
+    if job == "back":
+        wg = post.weave_gate(weave, refs.get("front_weave"))
+        if wg is not None:
+            gates.append(wg)
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
     metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
                "spill": met["spill"], "registration": reg_info, "islands": met["islands"],
-               "gates": gates, "fabric": answer["fabric"], "detail": answer["detail"], "failures": failures}
+               "gates": gates, "fabric": answer["fabric"], "detail": answer["detail"], "weave": weave,
+               "failures": failures}
     if failures and not force:
         metrics.update({"de_before": None, "de_after": None, "clamped": None})
         return {"state": "rejected", "reason": failures[0], "metrics": metrics, "accepted": False}
@@ -1808,7 +1827,7 @@ def references(character_name: str, item_id: str, has_back_panel: bool) -> dict:
     with Image.open(_item_path(item_id)) as it:
         item_rgba = np.asarray(it.convert("RGBA"))
     item = post.picture_reference(item_rgba, matte=_item_matte())
-    detail = {"front": item["detail"]}
+    detail = {"front": item["detail"], "front_cloth": item.get("detail_cloth")}
     if has_back_panel and back_view(character_name, item_id) is not None:
         detail["back"] = back_detail(character_name, item_id)
     return {"colour": item["colour"], "prefill": prefill_colour(item["colour"]), "detail": detail,
@@ -1866,6 +1885,13 @@ def _summary_metrics(jobs: dict, seam: dict | None, cross: dict | None) -> dict:
 #: The reason of a job that has no answer yet while the job before it passed (or was accepted by the user).
 NOT_MADE = "Not made yet — Make texture from cut renders it"
 SKIPPED = "Not run — the job before it did not pass"
+
+
+def _item_params(item_id: str) -> dict:
+    """The item's template params ({} without a template)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    return gt.params_of(get_item(item_id)) or {}
 
 
 def sleeve_print_of(item_id: str) -> str:
@@ -2015,7 +2041,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 place = front_place(said) if job == "front" else ""
                 main = main_words(said, job)
                 found = place if family == "top" else (main["phrase"] if job == "front" else "")
-                decorated = bool(found) and is_decorated(refs["detail"].get("front"))
+                decorated = bool(found) and is_decorated(decor_detail(refs["detail"], _item_params(item_id)))
                 plain_pieces = (prompt_sleeves(said, record["sleeve_print"]) if family == "top"
                                 else prompt_plain_pieces(said, record["sleeve_print"]))
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
@@ -2062,6 +2088,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     stopped = True
                     continue
                 results[job] = res
+                if job == "front":
+                    refs["front_weave"] = res["metrics"].get("weave")
                 continue
             _set_progress(key, "post")
             res = post_job(answer, islands, size, px_per_cm, job, refs, force=force,
@@ -2071,6 +2099,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 stopped = True      # a rejected job stops the flow: the next job that needs a render is not spent
                 continue
             results[job] = res
+            if job == "front":
+                refs["front_weave"] = res["metrics"].get("weave")
     except Exception as e:  # noqa: BLE001 — a job's failure is the record, shown in the dialog
         logger.warning("Cut texture %s %s failed: %s", character_name, item_id, e)
         failed = next((j for j in JOBS if (record["jobs"].get(j) or {}).get("state") == "failed"), "")
