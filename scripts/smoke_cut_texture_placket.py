@@ -43,8 +43,9 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     ``{"style": "buttons", "skipped": "no marks"}``; a lapel collar draws no stitch lines (pixel (85, 100) stays grey
     128 — the button discs only).
 [8] The assembly key (``garment_assembly._texture_key``, ``cut_info`` stubbed to texture "cut", csig "0123456789ab"):
-    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket2-buttons-0"; buttons / 4 ->
-    "...:placket2-buttons-4"; zip -> "...:placket2-zip-0" (``PLACKET_VERSION`` 2, phase E: the wipe) — every one a different key, so a
+    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket3-buttons-0"; buttons / 4 ->
+    "...:placket3-buttons-4"; zip -> "...:placket3-zip-0" (``PLACKET_VERSION`` 3, phase E: the wipe, and its decoration
+    guard [12]) — every one a different key, so a
     switch re-assembles. The cut keys do NOT change: ``garment_template_cut.cut_sig`` of the four param sets is one value
     (``placket`` / ``buttons`` are ``TEXTURE_ONLY``, out of ``keyed_params``), and ``garment_cut_texture.csig`` takes no
     params at all (islands, item picture, back view, prompt, post version) — so no image job and no new atlas.
@@ -60,6 +61,17 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     side (grey 128) — or, where that pixel is a detail (the print: the pixel (100, 100) ON the line reads x 62, the
     print's), the median fabric of the ring 19..38 px out (grey 128). So (102, 100), (100, 100) and (98, 30) are grey; the code's buttons and stitch are exactly
     [4]'s; the print 38 px off the line (> 19) and the other island are unchanged.
+[12] Review of stage 3 — the wipe never erases a decoration (``PLACKET_GUARD_REACH`` 3, ``PLACKET_GUARD_PX`` 1): [4]'s
+    atlas with the model's own placket — two dark (40) stitch lines x = 92 and x = 108, y 20..180 — and a light (230)
+    embroidery x 112..147, y 60..90 reaching into the band from the side. ``_wipe_line`` at [10]'s half width 19 px
+    (pixel x lies x - 100 px from the line x = 100.5): the stitch lines lie inside the band (8 px) and are wiped to
+    grey 128 at (92, 40), (108, 40) and (108, 75); the embroidery is ONE 8-connected detail, 8 columns (112..119)
+    x 31 rows = 248 pixels inside the band and 28 x 31 = 868 outside it (within 3 x 19 = 57 px) — 868 >= 248, a
+    decoration: every one of its pixels stays 230, and the wipe reports ``kept`` = its 1 px rim (x 111..148, y 59..91)
+    inside the band (x <= 119): 9 columns x 33 rows = 297. Before the guard those 248 pixels took the fabric.
+    ``draw_placket`` (jacket buttons) paints nothing on the kept decoration: its stitch line x = 100.5 + 15 crosses
+    the embroidery's column 115 at y 60..90, and those pixels stay 230 too; the same stitch line above the
+    embroidery, pixel (115, 40), is the stitch shade as in [4] (pixel (85, 100) there, the same distance, the other side).
 [11] Phase G — a corset's ``centre_back`` line (the back panel's centre column) is a centre line like ``centre_front``:
     the same line on an island named "back" gives pixel for pixel [4]'s result for buttons, lacing and zip (no inward
     offset, the placket's stitch lines either side, the zip on the line).
@@ -221,8 +233,8 @@ for style, n in (("none", 0), ("buttons", 0), ("buttons", 4), ("zip", 0)):
     PARAMS.update(placket=style, buttons=n)
     keys[(style, n)] = ga._texture_key("Demo", {"item_id": "item_fx", "template": True})
     cut_sigs.add(gtc.cut_sig(gt.params_of(inventory.get_item("item_fx")), base_sha="b", lower=[]))
-want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket2-buttons-0",
-        ("buttons", 4): "cut:0123456789ab:placket2-buttons-4", ("zip", 0): "cut:0123456789ab:placket2-zip-0"}
+want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket3-buttons-0",
+        ("buttons", 4): "cut:0123456789ab:placket3-buttons-4", ("zip", 0): "cut:0123456789ab:placket3-zip-0"}
 for k, v in want.items():
     check(f"[8] _texture_key {k} -> {v}", keys[k] == v, keys[k])
 check("[8] cut_sig is one value for all four", len(cut_sigs) == 1, cut_sigs)
@@ -261,6 +273,27 @@ for st11 in ("buttons", "lacing", "zip"):
     got11, _ = post.draw_placket(atlas, {"back": isl}, {"centre_back": dict(marks["centre_front"], island="back")},
                                  kind="top", style=st11, buttons=0, px_per_cm=10)
     check(f"[11] centre_back is drawn as a centre line ({st11})", (ref11 == got11).all())
+
+# [12]
+atlas12 = atlas.copy()
+atlas12[20:181, 92] = (40, 40, 40)             # the model's placket: two stitch lines 0.8 cm either side of the line
+atlas12[20:181, 108] = (40, 40, 40)
+atlas12[60:91, 112:148] = (230, 230, 230)      # the item's embroidery, reaching into the band from the side
+out12 = atlas12.copy()
+got12 = post._wipe_line(out12, atlas12, isl, np.array([[100.5, 20.0], [100.5, 180.0]]), 19.0)
+check("[12] the model's stitch lines in the band are wiped",
+      all(tuple(out12[y, x]) == (128, 128, 128) for x, y in ((92, 40), (108, 40), (108, 75))),
+      [tuple(out12[y, x]) for x, y in ((92, 40), (108, 40), (108, 75))])
+check("[12] the embroidery reaching into the band is kept, every pixel",
+      (out12[60:91, 112:148] == 230).all(), int((out12[60:91, 112:148] != 230).any(axis=-1).sum()))
+check("[12] kept = the embroidery's 1 px rim inside the band: 9 x 33 = 297", got12.get("kept") == 297,
+      {k: v for k, v in got12.items() if k != "guard"})
+out12d, info12 = post.draw_placket(atlas12, {"front": isl}, marks, kind="jacket", style="buttons", buttons=0,
+                                   px_per_cm=10)
+check("[12] draw_placket paints no stitch across the kept embroidery", (out12d[60:91, 112:148] == 230).all()
+      and info12["wipe"]["kept"] == 297, int((out12d[60:91, 112:148] != 230).any(axis=-1).sum()))
+check("[12] the stitch line above it is painted as in [4]", tuple(out12d[40, 115]) == tuple(out[100, 85]),
+      (tuple(out12d[40, 115]), tuple(out[100, 85])))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)

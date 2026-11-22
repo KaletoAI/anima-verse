@@ -376,11 +376,19 @@ jacket" (a leather fabric), "cardigan" (open, no collar), else "jacket"; a dress
 
 ## 1d. Tops: collar, neckband, placket; the corset's darts (plan group B, phases E / F / G)
 
-**Tops are panel kinds too** (`build_bodice`: `panel_kind` = jacket, dress, top). A `top` with covered shoulders has
-`collar` (none / stand; a lapel is validated to stand, a top without covered shoulders has no collar), `placket` and
-`buttons` (`KIND_FIELDS["top"]`, the dialog hides the collar off covered shoulders). Its cut key carries `"neck"` =
-`NECK_VERSION` 1 (`garment_template.neck_piece`: kind top, shoulders covered) — its islands changed once; an off-shoulder
-top or a top with straps has no neck ring and its islands are byte-identical to before.
+**Tops follow the neck rules only with a collar or a placket** (`garment_template.neck_rules`, the build arg
+`neck_rules`; `build_bodice`: `panel_kind` = jacket, dress, and such a top). A `top` with covered shoulders has `collar`
+(none / stand; a lapel is validated to stand, a top without covered shoulders has no collar), `placket` and `buttons`
+(`KIND_FIELDS["top"]`, the dialog hides the collar off covered shoulders). **A top with neither is cut exactly as on
+main 84feba712**: the builder gets `kind` None, its islands are the same bytes (its band too) and its `cut_sig` / `tsig`
+the same 12 hex, so nothing goes stale on the merge — `scripts/smoke_template_cut_tops_main.py` [1] on copies of the
+bodies: Tilda's blouse, Dario's two shirts, Kai's T-shirt, Ylva's blouse, against `git archive 84feba712`. A covered
+top with a collar or a placket carries `"neck"` = `NECK_VERSION` 1 in its cut key (`neck_piece`), so switching the
+placket on or off there is a NEW cut (CPU) and a new texture from cut (image jobs) — the dialog says so; its style and
+button count only re-assemble. Every jacket and dress carries `"neck"` too (the B8 depth rule and the smooth collar ring
+below reach them). An off-shoulder top or a top with straps has no neck ring: its islands are byte-identical either way
+and its key never carries `"neck"` — a placket there is written by B11 under the same sig (a laced off-shoulder front
+gets no line: its centre front is cut away).
 
 - **B8 for every kind:** the neckband is kept for a closed front without a collar and a crew / boat / scoop neckline
   whose depth is at most `BAND_SCOOP_MAX_M` (8 cm) — the depth limit now applies to crew and boat too (a 15 cm crew
@@ -409,7 +417,12 @@ replacing the atlas's frame (`scripts/smoke_template_cut_first.py` [2.6]).
 Before `draw_placket` paints, every island pixel within `placket_clear_px` of a line (the widest painted thing — the
 placket band or a button / the zip's pull / the eyelets — halved, + `PLACKET_CLEAR_CM` 0.4 cm) takes the pixel twice
 that far out on its own side; a detail there (more than `PLACKET_CLEAR_DETAIL` 40 off the ring's median) and a pixel
-off the island take the median fabric (`_wipe_line`, `PLACKET_VERSION` 2; `smoke_cut_texture_placket.py` [10]).
+off the island take the median fabric (`_wipe_line`; `smoke_cut_texture_placket.py` [10]). **A decoration is never
+wiped** (`PLACKET_VERSION` 3): a connected detail (8-connected pixels `PLACKET_CLEAR_DETAIL` off the ring's median) with
+at least as many pixels outside the band as inside it (counted within `PLACKET_GUARD_REACH` 3 x the half width) is the
+item's own — an embroidery, a print, a pocket reaching in from the side — and keeps its pixels and a 1 px rim
+(`PLACKET_GUARD_PX`); the painted placket draws nothing on it either. The model's placket lies on the line, inside the
+band ([12]).
 
 **The corset's darts (phase G).** A strapless top's front panel (`wrap`, panel 0) is cut open in its UV only — the
 mesh stays whole — at the centre front from the top edge down a third of the panel and at two bust darts 8 of 40

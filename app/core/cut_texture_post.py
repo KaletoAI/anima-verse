@@ -66,8 +66,9 @@ CLAMP_DE = 25.0
 POST_VERSION = 10
 #: The version of ``draw_placket``'s painting: part of the assembly key of a piece with a placket (it is drawn onto
 #: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job). 2: phase E,
-#: the model's own placket is wiped first.
-PLACKET_VERSION = 2
+#: the model's own placket is wiped first. 3: the wipe keeps a decoration reaching into its band
+#: (``PLACKET_GUARD_REACH``).
+PLACKET_VERSION = 3
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -1193,6 +1194,14 @@ def _inward(p: np.ndarray, s: np.ndarray, mask: np.ndarray, px_per_cm: float) ->
 PLACKET_CLEAR_CM = 0.4
 #: ``_wipe_line``: a source pixel farther than this (largest channel) from the ring's median fabric is a detail.
 PLACKET_CLEAR_DETAIL = 40
+#: ``_wipe_line``, review of stage 3 (Dario's embroidered shirt: the embroidery on the chest beside the placket): a
+#: connected detail (8-connected pixels ``PLACKET_CLEAR_DETAIL`` off the ring's median, inside the island) is the
+#: item's DECORATION and is never wiped when at least as many of its pixels lie outside the wipe band as inside it
+#: (counted within ``PLACKET_GUARD_REACH`` x the band's half width of the line). The model's own placket — stitch
+#: lines and buttons on the line — lies inside the band; an embroidery, a print or a pocket that reaches into it from
+#: the side lies mostly outside. Its pixels and a ``PLACKET_GUARD_PX`` rim round them (the soft edge) keep their colour.
+PLACKET_GUARD_REACH = 3.0
+PLACKET_GUARD_PX = 1
 
 
 def placket_clear_px(kind: str, style: str, px_per_cm: float, lapel: bool = False) -> float:
@@ -1209,12 +1218,16 @@ def placket_clear_px(kind: str, style: str, px_per_cm: float, lapel: bool = Fals
     return round((half + PLACKET_CLEAR_CM) * px_per_cm, 6)
 
 
-def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray, half: float) -> None:
+def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray, half: float) -> dict:
     """Replace the ``sel`` pixels within ``half`` of the polyline ``p`` with the pixel 2 x ``half`` further out along
     their own direction from the line (read from ``src``); one whose source lies off the island (or off the atlas) or
-    is a detail (``PLACKET_CLEAR_DETAIL`` off the median) takes the median colour of the island's pixels between ``half`` and 2 x ``half`` of the line."""
+    is a detail (``PLACKET_CLEAR_DETAIL`` off the median) takes the median colour of the island's pixels between ``half`` and 2 x ``half`` of the line.
+    A decoration reaching into the band from the side is kept (``PLACKET_GUARD_REACH``). Returns ``{"wiped",
+    "kept"}`` — the pixels replaced and the band pixels a decoration kept — and ``"guard"``, the kept decoration's
+    pixels (with their rim) as a mask of the atlas (None without one): ``draw_placket`` paints nothing on them."""
+    from scipy import ndimage
     h, w = sel.shape
-    r = int(np.ceil(2 * half)) + 2
+    r = int(np.ceil(PLACKET_GUARD_REACH * half)) + 2
     x0, x1 = max(0, int(p[:, 0].min()) - r), min(w, int(p[:, 0].max()) + r + 1)
     y0, y1 = max(0, int(p[:, 1].min()) - r), min(h, int(p[:, 1].max()) + r + 1)
     if x1 <= x0 or y1 <= y0:
@@ -1240,8 +1253,33 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
     wipe = inside & (best <= half)
     ring = inside & (best > half) & (best <= 2 * half)
     if not wipe.any():
-        return
+        return {"wiped": 0, "kept": 0, "guard": None}
     fallback = np.median(src[y0:y1, x0:x1].reshape(-1, 3)[ring], axis=0) if ring.any() else None
+    kept = 0
+    guard_full = None
+    if fallback is not None:
+        # the decoration guard: a connected detail mostly outside the band is the item's own (an embroidery beside
+        # the placket), never the model's placket — its band pixels stay
+        win = src[y0:y1, x0:x1].reshape(-1, 3).astype(np.int32)
+        det = inside & (np.abs(win - fallback.astype(np.int32)).max(axis=1) > PLACKET_CLEAR_DETAIL) \
+            & (best <= PLACKET_GUARD_REACH * half)
+        comp, n = ndimage.label(det.reshape(y1 - y0, x1 - x0), structure=np.ones((3, 3), bool))
+        if n:
+            flat = comp.reshape(-1)
+            n_in = np.bincount(flat, weights=(best <= half).astype(float), minlength=n + 1)
+            n_out = np.bincount(flat, weights=(best > half).astype(float), minlength=n + 1)
+            deco = (n_out >= n_in) & (n_out > 0)
+            deco[0] = False
+            guard = deco[comp]
+            if guard.any():
+                guard = ndimage.binary_dilation(guard, structure=np.ones((3, 3), bool), iterations=PLACKET_GUARD_PX)
+                guard_full = np.zeros((h, w), bool)
+                guard_full[y0:y1, x0:x1] = guard & sel[y0:y1, x0:x1]
+                guard = guard.reshape(-1)
+                kept = int((wipe & guard).sum())
+                wipe &= ~guard
+        if not wipe.any():
+            return {"wiped": 0, "kept": kept, "guard": guard_full}
     s_ = np.rint(q[wipe] + side[wipe] * 2 * half - 0.5).astype(int)
     ok = (s_[:, 0] >= 0) & (s_[:, 0] < w) & (s_[:, 1] >= 0) & (s_[:, 1] < h)
     ok[ok] = sel[s_[ok, 1], s_[ok, 0]]
@@ -1255,6 +1293,7 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
     if (~ok).any():
         vals[~ok] = fallback if fallback is not None else src[tgt[~ok, 0], tgt[~ok, 1]]
     out[tgt[:, 0], tgt[:, 1]] = vals
+    return {"wiped": int(len(tgt)), "kept": kept, "guard": guard_full}
 
 
 def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, style: str, buttons: int,
@@ -1286,10 +1325,15 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
     # phase E: the model's own placket goes first (a second one beside the painted one was the risk)
     clean = np.array(atlas, copy=True)
     clear_px = placket_clear_px(kind, style, px_per_cm, lapel=lapel)
+    info["wipe"] = {"wiped": 0, "kept": 0}
+    protect = None
     for name, line in sorted(lines.items()):
         p, s = _polyline(line["px"])
         if s[-1] > 1.0 and clear_px > 0:
-            _wipe_line(clean, np.asarray(atlas), np.asarray(masks[line["island"]], bool), p, clear_px)
+            got = _wipe_line(clean, np.asarray(atlas), np.asarray(masks[line["island"]], bool), p, clear_px)
+            info["wipe"] = {k: info["wipe"][k] + got[k] for k in ("wiped", "kept")}
+            if got.get("guard") is not None:
+                protect = got["guard"] if protect is None else protect | got["guard"]
     out = np.array(clean, copy=True)
     atlas = clean
     for name, line in sorted(lines.items()):
@@ -1297,6 +1341,9 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
         p, s = _polyline(line["px"])
         if s[-1] <= 1.0:
             continue
+        if protect is not None:
+            # a kept decoration (``_wipe_line``) is painted over by nothing — no stitch line, button or zip across it
+            sel = sel & ~protect
         # the fabric under the line
         near = np.zeros_like(sel)
         for t in np.linspace(0.0, s[-1], max(2, int(s[-1] // max(1.0, px_per_cm)) + 1)):
