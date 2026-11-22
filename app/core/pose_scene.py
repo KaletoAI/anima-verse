@@ -22,6 +22,9 @@ Neither engine keeps a copy of what lives here (plan pair scene, Task 3):
   finishes it) and lives in this process only.
 - "end after the finale" (:func:`end_after_finale`): the scene ends a given
   number of REAL seconds after that person's finale has fully played.
+- QUIET narration (:func:`quiet`, provider ``scene.quiet_narration``): the
+  start / switch / end lines of a pose a package marks leave the players'
+  chat transcript; the characters still perceive them.
 - the METERS row and HOLD (providers ``scene.meters`` / ``scene.meter_hold``)
   and the alt half a member plays (:func:`set_alt`).
 - the TEMPO and the CLIP CLOCK: per scene one clock in CLIP seconds,
@@ -192,6 +195,27 @@ def clamp_tempo(tempo) -> float:
     if not math.isfinite(value):
         return TEMPO_MAX
     return min(TEMPO_MAX, max(TEMPO_MIN, value))
+
+
+# ---------------------------------------------------------------- narration
+
+def quiet(pose_key: str) -> bool:
+    """Whether the start / switch / end narration of ``pose_key`` stays out of
+    the players' chat transcripts (provider ``scene.quiet_narration(pose_key)
+    -> bool``, several contributors; any True = quiet). The line is still
+    written: the characters perceive it, only ``GET /play/scene`` leaves it
+    out (``perception.record_utterance(quiet=True)``). False without a
+    provider or a pose key; a raising contributor is skipped."""
+    if not pose_key:
+        return False
+    from app.core.hooks import get_providers
+    for provider in get_providers("scene.quiet_narration"):
+        try:
+            if provider(pose_key=pose_key):
+                return True
+        except Exception as exc:
+            logger.debug("scene.quiet_narration provider failed for %s: %s", pose_key, exc)
+    return False
 
 
 # ---------------------------------------------------------------- finale

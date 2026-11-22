@@ -719,7 +719,8 @@ def record_utterance(*, speaker: str, content: str,
                      dedupe: bool = False,
                      perception_meta: Optional[Dict[str, Any]] = None,
                      anchor: Optional[Anchor] = None,
-                     sync_stored: bool = True) -> Optional[int]:
+                     sync_stored: bool = True,
+                     quiet: bool = False) -> Optional[int]:
     """Records a speech act + distributes the perceptions (fan-out).
 
     Presence is resolved NOW. Returns the utterance id — or None on error, so
@@ -740,6 +741,11 @@ def record_utterance(*, speaker: str, content: str,
     the speaker has no point of its own, never as an override; inside a
     location the room columns still decide who is in the room, and the anchor
     only supplies the centre of the earshot circle around it.
+
+    ``quiet`` marks the utterance (meta ``quiet: true``) as a line the
+    players' chat transcript leaves out (``get_character_room_stream(...,
+    include_quiet=False)``, used by ``GET /play/scene``). It is perceived and
+    stored like any other line — the characters' prompt view keeps it.
     """
     from app.core.timeutils import utc_now_iso
     from app.models import perception_store
@@ -798,6 +804,8 @@ def record_utterance(*, speaker: str, content: str,
             _umeta["source"] = source
         if perception_meta:
             _umeta.update(perception_meta)
+        if quiet:
+            _umeta["quiet"] = True
         from app.models.account import is_player_controlled
         # Freeze ALL content-bearing avatar roles, not only direct targets:
         # release/switch must not retroactively turn a listener into an NPC

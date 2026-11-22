@@ -278,8 +278,10 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     # but no chip ever offered it. One roster for all three
     # (``perception.addressable_for``), never a second presence rule here.
     present = addressable_for(avatar)
+    # Quiet lines (a pose's start/switch/end narration a package marks,
+    # ``pose_scene.quiet``) stay in what the characters perceive, not here.
     scene = perception_store.get_character_room_stream(
-        avatar, loc, room, limit, include_meta_lines=True)
+        avatar, loc, room, limit, include_meta_lines=True, include_quiet=False)
 
     # Portraits of the present for the environment window
     from app.models.character import get_character_profile_image

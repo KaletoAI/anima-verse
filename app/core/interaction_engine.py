@@ -58,10 +58,12 @@ from app.core.timeutils import game_time
 logger = get_logger(__name__)
 
 
-def _narrate(anchor: str, key: str, *, literal: bool = False, **fmt) -> None:
+def _narrate(anchor: str, key: str, *, literal: bool = False, quiet: bool = False,
+             **fmt) -> None:
     """Record a pair event in the anchor's language and room. Never raises.
     ``literal``: ``key`` is told as it is (a reaction line already written in
-    the room's language), not translated or formatted."""
+    the room's language), not translated or formatted. ``quiet``: the line
+    stays out of the players' chat transcript (``pose_scene.quiet``)."""
     try:
         from app.core.i18n import t
         from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
@@ -82,9 +84,20 @@ def _narrate(anchor: str, key: str, *, literal: bool = False, **fmt) -> None:
             volume=VOLUME_NORMAL,
             location_id=get_character_current_location(anchor) or "",
             room_id=get_character_current_room(anchor) or "",
-            source="interaction", anchor=anchor)
+            source="interaction", anchor=anchor, quiet=quiet)
     except Exception as e:
         logger.debug("interaction narration failed: %s", e)
+
+
+def _quiet(pose_key: str) -> bool:
+    """``pose_scene.quiet`` — whether a pose's start / switch / end line
+    leaves the players' chat. Never raises."""
+    try:
+        from app.core.pose_scene import quiet
+        return quiet(pose_key)
+    except Exception as e:
+        logger.debug("quiet narration check failed for %s: %s", pose_key, e)
+        return False
 
 
 class StaleDecision(ValueError):
@@ -868,7 +881,8 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
     sync_topics.changed_at(names[0], loc)
     # "A and B start …"; a group reads "A, B and C start …" off the same line.
     _narrate(names[0], "{actor} and {partner} start {pose}.",
-             actor=", ".join(names[:-1]), partner=names[-1], pose_key=pose_key)
+             actor=", ".join(names[:-1]), partner=names[-1], pose_key=pose_key,
+             quiet=_quiet(pose_key))
     logger.info("interaction %s: %s play '%s' (%.1fs %s)", inter_id,
                 ", ".join(f"{n} ({r})" for r, n in clip_roles.items()), kind, clip_duration,
                 "cycle" if loop else "one-shot")
@@ -1038,7 +1052,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # the two doing it, who read the stream as their own memory of the scene.
     _narrate(actor, "{actor} and {partner} switch to {pose}." if switch_from
              else "{actor} and {partner} start {pose}.",
-             actor=actor, partner=partner, pose_key=pose_key)
+             actor=actor, partner=partner, pose_key=pose_key, quiet=_quiet(pose_key))
     logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)%s",
                 inter_id, who_a, who_b, kind, clip_duration,
                 "cycle" if loop else "one-shot",
@@ -1158,7 +1172,8 @@ def end_interaction(character_name: str, reason: str = "ended", *,
         sync_topics.changed_at(name)
     if stand and cleared and len(names) >= 2:
         _narrate(character_name, "{actor} and {partner} stop {pose}.",
-                 actor=", ".join(names[:-1]), partner=names[-1], pose_key=inter["pose_key"])
+                 actor=", ".join(names[:-1]), partner=names[-1], pose_key=inter["pose_key"],
+                 quiet=_quiet(inter["pose_key"]))
         _remember_together(names, character_name, inter, ended_invite_id, location_id, room_id, reason)
         from app.core.hooks import emit
         emit("interaction.ended", character=character_name, members=names,

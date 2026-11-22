@@ -78,7 +78,7 @@ def main():
             print("PASS a: the place line follows the held pose's group")
 
             said, told = [], []
-            with patch.object(E, "_narrate", side_effect=lambda run, key, **fmt: said.append((key, fmt))), \
+            with patch.object(E, "_narrate", side_effect=lambda run, key, quiet=False, **fmt: said.append((key, fmt))), \
                     patch.object(E, "_tell_inviter", side_effect=lambda run, key, **fmt: told.append((key, fmt))):
                 def finish(run, before, status, reason, keep=""):
                     said.clear()

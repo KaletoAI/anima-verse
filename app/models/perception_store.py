@@ -236,7 +236,8 @@ def last_shared_utterance_ts(character: str,
 def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
                               limit: int = 100,
                               include_meta_lines: bool = False, *,
-                              include_source: bool = False
+                              include_source: bool = False,
+                              include_quiet: bool = True
                               ) -> List[Dict[str, Any]]:
     """A character's perceptions, filtered to one room (for the player's
     scene view). Joins ``utterances`` only for the room metadata — never for
@@ -249,6 +250,12 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
 
     include_source: optionally expose the utterance metadata's ``source`` as
     a top-level field (``None`` when absent), without changing perceived content.
+
+    include_quiet: QUIET lines (utterance meta ``quiet``, a pose's start /
+    switch / end narration a package marks, ``pose_scene.quiet``) are what
+    the characters perceive — the default keeps them for every prompt reader;
+    only the players' chat transcript (/play/scene) passes False. Filtered in
+    SQL, so the limit counts the lines that are shown.
 
     Plain room equality: the location's ground is a room like any other
     (``world.GROUND_ROOM_ID``), so it needs no rule of its own here.
@@ -285,6 +292,8 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     # u.game_ts travels with it so a stream row carries the WORLD time it was
     # spoken at, not just the system stamp in p.ts.
     source_column = ", json_extract(u.meta, '$.source') AS source" if include_source else ""
+    quiet_filter = ("" if include_quiet
+                    else " AND COALESCE(json_extract(u.meta, '$.quiet'), 0) = 0")
     addressed_scope = (
         "p.kind='addressed' OR (p.kind='nearby' AND EXISTS "
         "(SELECT 1 FROM json_each(u.addressees) a WHERE a.value=p.perceiver))")
@@ -294,15 +303,15 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
             f"WHERE p.perceiver=? AND ({addressed_scope} "
-            "                         OR (u.location_id=? AND u.room_id=?)) "
-            "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
+            "                         OR (u.location_id=? AND u.room_id=?))"
+            f"{quiet_filter} ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, location_id, room_id, limit)).fetchall()
     else:
         rows = conn.execute(
             f"SELECT p.*, u.volume AS volume, u.game_ts AS game_ts{source_column} "
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
-            f"WHERE p.perceiver=? AND ({addressed_scope} OR u.location_id='') "
+            f"WHERE p.perceiver=? AND ({addressed_scope} OR u.location_id=''){quiet_filter} "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, limit)).fetchall()
     out = [_row_to_dict(r) for r in reversed(rows)]

@@ -1074,12 +1074,14 @@ def _emit_lifecycle(event, run, **extra):
     _after_locks(lambda: emit(event, **payload))
 
 
-def _narrate(run, key, *, literal=False, **fmt):
+def _narrate(run, key, *, literal=False, quiet=False, **fmt):
     """One storyteller line in the run's room, in the actor's language, after
     every lock is released. The room has to SEE a figure sit down or get up —
     the perception stream is what the characters remember of the scene, and
     the player's chat shows it. ``literal``: ``key`` is the finished line
-    (a partner's reaction), neither translated nor formatted. Never raises."""
+    (a partner's reaction), neither translated nor formatted. ``quiet``: the
+    line stays out of the players' chat transcript (``pose_scene.quiet``).
+    Never raises."""
     from app.core.keyed_lock import _after_locks
 
     def deliver():
@@ -1100,11 +1102,21 @@ def _narrate(run, key, *, literal=False, **fmt):
                 content=key if literal else t(key, lang).format(
                     actor=actor, partner=_join(run["members"]), prop=prop, pose=pose, **fmt),
                 volume=VOLUME_NORMAL, location_id=target["location_id"], room_id=target["room_id"],
-                source="prop_action", anchor=actor)
+                source="prop_action", anchor=actor, quiet=quiet)
         except Exception as e:
             logger.debug("prop-action narration failed: %s", e)
 
     _after_locks(deliver)
+
+
+def _quiet(run) -> bool:
+    """Whether the start / end line of ``run``'s held pose leaves the
+    players' chat (``pose_scene.quiet``). Never raises."""
+    try:
+        return pose_scene.quiet(_held_pose(run))
+    except Exception as e:
+        logger.debug("quiet narration check failed: %s", e)
+        return False
 
 
 def _tell_inviter(run, key, **fmt):
@@ -1162,11 +1174,11 @@ def _narrate_finish(run, before, status, reason, kept):
         if pair or run["actor"] in kept:
             return
         if run["definition"]["ability"] == "sleep" and reason == "awake":
-            _narrate(run, "{actor} wakes up and gets up from the {prop}.")
+            _narrate(run, "{actor} wakes up and gets up from the {prop}.", quiet=_quiet(run))
         else:
             line = _group_line(_LEAVE_LINES, run)
             if line:
-                _narrate(run, line)
+                _narrate(run, line, quiet=_quiet(run))
     elif before == "approaching" and status == "failed":
         _narrate(run, "{actor} does not get to the {prop} after all.")
 
@@ -1887,7 +1899,7 @@ def _activate(run):
         line = ("{actor} lies down on the {prop} to sleep." if ability == "sleep"
                 else _group_line(_SETTLE_LINES, run))
         if line:
-            _narrate(run, line)
+            _narrate(run, line, quiet=_quiet(run))
     if ability == "sleep":
         _resume_sleep(run)
 
