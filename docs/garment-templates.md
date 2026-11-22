@@ -302,6 +302,9 @@ hold the model's parts only, the front job is zoomed like the back, and the trim
 the atlas frame afterwards — a 21 px waistband strip beside the panel was thickened by MiniMax and dropped by P-H3.
 Live on copies (chain MiniMax-H3-Image, P-H3-Image; 11 image jobs): Tilda's wool skirt, Rosi's corset and pencil skirt
 (one Build), Gelina's circle skirt (stacked layout) — iou 0.997–0.999, colour dE 0.6–3.2, every back plain (fabric).
+After the band relaxation (2 + 2 jobs): Rosi's pencil skirt clean; Gelina's front answer was split by a white vertical
+line (MiniMax painted the picture's slit as a cut through the panel) and the gates passed it — a gate for
+background-coloured lines inside a piece is still missing.
 
 ## 2. Texture from cut (step 2)
 
