@@ -747,14 +747,22 @@ def answer_gates(reg: np.ndarray, panel: np.ndarray, item_colour: dict | None,
                  reference_detail: float | None) -> tuple[list[dict], dict]:
     """The colour and the invented-content gate (``ANSWER_GATE``) of a registered answer's main ``panel`` mask:
     ``([{"gate", "ok", "value", "limit", "text"}], {"fabric": {"item", "answer", "de00"}, "detail": {"reference",
-    "answer", "limit"}})``. A gate whose input is missing (no item colour, an empty panel) is left out."""
+    "answer", "limit"}})``. A gate whose input is missing (no item colour, an empty panel) is left out. An item
+    picture with no plain fabric (``plain`` < ``FABRIC_MIN_PLAIN``: an all-over pattern such as scales) has no base
+    colour to hold an answer to — its histogram peak lands on the dark gaps between the scales (Glut's scale pieces,
+    live 2026-11-21: item (19, 8, 3) against a faithful red answer, ΔE00 26.9 / 30.6) — so the colour gate is
+    recorded as ``skipped`` and passes; the detail gate still guards the answer."""
     gates: list[dict] = []
     ans = fabric_colour(reg, panel) if np.asarray(panel).any() else None
     de = round(delta_e00(item_colour["lab"], ans["lab"]), 2) if ans and item_colour else None
     if de is not None:
         lim = ANSWER_GATE["de00"]
-        gates.append({"gate": "colour", "ok": de <= lim, "value": de, "limit": lim,
-                      "text": f"colour \u0394E00 {de:.1f} > {lim:.0f}" if de > lim else ""})
+        if float(item_colour.get("plain", 1.0)) < FABRIC_MIN_PLAIN:
+            gates.append({"gate": "colour", "ok": True, "value": de, "limit": lim, "skipped": True,
+                          "text": "", "note": "all-over pattern: no plain fabric in the item picture"})
+        else:
+            gates.append({"gate": "colour", "ok": de <= lim, "value": de, "limit": lim,
+                          "text": f"colour \u0394E00 {de:.1f} > {lim:.0f}" if de > lim else ""})
     det = detail_density(reg, panel) if np.asarray(panel).any() else None
     lim_d = detail_limit(reference_detail)
     if det is not None and lim_d is not None:

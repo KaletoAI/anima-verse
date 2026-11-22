@@ -43,6 +43,10 @@ Hand-derived expectations:
     only for "waistband of <Subject 1>"); Qwen ``<image1>`` / ``<image2>``; ordinal "the first image" / "the second
     image"; no section carries ``<ref``. The fitted BACK prompt for two palms says "shapes" (P-H3).
     A plain front lists two trims joined "A and B" ("right thumb and left thumb").
+[10] The colour gate of an all-over pattern: a flat red answer (180, 40, 30) on a 64 x 64 panel against an item
+    colour of the dark scale gaps (lab of (19, 8, 3)) is far over ``ANSWER_GATE["de00"]`` 20; with the item's
+    ``plain`` 0.0024 (< ``FABRIC_MIN_PLAIN`` 0.05, Glut's scale briefs live) the gate is ``skipped`` and ok, with
+    ``plain`` 0.5 it fails as before.
 """
 import hashlib
 import json
@@ -195,6 +199,20 @@ GLOVES = {"atlas_px": 2048, "islands": [isl("glove_back_r", (100, 100, 500, 900)
 pl = gct.edit_prompt(piece="gloves", side="front", pieces=gct.prompt_pieces(GLOVES), family="fitted",
                      sleeves=gct.prompt_plain_pieces(GLOVES), main=gct.main_words(GLOVES, "front"))
 check("[9] plain: trims joined", "The right thumb and left thumb of <Subject 1>" in pl.render("picture_subject"), True)
+
+# [10]
+import numpy as np  # noqa: E402
+from app.core import cut_texture_post as ctp  # noqa: E402
+
+red = np.zeros((64, 64, 3), np.uint8)
+red[...] = (180, 40, 30)
+panel = np.ones((64, 64), bool)
+dark = [round(float(v), 2) for v in ctp.srgb_to_lab(np.array([[19.0, 8.0, 3.0]]))[0]]
+g_pat, _ = ctp.answer_gates(red, panel, {"lab": dark, "plain": 0.0024}, None)
+g_pl, _ = ctp.answer_gates(red, panel, {"lab": dark, "plain": 0.5}, None)
+check("[10] all-over pattern: colour gate skipped and ok", (g_pat[0]["ok"], g_pat[0].get("skipped"),
+                                                            g_pat[0]["value"] > 20), (True, True, True))
+check("[10] plain item: the colour gate fails", g_pl[0]["ok"], False)
 
 print(json.dumps({"fails": FAILS}))
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")

@@ -341,7 +341,9 @@ hold, so:
   Dario → (19, 50, 29). A fill nearer to white than 40 is darkened to it (`PREFILL_MIN_DIST`).
 - **Answer gates** (`ANSWER_GATE`, measured on the job's main panel — front / back — of the registered answer):
   colour = CIEDE2000 of its `fabric_colour` against the item's, limit **20** (Kai 35.0 / 43.5 rejected, Dario 9.9
-  passes); invented content = `detail_density` (share of L* edges > 4 per px at 128 px) at most **4 × Picture 2's +
+  passes; an item picture with no plain fabric — `plain` < `FABRIC_MIN_PLAIN` 0.05, an all-over
+  pattern such as Glut's scales, whose histogram peak is the dark gaps — gets the colour gate `skipped`, live
+  2026-11-21: the faithful red MiniMax answers were rejected at ΔE00 26.9 / 30.6); invented content = `detail_density` (share of L* edges > 4 per px at 128 px) at most **4 × Picture 2's +
   0.04** (Kai 0.47 > 0.10 rejected, Dario 0.21 < 0.43 passes). The record keeps `metrics.gates`, `fabric`, `detail`
   and `failures` per job; the dialog shows each check.
 - **Sleeves and neckband** are not taken from the model: `fill_fabric` cuts the plainest `PATCH_CM` = 8 cm window of
