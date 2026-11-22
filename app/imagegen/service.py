@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
@@ -359,6 +359,41 @@ def apply_backend_variant(input_data: Dict[str, Any], backend: Any) -> Dict[str,
                     picked[field] = variant[field]
             return picked
     return input_data
+
+
+def _plan_slots(builder: Any, pv: Any, backend: Any, *, set_profile: bool, profile_reference: str,
+                active: bool = True) -> None:
+    """Plan ``backend``'s reference slots on ``pv`` before the prompt is rendered (``PromptBuilder.apply_slot_plan``);
+    the portrait's explicit reference is set first, because it IS the plan of a profile render. ``active`` False (no
+    person and no portrait reference: no slot is sent) plans nothing."""
+    if set_profile:
+        pv.profile_reference = profile_reference
+    builder.apply_slot_plan(pv, int(getattr(backend, "ref_slot_count", 0) or 0) if active else 0)
+
+
+def _portrait_character(pv: Any, character: Optional[str]) -> Optional[str]:
+    """The portrait's character block, led by the reference it is drawn from when that picture sits in a slot
+    (``"the same person as in <ref 1>, …"``); unchanged otherwise."""
+    slot = (getattr(pv, "person_slot", None) or {}).get(1)
+    if not getattr(pv, "set_profile", False) or not slot or character is None:
+        return character
+    lead = f"the same person as in <ref {slot}>"
+    return f"{lead}, {character}" if character.strip() else lead
+
+
+def _keep_reference_tokens(template: str, enhanced: str, method: str) -> Tuple[str, str]:
+    """The LLM enhancer's answer only when it kept every ``<ref N>`` of the template — a lost token unbinds a face
+    from its name, so the template is the safer render then."""
+    from app.imagegen.edit_prompt import CANONICAL_REF
+    wanted = sorted(set(m.group(0).replace(" ", "").lower() for m in CANONICAL_REF.finditer(template)))
+    if not wanted or enhanced == template:
+        return enhanced, method
+    got = set(m.group(0).replace(" ", "").lower() for m in CANONICAL_REF.finditer(enhanced))
+    missing = [t for t in wanted if t not in got]
+    if missing:
+        logger.info("prompt_enhance dropped reference token(s) %s — the template prompt renders", missing)
+        return template, "template"
+    return enhanced, method
 
 
 def _with_extra_reference_prompt(prompt: str, input_data: Dict[str, Any], pv: Any,
@@ -2757,6 +2792,14 @@ class ImageService:
                 # max_slots). Outfit + activity always stay in the text.
                 builder.apply_exclusion_rules(pv, max_slots=backend.ref_slot_count)
 
+                # The slot plan of THIS backend, before the prompt is rendered:
+                # the text names each slotted person / room / item by its slot
+                # (<ref N>) and resolve_reference_slots below sends exactly
+                # that plan (docs/edit-prompts.md §4).
+                _plan_slots(builder, pv, backend, set_profile=set_profile,
+                            profile_reference=profile_reference,
+                            active=not pv.no_person_detected or bool(profile_reference))
+
                 # Append the RP scene context to the scene prompt
                 pv.scene_prompt = prompt_text
                 if rp_scene_context:
@@ -2808,6 +2851,8 @@ class ImageService:
                     template_prompt, pv,
                     target_model=_target_model,
                     prompt_instruction=_wf_instruction)
+                enhanced_prompt, _prompt_method = _keep_reference_tokens(
+                    template_prompt, enhanced_prompt, _prompt_method)
                 _canonical_dict = canonical_to_dict(pv)
 
                 # Variables the rest of this function still reads
@@ -2862,11 +2907,21 @@ class ImageService:
                 # the location image would push out the profile reference slot.
                 if not _profile_only:
                     builder._collect_location(pv)
+                _plan_slots(builder, pv, backend, set_profile=set_profile,
+                            profile_reference=profile_reference)
 
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in persons]
                 agent_mentioned = any(p.is_agent for p in persons)
                 no_person_detected = False
 
+                # A portrait drawn from a slotted reference names it at the
+                # head of its character block (the style's {character} slot).
+                _portrait = _portrait_character(pv, _style_character)
+                if _portrait != _style_character:
+                    prompt_style = _cfg_mod.get_use_case_prompts(
+                        _uc_name, _uc_img_model,
+                        clothed=bool(input_data.get("clothed", True)),
+                        character=_portrait).get("prompt_style", "")
                 enhanced_prompt = prompt_text
                 prompt_without_style = prompt_text
                 if prompt_style:
@@ -2885,7 +2940,9 @@ class ImageService:
                     getattr(backend, "image_family", "") if backend else "",
                     _backend_model)
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in pv.persons]
-                pv.prompt_style = prompt_style or "photorealistic"
+                # Stored canonical form: without the portrait's slot token.
+                from app.imagegen.edit_prompt import strip_refs as _strip_style_refs
+                pv.prompt_style = _strip_style_refs(prompt_style) or "photorealistic"
                 pv.scene_prompt = prompt_text
                 # Mood/activity/outfit from the current character state for the rebuild context
                 try:
@@ -2912,8 +2969,13 @@ class ImageService:
             # first, so parallel generations do not overwrite each other (race
             # between an Instagram post and expression regen).
             # self.last_enhanced_prompt stays for non-threaded callers.
-            self._meta_tls.last_enhanced_prompt = enhanced_prompt
-            self.last_enhanced_prompt = enhanced_prompt
+            # Stored without the slot tokens: a re-render (regenerate,
+            # Instagram, Improvements) plans its own slots.
+            from app.imagegen.edit_prompt import strip_refs as _strip_refs
+            self._meta_tls.last_enhanced_prompt = _strip_refs(enhanced_prompt)
+            self.last_enhanced_prompt = self._meta_tls.last_enhanced_prompt
+            prompt_without_style = _strip_refs(prompt_without_style)
+            template_prompt = _strip_refs(template_prompt)
 
             # Remember the start time for logging
             _gen_start = time.time()
@@ -2977,6 +3039,8 @@ class ImageService:
                 face_refs = builder.resolve_reference_slots(
                     pv, max_slots=backend.ref_slot_count)
                 params["reference_images"] = face_refs["reference_images"]
+                if face_refs.get("reference_roles"):
+                    params["reference_roles"] = face_refs["reference_roles"]
                 enhanced_prompt = _with_extra_reference_prompt(
                     enhanced_prompt, input_data, pv, params["reference_images"], backend)
             else:

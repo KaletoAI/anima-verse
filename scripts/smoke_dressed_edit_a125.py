@@ -14,7 +14,7 @@ Fixtures (PIL, in a temp dir that stands for ``model_refs``): BASE = 100 x 200 R
 20..179, colour (200, 160, 130), alpha 255, background alpha 0. OUTFIT = 64 x 64 RGB (10, 200, 10).
 
 Expected, by hand:
-[1] Slot plan (``PromptBuilder._resolve_qwen_slots``): the creating character's reference BASE at position 1,
+[1] Slot plan (``PromptBuilder.plan_reference_slots``): the creating character's reference BASE at position 1,
     ``extra_ref_images`` = [OUTFIT]. 10 slots (Qwen2.1) -> {input_reference_image_1: BASE, input_reference_image_2:
     OUTFIT}, in that order. 4 slots (P-H3) -> the same two. 1 slot (CivitAI img2img, a Flux2 entry) ->
     {input_reference_image_1: BASE} only. A plan WITHOUT the character's own reference gets no extra either

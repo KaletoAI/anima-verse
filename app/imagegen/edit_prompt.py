@@ -361,7 +361,11 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
         if "<Subject" not in text:
             notes.append("free_text")
     elif dialect == "image_tag":
-        if total >= 2 and not re.search(r"\bcanvas\b", text, re.IGNORECASE):
+        # Only an EDIT has a canvas (a canvas, view or material role in the manifest); a new composition (every slot
+        # an identity / room / item) has none to name.
+        roles = [str((r or {}).get("role") or "") for r in ((params or {}).get("reference_roles") or {}).values()]
+        edit = not roles or any(r in ("canvas", "view_source", "material") for r in roles)
+        if total >= 2 and edit and not re.search(r"\bcanvas\b", text, re.IGNORECASE):
             notes.append("role_missing")
     unused = [n for n in slots if n not in named]
     if unused:
@@ -378,6 +382,45 @@ def normalise(prompt: str, params: Optional[Dict[str, Any]], backend: Any) -> Tu
                     f", {len(dropped)} sentence(s) dropped (slot not sent)" if dropped else "",
                     f", notes {', '.join(notes)}" if notes else "")
     return text, meta
+
+
+# ---------------------------------------------------------------------------------------------------- strip
+
+#: The canonical token producers write (``<ref N>``), any spacing.
+CANONICAL_REF = re.compile(r"<ref\s*\d+>", re.IGNORECASE)
+_PAREN = re.compile(r"\s*\(([^()]*)\)")
+
+
+def _strip_paren(m: "re.Match[str]") -> str:
+    """A parenthesis keeps its ``;``-parts without a ``<ref N>``; one left empty goes with its leading space."""
+    inner = m.group(1)
+    if not CANONICAL_REF.search(inner):
+        return m.group(0)
+    kept = [p.strip() for p in inner.split(";") if p.strip() and not CANONICAL_REF.search(p)]
+    lead = m.group(0)[:len(m.group(0)) - len(m.group(0).lstrip())]
+    return f"{lead}({'; '.join(kept)})" if kept else ""
+
+
+def strip_refs(text: str) -> str:
+    """``text`` without its canonical ``<ref N>`` tokens — the form a prompt is STORED in (gallery prompt, Instagram
+    post, template prompt), so a later re-render plans its own slots instead of inheriting this render's. A
+    parenthesis loses its ``;``-parts that hold a token (an emptied one goes); any other clause (``,``) holding one
+    goes, and a line left without words goes too. Text without ``<ref`` comes back byte-identical."""
+    if not text or not CANONICAL_REF.search(text):
+        return text
+    text = _PAREN.sub(_strip_paren, text)
+    lines = []
+    for line in text.split("\n"):
+        if CANONICAL_REF.search(line):
+            body = line.rstrip()
+            end = body[-1] if body and body[-1] in ".!?" else ""
+            clauses = [c for c in re.split(r",\s*", body[:-1] if end else body) if not CANONICAL_REF.search(c)]
+            line = ", ".join(clauses).rstrip() + end if clauses else ""
+            if not re.search(r"[A-Za-z]", line.split(":", 1)[-1] if ":" in line else line):
+                continue
+        lines.append(line)
+    out = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
 # ---------------------------------------------------------------------------------------------------- structured

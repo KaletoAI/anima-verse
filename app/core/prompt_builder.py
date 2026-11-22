@@ -100,6 +100,14 @@ class PromptVariables:
     profile_reference: str = ""     # Explicit current portrait, independent of person detection
     no_person_detected: bool = False
 
+    # The reference-slot plan of the target backend (``PromptBuilder.apply_slot_plan``), computed BEFORE the prompt
+    # is rendered so the text names each slot (``<ref N>``) in the order the pictures are sent. None = not planned.
+    reference_plan: Optional[List[Dict[str, Any]]] = None
+    reference_plan_slots: int = -1
+    person_slot: Dict[int, int] = field(default_factory=dict)   # person position (1-based) -> slot N
+    room_slot: int = 0                                         # slot of the room picture, 0 = none
+    item_slot_of: Dict[str, int] = field(default_factory=dict)  # item name -> slot N
+
 
 @dataclass
 class EntryPointConfig:
@@ -1038,7 +1046,7 @@ class PromptBuilder:
         # lands in a slot (priority plan). Outfit and activity deliberately
         # stay in the text.
         room_slotted = any(
-            e["kind"] == "room" for e in self._plan_qwen_slots(variables, max_slots))
+            e["kind"] == "room" for e in self.plan_reference_slots(variables, max_slots))
 
         if room_slotted and variables.prompt_location:
             logger.debug("Ausschluss: prompt_location entfernt (Raum-Ref im Slot)")
@@ -1277,7 +1285,10 @@ class PromptBuilder:
         """Builds the reference-image slot map for the target backend.
 
         Slots are filled by priority — 1 creating character, 2 room,
-        3 other characters, 4 items (until slots are full).
+        3 other characters, 4 items (until slots are full). A plan the
+        prompt was rendered from (``apply_slot_plan`` with the same
+        ``max_slots``) is used as it is, so the text's ``<ref N>`` and the
+        sent pictures can never disagree.
 
         Args:
             variables: Collected prompt variables.
@@ -1287,14 +1298,38 @@ class PromptBuilder:
         Returns:
             Dict with keys:
                 reference_images: {slot_name: file_path}
+                reference_roles: {slot_name: {"role", "label"}} (the slot manifest)
                 has_reference_slots: bool   (True when person slots are used)
         """
         if max_slots <= 0:
-            return {"reference_images": {}, "has_reference_slots": False}
+            return {"reference_images": {}, "reference_roles": {}, "has_reference_slots": False}
 
-        return self._resolve_qwen_slots(variables, max_slots)
+        if variables.reference_plan is not None and variables.reference_plan_slots == max_slots:
+            plan = variables.reference_plan
+        else:
+            plan = self.plan_reference_slots(variables, max_slots)
+        return self._resolve_slots(plan)
 
-    def _plan_qwen_slots(
+    def apply_slot_plan(self, variables: PromptVariables, max_slots: int) -> List[Dict[str, Any]]:
+        """Plan the slots of a backend with ``max_slots`` BEFORE the prompt is rendered and store the result on
+        ``variables``: ``reference_plan`` (what ``resolve_reference_slots`` then sends), ``person_slot`` (person
+        position -> slot), ``room_slot`` and ``item_slot_of`` (what the renderers name as ``<ref N>``)."""
+        plan = self.plan_reference_slots(variables, max_slots) if max_slots > 0 else []
+        variables.reference_plan = plan
+        variables.reference_plan_slots = max_slots
+        variables.person_slot = {}
+        variables.room_slot = 0
+        variables.item_slot_of = {}
+        for slot, entry in enumerate(plan, 1):
+            if entry["kind"] == "person":
+                variables.person_slot[int(entry["pos"])] = slot
+            elif entry["kind"] == "room":
+                variables.room_slot = slot
+            elif entry["kind"] == "item":
+                variables.item_slot_of.setdefault(str(entry.get("name") or ""), slot)
+        return plan
+
+    def plan_reference_slots(
         self, variables: PromptVariables, max_slots: int) -> List[Dict[str, Any]]:
         """Assign reference images to the available slots by priority.
 
@@ -1305,7 +1340,7 @@ class PromptBuilder:
             4. items
 
         The ONE source of the slot assignment — used both for the generation
-        (_resolve_qwen_slots) and for the exclusion rules, so both decide
+        (resolve_reference_slots, through apply_slot_plan for the text too) and for the exclusion rules, so both decide
         consistently what actually sits in a slot.
 
         A profile render accepts only an explicitly supplied identity reference
@@ -1367,34 +1402,37 @@ class PromptBuilder:
 
         return plan[:max(0, max_slots)]
 
-    def _resolve_qwen_slots(
-        self, variables: PromptVariables, max_slots: int) -> Dict[str, Any]:
-        """Distributes reference images onto the slots by priority.
-
-        Slot order = priority (see _plan_qwen_slots): creating character
-        first, then room, then other characters, then items.
-        """
+    def _resolve_slots(self, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The slot map and the slot manifest of a plan (``plan_reference_slots``): slot order = plan order —
+        creating character first, then extra edit pictures, room, other characters, items."""
         reference_images: Dict[str, str] = {}
+        reference_roles: Dict[str, Dict[str, str]] = {}
         has_reference_slots = False
 
-        for slot, entry in enumerate(self._plan_qwen_slots(variables, max_slots), 1):
+        for slot, entry in enumerate(plan, 1):
             key = f"input_reference_image_{slot}"
             reference_images[key] = entry["path"]
             if entry["kind"] == "person":
                 has_reference_slots = True
+                reference_roles[key] = {"role": "identity", "label": entry["name"]}
                 logger.debug("RefSlot %d: %s (gender=%s)%s", slot, entry["name"],
                              entry["gender"] or "no",
                              " [Agent]" if entry.get("is_agent") else "")
             elif entry["kind"] == "room":
+                reference_roles[key] = {"role": "room", "label": "the room"}
                 logger.debug("RefSlot %d: Room/Location", slot)
+            elif entry["kind"] == "extra":
+                reference_roles[key] = {"role": "material", "label": entry.get("name", "")}
+                logger.debug("RefSlot %d: extra edit picture %s", slot, entry.get("name", ""))
             else:  # item
+                reference_roles[key] = {"role": "item", "label": entry.get("name", "?")}
                 logger.info("RefSlot %d: Item '%s'", slot, entry.get("name", "?"))
 
-        logger.debug("RefSlots: %d belegt (Prio Agent>Raum>andere>Items)",
-                     len(reference_images))
+        logger.debug("RefSlots: %d filled (priority agent>extra>room>others>items)", len(reference_images))
 
         return {
             "reference_images": reference_images,
+            "reference_roles": reference_roles,
             "has_reference_slots": has_reference_slots,
         }
 

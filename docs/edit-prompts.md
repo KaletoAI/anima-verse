@@ -4,7 +4,7 @@ Status (2026-11-21, branch `eprompt`, base `7fc7c386d`): **Phase 1 and Phase 2 i
 `gate_attempts` itself and the cut texture use it) and the dialect column of the routing overview's DATA
 (`_explain_one`). Live E2E on copies of Kai and Dario passed (§10). Open: C10 (the dialog's attempts list — needs a
 frontend build), the overview's dialect column in `static/admin/settings.js`, C11's nine other loops, C12, C13 (an admin
-action), Phases 3–4 (C14–C26).
+action), Phases 3–4 (C14–C26). Phase 3 C14–C16 + C20 (the generate_on_backend path) landed on branch `chatimg` (§4).
 Sources: `~/claude-out/prompt-syntax-research.md` (model conventions, §5 templates),
 `~/claude-out/prompt-test-minimax/summary.md` + `prompts.json` (A/B, candidate N),
 `~/claude-out/prompt-test/` (the short P-H3 winners now on `main`).
@@ -108,8 +108,29 @@ The order is already decided in ONE place per path. Only its result has to reach
 | `image_regenerate.regenerate_image` (screenshot photo = slot 1, persons from 2, self-ref into the first free slot) | its own code `:471-501` | Fill the same `slot_of` from what it slotted. The stored original prompt gets `<ref N>` after the names through `edit_prompt.mark_persons(prompt, slot_of)` (whole word, first mention only). |
 | `scene_render` (:480-543) / `secret_diary/presentation.py` | `ref_slot_of` | Write `<ref N>` instead of "reference image N" / "the first reference image". This touches the config defaults `scene_prompt_multi_ref` / `scene_prompt_only_background` (`config_schema.py:45-50`, `:942`) too. |
 
-Rendering in `prompt_adapters._render_labeled_sections` (natural family): `- Kai (<ref 2>): appearance, wearing …`, and `Setting: the room in <ref 3>.` when the room is slotted (the location text is dropped there today anyway). The keywords family (`render_z_image`) only gets `Kai <ref 2>` when a slot exists. Keyword backends rarely take references, and the normaliser turns it into "the second image".
-`params["reference_roles"]` is built from the same plan: `{"input_reference_image_2": {"role": "identity", "label": "Kai"}, …}` (roles: identity / room / item / composition / canvas / material / view_source).
+**Landed (change plan point 1, generate_on_backend path).** `PromptBuilder.plan_reference_slots` is the public
+plan; `apply_slot_plan(pv, max_slots)` runs it BEFORE the render (right after `apply_exclusion_rules` with
+auto_enhance, after the location on the caller-built path) and stores `reference_plan`, `person_slot` (person position
+→ slot), `room_slot` and `item_slot_of` on `PromptVariables`; `resolve_reference_slots` sends that stored plan when its
+slot count matches, and also returns the slot manifest `reference_roles`, which goes into `params["reference_roles"]`.
+What the renderers write (only for what really sits in a slot of THIS backend):
+- `_render_labeled_sections` (natural family): `- Kai (the person in <ref 3>), appearance, wearing …` — only the label
+  at the start of the person's line is marked, never a later mention of the name; `Setting: the place shown in
+  <ref 2>.` when the room is slotted (its location text is dropped then, as before); `Objects: the lamp from <ref 4>.`
+  for slotted items; `Each person appears once.` as the last line of `Characters:` with two or more people, unless the
+  style or the scene already says it.
+- `render_z_image` (keywords): the same person marker, `the place in <ref N>`, `the lamp from <ref N>`, `each person
+  appears once`.
+- The portrait (`set_profile` with its current portrait as reference): the character block of the profile style starts
+  `the same person as in <ref 1>, …` (`service._portrait_character`).
+- The LLM enhancer (`image_prompt_enhance.md`) is told to keep every marker; an answer that lost one is replaced by the
+  template prompt (`service._keep_reference_tokens`, logged).
+- Every STORED prompt is token-free (`edit_prompt.strip_refs`): the gallery prompt, `last_enhanced_prompt` (Instagram's
+  post prompt) and `template_prompt`, so a re-render plans its own slots. Only `final_prompt` keeps the engine's
+  tokens.
+- The normaliser notes `role_missing` only for an edit (no manifest, or a `canvas` / `view_source` / `material` role in it), not for
+  a new composition.
+Guard: `scripts/smoke_chat_photo_slots.py`. A/B on the local hub: `~/claude-out/chat-bilder/stufe1/`.
 `pose_check.apply` (LLM rewrite of scene/event/photo) has to keep `<ref N>`, so its prompt template names the token. If a token is lost anyway, step 6 reports it as `unused`.
 
 ## 5. Request parameters per dialect (D5)

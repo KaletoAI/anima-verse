@@ -70,9 +70,40 @@ def get_target_model(image_family: str = "", backend_model: str = "") -> str:
 
 
 
+#: The sentence every picture of two or more people carries once (plan point 1): a person drawn twice is the most
+#: common failure of a group render. Not added when the style or the scene already says it.
+ONCE_RULE = "Each person appears once."
+_ONCE_SAID = ("appears once", "appears exactly once", "appear once", "appear exactly once")
+
+
+def _once_said(pv: PromptVariables) -> bool:
+    text = f"{pv.prompt_style} {pv.scene_prompt}".lower()
+    return any(p in text for p in _ONCE_SAID)
+
+
+def _person_ref(pv: PromptVariables, idx: int, text: str) -> str:
+    """``text`` of person ``idx`` (it starts with the person's label, ``"Kai, …"``) with the slot that holds the
+    person's picture right after the label: ``"Kai (the person in <ref 2>), …"``. Only the label at the START is
+    marked, never a later mention of the name; a person without a slot keeps ``text``."""
+    slot = (pv.person_slot or {}).get(idx)
+    if not slot or not text or idx < 1 or idx > len(pv.persons):
+        return text
+    person = pv.persons[idx - 1]
+    label = person.actor_label or person.name
+    if not label or not text.startswith(label):
+        return text
+    return f"{label} (the person in <ref {slot}>){text[len(label):]}"
+
+
+def _item_refs(pv: PromptVariables) -> str:
+    """``"the chair from <ref 4>, the lamp from <ref 5>"`` for the items in a slot; empty without one."""
+    return ", ".join(f"the {name} from <ref {slot}>"
+                     for name, slot in sorted((pv.item_slot_of or {}).items(), key=lambda kv: kv[1]) if name)
+
+
 def _person_with_outfit(pv: PromptVariables, idx: int, natural: bool) -> str:
     """Baut Personen-Beschreibung fuer einen Slot. `natural`=True liefert Satz."""
-    person_txt = pv.prompt_persons.get(idx, "")
+    person_txt = _person_ref(pv, idx, pv.prompt_persons.get(idx, ""))
     outfit_txt = pv.prompt_outfits.get(idx, "")
     if not natural:
         parts = [p for p in (person_txt, outfit_txt) if p]
@@ -170,6 +201,13 @@ def render_z_image(pv: PromptVariables) -> Dict[str, str]:
     _loc_clean = _clean_location_for_prompt(pv.prompt_location)
     if _loc_clean:
         parts.append(_loc_clean)
+    if pv.room_slot:
+        parts.append(f"the place in <ref {pv.room_slot}>")
+    _items = _item_refs(pv)
+    if _items:
+        parts.append(_items)
+    if len([p for p in pv.prompt_persons.values() if p]) >= 2 and not _once_said(pv):
+        parts.append(ONCE_RULE.rstrip(".").lower())
     if pv.personality:
         parts.append(pv.personality[:200])
     if pv.profile_image_hint:
@@ -266,7 +304,7 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
     if pv.prompt_persons:
         char_lines = ["Characters:"]
         for idx in sorted(pv.prompt_persons.keys()):
-            person_txt = pv.prompt_persons.get(idx, "").strip()
+            person_txt = _person_ref(pv, idx, pv.prompt_persons.get(idx, "").strip())
             outfit_clause = _outfit_clause(pv.prompt_outfits.get(idx, "").strip())
             if not person_txt:
                 continue
@@ -276,6 +314,8 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
             if not line.endswith("."):
                 line += "."
             char_lines.append(line)
+        if len(char_lines) > 2 and not _once_said(pv):
+            char_lines.append(ONCE_RULE)
         if len(char_lines) > 1:
             sections.append("\n".join(char_lines))
 
@@ -297,8 +337,15 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
         sections.append(f"Mood: {pv.prompt_mood}.")
 
     # --- Setting ---
+    # The location text is dropped when the room picture sits in a slot
+    # (apply_exclusion_rules); the text then names that picture instead.
     if _loc_clean:
         sections.append(f"Setting: {_loc_clean}.")
+    elif pv.room_slot:
+        sections.append(f"Setting: the place shown in <ref {pv.room_slot}>.")
+    _items = _item_refs(pv)
+    if _items:
+        sections.append(f"Objects: {_items}.")
 
     # --- Style (komplett aus Config) ---
     sections.append(f"Style: {style_full}.")
