@@ -529,6 +529,7 @@ def declared_motion_groups():
     from app.plugins import registry
     return sorted([{"id": rig.id, "controls": rig.controls,
                     "poses": {pose_id: dict(values) for pose_id, values in rig.poses.items()},
+                    "preview_pose": rig.preview_pose,
                     "defaults": {key: (rig.squash[0] if key == "flatten_floor" and rig.flatten_floor is None else getattr(rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
                    for rig in slot.rigs if rig.chains], key=lambda group: group["id"])
@@ -562,7 +563,8 @@ def validate_motion_overrides(section, *, character=False):
                        "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
 
 
-def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
+def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None,
+                   preview_poses=None):
     """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent.
 
     Each package group carries its effective ``op`` (``rig_groups_for``); hair groups carry none.
@@ -580,7 +582,10 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
 
     State: each active state names a pose per group (``bone_pose`` = {group: pose id}); the pose's values come from
     the group's declaration (``rigs[].poses``): rest angle = the largest, the other fields multiply, ``rigid`` =
-    the largest (0 without a pose). A pose id the group does not declare (any more) is ignored."""
+    the largest (0 without a pose). A pose id the group does not declare (any more) is ignored.
+
+    ``preview_poses`` (``{group id: pose id}``, the Places preview's pose pickers) applies like one more state whose
+    ``bone_pose`` it is; an unknown group or pose is ignored the same way."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -635,6 +640,11 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                         key=lambda row: row["id"])
     else:
         states = collect_bone_poses(character_name, profile.get("current_location", ""), profile=profile) if apply_states else []
+    # Only the pairs a group of this character declares: an unknown one changes nothing, not even the rev.
+    picked = {group["id"]: pose_id for group in declarations for group_id, pose_id in (preview_poses or {}).items()
+              if group_id == group["id"] and isinstance(pose_id, str) and pose_id in (group.get("poses") or {})}
+    if picked:
+        states = [*states, {"id": "", "bone_pose": picked}]
     groups = {}
     for group in declarations:
         if not group["chains"]:

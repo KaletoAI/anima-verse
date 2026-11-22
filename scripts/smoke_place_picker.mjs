@@ -21,6 +21,18 @@
  *     want lie, pair (a, b)              → too_few_slots (m2 has 1 slot)
  *     want seat, solo, all, max 1        → count 1
  *     names [Kira, mannequin], 2 places  → A Kira, B mannequin (in order, cycling)
+ *     every assignment carries poses {} (no pick: each group shows its preview_pose)
+ *     body per name: Kira → base, mannequin → outfit (the function's answers, per figure)
+ *   defaultBody (pair scene): plain {…} built → base · plain undefined (loading) → base · plain null (none) → outfit ·
+ *     mannequin → outfit whatever plain says
+ *
+ *   pose pickers (baseBodyModel.ts), groups g1 {poses [up, down], preview_pose up} · g2 {poses [], preview "x"} ·
+ *   g3 {poses [low], preview_pose "gone"}:
+ *     poseGroups               → g1 (preview up), g3 (preview "" — "gone" is no pose of g3); g2 has no poses
+ *     effectivePoses(no pick)  → {g1: up} (g3 at rest)
+ *     effectivePoses({g1: ''}) → {} (Rest picked) · ({g1: down, g3: low}) → both · ({g1: nope}) → {} (undeclared)
+ *     posesParam({g3: low, g1: up}) → "g1:up,g3:low" (sorted) · {} → ""
+ *     poseMotionUrl("A B", {g1: up}) → /characters/A%20B/base-body/pose-motion?poses=g1%3Aup
  *
  *
  *   A110c fit filter, props with marker_capacities: chair {seat:1} · bench {seat:3} · sofa {seat:2, lie:2} ·
@@ -58,6 +70,13 @@ try {
   const file = join(dir, 'picker.mjs')
   await writeFile(file, built.outputFiles[0].text, 'utf8')
   const P = await import(`file://${file}`)
+  const builtB = await esbuild.build({
+    entryPoints: [join(ROOT, 'frontend/src/tabs/characters/baseBodyModel.ts')],
+    bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'error',
+  })
+  const fileB = join(dir, 'base.mjs')
+  await writeFile(fileB, builtB.outputFiles[0].text, 'utf8')
+  const B = await import(`file://${fileB}`)
 
   const props = [
     { id: 'chair', marker_groups: ['seat'] }, { id: 'sofa', marker_groups: ['seat', 'lie'] },
@@ -96,6 +115,21 @@ try {
   check('max 1', fill({ max: 1 }).count, 1)
   const names = fill({ names: ['Kira', '__mannequin__'] })
   check('names cycle', [names.assign.A.character, names.assign.B.character], ['Kira', '__mannequin__'])
+  check('poses {}', [names.assign.A.poses, names.assign.B.poses], [{}, {}])
+  const bodies = fill({ names: ['Kira', '__mannequin__'], body: (n) => n === '__mannequin__' ? 'outfit' : 'base' })
+  check('body per name', [bodies.assign.A.body, bodies.assign.B.body], ['base', 'outfit'])
+  check('defaultBody', [P.defaultBody({ url: 'x' }), P.defaultBody(undefined), P.defaultBody(null),
+    P.defaultBody({ url: 'x' }, true), P.defaultBody(undefined, true)], ['base', 'base', 'outfit', 'outfit', 'outfit'])
+  console.log('[4b] pose pickers (pair scene)')
+  const groups = B.poseGroups([{ id: 'g1', poses: ['up', 'down'], preview_pose: 'up' }, { id: 'g2', poses: [], preview_pose: 'x' },
+    { id: 'g3', poses: ['low'], preview_pose: 'gone' }])
+  check('poseGroups', groups, [{ id: 'g1', poses: ['up', 'down'], preview_pose: 'up' }, { id: 'g3', poses: ['low'], preview_pose: '' }])
+  check('effective, no pick', B.effectivePoses(groups, {}), { g1: 'up' })
+  check('effective, Rest', B.effectivePoses(groups, { g1: '' }), {})
+  check('effective, both', B.effectivePoses(groups, { g1: 'down', g3: 'low' }), { g1: 'down', g3: 'low' })
+  check('effective, undeclared', B.effectivePoses(groups, { g1: 'nope' }), {})
+  check('posesParam', [B.posesParam({ g3: 'low', g1: 'up' }), B.posesParam({})], ['g1:up,g3:low', ''])
+  check('poseMotionUrl', B.poseMotionUrl('A B', { g1: 'up' }), '/characters/A%20B/base-body/pose-motion?poses=g1%3Aup')
   console.log('[5] fit filter (A110c)')
   const cp = [{ id: 'chair', marker_capacities: { seat: 1 } }, { id: 'bench', marker_capacities: { seat: 3 } },
     { id: 'sofa', marker_capacities: { seat: 2, lie: 2 } }, { id: 'cot', marker_capacities: { lie: 1 } },

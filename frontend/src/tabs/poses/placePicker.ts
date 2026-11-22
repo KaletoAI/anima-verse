@@ -97,7 +97,14 @@ export function groundRoom(want: string, count: number) {
 }
 
 export interface FillPlace { letter: string; markerId: string; group: string }
-export interface FillAssignment { character: string; role: string; body: 'outfit' | 'base'; state: string }
+export interface FillAssignment { character: string; role: string; body: 'outfit' | 'base'; poses: Record<string, string> }
+
+/** A new figure's body: the base body unless the character's plain body is known to be unbuilt (`plain` null —
+ *  GET …/figure?plain=1 answered without a ready model); while it loads (undefined) the base body, corrected once it
+ *  answers. The mannequin has only its one figure ('outfit'). */
+export function defaultBody(plain: unknown, mannequin = false): 'outfit' | 'base' {
+  return mannequin || plain === null ? 'outfit' : 'base'
+}
 /** Why a fill placed nobody. */
 export type FillReason = '' | 'loading' | 'no_places' | 'no_type' | 'too_few_slots'
 export interface FillPlan { assign: Record<string, FillAssignment>; count: number; reason: FillReason }
@@ -107,10 +114,10 @@ export interface FillPlan { assign: Record<string, FillAssignment>; count: numbe
  * load. `want` = the clip's place type: only places of that type are filled — a place of another type is never
  * filled (a seat clip on a stand spot is not what the game does). Solo: one figure per place; a pair/group: one
  * marker with at least `roles.length` slots per pair. `all` = every fitting place (at most `max` figures), else the
- * first only. `body` = the figures' body choice.
+ * first only. `body` = the figures' body choice, one for all or per name.
  */
 export function planFill(places: readonly FillPlace[], opts: { names: readonly string[] | null; want: string;
-  roles: readonly string[]; all: boolean; max: number; body?: 'outfit' | 'base' }): FillPlan {
+  roles: readonly string[]; all: boolean; max: number; body?: 'outfit' | 'base' | ((name: string) => 'outfit' | 'base') }): FillPlan {
   const empty = (reason: FillReason): FillPlan => ({ assign: {}, count: 0, reason })
   if (!opts.names) return empty('loading')
   if (!places.length) return empty('no_places')
@@ -122,7 +129,7 @@ export function planFill(places: readonly FillPlace[], opts: { names: readonly s
   const byMarker = new Map<string, FillPlace[]>()
   for (const p of fitting) byMarker.set(p.markerId, [...(byMarker.get(p.markerId) ?? []), p])
   const solo = opts.roles.length < 2
-  const body = opts.body ?? 'outfit'
+  const bodyOf = (name: string) => typeof opts.body === 'function' ? opts.body(name) : opts.body ?? 'outfit'
   const assign: Record<string, FillAssignment> = {}
   let n = 0
   for (const rows of byMarker.values()) {
@@ -130,10 +137,10 @@ export function planFill(places: readonly FillPlace[], opts: { names: readonly s
     if (solo) {
       for (const p of rows) {
         if (n >= opts.max || (!opts.all && n)) break
-        assign[p.letter] = { character: who(n), role: '', body, state: '' }; n++
+        assign[p.letter] = { character: who(n), role: '', body: bodyOf(who(n)), poses: {} }; n++
       }
     } else if (rows.length >= opts.roles.length && n + opts.roles.length <= opts.max) {
-      opts.roles.forEach((r, i) => { assign[rows[i].letter] = { character: who(n), role: r, body, state: '' }; n++ })
+      opts.roles.forEach((r, i) => { assign[rows[i].letter] = { character: who(n), role: r, body: bodyOf(who(n)), poses: {} }; n++ })
     }
   }
   return { assign, count: n, reason: n ? '' : 'too_few_slots' }

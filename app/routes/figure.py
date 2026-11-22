@@ -112,6 +112,11 @@ body actions):
   preview_states=[state])``). Nothing is saved and nothing runs; 404 for an unknown character or a state that
   carries no ``bone_pose``. ``plain_body.extension.states`` lists the states it offers
   (``prompt_filters.bone_pose_states`` over the base model's groups).
+* ``GET  /characters/{c}/base-body/pose-motion?poses=<group>:<pose>,…`` — the Poses → Places preview's pose pickers:
+  ``{"poses", "motion"}``, the bare base model's motion with ONLY those group poses applied
+  (``motion_payload(apply_clothing=False, preview_states=[], preview_poses=…)``); no poses = at rest. Nothing is
+  saved; 400 for a pair whose group does not declare the pose, 404 for an unknown character. Each
+  ``plain_body.extension.groups[i]`` carries ``poses`` (its declared pose ids) and ``preview_pose`` (pre-selected).
 * ``POST /characters/{c}/base-body/mesh-repair`` — the Base body tab's "Repair again" (Ruling A34,
   ``base_mesh_repair.start_repair``): the stored base model's mesh repair with the saved settings, then its
   extension rig on the repaired mesh — local, no hub job. 202 ``{"started": True}``; 404 without a stored base
@@ -317,11 +322,24 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
 
 def _with_preview_states(extension):
     """The base model's extension state with ``states``: what the Base body tab's state picker offers (Ruling A66,
-    ``prompt_filters.bone_pose_states`` over the model's groups — empty without groups). None stays None."""
+    ``prompt_filters.bone_pose_states`` over the model's groups — empty without groups). None stays None.
+
+    Each group also gets what the Poses → Places preview's pose picker offers: ``poses`` (the pose ids the group's
+    declaration names, sorted; [] without one) and ``preview_pose`` (the declaration's ``preview_pose`` when it
+    names one of them, else "")."""
     if extension is None:
         return None
+    from app.core.extension_rig import declared_motion_groups
     from app.core.prompt_filters import bone_pose_states
-    extension["states"] = bone_pose_states([group["id"] for group in extension.get("groups") or []])
+    groups = extension.get("groups") or []
+    extension["states"] = bone_pose_states([group["id"] for group in groups])
+    declared = {group["id"]: group for group in declared_motion_groups()}
+    for group in groups:
+        declaration = declared.get(group["id"]) or {}
+        poses = sorted(declaration.get("poses") or {})
+        group["poses"] = poses
+        preview = declaration.get("preview_pose") or ""
+        group["preview_pose"] = preview if preview in poses else ""
     return extension
 
 
@@ -338,6 +356,27 @@ def base_state_motion(character_name: str, state: str,
     profile = get_character_profile(character_name) or {}
     return {"state": state, "motion": motion_payload(character_name, profile=profile, apply_clothing=False,
                                                      preview_states=[state])}
+
+
+@router.get("/{character_name}/base-body/pose-motion")
+def base_pose_motion(character_name: str, poses: str = "",
+                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The base model's motion with the picked group poses applied — a preview, never stored (module docstring)."""
+    from app.core.extension_rig import declared_motion_groups, motion_payload
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    declared = {group["id"]: group.get("poses") or {} for group in declared_motion_groups()}
+    picked: Dict[str, str] = {}
+    for pair in (part.strip() for part in poses.split(",")):
+        if not pair:
+            continue
+        group_id, sep, pose_id = pair.partition(":")
+        if not sep or pose_id not in declared.get(group_id, {}):
+            raise HTTPException(status_code=400, detail=f"Not a declared group pose: {pair}")
+        picked[group_id] = pose_id
+    profile = get_character_profile(character_name) or {}
+    return {"poses": picked, "motion": motion_payload(character_name, profile=profile, apply_clothing=False,
+                                                      preview_states=[], preview_poses=picked)}
 
 
 @router.post("/{character_name}/figure/build", status_code=202)

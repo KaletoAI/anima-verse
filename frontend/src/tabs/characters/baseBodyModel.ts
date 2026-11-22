@@ -523,6 +523,47 @@ export function stateMotionUrl(character: string, state: string): string {
   return `/characters/${encodeURIComponent(character)}/base-body/state-motion?state=${encodeURIComponent(state)}`
 }
 
+/** One extension group of the base model as `plain_body.extension.groups[i]` carries it for the Poses → Places
+ *  preview's pose picker: `poses` = the pose ids its declaration names (sorted), `preview_pose` = the one the
+ *  picker pre-selects ("" = at rest). */
+export interface PoseGroupChoice { id: string; poses: string[]; preview_pose: string }
+
+/** The groups that get a pose picker — those that declare at least one pose; a `preview_pose` that names none of
+ *  them reads as "" (at rest). */
+export function poseGroups(groups: readonly unknown[] | null | undefined): PoseGroupChoice[] {
+  const out: PoseGroupChoice[] = []
+  for (const raw of groups ?? []) {
+    const g = (raw ?? {}) as Partial<PoseGroupChoice>
+    const poses = Array.isArray(g.poses) ? g.poses.filter((p): p is string => typeof p === 'string' && !!p) : []
+    if (typeof g.id !== 'string' || !g.id || !poses.length) continue
+    out.push({ id: g.id, poses, preview_pose: poses.includes(g.preview_pose ?? '') ? g.preview_pose! : '' })
+  }
+  return out
+}
+
+/** The poses in effect for a figure: per group its pick (`picked[group]`; '' = at rest), a group without a pick its
+ *  `preview_pose`; a pose the group does not declare (any more) counts as at rest. Groups at rest are left out. */
+export function effectivePoses(groups: readonly PoseGroupChoice[], picked: Record<string, string> | null | undefined):
+  Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const g of groups) {
+    const pose = picked && g.id in picked ? picked[g.id] : g.preview_pose
+    if (pose && g.poses.includes(pose)) out[g.id] = pose
+  }
+  return out
+}
+
+/** The `poses` parameter of GET …/base-body/pose-motion: `group:pose` pairs sorted by group, comma-joined;
+ *  "" = at rest. Also the cache key of one pick. */
+export function posesParam(poses: Record<string, string>): string {
+  return Object.keys(poses).sort().filter((g) => poses[g]).map((g) => `${g}:${poses[g]}`).join(',')
+}
+
+/** The GET that computes the bare base model's motion with those group poses (a read — the preview never posts). */
+export function poseMotionUrl(character: string, poses: Record<string, string>): string {
+  return `/characters/${encodeURIComponent(character)}/base-body/pose-motion?poses=${encodeURIComponent(posesParam(poses))}`
+}
+
 /** The motion the viewer plays: at rest (`plain_body.extension.motion`) with nothing picked, the picked state's motion
  *  once it arrived for exactly that state and base model — until then (and for a pick of another model) the rest. */
 export function viewerStateMotion<M>(rest: M | undefined, selected: string, picked: PickedStateMotion<M> | null,

@@ -151,6 +151,8 @@ class RigSpec:
     # Named poses a state may name (``prompt_filters.bone_pose`` = {group: pose id}): {pose id: {BONE_POSE_FIELDS
     # values, rigid 0|1}} — the values belong to the package (``prompt_filters.validate_pose_values``).
     poses: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # The pose the Poses → Places preview pre-selects for this group ("" = at rest); must name one of ``poses``.
+    preview_pose: str = ""
 
     @classmethod
     def parse(cls, raw, attributes=None, covered_by=None):
@@ -298,6 +300,10 @@ class RigSpec:
         spec.poses = {validate_pose_id(pose_id, where="rig.poses id"):
                       validate_pose_values(values, spec.controls, where=f"rig.poses.{pose_id}")
                       for pose_id, values in poses.items()}
+        preview_pose = raw.get("preview_pose", "")
+        if not isinstance(preview_pose, str) or (preview_pose and preview_pose not in spec.poses):
+            raise ValueError("rig.preview_pose must name one of the group's poses")
+        spec.preview_pose = preview_pose
         return spec
 
 

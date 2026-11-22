@@ -57,8 +57,8 @@ import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
 import { ModelTurnHint } from '../../components/ModelTurnHint'
 import { attachModelTurn, configureViewControls, poseMatrix } from '../../lib/modelTurn'
 import { mountPlaceFigure, placeInteraction, placePhaseB } from './placeFigures'
-import { GROUND_MAX, GROUND_PROP, fittingProps, groundFits, groundRoom, groupProps, planFill, preselectProp, type FillReason } from './placePicker'
-import { stateMotionUrl, statePicker, type PreviewStateChoice } from '../characters/baseBodyModel'
+import { GROUND_MAX, GROUND_PROP, defaultBody, fittingProps, groundFits, groundRoom, groupProps, planFill, preselectProp, type FillReason } from './placePicker'
+import { effectivePoses, poseGroups, poseMotionUrl, posesParam, type PoseGroupChoice } from '../characters/baseBodyModel'
 
 export const MANNEQUIN = '__mannequin__'
 /** D5: figures in the preview, and how many of them run strand hair. */
@@ -96,18 +96,19 @@ interface PlaceRow {
   point: [number, number]; facing: number; rootY: number
 }
 /** A figure on a place: who, which half of the clip, which body (Ruling A110b: the plain base body or the outfit
- *  body the game shows) and, on the base body, the previewed state ('' = at rest). */
-interface Assignment { character: string; role: string; body: 'outfit' | 'base'; state: string }
+ *  body the game shows) and, on the base body, the pose picked per extension group (pair scene: '' = at rest; a group
+ *  without a pick shows its `preview_pose`). */
+interface Assignment { character: string; role: string; body: 'outfit' | 'base'; poses: Record<string, string> }
 
 /** A character's plain base body as GET …/figure?plain=1 reports it (`plain_body`) — the Base body tab's source. */
 interface PlainInfo {
   url: string; collision: CollisionPayload | null; motion?: SecondaryMotionPayload
-  groupCount: number; states: PreviewStateChoice[]
+  groups: PoseGroupChoice[]
 }
 interface PlainAnswer {
   plain_body?: {
     model?: { url?: string; status?: string; collision?: CollisionPayload | null } | null
-    extension?: { groups?: unknown[]; motion?: SecondaryMotionPayload; states?: PreviewStateChoice[] } | null
+    extension?: { groups?: unknown[]; motion?: SecondaryMotionPayload } | null
   }
 }
 /** The base body of each character asked for, fetched once per mount: PlainInfo, null = none built, undefined = loading. */
@@ -124,7 +125,7 @@ function usePlainBodies(names: readonly string[]) {
         const ready = !!m?.url && m.status === 'ready'
         const ext = ready ? d?.plain_body?.extension : null
         setRows((cur) => ({ ...cur, [name]: ready ? { url: m!.url!, collision: m!.collision ?? null, motion: ext?.motion,
-          groupCount: ext?.groups?.length ?? 0, states: ext?.states ?? [] } : null }))
+          groups: poseGroups(ext?.groups) } : null }))
       }).catch(() => setRows((cur) => ({ ...cur, [name]: null })))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -180,34 +181,33 @@ interface PartnerInfo {
 /** The pose catalog's place types as the picker names them. */
 const TYPE_LABEL: Record<string, string> = { stand: 'Stand', seat: 'Seat', ground: 'Ground', lie: 'Lie' }
 
-/** Body and state of one figure (Ruling A110b): outfit body (GET …/model3d, the game's figure) or the plain base body
- *  (GET …/figure?plain=1) — a variant that is not built is greyed with the step that builds it; the state picker is
- *  the Base body tab's (`statePicker`: None (at rest) + each state that moves one of the base model's extension
- *  groups, motion from GET …/base-body/state-motion). */
+/** Body and poses of one figure (Ruling A110b): outfit body (GET …/model3d, the game's figure) or the plain base body
+ *  (GET …/figure?plain=1) — a variant that is not built is greyed with the step that builds it. On the base body, one
+ *  pose picker per extension group that declares poses (pair scene): Rest + its pose ids, pre-selected with the
+ *  group's `preview_pose`; motion from GET …/base-body/pose-motion. */
 function BodyPick({ a, outfitBuilt, base, onChange }: {
   a: Assignment; outfitBuilt: boolean; base: PlainInfo | null | undefined
   onChange: (patch: Partial<Assignment>) => void
 }) {
   const { t } = useI18n()
-  const picker = base ? statePicker(base.groupCount, base.states, t) : null
-  const stateTitle = a.body !== 'base' ? t('States are previewed on the base body, as in the Base body tab.')
-    : base === undefined ? t('Loading…') : !base ? t('No base model yet (Characters → Base body).') : picker?.note || ''
+  const groups = a.body === 'base' && base ? base.groups : []
   const missing = a.body === 'base' ? (base === null ? t('no base model yet (Characters → Base body)') : '')
     : outfitBuilt ? '' : t('no outfit model yet (Characters → Figure)')
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', minWidth: 0 }}>
       <select value={a.body} data-testid="place-body" style={{ flex: '1 1 0', minWidth: 0 }} title={t('Base body = the plain body; outfit body = the figure the game shows, with what the character wears.')}
-        onChange={(e) => onChange({ body: e.target.value as Assignment['body'], state: '' })}>
+        onChange={(e) => onChange({ body: e.target.value as Assignment['body'], poses: {} })}>
         <option value="outfit" disabled={!outfitBuilt}>{outfitBuilt ? t('Outfit body') : `${t('Outfit body')} — ${t('not built')}`}</option>
         <option value="base" disabled={base === null}>{base === null ? `${t('Base body')} — ${t('not built')}` : t('Base body')}</option>
       </select>
-      <select value={a.body === 'base' ? a.state : ''} data-testid="place-state" title={stateTitle}
-        disabled={a.body !== 'base' || !picker?.options.length} style={{ flex: '1 1 0', minWidth: 0 }}
-        onChange={(e) => onChange({ state: e.target.value })}>
-        {a.body === 'base' && picker?.options.length
-          ? picker.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)
-          : <option value="">{t('None (at rest)')}</option>}
-      </select>
+      {groups.map((g) => (
+        <select key={g.id} value={g.id in a.poses ? a.poses[g.id] : g.preview_pose} data-testid="place-pose"
+          title={`${g.id} — ${t('Preview only — nothing is saved, nothing runs.')}`} style={{ flex: '1 1 0', minWidth: 0 }}
+          onChange={(e) => onChange({ poses: { ...a.poses, [g.id]: e.target.value } })}>
+          <option value="">{t('Rest')}</option>
+          {g.poses.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      ))}
       {missing ? <div className="ga-hint" style={{ flexBasis: '100%', color: 'var(--danger, #f85149)' }}>{missing}</div> : null}
     </div>
   )
@@ -237,12 +237,12 @@ function useBuiltCharacters() {
 const memoKey = (kind: string) => `anima.placePreview.${kind}`
 
 /** Ruling A129.8: what the Places view keeps when the clip changes (tab state, for this page load): the camera, and
- *  per place INDEX the person, body and state — restored on the new clip's places with that index. */
+ *  per place INDEX the person, body and poses — restored on the new clip's places with that index. */
 const placeMemory: { camera: { pos: [number, number, number]; target: [number, number, number] } | null
-  byIndex: Record<number, { character: string; role: string; body: Assignment['body']; state: string }> } = {
+  byIndex: Record<number, { character: string; role: string; body: Assignment['body']; poses: Record<string, string> }> } = {
   camera: null, byIndex: {} }
 
-/** Ruling A150: the persons, bodies and states last picked per place index, remembered in this browser across page
+/** Ruling A150: the persons, bodies and poses last picked per place index, remembered in this browser across page
  *  loads and server restarts (localStorage; the server has no per-user preference store). */
 const PEOPLE_KEY = 'anima.placePreview.people'
 function loadPeople(): typeof placeMemory.byIndex {
@@ -455,10 +455,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const fill = (all: boolean) => {
     const names = chars ? [...chars.filter((c) => c.built).map((c) => c.name), MANNEQUIN] : null
     const plan = planFill(places.map((p) => ({ letter: p.letter, markerId: p.marker.id, group: p.marker.group })),
-      { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES })
+      { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES,
+        body: (name) => defaultBody(plain[name], name === MANNEQUIN) })
     const next = { ...plan.assign }
     if (!all) {
-      // A129.8: the persons, bodies and states picked on the last clip, per place index — only on the places the
+      // A129.8: the persons, bodies and poses picked on the last clip, per place index — only on the places the
       // default fill gives this clip; a remembered figure never adds a place the clip does not take (a place
       // remembered from "Fill all" stays empty). A place remembered EMPTY stays empty.
       const rl = solo ? [''] : roleList
@@ -468,11 +469,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       const gone: string[] = []
       places.forEach((p, i) => {
         const m = memo[i]
-        if (!m || !(p.letter in plan.assign)) return
+        // An entry without `poses` (remembered before the pose pickers) is not read.
+        if (!m || !m.poses || typeof m.poses !== 'object' || !(p.letter in plan.assign)) return
         if (!m.character) { delete next[p.letter]; return }
         if (!known.has(m.character)) { if (!gone.includes(m.character)) gone.push(m.character); return }
         const role = next[p.letter]?.role ?? (rl.includes(m.role) ? m.role : rl[i % rl.length])
-        next[p.letter] = { character: m.character, role, body: m.body, state: m.state }
+        next[p.letter] = { character: m.character, role, body: m.body, poses: m.poses }
       })
       setGoneNote(gone)
     } else setGoneNote([])
@@ -500,31 +502,49 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     places.forEach((p, i) => {
       const a = assign[p.letter]
       placeMemory.byIndex[i] = a?.character
-        ? { character: a.character, role: a.role, body: a.body, state: a.state }
-        : { character: '', role: '', body: 'outfit', state: '' }
+        ? { character: a.character, role: a.role, body: a.body, poses: a.poses }
+        : { character: '', role: '', body: 'outfit', poses: {} }
     })
     savePeople(placeMemory.byIndex)
   }, [assign, places])
   const assigned = places.filter((p) => assign[p.letter]?.character)
   const plain = usePlainBodies(places.map((p) => assign[p.letter]?.character || ''))
-  // A base figure's model, motion and state are part of the scene's key: a state pick or a base body that arrives
+  // A figure put on the base body while its plain body was still loading: once GET …/figure?plain=1 says there is
+  // none, it shows the outfit body (a new figure's body is the base body only when that is built).
+  useEffect(() => {
+    const flip = Object.keys(assign).filter((l) => assign[l].body === 'base' && assign[l].character !== MANNEQUIN
+      && plain[assign[l].character] === null)
+    if (!flip.length) return
+    setAssign((cur) => {
+      const next = { ...cur }
+      for (const l of flip) if (next[l]) next[l] = { ...next[l], body: 'outfit', poses: {} }
+      return next
+    })
+  }, [assign, plain])
+  // The group poses in effect on a base figure (its picks, else each group's preview_pose), as the request parameter.
+  const posesOf = (a: Assignment) => a.body === 'base' ? posesParam(effectivePoses(plain[a.character]?.groups ?? [], a.poses)) : ''
+  // A base figure's model, motion and poses are part of the scene's key: a pose pick or a base body that arrives
   // rebuilds the scene with the right model.
-  const [stateMotions, setStateMotions] = useState<Record<string, SecondaryMotionPayload | null>>({})
+  const [poseMotions, setPoseMotions] = useState<Record<string, SecondaryMotionPayload | null>>({})
   useEffect(() => {
     for (const p of assigned) {
       const a = assign[p.letter]
-      const k = `${a.character}|${a.state}`
-      if (a.body !== 'base' || !a.state || k in stateMotions || !plain[a.character]) continue
-      setStateMotions((cur) => ({ ...cur, [k]: null }))
-      apiGet<{ motion: SecondaryMotionPayload }>(stateMotionUrl(a.character, a.state))
-        .then((d) => setStateMotions((cur) => ({ ...cur, [k]: d.motion })))
+      const base = plain[a.character]
+      if (a.body !== 'base' || !base) continue
+      const poses = effectivePoses(base.groups, a.poses)
+      const k = `${a.character}|${posesParam(poses)}`
+      if (!posesParam(poses) || k in poseMotions) continue
+      setPoseMotions((cur) => ({ ...cur, [k]: null }))
+      apiGet<{ motion: SecondaryMotionPayload }>(poseMotionUrl(a.character, poses))
+        .then((d) => setPoseMotions((cur) => ({ ...cur, [k]: d.motion })))
         .catch(() => { /* the figure keeps the rest motion */ })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assign, plain])
   const assignKey = JSON.stringify(assigned.map((p) => {
     const a = assign[p.letter]
-    return [p.letter, a, a.body === 'base' ? [plain[a.character]?.url ?? '', !!stateMotions[`${a.character}|${a.state}`]] : 0]
+    const k = `${a.character}|${posesOf(a)}`
+    return [p.letter, a, a.body === 'base' ? [plain[a.character]?.url ?? '', posesOf(a), !!poseMotions[k]] : 0]
   }))
   const propName = isGround ? t('Ground (no prop)') : props?.find((p) => p.id === propId)?.name || propId
 
@@ -564,10 +584,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (raw) clipFiles.set(role, { file, raw, path: rootPath(raw, standRefM) })
         }
         // Models per character, loaded once; the mannequin is shared and never disposed here.
-        // Keyed by character + body + state: the outfit body is GET …/model3d (the game's figure), the base body
-        // `plain_body.model` of GET …/figure?plain=1 with its rest motion or the picked state's (Base body tab).
+        // Keyed by character + body + poses: the outfit body is GET …/model3d (the game's figure), the base body
+        // `plain_body.model` of GET …/figure?plain=1 with its rest motion or the picked poses' (pose-motion).
         const modelKey = (a: Assignment) => a.character === MANNEQUIN ? MANNEQUIN
-          : a.body === 'base' ? `${a.character}|base|${a.state}` : a.character
+          : a.body === 'base' ? `${a.character}|base|${posesOf(a)}` : a.character
         const models = new Map<string, { template: Object3D; answer: ModelAnswer | null; record: HairStrandRecord | null; owned: boolean }>()
         for (const a of assigned.map((p) => assign[p.letter])) {
           const name = a.character
@@ -581,7 +601,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (a.body === 'base') {
             const base = plain[name]
             if (!base) continue
-            const motion = (a.state ? stateMotions[`${name}|${a.state}`] : null) ?? base.motion
+            const poses = posesOf(a)
+            const motion = (poses ? poseMotions[`${name}|${poses}`] : null) ?? base.motion
             const gltf = await gltfLoader.loadAsync(base.url).catch(() => null)
             if (gltf) models.set(mk, { template: gltf.scene, answer: { model: { url: base.url, collision: base.collision }, motion },
               record: null, owned: true })
@@ -1678,10 +1699,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                           const v = e.target.value
                           setAssign((cur) => {
                             const next = { ...cur }
-                            const built = !!chars?.find((c) => c.name === v)?.built
                             if (!v) delete next[p.letter]
                             else next[p.letter] = { character: v, role: cur[p.letter]?.role ?? (solo ? '' : roleList[p.slot % roleList.length]),
-                              body: built || v === MANNEQUIN ? 'outfit' : 'base', state: '' }
+                              body: defaultBody(plain[v], v === MANNEQUIN), poses: {} }
                             return next
                           })
                         }}>
