@@ -14,7 +14,7 @@ Fields:
 - "length_m", in metres: for a skirt or a dress how far it reaches DOWN FROM THE WAIST — mini 0.30-0.38, above the knee 0.40-0.48, knee-length 0.50-0.58, midi 0.65-0.78, ankle-length 0.85-1.00. For a top or a jacket how far it reaches DOWN FROM THE SHOULDER — cropped 0.35-0.42, at the waist 0.45-0.50, at the hips 0.55-0.62, a long jacket or tunic 0.65-0.85.
 - "flare" (skirt and dress only): how much wider the hem is than the hips, 0.0 to 1.0: pencil / straight 0.0-0.1, A-line 0.3-0.5, full / pleated 0.6-0.8, circle skirt 0.9-1.0.
 - "waist_height" (skirt and dress only): "high", "natural" or "low" — where the waistband sits.
-- "slit" (skirt and dress only): "none", "left", "right", "front" or "back" — "left"/"right" are the WEARER's sides.
+- "slit" (skirt and dress only): "none", "left", "right", "front", "back", "front_left" or "front_right" — "left"/"right" are the WEARER's sides at the side seams; "front_left"/"front_right" a slit in the front a hand's width beside the centre, and the overlapping edge of a wrap skirt.
 - "slit_m": the slit's height from the hem in metres (0 when there is none).
 - "shoulders" (dress and top): "strapless" (nothing over the shoulders), "straps" (thin or wide shoulder straps), "covered" (a bodice over the shoulders, with or without sleeves) or "off_shoulder" (an off-shoulder, Carmen or Bardot blouse or dress: the shoulders are bare, an elastic band runs across the chest, the back and the upper arms below the shoulders, and the sleeves hang from it). A top is "covered" unless it is a bodice, bustier, corset, tube top or camisole cut straight or sweetheart across the chest: "strapless" when nothing goes over the shoulders, "straps" when thin straps run from its top edge over the shoulders. Such a top starts under the arms; its "length_m" is still measured from the shoulder: to under the bust 0.22-0.28, to the waist 0.45-0.50, to the hips 0.55-0.62.
 - "sleeves" (top, jacket, dress with "covered" or "off_shoulder" shoulders): "none" (tank top, sleeveless), "cap" (just over the shoulder), "short" (t-shirt), "elbow" or "long". An "off_shoulder" piece always has "short" (also puff sleeves), "elbow" or "long" (also bell sleeves) sleeves.
@@ -37,7 +37,7 @@ Fields:
 - "side_width_m" (briefs only): the height of the side panel between the waistband and the leg opening in metres, 0.01 (string bikini) .. 0.10.
 - "sides" (briefs only): "fabric" for side panels (the usual brief, panty, hipster), "string" when only a front and a back panel are joined by thin bands over the hips — a string, string bikini, tanga, side-tie bikini, G-string or thong with string sides. With "string", "side_width_m" and "leg_length_m" are left out; a thong also takes a low "back_coverage" (0.0-0.1).
 - "string_width_m" (briefs with "sides" "string" only): the height of the hip bands in metres, 0.004 (a cord) .. 0.008 (usual) .. 0.02 (a narrow tanga band).
-- "waistband" (briefs only): "none", "thin" or "wide".
+- "waistband" (briefs and skirts only): "none", "thin" or "wide" — a skirt's sewn-on band at the top (most skirts: "wide").
 - "rise" also applies to trousers: where the waistband sits — "low" (hip-huggers), "mid" or "high" (high-waisted, up to the waist).
 - "trouser_length" (trousers only): "shorts" (mid-thigh or shorter), "knee" (bermudas, to the knee), "capri" (mid-calf), "ankle" (cropped, ends above the ankle bone) or "full" (to the shoe).
 - "leg_shape" (trousers only): "skinny" (tight along the whole leg: skinny jeans, jeggings), "straight" (the usual: jeans, chinos, suit trousers), "wide" (wide-leg, palazzo, culottes), "flared" (tight to the knee, then wider: bootcut, bell-bottoms) or "cargo" (loose, baggy, cargo or combat trousers).
@@ -68,7 +68,7 @@ Leave out the fields that do not belong to the kind. Chains, belts, buckles and 
 Judge only what the picture shows. When something is hidden, take the usual value for that kind of piece. Never describe colours, patterns, the person, the background or the picture itself.
 
 Answer with exactly one JSON object and nothing else, for example:
-{"kind": "skirt", "length_m": 0.45, "flare": 0.4, "waist_height": "natural", "slit": "none", "slit_m": 0, "fabric": "medium"}
+{"kind": "skirt", "length_m": 0.45, "flare": 0.4, "waist_height": "natural", "slit": "none", "slit_m": 0, "waistband": "wide", "fabric": "medium"}
 or
 {"kind": "top", "shoulders": "strapless", "length_m": 0.5, "fit": 0.05, "neckline": "sweetheart", "neck_depth_m": 0, "fabric": "leather_glossy"}
 or

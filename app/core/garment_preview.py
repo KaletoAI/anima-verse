@@ -696,6 +696,15 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
                                 [edge[0] + inward * 0.004, top_s], [edge[0] - inward * 0.012, top_s + 0.004]])
             mark(hx + (0.02 if s == "left" else -0.02), top_s, f"slit {round(p['slit_m'] * 100)} cm",
                  "start" if s == "left" else "end")
+        elif s in ("front_left", "front_right"):
+            # step 3b: 6 columns (0.471 rad) beside the front centre — in the front view sin(0.471) = 0.454 of the
+            # hem's half width towards that side (the wearer's left is the drawing's right)
+            side = right if s == "front_left" else left
+            xs = x0 + math.sin(6 * math.pi / 40) * (side[0][0] - x0)
+            add("slit", "cut", [[xs - 0.03, hem_y - dip - 0.02], [xs + 0.03, hem_y - dip - 0.02], [xs, top_s]])
+            mark(xs + (0.03 if s == "front_left" else -0.03), top_s,
+                 f"slit {s.replace('_', ' ')} {round(p['slit_m'] * 100)} cm",
+                 "start" if s == "front_left" else "end")
         else:
             w = 0.035 if s == "front" else 0.0
             if s == "front":

@@ -551,6 +551,7 @@ export const TEMPLATE_CHOICE_LABELS: Record<string, string> = {
   mid: 'Mid', thin: 'Thin', wide: 'Wide',
   high: 'High', natural: 'Natural', low: 'Low',
   none: 'None', left: 'Left', right: 'Right', front: 'Front', back: 'Back',
+  front_left: 'Front left', front_right: 'Front right',
   short: 'Short', long: 'Long', cap: 'Cap', elbow: 'Elbow',
   strapless: 'Strapless', straps: 'Straps', covered: 'Covered (with a bodice)',
   off_shoulder: 'Off the shoulders (Carmen)',
@@ -587,7 +588,7 @@ export function choiceLabel(key: keyof TemplateParams, choice: string): string {
 /** The parameter dialog's field labels. */
 export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   kind: 'Garment kind', length_m: 'Length below the waist', flare: 'Flare (0 straight … 1 circle)',
-  waist_height: 'Waistband', slit: 'Slit', slit_m: 'Slit height from the hem', sleeves: 'Sleeves', fabric: 'Fabric',
+  waist_height: 'Waist height', slit: 'Slit', slit_m: 'Slit height from the hem', sleeves: 'Sleeves', fabric: 'Fabric',
   shoulders: 'Shoulders', sleeve_fit: 'Sleeve fit (0 tight … 1 loose)', fit: 'Body fit (0 tight … 1 loose)',
   neckline: 'Neckline', neck_depth_m: 'Neckline depth (0 = usual)', front: 'Front', collar: 'Collar',
   opacity: 'Opacity (0.2 sheer … 1 opaque)',
