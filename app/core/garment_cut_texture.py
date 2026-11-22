@@ -1582,7 +1582,8 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     rim = post.outline_rim(reg, mask)
     cut = post.cut_and_bleed(reg, mask, max(1, int(round(post.BLEED_CM * px_per_cm))), erode_px=rim["px"])
     grown = ~np.all(cut == 255, axis=-1) | mask
-    matched, cm = post.colour_match(cut, grown, fabric=refs.get("fabric"))
+    matched, cm = post.colour_match(cut, grown, fabric=refs.get("fabric"),
+                                    base=(refs.get("colour"), (answer.get("fabric") or {}).get("answer")))
     fabric = panel_fabric(matched, islands, labels, job, px_per_cm)
     filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),

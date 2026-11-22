@@ -372,7 +372,7 @@ hold, so:
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
 
-`POST_VERSION` 9 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 10 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -424,18 +424,29 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 - The erosion is the answer's own outline width (`outline_rim`): ring k = the pixels k px inside the mask; a ring
   whose share of pixels more than `RIM_DE` 12 (ΔE76) from the median cloth colour 10–20 px deep exceeds that band's
   own share by `RIM_SHARE` 0.05 still belongs to the outline; the run of such rings from the border plus one pixel,
-  clamped to 3–10 px (`RIM_MIN_PX` / `RIM_MAX_PX`). The record keeps it under `metrics.rim`. Live 2026-11-21:
+  clamped to 3–20 px (`RIM_MIN_PX` / `RIM_MAX_PX`). The record keeps it under `metrics.rim`. Live 2026-11-21:
   MiniMax-H3 keeps a ~5 px outline and a registration a few pixels off pushes it deeper into one side, which the
-  fixed 3 px left as a grey line along Tilda's side seams (6 px now); a P-H3 answer measures 5 px.
-- `CLAMP_DE` = 25.0 — the Lab mean/std transfer onto the item's fabric (BiRefNet matte, trimmed luminance range)
-  moves the mean by at most this ΔE76; the record keeps `de_before` / `de_after` (the test jobs were too saturated).
-- `POST_VERSION` = 9 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+  fixed 3 px left as a grey line along Tilda's side seams (6 px now); a P-H3 answer measures 5 px. A second, FINE
+  pass does the same at `RIM_DE_FINE` 5 against the band 20–30 px deep (`RIM_REF_FINE_PX`, `metrics.rim.fine`) and
+  the longer run wins: MiniMax shaded the border of Lirien's plain leather with a soft darker band (L* 21–26 at 3–10
+  px against 27.6 inside, ΔE 5–8, live 2026-11-22) that the coarse pass stopped at 7 px; the bleed drew it out as
+  dark rays along every seam. It measures 14 px now.
+- `CLAMP_DE` = 25.0 — the Lab transfer onto the item's fabric (BiRefNet matte, trimmed luminance range) moves the
+  colour by at most this ΔE76; the record keeps `de_before` / `de_after` / `by` / `gain` under `metrics.colour` (the
+  test jobs were too saturated). When the item AND the answer have plain fabric (`plain` ≥ `FABRIC_MIN_PLAIN`) the
+  shift is the answer's base colour onto the item's (`fabric_colour`, the two the colour gate compares, `by` "base");
+  otherwise mean onto mean (`by` "mean": an all-over pattern). The contrast gain is capped at `SIGMA_GAIN_MAX` 1.0 —
+  the match never adds contrast: a photo's sigma is shading and highlights. Live 2026-11-22, Lirien's glossy brown
+  leather: the item's pixel mean L* 34.1 sat 5 above its base 29.1 and its sigma L* 8.6 against the plain answer's
+  1.1 gave a 7.7 x gain — the faithful answer (ΔE00 1.0 from the item) came out pale taupe with a weave of noise.
+- `POST_VERSION` = 10 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
   plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`; 8: only a whole island thinner than the erosion keeps
   its own pixels, a thin part of a cored island — a fitted border's jagged teeth, a corner — is regrown from the core:
   the teeth kept the light outline as bleed seed, a pale zigzag along Kai's jeans waist seam, live 2026-11-21; 9: the
-  composed atlas fills its background pockets, `fill_pockets`).
+  composed atlas fills its background pockets, `fill_pockets`; 10: the colour match base onto base without added
+  contrast, the fine rim pass).
 - `POCKET_CM` = 3.0 cm — after the compose, every background pixel this close to the islands + bleed, and every
   pocket they enclose, takes its nearest filled colour (`fill_pockets`, exact distance transform): the round notch
   between the two front leg islands of Lirien's trousers stayed white past the 1 cm bleed and showed as a white spot
@@ -444,11 +455,17 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   of the fabric pixels skin-coloured, `LACE_SKIN_SHARE` / `LACE_SKIN_MAX`, the YCrCb box of `skin_mask`) is keyed
   into an RGBA atlas at assembly (`garment_assembly._lace_keyed`): the gaps become the sheer base cloth — the
   threads' median colour at the piece's `opacity` — the threads stay opaque, and the material's base colour alpha
-  is 1 (the texture's alpha carries the opacity). The stored atlas stays RGB; `LACE_VERSION` is part of the
+  is 1 (the texture's alpha carries the opacity) and the piece has no sheen, clear coat or specular
+  (`garment_assembly.LACE_SURFACE`). The stored atlas stays RGB; `LACE_VERSION` is part of the
   assembly's texture identity. The model paints skin into the gaps although the prompt says "without skin"
   (Kira's lace tights, live 2026-11-22: grey-beige pantyhose on the figure). Outside that range — a plain sheer
   cloth, or a cloth that is itself skin-coloured (brown leather is 99 % "skin" in that box) — the uniform opacity
-  stays.
+  stays. Measured on Kira's tights (Blender `figure_front`, uniform white world; legs' 20th / 80th luminance
+  percentile, torso skin (200, 162, 129)): with the cotton preset's sheen the threads came out (94, 92, 92) and the gaps
+  a grey (134, 127, 126) — the grey veil and the light rim of the review; sheen off (51, 49, 49) / (116, 91, 83); sheen
+  and specular off (35, 31, 32) — the atlas's thread exactly — / (113, 85, 76), 0.57 / 0.52 / 0.59 of the torso skin
+  where the item picture's gaps sit at 0.57 / 0.56 / 0.59 of its bare thigh. Double-sided stays (single-sided:
+  gaps (142, 106, 93), lighter than the item). `LACE_VERSION` 2.
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
 ### The key `csig`

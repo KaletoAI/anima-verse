@@ -72,6 +72,17 @@ channel distance from white exceeds ``WHITE_TOL`` (24); the synthetic answers pa
     b) the same plus a grey (225) band over rows 0..5, the whole width: 2 400 px = 2.19 % of the background > 1 % ->
        the 99th percentile is 30 -> 36 -> clamped down to WHITE_TOL 24 (a shadowed background keeps the old rule).
     c) a mask over the whole canvas (no background left) -> WHITE_TOL 24.
+[10] The gain never adds contrast (``SIGMA_GAIN_MAX`` 1, POST_VERSION 10; Lirien's leather 2026-11-22: a 7.7 x gain
+    over a plain answer). The [5] island split into a left half grey 100 and a right half grey 110, the item fabric
+    half grey 60 / half grey 200 (its L* sigma ~30, the island's ~2: the old transfer multiplied the halves' gap ~15
+    x). Now gain L* = 1 (a*, b*: sigma 0 on both sides, the floor 1 on the atlas -> 0 / 1 = 0); the halves' L* gap
+    stays L*(110) - L*(100) = 46.11 - 42.37 = 3.74 (+-0.8: each half is rounded to uint8 once, one sRGB step is
+    ~0.4 L* there); ``by`` "mean".
+[11] Base onto base: the [5] island (200, 60, 60) with ``base`` = (item {lab [40, 30, 20], plain 0.3}, answer {lab
+    [45, 35, 25], plain 0.9}) and the item fabric (150, 40, 40): the shift is item - answer = (-5, -5, -5), NOT the
+    means' (which would land on (150, 40, 40)); the island's Lab = Lab(200, 60, 60) + (-5, -5, -5) (+-0.6 per
+    channel after the uint8 round trip); ``by`` "base", ``de_before`` = |(-5, -5, -5)| = 8.66, ``de_after`` 0.0 (not clamped). With
+    the item's ``plain`` 0.03 (< FABRIC_MIN_PLAIN 0.05: an all-over pattern) -> ``by`` "mean" as in [5].
 """
 import os
 import sys
@@ -268,6 +279,32 @@ b9[0:6, :] = 225
 check("[9b] a 2.19 % grey band in the background -> tol 24", ctp.answer_white_tol(b9, m9) == 24,
       str(ctp.answer_white_tol(b9, m9)))
 check("[9c] no background -> WHITE_TOL", ctp.answer_white_tol(a9, np.ones((400, 400), bool)) == ctp.WHITE_TOL)
+
+# [10] the gain never adds contrast
+img10 = img5.copy()
+img10[20:100, 30:60] = (100, 100, 100)
+img10[20:100, 60:90] = (110, 110, 110)
+item10 = item.copy()
+item10[16:80, 16:48, :3] = (60, 60, 60)
+item10[16:80, 48:80, :3] = (200, 200, 200)
+out10, inf10 = ctp.colour_match(img10, m5, item10, matte=None)
+gap10 = ctp.srgb_to_lab(out10[60, 70].astype(float))[0] - ctp.srgb_to_lab(out10[60, 40].astype(float))[0]
+check("[10] L* gap of the halves kept 3.74 +-0.8", abs(gap10 - 3.74) <= 0.8, f"{gap10:.2f}")
+check("[10] gain [1, 0, 0], by mean", inf10["gain"] == [1.0, 0.0, 0.0] and inf10["by"] == "mean", str(inf10))
+check("[10] SIGMA_GAIN_MAX 1.0", ctp.SIGMA_GAIN_MAX == 1.0, str(ctp.SIGMA_GAIN_MAX))
+
+# [11] base onto base
+base_i, base_a = {"lab": [40.0, 30.0, 20.0], "plain": 0.3}, {"lab": [45.0, 35.0, 25.0], "plain": 0.9}
+out11, inf11 = ctp.colour_match(img5, m5, item, matte=None, base=(base_i, base_a))
+got11 = ctp.srgb_to_lab(out11[60, 60].astype(float))
+want11 = ctp.srgb_to_lab(np.array([200, 60, 60], float)) - 5.0
+check("[11] island = Lab(200,60,60) - 5 per channel (+-0.6)", bool(np.all(np.abs(got11 - want11) <= 0.6)),
+      f"{got11} vs {want11}")
+check("[11] by base, de_before 8.66, de_after 0", inf11["by"] == "base" and abs(inf11["de_before"] - 8.66) <= 0.01
+      and inf11["de_after"] == 0.0, str(inf11))
+_, inf11b = ctp.colour_match(img5, m5, item, matte=None, base=({**base_i, "plain": 0.03}, base_a))
+check("[11] an all-over item (plain 0.03) -> by mean, de_before 16.53", inf11b["by"] == "mean"
+      and abs(inf11b["de_before"] - 16.53) <= 0.05, str(inf11b))
 
 print()
 if FAILS:

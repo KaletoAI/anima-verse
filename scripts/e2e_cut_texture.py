@@ -6,7 +6,7 @@ Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>[,<item id>...]] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
         [--wear <item id>[,<item id>...]] [--take-off <item id>[,...]] [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
-        [--backend-set NAME.ATTR=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep]
+        [--backend-set NAME.ATTR=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
     ./.venv/bin/python scripts/e2e_cut_texture.py --world worlds/demo --character demo --dry-run
@@ -75,7 +75,9 @@ The served figure is rendered from the front and the back (Blender ``figure_fron
 
 Exit 0 = every check passed. ``--dry-run`` answers each image job with its own template (the islands pre-filled with
 the fabric colour) and the upscale with a refusal (Lanczos fallback, counted); it renders no piece-only view (so no
-``--fresh-back-view``).
+``--fresh-back-view``). ``--dry-run --replay <dir>`` answers each image job with the raw answer an earlier run saved
+in ``<dir>`` for that item and side (``<item>_<sig>.raw_<side>.png``): a live answer re-processed through the current
+post-processing, assembly and renders with no hub job.
 """
 import argparse
 import hashlib
@@ -228,9 +230,22 @@ def install_job_guard(dry: bool) -> None:
     llm_queue.LLMQueue.submit = lambda self, *a, **k: no_llm(*a, **k)
 
 
+#: ``--replay <dir>`` (dry run only): the directory whose saved answers (``<item>_<sig>.raw_<side>.png`` of an earlier
+#: run's ``--out``) answer the image jobs in place of the templates — a live answer re-processed with no hub job.
+REPLAY: Optional[Path] = None
+
+
+def _replayed(item_id: str, side: str) -> Optional[bytes]:
+    if REPLAY is None:
+        return None
+    found = sorted(p for p in REPLAY.glob(f"{item_id}_*.raw_{side}.png"))
+    return found[0].read_bytes() if found else None
+
+
 def install_dry_hub() -> None:
-    """``--dry-run``: each image job answers with its own template (the islands pre-filled with the fabric colour), the
-    upscale is refused (the flow falls back to Lanczos), a back view is the item picture."""
+    """``--dry-run``: each image job answers with its own template (the islands pre-filled with the fabric colour) — or,
+    with ``--replay``, with the saved answer of that item and side —, the upscale is refused (the flow falls back to
+    Lanczos), a back view is the item picture."""
     from app.core import garment_cut_texture as gct
     from app.core import garment_template_views as tv
     from app.imagegen import service
@@ -243,7 +258,10 @@ def install_dry_hub() -> None:
     def routed(item_id, side, prompt_for, template_png, ref_png, seed):
         prompt = prompt_for("ordinal")
         JOBS.append({"backend": "dry", "task": f"cut:{side}", "label": prompt[:60], "t": time.time()})
-        return Path(template_png).read_bytes(), DryBackend(), None, "ordinal", prompt
+        answer = _replayed(item_id, side)
+        if answer is not None:
+            print(f"replay: {item_id} {side} answered from {REPLAY}")
+        return answer or Path(template_png).read_bytes(), DryBackend(), None, "ordinal", prompt
     gct._routed_render = routed
 
     def upscale(self, *a, **k):
@@ -605,7 +623,14 @@ def main() -> int:
     ap.add_argument("--workdir", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--replay", type=Path, default=None,
+                    help="dry run only: answer each image job with the saved raw answer of that item/side in this dir")
     args = ap.parse_args()
+    if args.replay is not None:
+        if not args.dry_run:
+            raise SystemExit("--replay needs --dry-run")
+        global REPLAY
+        REPLAY = args.replay.resolve()
     if args.dry_run and args.fresh_back_view:
         raise SystemExit("--fresh-back-view needs a live run (a dry run renders no view)")
     if not (args.instance / "config.json").is_file():

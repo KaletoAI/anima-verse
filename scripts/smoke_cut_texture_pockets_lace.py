@@ -36,6 +36,12 @@ Expected values, by hand:
 4. ``garment_assembly._lace_keyed`` with the 3. picture as PNG bytes and opacity 0.4: an RGBA PNG whose pixel (0, 9)
    has alpha 102, ``info["lace"]["skin_share"]`` 0.4; the all-thread picture comes back as the SAME bytes with
    ``info["lace"]`` None.
+5. The keyed piece's surface (``garment_assembly.LACE_SURFACE``, ``LACE_VERSION`` 2): merged over a cotton preset with a
+   sheen (``{"pbrMetallicRoughness": {"roughnessFactor": 0.95}, "extensions": {"KHR_materials_sheen": {...}}}``) and the
+   sheer overrides at 0.4, the result keeps roughness 0.95, has baseColorFactor [1, 1, 1, 1] (the alpha is in the
+   texture), ``KHR_materials_sheen`` and ``KHR_materials_clearcoat`` None (the graft drops a None key) and
+   ``KHR_materials_specular`` {"specularFactor": 0.0}; alphaMode BLEND and doubleSided True stay (measured: single-
+   sided gaps came out lighter than the item's, see the constant's comment).
 """
 import io
 import os
@@ -141,6 +147,20 @@ plain = png(np.full((10, 10, 3), 30, np.uint8), "RGB")
 same, pinfo = garment_assembly._lace_keyed(plain, 0.4, {"texture": "cut"})
 check("4 no lace: same bytes", same == plain, True)
 check("4 no lace: info lace None", pinfo.get("lace", "missing"), None)
+
+# 5
+from app.core import garment_template  # noqa: E402
+
+cotton = {"pbrMetallicRoughness": {"roughnessFactor": 0.95},
+          "extensions": {"KHR_materials_sheen": {"sheenColorFactor": [0.5, 0.5, 0.5], "sheenRoughnessFactor": 0.8}}}
+sheer_ov = garment_template.material_overrides({"fabric": "sheer", "opacity": 0.4})
+m5 = garment_assembly._merge_overrides(garment_assembly._merge_overrides(cotton, sheer_ov), garment_assembly.LACE_SURFACE)
+check("5 roughness kept", m5["pbrMetallicRoughness"]["roughnessFactor"], 0.95)
+check("5 base colour factor 1", m5["pbrMetallicRoughness"]["baseColorFactor"], [1.0, 1.0, 1.0, 1.0])
+check("5 extensions", m5["extensions"], {"KHR_materials_sheen": None, "KHR_materials_clearcoat": None,
+                                         "KHR_materials_specular": {"specularFactor": 0.0}})
+check("5 still blended, both sides", (m5["alphaMode"], m5["doubleSided"]), ("BLEND", True))
+check("5 LACE_VERSION", post.LACE_VERSION, 2)
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

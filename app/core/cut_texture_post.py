@@ -59,18 +59,29 @@ CLAMP_DE = 25.0
 #: outline that the fixed 3 px left as a line along every seam. 8 (2026-11-21): only a whole island thinner than the
 #: erosion keeps its own pixels; a thin part of an island with a core (a jagged fitted border's teeth, a corner) is
 #: regrown from the core — the teeth kept the light outline as bleed seed (``cut_and_bleed``). 9 (2026-11-22): the
-#: composed atlas fills the background pockets near and between the islands (``fill_pockets``).
-POST_VERSION = 9
+#: composed atlas fills the background pockets near and between the islands (``fill_pockets``). 10 (2026-11-22): the
+#: colour match never adds contrast (``SIGMA_GAIN_MAX``) and moves base onto base when item and answer both have plain
+#: fabric (``colour_match`` ``base``); the erosion before the bleed also takes a soft shading band inside the outline
+#: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20).
+POST_VERSION = 10
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
 #: band ``RIM_REF_PX`` deep inside the islands is off; a ring with ``RIM_SHARE`` more off pixels than that band still
 #: belongs to the outline.
 RIM_MIN_PX = 3
-RIM_MAX_PX = 10
+RIM_MAX_PX = 20
 RIM_DE = 12.0
 RIM_SHARE = 0.05
 RIM_REF_PX = (10, 20)
+#: The second, FINE pass of ``outline_rim``: a pixel more than ``RIM_DE_FINE`` from the median of the deeper band
+#: ``RIM_REF_FINE_PX`` is off. MiniMax shades a plain piece's border with a soft darker band inside its outline (Lirien's
+#: brown leather, live 2026-11-22, registered front answer: ring L* 26.5 / 21.4 / 21.4 / 23.0 / 24.3 / 25.1 / 25.7 /
+#: 26.2 at 3..10 px against 27.6 at 16..25 px, dE 5..8 — under ``RIM_DE``, so the coarse pass stopped at 7 px and the
+#: bleed drew the band out as dark rays along every seam). The fine band's own share sets the bar, so a weave or a
+#: print that is off everywhere raises it and only a real border band counts.
+RIM_DE_FINE = 5.0
+RIM_REF_FINE_PX = (20, 30)
 
 #: Registration (the constants of ``bake_register``; the grid is finer: the atlas is one big picture).
 GRID = 256
@@ -84,6 +95,9 @@ MIN_STEP_LOG, MIN_STEP_OFF = 0.004, 0.003
 FABRIC_TRIM = 0.05
 #: ``colour_match``: the floor of the atlas' per-channel std (a uniform island: the transfer is a mean shift).
 SIGMA_FLOOR = 1.0
+#: ``colour_match``: the per-channel contrast gain is at most this — the match never adds contrast the answer does
+#: not have (2026-11-22, Lirien's leather: the item photo's shading gave a 7.7 x gain over a plain answer).
+SIGMA_GAIN_MAX = 1.0
 
 
 # ---------------------------------------------------------------------------------------------------------------- masks
@@ -413,38 +427,55 @@ def gate(img: np.ndarray, mask: np.ndarray, labels: np.ndarray, px_per_cm: float
 # ------------------------------------------------------------------------------------------------------- cut and bleed
 
 def outline_rim(img, mask) -> dict:
-    """How far the answer's outline reaches into the islands: ``{"px", "share", "ref"}``. Ring k = the pixels k px
-    inside the mask's border; ``share`` per ring = its pixels more than ``RIM_DE`` from the median colour of the band
-    ``RIM_REF_PX`` deep inside, ``ref`` the same share in that band (the cloth's own weave and print). ``px`` = the
-    length of the unbroken run of rings from the border whose share exceeds ``ref + RIM_SHARE``, plus one pixel of
-    margin (0 when none does), clamped to ``[RIM_MIN_PX, RIM_MAX_PX]``; islands too thin for the band keep
-    ``RIM_MIN_PX``. A SHARE, not a ring median: a registration a few pixels off pushes the outline deep into ONE side
-    only, which a median over the whole ring does not see — and the 3 px erosion before left exactly that side's
-    outline to seed the bleed (live 2026-11-21, Tilda's cream blouse on MiniMax-H3: a grey line along the side seams).
+    """How far the answer's outline reaches into the islands: ``{"px", "share", "ref", "fine"}``. Ring k = the pixels
+    k px inside the mask's border; ``share`` per ring = its pixels more than ``RIM_DE`` from the median colour of the
+    band ``RIM_REF_PX`` deep inside, ``ref`` the same share in that band (the cloth's own weave and print). The run =
+    the length of the unbroken run of rings from the border whose share exceeds ``ref + RIM_SHARE``. The FINE pass
+    (``fine``: ``{"share", "ref"}``, None when no pixel lies ``RIM_REF_FINE_PX[1]`` deep) does the same at
+    ``RIM_DE_FINE`` against the deeper band ``RIM_REF_FINE_PX`` and catches a soft shading band inside the outline.
+    ``px`` = the longer run plus one pixel of margin (0 when neither has one), clamped to ``[RIM_MIN_PX,
+    RIM_MAX_PX]``; islands too thin for the band keep ``RIM_MIN_PX``. A SHARE, not a ring median: a registration a
+    few pixels off pushes the outline deep into ONE side only, which a median over the whole ring does not see — and
+    the 3 px erosion before left exactly that side's outline to seed the bleed (live 2026-11-21, Tilda's cream blouse
+    on MiniMax-H3: a grey line along the side seams).
 
     Hand-measured on the live answers of 2026-11-21 (registered into the template frame): Tilda (MiniMax) ref 0.009,
     rings 0..4 at 0.82 / 0.65 / 0.35 / 0.19 / 0.062 (> 0.059), ring 5 at 0.007 -> run 5 -> 6 px; Kai's P-H3 answer ref
-    0.053, rings 0..3 at 0.83 / 0.62 / 0.35 / 0.135 (> 0.103), ring 4 at 0.095 -> run 4 -> 5 px."""
+    0.053, rings 0..3 at 0.83 / 0.62 / 0.35 / 0.135 (> 0.103), ring 4 at 0.095 -> run 4 -> 5 px. Lirien's leather
+    (MiniMax, 2026-11-22): coarse ref 0.0, run 6 (ring 5 at 0.066 > 0.05, ring 6 at 0.031) -> 7 px before; fine ref
+    0.0, rings 0..13 at 0.999 / 0.988 / 0.941 / 0.847 / 0.782 / 0.662 / 0.495 / 0.338 / 0.238 / 0.163 / 0.119 / 0.098 /
+    0.071 / 0.044 -> run 13 (ring 13 <= 0.05) -> 14 px."""
     mask = np.asarray(mask, bool)
     lab = srgb_to_lab(np.asarray(img)[..., :3])
     layers = [mask]
-    for _ in range(RIM_REF_PX[1]):
+    for _ in range(max(RIM_REF_PX[1], RIM_REF_FINE_PX[1])):
         layers.append(erode(layers[-1], 1))
-    band = layers[RIM_REF_PX[0]] & ~layers[RIM_REF_PX[1]]
-    if not band.any():
-        return {"px": RIM_MIN_PX, "share": [], "ref": None}
-    dist = np.linalg.norm(lab - np.median(lab[band], axis=0), axis=-1)
-    ref = float((dist[band] > RIM_DE).mean())
-    shares, run, off = [], 0, True
-    for k in range(RIM_MAX_PX):
-        ring = layers[k] & ~layers[k + 1]
-        share = float((dist[ring] > RIM_DE).mean()) if ring.any() else 0.0
-        shares.append(round(share, 3))
-        if off and share > ref + RIM_SHARE:
-            run = k + 1
-        else:
-            off = False
-    return {"px": int(min(RIM_MAX_PX, max(RIM_MIN_PX, run + 1 if run else 0))), "share": shares, "ref": round(ref, 3)}
+
+    def run_of(de: float, ref_px: tuple) -> tuple[int, list, float] | None:
+        band = layers[ref_px[0]] & ~layers[ref_px[1]]
+        if not band.any():
+            return None
+        dist = np.linalg.norm(lab - np.median(lab[band], axis=0), axis=-1)
+        ref = float((dist[band] > de).mean())
+        shares, run, on = [], 0, True
+        for k in range(RIM_MAX_PX):
+            ring = layers[k] & ~layers[k + 1]
+            share = float((dist[ring] > de).mean()) if ring.any() else 0.0
+            shares.append(round(share, 3))
+            if on and share > ref + RIM_SHARE:
+                run = k + 1
+            else:
+                on = False
+        return run, shares, ref
+
+    coarse = run_of(RIM_DE, RIM_REF_PX)
+    if coarse is None:
+        return {"px": RIM_MIN_PX, "share": [], "ref": None, "fine": None}
+    fine = run_of(RIM_DE_FINE, RIM_REF_FINE_PX)
+    run = max(coarse[0], fine[0] if fine else 0)
+    return {"px": int(min(RIM_MAX_PX, max(RIM_MIN_PX, run + 1 if run else 0))), "share": coarse[1],
+            "ref": round(coarse[2], 3),
+            "fine": {"share": fine[1], "ref": round(fine[2], 3)} if fine else None}
 
 
 def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.ndarray:
@@ -516,8 +547,9 @@ def fill_pockets(img, filled, reach_px: int) -> tuple[np.ndarray, np.ndarray]:
 #: box holds browns too: Lirien's brown leather is 99 % "skin"), no lace either.
 LACE_SKIN_SHARE = 0.10
 LACE_SKIN_MAX = 0.70
-#: Bumped when ``lace_alpha`` changes (part of the assembly's texture identity, ``garment_assembly._texture_state``).
-LACE_VERSION = 1
+#: Bumped when ``lace_alpha`` or the keyed piece's surface (``garment_assembly.LACE_SURFACE``) changes (part of the
+#: assembly's texture identity, ``garment_assembly._texture_state``). 2 (2026-11-22): no sheen / clear coat / specular.
+LACE_VERSION = 2
 
 
 def lace_alpha(rgb, opacity: float, skin_mask) -> tuple[np.ndarray | None, dict]:
@@ -592,13 +624,26 @@ def picture_reference(rgba: np.ndarray, *, matte=garment_matte.birefnet_matte) -
 
 
 def colour_match(img, mask, item_rgba: np.ndarray | None = None, *, matte=garment_matte.birefnet_matte,
-                 fabric: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
-    """The islands' colours moved onto the item fabric's: per Lab channel ``(x - mu_atlas) * (sigma_item /
-    sigma_atlas) + mu_item`` (``sigma_atlas`` floored at ``SIGMA_FLOOR``), the mean shift clamped to ``CLAMP_DE``
-    (dE76). Only mask pixels change. The fabric colours are ``fabric`` when given (``picture_reference``), else
-    ``fabric_pixels(item_rgba)``. Returns the (h, w, 3) uint8 image and ``{"de_before", "de_after", "clamped"}``
-    (``de_*`` = dE76 of the island mean against the fabric mean); nothing to match (no mask, no fabric) -> the image
-    unchanged and ``{"skipped": reason}``."""
+                 fabric: np.ndarray | None = None, base: tuple | None = None) -> tuple[np.ndarray, dict]:
+    """The islands' colours moved onto the item fabric's: per Lab channel ``(x - mu_atlas) * gain + mu_atlas +
+    shift`` with ``gain = min(SIGMA_GAIN_MAX, sigma_item / sigma_atlas)`` (``sigma_atlas`` floored at
+    ``SIGMA_FLOOR``) and ``shift = mu_item - mu_atlas``, clamped to ``CLAMP_DE`` (dE76). Only mask pixels change. The
+    fabric colours are ``fabric`` when given (``picture_reference``), else ``fabric_pixels(item_rgba)``.
+
+    ``base`` = ``(item fabric_colour, answer fabric_colour)`` (the answer gate's two dicts): when BOTH have plain
+    fabric (``plain`` >= ``FABRIC_MIN_PLAIN``) the shift is base onto base (``item.lab - answer.lab``), not mean onto
+    mean — a photo's highlights and shading lift and grey the mean of its pixels (Lirien's brown leather, live
+    2026-11-22: item mean L* 34.1 against its base 29.1, so a faithful answer at base L* 27.1 was lightened to taupe),
+    and the base is what the gate compared. ``info["by"]`` = "base" or "mean".
+
+    The gain never ADDS contrast: a photo's sigma is shading, highlights and folds, not the cloth's pattern, and the
+    same answer (sigma L* 1.1 against the item's 8.6) was multiplied 7.7 x — a weave of noise over the plain leather
+    and the bleed's faint seam residue turned into dark and light streaks.
+
+    Returns the (h, w, 3) uint8 image and ``{"de_before", "de_after", "clamped", "by", "gain"}`` (``de_before`` =
+    dE76 of the shift; ``de_after`` = the island mean against the item's for "mean", the clamp's residual for
+    "base"); nothing to match
+    (no mask, no fabric) -> the image unchanged and ``{"skipped": reason}``."""
     rgb = np.asarray(img)[..., :3].astype(np.uint8)
     mask = np.asarray(mask, bool)
     out = rgb.copy()
@@ -611,16 +656,26 @@ def colour_match(img, mask, item_rgba: np.ndarray | None = None, *, matte=garmen
     mu_i, sd_i = item_lab.mean(0), item_lab.std(0)
     lab = srgb_to_lab(rgb[mask].astype(np.float64))
     mu_a, sd_a = lab.mean(0), np.maximum(lab.std(0), SIGMA_FLOOR)
-    shift = mu_i - mu_a
+    gain = np.minimum(SIGMA_GAIN_MAX, sd_i / sd_a)
+    item_base, answer_base = base if base else (None, None)
+    by_base = bool(item_base and answer_base
+                   and float(item_base.get("plain", 0.0)) >= FABRIC_MIN_PLAIN
+                   and float(answer_base.get("plain", 0.0)) >= FABRIC_MIN_PLAIN)
+    src, dst = ((np.asarray(answer_base["lab"], float), np.asarray(item_base["lab"], float)) if by_base
+                else (mu_a, mu_i))
+    shift = dst - src
     de_before = float(np.linalg.norm(shift))
     clamped = de_before > CLAMP_DE
     if clamped:
         shift = shift * (CLAMP_DE / de_before)
-    new = (lab - mu_a) * (sd_i / sd_a) + mu_a + shift
+    new = (lab - mu_a) * gain + mu_a + shift
     out[mask] = np.clip(np.rint(lab_to_srgb(new)), 0, 255).astype(np.uint8)
-    after = srgb_to_lab(out[mask].astype(np.float64)).mean(0)
-    return out, {"de_before": round(de_before, 3), "de_after": round(float(np.linalg.norm(after - mu_i)), 3),
-                 "clamped": bool(clamped)}
+    # what is left: the island mean against the item's (by mean) / the shift's own residual (by base: non-zero only
+    # when clamped)
+    moved = srgb_to_lab(out[mask].astype(np.float64)).mean(0) if not by_base else src + shift
+    return out, {"de_before": round(de_before, 3), "de_after": round(float(np.linalg.norm(moved - dst)), 3),
+                 "clamped": bool(clamped), "by": "base" if by_base else "mean",
+                 "gain": [round(float(g), 3) for g in gain]}
 
 
 # ------------------------------------------------------------------------------------------------------ fabric colour

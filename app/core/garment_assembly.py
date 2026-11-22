@@ -669,6 +669,22 @@ def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) ->
     return info
 
 
+#: The material keys of a lace-keyed sheer piece (``_lace_keyed``): the base colour factor 1 (the keyed atlas's alpha
+#: holds the sheer opacity, the factor must not multiply it a second time), and no sheen, clear coat or specular — the
+#: threads read as the atlas's own colour. Measured 2026-11-22 on Kira's lace tights (Blender ``figure_front``, the
+#: uniform white world, legs 0.55..0.85 of the height): with the cotton preset's sheen (roughness 0.95) the threads
+#: (20th luminance percentile) came out (94, 92, 92) and the gaps (80th) a grey (134, 127, 126) for the atlas's
+#: thread (36, 31, 32) — the reported grey veil and light rim; sheen dropped (51, 49, 49) / (116, 91, 83); sheen and
+#: specular dropped (35, 31, 32) / (113, 85, 76) — the thread exactly, the gap at 0.57 / 0.52 / 0.59 of the bare torso
+#: skin (200, 162, 129), the item picture's gaps at 0.57 / 0.56 / 0.59 of its bare thigh. Double-sided stays: drawn
+#: single-sided the gaps were (142, 106, 93), lighter than the item's.
+LACE_SURFACE: Dict[str, Any] = {
+    "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]},
+    "extensions": {"KHR_materials_sheen": None, "KHR_materials_clearcoat": None,
+                   "KHR_materials_specular": {"specularFactor": 0.0}},
+}
+
+
 def _lace_keyed(atlas: bytes, opacity: float, info: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
     """Live 2026-11-22 (Kira's lace tights): a SHEER piece's cut atlas that shows skin in the lace's gaps
     (``cut_texture_post.lace_alpha``) is keyed into an RGBA atlas — the gaps the sheer base cloth at ``opacity``, the
@@ -1269,8 +1285,7 @@ def _build(character_name: str, directory: Path, bare: Path,
             from app.core import garment_template
             overrides = _merge_overrides(overrides, garment_template.material_overrides(_template_params(garment)))
             if _apply_cut_atlas(character_name, garment, mesh).get("lace"):
-                # the keyed atlas's alpha holds the sheer opacity: the factor must not multiply it a second time
-                overrides = _merge_overrides(overrides, {"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}})
+                overrides = _merge_overrides(overrides, LACE_SURFACE)
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
             # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the
