@@ -889,6 +889,25 @@ def _anthropic_finish_reason(stop_reason: Optional[str]) -> Optional[str]:
     }.get(stop_reason, stop_reason)
 
 
+# Sampling parameters a newer Claude model rejects with a 400 whose message
+# says the parameter "is deprecated for this model" (temperature, top_p, top_k
+# were removed for current models). Older models still accept them.
+_ANTHROPIC_SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
+
+# (base_url, model) pairs whose API rejected a sampling parameter. Learned from
+# the answer itself, never from a model name; a process restart forgets it and
+# costs one rejected call per model.
+_anthropic_no_sampling: set = set()
+
+
+def _is_sampling_deprecated_error(exc: Exception) -> bool:
+    """True for the 400 an Anthropic model answers to a removed sampling parameter."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    text = str(getattr(exc, "message", "") or exc).lower()
+    return "deprecated" in text and any(p in text for p in _ANTHROPIC_SAMPLING_PARAMS)
+
+
 class AnthropicLLMClient:
     """LLM client for Anthropic Claude models (native SDK).
 
@@ -938,15 +957,40 @@ class AnthropicLLMClient:
         # This Anthropic SDK has no temperature kwarg; send it through the
         # supported extra_body channel, then let explicit params override it.
         # The SDK overlays extra_body onto max_tokens as well as temperature.
-        kwargs["extra_body"] = merge_extra_params(
-            {"temperature": self.temperature}, self.extra_params)
+        extra = merge_extra_params({"temperature": self.temperature}, self.extra_params)
+        if self._sampling_key() in _anthropic_no_sampling:
+            extra = {k: v for k, v in extra.items() if k not in _ANTHROPIC_SAMPLING_PARAMS}
+        if extra:
+            kwargs["extra_body"] = extra
         return _merge_sdk_dict_fields(kwargs)
+
+    def _sampling_key(self) -> Tuple[str, str]:
+        return (self.base_url, self.model)
+
+    def _learn_no_sampling(self, exc: Exception) -> bool:
+        """Records a rejected sampling parameter; True when a retry without it can help."""
+        if not _is_sampling_deprecated_error(exc):
+            return False
+        key = self._sampling_key()
+        if key in _anthropic_no_sampling:
+            return False  # already sent without sampling — the error is something else
+        _anthropic_no_sampling.add(key)
+        logger.info("Anthropic model %s rejects sampling parameters (%s) — "
+                    "sending without temperature/top_p/top_k from now on",
+                    self.model, str(getattr(exc, "message", "") or exc)[:200])
+        return True
 
     def invoke(self, messages: List) -> LLMResponse:
         """Synchronous LLM call."""
         system_msg, msgs = _split_anthropic_messages(messages)
-        with _quota_attempt(self):
-            resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
+        try:
+            with _quota_attempt(self):
+                resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
+        except Exception as e:
+            if not self._learn_no_sampling(e):
+                raise
+            with _quota_attempt(self):
+                resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
 
         content = ""
         for block in resp.content:
@@ -959,7 +1003,21 @@ class AnthropicLLMClient:
         return LLMResponse(content=content, usage=usage, finish_reason=finish)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
-        """Async streaming generator."""
+        """Async streaming generator.
+
+        A removed sampling parameter is rejected when the stream opens, before
+        any text is yielded, so the one retry without it never repeats output.
+        """
+        try:
+            async for chunk in self._astream_once(messages):
+                yield chunk
+        except Exception as e:
+            if not self._learn_no_sampling(e):
+                raise
+            async for chunk in self._astream_once(messages):
+                yield chunk
+
+    async def _astream_once(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
         system_msg, msgs = _split_anthropic_messages(messages)
         with _quota_attempt(self):
             async with self._async.messages.stream(
