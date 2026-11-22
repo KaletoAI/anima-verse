@@ -848,12 +848,13 @@ def job_labels(islands: dict, size: int, job: str) -> np.ndarray:
 BACK_ZOOM_MARGIN = 0.12
 
 
-def job_frame(islands: dict, job: str, size: int) -> dict | None:
-    """The zoom frame of ``job``'s template (``BACK_ZOOM_MARGIN``; the back job only): ``{"ox", "oy", "side", "k"}``
-    — the atlas square ``[ox, ox + side) x [oy, oy + side)`` (integers, may reach past the atlas edge) is scaled by
-    ``k = size / side`` onto the template. None for the front job, for a job without islands, or when the crop would
-    not enlarge (``side >= size``)."""
-    if job != "back":
+def job_frame(islands: dict, job: str, size: int, *, zoom_front: bool = False) -> dict | None:
+    """The zoom frame of ``job``'s template (``BACK_ZOOM_MARGIN``; the back job, the front job too with
+    ``zoom_front`` — a piece with held trims, ``held_trims``): ``{"ox", "oy", "side", "k"}`` — the atlas square
+    ``[ox, ox + side) x [oy, oy + side)`` (integers, may reach past the atlas edge) is scaled by ``k = size / side``
+    onto the template. None for an unzoomed front job, for a job without islands, or when the crop would not enlarge
+    (``side >= size``)."""
+    if job != "back" and not zoom_front:
         return None
     scale = size / float(islands.get("atlas_px") or size)
     pts = [np.asarray(i.get("verts_px") or [], float).reshape(-1, 2) * scale
@@ -1616,19 +1617,62 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
             "_image": filled, "_grown": grown, "_mask": mask, "_fabric": fabric}
 
 
-def job_template(islands: dict, parts: dict, job: str, size: int, fill=None) -> Image.Image:
+#: Live test 2026-11-22 (Tilda's wool skirt, a 1-row waistband 21 px high beside the front panel): MiniMax painted
+#: the thin strip twice as high (spill 0.07, iou 0.87) and P-H3 left it out and blew the panel up to the frame
+#: (waistband coverage 0.00) — yet a plain trim's pixels never come from the answer (``fill_fabric``). So for these
+#: prompt kinds the plain trims are HELD: the template and the gates hold the model's parts only (zoomed like the
+#: back job), the trims are filled with the panel's fabric in the atlas frame afterwards. The tops and group A keep
+#: their tested templates.
+HELD_TRIM_KINDS = ("skirt", "strapless")
+
+
+def held_trims(kind, sleeve_print: str = "plain") -> bool:
+    """Whether a piece of prompt kind ``kind`` (``item_kind``) holds its plain trims back from the model
+    (``HELD_TRIM_KINDS``; never with ``sleeve_print`` "picture": the trims then come from the answer)."""
+    return str(kind or "") in HELD_TRIM_KINDS and sleeve_print != "picture"
+
+
+def sent_islands(islands: dict, job: str, sleeve_print: str = "plain", *, drop: bool = False) -> dict:
+    """``islands`` as the model sees ``job`` with held trims: the job's islands outside ``model_parts`` lose their
+    geometry (names kept — the label ids are the sorted names, ``island_ids``) or, with ``drop`` (the prompt's
+    words), leave the list."""
+    import copy
+    keep = model_parts(job, sleeve_print)
+    out = copy.deepcopy(islands)
+    kept = []
+    for isl in out.get("islands", []):
+        name = str(isl["name"])
+        if job_of(name) == job and part_of(name) not in keep:
+            if drop:
+                continue
+            isl["verts_px"], isl["tris"] = [], []
+            isl.pop("bbox_px", None)
+        kept.append(isl)
+    out["islands"] = kept
+    return out
+
+
+def job_template(islands: dict, parts: dict, job: str, size: int, fill=None, *, held: bool = False,
+                 sleeve_print: str = "plain") -> Image.Image:
     """The template the ``job`` sends as the first image: ``render_template`` of its islands, in its zoom frame
-    (``job_frame``) when it has one."""
-    frame = job_frame(islands, job, size)
-    sub = split_islands(zoom_payload(islands, job, frame, size))[job] if frame else parts[job]
+    (``job_frame``) when it has one; with ``held`` (``held_trims``) the model's parts only, the front zoomed too."""
+    src = sent_islands(islands, job, sleeve_print) if held else islands
+    frame = job_frame(src, job, size, zoom_front=held)
+    if frame:
+        sub = split_islands(zoom_payload(src, job, frame, size))[job]
+    else:
+        sub = split_islands(src)[job] if held else parts[job]
     return render_template(sub, size, fill=fill)
 
 
 def post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, refs: dict, *,
-             force: bool = False, sleeve_print: str = "plain") -> dict:
+             force: bool = False, sleeve_print: str = "plain", held: bool = False) -> dict:
     """``_post_job`` in the job's zoom frame (``job_frame``: the islands moved into it, ``px_per_cm`` times ``k``)
     and, on "ready", its image / grown area back in the atlas frame (``unzoom``) with the atlas mask — so ``compose``
-    never sees the frame. ``metrics.zoom`` is the frame (None for the front job)."""
+    never sees the frame. ``metrics.zoom`` is the frame (None for an unzoomed front job). With ``held``
+    (``held_trims``) see ``_post_held``."""
+    if held:
+        return _post_held(answer, islands, size, px_per_cm, job, refs, force=force, sleeve_print=sleeve_print)
     frame = job_frame(islands, job, size)
     if frame is None:
         res = _post_job(answer, islands, size, px_per_cm, job, refs, force=force, sleeve_print=sleeve_print)
@@ -1641,6 +1685,41 @@ def post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str
             res.update({"_image": image, "_grown": grown | mask, "_mask": mask})
     res["metrics"]["zoom"] = ({k: (round(v, 4) if isinstance(v, float) else v) for k, v in frame.items()}
                               if frame else None)
+    return res
+
+
+def _post_held(answer: bytes, islands: dict, size: int, px_per_cm: float, job: str, refs: dict, *,
+               force: bool = False, sleeve_print: str = "plain") -> dict:
+    """``post_job`` of a piece with held trims (``HELD_TRIM_KINDS``): ``_post_job`` on the model's parts only
+    (``sent_islands``; the gates measure them alone), in the zoom frame of those parts; on "ready" back in the atlas
+    frame, where the held trims and their bleed (``cut_texture_post.BLEED_CM``) are filled with the job's panel fabric
+    (``panel_fabric`` / ``fill_fabric`` at the atlas scale, so a plain back's tile matches too)."""
+    from scipy import ndimage
+    post = cut_texture_post
+    src = sent_islands(islands, job, sleeve_print)
+    frame = job_frame(src, job, size, zoom_front=True)
+    if frame is None:
+        res = _post_job(answer, src, size, px_per_cm, job, refs, force=force, sleeve_print=sleeve_print)
+    else:
+        res = _post_job(answer, zoom_payload(src, job, frame, size), size, px_per_cm * frame["k"], job, refs,
+                        force=force, sleeve_print=sleeve_print)
+    res["metrics"]["zoom"] = ({k: (round(v, 4) if isinstance(v, float) else v) for k, v in frame.items()}
+                              if frame else None)
+    if res["state"] != "ready":
+        return res
+    image, grown = (unzoom(res["_image"], res["_grown"], frame, size) if frame
+                    else (res["_image"], res["_grown"]))
+    labels = job_labels(islands, size, job)
+    mask = labels > 0
+    trims = mask & ~(job_labels(src, size, job) > 0)
+    if trims.any():
+        bleed = max(1, int(round(post.BLEED_CM * px_per_cm)))
+        grown = grown | (ndimage.distance_transform_edt(~trims) <= bleed)
+    grown = grown | mask
+    fabric = panel_fabric(image, islands, labels, job, px_per_cm)
+    image, fill = fill_fabric(image, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
+    res["metrics"]["fabric_fill"] = fill
+    res.update({"_image": image, "_grown": grown, "_mask": mask, "_fabric": fabric})
     return res
 
 
@@ -1835,6 +1914,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     "post_version": cut_texture_post.POST_VERSION,
                     "item_sha": _item_sha(item_id), "back_sha": "", "back_view": {"made": False, "jobs": 0},
                     "only": only or "", "sleeve_print": sleeve_print_of(item_id)}
+    record["held"] = held_trims(kind, record["sleeve_print"])
     sig = csig(pattern["islands_sha"], record["item_sha"], "", psha)
     try:
         if "back" in parts:
@@ -1884,7 +1964,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
             if stopped and job not in reuse:
                 continue
             template_png = _file(stem, f".template_{job}.png")
-            _write_bytes(template_png, _png(job_template(islands, parts, job, size, fill=refs["prefill"])))
+            _write_bytes(template_png, _png(job_template(islands, parts, job, size, fill=refs["prefill"],
+                                                         held=record["held"], sleeve_print=record["sleeve_print"])))
             raw_png = _file(stem, f".raw_{job}.png")
             if job in reuse:
                 answer = raw_png.read_bytes()
@@ -1892,14 +1973,17 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 force = bool(reuse[job].get("accepted"))
             else:
                 _set_progress(key, job)
-                place = front_place(parts[job]) if job == "front" else ""
-                main = main_words(parts[job], job)
+                # held trims (``held_trims``): the words name what the template shows — the model's parts only
+                said = (split_islands(sent_islands(islands, job, record["sleeve_print"], drop=True))[job]
+                        if record["held"] else parts[job])
+                place = front_place(said) if job == "front" else ""
+                main = main_words(said, job)
                 found = place if family == "top" else (main["phrase"] if job == "front" else "")
                 decorated = bool(found) and is_decorated(refs["detail"].get("front"))
-                plain_pieces = (prompt_sleeves(parts[job], record["sleeve_print"]) if family == "top"
-                                else prompt_plain_pieces(parts[job], record["sleeve_print"]))
+                plain_pieces = (prompt_sleeves(said, record["sleeve_print"]) if family == "top"
+                                else prompt_plain_pieces(said, record["sleeve_print"]))
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
-                                 pieces=prompt_pieces(parts[job]), layout=layout_words(parts[job], family),
+                                 pieces=prompt_pieces(said), layout=layout_words(said, family),
                                  sleeves=plain_pieces, family=family, main=main)
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
@@ -1923,10 +2007,10 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
                              "dialect": dialect, "prompt": "decorated" if decorated else "plain",
                              "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
-                             "islands": [str(i["name"]) for i in parts[job]["islands"]], "attempt": attempt}
+                             "islands": [str(i["name"]) for i in said["islands"]], "attempt": attempt}
                     _set_progress(key, "post")
                     res = post_job(answer, islands, size, px_per_cm, job, refs, force=False,
-                                   sleeve_print=record["sleeve_print"])
+                                   sleeve_print=record["sleeve_print"], held=record["held"])
                     attempts.append({"attempt": attempt, "backend": entry["backend"], "dialect": dialect,
                                      "routing": entry["routing"], "state": res["state"], "reason": res["reason"],
                                      "metrics": res["metrics"]})
@@ -1945,7 +2029,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 continue
             _set_progress(key, "post")
             res = post_job(answer, islands, size, px_per_cm, job, refs, force=force,
-                           sleeve_print=record["sleeve_print"])
+                           sleeve_print=record["sleeve_print"], held=record["held"])
             record["jobs"][job] = _entry_from_post(entry, res)
             if res["state"] != "ready":
                 stopped = True      # a rejected job stops the flow: the next job that needs a render is not spent
@@ -2031,6 +2115,7 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     size = int(islands.get("atlas_px") or 2048)
     px_per_cm = float(islands.get("px_per_cm") or 0.0)
     record["sleeve_print"] = sleeve_print_of(item_id)
+    record["held"] = held_trims(item_kind(item_id), record["sleeve_print"])
     _set_progress((character_name, item_id), "post")
     refs = references(character_name, item_id, "back" in parts)
     record["fabric"] = {"item": refs["colour"], "prefill": list(refs["prefill"]) if refs["prefill"] else None,
@@ -2048,7 +2133,7 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
             continue
         force = job == accept or bool(entry.get("accepted"))
         res = post_job(raw.read_bytes(), islands, size, px_per_cm, job, refs, force=force,
-                       sleeve_print=record["sleeve_print"])
+                       sleeve_print=record["sleeve_print"], held=record["held"])
         record["jobs"][job] = _entry_from_post(entry, res)
         if res["state"] == "ready":
             results[job] = res

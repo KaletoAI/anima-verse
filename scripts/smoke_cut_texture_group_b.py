@@ -28,7 +28,18 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     as in <Picture 2>:"; MiniMax names "waistband, front skirt panel" as the pieces (pattern order: ``PROMPT_PIECE_NAMES``
     lists the waistband before the step 3b parts) and "The waistband of <Subject 1>";
     no dialect carries ``<ref``. The back job's main is skirt_back: names "the back skirt panel".
+[5] Held trims (live test 2026-11-22, Tilda): ``held_trims`` True for "skirt" / "strapless", False with
+    ``sleeve_print`` "picture" and for "top" / "trousers" (their tested templates stay). On a 400 px payload at 10
+    px/cm — skirt_front [40, 20, 240, 220], skirt_back [260, 20, 380, 220], waistband [20, 300, 380, 310] —
+    ``sent_islands(.., "front")`` keeps all three names (the label ids are the sorted names: back 1, front 2,
+    waistband 3) and empties the waistband; with ``drop`` the front job says only skirt_front. The held front frame
+    is the skirt_front box alone: w = h = 200, side = ceil(200 * 1.24) = 248, ox = floor(140 - 124) = 16, oy =
+    floor(120 - 124) = -4 (k = 400 / 248); without ``zoom_front`` the front has none. A flat green answer painted
+    on that zoomed panel posts "ready" through ``post_job(held=True)``: the gates saw island 2 alone (``islands`` keys
+    ["2"]), ``fabric_fill`` filled ["waistband"], and every waistband pixel of the atlas-frame image is the green
+    (each channel within 3 of (19, 50, 29)) — the trim never sent, still painted.
 """
+import io
 import os
 import sys
 import tempfile
@@ -108,6 +119,48 @@ check("[4] MiniMax", ["waistband, front skirt panel" in sub, "The waistband of <
 check("[4] no <ref", any("<ref" in ep.render(d) for d in ("picture_edit", "picture_subject", "image_tag", "ordinal")),
       False)
 check("[4] back main", gct.main_words(jobs["back"], "back")["names"], "the back skirt panel")
+
+# [5]
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from app.core import cut_texture_post as post  # noqa: E402
+
+check("[5] held_trims", [gct.held_trims("skirt"), gct.held_trims("strapless"), gct.held_trims("skirt", "picture"),
+                         gct.held_trims("top"), gct.held_trims("trousers")], [True, True, False, False, False])
+
+
+def box(name, x0, y0, x1, y1):
+    return {"name": name, "verts_px": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "tris": [[0, 1, 2], [0, 2, 3]],
+            "bbox_px": [x0, y0, x1, y1]}
+
+
+PAY = {"atlas_px": 400, "px_per_cm": 10.0, "seams": [],
+       "islands": [box("skirt_front", 40, 20, 240, 220), box("skirt_back", 260, 20, 380, 220),
+                   box("waistband", 20, 300, 380, 310)]}
+sent = gct.sent_islands(PAY, "front")
+check("[5] ids kept", gct.island_ids(sent), {"skirt_back": 1, "skirt_front": 2, "waistband": 3})
+check("[5] waistband emptied", [i["verts_px"] for i in sent["islands"] if i["name"] == "waistband"], [[]])
+check("[5] drop", [i["name"] for i in gct.split_islands(gct.sent_islands(PAY, "front", drop=True))["front"]["islands"]],
+      ["skirt_front"])
+frame = gct.job_frame(sent, "front", 400, zoom_front=True)
+check("[5] frame", {k: frame[k] for k in ("ox", "oy", "side")}, {"ox": 16, "oy": -4, "side": 248})
+check("[5] no front frame without zoom_front", gct.job_frame(sent, "front", 400), None)
+zl = gct.rasterise_islands(gct.zoom_payload(sent, "front", frame, 400), 400)
+ans = np.full((400, 400, 3), 255, np.uint8)
+ans[zl == 2] = (19, 50, 29)
+buf = io.BytesIO()
+Image.fromarray(ans).save(buf, format="PNG")
+green = post.fabric_colour(ans, zl == 2)
+refs = {"colour": green, "detail": {"front": 0.2}, "fabric": ans[zl == 2].astype(float)}
+res = gct.post_job(buf.getvalue(), PAY, 400, 10.0, "front", refs, held=True)
+check("[5] ready", (res["state"], res["reason"]), ("ready", ""))
+if res["state"] == "ready":
+    check("[5] gates saw the panel alone", sorted(res["metrics"]["islands"]), ["2"])
+    check("[5] waistband filled", res["metrics"]["fabric_fill"].get("islands"), ["waistband"])
+    wb = gct.rasterise_islands(PAY, 400) == 3
+    dev = np.abs(res["_image"][wb].astype(int) - np.array([19, 50, 29])).max()
+    check("[5] waistband pixels are the green", bool(dev <= 3), True)
 
 print()
 print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
