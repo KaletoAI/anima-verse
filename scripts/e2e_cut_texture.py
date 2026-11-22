@@ -4,8 +4,8 @@ and the textures are not generated").
 
 Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
-        [--item <item id>] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
-        [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
+        [--item <item id>[,<item id>...]] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
+        [--wear <item id>[,<item id>...]] [--take-off <item id>[,...]] [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
         [--backend-set NAME.ATTR=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
@@ -23,7 +23,9 @@ What it does, in ONE process, never touching the world it is given:
    config writer is replaced by a recorder first, so nothing is written there (a recorded write is reported and
    fails the run). Nothing of the instance is printed or copied.
 3. Prepares the scenario ON THE COPY: the piece (``--item``, else the worn template top whose ``texture`` is "cut";
-   a worn top with "projection" is switched to "cut" in the copy's DB) loses every texture-from-cut record and its
+   a worn top with "projection" is switched to "cut" in the copy's DB; group A: ``--item a,b,c`` names several worn
+   pattern pieces — every one is prepared, planned and checked, all in the SAME one Build) loses every
+   texture-from-cut record and its
    cut-only run (``templates/cut/<item>_*``), and — unless ``--no-redrape`` — its drapes, so the Build has to cut,
    texture AND drape it (the two run side by side); ``--fresh-back-view`` also drops its back piece-only view (+1
    image job).
@@ -44,8 +46,14 @@ What it does, in ONE process, never touching the world it is given:
    - the SERVED GLB is the assembly (``garment_assembly.served`` of the bare model) and carries the atlas: one of its images decodes to the atlas's pixels (mean absolute
      difference < 2 at the GLB image's size);
    - zero LLM calls; network: only the hub's host (its availability probes; a dry run sends no job);
-   - when the drape ran too: the cut texture's first image job started before the drape step ended (side by side).
+   - reported only: whether the first image job started before the last drape ended (side by side — the cut-only
+     run waits for a free Blender slot).
 7. Copies the record, the answers and the atlas to ``--out`` (default ``~/claude-out/cut-e2e/<stamp>``) for a look.
+
+``--wear a,b`` puts those pieces on IN THE COPY first (the profile's ``equipped_pieces``: each piece in every slot of
+its ``slots``, the piece worn there before is taken off) — for a template piece the character owns but does not wear;
+``--take-off a,b`` takes pieces off in the copy (e.g. a cut-texture top over the trousers, whose cut would change with
+the layer under it and spend its own image jobs).
 
 ``--chain a,b`` overrides the ``garment_cut_texture`` routing chain IN THE PROCESS (``routing._rules``; nothing is
 written — the recorder still fails the run on a config write); every entry must be in ``ALLOWED_BACKENDS``.
@@ -328,20 +336,48 @@ def setup(world: Path, instance: Path, tmp: Path, dry: bool, shared_items: Path 
     install_click_counters()
 
 
-def pick_item(character: str, wanted: str) -> str:
+def wear(character: str, items: List[str], off: List[str] = ()) -> Dict[str, str]:
+    """``--wear`` / ``--take-off``: the pieces put on in the COPY's profile (``equipped_pieces``, each in all its
+    ``slots``), ``off`` taken off; the worn set after it."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    from app.models.inventory import get_item
+    with keyed_lock("character_profile", character):
+        profile = get_character_profile(character) or {}
+        worn = {slot: iid for slot, iid in dict(profile.get("equipped_pieces") or {}).items() if iid not in off}
+        for item_id in items:
+            item = get_item(item_id) or {}
+            slots = list((item.get("outfit_piece") or item.get("pieces") or {}).get("slots") or item.get("slots") or [])
+            if not slots:
+                raise SystemExit(f"--wear: {item_id} has no slots")
+            for slot in slots:
+                worn[str(slot)] = item_id
+        profile["equipped_pieces"] = worn
+        if not save_character_profile(character, profile):
+            raise SystemExit("--wear: the copy's profile was not saved")
+    from app.core import figure
+    figure.invalidate()
+    return worn
+
+
+def pick_items(character: str, wanted: str) -> List[str]:
+    """The pieces of the run: ``wanted`` (a comma list of worn template pieces), else the first worn pattern piece
+    whose ``texture`` is "cut" (else the first worn pattern piece)."""
     from app.core import figure, garment_template as gt
     from app.models.character import get_character_profile
     from app.models.inventory import get_item
     profile = get_character_profile(character) or {}
     w, _d = figure._delivered(character, profile=profile)
     tops = [i for i in w.template if (gt.params_of(get_item(i)) or {}).get("kind") in gt.PATTERN_KINDS]
-    if wanted:
-        if wanted not in w.template:
-            raise SystemExit(f"{wanted} is not a worn template piece of {character} ({list(w.template)})")
-        return wanted
+    names = [n.strip() for n in str(wanted or "").split(",") if n.strip()]
+    if names:
+        bad = [n for n in names if n not in w.template]
+        if bad:
+            raise SystemExit(f"{bad} not worn template pieces of {character} ({list(w.template)})")
+        return names
     cut = [i for i in tops if (gt.params_of(get_item(i)) or {}).get("texture") == "cut"]
     if cut or tops:
-        return (cut or tops)[0]
+        return [(cut or tops)[0]]
     raise SystemExit(f"{character} wears no template top ({list(w.template)})")
 
 
@@ -449,9 +485,9 @@ def apply_backend_sets(sets: List[str]) -> None:
         print(f"backend {name}: {attr} = {value!r} (in-process)")
 
 
-def check_dialects(record: Dict[str, Any]) -> None:
+def check_dialects(records: Dict[str, Dict[str, Any]]) -> None:
     """Every image request the hub got carries its backend's dialect (``DIALECT_MARKS``), with both pictures; every
-    attempt of the record names the dialect of the backend it ran on."""
+    attempt of every piece's record (``records`` = {item: record}) names the dialect of the backend it ran on."""
     from app.imagegen.edit_prompt import dialect_of
     from app.imagegen.service import get_image_service
     by_name = {b.name: b for b in get_image_service().pool.backends}
@@ -474,11 +510,13 @@ def check_dialects(record: Dict[str, Any]) -> None:
             body = p["body"]
             check(f"{p['backend']} request size", body.get("size"), "2048x2048")
             check(f"{p['backend']} request cfg", str(body.get("cfg")), "1")
-    for job, entry in (record.get("jobs") or {}).items():
-        for a in entry.get("attempts") or []:
-            b = by_name.get(str(a.get("backend")))
-            if b is not None:
-                check(f"{job} attempt {a.get('attempt')} dialect = its backend's", a.get("dialect"), dialect_of(b))
+    for item_id, record in records.items():
+        for job, entry in (record.get("jobs") or {}).items():
+            for a in entry.get("attempts") or []:
+                b = by_name.get(str(a.get("backend")))
+                if b is not None:
+                    check(f"{item_id} {job} attempt {a.get('attempt')} dialect = its backend's", a.get("dialect"),
+                          dialect_of(b))
 
 
 def _turned_glb(src: Path, dst: Path) -> None:
@@ -550,6 +588,8 @@ def main() -> int:
     ap.add_argument("--u2net-home", type=Path, default=ROOT / "models" / "u2net",
                     help="the rembg / BiRefNet models of the installation (read, never downloaded)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--wear", default="", help="comma list: pieces put on in the copy first")
+    ap.add_argument("--take-off", default="", help="comma list: pieces taken off in the copy first")
     ap.add_argument("--no-redrape", action="store_true")
     ap.add_argument("--fresh-back-view", action="store_true")
     ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
@@ -603,9 +643,13 @@ def main() -> int:
         if OUTBOUND:
             print(f"setup: {len(OUTBOUND)} connect(s) blocked while starting — not counted: {OUTBOUND[:3]}")
             OUTBOUND.clear()
-        item_id = pick_item(args.character, args.item)
-        prep = prepare(args.character, item_id, redrape=not args.no_redrape, fresh_back=args.fresh_back_view)
-        print(f"piece {item_id}: {prep}")
+        if args.wear or args.take_off:
+            print("worn now (copy): " + str(wear(args.character, [w for w in args.wear.split(",") if w.strip()],
+                                                  [w for w in args.take_off.split(",") if w.strip()])))
+        items = pick_items(args.character, args.item)
+        for item_id in items:
+            prep = prepare(args.character, item_id, redrape=not args.no_redrape, fresh_back=args.fresh_back_view)
+            print(f"piece {item_id}: {prep}")
 
         steps = figure_build.plan(args.character)
         cost = figure_build.cost(args.character, steps)
@@ -613,13 +657,13 @@ def main() -> int:
         for s in steps:
             print(f"  {s.name:12s} {s.item_id or '':28s} jobs={s.jobs} {s.label}")
         print(f"cost: {cost['note']}")
-        cut_steps = [s for s in steps if s.name == "cut_texture" and s.item_id == item_id]
-        check("the plan has the piece's cut_texture step", len(cut_steps), 1)
-        others = [s for s in steps if s.jobs and not (s.name == "cut_texture" and s.item_id == item_id)]
-        if others or not cut_steps:
+        cut_steps = [s for s in steps if s.name == "cut_texture" and s.item_id in items]
+        check("the plan has every piece's cut_texture step", sorted(s.item_id for s in cut_steps), sorted(items))
+        others = [s for s in steps if s.jobs and not (s.name == "cut_texture" and s.item_id in items)]
+        if others or len(cut_steps) != len(items):
             print("refused: other steps would spend hub jobs: " + "; ".join(s.label for s in others))
             return 2
-        announced = int(cut_steps[0].jobs or 0)
+        announced = sum(int(s.jobs or 0) for s in cut_steps)
 
         started = figure_build.start(args.character, reason="e2e-cut-texture")
         print(f"Build: {started}")
@@ -633,67 +677,77 @@ def main() -> int:
         # live run 2026-11-21 (Kai): the Build ended with the drape due again ("cut anew") and the assembly due — a
         # second Build would have been needed. Nothing but the local collision channel may be left.
         check("plan afterwards is empty (no second Build)", [s.label for s in after if s.name != "collision"], [])
-        rec0 = (gct.dialog_state(args.character, item_id).get("record") or {})
-        second = sum(1 for e in (rec0.get("jobs") or {}).values() if len(e.get("attempts") or []) > 1)
-        for j, e in (rec0.get("jobs") or {}).items():
-            for a in e.get("attempts") or []:
-                print(f"  {j} attempt {a.get('attempt')}: {a.get('backend')} {a.get('dialect')} {a.get('state')} "
-                      f"{a.get('reason') or ''} routing={a.get('routing')}")
+        records = {i: (gct.dialog_state(args.character, i).get("record") or {}) for i in items}
+        second = 0
+        for item_id, rec0 in records.items():
+            second += sum(1 for e in (rec0.get("jobs") or {}).values() if len(e.get("attempts") or []) > 1)
+            for j, e in (rec0.get("jobs") or {}).items():
+                for a in e.get("attempts") or []:
+                    print(f"  {item_id} {j} attempt {a.get('attempt')}: {a.get('backend')} {a.get('dialect')} "
+                          f"{a.get('state')} {a.get('reason') or ''} routing={a.get('routing')}")
         if args.reject_attempt:
-            tries = [a for e in (rec0.get("jobs") or {}).values() for a in (e.get("attempts") or [])
-                     if a.get("attempt") == args.reject_attempt + 1]
-            check("every job ran the next attempt", bool(tries) and second == len(
-                [e for e in (rec0.get("jobs") or {}).values() if e.get("attempts")]), True)
-            if not args.dry_run:      # the dry render is stubbed: it carries no routing meta
-                check("the next attempt aimed at the next chain entry",
-                      [((a.get("routing") or {}).get("attempt_entry") or {}).get("aimed_position") for a in tries],
-                      [args.reject_attempt + 1] * len(tries))
-            check("no fallback_from", [a for a in tries if "fallback_from" in (a.get("routing") or {})], [])
+            for item_id, rec0 in records.items():
+                tries = [a for e in (rec0.get("jobs") or {}).values() for a in (e.get("attempts") or [])
+                         if a.get("attempt") == args.reject_attempt + 1]
+                ran = [e for e in (rec0.get("jobs") or {}).values() if e.get("attempts")]
+                check(f"{item_id}: every job ran the next attempt", bool(tries) and len(tries) == len(ran), True)
+                if not args.dry_run:      # the dry render is stubbed: it carries no routing meta
+                    check(f"{item_id}: the next attempt aimed at the next chain entry",
+                          [((a.get("routing") or {}).get("attempt_entry") or {}).get("aimed_position") for a in tries],
+                          [args.reject_attempt + 1] * len(tries))
+                check(f"{item_id}: no fallback_from", [a for a in tries if "fallback_from" in (a.get("routing") or {})],
+                      [])
         check("image jobs as announced (+ one per second attempt)", len(JOBS), announced + second)
         if not args.dry_run:
-            check_dialects(rec0)
+            check_dialects(records)
         check("clicks", CLICKS, {"figure_build.start": 1, "garment_cut_texture.start": 0,
                                  "garment_cut_texture.start_recompose": 0, "garment_template_views.start": 0})
         check("backends refused", REFUSED, [])
         check("LLM calls", LLM, [])
         check("network outside the hub", OUTBOUND, [])
         check("config writes", CONFIG_WRITES, [])
-        dialog = gct.dialog_state(args.character, item_id)
-        rec = dialog.get("record") or {}
-        print(f"record: state={rec.get('state')} reason={rec.get('reason')!r} "
-              f"jobs={ {j: (e.get('state'), e.get('reason')) for j, e in (rec.get('jobs') or {}).items()} }")
-        check("dialog: current", dialog.get("current"), True)
-        check("dialog: applied", dialog.get("applied"), True)
-        from app.models.inventory import get_item
-        row = figure_build._cut_build_row(args.character, item_id, get_item(item_id))
-        check("figure row: cut_build done", (row or {}).get("state"), "done")
-        sig = dialog.get("csig")
-        atlas = gct.atlas_path(args.character, item_id, sig) if sig else None
-        check("atlas exists", bool(atlas and atlas.is_file()), True)
         from app.core import garment_assembly, model3d
+        from app.models.inventory import get_item
         bare, _match = model3d.find_model3d_serving(args.character)[:2]
         served = garment_assembly.served(args.character, bare, garment_assembly.FULL)
         print(f"served model: {served} (bare {bare})")
         check("the served model is the assembly", bool(served and bare and Path(served) != Path(bare)), True)
-        if atlas and atlas.is_file() and served:
-            found = atlas_in_glb(Path(served), atlas)
-            print(f"atlas in the served GLB: {found}")
-            check("the served GLB carries the atlas", found["match"], True)
-        else:
-            check("a served model", bool(served), True)
-        drape = next((s for s in STEPS if s["step"] == "template" and s["item_id"] == item_id), None)
-        if drape is not None and JOBS:
-            check("the first image job started before the drape ended", JOBS[0]["t"] < drape["t1"], True)
         out_dir.mkdir(parents=True, exist_ok=True)
-        if sig:
-            for path in gct.cut_dir(args.character).glob(f"{item_id}_{sig}*"):
-                shutil.copyfile(path, out_dir / path.name)
+        for item_id in items:
+            dialog = gct.dialog_state(args.character, item_id)
+            rec = dialog.get("record") or {}
+            print(f"record {item_id}: state={rec.get('state')} reason={rec.get('reason')!r} "
+                  f"jobs={ {j: (e.get('state'), e.get('reason')) for j, e in (rec.get('jobs') or {}).items()} }")
+            check(f"{item_id} dialog: current", dialog.get("current"), True)
+            check(f"{item_id} dialog: applied", dialog.get("applied"), True)
+            row = figure_build._cut_build_row(args.character, item_id, get_item(item_id))
+            check(f"{item_id} figure row: cut_build done", (row or {}).get("state"), "done")
+            sig = dialog.get("csig")
+            atlas = gct.atlas_path(args.character, item_id, sig) if sig else None
+            check(f"{item_id} atlas exists", bool(atlas and atlas.is_file()), True)
+            if atlas and atlas.is_file() and served:
+                found = atlas_in_glb(Path(served), atlas)
+                print(f"{item_id} atlas in the served GLB: {found}")
+                check(f"{item_id}: the served GLB carries the atlas", found["match"], True)
+            if sig:
+                for path in gct.cut_dir(args.character).glob(f"{item_id}_{sig}*"):
+                    shutil.copyfile(path, out_dir / path.name)
+            sheet = gct.pattern_sheet_file(args.character, item_id)
+            if sheet is not None:
+                shutil.copyfile(sheet, out_dir / f"{item_id}.pattern.png")
+        drapes = [s for s in STEPS if s["step"] == "template" and s["item_id"] in items and "t1" in s]
+        if drapes and JOBS:
+            # reported, not checked: the cut-only run needs a free Blender slot (``process_slots``), so with every
+            # slot busy (the drapes themselves, another process) the image jobs start only after the drapes — live
+            # 2026-11-21 (Lirien's trousers: the 151 s drape held the slot, the cut waited for it)
+            print(f"side by side: the first image job started "
+                  f"{'before' if JOBS[0]['t'] < max(s['t1'] for s in drapes) else 'after'} the last drape ended")
         if served and not args.no_renders:
             render_figure(Path(served), out_dir)
         (out_dir / "e2e.json").write_text(json.dumps({"plan": [s.as_dict() for s in steps], "cost": cost,
-                                                     "jobs": JOBS, "payloads": PAYLOADS,
-                                                     "steps": STEPS, "state": state,
-                                                     "prepare": prep, "fails": FAILS}, indent=1, default=str))
+                                                     "jobs": JOBS, "payloads": PAYLOADS, "items": items,
+                                                     "steps": STEPS, "state": state, "fails": FAILS},
+                                                    indent=1, default=str))
         print(f"availability probes blocked (not counted): {len(PROBES)}")
         print(f"files: {out_dir}")
     finally:

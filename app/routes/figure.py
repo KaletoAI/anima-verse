@@ -84,7 +84,7 @@ body actions):
 * ``GET  /characters/{c}/figure/template/{item_id}/cut`` — the dialog's Texture tab
   (``garment_cut_texture.dialog_state`` + picture URLs; starts the piece's cut on the CPU when it is missing):
   ``{running, step, error, csig, record, can_generate, blocked_reason, pattern_reason, cutting, cut_at, current, plan, texture, applied, upscale, has_back, islands_sha, files, urls, pattern_url, answers,
-  sleeve_print, has_sleeves, option_stale}``.
+  sleeve_print, has_sleeves, trim ("sleeves" / "pieces"), option_stale}``.
 * ``POST /characters/{c}/figure/template/{item_id}/cut/generate {only?}`` — the cut flow in the background (the back
   view when missing, the front job, the back job, the atlas applied; ``only`` "front" / "back" redoes one job) and
   the texture set to "cut"; 409 media off / already running / another hub-job flow of the piece (``piece_jobs``),

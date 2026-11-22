@@ -34,7 +34,7 @@ Cache: ``templates/{item}_{tsig}.glb + .json`` under the character's garment
 store; ``tsig`` = md5[:12] over the parameters, ``TEMPLATE_VERSION``, the base
 model sha256, the texture source sha256 and what the drape is cut against: the worn
 pieces UNDER it (their drape keys / fit identities, a boot it hangs over), the jacket
-allowance and the chest shaping (``key_for``) — never a piece worn over it. A top's drape also keeps its pattern islands beside it
+allowance and the chest shaping (``key_for``) — never a piece worn over it. A ``PATTERN_KINDS`` drape also keeps its pattern islands beside it
 (``{item}_{tsig}.islands.json``, ``islands_path``; the record's ``islands`` = file, sha256, px_per_cm).
 With the param ``texture`` "cut" the assembly swaps the drape's projection image for the "texture from cut" atlas
 (``atlas_for``; keyed by the islands sha, never by ``tsig`` — ``texture`` is ``TEXTURE_ONLY``). The islands do not
@@ -79,12 +79,11 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 TEMPLATE_VERSION = 10
 #: Step 3a (decision D7 b): the fitted kinds' own version, in the drape key of a ``FITTED_KINDS`` piece only — so a
 #: change of the fitted cut re-drapes the fitted pieces and no top / skirt / dress / jacket.
-#: 0 (held, review 2026-11-21): the fitted kinds' sewing-pattern UV islands (``fitted_pattern``) replace the planar
-#: box UV in every NEW fitted drape, but no existing one is re-draped for it yet: their texture is still the
-#: projection (the cut texture is not offered for them), so a forced re-drape only changed every user's briefs, bra,
-#: gloves, tights and trousers before anything could use the islands. 1 goes in with the fitted kinds' texture
-#: choice (one release): then every fitted drape is re-draped once and gets its islands.
-FITTED_VERSION = 0
+#: 1 (group A cut texture, 2026-11-21): the fitted kinds' sewing-pattern UV islands (``fitted_pattern``) replace the
+#: planar box UV, and their ``texture`` may be "cut" (``KIND_FIELDS``) — released together, so every existing briefs,
+#: bra, gloves, tights and trousers drape is re-draped ONCE (CPU, 0 hub jobs) on the next Build and gets its islands.
+#: (0 held the key of the drapes made before the islands while nothing could use them.)
+FITTED_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -254,7 +253,10 @@ TROUSER_FIELDS = ("trouser_length", "leg_shape", "seat", "trouser_waist", "fly",
 TEXTURE_SOURCES = ("projection", "cut")
 #: User test 2026-11-21: where the sleeves of a texture from cut come from — "plain" (default): a seamless patch of
 #: the front panel's fabric (the model painted a chest embroidery onto one sleeve); "picture": the model's answer,
-#: for an item with a print ON a sleeve. The neckband is always the fabric patch.
+#: for an item with a print ON a sleeve. The neckband is always the fabric patch. Group A (2026-11-21): the same
+#: choice for the small pieces of the close-fitting kinds (waistband, cuffs, bands, straps, gusset, thumbs, gore —
+#: ``garment_cut_texture.TRIM_PARTS``): plain = the main panels' fabric patch, picture = the answer, for an item whose
+#: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
 #: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top, and since
 #: step 3a every fitted kind; a jacket and a dress with a bodice keep the grid UV until step 3b of the pattern plan.
@@ -368,7 +370,7 @@ PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
 KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "skirt": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m"),
     "trousers": ("kind", "fabric", "opacity", "rise", "trouser_length", "leg_shape", "seat", "fit", "trouser_waist",
-                 "fly", "hem"),
+                 "fly", "hem", "texture", "sleeve_print"),
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS),
     "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
@@ -376,11 +378,11 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar"),
     "briefs": ("kind", "fabric", "opacity", "rise", "leg_cut", "back_coverage", "side_width_m", "gusset_m",
-               "waistband", "leg_length_m", "fit", "sides", "string_width_m"),
+               "waistband", "leg_length_m", "fit", "sides", "string_width_m", "texture", "sleeve_print"),
     "bra": ("kind", "fabric", "opacity", "cup_style", "cup_coverage", "push_up", "underband_m", "center_gore", "closure",
-            "straps"),
-    "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit"),
-    "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters"),
+            "straps", "texture", "sleeve_print"),
+    "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit", "texture", "sleeve_print"),
+    "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters", "texture", "sleeve_print"),
 }
 
 #: Spec section 8 pass marks (hand-derived in ``scripts/smoke_garment_template_spike.py``).
@@ -2571,7 +2573,8 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
         return out
     sig = gct.csig_for(character_name, item_id, str(islands["sha256"]),
                        has_back_panel=gct.has_back_file(templates_dir(character_name) / str(islands.get("file") or ""),
-                                                        str(islands["sha256"])))
+                                                        str(islands["sha256"])),
+                       kind=str(params.get("kind") or ""))
     if sig is None:
         out.update(cut_state="missing", reason=f"The item {item_id!r} has no picture")
         return out

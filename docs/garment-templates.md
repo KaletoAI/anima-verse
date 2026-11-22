@@ -206,14 +206,38 @@ default 0.06) is the crotch's full width (`fitted_spec`'s `gusset_half_m` = half
 crotch is `brief_back_width` = 0.4 g + back_coverage × 0.9 × (hip_half − 0.4 g). At the default it leaves the drape
 key as it was, and it keys no other kind. The dialog shows it as "Crotch width".
 
-**Texture from cut (data).** Every fitted part has a prompt name (`PROMPT_PIECE_NAMES`, left / right are the
-wearer's) and a sheet label (`PART_LABELS`); `piece_name_of` names the piece by its cut (high-leg briefs, thong,
-elbow-length gloves, knee-high socks, capri trousers, …). The fitted kinds' prompt files and the `texture` choice for
-them are not part of step 3a's pieces work.
+**Texture from cut (group A, 2026-11-21).** Every fitted part has a prompt name (`PROMPT_PIECE_NAMES`, left / right
+are the wearer's) and a sheet label (`PART_LABELS`); `piece_name_of` names the piece by its cut (high-leg briefs,
+thong, elbow-length gloves, knee-high socks, capri trousers, …). `KIND_FIELDS` of every fitted kind carries `texture`
+and `sleeve_print`, so the template dialog offers Texture = "From cut" through its generic field rendering, and the
+Build's step "cut_texture" finishes such a piece like a top (section 2):
 
-**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION` when it is not 0. It is held at 0 for now: a new fitted
-drape gets the pattern islands, an existing one is not re-draped for them while its texture is still the projection;
-1 goes in with the fitted kinds' texture choice. `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
+| kind | MAIN pieces (model answer, gates, fabric patch) | small pieces (fabric patch) | jobs |
+|---|---|---|---|
+| trousers, boxers | front: `front_r` + `front_l`; back: `back_l` + `back_r` | `waistband`, `cuff_l/r` | front, back (0 when the back view is plain) |
+| briefs | front: `front`; back: `back` | `gusset`, `waistband`, `hip_band_l/r` | front, back (0 when plain) |
+| tights | front: `leg_r` + `leg_l` | `gusset`, `waistband`, `top_band_l/r` | front only |
+| bra | front: `cup_r` + `cup_l` (a balconette's `cup_top_l/r` also from the answer) | `gore`, `band_l/r`, `strap_l/r` | front only (a bandeau: front / back) |
+| gloves | front: `glove_back_r` + `glove_back_l`; back: `palm_l` + `palm_r` | `thumb_l/r`, `cuff_l/r` | front, back (0 when plain) |
+
+`garment_cut_texture.MAIN_PARTS` (per job; part names are unique across kinds, so a pattern finds its own) is what the
+colour / detail gates measure, what the fabric patch (`panel_fabric`) is cut from and what a decorated prompt names.
+The small pieces (`TRIM_PARTS`, together with a top's sleeves and cuffs) are filled deterministically with that patch,
+like a top's sleeves; the piece's `sleeve_print` "picture" ("Small pieces: From the picture" in the Texture tab, the
+dialog state's `trim` = `"pieces"`) takes them from the answer for an item whose picture shows a trim on them. The
+fitted kinds have their OWN prompt files (`FITTED_PROMPT_FILES`: `garment_cut_texture_fitted_front_plain.md`,
+`…_fitted_front_decorated.md`, `…_fitted_back.md`, four dialect sections each): the top's tested wording, the main
+pieces named by where they lie (`main_words`: "the two largest shapes are the right front leg panel and the left
+front leg panel", "the top left shape is the front panel"), the article of a pair noun ("a pair of gloves",
+`a_piece`), the small pieces named as plain. Their sha (`prompt_sha_of(kind)`, `PROMPT_SHAS["fitted"]`) keys the
+fitted atlases only; a top's `PROMPT_SHA` and atlases stay as they were. Before the cut, the Build's estimate counts a
+back view and a back job only for a kind with back pieces (`kind_has_back`: not tights, not a cupped bra).
+
+**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION` = **1** (group A, 2026-11-21: released together with the
+texture choice). **One-time re-drape:** every existing briefs, bra, gloves, tights and trousers drape made before it
+(key without `fitted`, planar box UV) is due again on the next Build of its character — CPU only, 0 hub jobs, about a
+minute per piece — and then carries its pattern islands; its texture stays the projection until the user chooses
+"From cut". (It was held at 0 while nothing could use the islands.) `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
 `fitted_pattern.py`), so a change of the cut rules re-cuts. A fitted piece's cut also keys `UV_PATTERN_SHA` (md5 of
 `uv_pattern.py`); a top's keys `TOP_UV_PATTERN_SHA` instead — the md5 of the `uv_pattern.py` that last changed a top's
 islands (c926b67f0). Step 3a's additions leave the tops' islands byte-identical, so no top drape counts as
@@ -224,7 +248,8 @@ the pinned sha and that smoke's base commit together.
 
 ### The param `texture`
 
-The template param `texture` chooses where a top's texture comes from: `"projection"` (default — the projection bake
+The template param `texture` chooses where a pattern piece's texture comes from (a top; since group A every fitted
+kind, section 1a): `"projection"` (default — the projection bake
 of the piece-only views, always made and always inside the drape GLB) or `"cut"` (the cut atlas, swapped in at
 assembly). It is in `TEXTURE_ONLY`: changing it costs no drape and no job, only a CPU re-assemble
 (`garment_assembly` keeps `texture` = `"projection"` / `"cut:<csig>"` in its assembly state, `_apply_cut_atlas` puts
@@ -410,7 +435,7 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 
 ### The key `csig`
 
-`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of both prompt files, `POST_VERSION`), 12 hex.
+`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of the three prompt files of the piece's family — a top's, or the fitted kinds' own (`prompt_sha_of(kind)`) —, `POST_VERSION`), 12 hex.
 
 It deliberately does not contain the drape key `tsig`: `tsig` also carries the piece-only views, and a re-rendered
 FRONT view changes nothing the cut atlas depends on. The back view does: a new back view makes the cut stale (the

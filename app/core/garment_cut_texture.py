@@ -66,10 +66,22 @@ _PROMPT_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "im
 PROMPT_FILES = {"front_plain": _PROMPT_DIR / "garment_cut_texture_front_plain.md",
                 "front_decorated": _PROMPT_DIR / "garment_cut_texture_front_decorated.md",
                 "back": _PROMPT_DIR / "garment_cut_texture_back.md"}
-PROMPT_TEXTS = {variant: path.read_text(encoding="utf-8") for variant, path in PROMPT_FILES.items()}
-#: md5 of the three shipped files (every section) — part of the cut atlas key, so a reworded section makes an atlas
-#: stale.
-PROMPT_SHA = hashlib.md5("\0".join(PROMPT_TEXTS[v] for v in PROMPT_FILES).encode("utf-8")).hexdigest()
+#: Group A (2026-11-21): the close-fitting kinds' own three variants (``FITTED_KINDS``: briefs, bra, gloves, tights,
+#: trousers) — their main pieces come in pairs (two leg panels, two cups, two backs of the hand) and their small pieces
+#: are bands, so they are named per piece; a top's tested files and its ``PROMPT_SHA`` stay byte-identical.
+FITTED_PROMPT_FILES = {"front_plain": _PROMPT_DIR / "garment_cut_texture_fitted_front_plain.md",
+                       "front_decorated": _PROMPT_DIR / "garment_cut_texture_fitted_front_decorated.md",
+                       "back": _PROMPT_DIR / "garment_cut_texture_fitted_back.md"}
+#: The prompt family of each pattern kind (``prompt_family``) -> its variant files.
+PROMPT_SETS = {"top": PROMPT_FILES, "fitted": FITTED_PROMPT_FILES}
+PROMPT_TEXTS = {family: {variant: path.read_text(encoding="utf-8") for variant, path in files.items()}
+                for family, files in PROMPT_SETS.items()}
+#: md5 of a family's three shipped files (every section) — part of the cut atlas key, so a reworded section makes an
+#: atlas of that family stale (and only of that family).
+PROMPT_SHAS = {family: hashlib.md5("\0".join(texts[v] for v in PROMPT_SETS[family]).encode("utf-8")).hexdigest()
+               for family, texts in PROMPT_TEXTS.items()}
+#: A top's prompt sha (unchanged by group A: a top's atlases keep their csig).
+PROMPT_SHA = PROMPT_SHAS["top"]
 #: Renders per job: a gate rejection of attempt 1 renders attempt 2 on the chain's second entry (docs/edit-prompts.md
 #: §7); a single-entry chain renders it on the same backend with ``ATTEMPT_SEED_STEP`` added to the seed.
 CUT_ATTEMPTS = 2
@@ -110,6 +122,18 @@ def island_ids(islands: dict) -> dict[str, int]:
     if len(names) > 255:
         raise ValueError("garment_cut_texture: more than 255 islands do not fit a uint8 label raster")
     return {n: k + 1 for k, n in enumerate(names)}
+
+
+def prompt_family(kind) -> str:
+    """The prompt family of a pattern kind: "fitted" for the close-fitting kinds (``garment_template.FITTED_KINDS``),
+    "top" for every other."""
+    from app.core import garment_template as gt
+    return "fitted" if str(kind or "") in gt.FITTED_KINDS else "top"
+
+
+def prompt_sha_of(kind) -> str:
+    """The prompt sha a piece of ``kind`` is keyed by (``PROMPT_SHAS`` of its ``prompt_family``)."""
+    return PROMPT_SHAS[prompt_family(kind)]
 
 
 def _fill_triangle(out: np.ndarray, tri: np.ndarray, value: int) -> None:
@@ -271,35 +295,58 @@ def prompt_variant(side: str = "front", decorated: bool = False) -> str:
     return "front_decorated" if decorated else "front_plain"
 
 
-def _prompt_refs(side: str, piece: str):
+#: The last word of a piece name that is a pair noun ("gloves", "briefs", "trousers"): "a pair of …", never "a …".
+PAIR_NOUNS = ("gloves", "briefs", "tights", "trousers", "leggings", "stockings", "socks", "shorts", "warmers")
+
+
+def a_piece(piece: str) -> str:
+    """The piece name with its article: "a balconette bra", "an …", "a pair of elbow-length gloves" (``PAIR_NOUNS``)."""
+    piece = str(piece or "garment")
+    if piece.rsplit(" ", 1)[-1] in PAIR_NOUNS:
+        return f"a pair of {piece}"
+    return f"an {piece}" if piece[:1].lower() in "aeiou" else f"a {piece}"
+
+
+def _prompt_refs(side: str, piece: str, family: str = "top"):
     """The slots of every cut-texture render: the job's template is the canvas, its Picture 2 the material source."""
     from app.imagegen.edit_prompt import Ref
-    canvas = (f"the flat sewing pattern of the back panel of a {piece}" if side == "back"
-              else f"the flat sewing pattern of a {piece}")
+    if family == "fitted":
+        back_canvas = f"the flat sewing pattern of the back pieces of {a_piece(piece)}"
+        canvas = back_canvas if side == "back" else f"the flat sewing pattern of {a_piece(piece)}"
+    else:
+        canvas = (f"the flat sewing pattern of the back panel of a {piece}" if side == "back"
+                  else f"the flat sewing pattern of a {piece}")
     source = f"the back of the {piece}" if side == "back" else f"the {piece}"
     return [Ref(1, "canvas", canvas), Ref(2, "material", source)]
 
 
 def edit_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
-                pieces=(), layout=(), sleeves=()):
+                pieces=(), layout=(), sleeves=(), family: str = "top", main: dict | None = None):
     """The cut-texture prompt of the ``side`` job as an ``EditPrompt`` (every dialect rendered): the variant's
-    sectioned file (``prompt_variant``) with ``piece`` (e.g. "T-shirt"), the job's ``pieces`` (``prompt_pieces``),
-    ``layout`` (``layout_words``), the ``sleeves`` whose fabric stays plain and, for a ``decorated`` front, the front
-    island's ``front_place`` ("top left"). A missing variable raises (StrictUndefined)."""
+    sectioned file (``prompt_variant`` of the ``family``'s ``PROMPT_SETS``) with ``piece`` (e.g. "T-shirt"), the job's
+    ``pieces`` (``prompt_pieces``), ``layout`` (``layout_words``), the ``sleeves`` whose fabric stays plain (a fitted
+    piece: its small pieces, ``prompt_plain_pieces``) and, for a ``decorated`` front, the front island's
+    ``front_place`` ("top left"). A fitted family's prompt also names its MAIN pieces (``main`` = ``main_words``:
+    ``{"phrase", "count", "names"}`` — "the two largest shapes", 2, "the right front leg panel and the left front leg
+    panel"). A missing variable raises (StrictUndefined)."""
     from app.imagegen.edit_prompt import from_template
-    if side == "front" and decorated and not front_place:
+    main = main or {"phrase": "", "count": 0, "names": ""}
+    if side == "front" and decorated and not (front_place if family == "top" else main.get("phrase")):
         raise ValueError("a decorated front prompt needs the front island's place")
     variant = prompt_variant(side, decorated)
-    return from_template(PROMPT_FILES[variant], _prompt_refs(side, piece), piece=piece,
+    return from_template(PROMPT_SETS[family][variant], _prompt_refs(side, piece, family), piece=piece,
+                         a_piece=a_piece(piece),
                          front_place=front_place or "", pieces=list(pieces), layout=list(layout or []),
-                         sleeves=list(sleeves or []))
+                         sleeves=list(sleeves or []), main=str(main.get("phrase") or ""),
+                         main_count=int(main.get("count") or 0), main_names=str(main.get("names") or ""))
 
 
 def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
-                  pieces=(), layout=(), sleeves=(), dialect: str = "ordinal") -> str:
+                  pieces=(), layout=(), sleeves=(), dialect: str = "ordinal", family: str = "top",
+                  main: dict | None = None) -> str:
     """``edit_prompt(...)`` rendered in ``dialect`` (``edit_prompt.dialect_of`` of the backend it runs on)."""
     return edit_prompt(piece=piece, side=side, decorated=decorated, front_place=front_place, pieces=pieces,
-                       layout=layout, sleeves=sleeves).render(dialect)
+                       layout=layout, sleeves=sleeves, family=family, main=main).render(dialect)
 
 
 #: ``_place_words``: an island centre left of this share of the template is "left", right of 1 - it "right"; the
@@ -402,6 +449,58 @@ def prompt_sleeves(islands: dict, sleeve_print: str = "plain") -> list[str]:
     if sleeve_print == "picture":
         return []
     return [p for p in prompt_pieces(islands) if "sleeve" in p]
+
+
+def prompt_plain_pieces(islands: dict, sleeve_print: str = "plain") -> list[str]:
+    """A fitted piece's small pieces the prompt keeps plain (``TRIM_PARTS``: waistband, cuffs, bands, straps, gusset,
+    thumbs, gore), in pattern order with their prompt names; none with ``sleeve_print`` "picture" (they then come
+    from the answer)."""
+    if sleeve_print == "picture":
+        return []
+    names = dict(zip(_pattern_order(islands), prompt_pieces(islands)))
+    return [names[n] for n in _pattern_order(islands) if part_of(n) in TRIM_PARTS]
+
+
+_COUNT_WORDS = {2: "two", 3: "three", 4: "four"}
+
+
+def main_islands(islands: dict, job: str) -> list[str]:
+    """The island names of ``job``'s MAIN pieces (``MAIN_PARTS``) in pattern order."""
+    return [n for n in _pattern_order(islands) if part_of(n) in MAIN_PARTS.get(job, ())]
+
+
+def main_words(islands: dict, job: str) -> dict:
+    """How a fitted prompt names ``job``'s main pieces in its template (``islands`` = the job's payload, as the model
+    sees it): ``{"phrase", "count", "names"}``. One main island: "the {place} shape" (``_place_words`` of its bbox
+    centre); several that are the largest by area (``area_cm2``): "the two largest shapes"; several that are not:
+    "the shapes at the top left and the top right". ``names``: their prompt names joined with "and", each with "the"
+    ("the right front leg panel and the left front leg panel"). ``{"phrase": "", "count": 0, "names": ""}`` without
+    one."""
+    mains = main_islands(islands, job)
+    if not mains:
+        return {"phrase": "", "count": 0, "names": ""}
+    size = float(islands.get("atlas_px") or 2048)
+    by_name = {str(i["name"]): i for i in islands.get("islands", [])}
+    words = dict(zip(_pattern_order(islands), prompt_pieces(islands)))
+
+    def place(name):
+        x0, y0, x1, y1 = (float(v) for v in (by_name[name].get("bbox_px") or _bbox(by_name[name])))
+        return _place_words(0.5 * (x0 + x1) / size, 0.5 * (y0 + y1) / size)
+    names = " and ".join(f"the {words[n]}" for n in mains)
+    if len(mains) == 1:
+        where = place(mains[0])
+        for lead in ("at the ", "in the "):
+            if where.startswith(lead):
+                where = where[len(lead):]
+        return {"phrase": f"the {where} shape", "count": 1, "names": names}
+    area = {n: float(by_name[n].get("area_cm2") or 0.0) for n in by_name}
+    largest = sorted(area, key=lambda n: -area[n])[:len(mains)]
+    if set(largest) == set(mains) and len(mains) in _COUNT_WORDS:
+        phrase = f"the {_COUNT_WORDS[len(mains)]} largest shapes"
+    else:
+        spots = [place(n) for n in mains]
+        phrase = "the shapes " + " and ".join(spots)
+    return {"phrase": phrase, "count": len(mains), "names": names}
 
 # ---------------------------------------------------------------------------------------------------- debug sheet
 
@@ -696,11 +795,12 @@ def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tupl
     return out, g
 
 
-def csig(islands_sha: str, item_sha: str, back_sha: str = "") -> str:
+def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str = PROMPT_SHA) -> str:
     """The cut atlas key: the cut's islands, the item image, the back view the back job read ("" for a pattern
-    without a back panel, or before the view exists), the prompt files and the post-processing version — NOT
-    ``tsig`` (it carries the piece-only views' sha for the projection, which the atlas does not depend on)."""
-    raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), PROMPT_SHA,
+    without a back panel, or before the view exists), the prompt files of the piece's family (``prompt_sha_of``; a
+    top's by default) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
+    projection, which the atlas does not depend on)."""
+    raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), str(prompt_sha),
                     str(cut_texture_post.POST_VERSION)])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -883,16 +983,24 @@ def _islands_of(pattern: dict) -> dict:
         return {}
 
 
+def item_kind(item_id: str) -> str:
+    """The piece's template kind ("" without parameters)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    return str((gt.params_of(get_item(item_id)) or {}).get("kind") or "")
+
+
 def csig_for(character_name: str, item_id: str, islands_sha: str, islands: dict | None = None,
-             *, has_back_panel: bool | None = None) -> str | None:
+             *, has_back_panel: bool | None = None, kind: str | None = None) -> str | None:
     """The csig of the piece for these islands with the CURRENT item picture and back view; None without a
-    picture. ``has_back_panel`` None = read it from ``islands``."""
+    picture. ``has_back_panel`` None = read it from ``islands``; ``kind`` None = the item's (``item_kind``)."""
     isha = item_sha(item_id)
     if isha is None:
         return None
     if has_back_panel is None:
         has_back_panel = has_back(islands or {})
-    return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "")
+    kind = item_kind(item_id) if kind is None else kind
+    return csig(islands_sha, isha, back_sha(character_name, item_id) if has_back_panel else "", prompt_sha_of(kind))
 
 
 def atlas_path(character_name: str, item_id: str, sig: str) -> Path:
@@ -1237,13 +1345,27 @@ def job_plan(character_name: str, item_id: str, islands: dict | None = None, isl
     return out
 
 
-#: User test 2026-11-21 — the parts of each job whose pixels come from the model's answer; every other island of the
-#: job (the sleeves, the neckband, the cuffs) is filled with the seamless fabric patch of the job's main panel
-#: (``fill_fabric``). With the piece's ``sleeve_print`` "picture" the sleeves and cuffs come from the answer too.
-MODEL_PARTS = {"front": ("front", "collar", "placket"), "back": ("back",)}
+#: The MAIN pieces of each job — what its gates measure (colour, detail), what its fabric patch is cut from, what a
+#: decorated prompt names: a top's front / back panel; group A (2026-11-21) the close-fitting kinds' large pieces —
+#: the trousers' (and boxers') front_l + front_r / back_l + back_r, a brief's front / back, the tights' legs, the
+#: bra's cups (a bandeau's front / back), the gloves' backs of the hand / palms. Part names are unique across kinds,
+#: so a pattern finds its own without its kind.
+MAIN_PARTS = {"front": ("front", "front_r", "front_l", "leg_r", "leg_l", "cup_r", "cup_l", "glove_back_r",
+                        "glove_back_l"),
+              "back": ("back", "back_l", "back_r", "palm_l", "palm_r")}
+#: User test 2026-11-21 — the parts of each job whose pixels come from the model's answer: the main pieces, a top's
+#: collar and placket, a balconette's upper cups (the lace / trim sits on them); every other island of the job (the
+#: sleeves, the neckband, the cuffs; group A's small pieces ``TRIM_PARTS``) is filled with the seamless fabric patch
+#: of the job's main pieces (``fill_fabric``). With the piece's ``sleeve_print`` "picture" the sleeves, cuffs and
+#: small pieces come from the answer too.
+MODEL_PARTS = {"front": MAIN_PARTS["front"] + ("collar", "placket", "cup_top_r", "cup_top_l"),
+               "back": MAIN_PARTS["back"]}
 SLEEVE_PARTS = ("sleeve_l", "sleeve_r", "cuff_l", "cuff_r")
-#: The panel each job's gates measure and its fabric patch is cut from.
-MAIN_PART = {"front": "front", "back": "back"}
+#: The parts ``sleeve_print`` decides about: a top's sleeves and cuffs, group A's small pieces — waistband, cuffs,
+#: bra bands, straps and gore, gusset, glove thumbs, a string brief's hip bands, a stocking's top bands. A top's
+#: neckband is never one (always the fabric patch).
+TRIM_PARTS = SLEEVE_PARTS + ("waistband", "gusset", "gore", "band_r", "band_l", "strap_r", "strap_l", "thumb_r",
+                             "thumb_l", "hip_band_r", "hip_band_l", "top_band_r", "top_band_l")
 #: A pre-fill nearer to white than this (the largest channel distance) is darkened to it: the gate and the
 #: registration find the islands as "not near-white" (``cut_texture_post.WHITE_TOL`` 24), so a white fabric goes as a
 #: very light grey (the colour match moves the atlas back onto the item's own white).
@@ -1251,9 +1373,9 @@ PREFILL_MIN_DIST = 40
 
 
 def model_parts(job: str, sleeve_print: str = "plain") -> tuple[str, ...]:
-    """The parts of ``job`` taken from the model's answer (``MODEL_PARTS``, the sleeves with "picture")."""
+    """The parts of ``job`` taken from the model's answer (``MODEL_PARTS``; with "picture" also ``TRIM_PARTS``)."""
     parts = MODEL_PARTS.get(job, ())
-    return parts + SLEEVE_PARTS if job == "front" and sleeve_print == "picture" else parts
+    return parts + TRIM_PARTS if job == "front" and sleeve_print == "picture" else parts
 
 
 def prefill_colour(colour: dict | None) -> tuple[int, int, int] | None:
@@ -1282,7 +1404,7 @@ def panel_fabric(img: np.ndarray, islands: dict, labels: np.ndarray, job: str, p
     neckband's and a plain back's fabric (``fill_fabric``, ``fill_plain_back``)."""
     from scipy import ndimage
     post = cut_texture_post
-    panel = _part_mask(islands, labels, (MAIN_PART[job],))
+    panel = _part_mask(islands, labels, MAIN_PARTS[job])
     if not panel.any():
         return {"skipped": "no main panel"}
     base = post.fabric_colour(img, panel)
@@ -1340,7 +1462,7 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
         im.load()
         reg, reg_info = post.resample_register(im, mask)
     ok, met, reason = post.gate(reg, mask, labels, px_per_cm, reg_info.get("white_tol", post.WHITE_TOL))
-    panel = _part_mask(islands, labels, (MAIN_PART[job],))
+    panel = _part_mask(islands, labels, MAIN_PARTS[job])
     gates, answer = post.answer_gates(reg, panel, refs.get("colour"), (refs.get("detail") or {}).get(job))
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
     metrics = {"iou": met["iou"], "coverage": met["coverage"], "island_coverage": met["island_coverage"],
@@ -1565,18 +1687,21 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
     px_per_cm = float(islands.get("px_per_cm") or 0.0)
     size = int(islands.get("atlas_px") or 2048)
     from app.core.timeutils import utc_now_iso
+    kind = item_kind(item_id)
+    family, psha = prompt_family(kind), prompt_sha_of(kind)
     record: dict = {"islands_sha": pattern["islands_sha"], "cut_sig": pattern.get("cut_sig"), "state": "failed",
                     "reason": "", "metrics": {}, "jobs": {}, "px_per_cm": px_per_cm, "item_px": None,
-                    "upscale": None, "prompt_sha": PROMPT_SHA, "post_version": cut_texture_post.POST_VERSION,
+                    "upscale": None, "prompt_sha": psha, "prompt_family": family,
+                    "post_version": cut_texture_post.POST_VERSION,
                     "item_sha": _item_sha(item_id), "back_sha": "", "back_view": {"made": False, "jobs": 0},
                     "only": only or "", "sleeve_print": sleeve_print_of(item_id)}
-    sig = csig(pattern["islands_sha"], record["item_sha"])
+    sig = csig(pattern["islands_sha"], record["item_sha"], "", psha)
     try:
         if "back" in parts:
             _set_progress(key, "back_view")
             record["back_view"] = _ensure_back_view(character_name, item_id)
             record["back_sha"] = back_sha(character_name, item_id)
-        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"])
+        sig = csig(pattern["islands_sha"], record["item_sha"], record["back_sha"], psha)
     except Exception as e:  # noqa: BLE001 — the flow's failure is the record
         logger.warning("Cut texture %s %s: back view: %s", character_name, item_id, e)
         record.update({"csig": sig, "state": "failed", "reason": _failure_reason(e), "created_at": utc_now_iso()})
@@ -1628,10 +1753,14 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
             else:
                 _set_progress(key, job)
                 place = front_place(parts[job]) if job == "front" else ""
-                decorated = bool(place) and is_decorated(refs["detail"].get("front"))
+                main = main_words(parts[job], job)
+                found = place if family == "top" else (main["phrase"] if job == "front" else "")
+                decorated = bool(found) and is_decorated(refs["detail"].get("front"))
+                plain_pieces = (prompt_sleeves(parts[job], record["sleeve_print"]) if family == "top"
+                                else prompt_plain_pieces(parts[job], record["sleeve_print"]))
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
                                  pieces=prompt_pieces(parts[job]), layout=layout_words(parts[job]),
-                                 sleeves=prompt_sleeves(parts[job], record["sleeve_print"]))
+                                 sleeves=plain_pieces, family=family, main=main)
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
                 attempts: list = []
@@ -1959,14 +2088,34 @@ BUILD_BUSY = "The piece stayed busy with another job ({reason}) — Build again 
 _build_runs: dict[tuple[str, str], dict] = {}
 
 
+def kind_has_back(params: dict | None) -> bool:
+    """Whether a piece of these template params has back-job pieces (``BACK_PARTS``) before it is cut: a top (a bodice
+    always has a back panel), trousers and boxers (back leg panels), briefs (the back panel), gloves (the palms), a
+    bandeau (front / back); NOT tights (one island per leg, decision D2) nor a cupped bra (cups, gore, bands, straps —
+    D4)."""
+    p = params or {}
+    kind = str(p.get("kind") or "")
+    if kind == "tights":
+        return False
+    if kind == "bra":
+        return str(p.get("cup_style") or "") == "bandeau"
+    return True
+
+
 def _estimate_jobs(character_name: str, item_id: str) -> int:
     """The image jobs of a flow whose pattern is not cut yet: the back view when missing, the item upscale when the
-    picture is small, the front job and the back job (a top with a bodice always has a back panel) — the back job
-    only when the back view is not plain (``back_plain``; a missing back view counts it)."""
+    picture is small, the front job and the back job — both of the latter only when the kind has back pieces
+    (``kind_has_back``), and the back job only when the back view is not plain (``back_plain``; a missing back view
+    counts it)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
     side = _item_side(item_id)
+    upscale = 1 if 0 < side < MIN_ITEM_SIDE else 0
+    if not kind_has_back(gt.params_of(get_item(item_id))):
+        return upscale + 1
     view = 1 if back_view(character_name, item_id) is None else 0
     back = 0 if not view and back_plain(character_name, item_id) else 1
-    return view + (1 if 0 < side < MIN_ITEM_SIDE else 0) + 1 + back
+    return view + upscale + 1 + back
 
 
 def build_state(character_name: str, item_id: str, *, item: dict | None = None) -> dict:
@@ -2302,7 +2451,12 @@ def dialog_state(character_name: str, item_id: str) -> dict:
     else:
         out.update({"back_detail": None, "back_plain": None, "plain_back_limit": PLAIN_BACK_DETAIL})
     out.update({"answers": answers, "sleeve_print": sleeve_print,
-                "has_sleeves": any(part_of(str(i["name"])) in SLEEVE_PARTS for i in islands.get("islands", [])),
+                # the option's pieces: a top's sleeves, a fitted piece's small pieces (``TRIM_PARTS``); ``trim``
+                # says which the dialog names
+                "has_sleeves": any(part_of(str(i["name"])) in TRIM_PARTS for i in islands.get("islands", [])),
+                "trim": "sleeves" if any(part_of(str(i["name"])) in SLEEVE_PARTS and "sleeve" in str(i["name"])
+                                         for i in islands.get("islands", [])) or not islands.get("islands")
+                else "pieces",
                 "option_stale": record.get("state") == "ready"
                 and str(record.get("sleeve_print") or "plain") != sleeve_print})
     return out

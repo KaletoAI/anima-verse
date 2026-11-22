@@ -1,0 +1,16 @@
+{#- Texture from cut, the BACK job of a close-fitting piece (trousers / boxers: the back leg panels; briefs: the back
+    panel; gloves: the palms; a bandeau: its back — tights and a cupped bra have no back job). Reference 1 is the
+    ZOOMED island template of the back pieces alone (garment_cut_texture.job_frame), PRE-FILLED with the item's base
+    fabric colour; reference 2 is the piece's own BACK view (garment_template_views). The job runs only when the back
+    view is not plain (PLAIN_BACK_DETAIL), so its pattern is asked for.
+    picture_edit: the top's short back winner, "the shape" -> "the shapes", the back's pattern kept.
+    picture_subject / image_tag: the top's back texts with the back pieces named (main_names).
+    Variables: piece, a_piece ("a balconette bra", "a pair of gloves"), main, main_count, main_names (the others are unused here). -#}
+## picture_edit
+Edit {{ ref(1) }}. Texture the {{ "shape" if main_count == 1 else "shapes" }} in {{ ref(1) }} with the fabric on the back of the {{ piece }} in {{ ref(2) }}. Keep the {{ "shape" if main_count == 1 else "shapes" }}, the colour and the white background exactly. Add only the fabric's fine surface and the pattern its back shows, flat and evenly lit.
+## picture_subject
+The flat sewing pattern of {{ main_names }} of {{ a_piece }} on a white background in {{ ref(1) }} is <Subject 1>, filled with a plain colour; left and right are the wearer's. The back of the {{ piece }} in {{ ref(2) }} is <Subject 2>. The fabric of <Subject 2>, its colour, fine surface and pattern, is <Subject 3>. The target image shows <Subject 1> as a flat, evenly lit texture map covered with <Subject 3>. <Subject 1> is partially preserved; its outlines, proportions and the white background remain exactly, while its plain fill becomes <Subject 3>. <Subject 3> supplies the exact colour, surface and pattern transferred to <Subject 1>. <Subject 2> serves only as the source of its fabric and of any decoration on its back. A pattern, embroidery or print that <Subject 2> shows appears on <Subject 1> at the same place and scale. The fabric lies perfectly flat with even light, without folds, wrinkles, shadows, perspective, skin, labels, text or anything that <Subject 2> does not show.
+## image_tag
+Fill the back pieces in {{ ref(1) }} with the fabric of the {{ piece }} in {{ ref(2) }}, as a flat texture map. {{ ref(1) }} is the canvas: the flat sewing pattern of {{ main_names }} of {{ a_piece }} on a white background, filled with a plain colour; left and right are the wearer's. {{ ref(2) }} is the material source and shows the {{ piece }} from behind: take its fabric colour, fine surface and the pattern, embroidery or print its back really shows. Cover the pieces of {{ ref(1) }} with that fabric, perfectly flat and evenly lit. Keep the outlines, the proportions and the white background of {{ ref(1) }} unchanged. Keep the fabric free of folds, shadows, skin, labels, text and anything that {{ ref(2) }} does not show.
+## ordinal
+Texture the {{ "shape" if main_count == 1 else "shapes" }} in {{ ref(1) }} with the fabric on the back of the {{ piece }} in {{ ref(2) }}. Keep the {{ "shape" if main_count == 1 else "shapes" }}, the colour and the white background exactly. Add only the fabric's fine surface and the pattern its back shows, flat and evenly lit.

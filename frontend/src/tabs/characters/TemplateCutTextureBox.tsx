@@ -111,6 +111,9 @@ export interface TemplateCutState {
   /** Where the sleeves come from: "plain" (the front panel's fabric) or "picture" (the model's answer). */
   sleeve_print?: 'plain' | 'picture'
   has_sleeves?: boolean
+  /** Which pieces the sleeve option decides: a top's sleeves, or a close-fitting piece's small pieces (waistband,
+   *  cuffs, bands, straps, gusset, thumbs). */
+  trim?: 'sleeves' | 'pieces'
   /** The ready atlas was composed with the other sleeve option (it is composed again on the CPU). */
   option_stale?: boolean
   /** Live E2E 2026-11-21: the back view's detail and whether it is PLAIN (at or below `plain_back_limit`) — a plain
@@ -498,13 +501,17 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
         {state.error ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{t(state.error)}</div> : null}
         {state.has_sleeves ? (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }} data-cut-sleeves={state.sleeve_print || 'plain'}>
-            <strong style={{ fontWeight: 600 }}>{t('Sleeves')}</strong>
+            <strong style={{ fontWeight: 600 }}>{state.trim === 'pieces' ? t('Small pieces') : t('Sleeves')}</strong>
             {(['plain', 'picture'] as const).map((v) => (
               <button key={v} type="button" aria-pressed={(state.sleeve_print || 'plain') === v} disabled={busy || running}
                 className={`ga-btn ga-btn-sm${(state.sleeve_print || 'plain') === v ? ' ga-btn-primary' : ''}`}
-                title={t(v === 'plain'
-                  ? 'The sleeves and the neckband get the front panel’s plain fabric — a print on the chest never lands on a sleeve'
-                  : 'The sleeves come from the answer — only for a garment with a print on a sleeve')}
+                title={state.trim === 'pieces'
+                  ? t(v === 'plain'
+                    ? 'The waistband, cuffs, bands, straps, gusset and thumbs get the main pieces’ plain fabric'
+                    : 'The small pieces come from the answer — only when the picture shows a trim on them')
+                  : t(v === 'plain'
+                    ? 'The sleeves and the neckband get the front panel’s plain fabric — a print on the chest never lands on a sleeve'
+                    : 'The sleeves come from the answer — only for a garment with a print on a sleeve')}
                 onClick={() => { if ((state.sleeve_print || 'plain') !== v) void setSleeves(v) }}>
                 {t(v === 'plain' ? 'Plain fabric' : 'From the picture')}
               </button>
