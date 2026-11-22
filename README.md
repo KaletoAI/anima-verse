@@ -371,6 +371,11 @@ stops acting autonomously).
 - **Animations:** shared clip library under `shared/models/clips/` organised into sets, retargeted
   onto one reference rig, with pose presets, pair animations for two characters at one anchor and
   transition clips between them.
+- **Running pose scenes:** a free pair, a group or a furniture action is one scene layer. A skill
+  package can pace it (a playback tempo the server sends to every renderer), show meters, play a
+  closing clip at its own tempo and end the scene after it; the 3D client reports measurements of
+  the figures to the server, with a server estimate when no client is open. A package can keep a
+  pose's start and end lines out of the player chat while the characters still perceive them.
 - **Room furnishing** (needs → match → place) fills a room with props through a three-pass solver;
   scatter strokes line a street with them. **Furniture kits** furnish a room, or every empty room of
   a building, in seconds and without an LLM: a room type's template (`shared/furniture/room_types.json`)

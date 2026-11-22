@@ -953,6 +953,13 @@ dafür liefert das Event `scene.active`, die Anzeige der Provider `scene.meters`
 | `set_alt(scene_id, name, alt) -> dict` | `name` spielt ab jetzt die Alt-Hälfte `alt` seiner Clip-Rolle (`""` = wieder die eigene): `{ok, reason}`, `reason` ∈ `not_active`, `not_participant`, `no_scene`, `not_interacting`, `unknown_alt` (die Rolle hat sie nicht als Datei), `not_saved`, `invalid`. Die Spielposition rückt auf den Alt-Punkt (`geometry.alts`). Nimmt die Sperre des Laufs, dann die Profil-Sperre — nie mit einer Profil-Sperre aufrufen. Routen `POST /play/prop-actions/alt` und `POST /play/interact/alt {scene_id, alt}` |
 | `quiet(pose_key) -> bool` | Ob die Start-/Wechsel-/End-Zeile der Pose aus dem Chat-Verlauf der Spieler bleibt (Provider `scene.quiet_narration`, `multiple=True`, Kwarg `pose_key`; ein `True` genügt). False ohne Provider oder Pose; ein Fehler eines Providers wird übersprungen. Die Zeile wird trotzdem geschrieben (Kwarg `quiet` von `app.core.perception.record_utterance`, Utterance-Meta `quiet`): die Figuren nehmen sie wahr, nur `GET /play/scene` lässt sie weg. Einladungen, Annäherungen, Absagen und Reaktionen bleiben sichtbar |
 | `meters(scene_id, name='') -> list` | Die Füllstand-Zeile einer laufenden Szene (Möbel-Lauf über seine ID, freie Szene über ein Mitglied `name`); `[]` sonst |
+| `clamp_tempo(tempo) -> float` | `tempo` auf [0.2, 1] begrenzt (`TEMPO_MIN`, `TEMPO_MAX`); 1 für alles, was keine endliche Zahl ist |
+| `scene_tempo(scene_id, members, roles, pose_key, lead_role) -> float` | Das Tempo, das ein Paket der Szene jetzt gibt (Provider `scene.tempo`, s. u.), begrenzt; 1 ohne Provider, ohne Antwort oder bei einem Fehler. Jeder Takt fragt es einmal (vor `scene.active`) |
+| `clip_clock(scene_id, clip) -> tuple` | `(clip_s, tempo)` der Szene, wie der Block `interaction` sie nennt (schnittstellen-3d.md § A8a): die Clip-Uhr bis jetzt fortgeschrieben (`clip_s += Δ reale, nicht eingefrorene Sekunden · tempo`) und das aktuelle Tempo. Ein anderes `clip` als beim letzten Mal ist ein Posenwechsel und startet bei 0 |
+| `report_readouts(scene_id, rows, *, viewer='', admin=False) -> int` | Nimmt die Kanal-Messungen eines Clients an (Route `POST /play/scene/readouts`, § A8a): Zahl der übernommenen Zeilen. Nur für eine laufende Szene, deren Mitglieder `receiver` und `entering` sind, von einem Admin oder einem Avatar `viewer`, der die Szene sieht, höchstens eine je Schlüssel (receiver, channel, entering) pro 0,8 s; alles andere fällt still weg |
+| `readouts(scene_id, members=None) -> list` | Die Messungen für den Takt: je Schlüssel die letzte Client-Meldung, höchstens 5 s alt (`source: "client"`, `reaches` seit dem letzten Aufruf summiert), sonst die Schätzung (`estimate_readouts`); `[]` ohne beides — ein Paket liest eine fehlende Messung als neutral |
+| `estimate_readouts(scene_id, members=None) -> list` | Die SCHÄTZUNG ohne Client (`source: "estimate"`): aus dem Sidecar-`channel_profile` des Szenen-Clips (`{channel: {share_max, reaches_per_cycle}}`, gemessen in Poses → Places) und den Kollisionsdaten beider Figuren; Formel im Moduldocstring, `[]` ohne Profil oder Daten |
+| `figure_geometry(name) -> dict \| None` | Die Kanal- und Teil-Maße aus dem Kollisionsdatensatz des Modells, das das Spiel für `name` ausliefert (pro Datei gecacht); None ohne Modell oder aktuellen Datensatz |
 | `advance(now, *, due_only=False) -> int` | Ein Scheduler-Schritt der Szenen-Schicht: fällige Enden (`end_after_finale`), abgelaufene Abschlüsse, und der Takt jeder FREIEN Szene (Möbel-Läufe takten aus `prop_action_engine.advance`). `due_only` (Travel-Ticker): nur Szenen mit Füllständen, höchstens alle `METER_BEAT_REAL_S` |
 
 Provider `scene.meters` (Kwargs `scene_id`, `members`, `pose_key`; Antwort: `[{name, value, label, rate?}]`): die Füllstände
@@ -963,6 +970,13 @@ Szene bis jetzt hoch und gibt `rate` pro ECHTER Sekunde weiter (eingefrorene Wel
 hat, bekommt alle `METER_BEAT_REAL_S` (5 s) einen Takt (Möbel: `due_in_s`; frei: der Travel-Ticker), damit der
 Abschluss pünktlich kommt. Optional `holdable`/`held` (nur echtes `True` zählt): das HUD bietet der eigenen Zeile
 dann einen Zurückhalten-Schalter an (`hold`).
+
+Provider `scene.tempo` (Kwargs `scene_id`, `members`, `roles`, `pose_key`, `lead_role`; Antwort: eine Zahl oder
+None): das Abspieltempo der laufenden Szene, 1 = Eigentempo des Clips. Der Kern fragt es bei jedem Takt, bevor
+`scene.active` feuert (ein Paket, das im Takt einen Füllstand fortschreibt, sieht sein neues Tempo also erst beim
+nächsten Takt), begrenzt die Antwort auf [0.2, 1] und nimmt 1 ohne Provider, ohne Antwort oder bei einem Fehler. Der
+ganze Ablauf einer freien Paar-Szene mit einem Paket (Takt → Füllstand → Tempo → Abschluss → Ende, stille Zeilen) ist
+handgerechnet in `scripts/smoke_pair_scene_flow.py`.
 
 ## Folge-Pose nach dem Ende — `app.core.pose_catalog` ✅
 
@@ -975,6 +989,22 @@ ein Fehler sind kein normales Ende. Ein NPC steht nach 20 Spielminuten von selbs
 | Funktion | Semantik |
 |---|---|
 | `follow_pose_for(pose_key, role='', *, use_provider=True) -> str` | Die Folge-Pose: Katalogfeld `follow_pose` (ein Key oder `{a, b}` je Clip-Rolle einer Paar-Pose), sonst der Provider `pose.follow_pose` (Kwargs `pose_key`, `role`, `group`; Antwort: ein Pose-Key), sonst das `follow` der Platzgruppe (shared: `seat` → `sitting`, `lie` → `lying`). "" = keine; nie die Pose selbst und nie eine Paar-Pose — jedes Stoppen wendet genau EINE Stufe an |
+
+## Führende Rolle einer Mehrpersonen-Pose — `app.core.pose_catalog` ✅
+
+Eine Mehrpersonen-Pose darf im Katalog die Clip-Rolle nennen, die die laufende Szene FÜHRT (`lead_role`, eine der
+Rollen der Pose; Solo-Posen haben keine). Game-Admin → Poses zeigt das Feld „Lead role“; `POST`/`PUT` lehnen eine
+Rolle außerhalb der Pose mit 400 ab. Was die Führung bedeutet, entscheidet das Paket — der Kern reicht sie nur als
+`lead_role` an `scene.active` und `scene.tempo` weiter.
+
+| Funktion | Semantik |
+|---|---|
+| `lead_role_of(pose_key) -> str` | Das Katalogfeld `lead_role`, sonst Rolle `a`; "" für eine Solo-Pose oder eine unbekannte Pose |
+
+Provider `pose.lead_role_default` (Kwargs `pose_key`, `roles` (die Clip-Rollen der Pose), `role_gender` (die
+Geschlechter-Zuordnung ihres `animation`-Clips, `{}` ohne); Antwort: eine dieser Rollen): eine Boot-Migration
+(`app/core/pose_lead_role_migration.py`) fragt ihn EINMAL je Mehrpersonen-Pose ohne das Feld und schreibt eine gültige
+Antwort in den Speicher, aus dem der Eintrag kam (Welt oder shared). Ohne Provider oder Antwort bleibt das Feld leer.
 
 ## Pose — `app.models.character` ✅ (set_pose-Paket)
 
@@ -1269,6 +1299,11 @@ Capabilities, die der Core heute abfragt:
 | `party_invite_respond`, `party_invite_projection` | Party resolver and player invitation payload | Ordinary membership/question behavior |
 | `play.party_invite` | `routes/play.py` `POST /play/party/invite {target}` (the player's "Invite to party"), off the event loop, after the skill gate of the skill whose `PLAYER_ACTION` is `"party_invite"`. Called with the avatar and the target name (positional), it answers a dict with `status` (`"refused"`, else the invitation's status right after its answer was requested: `"pending"`, or `"accepted"`/`"declined"` when settled at once), `invite_id`, `reason`, and for a refusal `message` — English UI text the route translates through the i18n layer, `{name}` standing for the target. The route charges the skill's cost only for a recorded invitation | The route answers 404 "Party invitations are not available." |
 | `journey_execution_context`, `journey_arrival_validate` | Owned travel tick and exact arrival | Ordinary journey behavior |
+| `scene.tempo` | `pose_scene.scene_tempo`, einmal pro Takt einer laufenden Szene (Kwargs `scene_id`, `members`, `roles`, `pose_key`, `lead_role`) | Tempo 1 — der Clip läuft in seinem Eigentempo |
+| `scene.meters` | `pose_scene.meter_rows`: die Füllstand-Zeile im HUD und der Takt alle 5 s für Szenen mit Füllständen | Keine Füllstände, Takt nur mit dem Welt-Tick |
+| `scene.meter_hold` | `pose_scene.hold` (Routen `…/hold`) | `hold` antwortet `unsupported` |
+| `scene.quiet_narration` | `pose_scene.quiet` (`multiple=True`), bei Start-/Wechsel-/End-Zeile einer Pose | Alle Zeilen stehen im Chat der Spieler |
+| `pose.lead_role_default` | `pose_lead_role_migration.migrate_lead_role_once` beim Boot | Kein `lead_role` vorbelegt; `lead_role_of` nimmt Rolle `a` |
 
 ## Skill-Hooks (Deklarationen an der Klasse / im Manifest) ✅
 

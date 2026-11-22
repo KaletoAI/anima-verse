@@ -3024,7 +3024,8 @@ Payload-Lesen: `clip_s += Δ(reale, nicht eingefrorene Sekunden) · tempo` (das
 Tempo VOR dem Schritt; Grundlage ist die Bewegungsuhr `motion_time`, ein Freeze
 hält sie an). Das Tempo erneuert jeder Beat aus dem Provider
 `scene.tempo(scene_id, members, roles, pose_key, lead_role) -> float | None`,
-geklemmt auf [0.2, 1]; ohne Provider oder Antwort 1. Ein Posenwechsel (gleiche
+geklemmt auf [0.2, 1]; ohne Provider oder Antwort 1 (`lead_role` = das Katalogfeld
+`lead_role` der Pose, sonst Rolle `a`; `pose_catalog.lead_role_of`). Ein Posenwechsel (gleiche
 Id, neue Pose bzw. neuer Clip) startet die Uhr bei 0 und behält das Tempo. Die
 Uhr lebt im Serverprozess: eine Szene, die er zum ersten Mal sieht (Start oder
 erster Zugriff nach einem Serverstart), zählt ab 0.
@@ -3153,6 +3154,13 @@ Anzeigefenster in Systemzeit. Fehlt der Figur der Clip, entfällt der Abschluss 
 ein noch laufender Abschluss. Der Server lässt das Feld bis **4 s nach Clipende** stehen (damit jeder Poll es
 einmal sieht) und hält den Abschluss nur im Prozess (Neustart = weg); solange steht, lehnt er einen neuen
 Abschluss derselben Person ab.
+
+**Ende nach dem Abschluss.** Ein Paket darf die Szene an den Abschluss knüpfen:
+`pose_scene.end_after_finale(scene_id, name, delay_s)` beendet sie `delay_s` ECHTE Sekunden, nachdem `name`s
+Abschluss ganz gespielt ist (Start + `duration_s`, also jeder Durchlauf im Tempo des Felds; ohne Abschluss ab
+jetzt). Der Travel-Ticker erledigt es (`pose_scene.advance`); der Client sieht danach kein `interaction` mehr.
+Handgerechnet für ein freies Paar von Start bis Ende (Tempo je Takt, `clip_s`, `finale`-Block, Ende genau
+`delay_s` nach dem Abschluss, stille Start-/End-Zeile): `scripts/smoke_pair_scene_flow.py`.
 
 `GET /play/prop-actions/state` liefert pro laufender Zeile eines Möbel-Laufs zusätzlich `has_finale` (die gehaltene Pose hat
 einen Abschluss-Clip) und `meters: [{name, value 0..100, rate, label, holdable, held}]` (Füllstände eines Pakets,

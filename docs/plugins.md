@@ -1762,7 +1762,14 @@ rigs:
     poses:
       raised: {rest_deg: 24, gravity: 0.5, freq: 0.8, flatten: 2, spill: 0}
       held: {rest_deg: 60, length: 1.2, gain: 0, rigid: 1}
+    preview_pose: raised   # optional: pre-selected in Poses → Places
 ```
+
+`rigs[].preview_pose` (optional string, default `""`) names one of the group's own `poses`; any other
+value rejects the rig. Game-Admin → Poses → Places shows, on the base body, one pose picker per group that
+declares poses (Rest + its pose ids) and pre-selects this pose; `""` pre-selects Rest. It changes only that
+preview, never a state or a running scene (`GET /characters/{c}/figure?plain=1` →
+`plain_body.extension.groups[i].preview_pose`; motion via `GET /characters/{c}/base-body/pose-motion`).
 
 A state's `bone_pose` is then `{"<group id>": "<pose id>"}`, e.g.
 `{"bone_pose":{"example_group":"raised"}}`. Saving, moving and importing a state refuse
