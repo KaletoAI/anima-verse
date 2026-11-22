@@ -201,6 +201,8 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   if (key === 'waistband' && p.kind === 'tights' && p.tights_style !== 'tights') return false
   // B10: the button count only for a buttoned placket
   if (key === 'buttons' && p.placket !== 'buttons') return false
+  // B9 / phase E: a top's or dress's collar stands on a neck ring — only with covered shoulders
+  if (key === 'collar' && (p.kind === 'top' || p.kind === 'dress') && p.shoulders !== 'covered') return false
   return true
 }
 

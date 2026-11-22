@@ -27,8 +27,8 @@ Fields:
 - "neckline" (top, jacket, dress with "covered" shoulders; not for "off_shoulder", its neckline is the band): "crew" (round, close to the neck), "v", "scoop" (deep round) or "boat" (wide, shallow). A strapless top or a top with "straps" instead: "straight" (straight across the chest) or "sweetheart" (dips in the middle between two curves over the bust).
 - "neck_depth_m": how deep the neckline reaches below the shoulder line in metres, 0 for the usual depth of that neckline; for a "sweetheart" top the dip in the middle (0 = the usual 0.05, at most 0.10).
 - "front" (jacket only): "closed" (buttoned or zipped) or "open" (worn open).
-- "collar" (jacket or dress): "none", "stand" (a standing collar) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck; a dress takes "stand" only).
-- "placket" (jacket or dress): what closes the front as the picture shows it — "buttons", "zip", "lacing" or "none" (nothing visible, or an open front without a closure).
+- "collar" (jacket, dress or top): "none", "stand" (a standing collar; a shirt's turned-down collar is "stand" too) or "lapel" (a blazer's folded lapels; such a jacket is open at the neck; a dress or a top takes "stand" only, and only with "covered" shoulders).
+- "placket" (jacket, dress or top): what closes the front as the picture shows it — "buttons", "zip", "lacing" or "none" (nothing visible, or an open front without a closure). A shirt laced at the neck and buttoned below is "buttons"; a corset laced down the front is "lacing".
 - "buttons" (with "placket" "buttons"): how many buttons the picture shows down the front, 1-12; 0 when you cannot count them.
 - "fabric": "stiff" (denim, wool, thick cotton that keeps its shape), "leather_glossy" (shiny, polished or patent leather, latex-like shine), "leather_rough" (suede, nubuck, matte leather), "medium" (ordinary cotton, linen), "flowing" (silk, satin, jersey, anything opaque that falls in soft folds), "sheer" (chiffon, voile, organza, tulle, mesh — very light and see-through).
 - "rise" (briefs only): "low" (well under the navel, on the hip bones), "mid" or "high" (up to the waist).
