@@ -135,6 +135,14 @@ Files (replace `garment_cut_texture.md` / `_back.md`):
 | all three · image_tag | research §5e/§5f. The decoration clauses are dropped in front_plain, and front_decorated places the front print at `{{ front_place }}` | no (Qwen is not in the chain) |
 | all three · ordinal | = the picture_edit text without the `Edit …` frame, with `ref()` → "the first image" | as today on other backends |
 
+**The fitted family (group A, 2026-11-21).** Briefs, bra, gloves, tights and trousers use their own three files,
+`garment_cut_texture_fitted_{front_plain,front_decorated,back}.md`, with the same four sections
+(`garment_cut_texture.PROMPT_SETS["fitted"]`, picked by `prompt_family(kind)`). The text is the top's tested wording.
+The decorated front names the MAIN pieces (`main`, `main_count`, `main_names` from `main_words`: "the two largest
+shapes are the right front leg panel and the left front leg panel") instead of `front_place`. It also uses
+`a_piece` ("a pair of gloves") and lists the small pieces as plain fabric. Their sha keys the fitted atlases only;
+the top's `PROMPT_SHA` is unchanged.
+
 - Variables: `piece`, `front_place` (exists), plus the restored `pieces` / `layout` / `sleeves` that N needs. `prompt_pieces` / `layout_words` / `_pattern_order` come back from `3a6718c78^:app/core/garment_cut_texture.py:256-310` (only the subject sections use them).
 - `garment_cut_texture.render_prompt(*, side, decorated, front_place, piece, pieces, layout, dialect)` returns `EditPrompt.from_template(...).render(dialect)` with `refs=[Ref(1,"canvas",…), Ref(2,"material",…)]`.
 - The call moves INTO `_routed_render._render(b)`: `dialect = edit_prompt.dialect_of(b)`. Attempt 2 on another backend thus gets its own dialect. `compose(..., keep_negations=True)`.
