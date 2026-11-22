@@ -306,6 +306,8 @@ EXCEPTIONS = {
     **{(k, "fabric"): "drape / material only" for k in gt.BUILT_KINDS},
     # where the texture comes from (``TEXTURE_ONLY``): no drape, the cut is the same
     **{(k, f): "texture only" for k in gt.BUILT_KINDS for f in ("texture", "sleeve_print")},
+    # the placket and its buttons are painted onto the cut atlas (``cut_texture_post.placket_atlas``), not cut
+    **{(k, f): "painted on the atlas" for k in gt.BUILT_KINDS for f in ("placket", "buttons")},
 }
 #: The smallest patch of cloth that counts as a visible difference (2 x 2 cm).
 XOR_MIN_CM2 = 4.0
