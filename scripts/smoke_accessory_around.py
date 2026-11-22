@@ -23,6 +23,11 @@ Expected values, derived by hand:
     the skin (> 0.06) → ignored: t stays in [0.099880, 0.1], share 0.0. A garment round only part of the section
     (``UNDER_MIN_SHARE`` 0.5): 60 % of the 0.12 cylinder's sides → the piece goes round it, the missing 40 % bridged
     → every ray at least 0.119855 · cos(π/64)… ≥ 0.1197, share 1.0; 40 % of it → ignored, share 0.0.
+[4b] A choker sits on a garment only where it hugs the neck (``UNDER_MAX_BY_KEY`` choker 0.01): over the same 0.1
+    "neck" cylinder a turtleneck at 0.105 (5 mm off) is taken → t in [0.105 · cos(π/64), 0.105] = [0.104987, 0.105],
+    share 1.0; a collar at 0.125 (2.5 cm off — Kira's jacket collar stood 1.7–4 cm off her neck) is 0.025 > 0.01
+    beyond the skin → ignored, t stays in [0.099880, 0.1], share 0.0; the same 0.125 cylinder under a BELT is
+    0.025 ≤ 0.06 beyond → taken, share 1.0.
     Anklet, leg (0.1, 0.5, 0) → foot (0.1, 0.1, 0): axis (0, 1, 0), centre = foot + 0.035 · axis = (0.1, 0.135, 0).
 [5] ``band_mesh``, inner radius 0.102 everywhere, 3 mm deep, rows ±2 cm, 96 angles: a closed ring of volume
     π (0.105² − 0.102²) · 0.04 · (96 / 2π) sin(2π / 96) = 7.8037e-5 · 0.99929 = 7.7982e-5 m³ (± 0.1 %), positive
@@ -134,6 +139,17 @@ for share, want_share in ((0.6, 1.0), (0.4, 0.0)):
     s = ab.surface_radius(P, F, [(Pg, Fg[keep])], fr, [0.0], reach=0.3, what="belt")
     low = 0.1197 if want_share else 0.0998
     check(f"[4] garment round {share:.0%}", (bool(np.all(s["t"] >= low)), s["under_share"]), (True, want_share))
+# [4b] the choker's bound
+fr_c = dict(fr, key="choker")
+Pt, Ft = cylinder(0.105)
+s = ab.surface_radius(P, F, [(Pt, Ft)], fr_c, [0.0], reach=0.3, what="choker")
+check("[4b] choker on a turtleneck", (bool(np.all(s["t"] >= 0.105 * np.cos(np.pi / 64) - 1e-9)),
+                                      bool(np.all(s["t"] <= 0.105 + 1e-9)), s["under_share"]), (True, True, 1.0))
+Pc, Fc = cylinder(0.125)
+s = ab.surface_radius(P, F, [(Pc, Fc)], fr_c, [0.0], reach=0.3, what="choker")
+check("[4b] choker under a standing collar", (bool(np.all(s["t"] <= 0.1 + 1e-9)), s["under_share"]), (True, 0.0))
+s = ab.surface_radius(P, F, [(Pc, Fc)], fr, [0.0], reach=0.3, what="belt")
+check("[4b] belt over the same garment", s["under_share"], 1.0)
 fr_a = ab.frame(n({"kind": "anklet"}), {"mixamorig:LeftLeg": [0.1, 0.5, 0], "mixamorig:LeftFoot": [0.1, 0.1, 0]}, "left")
 fr_t = ab.frame(n({"kind": "strap", "band": {"at": "thigh"}}),
                 {"mixamorig:LeftUpLeg": [0.1, 0.9, 0], "mixamorig:LeftLeg": [0.1, 0.5, 0]}, "left")

@@ -43,6 +43,11 @@ REACH_M = {"belt": 0.32, "strap": 0.32, "choker": 0.12, "anklet": 0.12, "bracele
 #: A garment surface counts for a ray only up to this far beyond the body's skin on that ray (a skirt's flare or a
 #: coat's hem farther out is not the layer the band sits on).
 UNDER_MAX_M = 0.06
+#: Per section, a tighter bound than ``UNDER_MAX_M``. A choker is worn ON the neck: a garment is the layer under it
+#: only where it hugs the neck (a turtleneck, a few millimetres off the skin) — a jacket collar standing 2–4 cm off
+#: the neck is not, the choker goes on the skin under it (Kira's business jacket: the choker laid on the collar sat
+#: 2–4 cm out, reached the trapezius beside the neck and took half its weight from the shoulders).
+UNDER_MAX_BY_KEY = {"choker": 0.01}
 #: Which body surface a section takes (``accessory_curve.ray_hits`` pick): the outermost — clothing worn "in the
 #: body" is part of the body's surface, a belt goes over it — except round the neck, where a hair shell can lie
 #: farther out (the innermost layer, as for the necklace).
@@ -243,15 +248,17 @@ def smooth_up(t: np.ndarray, passes: int = 3) -> np.ndarray:
 def surface_radius(body_P, body_F, under: List[Tuple[np.ndarray, np.ndarray]], fr: Dict[str, Any],
                    offsets: Sequence[float], *, reach: float, what: str) -> Dict[str, Any]:
     """Per row and ray the radius of the layer a piece sits on: the body's skin, or a worn garment's surface when it
-    lies farther out on that ray (at most ``UNDER_MAX_M`` beyond the skin). ``{t, skin, dirs, under_share}`` —
+    lies farther out on that ray (at most ``UNDER_MAX_M`` — ``UNDER_MAX_BY_KEY`` for the section — beyond the skin).
+    ``{t, skin, dirs, under_share}`` —
     ``under_share`` the share of rays that sit on a garment."""
     skin, dirs = section(body_P, body_F, fr, offsets, reach=reach, pick=BODY_PICK.get(fr["key"], "outer"))
     skin = bridge(skin, what)
     t = skin.copy()
     on_garment = np.zeros_like(t, bool)
+    beyond = UNDER_MAX_BY_KEY.get(fr["key"], UNDER_MAX_M)
     for P, F in under:
-        g, _ = section(P, F, fr, offsets, reach=reach + UNDER_MAX_M, pick="outer")
-        g = np.where(np.isfinite(g) & (g <= skin + UNDER_MAX_M), g, np.nan)
+        g, _ = section(P, F, fr, offsets, reach=reach + beyond, pick="outer")
+        g = np.where(np.isfinite(g) & (g <= skin + beyond), g, np.nan)
         if np.isfinite(g).mean() < UNDER_MIN_SHARE:
             continue          # it only touches the section (a shoe's lower back edge): the piece is not over it
         # over most of it: the piece goes round it, bridging where it ends lower (a shaft cut lower at the back)

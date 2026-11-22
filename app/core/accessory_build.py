@@ -43,8 +43,9 @@ logger = logging.getLogger(__name__)
 
 #: Bumped when an accessory is built differently for the same inputs.
 ACCESSORY_VERSION = 2
-#: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``).
-AROUND_VERSION = 1
+#: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
+#: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
+AROUND_VERSION = 2
 #: The air between the skin and the chain's surface. The plan's 1.5 mm left one ring of Lirien's chain at 0.94 mm
 #: in the sit clip (A216 acceptance: rest 1.50–2.57 mm, sit min 0.94 mm); 1.7 mm keeps every ring inside the
 #: 1–3 mm band in rest, walk and sit (the skinning moves a ring by at most ~0.6 mm there).
