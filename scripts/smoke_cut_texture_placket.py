@@ -32,7 +32,30 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     ``buttons`` 2, and the button disc centre (115, 60) is the disc colour.
 [6] A zip on the closed front of [4]: the pixel (100, 100) on the line is the metal L* 60 (a tooth row or the band:
     L* 50 or 60, a* = b* ~ 0) and (110, 100) 9.5 px off — beyond the band's 0.4 cm half width — stays grey.
+[7] The assembly path (``garment_cut_texture.placket_atlas``) on a fixture cut: ``<stem>.islands.json`` (atlas_px 200,
+    10 px/cm; island "front" = the rectangle x 0..150 x 0..200 as two triangles, "stripe" = x 150..200 — sorted ids
+    front 1, stripe 2; ``rasterise_islands`` fills pixel CENTRES with half-open edges, so "front" is exactly the
+    pixels x < 150 of [4]), ``<stem>.marks.json`` next to it (the marks path is the islands path with
+    ``.islands.json`` -> ``.marks.json``; the line of [4]) and the grey / red atlas of [4] as PNG bytes. The item is a
+    closed jacket with ``placket`` buttons, ``buttons`` 0: the result decodes to exactly [4]'s ``out`` (same masks, same
+    marks, same px/cm) and its info names the buttons (100.5, 60) / (100.5, 140). ``placket`` "none" returns the SAME
+    bytes object (no decode, no re-encode); without a marks file the bytes come back unchanged with info
+    ``{"style": "buttons", "skipped": "no marks"}``; a lapel collar draws no stitch lines (pixel (85, 100) stays grey
+    128 — the button discs only).
+[8] The assembly key (``garment_assembly._texture_key``, ``cut_info`` stubbed to texture "cut", csig "0123456789ab"):
+    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket1-buttons-0"; buttons / 4 ->
+    "...:placket1-buttons-4"; zip -> "...:placket1-zip-0" (``PLACKET_VERSION`` 1) — every one a different key, so a
+    switch re-assembles. The cut keys do NOT change: ``garment_template_cut.cut_sig`` of the four param sets is one value
+    (``placket`` / ``buttons`` are ``TEXTURE_ONLY``, out of ``keyed_params``), and ``garment_cut_texture.csig`` takes no
+    params at all (islands, item picture, back view, prompt, post version) — so no image job and no new atlas.
+[9] Lacing on [4]'s closed front: the 16 cm line (160 px) at ``LACE_PITCH_CM`` 2.5 (25 px) has pairs at arc 12.5,
+    37.5, ..., 137.5 (< 160) = 6 pairs -> info ``eyelets`` 12. The first pair sits at y 32.5, ``LACE_HALF_CM`` 1.2
+    (12 px) either side of x 100.5: x 88.5 and 112.5. Pixel (88, 32) is that eyelet's centre: the inner disc (r 1.25
+    px) in the cord colour, the fabric L* 53.6 - ``LACE_DL`` 30 = 23.6; pixel (86, 32) lies 2 px from it — outside the
+    inner disc, inside the ring (r 2.5 px): the metal L* 60.
 """
+import io
+import json
 import os
 import sys
 import tempfile
@@ -134,6 +157,76 @@ z = lab(out3[100, 100])
 check("[6] the line is metal (L* 50 / 60, neutral)", min(abs(z[0] - 60), abs(z[0] - 50)) <= 1.0
       and abs(z[1]) < 1 and abs(z[2]) < 1, tuple(z))
 check("[6] 9.5 px off the line stays grey", tuple(out3[100, 110]) == (128, 128, 128), tuple(out3[100, 110]))
+
+# [7]
+from PIL import Image  # noqa: E402
+from app.core import garment_assembly as ga  # noqa: E402
+from app.core import garment_template as gt  # noqa: E402
+from app.core import garment_template_cut as gtc  # noqa: E402
+from app.models import inventory  # noqa: E402
+
+fx = Path(TEMP.name) / "fixture"
+fx.mkdir()
+rect = lambda x0, x1: {"verts_px": [[x0, 0], [x1, 0], [x1, 200], [x0, 200]], "tris": [[0, 1, 2], [0, 2, 3]]}
+islands = {"atlas_px": 200, "px_per_cm": 10.0, "islands": [{"name": "front", **rect(0, 150)},
+                                                            {"name": "stripe", **rect(150, 200)}]}
+ipath = fx / "item_fx_0123456789ab.islands.json"
+ipath.write_text(json.dumps(islands))
+mpath = fx / "item_fx_0123456789ab.marks.json"
+mpath.write_text(json.dumps({"atlas_px": 200, "lines": marks}))
+buf = io.BytesIO()
+Image.fromarray(atlas, "RGB").save(buf, "PNG")
+atlas_png = buf.getvalue()
+PARAMS = {"kind": "jacket", "front": "closed", "collar": "none", "placket": "buttons", "buttons": 0}
+inventory.get_item = lambda item_id: {"id": item_id, "outfit_piece": {"template": {"params": dict(PARAMS)}}}
+gct._ready_pattern = lambda character_name, item_id: {"islands_path": str(ipath), "islands_sha": "x"}
+labels = gct.rasterise_islands(islands, 200)
+check("[7] the fixture's front island is the pixels x < 150", (labels == 1).sum() == 150 * 200
+      and (labels[:, :150] == 1).all() and (labels[:, 150:] == 2).all())
+got, pinfo = gct.placket_atlas("Demo", "item_fx", atlas_png)
+got_rgb = np.asarray(Image.open(io.BytesIO(got)).convert("RGB"))
+check("[7] placket_atlas == draw_placket of [4]", (got_rgb == out).all(), int((got_rgb != out).any(axis=2).sum()))
+check("[7] info buttons (100.5, 60) / (100.5, 140)", (pinfo or {}).get("buttons") == [[100.5, 60.0], [100.5, 140.0]],
+      (pinfo or {}).get("buttons"))
+PARAMS["placket"] = "none"
+same_b, none_info = gct.placket_atlas("Demo", "item_fx", atlas_png)
+check("[7] none: the same bytes, info None", same_b is atlas_png and none_info is None)
+PARAMS["placket"] = "buttons"
+mpath.rename(fx / "moved.json")
+nm_b, nm_info = gct.placket_atlas("Demo", "item_fx", atlas_png)
+check("[7] no marks file: bytes unchanged, skipped", nm_b is atlas_png
+      and nm_info == {"style": "buttons", "skipped": "no marks"}, nm_info)
+(fx / "moved.json").rename(mpath)
+PARAMS["collar"] = "lapel"
+lp_b, _ = gct.placket_atlas("Demo", "item_fx", atlas_png)
+lp = np.asarray(Image.open(io.BytesIO(lp_b)).convert("RGB"))
+check("[7] lapel: no stitch line at (85, 100), the disc at (100, 60)",
+      tuple(lp[100, 85]) == (128, 128, 128) and tuple(lp[60, 100]) == tuple(col["disc"]), (lp[100, 85], lp[60, 100]))
+PARAMS["collar"] = "none"
+
+# [8]
+gt.cut_info = lambda character_name, item_id, record=None, item=None: {"texture": "cut", "csig": "0123456789ab"}
+keys, cut_sigs = {}, set()
+for style, n in (("none", 0), ("buttons", 0), ("buttons", 4), ("zip", 0)):
+    PARAMS.update(placket=style, buttons=n)
+    keys[(style, n)] = ga._texture_key("Demo", {"item_id": "item_fx", "template": True})
+    cut_sigs.add(gtc.cut_sig(gt.params_of(inventory.get_item("item_fx")), base_sha="b", lower=[]))
+want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket1-buttons-0",
+        ("buttons", 4): "cut:0123456789ab:placket1-buttons-4", ("zip", 0): "cut:0123456789ab:placket1-zip-0"}
+for k, v in want.items():
+    check(f"[8] _texture_key {k} -> {v}", keys[k] == v, keys[k])
+check("[8] cut_sig is one value for all four", len(cut_sigs) == 1, cut_sigs)
+import inspect  # noqa: E402
+check("[8] csig takes no params", list(inspect.signature(gct.csig).parameters) ==
+      ["islands_sha", "item_sha", "back_sha", "prompt_sha"])
+
+# [9]
+out4, info4 = post.draw_placket(atlas, {"front": isl}, marks, kind="jacket", style="lacing", buttons=0, px_per_cm=10)
+check("[9] lacing: 12 eyelets", info4.get("eyelets") == 12, info4.get("eyelets"))
+cord_l = float(lab(out4[32, 88])[0])
+check("[9] pixel (88, 32) is the cord, L* 23.6", abs(cord_l - (grey_l - 30.0)) <= 0.6, (cord_l, grey_l - 30.0))
+ring_l = float(lab(out4[32, 86])[0])
+check("[9] pixel (86, 32) is the ring, L* 60", abs(ring_l - 60.0) <= 0.6, ring_l)
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)
