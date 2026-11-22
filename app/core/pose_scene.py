@@ -40,6 +40,27 @@ Neither engine keeps a copy of what lives here (plan pair scene, Task 3):
   latest per key, no older than READOUT_FRESH_S, rides on every beat, its
   ``reaches`` summed since the previous beat. Measurements only — what they
   mean is the package's. They live in this process.
+- the READOUT ESTIMATE (:func:`estimate_readouts`): per key without a fresh
+  client report, :func:`readouts` hands out an estimate (``source "estimate"``)
+  instead — exact only with a client. It needs the clip's CHANNEL PROFILE
+  (sidecar ``channel_profile`` of the scene's clip kind, ``{channel:
+  {share_max, reaches_per_cycle}}``, measured once in the Poses tab) and the
+  two figures' collision records (:func:`figure_geometry`): the receiver R's
+  channel (depth D = |b_pos - a_pos|, rest radius = its ``r``) and the
+  entering figure E's first part whose op the channel accepts (length L =
+  the sum of its chain's bind link lengths, surface radius r = the largest
+  ``r_surface`` of its links). Per (R, channel, E)::
+
+      insertion_of_depth = share_max * L / D
+      part_radius_m = r, rest_radius_m = R's r, depth_m = D
+      reaches = reaches_per_cycle * cycles   when share_max * L >= D, else 0
+
+  ``cycles`` = clip seconds the scene's clip clock ran since the previous
+  estimate / the clip's ``duration_s`` (a clock that went back — a pose
+  switch — counts from 0); whole reaches only, the fraction carries to the
+  next estimate. No profile, no record, no accepted part: no entry (the
+  package reads a missing readout as neutral). Lengths are the models' bind
+  space (metres), the figures' height scale is not applied.
 """
 import math
 import uuid
@@ -91,6 +112,11 @@ _clocks = {}
 #: scene id -> {(receiver, channel, entering): the latest accepted row +
 #: "at" (utc of it) + "reaches" (summed since the last read)}
 _readouts = {}
+#: scene id -> {"clip_s": its clip clock at the previous estimate, "carry":
+#: {(receiver, channel, entering): the reach fraction carried}}
+_estimates = {}
+#: model path -> ((file stamps), figure geometry) — :func:`figure_geometry`
+_geometries = {}
 #: The game time of this process's first step (:func:`advance`): a free scene
 #: started before it gets no credit for the time the server was down.
 _boot = {"game": None}
@@ -361,6 +387,7 @@ def end_finales(scene_id=None, *, expired_only=False):
         if scene_id is not None and not expired_only:
             _clocks.pop(scene_id, None)
             _readouts.pop(scene_id, None)
+            _estimates.pop(scene_id, None)
         done = [(name, f) for name, f in _finales.items()
                 if (scene_id is None or f["scene_id"] == scene_id)
                 and not (expired_only and _finale_live(f))]
@@ -632,13 +659,14 @@ def _prune_clocks(free_ids):
     scene that is gone, a furniture run that ended or vanished)."""
     from app.core import prop_action_store as store
     with _mutex:
-        ids = [scene_id for scene_id in {*_clocks, *_readouts} if scene_id not in free_ids]
+        ids = [scene_id for scene_id in {*_clocks, *_readouts, *_estimates} if scene_id not in free_ids]
     for scene_id in ids:
         run = _furniture_run(scene_id)
         if run is None or run["status"] in store.TERMINAL:
             with _mutex:
                 _clocks.pop(scene_id, None)
                 _readouts.pop(scene_id, None)
+                _estimates.pop(scene_id, None)
 
 
 # ---------------------------------------------------------------- readouts
@@ -725,19 +753,19 @@ def report_readouts(scene_id: str, rows, *, viewer: str = "", admin: bool = Fals
     return accepted
 
 
-def readouts(scene_id: str) -> list:
+def readouts(scene_id: str, members=None) -> list:
     """The readouts of a scene for its beat: per key the latest report no
     older than READOUT_FRESH_S (``{receiver, channel, entering,
     insertion_of_depth, part_radius_m, rest_radius_m, depth_m, reaches,
-    source: "client"}``, sorted by key), ``reaches`` summed since the
-    previous call — which resets them. Older ones are forgotten. [] when
-    nothing was reported."""
+    source: "client"}``), ``reaches`` summed since the previous call — which
+    resets them; older ones are forgotten. Every key without such a report
+    gets the estimate instead when there is one (:func:`estimate_readouts`,
+    ``source: "estimate"``; ``members`` = the scene's members when the caller
+    knows them). Sorted by key; [] when there is neither."""
     now = utc_now()
     out = []
     with _mutex:
-        stored = _readouts.get(scene_id)
-        if not stored:
-            return []
+        stored = _readouts.get(scene_id) or {}
         for key in sorted(stored):
             row = stored[key]
             if (now - row["at"]).total_seconds() > READOUT_FRESH_S:
@@ -749,7 +777,188 @@ def readouts(scene_id: str) -> list:
             row["reaches"] = 0
         if not stored:
             _readouts.pop(scene_id, None)
-    return out
+    try:
+        estimated = estimate_readouts(scene_id, members)
+    except Exception:
+        logger.exception("scene %s: the readout estimate failed", scene_id)
+        estimated = []
+    have = {(row["receiver"], row["channel"], row["entering"]) for row in out}
+    out += [row for row in estimated if (row["receiver"], row["channel"], row["entering"]) not in have]
+    return sorted(out, key=lambda row: (row["receiver"], row["channel"], row["entering"]))
+
+
+# ---------------------------------------------------------------- estimate
+
+def figure_geometry_of(record, groups, index_of, positions) -> dict:
+    """What the readout estimate needs of one figure, from its collision
+    record (pure): ``{"channels": {id: {depth_m, rest_radius_m, accepts}},
+    "parts": [{op, length_m, surface_radius_m}]}``. A channel's depth is
+    |b_pos - a_pos|, its rest radius its ``r``. A part is one chain of an
+    extension group (``groups`` = ``collision.extension_chains``): its
+    length the sum of its links' bind segments (``collision.capsule_segment``
+    over ``index_of`` / ``positions``, ``collision.bind_joints``), its surface
+    radius the largest ``r_surface`` (else ``r``) of its links; a chain with a
+    link that has no capsule or no segment is left out (its length is
+    unknown)."""
+    import numpy as np
+    from app.core.collision import capsule_segment
+    from app.core.rig_contract import norm_bone_name
+    channels = {}
+    for ch in (record or {}).get("channels") or []:
+        try:
+            a = np.asarray([float(v) for v in ch["a_pos"]], np.float64)
+            b = np.asarray([float(v) for v in ch["b_pos"]], np.float64)
+            depth, rest = float(np.linalg.norm(b - a)), float(ch["r"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(ch.get("id"), str) and ch["id"] and depth > 0 and rest > 0 and math.isfinite(depth):
+            channels[ch["id"]] = dict(depth_m=depth, rest_radius_m=rest,
+                                      accepts=[str(op) for op in ch.get("accepts") or []])
+    capsules = {c.get("id"): c for c in (record or {}).get("capsules") or [] if isinstance(c, dict)}
+    parts = []
+    for group in groups or []:
+        for chain in group.get("chains") or []:
+            length, radius = 0.0, 0.0
+            for bone in (str(b) for b in chain if b):
+                capsule = capsules.get(f'{group.get("group")}:{norm_bone_name(bone)}')
+                segment = capsule_segment(capsule, index_of, positions) if capsule else None
+                if segment is None:
+                    length = 0.0
+                    break
+                length += float(np.linalg.norm(segment[1] - segment[0]))
+                radius = max(radius, float(capsule.get("r_surface") or capsule.get("r") or 0))
+            if length > 0 and radius > 0:
+                parts.append(dict(op=str(group.get("op") or ""), length_m=length, surface_radius_m=radius))
+    return dict(channels=channels, parts=parts)
+
+
+def figure_geometry(name: str) -> dict | None:
+    """:func:`figure_geometry_of` of the model the game serves for ``name``
+    (``model3d.find_model3d_serving``), cached per file until the model or
+    its sidecar changes; None without a model, a current collision record
+    (``collision.VERSION``) or a readable skin."""
+    from app.core import collision
+    from app.core.model3d import _read_sidecar, find_model3d_serving
+    try:
+        path, _match = find_model3d_serving(name)
+        if not path:
+            return None
+        sidecar = path.with_suffix(".json")
+        stamp = (path.stat().st_mtime_ns, path.stat().st_size,
+                 sidecar.stat().st_mtime_ns if sidecar.is_file() else 0)
+        with _mutex:
+            cached = _geometries.get(str(path))
+        if cached and cached[0] == stamp:
+            return cached[1]
+        meta = _read_sidecar(path)
+        record = meta.get("collision")
+        geometry = None
+        if (collision.applies(path, meta) and isinstance(record, dict) and not record.get("error")
+                and record.get("version") == collision.VERSION):
+            _names, index_of, positions = collision.bind_joints(path.read_bytes())
+            geometry = figure_geometry_of(record, collision.extension_chains(meta), index_of, positions)
+        with _mutex:
+            _geometries[str(path)] = (stamp, geometry)
+        return geometry
+    except Exception as exc:
+        logger.debug("figure geometry of %s not read: %s", name, exc)
+        return None
+
+
+def _scene_members(scene_id):
+    """The members of a running scene: a furniture run's, else the free
+    scene's (one walk over the characters); [] when it runs no more."""
+    run = _furniture_run(scene_id)
+    if run is not None:
+        return [member for _, member in _engine()._members(run)]
+    found = _free_scenes().get(scene_id)
+    return list(found[0]["members"]) if found else []
+
+
+def _scene_clip_kind(scene_id, members) -> str:
+    """The clip kind the scene plays: the interaction of a member that
+    belongs to it (its id, or a furniture run's ``execution_ref``); "" when
+    none does (a solo furniture run)."""
+    from app.core.interaction_engine import get_interaction
+    for name in members:
+        inter = get_interaction(name)
+        if not inter:
+            continue
+        belongs = (str(inter.get("execution_ref") or "") if inter.get("execution_kind") == "prop_action"
+                   else "") or inter.get("id")
+        if belongs == scene_id and inter.get("kind"):
+            return str(inter["kind"])
+    return ""
+
+
+def _clip_profile(kind):
+    """``(channel profile, clip length s)`` of a clip kind: the first set's
+    sidecar that holds a profile; ``(None, 0.0)`` without one."""
+    from app.core.animation_clips import clip_channel_profile, clip_entries, clip_meta
+    for cset in dict.fromkeys(e["set"] for e in clip_entries() if e["kind"] == kind):
+        meta = clip_meta(kind, cset)
+        profile = clip_channel_profile(meta)
+        if profile:
+            try:
+                duration = float((meta or {}).get("duration_s") or 0)
+            except (TypeError, ValueError):
+                duration = 0.0
+            return profile, duration if math.isfinite(duration) and duration > 0 else 0.0
+    return None, 0.0
+
+
+def estimate_readouts(scene_id: str, members=None) -> list:
+    """The ESTIMATED readouts of a running scene (module docstring "the
+    READOUT ESTIMATE"): ``{receiver, channel, entering, insertion_of_depth,
+    part_radius_m, rest_radius_m, depth_m, reaches, source: "estimate"}`` per
+    (receiver, profiled channel it holds, entering member with an accepted
+    part), sorted by key; [] without data. Each call steps the scene's clip
+    clock and counts the cycles since the previous call. ``members`` = the
+    scene's members when the caller knows them."""
+    if not isinstance(scene_id, str) or not scene_id:
+        return []
+    members = sorted(set(members if members is not None else _scene_members(scene_id)))
+    if len(members) < 2:
+        return []
+    kind = _scene_clip_kind(scene_id, members)
+    if not kind:
+        return []
+    clock_s = _step_clock(scene_id)["clip_s"]
+    with _mutex:
+        state = _estimates.setdefault(scene_id, dict(clip_s=0.0, carry={}))
+        ran_s = clock_s - state["clip_s"] if clock_s >= state["clip_s"] else clock_s
+        state["clip_s"] = clock_s
+    profile, length_s = _clip_profile(kind)
+    if not profile or length_s <= 0:
+        return []
+    cycles = max(0.0, ran_s) / length_s
+    geometry = {name: figure_geometry(name) for name in members}
+    rows = []
+    for receiver in members:
+        own = geometry[receiver]
+        for channel in sorted(profile):
+            ch = (own or {}).get("channels", {}).get(channel)
+            if not ch:
+                continue
+            for entering in members:
+                if entering == receiver or not geometry[entering]:
+                    continue
+                part = next((p for p in geometry[entering]["parts"] if p["op"] in ch["accepts"]), None)
+                if part is None:
+                    continue
+                inside = profile[channel]["share_max"] * part["length_m"]
+                key = (receiver, channel, entering)
+                with _mutex:
+                    carry = state["carry"]
+                    total = (profile[channel]["reaches_per_cycle"] * cycles + carry.get(key, 0.0)
+                             if inside >= ch["depth_m"] else 0.0)
+                    reaches = int(math.floor(total + 1e-9))
+                    carry[key] = max(0.0, total - reaches)
+                rows.append(dict(receiver=receiver, channel=channel, entering=entering,
+                                 insertion_of_depth=inside / ch["depth_m"], part_radius_m=part["surface_radius_m"],
+                                 rest_radius_m=ch["rest_radius_m"], depth_m=ch["depth_m"], reaches=reaches,
+                                 source="estimate"))
+    return rows
 
 
 # ---------------------------------------------------------------- beats
@@ -757,8 +966,8 @@ def readouts(scene_id: str) -> list:
 def emit_active(*, scene_id, kind, members, roles, pose_key, delta_game_s):
     """Fires ``scene.active`` for one scene after every lock is released —
     first stepping its clip clock and refreshing its tempo (provider
-    ``scene.tempo``, asked outside every lock), then taking its client
-    readouts (:func:`readouts`)."""
+    ``scene.tempo``, asked outside every lock), then taking its readouts
+    (:func:`readouts`: the clients', else the estimate)."""
     from app.core.hooks import emit
     from app.core.keyed_lock import _after_locks
     from app.core.pose_catalog import lead_role_of
@@ -767,7 +976,7 @@ def emit_active(*, scene_id, kind, members, roles, pose_key, delta_game_s):
                 delta_game_s=delta_game_s, readouts=[])
     def fire():
         _beat_tempo(beat)
-        beat["readouts"] = readouts(scene_id)
+        beat["readouts"] = readouts(scene_id, beat["members"])
         emit("scene.active", **beat)
     _after_locks(fire)
 

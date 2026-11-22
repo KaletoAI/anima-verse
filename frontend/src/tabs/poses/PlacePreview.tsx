@@ -50,7 +50,7 @@ import {
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPatch, apiPost } from '../../lib/api'
 import { loadCharacters } from '../../lib/refs'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
@@ -82,11 +82,36 @@ interface PropRow {
 /** One clip file of the edited kind, as the listing carries it. */
 export interface PlaceClip {
   role?: string; set?: string; url: string
+  /** where the clip lives (the listing's `library`/`source` + `rel`) — what "Measure channel profile" PATCHes */
+  library?: string; source?: string; rel?: string
+  /** pair scene: the stored channel profile the server's readout estimate reads (null = not measured) */
+  channel_profile?: ChannelProfile | null
   height_offsets_cm?: ClipHeightOffsetsCm
   orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null; partner_yaw_deg?: number | null } | null
   /** Ruling A212: the clip's alignment range (cm). */
   align_range?: { cm: number } | null
 }
+/** Pair scene: per channel id (from the collision records) the largest share of the entering chain's length inside
+ *  over one clip cycle and how many times the part reached the channel's bottom in that cycle — the clip sidecar's
+ *  `channel_profile` (PATCH /assets/animation-clips/{library}/{rel}). */
+export type ChannelProfile = Record<string, { share_max: number; reaches_per_cycle: number }>
+
+/** The channel profile of one clip cycle: per readout key its maxima (`foldReadoutMax`) and reach edges, folded per
+ *  channel (the largest share and reach count over the receivers and entering figures). Empty = nothing engaged. */
+function channelProfileOf(maxima: ReadonlyMap<string, ChannelReadoutMax>,
+  reaches: ReadonlyMap<string, number>): ChannelProfile {
+  const out: ChannelProfile = {}
+  for (const [key, m] of maxima) {
+    const channel = key.split('|')[1]
+    if (!channel) continue
+    const share = Math.round(Math.min(1, Math.max(0, m.insertionOfLength)) * 10000) / 10000
+    const count = Math.min(99, Math.max(0, Math.round(reaches.get(key) ?? 0)))
+    const prev = out[channel]
+    out[channel] = { share_max: Math.max(prev?.share_max ?? 0, share), reaches_per_cycle: Math.max(prev?.reaches_per_cycle ?? 0, count) }
+  }
+  return out
+}
+
 /** A pose that plays this clip (read-only here, D2). */
 export interface PlacePose { key: string; yaw_offset?: number; group?: string }
 
@@ -354,6 +379,40 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const targetWord = (x: ContactTarget) => targetWordOf(t, x)
   const [paused, setPaused] = useState(false)
   const [speed, setSpeed] = useState(0.2)
+  /** Pair scene: "Measure channel profile" — armed (waits for the next loop start), measuring (one whole cycle), then
+   *  the PATCH; `note` says how it went. The frame loop reads `measureRef`. */
+  const [measure, setMeasure] = useState<{ phase: 'armed' | 'measuring' | 'saving' | 'done' | 'error'; note: string } | null>(null)
+  const measureRef = useRef<'armed' | 'measuring' | null>(null)
+  const onMeasuredRef = useRef<(profile: ChannelProfile) => void>(() => {})
+  /** The clip the measurement was started on: a profile measured on another one is never stored. */
+  const measureClip = useRef('')
+  onMeasuredRef.current = (profile) => {
+    const channels = Object.keys(profile).sort()
+    if (measureClip.current !== `${kind}|${set.trim()}`) {
+      setMeasure({ phase: 'error', note: t('The clip changed during the measurement — nothing stored.') })
+      return
+    }
+    if (!channels.length) {
+      setMeasure({ phase: 'error', note: t('No channel was engaged during the cycle — nothing stored.') })
+      return
+    }
+    const want = set.trim()
+    const clip = clips.find((c) => (c.set || '') === want) ?? clips[0]
+    if (!clip?.rel) {
+      setMeasure({ phase: 'error', note: t('The clip has no library path — reload the clip list.') })
+      return
+    }
+    const path = `/assets/animation-clips/${encodeURIComponent(clip.library || clip.source || 'free')}/${
+      clip.rel.split('/').map((s) => encodeURIComponent(s)).join('/')}`
+    const list = channels.map((ch) => t('{channel}: {pct} % of the part inside, {n} reaches per cycle')
+      .replace('{channel}', ch.split(':').pop() || ch).replace('{pct}', (profile[ch].share_max * 100).toFixed(0))
+      .replace('{n}', String(profile[ch].reaches_per_cycle))).join(' · ')
+    setMeasure({ phase: 'saving', note: list })
+    apiPatch(path, { channel_profile: profile })
+      .then(() => setMeasure({ phase: 'done', note: t('Channel profile stored — {list}').replace('{list}', list) }))
+      .catch((e: unknown) => setMeasure({ phase: 'error', note: t('Channel profile not stored: {error}')
+        .replace('{error}', e instanceof Error ? e.message : String(e)) }))
+  }
   const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
     partners: PartnerInfo | null } | null>(null)
   const [show, setShow] = useState<PartnerShow>(loadShow)
@@ -898,9 +957,20 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         // The channel readouts' maxima per clip loop (key = channelReadoutKey): this loop's so far, and the last whole one.
         let loopMax = new Map<string, ChannelReadoutMax>()
         let lastLoopMax: Map<string, ChannelReadoutMax> | null = null
+        // The reach edges per key and loop (an edge = insertionOfDepth reaching 1 from below, as client3d's readout
+        // reports count them; the edge state outlives the loop boundary, so a reach across it counts once).
+        let loopReaches = new Map<string, number>()
+        let lastLoopReaches = new Map<string, number>()
+        let reachedKeys = new Set<string>()
         const drawPartners = (res: ReturnType<typeof placePhaseB>, wrapped: boolean) => {
           const sh = showRef.current
-          if (wrapped) { lastLoopMax = loopMax; loopMax = new Map() }
+          if (wrapped) {
+            lastLoopMax = loopMax; loopMax = new Map()
+            lastLoopReaches = loopReaches; loopReaches = new Map()
+            // Pair scene: a measurement starts at a loop start and ends at the next one — exactly one clip cycle.
+            if (measureRef.current === 'measuring') { measureRef.current = null; onMeasuredRef.current(channelProfileOf(lastLoopMax, lastLoopReaches)) }
+            else if (measureRef.current === 'armed') measureRef.current = 'measuring'
+          }
           overlay.visible = !!res
           if (!res) { partnerInfo = null; return }
           const frame = res.frame
@@ -943,7 +1013,18 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const [k, l] of chLines) l.visible = usedCh.has(k)
           for (const [k, r] of rings) if (!usedCh.has(k)) r.visible = false
           const best = frame.closest.reduce<FrameInspection['closest'][number] | null>((w, c) => (!w || c.depth > w.depth ? c : w), null)
-          if (!pausedRef.current) foldReadoutMax(loopMax, frame.engagements.flatMap((g) => (g.readout ? [g.readout] : [])))
+          if (!pausedRef.current) {
+            const now = frame.engagements.flatMap((g) => (g.readout ? [g.readout] : []))
+            foldReadoutMax(loopMax, now)
+            const reached = new Set<string>()
+            for (const r of now) {
+              if (r.insertionOfDepth < 1) continue
+              const key = channelReadoutKey(r)
+              if (!reachedKeys.has(key)) loopReaches.set(key, (loopReaches.get(key) ?? 0) + 1)
+              reached.add(key)
+            }
+            reachedKeys = reached
+          }
           partnerInfo = {
             closest: best ? { a: letterOf(best.a), b: letterOf(best.b), capA: best.capA, capB: best.capB, mm: best.depth * 1000 } : null,
             contacts: frame.contacts.length, channels,
@@ -1581,6 +1662,21 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         ))}
         <button type="button" className="ga-btn ga-btn-sm" onClick={() => fill(true)}
           title={t('Every place this clip fits gets a figure (at most 6).')}>{t('Fill all with this clip')}</button>
+        {!solo ? (
+          <button type="button" className="ga-btn ga-btn-sm" data-testid="place-measure-profile"
+            disabled={paused || measure?.phase === 'armed' || measure?.phase === 'measuring' || measure?.phase === 'saving'}
+            title={t('Plays one whole clip cycle and stores in the clip, per channel, the largest share of the entering part inside and how many times it reached the bottom. The server estimates the readouts of a running scene from it when no 3D client shows that scene.')}
+            onClick={() => { measureClip.current = `${kind}|${set.trim()}`; measureRef.current = 'armed'; setMeasure({ phase: 'armed', note: '' }) }}>
+            {t('Measure channel profile')}
+          </button>
+        ) : null}
+        {measure ? (
+          <span role="status" data-testid="place-measure-note" className="ga-hint"
+            style={measure.phase === 'error' ? { color: 'var(--danger, #f85149)' } : measure.phase === 'done' ? { color: '#3fb950' } : undefined}>
+            {measure.phase === 'armed' || measure.phase === 'measuring' ? t('Measuring one clip cycle…')
+              : measure.phase === 'saving' ? t('Storing the channel profile…') : measure.note}
+          </span>
+        ) : null}
         {goneNote.length ? (
           <span role="status" data-testid="place-gone-note" className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>
             {t('Remembered {names} no longer exists; the default fill took the place.').replace('{names}', goneNote.join(', '))}

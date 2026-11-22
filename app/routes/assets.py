@@ -58,6 +58,7 @@ from app.core.animation_clips import (CLIP_EXTS, CLIP_ROLES, ClipExists,
                                       library_revision, save_transitions,
                                       set_clip_height_offsets, set_clip_loop,
                                       set_clip_loop_count, valid_loop_count,
+                                      set_clip_channel_profile, valid_channel_profile,
                                       set_clip_role_gender, validate_height_offsets)
 from app.core.movement import movement_pose_kinds
 from app.core.auth_dependency import require_admin
@@ -188,7 +189,10 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
     height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_applied?, pair_pivot_cm?,
-    overwrite?}``, at least one edit field.
+    channel_profile?, overwrite?}``, at least one edit field.
+    ``channel_profile`` (pair scene) is the clip's measured channel profile ``{channel: {share_max: 0..1,
+    reaches_per_cycle: 0..99}}`` the readout estimate reads, stored in the ``<kind>.json``; ``null`` / ``{}`` = none
+    (a 400 for anything else).
     ``bend_limits`` (Ruling A145) is how far the attached part may bend toward its
     target per state, ``{raised: {total_deg}, resting: {total_deg}}`` (partial =
     completed from the inherited value), ``null`` = inherit.
@@ -239,12 +243,12 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
                 "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm", "align_applied",
-                "pair_pivot_cm")):
+                "pair_pivot_cm", "channel_profile")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
                    "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm, align_applied, "
-                   "pair_pivot_cm is required")
+                   "pair_pivot_cm, channel_profile is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -257,6 +261,11 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
     if "loop_count" in body:
         try:
             valid_loop_count(body["loop_count"])
+        except ClipLibraryError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+    if "channel_profile" in body:
+        try:
+            valid_channel_profile(body["channel_profile"])
         except ClipLibraryError as error:
             raise HTTPException(status_code=400, detail=str(error))
     if "overwrite" in body and not isinstance(body["overwrite"], bool):
@@ -307,6 +316,8 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         if "pair_pivot_cm" in body:
             from app.core.animation_clips import set_clip_pair_pivot
             clips = set_clip_pair_pivot(library, rel, body["pair_pivot_cm"])
+        if "channel_profile" in body:
+            clips = set_clip_channel_profile(library, rel, body["channel_profile"])
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}

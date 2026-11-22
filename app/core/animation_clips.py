@@ -1175,6 +1175,52 @@ def clip_play_s(meta: Optional[Dict[str, Any]]) -> Optional[float]:
     return duration * count if count else None
 
 
+#: The most reach edges one cycle may carry in a channel profile.
+CHANNEL_REACHES_MAX = 99
+
+
+def valid_channel_profile(raw: Any) -> Dict[str, Dict[str, Any]]:
+    """``raw`` as a clip's CHANNEL PROFILE — ``{channel id: {"share_max": float,
+    "reaches_per_cycle": int}}`` — or ``{}`` (``None`` / ``{}`` = none).
+    ``share_max`` is the share of the entering chain's length inside the
+    channel at the clip's deepest frame (0..1), ``reaches_per_cycle`` how many
+    times the part reached the channel's bottom in one cycle
+    (0..``CHANNEL_REACHES_MAX``); measured once in the Poses tab's places
+    preview, read by the scene's readout estimate (``pose_scene``). The
+    channel ids come from the collision records (a package's declarations),
+    never from code. Anything else raises ``ClipLibraryError``."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ClipLibraryError("channel_profile must be an object {channel: {share_max, reaches_per_cycle}} or null")
+    out: Dict[str, Dict[str, Any]] = {}
+    for channel, value in raw.items():
+        if not isinstance(channel, str) or not channel.strip():
+            raise ClipLibraryError("a channel_profile channel must be a non-empty string")
+        if not isinstance(value, dict) or set(value) != {"share_max", "reaches_per_cycle"}:
+            raise ClipLibraryError(f"the channel_profile of '{channel}' needs exactly share_max and reaches_per_cycle")
+        share, reaches = value["share_max"], value["reaches_per_cycle"]
+        if (isinstance(share, bool) or not isinstance(share, (int, float)) or not math.isfinite(share)
+                or not 0 <= share <= 1):
+            raise ClipLibraryError(f"share_max of '{channel}' must be a number from 0 to 1")
+        if isinstance(reaches, bool) or not isinstance(reaches, int) or not 0 <= reaches <= CHANNEL_REACHES_MAX:
+            raise ClipLibraryError(
+                f"reaches_per_cycle of '{channel}' must be a whole number from 0 to {CHANNEL_REACHES_MAX}")
+        out[channel] = {"share_max": round(float(share), 4), "reaches_per_cycle": reaches}
+    return out
+
+
+def clip_channel_profile(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """The sidecar's ``channel_profile`` (:func:`valid_channel_profile`), None
+    without a valid non-empty one — a broken value counts as none, never as
+    a guess."""
+    try:
+        value = valid_channel_profile((meta or {}).get("channel_profile") if isinstance(meta, dict) else None)
+    except ClipLibraryError:
+        return None
+    return value or None
+
+
 #: The genders a role can be assigned to — the two the profile field
 #: ``gender`` names unambiguously (the same pair ``animation_sets`` derives).
 ROLE_GENDERS = ("male", "female")
@@ -1370,6 +1416,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
             pair=bool(entry["role"]))),
         # Which gender plays which role — pair/group halves only, {} = not assigned.
         "role_gender": clip_role_gender(meta) if entry["role"] else {},
+        # Pair scene: the channel profile the readout estimate reads
+        # ({channel: {share_max, reaches_per_cycle}}); None = not measured.
+        "channel_profile": clip_channel_profile(meta),
         # Ruling A139: the contact relations of a pair/group clip
         # ({"relations", "source"}: clip | package | default); None for a solo clip.
         "contact_target": clip_contact_target(meta, entry["kind"]) if entry["role"] else None,
@@ -1878,6 +1927,27 @@ def set_clip_loop_count(library: str, rel: str, loop_count: Any) -> List[Dict[st
     views = _write_kind_flag(library, rel, "repeat count", mutate)
     logger.info("clip loop count: %s (%s) -> %s", rel, library,
                 count if count is not None else "endless")
+    return views
+
+
+@_library_writer
+def set_clip_channel_profile(library: str, rel: str, value: Any) -> List[Dict[str, Any]]:
+    """Writes the clip's CHANNEL PROFILE (:func:`valid_channel_profile`) —
+    measured over one cycle in the Poses tab's places preview; ``None`` /
+    ``{}`` removes it. Same place and reach as the loop flag
+    (:func:`set_clip_loop`): the shared ``<kind>.json`` and every variant's
+    own sidecar, so every role file of a pair reads the same profile.
+    ``ClipLibraryError`` for anything else."""
+    profile = valid_channel_profile(value)
+
+    def mutate(data: Dict[str, Any]) -> None:
+        if profile:
+            data["channel_profile"] = profile
+        else:
+            data.pop("channel_profile", None)
+
+    views = _write_kind_flag(library, rel, "channel profile", mutate)
+    logger.info("clip channel profile: %s (%s) -> %s", rel, library, profile or "none")
     return views
 
 

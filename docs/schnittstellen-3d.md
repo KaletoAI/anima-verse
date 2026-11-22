@@ -3007,8 +3007,16 @@ last one (the clients send once a second; the floor leaves room for network
 jitter). Anything else is dropped silently — 200 with `accepted` 0, never 403.
 Every beat of the scene (`scene.active`) carries `readouts`: per key the
 latest report no older than 5 s with `source: "client"`, `reaches` summed
-since the previous beat. Hand-computed: `client3d/scripts/smoke_readout_reports.mjs`,
-`scripts/smoke_scene_readouts.py`.
+since the previous beat. A key without such a report gets the server's
+ESTIMATE instead (`source: "estimate"`, `pose_scene.estimate_readouts`): from the
+clip sidecar's `channel_profile` (`{channel: {share_max, reaches_per_cycle}}`,
+measured over one cycle with "Measure channel profile" in Poses → Places) and
+the two collision records — `insertion_of_depth = share_max · L / D`, the part's
+surface radius, the channel's rest radius and depth, `reaches =
+reaches_per_cycle · cycles` since the previous beat (clip clock) when
+`share_max · L ≥ D`, else 0; no profile or record = no entry.
+Hand-computed: `client3d/scripts/smoke_readout_reports.mjs`,
+`scripts/smoke_scene_readouts.py`, `scripts/smoke_scene_readout_estimate.py`.
 
 **Der Clip läuft in ECHTZEIT, im Tempo der Szene** — unabhängig vom
 Spieluhr-Faktor. Der Server integriert die Clip-Uhr bei jedem Beat und jedem
