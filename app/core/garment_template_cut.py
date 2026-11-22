@@ -84,6 +84,10 @@ NO_PATTERN = "This kind is not cut into pattern pieces — it keeps its projecti
 #: A lower template layer is not draped yet: the next Build drapes it first and lays this piece out of it, so a cut
 #: made now would differ from the drape the Build makes.
 WAITING_LOWER = "Waiting for the layers under it to be draped — the next Build drapes them, then the pattern is cut"
+#: B11 (phase E): a cut made before the builder wrote the placket line (its record has no "marks" key) of a piece that
+#: wants a placket is cut ONCE more under the same sig — CPU, seconds; its islands must come out byte-identical.
+MARKS_MISSING = "Writing the placket line into the cut (CPU, 0 hub jobs)"
+MARKS_ISLANDS_CHANGED = "islands changed while writing marks"
 
 _lock = threading.Lock()
 #: (character, item, cut sig) -> "running"
@@ -238,7 +242,8 @@ def state(character_name: str, item_id: str, *, key: Optional[Dict[str, Any]] = 
         return out
     record = read_record(character_name, item_id, sig)
     path = islands_file(character_name, item_id, sig)
-    if record.get("state") == "ready" and path.is_file() and (record.get("islands") or {}).get("sha256"):
+    if record.get("state") == "ready" and path.is_file() and (record.get("islands") or {}).get("sha256") \
+            and not marks_due(key.get("params"), record, marks_file(character_name, item_id, sig)):
         out.update(state="ready", reason="", islands_path=path, islands_sha=str(record["islands"]["sha256"]),
                    cut_at=str(record.get("created_at") or ""), wall_s=record.get("wall_s"), record=record)
         return out
@@ -251,9 +256,19 @@ def state(character_name: str, item_id: str, *, key: Optional[Dict[str, Any]] = 
         out.update(state="failed", reason=CUT_FAILED.format(error=record.get("error") or "?"), record=record)
     elif left is not None:
         out.update(state="missing", reason=CUT_LEFT.format(outcome=left[1]))
+    elif record.get("state") == "ready":
+        out.update(state="missing", reason=MARKS_MISSING)
     else:
         out.update(state="missing", reason=NOT_CUT)
     return out
+
+
+def marks_due(params: Optional[Dict[str, Any]], record: Dict[str, Any], marks: Path) -> bool:
+    """B11: a ready cut whose placket line is still to be written — the piece wants a placket, the line is not on disk,
+    and the cut was made before the builder wrote lines (no "marks" key in its record; ``run`` records whether it
+    wrote one, so a cut that had none to write is never cut again)."""
+    return bool(params) and str(params.get("placket") or "none") != "none" and "marks" not in record \
+        and not marks.is_file()
 
 
 def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir: Path,
@@ -313,6 +328,10 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
     current = state(character_name, item_id, key=key)
     if current["state"] == "ready":
         return current
+    # B11: a ready cut without its placket line is cut again under the same sig — its islands must not move
+    before = read_record(character_name, item_id, sig)
+    old_raw = islands_file(character_name, item_id, sig).read_bytes() \
+        if current["reason"] == MARKS_MISSING and before.get("state") == "ready" else None
     params, item, lower, base = key["params"], key["item"], key["lower"], key["base"]
     colliders: List[Tuple[Path, Any]] = []
     ready = []
@@ -336,9 +355,15 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
                                   **({"shaping": shaping} if shaping else {}),
                                   "metrics": res["data"], "wall_s": res["wall_s"], "slot_wait_s": res["slot_wait_s"],
                                   "created_at": utc_now_iso()}
-        if res["ok"]:
+        if res["ok"] and old_raw is not None and res["islands"].read_bytes() != old_raw:
+            record.update(state="failed", error=MARKS_ISLANDS_CHANGED, outcome="rejected", log_tail="",
+                          islands_kept={"sha256": hashlib.sha256(old_raw).hexdigest()})
+            _write_atomic(record_file(character_name, item_id, sig), json.dumps(record, indent=1).encode("utf-8"))
+            logger.warning("Cut %s %s: %s", character_name, item_id, MARKS_ISLANDS_CHANGED)
+        elif res["ok"]:
             raw = res["islands"].read_bytes()
             _write_atomic(islands_file(character_name, item_id, sig), raw)
+            record["marks"] = bool(res.get("marks"))
             if res.get("marks"):
                 _write_atomic(marks_file(character_name, item_id, sig), res["marks"].read_bytes())
             try:

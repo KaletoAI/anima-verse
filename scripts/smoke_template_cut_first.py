@@ -43,6 +43,11 @@ equal.py``. Every expectation is derived by hand below.
           colliders and writes the islands bytes, the sheet and the record (cut sig, wall 11.8 s, islands sha256,
           base sha, ``UV_PATTERN_SHA``); a ready cut is kept (no Blender); "rejected" -> a failed record; "timeout" ->
           no record, "missing" with CUT_LEFT.
+    [2.6] B11 (phase E): an old ready cut (its record has no "marks" key) of a piece with placket "buttons" ->
+          "missing" with MARKS_MISSING (placket "none": "ready"); ``run`` cuts it ONCE (one Blender run, same sig) ->
+          ready, the record's "marks" True, the marks bytes written, the islands bytes unchanged; then nothing runs. Old
+          islands that differ from the re-cut's -> "failed" with CUT_FAILED(MARKS_ISLANDS_CHANGED), the old islands
+          kept, no marks; a record with "marks" False (the builder wrote none) is ready.
 [3] ``garment_cut_texture.dialog_state`` WITHOUT a drape (drape "missing", not worn) and the ready cut of [2.3]:
     ``pattern_reason`` "", ``cutting`` False, ``cut_at`` = the record's stamp, ``blocked_reason`` "" (picture, media,
     chain all in place), ``can_generate`` True, ``plan.total`` 2 (front + back, a back view exists, the item 1200 px)
@@ -346,8 +351,15 @@ def fake_run_blender(body_glb, params, *, item_id, out_dir, colliders=None, own=
         return {"ok": False, "outcome": RUN_OUTCOME["v"], "error": "boom", "data": {}, "islands": None,
                 "log_tail": "tail", "wall_s": 1.0, "slot_wait_s": 0.0, "measure_s": 0.1}
     (out_dir / "islands.json").write_bytes(PAYLOAD_BYTES)
+    marks = None
+    if RUN_OUTCOME.get("marks"):
+        marks = out_dir / "marks.json"
+        marks.write_bytes(MARKS_BYTES)
     return {"ok": True, "outcome": "ok", "error": "", "data": {"script_wall_s": 10.9}, "islands": out_dir / "islands.json",
-            "log_tail": "", "wall_s": 11.8, "slot_wait_s": 0.0, "measure_s": 0.3}
+            "marks": marks, "log_tail": "", "wall_s": 11.8, "slot_wait_s": 0.0, "measure_s": 0.3}
+
+
+MARKS_BYTES = b'{"lines":{"centre_front":{"island":"front","px":[[100,20],[100,300]]}},"px_per_cm":10,"version":1}'
 
 
 RUN_OUTCOME = {"v": "ok"}
@@ -384,6 +396,56 @@ with patch.object(gtc, "cut_key", full_key), patch.object(gtc, "run_blender", fa
           and r3["reason"] == gtc.CUT_LEFT.format(outcome="timeout")
           and not gtc.record_file(CHAR, "run3", "r3").exists(), r3)
     RUN_OUTCOME["v"] = "ok"
+
+# [2.6] B11 (phase E): a cut from before the placket line was written (its record has no "marks" key) is cut ONCE more
+# under the same sig when the piece wants a placket; the islands must come out byte-identical
+TOP_P = dict(TOP, placket="buttons")
+
+
+def marks_key(character_name, item_id, **_k):
+    sig, params = {"m1": ("s1", TOP_P), "m0": ("s0", TOP), "m2": ("s2", TOP_P)}[item_id]
+    return {"sig": sig, "reason": "", "params": params, "base": ("base0", "bsha"), "base_sha": "bsha", "lower": [],
+            "under": [], "item": {}}
+
+
+def old_cut(item, sig, raw):
+    gtc._write_atomic(gtc.islands_file(CHAR, item, sig), raw)
+    gtc._write_atomic(gtc.record_file(CHAR, item, sig), json.dumps(
+        {"state": "ready", "cut_sig": sig, "islands": {"sha256": hashlib.sha256(raw).hexdigest()},
+         "created_at": "2026-11-21T09:00:00+00:00"}).encode())
+
+
+OTHER_BYTES = PAYLOAD_BYTES.replace(b"10", b"11", 1)
+with patch.object(gtc, "cut_key", marks_key), patch.object(gtc, "run_blender", fake_run_blender), \
+        patch("app.core.garment_template.collider_states", lambda *a, **k: []), \
+        patch("app.core.garment_template.own_colliders", lambda *a, **k: []), \
+        patch("app.core.bust_shaping.prepare", lambda body, *a, **k: (Path(body), None, "")):
+    for item, sig in (("m1", "s1"), ("m0", "s0")):
+        old_cut(item, sig, PAYLOAD_BYTES)
+    s0 = gtc.state(CHAR, "m0")
+    check("[2.6] an old cut without a placket stays ready", s0["state"] == "ready", s0["state"])
+    s1 = gtc.state(CHAR, "m1")
+    check("[2.6] an old cut with a placket wanted -> missing, MARKS_MISSING", s1["state"] == "missing"
+          and s1["reason"] == gtc.MARKS_MISSING, (s1["state"], s1["reason"]))
+    RUN_OUTCOME["marks"] = True
+    n = len(CALLS)
+    r = gtc.run(CHAR, "m1")
+    rec = gtc.read_record(CHAR, "m1", "s1")
+    check("[2.6] the re-cut: one Blender run, ready, the marks written, the islands bytes unchanged",
+          len(CALLS) == n + 1 and r["state"] == "ready" and rec.get("marks") is True
+          and gtc.marks_file(CHAR, "m1", "s1").read_bytes() == MARKS_BYTES
+          and gtc.islands_file(CHAR, "m1", "s1").read_bytes() == PAYLOAD_BYTES, (r["state"], rec.get("marks")))
+    check("[2.6] after it: ready, no further run", gtc.run(CHAR, "m1")["state"] == "ready" and len(CALLS) == n + 1)
+    old_cut("m2", "s2", OTHER_BYTES)
+    r2 = gtc.run(CHAR, "m2")
+    check("[2.6] islands that change on the re-cut -> failed with the reason, the old islands kept",
+          r2["state"] == "failed" and r2["reason"] == gtc.CUT_FAILED.format(error=gtc.MARKS_ISLANDS_CHANGED)
+          and gtc.islands_file(CHAR, "m2", "s2").read_bytes() == OTHER_BYTES
+          and not gtc.marks_file(CHAR, "m2", "s2").exists(), (r2["state"], r2["reason"]))
+    RUN_OUTCOME["marks"] = False
+    gtc.record_file(CHAR, "m1", "s1").write_text(json.dumps({**rec, "marks": False}))
+    check("[2.6] a cut that wrote no line ('marks': False) stays ready (nothing to paint, never cut again)",
+          gtc.state(CHAR, "m1")["state"] == "ready")
 
 # ---------------------------------------------------------------------------------------------------- [3] + [4]
 _items = Path(_tmp) / "items"
