@@ -10,7 +10,7 @@ equal.py``. Every expectation is derived by hand below.
 [1] The cut signature's content — what ``garment_template_build.run`` reads before the ``cut_only`` return:
     [1.1] the builder: every ``prm[...]`` / ``prm.get(...)`` key read in ``run`` before the top's ``if cut_only:`` (the
           last one in ``run``; the fitted kinds' branch returns at the first, step 3a) is one of
-          progress_file, spec, lower_offsets, lower_shapes, torso_half_m, thickness, uv_mode, node, slit, cut_only,
+          progress_file, spec, lower_offsets, lower_shapes, torso_half_m, thickness, node, slit, cut_only,
           kind, waistband_m, neck_rules (a top with a collar or a placket, phases E + F) —
           none of fabric, drape_quality, frames, poses, shape_groups, smooth_weights, render (read after it); and
           ``inp["front"]`` / ``inp["back"]`` (the views) only after it.
@@ -150,7 +150,7 @@ run_src = BUILD[BUILD.index("def run(a):"):]
 cut_at = run_src.rindex("if cut_only:")
 before = run_src[:cut_at]
 read = set(re.findall(r'prm\["(\w+)"\]', before)) | set(re.findall(r'prm\.get\("(\w+)"', before))
-allowed = {"progress_file", "spec", "lower_offsets", "lower_shapes", "torso_half_m", "thickness", "uv_mode", "node",
+allowed = {"progress_file", "spec", "lower_offsets", "lower_shapes", "torso_half_m", "thickness", "node",
            "slit", "cut_only", "kind", "waistband_m", "neck_rules"}
 check("[1.1] the cut reads only the cut's build args", read <= allowed and "spec" in read and "slit" in read,
       sorted(read))
@@ -185,9 +185,9 @@ diff = {k for k in set(ba_m) | set(ba_s) if json.dumps(ba_m.get(k), sort_keys=Tr
 check("[1.2] fabric changes only the cloth args (fabric, drape_quality)", diff <= {"fabric", "drape_quality"}
       and "fabric" in diff, sorted(diff))
 check("[1.2] DRAPE_ONLY is ('fabric',)", gtc.DRAPE_ONLY == ("fabric",), gtc.DRAPE_ONLY)
-check("[1.2] uv_mode pattern for a top; PATTERN_KINDS = top + the fitted kinds (step 3a) + skirt (step 3b) + jacket,"
+check("[1.2] no uv_mode build arg (B17); PATTERN_KINDS = top + the fitted kinds (step 3a) + skirt (step 3b) + jacket,"
       " dress (phases C / D) = every kind",
-      ba_m["uv_mode"] == "pattern" and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS + ("skirt", "jacket", "dress")
+      "uv_mode" not in ba_m and gt.PATTERN_KINDS == ("top",) + gt.FITTED_KINDS + ("skirt", "jacket", "dress")
       and set(gt.PATTERN_KINDS) == set(gt.KINDS), gt.PATTERN_KINDS)
 
 uvp_sha = hashlib.md5((ROOT / "app" / "blender" / "scripts" / "uv_pattern.py").read_bytes()).hexdigest()[:12]

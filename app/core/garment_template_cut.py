@@ -13,7 +13,7 @@ The CUT SIGNATURE (``cut_sig``) is exactly what the cut reads (derived from ``ga
 - the parameters as the drape key has them (``garment_template.keyed_params``: without ``TEXTURE_ONLY`` /
   ``MATERIAL_ONLY`` and the fields of other kinds) minus ``DRAPE_ONLY`` — ``fabric`` reaches the builder only as the
   cloth settings (``fabric``, ``drape_quality``), read after the cut. Every other field shapes ``panel_spec`` (the
-  pattern), ``slit`` or ``uv_mode``;
+  pattern) or ``slit``;
 - the base model sha256 (the body the panels are wrapped round and laid out of; ``measure_body`` reads it too);
 - the lower-layer tokens of the drape key (``garment_template.under_tokens``: the drapes / fits under the piece are
   the colliders ``clear_of_body`` lays the panels out of, the jacket allowance shapes ``panel_spec``, the chest

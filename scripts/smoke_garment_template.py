@@ -120,14 +120,14 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
        legs: unchanged). Top knot max(0.77295, 0.8217 + 0.02) = 0.8417. y 0.82 (h 0.66): cone 1.94933 -
        1.17638 * 0.66 / 0.76 = 0.92774 < 0.9178 + 0.02 = 0.9378 -> 0.9378; y 0.80 (h 0.64): cone 1.94933 -
        0.99063 = 0.95870 > 0.9459 -> 0.9587. Knots: hem + the 13 samples 0.66 .. 0.90 + top = 15.
-[15] Pattern-piece UVs (plan 2026-11-20-template-cut-uv-texture, Task 3): ``build_args`` sends ``uv_mode`` "pattern"
-     for a top, and since plan group B phases C / D for a jacket and a covered dress with sleeves too (a skirt is a
-     pattern kind since step 3b, [17]). A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
+[15] Pattern-piece UVs (plan 2026-11-20-template-cut-uv-texture, Task 3): every kind is a pattern kind
+     (``PATTERN_KINDS`` = ``KINDS``), so since plan group B's B17 ``build_args`` sends no ``uv_mode`` at all — the
+     builder has no other UV — for a top, a jacket and a covered dress with sleeves. A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
      ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
      grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
-[16] Step 3a (the fitted kinds' pattern pieces): ``build_args`` sends ``uv_mode`` "pattern" for briefs, bra, gloves,
-     tights and trousers too (``PATTERN_KINDS``). ``FITTED_VERSION`` is 1 since the fitted kinds' texture choice was
+[16] Step 3a (the fitted kinds' pattern pieces): briefs, bra, gloves, tights and trousers are pattern kinds too
+     (``PATTERN_KINDS``), and ``build_args`` sends them no ``uv_mode`` either (B17). ``FITTED_VERSION`` is 1 since the fitted kinds' texture choice was
      released (group A, one re-drape of every fitted drape): a fitted kind's ``tsig`` is md5 of the payload
      ``{params: keyed_params, version: TEMPLATE_VERSION, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
      it differs from the pre-release key (the same payload without ``fitted``) in exactly that one component, for
@@ -135,7 +135,7 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      the one ``garment_template.py`` of the base commit c926b67f0 gives (read with ``git show``; skipped with a note
      without git) — no top re-drapes.
 [17] Step 3b (plan group B, Phase A — skirts and strapless tops cut into pattern pieces):
-     [17.1] ``build_args`` sends ``uv_mode`` "pattern" for a skirt and a strapless top, and a skirt's
+     [17.1] ``build_args`` sends no ``uv_mode`` for a skirt and a strapless top (B17), and a skirt's
             ``waistband_m`` = ``WAISTBAND_M[waistband]`` (wide 0.03, thin 0.012); a top with a bodice gets no
             ``waistband_m`` key.
      [17.2] ``PANEL_VERSION`` is 1: a skirt's / a strapless top's ``tsig`` is md5 of the [16] payload PLUS
@@ -651,13 +651,14 @@ sg = gt.panel_spec(gp, GEL)
 gg = sg["panels"][1]["grid_m"]
 check("[14] Gelina: panel top row = 0.8417 / 2", close(gg[0][-1][0] - gg[0][0][0], 0.42085), gg[0][-1][0] - gg[0][0][0])
 
-# [15] pattern-piece UVs: uv_mode, the islands file beside the drape
+# [15] pattern-piece UVs: every kind, no uv_mode build arg (B17), the islands file beside the drape
+check("[15] PATTERN_KINDS = every kind", set(gt.PATTERN_KINDS) == set(gt.KINDS), gt.PATTERN_KINDS)
 _top15, _ = gt.validate_params({"kind": "top", "sleeves": "short"})
-check("[15] top -> uv_mode pattern", gt.build_args(_top15, gt.panel_spec(_top15, MU), item_id="x").get("uv_mode") == "pattern")
+check("[15] top -> no uv_mode", "uv_mode" not in gt.build_args(_top15, gt.panel_spec(_top15, MU), item_id="x"))
 for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleeves": "short"}):
     _p15, _ = gt.validate_params(_kw)
-    check(f"[15] {_kw['kind']} -> uv_mode pattern (phases C / D)",
-          gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x").get("uv_mode") == "pattern")
+    check(f"[15] {_kw['kind']} -> no uv_mode (B17)",
+          "uv_mode" not in gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x"))
 check("[15] TEMPLATE_VERSION 10", gt.TEMPLATE_VERSION == 10, gt.TEMPLATE_VERSION)
 
 # [16] step 3a: the fitted kinds are cut into pattern pieces
@@ -668,8 +669,8 @@ _mu16 = {**MU, "joints": {"leftarm": [0.2081, 1.508, 0.0138], "leftforearm": [0.
          "arm_len": 0.5607}
 for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _p16, _ = gt.validate_params({"kind": _k16})
-    check(f"[16] {_k16} -> uv_mode pattern",
-          gt.build_args(_p16, gt.panel_spec(_p16, _mu16), item_id="x").get("uv_mode") == "pattern")
+    check(f"[16] {_k16} -> no uv_mode (B17)",
+          "uv_mode" not in gt.build_args(_p16, gt.panel_spec(_p16, _mu16), item_id="x"))
 check("[16] FITTED_VERSION is 1", gt.FITTED_VERSION == 1, gt.FITTED_VERSION)
 _kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["b", "a"])
 for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
@@ -700,11 +701,11 @@ else:
 # [17] step 3b: skirts and strapless tops
 _sk17 = gt.validate_params({"kind": "skirt", "waistband": "wide"})[0]
 _ba17 = gt.build_args(_sk17, gt.panel_spec(_sk17, MU), item_id="x")
-check("[17.1] skirt -> uv_mode pattern, waistband_m 0.03", _ba17.get("uv_mode") == "pattern"
+check("[17.1] skirt -> no uv_mode, waistband_m 0.03", "uv_mode" not in _ba17
       and _ba17.get("waistband_m") == 0.03, (_ba17.get("uv_mode"), _ba17.get("waistband_m")))
 _sl17 = gt.validate_params({"kind": "top", "shoulders": "strapless"})[0]
-check("[17.1] strapless top -> uv_mode pattern, no waistband_m",
-      gt.build_args(_sl17, gt.panel_spec(_sl17, MU), item_id="x").get("uv_mode") == "pattern"
+check("[17.1] strapless top -> no uv_mode, no waistband_m",
+      "uv_mode" not in gt.build_args(_sl17, gt.panel_spec(_sl17, MU), item_id="x")
       and "waistband_m" not in gt.build_args(_sl17, gt.panel_spec(_sl17, MU), item_id="x"))
 check("[17.1] a top with a bodice: no waistband_m", "waistband_m" not in gt.build_args(
     _top15, gt.panel_spec(_top15, MU), item_id="x"))

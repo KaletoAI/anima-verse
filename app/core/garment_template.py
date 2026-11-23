@@ -282,9 +282,10 @@ TEXTURE_SOURCES = ("projection", "cut")
 #: ``garment_cut_texture.TRIM_PARTS``): plain = the main panels' fabric patch, picture = the answer, for an item whose
 #: picture shows a trim on them.
 SLEEVE_PRINTS = ("plain", "picture")
-#: The kinds cut into pattern pieces (``uv_mode`` "pattern": ``islands.json``, the texture from cut): a top (since
+#: The kinds cut into pattern pieces (``islands.json``, the texture from cut): a top (since
 #: step 3b also a strapless one, cut by ``wrap``), since step 3a every fitted kind, since step 3b a skirt, since step
-#: 3c / 3d (plan group B, phases C and D) a jacket and a dress — every kind.
+#: 3c / 3d (plan group B, phases C and D) a jacket and a dress — every kind. The builder knows no other UV since B17
+#: (the grid UV and its build arg ``uv_mode`` are gone).
 PATTERN_KINDS = ("top", "briefs", "bra", "gloves", "tights", "trousers", "skirt", "jacket", "dress")
 #: Step 3b: the kinds whose pattern pieces come from the panel construction (``PANEL_VERSION``, ``panel_piece``);
 #: step 3c / 3d (plan group B, phases C and D) the jacket and the dress.
@@ -2524,8 +2525,6 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "smooth_weights": bool(corrective), "shape_groups": groups,
             "shape_poses": [p for g in groups if g["name"] == "legs" for p in g["poses"]],
             "lower_shapes": list(lower_shapes or []), "lower_offsets": list(lower_offsets or []),
-            # pattern-piece UV islands for every ``PATTERN_KINDS`` kind
-            "uv_mode": "pattern" if params["kind"] in PATTERN_KINDS else "grid",
             # step 3b (B2): a skirt's waistband rows (``uv_pattern.wrap_parts``); read before the cut
             **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {}),
             # phases E + F: a top with a collar or a placket is cut by the neck-ring rules (``neck_rules``); without

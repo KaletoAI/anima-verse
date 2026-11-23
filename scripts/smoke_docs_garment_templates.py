@@ -20,10 +20,11 @@ B) The atlas: ``PATTERN_ATLAS_PX`` and ``PATTERN_MARGIN_CM`` (``app/blender/scri
 C) The parts: every name of ``PARTS`` and every id of ``STRIP_PARTS`` (``app/blender/scripts/uv_pattern.py``)
    appears in the document's parts table as a row "| <id> | `<name>` | strip/panel |", with "strip" exactly for
    the ids in ``STRIP_PARTS``.
-D) ``uv_mode``: both values "pattern" and "grid" appear, and the build-arg rule in ``garment_template.py``
-   (``"pattern" if params["kind"] in PATTERN_KINDS else "grid"``, ``PATTERN_KINDS`` read from the source: "top" and
-   since step 3a the fitted kinds) is still the rule the document states (every kind of ``PATTERN_KINDS`` named
-   within 80 characters after "pattern").
+D) Pattern UV for every kind (B17): ``PATTERN_KINDS`` (read from the source) is every kind of ``KINDS``, the
+   document names each of them in its "Which pieces get them" section, ``garment_template.py`` sends no ``uv_mode``
+   build arg, the builder carries none of the grid UV's names (``uv_mode``, ``UV_TORSO``, ``UV_CAP``, ``UV_COLLAR``,
+   ``UV_SLEEVE``, ``grid_uv``) and bakes at the atlas size only (no 1024 fallback), and the document no longer
+   states a ``uv_mode`` rule.
 E) The occasion: ``garment_cut_texture`` with its admin label (the first string of its ``_image(...)`` call in
    ``app/imagegen/occasions.py``), ``min_ref_slots=2`` and ``requires_chain=True`` there, and the document names
    all three.
@@ -120,14 +121,18 @@ def main() -> int:
         check(f"C  part {pid} `{name}` is a {kind}", row is not None)
 
     # D
-    rule = re.search(r'"uv_mode":\s*"pattern" if params\["kind"\] in PATTERN_KINDS else "grid"', gt)
-    check("D  uv_mode rule found in garment_template.build_args", rule is not None)
-    kinds = const(GT, "PATTERN_KINDS")
-    check("D  PATTERN_KINDS is a tuple of kinds", isinstance(kinds, tuple) and len(kinds) >= 1, kinds)
+    kinds, all_kinds = const(GT, "PATTERN_KINDS"), const(GT, "KINDS")
+    check("D  PATTERN_KINDS is every kind", isinstance(kinds, tuple) and set(kinds) == set(all_kinds or ()),
+          (kinds, all_kinds))
+    sec = doc[doc.index("### Which pieces get them"):][:900] if "### Which pieces get them" in doc else ""
     for kind in kinds or ():
-        check(f"D  doc: uv_mode pattern for kind {kind}, grid otherwise",
-              "`uv_mode`" in doc and '"pattern"' in doc and '"grid"' in doc
-              and re.search(rf'"pattern".{{0,80}}`{kind}`', doc, re.S) is not None)
+        check(f"D  doc names kind {kind} as a pattern kind", f"`{kind}`" in sec)
+    check("D  garment_template.py sends no uv_mode", '"uv_mode"' not in gt)
+    build = BUILD.read_text(encoding="utf-8")
+    gone = [n for n in ("uv_mode", "UV_TORSO", "UV_CAP", "UV_COLLAR", "UV_SLEEVE", "grid_uv") if n in build]
+    check("D  the builder has no grid UV left", not gone, gone)
+    check("D  the bake is at the atlas size only", "1024" not in build, "1024" in build)
+    check("D  the doc states no uv_mode rule", not re.search(r'`uv_mode`:\s*`?"pattern"', doc))
 
     # E
     occ = OCC.read_text(encoding="utf-8")

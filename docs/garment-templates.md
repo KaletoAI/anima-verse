@@ -13,12 +13,12 @@ is out of date and is re-draped by the next Build).
 
 ## 1. Pattern-piece UV islands (step 1: tops)
 
-### Which pieces get them — `uv_mode`
+### Which pieces get them — every kind
 
-`garment_template.build_args` passes the build arg `uv_mode`: `"pattern"` for `top`, `briefs`, `bra`, `gloves`,
-`tights`, `trousers`, `skirt`, and `"pattern"` for `jacket`, `dress` (`PATTERN_KINDS`; the close-fitting kinds since step 3a, section 1a;
-a skirt and a strapless top since step 3b, section 1b; a jacket and a dress since phases C / D, section 1c) —
-every kind today; `"grid"` is left only as the builder's unused branch until plan group B's B17 removes it.
+Every kind is cut into pattern pieces (`PATTERN_KINDS`: `top`, `briefs`, `bra`, `gloves`, `tights`, `trousers`, `skirt`,
+`jacket`, `dress`; the close-fitting kinds since step 3a, section 1a; a skirt and a strapless top since step 3b,
+section 1b; a jacket and a dress since phases C / D, section 1c). The builder has no other UV: plan group B's B17
+removed the grid UV, its build arg `uv_mode` and its 1024 px bake.
 
 ### Parts come from the construction
 
@@ -101,7 +101,7 @@ Parts (`uv_pattern.PARTS`; `STRIP_PARTS` get a construction-strip UV, the rest a
 `uv_pattern.pack` puts all islands at **one px/cm** into a square atlas of **`PATTERN_ATLAS_PX` = 2048 px** with
 **`PATTERN_MARGIN_CM` = 1.5 cm** around every island, in rows (`ROW_ORDER`: front/back, the sleeves, the strips),
 px/cm = floor to 0.01 of 2048 / the layout extent in cm (measured 13.8–18.4 px/cm). The projection bake writes the same
-2048 px atlas for a pattern piece (the grid UV keeps 1024). The assembly grafts the PNG unchanged into both figure
+2048 px atlas (every piece). The assembly grafts the PNG unchanged into both figure
 tiers — no downsizing.
 
 ### `islands.json`
@@ -130,7 +130,7 @@ Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut read
 
 | input | why |
 |---|---|
-| the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec`, `slit` or `uv_mode`; `fabric` reaches the builder only as the cloth settings, read after the cut |
+| the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec` or `slit`; `fabric` reaches the builder only as the cloth settings, read after the cut |
 | the base model sha256 | the body the panels are wrapped round, laid out of and measured on |
 | the drape key's lower-layer tokens (`under_tokens`) plus one `collider:<item>` per lower template drape that is READY | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of (only ready drapes are handed over); the jacket allowance and the chest shaping change the pattern or the body |
 | `TEMPLATE_VERSION`, the flattening key (`uv_pattern_key`: a top's `TOP_UV_PATTERN_SHA`, a fitted piece's `UV_PATTERN_SHA` = md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
