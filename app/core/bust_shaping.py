@@ -695,15 +695,12 @@ def previous_drape(character_name: str, item_id: str, item: Optional[Dict[str, A
     figure in between. Only a drape whose shaping differs from the set's now (its lift, or none) stands in — any
     other change of the key leaves the piece off as before. ``{tsig, path, record}`` or None."""
     from app.core.garment_store import read_record
-    from app.core.garment_template import templates_dir
-    folder = templates_dir(character_name)
-    if not folder.is_dir():
-        return None
+    from app.core.garment_template import drape_metas
     lift_now = round(set_lift(list(lower or []) + [item_id], {item_id: item} if item else None,
                               character_name=character_name), 4) \
         if key_tokens(item_id, item, lower, character_name=character_name) else 0.0
     best = None
-    for meta in folder.glob(f"{item_id}_*.json"):
+    for meta in drape_metas(character_name, item_id):
         rec = read_record(meta)
         glb = meta.with_suffix(".glb")
         if (rec.get("accepted") is not True or not glb.is_file() or rec.get("base_model_sha256") != base_sha

@@ -2154,6 +2154,22 @@ def drape_path(character_name: str, item_id: str, sig: str) -> Path:
     return templates_dir(character_name) / f"{item_id}_{sig}.glb"
 
 
+_TSIG_RE = re.compile(r"[0-9a-f]{12}")
+
+
+def drape_metas(character_name: str, item_id: str) -> List[Path]:
+    """The drape records (``<item>_<tsig>.json``) of the item in the templates folder — by NAME, before anything is
+    read. The bare glob ``<item>_*.json`` also matches the cut's ``<item>_<tsig>.islands.json`` (megabytes each) and
+    the records of an item whose id extends this one (``<item>_copy_<tsig>.json``); parsing those on every figure
+    poll held the GIL for seconds and froze the server (2026-11-23)."""
+    folder = templates_dir(character_name)
+    if not folder.is_dir():
+        return []
+    prefix = f"{item_id}_"
+    return [p for p in folder.glob(f"{_glob.escape(item_id)}_*.json")
+            if _TSIG_RE.fullmatch(p.name[len(prefix):-len(".json")])]
+
+
 def islands_path(character_name: str, item_id: str, sig: str) -> Path:
     """The drape's pattern islands (``uv_pattern.islands_payload``) beside its GLB — written for a ``PATTERN_KINDS``
     piece (a top with a bodice, every fitted kind)."""
@@ -2444,11 +2460,8 @@ def cut_stand_in(character_name: str, item_id: str, *, base_sha: str, params: Di
     record carried ``texture_sha`` never stands in (it re-drapes once, as before). The newest such drape wins.
     ``{tsig, path, record}`` or None."""
     from app.core.garment_store import read_record
-    folder = templates_dir(character_name)
-    if not folder.is_dir():
-        return None
     best = None
-    for meta in folder.glob(f"{_glob.escape(item_id)}_*.json"):
+    for meta in drape_metas(character_name, item_id):
         rec = read_record(meta)
         glb = meta.with_suffix(".glb")
         tex = rec.get("texture_sha")
