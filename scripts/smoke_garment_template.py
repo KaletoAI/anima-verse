@@ -776,7 +776,7 @@ _prep15 = _bs15.prepare
 try:
     gt.templates_dir = lambda name: _t15 / "templates"
     gt.texture_sources = lambda name, item_id: {"front": "f.png", "back": "b.png", "source": "item_image"}
-    _bs15.prepare = lambda body, item_id, item, lower, folder: (body, None, None)
+    _bs15.prepare = lambda body, item_id, item, lower, folder, **k: (body, None, None)
 
     def _fake15(with_islands):
         def run(run_one, colliders, own):

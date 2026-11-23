@@ -181,14 +181,16 @@ def applies(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     return source != SOURCE_FULL_BODY
 
 
-def _male(profile: Dict[str, Any]) -> bool:
+def is_male(profile: Optional[Dict[str, Any]]) -> bool:
+    """Whether the profile's ``gender`` is male ("male" / "man" / "m", any case); unset or anything else is not.
+    Also the chest shaping's character gate (``bust_shaping.character_shaped``)."""
     return str((profile or {}).get("gender") or "").strip().lower() in ("male", "man", "m")
 
 
 def skin_prompt(profile: Dict[str, Any]) -> str:
     """The whole prompt of the edit: ``SKIN_KEEP`` + ``SKIN_SURFACE`` (+ the
     body hair clause for a male character)."""
-    return f"{SKIN_KEEP} {SKIN_SURFACE}{SKIN_BODY_HAIR_MALE if _male(profile) else ''}."
+    return f"{SKIN_KEEP} {SKIN_SURFACE}{SKIN_BODY_HAIR_MALE if is_male(profile) else ''}."
 
 
 def transfer_params() -> Dict[str, Any]:

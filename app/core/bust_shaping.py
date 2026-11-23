@@ -578,47 +578,66 @@ def effective_lift(item: Optional[Dict[str, Any]]) -> float:
 
 
 def shapes_chest(item: Optional[Dict[str, Any]]) -> bool:
-    """Whether ``item`` is a template top / dress whose effective lift shapes the chest under it."""
+    """Whether ``item`` is a template top / dress whose effective lift shapes the chest under it — of the PIECE; a
+    character the shaping does not apply to (``character_shaped``) is gated by the caller / ``set_lift``."""
     params = _template_params(item)
     return bool(params) and applies(params, effective_lift(item))
 
 
-def set_lift(item_ids, items: Optional[Dict[str, Dict[str, Any]]] = None) -> float:
+def character_shaped(character_name: str, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """User ruling 2026-11-23: a male character never gets the chest shaping — whatever his pieces say, an explicit
+    lift included (``base_skin.is_male`` on the profile's ``gender``). Any other or an unset gender keeps it (a small
+    chest is lifted too). ``profile``: the one the caller already holds, else read here."""
+    from app.core.base_skin import is_male
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    return not is_male(profile)
+
+
+def set_lift(item_ids, items: Optional[Dict[str, Dict[str, Any]]] = None, *, character_name: str,
+             profile: Optional[Dict[str, Any]] = None) -> float:
     """Review M2: the shaping is a property of the WORN SET — the strongest effective lift among its shaping
-    template pieces (``shapes_chest``); 0 when none shapes. ``items``: already loaded items by id."""
+    template pieces (``shapes_chest``); 0 when none shapes. ``items``: already loaded items by id. THE one place
+    the wearer decides: 0 for a character the shaping does not apply to (``character_shaped``) — every drape, cut,
+    assembly and accessory fit reads its shaping from here (``key_tokens`` / ``prepare`` -> the drape records)."""
     from app.models.inventory import get_item
     best = 0.0
     for iid in sorted(set(item_ids or ())):
         item = (items or {}).get(iid) or get_item(iid)
         if shapes_chest(item):
             best = max(best, effective_lift(item))
+    if best > 0 and not character_shaped(character_name, profile):
+        return 0.0
     return best
 
 
-def key_tokens(item_id: str, item: Optional[Dict[str, Any]], lower) -> list:
+def key_tokens(item_id: str, item: Optional[Dict[str, Any]], lower, *, character_name: str) -> list:
     """What ``garment_template.key_for`` folds into the drape key of ``item_id`` worn with ``lower`` (the other
-    worn mesh pieces): [] when the set does not shape or the piece does not reach the chest (its key stays what it
-    was before A228), else the one ``signature`` token of the set's lift."""
+    worn mesh pieces) by ``character_name``: [] when the set does not shape for that character (``set_lift``) or
+    the piece does not reach the chest (its key stays what it was before A228), else the one ``signature`` token
+    of the set's lift."""
     params = _template_params(item)
     if not params or params.get("kind") not in CHEST_KINDS:
         return []
-    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None)
+    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None, character_name=character_name)
     if lift <= 0:
         return []
     raw = json.dumps({"v": VERSION, "lift": round(float(lift), 4)}, sort_keys=True)
     return ["shape:" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]]
 
 
-def prepare(body_glb, item_id: str, item: Optional[Dict[str, Any]], lower, scratch):
-    """``(body path, shaping record or None, note)`` for a drape: a chest piece of a shaping set (``key_tokens``)
+def prepare(body_glb, item_id: str, item: Optional[Dict[str, Any]], lower, scratch, *, character_name: str):
+    """``(body path, shaping record or None, note)`` for a drape of ``character_name``'s piece: a chest piece of a
+    shaping set (``key_tokens``)
     drapes on a shaped copy of the plain body written into ``scratch``; every other piece on ``body_glb`` itself.
     A body whose chest cannot be measured (review L9) drapes unshaped with ``note`` saying so."""
     from pathlib import Path
     from app.core import glb_mesh
     from app.core.garment_template import measure_body
-    if not key_tokens(item_id, item, lower):
+    if not key_tokens(item_id, item, lower, character_name=character_name):
         return Path(body_glb), None, ""
-    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None)
+    lift = set_lift(list(lower or []) + [item_id], {item_id: item} if item else None, character_name=character_name)
     blob = Path(body_glb).read_bytes()
     try:
         lm = landmarks(glb_mesh.body_arrays(blob).positions, measure_body(blob))
@@ -680,8 +699,9 @@ def previous_drape(character_name: str, item_id: str, item: Optional[Dict[str, A
     folder = templates_dir(character_name)
     if not folder.is_dir():
         return None
-    lift_now = round(set_lift(list(lower or []) + [item_id], {item_id: item} if item else None), 4) \
-        if key_tokens(item_id, item, lower) else 0.0
+    lift_now = round(set_lift(list(lower or []) + [item_id], {item_id: item} if item else None,
+                              character_name=character_name), 4) \
+        if key_tokens(item_id, item, lower, character_name=character_name) else 0.0
     best = None
     for meta in folder.glob(f"{item_id}_*.json"):
         rec = read_record(meta)

@@ -376,7 +376,8 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
     body = get_character_dir(character_name) / "model3d" / f"{base[0]}.glb"
     scratch = Path(tempfile.mkdtemp(prefix="av-cut-"))
     try:
-        shaped, shaping, _note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
+        shaped, shaping, _note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping",
+                                                     character_name=character_name)
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
                           over_sleeves=gt.over_sleeved_layer(params["kind"], ready),
                           own_offset=gt.INNER_SHRINK_M if own_mode == "shrunk" else 0.0,

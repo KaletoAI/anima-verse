@@ -624,7 +624,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             # Absent = the group's ``clothing_lift_default`` for the slot.
             pieces[iid]["lift"] = op.get("lift")
             from app.core import bust_shaping
-            pieces[iid]["shapes"] = bust_shaping.shapes_chest(item)
+            pieces[iid]["shapes"] = bust_shaping.shapes_chest(item) and \
+                bust_shaping.character_shaped(character_name, profile)
             pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
     slots = slots_for_character(character_name, profile=profile)
     attributes = {rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})

@@ -686,7 +686,7 @@ for st in STUBS:
 _SHAPED = {"id": "top7", "outfit_piece": {"template": {"params": dict(TOP)}}}
 with patch("app.core.garment_template.collider_states", bra_states), \
         patch("app.core.garment_template.own_colliders", lambda *a, **k: []), \
-        patch("app.core.bust_shaping.key_tokens", lambda iid, item, lower: ["shape:x"] if item else []), \
+        patch("app.core.bust_shaping.key_tokens", lambda iid, item, lower, **k: ["shape:x"] if item else []), \
         patch("app.models.inventory.get_item", lambda iid: _SHAPED):
     BRA["state"] = "ready"
     s_item = gtc.sig_of(CHAR, "top7", TOP, base_sha="b0", lower=["bra1"], item=_SHAPED)[0]

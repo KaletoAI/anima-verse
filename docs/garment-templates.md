@@ -471,6 +471,13 @@ Rosi's Red Corset Top at lift 1, measured on the dry run: waist 2.96 / hem 2.2 /
 At 50 % the upper chest bunches and a small fold shows at the front of the shoulder. Lift 0.7 (35 %) renders
 clean. Smokes: `smoke_bust_shaping.py` (v3, old-code proof against 4ee6ac1ab) and `smoke_corset_shell.py`.
 
+**Who is shaped (user ruling 2026-11-23).** A male character never gets the chest shaping: `bust_shaping.set_lift`
+returns 0 for a wearer whose profile `gender` is male (`character_shaped` → `base_skin.is_male`), whatever his pieces
+say — an explicit Lift too. His drape and cut keys carry no `shape:` token and drape on the plain body file; the
+assembly and the accessory fits read the shaping from those drapes, so none shapes him either. Any other or an unset
+gender keeps the shaping (a small chest is lifted as before). Smoke: `smoke_chest_shaping_male.py` (old-code proof
+against 32056ce9d).
+
 **Corset v5 (review 2026-11-23: two flaps under the arms; a crease where the lifted cup met the straight panel).**
 `CORSET_VERSION` 5, all in `garment_template_build.py`'s corset functions:
 - *The edge under the arms* (`underarm_edge`, after `cup_edge`). The side and back edge lay on the fold from the back

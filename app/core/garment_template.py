@@ -2428,7 +2428,7 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
         under.append("tuck:" + ",".join(tucks) + f":{STRAPLESS_TUCK_M}")
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
-    under += bust_shaping.key_tokens(item_id, item, lower)
+    under += bust_shaping.key_tokens(item_id, item, lower, character_name=character_name)
     return under
 
 
@@ -3327,7 +3327,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
     try:
         # A228: a shaping piece drapes on the plain body shaped under it (``bust_shaping``)
         from app.core import bust_shaping
-        body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
+        body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping",
+                                                           character_name=character_name)
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over,

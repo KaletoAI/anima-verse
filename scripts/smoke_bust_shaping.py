@@ -298,13 +298,16 @@ ITEMS = {"top1": tpl("top", 1.0), "top0": tpl("top"), "jacket": tpl("jacket", No
 import app.models.inventory as inventory  # noqa: E402
 inventory.get_item = lambda iid: ITEMS.get(iid)
 check("shapes_chest: top lift 1 yes, top default 0 no", bs.shapes_chest(ITEMS["top1"]) and not bs.shapes_chest(ITEMS["top0"]))
-check("set_lift: strongest of the set", bs.set_lift(["top1", "dress5", "skirt"]) == 1.0 and bs.set_lift(["top0", "skirt"]) == 0.0)
-tj = bs.key_tokens("jacket", ITEMS["jacket"], ["top1"])
-tt = bs.key_tokens("top1", ITEMS["top1"], ["jacket"])
+# the wearer's gate (``character_shaped``) has its own smoke (smoke_chest_shaping_male.py); here every wearer is shaped
+bs.character_shaped = lambda name, profile=None: True
+check("set_lift: strongest of the set", bs.set_lift(["top1", "dress5", "skirt"], character_name="demo") == 1.0
+      and bs.set_lift(["top0", "skirt"], character_name="demo") == 0.0)
+tj = bs.key_tokens("jacket", ITEMS["jacket"], ["top1"], character_name="demo")
+tt = bs.key_tokens("top1", ITEMS["top1"], ["jacket"], character_name="demo")
 check("key: a jacket over a shaping top carries the set's token", len(tj) == 1 and tj == tt and tj[0].startswith("shape:"))
-check("key: a skirt keeps its key", bs.key_tokens("skirt", ITEMS["skirt"], ["top1"]) == [])
-check("key: no token without shaping", bs.key_tokens("jacket", ITEMS["jacket"], ["top0"]) == [])
-check("key: changes with the set's lift", bs.key_tokens("jacket", ITEMS["jacket"], ["dress5"]) != tj)
+check("key: a skirt keeps its key", bs.key_tokens("skirt", ITEMS["skirt"], ["top1"], character_name="demo") == [])
+check("key: no token without shaping", bs.key_tokens("jacket", ITEMS["jacket"], ["top0"], character_name="demo") == [])
+check("key: changes with the set's lift", bs.key_tokens("jacket", ITEMS["jacket"], ["dress5"], character_name="demo") != tj)
 r_hi, r_lo = bs.record(LM, 1.0), bs.record(LM, 0.4)
 worn = [{"template": True, "record": {"shaping": r_lo}}, {"template": True, "record": {"shaping": r_hi}},
         {"template": False, "record": {"shaping": bs.record(LM, 1.0)}}, {"template": True, "record": {}}]
