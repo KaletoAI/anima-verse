@@ -2963,14 +2963,26 @@ _button_pic_cache: dict[tuple[str, int, int], dict | None] = {}
 
 
 def button_text_colour(text: str) -> tuple[int, int, int] | None:
-    """The buttons' colour as the item ``text`` names it: the first colour (``TRIM_COLOURS``) or material
-    (``BUTTON_MATERIALS``) word of the segment (split at "," and ";") that names "button(s)"; None without one.
-    "black tailored blazer, fitted, two silver buttons" -> silver."""
-    for seg in re.split(r"[,;]", (text or "").lower()):
-        words = _TRIM_WORD.findall(seg)
-        if not any(_noun(w, ("button",)) for w in words):
+    """The buttons' colour as the item ``text`` names it, None without one. The text is cut into clauses (at ",",
+    ";" and the words "with" and "and", as ``trim_style`` reads it) so the garment's own colour of "green shirt with
+    white buttons" never reaches the buttons; in the clause naming "button(s)" the colour word (``TRIM_COLOURS``)
+    nearest before the noun wins, else the material word (``BUTTON_MATERIALS``) nearest before it, else the first
+    of either after it ("buttons in brass"). "black tailored blazer, fitted, two silver buttons" -> silver,
+    "brown wooden buttons" -> brown, "wool coat with horn buttons" -> horn."""
+    low = (text or "").lower()
+    for clause in (c for part in re.split(r"[,;]", low) for c in re.split(r"\b(?:with|and)\b", part)):
+        words = _TRIM_WORD.findall(clause)
+        at = next((i for i, w in enumerate(words) if _noun(w, ("button",))), None)
+        if at is None:
             continue
-        for w in words:
+        before = words[:at]
+        colour = next((w for w in reversed(before) if w in TRIM_COLOURS), None)
+        if colour:
+            return tuple(TRIM_COLOURS[colour])
+        material = next((w for w in reversed(before) if w in BUTTON_MATERIALS), None)
+        if material:
+            return BUTTON_MATERIALS[material]
+        for w in words[at + 1:]:
             if w in TRIM_COLOURS:
                 return tuple(TRIM_COLOURS[w])
             if w in BUTTON_MATERIALS:

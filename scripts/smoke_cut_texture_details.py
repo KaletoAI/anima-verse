@@ -28,7 +28,12 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     "its colour and fine vertical stripes,".
 [4] Buttons. ``button_text_colour``: "black tailored blazer, fitted, two silver buttons" -> silver (184, 184, 190);
     "dark green linen shirt with nordic silver embroidery, loose fit" names no button -> None (the silver belongs to
-    the embroidery's segment); "shirt with brown wooden buttons" -> the first word, brown (104, 66, 38).
+    the embroidery's segment); "shirt with brown wooden buttons" -> the colour word nearest before the noun beats the
+    material, brown (104, 66, 38). The garment's own colour never reaches the buttons (clauses split at "with"/"and"):
+    "long dark navy captain's coat with brass buttons and shoulder boards" (Anima Divide) -> clause "brass buttons"
+    -> brass (176, 140, 72), not navy; "green shirt with white buttons" -> white (236, 234, 230), not green;
+    "dark brown wool coat with horn buttons" -> clause "horn buttons", no colour word -> the material horn
+    (92, 70, 52), not brown.
     ``picture_buttons`` on a 512 px picture (scale 1): a green garment (40, 100, 60) x 100..399 (width 300), five
     copper discs (140, 70, 20) of radius 6.5 centred on x 250.5 (pixels 244..256, d 13 px in 3.6..18 = 0.012..0.06 x
     300, fill ~0.79), two discs at x 150.5 and 330.5, a white stroke 2 x 40 px (aspect 20 > 1.6). The biggest column
@@ -149,6 +154,12 @@ check("text: silver buttons", gct.button_text_colour("black tailored blazer, fit
 check("text: silver embroidery is no button colour",
       gct.button_text_colour("dark green linen shirt with nordic silver embroidery, loose fit") is None)
 check("text: brown wooden buttons -> brown", gct.button_text_colour("shirt with brown wooden buttons") == (104, 66, 38))
+check("text: captain's coat -> brass, not navy", gct.button_text_colour(
+    "long dark navy captain's coat with brass buttons and shoulder boards") == (176, 140, 72))
+check("text: green shirt with white buttons -> white",
+      gct.button_text_colour("green shirt with white buttons") == (236, 234, 230))
+check("text: brown wool coat with horn buttons -> horn",
+      gct.button_text_colour("dark brown wool coat with horn buttons") == (92, 70, 52))
 
 
 def disc(img, cx, cy, r, rgb):
