@@ -41,7 +41,8 @@ What it does, in ONE process, never touching the world it is given:
      render / upscale / view call);
    - the Build's state is not running and has no failed step; its plan afterwards is empty (the local collision
      channel aside) — no second Build;
-   - the atlas exists (``garment_cut_texture.atlas_path`` of the current csig) and the dialog reads it as done
+   - the atlas exists (``garment_cut_texture.atlas_path`` of the current csig), has no light / dark streaks round its
+     islands (the record's ``bleed_streaks``) and the dialog reads it as done
      (``dialog_state``: ``current`` and ``applied`` True), the Figure row's ``cut_build`` is "done";
    - the SERVED GLB is the assembly (``garment_assembly.served`` of the bare model) and carries the atlas: one of its images decodes to the atlas's pixels (mean absolute
      difference < 2 at the GLB image's size);
@@ -805,6 +806,10 @@ def main() -> int:
             sig = dialog.get("csig")
             atlas = gct.atlas_path(args.character, item_id, sig) if sig else None
             check(f"{item_id} atlas exists", bool(atlas and atlas.is_file()), True)
+            # review 2026-11-23: no light / dark streaks round the islands (``cut_texture_post.bleed_streaks``)
+            streaks = (rec.get("metrics") or {}).get("bleed_streaks") or {}
+            print(f"{item_id} bleed streaks: {streaks}")
+            check(f"{item_id} no streaks round the islands", bool(streaks.get("ok")), True)
             if atlas and atlas.is_file() and served:
                 from app.core import garment_template as _gt
                 opacity = _gt.sheer_opacity(_gt.params_of(get_item(item_id)))

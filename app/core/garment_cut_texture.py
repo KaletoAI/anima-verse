@@ -917,7 +917,17 @@ def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tupl
     frame: scaled to ``side`` (Lanczos; the grown mask nearest) and put at ``(ox, oy)``, clipped to the atlas; white /
     False elsewhere."""
     side, ox, oy = int(frame["side"]), int(frame["ox"]), int(frame["oy"])
-    small = np.asarray(Image.fromarray(np.asarray(image, np.uint8), "RGB").resize((side, side), Image.LANCZOS))
+    image = np.asarray(image, np.uint8)
+    grown = np.asarray(grown, bool)
+    if grown.any() and not grown.all():
+        # review 2026-11-23 (Rosi's corset: white-pink rays round the front island, on the figure as pale streaks on
+        # the flank): the Lanczos kernel mixed the white outside ``grown`` into its outer pixels, and the atlas's
+        # pocket fill (``cut_texture_post.fill_pockets``) drew those pale pixels out as rays — so the outside takes the
+        # nearest grown colour before the scale
+        from scipy import ndimage
+        _d, (iy, ix) = ndimage.distance_transform_edt(~grown, return_indices=True)
+        image = image[iy, ix]
+    small = np.asarray(Image.fromarray(image, "RGB").resize((side, side), Image.LANCZOS))
     gsmall = np.asarray(Image.fromarray(np.asarray(grown, np.uint8) * 255, "L").resize((side, side), Image.NEAREST)) > 127
     out = np.full((size, size, 3), 255, np.uint8)
     g = np.zeros((size, size), bool)
@@ -2130,6 +2140,11 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
         seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
         cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
         record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
+        isl_mask = np.zeros((size, size), bool)
+        for r in results.values():
+            isl_mask |= np.asarray(r["_mask"], bool)
+        record["metrics"]["bleed_streaks"] = cut_texture_post.bleed_streaks(
+            atlas, isl_mask, max(1, int(round(cut_texture_post.POCKET_CM * ppc))) if ppc > 0 else 0)
     record["created_at"] = utc_now_iso()
     _file(stem, ".atlas.png").unlink(missing_ok=True)
     if atlas is not None:

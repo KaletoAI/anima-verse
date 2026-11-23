@@ -106,7 +106,11 @@ NECK_VERSION = 1
 #: run) and its front rises over the cups (``cup_rise``) — part of its drape key too (``tsig``), so it re-drapes once.
 #: 3 (review 2026-11-22): the band under the top edge is gated too (``under_edge``) and the hem reaches under the worn
 #: skirt's waistband (``STRAPLESS_TUCK_M``).
-CORSET_VERSION = 3
+#: 4 (review 2026-11-23): the front's top row reaches ``CUP_COVER_MAX_M`` over the apex and each column's edge sits on
+#: the top of the chest tissue (``cup_edge``), the sweetheart dip ends over the apex (``CUP_TIP_M``), the front's
+#: vertical hull reaches every column with chest tissue (no dent under the outer cup), new max gates
+#: (``CORSET_MAX_MM``).
+CORSET_VERSION = 4
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
@@ -174,6 +178,21 @@ STRAPLESS_MIN_M = 0.08
 CUP_COVER_M = 0.035
 CUP_RISE_MAX_M = 0.10
 CUP_HALF_RAD = 0.6
+#: Corset v4 (review 2026-11-23: the cups covered only the lower half of the lifted chest, skin stood over the cup
+#: edge at the side): the front's top row lies this far over the apex (at most ``CUP_RISE_MAX_M`` over the edge
+#: under the arms); the default cup line stays ``CUP_COVER_M`` over the apex and the build raises each front column
+#: up to the top of the chest tissue at its angle (``garment_template_build.cup_edge``), never over this row.
+CUP_COVER_MAX_M = 0.08
+#: Corset v4: a sweetheart dip ends at least this far over the apex — the dip is measured down from the cup line, so
+#: a deep dip (``neck_depth_m`` up to ``SWEETHEART_MAX_M``) under a lifted chest left the cups covering only their
+#: lower half.
+CUP_TIP_M = 0.01
+#: Corset v4: the build's cup edge (``garment_template_build.cup_edge``): a front column holds chest tissue when its
+#: radius at the apex stands this far over its radius at the top row; its edge then sits where the skin above it
+#: recedes by ``CUP_EDGE_RECEDE_M`` per centimetre and nothing above stands out over it (``CUP_EDGE_SPILL_M``).
+CUP_TISSUE_M = 0.03
+CUP_EDGE_RECEDE_M = 0.005
+CUP_EDGE_SPILL_M = 0.001
 #: Corset v2: the shell lies this far outside the body (or the layer under it) along the build's rays; the gates
 #: (``judge_build``, ``CORSET_GAP_MM``) measure the distance of the single layer to the nearest surface.
 CORSET_CLEAR_M = 0.0015
@@ -181,6 +200,11 @@ CORSET_CLEAR_M = 0.0015
 #: waist, along the hem and along the top edge (the bridge over the neckline's middle left out). Corset v3: and in the
 #: band 1..3 cm under the top edge on the worse side (``under_edge``; ``garment_template_build.shell_gaps``).
 CORSET_GAP_MM = {"waist": 3.0, "hem": 5.0, "top_edge": 2.0, "under_edge": 5.0}
+#: Corset v4 (review 2026-11-23: the outer cup edge flared off the skin and skin spilled sideways over it while the p95
+#: gates passed): gated on the MAXIMUM, millimetres — ``edge_outer`` = the gap of the top edge over the outer part of
+#: the cups (``garment_template_build.EDGE_OUTER_RAD``), ``edge_spill`` = how far the skin up to 3 cm over the top edge
+#: of a column with chest tissue stands out beyond the skin at the edge (``garment_template_build.shell_gaps``).
+CORSET_MAX_MM = {"edge_outer": 3.0, "edge_spill": 1.0}
 #: Corset v3 (review 2026-11-22: a strip of bare skin between the corset's hem and the skirt's waistband): a strapless
 #: top worn with a template skirt or trousers (``tuck_lines``) reaches this far below the lowest of their waist lines
 #: (``_waist_line``) — the skirt drapes on the plain body and stands a few millimetres off it, the corset lies on the
@@ -1549,23 +1573,44 @@ def tuck_lines(params: Dict[str, Any], lower: List[str]) -> Tuple[str, ...]:
 
 def cup_rise(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
     """Corset v2: how far a strapless top's front rises over its edge under the arms (``band_y`` -
-    ``STRAPLESS_UNDERARM_M``) to cover the chest — ``chest_apex_y`` + ``CUP_COVER_M`` less that edge, between 0 and
-    ``CUP_RISE_MAX_M``; 0 for every other piece and on a body without the measure."""
+    ``STRAPLESS_UNDERARM_M``) to cover the chest — corset v4: its top row, ``chest_apex_y`` + ``CUP_COVER_MAX_M`` less
+    that edge, between 0 and ``CUP_RISE_MAX_M``; 0 for every other piece and on a body without the measure."""
     if not strapless_top(params) or "chest_apex_y" not in meas:
         return 0.0
     side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
-    return round(min(CUP_RISE_MAX_M, max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_M - side_y)), 4)
+    return round(min(CUP_RISE_MAX_M, max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_MAX_M - side_y)), 4)
 
 
-def cup_drop(rise: float, cols: int) -> Tuple[List[float], List[float]]:
+def cup_base(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
+    """Corset v4: how far the default cup line (``chest_apex_y`` + ``CUP_COVER_M``) lies under the front's top row
+    (``cup_rise``) — the build raises a column with chest tissue from it (``garment_template_build.cup_edge``)."""
+    rise = cup_rise(params, meas)
+    if rise <= 0:
+        return 0.0
+    side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
+    line = max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_M - side_y)
+    return round(max(0.0, rise - min(rise, line)), 4)
+
+
+def cup_drop(rise: float, cols: int, base: float = 0.0) -> Tuple[List[float], List[float]]:
     """Corset v2: the ``top_drop`` of a strapless top whose front rises by ``rise`` (``cup_rise``): ``(front, back)``
-    per column — the front (column c at pi * c / (cols - 1) - pi / 2 off its centre, as ``top_drop``) falls to the edge
-    under the arms by rise * smoothstep(off; ``CUP_HALF_RAD``, pi / 2); the back lies the whole rise lower."""
+    per column — the front (column c at pi * c / (cols - 1) - pi / 2 off its centre, as ``top_drop``) lies ``base``
+    under the top row (corset v4, ``cup_base``) and falls to the edge under the arms by (rise - base) *
+    smoothstep(off; ``CUP_HALF_RAD``, pi / 2); the back lies the whole rise lower."""
     def fall(off: float) -> float:
         t = min(1.0, max(0.0, (off - CUP_HALF_RAD) / (math.pi / 2 - CUP_HALF_RAD)))
-        return rise * t * t * (3.0 - 2.0 * t)
+        return base + (rise - base) * t * t * (3.0 - 2.0 * t)
     front = [round(fall(abs(math.pi * c / (cols - 1) - math.pi / 2)), 5) for c in range(cols)]
     return front, [round(rise, 5)] * cols
+
+
+def cup_dip(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
+    """Corset v4: the sweetheart dip of a strapless top whose front rises over the cups — ``sweetheart_depth``, at
+    most down to ``CUP_TIP_M`` over the apex from the default cup line (``chest_apex_y`` + ``CUP_COVER_M``)."""
+    depth = sweetheart_depth(params)
+    if cup_rise(params, meas) <= 0:
+        return depth
+    return round(max(0.0, min(depth, CUP_COVER_M - CUP_TIP_M)), 4)
 
 
 def sweetheart_depth(params: Dict[str, Any]) -> float:
@@ -1722,9 +1767,17 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
     rise = float(shape.get("cup_rise_m") or 0.0)
     if rise > 0:
         # corset v2: the front rises over the cups, the sides and the back stay under the arms (``cup_drop``); the
-        # sweetheart dip is measured down from the cup line
-        front, back = cup_drop(rise, COLS)
+        # sweetheart dip is measured down from the cup line — corset v4: it ends over the apex (``cup_dip``), the
+        # cup line lies ``cup_base`` under the top row and the build raises it to the chest tissue (``cup_edge``)
+        if drop:
+            dip = cup_dip(params, meas)
+            drop = [round(sweetheart_drop(dip, abs(math.pi * c / (COLS - 1) - math.pi / 2)), 5) for c in range(COLS)]
+        base = cup_base(params, meas)
+        front, back = cup_drop(rise, COLS, base)
         out["top_drop"] = {"front": [round(a + b, 5) for a, b in zip(front, drop or [0.0] * COLS)], "back": back}
+        out["cup_edge"] = {"apex_y": float(meas["chest_apex_y"]), "base_m": base, "tissue_m": CUP_TISSUE_M,
+                           "recede_m": CUP_EDGE_RECEDE_M, "spill_m": CUP_EDGE_SPILL_M,
+                           "dip": drop or [0.0] * COLS}
     elif drop:
         out["top_drop"] = {"front": drop}
     if has_bodice(params):
@@ -2650,7 +2703,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
             # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
-            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": dict(CORSET_GAP_MM)} if strapless_top(params) else {}),
+            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if strapless_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
             "frames": (BODICE_FRAMES if has_bodice(params) else
                        int((spec.get("fitted") or {}).get("frames") or 50)),
@@ -2711,6 +2764,11 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         gap = ((data.get("fit_gap") or {}).get(part) or {}).get("p95_mm")
         if gap is not None:
             row(f"gap_{part}_p95_mm", gap, limit, gap <= limit)
+    # corset v4: the outer cup edge and the skin over the top edge, on the maximum (mm)
+    for part, limit in CORSET_MAX_MM.items():
+        gap = ((data.get("fit_gap") or {}).get(part) or {}).get("max_mm")
+        if gap is not None:
+            row(f"gap_{part}_max_mm", gap, limit, gap <= limit)
     # corset v3: a hem moved under the worn skirt's / trousers' waistband (``STRAPLESS_TUCK_M``) reaches under it
     tucked = (data.get("outline") or {}).get("hem_tucked")
     if tucked:

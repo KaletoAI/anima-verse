@@ -1,21 +1,27 @@
-"""Corset v2/v3 (user report 2026-11-22: "lots of air below, thick at the top"): a strapless top's front rises over the
+"""Corset v2/v3/v4 (user report 2026-11-22: "lots of air below, thick at the top"): a strapless top's front rises over the
 shaped chest (``garment_template.cup_rise`` / ``cup_drop``), it is laid on the body as a shell
 (``build_args`` sends ``shell_clear_m`` / ``shell_gap_mm``) and its gaps are gated (``judge_build``). No server, no
 world DB, no Blender. Every number below is derived by hand.
 
-[1] ``cup_rise``: STRAPLESS_UNDERARM_M 0.02, CUP_COVER_M 0.035, CUP_RISE_MAX_M 0.10. Rosi's measures (band_y 1.2375,
-    chest_apex_y 1.251 — the shaped apex at lift 1): the edge under the arms 1.2375 - 0.02 = 1.2175, the rise
-    1.251 + 0.035 - 1.2175 = 0.0685 (the drape record of 2026-11-22 shows cup_rise_m 0.0685, top_y 1.286).
-    chest_apex_y 1.40 -> 1.40 + 0.035 - 1.2175 = 0.2175 -> capped 0.10; chest_apex_y 1.10 -> negative -> 0;
+[1] ``cup_rise`` (corset v4): STRAPLESS_UNDERARM_M 0.02, CUP_COVER_MAX_M 0.08, CUP_RISE_MAX_M 0.10. Rosi's measures
+    (band_y 1.2375, chest_apex_y 1.2363 — the shaped apex at lift 1, drape record 2026-11-23): the edge under the arms
+    1.2375 - 0.02 = 1.2175, the rise 1.2363 + 0.08 - 1.2175 = 0.0988 (top row 1.3163).
+    chest_apex_y 1.40 -> 1.40 + 0.08 - 1.2175 = 0.2625 -> capped 0.10; chest_apex_y 1.10 -> 1.18 - 1.2175 < 0 -> 0;
     no chest_apex_y -> 0; a top with straps -> 0.
+    ``cup_base``: the default cup line 1.2363 + CUP_COVER_M 0.035 = 1.2713 lies 1.3163 - 1.2713 = 0.045 under the top
+    row. ``cup_dip``: the sweetheart neck_depth_m 0.10 ends CUP_TIP_M 0.01 over the apex -> min(0.10, 0.035 - 0.01) =
+    0.025; without a rise (no chest measure) the plain ``sweetheart_depth`` 0.10.
 [2] ``cup_drop(0.05, 5)``: column offsets |pi c / 4 - pi / 2| = pi/2, pi/4, 0, pi/4, pi/2; CUP_HALF_RAD 0.6:
     pi/4 -> t = (0.785398 - 0.6) / (1.570796 - 0.6) = 0.190975, smoothstep 0.190975^2 x (3 - 0.381950) = 0.036471 x 2.618050 = 0.095484
     -> 0.05 x 0.095484 = 0.004774; pi/2 -> t 1 -> 0.05; 0 -> 0. Front [0.05, 0.00477, 0, 0.00477, 0.05] (5 places),
     back [0.05] x 5 (the back lies the whole rise lower than the front's top).
+    ``cup_drop(0.05, 5, base=0.02)``: 0.02 + 0.03 x smoothstep -> centre 0.02, pi/4 0.02 + 0.03 x 0.095484 = 0.022865
+    -> 0.02286 (5 places, half-even on the float), pi/2 0.05.
 [3] ``build_args`` of a strapless top carries shell_clear_m = CORSET_CLEAR_M 0.0015 and shell_gap_mm = CORSET_GAP_MM
-    {waist 3, hem 5, top_edge 2}; a skirt carries neither.
+    {waist 3, hem 5, top_edge 2, under_edge 5} + CORSET_MAX_MM {edge_outer 3, edge_spill 1}; a skirt carries neither.
 [4] ``judge_build`` with fit_gap waist 2.9 / hem 5.1 / top_edge 1.5 (p95): rows gap_waist_p95_mm ok, gap_hem_p95_mm
-    NOT ok, gap_top_edge_p95_mm ok, all three gates; without fit_gap no gap row.
+    NOT ok, gap_top_edge_p95_mm ok, all three gates; without fit_gap no gap row. Corset v4, on the MAXIMUM: edge_outer
+    3.1 > 3 fails (a gate), edge_spill 0.5 <= 1 ok.
 
 [5] Corset v3, the hem under a worn skirt's waistband (``_strapless_top_outline(tuck=...)``, STRAPLESS_TUCK_M 0.02):
     measures band_y 1.24, shoulder_y 1.37, waist_y 0.98, hip_y 0.88, floor 0, no chest measures (no rise, no fold);
@@ -54,6 +60,8 @@ def check(label, ok, detail=""):
         FAILS.append(label)
 
 
+check("v4 constants", (gt.CUP_COVER_MAX_M, gt.CUP_TIP_M, gt.CORSET_MAX_MM) == (0.08, 0.01, {"edge_outer": 3.0,
+                                                                                         "edge_spill": 1.0}))
 check("constants", (gt.STRAPLESS_UNDERARM_M, gt.CUP_COVER_M, gt.CUP_RISE_MAX_M, gt.CUP_HALF_RAD, gt.CORSET_CLEAR_M,
                     gt.CORSET_GAP_MM, gt.STRAPLESS_TUCK_M, gt.TUCK_KINDS)
       == (0.02, 0.035, 0.10, 0.6, 0.0015, {"waist": 3.0, "hem": 5.0, "top_edge": 2.0, "under_edge": 5.0}, 0.02,
@@ -63,22 +71,29 @@ strapped = gt.validate_params({"kind": "top"})[0]
 skirt = gt.validate_params({"kind": "skirt"})[0]
 
 # [1]
-M = {"band_y": 1.2375, "chest_apex_y": 1.251}
-check("[1] Rosi: rise 0.0685", gt.cup_rise(corset, M) == 0.0685, gt.cup_rise(corset, M))
+M = {"band_y": 1.2375, "chest_apex_y": 1.2363}
+check("[1] Rosi: rise 0.0988", gt.cup_rise(corset, M) == 0.0988, gt.cup_rise(corset, M))
 check("[1] capped at 0.10", gt.cup_rise(corset, {**M, "chest_apex_y": 1.40}) == 0.10)
 check("[1] a low chest: 0", gt.cup_rise(corset, {**M, "chest_apex_y": 1.10}) == 0.0)
 check("[1] no chest measure: 0", gt.cup_rise(corset, {"band_y": 1.2375}) == 0.0)
 check("[1] a top with straps: 0", gt.cup_rise(strapped, M) == 0.0)
+check("[1] cup_base 0.045", gt.cup_base(corset, M) == 0.045, gt.cup_base(corset, M))
+deep = gt.validate_params({"kind": "top", "shoulders": "strapless", "neckline": "sweetheart", "neck_depth_m": 0.10})[0]
+check("[1] cup_dip 0.025 over the apex", gt.cup_dip(deep, M) == 0.025, gt.cup_dip(deep, M))
+check("[1] cup_dip without a rise: 0.10", gt.cup_dip(deep, {"band_y": 1.2375}) == 0.10)
 
 # [2]
 front, back = gt.cup_drop(0.05, 5)
 check("[2] front falls to the arms", [round(v, 5) for v in front] == [0.05, 0.00477, 0.0, 0.00477, 0.05], front)
 check("[2] back the whole rise lower", back == [0.05] * 5, back)
+front_b, _b = gt.cup_drop(0.05, 5, 0.02)
+check("[2] with a base", [round(v, 5) for v in front_b] == [0.05, 0.02286, 0.02, 0.02286, 0.05], front_b)
 
 # [3]
 src = (ROOT / "app" / "core" / "garment_template.py").read_text(encoding="utf-8")
 check("[3] build_args sends shell_clear_m / shell_gap_mm for a strapless top only",
-      '{"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": dict(CORSET_GAP_MM)} if strapless_top(params) else {}' in src)
+      '{"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if strapless_top(params) '
+      'else {}' in src)
 check("[3] a skirt is no strapless top", not gt.strapless_top(skirt) and gt.strapless_top(corset))
 
 # [4]
@@ -87,6 +102,9 @@ rows = {r["check"]: r for r in gt.judge_build({"fit_gap": {"waist": {"p95_mm": 2
 check("[4] waist 2.9 <= 3 ok", rows["gap_waist_p95_mm"]["ok"] and rows["gap_waist_p95_mm"]["gate"])
 check("[4] hem 5.1 > 5 fails", not rows["gap_hem_p95_mm"]["ok"] and rows["gap_hem_p95_mm"]["gate"])
 check("[4] top edge 1.5 <= 2 ok", rows["gap_top_edge_p95_mm"]["ok"])
+rows7 = {r["check"]: r for r in gt.judge_build({"fit_gap": {"edge_outer": {"max_mm": 3.1}, "edge_spill": {"max_mm": 0.5}}})}
+check("[4] v4: edge_outer max 3.1 > 3 fails", not rows7["gap_edge_outer_max_mm"]["ok"] and rows7["gap_edge_outer_max_mm"]["gate"])
+check("[4] v4: edge_spill max 0.5 <= 1 ok", rows7["gap_edge_spill_max_mm"]["ok"])
 check("[4] no fit_gap, no gap row", not any(r["check"].startswith("gap_") for r in gt.judge_build({})))
 
 # [5]

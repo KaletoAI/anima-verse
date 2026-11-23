@@ -532,6 +532,36 @@ def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.nd
     return out
 
 
+#: ``bleed_streaks`` (review 2026-11-23): a pixel of the ring round the islands (bleed + pocket fill, ``POCKET_CM``)
+#: whose L* differs from the nearest island pixel's by
+#: more than ``STREAK_DL`` is a streak; at most ``STREAK_SHARE`` of the ring may be one (the e2e check reads it).
+STREAK_DL = 20.0
+STREAK_SHARE = 0.01
+
+
+def bleed_streaks(atlas, islands, bleed_px: int) -> dict:
+    """The light / dark streaks in the ring of a composed atlas (``bleed_px`` round ``islands``; the record reads it at
+    ``POCKET_CM``, the bleed and the pocket fill): every ring pixel
+    against its nearest island pixel's L* (``STREAK_DL``). The ring is what a mip level or a bilinear sample at an
+    island's border mixes in — Rosi's corset showed its pale rays as streaks on the flank. ``{ring, light, dark, share,
+    limit, ok}``; an empty ring (no bleed) is ok."""
+    from scipy import ndimage
+
+    islands = np.asarray(islands, bool)
+    if bleed_px <= 0 or not islands.any():
+        return {"ring": 0, "light": 0, "dark": 0, "share": 0.0, "limit": STREAK_SHARE, "ok": True}
+    dist, (iy, ix) = ndimage.distance_transform_edt(~islands, return_indices=True)
+    ring = ~islands & (dist <= float(bleed_px))
+    rgb = np.asarray(atlas)[..., :3]
+    L = srgb_to_lab(rgb[ring].astype(np.float64))[:, 0]
+    L0 = srgb_to_lab(rgb[iy[ring], ix[ring]].astype(np.float64))[:, 0]
+    light = int((L - L0 > STREAK_DL).sum())
+    dark = int((L0 - L > STREAK_DL).sum())
+    n = int(ring.sum())
+    share = round((light + dark) / max(1, n), 5)
+    return {"ring": n, "light": light, "dark": dark, "share": share, "limit": STREAK_SHARE, "ok": share <= STREAK_SHARE}
+
+
 def fill_pockets(img, filled, reach_px: int) -> tuple[np.ndarray, np.ndarray]:
     """The composed atlas with its background pockets filled: every pixel outside ``filled`` (islands + bleed) that
     lies within ``reach_px`` of it, or in a hole ``filled`` encloses, takes the colour of its nearest ``filled`` pixel

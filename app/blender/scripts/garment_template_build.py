@@ -278,6 +278,101 @@ SHELL_SETTLE_DZ_M = 0.005
 SHELL_SETTLE_ROUNDS = 4
 
 
+#: Corset v4 (review 2026-11-23): ``cup_edge`` scans a column's edge upward in steps of this many metres, and reads
+#: the skin over a candidate edge up to ``CUP_EDGE_LOOK_M`` higher.
+CUP_EDGE_STEP_M = 0.002
+CUP_EDGE_LOOK_M = 0.03
+
+
+#: Corset v4: ``chest_tissue`` compares the radius at the apex with the radius this far under it (under the tissue,
+#: on the rib cage) as well as at the top row — the cleavage and the flank stand no farther out than either.
+CUP_UNDER_M = 0.12
+
+
+def chest_tissue(btree, centre, ang, apex_z, top_z, tissue_m):
+    """Corset v4: whether the body at angle ``ang`` holds chest tissue — its radius at the apex height stands
+    ``tissue_m`` over the larger of its radii at the front's top row ``top_z`` and ``CUP_UNDER_M`` under the apex
+    (the cleavage and the flank under the arm do not; the build's body tree has no arms, so the flank's top row may
+    read a hole)."""
+    wall = max(gd.body_radius(btree, centre, ang, top_z), gd.body_radius(btree, centre, ang, apex_z - CUP_UNDER_M))
+    return gd.body_radius(btree, centre, ang, apex_z) - wall >= tissue_m
+
+
+def edge_clears(btree, centre, ang, z, top_z, recede_m, spill_m):
+    """Corset v4: whether a top edge at height ``z`` lies on the chest's upper slope at angle ``ang``: the skin 1 cm
+    over it recedes by ``recede_m`` and nothing over it, up to ``CUP_EDGE_LOOK_M``, stands out more than ``spill_m``
+    beyond it (the skin of a lifted chest standing over the cup edge read as spilling over the cup)."""
+    r = gd.body_radius(btree, centre, ang, z)
+    if r - gd.body_radius(btree, centre, ang, z + 0.01) < recede_m:
+        return False
+    for dz in np.arange(0.004, CUP_EDGE_LOOK_M + 1e-9, 0.004):
+        if gd.body_radius(btree, centre, ang, z + float(dz)) > r + spill_m:
+            return False
+    return True
+
+
+def cup_edge(spec, btree, centre):
+    """Corset v4 (review 2026-11-23: the cups covered only the lower half of the lifted chest; at the outer cup the
+    skin stood over the edge): raise each front column's top edge (``spec["top_drop"]["front"]``, metres under the top
+    row) from its default cup line to the top of the chest tissue at its angle — the lowest height where the edge
+    clears (``edge_clears``), at most the top row; only on columns with chest tissue (``chest_tissue``); each such
+    column takes the largest raise of its tissue neighbours, smoothed; the columns between take the raise linearly
+    between the nearest tissue columns, 0 at the side seams and in the sweetheart dip (raised, never lowered). In place; returns ``{tissue_cols, raised_cols, max_raise_m}``
+    and stores ``tissue_cols`` in ``spec["cup_edge"]`` (``corset_shell``'s vertical hull and ``shell_gaps`` read it)."""
+    ce = spec.get("cup_edge")
+    drops = spec.get("top_drop") or {}
+    if not ce or "front" not in drops:
+        return None
+    cols = int(spec["cols"])
+    top_z = float(spec["row_y"][0])
+    apex_z = float(ce["apex_y"])
+    front = [float(d) for d in drops["front"]]
+    dip = [float(d) for d in ce.get("dip") or [0.0] * cols]
+    edge = [top_z - d for d in front]
+    tissue = []
+    raise_ = [0.0] * cols
+    for c in range(cols):
+        ang = math.pi + math.pi * c / (cols - 1)
+        if not chest_tissue(btree, centre, ang, apex_z, top_z, float(ce["tissue_m"])):
+            continue
+        tissue.append(c)
+        z = edge[c]
+        while z < top_z and not edge_clears(btree, centre, ang, z, top_z, float(ce["recede_m"]), float(ce["spill_m"])):
+            z += CUP_EDGE_STEP_M
+        raise_[c] = max(0.0, min(top_z, z) - edge[c])
+    # the raise of a tissue column: the largest of its tissue neighbours', then smoothed (1, 2, 1) among them; every
+    # other column takes it linearly between the nearest tissue columns either side, 0 at the side seams (the edge
+    # meets the back's edge under the arms) and 0 inside the sweetheart dip
+    tset = set(tissue)
+    up = [0.0] * cols
+    for c in tissue:
+        up[c] = max(raise_[k] for k in (c - 1, c, c + 1) if 0 <= k < cols and k in tset)
+    sm = list(up)
+    for c in tissue:
+        nb = [(w, up[k]) for w, k in ((1, c - 1), (2, c), (1, c + 1)) if 0 <= k < cols and k in tset]
+        sm[c] = max(raise_[c], sum(w * v for w, v in nb) / sum(w for w, _v in nb))
+    anchors = sorted(set(tissue) | {0, cols - 1})
+    val = {k: (sm[k] if k in tset else 0.0) for k in anchors}
+    new = list(edge)
+    for c in range(cols):
+        if c in tset:
+            new[c] = edge[c] + sm[c]
+            continue
+        if dip[c] > 0:
+            continue
+        lo = max(k for k in anchors if k <= c)
+        hi = min(k for k in anchors if k >= c)
+        t = 0.0 if hi == lo else (c - lo) / (hi - lo)
+        new[c] = edge[c] + val[lo] * (1 - t) + val[hi] * t
+    new = [min(top_z, z) for z in new]
+    drops["front"] = [round(top_z - z, 5) for z in new]
+    ce["tissue_cols"] = tissue
+    raised = [new[c] - edge[c] for c in range(cols)]
+    return {"tissue_cols": len(tissue), "raised_cols": int(sum(1 for r in raised if r > 1e-4)),
+            "max_raise_m": round(max(raised), 4), "edge_z": [round(z, 4) for z in new],
+            "tissue": sorted(tissue), "centre": [round(float(v), 4) for v in centre[:2]]}
+
+
 def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     """Corset v2 (user report 2026-11-22, "lots of air below, thick at the top"): lay a strapless top's ``wrap``
     vertices ON the body instead of hanging them as a tube — each at its own angle and height ``clear`` outside the
@@ -298,12 +393,15 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     front = [k for k, p in enumerate(spec["panels"]) if p["name"] == "front"]
     bridged = 0
     hollow = []
+    edge_set = set(int(i) for i in edge)
     for r in range(rows):
         idx = np.array([k * rows * cols + r * cols + c for k in range(panels) for c in range(cols)])
         hull = _hull_radius(centre, [angles[i] for i in idx], body_r[idx])
         for j, i in enumerate(idx):
             off = abs(((angles[i] - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
             if i // (rows * cols) in front and off <= SHELL_HULL_RAD and hull[j] > body_r[i]:
+                if int(i) in edge_set and hull[j] - body_r[i] <= SHELL_BRIDGE_M:
+                    continue        # corset v4: the top edge stays on the skin where the hull only grazes it
                 rad[i] = hull[j] + clear
                 if hull[j] - body_r[i] > SHELL_BRIDGE_M:
                     bridged += 1
@@ -314,13 +412,16 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     # front does; the waist stays on the body. Such a vertex counts as over a hollow (``hollow``: no settle, out of
     # the band gap)
     waist_y = (spec.get("outline") or {}).get("waist_y")
+    tissue_cols = set((spec.get("cup_edge") or {}).get("tissue_cols") or ())
     if waist_y is not None:
         for k in front:
             base = k * rows * cols
             for c in range(cols):
                 i0 = base + c
                 off = abs(((angles[i0] - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
-                if off > SHELL_HULL_RAD:
+                # corset v4 (review 2026-11-23: a dent under the outer cup in the side view): every column with chest
+                # tissue (``cup_edge``) runs straight from the chest to the rib cage too
+                if off > SHELL_HULL_RAD and c not in tissue_cols:
                     continue
                 col = [base + r * cols + c for r in range(rows)]
                 zs = np.array([verts[i][2] for i in col])
@@ -359,12 +460,24 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
             return 0
         if (a in fixed or b in fixed) and not edge_pass:
             return 0
+        if edge_pass and a in fixed and b in fixed:
+            # corset v4: a chord ALONG the top edge across the rounded upper cup is left as it is (raising both its ends
+            # stood the edge 2-3 mm off the skin); the stretches from the edge inward are still raised
+            return 0
         if edge_pass:
             # only where the body really stands through the stretch, and only up to the body's surface
             if worst <= clear:
                 return 0
             worst -= clear - SHELL_EDGE_SKIN_M
         wa, wb = 1 - wt, wt
+        if edge_pass:
+            # corset v4: the edge end stays on the skin; the inner end takes the raise (its sample share exact)
+            share = wt if a in fixed else 1 - wt
+            worst = worst / max(share, 0.25)
+            wa, wb = (0.0, 1.0) if a in fixed else (1.0, 0.0)
+            rad[a] += worst * wa
+            rad[b] += worst * wb
+            return 1
         k = worst / (wa * wa + wb * wb)
         rad[a] += k * wa
         rad[b] += k * wb
@@ -417,6 +530,16 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     # rolled out as a flap at the cups' side), they are raised here by both ends where the body stands through them
     # (``SHELL_EDGE_SKIN_M``) — so no skin shows through between the edge and the next row
     edge_raised = clear_stretches(edge_pass=True)
+    # corset v4 (review 2026-11-23: the edge stood up to 3 mm off the upper slope of the lifted chest after the edge
+    # pass): an edge vertex farther than ``clear`` from its nearest surface point moves in along its ray by the
+    # difference, never closer than ``SHELL_EDGE_SKIN_M`` over the surface its ray meets
+    for i in fixed:
+        q = Vector(point(i))
+        loc, _nrm, _f, dist = btree.find_nearest(q)
+        if loc is not None and dist > clear + SHELL_SETTLE_TOL_M:
+            rad[i] = max(body_r[i] + SHELL_EDGE_SKIN_M if zz[i] == verts[i][2] else 0.0,
+                         gd.body_radius(btree, centre, angles[i], zz[i]) + SHELL_EDGE_SKIN_M,
+                         rad[i] - (dist - clear))
     for i in range(n):
         verts[i] = (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), zz[i])
     return {"rows": int(rows), "bridged": int(bridged), "raised": int(raised), "settled": int(settled),
@@ -427,6 +550,9 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
 #: Corset v3 (review 2026-11-22: the side cup edge rolled out as a flap the top-edge row alone did not see): the band
 #: under the top edge whose gap is gated per side (``under_edge``), metres under the edge at the same angle.
 UNDER_EDGE_M = (0.01, 0.03)
+#: Corset v4: the outer part of the cups' top edge (radians off the front centre) whose gap is gated on its maximum
+#: (``edge_outer``).
+EDGE_OUTER_RAD = (0.6, 1.2)
 
 
 def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm, hollow=()):
@@ -454,10 +580,15 @@ def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm, hollow=()):
     else:
         top = border & (np.abs(co[:, 2] - float(spec["row_y"][0])) < 0.002)
     over = np.zeros(len(co), bool)
+    # corset v4: with a cup edge (``cup_edge``) the whole cleavage between the innermost tissue columns is the bridge
+    tc = (spec.get("cup_edge") or {}).get("tissue_cols") or []
+    cleave = (min(abs(math.pi * c / (int(spec["cols"]) - 1) - math.pi / 2) for c in tc) if tc else 0.0)
     for i in np.where(top)[0]:
         ang = math.atan2(co[i, 1] - centre[1], co[i, 0] - centre[0])
         r = math.hypot(co[i, 0] - centre[0], co[i, 1] - centre[1])
-        over[i] = r - gd.body_radius(btree, centre, ang, float(co[i, 2])) > clear + SHELL_BRIDGE_M
+        off = abs(((ang - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
+        over[i] = (r - gd.body_radius(btree, centre, ang, float(co[i, 2])) > clear + SHELL_BRIDGE_M
+                   or (off < cleave and co[i, 1] < centre[1]))
     band = np.zeros(len(co), bool)
     ti = np.where(top)[0]
     if len(ti):
@@ -476,6 +607,33 @@ def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm, hollow=()):
             out[name] = {"n": int(m.sum()), "p50_mm": round(float(np.percentile(v, 50)), 2),
                          "p95_mm": round(float(np.percentile(v, 95)), 2), "max_mm": round(float(v.max()), 2),
                          "limit_mm": gap_mm.get(name.replace("_left", "").replace("_right", ""))}
+    ce = spec.get("cup_edge")
+    if ce and top.any():
+        # corset v4 (review 2026-11-23): the outer cup edge on its maximum gap, and the skin over the top edge of a
+        # column with chest tissue standing out beyond ``recede_m`` inside the edge (the spill the p95 never saw)
+        top_z = float(spec["row_y"][0])
+        apex_z = float(ce["apex_y"])
+        outer, spill = [], []
+        for i in np.where(top & ~over)[0]:
+            ang = math.atan2(co[i, 1] - centre[1], co[i, 0] - centre[0])
+            off = abs(((ang - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
+            if EDGE_OUTER_RAD[0] <= off <= EDGE_OUTER_RAD[1]:
+                outer.append(dist[i] * 1000)
+            if off < math.pi / 2 and chest_tissue(btree, centre, ang, apex_z, top_z, float(ce["tissue_m"])):
+                r = gd.body_radius(btree, centre, ang, float(co[i, 2]))
+                stand = max(gd.body_radius(btree, centre, ang, float(co[i, 2]) + float(dz))
+                            for dz in np.arange(0.004, CUP_EDGE_LOOK_M + 1e-9, 0.004))
+                spill.append(max(0.0, stand - r) * 1000)
+        te = [(round(float(dist[i] * 1000), 2), round(abs(((math.atan2(co[i, 1] - centre[1], co[i, 0] - centre[0])
+                                                          - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi), 2),
+               round(float(co[i, 2]), 3)) for i in np.where(top & ~over)[0]]
+        out["top_edge_worst"] = sorted(te, reverse=True)[:6]
+        for name, v in (("edge_outer", outer), ("edge_spill", spill)):
+            if v:
+                v = np.array(v)
+                out[name] = {"n": int(len(v)), "p50_mm": round(float(np.percentile(v, 50)), 2),
+                             "p95_mm": round(float(np.percentile(v, 95)), 2), "max_mm": round(float(v.max()), 2),
+                             "limit_mm": gap_mm.get(name)}
     sides = [out[k] for k in ("under_edge_left", "under_edge_right") if k in out]
     if sides:
         out["under_edge"] = dict(max(sides, key=lambda r: r["p95_mm"]))
@@ -2534,6 +2692,13 @@ def run(a):
     top_z = spec["row_y"][0]
     sl = bco[np.abs(bco[:, 2] - top_z) < 0.01]
     centre = sl[:, :2].mean(0) if len(sl) else bco[:, :2].mean(0)
+    if (spec.get("outline") or {}).get("side_top_y") is not None:
+        # corset v4: a strapless top whose front rises over the cups takes its axis from the torso's box at the edge
+        # under the arms (``side_top_y``): its top row reached the T-posed arms, and the vertex mean of a slice through
+        # the dense, lifted chest stood 12 cm in front of the spine (the rays from the axis then missed the body)
+        tz = bco[(np.abs(bco[:, 2] - float(spec["outline"]["side_top_y"])) < 0.01) & (np.abs(bco[:, 0]) < half)]
+        if len(tz):
+            centre = (tz[:, :2].min(0) + tz[:, :2].max(0)) / 2.0
     fitted = spec.get("fitted")
     uv_info = None
     cut_only = bool(prm.get("cut_only"))
@@ -2663,6 +2828,10 @@ def run(a):
             if prm.get("shell_clear_m") is not None:
                 # corset v3: its sewn seams, painted onto the cut atlas at assembly (``corset_darts.seam_lines``)
                 wrap_marks.update(cdarts.seam_lines(spec["rows"], spec["cols"]))
+        if prm.get("shell_clear_m") is not None and spec.get("cup_edge"):
+            # corset v4: each front column's edge on the top of the chest tissue (``cup_edge``) — before ``wrap``, so
+            # the cut and the drape lay the same rows
+            binfo["cup_edge"] = cup_edge(spec, btree, centre)
         row_c = leg_centres(bco[np.abs(bco[:, 0] - centre[0]) < half], centre, spec["row_y"],
                             lambda cen, r: wrap_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
         binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
