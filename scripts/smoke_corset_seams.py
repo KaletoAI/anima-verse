@@ -18,8 +18,8 @@ world DB, no Blender. Every number below is derived by hand.
     A red atlas sRGB (150, 80, 80) (L* 42.5 — under 50, where ``_shade`` would lighten; its darker shade stays
     inside sRGB, a saturated red would clip): the groove is DARKER, L* 42.5 - 16 = 26.5 (SEAM_DARK_MIN_L 25); a
     near-black sRGB (30, 30, 30) (L* 11.3) gets a LIGHTER groove, 11.3 + 16 = 27.3.
-[3] ``placket_key``: a strapless top without a placket -> ":seams2" (SEAM_VERSION 2, corset v7: the seam under the
-    cups is smoothed); with a lacing (3 buttons ignored by lacing) -> ":placket<PLACKET_VERSION>-lacing-0:seams2"; a
+[3] ``placket_key``: a strapless top without a placket -> ":seams3" (SEAM_VERSION 3, corset v7: the seam under the
+    cups is smoothed); with a lacing (3 buttons ignored by lacing) -> ":placket<PLACKET_VERSION>-lacing-0:seams3"; a
     skirt -> "".
 
 Usage: ./.venv/bin/python scripts/smoke_corset_seams.py
@@ -110,8 +110,8 @@ gt.params_of = lambda it: (it or {}).get("template")
 _orig_po = gct.placket_of
 try:
     gct.placket_of = lambda i: ("none", 0, "top", "none") if i != "l" else ("lacing", 0, "top", "none")
-    check("[3] corset without placket -> :seams2", gct.placket_key("c") == ":seams2", gct.placket_key("c"))
-    check("[3] laced corset", gct.placket_key("l") == f":placket{ctp.PLACKET_VERSION}-lacing-0:seams2",
+    check("[3] corset without placket -> :seams3", gct.placket_key("c") == ":seams3", gct.placket_key("c"))
+    check("[3] laced corset", gct.placket_key("l") == f":placket{ctp.PLACKET_VERSION}-lacing-0:seams3",
           gct.placket_key("l"))
     check("[3] a skirt -> ''", gct.placket_key("s") == "", gct.placket_key("s"))
 finally:

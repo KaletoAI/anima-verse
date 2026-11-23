@@ -47,8 +47,10 @@ stubbed). No server, no world DB, no Blender. Every number below is derived by h
     column 1 starts at row 3: [16, 21]; column 0 runs from the top: [0, 5, 10, 15, 20]; runs of one column draw
     nothing.
     ``_smooth_points`` [(0, 0), (1, 4), (2, 0)], one round: the middle (0 + 2 + 2, 0 + 8 + 0) / 4 = (1, 2), the
-    ends held.
-[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 7; SEAM_VERSION 2.
+    ends held. ``_forward_points`` [(0, 0), (4, 1), (6, 2), (5, 3), (5.5, 1), (7, 0), (10, 0)]: x 5 and 5.5 are not past
+    6 -> [(0, 0), (4, 1), (6, 2), (7, 0), (10, 0)]; reversed (x falling) only 6 is not under 5 -> [(10, 0), (7, 0),
+    (5.5, 1), (5, 3), (4, 1), (0, 0)].
+[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 7; SEAM_VERSION 3.
 [7] Fails on the old code: at 6b076ad15 (v6, the review's BEFORE) the build script has no ``side_blend``, no
     ``side_strip_blend``, no ``corset_diagonals`` and no ``side_fold`` (its fold gate stopped at ``SHELL_HULL_RAD``
     + 0.3 rad = 51.6 degrees, so the 90.8-degree crease at 83.5 degrees passed at 34).
@@ -202,13 +204,18 @@ check("[5] seam_lines: column 0 from the top", sl["seam_front_0"] == (1, [0, 5, 
 check("[5] seam_lines without cup rows unchanged", cdarts.seam_lines(5, 5)["seam_front_1"] == (1, [1, 6, 11, 16, 21]))
 sp = ctp._smooth_points([(0, 0), (1, 4), (2, 0)], 1)
 check("[5] _smooth_points: (1, 2), ends held", np.allclose(sp, [[0, 0], [1, 2], [2, 0]]), sp)
+fl = [(0, 0), (4, 1), (6, 2), (5, 3), (5.5, 1), (7, 0), (10, 0)]
+fp = ctp._forward_points(fl)
+check("[5] _forward_points drops the points stepping back", np.allclose(fp, [[0, 0], [4, 1], [6, 2], [7, 0], [10, 0]]), fp)
+fr = ctp._forward_points(fl[::-1])
+check("[5] _forward_points reversed: x falling", np.allclose(fr, [[10, 0], [7, 0], [5.5, 1], [5, 3], [4, 1], [0, 0]]), fr)
 
 # [6]
 rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_deg": 56.0}}})}
 check("[6] side_fold 56 > 55 fails (gate)", not rows6["side_fold_max_deg"]["ok"] and rows6["side_fold_max_deg"]["gate"])
 rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_deg": 48.0}}})}
 check("[6] side_fold 48 ok", rows6["side_fold_max_deg"]["ok"])
-check("[6] CORSET_VERSION 7, SEAM_VERSION 2", gt.CORSET_VERSION == 7 and ctp.SEAM_VERSION == 2)
+check("[6] CORSET_VERSION 7, SEAM_VERSION 3", gt.CORSET_VERSION == 7 and ctp.SEAM_VERSION == 3)
 
 # [7]
 OLD = "6b076ad15"

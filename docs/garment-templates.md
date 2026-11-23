@@ -529,7 +529,7 @@ on purpose: the cloth spans the hollow there. The dark crescent under a cup in a
 (gone with shadows off). Sitting still stretches the hem to 1.51x (see v5). Smoke: `smoke_corset_underarm.py`.
 **Corset v7 (review 2026-11-23 of v6: a vertical crease where each cup met the side panel, dihedral angles up to 91°
 at 83-92° off the front, outside the fold gate; a dark band under the cups with no seam there).** `CORSET_VERSION` 7,
-in `garment_template_build.py`'s corset functions, `corset_darts.py` and `cut_texture_post.py` (`SEAM_VERSION` 2):
+in `garment_template_build.py`'s corset functions, `corset_darts.py` and `cut_texture_post.py` (`SEAM_VERSION` 3):
 - *The edge blends over the side seam* (`side_blend`, called by `underarm_edge`): between `SIDE_BLEND_RAD` 55°..115° off
   the front the edge height is smoothed (1, 2, 1) `SIDE_BLEND_PASSES` 40 times; a column with chest tissue may come
   down up to `SIDE_CUP_DROP_M` 2.5 cm x smoothstep((off - 55°) / 35°), other locked columns hold, free columns stay at
@@ -549,8 +549,9 @@ in `garment_template_build.py`'s corset functions, `corset_darts.py` and `cut_te
   tissue column's chest ends (rise over the rib cage <= `CUP_SEAM_TISSUE_SHARE` 0.2 of the cup's depth, searched
   `CUP_SEAM_ABOVE_M` 3 cm above to `CUP_SEAM_BELOW_M` 10 cm under the fullest point, smoothed `CUP_SEAM_SMOOTH` 3
   times, the cleavage columns linear between the cups) carries a painted seam `seam_cup_<k>`, and the front seams
-  start there. `draw_seams` smooths a `seam_cup_*` line (`SEAM_CROSS_SMOOTH` 6 rounds of (1, 2, 1) / 4, ends held)
-  so the row changes do not draw stairs.
+  start there. `draw_seams` drops the points of a `seam_cup_*` line that step back across the panel (`_forward_points`:
+  the pattern folds back on itself at the centre front, which drew a spike) and smooths the rest (`SEAM_CROSS_SMOOTH`
+  6 rounds of (1, 2, 1) / 4, ends held) so the row changes do not draw stairs.
 
 Rosi's Red Corset Top, dry run against v6: side fold max 48° (v6 on the served model 91°, 35 edges over 40°, now 2),
 front fold 34°, edge loop gap 1.7 mm, flare 1.99 mm, under edge p95 4.58, waist p95 2.12. The band under the cups is

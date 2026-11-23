@@ -1667,10 +1667,11 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
 #: so it is darker on every fabric of L* >= SEAM_DARK_MIN_L (``_shade`` turns at L* 50: on a red of L* 45 the first
 #: dry run drew light lines); only a near-black fabric gets lighter lines. Part of the assembly key
 #: (``garment_cut_texture.placket_key``).
-#: 2 (corset v7, review 2026-11-23 of v6): a seam that crosses the grid's rows (``seam_cup_*``, under the cups) runs
-#: through the vertices of the row nearest its line in each column, a stair of one row at each change; its points are
-#: smoothed (``SEAM_CROSS_SMOOTH`` rounds of (1, 2, 1) / 4, the two ends held) before it is drawn.
-SEAM_VERSION = 2
+#: 2 / 3 (corset v7, review 2026-11-23 of v6; 3 adds ``_forward_points``): a seam that crosses the grid's rows (``seam_cup_*``, under the cups) runs
+#: through the vertices of the row nearest its line in each column, a stair of one row at each change, and the pattern
+#: folds back on itself at the centre front: a point that steps back across the panel is dropped (``_forward_points``)
+#: and the rest smoothed (``SEAM_CROSS_SMOOTH`` rounds of (1, 2, 1) / 4, the two ends held) before it is drawn.
+SEAM_VERSION = 3
 SEAM_CROSS_PREFIX = "seam_cup_"
 SEAM_CROSS_SMOOTH = 6
 SEAM_GROOVE_CM = 0.12
@@ -1684,6 +1685,23 @@ def _seam_shade(base_lab, dl: float) -> np.ndarray:
     lab = np.asarray(base_lab, np.float64).copy()
     lab[0] = float(np.clip(lab[0] - dl, 0.0, 100.0))
     return np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
+
+
+def _forward_points(px) -> np.ndarray:
+    """``px`` (n x 2) without the points that step back across the panel (SEAM_VERSION 2): a seam that runs across the
+    panel (first to last point) keeps a point only when it lies further along x than every point kept before it — where
+    the panel's pattern folds back on itself between two columns (the centre front between the cups) the line would
+    otherwise draw a loop, a spike on the model."""
+    p = np.asarray(px, np.float64).reshape(-1, 2)
+    if len(p) < 3:
+        return p
+    sign = 1.0 if p[-1, 0] >= p[0, 0] else -1.0
+    keep, far = [0], sign * p[0, 0]
+    for i in range(1, len(p)):
+        if sign * p[i, 0] > far:
+            keep.append(i)
+            far = sign * p[i, 0]
+    return p[keep]
 
 
 def _smooth_points(px, rounds: int) -> np.ndarray:
@@ -1711,7 +1729,7 @@ def draw_seams(atlas: np.ndarray, masks: dict, marks: dict, *, px_per_cm: float)
         sel = np.asarray(masks[line["island"]], bool)
         px = line["px"]
         if name.startswith(SEAM_CROSS_PREFIX):
-            px = _smooth_points(px, SEAM_CROSS_SMOOTH)
+            px = _smooth_points(_forward_points(px), SEAM_CROSS_SMOOTH)
         p, s = _polyline(px)
         if s[-1] <= 1.0:
             continue
