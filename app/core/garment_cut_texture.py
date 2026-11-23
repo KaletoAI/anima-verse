@@ -1567,6 +1567,16 @@ TRIM_EDGE_CM = 0.25
 #: The share of the filled fabric's lightness detail a trim keeps over its own colour (the grain of the material,
 #: not the fabric's print).
 TRIM_GRAIN = 0.25
+#: Garment nouns: a colour before one of them is the garment's, a trim noun right before one is a compound
+#: ("spaghetti-strap dress") — round D, final step (review of stage "layers": ``trim_style`` false positives).
+GARMENT_NOUNS = ("dress", "gown", "top", "bra", "bralette", "bodice", "corset", "bustier", "skirt", "shirt", "blouse",
+                 "tee", "jacket", "coat", "blazer", "cardigan", "sweater", "jumper", "pullover", "vest", "waistcoat",
+                 "tunic", "robe", "suit", "jeans", "trousers", "pants", "shorts", "leggings", "tights", "stockings",
+                 "gloves", "glove", "bikini", "swimsuit", "leotard", "camisole", "slip", "brief", "apron", "uniform")
+#: The version of the trims' painting, kept in ``trim_style`` (so in every record's ``trim_style``): a change of the
+#: painting recomposes every atlas with trims once (CPU, 0 image jobs; ``composed_as_now``). 2 (round D, final step):
+#: the edge band keeps a core of the trim colour in a narrow part (``paint_trims``).
+TRIM_VERSION = 2
 _TRIM_WORD = re.compile(r"[a-z]+")
 
 
@@ -1579,32 +1589,66 @@ def _noun(word: str, nouns) -> str | None:
 
 def trim_style(text: str) -> dict | None:
     """The trims' own colour as the item ``text`` (its prompt fragment) names it: ``{"parts": [...], "colour": rgb,
-    "edge": rgb | None, "words": [...]}``, or None when it names none.
+    "edge": rgb | None, "words": [...], "version": TRIM_VERSION}``, or None when it names none.
 
-    The text is read in segments (split at ",", ";" and the word "with"): a segment naming a trim noun
-    (``TRIM_NOUNS``) takes its first colour word (``TRIM_COLOURS``) as the trims' colour — a segment of trim nouns
-    without one, right after such a segment, joins it ("black straps, band and gore"); the colour word right before an
-    edge noun ("with gold edges") or after an edge participle ("edged in gold") in the segment or in the next one
-    without a trim noun is the edge colour. "molded cups of red scales with black straps" gives black straps."""
+    The text is read in segments (split at ",", ";" and the word "with"). In a segment, a trim noun (``TRIM_NOUNS``)
+    takes the colour word (``TRIM_COLOURS``) nearest BEFORE it, else the first one after it — but never across a
+    garment noun (``GARMENT_NOUNS``: "red dress straps" names the dress's colour) and never the edge colour. A trim
+    noun right before a garment or another trim noun is a compound ("spaghetti-strap dress", "band collar") and names
+    no trim. The first colour found stands: a noun with another colour ends the reading ("white collar and red
+    cuffs" -> the collar). A segment of trim nouns without a colour, right after such a segment, joins it ("black
+    straps, band and gore"); the colour word right before an edge noun ("with gold edges") or after an edge participle
+    ("edged in gold") in the segment or in the next one without a trim noun is the edge colour. "molded cups of red
+    scales with black straps" gives black straps."""
     low = (text or "").lower()
     segs = [seg for part in re.split(r"[,;]", low) for seg in re.split(r"\bwith\b", part)]
     parts: list[str] = []
     colour = edge = None
     group = False
+    done = False
     for seg in segs:
         words = _TRIM_WORD.findall(seg)
-        nouns = [n for n in (_noun(w, TRIM_NOUNS) for w in words) if n]
-        edge_here = next((w for i, w in enumerate(words) if w in TRIM_COLOURS
-                          and (_noun(words[i + 1] if i + 1 < len(words) else "", EDGE_NOUNS)
-                               or any(v in EDGE_VERBS for v in words[max(0, i - 2):i]))), None)
-        own = next((w for w in words if w in TRIM_COLOURS and w != edge_here), None)
-        if nouns and (own or group):
-            if own and colour and own != colour:
-                break                          # a second trim colour: the first group stands
-            colour = colour or own
-            parts.extend(p for n in nouns for p in TRIM_NOUNS[n] if p not in parts)
+        edge_at = next((i for i, w in enumerate(words) if w in TRIM_COLOURS
+                        and (_noun(words[i + 1] if i + 1 < len(words) else "", EDGE_NOUNS)
+                             or any(v in EDGE_VERBS for v in words[max(0, i - 2):i]))), None)
+        edge_here = words[edge_at] if edge_at is not None else None
+        found = []                             # (noun, colour word | None) in reading order
+        for i, w in enumerate(words):
+            n = _noun(w, TRIM_NOUNS)
+            if not n:
+                continue
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            if _noun(nxt, TRIM_NOUNS) or _noun(nxt, GARMENT_NOUNS):
+                continue                       # a compound: the next noun is the piece
+            own = None
+            for j in range(i - 1, -1, -1):     # the nearest colour before it, not across a garment noun
+                if _noun(words[j], GARMENT_NOUNS):
+                    break
+                if words[j] in TRIM_COLOURS and j != edge_at:
+                    own = words[j]
+                    break
+            if own is None:
+                for j in range(i + 1, len(words)):
+                    if _noun(words[j], GARMENT_NOUNS) or _noun(words[j], TRIM_NOUNS):
+                        break
+                    if words[j] in TRIM_COLOURS and j != edge_at:
+                        own = words[j]
+                        break
+            found.append((n, own))
+        nouns = [n for n, _ in found]
+        if nouns and (any(c for _, c in found) or group):
+            for n, own in found:
+                if own and colour and own != colour:
+                    done = True                # a second trim colour: the first group stands
+                    break
+                if own is None and colour is None:
+                    continue                   # a trim before the first colour of the segment names none
+                colour = colour or own
+                parts.extend(p for p in TRIM_NOUNS[n] if p not in parts)
             edge = edge or edge_here
             group = True
+            if done:
+                break
             continue
         if group and not nouns and edge_here and edge is None:
             edge = edge_here
@@ -1612,7 +1656,7 @@ def trim_style(text: str) -> dict | None:
     if not parts or colour is None:
         return None
     return {"parts": parts, "colour": list(TRIM_COLOURS[colour]), "edge": list(TRIM_COLOURS[edge]) if edge else None,
-            "words": [colour] + ([edge] if edge else [])}
+            "words": [colour] + ([edge] if edge else []), "version": TRIM_VERSION}
 
 
 def trim_style_of(item_id: str) -> dict | None:
@@ -1625,7 +1669,8 @@ def paint_trims(atlas: np.ndarray, islands: dict, size: int, px_per_cm: float,
                 style: dict | None) -> tuple[np.ndarray, dict]:
     """The trim islands ``style`` names (``trim_style``; only those the pattern has) and the bleed nearest to them
     painted in the trims' colour, keeping ``TRIM_GRAIN`` of the filled fabric's lightness detail, with an
-    ``TRIM_EDGE_CM`` band inside each island's outline in the edge colour. Returns the atlas and
+    ``TRIM_EDGE_CM`` band inside each island's outline in the edge colour — in a narrow part at most half of the
+    local half-width, so the trim colour keeps a core there. Returns the atlas and
     ``{"islands": [...], "edge_px": n}`` ({"islands": []} without a style or a named island)."""
     from scipy import ndimage
     post = cut_texture_post
@@ -1650,10 +1695,17 @@ def paint_trims(atlas: np.ndarray, islands: dict, size: int, px_per_cm: float,
     colours = np.repeat(post.srgb_to_lab(np.asarray([style["colour"]], np.float64)), len(lab), axis=0)
     if style.get("edge"):
         band = max(1, int(round(TRIM_EDGE_CM * px_per_cm)))
+        yy, xx = np.mgrid[-band:band + 1, -band:band + 1]
+        disk = (xx * xx + yy * yy) <= band * band
         inner = np.zeros_like(own)
         for n in names:
             m = labels == ids[n]
-            inner |= m & (ndimage.distance_transform_edt(m) <= band)
+            d = ndimage.distance_transform_edt(m)
+            # round D, final step (review of stage "layers": a narrow gore turned fully gold): the edge takes at most
+            # half of the island's local half-width (the largest inner distance within one band, +1 px for the
+            # raster), so a narrow part keeps a core of the trim colour; a part at least 4 bands wide is unchanged
+            local = ndimage.maximum_filter(d, footprint=disk)
+            inner |= m & (d <= band) & (2 * d <= local + 1)
         edge_mask = (inner | ((labels == 0) & region))[region]
         colours[edge_mask] = post.srgb_to_lab(np.asarray([style["edge"]], np.float64))[0]
         edge_px = int(inner.sum())

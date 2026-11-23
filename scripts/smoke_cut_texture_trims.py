@@ -22,6 +22,13 @@ No server, no world DB, no Blender, no hub job: ``garment_cut_texture.trim_style
           ..., glowing ember-red seams" -> None (no trim noun; "seams" is none).
     [1.6] "black straps, red band" -> the first colour group stands: straps black, the red band is not taken.
     [1.7] "band and gore with gold edges" (no colour of their own) -> None (an edge alone names no trim colour).
+    Every style carries ``"version": 2`` (``TRIM_VERSION``). Round D, final step (review of stage "layers": false
+    positives) — a noun takes the colour nearest before it (else the first after it), never across a garment noun, and
+    a trim noun right before a garment / trim noun is a compound:
+    [1.8] "red spaghetti-strap dress" -> None (old: red straps); "dark green linen shirt with brown buttons, black band
+          collar" -> collar only, black (old: band_l / band_r too); "navy dress, white collar and red cuffs" -> the
+          collar, white (old: collar and cuffs white); "red dress band" -> None (old: a red band); "blue jeans with a
+          brown leather waistband" -> waistband, brown (104, 66, 38).
 [2] ``paint_trims`` on a 512 px atlas, 10 px/cm, every pixel (200, 40, 40) (uniform: the grain is 0, so the painted
     colours are exact up to the Lab round trip, +-1). Islands (boxes, ``verts_px`` corners): cup_r x 10..110,
     y 10..110; strap_r x 200..220, y 10..210; band_r x 10..210, y 300..330. Style [1.3] + edge gold (parts strap_l,
@@ -34,10 +41,14 @@ No server, no world DB, no Blender, no hub job: ``garment_cut_texture.trim_style
     - the cup (60, 60) and the band (100, 315): not named -> unchanged;
     - info: islands ["strap_r"] (strap_l is not in the pattern), edge_px > 0.
     Without an edge colour the rim (200, 110) is black too. ``style`` None -> the atlas unchanged, islands [].
+    Narrow part (round D, final step: a narrow gore turned fully gold): the edge takes at most half the local
+    half-width (largest inner distance within one band, + 1 px). A 4 px strap_l (box 300..304, pixels x 300..303: the rasteriser leaves the right edge open): inner distances 1, 2, 2, 1,
+    the local maximum 2 -> edge where 2 d <= 3: x 300 and 303 gold, 301 / 302 black (the old rule d <= 2 painted all
+    four gold). strap_r (20 px wide): rim d 1 has a local maximum 3 (2 <= 4), d 2 has 4 (4 <= 5) -> unchanged.
 [3] ``composed_as_now``: a ready record composed before the stage (no "trim_style" key) of an item whose text names
     no trim colour -> True (nothing recomposes, nothing is re-rendered); the same record when the text names one ->
     False (the Build's step "compose": ``recompose``, CPU, 0 image jobs); a record with that style -> True; another
-    ``sleeve_print`` -> False.
+    ``sleeve_print`` -> False; a record of stage "layers" (its style without ``version``) -> False (recomposed once).
 [4] Source: ``_finish`` paints the trims after ``compose`` only when the record's ``sleeve_print`` is not "picture"
     (then the small pieces come from the answer); ``generate`` and ``recompose`` store ``trim_style_of``.
 """
@@ -68,20 +79,31 @@ GLUT = "push-up bra of glowing ember-red metal scales, molded half-cups lifting 
 st = gct.trim_style(GLUT + ", black straps, band and gore with gold edges")
 check("[1.1] straps, band and gore black with gold edges",
       st == {"parts": ["strap_l", "strap_r", "band_l", "band_r", "gore"], "colour": BLACK, "edge": GOLD,
-             "words": ["black", "gold"]}, st)
+             "words": ["black", "gold"], "version": 2}, st)
 check("[1.2] Glut's text as it is: None", gct.trim_style(GLUT) is None, gct.trim_style(GLUT))
 st = gct.trim_style("molded cups of red scales with black straps")
 check("[1.3] the red stays with the cups", st == {"parts": ["strap_l", "strap_r"], "colour": BLACK, "edge": None,
-                                                   "words": ["black"]}, st)
+                                                   "words": ["black"], "version": 2}, st)
 st = gct.trim_style("a cream blouse with a white collar edged in gold")
 check("[1.4] a white collar edged in gold", st == {"parts": ["collar"], "colour": WHITE, "edge": GOLD,
-                                                    "words": ["white", "gold"]}, st)
+                                                    "words": ["white", "gold"], "version": 2}, st)
 for text in ("black lether jacket, slim fit, zipper", "blue jeans",
              "fingerless black leather opera gloves reaching above her elbows, glowing ember-red seams"):
     check(f"[1.5] no trim noun: {text[:30]!r}", gct.trim_style(text) is None, gct.trim_style(text))
 st = gct.trim_style("black straps, red band")
 check("[1.6] the first colour group stands", st and st["parts"] == ["strap_l", "strap_r"] and st["colour"] == BLACK, st)
 check("[1.7] an edge alone names no trim colour", gct.trim_style("band and gore with gold edges") is None)
+st = gct.trim_style("red spaghetti-strap dress")
+check("[1.8] a compound names no trim", st is None, st)
+st = gct.trim_style("dark green linen shirt with brown buttons, black band collar")
+check("[1.8] 'band collar' is a collar", st and st["parts"] == ["collar"] and st["colour"] == BLACK, st)
+st = gct.trim_style("navy dress, white collar and red cuffs")
+check("[1.8] each noun its own colour, the first stands", st and st["parts"] == ["collar"] and st["colour"] == WHITE,
+      st)
+st = gct.trim_style("red dress band")
+check("[1.8] never a colour across a garment noun", st is None, st)
+st = gct.trim_style("blue jeans with a brown leather waistband")
+check("[1.8] the waistband's own colour", st and st["parts"] == ["waistband"] and st["colour"] == [104, 66, 38], st)
 
 # [2]
 PPC, SIZE = 10.0, 512
@@ -120,6 +142,17 @@ check("[2] info names the strap only, with an edge", info["islands"] == ["strap_
 out2, _ = gct.paint_trims(ATLAS, ISL, SIZE, PPC, {**style, "edge": None})
 check("[2] without an edge colour the rim is black", near(at(out2, 200, 110), BLACK), at(out2, 200, 110))
 out3, info3 = gct.paint_trims(ATLAS, ISL, SIZE, PPC, None)
+# the narrow strap: 4 px wide — the box 300..304 rasterises to the pixels x 300..303 (the right / lower edge is open)
+NARROW = {**ISL, "islands": ISL["islands"] + [box("strap_l", 300, 10, 304, 210)]}
+lab = gct.rasterise_islands(NARROW, SIZE)
+check("[2] the narrow strap covers x 300..303", bool(lab[110, 300:304].all()) and not lab[110, 299]
+      and not lab[110, 304], lab[110, 298:306].tolist())
+out4, _ = gct.paint_trims(ATLAS, NARROW, SIZE, PPC, style)
+check("[2] narrow: the rim pixels are gold", near(at(out4, 300, 110), GOLD) and near(at(out4, 303, 110), GOLD),
+      (at(out4, 300, 110), at(out4, 303, 110)))
+check("[2] narrow: the core keeps the trim colour (old rule: all gold)",
+      near(at(out4, 301, 110), BLACK) and near(at(out4, 302, 110), BLACK), (at(out4, 301, 110), at(out4, 302, 110)))
+check("[2] narrow: the wide strap is unchanged by it", np.array_equal(out4[:, 150:260], out[:, 150:260]))
 check("[2] no style: unchanged", np.array_equal(out3, ATLAS) and info3 == {"islands": []}, info3)
 
 # [3]
@@ -136,6 +169,9 @@ try:
     new = {**old, "trim_style": gct.trim_style(TEXT["v"])}
     check("[3] composed with that style", gct.composed_as_now(new, "i1", {"sleeve_print": "plain"}))
     check("[3] another sleeve option", not gct.composed_as_now(new, "i1", {"sleeve_print": "picture"}))
+    stage_layers = {**old, "trim_style": {k: v for k, v in gct.trim_style(TEXT["v"]).items() if k != "version"}}
+    check("[3] a record of stage 'layers' (no version): recompose once",
+          not gct.composed_as_now(stage_layers, "i1", {"sleeve_print": "plain"}))
 finally:
     inv.get_item = _saved
 

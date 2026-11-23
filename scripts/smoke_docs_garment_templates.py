@@ -49,6 +49,8 @@ N) Plan group B, phases E / F / G (section 1d): ``NECK_VERSION`` and ``CORSET_VE
    "`PLACKET_VERSION` <n>" with the code's n; ``PLACKET_CLEAR_CM`` appears as "<value> cm" and ``PLACKET_CLEAR_DETAIL``
    with its value; ``BAND_SCOOP_MAX_M`` (``garment_template_build.py``) as "<value x 100> cm"; the dart rule names
    ``corset_darts.py`` and that file exists.
+O) Round D, final step: ``TRIM_VERSION`` (``garment_cut_texture.py``) — the document says "`TRIM_VERSION` <n>" with the
+   code's n, and names ``GARMENT_NOUNS``.
 """
 import ast
 import re
@@ -212,6 +214,10 @@ def main() -> int:
     check(f"N  doc: BAND_SCOOP_MAX_M {bs * 100:g} cm", f"`BAND_SCOOP_MAX_M` ({bs * 100:g} cm)" in doc)
     check("N  doc names corset_darts.py and it exists", "corset_darts.py" in doc
           and (REPO / "app" / "blender" / "scripts" / "corset_darts.py").is_file())
+
+    # O
+    tv = const(GCT, "TRIM_VERSION")
+    check(f"O  doc: TRIM_VERSION {tv}, GARMENT_NOUNS", f"`TRIM_VERSION` {tv}" in doc and "`GARMENT_NOUNS`" in doc)
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     if _failures:

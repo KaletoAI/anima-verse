@@ -462,32 +462,6 @@ placket: it stays "projection" until a live run; Rosi's corset with darts over h
 pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
 time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back centre.
 
-## 1f. Details round (stage "details", 2026-11-23)
-
-- **The back names a striped front's stripes.** The back prompt's "fine weave" is the variable `weave`
-  (`garment_cut_texture_back.md`; the default renders the old text byte for byte). `cut_texture_post.weave_axis`
-  measures the coherence and the line angle of the front answer's L* high-pass (structure tensor); `stripe_words`
-  says "fine vertical stripes" / "fine horizontal stripes" when the grain is at most `STRIPES` grain_share 0.22 of the
-  level, the level at least 1.5, the coherence at least 0.5 and the lines within 30 deg of an axis, else "fine
-  weave". Dario's Worn Linen Shirt: front 3.20 / 0.54, coherence 0.96, 0.6 deg. A back striped along the same axis
-  (`weave_gates`: front and back give the same stripe words) is held to `WEAVE_GATE` `stripe_factor` 3.0 x the
-  front level + 1.0 (10.59) instead of 1.25 x (5.00): a stripe's contrast is the model's guess, its grain is not.
-  Same-seed A/B on the saved back template: P-H3 7.47 / 0.96 (fine beige stripes: passes), MiniMax 17.16 / 0.68
-  (blue and red candy stripes: rejected, attempt 2 goes on).
-- **The painted buttons take the item's colour** (`PLACKET_VERSION` 4): `garment_cut_texture.button_rgb` reads a
-  colour or material word in the item text's "button(s)" segment (`button_text_colour`, `BUTTON_MATERIALS`), else
-  the buttons of the item picture (`cut_texture_post.picture_buttons`: compact discs off the garment colour, at least
-  3 in one column; Dario's green shirt: 5, copper (140, 68, 19)); without either the old contrast colour. The rim is
-  15 L* darker (lighter below L* 30). The tint is part of `placket_key`, so a change is a CPU re-assembly.
-- **No invented dot grid round a motif** (`POST_VERSION` 12, `cut_texture_post.busy_halo`, `HALO`): on the FRONT job
-  of a top whose prompt was "decorated", texture of the registered answer busier than 1.8 x the panel's quiet level (floor 2.0;
-  the panel eroded 0.9 cm) that is not
-  the decoration and lies at least 0.6 cm from it is filled from the panel's plainest patch. Dario's MiniMax dot grid:
-  0.139 of the panel cleared, the fainter grid of this stage's live answer 0.041; his clean embroidered front 0.051
-  (its own placket line, wiped anyway), Ylva's moon dress 0.001. A button colour found in the picture is read off the
-  cut's own upscaled item picture (`<stem>.item.png`): on the 392 x 512 original the buttons are ~5 px.
-- `scripts/smoke_cut_texture_details.py`.
-
 ## 1e. Geometry round (stage "geometry", 2026-11-22)
 
 - **Rows round the legs** (`LEG_VERSION` 1, `garment_template.leg_piece`: a skirt, a dress; build arg `leg_centres`,
@@ -530,6 +504,51 @@ time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back cent
   slit or hem that does not lie on the real cut (an edge line parallel to the island's own slit / hem border but
   inside it), or a front whose shading contrast exceeds the back's by a large factor when the item is one plain
   fabric. Then the skirt runs live again.
+
+## 1f. Details round (stage "details", 2026-11-23)
+
+- **The back names a striped front's stripes.** The back prompt's "fine weave" is the variable `weave`
+  (`garment_cut_texture_back.md`; the default renders the old text byte for byte). `cut_texture_post.weave_axis`
+  measures the coherence and the line angle of the front answer's L* high-pass (structure tensor); `stripe_words`
+  says "fine vertical stripes" / "fine horizontal stripes" when the grain is at most `STRIPES` grain_share 0.22 of the
+  level, the level at least 1.5, the coherence at least 0.5 and the lines within 30 deg of an axis, else "fine
+  weave". Dario's Worn Linen Shirt: front 3.20 / 0.54, coherence 0.96, 0.6 deg. A back striped along the same axis
+  (`weave_gates`: front and back give the same stripe words) is held to `WEAVE_GATE` `stripe_factor` 3.0 x the
+  front level + 1.0 (10.59) instead of 1.25 x (5.00): a stripe's contrast is the model's guess, its grain is not.
+  Same-seed A/B on the saved back template: P-H3 7.47 / 0.96 (fine beige stripes: passes), MiniMax 17.16 / 0.68
+  (blue and red candy stripes: rejected, attempt 2 goes on).
+- **The painted buttons take the item's colour** (`PLACKET_VERSION` 4): `garment_cut_texture.button_rgb` reads a
+  colour or material word in the item text's "button(s)" segment (`button_text_colour`, `BUTTON_MATERIALS`), else
+  the buttons of the item picture (`cut_texture_post.picture_buttons`: compact discs off the garment colour, at least
+  3 in one column; Dario's green shirt: 5, copper (140, 68, 19)); without either the old contrast colour. The rim is
+  15 L* darker (lighter below L* 30). The tint is part of `placket_key`, so a change is a CPU re-assembly.
+- **No invented dot grid round a motif** (`POST_VERSION` 12, `cut_texture_post.busy_halo`, `HALO`): on the FRONT job
+  of a top whose prompt was "decorated", texture of the registered answer busier than 1.8 x the panel's quiet level (floor 2.0;
+  the panel eroded 0.9 cm) that is not
+  the decoration and lies at least 0.6 cm from it is filled from the panel's plainest patch. Dario's MiniMax dot grid:
+  0.139 of the panel cleared, the fainter grid of this stage's live answer 0.041; his clean embroidered front 0.051
+  (its own placket line, wiped anyway), Ylva's moon dress 0.001. A button colour found in the picture is read off the
+  cut's own upscaled item picture (`<stem>.item.png`): on the 392 x 512 original the buttons are ~5 px.
+- `scripts/smoke_cut_texture_details.py`.
+
+## 1g. Round D, final step (2026-11-23)
+
+- **Trims, a narrow part keeps its colour** (`TRIM_VERSION` 2, review of stage "layers": Glut's gore, 1.9 x 3.6 cm,
+  read gold between the cups). `paint_trims` paints the edge only where `2 d <= local + 1` — `d` the pixel's inner
+  distance, `local` the largest inner distance within one edge band of it — so the edge takes at most half of a
+  part's local half-width and a narrow part keeps a core of the trim colour; a part at least four bands wide is
+  unchanged. A 4 px strap at 10 px/cm: edge band 2 px, the old rule painted all four pixels in the edge colour, the
+  new one the two rim pixels. Glut's gore at 27.31 px/cm (band 7 px): 1634 -> 1547 edge pixels, its narrow top lobes
+  get a black core; straps and underband lose under 3 % (raster corners).
+- **Trims, no false positives** (`trim_style`): a trim noun takes the colour word nearest before it (else the first
+  after it), never across a garment noun (`GARMENT_NOUNS`), never the edge colour; a trim noun right before a garment
+  or another trim noun is a compound and names no trim ("spaghetti-strap dress", "band collar"); a second colour ends
+  the reading ("white collar and red cuffs" -> the collar). Over the world's 188 item texts this changes one result:
+  "dark navy city watch uniform shirt buttoned to the collar" no longer gives a navy collar.
+- The style carries `"version": TRIM_VERSION`, so `composed_as_now` recomposes a stage-"layers" record once (CPU, 0
+  image jobs). E2E (replay of the stage's live answers, 0 hub jobs): Glut's bra and briefs in one Build, all checks
+  OK, plan empty; the gore between the cups shows a gold rim round a black core.
+- Smoke: `scripts/smoke_cut_texture_trims.py` [1.8] and the narrow strap in [2].
 
 ## 2. Texture from cut (step 2)
 
@@ -677,7 +696,9 @@ hold, so:
   `sleeve_print` "picture". The record keeps `trim_style`; `composed_as_now` (the Build's `compose` state, the dialog's
   `current` / `option_stale`, `cut_info` "option") compares it with the text now, so a changed text recomposes on the
   CPU (0 image jobs). A text that names no trim colour leaves every atlas as it was (old records carry no
-  `trim_style`, which equals None). No prompt changes. Smoke: `scripts/smoke_cut_texture_trims.py`.
+  `trim_style`, which equals None). No prompt changes. Since round D's final step a noun takes the colour nearest
+  to it, never across a garment noun, a compound ("strap dress") names no trim, and the edge keeps a core of the trim
+  colour in a narrow part (`TRIM_VERSION` 2, section 1g). Smoke: `scripts/smoke_cut_texture_trims.py`.
 - **Use this answer** (`POST …/cut/use {job}`, `start_recompose` → `recompose`, 0 image jobs): the shown answer of a
   job — also a rejected one, after an in-app confirmation naming the reason — is accepted (`accepted`,
   `accepted_over`) and composed; a job without an answer stays `skipped` with "Not made yet", and Run all renders just
