@@ -813,7 +813,9 @@ def main() -> int:
                 pb, pinfo = gct.placket_atlas(args.character, item_id, atlas.read_bytes())
                 if pinfo is not None:
                     print(f"{item_id} placket: {pinfo}")
-                    check(f"{item_id}: the placket was painted", bool(pinfo.get("lines")), True)
+                    # corset v3: a corset's painted seam lines (``seams``) count as well as a placket's lines
+                    check(f"{item_id}: the placket / seams were painted",
+                          bool(pinfo.get("lines") or pinfo.get("seams")), True)
                     keyed = pb
                     (out_dir / f"{atlas.name[:-len('.atlas.png')]}.placket.png").write_bytes(pb)
                 if opacity is not None:

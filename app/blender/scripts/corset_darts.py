@@ -40,6 +40,27 @@ def dart_seams(rows: int, cols: int) -> list:
     return out
 
 
+#: Corset v3 (review 2026-11-22: the item's picture shows its seams and boning, the atlas was plain): the sewn seam
+#: lines painted onto the cut atlas (``seam_lines`` -> the cut's ``marks.json`` ``seam_*`` lines ->
+#: ``cut_texture_post.draw_seams``): on the front the continuation of each bust dart (``DART_COLS``) and one more
+#: ``SEAM_FRONT_OUTER_COLS`` off the centre, on the back ``SEAM_BACK_COLS`` either side of the lacing; all top to hem
+#: (columns per 40 of a half panel, as ``DART_COLS``).
+SEAM_FRONT_OUTER_COLS = 16
+SEAM_BACK_COLS = 10
+
+
+def seam_lines(rows: int, cols: int) -> dict:
+    """``{name: (part, construction ids top to bottom)}`` of the painted seams (front = part 1, back = part 2, as the
+    placket line ``centre_back``): ``seam_front_<k>`` / ``seam_back_<k>``, k left to right in column order."""
+    c0 = (cols - 1) // 2
+    out = {}
+    for part, base, offs in ((1, 0, (DART_COLS, SEAM_FRONT_OUTER_COLS)), (2, rows * cols, (SEAM_BACK_COLS,))):
+        cs = sorted({c0 + sg * int(round(o * (cols - 1) / 40.0)) for o in offs for sg in (-1, 1)})
+        for k, c in enumerate(cs):
+            out[f"seam_{'front' if part == 1 else 'back'}_{k}"] = (part, [base + r * cols + c for r in range(rows)])
+    return out
+
+
 def back_line(rows: int, cols: int) -> list:
     """The back panel's centre column, top to bottom (construction ids)."""
     base = rows * cols

@@ -725,8 +725,8 @@ for _p17 in (_sk17, _sl17):
               "lower": ["a", "b"]}
     _got17 = gt.tsig(_p17, **_kw16)
     _want17 = {**_pre17, "panels": 1, **({"legs": 1} if _p17["kind"] == "skirt" else {}),
-               **({"corset": gt.CORSET_VERSION} if _p17["kind"] == "top" else {})}
-    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1 (+ legs 1 for the skirt, + corset for the top)",
+               **({"corset": 3} if _p17["kind"] == "top" else {})}
+    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1 (+ legs 1 for the skirt, + corset 3 for the top)",
           _got17 == gt._md5(_want17) and _got17 != gt._md5(_pre17))
 check("[17.2] a top with sleeves and a fitted kind are no panel piece",
       not gt.panel_piece(_top15) and not gt.panel_piece(gt.validate_params({"kind": "briefs"})[0]))

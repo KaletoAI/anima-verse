@@ -104,7 +104,9 @@ NECK_VERSION = 1
 #: (``garment_template_build.corset_shell``: every vertex ``CORSET_CLEAR_M`` outside the body — over the hollow
 #: between the cups outside its row's hull — every stretch between two vertices clear of the body, pinned, no cloth
 #: run) and its front rises over the cups (``cup_rise``) — part of its drape key too (``tsig``), so it re-drapes once.
-CORSET_VERSION = 2
+#: 3 (review 2026-11-22): the band under the top edge is gated too (``under_edge``) and the hem reaches under the worn
+#: skirt's waistband (``STRAPLESS_TUCK_M``).
+CORSET_VERSION = 3
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
@@ -176,8 +178,16 @@ CUP_HALF_RAD = 0.6
 #: (``judge_build``, ``CORSET_GAP_MM``) measure the distance of the single layer to the nearest surface.
 CORSET_CLEAR_M = 0.0015
 #: Corset v2: the largest gap (p95, millimetres) of a strapless top's single layer to the surface under it — at the
-#: waist, along the hem and along the top edge (the bridge over the neckline's middle left out).
-CORSET_GAP_MM = {"waist": 3.0, "hem": 5.0, "top_edge": 2.0}
+#: waist, along the hem and along the top edge (the bridge over the neckline's middle left out). Corset v3: and in the
+#: band 1..3 cm under the top edge on the worse side (``under_edge``; ``garment_template_build.shell_gaps``).
+CORSET_GAP_MM = {"waist": 3.0, "hem": 5.0, "top_edge": 2.0, "under_edge": 5.0}
+#: Corset v3 (review 2026-11-22: a strip of bare skin between the corset's hem and the skirt's waistband): a strapless
+#: top worn with a template skirt or trousers (``tuck_lines``) reaches this far below the lowest of their waist lines
+#: (``_waist_line``) — the skirt drapes on the plain body and stands a few millimetres off it, the corset lies on the
+#: skin, so a hem that only met the waistband left the skin between them open from above.
+STRAPLESS_TUCK_M = 0.02
+#: The worn template kinds whose waist line a strapless top's hem reaches under (``tuck_lines``).
+TUCK_KINDS = ("skirt", "trousers")
 SHOULDERS = ("strapless", "straps", "covered", "off_shoulder")
 # --- A229: the off-shoulder (Carmen / Bardot) blouse --------------------------------------------------------------
 #: An off-shoulder top or dress is built as a covered bodice with sleeves and cut below the shoulders along an elastic
@@ -1259,7 +1269,8 @@ GRID_M = 0.015
 COLS = 41
 
 
-def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False) -> Dict[str, Any]:
+def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False,
+            tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """The piece's side profile: ``knots`` = [(height above the hem in metres, full circumference)]
     ascending from the hem (0) to the top, the top height ``top_y`` (Y-up world) and the pinned top. A skirt
     runs waist → hem; a dress runs chest band → waist → hem.
@@ -1281,7 +1292,7 @@ def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: boo
     if has_bodice(params):
         return _bodice_outline(params, meas, waist_y, waist_c, hem_c, over_sleeves=over_sleeves)
     if strapless_top(params):
-        return _strapless_top_outline(params, meas, waist_y)
+        return _strapless_top_outline(params, meas, waist_y, tuck)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
         # A223: the top edge lies STRAPLESS_UNDERARM_M under the chest band, as a strapless top's (A221): at the band
@@ -1432,7 +1443,7 @@ def _bodice_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float
 
 
 #: Bug round 2026-11-20: a top's or jacket's hem closer than this to the measured underbust fold (``_bust_lines``,
-#: the same line as ``bust_shaping.landmarks`` ``under_y``) is moved this far BELOW the fold — never up, a piece is
+#: the same line as ``bust_shaping.landmarks`` ``fold_y``) is moved this far BELOW the fold — never up, a piece is
 #: never made shorter. On the fold the hem's cloth spans the step from the chest to the rib cage and a few edges
 #: there take the drape's pull: Lirien's top at length 0.27 (hem 1.178 m, fold 1.168 m) failed at stretch 1.48 with
 #: p99 1.03; at 0.31 (hem 1.138 m, 3 cm under the fold) it drapes at 1.09.
@@ -1489,7 +1500,8 @@ def _clear_underbust(params: Dict[str, Any], meas: Dict[str, Any], hem_y: float,
                  "draped_length_m": round(length_from - new, 4)}
 
 
-def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float) -> Dict[str, Any]:
+def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y: float,
+                           tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """A221: the side profile of a strapless top — a tube from the hem up to ``STRAPLESS_UNDERARM_M`` under the
     chest band (``band_y``, the top of a strapless dress), the body's own girth with the bodice ease (``BODICE_EASE``, so fit 0
     is a snug corset) + ``EASE_M`` every 2 cm. ``length_m`` counts from the shoulder line (joints +
@@ -1502,13 +1514,37 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
     rise = cup_rise(params, meas)
     top_y = side_y + rise
     hem_y, moved = _clear_underbust(params, meas, hem_y, shoulder)
+    tucked = None
+    if tuck:
+        # corset v3: under the waistband of the skirt / trousers worn with it (``STRAPLESS_TUCK_M``)
+        line = min(_waist_line({"waist_height": t}, meas) for t in tuck)
+        if hem_y > line - STRAPLESS_TUCK_M:
+            tucked = {"waist_line_y": round(line, 4), "from_y": round(hem_y, 4)}
+            hem_y = max(float(meas["floor_y"]) + 0.2, line - STRAPLESS_TUCK_M)
+            tucked["hem_y"] = round(hem_y, 4)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"]
     knots = [(round(float(y) - hem_y, 4), round(_torso_girth(meas, float(y)) * ease + EASE_M, 4))
              for y in np.arange(hem_y, top_y - 1e-6, 0.02)]
     knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
     return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0],
             **({"cup_rise_m": round(rise, 4), "side_top_y": round(side_y, 4)} if rise > 0 else {}),
+            **({"hem_tucked": tucked} if tucked else {}),
             **({"hem_moved": moved} if moved else {})}
+
+
+def tuck_lines(params: Dict[str, Any], lower: List[str]) -> Tuple[str, ...]:
+    """Corset v3: the waist heights (``waist_height``) of the worn template skirts / trousers (``TUCK_KINDS``) a
+    strapless top's hem reaches under (``STRAPLESS_TUCK_M``) — sorted, each once; () for every other piece. Part of
+    the piece's drape and cut key (``under_tokens``)."""
+    if not strapless_top(params):
+        return ()
+    from app.models.inventory import get_item
+    out = set()
+    for other in lower or ():
+        it = get_item(other)
+        if _template_kind(it) in TUCK_KINDS:
+            out.add(str(params_of(it)["waist_height"]))
+    return tuple(sorted(out))
 
 
 def cup_rise(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
@@ -1633,7 +1669,8 @@ def _sleeve_panel(sleeve: Dict[str, Any]):
     return json.loads(json.dumps(panel.assembly().pattern, default=str))
 
 
-def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False) -> Dict[str, Any]:
+def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: bool = False,
+               tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """The pattern of a built kind as two pygarment panels (front, back; each half the
     circumference), sampled to quad grids: ``{rows, cols, row_y (Y-up world height per row, row 0 =
     the pinned top), panels: [{name, grid_m: rows x cols x 2}], pygarment: {front, back}}``.
@@ -1647,7 +1684,7 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
         raise ValueError(KIND_NOT_BUILT.format(kind=params["kind"]))
     if params["kind"] in FITTED_KINDS:
         return fitted_spec(params, meas)
-    shape = outline(params, meas, over_sleeves=over_sleeves)
+    shape = outline(params, meas, over_sleeves=over_sleeves, tuck=tuck)
     knots = shape["knots"]
     total = knots[-1][0]
     rows = int(min(81, max(12, round(total / GRID_M) + 1)))
@@ -2305,6 +2342,10 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
     if under and params["kind"] in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
+    # corset v3: a strapless top reaches under the waistband of the skirt / trousers worn with it (``tuck_lines``)
+    tucks = tuck_lines(params, lower)
+    if tucks:
+        under.append("tuck:" + ",".join(tucks) + f":{STRAPLESS_TUCK_M}")
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower)
@@ -2670,6 +2711,11 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         gap = ((data.get("fit_gap") or {}).get(part) or {}).get("p95_mm")
         if gap is not None:
             row(f"gap_{part}_p95_mm", gap, limit, gap <= limit)
+    # corset v3: a hem moved under the worn skirt's / trousers' waistband (``STRAPLESS_TUCK_M``) reaches under it
+    tucked = (data.get("outline") or {}).get("hem_tucked")
+    if tucked:
+        under = round(float(tucked["waist_line_y"]) - float(tucked["hem_y"]), 4)
+        row("hem_under_waistband_m", under, STRAPLESS_TUCK_M, under >= STRAPLESS_TUCK_M - 1e-4)
     bake = data.get("bake") or {}
     if "coverage" in bake:
         row("bake_coverage", bake["coverage"], THRESHOLDS["bake_coverage"],
@@ -3002,7 +3048,8 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
               timeout_s: int = 300, corrective: bool = True,
               lower: Optional[List[Tuple[Path, Any]]] = None,
               live: Optional[Tuple[str, str]] = None,
-              lower_offsets: Optional[List[float]] = None, over_sleeves: bool = False) -> Dict[str, Any]:
+              lower_offsets: Optional[List[float]] = None, over_sleeves: bool = False,
+              tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH`` or a narrow miss, ``retry_due``; the retry's result is
     judged and carries ``data.retry``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
@@ -3017,7 +3064,7 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
     started = time.time()
     _live_stage(live, "measure_body")
     meas = measure_body(Path(body_glb).read_bytes())
-    spec = panel_spec(params, meas, over_sleeves=over_sleeves)
+    spec = panel_spec(params, meas, over_sleeves=over_sleeves, tuck=tuck)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     progress_file = out_dir / "progress.json"
@@ -3193,7 +3240,8 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
-                                                 lower=cols, live=key, lower_offsets=offsets, over_sleeves=over),
+                                                 lower=cols, live=key, lower_offsets=offsets, over_sleeves=over,
+                                                 tuck=tuck_lines(params, lower)),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
         # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``); stage

@@ -261,6 +261,21 @@ SHELL_HULL_RAD = 0.6
 #: there (``corset_shell``: the row rays alone never see the underside of a lifted chest, which then stood through
 #: the chord between two rows).
 SHELL_PROFILE_SAMPLES = 8
+#: Corset v3 (review 2026-11-22: 1..3 cm under the top edge the shell stood 6..12 mm off the body at the cups' top and
+#: under the arms): the build's rays are horizontal, so where the body's surface is nearly horizontal itself (the top of
+#: the lifted chest, the underside of the armpit) a stretch cleared along the ray stands far off the surface along its
+#: normal. ``corset_shell`` then settles: each vertex farther than ``clear`` + ``SHELL_SETTLE_TOL_M`` from the body
+#: moves to ``clear`` off its nearest point (its height by at most ``SHELL_SETTLE_DZ_M``, a third of a row: rows never
+#: cross), and the stretches are cleared again — ``SHELL_SETTLE_ROUNDS`` times.
+SHELL_SETTLE_TOL_M = 0.001
+#: Corset v3: the stretches from the top edge in are raised only where the body stands through them, to this far
+#: over the surface (metres; ``corset_shell``'s last pass).
+SHELL_EDGE_SKIN_M = 0.0003
+#: Corset v3: the front's hull down from the chest (``corset_shell``) ends this far over the waist line, so the waist
+#: itself hugs (a hull down to the waist row stood up to 29 mm off the belly just above it).
+SHELL_FRONT_WAIST_M = 0.035
+SHELL_SETTLE_DZ_M = 0.005
+SHELL_SETTLE_ROUNDS = 4
 
 
 def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
@@ -282,6 +297,7 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     rad = body_r + clear
     front = [k for k, p in enumerate(spec["panels"]) if p["name"] == "front"]
     bridged = 0
+    hollow = []
     for r in range(rows):
         idx = np.array([k * rows * cols + r * cols + c for k in range(panels) for c in range(cols)])
         hull = _hull_radius(centre, [angles[i] for i in idx], body_r[idx])
@@ -291,10 +307,45 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
                 rad[i] = hull[j] + clear
                 if hull[j] - body_r[i] > SHELL_BRIDGE_M:
                     bridged += 1
+                    hollow.append(int(i))
+    # corset v3 (review 2026-11-22: a step under the lifted chest in the side view): down the front, from the top
+    # edge of a column to ``SHELL_FRONT_WAIST_M`` over the waist, the shell spans the column's upper hull in
+    # (height, radius) — the cloth runs straight from the chest to the rib cage over the fold under it, as a corset's
+    # front does; the waist stays on the body. Such a vertex counts as over a hollow (``hollow``: no settle, out of
+    # the band gap)
+    waist_y = (spec.get("outline") or {}).get("waist_y")
+    if waist_y is not None:
+        for k in front:
+            base = k * rows * cols
+            for c in range(cols):
+                i0 = base + c
+                off = abs(((angles[i0] - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
+                if off > SHELL_HULL_RAD:
+                    continue
+                col = [base + r * cols + c for r in range(rows)]
+                zs = np.array([verts[i][2] for i in col])
+                w = int(np.argmin(np.abs(zs - float(waist_y) - SHELL_FRONT_WAIST_M)))
+                span = sorted([r for r in range(rows) if zs[r] >= zs[w]], key=lambda r: zs[r])
+                if len(span) < 3:
+                    continue
+                hull = []
+                for r in span:
+                    q = (zs[r], rad[col[r]])
+                    while len(hull) >= 2 and ((hull[-1][0] - hull[-2][0]) * (q[1] - hull[-2][1])
+                                              - (hull[-1][1] - hull[-2][1]) * (q[0] - hull[-2][0])) >= 0:
+                        hull.pop()
+                    hull.append(q)
+                hz, hr = np.array([h[0] for h in hull]), np.array([h[1] for h in hull])
+                for r in span:
+                    h = float(np.interp(zs[r], hz, hr))
+                    if h - rad[col[r]] > SHELL_BRIDGE_M:
+                        hollow.append(int(col[r]))       # spans the fold: the settle leaves it there
+                    rad[col[r]] = max(rad[col[r]], h)
     raised = 0
     fixed = set(int(i) for i in edge)
+    zz = np.array([float(v[2]) for v in verts])
 
-    def lift(a, b, pa, pb):
+    def lift(a, b, pa, pb, edge_pass=False):
         """Raise the stretch a-b (radii ``rad``, points ``pa``/``pb`` at those radii) until every sample on it clears
         the body by ``clear``; the least change that does it (``(1-t, t)`` share, exact at the worst sample)."""
         worst, wt = 0.0, 0.5
@@ -306,44 +357,86 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
                 worst, wt = need, t
         if worst <= 1e-4:
             return 0
-        wa, wb = (0.0 if a in fixed else 1 - wt), (0.0 if b in fixed else wt)
-        if wa == wb == 0.0:
+        if (a in fixed or b in fixed) and not edge_pass:
             return 0
+        if edge_pass:
+            # only where the body really stands through the stretch, and only up to the body's surface
+            if worst <= clear:
+                return 0
+            worst -= clear - SHELL_EDGE_SKIN_M
+        wa, wb = 1 - wt, wt
         k = worst / (wa * wa + wb * wb)
         rad[a] += k * wa
         rad[b] += k * wb
         return 1
 
     def point(i):
-        return (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), verts[i][2])
+        return (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), zz[i])
 
-    for _pass in range(3):
+    def clear_stretches(edge_pass=False):
+        count = 0
         for k in range(panels):
             base = k * rows * cols
             for c in range(cols):
                 col = [base + r * cols + c for r in range(rows)]
                 for a, b in zip(col[:-1], col[1:]):
-                    raised += lift(a, b, point(a), point(b))
+                    count += lift(a, b, point(a), point(b), edge_pass)
             for r in range(rows):
                 row = [base + r * cols + c for c in range(cols)]
                 for a, b in zip(row[:-1], row[1:]):
-                    raised += lift(a, b, point(a), point(b))
+                    count += lift(a, b, point(a), point(b), edge_pass)
             for r in range(rows - 1):
                 for c in range(cols - 1):
                     # both diagonals of the quad (its triangles' inner edge, whichever way it is split)
                     for a, b in ((base + r * cols + c, base + (r + 1) * cols + c + 1),
                                  (base + r * cols + c + 1, base + (r + 1) * cols + c)):
-                        raised += lift(a, b, point(a), point(b))
+                        count += lift(a, b, point(a), point(b), edge_pass)
+        return count
+
+    for _pass in range(3):
+        raised += clear_stretches()
+    keep = fixed | set(hollow)
+    settled = 0
+    for _round in range(SHELL_SETTLE_ROUNDS):
+        for i in range(n):
+            if i in keep:
+                continue
+            q = Vector(point(i))
+            loc, nrm, _f, dist = btree.find_nearest(q)
+            if loc is None or dist <= clear + SHELL_SETTLE_TOL_M:
+                continue
+            out = (q - loc).normalized() if dist > 1e-9 else nrm
+            t = loc + out * clear
+            zz[i] = verts[i][2] + max(-SHELL_SETTLE_DZ_M, min(SHELL_SETTLE_DZ_M, t.z - verts[i][2]))
+            # the radius along the vertex's own ray at its new height: the point of the offset surface there
+            rad[i] = max(gd.body_radius(btree, centre, angles[i], zz[i]) + clear,
+                         min(rad[i], math.hypot(t.x - centre[0], t.y - centre[1])))
+            settled += 1
+        raised += clear_stretches()
+    # last, the stretches from the top edge in: left out above (all of their raise fell on the inner end, which then
+    # rolled out as a flap at the cups' side), they are raised here by both ends where the body stands through them
+    # (``SHELL_EDGE_SKIN_M``) — so no skin shows through between the edge and the next row
+    edge_raised = clear_stretches(edge_pass=True)
     for i in range(n):
-        verts[i] = (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), verts[i][2])
-    return {"rows": int(rows), "bridged": int(bridged), "raised": int(raised)}
+        verts[i] = (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), zz[i])
+    return {"rows": int(rows), "bridged": int(bridged), "raised": int(raised), "settled": int(settled),
+            "edge_raised": int(edge_raised),
+            "hollow": hollow}
 
 
-def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm):
+#: Corset v3 (review 2026-11-22: the side cup edge rolled out as a flap the top-edge row alone did not see): the band
+#: under the top edge whose gap is gated per side (``under_edge``), metres under the edge at the same angle.
+UNDER_EDGE_M = (0.01, 0.03)
+
+
+def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm, hollow=()):
     """Corset v2: the distance of the single layer to the nearest surface under it (``ftree``: the body and the
     layers under the piece) in millimetres, p50 / p95 / max per part: the waist (within 12 mm of ``waist_y``), the hem
     (its row) and the top edge (its row, ``pin_top`` where it is lowered; those over a hollow — farther than
-    ``clear`` + ``SHELL_BRIDGE_M`` outside the surface their own ray meets — are left out and counted as ``bridge``)."""
+    ``clear`` + ``SHELL_BRIDGE_M`` outside the surface their own ray meets — are left out and counted as ``bridge``).
+    Corset v3: ``under_edge`` = the band ``UNDER_EDGE_M`` under the top edge (under the edge vertex nearest in angle),
+    the vertices the shell laid over the hollow between the cups (``hollow``, ``corset_shell``) left out, per side
+    (``under_edge_left`` / ``_right``: x over / under the centre) and the worse side as ``under_edge``."""
     co, _n, _t = gd.world_coords(obj)
     dist = np.array([(Vector(c) - ftree.find_nearest(Vector(c))[0]).length for c in co])
     hem_z = float(spec["row_y"][-1])
@@ -365,13 +458,27 @@ def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm):
         ang = math.atan2(co[i, 1] - centre[1], co[i, 0] - centre[0])
         r = math.hypot(co[i, 0] - centre[0], co[i, 1] - centre[1])
         over[i] = r - gd.body_radius(btree, centre, ang, float(co[i, 2])) > clear + SHELL_BRIDGE_M
+    band = np.zeros(len(co), bool)
+    ti = np.where(top)[0]
+    if len(ti):
+        ang_all = np.arctan2(co[:, 1] - centre[1], co[:, 0] - centre[0])
+        ang_top = ang_all[ti]
+        diff = np.abs((ang_all[:, None] - ang_top[None, :] + math.pi) % (2 * math.pi) - math.pi)
+        dz = co[ti[np.argmin(diff, axis=1)], 2] - co[:, 2]
+        band = (dz >= UNDER_EDGE_M[0]) & (dz <= UNDER_EDGE_M[1])
+        band[np.asarray(list(hollow), int)] = False
     out = {}
-    for name, m in (("waist", np.abs(co[:, 2] - waist_z) < 0.012), ("hem", hem), ("top_edge", top & ~over)):
+    parts = [("waist", np.abs(co[:, 2] - waist_z) < 0.012), ("hem", hem), ("top_edge", top & ~over),
+             ("under_edge_left", band & (co[:, 0] > centre[0])), ("under_edge_right", band & (co[:, 0] < centre[0]))]
+    for name, m in parts:
         if m.any():
             v = dist[m] * 1000
             out[name] = {"n": int(m.sum()), "p50_mm": round(float(np.percentile(v, 50)), 2),
                          "p95_mm": round(float(np.percentile(v, 95)), 2), "max_mm": round(float(v.max()), 2),
-                         "limit_mm": gap_mm.get(name)}
+                         "limit_mm": gap_mm.get(name.replace("_left", "").replace("_right", ""))}
+    sides = [out[k] for k in ("under_edge_left", "under_edge_right") if k in out]
+    if sides:
+        out["under_edge"] = dict(max(sides, key=lambda r: r["p95_mm"]))
     out["bridge"] = {"n": int((top & over).sum()),
                      "p95_mm": round(float(np.percentile(dist[top & over] * 1000, 95)), 2) if (top & over).any()
                      else None}
@@ -2553,6 +2660,9 @@ def run(a):
             # centre is the placket line (``corset_darts``)
             fseams = list(fseams) + cdarts.dart_seams(spec["rows"], spec["cols"])
             wrap_marks = {"centre_back": (2, cdarts.back_line(spec["rows"], spec["cols"]))}
+            if prm.get("shell_clear_m") is not None:
+                # corset v3: its sewn seams, painted onto the cut atlas at assembly (``corset_darts.seam_lines``)
+                wrap_marks.update(cdarts.seam_lines(spec["rows"], spec["cols"]))
         row_c = leg_centres(bco[np.abs(bco[:, 0] - centre[0]) < half], centre, spec["row_y"],
                             lambda cen, r: wrap_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
         binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
@@ -2560,6 +2670,7 @@ def run(a):
         if prm.get("shell_clear_m") is not None:
             # corset v2: a strapless top lies on the body as a shell (``corset_shell``)
             binfo["shell"] = corset_shell(verts, angles, spec, btree, centre, float(prm["shell_clear_m"]), top_ids)
+            shell_hollow = binfo["shell"].pop("hollow")
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         me.uv_layers.new(name="UVMap")         # filled by ``pattern_uv_of_wrap`` below
@@ -2657,7 +2768,7 @@ def run(a):
     n_single = len(me.vertices)
     # corset v2: how close the shell lies (``shell_gaps``; gated in ``garment_template.judge_build``)
     fit_gap = shell_gaps(obj, ftree, btree, centre, spec, float(prm["shell_clear_m"]),
-                         prm.get("shell_gap_mm") or {}) if "shell" in binfo else None
+                         prm.get("shell_gap_mm") or {}, shell_hollow) if "shell" in binfo else None
     if fitted and fitted["kind"] == "briefs":
         binfo["cover"] = gf.part_cover(body, obj)
     neck = {}

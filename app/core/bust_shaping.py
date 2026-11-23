@@ -9,37 +9,44 @@ skin the piece leaves open and the drape agree. Only positions move: faces, UVs,
 so the skinning is the plain body's. The bare body file is never changed — the shaping exists only in a drape's
 scratch copy and in an assembled worn set.
 
-Version 3 (user report 2026-11-22 "pressed flat"): version 2 took half the protrusion away (``COMPRESS``) and lifted
-by the protrusion, which left a flat cap with a hard rim above the cloth edge (volume -48 %, 228 new creases on
-Rosi). Version 3 is the flow of a divergence-free velocity field: its Jacobian determinant is 1 everywhere, so the
-shaped body keeps the volume of every part of it and can never fold.
+Version 4 (review of v3, 2026-11-22): v3 lifted the whole chest as one block and let the skin over its root take
+the compression up to 15 cm over the root — past the shoulder line, so the shoulders and the collarbone moved (up to
+75 mm) and faces turned over there; its depth fade of 4 cm sheared the overhanging underside at the outer edge
+(32 faces turned over at lift 0.7). Version 4 keeps every vertex above the shoulder line where it is: the motion
+runs out on a straight ramp (rounded ends) from ``UPPER_START_M`` above the apex up to the shoulder line, so the
+upper part of the chest takes the compression and fills, the way a corset gathers it upward. A compressed column
+grows forward by at most ``FILL_CAP_M`` x the compression (``g_c``), never in proportion to its depth: an exactly
+volume-keeping fill pushed the upper part out into a forward wedge (render 2026-11-22). The volume stays within a few
+per cent (``scripts/smoke_bust_shaping.py`` gates >= 0.95), and the lift is what the user asked for: the apex rises
+by ``share`` x ``extent_m``, share = min(lift x ``LIFT_SHARE``, ``ROOM_SHARE`` x (cap_y - apex_y) / extent_m) — the
+slider's 0..1 is 0..50 % of the chest's own height, capped by the room up to the shoulder line (past it the upper
+part turned into a flat shelf). ``D`` is solved so that the flow carries the apex up by exactly that.
 
 The ``landmarks`` are measured once on the plain body (glTF Y-up metres, front = +Z; ``_column_landmarks``): per side
 the apex (the most forward chest point), the fold under it (``_fold_below``, as ``garment_template_fitted._fold``)
 and the root above it (where the protrusion in front of the chest wall falls under ``ROOT_P_M``); ``fold_y`` /
-``apex_y`` / ``root_y`` are the means of both sides, ``extent_m`` = root_y - fold_y. The chest wall ``wall_z`` is
-the most forward point of the slice at the fold per ``WALL_STEP_M`` of distance from the middle. The field is a pure
-function of a vertex's position and the landmarks, so the full and the low tier (different vertices) shape alike.
+``apex_y`` / ``root_y`` are the means of both sides, ``extent_m`` = root_y - fold_y, ``cap_y`` the shoulder line.
+The chest wall ``wall_z`` is the most forward point of the slice at the fold per ``WALL_STEP_M`` of distance from the
+middle. The field is a pure function of a vertex's position and the landmarks, so the full and the low tier
+(different vertices) shape alike.
 
-In the coordinates X = x - centre_x, y, p = z - wall(x) (a shear of x, y, z: volume-preserving):
+In the coordinates X = x - centre_x, y, p = z - wall(x) (a shear of x, y, z):
 
-    D      = lift * LIFT_SHARE * extent_m * min(1, depth_m / FULL_DEPTH_M)      (the lift)
+    D      = solved: the flow lifts the apex by share * extent_m * min(1, depth_m / FULL_DEPTH_M)
     G      = lift * GATHER * min(1, depth_m / FULL_DEPTH_M)                       (the gathering rate)
-    m(y)   = S(y; fold_y - BELOW_M, fold_y + RISE_M) * (1 - S(y; up0, up1)),
-             up0 = max(root_y, apex_y + D),  up1 = up0 + ABOVE_M + ABOVE_GAIN * D
+    m(y)   = S(y; fold_y - BELOW_M, fold_y + RISE_M) * (1 - R(y; up0, cap_y)),   up0 = apex_y + UPPER_START_M
+    R      = a straight ramp 0 -> 1 from up0 to cap_y whose ends are rounded over ``RAMP_ROUND_M``
     k(X)   = 1 - S(|X|; off + SIDE_PAST_M),  off = mean |apex_x - centre_x| of both sides
-    g'(p)  = S(p; -BACK_M, 0),  g(p) = integral of g' from -BACK_M
+    g'(p)  = S(p; -BACK_M, FRONT_M),  g(p) = integral of g' from -BACK_M,  g_c = FILL_CAP_M * tanh(g / FILL_CAP_M)
     s(X)   = X * (1 - S(|X|; GATHER_SIDE_M))
     v_x    = -G * s(X) * m(y) * g'(p)
     v_y    =  D * m(y) * k(X) * g'(p)
-    v_p    = -D * m'(y) * k(X) * g(p)  +  G * s'(X) * m(y) * g(p)
+    v_p    = -D * m'(y) * k(X) * g_c(p)  +  G * s'(X) * m(y) * g(p)
 
-(S = smoothstep). div v = dv_x/dX + dv_y/dy + dv_p/dp = 0 term by term. The positions are the flow of v over unit
-time (``STEPS`` classic Runge-Kutta steps). Inside the chest (m = k = g' = 1, the ramps of m lie under the fold and
-over the root) the tissue moves as one block: straight up by D and in toward the middle by the factor e^-G, so its
-shape stays round; the skin under the fold stretches, the skin over the root takes the compression and fills the
-neckline a little. Behind the wall by more than ``BACK_M`` (the back, the arms' undersides) and farther than
-``off + SIDE_PAST_M[1]`` from the middle nothing rises. The apex rises by exactly D (it stays inside m = k = 1).
+(S = smoothstep). Where g < FILL_CAP_M (the skin near the wall) div v = 0; deeper in the compressed upper part it
+keeps less than all of its volume. The positions are the flow of v over unit time (``STEPS`` classic Runge-Kutta
+steps). Behind the wall by more than ``BACK_M`` (the back, the arms' undersides), farther than
+``off + SIDE_PAST_M[1]`` from the middle and above ``cap_y`` nothing moves.
 ``scripts/smoke_bust_shaping.py`` derives the numbers by hand.
 """
 from __future__ import annotations
@@ -51,7 +58,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 #: Bump when the field changes: it is part of every shaped drape's key.
-VERSION = 3
+VERSION = 4
 #: The lift at lift 1 as a share of the chest's own vertical extent (fold -> root): the slider's 0..1 is 0..50 %.
 LIFT_SHARE = 0.5
 #: The gathering rate toward the middle at lift 1: the chest's distance from the middle shrinks by e^-GATHER (10 %).
@@ -62,10 +69,16 @@ FULL_DEPTH_M = 0.08
 #: The ramp of m under the fold (from fold - BELOW_M up to fold + RISE_M): the rib cage skin there stretches.
 BELOW_M = 0.06
 RISE_M = 0.01
-#: The ramp of m over the root (up0 .. up0 + ABOVE_M + ABOVE_GAIN * D): the skin there takes the compression; a
-#: longer ramp for a larger lift keeps it from bunching.
-ABOVE_M = 0.10
-ABOVE_GAIN = 0.6
+#: Where the motion starts running out above the apex (metres): the ramp of m runs from apex_y + this up to the
+#: shoulder line (``cap_y``), so the upper part of the chest takes the compression.
+UPPER_START_M = 0.06
+#: The rounded ends of that ramp (metres).
+RAMP_ROUND_M = 0.05
+#: The apex rises at most this share of its distance to the shoulder line (past ~0.4 the compressed upper part
+#: turned into a flat shelf on a full chest, render 2026-11-22).
+ROOM_SHARE = 0.4
+#: The forward fill of a compressed column is capped at this (metres, ``g_c``).
+FILL_CAP_M = 0.04
 #: The sideways fade of the lift, measured past the apex's distance from the body's middle (metres): full inside the
 #: first, none beyond the second (scales with the chest's width; a narrower fade sheared the tissue's outer side into
 #: a crease, render 2026-11-22).
@@ -76,9 +89,14 @@ DEPTH_HALF_M = 0.15
 GATHER_SIDE_M = (0.12, 0.24)
 #: The depth behind the chest wall over which the motion fades out (metres): the underside of the chest and the
 #: cleavage lie at or just behind the wall and move with the tissue; the flanks and the back lie far behind it.
-BACK_M = 0.04
+BACK_M = 0.06
+#: ... and reaches full in front of the wall by this much (metres): a fade over 6 cm into the tissue keeps the
+#: overhanging underside at the outer edge from shearing over (v3 had 4 cm and none: 32 faces turned at lift 0.7).
+FRONT_M = 0.02
 #: Runge-Kutta steps of the flow.
-STEPS = 24
+STEPS = 32
+#: Bisection steps that solve ``D`` for the asked apex rise.
+SOLVE_STEPS = 32
 #: The root: the first height over the apex where the protrusion in front of the wall falls under this (metres).
 ROOT_P_M = 0.005
 #: The landmark columns: vertices within this half width of the apex's x, sampled every COLUMN_STEP_M in height
@@ -215,7 +233,8 @@ def chest_apex(positions, meas: Dict[str, Any]) -> Dict[str, np.ndarray]:
 
 def landmarks(positions, meas: Dict[str, Any]) -> Dict[str, Any]:
     """The plain body's chest landmarks (module docstring): ``centre_x`` (the spine's x), ``apex`` {l, r: [x, y, z]},
-    ``fold_y`` / ``apex_y`` / ``root_y`` (means of both sides), ``extent_m``, ``wall_z`` and ``depth_m`` (the largest
+    ``fold_y`` / ``apex_y`` / ``root_y`` (means of both sides), ``extent_m``, ``cap_y`` (the shoulder line, nothing
+    above it moves), ``wall_z`` and ``depth_m`` (the largest
     protrusion in front of the wall between the fold and the root within ``DEPTH_HALF_M`` of the middle). A side whose
     fold cannot be found takes the other's; neither = the band less 15 cm. ValueError without a chest region."""
     P = np.asarray(positions, np.float64)
@@ -242,7 +261,8 @@ def landmarks(positions, meas: Dict[str, Any]) -> Dict[str, Any]:
     return {"centre_x": round(centre_x, 4), "wall_z": wall,
             "apex": {k: [round(float(v), 4) for v in a] for k, a in apex.items()},
             "fold_y": round(fold_y, 4), "apex_y": round(apex_y, 4), "root_y": round(root_y, 4),
-            "extent_m": round(root_y - fold_y, 4), "depth_m": round(max(0.0, depth), 4)}
+            "extent_m": round(root_y - fold_y, 4), "depth_m": round(max(0.0, depth), 4),
+            "cap_y": round(float(meas.get("shoulder_y", float(meas["band_y"]) + 0.09)), 4)}
 
 
 def wall_at(x, lm: Dict[str, Any]) -> np.ndarray:
@@ -255,26 +275,60 @@ def wall_at(x, lm: Dict[str, Any]) -> np.ndarray:
     return np.interp(np.abs(np.asarray(x, np.float64) - lm["centre_x"]), centres, np.asarray(wall, np.float64))
 
 
-def amounts(lm: Dict[str, Any], lift: float) -> Dict[str, float]:
-    """The field's numbers for ``lift`` (module docstring): ``D`` (the lift in metres), ``G`` (the gathering rate),
-    the ramps of m (``lo0`` / ``lo1`` / ``up0`` / ``up1``) and the sideways fade of k (``side0`` / ``side1``)."""
+def _ramp(y, a: float, b: float, e: float):
+    """0 under ``a``, 1 over ``b``, a straight line between whose ends are rounded over ``e`` (slope 1 / (b - a - e))."""
+    return (_smoothstep_i(y, a, a + e) - _smoothstep_i(y, b - e, b)) / ((b - a) - e)
+
+
+def _ramp_d(y, a: float, b: float, e: float):
+    """d/dy of ``_ramp``."""
+    return (_smoothstep(y, a, a + e) - _smoothstep(y, b - e, b)) / ((b - a) - e)
+
+
+def share_of(lm: Dict[str, Any], lift: float) -> float:
+    """The apex's rise as a share of ``extent_m`` (module docstring): lift x ``LIFT_SHARE`` x the depth factor,
+    capped by ``ROOM_SHARE`` of the room up to the shoulder line."""
     depth = min(1.0, float(lm.get("depth_m", FULL_DEPTH_M)) / FULL_DEPTH_M)
-    D = float(lift) * LIFT_SHARE * float(lm["extent_m"]) * depth
-    up0 = max(float(lm["root_y"]), float(lm["apex_y"]) + D)
+    room = ROOM_SHARE * max(0.0, float(lm["cap_y"]) - float(lm["apex_y"])) / max(float(lm["extent_m"]), 1e-6)
+    return max(0.0, min(float(lift) * LIFT_SHARE * depth, room))
+
+
+def amounts(lm: Dict[str, Any], lift: float) -> Dict[str, float]:
+    """The field's numbers for ``lift`` (module docstring): ``D`` (solved, metres), ``G`` (the gathering rate), the
+    ramps of m (``lo0`` / ``lo1`` / ``up0`` / ``cap``), the sideways fade of k (``side0`` / ``side1``) and the asked
+    apex rise ``rise`` (metres)."""
+    depth = min(1.0, float(lm.get("depth_m", FULL_DEPTH_M)) / FULL_DEPTH_M)
     off = float(np.mean([abs(float(v[0]) - float(lm["centre_x"])) for v in lm["apex"].values()]))
-    return {"D": D, "side0": off + SIDE_PAST_M[0], "side1": off + SIDE_PAST_M[1], "G": float(lift) * GATHER * depth,
-            "lo0": float(lm["fold_y"]) - BELOW_M,
-            "lo1": float(lm["fold_y"]) + RISE_M, "up0": up0, "up1": up0 + ABOVE_M + ABOVE_GAIN * D}
+    cap = float(lm["cap_y"])
+    a = {"D": 0.0, "side0": off + SIDE_PAST_M[0], "side1": off + SIDE_PAST_M[1], "G": float(lift) * GATHER * depth,
+         "lo0": float(lm["fold_y"]) - BELOW_M, "lo1": float(lm["fold_y"]) + RISE_M,
+         "up0": min(float(lm["apex_y"]) + UPPER_START_M, cap - 2.0 * RAMP_ROUND_M), "cap": cap,
+         "rise": share_of(lm, lift) * float(lm["extent_m"])}
+    if a["rise"] <= 0.0:
+        return a
+    apex = np.array([v for v in lm["apex"].values()], np.float64)
+    p0 = apex[:, 2] - wall_at(apex[:, 0], lm)
+    lo, hi = 0.0, 4.0 * a["rise"] + 0.05
+    for _ in range(SOLVE_STEPS):
+        a["D"] = 0.5 * (lo + hi)
+        _x, y, _p = _flow(apex[:, 0] - float(lm["centre_x"]), apex[:, 1].copy(), p0, a)
+        if float(np.mean(y - apex[:, 1])) < a["rise"]:
+            lo = a["D"]
+        else:
+            hi = a["D"]
+    a["D"] = 0.5 * (lo + hi)
+    return a
 
 
 def velocity(X, y, p, a: Dict[str, float]):
     """``(v_x, v_y, v_p)`` of the module docstring at ``X`` (x - centre_x), ``y``, ``p`` (z - wall) for the
     ``amounts`` ``a``."""
-    gp = _smoothstep(p, -BACK_M, 0.0)
-    g = _smoothstep_i(p, -BACK_M, 0.0)
-    rise, fall = _smoothstep(y, a["lo0"], a["lo1"]), 1.0 - _smoothstep(y, a["up0"], a["up1"])
+    gp = _smoothstep(p, -BACK_M, FRONT_M)
+    g = _smoothstep_i(p, -BACK_M, FRONT_M)
+    gc = FILL_CAP_M * np.tanh(g / FILL_CAP_M)
+    rise, fall = _smoothstep(y, a["lo0"], a["lo1"]), 1.0 - _ramp(y, a["up0"], a["cap"], RAMP_ROUND_M)
     m = rise * fall
-    dm = _smoothstep_d(y, a["lo0"], a["lo1"]) * fall - rise * _smoothstep_d(y, a["up0"], a["up1"])
+    dm = _smoothstep_d(y, a["lo0"], a["lo1"]) * fall - rise * _ramp_d(y, a["up0"], a["cap"], RAMP_ROUND_M)
     ax = np.abs(X)
     k = 1.0 - _smoothstep(ax, a["side0"], a["side1"])
     side = _smoothstep(ax, *GATHER_SIDE_M)
@@ -282,23 +336,11 @@ def velocity(X, y, p, a: Dict[str, float]):
     ds = (1.0 - side) - ax * _smoothstep_d(ax, *GATHER_SIDE_M)
     return (-a["G"] * s * m * gp,
             a["D"] * m * k * gp,
-            -a["D"] * dm * k * g + a["G"] * ds * m * g)
+            -a["D"] * dm * k * gc + a["G"] * ds * m * g)
 
 
-def displace(positions, lm: Dict[str, Any], lift: float) -> np.ndarray:
-    """The shaped positions: the flow of ``velocity`` over unit time (``STEPS`` Runge-Kutta steps); vertices the
-    field does not reach come back unchanged."""
-    P = np.array(positions, np.float64, copy=True).reshape(-1, 3)
-    a = amounts(lm, lift)
-    if a["D"] <= 0.0 and a["G"] <= 0.0:
-        return P
-    cx = float(lm["centre_x"])
-    p0 = P[:, 2] - wall_at(P[:, 0], lm)
-    # only what the field can reach is integrated: in front of the wall - BACK_M, inside the side fades, between the
-    # ramps of m (the rest has v = 0 everywhere along its path, which never leaves where it is)
-    live = (p0 > -BACK_M) & (np.abs(P[:, 0] - cx) < max(a["side1"], GATHER_SIDE_M[1])) \
-        & (P[:, 1] > a["lo0"]) & (P[:, 1] < a["up1"])
-    X, y, p = P[live, 0] - cx, P[live, 1].copy(), p0[live]
+def _flow(X, y, p, a: Dict[str, float]):
+    """``(X, y, p)`` carried by ``velocity`` over unit time (``STEPS`` classic Runge-Kutta steps)."""
     h = 1.0 / STEPS
     for _ in range(STEPS):
         k1 = velocity(X, y, p, a)
@@ -308,6 +350,23 @@ def displace(positions, lm: Dict[str, Any], lift: float) -> np.ndarray:
         X = X + h / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
         y = y + h / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
         p = p + h / 6 * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2])
+    return X, y, p
+
+
+def displace(positions, lm: Dict[str, Any], lift: float, a: Optional[Dict[str, float]] = None) -> np.ndarray:
+    """The shaped positions: the flow of ``velocity`` over unit time; vertices the field does not reach come back
+    unchanged. ``a``: the ``amounts`` when already solved."""
+    P = np.array(positions, np.float64, copy=True).reshape(-1, 3)
+    a = a or amounts(lm, lift)
+    if a["D"] <= 0.0 and a["G"] <= 0.0:
+        return P
+    cx = float(lm["centre_x"])
+    p0 = P[:, 2] - wall_at(P[:, 0], lm)
+    # only what the field can reach is integrated: in front of the wall - BACK_M, inside the side fades, between the
+    # ramps of m (the rest has v = 0 everywhere along its path, which never leaves where it is)
+    live = (p0 > -BACK_M) & (np.abs(P[:, 0] - cx) < max(a["side1"], GATHER_SIDE_M[1])) \
+        & (P[:, 1] > a["lo0"]) & (P[:, 1] < a["cap"])
+    X, y, p = _flow(P[live, 0] - cx, P[live, 1].copy(), p0[live], a)
     P[live, 0] = X + cx
     P[live, 1] = y
     P[live, 2] = p + wall_at(X + cx, lm)
@@ -587,8 +646,9 @@ def worn_record(garments) -> Optional[Dict[str, Any]]:
 
 def shape_collision(collision: Optional[Dict[str, Any]], rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Review M3: the collision record of the shown body with its capsules shaped like the body — every bind-space
-    endpoint (``a_pos`` / ``b_pos``) displaced; the radius stays (the field keeps the tissue's volume, it compresses
-    nothing). Other entries stay. None in, None out."""
+    endpoint (``a_pos`` / ``b_pos``) displaced; the radius stays (v4 keeps the volume in front of the wall within 5 %
+    — ``FILL_CAP_M`` — and turns no face over, so a capsule's girth stays a fair stand-in). Other entries stay. None
+    in, None out."""
     if not isinstance(collision, dict):
         return collision
     import copy

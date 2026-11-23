@@ -3074,11 +3074,20 @@ def placket_key(item_id: str, character_name: str = "", csig: str = "") -> str:
     colour (``button_rgb``) or ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and
     csig stay."""
     style, buttons, _, _ = placket_of(item_id)
+    seams = f":seams{cut_texture_post.SEAM_VERSION}" if _has_seams(item_id) else ""
     if style == "none":
-        return ""
+        return seams
     colour = button_rgb(item_id, character_name, csig)[0] if style == "buttons" else None
     tint = "-" + "".join(f"{int(v):02x}" for v in colour) if colour else ""
-    return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}"
+    return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}{seams}"
+
+
+def _has_seams(item_id: str) -> bool:
+    """Corset v3: whether the piece's cut carries painted seam lines (a strapless top: ``corset_darts.seam_lines``)."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    params = gt.params_of(get_item(item_id))
+    return bool(params) and gt.strapless_top(params)
 
 
 def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[bytes, dict | None]:
@@ -3087,7 +3096,8 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     button count is a CPU re-assembly without an image job. Unchanged (info None) without a placket, without a ready
     cut or without a marks file (a cut that wrote no line; an old top cut is cut once more for it, B11)."""
     style, buttons, kind, collar = placket_of(item_id)
-    if style == "none":
+    seams = _has_seams(item_id)
+    if style == "none" and not seams:
         return atlas, None
     try:
         pattern = _ready_pattern(character_name, item_id)
@@ -3107,9 +3117,17 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     masks = {n: labels == ids[n] for n in {str(v.get("island")) for v in marks.values()} if n in ids}
     colour, source = (button_rgb(item_id, character_name, current_csig(character_name, item_id) or "")
                       if style == "buttons" else (None, ""))
-    out, info = cut_texture_post.draw_placket(rgb, masks, marks, kind=kind, style=style, buttons=buttons,
-                                              px_per_cm=float(islands.get("px_per_cm") or 0.0),
-                                              lapel=collar == "lapel", button_rgb=colour)
+    px_per_cm = float(islands.get("px_per_cm") or 0.0)
+    info = {"style": style}
+    if seams:
+        # corset v3: the sewn seams first, the placket over them
+        rgb, sinfo = cut_texture_post.draw_seams(rgb, masks, marks, px_per_cm=px_per_cm)
+        info.update(sinfo)
+    out, pinfo = cut_texture_post.draw_placket(rgb, masks, {k: v for k, v in marks.items()
+                                                            if not k.startswith("seam_")},
+                                               kind=kind, style=style, buttons=buttons, px_per_cm=px_per_cm,
+                                               lapel=collar == "lapel", button_rgb=colour)
+    info.update(pinfo)
     if colour:
         info["button_rgb"], info["button_source"] = colour, source
     return _png(Image.fromarray(out, "RGB")), info

@@ -1632,6 +1632,62 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
     return {"wiped": int(len(tgt)), "kept": kept, "guard": guard_full}
 
 
+#: Corset v3 (review 2026-11-22): a sewn seam with its boning channel (``draw_seams``) — a groove SEAM_GROOVE_CM wide
+#: SEAM_DL darker than the fabric under it, a stitch line STITCH_DL darker SEAM_HALF_CM either side. A seam is a shadow,
+#: so it is darker on every fabric of L* >= SEAM_DARK_MIN_L (``_shade`` turns at L* 50: on a red of L* 45 the first
+#: dry run drew light lines); only a near-black fabric gets lighter lines. Part of the assembly key
+#: (``garment_cut_texture.placket_key``).
+SEAM_VERSION = 1
+SEAM_GROOVE_CM = 0.12
+SEAM_DL = 16.0
+SEAM_HALF_CM = 0.35
+SEAM_DARK_MIN_L = 25.0
+
+
+def _seam_shade(base_lab, dl: float) -> np.ndarray:
+    """``base_lab`` with L* lowered by ``dl`` (raised for a negative one), as sRGB uint8."""
+    lab = np.asarray(base_lab, np.float64).copy()
+    lab[0] = float(np.clip(lab[0] - dl, 0.0, 100.0))
+    return np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
+
+
+def draw_seams(atlas: np.ndarray, masks: dict, marks: dict, *, px_per_cm: float) -> tuple[np.ndarray, dict]:
+    """Paint every ``seam_*`` line of the cut's ``marks`` (``corset_darts.seam_lines``) into ``atlas``, each only
+    inside its own island (``masks``): the groove on the line, the two stitch lines beside it (``SEAM_*``), shaded
+    from the fabric's median L*a*b* within 2 cm of the line. Returns the new atlas and ``{"seams": [names]}``."""
+    out = np.array(atlas, copy=True)
+    info: dict = {"seams": []}
+    if not marks or px_per_cm <= 0:
+        return out, info
+    for name, line in sorted(marks.items()):
+        if not name.startswith("seam_") or not line.get("px") or len(line["px"]) < 2 \
+                or line.get("island") not in masks:
+            continue
+        sel = np.asarray(masks[line["island"]], bool)
+        p, s = _polyline(line["px"])
+        if s[-1] <= 1.0:
+            continue
+        near = np.zeros_like(sel)
+        for t in np.linspace(0.0, s[-1], max(2, int(s[-1] // max(1.0, px_per_cm)) + 1)):
+            c, _ = _at(p, s, t)
+            _disc(near, np.ones_like(sel), c, 2 * px_per_cm, True)
+        pick = near & sel
+        fab = np.median(srgb_to_lab(np.asarray(atlas, np.float64)[pick]), axis=0) if pick.any() \
+            else np.array([50.0, 0.0, 0.0])
+        sign = 1.0 if fab[0] >= SEAM_DARK_MIN_L else -1.0
+        groove = _seam_shade(fab, sign * SEAM_DL)
+        stitch = _seam_shade(fab, sign * STITCH_DL)
+        ts = np.linspace(0.0, s[-1], max(16, int(s[-1] // 2)))
+        frames = [_at(p, s, t) for t in ts]
+        for d, half, col in ((0.0, max(0.6, SEAM_GROOVE_CM * px_per_cm / 2.0), groove),
+                             (SEAM_HALF_CM * px_per_cm, 0.5, stitch), (-SEAM_HALF_CM * px_per_cm, 0.5, stitch)):
+            pts = [c + np.array([-tg[1], tg[0]]) * d for c, tg in frames]
+            for a, b in zip(pts, pts[1:]):
+                _band(out, sel, a, b, half, col)
+        info["seams"].append(name)
+    return out, info
+
+
 def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, style: str, buttons: int,
                  px_per_cm: float, lapel: bool = False, button_rgb=None) -> tuple[np.ndarray, dict]:
     """Paint the placket ``style`` (``garment_template.PLACKETS``: buttons / zip / lacing; "none" draws nothing) of a

@@ -299,16 +299,17 @@ def marks_due(params: Optional[Dict[str, Any]], record: Dict[str, Any], marks: P
 def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir: Path,
                 colliders: Optional[List[Tuple[Path, Any]]] = None, own: Optional[List[Tuple[Path, Any]]] = None,
                 over_sleeves: bool = False, timeout_s: int = CUT_TIMEOUT_S,
-                own_offset: float = 0.0) -> Dict[str, Any]:
+                own_offset: float = 0.0, tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """ONE cut-only run of ``garment_template_build`` with the inputs a drape's attempt gets
     (``garment_template._run_drape_once`` / ``drape_with_fallback``: the template drapes under it, then the
-    own-mesh fits at ``own_offset`` — 0 "full", ``INNER_SHRINK_M`` "shrunk"; "dropped" hands no ``own``). ``{ok, outcome, error, data, islands (Path | None), log_tail, wall_s, slot_wait_s,
+    own-mesh fits at ``own_offset`` — 0 "full", ``INNER_SHRINK_M`` "shrunk"; "dropped" hands no ``own``; ``tuck`` the
+    lines a strapless top's hem reaches under, ``garment_template.tuck_lines``). ``{ok, outcome, error, data, islands (Path | None), log_tail, wall_s, slot_wait_s,
     measure_s}`` — ``wall_s`` the whole call less the slot wait."""
     from app.blender import runner
     from app.core import garment_template as gt
     started = time.time()
     meas = gt.measure_body(Path(body_glb).read_bytes())
-    spec = gt.panel_spec(params, meas, over_sleeves=over_sleeves)
+    spec = gt.panel_spec(params, meas, over_sleeves=over_sleeves, tuck=tuck)
     measure_s = round(time.time() - started, 2)
     cols = list(colliders or []) + list(own or [])
     offsets = [0.0] * len(colliders or []) + [float(own_offset)] * len(own) if own else None
@@ -378,7 +379,8 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
         shaped, shaping, _note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
                           over_sleeves=gt.over_sleeved_layer(params["kind"], ready),
-                          own_offset=gt.INNER_SHRINK_M if own_mode == "shrunk" else 0.0)
+                          own_offset=gt.INNER_SHRINK_M if own_mode == "shrunk" else 0.0,
+                          tuck=gt.tuck_lines(params, lower))
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
                                   "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,
