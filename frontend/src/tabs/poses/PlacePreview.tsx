@@ -38,12 +38,12 @@ import {
   strandCandidates, transplantedRestPose, type FootPose,
   type AlignmentDraft, type ChannelNow, type FrameInspection, type AlignmentLamp, type ClipHeightOffsetsCm, type CollisionPayload, type FigureRuntime,
   type HairStrandRecord, type SceneMarker, type SceneModelSpec, type SecondaryMotionPayload,
-  contactReport, fixRoot, fixPivot, partnerTurnFix, turnAxes, findContact, contactSampleOf,
+  contactReport, fixRoot, fixPivot, roleTurnFix, findContact, contactSampleOf,
   attachedPartIndex, partBoneNames, pairInterpenetration, clearLamp, PART_REGIONS, type ClearLamp,
   type ContactLamp, type ContactReport, type FitSample, type PairFix,
   isPointTarget, POINT_TARGET_OPS, MOUTH_CHANNEL_ID, type ContactTarget,
   bendSample, BEND_LIMITS_DEFAULT, type BendLimits, type BendResult,
-  supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport, type ContactRelation,
+  supportSample, supportHeight, postureReport, postureAngleCapDeg, supportMode, surfaceGap, surfaceExcess, SUPPORT_CAPSULES, type PostureReport, type ContactRelation,
   alignByPasses, pairPivotCm, keyReport, keyLamp, keyReasons, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
   keyFrames, keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
@@ -89,9 +89,10 @@ export interface PlaceClip {
   /** pair scene: the stored channel profile the server's readout estimate reads (null = not measured) */
   channel_profile?: ChannelProfile | null
   height_offsets_cm?: ClipHeightOffsetsCm
-  orientation?: { shift_cm?: [number, number] | null; partner_turn_deg?: [number, number] | null; partner_yaw_deg?: number | null } | null
+  orientation?: { shift_cm?: [number, number] | null; role_turn_deg?: Record<string, [number, number, number]> | null } | null
   /** Ruling A212: the clip's alignment range (cm). */
   align_range?: { cm: number } | null
+  align_turn?: { deg: number } | null
 }
 /** Pair scene: per channel id (from the collision records) the largest share of the entering chain's length inside
  *  over one clip cycle and how many times the part reached the channel's bottom in that cycle — the clip sidecar's
@@ -126,6 +127,23 @@ interface PlaceRow {
  *  body the game shows) and, on the base body, the pose picked per extension group (pair scene: '' = at rest; a group
  *  without a pick shows its `preview_pose`). */
 interface Assignment { character: string; role: string; body: 'outfit' | 'base'; poses: Record<string, string> }
+/** "Align all" (owner 2026-11-23): the persons by ROLE that every clip it opens is measured with. */
+export interface AlignCast {
+  /** The person of each role's first place (in letter order). */
+  byRole: Record<string, Assignment>
+  /** The persons of the other places, in letter order: they go to the places of roles the cast has no person for. */
+  extra: Assignment[]
+}
+/** The cast of a scene: each role's first place gives its person, the other places are the spares. */
+function castOf(assign: Record<string, Assignment>): AlignCast {
+  const byRole: Record<string, Assignment> = {}
+  const extra: Assignment[] = []
+  for (const [, a] of Object.entries(assign).sort(([x], [y]) => x.localeCompare(y))) {
+    if (!a?.character || !a.role) continue
+    if (byRole[a.role]) extra.push(a); else byRole[a.role] = a
+  }
+  return { byRole, extra }
+}
 
 /** A character's plain base body as GET …/figure?plain=1 reports it (`plain_body`) — the Base body tab's source. */
 interface PlainInfo {
@@ -308,7 +326,14 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       /** How many sampled frames hold the tip inside (s_tip > 0) before and after, of `frames`. */
       tipInside: { before: number; after: number; frames: number }
       shiftCm: [number, number, number]
-      turnDeg: [number, number]
+      /** The moved role's turn [tilt, roll, yaw] (degrees, base + solved). */
+      turnDeg: [number, number, number]
+      /** THE SUPPORT, ABSOLUTE (postureSupport): the moved role's mode and its lowest support capsule's gap over its
+       *  surface over the loop (mm, [min, max]) before and after, the excess over the touch band (mm), and every
+       *  other role's gap at the start (reported, never moved). */
+      support: { mode: 'surface' | 'band' | 'none'; beforeMm: [number, number] | null; afterMm: [number, number] | null
+        excessBeforeMm: number; excessAfterMm: number
+        others: { letter: string; role: string; mm: [number, number] | null }[] }
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp
@@ -324,10 +349,11 @@ export interface RelationAlign { by: string; of: string; channel: string; target
 export interface RootFrameView { k: number; rootMm: number; visMm: number; tipMm: number }
 export interface ClearView { with: string; startMm: number; allowMm: number; afterMm: number; worst: string }
 /** Ruling A212: one moving role — its total offset around the base arrangement, and whether the cap stopped it. */
-export interface MoverAlign { role: string; letter: string; mover: AlignMover; applied: boolean; shiftCm: [number, number, number]; turnDeg: [number, number]
+export interface MoverAlign { role: string; letter: string; mover: AlignMover; applied: boolean; shiftCm: [number, number, number]
+  turnDeg: [number, number, number]
   /** What THIS run moved (cm, degrees): the result minus the dials when it was clicked. */
-  adjustCm: [number, number, number]; adjustDeg: [number, number]
-  rangeCm: number
+  adjustCm: [number, number, number]; adjustDeg: [number, number, number]
+  rangeCm: number; turnRangeDeg: number
   /** red when an unknown hit its cap/slider range (`hits`), green otherwise. */
   lamp: AlignLamp; hits: AlignBound[]
   /** The root angle this run wrote (null = not solved for this role) and the one before (degrees). */
@@ -335,13 +361,18 @@ export interface MoverAlign { role: string; letter: string; mover: AlignMover; a
   /** The measure → solve passes (increments) and whether they converged. */
   passes: AlignPass[]; converged: boolean }
 export type AutoAlignResult =
-  | { ok: false; reason: string }
+  /** `code`: why nothing could be measured, for the clip's status (no place fits, no figure has the part, the pair
+   *  never filled in). */
+  | { ok: false; reason: string; code?: 'no_place' | 'no_part' | 'no_pair' }
   | { ok: true; relations: RelationAlign[]; roleShiftCm: Record<string, [number, number, number]>
       movers: MoverAlign[]
       target: ContactTarget; part: string
       by: string; of: string; channel: string; shiftCm: [number, number, number]
-      /** Partner B's tilt/roll draft (degrees, base + solved, within ±10° of the base). */
-      turnDeg: [number, number]
+      /** The moved role's turn draft [tilt, roll, yaw] (degrees, base + solved, within the rotation range of the base). */
+      turnDeg: [number, number, number]
+      /** The turn drafts of every moved role (degrees), like `roleShiftCm`. */
+      roleTurnDeg: Record<string, [number, number, number]>
+      support: RelationAlign['support']
       clearWorst: string; clearLamp: ClearLamp
       before: ContactReport; after: ContactReport; overlapBeforeMm: number; overlapAfterMm: number
       lampBefore: ContactLamp; lamp: ContactLamp; bend: BendReadout | null; keys: KeyAlign
@@ -369,7 +400,7 @@ export interface EndPose { kind: string; rel: Record<string, [number, number, nu
  *  role too, and takes the better (pairAlign `compareCandidates`). */
 export type AlignMover = 'part' | 'receiver'
 export type AlignMoverChoice = AlignMover | 'auto'
-export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: number | null; join?: EndPose | null
+export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: number | null; turnDeg?: number | null; join?: EndPose | null
   /** One click = one contact relation: the relation to align ('detected' = the auto-detected contact of a clip without
    *  declared relations) and which of its roles moves (default 'part'). Absent = every relation, each moved by its
    *  part's carrier ("Align all", end clips). */
@@ -377,17 +408,19 @@ export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: num
   /** "Align all": every relation one after the other, each on the previous one's result (default mover 'auto'), and
    *  a mover per relation key (`RelationAlign.key`). */
   each?: boolean; moverOf?: Record<string, AlignMoverChoice>
-  /** The arrangement the cap is measured from (draft values: role shifts in metres, B's tilt/roll in degrees); absent =
+  /** The arrangement the cap is measured from (draft values: role shifts in metres, role turns in degrees); absent =
    *  the dials now. */
-  base?: { roleShiftM?: Record<string, [number, number, number]>; turnDeg?: [number, number] } | null }
+  base?: { roleShiftM?: Record<string, [number, number, number]>; roleTurnDeg?: Record<string, [number, number, number]> } | null }
 /** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
 export type AutoAlignRun = ((opts?: AutoAlignOptions) => AutoAlignResult) & { kind?: string; set?: string; figures?: number
   endPose?: () => EndPose | null
+  /** The persons of this scene by role (what "Align all" carries to every clip it opens). */
+  cast?: AlignCast
   /** No prop has a place this clip fits on: the run only says so (the scene never starts). */
   noPlace?: boolean }
 
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
-  onReadout, autoAlignRef, height = 360 }: {
+  onReadout, autoAlignRef, castRef, height = 360 }: {
   kind: string; set?: string
   /** 0/1 = solo, 2 = pair, 3+ = group */
   roles: number
@@ -402,6 +435,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   onReadout?: (r: PlaceReadout | null) => void
   /** Set while a scene runs: plays the clip headless-fast and solves partner B's shift (Ruling A126). */
   autoAlignRef?: MutableRefObject<AutoAlignRun | null>
+  /** Set while "Align all" runs: the default fill puts these persons on the places of their role (the place-index memory
+   *  alone drifted to other persons whenever a clip used other places — two persons without a fitting part). */
+  castRef?: MutableRefObject<AlignCast | null>
   height?: number
 }) {
   const { t } = useI18n()
@@ -415,8 +451,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   /** Ruling A150: remembered persons that no longer exist (their places got the default fill). */
   const [goneNote, setGoneNote] = useState<string[]>([])
   const [variant, setVariant] = useState(0)
-  const [scene, setScene] = useState<{ models: SceneModelSpec[]; markers: SceneMarker[] } | null>(null)
+  /** The draft scene and the clip/prop it was built for (`for`): until the next clip's scene has come, the previous
+   *  clip's scene is still shown, and the default fill must not plan the new clip on it. */
+  const [scene, setScene] = useState<{ models: SceneModelSpec[]; markers: SceneMarker[]; for: string } | null>(null)
   const [assign, setAssign] = useState<Record<string, Assignment>>({})
+  const assignRef = useRef(assign)
+  assignRef.current = assign
   const [status, setStatus] = useState('')
   /** Ruling A139: what the persons picked lack for their place's role (from the contact relations). */
   const [roleIssues, setRoleIssues] = useState<string[]>([])
@@ -479,7 +519,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   // The SAVED calibration per role, read live in the frame loop: after Apply the listing (new shift_cm / heights)
   // arrives after the clip reload, and the figures must take it the moment it does — never a stale copy.
   const savedRef = useRef<Record<string, { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null
-    partnerTurnDeg: [number, number] | null; partnerYawDeg: number }>>({})
+    roleTurnDeg: Record<string, [number, number, number]> }>>({})
   {
     const want = set.trim()
     const out: typeof savedRef.current = {}
@@ -487,7 +527,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       const c = (want ? clips.find((x) => (x.role || '') === role && (x.set || '') === want) : undefined)
         || clips.find((x) => (x.role || '') === role && !x.set) || clips.find((x) => (x.role || '') === role)
       if (c) out[role] = { shiftCm: c.orientation?.shift_cm ?? null, heightOffsetsCm: c.height_offsets_cm ?? null,
-        partnerTurnDeg: c.orientation?.partner_turn_deg ?? null, partnerYawDeg: c.orientation?.partner_yaw_deg ?? 0 }
+        roleTurnDeg: c.orientation?.role_turn_deg ?? {} }
     }
     savedRef.current = out
   }
@@ -523,7 +563,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   // "Align all" (owner 2026-11-22): a clip no prop has a place for answers at once instead of being waited for.
   useEffect(() => {
     if (!nothingFits || !autoAlignOut.current) return
-    const stub: AutoAlignRun = Object.assign((): AutoAlignResult => ({ ok: false, reason: t('No prop has a place this clip fits on.') }),
+    const stub: AutoAlignRun = Object.assign((): AutoAlignResult => ({ ok: false, reason: t('No prop has a place this clip fits on.'), code: 'no_place' }),
       { kind, set, figures: 0, noPlace: true })
     autoAlignOut.current.current = stub
     return () => { if (autoAlignOut.current?.current === stub) autoAlignOut.current.current = null }
@@ -534,6 +574,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     if (!propId) { setScene(null); return }
     try { localStorage.setItem(memoKey(kind), JSON.stringify({ prop: propId, variant })) } catch { /* private mode */ }
     let off = false
+    const sceneFor = `${kind}|${propId}|${variant}`
     // The bare floor is one room marker (placePicker.groundRoom); a prop stands at the room centre.
     const room = propId === GROUND_PROP ? groundRoom(wantType, solo ? groundCount : roleList.length)
       : { id: 'place-preview', name: 'Preview',
@@ -541,7 +582,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     apiPost<{ models?: SceneModelSpec[]; markers?: SceneMarker[] }>('/play/scene-preview', { rooms: [room] })
       .then((payload) => {
         if (off) return
-        setScene({ models: (payload.models || []).filter((m) => m.role === 'prop'), markers: payload.markers || [] })
+        setScene({ models: (payload.models || []).filter((m) => m.role === 'prop'), markers: payload.markers || [], for: sceneFor })
       })
       .catch((e) => { if (!off) { setScene(null); setStatus(String((e as Error).message || e)) } })
     return () => { off = true }
@@ -594,6 +635,39 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         next[p.letter] = { character: m.character, role, body: m.body, poses: m.poses }
       })
       setGoneNote(gone)
+      const cast = castRef?.current
+      if (cast) {
+        // "Align all": each role's FIRST place gets the cast's person of that role; every other place keeps its own
+        // person unless that person is already placed, then the default fill's, then any built person not placed yet
+        // — never one person twice (a doubled person never finished mounting).
+        const letters = Object.keys(next).sort()
+        const castNames = new Set([...Object.values(cast.byRole), ...cast.extra].map((c) => c.character).filter((n) => known.has(n)))
+        const used = new Set<string>()
+        const fromCast = new Set<string>()
+        for (const l of letters) {
+          const r = next[l]?.role
+          const c = r ? cast.byRole[r] : undefined
+          if (!c || !known.has(c.character) || used.has(c.character)) continue
+          next[l] = { ...c, role: r }; used.add(c.character); fromCast.add(l)
+        }
+        const spare = [...(names ?? [])]
+        const extra = cast.extra.filter((c) => known.has(c.character))
+        for (const l of letters) {
+          if (fromCast.has(l)) continue
+          const r = next[l]?.role
+          // a role the cast has no person for takes the cast's next spare person
+          const x = r && !cast.byRole[r] ? extra.find((c) => !used.has(c.character)) : undefined
+          if (x) { next[l] = { ...x, role: r }; used.add(x.character); continue }
+          const a = next[l]
+          const free = (n: string | undefined) => !!n && !used.has(n) && !castNames.has(n)
+          const pick = free(a?.character) ? a!.character : free(plan.assign[l]?.character) ? plan.assign[l]!.character
+            : spare.find((n) => free(n))
+          if (!pick) { delete next[l]; continue }
+          next[l] = { ...(a ?? plan.assign[l]!), character: pick,
+            ...(pick !== a?.character ? { body: defaultBody(plain[pick], pick === MANNEQUIN), poses: {} } : {}) }
+          used.add(pick)
+        }
+      }
     } else setGoneNote([])
     fillResult.current = next
     setAssign(next)
@@ -602,6 +676,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const filled = useRef('')
   useEffect(() => {
     const key = `${kind}|${propId}|${variant}|${places.length}|${chars ? 1 : 0}`
+    // "Align all" (owner 2026-11-23, the clips never filled in run 3): the default fill waits for THIS clip's scene. Planned
+    // on the previous clip's places (still shown while the new scene loads), it emptied every place of a clip whose place
+    // type differs, and the same key then kept the real places from being filled at all.
+    if (scene?.for !== `${kind}|${propId}|${variant}`) return
     if (!places.length || !chars || filled.current === key) return
     filled.current = key
     fill(false)
@@ -844,8 +922,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number
           hips: Object3D | null; hipsBind: { x: number; y: number; z: number }
           bindInv: InstanceType<typeof THREE.Quaternion>; runtime: FigureRuntime; hasRecord: boolean
-          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null; partnerTurnDeg: [number, number] | null
-            partnerYawDeg: number }
+          saved: { shiftCm: [number, number] | null; heightOffsetsCm: ClipHeightOffsetsCm | null
+            roleTurnDeg: Record<string, [number, number, number]> }
           anchor: { x: number; y: number; z: number }; placeYaw: number
           arrow: InstanceType<typeof THREE.ArrowHelper>; yawS: number[]; posS: number[]
           medYaw: number; medPos: number; dyaw: number; dpos: number; chains: number
@@ -961,7 +1039,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           figs.push({ letter: p.letter, partMeshes, collision: answer?.model?.collision ?? null, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
             saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
-              partnerTurnDeg: o?.partner_turn_deg ?? null, partnerYawDeg: o?.partner_yaw_deg ?? 0 },
+              roleTurnDeg: o?.role_turn_deg ?? {} },
             anchor, placeYaw, arrow, yawS: [], posS: [], medYaw: NaN, medPos: NaN, dyaw: 0, dpos: 0,
             chains: Object.keys(answer?.motion?.groups ?? {}).length, head, tips, tipRest: new Map() })
           disposers.push(() => { mixer.stopAllAction(); mixer.uncacheRoot(inst); runtime.dispose() })
@@ -1104,8 +1182,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           }
         }
 
-        // ── Ruling A129: the root of a figure — the calibration (draft over saved), then partner B's turn (saved +
-        // draft, renderer-only) about the bind hips (`fixPivot`, stage space). ──
+        // ── The root of a figure — the calibration (draft over saved), then its role's turn (saved + draft, renderer-only,
+        // owner decision 2026-11-23: every role) about the bind hips (`fixPivot`, stage space). ──
         const fixQ = new THREE.Quaternion()
         const placeRoot = (f: Fig, time: number, draft: AlignmentDraft) => {
           const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
@@ -1115,12 +1193,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
           const pivot = fixPivot([at.x, at.y, at.z], cal.frame, [f.hipsBind.x, f.hipsBind.y, f.hipsBind.z])
           if (!solo) {
-            const saved = f.role === 'b' ? (savedRef.current[f.role] ?? f.saved).partnerTurnDeg ?? [0, 0] : [0, 0]
-            const turn = f.role === 'b' ? draft.partnerTurnDeg ?? [0, 0] : [0, 0]
-            // Ruling A165: B's yaw about its own vertical axis (saved + draft) goes first; Auto-align starts from it
-            // and never changes it (its trial rides on the draft's tilt/roll).
-            const yaw = f.role === 'b' ? ((savedRef.current[f.role] ?? f.saved).partnerYawDeg ?? 0) + (draft.partnerYawDeg ?? 0) : 0
-            const fix: PairFix = partnerTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame, yaw)
+            const saved = (savedRef.current[f.role] ?? f.saved).roleTurnDeg[f.role] ?? [0, 0, 0]
+            const turn = draft.roleTurnDeg?.[f.role] ?? [0, 0, 0]
+            // the yaw about the role's own vertical axis goes first (`roleTurnFix`)
+            const fix: PairFix = roleTurnFix(saved[0] + turn[0], saved[1] + turn[1], cal.frame, saved[2] + turn[2])
             if (fix.turn.some((v) => v) || fix.shift.some((v) => v)) {
               const r = fixRoot(fix, pivot, [at.x, at.y, at.z])
               f.root.position.set(r.position[0], r.position[1], r.position[2])
@@ -1486,7 +1562,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         type FigCaps = { pivot: [number, number, number]; caps: ClearCapsule[][] }
         type PassOut = { per: AlignSample[][]; ks: number[][]; overlap: number; worst: string; draft: AlignmentDraft
-          heights: Map<number, { ids: string[]; h: number }>
+          heights: Map<number, { ids: string[]; h: number; mode: 'surface' | 'band' }>
           /** THE CLEARANCE (pairAlign): per sampled frame k every figure's stage capsules and the mover's pivot; per figure
            *  the mover's worst overlap with it over the loop (metres) and its capsule pair; per frame the per-figure depths. */
           caps: Map<number, FigCaps>; clearBy: number[]; clearWorst: string[]; clearAt: Map<number, number[]> }
@@ -1496,7 +1572,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const stageCaps = (insp: NonNullable<NonNullable<ReturnType<typeof placePhaseB>>['figures'][number]['inspection']>): ClearCapsule[] =>
           contactCapsules(insp).map((c) => ({ id: c.id, a: toStageP(c.now.a), b: toStageP(c.now.b), r: c.now.r }))
         const autoAlign = (opts: AutoAlignOptions = {}): AutoAlignResult => {
-          if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
+          if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.'), code: 'no_pair' }
           const loop = Math.max(8, Math.ceil(duration / step))
           const base = draftRef.current
           const rels = opts.relations ?? base.contactRelations ?? []
@@ -1506,21 +1582,20 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const all = probe ? findHits(probe, rels) : []
           if (rels.length) {
             const needs = probe ? roleNeeds(probe, rels) : []
-            if (needs.length) return { ok: false, reason: needs.join(' ') }
+            if (needs.length) return { ok: false, reason: needs.join(' '), code: 'no_part' }
           }
-          if (!all.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
+          if (!all.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.'), code: 'no_part' }
           // ONE RELATION, ONE MOVER (2026-11-22): a click names the relation and the role that moves; "Align all" runs
           // every relation one after the other (`each`); without either (end clips) every relation is aligned by its part's
           // carrier, one solve per figure.
           const only = opts.only
           const hits = !only ? all : only === 'detected' ? all.slice(0, 1)
             : all.filter((h) => figs[h.e].role === only.part && figs[h.r].role === only.at && h.target === only.target)
-          if (!hits.length) return { ok: false, reason: t('This contact is not in the scene: {rel}.').replace('{rel}',
+          if (!hits.length) return { ok: false, code: 'no_part', reason: t('This contact is not in the scene: {rel}.').replace('{rel}',
             only && only !== 'detected' ? `${only.part.toUpperCase()} → ${only.at.toUpperCase()} (${targetWordOf(t, only.target)})` : '–') }
-          const isPair = roles === 2
           const bendLim = bendLimitsNow()
-          const cap = alignCap(opts.rangeCm ?? clips.find((c) => (c.set || '') === set.trim() && c.role === 'a')?.align_range?.cm
-            ?? clips.find((c) => c.role === 'a')?.align_range?.cm)
+          const fileA = clips.find((c) => (c.set || '') === set.trim() && c.role === 'a') ?? clips.find((c) => c.role === 'a')
+          const cap = alignCap(opts.rangeCm ?? fileA?.align_range?.cm, opts.turnDeg ?? fileA?.align_turn?.deg)
           const rangeCm = Math.round(cap.forwardM * 1000) / 10
           // Auto-align is RIGID: the contact report and the key rows read the samples as solved (no bend); the key rows
           // and the bend readout say what the bend still does there afterwards.
@@ -1588,35 +1663,36 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const partFig = group[0].e
             const anchor = figs[moverKind === 'receiver' ? group[0].e : group[0].r]
             const b0 = start.roleShiftM[mr] ?? [0, 0, 0]
-            const t0 = start.partnerTurnDeg ?? [0, 0]
+            const t0: [number, number, number] = [...(start.roleTurnDeg?.[mr] ?? [0, 0, 0])] as [number, number, number]
             // The BASE the cap is measured from (Ruling A212 review H1): the arrangement the user set, not the dials an
             // earlier Auto-align already moved — a second click stays inside the same cap.
             const bb = opts.base ? opts.base.roleShiftM?.[mr] ?? [0, 0, 0] : b0
-            const tb = opts.base ? opts.base.turnDeg ?? [0, 0] : t0
-            const savedTurn = (savedRef.current.b ?? moving.saved).partnerTurnDeg ?? [0, 0]
-            // Tilt/roll stay a pair's partner B dials: only B turns.
-            const turns = isPair && mr === 'b'
+            const tb: [number, number, number] = opts.base ? [...(opts.base.roleTurnDeg?.[mr] ?? [0, 0, 0])] as [number, number, number] : t0
+            const savedTurn = (savedRef.current[mr] ?? moving.saved).roleTurnDeg[mr] ?? [0, 0, 0]
+            // THE ROLE TURN (owner 2026-11-23): any moved role turns, within the clip's rotation range.
+            const turns = cap.angleDeg > 0
             const root0: RootAngle = { pitchDeg: start.rootAngle?.pitchDeg ?? 0, yawDeg: start.rootAngle?.yawDeg ?? 0 }
             // The chain the root angle turns: the PART figure's first chain with a point-target op (`applyRootAngle`).
             const rootChain = probe!.figures[partFig].inspection?.chains.findIndex((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op)) ?? -1
             const turnsRoot = rootTurns(figs[partFig].role) && group.some((h) => h.chain === rootChain)
             const solveRoot = mayRoot && turnsRoot
-            const draftOf = (extra: [number, number, number], turn: [number, number], root: RootAngle | null): AlignmentDraft => ({ ...start,
+            const draftOf = (extra: [number, number, number], turn: readonly number[], root: RootAngle | null): AlignmentDraft => ({ ...start,
               roleShiftM: { ...start.roleShiftM, [mr]: [bb[0] + extra[0], bb[1] + extra[1], bb[2] + extra[2]] },
-              partnerTurnDeg: turns ? [tb[0] + turn[0], tb[1] + turn[1]] : start.partnerTurnDeg,
+              roleTurnDeg: turns ? { ...(start.roleTurnDeg ?? {}), [mr]: [tb[0] + (turn[0] ?? 0), tb[1] + (turn[1] ?? 0), tb[2] + (turn[2] ?? 0)] }
+                : start.roleTurnDeg,
               ...(root ? { rootAngle: root } : {}) })
             // Ruling A150: the moving figure's own posture per frame index (its support capsules and height), from the
             // baseline pass; every later pass keeps the same capsules and measures against that height.
             const placeGroup = moving.place.marker.group
-            let baseline: Map<number, { ids: string[]; h: number }> | null = null
-            let axes: [number, number, number][] = []
+            let baseline: Map<number, { ids: string[]; h: number; mode: 'surface' | 'band' }> | null = null
+            let moverFrame: number[] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
             const moverName = entries[mi].name
             const nameAt = new Map(entries.map((e, j) => [e.name, j]))
-            const pass = (extra: [number, number, number], turn: [number, number] = [0, 0], root: RootAngle | null = null): PassOut => {
+            const pass = (extra: [number, number, number], turn: readonly number[] = [0, 0, 0], root: RootAngle | null = null): PassOut => {
               const draft = draftOf(extra, turn, root)
               const per: AlignSample[][] = group.map(() => [])
               const ks: number[][] = group.map(() => [])
-              const heights = new Map<number, { ids: string[]; h: number }>()
+              const heights = new Map<number, { ids: string[]; h: number; mode: 'surface' | 'band' }>()
               const caps = new Map<number, FigCaps>()
               const clearAt = new Map<number, number[]>()
               const clearBy = figs.map(() => 0), clearWorst = figs.map(() => '')
@@ -1628,14 +1704,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 if (!res) continue
                 const pl = placed.get(moving)!
                 const k = i - loop
-                axes = turnAxes(pl.frame)
+                moverFrame = pl.frame
                 group.forEach((hit, gi) => {
                   const smp = sampleAt(res, hit, pl, gi === 0 ? baseline?.get(k)?.ids : undefined, mi)
                   if (!smp) return
                   if (gi === 0 && smp.support) {
-                    heights.set(k, { ids: smp.support.ids, h: supportHeight(smp.support.pts, smp.support.r) })
+                    heights.set(k, { ids: smp.support.ids, h: supportHeight(smp.support.pts, smp.support.r), mode: supportMode(smp.support) })
                     const b = baseline?.get(k)
-                    if (b) smp.support = { ...smp.support, base: b.h }
+                    // THE SUPPORT, ABSOLUTE: the mode of this frame from the base arrangement (postureSupport `supportMode`).
+                    if (b) smp.support = { ...smp.support, base: b.h, mode: b.mode }
                   } else if (gi > 0) delete smp.support
                   per[gi].push({ ...smp, phase: duration > 0 ? time / duration : 0 })
                   ks[gi].push(k)
@@ -1672,11 +1749,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               runAt(0, draft, false)
               return { deltaM: joinDelta(placed.get(anchor)!.frame, rel, hipsStage(moving), hipsStage(anchor)) }
             }
-            const st0 = turns ? [-(savedTurn[0] + tb[0]), -(savedTurn[1] + tb[1])] as [number, number] : [0, 0] as [number, number]
+            const st0 = turns ? [-(savedTurn[0] + tb[0]), -(savedTurn[1] + tb[1]), -(savedTurn[2] + tb[2])] : [0, 0, 0]
             baseline = pass([-bb[0], -bb[1], -bb[2]], st0).heights
             // the dials now, relative to the base
             const x0: [number, number, number] = [b0[0] - bb[0], b0[1] - bb[1], b0[2] - bb[2]]
-            const a0: [number, number] = turns ? [t0[0] - tb[0], t0[1] - tb[1]] : [0, 0]
+            const a0: [number, number, number] = turns ? [t0[0] - tb[0], t0[1] - tb[1], t0[2] - tb[2]] : [0, 0, 0]
             const p0 = pass(x0, a0)
             if (p0.per.some((x) => x.length < 4)) return t('The contact could not be sampled over the clip.')
             // THE CLEARANCE: each other figure's allowance from the start (the dials when clicked).
@@ -1704,26 +1781,53 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             // Measure → solve → measure again (`alignByPasses`); the first measurement is p0.
             let firstUsed = false
             const measure = (s: { x: [number, number, number]; deg: number[]; root: RootAngle | null }) => {
-              const got = firstUsed ? pass(s.x, turns ? [s.deg[0] ?? 0, s.deg[1] ?? 0] : [0, 0], s.root) : p0
+              const got = firstUsed ? pass(s.x, turns ? [s.deg[0] ?? 0, s.deg[1] ?? 0, s.deg[2] ?? 0] : [0, 0, 0], s.root) : p0
               firstUsed = true
               return { relations: got.per.map((samples, gi) => ({ samples, rooted: solveRoot && group[gi].chain === rootChain })),
                 basis: basisOf(got.draft), join: joinOf(got.draft), clear: clearOf(got), out: got }
             }
-            const run = alignByPasses(measure, { axes: turns ? axes : [], cap,
+            // THE ROLE TURN: the trial's rotation as rendered — the moved role's clip frame and what is already stored and
+            // drafted under the base (pairAlign `roleTurnDelta`); a standing role keeps its tilt/roll within the posture cap.
+            const run = alignByPasses(measure, { cap,
+              turn: turns ? { frame: moverFrame, offsetDeg: [savedTurn[0] + tb[0], savedTurn[1] + tb[1], savedTurn[2] + tb[2]] } : null,
               angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined },
             { x: x0, deg: turns ? a0 : [], root: solveRoot ? root0 : null })
             const cur = run.last.out
             const extra = run.state.x
-            const turn: [number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0] : [0, 0]
+            const turn: [number, number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0, run.state.deg[2] ?? 0] : [0, 0, 0]
             const hitsNow = run.sol?.hits ?? []
             const postureOf = (smps: readonly FitSample[]) => {
               const r = postureReport(smps.map((x) => ({ support: x.support })))
               return r.frames ? r : null
             }
             const shiftCm: [number, number, number] = [cm(bb[0] + extra[0]), cm(bb[1] + extra[1]), cm(bb[2] + extra[2])]
-            const turnDeg: [number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1])] : [deg(t0[0]), deg(t0[1])]
+            const turnDeg: [number, number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1]), deg(tb[2] + turn[2])]
+              : [deg(t0[0]), deg(t0[1]), deg(t0[2])]
             const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
-            const adjustDeg: [number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1])]
+            const adjustDeg: [number, number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1]), deg(turn[2] - a0[2])]
+            // THE SUPPORT, ABSOLUTE: the moved role's gap over its surface over the loop, before and after, and every
+            // other role's at the start (reported only).
+            const gapRange = (smps: readonly AlignSample[]): [number, number] | null => {
+              const g = smps.map((x) => surfaceGap(x.support)).filter((v): v is number => v !== null)
+              return g.length ? [Math.min(...g) * 1000, Math.max(...g) * 1000] : null
+            }
+            const excessOf = (smps: readonly AlignSample[]) => Math.max(0, ...smps.map((x) => {
+              const g = x.support?.mode === 'surface' ? surfaceGap(x.support) : null
+              return g === null ? 0 : Math.abs(surfaceExcess(g)) * 1000
+            }))
+            const modes = new Set(p0.per[0].map((x) => x.support?.mode ?? 'none'))
+            const othersSupport = figs.map((f, j) => ({ f, j })).filter(({ j }) => j !== mi).map(({ f, j }) => {
+              const g: number[] = []
+              for (const fc of p0.caps.values()) {
+                const low = fc.caps[j].filter((c) => SUPPORT_CAPSULES.includes(c.id))
+                if (low.length) g.push(Math.min(...low.map((c) => Math.min(c.a[1], c.b[1]) - c.r)) - f.place.marker.y_world)
+              }
+              return { letter: f.letter, role: f.role, mm: g.length ? [Math.min(...g) * 1000, Math.max(...g) * 1000] as [number, number] : null }
+            })
+            const support: RelationAlign['support'] = {
+              mode: modes.has('surface') ? 'surface' : modes.has('band') ? 'band' : 'none',
+              beforeMm: gapRange(p0.per[0]), afterMm: gapRange(cur.per[0]),
+              excessBeforeMm: excessOf(p0.per[0]), excessAfterMm: excessOf(cur.per[0]), others: othersSupport }
             // THE CLEARANCE after the run, over the whole loop of the last measurement.
             const clearRows: ClearRow[] = others.map((j) => ({ name: figs[j].letter, startM: p0.clearBy[j], allowM: allow[j],
               afterM: cur.clearBy[j], worst: cur.clearWorst[j] || p0.clearWorst[j] }))
@@ -1742,7 +1846,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const inside = !isPointTarget(hit.target)
               const rr = rendered[gi]
               return { kb, ka, inside, verdict: alignVerdict(kb, ka, inside, clearRows,
-                rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm } : null) }
+                rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm } : null,
+                support.mode === 'surface' ? { beforeMm: support.excessBeforeMm, afterMm: support.excessAfterMm } : null) }
             })
             const bad = reports.find((x) => !x.verdict.applied)?.verdict ?? null
             const applied = !bad
@@ -1776,14 +1881,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 reasons,
                 tipInside: { before: insideCount(p0.per[gi]), after: insideCount(cur.per[gi]), frames: cur.per[gi].length },
                 postureBefore: gi === 0 ? postureOf(p0.per[gi]) : null, posture,
-                limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null, shiftCm, turnDeg,
+                limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null, shiftCm, turnDeg, support,
                 before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
                 clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: keyLamp(kb, [], inside), lamp,
                 keys: { before: kb, after: ka },
                 bend: bendReadout(cur.per[gi].map((x) => bendOf(x, bendLim))), rendered: rendered[gi] }
             })
             const moverRow: MoverAlign = { role: mr, letter: moving.letter, mover: moverKind, applied, shiftCm, turnDeg, adjustCm,
-              adjustDeg, rangeCm, lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
+              adjustDeg, rangeCm, turnRangeDeg: cap.angleDeg, lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
               passes: run.trace, converged: run.converged }
             return { rows, moverRow, draft: cur.draft, applied, solvedRoot: solveRoot && applied, pivot: applied ? cur.per : p0.per, cand,
               blocked: alignBlocked({ applied, postureLimited: !!posture0?.limited, hits: hitsNow, deepOk }) }
@@ -1825,13 +1930,15 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           runAt(timeRef.current, draftRef.current, false)
           const roleShiftCm: Record<string, [number, number, number]> = {}
           for (const [r, v] of Object.entries(cur0.roleShiftM)) roleShiftCm[r] = [cm(v[0]), cm(v[1]), cm(v[2])]
+          const roleTurnDeg: Record<string, [number, number, number]> = {}
+          for (const [r, v] of Object.entries(cur0.roleTurnDeg ?? {})) roleTurnDeg[r] = [deg(v[0]), deg(v[1]), deg(v[2])]
           // The pivot in the clip frame of the receiving figure's place anchor (every role of a clip shares it).
           const recv = figs[hits[0].r]
           const pivotCm = pairPivotCm(pivotRels, recv.anchor, recv.placeYaw)
           const rootAngle = moverRows.find((m) => m.applied && m.rootAngle)?.rootAngle ?? null
           // The other contacts whose part the one root angle turns as well (only a one-relation click can surprise there).
           const rootShared = only && rootAngle ? all.filter((h) => !hits.includes(h) && rootTurns(figs[h.e].role)).map(relLabel) : []
-          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows, rootAngle, rootShared, pivotCm,
+          return { ok: true, ...rows[0], relations: rows, roleShiftCm, roleTurnDeg, movers: moverRows, rootAngle, rootShared, pivotCm,
             applied: moverRows.some((m) => m.applied) }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
@@ -1846,7 +1953,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           runAt(timeRef.current, draftRef.current, false)
           return { kind, rel }
         }
-        if (autoAlignOut.current) autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose })
+        // Only a mount of THIS clip's scene answers for it — the previous clip's scene is remounted under the new kind
+        // until the new scene comes (or for good, when no prop fits) — and a mount without figures never replaces the
+        // no-place answer of the same clip ("Align all" waited for both in vain).
+        const noPlaceRun = autoAlignOut.current?.current
+        if (autoAlignOut.current && scene?.for.startsWith(`${kind}|`) && !(figs.length === 0 && noPlaceRun?.noPlace && noPlaceRun.kind === kind && (noPlaceRun.set ?? '') === (set ?? '')))
+          autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose,
+            cast: castOf(assignRef.current) })
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
         tick()
       } catch (e) {

@@ -145,6 +145,15 @@ try:
 except Exception as _pse:
     logger.warning("partner shift migration failed: %s", _pse)
 
+# Boot migration (2026-11-23): every role carries its own renderer-only turn (role_turn_deg, like role_shift_cm).
+try:
+    from app.core.animation_clips import migrate_partner_turn_roles
+    _pt = migrate_partner_turn_roles()
+    if _pt:
+        logger.info("Clip role turns: partner_turn_deg/partner_yaw_deg moved to role_turn_deg.b in %d clip sidecar(s)", _pt)
+except Exception as _pte:
+    logger.warning("partner turn migration failed: %s", _pte)
+
 # Boot migration (2026-11-02): pose field solo -> participants in the world layer.
 from app.core.pose_catalog import migrate_participants_once
 _pm = migrate_participants_once()

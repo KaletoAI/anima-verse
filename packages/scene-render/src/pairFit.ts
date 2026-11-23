@@ -5,8 +5,9 @@
  *
  * A FIX moves the ENTERING figure rigidly about a PIVOT p (the caller's convention, the same at solve and at apply):
  *   X ↦ R(X − p) + p + Δ,  R = exp([θ]×) for the rotation vector θ (Rodrigues), Δ the shift (world metres).
- * Partner B's stored tilt/roll/yaw (`partnerTurnFix`) is such a fix, applied about its bind hips (`fixPivot`,
- * `fixRoot`); a solve turns only about the caller's AXES (Tilt = the clip frame's side axis, Roll = its forward axis).
+ * A role's stored turn (`roleTurnFix`, the listing's `orientation.role_turn_deg`: [tilt, roll, yaw] per role) is such a
+ * fix, applied about its bind hips (`fixPivot`, `fixRoot`); a solve turns about the role's clip-frame axes (tilt = the
+ * side axis, roll = the forward axis, yaw = the up axis).
  *
  * THE RESIDUALS of Auto-align live in `pairAlign.ts` (the two-key-frame solve, Ruling A212 procedure of 2026-11-20):
  * this module gives it the fix (`fixPoint`), the support delta (`supportDelta`) and the bend it reports (`bendSample`).
@@ -98,12 +99,22 @@ function composeFix(a: PairFix, b: PairFix): PairFix {
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) R[i * 3 + j] += Rb[i * 3 + k] * Ra[k * 3 + j]
   return { shift: add(mul(Rb, a.shift), b.shift), turn: matrixTurn(R) }
 }
-/** The rotation vector of a row-major rotation matrix. */
+/** The rotation vector of a row-major rotation matrix. Near a half turn (angle within 1e-3 rad of π) the antisymmetric
+ *  part vanishes, so the axis comes from the symmetric part (R + I)/2 = n·nᵀ at π: the column of the largest diagonal,
+ *  normalised, its sign taken from what is left of the antisymmetric part (a yaw of 180° used to come out as no turn). */
 export function matrixTurn(m: number[]): Vec3 {
   const c = Math.max(-1, Math.min(1, (m[0] + m[4] + m[8] - 1) / 2))
   const a = Math.acos(c)
   if (a < 1e-9) return [0, 0, 0]
   const v: Vec3 = [m[7] - m[5], m[2] - m[6], m[3] - m[1]]
+  if (a > Math.PI - 1e-3) {
+    const S = [0, 1, 2].map((j) => [0, 1, 2].map((i) => (m[i * 3 + j] + m[j * 3 + i]) / 4 + (i === j ? 0.5 : 0)))
+    const j = [0, 1, 2].reduce((b, k) => (S[k][k] > S[b][b] ? k : b), 0)
+    const col: Vec3 = [S[j][0], S[j][1], S[j][2]]
+    const n = scale(col, 1 / (len(col) || 1))
+    const sgn = n[0] * v[0] + n[1] * v[1] + n[2] * v[2] < 0 ? -1 : 1
+    return scale(n, sgn * a)
+  }
   const s = len(v)
   return s < 1e-12 ? [0, 0, 0] : scale(v, a / s)
 }
@@ -141,19 +152,19 @@ export function turnAxes(frame: readonly number[]): [Vec3, Vec3] {
 export function bendFrameOf(frame: readonly number[]): BendFrame {
   return { side: [frame[0], frame[3], frame[6]], up: [frame[1], frame[4], frame[7]] }
 }
-/** Partner B's stored/drafted turn (Ruling A129) as a fix: tilt about the side axis, roll about the forward axis.
- *  Ruling A165: `yawDeg` turns B about its OWN vertical axis — the root frame's up through the fix pivot (B's bind
- *  hips) — FIRST; the tilt/roll follows. Yaw 0 is the A129 fix unchanged. */
-export function partnerTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[], yawDeg = 0): PairFix {
+/** A role's stored/drafted turn (owner decision 2026-11-23, formerly partner B's A129/A165 turn) as a fix: `yawDeg`
+ *  turns the role about its OWN vertical axis — the root frame's up through the fix pivot (its bind hips) — FIRST; then
+ *  ONE rotation by the vector tilt·side + roll·forward (the frame's +X and +Z). Yaw 0 is a plain tilt/roll. */
+export function roleTurnFix(tiltDeg: number, rollDeg: number, frame: readonly number[], yawDeg = 0): PairFix {
   const [side, fwd] = turnAxes(frame)
   const a = tiltDeg * Math.PI / 180, b = rollDeg * Math.PI / 180
   const tr: PairFix = { shift: [0, 0, 0],
     turn: [side[0] * a + fwd[0] * b, side[1] * a + fwd[1] * b, side[2] * a + fwd[2] * b] }
-  return yawDeg ? composeFix(partnerYawFix(yawDeg, frame), tr) : tr
+  return yawDeg ? composeFix(roleYawFix(yawDeg, frame), tr) : tr
 }
-/** Ruling A165: partner B's yaw about its own vertical axis (the root frame's up, +Y) as a fix — a positive yaw turns
- *  B's forward (+Z) towards its left (+X), like the clip's own turn dial. */
-export function partnerYawFix(yawDeg: number, frame: readonly number[]): PairFix {
+/** A role's yaw about its own vertical axis (the root frame's up, +Y) as a fix — a positive yaw turns its forward (+Z)
+ *  towards its left (+X), like the clip's own turn dial. */
+export function roleYawFix(yawDeg: number, frame: readonly number[]): PairFix {
   const c = yawDeg * Math.PI / 180
   return { shift: [0, 0, 0], turn: [frame[1] * c, frame[4] * c, frame[7] * c] }
 }

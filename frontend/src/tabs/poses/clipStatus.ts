@@ -66,7 +66,7 @@ export function saveSteps(s: { bake: boolean; shift: boolean; heights: boolean; 
 
 /** One request of a Save: the orient write (bake/shift/check), the heights / root-angle / contact-pivot PATCH, or a
  *  check alone. */
-export type SaveWrite = 'orient' | 'heights' | 'root' | 'pivot' | 'check'
+export type SaveWrite = 'orient' | 'heights' | 'root' | 'pivot' | 'check' | 'status'
 
 /** Runs a Save's requests in order and stops at the first failure. `applied` names every request that went
  *  through — the caller clears exactly those drafts, whatever failed after them: the orient write is a DELTA

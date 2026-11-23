@@ -188,8 +188,13 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames or moves a clip and/or edits its playback metadata.
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
-    height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_applied?, pair_pivot_cm?,
-    channel_profile?, overwrite?}``, at least one edit field.
+    height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_turn_deg?, align_applied?,
+    align_status?, pair_pivot_cm?, channel_profile?, overwrite?}``, at least one edit field.
+    ``align_turn_deg`` (owner decision 2026-11-23) is how far Auto-align may turn the moved role (tilt, roll and yaw,
+    each 0..180 degrees from the base arrangement), ``null`` = the default. ``align_status`` is the clip's alignment
+    status ``{relations?: {key: {state, reason?, depth_mm?, axis_mm?, root_mm?, support_mm?, mover?, turn_deg?} |
+    null}, done?: bool}`` (``set_clip_align_status``; the named relations are replaced, ``done`` is the "manual: done"
+    tick), ``null`` = cleared.
     ``channel_profile`` (pair scene) is the clip's measured channel profile ``{channel: {share_max: 0..1,
     reaches_per_cycle: 0..99}}`` the readout estimate reads, stored in the ``<kind>.json``; ``null`` / ``{}`` = none
     (a 400 for anything else).
@@ -200,7 +205,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     yaw_deg: −30..30}`` (pitch + = up toward the belly, yaw + = the figure's right); ``null`` / 0 = none.
     ``align_range_cm`` (Ruling A212) is how far Auto-align may move the part's role forward/back and
     up/down around the base arrangement (1..40 cm), ``null`` = the default 8 cm. ``align_applied`` (A212) is what
-    "Also align end clips" has baked so far ``{role_shift_cm: {role: [3]}, turn_deg: [2]}``, ``null`` = none.
+    "Also align end clips" has applied so far ``{role_shift_cm: {role: [3]}, role_turn_deg: {role: [3]}}``,
+    ``null`` = none.
     ``pair_pivot_cm`` (owner decision 2026-11-20, § A8a) is the clip's contact pivot ``[side, forward]`` cm of the clip
     frame (each within ±300) that real figure heights are scaled about, ``null`` = the clip frame's origin.
     ``contact_target`` (Ruling A139) is the clip's contact relations
@@ -242,13 +248,13 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
-                "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm", "align_applied",
-                "pair_pivot_cm", "channel_profile")):
+                "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm", "align_turn_deg",
+                "align_applied", "align_status", "pair_pivot_cm", "channel_profile")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
-                   "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm, align_applied, "
-                   "pair_pivot_cm, channel_profile is required")
+                   "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm, align_turn_deg, "
+                   "align_applied, align_status, pair_pivot_cm, channel_profile is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -310,6 +316,12 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         if "align_range_cm" in body:
             from app.core.animation_clips import set_clip_align_range
             clips = set_clip_align_range(library, rel, body["align_range_cm"])
+        if "align_turn_deg" in body:
+            from app.core.animation_clips import set_clip_align_turn
+            clips = set_clip_align_turn(library, rel, body["align_turn_deg"])
+        if "align_status" in body:
+            from app.core.animation_clips import set_clip_align_status
+            clips = set_clip_align_status(library, rel, body["align_status"])
         if "root_angle" in body:
             from app.core.animation_clips import set_clip_root_angle
             clips = set_clip_root_angle(library, rel, body["root_angle"])
@@ -330,7 +342,7 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     """Turns an already imported clip — the import's orientation dial,
     applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?, role_shift_cm?, shift_cm?, partner_turn_deg?, partner_yaw_deg?}``,
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, role_shift_cm?, shift_cm?, role_turn_deg?}``,
     at least
     one of them non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)``
     about the origin of the clip frame on the floor. ``role_shift_cm`` is
@@ -340,9 +352,10 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     ``partner_shift_cm`` is refused (a pair's B shift is ``role_shift_cm.b``). Surface heights use the PATCH route's
     ``height_offsets_cm`` instead. ``shift_cm`` is the renderer-only cumulative
     [side, forward] correction in cm (-200..200 per edit), shared by both halves.
-    ``partner_turn_deg`` (Ruling A129) is a pair's renderer-only cumulative [tilt, roll] of partner B
-    in degrees (-45..45 per edit), turned about B's hips at placement; ``partner_yaw_deg`` (Ruling A165) its renderer-only cumulative
-    yaw about its own vertical axis (-180..180 per edit). Shift-only and turn-only edits do
+    ``role_turn_deg`` (owner decision 2026-11-23) is the renderer-only cumulative turn of the roles of a pair or a
+    group, ``{role: [tilt, roll, yaw]}`` degrees (-180..180 per edit), turned about each role's bind hips at
+    placement (yaw first); the former ``partner_turn_deg`` / ``partner_yaw_deg`` are refused (B's turn is
+    ``role_turn_deg.b``). Shift-only and turn-only edits do
     not require Blender. Both halves of a pair are turned in ONE
     Blender run, the sidecar's angles add up and a
     pair's root geometry is re-measured on the written file. Needs Blender
@@ -394,11 +407,15 @@ def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[
                                 detail="role_shift_cm must be {role: [side, up, forward] numbers}")
         role_shift = {str(r): [float(x) for x in v] for r, v in role_shift.items()}
     role_moves = [x for v in (role_shift or {}).values() for x in v]
-    from app.core.animation_clips import validate_clip_shift, validate_partner_turn, validate_partner_yaw
+    if "partner_turn_deg" in body or "partner_yaw_deg" in body:
+        raise HTTPException(status_code=400,
+                            detail="partner_turn_deg / partner_yaw_deg are gone: every role turns with "
+                                   "role_turn_deg {a..e: [tilt, roll, yaw]}")
+    from app.core.animation_clips import validate_clip_shift, validate_role_turn
     try:
         horizontal = validate_clip_shift(body.get("shift_cm"))
-        turn = validate_partner_turn(body.get("partner_turn_deg"))
-        pyaw = validate_partner_yaw(body.get("partner_yaw_deg"))
+        turns = validate_role_turn(body.get("role_turn_deg"))
+        turn = [x for v in turns.values() for x in v]
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     checked = None
@@ -408,16 +425,16 @@ def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[
             checked = validate_orientation_check(body["checked"])
         except ClipLibraryError as e:
             raise _clip_edit_error(e)
-        if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn, pyaw)):
+        if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn)):
             # Nothing to bake: the admin saved a place check that already reads green.
             try:
                 return {"clips": mark_clip_checked(library, rel, checked), "seconds": 0}
             except ClipLibraryError as e:
                 raise _clip_edit_error(e)
-    if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn, pyaw)):
+    if not any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves, *horizontal, *turn)):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg, role_shift_cm, shift_cm, partner_turn_deg, partner_yaw_deg "
+            detail="one of yaw_deg, tilt_deg, roll_deg, role_shift_cm, shift_cm, role_turn_deg "
                    "must be non-zero")
     if any(abs(v) > 1e-9 for v in (*dials.values(), *role_moves)) and not blender_runner.is_available():
         raise HTTPException(status_code=503,
@@ -425,8 +442,8 @@ def _post_animation_clip_orient_sync(library: str, rel: str, body: Any) -> Dict[
     started = time.monotonic()
     try:
         clips = orient_clip(library, rel, **dials,
-                            role_shift_cm=role_shift, shift_cm=horizontal, partner_turn_deg=turn,
-                            partner_yaw_deg=pyaw, checked=checked)
+                            role_shift_cm=role_shift, shift_cm=horizontal, role_turn_deg=turns or None,
+                            checked=checked)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}

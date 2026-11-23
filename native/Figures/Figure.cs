@@ -208,6 +208,7 @@ public partial class Figure : Node3D
     /// </summary>
     public void SnapTo(Vector3 at)
     {
+        if (_pairFixDelta is not null) DropPairFix();   // the snap replaces the position: nothing to take back off it
         Position = at;
         Target = at;
         Waypoints.Clear();
@@ -230,11 +231,63 @@ public partial class Figure : Node3D
     public void ApplyRotation()
     {
         var lean = Lean ?? (0, 0);
-        var previous = Rotation;
+        var previous = _rootEuler;
         var rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), (float)Yaw, (float)(lean.Roll * Math.PI / 180));
-        Rotation = rotation;
+        _rootEuler = rotation;
+        // A pair fix premultiplies its turn onto the root's own rotation (npcs.ts applyPairFix: the outer root's quaternion
+        // over the figure's yaw); Godot's FromEuler is YXZ like Rotation.
+        if (_pairFixDelta is null) Rotation = rotation;
+        else Quaternion = (PairTurn * Quaternion.FromEuler(rotation)).Normalized();
         if ((HeightCorrectionM != 0 || HorizontalCorrection != default)
             && (previous.X != rotation.X || previous.Z != rotation.Z)) ApplyBody();
+    }
+
+    /// <summary>The yaw/lean Euler (YXZ) of the root WITHOUT a pair fix — what the calibration of <see cref="ApplyBody"/> reads.</summary>
+    private Vector3 _rootEuler;
+    /// <summary>The turn a pair/group half's stored role turn premultiplies onto the root (identity = none).</summary>
+    public Quaternion PairTurn { get; private set; } = Quaternion.Identity;
+    private Vector3? _pairFixDelta;
+    /// <summary>
+    /// figures.ts <c>pairHipsBind[1]</c>: the bind hips height over the feet in the root frame (the body anchored and scaled) —
+    /// the point a role turn is about (<see cref="RoleTurn.FixPivot"/> with (0, this, 0)); the body height × 0.53 without a
+    /// hips bone, like <c>rigHipsHeight(inst) ?? height * 0.53</c>.
+    /// </summary>
+    public double PairHipsBindY { get; private set; }
+
+    /// <summary>
+    /// npcs.ts <c>applyPairFix</c>: the root moves by <paramref name="delta"/> (<c>fixRoot(...).position − root</c>) and turns by
+    /// <paramref name="turn"/> on top of its yaw, until <see cref="ClearPairFix"/>.
+    /// </summary>
+    public void SetPairFix(Vector3 delta, Quaternion turn)
+    {
+        Position += delta;
+        _pairFixDelta = delta;
+        PairTurn = turn;
+        ApplyRotation();
+    }
+
+    /// <summary>npcs.ts <c>clearPairFix</c>: take the fix's move and turn back off (every frame, before the figure is placed).</summary>
+    public void ClearPairFix()
+    {
+        if (_pairFixDelta is not { } delta) return;
+        Position -= delta;
+        DropPairFix();
+    }
+
+    private void DropPairFix()
+    {
+        _pairFixDelta = null;
+        PairTurn = Quaternion.Identity;
+        ApplyRotation();
+    }
+
+    private double HipsBindY(Skeleton3D? skel, double bodyHeight)
+    {
+        if (skel is not null)
+            for (int i = 0; i < skel.GetBoneCount(); i++)
+                if (ClipLibrary.NormBone(skel.GetBoneName(i)).EndsWith("hips", StringComparison.Ordinal))
+                    return (FrameOf(skel) * skel.GetBoneGlobalRest(i)).Origin.Y;
+        return bodyHeight * 0.53;
     }
 
     /// <summary>Show or hide the figure for the placement (<c>npc.root.visible = !st.hidden</c>).</summary>
@@ -297,6 +350,7 @@ public partial class Figure : Node3D
         _procedural = null;
         AddChild(body);
         ApplyBody();
+        PairHipsBindY = HipsBindY(skeleton, bodyHeight);
         // figures.ts Figure constructor: a rig without clips gets its leg chains for the procedural gait.
         if (IsStatic && skeleton is not null && bindBox is { } box) FindLegs(skeleton, box);
         UpdateClip();
@@ -1033,7 +1087,7 @@ public partial class Figure : Node3D
         if (_procedural is null && HeightCorrectionM != 0)
         {
             // Inverse YXZ root rotation of world up: yaw leaves up unchanged.
-            double tilt = Rotation.X, roll = Rotation.Z;
+            double tilt = _rootEuler.X, roll = _rootEuler.Z;
             double vertical = HeightCorrectionM * Math.Cos(tilt);
             dx = vertical * Math.Sin(roll);
             dy = vertical * Math.Cos(roll);
@@ -1041,7 +1095,7 @@ public partial class Figure : Node3D
         }
         if (_procedural is null)
         {
-            var horizontal = HorizontalCorrection.Local(Rotation.X, Rotation.Z);
+            var horizontal = HorizontalCorrection.Local(_rootEuler.X, _rootEuler.Z);
             // A pair/group half's shift scales with its figure (HorizontalScale); 1 leaves the vector untouched.
             double s = HorizontalScale;
             dx += s == 1 ? horizontal.X : s * horizontal.X;

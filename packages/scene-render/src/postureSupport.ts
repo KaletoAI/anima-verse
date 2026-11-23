@@ -23,6 +23,19 @@
  * turn costs `POSTURE.turnCostM` per radian (× √N), so a turn is taken only where it buys more than it costs. A standing or lying place type allows only a few degrees of turn at all
  * (`postureAngleCapDeg`).
  *
+ * THE SUPPORT, ABSOLUTE (owner 2026-11-23, `SURFACE`): Auto-align may now turn the moved role by tens of degrees, and
+ * a band around the clip's own posture would carry a body that floats or sinks at the start along with it. So the moved
+ * role's LOWEST support capsule (over all of `SUPPORT_CAPSULES`, `SupportSample.low` — whatever touches after the
+ * turn) must touch the surface of its place (the place marker's height, `SupportSample.surface`): its gap
+ * h_low − surface within [−`SURFACE.sinkM`, +`SURFACE.floatM`] = [−5 mm, +10 mm] (the capsules are fitted a few
+ * millimetres outside the skin, `app/core/collision.py` margin 6 mm, so a touching body reads slightly above 0 and a
+ * gap below −5 mm is the body in the prop), `POSTURE.weight` per metre beyond. The mode per frame (`supportMode`,
+ * from the BASE arrangement): 'surface' — the absolute condition; 'band' — the posture band above, for a role whose
+ * support is not the surface: one that stands on its feet (only the shins carry it and they stand upright — a shin
+ * capsule ends at the ankle, the sole lies below it, and the clip's ground rule already holds the sole on the floor),
+ * and one whose lowest capsule is more than `SURFACE.carriedM` = 50 mm above the surface at the base — carried by
+ * the other person (the role on top); there THE CLEARANCE of `pairAlign.ts` keeps the bodies apart.
+ *
  * THE REPORT (`postureReport`): per frame Δ; `gapMm` = the largest float (Δ > 0), `sinkMm` = the largest sink (Δ < 0),
  * `heightMm` = the largest h − surface (the support's own height above the surface, informational: a shin capsule
  * ends at the ankle), `limited` = some frame sits at the band's edge (within `POSTURE.edgeM`) — the solve wanted more
@@ -40,17 +53,24 @@ export const POSTURE = Object.freeze({
   /** Residual weight per metre beyond the band (1 cm beyond costs like 3 m of tip lateral in one frame): a near-hard
    *  limit — the entry condition (`CONTACT_ENTRY_WEIGHT` × N) must not buy a float or a sink. */
   weight: 300,
-  /** Residual per radian of turn (× √N): a turn must pay for itself. */
-  turnCostM: 0.15,
+  /** Residual per radian of turn (× √N): a turn must pay for itself. Owner 2026-11-23 (the role turn of up to the
+   *  clip's rotation range, its TOTAL from the base): 0.05 m per radian — a 90° turn costs like 8 cm of axis error per
+   *  key frame, so a mismatch of 20 cm and more is worth turning for, a few millimetres are not. */
+  turnCostM: 0.05,
   /** A frame within this of the band's edge counts as "at the posture limit" (metres). */
   edgeM: 0.002,
 })
+/** THE SUPPORT, ABSOLUTE (module docstring): the touch band against the surface and the height above it from which a
+ *  role counts as carried by someone else (metres). */
+export const SURFACE = Object.freeze({ floatM: 0.01, sinkM: 0.005, carriedM: 0.05 })
 /** The capsules that may carry a figure (`app/core/collision.py` CAPSULES ids). */
 export const SUPPORT_CAPSULES: readonly string[] = ['left_thigh', 'left_shin', 'right_thigh', 'right_shin', 'hips',
   'spine', 'chest', 'outer_hips', 'outer_waist', 'outer_spine', 'outer_chest', 'left_upper_arm', 'right_upper_arm',
   'left_forearm', 'right_forearm', 'head']
-/** The largest turn (degrees) a place type allows on top of its support: standing and lying stay nearly level. */
-export const POSTURE_ANGLE_CAP_DEG: Readonly<Record<string, number>> = Object.freeze({ stand: 3, lie: 5 })
+/** The largest TILT and ROLL (degrees) a place type allows on top of its support: a standing role stays upright (its yaw
+ *  is free). A lying role is held by THE SUPPORT, ABSOLUTE instead (owner 2026-11-23: a turned body must lie ON the
+ *  bed, which a cap of a few degrees cannot give). */
+export const POSTURE_ANGLE_CAP_DEG: Readonly<Record<string, number>> = Object.freeze({ stand: 3 })
 export function postureAngleCapDeg(group: string | null | undefined, bound: number): number {
   const cap = group ? POSTURE_ANGLE_CAP_DEG[group] : undefined
   return cap === undefined ? bound : Math.min(bound, cap)
@@ -64,8 +84,14 @@ export interface SupportSample {
   r: number[]
   /** The support height of the clip's own posture this frame (world y); absent = this sample's own height. */
   base?: number
-  /** The surface height under the figure (world y), for the report only. */
+  /** The surface height under the figure (world y): THE SUPPORT, ABSOLUTE and the report. */
   surface?: number
+  /** Every support capsule's endpoints and radii (not only the supporting ones): the lowest point after a turn. */
+  low?: { pts: Vec3[]; r: number[] }
+  /** Only the shins carry the figure and they stand upright (it stands on its feet). */
+  feet?: boolean
+  /** THE SUPPORT, ABSOLUTE: 'surface' = the lowest capsule touches the surface; 'band' (absent) = the posture band. */
+  mode?: 'surface' | 'band'
 }
 
 interface CapsuleLike { id: string; now: { a: readonly number[]; b: readonly number[]; r: number } }
@@ -85,8 +111,26 @@ export function supportSample(capsules: readonly CapsuleLike[], opts: { ids?: re
     const lo = Math.min(...rows.map((x) => x.low))
     pick = rows.filter((x) => x.low <= lo + POSTURE.bandM)
   }
+  const feet = pick.every((x) => (x.id === 'left_shin' || x.id === 'right_shin')
+    && Math.abs(x.a[1] - x.b[1]) > 0.5 * Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1], x.a[2] - x.b[2]))
   return { ids: pick.map((x) => x.id), pts: pick.flatMap((x) => [x.a, x.b]), r: pick.flatMap((x) => [x.r, x.r]),
+    low: { pts: rows.flatMap((x) => [x.a, x.b]), r: rows.flatMap((x) => [x.r, x.r]) }, feet,
     ...(opts.surface !== undefined ? { surface: opts.surface } : {}) }
+}
+/** THE SUPPORT, ABSOLUTE: the gap of the lowest support capsule over the surface (metres; null without a surface). */
+export function surfaceGap(s: SupportSample | null | undefined, pts?: readonly Vec3[]): number | null {
+  if (!s || s.surface === undefined || !s.low) return null
+  return supportHeight(pts ?? s.low.pts, s.low.r) - s.surface
+}
+/** The mode of a frame from its BASE arrangement (module docstring): 'band' for a role on its feet or carried more than
+ *  `SURFACE.carriedM` above the surface, 'surface' otherwise (and 'band' without a surface). */
+export function supportMode(base: SupportSample | null | undefined): 'surface' | 'band' {
+  const g = surfaceGap(base)
+  return g === null || base?.feet || g > SURFACE.carriedM ? 'band' : 'surface'
+}
+/** The touch band's excess of a gap (metres; 0 inside [−`SURFACE.sinkM`, +`SURFACE.floatM`]). */
+export function surfaceExcess(gap: number): number {
+  return gap > SURFACE.floatM ? gap - SURFACE.floatM : gap < -SURFACE.sinkM ? gap + SURFACE.sinkM : 0
 }
 
 /** The support height of points `pts` (radii `r`): the lowest capsule point. */

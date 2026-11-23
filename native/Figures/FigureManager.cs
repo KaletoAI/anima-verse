@@ -746,6 +746,8 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        // npcs.ts tick: the last frame's pair fix comes off before anything places the figure (a pair re-applies it).
+        fig.ClearPairFix();
         // A solo scene's clip clock runs whatever path draws the figure (npcs.ts tick: stepHeldClock).
         if (fig.Held is { } heldClip) fig.Held = heldClip.Step(dt, WorldFrozen);
         if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
@@ -912,10 +914,32 @@ public partial class FigureManager : Node3D
         var shown = it.Blend is { } blend ? PairBlend.Sample(blend.From, target, age).Pose : target;
         fig.Position = new Vector3((float)shown.X, (float)shown.Y, (float)shown.Z);
         fig.FaceTowards(new Vector3((float)Math.Sin(shown.Yaw), 0, (float)Math.Cos(shown.Yaw)), snap: true);
+        ApplyRoleTurn(fig, clip, shown.Yaw);
         if (age >= PairBlend.BlendS) it.Blend = null;
         fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
         fig.UpdateFigure(restart ? 0 : dt);
         return true;
+    }
+
+    /// <summary>
+    /// npcs.ts <c>pairFixOf</c> / <c>applyPairFix</c> (owner decision 2026-11-23): the half's stored role turn
+    /// (<c>orientation.role_turn_deg[role]</c> of the file it plays, <see cref="ClipLibrary.RoleTurnFor"/>) about its bind hips —
+    /// frame = <c>eulerYXZ(0, yaw, 0)</c>, pivot = <see cref="RoleTurn.FixPivot"/>(root, frame, (0, <see cref="Figure.PairHipsBindY"/>, 0)),
+    /// the root moves to <see cref="RoleTurn.FixRoot"/>'s position and turns by its quaternion over its yaw. The root is
+    /// already the size-scaled one; the angles are size-free. No turn = nothing done.
+    /// </summary>
+    private void ApplyRoleTurn(Figure fig, string clip, double yaw)
+    {
+        var turn = Clips.RoleTurnFor(clip, fig.Sets);
+        if (turn.IsZero) return;
+        var frame = RoleTurn.YawFrame(yaw);
+        var p = fig.Position;
+        var root = new V3(p.X, p.Y, p.Z);
+        var fix = RoleTurn.Fix(turn, frame);
+        if (fix.IsIdentity) return;
+        var (at, q) = RoleTurn.FixRoot(fix, RoleTurn.FixPivot(root, frame, new V3(0, fig.PairHipsBindY, 0)), root);
+        fig.SetPairFix(new Vector3((float)(at.X - root.X), (float)(at.Y - root.Y), (float)(at.Z - root.Z)),
+                       new Quaternion((float)q.X, (float)q.Y, (float)q.Z, (float)q.W));
     }
 
     /// <summary>

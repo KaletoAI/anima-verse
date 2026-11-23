@@ -7,7 +7,11 @@ namespace AnimaNative.Figures;
 public readonly record struct PairXZ(double X, double Z);
 
 /// <summary>A pair/group half's root as the clip library keeps it: its horizontal root path and the clip's contact pivot.</summary>
-public sealed record PairRoot(RootPath Path, PairXZ Pivot);
+public sealed record PairRoot(RootPath Path, PairXZ Pivot)
+{
+    /// <summary>The renderer-only turn of the half's own role (<c>orientation.role_turn_deg</c>, <see cref="RoleTurn"/>); none when absent.</summary>
+    public RoleTurnDeg Turn { get; init; }
+}
 
 /// <summary>
 /// PAIR SCALE — packages/scene-render/src/pairScale.ts (owner decision 2026-11-20): a pair/group clip's alignment is

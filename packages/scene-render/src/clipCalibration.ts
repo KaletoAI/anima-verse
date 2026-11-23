@@ -36,10 +36,9 @@ export interface AlignmentDraft {
   roleShiftM: Readonly<Record<string, readonly [number, number, number]>>
   /** Draft surface corrections in cm per surface group; a group not named keeps its saved value. */
   heightCm: ClipHeightOffsetsCm
-  /** Ruling A129: a pair's partner B turned about its hips, renderer-only [tilt, roll] degrees (`partnerTurnFix`). */
-  partnerTurnDeg?: readonly [number, number]
-  /** Ruling A165: partner B's renderer-only yaw about its own vertical axis, degrees (`partnerTurnFix`'s `yawDeg`). */
-  partnerYawDeg?: number
+  /** Owner decision 2026-11-23: renderer-only role turns [tilt, roll, yaw] degrees per role, added to the saved
+   *  `role_turn_deg` and turned about each role's bind hips (`roleTurnFix`; the yaw first). */
+  roleTurnDeg?: Readonly<Record<string, readonly [number, number, number]>>
   /** Ruling A139: the clip's contact relations (part place → anchor place, target); empty/absent = auto-detect (A126). */
   contactRelations?: readonly ContactRelation[]
   /** Ruling A145: how far the attached part may bend toward its target (absent = `BEND_LIMITS_DEFAULT`). */
@@ -65,7 +64,7 @@ export interface SavedCalibration {
 export function isEmptyDraft(d: AlignmentDraft): boolean {
   return !d.yawDeg && !d.tiltDeg && !d.rollDeg && !d.shiftCm[0] && !d.shiftCm[1]
     && !Object.values(d.roleShiftM).some((v) => v.some((x) => x))
-    && !Object.keys(d.heightCm).length && !(d.partnerTurnDeg && (d.partnerTurnDeg[0] || d.partnerTurnDeg[1])) && !d.partnerYawDeg
+    && !Object.keys(d.heightCm).length && !Object.values(d.roleTurnDeg ?? {}).some((v) => v.some((x) => x))
 }
 
 const RAD = Math.PI / 180

@@ -3,10 +3,8 @@ export interface ClipSource {
   rootMotionMode?: string;
   heightOffsets?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
   shift?: readonly [number, number] | null;
-  /** Ruling A129: a pair's partner-B turn [tilt, roll] degrees. */
-  partnerTurn?: [number, number] | null;
-  /** Ruling A165: a pair's partner-B yaw about its own vertical axis, degrees. */
-  partnerYaw?: number | null;
+  /** Owner decision 2026-11-23: the clip's renderer-only role turns {role: [tilt, roll, yaw]} degrees. */
+  roleTurns?: Record<string, number[]> | null;
   /** Ruling A139: the clip's contact relations ([] / absent = automatic). */
   contacts?: { part: string; at: string; target: 'channel' | 'mouth' | 'hand_left' | 'hand_right' | 'none' }[] | null;
   /** Ruling A145: the clip's bend limits as listed (`bend_limits.limits`). */

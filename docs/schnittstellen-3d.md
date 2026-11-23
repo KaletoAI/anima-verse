@@ -2824,6 +2824,21 @@ oder b); das frühere `partner_shift_cm` des Paars wird beim Start einmal nach
 `role_shift_cm.b` übertragen (`migrate_partner_shift_roles`) und von
 `…/orient` abgelehnt (`scripts/smoke_clip_orient.py` [13]).
 
+**Rollendrehung (2026-11-23).** Jede Rolle eines Paars oder einer Gruppe trägt
+zusätzlich eine reine Darstellungsdrehung `geometry.role_turn_deg`
+(`{role: [tilt, roll, yaw]}` Grad, kumulativ, je Wert auf (−180, 180] gewickelt;
+`POST …/orient` mit `role_turn_deg`, Listing `orientation.role_turn_deg`). Beide
+Renderer wenden sie um die Bind-Hüfte der Rolle an (scene-render `roleTurnFix`/
+`fixPivot`/`fixRoot`): zuerst der Yaw um die Hochachse des Clip-Rahmens, dann
+tilt·side + roll·forward als eine Drehung; Vektor `shared/test-vectors/role_turn.json`.
+Sie ersetzt B's `partner_turn_deg` [tilt, roll] und `partner_yaw_deg`; die werden
+beim Start einmal nach `role_turn_deg.b` übertragen
+(`migrate_partner_turn_roles`) und von `…/orient` abgelehnt
+(`scripts/smoke_clip_role_turn.py`). Wie weit Auto-align die bewegte Rolle drehen
+darf, steht im Sidecar als `align_turn_deg` (Listing `align_turn`, Standard 45°);
+was Auto-align/Align all/eine Hand-Speicherung je Kontaktbeziehung hinterließ, als
+`align_status` (Listing mit `summary` = die schlechteste Beziehung).
+
 **Gruppen abspielen (G3, 2026-11-03).** Eine Gruppe spielt wie ein Paar, nur
 mit mehr Figuren:
 - Jedes Mitglied spielt SEINE Hälfte `<kind>__<role>` (Rolle aus

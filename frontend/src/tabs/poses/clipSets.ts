@@ -1,3 +1,4 @@
+import type { ClipAlignStatus } from './alignStatus'
 import type { ContactRelation } from '@anima/scene-render'
 /**
  * The clip listing as the admin UI reads it, plus the two rules every surface
@@ -52,7 +53,12 @@ export interface ApiClipRow {
   /** Ruling A212: how far Auto-align may move the part's role (cm) and where it comes from (null for a solo clip). */
   align_range?: { cm: number; source: 'clip' | 'default' } | null
   /** Ruling A212: what "Also align end clips" has baked into this end clip so far (null = nothing). */
-  align_applied?: { role_shift_cm: Record<string, [number, number, number]>; turn_deg: [number, number] } | null
+  /** Owner decision 2026-11-23: how far Auto-align may turn the moved role (degrees, each of tilt/roll/yaw). */
+  align_turn?: { deg: number; source: 'clip' | 'default' } | null
+  /** A STATUS PER CLIP (owner 2026-11-23, `alignStatus.ts`; null for a solo clip). */
+  align_status?: ClipAlignStatus | null
+  align_applied?: { role_shift_cm?: Record<string, [number, number, number]>
+    role_turn_deg?: Record<string, [number, number, number]> } | null
   /** Owner decision 2026-11-20 (§ A8a, scene-render `pairScale.ts`): the contact pivot [side, forward] cm in the clip
    *  frame real figure heights scale about (null = the clip frame's origin; null for a solo clip). */
   pair_pivot_cm?: [number, number] | null
@@ -71,10 +77,8 @@ export interface ApiClipRow {
     tilt_deg?: number | null
     roll_deg?: number | null
     floor_shift_cm?: number | null
-    /** Ruling A129: partner B's renderer-only [tilt, roll] degrees. */
-    partner_turn_deg?: [number, number] | null
-    /** Ruling A165: partner B's renderer-only yaw about its own vertical axis, degrees. */
-    partner_yaw_deg?: number | null
+    /** Owner decision 2026-11-23: every role's renderer-only [tilt, roll, yaw] degrees about its hips. */
+    role_turn_deg?: Record<string, [number, number, number]> | null
     /** A pair's or group's per-role [side, up, forward] offsets in centimetres. */
     role_shift_cm?: Record<string, [number, number, number]> | null
     /** Cumulative renderer-only [side, forward] centimetres. */

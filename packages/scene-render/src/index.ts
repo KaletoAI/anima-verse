@@ -272,18 +272,18 @@ export { CONTACT_TARGETS, POINT_TARGETS, POINT_TARGET_OPS, TARGET_RADIUS_M, MOUT
   isPointTarget, targetFrame, targetFrames, orientAlong, targetLamp } from './contactTarget'
 export type { ContactTarget, PointTarget, TargetBones, TargetFrame } from './contactTarget'
 export { fixPoint, fixSample, fixRoot, turnMatrix, matrixTurn,
-  findContact, contactSampleOf, turnAxes, partnerTurnFix, partnerYawFix, fixPivot,
+  findContact, contactSampleOf, turnAxes, roleTurnFix, roleYawFix, fixPivot,
   pairInterpenetration, clearLamp, PART_REGIONS, CLEAR_GREEN_MM, CLEAR_YELLOW_MM, bendSample, supportDelta, bendFrameOf, solveLinear } from './pairFit'
 export { solveAlign, alignByPasses, keyFrames, keyRow, keyReport, keyLamp, keyReasons, keyWorstMm, moveSample, axisError, depthTarget,
-  alignMovers, alignCap, relativeOf, joinDelta, clearAllowM, clearDepths, alignVerdict, deepHolds, alignBlocked, visibleRootDepth, depthGate, partRadiusOf, ALIGN_PART_RADIUS_M, ALIGN_ROOT_SLACK_MM,
+  alignMovers, alignCap, relativeOf, joinDelta, clearAllowM, clearDepths, alignVerdict, alignGain, roleTurnMatrix, roleTurnDelta, deepHolds, alignBlocked, visibleRootDepth, depthGate, partRadiusOf, ALIGN_PART_RADIUS_M, ALIGN_ROOT_SLACK_MM,
   compareCandidates, alignBucket,
   ALIGN_CLEAR_WEIGHT, ALIGN_CLEAR_TOL_MM, ALIGN_CLEAR_SLACK_MM, ALIGN_MISMATCH_DEG,
-  ALIGN_RANGE_CM_DEFAULT, ALIGN_ANGLE_DEG, JOIN_WEIGHT, ALIGN_LIMIT_WEIGHT, ALIGN_MARGIN_M, ALIGN_RIDGE, ALIGN_PASSES,
+  ALIGN_RANGE_CM_DEFAULT, ALIGN_ANGLE_DEG, ALIGN_TURN_DEG_DEFAULT, ALIGN_GAIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM, JOIN_WEIGHT, ALIGN_LIMIT_WEIGHT, ALIGN_MARGIN_M, ALIGN_RIDGE, ALIGN_PASSES,
   ALIGN_AXIS_LEVER_M, ALIGN_DEPTH_WEIGHT, ALIGN_CROSS_MIN, KEY_GREEN_MM, KEY_YELLOW_MM, KEY_SHALLOWER_MM } from './pairAlign'
 export type { AlignCap, AlignLamp, AlignBound, AlignSample, AlignRelation, AlignProblem, AlignSolution, KeyRow, KeyReport, KeyReason,
   AlignState, AlignMeasure, AlignPass, ClearCapsule, ClearFrame, ClearRow, AlignDiscard, AlignCandidate, AlignBucket } from './pairAlign'
-export { POSTURE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
-  postureReport } from './postureSupport'
+export { POSTURE, SURFACE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,
+  postureReport, surfaceGap, supportMode, surfaceExcess } from './postureSupport'
 export type { SupportSample, PostureReport } from './postureSupport'
 export { solveChainBend, bendLimitAt, bendLimitsOf, bendShares, bendGate, bendLamp, quatOf, quatMul, quatRotate, quatAngle,
   rootTurnOf, rootTurnQuat, rootAngleOf, bodyFrameOf, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, BEND_LIMITS_DEFAULT, BEND_SWEEPS, BEND_NEAR_M, BEND_REACH_M } from './chainBend'

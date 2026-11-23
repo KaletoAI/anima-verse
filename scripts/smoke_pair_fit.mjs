@@ -23,11 +23,11 @@
  * FIXTURE B = A126's fixture 1 (smoke_channel_contact.mjs): no axes → the shift-only solve; root and tip are off by
  *   (0.01, −0.02) at every frame → Δ = (−0.01, 0.02, 0) ± 1e-6 (the forward is the null direction again).
  *   [5] the solve without axes = (−0.01, 0.02, 0) ± 1e-6.
- * [6] partnerTurnFix(10, −5, identity frame) = turn (10°, 0, −5°) in radians: (0.17453293, 0, −0.08726646).
+ * [6] roleTurnFix(10, −5, identity frame) = turn (10°, 0, −5°) in radians: (0.17453293, 0, −0.08726646).
  * [6b] Ruling A165, partner B's yaw about its own vertical axis (identity frame, pivot p = (1, 0, 2)):
  *     yaw 90° first, then tilt 10° about +X. Point p + (0, 0, 1): Ry(90°) maps (0, 0, 1) to (1, 0, 0), Rx leaves +X
  *     alone → (2, 0, 2). Point p + (0, 1, 0): Ry keeps it, Rx(10°) maps (0, 1, 0) to (0, cos 10°, sin 10°) →
- *     (1, 0.98480775, 2.17364818). partnerYawFix(90, Ry(90°) frame) turns about that frame's up (0, 1, 0): π/2 on y.
+ *     (1, 0.98480775, 2.17364818). roleYawFix(90, Ry(90°) frame) turns about that frame's up (0, 1, 0): π/2 on y.
  * [7] fixPivot((1, 0, 2), Ry(90°) row-major [0,0,1, 0,1,0, −1,0,0], hips (0, 0.9, 0.1)) = (1 + 0.1, 0.9, 2 − 0) =
  *     (1.1, 0.9, 2).
  * THE HONEST CHECK (A129.5): entering E with part capsule `part`, receiving R whose channel allows `pelvis`.
@@ -84,14 +84,14 @@ assert.ok(lim.fix.shift.every((v) => Math.abs(v) <= 0.5))
 const B = [-0.05, 0, 0.03].map((z) => ({ tip: [0.01, -0.02, z], base: [0.01, -0.02, z - 0.1], o: O, u: U, pivot: [0, 0, 0] }))
 const fb = solve(B, [])                                                                       // [5]
 ;[-0.01, 0.02, 0].forEach((v, i) => near(fb.fix.shift[i], v, 1e-6, 'shift-only'))
-const pt = SR.partnerTurnFix(10, -5, [1, 0, 0, 0, 1, 0, 0, 0, 1])                            // [6]
+const pt = SR.roleTurnFix(10, -5, [1, 0, 0, 0, 1, 0, 0, 0, 1])                            // [6]
 near(pt.turn[0], 0.17453293, 1e-8, 'turn x'); near(pt.turn[1], 0, 1e-12, 'turn y'); near(pt.turn[2], -0.08726646, 1e-8, 'turn z')
 {                                                                                             // [6b]
   const I = [1, 0, 0, 0, 1, 0, 0, 0, 1], p = [1, 0, 2]
-  const yt = SR.partnerTurnFix(10, 0, I, 90)
+  const yt = SR.roleTurnFix(10, 0, I, 90)
   ;[2, 0, 2].forEach((v, i) => near(SR.fixPoint(yt, p, [1, 0, 3])[i], v, 1e-9, 'yaw then tilt, forward point'))
   ;[1, 0.98480775, 2.17364818].forEach((v, i) => near(SR.fixPoint(yt, p, [1, 1, 2])[i], v, 1e-8, 'yaw then tilt, up point'))
-  const yf = SR.partnerYawFix(90, [0, 0, 1, 0, 1, 0, -1, 0, 0])
+  const yf = SR.roleYawFix(90, [0, 0, 1, 0, 1, 0, -1, 0, 0])
   near(yf.turn[1], Math.PI / 2, 1e-12, 'yaw axis'); near(yf.turn[0], 0, 1e-12, 'yaw x'); near(yf.turn[2], 0, 1e-12, 'yaw z')
 }
 const pv = SR.fixPivot([1, 0, 2], [0, 0, 1, 0, 1, 0, -1, 0, 0], [0, 0.9, 0.1])               // [7]

@@ -51,9 +51,9 @@ function placement(m, data) {
     frameFigure: () => null, partnerSnapshot: () => null, updateSecondary: () => {}, channelOccupants: () => [],
     applyChannelOpenings: () => {}, hasHairPush: false, setGpuPartners: () => {},
     setRootAngle: () => {}, clipRootAngle: null, channelReadouts: () => [],
-    // Ruling A129 (d08f3c4b9): the pair fix turns partner B about its bind hips. No stored turn here
-    // (0, 0, 0) — the fix is the identity, so the placement is the anchor rule alone.
-    pairHipsBind: [0, 0.9, 0], pairTurnDeg: [0, 0, 0],
+    // The pair fix turns a role about its bind hips (owner decision 2026-11-23: every role, `roleTurnDeg`). No stored
+    // turn here (0, 0, 0) — the fix is the identity, so the placement is the anchor rule alone.
+    pairHipsBind: [0, 0.9, 0], roleTurnDeg: () => [0, 0, 0],
     // Owner decision 2026-11-20 (686831af3, pairScale.ts): a 1.70 m figure has scale a = 1 — the root path unscaled.
     height: 1.7,
   };

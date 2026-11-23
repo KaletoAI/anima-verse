@@ -11,8 +11,14 @@
  * leaves ticked (only "would improve" rows can be ticked); a blocked row may get another mover and be measured again.
  * The clip's one root angle is solved by the first relation that carries the part and kept by the others — the
  * "root" column says which.
+ *
+ * Owner decisions 2026-11-23: the moved role may TURN (tilt, roll, yaw within the clip's rotation range — the "turn"
+ * column), must stay ON its surface (THE SUPPORT, ABSOLUTE — the "support" column, the moved role's gap over its
+ * surface before → after), and a result counts only with THE MINIMUM GAIN (5 mm less axis error or depth error; else
+ * "nothing to gain"). Stage 2 also records the status of every row of the table in its clip's sidecar
+ * (`alignStatus.ts`) — a saved row as improved / aligned, the others as blocked / mismatch / not measurable.
  */
-import { ALIGN_MISMATCH_DEG, type AlignBucket } from '@anima/scene-render'
+import { ALIGN_GAIN_MM, ALIGN_MISMATCH_DEG, type AlignBucket } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { AlignMoverChoice, RelationAlign } from './PlacePreview'
 
@@ -25,6 +31,10 @@ export interface AlignAllRow {
   /** The measured relation (null: the clip gave none — `reason` says why). */
   rel: RelationAlign | null
   reason: string
+  /** How long opening the clip took (seconds, "Align all"'s wait for its scene and figures). */
+  waitS?: number
+  /** Why the clip gave no relation (for its status). */
+  code?: 'no_place' | 'no_part' | 'no_pair'
   /** The mover the next re-measure uses, whether the row is ticked for stage 2, and what stage 2 did with it. */
   choice: AlignMoverChoice; tick: boolean; outcome: string
 }
@@ -52,15 +62,19 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
     if (x.discard === 'overlap' && x.collide) return t('would go into {who}: {pair} {mm} mm (allowed {allow} mm)')
       .replace('{who}', x.collide.with).replace('{pair}', x.collide.worst).replace('{mm}', x.collide.afterMm.toFixed(0))
       .replace('{allow}', x.collide.allowMm.toFixed(0))
-    if (x.discard === 'worse') return t('ends shallower and further off the axis than it starts')
+    if (x.discard === 'worse') return t('ends deeper off its depth and further off the axis than it starts')
+    if (x.discard === 'support') return t('the moved role would float above or sink into its surface')
     if (x.discard === 'root') return t('the visible root would end inside the opening')
     const parts: string[] = []
     if (x.reasons.includes('caps')) parts.push(t('a cap was hit'))
     if (x.limitReason === 'posture') parts.push(t('the posture held it back'))
     if (x.reasons.includes('root_inside')) parts.push(t('the visible root is inside the opening'))
-    if (r.bucket === 'blocked' && !parts.length) parts.push(t('nothing to gain'))
+    if (r.bucket === 'blocked' && !parts.length) parts.push(t('nothing to gain (less than {mm} mm)').replace('{mm}', String(ALIGN_GAIN_MM)))
     return parts.join(', ')
   }
+  const gapMm = (g: [number, number] | null) => (g ? (Math.abs(g[0]) > Math.abs(g[1]) ? g[0] : g[1]).toFixed(0) : '–')
+  const supportCell = (x: RelationAlign) => (x.support.mode === 'surface'
+    ? `${gapMm(x.support.beforeMm)} → ${gapMm(x.support.afterMm)}` : x.support.mode === 'band' ? t('carried') : '–')
   const counts = BUCKETS.map((b) => [b, rows.filter((r) => r.bucket === b).length] as const)
   const ticked = rows.filter((r) => r.tick).length
   const fmt = (v: number | undefined | null) => (v === undefined || v === null ? '–' : v.toFixed(0))
@@ -79,6 +93,8 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
           <th title={t('Axis error: the opening offset or the angle’s lever, worst of both key frames, before → after (mm)')}>{t('off axis')}</th>
           <th title={t('The visible root at its deepest frame of the loop as rendered, after (mm, negative = outside)')}>{t('root at')}</th>
           <th>{t('moved')}</th>
+          <th title={t('The moved role’s turn after the run: tilt / roll / yaw (degrees, from the saved state)')}>{t('turn')}</th>
+          <th title={t('The moved role’s lowest support capsule over its surface, the frame furthest from it, before → after (mm; carried = on the other person or on its feet, held by its own posture instead)')}>{t('support')}</th>
           <th title={t('The clip has one root angle: the first relation that carries the part solves it, the others keep it.')}>{t('root')}</th>
           <th style={{ textAlign: 'left' }}>{t('Reason')}</th><th /><th />
         </tr></thead>
@@ -97,6 +113,8 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{x ? `${fmt(axis(x.keys.before))} → ${fmt(axis(x.keys.after))}` : ''}</td>
                 <td style={{ textAlign: 'right' }}>{x?.rendered ? x.rendered.after.visMm.toFixed(0) : ''}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>{x ? `${x.moved.toUpperCase()}${x.alternative ? ` (${t('auto alternative')})` : ''}` : ''}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{x ? x.turnDeg.map((v) => v.toFixed(0)).join(' / ') : ''}</td>
+                <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{x ? supportCell(x) : ''}</td>
                 <td>{x ? ({ solved: t('solved'), kept: t('kept'), none: '–' })[x.root] : ''}</td>
                 <td style={{ maxWidth: 220 }}>{why(r)}{r.outcome ? <span style={{ opacity: 0.8 }}> · {r.outcome}</span> : null}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>{r.bucket === 'blocked' ? (<>
@@ -118,7 +136,7 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" data-testid="align-all-apply" disabled={busy || !ticked}
           onClick={onApply}>{t('Apply and save the ticked rows ({n})').replace('{n}', String(ticked))}</button>
         <span className="ga-form-hint" style={{ margin: 0 }}>
-          {t('Nothing is written without a tick. Stage 2 measures each ticked clip again with only its ticked relations and the mover shown, and saves it only when every one of them still improves (one Blender run per clip, no hub jobs).')}
+          {t('Nothing is moved without a tick. Stage 2 measures each ticked clip again with only its ticked relations and the mover shown, and saves it only when every one of them still improves (one Blender run per clip, no hub jobs); it records every row’s status in its clip.')}
         </span>
       </div>
     </div>

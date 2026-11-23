@@ -1429,6 +1429,11 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "root_angle": clip_root_angle(meta) if entry["role"] else None,
         # Ruling A212: how far Auto-align may move the part's role ({"cm", "source"}); None for a solo clip.
         "align_range": clip_align_range(meta) if entry["role"] else None,
+        # Owner decision 2026-11-23: how far Auto-align may turn the moved role ({"deg", "source"}); None for a solo clip.
+        "align_turn": clip_align_turn(meta) if entry["role"] else None,
+        # Owner decision 2026-11-23: the clip's alignment status per contact relation and its summary
+        # ({relations, done, done_at, summary}); None for a solo clip.
+        "align_status": clip_align_status(meta) if entry["role"] else None,
         # Ruling A212: what "Also align end clips" has baked into this clip so far (None = nothing).
         "align_applied": clip_align_applied(meta) if entry["role"] else None,
         # Owner decision 2026-11-20 (§ A8a): the contact pivot [side, forward] cm real figure heights scale about
@@ -1439,12 +1444,10 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "orientation": {k: geometry.get(k) for k in
                         ORIENT_ANGLES + ("floor_shift_cm", "role_shift_cm")
                         } | {"shift_cm": horizontal,
-                             # Ruling A129: partner B's renderer-only tilt/roll [deg], applied at placement.
-                             "partner_turn_deg": read_partner_turn(shift_geometry.get("partner_turn_deg")
-                                                                   if isinstance(shift_geometry, dict) else None),
-                             # Ruling A165: partner B's renderer-only yaw about its own vertical axis [deg].
-                             "partner_yaw_deg": read_partner_yaw(shift_geometry.get("partner_yaw_deg")
-                                                                 if isinstance(shift_geometry, dict) else None),
+                             # Owner decision 2026-11-23: every role's renderer-only turn {role: [tilt, roll, yaw]}
+                             # degrees, applied at placement about the role's bind hips (scene-render roleTurnFix).
+                             "role_turn_deg": read_role_turn(shift_geometry.get("role_turn_deg")
+                                                             if isinstance(shift_geometry, dict) else None),
                              # D3 (Ruling A110): the place check the admin passed all-green, or None —
                              # cleared by the next bake.
                              "checked": (shift_geometry.get("checked")
@@ -2376,6 +2379,60 @@ def migrate_partner_shift_roles() -> int:
     return changed
 
 
+def migrate_partner_turn_roles() -> int:
+    """Boot migration (2026-11-23): every role carries its own renderer-only turn (``geometry.role_turn_deg``), so every
+    sidecar of both libraries whose geometry still records partner B's ``partner_turn_deg`` [tilt, roll] and/or
+    ``partner_yaw_deg`` gets them added to ``role_turn_deg.b`` as [tilt, roll, yaw] (a total back at zero drops out)
+    and the old fields removed; an ``align_applied.turn_deg`` [tilt, roll] becomes ``align_applied.role_turn_deg.b``
+    [tilt, roll, 0]. Nothing is re-baked (the turn was never baked). Idempotent; returns how many files changed."""
+    changed = 0
+    num = lambda v: not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)  # noqa: E731
+    for library in LIBRARIES:
+        try:
+            root = library_root(library)
+        except Exception:  # noqa: BLE001 — a library that is not configured has nothing to migrate
+            continue
+        if not root.is_dir():
+            continue
+        for sidecar in sorted(root.rglob("*.json")):
+            try:
+                data = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            touched = False
+            geometry = data.get("geometry")
+            if isinstance(geometry, dict) and ("partner_turn_deg" in geometry or "partner_yaw_deg" in geometry):
+                tr = geometry.pop("partner_turn_deg", None)
+                yw = geometry.pop("partner_yaw_deg", None)
+                tilt, roll = ([float(tr[0]), float(tr[1])] if isinstance(tr, (list, tuple)) and len(tr) == 2
+                              and all(num(v) for v in tr) else [0.0, 0.0])
+                yaw = float(yw) if num(yw) else 0.0
+                book = add_role_turns(geometry.get("role_turn_deg"), {"b": [tilt, roll, yaw]})
+                if book:
+                    geometry["role_turn_deg"] = book
+                else:
+                    geometry.pop("role_turn_deg", None)
+                touched = True
+            applied = data.get("align_applied")
+            if isinstance(applied, dict) and "turn_deg" in applied:
+                tr = applied.pop("turn_deg")
+                if isinstance(tr, (list, tuple)) and len(tr) == 2 and all(num(v) for v in tr) and any(tr):
+                    turns = applied.get("role_turn_deg") if isinstance(applied.get("role_turn_deg"), dict) else {}
+                    was = turns.get("b") or [0.0, 0.0, 0.0]
+                    turns["b"] = [round(float(was[0]) + float(tr[0]), 2), round(float(was[1]) + float(tr[1]), 2),
+                                  float(was[2])]
+                    applied["role_turn_deg"] = turns
+                touched = True
+            if touched:
+                _write_json_atomic(sidecar, data)
+                changed += 1
+    if changed:
+        reload_clip_caches()
+    return changed
+
+
 #: Ruling A158: the attached part's DIRECT root angle per pair clip (degrees): pitch about the body's side axis
 #: (+ = up toward the belly, − = down) and turn about the body's up axis (+ = the figure's right, − = its left).
 #: Applied always, before any bend; Auto-align never changes it.
@@ -2522,6 +2579,10 @@ def set_clip_pair_pivot(library: str, rel: str, value: Any) -> List[Dict[str, An
 #: up/down (cm; sideways stays at most 3 cm, tilt/roll at most 10°). The clip's own value wins over the default.
 ALIGN_RANGE_DEFAULT_CM = 8.0
 ALIGN_RANGE_BOUNDS_CM = (1.0, 40.0)
+#: Owner decision 2026-11-23: how far Auto-align may turn the moved role (tilt, roll and yaw, each), degrees from the
+#: user's base arrangement — the default and the bounds of a clip's own ``align_turn_deg``.
+ALIGN_TURN_DEFAULT_DEG = 45.0
+ALIGN_TURN_BOUNDS_DEG = (0.0, 180.0)
 
 
 def validate_align_range(value: Any) -> float:
@@ -2548,22 +2609,25 @@ def clip_align_range(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def validate_align_applied(value: Any) -> Dict[str, Any]:
     """Ruling A212: what "Also align end clips" has baked into an end clip so far — ``{"role_shift_cm": {role: [side,
-    up, forward]}, "turn_deg": [tilt, roll]}``, every number finite and within ±100 (cm / degrees)."""
+    up, forward]}, "role_turn_deg": {role: [tilt, roll, yaw]}}``, every shift finite and within ±100 cm, every angle
+    within ±180 degrees."""
     import math
-    if not isinstance(value, dict) or set(value) - {"role_shift_cm", "turn_deg"}:
-        raise ClipLibraryError("align_applied must be an object with role_shift_cm and/or turn_deg")
+    if not isinstance(value, dict) or set(value) - {"role_shift_cm", "role_turn_deg"}:
+        raise ClipLibraryError("align_applied must be an object with role_shift_cm and/or role_turn_deg")
 
-    def nums(v: Any, n: int, what: str) -> List[float]:
+    def nums(v: Any, n: int, bound: float, what: str) -> List[float]:
         if not isinstance(v, list) or len(v) != n or any(
-                isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or abs(x) > 100
+                isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or abs(x) > bound
                 for x in v):
-            raise ClipLibraryError(f"align_applied {what} must be {n} numbers within ±100")
+            raise ClipLibraryError(f"align_applied {what} must be {n} numbers within ±{bound:g}")
         return [float(x) for x in v]
-    roles = value.get("role_shift_cm") or {}
-    if not isinstance(roles, dict) or any(r not in ("a", "b", "c", "d", "e") for r in roles):
-        raise ClipLibraryError("align_applied role_shift_cm must map roles a..e")
-    return {"role_shift_cm": {r: nums(v, 3, f"role_shift_cm.{r}") for r, v in roles.items()},
-            "turn_deg": nums(value.get("turn_deg", [0, 0]), 2, "turn_deg")}
+    out: Dict[str, Any] = {}
+    for field, bound in (("role_shift_cm", 100.0), ("role_turn_deg", 180.0)):
+        roles = value.get(field) or {}
+        if not isinstance(roles, dict) or any(r not in CLIP_ROLES for r in roles):
+            raise ClipLibraryError(f"align_applied {field} must map roles a..e")
+        out[field] = {r: nums(v, 3, bound, f"{field}.{r}") for r, v in roles.items()}
+    return out
 
 
 def clip_align_applied(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -2638,6 +2702,179 @@ def set_clip_align_range(library: str, rel: str, cm: Any) -> List[Dict[str, Any]
     reload_clip_caches()
     logger.info("clip alignment range: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
                 data.get("align_range_cm") or "default")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+def validate_align_turn(value: Any) -> float:
+    """Owner decision 2026-11-23: a finite number of degrees within ``ALIGN_TURN_BOUNDS_DEG``."""
+    lo, hi = ALIGN_TURN_BOUNDS_DEG
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or not lo <= value <= hi:
+        raise ClipLibraryError(f"rotation range must be a number of degrees from {lo:g} to {hi:g}")
+    return float(value)
+
+
+def clip_align_turn(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``{"deg", "source"}`` — the ``<kind>.json``'s ``align_turn_deg`` (source ``clip``) or the default."""
+    own = (meta or {}).get("align_turn_deg") if isinstance(meta, dict) else None
+    if own is not None:
+        try:
+            return {"deg": validate_align_turn(own), "source": "clip"}
+        except ClipLibraryError:
+            pass
+    return {"deg": ALIGN_TURN_DEFAULT_DEG, "source": "default"}
+
+
+def _pair_kind_sidecar(library: str, rel: str, what: str) -> Tuple[Path, str, str, Path, Dict[str, Any]]:
+    """A pair/group clip's shared ``<kind>.json`` for a kind-wide edit: (path, kind, set, sidecar, data). Refused for
+    a solo clip and a kind without a readable sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair or group clip has {what}")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    return path, kind, cset, sidecar, data
+
+
+@_library_writer
+def set_clip_align_turn(library: str, rel: str, deg: Any) -> List[Dict[str, Any]]:
+    """Writes (or with ``None`` clears = default) a pair/group clip's rotation range in its shared ``<kind>.json``."""
+    path, kind, cset, sidecar, data = _pair_kind_sidecar(library, rel, "a rotation range")
+    if deg is None:
+        data.pop("align_turn_deg", None)
+    else:
+        data["align_turn_deg"] = validate_align_turn(deg)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    logger.info("clip rotation range: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                data.get("align_turn_deg", "default"))
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+# ── THE ALIGNMENT STATUS of a pair/group clip (owner decision 2026-11-23) ──
+#: Per contact relation: what the last SAVED Auto-align / Align all result or a hand save left. "not checked" is the
+#: absence of an entry. "manual: done" is the clip's own tick (``done``), kept through later auto runs until the
+#: user unticks it.
+ALIGN_STATES = ("auto_improved", "auto_aligned", "auto_blocked", "auto_mismatch", "not_measurable", "manual_adjusted")
+ALIGN_STATE_REASONS = {
+    "auto_blocked": ("overlap", "support", "range", "root_inside", "nothing_to_gain", "worse"),
+    "not_measurable": ("no_place", "no_part", "no_pair"),
+}
+#: The clip summary is its WORST relation, in this order (worst first).
+ALIGN_STATE_ORDER = ("auto_mismatch", "auto_blocked", "not_measurable", "not_checked", "auto_improved",
+                     "manual_adjusted", "auto_aligned")
+_STATUS_NUMBERS = {"depth_mm": 2, "axis_mm": 2, "root_mm": 1, "support_mm": 1}
+
+
+def _status_entry(key: str, raw: Any, stamp: str) -> Dict[str, Any]:
+    """One relation's status as stored: ``{state, reason?, depth_mm?: [before, after], axis_mm?: [before, after],
+    root_mm?, support_mm?, mover?, turn_deg?: [tilt, roll, yaw], at}`` (``at`` = system time, set here)."""
+    if not isinstance(key, str) or not key or len(key) > 80:
+        raise ClipLibraryError("align_status relation keys must be strings of 1..80 characters")
+    if not isinstance(raw, dict) or raw.get("state") not in ALIGN_STATES:
+        raise ClipLibraryError(f"align_status.{key} needs a state of {', '.join(ALIGN_STATES)}")
+    state = raw["state"]
+    out: Dict[str, Any] = {"state": state}
+    reason = raw.get("reason")
+    if reason is not None:
+        if reason not in ALIGN_STATE_REASONS.get(state, ()):
+            raise ClipLibraryError(f"align_status.{key}: '{reason}' is no reason for {state}")
+        out["reason"] = reason
+    for field, n in _STATUS_NUMBERS.items():
+        v = raw.get(field)
+        if v is None:
+            continue
+        vals = v if isinstance(v, list) else [v]
+        if len(vals) != n or any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                                 or abs(x) > 1e5 for x in vals):
+            raise ClipLibraryError(f"align_status.{key}.{field} must be {n} finite number(s)")
+        r = [round(float(x), 1) for x in vals]
+        out[field] = r if n > 1 else r[0]
+    mover = raw.get("mover")
+    if mover is not None:
+        if mover not in CLIP_ROLES:
+            raise ClipLibraryError(f"align_status.{key}.mover must be a role a..e")
+        out["mover"] = mover
+    turn = raw.get("turn_deg")
+    if turn is not None:
+        if (not isinstance(turn, list) or len(turn) != 3 or any(
+                isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or abs(x) > 360
+                for x in turn)):
+            raise ClipLibraryError(f"align_status.{key}.turn_deg must be [tilt, roll, yaw] degrees")
+        out["turn_deg"] = [round(float(x), 1) for x in turn]
+    out["at"] = stamp
+    return out
+
+
+def clip_align_status(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The stored status of a pair/group clip with its summary: ``{relations, done, done_at, summary}`` — the summary
+    is the worst relation (``ALIGN_STATE_ORDER``), "not_checked" without any; an invalid entry is left out."""
+    own = (meta or {}).get("align_status") if isinstance(meta, dict) else None
+    own = own if isinstance(own, dict) else {}
+    rels: Dict[str, Any] = {}
+    for key, entry in (own.get("relations") or {}).items() if isinstance(own.get("relations"), dict) else ():
+        if isinstance(entry, dict) and entry.get("state") in ALIGN_STATES:
+            rels[key] = entry
+    summary = min((e["state"] for e in rels.values()), key=ALIGN_STATE_ORDER.index, default="not_checked")
+    return {"relations": rels, "done": own.get("done") is True,
+            "done_at": own.get("done_at") if own.get("done") is True else None, "summary": summary}
+
+
+@_library_writer
+def set_clip_align_status(library: str, rel: str, value: Any) -> List[Dict[str, Any]]:
+    """Writes a pair/group clip's alignment status into its shared ``<kind>.json`` (finale clips are clips of their
+    own). ``value`` = ``{relations?: {key: entry | null}, done?: bool}``: the named relations are replaced (null =
+    removed, back to "not checked"), the others kept; ``done`` sets or clears the "manual: done" tick. ``None`` =
+    clear everything."""
+    from app.core.timeutils import utc_now_iso
+    path, kind, cset, sidecar, data = _pair_kind_sidecar(library, rel, "an alignment status")
+    if value is None:
+        data.pop("align_status", None)
+    else:
+        if not isinstance(value, dict) or set(value) - {"relations", "done"} or not value:
+            raise ClipLibraryError("align_status must be an object with relations and/or done")
+        stamp = utc_now_iso()
+        cur = data.get("align_status") if isinstance(data.get("align_status"), dict) else {}
+        rels = dict(cur.get("relations") or {}) if isinstance(cur.get("relations"), dict) else {}
+        given = value.get("relations")
+        if given is not None:
+            if not isinstance(given, dict):
+                raise ClipLibraryError("align_status.relations must be an object")
+            for key, entry in given.items():
+                if entry is None:
+                    rels.pop(key, None)
+                else:
+                    rels[key] = _status_entry(key, entry, stamp)
+        out: Dict[str, Any] = {}
+        if rels:
+            out["relations"] = rels
+        done = value["done"] if "done" in value else cur.get("done") is True
+        if not isinstance(done, bool):
+            raise ClipLibraryError("align_status.done must be true or false")
+        if done:
+            out["done"] = True
+            out["done_at"] = stamp if value.get("done") is True and cur.get("done") is not True else cur.get("done_at")
+        if out:
+            data["align_status"] = out
+        else:
+            data.pop("align_status", None)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    status = clip_align_status(data)
+    logger.info("clip alignment status: %s%s (%s) -> %s%s", f"{cset}/" if cset else "", kind, library,
+                status["summary"], " (manual: done)" if status["done"] else "")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
@@ -2727,31 +2964,54 @@ def validate_clip_shift(value: Optional[Sequence[float]]) -> List[float]:
     return [float(v) for v in value]
 
 
-def validate_partner_turn(value: Optional[Sequence[float]]) -> List[float]:
-    """Ruling A129: one edit of partner B's renderer-only [tilt, roll] in degrees, each within ±45."""
+#: A role's renderer-only turn (owner decision 2026-11-23, formerly partner B's `partner_turn_deg` + `partner_yaw_deg`):
+#: [tilt, roll, yaw] degrees per role, turned about that role's bind hips at placement — yaw about the role's own
+#: vertical axis FIRST, then tilt (side axis) and roll (forward axis) as one rotation (scene-render `roleTurnFix`).
+ROLE_TURN_EDIT_MAX_DEG = 180.0
+
+
+def validate_role_turn(value: Any) -> Dict[str, List[float]]:
+    """One edit of the renderer-only role turns: ``{role a..e: [tilt, roll, yaw]}`` degrees, each within ±180; an
+    all-zero role drops out. ``None`` = no edit."""
     if value is None:
-        return [0.0, 0.0]
-    if (not isinstance(value, (list, tuple)) or len(value) != 2
-            or any(isinstance(v, bool) or not isinstance(v, (int, float))
-                   or not math.isfinite(v) or abs(v) > 45 for v in value)):
-        raise ClipLibraryError("partner_turn_deg must be [tilt, roll] numbers from -45 to 45")
-    return [float(v) for v in value]
+        return {}
+    if not isinstance(value, dict):
+        raise ClipLibraryError("role_turn_deg must be {role a..e: [tilt, roll, yaw]} degrees from -180 to 180")
+    out: Dict[str, List[float]] = {}
+    for r, v in value.items():
+        if (r not in CLIP_ROLES or not isinstance(v, (list, tuple)) or len(v) != 3
+                or any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                       or abs(x) > ROLE_TURN_EDIT_MAX_DEG for x in v)):
+            raise ClipLibraryError("role_turn_deg must be {role a..e: [tilt, roll, yaw]} degrees from -180 to 180")
+        if any(abs(float(x)) > 1e-9 for x in v):
+            out[r] = [float(x) for x in v]
+    return out
 
 
-def validate_partner_yaw(value: Any) -> float:
-    """Ruling A165: one edit of partner B's renderer-only yaw about its own vertical axis, degrees within ±180."""
-    if value is None:
-        return 0.0
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > 180:
-        raise ClipLibraryError("partner_yaw_deg must be a number from -180 to 180")
-    return float(value)
+def read_role_turn(value: Any) -> Dict[str, List[float]]:
+    """The saved cumulative role turns ``{role: [tilt, roll, yaw]}``, each wrapped to (-180, 180]; an invalid entry
+    means no turn for that role."""
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, List[float]] = {}
+    for r in CLIP_ROLES:
+        v = value.get(r)
+        if (isinstance(v, (list, tuple)) and len(v) == 3
+                and all(not isinstance(x, bool) and isinstance(x, (int, float)) and math.isfinite(x) for x in v)):
+            out[r] = [wrap_yaw(float(x)) for x in v]
+    return out
 
 
-def read_partner_yaw(value: Any) -> float:
-    """The saved cumulative partner yaw, wrapped to -180..180; invalid data means zero."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return 0.0
-    return wrap_yaw(float(value))
+def add_role_turns(book: Any, delta: Dict[str, List[float]]) -> Dict[str, List[float]]:
+    """``book`` (stored totals) plus ``delta`` per role, wrapped; a role back at zero drops out."""
+    total = read_role_turn(book)
+    for r, vals in delta.items():
+        t = [wrap_yaw(a + b) for a, b in zip(total.get(r) or (0.0, 0.0, 0.0), vals)]
+        if any(abs(x) >= 0.005 for x in t):
+            total[r] = t
+        else:
+            total.pop(r, None)
+    return {r: total[r] for r in CLIP_ROLES if r in total}
 
 
 def wrap_yaw(deg: float) -> float:
@@ -2759,14 +3019,6 @@ def wrap_yaw(deg: float) -> float:
     w = math.fmod(deg + 180.0, 360.0)
     w = w + 360.0 if w <= 0 else w
     return round(w - 180.0, 2)
-
-
-def read_partner_turn(value: Any) -> List[float]:
-    """The saved cumulative partner turn; invalid data means zero."""
-    if (not isinstance(value, (list, tuple)) or len(value) != 2
-            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in value)):
-        return [0.0, 0.0]
-    return [float(v) for v in value]
 
 
 def read_clip_shift(value: Any) -> List[float]:
@@ -2855,8 +3107,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 height_cm: float = 0.0,
                 role_shift_cm: Optional[Dict[str, Sequence[float]]] = None,
                 shift_cm: Optional[Sequence[float]] = None,
-                partner_turn_deg: Optional[Sequence[float]] = None,
-                partner_yaw_deg: Optional[float] = None,
+                role_turn_deg: Optional[Dict[str, Sequence[float]]] = None,
                 with_finales: bool = True,
                 checked: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
@@ -2890,13 +3141,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     ``partner_shift_cm`` became ``role_shift_cm.b``, see
     :func:`migrate_partner_shift_roles`). A solo clip refuses it.
 
-    ``partner_turn_deg`` (Ruling A129) is a pair's cumulative renderer-only
-    [tilt, roll] of partner B in degrees (``geometry.partner_turn_deg``),
-    turned about B's hips at placement — no Blender.
-    ``partner_yaw_deg`` (Ruling A165) is a pair's cumulative renderer-only yaw
-    of partner B about its own vertical axis through its hips
-    (``geometry.partner_yaw_deg``, wrapped to ±180), applied before the
-    tilt/roll — no Blender.
+    ``role_turn_deg`` (owner decision 2026-11-23; formerly partner B's A129
+    tilt/roll and A165 yaw) turns the roles of a PAIR or a GROUP renderer-only:
+    ``{role: [tilt, roll, yaw]}`` degrees per edit (each within ±180), the
+    totals added up per role in ``geometry.role_turn_deg`` (each wrapped to
+    ±180, a role back at zero drops out) and applied at placement about that
+    role's bind hips — yaw about its own vertical axis first, then tilt/roll
+    (scene-render ``roleTurnFix``). No Blender. A solo clip refuses it.
     ``shift_cm`` is a cumulative renderer-only [side, forward] correction,
     -200..200 cm per edit, shared by both pair halves. It is applied after
     placement in the horizontal clip frame, independent of height and lean.
@@ -2926,8 +3177,7 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     yaw, tilt, roll = float(yaw_deg or 0.0), float(tilt_deg or 0.0), float(roll_deg or 0.0)
     height = float(height_cm or 0.0)
     horizontal = validate_clip_shift(shift_cm)
-    turn = validate_partner_turn(partner_turn_deg)
-    pyaw = validate_partner_yaw(partner_yaw_deg)
+    turns = validate_role_turn(role_turn_deg)
     per_role: Dict[str, List[float]] = {}
     for r, v in (role_shift_cm or {}).items():
         vals = [float(x) for x in (v or ())] if isinstance(v, (list, tuple)) else []
@@ -2938,17 +3188,15 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     kind, _role = parse_clip_role(path.name)
     root = library_root(library).resolve()
     cset = path.parent.name if path.parent.resolve() != root else ""
-    if not per_role and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *horizontal, *turn, pyaw)):
+    if not per_role and not turns and not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height, *horizontal)):
         return [_view_of(path, cset, library)]               # nothing dialled
 
     siblings = _role_siblings(path)
-    if any(abs(v) > 1e-9 for v in (*turn, pyaw)) and len(siblings) != 1:
-        raise ClipLibraryError(f"'{kind}' is not a pair clip — only a pair turns partner B")
-    if per_role and not siblings:
-        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair or a group moves single roles")
+    if (per_role or turns) and not siblings:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair or a group moves or turns single roles")
     present = {_split_stem(p.stem)[1] for p in [path] + siblings}
-    if set(per_role) - present:
-        raise ClipLibraryError(f"'{kind}' has no role {', '.join(sorted(set(per_role) - present))}")
+    if (set(per_role) | set(turns)) - present:
+        raise ClipLibraryError(f"'{kind}' has no role {', '.join(sorted((set(per_role) | set(turns)) - present))}")
     sidecar = _orient_sidecar(path, kind, bool(siblings))
     if not sidecar.is_file():
         raise ClipLibraryError(
@@ -3074,18 +3322,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             geometry["shift_cm"] = total
         else:
             geometry.pop("shift_cm", None)
-    if any(abs(v) > 1e-9 for v in turn):
-        total = [round(a + b, 2) for a, b in zip(read_partner_turn(geometry.get("partner_turn_deg")), turn)]
-        if any(total):
-            geometry["partner_turn_deg"] = total
+    if turns:
+        book = add_role_turns(geometry.get("role_turn_deg"), turns)
+        if book:
+            geometry["role_turn_deg"] = book
         else:
-            geometry.pop("partner_turn_deg", None)
-    if abs(pyaw) > 1e-9:
-        total_yaw = wrap_yaw(read_partner_yaw(geometry.get("partner_yaw_deg")) + pyaw)
-        if abs(total_yaw) > 1e-9:
-            geometry["partner_yaw_deg"] = total_yaw
-        else:
-            geometry.pop("partner_yaw_deg", None)
+            geometry.pop("role_turn_deg", None)
     geometry.pop("checked", None)
     if checked:
         geometry["checked"] = dict(checked)
@@ -3105,8 +3347,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 views += orient_clip(library, _rel_in(finale, library), yaw_deg=yaw, tilt_deg=tilt,
                                      roll_deg=roll, height_cm=height,
                                      role_shift_cm=per_role or None,
-                                     shift_cm=horizontal, partner_turn_deg=turn,
-                                     partner_yaw_deg=pyaw, with_finales=False)
+                                     shift_cm=horizontal, role_turn_deg=turns or None,
+                                     with_finales=False)
             except ClipLibraryError as e:
                 raise ClipLibraryError(
                     f"'{kind}' was changed, but its finale '{parse_clip_role(finale.name)[0]}' "

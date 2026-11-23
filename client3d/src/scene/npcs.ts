@@ -17,7 +17,7 @@ import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
-import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, partnerTurnFix, findContact, contactSampleOf,
+import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, roleTurnFix, findContact, contactSampleOf,
   type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
@@ -1571,9 +1571,9 @@ export class NpcManager {
     return true;
   }
 
-  /** Ruling A129: partner B's stored turn (`orientation.partner_turn_deg`, renderer-only; A165: with its yaw about its
-   *  own vertical axis, `partner_yaw_deg`) about its bind hips —
-   *  the same `partnerTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. The root is already the
+  /** Owner decision 2026-11-23: this role's stored turn (`orientation.role_turn_deg[role]`, renderer-only, [tilt, roll,
+   *  yaw] — the yaw about its own vertical axis first) about its bind hips —
+   *  the same `roleTurnFix` / `fixPivot` / `fixRoot` the Library's place preview applies. The root is already the
    *  size-scaled one (`pairScale.ts`) and `pairHipsBind` is this figure's own bind hips, so the turn's pivot follows
    *  the real body; the angles themselves are size-free. */
   private pairFixOf(npc: Npc, base: string, yaw: number): { fix: PairFix; pivot: [number, number, number] } | null {
@@ -1583,8 +1583,8 @@ export class NpcManager {
     const p = npc.root.position;
     const pivot = fixPivot([p.x, p.y, p.z], frame, fig.pairHipsBind);
     const role = base.slice(base.lastIndexOf('__') + 2);
-    const [tilt, roll, ownYaw] = role === 'b' ? fig.pairTurnDeg : [0, 0, 0];
-    return { fix: partnerTurnFix(tilt, roll, frame, ownYaw), pivot };
+    const [tilt, roll, ownYaw] = fig.roleTurnDeg(role);
+    return { fix: roleTurnFix(tilt, roll, frame, ownYaw), pivot };
   }
 
   private applyPairFix(npc: Npc, base: string, yaw: number, interactionId: string): void {

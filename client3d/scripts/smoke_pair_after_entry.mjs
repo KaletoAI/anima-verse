@@ -84,7 +84,7 @@ try {
     // the seated knee-raise's floor (98dd20394, P3b) — not measured here
     setFloorY() {},
     // Ruling A129 (d08f3c4b9): the pair fix turns partner B about its bind hips; no stored turn = the identity.
-    pairHipsBind: [0, 0.9, 0], pairTurnDeg: [0, 0, 0], height: 1.7,
+    pairHipsBind: [0, 0.9, 0], roleTurnDeg: () => [0, 0, 0], height: 1.7,
     // Phase B of the two-phase figure frame (b47a88e29, runFigureFrame's `FramePhaseB`; root angle A158 0418f24ed):
     // a stand-in without a loaded model — no frame figure, no partners, no channels, no root angle.
     frameFigure: () => null, partnerSnapshot: () => null, updateSecondary() {}, channelOccupants: () => [],

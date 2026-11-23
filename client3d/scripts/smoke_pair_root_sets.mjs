@@ -75,7 +75,7 @@ function place(height) {
   const figure = {
     playPair: () => true, holdsTravel: false, takeTravel: () => {},
     faceTowards: () => {}, setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
-    pairHipsBind: [0, 0.9, 0], pairTurnDeg: [0, 0, 0],
+    pairHipsBind: [0, 0.9, 0], roleTurnDeg: () => [0, 0, 0],
     ...(height === undefined ? {} : {height}),
   };
   const mgr = new m.NpcManager(lib, {

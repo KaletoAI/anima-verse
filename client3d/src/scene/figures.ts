@@ -79,9 +79,9 @@ const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
 const clipLoopCounts = new WeakMap<THREE.AnimationClip, number>();
 const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>();
 const clipShifts = new WeakMap<THREE.AnimationClip, ClipShiftCm>();
-/** Ruling A129: a pair's partner-B turn [tilt, roll] degrees (renderer-only, `orientation.partner_turn_deg`), plus
- *  (Ruling A165) its yaw about B's own vertical axis (`orientation.partner_yaw_deg`) as the third value. */
-const clipPartnerTurns = new WeakMap<THREE.AnimationClip, [number, number, number]>();
+/** Owner decision 2026-11-23: a pair/group clip's renderer-only role turns (`orientation.role_turn_deg` of the listing,
+ *  {role: [tilt, roll, yaw]} degrees; the same map on every role file of the clip). */
+const clipRoleTurns = new WeakMap<THREE.AnimationClip, Record<string, [number, number, number]>>();
 
 /** Ruling A139: a pair/group clip's contact relations (`contact_target.relations` of the listing; [] = automatic). */
 const clipContactRelations = new WeakMap<THREE.AnimationClip, ContactRelation[]>();
@@ -114,15 +114,17 @@ export function clipContactRelationsOf(clip: THREE.AnimationClip | null | undefi
   return (clip && clipContactRelations.get(clip)) || [];
 }
 
-/** Remembers the listing's partner-B turn for one loaded clip file. */
-export function setClipPartnerTurn(clip: THREE.AnimationClip, turn: [number, number] | null | undefined,
-                                   yaw?: number | null): void {
-  const t: [number, number, number] = [turn?.[0] || 0, turn?.[1] || 0, yaw || 0];
-  if (t[0] || t[1] || t[2]) clipPartnerTurns.set(clip, t);
+/** Remembers the listing's role turns for one loaded clip file (only valid [tilt, roll, yaw] triples, non-zero). */
+export function setClipRoleTurns(clip: THREE.AnimationClip, turns: Record<string, readonly number[]> | null | undefined): void {
+  const out: Record<string, [number, number, number]> = {};
+  for (const [r, v] of Object.entries(turns ?? {})) {
+    if (Array.isArray(v) && v.length === 3 && v.every((x) => Number.isFinite(x)) && v.some((x) => x !== 0)) out[r] = [v[0], v[1], v[2]];
+  }
+  if (Object.keys(out).length) clipRoleTurns.set(clip, out);
 }
-/** The partner-B turn [tilt, roll, yaw] of a played clip ([0, 0, 0] = none). */
-export function clipPartnerTurn(clip: THREE.AnimationClip | null | undefined): [number, number, number] {
-  return (clip && clipPartnerTurns.get(clip)) || [0, 0, 0];
+/** The turn [tilt, roll, yaw] of `role` in a played clip ([0, 0, 0] = none). */
+export function clipRoleTurn(clip: THREE.AnimationClip | null | undefined, role: string): [number, number, number] {
+  return (clip && clipRoleTurns.get(clip)?.[role]) || [0, 0, 0];
 }
 
 /** Renderer-only horizontal correction of the exact selected source file. */
@@ -169,8 +171,8 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
     if (heights) clipHeightOffsets.set(c, heights);
     const shift = source && clipShifts.get(source);
     if (shift) clipShifts.set(c, shift);
-    const turn = source && clipPartnerTurns.get(source);
-    if (turn) clipPartnerTurns.set(c, turn);
+    const turn = source && clipRoleTurns.get(source);
+    if (turn) clipRoleTurns.set(c, turn);
     const rel = source && clipContactRelations.get(source);
     if (rel) clipContactRelations.set(c, rel);
     const bend = source && clipBendLimits.get(source);
@@ -1129,7 +1131,7 @@ export class FigureLibrary {
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
-                             partnerTurn?: [number, number] | null; partnerYaw?: number | null; contacts?: ContactRelation[] | null;
+                             roleTurns?: Record<string, number[]> | null; contacts?: ContactRelation[] | null;
                              bend?: unknown; rootAngle?: unknown; pivot?: unknown }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
@@ -1138,8 +1140,7 @@ export class FigureLibrary {
           rootMotionMode: c.root_motion?.mode,
           heightOffsets: c.height_offsets_cm,
           shift: c.orientation?.shift_cm,
-          partnerTurn: c.orientation?.partner_turn_deg,
-          partnerYaw: c.orientation?.partner_yaw_deg,
+          roleTurns: c.orientation?.role_turn_deg,
           contacts: c.contact_target?.relations,
           bend: c.bend_limits?.limits,
           rootAngle: c.root_angle,
@@ -1199,7 +1200,7 @@ export class FigureLibrary {
           setClipRootMotion(clip, source.rootMotion, source.rootMotionMode);
           setClipHeightOffsets(clip, source.heightOffsets);
           setClipShift(clip, source.shift);
-          setClipPartnerTurn(clip, source.partnerTurn, source.partnerYaw);
+          setClipRoleTurns(clip, source.roleTurns);
           setClipContactRelations(clip, source.contacts);
           setClipBendLimits(clip, source.bend);
           setClipRootAngle(clip, source.rootAngle);
@@ -1280,7 +1281,7 @@ export class FigureLibrary {
               setClipRootMotion(clip, !!source.root_motion && source.root_motion.mode !== 'strip', source.root_motion?.mode);
               setClipHeightOffsets(clip, source.height_offsets_cm);
               setClipShift(clip, source.orientation?.shift_cm);
-              setClipPartnerTurn(clip, source.orientation?.partner_turn_deg, source.orientation?.partner_yaw_deg);
+              setClipRoleTurns(clip, source.orientation?.role_turn_deg);
               setClipContactRelations(clip, source.contact_target?.relations);
               setClipBendLimits(clip, source.bend_limits?.limits);
               setClipRootAngle(clip, source.root_angle);
@@ -1846,8 +1847,8 @@ export class FigureLibrary {
           if (heights) clipHeightOffsets.set(c, heights);
           const shift = clipShifts.get(clip);
           if (shift) clipShifts.set(c, shift);
-          const turn = clipPartnerTurns.get(clip);
-          if (turn) clipPartnerTurns.set(c, turn);
+          const turn = clipRoleTurns.get(clip);
+          if (turn) clipRoleTurns.set(c, turn);
           const rel = clipContactRelations.get(clip);
           if (rel) clipContactRelations.set(c, rel);
           const bend = clipBendLimits.get(clip);
@@ -2334,10 +2335,9 @@ export class Figure {
   /** Ruling A129: the bind hips over the root (metres) — `fixPivot`'s hips for a pair fix. */
   readonly pairHipsBind: [number, number, number];
 
-  /** Ruling A129: the partner-B turn [tilt, roll] degrees of the clip playing now, plus (A165) its yaw about B's own
-   *  vertical axis ([0, 0, 0] = none). */
-  get pairTurnDeg(): [number, number, number] {
-    return clipPartnerTurn(this.current?.getClip());
+  /** Owner decision 2026-11-23: the turn [tilt, roll, yaw] degrees of `role` in the clip playing now ([0, 0, 0] = none). */
+  roleTurnDeg(role: string): [number, number, number] {
+    return clipRoleTurn(this.current?.getClip(), role);
   }
 
   /** Ruling A139: the contact relations of the clip playing now ([] = automatic). */

@@ -20,11 +20,19 @@
  *       = 0.01500077776. The band edge is a kink (zero slope inside), which Gauss–Newton approaches from inside by
  *       line-search halvings: expect d − 0.5 mm ≤ Δy ≤ d + 1e-6 (never beyond the minimum, at most 0.5 mm short),
  *       Δx = Δz = 0 (±1e-9).
- *   [4] postureAngleCapDeg: stand 20 → 3, lie 20 → 5, seat 20 → 20, null 10 → 10.
+ *   [4] postureAngleCapDeg (tilt and roll; owner 2026-11-23 the lying role is held by THE SUPPORT, ABSOLUTE instead):
+ *       stand 20 → 3, lie 20 → 20, seat 20 → 20, null 10 → 10.
  *   [5] postureReport of the frames moved by [3]: gapMm = Δy·1000 (±1e-6), sinkMm 0, heightMm = (0.05 + Δy)·1000 with
  *       surface 0, limited (Δy ≥ 14.5 mm ≥ 15 − 2).
- *   [6] Fixture [3] with tilt/roll axes X, Z and the place type 'lie' (angle cap postureAngleCapDeg('lie', 20) = 5):
- *       every turn ≤ 5° (+1e-9).
+ *   [6] Fixture [3] with tilt/roll axes X, Z and the place type 'stand' (angle cap postureAngleCapDeg('stand', 20) = 3):
+ *       every turn ≤ 3° (+1e-9).
+ *   [7] THE SUPPORT, ABSOLUTE: surfaceExcess 0.02 → 0.01, −0.008 → −0.003, 0.005 → 0 (band [−5, +10] mm).
+ *       supportMode of [1]'s sample: only the two shins carry it and they stand upright (vertical 0.4 / 0.38 m
+ *       capsules) → 'band' (on its feet). The shins laid flat (left_shin (0, 0.1, 0)–(0, 0.1, 0.4), right_shin
+ *       (0.2, 0.12, 0)–(0.2, 0.12, 0.4), r 0.05; lowest point 0.05) on a surface at 0.05: surfaceGap 0 → 'surface'; on
+ *       a surface at −0.01: gap 0.06 > carriedM 0.05 → 'band' (carried by someone else).
+ *   [8] Fixture [3] with the flat shins and mode 'surface', surface 0.05: the gap is d (the vertical shift), root and tip want d = 0.05, the band allows d ≤ 0.01: minimise 2(d − 0.05)² + 300²(d − 0.01)²
+ *       → d = (0.1 + 900)/90002 = 0.0100004444; the kink is approached from either side within 0.5 mm.
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -77,7 +85,7 @@ const fix = solve(S).fix
 const d = (0.2 + 2700) / 180004
 assert.ok(fix.shift[1] >= d - 0.0005 && fix.shift[1] <= d + 1e-6, `[3] posture Δy ${fix.shift[1]} vs ${d}`); near(fix.shift[0], 0, 1e-9, '[3] Δx'); near(fix.shift[2], 0, 1e-9, '[3] Δz')
 // [4]
-assert.equal(SR.postureAngleCapDeg('stand', 20), 3); assert.equal(SR.postureAngleCapDeg('lie', 20), 5)
+assert.equal(SR.postureAngleCapDeg('stand', 20), 3); assert.equal(SR.postureAngleCapDeg('lie', 20), 20)
 assert.equal(SR.postureAngleCapDeg('seat', 20), 20); assert.equal(SR.postureAngleCapDeg(null, 10), 10)
 // [5]
 const rep = SR.postureReport(S.map((x) => ({ support: x.support, pts: x.support.pts.map((p) => SR.fixPoint(fix, x.pivot, p)) })))
@@ -85,6 +93,22 @@ near(rep.gapMm, fix.shift[1] * 1000, 1e-6, '[5] gap'); assert.equal(rep.sinkMm, 
 near(rep.heightMm, (0.05 + fix.shift[1]) * 1000, 1e-6, '[5] height'); assert.equal(rep.limited, true)
 // [6]
 const ax = [[1, 0, 0], [0, 0, 1]]
-const tf = solve(S, { axes: ax, angleCapDeg: SR.postureAngleCapDeg('lie', cap.angleDeg) })
-for (const a of tf.deg) assert.ok(Math.abs(a) <= 5 + 1e-9, `[6] turn ${a}`)
+const tf = solve(S, { axes: ax, angleCapDeg: SR.postureAngleCapDeg('stand', cap.angleDeg) })
+for (const a of tf.deg) assert.ok(Math.abs(a) <= 3 + 1e-9, `[6] turn ${a}`)
+// [7]
+near(SR.surfaceExcess(0.02), 0.01, 1e-12, '[7] float'); near(SR.surfaceExcess(-0.008), -0.003, 1e-12, '[7] sink')
+assert.equal(SR.surfaceExcess(0.005), 0)
+assert.equal(SR.supportMode(sup), 'band')
+const flat = [
+  { id: 'left_shin', now: { a: [0, 0.1, 0], b: [0, 0.1, 0.4], r: 0.05 } },
+  { id: 'right_shin', now: { a: [0.2, 0.12, 0], b: [0.2, 0.12, 0.4], r: 0.05 } },
+]
+const fs0 = SR.supportSample(flat, { surface: 0.05 })
+near(SR.surfaceGap(fs0), 0, 1e-12, '[7] flat gap'); assert.equal(SR.supportMode(fs0), 'surface')
+assert.equal(SR.supportMode(SR.supportSample(flat, { surface: -0.01 })), 'band')
+// [8]
+const FS = Array.from({ length: 6 }, () => frame({ ...fs0, mode: 'surface' }))
+const fx = solve(FS).fix
+const d8 = (0.1 + 900) / 90002
+assert.ok(Math.abs(fx.shift[1] - d8) <= 0.0005, `[8] surface Δy ${fx.shift[1]} vs ${d8}`)
 console.log('smoke_posture_support OK')

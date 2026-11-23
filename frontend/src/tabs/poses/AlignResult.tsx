@@ -6,8 +6,8 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { hasInside, targetWordOf } from './contactWords'
 import { LampDot } from './StatusLamp'
-import type { AlignBound, KeyReason } from '@anima/scene-render'
-import type { AutoAlignResult, KeyAlign } from './PlacePreview'
+import { alignGain, ALIGN_GAIN_MM, type AlignBound, type KeyReason } from '@anima/scene-render'
+import type { AutoAlignResult, KeyAlign, RelationAlign } from './PlacePreview'
 
 type Ok = Extract<AutoAlignResult, { ok: true }>
 const CELL = { textAlign: 'right' as const, padding: '0 4px', whiteSpace: 'nowrap' as const }
@@ -94,13 +94,23 @@ function reasonWord(t: (s: string) => string, r: KeyReason): string {
 }
 
 /** The names of the unknowns that hit their cap or slider range. */
-function boundWord(t: (s: string) => string, b: AlignBound, rangeCm: number): string {
+/** The gap of [min, max] furthest from the surface (mm), as a word. */
+function gapWord(g: [number, number] | null): string {
+  return g ? (Math.abs(g[0]) > Math.abs(g[1]) ? g[0] : g[1]).toFixed(0) : '–'
+}
+/** THE MINIMUM GAIN of one relation (mm): the larger of the axis error's and the depth error's drop. */
+function gainOf(x: RelationAlign): number {
+  const g = alignGain(x.keys.before, x.keys.after, hasInside(x.target))
+  return Math.max(g.axisMm, g.depthMm)
+}
+function boundWord(t: (s: string) => string, b: AlignBound, rangeCm: number, turnDeg: number): string {
   switch (b) {
     case 'side': return t('sideways (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
     case 'up': return t('up/down (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
     case 'forward': return t('forward/back (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
-    case 'tilt': return t('tilt (±10°)')
-    case 'roll': return t('roll (±10°)')
+    case 'tilt': return t('tilt (±{d}°)').replace('{d}', turnDeg.toFixed(0))
+    case 'roll': return t('roll (±{d}°)').replace('{d}', turnDeg.toFixed(0))
+    case 'turn': return t('yaw (±{d}°)').replace('{d}', turnDeg.toFixed(0))
     case 'pitch': return t('root pitch (±60°)')
     case 'yaw': return t('root yaw (±30°)')
   }
@@ -142,7 +152,13 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
             : x.discard === 'root'
               ? t('Not applied — the visible root of the part would end {mm} mm inside the opening on a rendered frame (it starts at {start} mm). The dials stay as they were.')
                 .replace('{mm}', (x.rendered?.after.visMm ?? 0).toFixed(0)).replace('{start}', (x.rendered?.before.visMm ?? 0).toFixed(0))
-              : t('Not applied — {role} would end shallower and further off the axis than it starts. The dials stay as they were.'))
+              : x.discard === 'support'
+                ? t('Not applied — {role} would float above or sink into its seat or bed: {mm} mm off its surface (it starts at {start} mm; allowed −5 to +10 mm). The dials stay as they were.')
+                  .replace('{mm}', gapWord(x.support.afterMm)).replace('{start}', gapWord(x.support.beforeMm))
+                : x.discard === 'nothing'
+                  ? t('Not applied — nothing to gain: {role} would get at most {gain} mm closer to the axis or the depth (at least {min} mm needed). The dials stay as they were.')
+                    .replace('{gain}', Math.max(0, gainOf(x)).toFixed(1)).replace('{min}', String(ALIGN_GAIN_MM))
+                  : t('Not applied — {role} would end further off its depth and further off the axis than it starts. The dials stay as they were.'))
             .replace('{role}', x.moved.toUpperCase())}
         </div>
       ))}
@@ -152,6 +168,21 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
           title={t('Where the part’s mesh meets the body (the body-side end of its first capsule, with its radius), along the axis through the opening, at the frame of the loop as rendered where it is deepest; negative = outside.')}>
           {t('Visible root at its deepest rendered frame: {after} mm (before {before} mm; negative = outside)')
             .replace('{after}', x.rendered!.after.visMm.toFixed(0)).replace('{before}', x.rendered!.before.visMm.toFixed(0))}
+        </div>
+      ))}
+      {r.relations.map((x, i) => (
+        <div key={i} data-testid="align-support" data-support={JSON.stringify(x.support)}
+          title={t('The moved role’s lowest support capsule over the surface of its place, over the loop (the frame furthest from it). A role on its feet, or one carried more than 50 mm above its surface by the other person, keeps its own posture instead.')}>
+          {x.support.mode === 'surface'
+            ? t('{role} on its surface: {before} mm → {after} mm (allowed −5 to +10 mm)').replace('{role}', x.moved.toUpperCase())
+              .replace('{before}', gapWord(x.support.beforeMm)).replace('{after}', gapWord(x.support.afterMm))
+            : x.support.mode === 'band' ? t('{role} is carried (on its feet or by the other person): its own posture holds it.').replace('{role}', x.moved.toUpperCase())
+              : ''}
+          {x.support.others.filter((o) => o.mm && (o.mm[0] < -5 || o.mm[0] > 10) && o.mm[0] < 50).map((o) => (
+            <span key={o.letter} style={{ color: 'var(--warning, #d29922)' }}>
+              {' · '}{t('place {p} ({role}, not moved) starts {mm} mm off its surface').replace('{p}', o.letter).replace('{role}', o.role.toUpperCase())
+                .replace('{mm}', o.mm![0].toFixed(0))}</span>
+          ))}
         </div>
       ))}
       {r.relations[0]?.clear.length ? (
@@ -178,15 +209,16 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
       ) : null}
       {r.movers.map((m) => {
         const v3 = (v: number[]) => v.map((x) => x.toFixed(1)).join(' / ')
-        const limit = t('Auto-align moves {role} at most ±{r} cm in every direction and ±10° tilt/roll around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
-          .replace('{role}', m.role.toUpperCase()).replace('{r}', m.rangeCm.toFixed(0))
+        const limit = t('Auto-align moves {role} at most ±{r} cm in every direction and turns it at most ±{d}° in tilt, roll and yaw around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
+          .replace('{role}', m.role.toUpperCase()).replace('{r}', m.rangeCm.toFixed(0)).replace('{d}', m.turnRangeDeg.toFixed(0))
         return (
           <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} title={limit}>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <LampDot lamp={m.lamp} title={t('Within the alignment range')} />
               <span>{t('{role} moved by {a} cm (now {s} cm)').replace('{role}', m.role.toUpperCase()).replace('{a}', v3(m.adjustCm)).replace('{s}', v3(m.shiftCm))}
-                {m.adjustDeg[0] || m.adjustDeg[1]
-                  ? ` · ${t('tilt {a}° roll {b}°').replace('{a}', m.adjustDeg[0].toFixed(1)).replace('{b}', m.adjustDeg[1].toFixed(1))}` : ''}</span>
+                {m.adjustDeg.some((v) => v !== 0)
+                  ? ` · ${t('turned tilt {a}° roll {b}° yaw {c}° (now {n}°)').replace('{a}', m.adjustDeg[0].toFixed(1)).replace('{b}', m.adjustDeg[1].toFixed(1))
+                    .replace('{c}', m.adjustDeg[2].toFixed(1)).replace('{n}', v3(m.turnDeg))}` : ''}</span>
             </div>
             {m.rootAngle ? (
               <div data-testid="align-root">{t('Root angle pitch {p}° yaw {y}° (was {p0}° / {y0}°) — written to the root-angle dials.')
@@ -195,7 +227,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
             ) : null}
             {m.hits.length ? (
               <div style={{ color: 'var(--danger, #f85149)' }}>
-                {t('Stopped by: {names} — move it closer by hand.').replace('{names}', m.hits.map((b) => boundWord(t, b, m.rangeCm)).join(', '))}</div>
+                {t('Stopped by: {names} — move it closer by hand.').replace('{names}', m.hits.map((b) => boundWord(t, b, m.rangeCm, m.turnRangeDeg)).join(', '))}</div>
             ) : null}
             <div style={{ opacity: 0.7 }}>{(m.converged ? t('Converged after {n} passes.') : t('Not converged after {n} passes.'))
               .replace('{n}', String(m.passes.length))}</div>

@@ -22,8 +22,9 @@ Owner decision 2026-11-20: ONE value per state, the TOTAL (degrees); no per-join
     "yaw_deg": -15} -> 20/-15.
 [9] A212 alignment range: 8 and 40 and 1 accepted as floats; refused 0.5, 41, a bool, "8", NaN;
     clip_align_range(None) -> 8 cm source default, of {"align_range_cm": 12} -> 12 source clip, of a junk 99 -> default.
-[10] A212 align_applied: {"role_shift_cm": {"b": [1, 2, 3]}} -> turn_deg [0, 0] filled in, floats; refused a role
-    "x", 2 numbers for a role, 101, a key "yaw"; clip_align_applied(None) -> None, of junk -> None.
+[10] A212 align_applied: {"role_shift_cm": {"b": [1, 2, 3]}} -> role_turn_deg {} filled in, floats (owner 2026-11-23:
+    every role's turn [tilt, roll, yaw]); refused a role "x", 2 numbers for a role, a turn of 181, the gone key
+    "turn_deg", a key "yaw"; clip_align_applied(None) -> None, of junk -> None.
 [11] the boot migration migrate_bend_limits_total (temp clip libraries via ANIMATION_CLIPS_DIR /
     ANIMATION_CLIPS_LICENSED_DIR; rule: raised total = min(old joint, old total), resting total = old total):
     free/p.json raised {joint 15, total 35, root_up 60}, resting {joint 25, total 75} -> raised 15 (min 15/35),
@@ -141,8 +142,9 @@ assert ac.clip_align_range(None) == {"cm": 8.0, "source": "default"}
 assert ac.clip_align_range({"align_range_cm": 12}) == {"cm": 12.0, "source": "clip"}
 assert ac.clip_align_range({"align_range_cm": 99}) == {"cm": 8.0, "source": "default"}
 assert ac.validate_align_applied({"role_shift_cm": {"b": [1, 2, 3]}}) == {                # [10]
-    "role_shift_cm": {"b": [1.0, 2.0, 3.0]}, "turn_deg": [0.0, 0.0]}
-for bad in ({"role_shift_cm": {"x": [0, 0, 0]}}, {"role_shift_cm": {"b": [0, 0]}}, {"turn_deg": [101, 0]}, {"yaw": 1}):
+    "role_shift_cm": {"b": [1.0, 2.0, 3.0]}, "role_turn_deg": {}}
+for bad in ({"role_shift_cm": {"x": [0, 0, 0]}}, {"role_shift_cm": {"b": [0, 0]}}, {"role_turn_deg": {"b": [181, 0, 0]}},
+            {"turn_deg": [1, 0]}, {"yaw": 1}):
     try:
         ac.validate_align_applied(bad)
     except ac.ClipLibraryError:

@@ -386,6 +386,13 @@ they still use real model files and sidecars, outside the standalone vectors.
 after scaling, = C); `pairPlacedRoot(root, pivot, heightM, anchor)` = scale, then `x = ax + rx·cos + rz·sin`,
 `z = az − rx·sin + rz·cos` (npcs.ts `tickInteraction`'s order; the numbers of `smoke_pair_root_sets.mjs` [B]).
 
+`role_turn.json` (source `client3d/scripts/smoke_role_turn_vectors.mjs`, 19 cases, eps 1e-12, replayed by that smoke and
+native `RoleTurnVectorTests`): scene-render `pairFit.ts` — `roleTurnFix(tilt, roll, frame, yaw)` → `{shift, turn}`,
+`turnMatrix`, `matrixTurn` (incl. the half-turn branch), `fixPivot(root, frame, hipsBind)`, `fixRoot(fix, pivot, root)` →
+`{position, quaternion [x,y,z,w]}`; frames row-major. `roleTurnPlaced(map, role, root, yawDeg, hipsBind)` is the whole
+placement chain of npcs.ts `applyPairFix`: the role's entry of `orientation.role_turn_deg` (exactly three finite numbers,
+else no turn), frame `eulerYXZ(0, yaw, 0)`, `fixPivot`, `roleTurnFix`, `fixRoot`.
+
 Task 84 adds `pairBlend(from, target, elapsedS)` / native `PairBlend.Sample`:
 `u = clamp(elapsedS / .4, 0, 1)`, weight `u²(3−2u)`, position interpolated
 from the rendered adoption pose toward this frame's target, yaw along the

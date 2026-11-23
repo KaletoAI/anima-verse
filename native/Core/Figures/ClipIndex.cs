@@ -21,6 +21,12 @@ public sealed record ClipSourceEntry(string Kind, string Set, string Url, bool? 
     public bool KeepFacing { get; init; }
     /// <summary>A pair/group half's contact pivot (<c>pair_pivot_cm</c>, <see cref="PairScale.PivotOf"/>); the origin when absent.</summary>
     public PairXZ PairPivot { get; init; }
+    /// <summary>
+    /// The renderer-only turn of THIS file's own role (<c>orientation.role_turn_deg[role]</c>, <see cref="RoleTurnDeg.Parse"/>):
+    /// a file is one role, so only that role's entry of the clip-wide map is kept. Zero for a solo clip, an absent role or a
+    /// malformed map.
+    /// </summary>
+    public RoleTurnDeg RoleTurn { get; init; }
     /// <summary><c>clipLoops</c>: a missing flag loops (§ A8).</summary>
     public bool Loops => Loop ?? true;
 }
@@ -121,6 +127,8 @@ public static class ClipLibraryRules
             {
                 PairPivot = c.TryGetProperty("pair_pivot_cm", out var pivot) ? PairScale.PivotOf(pivot) : PairScale.Origin,
                 KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
+                RoleTurn = c.TryGetProperty("orientation", out var turnBook) && turnBook.ValueKind == JsonValueKind.Object
+                           && turnBook.TryGetProperty("role_turn_deg", out var turns) ? RoleTurnDeg.Parse(turns, role) : RoleTurnDeg.None,
                 HeightOffsets = (c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default) with
                 {
                     Shift = c.TryGetProperty("orientation", out var orientation) && orientation.ValueKind == JsonValueKind.Object

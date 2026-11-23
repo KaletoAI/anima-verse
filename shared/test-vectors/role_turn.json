@@ -1,0 +1,668 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_role_turn_vectors.mjs",
+  "cases": [
+    {
+      "label": "[1] identity: no tilt, roll or yaw is the identity fix",
+      "fn": "roleTurnFix",
+      "args": [
+        0,
+        0,
+        [
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1
+        ],
+        0
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0,
+          0,
+          0
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[2] tilt 10° alone, identity frame: the turn is 10° about the side axis +X",
+      "fn": "roleTurnFix",
+      "args": [
+        10,
+        0,
+        [
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1
+        ],
+        0
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0.17453292519943295,
+          0,
+          0
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[2] roll 10° alone, identity frame: the turn is 10° about the forward axis +Z",
+      "fn": "roleTurnFix",
+      "args": [
+        0,
+        10,
+        [
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1
+        ],
+        0
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0,
+          0,
+          0.17453292519943295
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[3] yaw 90° alone, a frame yawed 90°: a quarter turn about up +Y",
+      "fn": "roleTurnFix",
+      "args": [
+        0,
+        0,
+        [
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          -1,
+          0,
+          0
+        ],
+        90
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0,
+          1.5707963267948966,
+          0
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[3] yaw 180° alone, identity frame: a half turn about up +Y, not none",
+      "fn": "roleTurnFix",
+      "args": [
+        0,
+        0,
+        [
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1
+        ],
+        180
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0,
+          3.141592653589793,
+          0
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[4] yaw 90° then tilt 90°, identity frame: 120° about (1,1,1)/√3",
+      "fn": "roleTurnFix",
+      "args": [
+        90,
+        0,
+        [
+          1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          1
+        ],
+        90
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          1.2091995761561452,
+          1.2091995761561452,
+          1.2091995761561452
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[4] yaw 90° then tilt 90°, a frame yawed 90°: F·(1,1,1)·k = (k, k, −k)",
+      "fn": "roleTurnFix",
+      "args": [
+        90,
+        0,
+        [
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          -1,
+          0,
+          0
+        ],
+        90
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          1.2091995761561452,
+          1.2091995761561452,
+          -1.2091995761561452
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[5] tilt 90° alone, a frame yawed 90°: about the side axis (0,0,−1)",
+      "fn": "roleTurnFix",
+      "args": [
+        90,
+        0,
+        [
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          -1,
+          0,
+          0
+        ],
+        0
+      ],
+      "expect": {
+        "shift": [
+          0,
+          0,
+          0
+        ],
+        "turn": [
+          0,
+          0,
+          -1.5707963267948966
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[6] turnMatrix of a quarter turn about +Y",
+      "fn": "turnMatrix",
+      "args": [
+        [
+          0,
+          1.5707963267948966,
+          0
+        ]
+      ],
+      "expect": [
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        -1,
+        0,
+        0
+      ],
+      "eps": 1e-12
+    },
+    {
+      "label": "[6] matrixTurn of the cyclic permutation x→y→z→x",
+      "fn": "matrixTurn",
+      "args": [
+        [
+          0,
+          0,
+          1,
+          1,
+          0,
+          0,
+          0,
+          1,
+          0
+        ]
+      ],
+      "expect": [
+        1.2091995761561452,
+        1.2091995761561452,
+        1.2091995761561452
+      ],
+      "eps": 1e-12
+    },
+    {
+      "label": "[6] matrixTurn of the exact half turn about +Y",
+      "fn": "matrixTurn",
+      "args": [
+        [
+          -1,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          -1
+        ]
+      ],
+      "expect": [
+        0,
+        3.141592653589793,
+        0
+      ],
+      "eps": 1e-12
+    },
+    {
+      "label": "[7] fixPivot: root plus the hips bind turned by a frame yawed 90°",
+      "fn": "fixPivot",
+      "args": [
+        [
+          1,
+          0.5,
+          -2
+        ],
+        [
+          0,
+          0,
+          1,
+          0,
+          1,
+          0,
+          -1,
+          0,
+          0
+        ],
+        [
+          0.1,
+          0.95,
+          0.2
+        ]
+      ],
+      "expect": [
+        1.2,
+        1.45,
+        -2.1
+      ],
+      "eps": 1e-12
+    },
+    {
+      "label": "[8] fixRoot: a quarter turn about −Z through the hips 0.95 m over the root",
+      "fn": "fixRoot",
+      "args": [
+        {
+          "shift": [
+            0,
+            0,
+            0
+          ],
+          "turn": [
+            0,
+            0,
+            -1.5707963267948966
+          ]
+        },
+        [
+          1,
+          1.45,
+          -2
+        ],
+        [
+          1,
+          0.5,
+          -2
+        ]
+      ],
+      "expect": {
+        "position": [
+          0.05,
+          1.45,
+          -2
+        ],
+        "quaternion": [
+          0,
+          0,
+          -0.7071067811865476,
+          0.7071067811865476
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[9] placed: role b tilt 10°, yaw 0, hips 1 m: the feet swing back",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "b": [
+            10,
+            0,
+            0
+          ]
+        },
+        "b",
+        [
+          0,
+          0,
+          0
+        ],
+        0,
+        [
+          0,
+          1,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          0,
+          0.01519224698779198,
+          -0.17364817766693033
+        ],
+        "quaternion": [
+          0.08715574274765817,
+          0,
+          0,
+          0.9961946980917455
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[10] placed: group role c roll 90°, the root swings to +X",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "a": [
+            0,
+            0,
+            45
+          ],
+          "b": [
+            10,
+            0,
+            0
+          ],
+          "c": [
+            0,
+            90,
+            0
+          ]
+        },
+        "c",
+        [
+          2,
+          0,
+          3
+        ],
+        0,
+        [
+          0,
+          0.9,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          2.9,
+          0.9,
+          3
+        ],
+        "quaternion": [
+          0,
+          0,
+          0.7071067811865476,
+          0.7071067811865476
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[11] placed: role d absent from the map → identity",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "a": [
+            0,
+            0,
+            45
+          ],
+          "b": [
+            10,
+            0,
+            0
+          ],
+          "c": [
+            0,
+            90,
+            0
+          ]
+        },
+        "d",
+        [
+          2,
+          0,
+          3
+        ],
+        0,
+        [
+          0,
+          0.9,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          2,
+          0,
+          3
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[11] placed: a malformed role entry → identity",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "b": [
+            10,
+            "x",
+            0
+          ]
+        },
+        "b",
+        [
+          2,
+          0,
+          3
+        ],
+        0,
+        [
+          0,
+          0.9,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          2,
+          0,
+          3
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[12] placed: role b yaw 180° alone, the root stays under the hips",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "b": [
+            0,
+            0,
+            180
+          ]
+        },
+        "b",
+        [
+          1,
+          0,
+          0
+        ],
+        0,
+        [
+          0,
+          0.9,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          1,
+          0,
+          0
+        ],
+        "quaternion": [
+          0,
+          1,
+          0,
+          0
+        ]
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "[13] placed: role b tilt 90°, root yawed 90°, hips 0.95 m: the full fixRoot",
+      "fn": "roleTurnPlaced",
+      "args": [
+        {
+          "b": [
+            90,
+            0,
+            0
+          ]
+        },
+        "b",
+        [
+          1,
+          0.5,
+          -2
+        ],
+        90,
+        [
+          0,
+          0.95,
+          0
+        ]
+      ],
+      "expect": {
+        "position": [
+          0.05,
+          1.45,
+          -2
+        ],
+        "quaternion": [
+          0,
+          0,
+          -0.7071067811865476,
+          0.7071067811865476
+        ]
+      },
+      "eps": 1e-12
+    }
+  ]
+}

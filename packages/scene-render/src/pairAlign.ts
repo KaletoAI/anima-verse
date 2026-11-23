@@ -52,8 +52,11 @@
  * cannot reach overlap within the cap (start depth below a_f − the cap's reach) are left out.
  * THE VERDICT (`alignVerdict`): the run's last measurement over the WHOLE loop decides — a role deeper into some f
  * than a_f + `ALIGN_CLEAR_SLACK_MM` (0.5 mm, the re-measure repeatability) is DISCARDED ('overlap', the dials stay),
- * and so is a result worse than its start by the lamp's own measures: the deepest frame shallower (`KEY_SHALLOWER_MM`,
- * not counted for a start past the bottom) AND the axis error larger ('worse'). THE RENDERED ROOT (owner finding
+ * and so is a result worse than its start ('worse': the axis error AND the depth error at the deepest frame both larger by
+ * more than `ALIGN_GAIN_SLACK_MM`), and — THE MINIMUM GAIN (owner 2026-11-23, `alignGain`) — one that is not at least
+ * `ALIGN_GAIN_MM` = 5 mm better in one of them without being worse in the other ('nothing': nothing to gain). THE
+ * SUPPORT, ABSOLUTE (`postureSupport.ts`): a moved role whose excess over the surface's touch band grows ('support').
+ * THE RENDERED ROOT (owner finding
  * 2026-11-22): the page measures the VISIBLE root over the loop as rendered (partners on, the chain bend applied); a
  * channel whose visible root ends deeper than max(0, its start) + `ALIGN_ROOT_SLACK_MM` on some rendered frame is
  * discarded too ('root'); one still inside but not deeper than it started is applied, red, with the reason named.
@@ -121,14 +124,22 @@
  * target reads the root joint and the tip off its line instead of the axis error.
  */
 import type { Vec3 } from './collision'
-import { bendSample, fixPoint, solveLinear, supportDelta, turnMatrix, type FitSample, type PairFix } from './pairFit'
+import { bendSample, fixPoint, matrixTurn, roleTurnFix, solveLinear, supportDelta, turnMatrix, type FitSample,
+  type PairFix } from './pairFit'
 import { quatMul, quatRotate, rootTurnQuat, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, type BendFrame, type BendLimits,
   type RootAngle } from './chainBend'
-import { POSTURE, postureExcess } from './postureSupport'
+import { POSTURE, postureExcess, supportHeight, surfaceExcess } from './postureSupport'
 import { segmentSegmentDistance } from './figureInspect'
 
 export const ALIGN_RANGE_CM_DEFAULT = 8
 export const ALIGN_ANGLE_DEG = 10
+/** The default rotation range of the moved role (tilt, roll and yaw each, degrees; the sidecar's `align_turn_deg`,
+ *  server `ALIGN_TURN_DEFAULT_DEG`). */
+export const ALIGN_TURN_DEG_DEFAULT = 45
+/** THE MINIMUM GAIN (owner 2026-11-23): a result counts as an improvement only when the axis error drops or the depth
+ *  error at the deepest frame shrinks by at least this (mm) — and neither grows by more than `ALIGN_GAIN_SLACK_MM`. */
+export const ALIGN_GAIN_MM = 5
+export const ALIGN_GAIN_SLACK_MM = 1
 export const JOIN_WEIGHT = 1
 /** The inequality weight (per metre of violation) and the margin the inequalities keep (metres). */
 export const ALIGN_LIMIT_WEIGHT = 10
@@ -159,12 +170,26 @@ export const ALIGN_MISMATCH_DEG = 60
 export interface AlignCap { sideM: number; upM: number; forwardM: number; angleDeg: number }
 export type AlignLamp = 'green' | 'yellow' | 'red'
 /** An unknown that ended on its cap or slider range. */
-export type AlignBound = 'side' | 'up' | 'forward' | 'tilt' | 'roll' | 'pitch' | 'yaw'
+export type AlignBound = 'side' | 'up' | 'forward' | 'tilt' | 'roll' | 'turn' | 'pitch' | 'yaw'
 
-/** The cap for a clip's alignment range (cm; null/invalid = the default). */
-export function alignCap(rangeCm?: number | null): AlignCap {
+/** The cap for a clip's alignment range (cm; null/invalid = the default) and its rotation range (degrees, each of tilt,
+ *  roll and yaw; null/invalid = `ALIGN_TURN_DEG_DEFAULT`; 0 = no turn). */
+export function alignCap(rangeCm?: number | null, turnDeg?: number | null): AlignCap {
   const r = typeof rangeCm === 'number' && Number.isFinite(rangeCm) && rangeCm > 0 ? rangeCm : ALIGN_RANGE_CM_DEFAULT
-  return { sideM: r / 100, upM: r / 100, forwardM: r / 100, angleDeg: ALIGN_ANGLE_DEG }
+  const a = typeof turnDeg === 'number' && Number.isFinite(turnDeg) && turnDeg >= 0 ? Math.min(180, turnDeg) : ALIGN_TURN_DEG_DEFAULT
+  return { sideM: r / 100, upM: r / 100, forwardM: r / 100, angleDeg: a }
+}
+/** THE ROLE TURN as rendered (`roleTurnFix`): the rotation matrix (row-major) of [tilt, roll, yaw] degrees in the role's
+ *  clip frame `frame` — the yaw about the frame's up first, then tilt·side + roll·forward as one rotation. */
+export function roleTurnMatrix(deg: readonly number[], frame: readonly number[]): number[] {
+  return turnMatrix(roleTurnFix(deg[0] ?? 0, deg[1] ?? 0, frame, deg[2] ?? 0).turn)
+}
+/** The rotation vector that takes the role from its rendered turn `fromDeg` to `toDeg` (world): R(to)·R(from)ᵀ. */
+export function roleTurnDelta(fromDeg: readonly number[], toDeg: readonly number[], frame: readonly number[]): Vec3 {
+  const a = roleTurnMatrix(toDeg, frame), b = roleTurnMatrix(fromDeg, frame)
+  const m = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) m[i * 3 + j] += a[i * 3 + k] * b[j * 3 + k]
+  return matrixTurn(m)
 }
 
 /** One collision capsule (stage space): the axis segment a–b and the radius. */
@@ -224,8 +249,15 @@ export interface AlignProblem {
   /** The trial already applied, relative to the base: offset (m) and angles (deg). */
   start?: Vec3
   startDeg?: readonly number[]
-  /** Unit world axes the figure may turn about ([] / absent = shift only); index 0 = tilt, 1 = roll. */
+  /** Unit world axes the figure may turn about, small-angle increments on top of the measured state ([] / absent =
+   *  shift only); index 0 = tilt, 1 = roll. Ignored when `turn` is given. */
   axes?: readonly Vec3[]
+  /** THE ROLE TURN (owner 2026-11-23): the moving role turns by [tilt, roll, yaw] (the unknowns, degrees relative to the
+   *  base, `startDeg` = where the measurement stands) as it is RENDERED — `roleTurnMatrix(offsetDeg + angles, frame)`
+   *  about the sample's pivot, `frame` the role's clip frame (row-major), `offsetDeg` what is already stored and drafted
+   *  under the base. The trial's rotation is the exact delta R(start + z)·R(start)ᵀ, so a large turn is modelled
+   *  as rendered; `angleCapDeg` (absent = the cap's) applies to tilt and roll, the cap's angle to the yaw. */
+  turn?: { frame: readonly number[]; offsetDeg: readonly [number, number, number] } | null
   cap: AlignCap
   /** A tighter angle cap (the place type's posture cap), degrees. */
   angleCapDeg?: number
@@ -239,6 +271,9 @@ export interface AlignProblem {
   /** THE DEPTH GATE: per relation, the root joint's depth at the deepest frame of the run's FIRST measurement (metres);
    *  absent = the sample's own. */
   depthHold?: readonly (number | null)[] | null
+  /** THE SEEDS: also start the solve from large turns (`turn` with a range of 30° or more); `alignByPasses` sets it on its
+   *  first pass. */
+  seeds?: boolean
   iterations?: number
 }
 export interface AlignSolution {
@@ -346,11 +381,12 @@ export function partRadiusOf(s: { rootRingM?: number; tipRadiusM?: number }): nu
 
 /** The active-set Gauss–Newton of the module docstring THE SOLVE: the increment z with (start + z) within ±half that
  *  minimises |res(z)|². */
-function solveBounded(res: (z: number[]) => number[], start: readonly number[], half: readonly number[], iterations: number): number[] {
+function solveBounded(res: (z: number[]) => number[], start: readonly number[], half: readonly number[], iterations: number,
+  z0?: readonly number[]): number[] {
   const n = start.length
   const lo = (i: number) => -half[i] - start[i], hi = (i: number) => half[i] - start[i]
   const project = (z: number[]) => z.map((v, i) => clampTo(v, lo(i), hi(i)))
-  let z = project(new Array(n).fill(0))
+  let z = project(z0 ? [...z0] : new Array(n).fill(0))
   let r = res(z)
   let c = r.reduce((a, v) => a + v * v, 0)
   if (!r.length) return z
@@ -416,14 +452,20 @@ export function solveAlign(p: AlignProblem): AlignSolution {
     if (k.shallow !== k.deep) picks.push({ s: r.samples[k.shallow], deep: false, rooted: !!r.rooted, g, hold })
   })
   const rooted = !!p.root && picks.some((x) => x.rooted && !!x.s.body && (x.s.chain?.length ?? 0) >= 2)
-  const nA = axes.length
+  const rt = p.turn ?? null
+  const nA = rt ? 3 : axes.length
   const ang = Math.min(p.cap.angleDeg, p.angleCapDeg ?? Infinity)
-  const half = [p.cap.sideM, p.cap.upM, p.cap.forwardM, ...axes.map(() => ang),
+  const angHalf = rt ? [ang, ang, p.cap.angleDeg] : axes.map(() => ang)
+  const half = [p.cap.sideM, p.cap.upM, p.cap.forwardM, ...angHalf,
     ...(rooted ? [ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG] : [])]
   const root0: RootAngle = { pitchDeg: p.root?.pitchDeg ?? 0, yawDeg: p.root?.yawDeg ?? 0 }
-  const start = [...(p.start ?? [0, 0, 0]), ...axes.map((_, k) => p.startDeg?.[k] ?? 0),
+  const start = [...(p.start ?? [0, 0, 0]), ...angHalf.map((_, k) => p.startDeg?.[k] ?? 0),
     ...(rooted ? [root0.pitchDeg, root0.yawDeg] : [])]
+  // THE ROLE TURN: the rendered angles (stored + drafted under the base, plus the unknowns) at the measurement.
+  const turnAt = (z: readonly number[]) => [0, 1, 2].map((k) => (rt ? rt.offsetDeg[k] + start[3 + k] + (z[3 + k] ?? 0) : 0))
+  const turn0 = turnAt(new Array(start.length).fill(0))
   const toFix = (z: number[]): PairFix => {
+    if (rt) return { shift: mulM(p.basis, z), turn: roleTurnDelta(turn0, turnAt(z), rt.frame) }
     const turn: Vec3 = [0, 0, 0]
     axes.forEach((a, k) => {
       const r = z[3 + k] * Math.PI / 180
@@ -438,7 +480,9 @@ export function solveAlign(p: AlignProblem): AlignSolution {
   const W = ALIGN_LIMIT_WEIGHT, m = ALIGN_MARGIN_M
   // THE CLEARANCE: the capsule pairs that can reach their allowance within the cap (the farthest a capsule can move:
   // the shift cap's diagonal plus a turn's sweep of up to 0.2 m).
-  const reach = Math.hypot(p.cap.sideM, p.cap.upM, p.cap.forwardM) + 0.2
+  // (THE ROLE TURN: a point 1 m from the pivot sweeps 2·sin(θ/2) metres for the largest turn θ of the cap.)
+  const sweep = rt ? 2 * Math.sin(Math.min(Math.PI, (Math.max(...angHalf) * Math.PI / 180) * Math.sqrt(3)) / 2) : 0
+  const reach = Math.hypot(p.cap.sideM, p.cap.upM, p.cap.forwardM) + Math.max(0.2, sweep)
   const clearPairs: { f: ClearFrame; m: ClearCapsule; c: ClearCapsule; allowM: number }[] = []
   for (const f of p.clear ?? []) for (const o of f.others) for (const mc of f.mover) for (const c of o.caps) {
     if (f.exempt?.has(`${mc.id}|${o.name}|${c.id}`)) continue
@@ -468,14 +512,24 @@ export function solveAlign(p: AlignProblem): AlignSolution {
         const bottom = (k.s.depthM ?? 0) - (k.s.tipRadiusM ?? 0)
         if ((k.s.depthM ?? 0) > 0) out.push(W * Math.max(0, st - bottom + m))
       }
-      if (posture) {
-        const d = supportDelta(k.s, fix)   // the mover's support about the mover's pivot
-        if (d !== null) out.push(POSTURE.weight * postureExcess(d))
+      if (posture && k.s.support) {
+        const sp = k.s.support
+        if (sp.mode === 'surface' && sp.surface !== undefined && sp.low) {
+          // THE SUPPORT, absolute: the lowest support capsule of the moved role on its surface, within the touch band.
+          const pts = sp.low.pts.map((q) => fixPoint(fix, k.s.pivot, q))
+          out.push(POSTURE.weight * surfaceExcess(supportHeight(pts, sp.low.r) - sp.surface))
+        } else {
+          const d = supportDelta(k.s, fix)   // the mover's support about the mover's pivot (the posture band)
+          if (d !== null) out.push(POSTURE.weight * postureExcess(d))
+        }
       }
     }
     if (posture) {
       const kt = POSTURE.turnCostM * Math.sqrt(N)
-      out.push(kt * fix.turn[0], kt * fix.turn[1], kt * fix.turn[2])
+      if (rt) {
+        // THE ROLE TURN costs its total from the base (radians), not the pass's increment.
+        for (let k = 0; k < 3; k++) out.push(kt * (start[3 + k] + z[3 + k]) * Math.PI / 180)
+      } else out.push(kt * fix.turn[0], kt * fix.turn[1], kt * fix.turn[2])
     }
     for (const q of clearPairs) {
       const a = fixPoint(fix, q.f.pivot, q.m.a), b = fixPoint(fix, q.f.pivot, q.m.b)
@@ -494,22 +548,49 @@ export function solveAlign(p: AlignProblem): AlignSolution {
   // exactly the solve without a gate). The gate is fixed within a stage, so no stage can buy a smaller depth pull by
   // staying off the axis.
   const deepPicks = picks.filter((k) => k.deep && k.s.channel)
-  let z: number[]
-  if (!picks.length) z = new Array(start.length).fill(0)
-  else if (!deepPicks.length) z = solveBounded(res, start, half, p.iterations ?? 30)
-  else {
+  const solveFrom = (z0?: readonly number[]): number[] => {
+    if (!picks.length) return new Array(start.length).fill(0)
+    if (!deepPicks.length) return solveBounded(res, start, half, p.iterations ?? 30, z0)
     for (const k of deepPicks) k.g.gate = 0
-    const zA = solveBounded(res, start, half, p.iterations ?? 30)
+    const zA = solveBounded(res, start, half, p.iterations ?? 30, z0)
     const fixA = toFix(zA), toA = rooted ? rootOf(zA) : null
     for (const k of deepPicks) {
       const s = moveSample(k.s, fixA, k.rooted ? root0 : null, k.rooted ? toA : null)
       const off = axisError(s, s.chain?.[0] ?? s.base).offset
       k.g.gate = depthGate(Math.hypot(off[0], off[1], off[2]), partRadiusOf(k.s))
     }
-    z = deepPicks.every((k) => k.g.gate === 0) ? zA : solveBounded(res, start, half, p.iterations ?? 30)
+    return deepPicks.every((k) => k.g.gate === 0) ? zA : solveBounded(res, start, half, p.iterations ?? 30, z0)
+  }
+  // THE SEEDS (owner 2026-11-23, a large turn): Gauss–Newton finds the minimum nearest its start, and a shaft that stands
+  // 90° off the axis lies in another basin than one that may turn 90°. With `seeds` and a rotation range of 30° or
+  // more the solve also starts from a yaw of ±90° / 180° and a tilt or roll of ±half the range (each within the cap) and
+  // keeps the start whose result costs least — compared with every depth gate at 1 (the full objective), so a seed
+  // cannot win by missing the opening.
+  let z = solveFrom()
+  if (rt && p.seeds && ang >= 30 && picks.length) {
+    const gates = picks.map((k) => k.g.gate)
+    const full = (zz: number[]) => {
+      const keep = picks.map((k) => k.g.gate)
+      for (const k of picks) k.g.gate = 1
+      const c = res(zz).reduce((a, v) => a + v * v, 0)
+      picks.forEach((k, i) => { k.g.gate = keep[i] })
+      return c
+    }
+    let best = { z, cost: full(z), gates }
+    const seedDeg: [number, number, number][] = []
+    for (const y of [90, -90, 180]) if (Math.abs(y) <= p.cap.angleDeg) seedDeg.push([0, 0, y])
+    for (const t of [ang / 2, -ang / 2]) { seedDeg.push([t, 0, 0]); seedDeg.push([0, t, 0]) }
+    for (const sd of seedDeg) {
+      const z0 = start.map((_, i) => (i >= 3 && i < 6 ? sd[i - 3] - start[i] : 0))
+      const zs = solveFrom(z0)
+      const cost = full(zs)
+      if (cost < best.cost - 1e-12) best = { z: zs, cost, gates: picks.map((k) => k.g.gate) }
+    }
+    z = best.z
+    picks.forEach((k, i) => { k.g.gate = best.gates[i] })
   }
   const tot = z.map((v, i) => v + start[i])
-  const names: AlignBound[] = ['side', 'up', 'forward', ...axes.map((_, k): AlignBound => (k === 0 ? 'tilt' : 'roll')),
+  const names: AlignBound[] = ['side', 'up', 'forward', ...angHalf.map((_, k): AlignBound => (k === 0 ? 'tilt' : k === 1 ? 'roll' : 'turn')),
     ...(rooted ? ['pitch', 'yaw'] as AlignBound[] : [])]
   const hits = names.filter((_, i) => Math.abs(tot[i]) >= half[i] - 1e-9 && half[i] > 0)
   return { x: [tot[0], tot[1], tot[2]], deg: tot.slice(3, 3 + nA),
@@ -614,7 +695,7 @@ export function alignByPasses<M extends AlignMeasure>(measure: (s: AlignState) =
   let converged = false
   for (let i = 0; i < passes; i++) {
     sol = solveAlign({ ...fixed, relations: cur.relations, basis: cur.basis, join: cur.join, clear: cur.clear, depthHold, start: st.x,
-      startDeg: st.deg, root: st.root })
+      startDeg: st.deg, root: st.root, seeds: i === 0 })
     const step: AlignPass = {
       shiftMm: Math.hypot(sol.x[0] - st.x[0], sol.x[1] - st.x[1], sol.x[2] - st.x[2]) * 1000,
       turnDeg: Math.max(0, ...sol.deg.map((v, k) => Math.abs(v - (st.deg[k] ?? 0)))),
@@ -655,11 +736,29 @@ export function alignMovers<T extends { e: number; r: number }>(hits: readonly T
  *  was past the bottom) AND its axis error larger, a point target's error larger (each by more than
  *  `KEY_SHALLOWER_MM`). Applied otherwise. */
 export interface ClearRow { name: string; startM: number; allowM: number; afterM: number; worst: string }
-export type AlignDiscard = 'overlap' | 'worse' | 'root'
+export type AlignDiscard = 'overlap' | 'worse' | 'root' | 'support' | 'nothing'
 /** The verdict's slack on the visible root of the RENDERED loop (mm). */
 export const ALIGN_ROOT_SLACK_MM = 0.5
+/** The verdict's slack on THE SUPPORT, ABSOLUTE (mm beyond the touch band, `postureSupport.ts`). */
+export const ALIGN_SUPPORT_SLACK_MM = 1
+/** THE MINIMUM GAIN of a result over its start (mm): `axisMm` = the drop of the axis error (`keyWorstMm`); `depthMm` =
+ *  a channel's shrink of the depth error at the deepest frame, |root joint − its depth target| — for a part that starts
+ *  too shallow that is exactly how much deeper the (rigid) part goes, for one that starts too deep how much it comes
+ *  back out. `improved` = one of them ≥ `ALIGN_GAIN_MM` and neither negative beyond `ALIGN_GAIN_SLACK_MM`;
+ *  `worse` = both negative beyond it (a point target: its error alone). */
+export function alignGain(before: KeyReport | null, after: KeyReport | null, inside: boolean):
+  { axisMm: number; depthMm: number; improved: boolean; worse: boolean } {
+  if (!before || !after) return { axisMm: 0, depthMm: 0, improved: false, worse: false }
+  const axisMm = keyWorstMm(before, inside) - keyWorstMm(after, inside)
+  const err = (r: KeyRow) => Math.abs(r.rootDepthMm - r.rootTargetMm)
+  const depthMm = inside ? err(before.deep) - err(after.deep) : 0
+  const lost = (v: number) => v < -ALIGN_GAIN_SLACK_MM
+  return { axisMm, depthMm, improved: (axisMm >= ALIGN_GAIN_MM || depthMm >= ALIGN_GAIN_MM) && !lost(axisMm) && !lost(depthMm),
+    worse: lost(axisMm) && (!inside || lost(depthMm)) }
+}
 export function alignVerdict(before: KeyReport | null, after: KeyReport | null, inside: boolean,
-  clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number } | null):
+  clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number } | null,
+  support?: { beforeMm: number; afterMm: number } | null):
   { applied: boolean; why: AlignDiscard | null; collide: ClearRow | null } {
   const slack = ALIGN_CLEAR_SLACK_MM / 1000
   // THE RENDERED ROOT: the visible root's deepest point over the loop as rendered may not end inside the opening when
@@ -671,11 +770,13 @@ export function alignVerdict(before: KeyReport | null, after: KeyReport | null, 
     const collide = over.reduce((w, c) => (c.afterM - c.allowM > w.afterM - w.allowM ? c : w), over[0])
     return { applied: false, why: 'overlap', collide }
   }
-  if (before && after) {
-    const worseAxis = keyWorstMm(after, inside) > keyWorstMm(before, inside) + KEY_SHALLOWER_MM
-    const shallower = !before.deep.pastBottom && after.deep.depthMm < before.deep.depthMm - KEY_SHALLOWER_MM
-    if (worseAxis && (!inside || shallower)) return { applied: false, why: 'worse', collide: null }
+  // THE SUPPORT, ABSOLUTE: the moved role's largest excess over the touch band (mm, over the loop) may not grow.
+  if (support && support.afterMm > Math.max(0, support.beforeMm) + ALIGN_SUPPORT_SLACK_MM) {
+    return { applied: false, why: 'support', collide: null }
   }
+  const gain = alignGain(before, after, inside)
+  if (gain.worse) return { applied: false, why: 'worse', collide: null }
+  if (!gain.improved) return { applied: false, why: 'nothing', collide: null }
   return { applied: true, why: null, collide: null }
 }
 /** Whether the deepest frame's conditions hold (a channel: root outside, tip inside, not past the bottom; a point
@@ -704,15 +805,14 @@ export function compareCandidates(a: AlignCandidate, b: AlignCandidate): number 
   if (Math.abs(a.depthMm - b.depthMm) > 1e-9) return b.depthMm - a.depthMm
   return 0
 }
-/** "Align all" stage 1 (owner 2026-11-22): the bucket of one contact relation — 'mismatch' when there is no key report
- *  before or the shaft stands more than `ALIGN_MISMATCH_DEG` off a channel's axis at the deepest frame before;
- *  'improve' when the run may be applied and the deepest tip went deeper or the axis error got smaller (each by more
- *  than `KEY_SHALLOWER_MM`); 'blocked' otherwise (discarded, held by a cap or the posture, or nothing to gain). */
+/** "Align all" stage 1 (owner 2026-11-22/23): the bucket of one contact relation — 'improve' when the run may be applied
+ *  (THE VERDICT, which includes THE MINIMUM GAIN); 'mismatch' when there is no key report before, or when it may not be
+ *  applied and a channel's shaft stood more than `ALIGN_MISMATCH_DEG` off the axis at the deepest frame before AND
+ *  still does after (the role turn could not bring it round); 'blocked' otherwise (discarded, with its reason). */
 export type AlignBucket = 'improve' | 'blocked' | 'mismatch'
 export function alignBucket(before: KeyReport | null, after: KeyReport | null, inside: boolean, applied: boolean): AlignBucket {
-  if (!before || (inside && before.deep.shaftDeg > ALIGN_MISMATCH_DEG)) return 'mismatch'
-  if (!applied || !after) return 'blocked'
-  const deeper = inside && after.deep.depthMm > before.deep.depthMm + KEY_SHALLOWER_MM
-  const straighter = keyWorstMm(after, inside) < keyWorstMm(before, inside) - KEY_SHALLOWER_MM
-  return deeper || straighter ? 'improve' : 'blocked'
+  if (!before) return 'mismatch'
+  if (applied && after) return 'improve'
+  if (inside && before.deep.shaftDeg > ALIGN_MISMATCH_DEG && (!after || after.deep.shaftDeg > ALIGN_MISMATCH_DEG)) return 'mismatch'
+  return 'blocked'
 }
