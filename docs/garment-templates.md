@@ -493,6 +493,17 @@ time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back cent
 - **The waist line** of a cut atlas came from the post-processing, not the geometry: the eroded rim and the bleed were
   regrown as rays from the core, a streaked band along every island edge that met the next one at the waist seam.
   They mirror the core now (`POST_VERSION` 11, `cut_texture_post.cut_and_bleed`).
+- **Open: a gate against a picture inside the panel.** Ylva's wrap skirt passed every gate live (2026-11-22,
+  coverage 0.998, seam ΔE 0.71) and is still not usable: P-H3 (attempt 2, after MiniMax's split line) pasted a whole
+  product photo of the skirt into the `skirt_front` island — the photo's plain margin round the painted skirt, a
+  painted slit beside the real slit, a painted hem above the real hem, a waistband button, glossy leather in front
+  and a flat back. Atlas, measured on 127 px boxes: painted skirt RGB (146, 76, 53) with a luminance spread of 40,
+  the front's margin (121, 47, 24) / spread 10, the back (121, 47, 23) / spread 0.4; the front panel's luminance
+  p5..p95 17..137 against the back's 63..64. The piece is not switchable until a gate rejects such an answer — any
+  one of: a framed margin (a plain border band inside the island around a differently shaded core), a painted
+  slit or hem that does not lie on the real cut (an edge line parallel to the island's own slit / hem border but
+  inside it), or a front whose shading contrast exceeds the back's by a large factor when the item is one plain
+  fabric. Then the skirt runs live again.
 
 ## 2. Texture from cut (step 2)
 
