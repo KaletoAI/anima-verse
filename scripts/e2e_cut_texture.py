@@ -386,12 +386,21 @@ def wear(character: str, items: List[str], off: List[str] = ()) -> Dict[str, str
 
 
 def set_text(spec: str) -> str:
-    """``--set-text ITEM=TEXT``: the piece's prompt fragment set in the COPY's item (``update_item``)."""
+    """``--set-text ITEM=TEXT``: the piece's prompt fragment set in the COPY's item (``update_item``). The save's
+    render purge (``inventory._invalidate_renders_for_item``: the wearers' expression variants) is skipped — it
+    regenerates the current expression on the portrait backend and requests a second Build, neither of which is part
+    of this proof (the backend guard refuses the portrait job, the click count sees the second Build)."""
+    from app.models import inventory
     from app.models.inventory import get_item, update_item
     item_id, _, text = spec.partition("=")
     if not get_item(item_id) or not text:
         raise SystemExit(f"--set-text {spec!r}: no item {item_id!r} or no text")
-    update_item(item_id, {"prompt_fragment": text})
+    purge = inventory._invalidate_renders_for_item
+    inventory._invalidate_renders_for_item = lambda _item_id: None
+    try:
+        update_item(item_id, {"prompt_fragment": text})
+    finally:
+        inventory._invalidate_renders_for_item = purge
     return f"{item_id}.prompt_fragment = {(get_item(item_id) or {}).get('prompt_fragment')!r}"
 
 
