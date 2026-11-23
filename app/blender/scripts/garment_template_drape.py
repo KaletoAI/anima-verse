@@ -406,6 +406,15 @@ def measure_pose(arm, body, piece, pose, rest_edges_len, edges, rim):
     for i, q in zip(cand, ax):
         if dom[i] in toe_head:
             q = toe_head[dom[i]]
+        elif dom[i] >= 0:
+            # Corset v2 (2026-11-22): a bone keeps its rest orientation when the chest shaping moves its joints, so
+            # a chest bone's tail ends below the lifted tissue, OUTSIDE the skin; a fitted top 2 mm off that skin then
+            # "poked" 9 % of the chest from rays starting in the air. An axis point the straight line from its bone's
+            # head leaves the body to reach is not inside it: such a vertex is measured from the bone's head.
+            hd = Vector(segs[dom[i]][0])
+            to_q = Vector(q) - hd
+            if to_q.length > 1e-4 and bb.ray_cast(hd, to_q.normalized(), to_q.length)[0] is not None:
+                q = hd
         if shell is not None and shell[i]:
             continue                       # A236: hair / a beard lying on the body, no skin
         v = Vector(bco[i])

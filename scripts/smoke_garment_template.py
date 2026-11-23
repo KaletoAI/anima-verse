@@ -149,6 +149,8 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
             neither key for the jacket. ``garment_template_cut.cut_sig`` gains ``"legs"`` / ``"straps"`` the same
             way: the strapped dress's cut key differs from the same key with ``strap_piece`` and ``leg_piece``
             stubbed False.
+     [17.2b] corset v2 (user report 2026-11-22: the shell laid on the body is part of its drape): a strapless top's
+            ``tsig`` also carries ``"corset": CORSET_VERSION``.
      [17.3] ``validate_params({"kind": "skirt"})`` keeps the PARAM_SPEC waistband "thin" (a saved skirt is unchanged);
             ``kind_defaults("skirt")["waistband"]`` is "wide" (a new skirt, B2); "waistband" and "texture" are skirt
             fields; ``slit`` "front_left" / "front_right" are valid (not reset to "none").
@@ -722,8 +724,9 @@ for _p17 in (_sk17, _sl17):
     _pre17 = {"params": gt.keyed_params(_p17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got17 = gt.tsig(_p17, **_kw16)
-    _want17 = {**_pre17, "panels": 1, **({"legs": 1} if _p17["kind"] == "skirt" else {})}
-    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1 (+ legs 1 for the skirt)",
+    _want17 = {**_pre17, "panels": 1, **({"legs": 1} if _p17["kind"] == "skirt" else {}),
+               **({"corset": gt.CORSET_VERSION} if _p17["kind"] == "top" else {})}
+    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1 (+ legs 1 for the skirt, + corset for the top)",
           _got17 == gt._md5(_want17) and _got17 != gt._md5(_pre17))
 check("[17.2] a top with sleeves and a fitted kind are no panel piece",
       not gt.panel_piece(_top15) and not gt.panel_piece(gt.validate_params({"kind": "briefs"})[0]))

@@ -211,6 +211,173 @@ ARMHOLE_DROP_RAMP_M = 0.05
 STRAP_MERGE_M = 0.008
 
 
+#: Corset v2 (user report 2026-11-22): a shell vertex standing farther than this outside the surface its own ray met
+#: (beyond the clearance) bridges a hollow of the row — the neckline's middle between the cups; such vertices are
+#: left out of the top edge's gap and counted on their own.
+SHELL_BRIDGE_M = 0.004
+
+
+def _hull_radius(centre, angles, radii):
+    """The distance from ``centre`` along each of ``angles`` to the convex hull of the points ``centre + radii *
+    (cos, sin)`` (a radius <= 0 = no point there). The hull of a body slice bridges its hollows (the neckline's
+    middle between the cups, the spine's groove) as a corset does."""
+    ang = np.asarray(angles, float)
+    rad = np.asarray(radii, float)
+    ok = rad > 0
+    pts = np.c_[np.cos(ang[ok]) * rad[ok], np.sin(ang[ok]) * rad[ok]]
+    if len(pts) < 3:
+        return np.where(ok, rad, 0.0)
+    order = np.lexsort((pts[:, 1], pts[:, 0]))
+    P = pts[order]
+
+    def half(seq):
+        h = []
+        for q in seq:
+            while len(h) >= 2 and ((h[-1][0] - h[-2][0]) * (q[1] - h[-2][1])
+                                   - (h[-1][1] - h[-2][1]) * (q[0] - h[-2][0])) <= 0:
+                h.pop()
+            h.append(q)
+        return h
+    hull = np.array(half(P)[:-1] + half(P[::-1])[:-1])
+    a, b = hull, np.roll(hull, -1, axis=0)
+    out = np.zeros(len(ang))
+    for i, t in enumerate(ang):
+        d = np.array([math.cos(t), math.sin(t)])
+        e = b - a
+        den = d[0] * e[:, 1] - d[1] * e[:, 0]
+        good = np.abs(den) > 1e-12
+        tt = np.where(good, (a[:, 0] * e[:, 1] - a[:, 1] * e[:, 0]) / np.where(good, den, 1.0), -1.0)
+        ss = np.where(good, (a[:, 0] * d[1] - a[:, 1] * d[0]) / np.where(good, den, 1.0), -1.0)
+        hit = good & (tt > 0) & (ss >= -1e-9) & (ss <= 1 + 1e-9)
+        out[i] = float(tt[hit].max()) if hit.any() else 0.0
+    return out
+
+
+#: Corset v2: the hull bridges only the front between the cups — this far round from the front centre (radians; the
+#: sweetheart's cups lie within ``garment_template.CUP_HALF_RAD``); elsewhere the shell follows the body itself (a
+#: hull over the spine's groove or the folds of a waistband under the hem only added air).
+SHELL_HULL_RAD = 0.6
+#: Corset v2: each stretch between two rows of a column is checked at this many heights against the body's profile
+#: there (``corset_shell``: the row rays alone never see the underside of a lifted chest, which then stood through
+#: the chord between two rows).
+SHELL_PROFILE_SAMPLES = 8
+
+
+def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
+    """Corset v2 (user report 2026-11-22, "lots of air below, thick at the top"): lay a strapless top's ``wrap``
+    vertices ON the body instead of hanging them as a tube — each at its own angle and height ``clear`` outside the
+    surface the build's ray meets there (``gd.body_radius``, so a layer the piece is draped over — a collider —
+    counts as the surface); within ``SHELL_HULL_RAD`` of the front centre outside the convex hull of its
+    row's section instead (``_hull_radius``: the neckline's middle spans the hollow between the cups). Then every
+    stretch between two vertices — two rows of a column (a chest's underside), two columns of a row (a chord across the
+    rounded chest) and either diagonal of a quad — is raised until it clears the body by ``clear`` at
+    ``SHELL_PROFILE_SAMPLES`` points, by the least change of its two ends, all of it on the inner end where the other
+    is on the top ``edge`` (that edge stays on the skin: no visible step). The waist hugs, the hem does not flare, the
+    top edge lies on the skin. In place; returns ``{rows, bridged, raised}`` (vertices standing over a hollow,
+    ``SHELL_BRIDGE_M``; stretches raised)."""
+    rows, cols = spec["rows"], spec["cols"]
+    n = len(verts)
+    panels = n // (rows * cols)
+    body_r = np.array([gd.body_radius(btree, centre, angles[i], verts[i][2]) for i in range(n)])
+    rad = body_r + clear
+    front = [k for k, p in enumerate(spec["panels"]) if p["name"] == "front"]
+    bridged = 0
+    for r in range(rows):
+        idx = np.array([k * rows * cols + r * cols + c for k in range(panels) for c in range(cols)])
+        hull = _hull_radius(centre, [angles[i] for i in idx], body_r[idx])
+        for j, i in enumerate(idx):
+            off = abs(((angles[i] - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
+            if i // (rows * cols) in front and off <= SHELL_HULL_RAD and hull[j] > body_r[i]:
+                rad[i] = hull[j] + clear
+                if hull[j] - body_r[i] > SHELL_BRIDGE_M:
+                    bridged += 1
+    raised = 0
+    fixed = set(int(i) for i in edge)
+
+    def lift(a, b, pa, pb):
+        """Raise the stretch a-b (radii ``rad``, points ``pa``/``pb`` at those radii) until every sample on it clears
+        the body by ``clear``; the least change that does it (``(1-t, t)`` share, exact at the worst sample)."""
+        worst, wt = 0.0, 0.5
+        for t in (np.arange(SHELL_PROFILE_SAMPLES) + 0.5) / SHELL_PROFILE_SAMPLES:
+            x, y, z = pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t
+            ang = math.atan2(y - centre[1], x - centre[0])
+            need = gd.body_radius(btree, centre, ang, z) + clear - math.hypot(x - centre[0], y - centre[1])
+            if need > worst:
+                worst, wt = need, t
+        if worst <= 1e-4:
+            return 0
+        wa, wb = (0.0 if a in fixed else 1 - wt), (0.0 if b in fixed else wt)
+        if wa == wb == 0.0:
+            return 0
+        k = worst / (wa * wa + wb * wb)
+        rad[a] += k * wa
+        rad[b] += k * wb
+        return 1
+
+    def point(i):
+        return (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), verts[i][2])
+
+    for _pass in range(3):
+        for k in range(panels):
+            base = k * rows * cols
+            for c in range(cols):
+                col = [base + r * cols + c for r in range(rows)]
+                for a, b in zip(col[:-1], col[1:]):
+                    raised += lift(a, b, point(a), point(b))
+            for r in range(rows):
+                row = [base + r * cols + c for c in range(cols)]
+                for a, b in zip(row[:-1], row[1:]):
+                    raised += lift(a, b, point(a), point(b))
+            for r in range(rows - 1):
+                for c in range(cols - 1):
+                    # both diagonals of the quad (its triangles' inner edge, whichever way it is split)
+                    for a, b in ((base + r * cols + c, base + (r + 1) * cols + c + 1),
+                                 (base + r * cols + c + 1, base + (r + 1) * cols + c)):
+                        raised += lift(a, b, point(a), point(b))
+    for i in range(n):
+        verts[i] = (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), verts[i][2])
+    return {"rows": int(rows), "bridged": int(bridged), "raised": int(raised)}
+
+
+def shell_gaps(obj, ftree, btree, centre, spec, clear, gap_mm):
+    """Corset v2: the distance of the single layer to the nearest surface under it (``ftree``: the body and the
+    layers under the piece) in millimetres, p50 / p95 / max per part: the waist (within 12 mm of ``waist_y``), the hem
+    (its row) and the top edge (its row, ``pin_top`` where it is lowered; those over a hollow — farther than
+    ``clear`` + ``SHELL_BRIDGE_M`` outside the surface their own ray meets — are left out and counted as ``bridge``)."""
+    co, _n, _t = gd.world_coords(obj)
+    dist = np.array([(Vector(c) - ftree.find_nearest(Vector(c))[0]).length for c in co])
+    hem_z = float(spec["row_y"][-1])
+    waist_z = float((spec.get("outline") or {}).get("waist_y", -9.0))
+    border = np.zeros(len(co), bool)
+    border[gd.boundary_verts(obj)] = True
+    hem = border & (np.abs(co[:, 2] - hem_z) < 0.002)
+    vg = obj.vertex_groups.get("pin_top")
+    if vg is not None:
+        # a lowered top edge (A221): its row by name (seam borders are no top edge)
+        top = np.zeros(len(co), bool)
+        for v in obj.data.vertices:
+            if any(g.group == vg.index for g in v.groups):
+                top[v.index] = True
+    else:
+        top = border & (np.abs(co[:, 2] - float(spec["row_y"][0])) < 0.002)
+    over = np.zeros(len(co), bool)
+    for i in np.where(top)[0]:
+        ang = math.atan2(co[i, 1] - centre[1], co[i, 0] - centre[0])
+        r = math.hypot(co[i, 0] - centre[0], co[i, 1] - centre[1])
+        over[i] = r - gd.body_radius(btree, centre, ang, float(co[i, 2])) > clear + SHELL_BRIDGE_M
+    out = {}
+    for name, m in (("waist", np.abs(co[:, 2] - waist_z) < 0.012), ("hem", hem), ("top_edge", top & ~over)):
+        if m.any():
+            v = dist[m] * 1000
+            out[name] = {"n": int(m.sum()), "p50_mm": round(float(np.percentile(v, 50)), 2),
+                         "p95_mm": round(float(np.percentile(v, 95)), 2), "max_mm": round(float(v.max()), 2),
+                         "limit_mm": gap_mm.get(name)}
+    out["bridge"] = {"n": int((top & over).sum()),
+                     "p95_mm": round(float(np.percentile(dist[top & over] * 1000, 95)), 2) if (top & over).any()
+                     else None}
+    return out
+
+
 # --- Ruling A142: the bodice (top, jacket, dress with straps or sleeves) -------------------------------------
 #: Columns either side of each side seam (angle 0 = the character's left, pi = right) removed between the chest
 #: band and the shoulder line: the armhole (5 of 80 columns = 0.39 rad, ~7 cm at a 0.18 m torso radius — wider than
@@ -2390,6 +2557,9 @@ def run(a):
                             lambda cen, r: wrap_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
         binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
         verts, faces, angles, top_ids = wrap(spec, btree, centre, band_rows=winfo["waistband_rows"], row_c=row_c)
+        if prm.get("shell_clear_m") is not None:
+            # corset v2: a strapless top lies on the body as a shell (``corset_shell``)
+            binfo["shell"] = corset_shell(verts, angles, spec, btree, centre, float(prm["shell_clear_m"]), top_ids)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         me.uv_layers.new(name="UVMap")         # filled by ``pattern_uv_of_wrap`` below
@@ -2452,6 +2622,8 @@ def run(a):
             pin = off_shoulder_pins(obj, bod["off_shoulder"], arm, nj[0] if nj else centre[0])
         else:
             pin = bodice_pins(obj, bod, nj[0] if nj else centre[0], -nj[2] if nj else centre[1])
+    elif "shell" in binfo:
+        pin = np.arange(len(me.vertices))          # corset v2: the shell is pinned whole — it lies where it was laid
     elif "pin_top" in obj.vertex_groups:
         gi = obj.vertex_groups["pin_top"].index
         pin = np.array([v.index for v in me.vertices if any(g.group == gi for g in v.groups)], int)
@@ -2463,7 +2635,7 @@ def run(a):
     # A179: the skinned collider of the arm shapes is this piece's rest collider, kept as a mesh copy (``drape``
     # crops and removes the object it is given)
     rest_me = col.data.copy() if col is not None and not lower else None
-    cpu, wall, drift = gd.drape(obj, body, pin, int(prm.get("frames", 50)),
+    cpu, wall, drift = (0.0, 0.0, 0.0) if "shell" in binfo else gd.drape(obj, body, pin, int(prm.get("frames", 50)),
                                 quality=int(prm.get("drape_quality") or fab["quality"]),
                                 bending=float(fab["bending"]), shrink=float(fab.get("shrink", 0.0)),
                                 self_collision=False, thickness=thickness, extra=lower, crop_m=CROP_M, collider=col,
@@ -2483,6 +2655,9 @@ def run(a):
                 "over_at": [[round(float(x), 2) for x in co0[e].mean(0)] for e in edges[np.argsort(-st)[:8]]], "rest_mm": round(float(rest_len[int(st.argmax())]) * 1000, 1),
                 "x": round(float(worst[0]), 3), "y": round(float(worst[1]), 3)}
     n_single = len(me.vertices)
+    # corset v2: how close the shell lies (``shell_gaps``; gated in ``garment_template.judge_build``)
+    fit_gap = shell_gaps(obj, ftree, btree, centre, spec, float(prm["shell_clear_m"]),
+                         prm.get("shell_gap_mm") or {}) if "shell" in binfo else None
     if fitted and fitted["kind"] == "briefs":
         binfo["cover"] = gf.part_cover(body, obj)
     neck = {}
@@ -2688,7 +2863,7 @@ def run(a):
         if q.is_file():
             outputs[f"posed_{pose}"] = str(q)
     data = {"verts": len(obj.data.vertices), "pins": int(len(pin)), "slit_edges": int(slit_edges),
-            "bodice": binfo, "neck": neck, "lower_layers": len(lower),
+            "bodice": binfo, "neck": neck, "lower_layers": len(lower), **({"fit_gap": fit_gap} if fit_gap else {}),
             "drape": {"cpu_s": cpu, "wall_s": wall, "pin_drift_mm": drift,
                       "stretch_max": round(float(st.max()), 3), "stretch_at": worst_at,
                       "stretch_max_all": round(float(st_all.max()), 3),

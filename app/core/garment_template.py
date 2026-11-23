@@ -100,7 +100,11 @@ NECK_VERSION = 1
 #: Phase G (plan group B): a strapless top's front is cut open at the centre and at two bust darts in its UV
 #: (``app/blender/scripts/corset_darts.py``; the mesh stays whole) and its back centre is the placket line. Part of the
 #: CUT key of a strapless top only: its islands change once; its drape (the same mesh) does not.
-CORSET_VERSION = 1
+#: 2 (user report 2026-11-22, "lots of air below, thick at the top"): the strapless top is a SHELL laid on the body
+#: (``garment_template_build.corset_shell``: every vertex ``CORSET_CLEAR_M`` outside the body — over the hollow
+#: between the cups outside its row's hull — every stretch between two vertices clear of the body, pinned, no cloth
+#: run) and its front rises over the cups (``cup_rise``) — part of its drape key too (``tsig``), so it re-drapes once.
+CORSET_VERSION = 2
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
@@ -161,6 +165,19 @@ SWEETHEART_HALF_RAD = 0.5
 STRAPLESS_UNDERARM_M = 0.02
 #: A221: a strapless top reaches at least this far below its top edge (the chest band).
 STRAPLESS_MIN_M = 0.08
+#: Corset v2 (``CORSET_VERSION``): a strapless top's front covers the chest up to this far over its apex
+#: (``measure_body`` ``chest_apex_y``, read on the body it drapes on — the shaped one under a lifting piece), at most
+#: ``CUP_RISE_MAX_M`` over the edge under the arms. The rise is full within ``CUP_HALF_RAD`` of the front centre and
+#: falls to the edge under the arms at the side (pi / 2); the back stays at the edge under the arms.
+CUP_COVER_M = 0.035
+CUP_RISE_MAX_M = 0.10
+CUP_HALF_RAD = 0.6
+#: Corset v2: the shell lies this far outside the body (or the layer under it) along the build's rays; the gates
+#: (``judge_build``, ``CORSET_GAP_MM``) measure the distance of the single layer to the nearest surface.
+CORSET_CLEAR_M = 0.0015
+#: Corset v2: the largest gap (p95, millimetres) of a strapless top's single layer to the surface under it — at the
+#: waist, along the hem and along the top edge (the bridge over the neckline's middle left out).
+CORSET_GAP_MM = {"waist": 3.0, "hem": 5.0, "top_edge": 2.0}
 SHOULDERS = ("strapless", "straps", "covered", "off_shoulder")
 # --- A229: the off-shoulder (Carmen / Bardot) blouse --------------------------------------------------------------
 #: An off-shoulder top or dress is built as a covered bodice with sleeves and cut below the shoulders along an elastic
@@ -1163,6 +1180,14 @@ def measure_body(glb: bytes) -> Dict[str, float]:
            "waist_c": round(waist_c, 4), "hip_y": round(float(hip_y), 4), "hip_c": round(hip_c, 4),
            "band_y": round(float(band_y), 4), "band_c": round(perim(band_y), 4)}
     out.update(_upper_measure(P, arrays.joint_positions, perim, floor, height))
+    if "shoulder_y" in out:
+        # corset v2: the height of the most forward chest point (``bust_shaping.chest_apex``) — a strapless top's
+        # front covers it (``cup_rise``)
+        from app.core.bust_shaping import chest_apex
+        try:
+            out["chest_apex_y"] = round(float(np.mean([a[1] for a in chest_apex(P, out).values()])), 4)
+        except ValueError:
+            pass
     return out
 
 
@@ -1471,16 +1496,40 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
     ``SHOULDER_TOP_M``) like every top; the hem stays at least ``STRAPLESS_MIN_M`` below the top edge and 0.2 m above
     the floor."""
     import numpy as np
-    top_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
-    shoulder = _length_origin(meas, top_y)
-    hem_y = min(top_y - STRAPLESS_MIN_M, max(meas["floor_y"] + 0.2, shoulder - params["length_m"]))
+    side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
+    shoulder = _length_origin(meas, side_y)
+    hem_y = min(side_y - STRAPLESS_MIN_M, max(meas["floor_y"] + 0.2, shoulder - params["length_m"]))
+    rise = cup_rise(params, meas)
+    top_y = side_y + rise
     hem_y, moved = _clear_underbust(params, meas, hem_y, shoulder)
     ease = 1.0 + BODICE_EASE[0] + BODICE_EASE[1] * params["fit"]
     knots = [(round(float(y) - hem_y, 4), round(_torso_girth(meas, float(y)) * ease + EASE_M, 4))
              for y in np.arange(hem_y, top_y - 1e-6, 0.02)]
     knots.append((round(top_y - hem_y, 4), round(_torso_girth(meas, top_y) * ease + EASE_M, 4)))
     return {"knots": knots, "top_y": round(top_y, 4), "waist_y": round(waist_y, 4), "length": knots[-1][0],
+            **({"cup_rise_m": round(rise, 4), "side_top_y": round(side_y, 4)} if rise > 0 else {}),
             **({"hem_moved": moved} if moved else {})}
+
+
+def cup_rise(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
+    """Corset v2: how far a strapless top's front rises over its edge under the arms (``band_y`` -
+    ``STRAPLESS_UNDERARM_M``) to cover the chest — ``chest_apex_y`` + ``CUP_COVER_M`` less that edge, between 0 and
+    ``CUP_RISE_MAX_M``; 0 for every other piece and on a body without the measure."""
+    if not strapless_top(params) or "chest_apex_y" not in meas:
+        return 0.0
+    side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
+    return round(min(CUP_RISE_MAX_M, max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_M - side_y)), 4)
+
+
+def cup_drop(rise: float, cols: int) -> Tuple[List[float], List[float]]:
+    """Corset v2: the ``top_drop`` of a strapless top whose front rises by ``rise`` (``cup_rise``): ``(front, back)``
+    per column — the front (column c at pi * c / (cols - 1) - pi / 2 off its centre, as ``top_drop``) falls to the edge
+    under the arms by rise * smoothstep(off; ``CUP_HALF_RAD``, pi / 2); the back lies the whole rise lower."""
+    def fall(off: float) -> float:
+        t = min(1.0, max(0.0, (off - CUP_HALF_RAD) / (math.pi / 2 - CUP_HALF_RAD)))
+        return rise * t * t * (3.0 - 2.0 * t)
+    front = [round(fall(abs(math.pi * c / (cols - 1) - math.pi / 2)), 5) for c in range(cols)]
+    return front, [round(rise, 5)] * cols
 
 
 def sweetheart_depth(params: Dict[str, Any]) -> float:
@@ -1633,7 +1682,13 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
     out = {"rows": rows, "cols": COLS, "row_y": row_y, "panels": panels, "outline": shape, "measure": meas,
            "pygarment": {"version": "2.0.2", "panels": specs}}
     drop = top_drop(params, COLS)
-    if drop:
+    rise = float(shape.get("cup_rise_m") or 0.0)
+    if rise > 0:
+        # corset v2: the front rises over the cups, the sides and the back stay under the arms (``cup_drop``); the
+        # sweetheart dip is measured down from the cup line
+        front, back = cup_drop(rise, COLS)
+        out["top_drop"] = {"front": [round(a + b, 5) for a, b in zip(front, drop or [0.0] * COLS)], "back": back}
+    elif drop:
         out["top_drop"] = {"front": drop}
     if has_bodice(params):
         out["bodice"] = bodice_spec(params, meas, over_sleeves=over_sleeves)
@@ -1965,6 +2020,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
         payload["legs"] = LEG_VERSION
     if strap_piece(params):
         payload["straps"] = STRAP_VERSION
+    if strapless_top(params):
+        # corset v2: the strapless top is a shell on the body with a cup line (``CORSET_VERSION``)
+        payload["corset"] = CORSET_VERSION
     return _md5(payload)
 
 
@@ -2550,6 +2608,8 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
     return {"spec": spec, "fabric": fabric, "torso_half_m": round(torso, 4), "slit": {"side": params["slit"], "depth_m": params["slit_m"]},
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
+            # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
+            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": dict(CORSET_GAP_MM)} if strapless_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
             "frames": (BODICE_FRAMES if has_bodice(params) else
                        int((spec.get("fitted") or {}).get("frames") or 50)),
@@ -2605,6 +2665,11 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     for pose, m in (data.get("draped") or {}).items():
         row(f"poke_share[{pose}]", m["poke_share"], THRESHOLDS["poke_share"],
             m["poke_share"] < THRESHOLDS["poke_share"], gate=pose == "rest")
+    # corset v2: a strapless top lies on the body — its gaps at the waist, the hem and the top edge (p95, mm)
+    for part, limit in CORSET_GAP_MM.items():
+        gap = ((data.get("fit_gap") or {}).get(part) or {}).get("p95_mm")
+        if gap is not None:
+            row(f"gap_{part}_p95_mm", gap, limit, gap <= limit)
     bake = data.get("bake") or {}
     if "coverage" in bake:
         row("bake_coverage", bake["coverage"], THRESHOLDS["bake_coverage"],

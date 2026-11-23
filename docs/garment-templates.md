@@ -444,9 +444,32 @@ dart from the hem gained nothing (1.258). Rosi's Red Corset Top: front p95 1.276
 centre column is the placket line `centre_back` (a corset laces at the back), drawn like `centre_front` (no inward
 offset). A strapless top has no front line, so the parameter prompt (`garment_template_params.md`) asks for `placket`
 "lacing" only for a lacing down the back and "none" for a corset laced down the front — its painted front lacing stays
-where the picture shows it and no second lacing is drawn on the back. The cut key of a strapless top gains `"corset"` = `CORSET_VERSION` 1 and `"corset_rules"` (md5 of
+where the picture shows it and no second lacing is drawn on the back. The cut key of a strapless top gains `"corset"` = `CORSET_VERSION` (2 since corset v2, below) and `"corset_rules"` (md5 of
 `corset_darts.py`); skirts and dresses are unchanged (`scripts/smoke_corset_darts.py`, `smoke_cut_texture_placket.py`
 [11]).
+
+**Corset v2 (user report 2026-11-22: "the chest just pressed flat, the fabric thick at the top, lots of air below").**
+Three steps, in this order:
+1. *The bare body is shaped by a lift that keeps volume* (`app/core/bust_shaping.py`, `VERSION` 3). The tissue
+   rises by `lift × LIFT_SHARE (0.5) × extent` — the piece's Lift slider 0..1 is 0..50 % of the chest's own height
+   from fold to root — and gathers a little toward the middle. The motion is a divergence-free flow
+   (stream function, Runge-Kutta), so the Jacobian determinant is 1. Volume is kept and nothing folds: the tissue
+   moves as one block and stays round. The old v2 squashed it to half its depth. The side fade scales with the
+   chest's width (`SIDE_PAST_M`).
+2. *The strapless top is laid on that body as a shell, with no cloth run* (`garment_template_build.corset_shell`).
+   - Every vertex sits `CORSET_CLEAR_M` (1.5 mm) outside the body, or outside the layer under it. Over the hollow
+     between the cups it sits outside its row's convex hull instead.
+   - Every stretch between two vertices — columns, rows and both diagonals — is raised by the least change until
+     it clears the body. The top edge never moves for this; the inner end takes all of it.
+   - The front rises over the shaped chest's apex by `CUP_COVER_M` (`cup_rise` / `cup_drop`).
+   - The gaps are gated (`judge_build`: `gap_waist/hem/top_edge_p95_mm` ≤ 3 / 5 / 2 mm).
+   - The rest-poke measure takes its rays from a bone's head where the line to the axis point would leave the body.
+     A chest bone keeps its rest orientation when the shaping moves its joint, so its tail ends outside the skin.
+3. *The cut texture runs again on the new pieces.*
+
+Rosi's Red Corset Top at lift 1, measured on the dry run: waist 2.96 / hem 2.2 / top edge 1.47 mm (p95), poke 0.
+At 50 % the upper chest bunches and a small fold shows at the front of the shoulder. Lift 0.7 (35 %) renders
+clean. Smokes: `smoke_bust_shaping.py` (v3, old-code proof against 4ee6ac1ab) and `smoke_corset_shell.py`.
 
 **Live 2026-11-22** (copies, chain MiniMax-H3-Image, P-H3-Image; 7 image jobs, every one MiniMax in attempt 1):
 Tilda's buttoned blouse (placket buttons, 7; no collar — see above): plain cream, seven buttons on the centre line, no
