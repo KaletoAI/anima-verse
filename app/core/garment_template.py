@@ -2164,6 +2164,30 @@ def _key(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
     return tsig(params, base_sha=base_sha, texture_sha=tex, lower=under), None, sources, params, under
 
 
+#: The A200 fallback modes whose own-mesh colliders lay the panels out differently from "full" (``drape_with_fallback``).
+OWN_FALLBACK_MODES = ("shrunk", "dropped")
+
+
+def own_fallback_mode(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
+                      item: Optional[Dict[str, Any]] = None) -> str:
+    """Stage "layers" (2026-11-22, Kai's leather jacket over his generated jeans): the A200 fallback mode the piece's
+    CURRENT drape needed — "shrunk" / "dropped" (``inner_collider.mode`` of the accepted drape of the current key, or
+    of the drape standing in for it, ``cut_stand_in``), else "full" (no drape yet, no own-mesh collider, or it passed
+    in full). The cut (``garment_template_cut.sig_of`` / ``run``) lays its panels out of the same colliders, so the
+    cut texture's islands are the drape's. Read-only."""
+    from app.core.garment_store import read_record
+    sig, _reason, _sources, params, under = _key(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    if sig is None or not params or not any(":fit:" in t for t in under):
+        return "full"
+    path = drape_path(character_name, item_id, sig)
+    record = read_record(path.with_suffix(".json")) if path.is_file() else {}
+    if record.get("accepted") is not True:
+        stand = cut_stand_in(character_name, item_id, base_sha=base_sha, params=params, key_lower=under)
+        record = (stand or {}).get("record") or {}
+    mode = str((record.get("inner_collider") or {}).get("mode") or "full")
+    return mode if mode in OWN_FALLBACK_MODES else "full"
+
+
 def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
                  item: Optional[Dict[str, Any]] = None,
                  states: Optional[List[Tuple[str, Dict[str, Any], Dict[str, Any]]]] = None) -> List[str]:
@@ -2567,8 +2591,8 @@ def _bake_iou(bake: Dict[str, Any]) -> Optional[float]:
 #: The Figure row's words for a wanted cut texture the figure cannot use (``texture_warning``; English, the React
 #: client puts them through ``t()``).
 CUT_STALE_TEXT = "Texture from cut is out of date — make it again in the piece dialog (Texture tab)"
-CUT_OPTION_TEXT = ("The sleeve option of the texture from cut changed — use the answer again in the piece dialog "
-                   "(Texture tab, CPU, 0 hub jobs)")
+CUT_OPTION_TEXT = ("The sleeve option or the trim colour of the texture from cut changed — use the answer again in "
+                   "the piece dialog (Texture tab, CPU, 0 hub jobs)")
 CUT_REJECTED_TEXT = "Texture from cut was rejected: {reason}"
 CUT_FAILED_TEXT = "Texture from cut failed: {reason}"
 CUT_DRAPE_BEHIND_TEXT = ("Texture from cut is made for a newer cut than this drape — the next Build drapes the new "
@@ -2660,7 +2684,7 @@ def cut_info(character_name: str, item_id: str, record: Optional[Dict[str, Any]]
         out["metrics"] = rec.get("metrics") or None
         out["px_per_cm"] = rec.get("px_per_cm") or out["px_per_cm"]
     state = rec.get("state")
-    if state == "ready" and str(rec.get("sleeve_print") or "plain") != str(params.get("sleeve_print") or "plain"):
+    if state == "ready" and not gct.composed_as_now(rec, item_id, params):
         out.update(cut_state="option", reason=CUT_OPTION_TEXT)
     elif state == "ready" and gct.atlas_path(character_name, item_id, sig).is_file():
         out.update(texture="cut", cut_state="ready")
@@ -3073,15 +3097,16 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
-        # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``) — only when
-        # its colliders were the cut's ("full": an own-mesh collider shrunk or dropped laid the panels out of others)
+        # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``); stage
+        # "layers" (2026-11-22): in every mode — a shrunk / dropped own-mesh collider is a token of the cut
+        # (``garment_template_cut.sig_of`` ``own_mode``), whose cut-only run lays the panels out the same way
         cut_sig = None
-        if params["kind"] in PATTERN_KINDS and inner["mode"] == "full":
+        if params["kind"] in PATTERN_KINDS:
             # ``wait=False``: the sig of the colliders really handed over, also when a lower layer was left due — the
             # layer's drape later makes the current sig differ, and ``cut_behind`` re-drapes this one
             from app.core import garment_template_cut
             cut_sig = garment_template_cut.sig_of(character_name, item_id, params, base_sha=base_sha, lower=lower,
-                                                  item=item, wait=False)[0]
+                                                  item=item, wait=False, own_mode=inner["mode"])[0]
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
         record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,

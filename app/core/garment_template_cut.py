@@ -39,8 +39,9 @@ and the next Build drapes it again — the drape key (``tsig``) stays, so no oth
 
 A drape of the same cut writes the same islands bytes (``scripts/smoke_template_cut_first.py`` proves it on a real
 body), so the cut atlas — keyed by the islands sha (``garment_cut_texture.csig``) — fits every drape of that cut and
-no other. A drape whose own-mesh colliders had to be shrunk or dropped (``drape_with_fallback``) was laid out of other
-colliders: its islands differ, and ``garment_template.cut_info`` says so.
+no other. A drape whose own-mesh colliders had to be shrunk or dropped (``drape_with_fallback``) records that mode
+(``inner_collider``); since stage "layers" (2026-11-22) the cut is keyed by it (``own:<mode>``) and laid out of the
+colliders that way, so its islands are that drape's (``garment_template.own_fallback_mode``).
 """
 from __future__ import annotations
 
@@ -138,7 +139,8 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
 
 
 def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
-           item: Optional[Dict[str, Any]] = None, wait: bool = True) -> Tuple[Optional[str], str, List[str]]:
+           item: Optional[Dict[str, Any]] = None, wait: bool = True,
+           own_mode: Optional[str] = None) -> Tuple[Optional[str], str, List[str]]:
     """``(cut sig | None, reason, under tokens)`` of a piece within the worn set ``lower`` — the ONE rule for the cut
     (``cut_key``) and for the cut a drape was laid out of (``garment_template._build_drape``, its record's
     ``cut_sig``; ``garment_template.drape_state`` compares the two).
@@ -153,7 +155,11 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
     ``wait=False`` (the drape's record) gives the sig of what the drape WAS laid out of even when a layer was left
     due. ``item`` None reads the item (live E2E 2026-11-21, Kai: ``drape_state`` / the Build's plan pass none, and
     without it the chest shaping's token was missing — the sig differed from the drape's recorded ``cut_sig``, so
-    every Build re-draped the shirt as "cut anew")."""
+    every Build re-draped the shirt as "cut anew").
+    Stage "layers" (2026-11-22): ``own_mode`` is the A200 fallback mode of the drape (``drape_with_fallback``; the
+    drape's record passes its own, None reads ``garment_template.own_fallback_mode``) — "shrunk" / "dropped" add the
+    token ``own:<mode>``, and ``run`` lays the cut out of the own-mesh colliders that way: the drape and the cut stay
+    one cut (Kai's leather jacket over his generated jeans drapes "dropped", its islands were not the cut's)."""
     from app.core import garment_template as gt
     if item is None:
         from app.models.inventory import get_item
@@ -166,6 +172,10 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
     under = gt.under_tokens(character_name, item_id, params, base_sha=base_sha, lower=lower, item=item,
                             states=states)
     tokens = under + [f"collider:{other}" for other, _it, sub in states if sub["state"] == "ready"]
+    if own_mode is None:
+        own_mode = gt.own_fallback_mode(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    if own_mode in gt.OWN_FALLBACK_MODES and any(":fit:" in t for t in under):
+        tokens.append(f"own:{own_mode}")
     return cut_sig(params, base_sha=base_sha, lower=tokens), "", under
 
 
@@ -224,8 +234,10 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     sets = figure.worn_sets(character_name, profile=profile)
     worn = item_id in set(sets.pieces.values())
     lower = gt.lower_layers(sets.own, item_id) if worn else []
-    sig, reason, under = sig_of(character_name, item_id, params, base_sha=base[1], lower=lower, item=item)
-    out.update(sig=sig, reason=reason, base=base, base_sha=base[1], lower=lower, under=under)
+    own_mode = gt.own_fallback_mode(character_name, item_id, base_sha=base[1], lower=lower, item=item)
+    sig, reason, under = sig_of(character_name, item_id, params, base_sha=base[1], lower=lower, item=item,
+                                own_mode=own_mode)
+    out.update(sig=sig, reason=reason, base=base, base_sha=base[1], lower=lower, under=under, own_mode=own_mode)
     return out
 
 
@@ -280,10 +292,11 @@ def marks_due(params: Optional[Dict[str, Any]], record: Dict[str, Any], marks: P
 
 def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir: Path,
                 colliders: Optional[List[Tuple[Path, Any]]] = None, own: Optional[List[Tuple[Path, Any]]] = None,
-                over_sleeves: bool = False, timeout_s: int = CUT_TIMEOUT_S) -> Dict[str, Any]:
-    """ONE cut-only run of ``garment_template_build`` with the inputs a drape's first attempt gets
-    (``garment_template._run_drape_once`` / ``drape_with_fallback`` "full": the template drapes under it, then the
-    own-mesh fits at offset 0). ``{ok, outcome, error, data, islands (Path | None), log_tail, wall_s, slot_wait_s,
+                over_sleeves: bool = False, timeout_s: int = CUT_TIMEOUT_S,
+                own_offset: float = 0.0) -> Dict[str, Any]:
+    """ONE cut-only run of ``garment_template_build`` with the inputs a drape's attempt gets
+    (``garment_template._run_drape_once`` / ``drape_with_fallback``: the template drapes under it, then the
+    own-mesh fits at ``own_offset`` — 0 "full", ``INNER_SHRINK_M`` "shrunk"; "dropped" hands no ``own``). ``{ok, outcome, error, data, islands (Path | None), log_tail, wall_s, slot_wait_s,
     measure_s}`` — ``wall_s`` the whole call less the slot wait."""
     from app.blender import runner
     from app.core import garment_template as gt
@@ -292,7 +305,7 @@ def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir
     spec = gt.panel_spec(params, meas, over_sleeves=over_sleeves)
     measure_s = round(time.time() - started, 2)
     cols = list(colliders or []) + list(own or [])
-    offsets = [0.0] * len(cols) if own else None
+    offsets = [0.0] * len(colliders or []) + [float(own_offset)] * len(own) if own else None
     args = gt.build_args(params, spec, item_id=item_id, lower_shapes=[payload for _p, payload in cols],
                          lower_offsets=offsets)
     args["cut_only"] = True
@@ -349,16 +362,22 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
             ready.append(it)
     own = [(fit, None) for _o, fit in gt.own_colliders(character_name, item_id, params["kind"], lower,
                                                         base_sha=key["base_sha"]) if fit is not None]
+    # stage "layers": the own-mesh colliders as the drape's fallback had them (``own_fallback_mode``)
+    own_mode = key.get("own_mode") or "full"
+    if own_mode == "dropped":
+        own = []
     body = get_character_dir(character_name) / "model3d" / f"{base[0]}.glb"
     scratch = Path(tempfile.mkdtemp(prefix="av-cut-"))
     try:
         shaped, shaping, _note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping")
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
-                          over_sleeves=gt.over_sleeved_layer(params["kind"], ready))
+                          over_sleeves=gt.over_sleeved_layer(params["kind"], ready),
+                          own_offset=gt.INNER_SHRINK_M if own_mode == "shrunk" else 0.0)
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
                                   "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,
                                   "under": key["under"], "colliders": [Path(c[0]).name for c in colliders + own],
+                                  "own_mode": own_mode,
                                   **({"shaping": shaping} if shaping else {}),
                                   "metrics": res["data"], "wall_s": res["wall_s"], "slot_wait_s": res["slot_wait_s"],
                                   "created_at": utc_now_iso()}

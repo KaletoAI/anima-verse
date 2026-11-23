@@ -6,7 +6,7 @@ Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>[,<item id>...]] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
         [--wear <item id>[,<item id>...]] [--take-off <item id>[,...]] [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
-        [--backend-set NAME.ATTR=JSON] [--set-param ITEM.KEY=JSON] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
+        [--backend-set NAME.ATTR=JSON] [--set-param ITEM.KEY=JSON] [--set-text ITEM=TEXT] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
     ./.venv/bin/python scripts/e2e_cut_texture.py --world worlds/demo --character demo --dry-run
@@ -58,6 +58,9 @@ the layer under it and spend its own image jobs).
 ``--set-param ITEM.KEY=JSON`` (repeatable) sets one template parameter of a piece in the COPY (validated); a painted
 placket (``placket`` / ``buttons``, plan group B C3) is checked on the served GLB: the atlas it carries is the
 assembly's ``placket_atlas`` of the record's atlas (written beside it to ``--out`` as ``<stem>.placket.png``).
+
+``--set-text ITEM=TEXT`` (repeatable) sets a piece's prompt fragment in the COPY (``update_item``) — e.g. the trims'
+own colour the texture from cut reads from it (``garment_cut_texture.trim_style``, stage "layers").
 
 ``--chain a,b`` overrides the ``garment_cut_texture`` routing chain IN THE PROCESS (``routing._rules``; nothing is
 written — the recorder still fails the run on a config write); every entry must be in ``ALLOWED_BACKENDS``.
@@ -382,6 +385,16 @@ def wear(character: str, items: List[str], off: List[str] = ()) -> Dict[str, str
     return worn
 
 
+def set_text(spec: str) -> str:
+    """``--set-text ITEM=TEXT``: the piece's prompt fragment set in the COPY's item (``update_item``)."""
+    from app.models.inventory import get_item, update_item
+    item_id, _, text = spec.partition("=")
+    if not get_item(item_id) or not text:
+        raise SystemExit(f"--set-text {spec!r}: no item {item_id!r} or no text")
+    update_item(item_id, {"prompt_fragment": text})
+    return f"{item_id}.prompt_fragment = {(get_item(item_id) or {}).get('prompt_fragment')!r}"
+
+
 def set_param(spec: str) -> str:
     """``--set-param ITEM.KEY=JSON``: one template parameter of a piece set in the COPY's item (``set_params``,
     validated) — e.g. a placket to see it painted with no image job (``--dry-run --replay``)."""
@@ -635,6 +648,8 @@ def main() -> int:
     ap.add_argument("--take-off", default="", help="comma list: pieces taken off in the copy first")
     ap.add_argument("--set-param", action="append", default=[], metavar="ITEM.KEY=JSON",
                     help="set one template parameter of a piece IN THE COPY first (repeatable)")
+    ap.add_argument("--set-text", action="append", default=[], metavar="ITEM=TEXT",
+                    help="a piece's prompt fragment in the copy")
     ap.add_argument("--no-redrape", action="store_true")
     ap.add_argument("--fresh-back-view", action="store_true")
     ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
@@ -697,6 +712,8 @@ def main() -> int:
             OUTBOUND.clear()
         for spec in args.set_param:
             print("param (copy): " + set_param(spec))
+        for spec in args.set_text:
+            print("text (copy): " + set_text(spec))
         if args.wear or args.take_off:
             print("worn now (copy): " + str(wear(args.character, [w for w in args.wear.split(",") if w.strip()],
                                                   [w for w in args.take_off.split(",") if w.strip()])))

@@ -150,8 +150,20 @@ Files under `templates/cut/`: `{item}_{cut_sig}.islands.json` (the builder's byt
 metrics, `wall_s`) and `.pattern.png` (the debug sheet). The cut starts when the parameters are saved
 (`PUT …/figure/template/{item_id}`) and whenever the dialog reads its Texture tab (`GET …/cut`), when it is missing —
 never twice for one key, never again for a failed key, and not within 5 minutes after a run that judged nothing
-(timeout, no Blender). A drape records the `cut_sig` it was laid out of when its colliders were the cut's
-(own-mesh colliders shrunk or dropped by `drape_with_fallback` lay the panels out of other colliders: other islands).
+(timeout, no Blender). A drape records the `cut_sig` it was laid out of — in every mode of `drape_with_fallback` (stage "layers",
+2026-11-22). Over an own-mesh piece the drape may need the A200 fallback: "shrunk" lays the panels out of the
+own-mesh collider moved `INNER_SHRINK_M` inward, "dropped" without it — other islands than a cut made with it (Kai's
+leather jacket over his generated jeans: "full" stretch 1.52, "shrunk" 4.46, "dropped" passes at 13.98 against the
+cut's 14.00 px/cm; the cut atlas was never applied, "drape_other"). So the CUT follows the drape:
+`garment_template.own_fallback_mode` reads the mode of the piece's current drape (`inner_collider.mode`, also of a
+stand-in), `garment_template_cut.sig_of` adds the token `own:shrunk` / `own:dropped` (only with an own-mesh fit under
+the piece; "full" keys as before — no existing cut moves), and the cut-only run hands the own-mesh collider the way
+that mode does (`run_blender` `own_offset`, none for "dropped"). The drape records the sig of its own mode
+(`sig_of(..., own_mode=inner["mode"])`). Laying every attempt out of the full colliders instead was measured on the
+copy and rejected: the islands matched, but "dropped" then failed as well (stretch 1.465). A Build does not start the
+cut texture beside the drape of a piece with an own-mesh fit under it (`figure_build._prestart_cut_texture`): the
+mode is known only after the drape, so the step runs in its place after it. Smoke `scripts/smoke_cut_own_fallback.py`;
+`scripts/smoke_template_cut_islands_equal.py --own <fit> --mode dropped` proves the bytes on a real body.
 A ready drape whose recorded `cut_sig` differs from the current one (a new `uv_pattern.py`, a lower layer that became
 ready after it) counts as not draped (`garment_template.cut_behind`; `drape_state` "missing" with "The pattern was cut
 anew — the next Build drapes it again") and the next Build drapes it again under the same `tsig`. The drape key is NOT
@@ -585,6 +597,18 @@ hold, so:
   `POST …/cut/sleeves`) takes the model's sleeves and cuffs for a garment with a print on a sleeve; a switch composes
   the atlas again on the CPU (`recompose`); until then `cut_info` says `"option"`. The back job paints the back panel
   alone anyway.
+- **Trims in their own colour** (stage "layers", 2026-11-22; Glut's bra: straps and band black with gold edges in the
+  picture, the fill gave them the cups' scales). `trim_style` reads the item's prompt fragment in segments (split at
+  `,` `;` and "with"): a segment with a trim noun (`TRIM_NOUNS`: strap, band / underband, waistband, cuff, collar,
+  gore; singular or plural) takes its first colour word (`TRIM_COLOURS`) for those parts, a following trim segment
+  without a colour joins it, and a colour before an edge noun ("with gold edges", `EDGE_NOUNS`) or after an edge
+  participle ("edged in gold") is the edge colour — "…, black straps, band and gore with gold edges". `_finish`
+  paints the named islands and their bleed after `compose` (`paint_trims`: the colour, `TRIM_GRAIN` = 0.25 of the
+  fill's lightness detail kept, a `TRIM_EDGE_CM` = 0.25 cm band inside each outline in the edge colour); never with
+  `sleeve_print` "picture". The record keeps `trim_style`; `composed_as_now` (the Build's `compose` state, the dialog's
+  `current` / `option_stale`, `cut_info` "option") compares it with the text now, so a changed text recomposes on the
+  CPU (0 image jobs). A text that names no trim colour leaves every atlas as it was (old records carry no
+  `trim_style`, which equals None). No prompt changes. Smoke: `scripts/smoke_cut_texture_trims.py`.
 - **Use this answer** (`POST …/cut/use {job}`, `start_recompose` → `recompose`, 0 image jobs): the shown answer of a
   job — also a rejected one, after an in-app confirmation naming the reason — is accepted (`accepted`,
   `accepted_over`) and composed; a job without an answer stays `skipped` with "Not made yet", and Run all renders just

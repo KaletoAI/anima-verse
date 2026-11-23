@@ -1817,7 +1817,14 @@ def _prestart_cut_texture(character_name: str, step: Step, rest: List[Step], exp
     try:
         from app.core import garment_cut_texture as gct
         from app.core import garment_template_cut as gtc
-        if gtc.cut_key(character_name, step.item_id)["sig"] is None:
+        key = gtc.cut_key(character_name, step.item_id)
+        if key["sig"] is None:
+            return False
+        if any(":fit:" in t and not t.endswith(":fit:-") for t in key.get("under") or []):
+            # stage "layers" (2026-11-22): over an own-mesh piece the drape may fall back (shrunk / dropped), and the
+            # cut follows the mode it lands in (``garment_template.own_fallback_mode``) — cut after the drape
+            logger.info("Build %s: the texture from cut of %s waits for its drape (own-mesh layer under it)",
+                        character_name, _item_name(step.item_id))
             return False
         if gct.build_start(character_name, step.item_id, explicit=explicit):
             logger.info("Build %s: the texture from cut of %s starts beside its drape", character_name,

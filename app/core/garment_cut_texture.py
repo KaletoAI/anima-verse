@@ -1541,6 +1541,123 @@ SLEEVE_PARTS = ("sleeve_l", "sleeve_r", "cuff_l", "cuff_r")
 #: (always the fabric patch).
 TRIM_PARTS = SLEEVE_PARTS + ("waistband", "gusset", "gore", "band_r", "band_l", "strap_r", "strap_l", "thumb_r",
                              "thumb_l", "hip_band_r", "hip_band_l", "top_band_r", "top_band_l", "collar")
+#: Stage "layers" (2026-11-22, Glut's bra: the picture's straps and band are black with gold edges, the fabric fill gave
+#: them the cups' scales) — the small pieces the item TEXT names with a colour of their own (``trim_style``): the noun
+#: (singular / plural) and the parts it names. Only these nouns: "trim" / "edge" name the edging, never a piece.
+TRIM_NOUNS = {"strap": ("strap_l", "strap_r"), "band": ("band_l", "band_r"), "underband": ("band_l", "band_r"),
+              "waistband": ("waistband",), "cuff": ("cuff_l", "cuff_r"), "collar": ("collar",), "gore": ("gore",)}
+#: The nouns that make a colour the trims' EDGE colour ("with gold edges", "gold piping").
+EDGE_NOUNS = ("edge", "edging", "trim", "piping", "rim", "border", "binding")
+#: The participles that make the colour after them the edge colour ("edged in gold", "trimmed with silver").
+EDGE_VERBS = ("edged", "trimmed", "piped", "rimmed", "bordered")
+#: sRGB of the colour words a trim may name (English: the item's prompt fragment is the picture's prompt). A word
+#: outside this list names no trim colour (the trims keep the fabric fill).
+TRIM_COLOURS = {"black": (24, 22, 22), "white": (236, 234, 230), "grey": (128, 128, 128), "gray": (128, 128, 128),
+                "silver": (184, 184, 190), "gold": (196, 152, 64), "golden": (196, 152, 64),
+                "brass": (176, 140, 72), "bronze": (150, 100, 52), "copper": (176, 102, 64), "red": (164, 32, 32),
+                "brown": (104, 66, 38), "tan": (176, 134, 92), "beige": (212, 192, 160), "cream": (232, 222, 196),
+                "blue": (44, 66, 148), "navy": (28, 36, 72), "green": (44, 112, 54), "pink": (222, 142, 164),
+                "purple": (104, 52, 124), "orange": (214, 112, 36), "yellow": (222, 192, 52)}
+#: The edge band of a trim island (cm, inside its outline).
+TRIM_EDGE_CM = 0.25
+#: The share of the filled fabric's lightness detail a trim keeps over its own colour (the grain of the material,
+#: not the fabric's print).
+TRIM_GRAIN = 0.25
+_TRIM_WORD = re.compile(r"[a-z]+")
+
+
+def _noun(word: str, nouns) -> str | None:
+    for n in nouns:
+        if word == n or word == n + "s" or word == n + "es":
+            return n
+    return None
+
+
+def trim_style(text: str) -> dict | None:
+    """The trims' own colour as the item ``text`` (its prompt fragment) names it: ``{"parts": [...], "colour": rgb,
+    "edge": rgb | None, "words": [...]}``, or None when it names none.
+
+    The text is read in segments (split at ",", ";" and the word "with"): a segment naming a trim noun
+    (``TRIM_NOUNS``) takes its first colour word (``TRIM_COLOURS``) as the trims' colour — a segment of trim nouns
+    without one, right after such a segment, joins it ("black straps, band and gore"); the colour word right before an
+    edge noun ("with gold edges") or after an edge participle ("edged in gold") in the segment or in the next one
+    without a trim noun is the edge colour. "molded cups of red scales with black straps" gives black straps."""
+    low = (text or "").lower()
+    segs = [seg for part in re.split(r"[,;]", low) for seg in re.split(r"\bwith\b", part)]
+    parts: list[str] = []
+    colour = edge = None
+    group = False
+    for seg in segs:
+        words = _TRIM_WORD.findall(seg)
+        nouns = [n for n in (_noun(w, TRIM_NOUNS) for w in words) if n]
+        edge_here = next((w for i, w in enumerate(words) if w in TRIM_COLOURS
+                          and (_noun(words[i + 1] if i + 1 < len(words) else "", EDGE_NOUNS)
+                               or any(v in EDGE_VERBS for v in words[max(0, i - 2):i]))), None)
+        own = next((w for w in words if w in TRIM_COLOURS and w != edge_here), None)
+        if nouns and (own or group):
+            if own and colour and own != colour:
+                break                          # a second trim colour: the first group stands
+            colour = colour or own
+            parts.extend(p for n in nouns for p in TRIM_NOUNS[n] if p not in parts)
+            edge = edge or edge_here
+            group = True
+            continue
+        if group and not nouns and edge_here and edge is None:
+            edge = edge_here
+        group = False
+    if not parts or colour is None:
+        return None
+    return {"parts": parts, "colour": list(TRIM_COLOURS[colour]), "edge": list(TRIM_COLOURS[edge]) if edge else None,
+            "words": [colour] + ([edge] if edge else [])}
+
+
+def trim_style_of(item_id: str) -> dict | None:
+    """``trim_style`` of the piece's prompt fragment (None without one or when it names no trim colour)."""
+    from app.models.inventory import get_item
+    return trim_style(str((get_item(item_id) or {}).get("prompt_fragment") or ""))
+
+
+def paint_trims(atlas: np.ndarray, islands: dict, size: int, px_per_cm: float,
+                style: dict | None) -> tuple[np.ndarray, dict]:
+    """The trim islands ``style`` names (``trim_style``; only those the pattern has) and the bleed nearest to them
+    painted in the trims' colour, keeping ``TRIM_GRAIN`` of the filled fabric's lightness detail, with an
+    ``TRIM_EDGE_CM`` band inside each island's outline in the edge colour. Returns the atlas and
+    ``{"islands": [...], "edge_px": n}`` ({"islands": []} without a style or a named island)."""
+    from scipy import ndimage
+    post = cut_texture_post
+    if not style:
+        return atlas, {"islands": []}
+    labels = rasterise_islands(islands, size)
+    ids = island_ids(islands)
+    names = sorted(n for n, iid in ids.items() if part_of(n) in style["parts"] and (labels == iid).any())
+    if not names:
+        return atlas, {"islands": []}
+    sel = np.zeros(256, bool)
+    for n in names:
+        sel[ids[n]] = True
+    own = sel[labels]
+    dist, (iy, ix) = ndimage.distance_transform_edt(labels == 0, return_indices=True)
+    bleed = max(1, int(round(post.BLEED_CM * px_per_cm)))
+    region = own | ((labels == 0) & sel[labels[iy, ix]] & (dist <= bleed))
+    out = np.asarray(atlas)[..., :3].astype(np.uint8).copy()
+    lab = post.srgb_to_lab(out[region].astype(np.float64))
+    grain = (lab[:, 0] - lab[:, 0].mean()) * TRIM_GRAIN
+    edge_px = 0
+    colours = np.repeat(post.srgb_to_lab(np.asarray([style["colour"]], np.float64)), len(lab), axis=0)
+    if style.get("edge"):
+        band = max(1, int(round(TRIM_EDGE_CM * px_per_cm)))
+        inner = np.zeros_like(own)
+        for n in names:
+            m = labels == ids[n]
+            inner |= m & (ndimage.distance_transform_edt(m) <= band)
+        edge_mask = (inner | ((labels == 0) & region))[region]
+        colours[edge_mask] = post.srgb_to_lab(np.asarray([style["edge"]], np.float64))[0]
+        edge_px = int(inner.sum())
+    colours[:, 0] = colours[:, 0] + grain
+    out[region] = np.clip(np.rint(post.lab_to_srgb(colours)), 0, 255).astype(np.uint8)
+    return out, {"islands": names, "edge_px": edge_px}
+
+
 #: A pre-fill nearer to white than this (the largest channel distance) is darkened to it: the gate and the
 #: registration find the islands as "not near-white" (``cut_texture_post.WHITE_TOL`` 24), so a white fabric goes as a
 #: very light grey (the colour match moves the atlas back onto the item's own white).
@@ -1892,6 +2009,18 @@ def _item_params(item_id: str) -> dict:
     return gt.params_of(get_item(item_id)) or {}
 
 
+def composed_as_now(record: dict, item_id: str, params: dict | None = None) -> bool:
+    """Whether a ready ``record`` was composed with the piece's options as they are now: its ``sleeve_print`` and
+    the trims' colour of the item text (``trim_style``, stage "layers"). Otherwise ``recompose`` makes it again on
+    the CPU from the stored answers (0 image jobs)."""
+    if params is None:
+        from app.core import garment_template as gt
+        from app.models.inventory import get_item
+        params = gt.params_of(get_item(item_id)) or {}
+    return (str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain")
+            and record.get("trim_style") == trim_style_of(item_id))
+
+
 def sleeve_print_of(item_id: str) -> str:
     """The piece's ``sleeve_print`` param ("plain" without one)."""
     from app.core import garment_template as gt
@@ -1923,7 +2052,11 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
         record.update({"state": "rejected", "reason": f"{job.capitalize()}: {entry.get('reason') or NOT_MADE}"})
         record["metrics"] = _summary_metrics(record["jobs"], None, None)
     else:
-        atlas = compose(results, size, float(islands.get("px_per_cm") or record.get("px_per_cm") or 0.0))
+        ppc = float(islands.get("px_per_cm") or record.get("px_per_cm") or 0.0)
+        atlas = compose(results, size, ppc)
+        if record.get("sleeve_print") != "picture":
+            # stage "layers": the trims the item text gives a colour of their own (``trim_style``)
+            atlas, record["trim_paint"] = paint_trims(atlas, islands, size, ppc, record.get("trim_style"))
         seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
         cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
         record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
@@ -1973,7 +2106,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     "upscale": None, "prompt_sha": psha, "prompt_family": family,
                     "post_version": cut_texture_post.POST_VERSION,
                     "item_sha": _item_sha(item_id), "back_sha": "", "back_view": {"made": False, "jobs": 0},
-                    "only": only or "", "sleeve_print": sleeve_print_of(item_id)}
+                    "only": only or "", "sleeve_print": sleeve_print_of(item_id),
+                    "trim_style": trim_style_of(item_id)}
     record["held"] = held_trims(kind, record["sleeve_print"])
     sig = csig(pattern["islands_sha"], record["item_sha"], "", psha)
     try:
@@ -2179,6 +2313,7 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
     size = int(islands.get("atlas_px") or 2048)
     px_per_cm = float(islands.get("px_per_cm") or 0.0)
     record["sleeve_print"] = sleeve_print_of(item_id)
+    record["trim_style"] = trim_style_of(item_id)
     record["held"] = held_trims(item_kind(item_id), record["sleeve_print"])
     _set_progress((character_name, item_id), "post")
     refs = references(character_name, item_id, "back" in parts)
@@ -2452,7 +2587,7 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
         record = read_record(character_name, item_id, sig) if sig else {}
         plan = job_plan(character_name, item_id, islands, cut["islands_sha"])
         if record.get("state") == "ready" and atlas_path(character_name, item_id, sig).is_file():
-            if str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain"):
+            if composed_as_now(record, item_id, params):
                 return {**out, "state": BUILD_DONE}
             return {**out, "state": BUILD_COMPOSE}
         if record.get("state") in ("rejected", "failed"):
@@ -2718,8 +2853,7 @@ def dialog_state(character_name: str, item_id: str) -> dict:
                 # the Pattern step's own line: "" = cut with islands; ``cutting`` = the cut-only run cuts it now
                 "pattern_reason": pattern_reason, "cutting": pattern["state"] == "cutting",
                 "cut_at": str(pattern.get("cut_at") or ""), "cut_wall_s": pattern.get("wall_s"),
-                "current": record.get("state") == "ready"
-                and str(record.get("sleeve_print") or "plain") == str(params.get("sleeve_print") or "plain"),
+                "current": record.get("state") == "ready" and composed_as_now(record, item_id, params),
                 "plan": job_plan(character_name, item_id, islands, str(pattern.get("islands_sha") or ""))
                 if cut_ready else None,
                 "texture": params.get("texture") or "projection",
@@ -2746,8 +2880,9 @@ def dialog_state(character_name: str, item_id: str) -> dict:
                 "trim": "sleeves" if any(part_of(str(i["name"])) in SLEEVE_PARTS and "sleeve" in str(i["name"])
                                          for i in islands.get("islands", [])) or not islands.get("islands")
                 else "pieces",
-                "option_stale": record.get("state") == "ready"
-                and str(record.get("sleeve_print") or "plain") != sleeve_print})
+                "option_stale": record.get("state") == "ready" and not composed_as_now(record, item_id, params),
+                # stage "layers": the trims' own colour read from the item text (None: the fabric fill)
+                "trim_style": trim_style_of(item_id)})
     return out
 
 

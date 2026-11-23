@@ -3,7 +3,8 @@
 Usage:
     ./.venv/bin/python scripts/smoke_template_cut_islands_equal.py --body <plain base body .glb> \\
         --record <a top's drape record .json, or a JSON file of template params> \\
-        [--front <view .png> --back <view .png>] [--expect-sha <sha256 of the drape's islands.json>]
+        [--front <view .png> --back <view .png>] [--expect-sha <sha256 of the drape's islands.json>] \\
+        [--own <an own-mesh piece's fit .glb> [--mode full|shrunk|dropped]]
 
 Work on COPIES of a character's files (e.g. the base body ``model3d/base*.glb``, a drape record
 ``garments/templates/<item>_<tsig>.json`` and the two piece-only views), never on a live world folder: everything
@@ -27,6 +28,14 @@ Wall times of both are printed.
 
 Measured 2026-11-21 on a copy of Dario's base body and shirt (Blender 5.2.2, this host): cut 11.8 s, drape 63.6 s
 (41.0 s Blender), both sha256 387cd15f… = the live drapes' islands.
+
+``--own`` (stage "layers", 2026-11-22): an own-mesh piece under the template piece (its accepted plain-body fit, e.g.
+Kai's generated jeans under his leather jacket) and the A200 fallback ``--mode`` the drape landed in. Both runs get it
+the way that mode hands it: the drape as ``garment_template.drape_with_fallback``'s attempt (full: offset 0, shrunk:
+``INNER_SHRINK_M``, dropped: not at all), the cut as ``garment_template_cut.run`` does for ``own_mode`` (the same), so
+[2] / [3] hold in every mode. [1] allows ``marks.json`` beside the islands (a jacket / dress writes its placket lines).
+[5] is not checked with ``--own``. Measured 2026-11-22 on a copy of Kai's base body, jacket and jeans fit: "dropped"
+both sha 360866fd… (13.98 px/cm) — the drape's islands of the live run.
 """
 import argparse
 import hashlib
@@ -56,6 +65,8 @@ def main() -> int:
     ap.add_argument("--back")
     ap.add_argument("--item", default="item_cut_check")
     ap.add_argument("--expect-sha", default="")
+    ap.add_argument("--own", default="", help="an own-mesh piece's fit .glb under the piece (a collider)")
+    ap.add_argument("--mode", default="full", choices=("full", "shrunk", "dropped"))
     a = ap.parse_args()
     from PIL import Image
 
@@ -71,17 +82,23 @@ def main() -> int:
         Image.new("RGBA", (512, 512), (128, 128, 128, 255)).save(grey)
         front, back = front or str(grey), back or str(grey)
     t0 = time.time()
-    cut = gtc.run_blender(Path(a.body), params, item_id=a.item, out_dir=out / "cut")
+    own = [(Path(a.own), None)] if a.own and a.mode != "dropped" else []
+    off = gt.INNER_SHRINK_M if a.mode == "shrunk" else 0.0
+    cut = gtc.run_blender(Path(a.body), params, item_id=a.item, out_dir=out / "cut", own=own, own_offset=off)
     cut_wall = time.time() - t0
     check("[1] the cut-only run succeeds", cut["ok"], cut["error"] or cut["outcome"])
     if not cut["ok"]:
         print(cut["log_tail"][-3000:])
         return 1
     produced = sorted(p.name for p in (out / "cut").iterdir())
-    check("[1] it writes islands.json only", produced == ["islands.json"], produced)
+    check("[1] it writes islands.json (and the placket lines) only", produced in (["islands.json"],
+                                                                         ["islands.json", "marks.json"]), produced)
     t1 = time.time()
     drape = gt.run_drape(Path(a.body), params, {"front": front, "back": back, "source": "piece_only"},
-                         item_id=a.item, out_dir=out / "drape")
+                         item_id=a.item, out_dir=out / "drape", lower=own or None,
+                         lower_offsets=[off] if own else None)
+    if a.own:
+        print(f"drape mode {a.mode}: ok {drape.get('ok')} error {drape.get('error')!r}")
     drape_wall = time.time() - t1
     isl = (drape.get("outputs") or {}).get("islands")
     check("[1] the full drape succeeds and writes islands", bool(drape.get("glb")) and bool(isl),
@@ -101,10 +118,11 @@ def main() -> int:
     if a.expect_sha:
         check("[4] the drape's earlier islands sha", cs == a.expect_sha, cs)
     drape_work = gt.work_wall_s(drape.get("data") or {})
-    check("[5] the cut takes under half the drape's time", cut["wall_s"] < 0.5 * float(drape_work or drape_wall),
-          f"cut {cut['wall_s']} s (Blender {(cut['data'] or {}).get('script_wall_s')} s) vs drape "
-          f"{drape_work} s (Blender {(drape.get('data') or {}).get('script_wall_s')} s); calls {cut_wall:.1f} / "
-          f"{drape_wall:.1f} s")
+    if not a.own:
+        check("[5] the cut takes under half the drape's time", cut["wall_s"] < 0.5 * float(drape_work or drape_wall),
+              f"cut {cut['wall_s']} s (Blender {(cut['data'] or {}).get('script_wall_s')} s) vs drape "
+              f"{drape_work} s (Blender {(drape.get('data') or {}).get('script_wall_s')} s); calls {cut_wall:.1f} / "
+              f"{drape_wall:.1f} s")
     print(f"islands sha256 {cs}")
     print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0
