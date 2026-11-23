@@ -399,6 +399,9 @@ UNDERARM_DROP_MAX_M = 0.08
 #: flank 0.25-0.45): an edge on such a slope stands out as a flap even where the slope is straight, so the flare alone
 #: does not see it.
 UNDERARM_SLOPE_MAX = 0.6
+#: Corset v5: (1, 2, 1) passes over the lowering round the waist (``underarm_edge``): 2 left a V notch between the
+#: side seam (no fold there) and the fold behind it in the side view; 8 make it one wide, even scoop.
+UNDERARM_SMOOTH_PASSES = 8
 
 
 def skin_flare(btree, centre, ang, z):
@@ -464,7 +467,7 @@ def underarm_edge(spec, btree, centre):
     wide = list(need)
     for _round in range(6):
         wide = [0.0 if locked[k] else max(need[(k + d) % n] for d in (-1, 0, 1)) for k in range(n)]
-        for _ in range(2):
+        for _ in range(UNDERARM_SMOOTH_PASSES):
             wide = [0.0 if locked[k] else max(need[k], (wide[(k - 1) % n] + 2 * wide[k] + wide[(k + 1) % n]) / 4.0)
                     for k in range(n)]
         # a column the smoothing moved onto the fold goes on down from there (the next round smooths it again)

@@ -478,7 +478,8 @@ clean. Smokes: `smoke_bust_shaping.py` (v3, old-code proof against 4ee6ac1ab) an
   the cloth under it — a flap. Every column without chest tissue and outside the sweetheart dip now lowers its edge
   in 2 mm steps until the skin under it neither flares (`skin_flare` ≤ 2.5 mm against the straight line through the
   skin 1.5 and 3 cm lower) nor widens more steeply than 0.6 m/m (`skin_slope`). The lowering is widened to the
-  neighbouring columns and smoothed (1, 2, 1), never under a column's own need (Rosi: 26 columns, at most 3.6 cm).
+  neighbouring columns and smoothed (1, 2, 1) `UNDERARM_SMOOTH_PASSES` 8 times, never under a column's own need —
+  one wide scoop under each arm instead of a V notch beside the side seam (Rosi: 36 columns, at most 3.6 cm).
 - *The top edge lies on the skin all the way round.* The edge moves to 0.8 mm off the skin (`SHELL_EDGE_CLEAR_M`),
   and where the line between two edge vertices spans a hollow (the shoulder blade's edge) by more than 1.7 mm both
   ends move in. The cleavage bridge keeps its hull (it spans the hollow on purpose; out of every edge gate).
@@ -492,8 +493,8 @@ clean. Smokes: `smoke_bust_shaping.py` (v3, old-code proof against 4ee6ac1ab) an
   per 2 cm segment of the whole top edge round the body, sampled every 2 mm (`edge_loop`) — and
   `front_fold_max_deg` ≤ `CORSET_FOLD_DEG` 55 (`front_folds`: the dihedral angle of the front's inner edges).
 
-Rosi's Red Corset Top, dry run against round 1 (65bf47a3a): edge loop gap max 1.77 mm, flare max 1.12 mm (was 5-17 mm
-under the arms), top edge p95 0.88, front fold max 47° (v4 98°), waist 2.07 / hem 2.12 / under edge 4.68 mm (p95).
+Rosi's Red Corset Top, dry run against round 1 (65bf47a3a): edge loop gap max 1.77 mm, flare max 1.22 mm (was 5-17 mm
+under the arms), top edge p95 0.88, front fold max 47° (v4 98°), waist 2.07 / hem 2.12 / under edge 4.87 mm (p95).
 Not fixed: the sitting pose stretches the hem over the buttocks to 1.50× (walking 1.18×; the hem's horizontal edges
 at the back, the hip widening under it). It is not gated per pose; shortening the back hem or freeing the hem from
 the thigh weights would be its fix. Smoke: `smoke_corset_underarm.py`.

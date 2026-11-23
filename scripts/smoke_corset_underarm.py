@@ -18,6 +18,8 @@ are gated (``judge_build``). The helpers are taken out of the Blender script by 
       1st: [0.009, 0.027, 0.036, 0.027, 0.009 | 0, 0, 0]
       2nd: back 0 (0 + 0.018 + 0.027) / 4 = 0.01125, back 1 (0.009 + 0.054 + 0.036) / 4 = 0.02475, back 2
            (0.027 + 0.072 + 0.027) / 4 = 0.0315 -> its need 0.036, back 3 0.02475, back 4 0.01125.
+    (two passes: ``UNDERARM_SMOOTH_PASSES`` is set to 2 for this derivation; the shipped 8 are checked for the shape:
+    back 2 at its need, symmetric, falling away from it, wider than with 2.)
     No smoothed column lies on the fold (the fold is at back 2 only) -> done. top_drop back
     [0.01125, 0.02475, 0.036, 0.02475, 0.01125]; the side seams: front 4 = back 0 = 0.01125, front 0 = back 4 = 0.01125;
     front 1..3 0. lowered_cols 5, max_drop_m 0.036.
@@ -65,7 +67,8 @@ def check(label, ok, detail=""):
 
 BUILD = ROOT / "app" / "blender" / "scripts" / "garment_template_build.py"
 WANT = {"skin_flare", "skin_slope", "underarm_edge", "bone_bend"}
-CONSTS = {"UNDERARM_FLARE_M", "UNDERARM_BELOW_M", "UNDERARM_STEP_M", "UNDERARM_DROP_MAX_M", "UNDERARM_SLOPE_MAX"}
+CONSTS = {"UNDERARM_FLARE_M", "UNDERARM_BELOW_M", "UNDERARM_STEP_M", "UNDERARM_DROP_MAX_M", "UNDERARM_SLOPE_MAX",
+          "UNDERARM_SMOOTH_PASSES"}
 
 
 def load(src):
@@ -81,7 +84,7 @@ def load(src):
 ns, gd = load(BUILD.read_text())
 check("helpers present", WANT <= set(ns), sorted(WANT - set(ns)))
 check("constants", (ns["UNDERARM_FLARE_M"], ns["UNDERARM_BELOW_M"], ns["UNDERARM_STEP_M"], ns["UNDERARM_DROP_MAX_M"],
-                    ns["UNDERARM_SLOPE_MAX"]) == (0.0025, (0.015, 0.03), 0.002, 0.08, 0.6))
+                    ns["UNDERARM_SLOPE_MAX"], ns["UNDERARM_SMOOTH_PASSES"]) == (0.0025, (0.015, 0.03), 0.002, 0.08, 0.6, 8))
 
 # [1]
 gd.body_radius = lambda bt, c, a, z: 0.10 + 0.5 * (z - 1.0)
@@ -94,8 +97,13 @@ check("[1] curved skin: slope 0.3", abs(ns["skin_slope"](None, None, 0.0, 1.23) 
 
 # [2]
 gd.body_radius = lambda bt, c, a, z: 0.10 + (10 * max(0.0, z - 1.25) ** 2 if abs(a - math.pi / 2) < 0.1 else 0.0)
-spec = {"cols": 5, "row_y": [1.30], "top_drop": {"front": [0.0] * 5, "back": [0.0] * 5},
-        "cup_edge": {"tissue_cols": [1, 2, 3], "dip": [0.0] * 5}}
+def spec5():
+    return {"cols": 5, "row_y": [1.30], "top_drop": {"front": [0.0] * 5, "back": [0.0] * 5},
+            "cup_edge": {"tissue_cols": [1, 2, 3], "dip": [0.0] * 5}}
+
+
+spec = spec5()
+ns["UNDERARM_SMOOTH_PASSES"] = 2          # the hand derivation above: two passes
 res = ns["underarm_edge"](spec, None, None)
 back = spec["top_drop"]["back"]
 want = [0.01125, 0.02475, 0.036, 0.02475, 0.01125]
@@ -104,6 +112,14 @@ front = spec["top_drop"]["front"]
 check("[2] side seams synced, tissue columns untouched", abs(front[0] - 0.01125) < 1e-5
       and abs(front[4] - 0.01125) < 1e-5 and front[1:4] == [0.0, 0.0, 0.0], front)
 check("[2] lowered_cols 5, max_drop 0.036", res["lowered_cols"] == 5 and abs(res["max_drop_m"] - 0.036) < 1e-6, res)
+ns["UNDERARM_SMOOTH_PASSES"] = 8          # the shipped passes: one even scoop round the fold
+spec8 = spec5()
+ns["underarm_edge"](spec8, None, None)
+b8, f8 = spec8["top_drop"]["back"], spec8["top_drop"]["front"]
+check("[2] 8 passes: back 2 keeps its need 0.036, symmetric, falling away from it, tissue columns 0",
+      abs(b8[2] - 0.036) < 1e-6 and abs(b8[1] - b8[3]) < 1e-9 and abs(b8[0] - b8[4]) < 1e-9
+      and b8[2] > b8[1] > b8[0] > 0 and f8[1:4] == [0.0, 0.0, 0.0], (b8, f8))
+check("[2] 8 passes reach wider than 2 (back 0 lower)", b8[0] > want[0], (b8[0], want[0]))
 spec0 = {"cols": 5, "row_y": [1.30], "top_drop": {"front": [0.0] * 5}}
 check("[2] no back drops yet -> created", ns["underarm_edge"](spec0, None, None) is not None
       and len(spec0["top_drop"]["back"]) == 5)
