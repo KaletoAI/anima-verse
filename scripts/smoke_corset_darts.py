@@ -23,7 +23,8 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. The
 [4] ``garment_template.CORSET_VERSION`` is 1 and keys the CUT of a strapless top only: ``cut_sig`` of a strapless top
     is md5 of the payload ``{params: cut_params, version, uv_pattern, base, lower, panels: 1}`` PLUS ``"corset": 1``
     and ``"corset_rules"`` = md5[:12] of ``corset_darts.py`` (a changed rule re-cuts it, like ``fitted_pattern``);
-    a skirt carries ``panels`` but no ``corset``.
+    a skirt carries ``panels`` and, since stage "geometry" of round D, ``"legs": 1`` (``garment_template.leg_piece``:
+    a skirt's rows below the crotch may follow the legs) — but no ``corset``.
 """
 import hashlib
 import json
@@ -83,7 +84,8 @@ def base(p):
 check("[4] a strapless top's cut key = payload + corset 1",
       gtc.cut_sig(corset, base_sha="b" * 64, lower=[]) == md({**base(corset), "corset": 1,
                                                               "corset_rules": gtc.CORSET_DARTS_SHA}))
-check("[4] a skirt's cut key carries no corset", gtc.cut_sig(skirt, base_sha="b" * 64, lower=[]) == md(base(skirt)))
+check("[4] a skirt's cut key carries no corset",
+      gtc.cut_sig(skirt, base_sha="b" * 64, lower=[]) == md({**base(skirt), "legs": 1}))
 
 print(f"\n{len(FAILS)} FAILED: {FAILS}" if FAILS else "\nALL OK")
 sys.exit(1 if FAILS else 0)
