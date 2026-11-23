@@ -1223,6 +1223,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         // ── Ruling A126/A139: the contact of the pair shown, its samples in stage space. ──
         type Hit = { e: number; r: number; chain: number; channel: string; target: ContactTarget }
+        type Inspected = Pick<NonNullable<ReturnType<typeof placePhaseB>>, 'figures'>
         const stageRot = new THREE.Matrix3()
         const sv = new THREE.Vector3()
         const toStageP = (p: readonly number[], dir = false): [number, number, number] => {
@@ -1230,7 +1231,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (dir) sv.applyMatrix3(stageRot.setFromMatrix4(stageInv)).normalize(); else sv.applyMatrix4(stageInv)
           return [sv.x, sv.y, sv.z]
         }
-        const findHit = (res: NonNullable<ReturnType<typeof placePhaseB>>): Hit | null => {
+        const findHit = (res: Inspected): Hit | null => {
           for (let e = 0; e < res.figures.length; e++) for (let r = 0; r < res.figures.length; r++) {
             const ie = res.figures[e].inspection, ir = res.figures[r].inspection
             if (r === e || !ie || !ir) continue
@@ -1241,7 +1242,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         }
         // Ruling A139: the clip's contact relations (draft, read live) → one hit per relation; none declared = the
         // A126 auto-detection (one hit).
-        const findHits = (res: NonNullable<ReturnType<typeof placePhaseB>>,
+        const findHits = (res: Inspected,
           rels: readonly ContactRelation[] = draftRef.current.contactRelations ?? []): Hit[] => {
           if (!rels.length) { const h = findHit(res); return h ? [h] : [] }
           const out: Hit[] = []
@@ -1323,8 +1324,12 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const bendLimitsNow = (): BendLimits | null => draftRef.current.bendLimits ?? BEND_LIMITS_DEFAULT
         /** The bend a stage sample gets when rendered (null without limits or a chain). */
         const bendOf = (smp: FitSample, lim: BendLimits | null): BendResult | null => (lim ? bendSample(smp, lim).bend : null)
-        /** Bend the entering figure's chain bones of this frame (world; the same solve as `bendOf`). */
-        const bendBones = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit, lim: BendLimits | null): BendResult | null => {
+        /** Every figure's inspection NOW (after the secondary motion, before the openings — the bend's input). */
+        const inspectAll = (): Inspected => ({ figures: entries.map((e) => ({ name: e.name, inspection: e.figure.inspect() })) })
+        /** Bend the entering figure's chain bones of this frame (world; the same solve as `bendOf`). Runs inside phase B
+         *  (`placePhaseB` `afterSecondary`), before the channel openings, so the engagement, the opening and the mouth
+         *  see the part as rendered (frameLoop step 3). */
+        const bendBones = (res: Inspected, hit: Hit, lim: BendLimits | null): BendResult | null => {
           if (!lim) return null
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
           const w = ie && ir ? contactSampleOf(ie, ir, hit, [0, 0, 0]) : null
@@ -1446,7 +1451,22 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // The fixed readout row (Ruling A212) needs every pair frame's inspection.
           const wantInspect = showRef.current.collision || showRef.current.channels || pairOn
           const bendInspect = pairOn && !live.none
-          const phaseB = placePhaseB(entries, frameState, wantInspect || bendInspect || needsSeq !== draftSeqRef.current)
+          // Ruling A145: the entering figure's chain bones bend toward the target every frame — inside phase B, before the
+          // openings (frameLoop step 3), so the mouth and the surface open around the part as it is shown.
+          // Paused too: the paused frame is shown as rendered (bent, engaged, the mouth open) — skipping the bend while
+          // paused showed the unbent part and let the engagement release.
+          const bendNow = () => {
+            if (!bendInspect) return
+            const pre = inspectAll()
+            if (!live.found) {
+              live.recs = findHits(pre).map((hit) => ({ hit, bend: bendLimitsNow() }))
+              live.found = true
+              live.none = !live.recs.length
+            }
+            for (const rec of live.recs) bendBones(pre, rec.hit, rec.bend)
+          }
+          const phaseB = placePhaseB(entries, frameState, wantInspect || bendInspect || needsSeq !== draftSeqRef.current,
+            { afterSecondary: bendNow })
           if (phaseB && needsSeq !== draftSeqRef.current && !solo && figs.length > 1) {
             needsSeq = draftSeqRef.current
             const needs = roleNeeds(phaseB)
@@ -1468,15 +1488,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 setAssign((cur) => ({ ...cur, [a.letter]: { ...cur[a.letter], role: b.role }, [b.letter]: { ...cur[b.letter], role: a.role } }))
               }
             }
-          }
-          if (bendInspect && phaseB && !pausedRef.current) {
-            if (!live.found) {
-              live.recs = findHits(phaseB).map((hit) => ({ hit, bend: bendLimitsNow() }))
-              live.found = true
-              live.none = !live.recs.length
-            }
-            // Ruling A145: the entering figure's chain bones bend toward the target every frame.
-            for (const rec of live.recs) bendBones(phaseB, rec.hit, rec.bend)
           }
           const inspection = wantInspect ? phaseB : null
           ms = ms * 0.9 + (performance.now() - t0) * 0.1
@@ -1558,13 +1569,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         // role); every other role stays. A cap or slider range that stops it is named. ──
         const step = 1 / 60
         const placed = new Map<Fig, { pivot: [number, number, number]; frame: number[] }>()
-        const runAt = (time: number, draft: AlignmentDraft, inspect: boolean, isolated = false) => {
+        const runAt = (time: number, draft: AlignmentDraft, inspect: boolean, isolated = false, afterSecondary?: () => void) => {
           for (const f of figs) {
             f.mixer.setTime(time)
             placed.set(f, placeRoot(f, time, draft))
             f.runtime.poseStep({ realDelta: step })
           }
-          return placePhaseB(entries, frameState, inspect, { isolated })
+          return placePhaseB(entries, frameState, inspect, { isolated, afterSecondary })
         }
         const hipsStage = (f: Fig): [number, number, number] => {
           if (!f.hips) return [f.root.position.x, f.root.position.y, f.root.position.z]
@@ -1641,9 +1652,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const lim = bendLimitsNow()
             for (let i = 0; i < 2 * loop; i++) {
               const time = (i % loop) * step % duration
-              const res = runAt(time, draft, true, isolated)
+              const res = runAt(time, draft, true, isolated, isolated ? undefined : () => { bendBones(inspectAll(), hit, lim) })
               if (!res) continue
-              if (!isolated) bendBones(res, hit, lim)
               if (i < loop) continue
               const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
               const ch = ir?.channels.find((x) => x.id === hit.channel)

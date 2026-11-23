@@ -2421,8 +2421,9 @@ export class NpcManager {
       entries.push({ name: npc.name, interaction: npc.interaction ?? null, figure: npc.figure });
       npc.figure?.setRootAngle(this.rootAngleOf(npc));
     }
-    runFigureFrame(entries, this.frameState, OPENING_BUDGET);
-    this.observePairBends();
+    // Ruling A145: the chain bend runs inside phase B, before the openings (frameLoop step 3) — the mouth and the
+    // surface open around the part as it is shown, and the next update engages on it.
+    runFigureFrame(entries, this.frameState, OPENING_BUDGET, { afterSecondary: () => this.observePairBends() });
     if (this.readoutsNow.length) this.readoutsNow = [];
     for (const npc of this.npcs.values()) {
       for (const r of npc.figure?.channelReadouts() ?? []) this.readoutsNow.push({ ...r, receiver: npc.name });
@@ -2451,7 +2452,7 @@ export class NpcManager {
     return !parts.length || parts.includes(role) ? angle : null;
   }
 
-  /** Ruling A145: after phase B, every pair/group interaction finds its contact once per contact relation (the
+  /** Ruling A145: inside phase B (after every figure's secondary motion, before the openings), every pair/group interaction finds its contact once per contact relation (the
    *  attached part of one figure, the channel or point target of the other that accepts it) and from then on turns the
    *  entering figure's attached part at its ROOT toward it every frame (`chainBend.ts`: the part stays rigid, no turn
    *  while the tip is 8 cm or more before the opening), within the clip's bend limits. A pair without such a

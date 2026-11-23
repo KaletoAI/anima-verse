@@ -335,27 +335,35 @@ export class FigureRuntime {
 
   /** Ruling A203: the chains engaged in this figure's mouth channel open the mouth as far as the thickest of them
    *  needs (`mouthOpenFor` with the built channel's `mouthPassHeight`: its `teeth_gap` when it has teeth, Ruling
-   *  A206, else `open_height`); none = back to the manual value. */
-  private driveMouth(occupants: readonly { channel: string; w: number; segments: readonly OpeningSegment[] }[]): void {
+   *  A206, else `open_height`) — each by max(w, its approach), so the mouth opens as the part comes at it; none =
+   *  back to the manual value. */
+  private driveMouth(occupants: readonly { channel: string; w: number; approach?: number; segments: readonly OpeningSegment[] }[]): void {
     const mouth = this.mouthNow()
     if (!mouth) return
-    let radius = 0
+    const height = mouthPassHeight(this.collisionPayload?.channels?.find(c => c.id === MOUTH_CHANNEL_ID))
+    // Per occupant: engaged, the part's radius × w; approaching (`mouthApproach`), approach × the value the whole part
+    // needs — 0 at the approach's outer edge (no margin step), that value at the funnel's start; the larger wins.
+    let value = 0, radius = 0
     for (const occ of occupants) {
       if (occ.channel !== MOUTH_CHANNEL_ID) continue
-      for (const seg of occ.segments) radius = Math.max(radius, seg.r * occ.w)
+      let r = 0
+      for (const seg of occ.segments) r = Math.max(r, seg.r)
+      radius = Math.max(radius, r * occ.w)
+      value = Math.max(value, mouthOpenFor(r * occ.w, height), (occ.approach ?? 0) * mouthOpenFor(r, height))
     }
-    const height = mouthPassHeight(this.collisionPayload?.channels?.find(c => c.id === MOUTH_CHANNEL_ID))
-    mouth.setContact(mouthOpenFor(radius, height))
+    mouth.setContact(value)
   }
 
   /** THE OPENING (Ruling A102/A102b), after every figure's phase B: the other figures' chains engaged in THIS
    *  figure's channels open its surface — each segment's radius × w. An unoccupied channel is restored; an
    *  occupied one is recomputed only when it `changed`, and only while `budget` lasts (one per recompute/bind). */
-  applyChannelOpenings(occupants: readonly ChannelOccupant[], budget: { left: number } = { left: Infinity }): void {
+  applyChannelOpenings(all: readonly ChannelOccupant[], budget: { left: number } = { left: Infinity }): void {
     const before = this.openingState
     this.openingState = new Map()
     if (this.readouts.length) this.readouts = []
-    this.driveMouth(occupants)
+    this.driveMouth(all)
+    // The surface and the readouts follow the engaged chains only (an approaching one opens the jaw alone).
+    const occupants = all.some(o => !(o.w > 0)) ? all.filter(o => o.w > 0) : all
     if (!occupants.length && !this.openings.size) return
     const inst = this.instance
     const channels = this.partnerChannels
@@ -425,7 +433,7 @@ export class FigureRuntime {
         funnel: ch.funnel, coneDeg: ch.coneDeg, accepts: [...ch.accepts], suppress: [...ch.suppress] })),
       chains: this.disposed ? [] : this.secondary.opChains().map(c => ({ op: c.op, raised: c.raised,
         segments: c.segments.map(seg => ({ a: v(seg.a), b: v(seg.b), r: seg.r })) })),
-      engaged: this.channelOccupants().map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
+      engaged: this.channelOccupants().filter(o => o.w > 0).map(o => ({ partner: o.partner, channel: o.channel, w: o.w,
         radius: o.segments.length ? Math.max(...o.segments.map(seg => seg.r)) : 0 })),
       openings: [...this.openingState.values()].map(o => ({ ...o })),
       mouthOpen: this.mouthOpenValue(),

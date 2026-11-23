@@ -6,7 +6,11 @@
  *   1. the plan — per reader the partners it reads this frame (`planPartnerFrame`);
  *   2. every selected partner snapshot ONCE, before any solve, so the result
  *      does not depend on the order the figures are visited in;
- *   3. `updateSecondary` for each figure (a no-op for one not posed);
+ *   3. `updateSecondary` for each figure (a no-op for one not posed), then the caller's `afterSecondary` — the
+ *      chain bend (Ruling A145, `chainBend.ts`) runs here, so what follows sees the part as RENDERED: the bend is
+ *      what carries an attached part into a partner's mouth or opening, and an opening pass (or a mouth, Ruling A203)
+ *      run before it opened around the unbent part, or not at all (resting-blowjob 2026-11-24: the unbent tip stayed
+ *      54–139 mm before the mouth, the bent one reached 6 mm inside — the mouth never opened);
  *   4. the channel openings (Ruling A102): every chain engaged in a partner's
  *      channel opens that partner's surface, at most `openingBudget` recomputes
  *      per frame, receivers visited from the rotating `state.openingTurn`; each
@@ -24,7 +28,9 @@ import type { OpeningSegment } from './channelOpening'
  *  weight w, the radius it grew the channel to (Ruling A161), the depth scale k its guidance applied and `from`, the
  *  entering figure's name (the channel readout's `entering`). */
 export interface ChannelOccupant { channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number
-  k?: number; from?: string }
+  k?: number; from?: string
+  /** The mouth approach 0 … 1 (`mouthOpen.ts`): opens the jaw only, never the surface (an occupant may have w 0). */
+  approach?: number }
 import { planPartnerFrame } from './partnerFrame'
 import type { FrameFigure } from './partnerFrame'
 
@@ -34,7 +40,7 @@ export interface FramePhaseB {
   partnerSnapshot(interaction: { id: string; kind: string } | null, name: string): PartnerSnapshot | null
   updateSecondary(partners: readonly PartnerSnapshot[], interaction: { id: string } | null): unknown
   channelOccupants(): readonly { partner: string; channel: string; w: number; segments: readonly OpeningSegment[]; channelR?: number
-    k?: number }[]
+    k?: number; approach?: number }[]
   applyChannelOpenings(occupants: readonly ChannelOccupant[], budget: { left: number }): void
   readonly hasHairPush: boolean
   setGpuPartners(capsules: readonly CapsuleNow[] | null): void
@@ -56,12 +62,13 @@ export const OPENING_BUDGET = 1
 
 const NO_PARTNERS: readonly PartnerSnapshot[] = []
 
-/** Run phase B for `entries` (module docstring). Names must be unique per frame. `isolated`: every figure steps
- *  WITHOUT partners — no partner capsules, no channel engagement or guidance, no opening pass, no GPU partners — so a
+/** Run phase B for `entries` (module docstring). Names must be unique per frame. `afterSecondary`: called once every
+ *  figure's secondary motion has run and before the channel openings (step 3 — the chain bend goes there; not in
+ *  `isolated`). `isolated`: every figure steps WITHOUT partners — no partner capsules, no channel engagement or guidance, no opening pass, no GPU partners — so a
  *  frame depends only on the figure's own motion (Auto-align samples this way, history-independent of what the
  *  partner channels did before). */
 export function runFigureFrame(entries: readonly FrameEntry[], state: FrameLoopState,
-  openingBudget = OPENING_BUDGET, opts: { isolated?: boolean } = {}): void {
+  openingBudget = OPENING_BUDGET, opts: { isolated?: boolean; afterSecondary?: () => void } = {}): void {
   if (opts.isolated) {
     for (const e of entries) {
       e.figure?.updateSecondary(NO_PARTNERS, null)
@@ -99,6 +106,7 @@ export function runFigureFrame(entries: readonly FrameEntry[], state: FrameLoopS
   }
   // Each reader passes its OWN interaction: a partner's channel engages only within the same one.
   for (const e of entries) e.figure?.updateSecondary(partnersOf(e.name), interactionOf(e))
+  opts.afterSecondary?.()
   const occupied = new Map<string, ChannelOccupant[]>()
   for (const e of entries) {
     for (const occ of e.figure?.channelOccupants() ?? []) {

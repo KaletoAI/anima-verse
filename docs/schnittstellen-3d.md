@@ -12552,7 +12552,11 @@ computed) opens it and the morph target `mouth_open` adds the upper lip's lift. 
 `open_height` (metres): the opening's height with the mouth fully open. A renderer opens the mouth with ONE number
 0…1 (`packages/scene-render/src/mouthOpen.ts`): the jaw turns about the model's side axis by value × the bone's
 `mouth_open_deg` (node `extras`), the morph target's influence is the value; contact asks for
-`(2 · radius + 4 mm) / open_height`. A model whose face shows no lip line has no such record
+`(2 · radius + 4 mm) / open_height`. A part the mouth channel accepts opens it as it comes at it, before it engages
+(owner 2026-11-24, `mouthApproach`): with s, ρ the tip of its front link in channel coordinates, the factor is 0 at
+s ≤ −(F + 0.04 m), rising linearly to 1 at s = −F, provided ρ ≤ R + max(0, −s) · tan(cone + 15°) and the front link's
+lever is within cone + 15° of u; the mouth opens by max(the engaged value, factor × the whole part's value). Only the
+jaw and the morph follow it, never the surface opening (`scripts/smoke_mouth_approach.mjs`). A model whose face shows no lip line has no such record
 (`channels_skipped` gives the reason) and keeps the measured `mouth` of version 9. The reduced tier carries the
 bone and its weights but no morph target.
 
@@ -12786,7 +12790,8 @@ rule exists once, in `packages/scene-render/src/channelOpening.ts` (numbers: `sc
   rotating start, so with n changed receivers each waits at most n − 1 frames. Measured by
   `scripts/bench_channel_opening.mjs` (node, 20 480-vertex synthetic region): held pose 0.006 ms/frame, walk about
   4.3 ms/frame for 1 or 3 receivers (3 receivers without the budget: about 13.8 ms).
-- 3D client (and the admin's figure preview): after every figure's phase B, `runFigureFrame` collects each figure's
+- 3D client (and the admin's figure preview): after every figure's phase B and the caller's `afterSecondary` hook (the
+  pair bends, so the zone and the opening read the bent part — `scripts/smoke_bend_engagement.mjs`), `runFigureFrame` collects each figure's
   `channelOccupants()` by partner and calls `applyChannelOpenings` on the receiving figure (`FigureRuntime`). No occupant → nothing to do; an empty
   channel restores; a model swap or dispose drops the openings.
 

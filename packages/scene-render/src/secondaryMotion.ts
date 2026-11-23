@@ -145,6 +145,8 @@
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
 import { CHANNEL_GROW, channelCoords, channelForPart, channelGate, depthJoint, depthScale, inZone, radialGuidanceAngle, stepEngagement } from './channels'
+import { MOUTH_CHANNEL_ID } from './contactTarget'
+import { mouthApproach } from './mouthOpen'
 import type { ChannelNow } from './channels'
 import { bindCollision, bodyJoints, COLLISION_VERSION, HAIR_ONLY_REGIONS, jointRefNow, linearScale, PARTNER_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, JointRef, Vec3 } from './collision'
@@ -241,12 +243,14 @@ export interface SecondaryMotion {
    *  partner's channel (CHANNELS, w > 0) also names it: the channel id, w and the depth scale k applied. */
   contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[];
     channel?: { id: string; w: number; k: number } }[]
-  /** Ruling A102: per engagement with w > 0, the partner, its channel id, w and the chain's links as world segments
+  /** Ruling A102: per engagement with w > 0 — or, for a mouth, with an `approach` > 0 (`mouthOpen.ts` `mouthApproach`,
+   *  w may then be 0: the receiver opens only the jaw for it, never the surface) — the partner, its channel id, w and the chain's links as world segments
    *  (joint → tip, the link's SURFACE radius — `r_surface` × girth, Ruling A159; links without a capsule left out) as last rendered — what the
    *  receiving figure opens its surface around (`bindChannelOpening`). */
   channelOccupants(): { partner: string; channel: string; w: number; segments: { a: Vec3; b: Vec3; r: number }[];
     /** The channel radius this chain sees (Ruling A161: grown to its thickest link + margin). */ channelR: number
-    /** The depth scale the last update applied (blended by w; 1 = none) — the channel readout's `compressK`. */ k: number }[]
+    /** The depth scale the last update applied (blended by w; 1 = none) — the channel readout's `compressK`. */ k: number
+    /** The mouth approach 0 … 1 (0 for any other channel). */ approach: number }[]
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
    *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
   opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[]; raised: number }[]
@@ -282,6 +286,8 @@ interface ChannelState {
   gate: number
   engaged: boolean
   w: number
+  /** THE MOUTH APPROACH (`mouthOpen.ts` `mouthApproach`) of the chain's front as last rendered; 0 for any other channel. */
+  approach: number
   /** The zone of the chain's rendered tips at the end of the last update — this update's engagement step. */
   inZone: boolean
   inGrown: boolean
@@ -1484,7 +1490,7 @@ export function createSecondaryMotion(
             const states = chain.channels ??= []
             let state = states.find(x => x.key === key)
             if (!state) {
-              state = { key, partner: snap.name, ch, gate: 0, engaged: false, w: 0, inZone: false, inGrown: false, leverDeg: Infinity, k: 1,
+              state = { key, partner: snap.name, ch, gate: 0, engaged: false, w: 0, approach: 0, inZone: false, inGrown: false, leverDeg: Infinity, k: 1,
                 suppressKeys: [], suppressFrom: null }
               states.push(state)
             }
@@ -1567,13 +1573,56 @@ export function createSecondaryMotion(
     for (let n: Object3D | null = bone; n; n = n.parent) if (n === top) return true
     return false
   }
+  /** THE ZONE of every engagement of `chain` for the next update's step (`stepEngagement`): any link tip in Φ ∪ C
+   *  (with the smallest lever angle to u among those) and any in the grown zone — read from the chain's bones as they
+   *  are NOW. `finishChain` calls it after the solve, and `bendChain` again after the bend (Ruling A145), so the
+   *  engagement always sees the part as rendered: the bend is what aims an attached part into a partner's channel or
+   *  mouth, and a zone read before it missed the opening (resting-blowjob 2026-11-24: unbent tip 54–139 mm before the
+   *  mouth, bent tip up to 6 mm inside it — the mouth never engaged, never opened). */
+  const zoneOf = (chain: Particle) => {
+    const links = chain.chainLinks
+    for (const state of chain.channels!) {
+      const ch = state.ch
+      let tipIn = false, tipGrown = false, lever = Infinity
+      for (const link of links) {
+        const world = link.bind.bone.matrixWorld
+        chainHead.setFromMatrixPosition(world)
+        chainTip.copy(link.tipLocal).applyMatrix4(world)
+        const { s, rho } = channelCoords([chainTip.x, chainTip.y, chainTip.z], ch)
+        if (inZone(s, rho, ch, CHANNEL_GROW)) tipGrown = true
+        if (!inZone(s, rho, ch)) continue
+        tipIn = true
+        chainTip.sub(chainHead)
+        const len = chainTip.length()
+        if (len > 1e-12) {
+          const cos = (chainTip.x * ch.u[0] + chainTip.y * ch.u[1] + chainTip.z * ch.u[2]) / len
+          lever = Math.min(lever, Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI)
+        }
+      }
+      state.inZone = tipIn
+      state.inGrown = tipGrown
+      state.leverDeg = lever
+      // THE APPROACH to a mouth (`mouthApproach`): the front link's tip and lever.
+      state.approach = 0
+      if (ch.id === MOUTH_CHANNEL_ID && links.length) {
+        const front = links[links.length - 1], world = front.bind.bone.matrixWorld
+        chainHead.setFromMatrixPosition(world)
+        chainTip.copy(front.tipLocal).applyMatrix4(world)
+        const { s, rho } = channelCoords([chainTip.x, chainTip.y, chainTip.z], ch)
+        chainTip.sub(chainHead)
+        const len = chainTip.length()
+        const deg = len > 1e-12 ? Math.acos(Math.max(-1, Math.min(1,
+          (chainTip.x * ch.u[0] + chainTip.y * ch.u[1] + chainTip.z * ch.u[2]) / len))) * 180 / Math.PI : Infinity
+        state.approach = mouthApproach(s, rho, deg, ch)
+      }
+    }
+  }
   /**
    * After a chain's last link (CHANNELS): per engagement with w > 0 the DEPTH SCALE — s_tip the last link's tip,
    * s_e the link joint `depthJoint` picks (the first at s ≥ 0, else the one nearest before the opening),
    * k = `depthScale` blended 1 → k by w — shortens the levers of that link and the links below it along their tips, about its joint: each joint moves to h_e + k (h − h_e), each lever is scaled by
-   * k along its tip direction, and the bones are re-published (world, pure world and local matrix). Then the zone of
-   * every engagement's channel for the next update's step: any link tip in Φ ∪ C (with the smallest lever angle to
-   * u among those) and any in the grown zone.
+   * k along its tip direction, and the bones are re-published (world, pure world and local matrix). Then THE ZONE
+   * (`zoneOf`) of every engagement's channel for the next update's step.
    */
   const finishChain = (chain: Particle) => {
     const links = chain.chainLinks
@@ -1613,28 +1662,7 @@ export function createSecondaryMotion(
         bone.matrixWorldNeedsUpdate = true
       }
     }
-    for (const state of chain.channels!) {
-      const ch = state.ch
-      let tipIn = false, tipGrown = false, lever = Infinity
-      for (const link of links) {
-        const world = link.bind.bone.matrixWorld
-        chainHead.setFromMatrixPosition(world)
-        chainTip.copy(link.tipLocal).applyMatrix4(world)
-        const { s, rho } = channelCoords([chainTip.x, chainTip.y, chainTip.z], ch)
-        if (inZone(s, rho, ch, CHANNEL_GROW)) tipGrown = true
-        if (!inZone(s, rho, ch)) continue
-        tipIn = true
-        chainTip.sub(chainHead)
-        const len = chainTip.length()
-        if (len > 1e-12) {
-          const cos = (chainTip.x * ch.u[0] + chainTip.y * ch.u[1] + chainTip.z * ch.u[2]) / len
-          lever = Math.min(lever, Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI)
-        }
-      }
-      state.inZone = tipIn
-      state.inGrown = tipGrown
-      state.leverDeg = lever
-    }
+    zoneOf(chain)
   }
   /** The engagement a link's `contactTips` row names: the one of its chain with the largest w > 0. */
   const channelRow = (st: Particle): { id: string; w: number; k: number } | null => {
@@ -1688,7 +1716,9 @@ export function createSecondaryMotion(
       for (const chain of particles) {
         if (chain.chainRoot !== chain || !chain.channels) continue
         for (const state of chain.channels) {
-          if (!(state.w > 0)) continue
+          // the approach counts only while the gate passes this update (a released state keeps only its w)
+          const approach = state.gate === partnerUpdate ? state.approach : 0
+          if (!(state.w > 0) && !(approach > 0)) continue
           const segments: { a: Vec3; b: Vec3; r: number }[] = []
           for (const link of chain.chainLinks) {
             // Ruling A159: the opening widens to the part's SURFACE radius (× the state girth), not its contact core.
@@ -1699,7 +1729,7 @@ export function createSecondaryMotion(
             segments.push({ a: [head.x, head.y, head.z], b: [tip.x, tip.y, tip.z], r })
           }
           if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments, channelR: state.ch.r,
-            k: state.k })
+            k: state.k, approach })
         }
       }
       return rows
@@ -1744,6 +1774,8 @@ export function createSecondaryMotion(
           bone.matrix.decompose(bone.position, bone.quaternion, bone.scale)
           bone.updateMatrixWorld(true)
         }
+        // THE ZONE of the part as rendered (`zoneOf`): the next update engages on the bent chain.
+        if (chain.channels) zoneOf(chain)
         return
       }
     },
