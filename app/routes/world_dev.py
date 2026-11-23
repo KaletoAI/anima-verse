@@ -32,6 +32,12 @@ from app.core.layout_prompt import (
 # In-memory session store
 _sessions: Dict[str, Dict[str, Any]] = {}
 
+# Effort levels of the Anthropic Messages API (output_config.effort).
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Completion budget for Anthropic models when neither the UI nor the LLM
+# routing names one: thinking plus reply share it (Anthropic's suggested start).
+_ANTHROPIC_DEFAULT_MAX_TOKENS = 65536
+
 
 def _create_llm(model: str, provider: str = "", max_tokens: Optional[int] = None):
     """Creates an LLMClient + LLMInstance for the given model."""
@@ -799,7 +805,8 @@ async def world_dev_chat(request: Request):
     context_character_names = data.get("context_character_names", [])
     # Completion budget from the UI field next to the model picker.
     # EMPTY = default: the model's LLM-ROUTING entry max_tokens when one is
-    # configured (the per-model place to tune this), else 32768.
+    # configured (the per-model place to tune this), else 32768 (65536 for
+    # Anthropic models, set below once the client type is known).
     # EXPLICIT 0 = send NO max_tokens at all (provider default) — required
     # for vLLM, which REJECTS prompt+max_tokens > context instead of
     # clamping. CAUTION: Together applies a TINY default when none is sent
@@ -835,8 +842,13 @@ async def world_dev_chat(request: Request):
         max_tokens = None if _v <= 0 else _v
         if max_tokens is None:
             _mt_source = "none (explicit 0)"
-    logger.info("WorldDev LLM: %s/%s max_tokens=%s (source: %s)",
-                provider or "?", model, max_tokens, _mt_source)
+    # Thinking depth from the Effort picker next to the model picker. Only
+    # Anthropic models read it (output_config.effort); on Claude models with
+    # always-on adaptive thinking it is the one control for how much of the
+    # max_tokens budget goes to hidden thinking. Empty = the model's default.
+    effort = (data.get("effort") or "").strip().lower()
+    if effort not in _EFFORT_LEVELS:
+        effort = ""
 
     if not model:
         raise HTTPException(status_code=400, detail="model erforderlich")
@@ -1007,6 +1019,20 @@ async def world_dev_chat(request: Request):
     llm, llm_instance = _create_llm(model, provider, max_tokens=max_tokens)
     if not llm:
         raise HTTPException(status_code=500, detail=f"Kein Provider fuer Model '{model}' gefunden")
+    from app.core.llm_client import AnthropicLLMClient, merge_extra_params
+    _is_anthropic = isinstance(llm, AnthropicLLMClient)
+    if _is_anthropic and _mt_source == "default":
+        # Claude thinks on every request and the thinking counts against
+        # max_tokens — 32768 left a map JSON ~600 tokens (2026-11-23).
+        max_tokens = _ANTHROPIC_DEFAULT_MAX_TOKENS
+        llm.max_tokens = max_tokens
+        llm_instance.max_tokens = max_tokens
+    if effort and _is_anthropic:
+        llm.extra_params = merge_extra_params(
+            llm.extra_params, {"output_config": {"effort": effort}})
+    logger.info("WorldDev LLM: %s/%s max_tokens=%s (source: %s) effort=%s",
+                provider or "?", model, max_tokens, _mt_source,
+                (effort or "default") if _is_anthropic else "n/a (not Anthropic)")
 
     agent = StreamingAgent(
         llm=llm,

@@ -164,6 +164,12 @@ type LayoutAction =
   | { kind: 'restore-layout'; snapshotId: string }
 type PendingAction = MapAction | LayoutAction
 
+// Effort levels of the Anthropic Messages API (output_config.effort).
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+// Completion budgets offered next to the model picker; 128000 is the
+// largest output Claude models accept on the synchronous Messages API.
+const BUDGET_STEPS = [4096, 8192, 16384, 32768, 65536, 128000]
+
 export function WorldDevTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -199,6 +205,8 @@ export function WorldDevTab() {
   // Completion budget for the chat model. Empty = built-in default (32768,
   // grey placeholder, never materialized); explicit 0 = send NO max_tokens.
   const [maxTokens, setMaxTokens] = usePersistentState('worlddev.maxTokens', '')
+  // Thinking depth for Claude models (output_config.effort); '' = model default.
+  const [effort, setEffort] = usePersistentState('worlddev.effort', '')
   const [validateModel, setValidateModel] = usePersistentState('worlddev.validateModel', '')
   const [validateProvider, setValidateProvider] = usePersistentState('worlddev.validateProvider', '')
   const [schema, setSchema] = usePersistentState<string>('worlddev.schema', 'location')
@@ -332,6 +340,7 @@ export function WorldDevTab() {
           provider,
           session_id: sessionId,
           max_tokens: maxTokens.trim() ? parseInt(maxTokens, 10) : undefined,
+          effort: effort || undefined,
           message: userMsg,
           schema,
           // Only NEW sends the picked template — the dropdown exists only in
@@ -443,7 +452,7 @@ export function WorldDevTab() {
     } finally {
       setStreaming(false)
     }
-  }, [contextCharacters, contextLocations, draft, editTarget, maxTokens, mode, model, provider, schema, sessionId, streaming, t, template, toast])
+  }, [contextCharacters, contextLocations, draft, editTarget, effort, maxTokens, mode, model, provider, schema, sessionId, streaming, t, template, toast])
 
   const apply = useCallback(
     async (kind: keyof ExtractedData) => {
@@ -794,17 +803,32 @@ export function WorldDevTab() {
               setProvider(prov || ''); setModel(name || '')
             }}
           />
-          <input
-            className="ga-input"
-            type="number"
-            min={0}
-            step={1024}
-            style={{ width: 92, flex: '0 0 auto' }}
+          <select
+            className="ga-input ga-wd-compact-select"
+            value={effort}
+            title={t('Effort: how deeply a Claude model thinks before answering. Its thinking comes out of the token budget next to this. Other providers ignore it. Default = the model\'s own level.')}
+            onChange={(e) => setEffort(e.target.value)}
+          >
+            <option value="">{t('Effort: default')}</option>
+            {EFFORT_LEVELS.map((lv) => (
+              <option key={lv} value={lv}>{t('Effort: {level}').replace('{level}', lv)}</option>
+            ))}
+          </select>
+          <select
+            className="ga-input ga-wd-compact-select"
             value={maxTokens}
-            placeholder={t('default')}
-            title={t('Max tokens (completion budget). Thinking models spend hidden reasoning tokens from this budget too. Empty = the model\'s LLM-Routing max_tokens, else 32768. 0 = no max_tokens sent — required for vLLM (rejects prompt+max_tokens beyond the context window), but Together then applies a TINY default and cuts after a few tokens.')}
+            title={t('Token budget (max_tokens): thinking plus reply. Auto = the model\'s LLM-Routing max_tokens, else 32k (64k for Claude). None = send no max_tokens — needed for vLLM, but Together then cuts after a few tokens.')}
             onChange={(e) => setMaxTokens(e.target.value)}
-          />
+          >
+            <option value="">{t('Budget: auto')}</option>
+            {BUDGET_STEPS.map((n) => (
+              <option key={n} value={String(n)}>{t('Budget: {size}').replace('{size}', `${Math.round(n / 1024)}k`)}</option>
+            ))}
+            {maxTokens.trim() && maxTokens !== '0' && !BUDGET_STEPS.includes(parseInt(maxTokens, 10)) && (
+              <option value={maxTokens}>{t('Budget: {size}').replace('{size}', maxTokens)}</option>
+            )}
+            <option value="0">{t('Budget: none')}</option>
+          </select>
           <ModelPicker
             className="ga-wd-model-select"
             options={modelOptions}
