@@ -20,7 +20,9 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. The
     centre still 6 rows, the darts 3: 12 edges.
 [3] ``back_line(19, 41)``: the back panel's (panel 1, base 779) centre column 20, top to bottom: 19 ids, the first
     779 + 20 = 799, the last 779 + 18 * 41 + 20 = 1537.
-[4] ``garment_template.CORSET_VERSION`` is 5 (v5, review 2026-11-23: the edge under the arms, the stiff front strip;
+[4] ``garment_template.CORSET_VERSION`` is 6 (v6, review 2026-11-23 of v5: the closed section over the cleavage, one
+    scoop under the arms mirrored left/right, the strip drawn onto the body; v5: the edge under the arms, the stiff
+    front strip;
     v4: the cup edge on the chest tissue, the dip over the apex; v3: the front hull, the settle onto the body, the
     hem tucked under a worn skirt's waistband, the painted seam lines) and keys the
     CUT of a strapless top: ``cut_sig`` of a strapless top
@@ -70,7 +72,7 @@ check("[2] 81 columns: darts at 24 / 56, 12 edges", len(s2) == 12 and (24, 105) 
 b3 = cd.back_line(19, 41)
 check("[3] the back line: 19 ids 799 .. 1537", len(b3) == 19 and b3[0] == 799 and b3[-1] == 1537, (len(b3), b3[:2]))
 
-check("[4] CORSET_VERSION is 5", getattr(gt, "CORSET_VERSION", None) == 5)
+check("[4] CORSET_VERSION is 6", getattr(gt, "CORSET_VERSION", None) == 6)
 corset = gt.validate_params({"kind": "top", "shoulders": "strapless", "neckline": "sweetheart", "fit": 0.0})[0]
 skirt = gt.validate_params({"kind": "skirt"})[0]
 
@@ -84,8 +86,8 @@ def base(p):
             "base": "b" * 64, "lower": [], "panels": 1}
 
 
-check("[4] a strapless top's cut key = payload + corset 5",
-      gtc.cut_sig(corset, base_sha="b" * 64, lower=[]) == md({**base(corset), "corset": 5,
+check("[4] a strapless top's cut key = payload + corset 6",
+      gtc.cut_sig(corset, base_sha="b" * 64, lower=[]) == md({**base(corset), "corset": 6,
                                                               "corset_rules": gtc.CORSET_DARTS_SHA}))
 check("[4] a skirt's cut key carries no corset",
       gtc.cut_sig(skirt, base_sha="b" * 64, lower=[]) == md({**base(skirt), "legs": 1}))

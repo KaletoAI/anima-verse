@@ -75,6 +75,13 @@ checked against its backend's dialect (``DIALECT_MARKS``, docs/edit-prompts.md �
 "Edit <Picture 1>.", MiniMax names ``<Picture 1>``, ``<Picture 2>`` and ``<Subject 1>``, Qwen ``<image1>`` and
 ``<image2>`` at 2048x2048 with cfg 1; no request carries another dialect's spelling or ``<ref N>``; two pictures each;
 every attempt of the record names its backend's dialect. The bodies land in ``e2e.json`` (``payloads``).
+
+``--attempts N`` sets ``CUT_ATTEMPTS`` in the process (1: no second attempt after a gate rejection). Before the click
+the worst case is printed — per cut step the plan's ``max``, every second attempt included — and a live run with
+``--max-jobs N`` is refused when it exceeds N (review 2026-11-23: a cap of 4 was broken by an uncounted second
+attempt). ``e2e.json`` carries ``worst_case_jobs`` and, per piece, its newest template drape record's gate rows, every
+``fit_gap`` block with its worst list, the bodice numbers and the stretch (``templates``), so the gate values can be
+checked without the run's world copy.
 ``--backend-set NAME.ATTR=JSON`` (repeatable) sets an attribute of a pool backend IN THE PROCESS — the recommended
 texture entry of docs/edit-prompts.md §5 without writing it, e.g. ``--backend-set Qwen2.1.width=2048
 --backend-set Qwen2.1.height=2048 --backend-set 'Qwen2.1.extra_params={"cfg": 1}'``.
@@ -625,6 +632,41 @@ def render_figure(glb: Path, out_dir: Path) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def worst_case_jobs(gct: Any, character: str, cut_steps: List[Any]) -> int:
+    """The most image jobs the click can spend: per cut step the larger of its announced count and the plan's
+    ``max`` (every second attempt included); with no pattern yet to plan from, the announced count times
+    ``CUT_ATTEMPTS`` (an upper bound: an upscale job is never repeated)."""
+    total = 0
+    for s in cut_steps:
+        jobs = int(s.jobs or 0)
+        try:
+            most = int(gct.job_plan(character, s.item_id).get("max") or 0)
+        except Exception:
+            most = 0
+        total += max(jobs, most) if most else jobs * int(gct.CUT_ATTEMPTS)
+    return total
+
+
+def template_gates(character: str, item_id: str) -> Dict[str, Any]:
+    """The piece's newest template drape record (accepted or failed) as a reviewer needs it: the gate rows, every
+    fit_gap block with its worst list, the bodice's shell and underarm numbers and the stretch."""
+    from app.core import paths
+    base = Path(paths.get_storage_dir()) / "characters" / character / "garments" / "templates"
+    found = [f for d in (base, base / "failed") if d.is_dir() for f in d.glob(f"{item_id}_*.json")
+             if "islands" not in f.name]
+    if not found:
+        return {}
+    rec_path = max(found, key=lambda f: f.stat().st_mtime)
+    rec = json.loads(rec_path.read_text())
+    m = rec.get("metrics") or {}
+    bodice = dict(m.get("bodice") or {})
+    if isinstance(bodice.get("shell"), dict):
+        bodice["shell"] = {k: v for k, v in bodice["shell"].items() if k != "hollow"}
+    return {"file": str(rec_path.relative_to(base)), "outcome": rec.get("outcome"), "version": rec.get("version"),
+            "rows": rec.get("rows"), "fit_gap": m.get("fit_gap"), "bodice": bodice,
+            "stretch_max": (m.get("drape") or {}).get("stretch_max"), "pose_shapes": rec.get("pose_shapes")}
+
+
 def code_state() -> Dict[str, Any]:
     """The commit the run's code comes from and the files of ``app/`` / ``scripts/`` that differ from it (a run of a
     committed state lists none)."""
@@ -687,6 +729,11 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--replay", type=Path, default=None,
                     help="dry run only: answer each image job with the saved raw answer of that item/side in this dir")
+    ap.add_argument("--attempts", type=int, default=0,
+                    help="set garment_cut_texture.CUT_ATTEMPTS in this process (1 = no second attempt after a gate "
+                         "rejection)")
+    ap.add_argument("--max-jobs", type=int, default=-1,
+                    help="refuse before the click when the worst case (every second attempt included) exceeds this")
     args = ap.parse_args()
     if args.replay is not None:
         if not args.dry_run:
@@ -708,6 +755,9 @@ def main() -> int:
         setup(world, args.instance.resolve(), tmp, args.dry_run, args.shared_items.resolve(),
               args.u2net_home.resolve())
         from app.core import figure_build, garment_cut_texture as gct, paths
+        if args.attempts:
+            gct.CUT_ATTEMPTS = max(1, int(args.attempts))
+            print(f"cut attempts per job: {gct.CUT_ATTEMPTS} (in-process)")
         check("storage is the copy", Path(paths.get_storage_dir()).resolve(), world.resolve())
         chain = [c.strip() for c in args.chain.split(",") if c.strip()]
         if chain:
@@ -759,6 +809,12 @@ def main() -> int:
             print("refused: other steps would spend hub jobs: " + "; ".join(s.label for s in others))
             return 2
         announced = sum(int(s.jobs or 0) for s in cut_steps)
+        worst = worst_case_jobs(gct, args.character, cut_steps)
+        print(f"image jobs: announced {announced}, worst case {worst} (cut attempts {gct.CUT_ATTEMPTS})")
+        # review 2026-11-23: a cap of 4 was broken by 5 jobs — the automatic second attempt was not counted
+        if args.max_jobs >= 0 and not args.dry_run and worst > args.max_jobs:
+            print(f"refused: the worst case {worst} exceeds --max-jobs {args.max_jobs} (pass --attempts 1?)")
+            return 2
 
         started = figure_build.start(args.character, reason="e2e-cut-texture")
         print(f"Build: {started}")
@@ -865,7 +921,10 @@ def main() -> int:
         (out_dir / "e2e.json").write_text(json.dumps({"code": code_state(), "plan": [s.as_dict() for s in steps],
                                                      "cost": cost,
                                                      "jobs": JOBS, "payloads": PAYLOADS, "items": items,
-                                                     "steps": STEPS, "state": state, "fails": FAILS},
+                                                     "steps": STEPS, "state": state, "fails": FAILS,
+                                                     "worst_case_jobs": worst,
+                                                     "templates": {i: template_gates(args.character, i)
+                                                                   for i in items}},
                                                     indent=1, default=str))
         print(f"availability probes blocked (not counted): {len(PROBES)}")
         print(f"files: {out_dir}")

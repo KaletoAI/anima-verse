@@ -114,7 +114,10 @@ NECK_VERSION = 1
 #: (``garment_template_build.underarm_edge``), the front runs from the cup into the panel as a stiff strip
 #: (``boned_profile``: no crease), the whole top edge is gated on its maximum per 2 cm (``edge_loop_gap`` /
 #: ``edge_loop_flare``) and the front's bend (``CORSET_FOLD_DEG``).
-CORSET_VERSION = 5
+#: 6 (review 2026-11-23 of v5): the section over the cleavage is closed by a rolling disc (round cups, no box), the
+#: front strips end at one waist height and are drawn onto the body (no centre pinch, no ridge under the cup), the
+#: lowering under the arms is mirrored and spread into one scoop (no V beside the side seam, even left and right).
+CORSET_VERSION = 6
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back

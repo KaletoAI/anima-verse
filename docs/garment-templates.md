@@ -499,6 +499,37 @@ Not fixed: the sitting pose stretches the hem over the buttocks to 1.50× (walki
 at the back, the hip widening under it). It is not gated per pose; shortening the back hem or freeing the hem from
 the thigh weights would be its fix. Smoke: `smoke_corset_underarm.py`.
 
+**Corset v6 (review 2026-11-23 of v5: the cups a wide box, a pinch at the centre front, a V beside the side seam,
+the back edge uneven).** `CORSET_VERSION` 6, all in `garment_template_build.py`'s corset functions:
+- *Round cups.* Between the cups each row's section is CLOSED by a rolling disc of radius `SHELL_CLOSE_M` 5 cm
+  (`_close_section` / `_close_radius`, sampled `SHELL_CLOSE_SAMPLES` per stretch) instead of the convex hull: the hull
+  ran a straight chord from apex to apex (a flat plateau, vertical outer sides); the disc bridges only the cleavage
+  and leaves each cup its own curve.
+- *The strip is drawn onto the body* (`bone_bend`'s `pull`, per point or one for all): `BONE_PULL` 1e6 (a length of
+  about 3 cm: the strip curves in under the cup instead of running straight from the apex to the rib cage) and
+  `BONE_PULL_EDGE` 2e7 over the top `BONE_PULL_EDGE_M` 5 cm (the edge band lies on the skin; with the light pull it
+  stood up to 7 mm off). One waist end for every column (`bot`; v5 took each column's own row: the strips ended up to
+  a row apart — the pinch at the centre front). The strip is solved again where the straight stretch between two rows
+  still cuts in (`BONE_CHORD_ROUNDS` / `BONE_CHORD_TOL_M`).
+- *No ridge under the outer cup.* The smoothing across the columns never lowers a strip under its own line; what the
+  stretch pass then raises on the front is spread over its 3 x 3 neighbours and (1, 2, 1) `SHELL_SPREAD_ROUNDS` 2
+  times, never under the raise, from row `SHELL_SPREAD_FROM_ROW` 3 down (the top rows' band is gated on the skin). A
+  strip the smoothing lifted off its own line by more than `SHELL_BRIDGE_M` counts as bridge (out of the band gap).
+- *One even scoop under each arm, alike left and right* (`underarm_edge`): each column's need is the larger of its own
+  and its mirror's, the largest need is spread round the ring by a raised cosine of `UNDERARM_SPREAD_COLS` 10 columns
+  (across the side seam), then the edge HEIGHT is smoothed (1, 2, 1) `UNDERARM_SMOOTH_PASSES` 8 times with the chest
+  tissue's columns held, never above a column's own need.
+- `under_edge` gains a `worst` list (off-front degrees, signed by side; height; mm) like the edge loop and the fold.
+
+Rosi's Red Corset Top, dry run against v5 (bbf0617eb): edge loop gap max 1.67 mm, flare max 1.09 mm, top edge p95
+0.88, under edge p95 4.59 (max 7.59 at 81° beside the arm), waist p95 2.08, hem p95 2.12, front fold max 34° (at the
+hem, z 1.018; v5 47° under the cups, the centre pinch 69°). The underarm scoop is symmetric to 0.6 mm (at most 3.6 cm
+deep, 0.9 cm at the back centre). The cleavage bridge (5 vertices, p95 14.5 mm, v5 30.5) stays out of every edge gate
+on purpose: the cloth spans the hollow there. The dark crescent under a cup in a lit render is the cup's cast shadow
+(gone with shadows off). Sitting still stretches the hem to 1.51x (see v5). Smoke: `smoke_corset_underarm.py`.
+`scripts/e2e_cut_texture.py --attempts N --max-jobs N` sets `CUT_ATTEMPTS` and refuses a live run whose worst case
+(the plan's `max`, every second attempt) exceeds the cap; its `e2e.json` carries the template record's gate blocks.
+
 **Live 2026-11-22** (copies, chain MiniMax-H3-Image, P-H3-Image; 7 image jobs, every one MiniMax in attempt 1):
 Tilda's buttoned blouse (placket buttons, 7; no collar — see above): plain cream, seven buttons on the centre line, no
 second placket — but its cut is the split one above (band + band_2, jagged strips in the pattern), so it is **not
