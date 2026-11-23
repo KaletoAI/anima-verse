@@ -62,8 +62,9 @@ CLAMP_DE = 25.0
 #: composed atlas fills the background pockets near and between the islands (``fill_pockets``). 10 (2026-11-22): the
 #: colour match never adds contrast (``SIGMA_GAIN_MAX``) and moves base onto base when item and answer both have plain
 #: fabric (``colour_match`` ``base``); the erosion before the bleed also takes a soft shading band inside the outline
-#: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20).
-POST_VERSION = 10
+#: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20). 11 (2026-11-22): the eroded rim and the bleed MIRROR the core
+#: across its border instead of regrowing rays from it (``cut_and_bleed``; the waist line of Lirien's dress).
+POST_VERSION = 11
 #: The version of ``draw_placket``'s painting: part of the assembly key of a piece with a placket (it is drawn onto
 #: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job). 2: phase E,
 #: the model's own placket is wiped first. 3: the wipe keeps a decoration reaching into its band
@@ -485,8 +486,8 @@ def outline_rim(img, mask) -> dict:
 
 def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.ndarray:
     """The atlas cut to the islands with bleed padding: the mask eroded by ``erode_px`` (the model's outline, drawn
-    inside the islands), then regrown ``erode_px + bleed_px`` times by one 8-neighbour ring whose pixels take the mean
-    of their already filled neighbours, until every mask pixel is filled. An ISLAND thinner than the erosion (no core
+    inside the islands), then filled up to ``erode_px + bleed_px`` px (chessboard) and over the whole mask by MIRRORING
+    the core across its border (POST_VERSION 11; the mean-of-neighbours regrow before drew streaks). An ISLAND thinner than the erosion (no core
     left, a strap or a band) keeps its own pixels; a thin part of an island with a core is regrown from that core —
     the jagged border of a fitted piece's island (bisected triangles: teeth 10-30 px deep at 2048) held the model's
     light outline in every tooth, and the old per-pixel rule (``mask & ~dilate(core)``) kept it as seed: a pale
@@ -503,26 +504,24 @@ def cut_and_bleed(img, mask, bleed_px: int, erode_px: int = RIM_MIN_PX) -> np.nd
         cored[np.unique(labels[core])] = True
         cored[0] = True
         core |= mask & ~cored[labels]
-    filled = core.copy()
-    col = np.where(filled[..., None], rgb, 0.0)
+    if not core.any():
+        return np.full(rgb.shape, 255, np.uint8)
+    # the grown area: what the old ring-by-ring regrow reached (8-neighbour rings = chessboard distance), and the mask
+    reach = ndimage.distance_transform_cdt(~core, metric="chessboard")
+    filled = core | mask | (reach <= int(erode_px) + int(bleed_px))
+    # MIRROR, not rays (POST_VERSION 11): a pixel outside the core takes the core pixel mirrored across the core's
+    # border (nearest core pixel q, then q + (q - p)), its nearest core pixel where the mirror leaves the core. The
+    # mean-of-neighbours regrow carried each border pixel straight outward: a 14 px band of streaks along every island
+    # edge (Lirien's dress, live 2026-11-22: the bodice's and the skirt's bands meet at the waist and read as a
+    # streaked seam line on the figure). The mirror keeps the weave's grain and brightness up to the border.
+    _dist, (iy, ix) = ndimage.distance_transform_edt(~core, return_indices=True)
     h, w = mask.shape
-    offs = [(di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj]
-    steps = 0
-    while steps < int(erode_px) + int(bleed_px) or (mask & ~filled).any():
-        steps += 1
-        ring = dilate(filled, 1) & ~filled
-        if not ring.any():
-            break
-        acc = np.zeros_like(col)
-        cnt = np.zeros((h, w))
-        pf = np.pad(filled, 1)
-        pc = np.pad(col, ((1, 1), (1, 1), (0, 0)))
-        for di, dj in offs:
-            f = pf[1 + di:1 + di + h, 1 + dj:1 + dj + w]
-            acc += pc[1 + di:1 + di + h, 1 + dj:1 + dj + w] * f[..., None]
-            cnt += f
-        col[ring] = acc[ring] / cnt[ring][:, None]
-        filled |= ring
+    my = np.clip(2 * iy - np.arange(h)[:, None], 0, h - 1)
+    mx = np.clip(2 * ix - np.arange(w)[None, :], 0, w - 1)
+    inside = core[my, mx]
+    sy = np.where(inside, my, iy)
+    sx = np.where(inside, mx, ix)
+    col = rgb[sy, sx]
     out = np.full(rgb.shape, 255, np.uint8)
     out[filled] = np.clip(np.rint(col[filled]), 0, 255).astype(np.uint8)
     return out

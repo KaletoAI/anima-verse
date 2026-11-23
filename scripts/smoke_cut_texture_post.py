@@ -42,11 +42,15 @@ channel distance from white exceeds ``WHITE_TOL`` (24); the synthetic answers pa
     -> rejected with "spill 0.05 > 0.03" (iou 240 000 / 258 000 = 0.930 still passes).
 [4] Bleed. A 100 x 50 mask (cols 50..149, rows 40..89) in a 200 x 200 frame, bleed 4, erode 0: an 8-neighbour
     dilation 4 times grows the rectangle by 4 px on every side, square corners -> (100 + 8) * (50 + 8) = 6 264 filled
-    px, the rest white. The island's left column is red (220, 30, 30), the rest blue (30, 30, 220): every bleed pixel
-    left of the island (cols 46..49) on a row away from the corners (rows 45..84) is exactly the red edge colour, every
-    one right of it (cols 150..153) the blue edge colour. With erode 3 the outline ring (3 px) is cut away first and
-    regrown from the interior: the filled area is unchanged (6 264) and the left bleed is blue now (the red column was
-    eroded).
+    px, the rest white. The island's left column is red (220, 30, 30), the rest blue (30, 30, 220). Since POST_VERSION
+    11 the bleed MIRRORS the core across its border: a pixel k px outside takes the pixel k px inside the border
+    (nearest core pixel q, then q + (q - p)), so the left bleed (cols 46..49, rows 45..84) mirrors cols 54..51 — blue,
+    the red edge column is never carried outward — and the right bleed (cols 150..153) mirrors cols 148..145, blue.
+    With erode 3 the outline ring (3 px) is cut away first and mirrored from the core (cols 53..146): the filled area
+    is unchanged (6 264; chessboard reach 3 + 4 = 7 from the core) and cols 46..53 are blue.
+[4b] Mirror, not rays: the same mask over a horizontal ramp (R = column index, G = B = 0), erode 0, bleed 4: on row
+    60 the bleed pixel at col 50 - k (k = 1..4) holds R = 50 + k (51, 52, 53, 54) and the one at col 149 + k holds
+    R = 149 - k (148 .. 145). The ray regrow before (mean of filled neighbours) gave the edge value 50 / 149 to all.
 [5] Colour match. A uniform island (200, 60, 60) and a uniform item fabric (150, 40, 40) (64 x 64 on white, key cut).
     sigma = 0 on both sides; the atlas floor 1.0 makes the transfer a pure mean shift. That shift is
     dE76((200,60,60), (150,40,40)) = 16.53 < 25 (not clamped) -> the island becomes (150, 40, 40) +-1 per channel,
@@ -194,7 +198,7 @@ b4 = ctp.cut_and_bleed(img4, m4, 4, erode_px=0)
 filled = (b4 != 255).any(-1)
 check("[4] bleed 4 -> 6264 filled px", int(filled.sum()) == 6264, str(int(filled.sum())))
 check("[4] filled area is the grown rectangle", bool(filled[36:94, 46:154].all()), "")
-check("[4] left bleed = red edge colour", bool((b4[45:85, 46:50] == (220, 30, 30)).all()), str(b4[60, 46]))
+check("[4] left bleed mirrors the interior: blue", bool((b4[45:85, 46:50] == (30, 30, 220)).all()), str(b4[60, 46]))
 check("[4] right bleed = blue edge colour", bool((b4[45:85, 150:154] == (30, 30, 220)).all()), str(b4[60, 152]))
 check("[4] inside unchanged", bool((b4[40:90, 50:150] == img4[40:90, 50:150]).all()), "")
 b4e = ctp.cut_and_bleed(img4, m4, 4, erode_px=3)
@@ -202,6 +206,17 @@ filled_e = (b4e != 255).any(-1)
 check("[4] erode 3 + bleed 4 -> still 6264 filled px", int(filled_e.sum()) == 6264, str(int(filled_e.sum())))
 check("[4] erode 3: the eroded red column is regrown blue", bool((b4e[45:85, 46:54] == (30, 30, 220)).all()),
       str(b4e[60, 50]))
+
+# [4b] mirror
+img4b = np.full((200, 200, 3), 255, np.uint8)
+img4b[40:90, 50:150, 0] = np.arange(50, 150, dtype=np.uint8)[None, :]
+img4b[40:90, 50:150, 1:] = 0
+b4b = ctp.cut_and_bleed(img4b, m4, 4, erode_px=0)
+check("[4b] left bleed: R = 50 + k at col 50 - k", [int(b4b[60, 50 - k, 0]) for k in range(1, 5)] == [51, 52, 53, 54],
+      str([int(b4b[60, 50 - k, 0]) for k in range(1, 5)]))
+check("[4b] right bleed: R = 149 - k at col 149 + k",
+      [int(b4b[60, 149 + k, 0]) for k in range(1, 5)] == [148, 147, 146, 145],
+      str([int(b4b[60, 149 + k, 0]) for k in range(1, 5)]))
 
 # [5] colour match
 item = np.zeros((96, 96, 4), np.uint8)

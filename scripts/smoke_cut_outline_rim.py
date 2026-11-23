@@ -1,5 +1,5 @@
 """Smoke: the erosion before the bleed is the answer's own outline width (``cut_texture_post.outline_rim``,
-POST_VERSION 7; the per-island thin rule of POST_VERSION 8 in case 5; the fine pass of POST_VERSION 10 in case 6).
+POST_VERSION 7; the per-island thin rule of POST_VERSION 8 in case 5; the fine pass of POST_VERSION 10 in case 6; 11 mirrors the bleed, ``smoke_cut_texture_post`` [4b]).
 
 Usage: ./.venv/bin/python scripts/smoke_cut_outline_rim.py
 
@@ -144,6 +144,6 @@ check("6 every mask pixel cloth with 12", bool(np.all(post.cut_and_bleed(img, ma
 check("6 the coarse 3 leave ring 3 soft", tuple(int(v) for v in post.cut_and_bleed(img, mask, 4, erode_px=3)[100, 43]),
       SOFT)
 
-check("POST_VERSION (10 since the fine rim pass)", post.POST_VERSION, 10)
+check("POST_VERSION (11 since the mirrored bleed)", post.POST_VERSION, 11)
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)
