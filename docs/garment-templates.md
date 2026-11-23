@@ -556,6 +556,23 @@ in `garment_template_build.py`'s corset functions, `corset_darts.py` and `cut_te
 Rosi's Red Corset Top, dry run against v6: side fold max 48° (v6 on the served model 91°, 35 edges over 40°, now 2),
 front fold 34°, edge loop gap 1.7 mm, flare 1.99 mm, under edge p95 4.58, waist p95 2.12. The band under the cups is
 the cup's cast shadow; with the viewer's soft light its edge has no stairs. Smoke: `smoke_corset_side.py`.
+**Corset v8 (review 2026-11-23 of v7: the seam under the cups formed an "M" whose two arcs met the centre front at
+different heights, with a kink and a short spike up from the meeting point).** `CORSET_VERSION` 8, in
+`under_cup_rows` and `corset_darts.py` (`SEAM_VERSION` stays 3):
+- *Cause, measured on Rosi's atlas:* the centre cut (`dart_seams`, rows 0..9 of 27) opens the front's pattern, and its
+  two sides OVERLAP in the atlas — a wedge from the top edge down to the cut's end, up to 4 columns either side of the
+  centre at row 5. v7's single line ran through that wedge: `_forward_points` dropped the two points stepping back,
+  so the left arc ended 31 px (1.6 cm) lower than the right arc began, and what was painted in the wedge showed on
+  both sides of the body.
+- *Mirror-symmetric rows* (`under_cup_rows`): each column and its mirror about the centre column take their mean
+  height and are counted under their mean top drop, so both arcs lie on the same rows.
+- *Under the cut* (`corset_darts.centre_cup_rows`): the seam meets the centre front `CUP_CENTRE_BELOW_ROWS` 1 row
+  under the cut's end (a vertex the cut does not split, one atlas point); `CUP_CENTRE_CLEAR_COLS` 2 columns either
+  side at least on that row, every column further out one row less. Rosi: every point of the drawn line at least
+  9.4 px (0.49 cm) outside the wedge.
+- *Two halves* (`corset_darts.cup_seams`): a run through the centre column becomes `seam_cup_0` (ending on the centre
+  vertex) and `seam_cup_1` (starting on it); `draw_seams` smooths each with its ends held, so both end on one point
+  with mirrored tangents — a soft point where the two arcs meet. Smoke: `smoke_corset_cup_centre.py`.
 `scripts/e2e_cut_texture.py --attempts N --max-jobs N` sets `CUT_ATTEMPTS` and refuses a live run whose worst case
 (the plan's `max`, every second attempt) exceeds the cap; its `e2e.json` carries the template record's gate blocks.
 

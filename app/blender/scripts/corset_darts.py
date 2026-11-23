@@ -31,7 +31,7 @@ def _column(rows: int, cols: int, c: int, n: int, base: int = 0) -> list:
 def dart_seams(rows: int, cols: int) -> list:
     """The cut edges of the front panel (vertex-id pairs): the centre cut and the two bust darts."""
     c0 = (cols - 1) // 2
-    n_c = int(round((rows - 1) * CENTRE_SHARE))
+    n_c = centre_rows(rows)
     n_d = int(round((rows - 1) * DART_SHARE))
     off = int(round(DART_COLS * (cols - 1) / 40.0))
     out = _column(rows, cols, c0, n_c)
@@ -67,10 +67,43 @@ def seam_lines(rows: int, cols: int, cup_rows: dict = None) -> dict:
     return out
 
 
+#: Corset v8 (review 2026-11-23 of v7: the seam under the cups formed an "M" whose two arcs met the centre front at
+#: different heights, with a kink): the centre cut (``dart_seams``, the centre column cut from row 0 down to row n_c)
+#: opens the front's pattern, and its two sides OVERLAP in the atlas — a wedge from the top edge down to the cut's
+#: end, measured on Rosi's corset over columns c0 - 4 .. c0 + 4 at row 5 and c0 - 2 .. c0 + 2 at row 9 (6 px deep at
+#: c0 + 1). A line painted into that wedge shows on both sides of the body (v7: a short spike up from the centre).
+#: The seam therefore meets the centre front ``CUP_CENTRE_BELOW_ROWS`` under the cut's end, on a vertex the cut does not
+#: split (one atlas point for both halves), and the columns beside it stay out of the wedge: ``CUP_CENTRE_CLEAR_COLS``
+#: columns either side at least on that row, every column further out one row less (measured on Rosi's: every point
+#: of the line at least 9 px outside the wedge, 0.47 cm at 19.2 px/cm).
+CUP_CENTRE_BELOW_ROWS = 1
+CUP_CENTRE_CLEAR_COLS = 2
+
+
+def centre_rows(rows: int) -> int:
+    """The row where the centre cut ends (``dart_seams``: the centre column cut from row 0 down to this row)."""
+    return int(round((rows - 1) * CENTRE_SHARE))
+
+
+def centre_cup_rows(rows: int, cols: int, cup_rows: dict) -> dict:
+    """Corset v8: ``cup_rows`` ({front column: row}, ``under_cup_rows``) with every column ``k`` columns off the centre
+    column at least on row n_c + ``CUP_CENTRE_BELOW_ROWS`` - max(0, k - ``CUP_CENTRE_CLEAR_COLS``) (n_c =
+    ``centre_rows``), never under the hem row; a row is never raised. The centre column lands on the shared point under
+    the cut. {} stays {}."""
+    c0 = (cols - 1) // 2
+    low = centre_rows(rows) + CUP_CENTRE_BELOW_ROWS
+    return {int(c): min(rows - 1, max(int(r), low - max(0, abs(int(c) - c0) - CUP_CENTRE_CLEAR_COLS)))
+            for c, r in cup_rows.items()}
+
+
 def cup_seams(cols: int, cup_rows: dict) -> dict:
     """Corset v7: the seam under each cup — ``{"seam_cup_<k>": (1, construction ids)}`` through the front vertex of
     row ``cup_rows[c]`` in each column ``c``, one line per run of neighbouring columns (k left to right in column
-    order; a run of one column draws nothing)."""
+    order; a run of one column draws nothing).
+    Corset v8: a run through the centre column is split there into two lines that BOTH hold the centre column's vertex
+    — the left half ends on it, the right half starts on it (each half runs one way across the panel, so the atlas
+    line never steps back, and the two halves share their centre point)."""
+    c0 = (cols - 1) // 2
     cs = sorted(int(c) for c in cup_rows)
     runs, run = [], []
     for c in cs:
@@ -80,7 +113,13 @@ def cup_seams(cols: int, cup_rows: dict) -> dict:
         run.append(c)
     if run:
         runs.append(run)
-    return {f"seam_cup_{k}": (1, [int(cup_rows[c]) * cols + c for c in r]) for k, r in enumerate(x for x in runs
+    halves = []
+    for r in runs:
+        if r[0] < c0 < r[-1]:
+            halves += [[c for c in r if c <= c0], [c for c in r if c >= c0]]
+        else:
+            halves.append(r)
+    return {f"seam_cup_{k}": (1, [int(cup_rows[c]) * cols + c for c in r]) for k, r in enumerate(x for x in halves
                                                                                               if len(x) > 1)}
 
 

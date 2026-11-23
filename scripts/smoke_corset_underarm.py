@@ -40,7 +40,7 @@ are gated (``judge_build``). The helpers are taken out of the Blender script by 
     r0 = a = 0.01 and r2 = 0 fixed, lo 0, r1's spacing 0.01: E = 1e6 (a - 2 r1)^2 + 0.01 pull r1^2;
     dE/dr1 = -4e6 (a - 2 r1) + 0.02 pull r1 = 0 -> r1 = 4e6 a / (8e6 + 0.02 pull): pull 0 -> a/2 = 0.005,
     pull 4e8 -> a/4 = 0.0025 (the same with the weights given per point, [0, 4e8, 0]).
-[4] ``judge_build`` (garment_template): CORSET_VERSION 7; CORSET_FOLD_DEG 55: front_fold max 56 fails (a gate),
+[4] ``judge_build`` (garment_template): CORSET_VERSION 8; CORSET_FOLD_DEG 55: front_fold max 56 fails (a gate),
     47 ok; edge_loop_gap max 2.3 > 2 fails, edge_loop_flare max 1.12 <= 3 ok (gates on max_mm).
 [5] Fails on the old code: at 65bf47a3a ``CORSET_MAX_MM`` had no edge_loop_gap / edge_loop_flare and the build script
     no ``underarm_edge`` — the flaps (a 5-17 mm flare under the arms) passed every gate there. At bbf0617eb (v5, the
@@ -165,7 +165,7 @@ r = ns["bone_bend"](z3, [0.01, 0, 0], [0, 2], [0.0, 4e8, 0.0])
 check("[3] v6 pull per point [0, 4e8, 0]: r1 0.0025", abs(r[1] - 0.0025) < 1e-9, r)
 
 # [4]
-check("[4] CORSET_VERSION 7, CORSET_FOLD_DEG 55", (gt.CORSET_VERSION, gt.CORSET_FOLD_DEG) == (7, 55.0))
+check("[4] CORSET_VERSION 8, CORSET_FOLD_DEG 55", (gt.CORSET_VERSION, gt.CORSET_FOLD_DEG) == (8, 55.0))
 rows = {x["check"]: x for x in gt.judge_build({"fit_gap": {"front_fold": {"max_deg": 56.0}}})}
 check("[4] fold 56 > 55 fails (gate)", not rows["front_fold_max_deg"]["ok"] and rows["front_fold_max_deg"]["gate"])
 rows = {x["check"]: x for x in gt.judge_build({"fit_gap": {"front_fold": {"max_deg": 47.0}}})}

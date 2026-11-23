@@ -997,7 +997,8 @@ def under_cup_rows(spec, btree, centre):
     (``cup_edge``'s ``tissue_cols``) and the columns between the cups (their heights linear between the cups' inner
     columns): the row of ``wrap``'s grid (its heights under the lowered top edge,
     ``spec["top_drop"]["front"]``) nearest the height where the column's tissue ends (``CUP_SEAM_*``), at least row
-    2. {} without a cup edge."""
+    2. Corset v8: mirror-symmetric about the centre column (each column and its mirror at their mean height, under
+    their mean top drop). {} without a cup edge."""
     ce = spec.get("cup_edge") or {}
     tissue = sorted(int(c) for c in ce.get("tissue_cols") or ())
     drops = (spec.get("top_drop") or {}).get("front")
@@ -1030,9 +1031,14 @@ def under_cup_rows(spec, btree, centre):
     zu = dict(sorted(zu.items()))
     for _ in range(CUP_SEAM_SMOOTH):
         zu = {c: (zu.get(c - 1, zu[c]) + 2 * zu[c] + zu.get(c + 1, zu[c])) / 4.0 for c in zu}
+    # corset v8 (review 2026-11-23 of v7: the two arcs met the centre front at different heights): the line is made
+    # mirror-symmetric about the centre column — each column and its mirror take the mean of their two heights, and
+    # their rows are counted under the mean of their two top drops, so both get the same row
+    c0 = (cols - 1) // 2
+    zu = {c: (z + zu.get(2 * c0 - c, z)) / 2.0 for c, z in zu.items()}
     out = {}
     for c, z in zu.items():
-        d = float(drops[c])
+        d = (float(drops[c]) + float(drops[2 * c0 - c] if 0 <= 2 * c0 - c < cols else drops[c])) / 2.0
         hs = [row_y[r] - d * (row_y[r] - hem_z) / max(1e-6, top_z - hem_z) for r in range(rows)]
         out[c] = max(2, int(np.argmin([abs(h - z) for h in hs])))
     return out
@@ -3584,7 +3590,8 @@ def run(a):
             binfo["underarm_edge"] = underarm_edge(spec, btree, centre)
             if wrap_marks is not None:
                 # corset v7: the seam under each cup, the front's seams from there down (``under_cup_rows``)
-                cup_rows = under_cup_rows(spec, btree, centre)
+                # corset v8: under the centre cut, mirror-symmetric (``corset_darts.centre_cup_rows``)
+                cup_rows = cdarts.centre_cup_rows(spec["rows"], spec["cols"], under_cup_rows(spec, btree, centre))
                 wrap_marks.update(cdarts.seam_lines(spec["rows"], spec["cols"], cup_rows))
                 wrap_marks.update(cdarts.cup_seams(spec["cols"], cup_rows))
                 binfo["cup_seam"] = {"rows": {int(c): int(r) for c, r in sorted(cup_rows.items())}}

@@ -121,7 +121,10 @@ NECK_VERSION = 1
 #: (``underarm_edge``'s ``side_blend``), the outer strips' rise runs out round the side seam (``side_strip_blend``),
 #: each quad splits along its flatter diagonal (``corset_diagonals``), the fold gate reads the triangles out to 110
 #: degrees round the side (``side_fold``), and a seam is painted under each cup (``corset_darts.cup_seams``).
-CORSET_VERSION = 7
+#: 8 (review 2026-11-23 of v7: the seam's two arcs met the centre front at different heights, an "M" with a kink): the
+#: seam under the cups is mirror-symmetric (``under_cup_rows``), meets the centre front at the end of the centre cut
+#: and runs as two halves that share that point (``corset_darts.centre_cup_rows`` / ``cup_seams``).
+CORSET_VERSION = 8
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back

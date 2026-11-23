@@ -42,7 +42,8 @@ stubbed). No server, no world DB, no Blender. Every number below is derived by h
     -> ((z - 1.25) / 0.10)^2 >= 0.8 -> z <= 1.25 - 0.08944 = 1.16056; scanned in 2 mm steps from 1.28: 1.162 gives
     0.7744 (not yet), 1.160 gives 0.81 -> 1.160 in columns 1 and 3, column 2 between them 1.160; the nearest row 3
     (1.15) -> {1: 3, 2: 3, 3: 3}.
-    ``cup_seams(5, ...)``: one run 1..3 -> seam_cup_0 = (1, [3 x 5 + 1, + 2, + 3]) = [16, 17, 18]; ``seam_lines(5, 5,
+    ``cup_seams(5, ...)``: one run 1..3 through the centre column 2, split there (corset v8,
+    ``smoke_corset_cup_centre.py``) -> seam_cup_0 = (1, [3 x 5 + 1, + 2]) = [16, 17], seam_cup_1 = [17, 18]; ``seam_lines(5, 5,
     rows)``: front seams in columns round(8 x 4 / 40) = 1 and round(16 x 4 / 40) = 2 off the centre 2 -> 0, 1, 3, 4;
     column 1 starts at row 3: [16, 21]; column 0 runs from the top: [0, 5, 10, 15, 20]; runs of one column draw
     nothing.
@@ -50,7 +51,7 @@ stubbed). No server, no world DB, no Blender. Every number below is derived by h
     ends held. ``_forward_points`` [(0, 0), (4, 1), (6, 2), (5, 3), (5.5, 1), (7, 0), (10, 0)]: x 5 and 5.5 are not past
     6 -> [(0, 0), (4, 1), (6, 2), (7, 0), (10, 0)]; reversed (x falling) only 6 is not under 5 -> [(10, 0), (7, 0),
     (5.5, 1), (5, 3), (4, 1), (0, 0)].
-[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 7; SEAM_VERSION 3.
+[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 8 (v8: the seam's centre); SEAM_VERSION 3.
 [7] Fails on the old code: at 6b076ad15 (v6, the review's BEFORE) the build script has no ``side_blend``, no
     ``side_strip_blend``, no ``corset_diagonals`` and no ``side_fold`` (its fold gate stopped at ``SHELL_HULL_RAD``
     + 0.3 rad = 51.6 degrees, so the 90.8-degree crease at 83.5 degrees passed at 34).
@@ -196,7 +197,8 @@ rows = ns["under_cup_rows"](spec5, None, (0.0, 0.0))
 check("[5] the cup seam on row 3 in columns 1..3", rows == {1: 3, 2: 3, 3: 3}, rows)
 check("[5] no cup edge -> {}", ns["under_cup_rows"]({"rows": 5, "cols": 5, "row_y": [1.3]}, None, (0, 0)) == {})
 cs = cdarts.cup_seams(5, rows)
-check("[5] cup_seams: one line [16, 17, 18]", cs == {"seam_cup_0": (1, [16, 17, 18])}, cs)
+check("[5] cup_seams: two halves [16, 17] / [17, 18]", cs == {"seam_cup_0": (1, [16, 17]), "seam_cup_1": (1, [17, 18])},
+      cs)
 check("[5] cup_seams: a run of one column draws nothing", cdarts.cup_seams(5, {1: 3, 3: 3}) == {})
 sl = cdarts.seam_lines(5, 5, rows)
 check("[5] seam_lines: the front seam in column 1 starts at row 3", sl["seam_front_1"] == (1, [16, 21]), sl)
@@ -215,7 +217,7 @@ rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_d
 check("[6] side_fold 56 > 55 fails (gate)", not rows6["side_fold_max_deg"]["ok"] and rows6["side_fold_max_deg"]["gate"])
 rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_deg": 48.0}}})}
 check("[6] side_fold 48 ok", rows6["side_fold_max_deg"]["ok"])
-check("[6] CORSET_VERSION 7, SEAM_VERSION 3", gt.CORSET_VERSION == 7 and ctp.SEAM_VERSION == 3)
+check("[6] CORSET_VERSION 8, SEAM_VERSION 3", gt.CORSET_VERSION == 8 and ctp.SEAM_VERSION == 3)
 
 # [7]
 OLD = "6b076ad15"
