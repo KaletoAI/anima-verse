@@ -342,14 +342,17 @@ def _prompt_refs(side: str, piece: str, family: str = "top"):
 
 
 def edit_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
-                pieces=(), layout=(), sleeves=(), family: str = "top", main: dict | None = None):
+                pieces=(), layout=(), sleeves=(), family: str = "top", main: dict | None = None,
+                weave: str = cut_texture_post.WEAVE_WORDS[""]):
     """The cut-texture prompt of the ``side`` job as an ``EditPrompt`` (every dialect rendered): the variant's
     sectioned file (``prompt_variant`` of the ``family``'s ``PROMPT_SETS``) with ``piece`` (e.g. "T-shirt"), the job's
     ``pieces`` (``prompt_pieces``), ``layout`` (``layout_words``), the ``sleeves`` whose fabric stays plain (a fitted
     piece: its small pieces, ``prompt_plain_pieces``) and, for a ``decorated`` front, the front island's
     ``front_place`` ("top left"). A fitted family's prompt also names its MAIN pieces (``main`` = ``main_words``:
     ``{"phrase", "count", "names"}`` — "the two largest shapes", 2, "the right front leg panel and the left front leg
-    panel"). A missing variable raises (StrictUndefined)."""
+    panel"). ``weave`` names the fabric's weave in the back prompt (``cut_texture_post.stripe_words`` of the front
+    answer: "fine vertical stripes" for a striped front, else "fine weave"). A missing variable raises
+    (StrictUndefined)."""
     from app.imagegen.edit_prompt import from_template
     main = main or {"phrase": "", "count": 0, "names": ""}
     if side == "front" and decorated and not (front_place if family == "top" else main.get("phrase")):
@@ -359,7 +362,8 @@ def edit_prompt(*, piece: str, side: str = "front", decorated: bool = False, fro
                          a_piece=a_piece(piece),
                          front_place=front_place or "", pieces=list(pieces), layout=list(layout or []),
                          sleeves=list(sleeves or []), main=str(main.get("phrase") or ""),
-                         main_count=int(main.get("count") or 0), main_names=str(main.get("names") or ""))
+                         main_count=int(main.get("count") or 0), main_names=str(main.get("names") or ""),
+                         weave=weave)
 
 
 def render_prompt(*, piece: str, side: str = "front", decorated: bool = False, front_place: str = "",
@@ -1762,6 +1766,10 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
         gates.append(split)
     # review of stage 3: the back's weave against the front answer's (``cut_texture_post.WEAVE_GATE``)
     weave = post.weave_levels(reg, panel, px_per_cm) if panel.any() else None
+    if weave is not None:
+        # stage "details": the front's stripe direction names the back prompt's weave (``stripe_words``), a back
+        # striped along the same axis is held to the stripe level limit (``weave_gates``)
+        weave = {**weave, "axis": post.weave_axis(reg, panel, px_per_cm)}
     if job == "back":
         gates.extend(post.weave_gates(weave, refs.get("front_weave")))
     failures = list(met["failures"]) + [g["text"] for g in gates if not g["ok"]]
@@ -1779,8 +1787,14 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
                                     base=(refs.get("colour"), (answer.get("fabric") or {}).get("answer")))
     fabric = panel_fabric(matched, islands, labels, job, px_per_cm)
     filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
+    halo = None
+    if job == "front" and refs.get("halo") and "skipped" not in fabric:
+        # stage "details": an invented texture field round a decorated front's motif becomes the plain fabric
+        busy, halo = post.busy_halo(filled, panel, fabric["base"]["lab"], px_per_cm)
+        if busy.any():
+            filled, _t = post.tile_fill(filled, busy, fabric["patch"], fabric["base"]["lab"])
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
-                    "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill, "rim": rim})
+                    "clamped": cm.get("clamped"), "colour": cm, "fabric_fill": fill, "rim": rim, "halo": halo})
     return {"state": "ready", "reason": "", "metrics": metrics, "accepted": bool(failures),
             "_image": filled, "_grown": grown, "_mask": mask, "_fabric": fabric}
 
@@ -2165,6 +2179,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 answer = raw_png.read_bytes()
                 entry = {k: v for k, v in reuse[job].items() if k not in ("metrics", "state", "reason")}
                 force = bool(reuse[job].get("accepted"))
+                if job == "front":
+                    refs["halo"] = entry.get("prompt") == "decorated" and family == "top"
             else:
                 _set_progress(key, job)
                 # held trims (``held_trims``): the words name what the template shows — the model's parts only
@@ -2176,9 +2192,14 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 decorated = bool(found) and is_decorated(decor_detail(refs["detail"], _item_params(item_id)))
                 plain_pieces = (prompt_sleeves(said, record["sleeve_print"]) if family == "top"
                                 else prompt_plain_pieces(said, record["sleeve_print"]))
+                if job == "front":
+                    refs["halo"] = decorated and family == "top"     # ``busy_halo`` (stage "details")
+                weave_words = (cut_texture_post.stripe_words(refs.get("front_weave"),
+                                                             (refs.get("front_weave") or {}).get("axis"))
+                               if job == "back" else cut_texture_post.WEAVE_WORDS[""])
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
                                  pieces=prompt_pieces(said), layout=layout_words(said, family),
-                                 sleeves=plain_pieces, family=family, main=main)
+                                 sleeves=plain_pieces, family=family, main=main, weave=weave_words)
                 seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
                 ref = item_png if job == "front" else back_png
                 attempts: list = []
@@ -2200,6 +2221,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                     _write_bytes(raw_png, answer)
                     entry = {"backend": getattr(used, "name", ""), "routing": route_meta(route),
                              "dialect": dialect, "prompt": "decorated" if decorated else "plain",
+                             "weave_words": weave_words,
                              "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
                              "islands": [str(i["name"]) for i in said["islands"]], "attempt": attempt}
                     _set_progress(key, "post")
@@ -2331,6 +2353,8 @@ def recompose(character_name: str, item_id: str, *, accept: str | None = None, a
         if not wanted or not raw.is_file():
             continue
         force = job == accept or bool(entry.get("accepted"))
+        if job == "front":
+            refs["halo"] = entry.get("prompt") == "decorated" and record.get("prompt_family", "top") == "top"
         res = post_job(raw.read_bytes(), islands, size, px_per_cm, job, refs, force=force,
                        sleeve_print=record["sleeve_print"], held=record["held"])
         record["jobs"][job] = _entry_from_post(entry, res)
@@ -2927,13 +2951,62 @@ def placket_of(item_id: str) -> tuple[str, int, str, str]:
             str(p.get("collar") or "none"))
 
 
+#: Stage "details": the button colour words of an item text — the trims' colours (``TRIM_COLOURS``) and the materials
+#: a button is made of (sRGB).
+BUTTON_MATERIALS = {"wooden": (128, 84, 48), "wood": (128, 84, 48), "horn": (92, 70, 52), "pearl": (236, 230, 216),
+                    "metal": (170, 170, 176)}
+_button_pic_cache: dict[tuple[str, int, int], dict | None] = {}
+
+
+def button_text_colour(text: str) -> tuple[int, int, int] | None:
+    """The buttons' colour as the item ``text`` names it: the first colour (``TRIM_COLOURS``) or material
+    (``BUTTON_MATERIALS``) word of the segment (split at "," and ";") that names "button(s)"; None without one.
+    "black tailored blazer, fitted, two silver buttons" -> silver."""
+    for seg in re.split(r"[,;]", (text or "").lower()):
+        words = _TRIM_WORD.findall(seg)
+        if not any(_noun(w, ("button",)) for w in words):
+            continue
+        for w in words:
+            if w in TRIM_COLOURS:
+                return tuple(TRIM_COLOURS[w])
+            if w in BUTTON_MATERIALS:
+                return BUTTON_MATERIALS[w]
+    return None
+
+
+def button_rgb(item_id: str) -> tuple[list[int] | None, str]:
+    """The painted buttons' colour (stage "details"): the item TEXT's (``button_text_colour``), else the item
+    PICTURE's (``cut_texture_post.picture_buttons``, cached by the file's stat), else None (a shade of the fabric,
+    ``button_colours``). ``(rgb, source)`` with source "text" / "picture" / ""."""
+    from app.models.inventory import get_item
+    said = button_text_colour(str((get_item(item_id) or {}).get("prompt_fragment") or ""))
+    if said is not None:
+        return list(said), "text"
+    try:
+        path = _item_path(item_id)
+    except NotReady:
+        return None, ""
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _button_pic_cache:
+        with Image.open(path) as im:
+            rgba = np.asarray(im.convert("RGBA")).astype(np.float64)
+        rgb = rgba[..., :3] * (rgba[..., 3:] / 255.0) + 255.0 * (1.0 - rgba[..., 3:] / 255.0)  # flattened on white
+        _button_pic_cache[key] = cut_texture_post.picture_buttons(rgb)
+    found = _button_pic_cache[key]
+    return (list(found["rgb"]), "picture") if found else (None, "")
+
+
 def placket_key(item_id: str) -> str:
-    """The assembly key part of a piece's painted placket ("" without one): a changed style, button count or
-    ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and csig stay."""
+    """The assembly key part of a piece's painted placket ("" without one): a changed style, button count, button
+    colour (``button_rgb``) or ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and
+    csig stay."""
     style, buttons, _, _ = placket_of(item_id)
     if style == "none":
         return ""
-    return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}"
+    colour = button_rgb(item_id)[0] if style == "buttons" else None
+    tint = "-" + "".join(f"{int(v):02x}" for v in colour) if colour else ""
+    return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}"
 
 
 def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[bytes, dict | None]:
@@ -2960,7 +3033,10 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     labels = rasterise_islands(islands, size)
     ids = island_ids(islands)
     masks = {n: labels == ids[n] for n in {str(v.get("island")) for v in marks.values()} if n in ids}
+    colour, source = button_rgb(item_id) if style == "buttons" else (None, "")
     out, info = cut_texture_post.draw_placket(rgb, masks, marks, kind=kind, style=style, buttons=buttons,
                                               px_per_cm=float(islands.get("px_per_cm") or 0.0),
-                                              lapel=collar == "lapel")
+                                              lapel=collar == "lapel", button_rgb=colour)
+    if colour:
+        info["button_rgb"], info["button_source"] = colour, source
     return _png(Image.fromarray(out, "RGB")), info

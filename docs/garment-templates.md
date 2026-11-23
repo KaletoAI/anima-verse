@@ -430,7 +430,7 @@ Before `draw_placket` paints, every island pixel within `placket_clear_px` of a 
 placket band or a button / the zip's pull / the eyelets — halved, + `PLACKET_CLEAR_CM` 0.4 cm) takes the pixel twice
 that far out on its own side; a detail there (more than `PLACKET_CLEAR_DETAIL` 40 off the ring's median) and a pixel
 off the island take the median fabric (`_wipe_line`; `smoke_cut_texture_placket.py` [10]). **A decoration is never
-wiped** (`PLACKET_VERSION` 3): a connected detail (8-connected pixels `PLACKET_CLEAR_DETAIL` off the ring's median) with
+wiped** (since `PLACKET_VERSION` 3): a connected detail (8-connected pixels `PLACKET_CLEAR_DETAIL` off the ring's median) with
 at least as many pixels outside the band as inside it (counted within `PLACKET_GUARD_REACH` 3 x the half width) is the
 item's own — an embroidery, a print, a pocket reaching in from the side — and keeps its pixels and a 1 px rim
 (`PLACKET_GUARD_PX`); the painted placket draws nothing on it either. The model's placket lies on the line, inside the
@@ -461,6 +461,29 @@ accepted**, it stays "projection" (since the review: the weave gate's grain reje
 placket: it stays "projection" until a live run; Rosi's corset with darts over her
 pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
 time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back centre.
+
+## 1f. Details round (stage "details", 2026-11-23)
+
+- **The back names a striped front's stripes.** The back prompt's "fine weave" is the variable `weave`
+  (`garment_cut_texture_back.md`; the default renders the old text byte for byte). `cut_texture_post.weave_axis`
+  measures the coherence and the line angle of the front answer's L* high-pass (structure tensor); `stripe_words`
+  says "fine vertical stripes" / "fine horizontal stripes" when the grain is at most `STRIPES` grain_share 0.22 of the
+  level, the level at least 1.5, the coherence at least 0.5 and the lines within 30 deg of an axis, else "fine
+  weave". Dario's Worn Linen Shirt: front 3.20 / 0.54, coherence 0.96, 0.6 deg. A back striped along the same axis
+  (`weave_gates`: front and back give the same stripe words) is held to `WEAVE_GATE` `stripe_factor` 3.0 x the
+  front level + 1.0 (10.59) instead of 1.25 x (5.00): a stripe's contrast is the model's guess, its grain is not.
+  Same-seed A/B on the saved back template: P-H3 7.47 / 0.96 (fine beige stripes: passes), MiniMax 17.16 / 0.68
+  (blue and red candy stripes: rejected, attempt 2 goes on).
+- **The painted buttons take the item's colour** (`PLACKET_VERSION` 4): `garment_cut_texture.button_rgb` reads a
+  colour or material word in the item text's "button(s)" segment (`button_text_colour`, `BUTTON_MATERIALS`), else
+  the buttons of the item picture (`cut_texture_post.picture_buttons`: compact discs off the garment colour, at least
+  3 in one column; Dario's green shirt: 5, copper (140, 68, 19)); without either the old contrast colour. The rim is
+  15 L* darker (lighter below L* 30). The tint is part of `placket_key`, so a change is a CPU re-assembly.
+- **No invented dot grid round a motif** (`POST_VERSION` 12, `cut_texture_post.busy_halo`, `HALO`): on the FRONT job
+  of a top whose prompt was "decorated", texture busier than 1.8 x the panel's quiet level (floor 4.0) that is not
+  the decoration and lies at least 0.6 cm from it is filled from the panel's plainest patch. Dario's MiniMax dot grid:
+  0.146 of the panel cleared; his clean embroidered fronts 0 / 0.010, Ylva's moon dress 0.
+- `scripts/smoke_cut_texture_details.py`.
 
 ## 1e. Geometry round (stage "geometry", 2026-11-22)
 
@@ -739,7 +762,7 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   the match never adds contrast: a photo's sigma is shading and highlights. Live 2026-11-22, Lirien's glossy brown
   leather: the item's pixel mean L* 34.1 sat 5 above its base 29.1 and its sigma L* 8.6 against the plain answer's
   1.1 gave a 7.7 x gain — the faithful answer (ΔE00 1.0 from the item) came out pale taupe with a weave of noise.
-- `POST_VERSION` = 11 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+- `POST_VERSION` = 12 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
   plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`; 8: only a whole island thinner than the erosion keeps
@@ -748,7 +771,8 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   composed atlas fills its background pockets, `fill_pockets`; 10: the colour match base onto base without added
   contrast, the fine rim pass; 11: the eroded rim and the bleed MIRROR the core across its border instead of
   regrowing rays from it — the rays drew a streaked band along every island edge, the waist line of Lirien's dress,
-  live 2026-11-22).
+  live 2026-11-22; 12: an invented texture field round a decorated top front's motif becomes the plain fabric,
+  `busy_halo`, stage "details" 2026-11-23).
 - `POCKET_CM` = 3.0 cm — after the compose, every background pixel this close to the islands + bleed, and every
   pocket they enclose, takes its nearest filled colour (`fill_pockets`, exact distance transform): the round notch
   between the two front leg islands of Lirien's trousers stayed white past the 1 cm bleed and showed as a white spot

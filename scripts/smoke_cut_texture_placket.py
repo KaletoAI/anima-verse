@@ -43,8 +43,8 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     ``{"style": "buttons", "skipped": "no marks"}``; a lapel collar draws no stitch lines (pixel (85, 100) stays grey
     128 — the button discs only).
 [8] The assembly key (``garment_assembly._texture_key``, ``cut_info`` stubbed to texture "cut", csig "0123456789ab"):
-    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket3-buttons-0"; buttons / 4 ->
-    "...:placket3-buttons-4"; zip -> "...:placket3-zip-0" (``PLACKET_VERSION`` 3, phase E: the wipe, and its decoration
+    placket none -> "cut:0123456789ab"; buttons / 0 -> "cut:0123456789ab:placket4-buttons-0"; buttons / 4 ->
+    "...:placket4-buttons-4"; zip -> "...:placket4-zip-0" (``PLACKET_VERSION`` 4: 3 = phase E, the wipe, and its decoration
     guard [12]) — every one a different key, so a
     switch re-assembles. The cut keys do NOT change: ``garment_template_cut.cut_sig`` of the four param sets is one value
     (``placket`` / ``buttons`` are ``TEXTURE_ONLY``, out of ``keyed_params``), and ``garment_cut_texture.csig`` takes no
@@ -233,8 +233,8 @@ for style, n in (("none", 0), ("buttons", 0), ("buttons", 4), ("zip", 0)):
     PARAMS.update(placket=style, buttons=n)
     keys[(style, n)] = ga._texture_key("Demo", {"item_id": "item_fx", "template": True})
     cut_sigs.add(gtc.cut_sig(gt.params_of(inventory.get_item("item_fx")), base_sha="b", lower=[]))
-want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket3-buttons-0",
-        ("buttons", 4): "cut:0123456789ab:placket3-buttons-4", ("zip", 0): "cut:0123456789ab:placket3-zip-0"}
+want = {("none", 0): "cut:0123456789ab", ("buttons", 0): "cut:0123456789ab:placket4-buttons-0",
+        ("buttons", 4): "cut:0123456789ab:placket4-buttons-4", ("zip", 0): "cut:0123456789ab:placket4-zip-0"}
 for k, v in want.items():
     check(f"[8] _texture_key {k} -> {v}", keys[k] == v, keys[k])
 check("[8] cut_sig is one value for all four", len(cut_sigs) == 1, cut_sigs)

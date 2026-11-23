@@ -27,6 +27,8 @@ answer ``u = sx * x + ox``, ``v = sy * y + oy`` for a template point ``(x, y)``.
 from __future__ import annotations
 
 
+import math
+
 import numpy as np
 from PIL import Image
 
@@ -64,12 +66,15 @@ CLAMP_DE = 25.0
 #: fabric (``colour_match`` ``base``); the erosion before the bleed also takes a soft shading band inside the outline
 #: (``outline_rim``'s fine pass, ``RIM_MAX_PX`` 20). 11 (2026-11-22): the eroded rim and the bleed MIRROR the core
 #: across its border instead of regrowing rays from it (``cut_and_bleed``; the waist line of Lirien's dress).
-POST_VERSION = 11
+#: 12 (2026-11-23, stage "details"): an invented texture field round a decorated front's motif is filled with the plain
+#: fabric (``busy_halo``; Dario's dot grid).
+POST_VERSION = 12
 #: The version of ``draw_placket``'s painting: part of the assembly key of a piece with a placket (it is drawn onto
 #: the composed atlas at assembly, never into the record's atlas — a changed placket costs no image job). 2: phase E,
 #: the model's own placket is wiped first. 3: the wipe keeps a decoration reaching into its band
-#: (``PLACKET_GUARD_REACH``).
-PLACKET_VERSION = 3
+#: (``PLACKET_GUARD_REACH``). 4 (stage "details", 2026-11-23): the buttons take the ITEM's button colour (its text, else
+#: its picture — ``garment_cut_texture.button_rgb``) instead of a lighter shade of the fabric.
+PLACKET_VERSION = 4
 
 #: ``outline_rim``: the erosion is never less than ``RIM_MIN_PX`` (the template's ``LINE_PX`` outline plus a pixel of
 #: registration) and never more than ``RIM_MAX_PX``. A pixel more than ``RIM_DE`` (dE76) from the median colour of the
@@ -966,12 +971,20 @@ SPLIT_GATE = {"edge_cm": 1.0, "length": 0.4, "width_cm": 3.0, "item_share": 0.02
 #: 1.0 is two plain panels' noise; ``grain_factor`` 1.25 over the largest legitimate grain rise (1.11 x, the gloves),
 #: ``grain_slack`` 0.5 over a plain panel's grain noise (Lirien +0.17). The world atlas 3fbadeae2a1f is a NEGATIVE
 #: case. ``scripts/smoke_cut_texture_detail_gates.py``.
+#: ``stripe_factor`` (stage "details", 2026-11-23): when the front AND the back are striped along the same axis
+#: (``stripe_words``) the level limit is ``stripe_factor`` x the front's + ``slack`` — the level of a stripe is its
+#: contrast, which the model draws at random (the two striped fronts above differ by 36 %). Live A/B on Dario's linen
+#: back with "fine vertical stripes" (front 3.20 / 0.54): P-H3 drew faithful beige stripes, 7.47 / 0.96 (the 1.25 x
+#: limit 5.00 rejected it, the grain passed); MiniMax drew blue and red candy stripes, 17.16 / 0.68 (colour gate 9.0
+#: passed). Both through ``post_job`` in a dry replay of the Build. 3.0 -> limit 10.59 lies between them (their
+#: geometric middle is 11.3); a speckled back is not striped and keeps ``factor``.
 WEAVE_GATE = {"sigma_cm": 0.5, "px_per_cm": 10.0, "erode_cm": 1.0, "factor": 1.25, "slack": 1.0,
-              "grain_factor": 1.25, "grain_slack": 0.5}
+              "grain_factor": 1.25, "grain_slack": 0.5, "stripe_factor": 3.0}
 
 
-def weave_levels(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> dict | None:
-    """``{"level", "grain"}`` of ``mask`` (``WEAVE_GATE``): None for a region too small to measure."""
+def _weave_hp(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float):
+    """The high-pass of ``weave_levels`` / ``stripe_axis``: ``(hp, m, sigma)`` at ``WEAVE_GATE`` px/cm over ``mask``
+    eroded, or None for a region too small to measure."""
     from scipy import ndimage
     mask = np.asarray(mask, bool)
     if px_per_cm <= 0 or mask.sum() < 16:
@@ -991,10 +1004,75 @@ def weave_levels(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> dict | 
     sigma = g["sigma_cm"] * g["px_per_cm"]
     L = srgb_to_lab(small)[..., 0]
     hp = L - ndimage.gaussian_filter(L, sigma)
+    return hp, m, sigma
+
+
+def weave_levels(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> dict | None:
+    """``{"level", "grain"}`` of ``mask`` (``WEAVE_GATE``): None for a region too small to measure."""
+    from scipy import ndimage
+    got = _weave_hp(rgb, mask, px_per_cm)
+    if got is None:
+        return None
+    hp, m, sigma = got
     gy, gx = np.gradient(hp)
     sxx, syy, sxy = (ndimage.gaussian_filter(a, sigma) for a in (gx * gx, gy * gy, gx * gy))
     minor = (sxx + syy) / 2.0 - np.sqrt(((sxx - syy) / 2.0) ** 2 + sxy ** 2)
     return {"level": round(float(hp[m].std()), 3), "grain": round(float(np.sqrt(max(minor[m].mean(), 0.0))), 3)}
+
+
+def weave_axis(rgb: np.ndarray, mask: np.ndarray, px_per_cm: float) -> dict | None:
+    """The weave's direction over ``mask`` (``WEAVE_GATE``'s high-pass): the mean structure tensor of ``hp``
+    (``sxx`` / ``syy`` / ``sxy``, gradient products averaged over the eroded panel) gives ``coherence`` = (major -
+    minor) / (major + minor) — 1 for parallel lines, 0 for a speckle or lines in every direction — and ``angle`` = the
+    direction the LINES run, in degrees from the vertical (0 = vertical, 90 = horizontal; the gradient runs across
+    them). None for a region too small to measure."""
+    got = _weave_hp(rgb, mask, px_per_cm)
+    if got is None:
+        return None
+    hp, m, _sigma = got
+    gy, gx = np.gradient(hp)
+    sxx, syy, sxy = float((gx * gx)[m].mean()), float((gy * gy)[m].mean()), float((gx * gy)[m].mean())
+    root = math.hypot((sxx - syy) / 2.0, sxy)
+    tr = (sxx + syy) / 2.0
+    coherence = root / tr if tr > 1e-12 else 0.0
+    grad = 0.5 * math.degrees(math.atan2(2.0 * sxy, sxx - syy))     # the gradient's angle from the x axis
+    angle = abs(((grad + 90.0) % 180.0) - 90.0)                       # lines run across it: 0 = vertical lines
+    return {"coherence": round(coherence, 3), "angle": round(angle, 1)}
+
+
+#: Stage "details" (2026-11-23, Dario's Worn Linen Shirt): the back job's prompt said "the fine weave", and both
+#: backends painted a speckled cross weave (grain 2.63 / 3.47) behind the front answer's fine vertical stripes (grain
+#: 0.54) — the back view itself reads grain 0.67, the models invented the speckle, the weave gate rejected it rightly.
+#: So the back prompt NAMES the stripes when the FRONT answer's main panel is striped (``stripe_words``): its grain at
+#: most ``grain_share`` x its level, its level at least ``min_level``, its ``weave_axis`` coherence at least
+#: ``coherence`` and its lines within ``axis_deg`` of the vertical or the horizontal. Measured on the 53 saved front
+#: answers (the template's largest island over the raw answer; grain / level, coherence, line angle): the striped linen
+#: 0.18, 0.95, 0.6 deg — the only one named; Glut's scale bra 0.14, 0.84, 55.7 deg (diagonal scales: "fine weave"; a
+#: bra has no back job anyway); Ylva's wrap skirt (a pasted product photo) 0.23, 0.17; Dario's embroidered fronts
+#: 0.35-0.69, coherence <= 0.13; every other front 0.35 and up. ``grain_share`` 0.22 lies between 0.18 and 0.23, the
+#: coherence floor 0.5 keeps an oriented photo or embroidery out on a second count, ``min_level`` 1.5 is above a plain
+#: panel's noise (<= 0.9). ``scripts/smoke_cut_texture_details.py`` [1].
+STRIPES = {"grain_share": 0.22, "min_level": 1.5, "coherence": 0.5, "axis_deg": 30.0}
+#: The weave words of the back prompt: the default (every non-striped front, the old wording byte for byte) and the
+#: striped ones by axis.
+WEAVE_WORDS = {"": "fine weave", "vertical": "fine vertical stripes", "horizontal": "fine horizontal stripes"}
+
+
+def stripe_words(levels: dict | None, axis: dict | None) -> str:
+    """The back prompt's weave words (``STRIPES``, ``WEAVE_WORDS``) from the FRONT answer's ``weave_levels`` and
+    ``weave_axis``: "fine vertical stripes" / "fine horizontal stripes" for a striped front, else "fine weave"."""
+    g = STRIPES
+    if not isinstance(levels, dict) or not isinstance(axis, dict):
+        return WEAVE_WORDS[""]
+    level, grain = float(levels.get("level") or 0.0), float(levels.get("grain") or 0.0)
+    if level < g["min_level"] or grain > g["grain_share"] * level or float(axis.get("coherence") or 0.0) < g["coherence"]:
+        return WEAVE_WORDS[""]
+    angle = float(axis.get("angle") or 0.0)
+    if angle <= g["axis_deg"]:
+        return WEAVE_WORDS["vertical"]
+    if angle >= 90.0 - g["axis_deg"]:
+        return WEAVE_WORDS["horizontal"]
+    return WEAVE_WORDS[""]
 
 
 def weave_gates(back: dict | None, front: dict | None) -> list[dict]:
@@ -1004,14 +1082,18 @@ def weave_gates(back: dict | None, front: dict | None) -> list[dict]:
         return []
     g = WEAVE_GATE
     out = []
-    for gate, key, factor, slack in (("weave", "level", g["factor"], g["slack"]),
+    # stage "details": front and back striped along the same axis (``stripe_words``) — the level is the stripes'
+    # contrast, which the model draws at random, so it gets ``stripe_factor``; the grain gate is unchanged
+    words = stripe_words(front, front.get("axis"))
+    striped = words != WEAVE_WORDS[""] and stripe_words(back, back.get("axis")) == words
+    for gate, key, factor, slack in (("weave", "level", g["stripe_factor"] if striped else g["factor"], g["slack"]),
                                      ("grain", "grain", g["grain_factor"], g["grain_slack"])):
         if back.get(key) is None or front.get(key) is None:
             continue
         b, f = float(back[key]), float(front[key])
         lim = round(factor * f + slack, 3)
         ok = b <= lim
-        out.append({"gate": gate, "ok": ok, "value": b, "limit": lim, "front": f,
+        out.append({"gate": gate, "ok": ok, "value": b, "limit": lim, "front": f, "striped": striped,
                     "text": "" if ok else f"back {gate} {b:.2f} > {lim:.2f} (the front's {f:.2f})"})
     return out
 
@@ -1157,6 +1239,76 @@ def tile_fill(img: np.ndarray, region: np.ndarray, patch: np.ndarray, target_lab
     return out, {"shift": round(float(np.linalg.norm(shift)), 3)}
 
 
+#: Stage "details" (2026-11-23, Dario's embroidered shirt: MiniMax set the embroidery on a rectangle of raised dots —
+#: a "dot grid" the item does not show — and every gate passed; the plain linen around it is the item's).
+#: ``busy_halo`` finds such an invented texture field on a FRONT panel: the DECORATION is every pixel more than
+#: ``deco_de`` (dE76) from the panel's base fabric whose component's box is at least ``deco_cm`` long (an embroidery
+#: stroke, a print; a single dot of the grid is ~0.3 cm), grown by ``keep_cm``; the decoration is set to the base
+#: lightness, then the local texture energy = the root of the Gaussian (``energy_cm``) mean of the squared L* high-pass
+#: (L* minus its Gaussian of ``hp_cm``). The panel's quiet level is the median energy of the panel away from the
+#: decoration (``away_cm``); a pixel is busy above ``factor`` x that level and ``floor``; busy components smaller
+#: than ``min_cm`` square are dropped, and so is every busy pixel within ``near_cm`` of the decoration (the gaps between
+#: strokes and a faint motif round them stay). Applied only to the FRONT job of a top-family piece whose prompt was
+#: "decorated" (``refs["halo"]``): on the 53 saved fronts the measure also flags a plain leather jacket's zip shading
+#: (0.118 of the panel), Kai's jeans' whiskers (0.103) and Kira's lace (0.150) — real details, none decorated-top.
+#: Measured (raw answer, 13.88 px/cm, high-pass 0.3 cm, energy 0.75 cm): Dario's plain linen around the motif 3.2-3.8
+#: (p10-p90), the dot field 5.4-15.9, median 9.2; the panel's quiet level 3.49 -> limit 6.3 (``factor`` 1.8; 2.5 gave
+#: 8.7 and missed half the field): 0.146 of the panel cleared. Decorated fronts that are right: Ylva's moon dress 0
+#: (its grey motif is decoration), Dario's clean embroidered fronts 0 and 0.010 (a model placket line, wiped by the
+#: placket anyway). The busy pixels that are not decoration are filled from the panel's plainest patch (``tile_fill``).
+HALO = {"deco_de": 30.0, "deco_cm": 1.0, "keep_cm": 0.15, "hp_cm": 0.3, "energy_cm": 0.75, "away_cm": 1.0,
+        "factor": 1.8, "floor": 4.0, "min_cm": 2.0, "near_cm": 0.6}
+
+
+def busy_halo(img: np.ndarray, panel: np.ndarray, base_lab, px_per_cm: float) -> tuple[np.ndarray, dict]:
+    """The invented texture field of a front panel (``HALO``): ``(mask of the busy non-decoration pixels, info)`` —
+    ``info`` = ``{"px", "quiet", "limit"}``; an empty mask when the panel is too small or nothing is busy."""
+    from scipy import ndimage
+    g = HALO
+    panel = np.asarray(panel, bool)
+    empty = np.zeros(panel.shape, bool)
+    if px_per_cm <= 0 or panel.sum() < 64:
+        return empty, {"px": 0}
+    ys, xs = np.nonzero(panel)
+    y0, y1 = max(0, ys.min() - 2), ys.max() + 3
+    x0, x1 = max(0, xs.min() - 2), xs.max() + 3
+    sub = np.asarray(img)[y0:y1, x0:x1, :3].astype(np.float64)
+    pm = panel[y0:y1, x0:x1]
+    lab = srgb_to_lab(sub)
+    base = np.asarray(base_lab, np.float64)
+    far = (np.linalg.norm(lab - base, axis=-1) > g["deco_de"]) & pm
+    labels, _n = ndimage.label(far)
+    long_px = g["deco_cm"] * px_per_cm
+    deco = np.zeros_like(far)
+    for i, sl in enumerate(ndimage.find_objects(labels), 1):
+        if sl is not None and max(sl[0].stop - sl[0].start, sl[1].stop - sl[1].start) >= long_px:
+            deco[sl] |= labels[sl] == i
+    keep = ndimage.binary_dilation(deco, iterations=max(1, int(round(g["keep_cm"] * px_per_cm)))) if deco.any() \
+        else deco
+    L = np.where(keep | ~pm, base[0], lab[..., 0])
+    hp = L - ndimage.gaussian_filter(L, g["hp_cm"] * px_per_cm)
+    energy = np.sqrt(ndimage.gaussian_filter(hp * hp, g["energy_cm"] * px_per_cm))
+    away = pm & ~(ndimage.binary_dilation(deco, iterations=max(1, int(round(g["away_cm"] * px_per_cm))))
+                  if deco.any() else deco)
+    if away.sum() < 64:
+        return empty, {"px": 0}
+    quiet = float(np.median(energy[away]))
+    limit = max(g["factor"] * quiet, g["floor"])
+    busy = (energy > limit) & pm
+    if deco.any():
+        # only a field AWAY from the decoration: the gaps between strokes and a faint motif round them stay
+        busy &= ndimage.distance_transform_edt(~deco) >= g["near_cm"] * px_per_cm
+    lab_b, _nb = ndimage.label(busy)
+    min_area = (g["min_cm"] * px_per_cm) ** 2
+    sizes = ndimage.sum(busy, lab_b, range(1, _nb + 1)) if _nb else []
+    big = np.zeros(_nb + 1, bool)
+    big[1:] = np.asarray(sizes) >= min_area
+    busy = big[lab_b] & ~keep
+    out = empty.copy()
+    out[y0:y1, x0:x1] = busy
+    return out, {"px": int(busy.sum()), "quiet": round(quiet, 3), "limit": round(limit, 3)}
+
+
 # ------------------------------------------------------------------------------------------------------ seam continuity
 
 def seam_continuity(atlas, seams) -> dict:
@@ -1235,10 +1387,81 @@ def _shade(base_lab, dl: float) -> np.ndarray:
     return np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
 
 
-def button_colours(base_lab) -> dict:
-    """B13: the disc and the rim of a button on a fabric of ``base_lab`` -> {"disc": L*, "rim": L*, sRGB both}."""
-    disc, rim = _shade(base_lab, BUTTON_DL), _shade(base_lab, BUTTON_RIM_DL)
+def button_colours(base_lab, button_rgb=None) -> dict:
+    """B13: the disc and the rim of a button on a fabric of ``base_lab`` -> {"disc": L*, "rim": L*, sRGB both}. With
+    the item's own ``button_rgb`` (stage "details") the disc is that colour and the rim ``BUTTON_RIM_OWN_DL`` darker
+    (lighter on a disc darker than L* 30)."""
+    if button_rgb is not None:
+        disc = np.clip(np.rint(np.asarray(button_rgb, np.float64)[:3]), 0, 255).astype(np.uint8)
+        lab = srgb_to_lab(disc.astype(np.float64))
+        rim_lab = np.array(lab, np.float64)
+        rim_lab[0] = float(np.clip(lab[0] - BUTTON_RIM_OWN_DL if lab[0] >= 30.0 else lab[0] + BUTTON_RIM_OWN_DL,
+                                   0.0, 100.0))
+        rim = np.clip(np.rint(lab_to_srgb(rim_lab)), 0, 255).astype(np.uint8)
+    else:
+        disc, rim = _shade(base_lab, BUTTON_DL), _shade(base_lab, BUTTON_RIM_DL)
     return {"disc": disc, "rim": rim, "disc_l": float(srgb_to_lab(disc)[0]), "rim_l": float(srgb_to_lab(rim)[0])}
+
+
+#: The rim of a button in the item's own colour: this much darker in L* (``button_colours``).
+BUTTON_RIM_OWN_DL = 15.0
+#: Stage "details" (2026-11-23, Dario's embroidered shirt: the painted buttons came out light green — a shade of the
+#: fabric — where the item picture shows copper-brown ones). ``picture_buttons`` finds the buttons in an item picture
+#: that is a garment on white: the picture at ``long`` px on its long side; the garment = not near-white (any channel
+#: below 225), eroded 3 px; a candidate pixel is more than ``de`` (dE76) from the picture's base fabric
+#: (``fabric_colour``); a button is a candidate component whose box's long side is ``d_min``-``d_max`` of the garment's
+#: width, at most ``aspect`` long for its width and filling at least ``fill`` of its box (a round disc fills 0.79, a
+#: thin embroidery star or a stroke far less); the buttons are the largest set of at least ``min_count`` such discs
+#: whose centres lie within ``column`` x the width of one another's x (one placket line). Measured: Dario's embroidered
+#: shirt (512 px, width 383): 8 discs, the five on x 194-196 (d 8-9 px, fill 0.68-0.78), the three embroidery stars
+#: at x 261-277 (d 5) -> copper (140, 68, 19); his linen shirt: 3 at x 152-166 -> wood (166, 134, 109); Kira's blazer
+#: (two buttons on black): 1 disc -> none (her text names "silver buttons").
+BUTTON_FIND = {"long": 512, "de": 25.0, "d_min": 0.012, "d_max": 0.06, "aspect": 1.6, "fill": 0.55, "column": 0.04,
+               "min_count": 3}
+
+
+def picture_buttons(rgb) -> dict | None:
+    """The buttons of an item picture on white (``BUTTON_FIND``): ``{"rgb", "count", "x"}`` — the median colour of
+    the discs' inner pixels, their number and their mean x (share of the picture width) —, or None."""
+    from scipy import ndimage
+    g = BUTTON_FIND
+    im = Image.fromarray(np.asarray(rgb)[..., :3].astype(np.uint8))
+    s = g["long"] / float(max(im.size))
+    im = im.resize((max(1, round(im.size[0] * s)), max(1, round(im.size[1] * s))), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float64)
+    garment = ndimage.binary_erosion((255.0 - a).max(-1) > 30.0, iterations=3)
+    if garment.sum() < 64:
+        return None
+    xs = np.nonzero(garment)[1]
+    width = float(xs.max() - xs.min() + 1)
+    fab = fabric_colour(np.asarray(im), garment)
+    if not fab:
+        return None
+    de = np.linalg.norm(srgb_to_lab(a) - np.asarray(fab["lab"], np.float64), axis=-1)
+    labels, _n = ndimage.label((de > g["de"]) & garment)
+    discs = []
+    for i, sl in enumerate(ndimage.find_objects(labels), 1):
+        if sl is None:
+            continue
+        h, w = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
+        d = max(h, w)
+        if not (g["d_min"] * width <= d <= g["d_max"] * width) or d / max(1, min(h, w)) > g["aspect"]:
+            continue
+        if (labels[sl] == i).sum() / float(h * w) < g["fill"]:
+            continue
+        discs.append(((sl[1].start + sl[1].stop) / 2.0, i))
+    best: list = []
+    for cx, _i in discs:
+        group = [d for d in discs if abs(d[0] - cx) <= g["column"] * width]
+        if len(group) > len(best):
+            best = group
+    if len(best) < g["min_count"]:
+        return None
+    sel = np.isin(labels, [i for _x, i in best])
+    inner = ndimage.binary_erosion(sel)
+    px = a[inner if inner.sum() >= 10 else sel]
+    return {"rgb": [int(round(v)) for v in np.median(px, axis=0)], "count": len(best),
+            "x": round(float(np.mean([x for x, _i in best])) / a.shape[1], 3)}
 
 
 def button_centres(length_px: float, px_per_cm: float, kind: str, buttons: int = 0) -> list[float]:
@@ -1403,7 +1626,7 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
 
 
 def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, style: str, buttons: int,
-                 px_per_cm: float, lapel: bool = False) -> tuple[np.ndarray, dict]:
+                 px_per_cm: float, lapel: bool = False, button_rgb=None) -> tuple[np.ndarray, dict]:
     """Paint the placket ``style`` (``garment_template.PLACKETS``: buttons / zip / lacing; "none" draws nothing) of a
     ``kind`` piece into ``atlas`` along the cut's ``marks`` lines (``marks.json`` ``lines``: ``centre_front`` of a
     closed front; ``edge_left`` / ``edge_right`` of an open one), each only inside the pixels of its own island
@@ -1412,7 +1635,8 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
     is wiped along every line (``placket_clear_px``, ``_wipe_line``), so the code's placket is the only one.
 
     - buttons, closed front: the placket's two edges stitched ``PLACKET_W_CM`` apart (none for a ``lapel``), the
-      buttons on the line (``button_centres``, ``BUTTON_D_CM``, ``button_colours``, two holes);
+      buttons on the line (``button_centres``, ``BUTTON_D_CM``, ``button_colours``: the item's ``button_rgb`` when
+      known, else a shade of the fabric; two holes);
     - buttons, open front: the buttons half a placket width inside the RIGHT front's edge (``edge_right``), the
       button holes (a slit of the diameter, the rim's L*) as far inside the LEFT front's edge — fixed sides, no
       wearer parameter (B12);
@@ -1469,7 +1693,7 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
             c, tg = _at(p, s, t)
             return c + np.array([-tg[1], tg[0]]) * d, tg
         if style == "buttons":
-            col = button_colours(fab)
+            col = button_colours(fab, button_rgb)
             info["button_l"] = round(col["disc_l"], 2)
             info["rim_l"] = round(col["rim_l"], 2)
             d_px = BUTTON_D_CM.get(kind, 1.1) * px_per_cm
