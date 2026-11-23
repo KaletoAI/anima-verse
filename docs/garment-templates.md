@@ -471,6 +471,33 @@ Rosi's Red Corset Top at lift 1, measured on the dry run: waist 2.96 / hem 2.2 /
 At 50 % the upper chest bunches and a small fold shows at the front of the shoulder. Lift 0.7 (35 %) renders
 clean. Smokes: `smoke_bust_shaping.py` (v3, old-code proof against 4ee6ac1ab) and `smoke_corset_shell.py`.
 
+**Corset v5 (review 2026-11-23: two flaps under the arms; a crease where the lifted cup met the straight panel).**
+`CORSET_VERSION` 5, all in `garment_template_build.py`'s corset functions:
+- *The edge under the arms* (`underarm_edge`, after `cup_edge`). The side and back edge lay on the fold from the back
+  to the arm, which flares out there by 4-5 cm over 6 cm of height: its gap was small, but it stood 5-17 mm proud of
+  the cloth under it — a flap. Every column without chest tissue and outside the sweetheart dip now lowers its edge
+  in 2 mm steps until the skin under it neither flares (`skin_flare` ≤ 2.5 mm against the straight line through the
+  skin 1.5 and 3 cm lower) nor widens more steeply than 0.6 m/m (`skin_slope`). The lowering is widened to the
+  neighbouring columns and smoothed (1, 2, 1), never under a column's own need (Rosi: 26 columns, at most 3.6 cm).
+- *The top edge lies on the skin all the way round.* The edge moves to 0.8 mm off the skin (`SHELL_EDGE_CLEAR_M`),
+  and where the line between two edge vertices spans a hollow (the shoulder blade's edge) by more than 1.7 mm both
+  ends move in. The cleavage bridge keeps its hull (it spans the hollow on purpose; out of every edge gate).
+- *The front is a stiff strip* (`boned_profile` / `bone_bend`). v3/v4 ran a straight hull from the chest to the rib
+  cage, with a corner at either end: two horizontal creases (up to 98°). v5 solves each front column for the least
+  bending over the body (an active-set solve of the second differences, never inside the body), fixed at the edge and
+  clamped on the body from 1.5 cm over the waist (`SHELL_FRONT_WAIST_M`). The row hull is taken at each vertex's own
+  height (`slice_hull`: a row's hull through the columns' different heights stood a 3 cm keel out of the middle),
+  and the strips are smoothed across the columns at equal height (`SHELL_STRIP_SMOOTH_ROUNDS`).
+- *New gates* (`judge_build`): `gap_edge_loop_gap_max_mm` ≤ 2 and `gap_edge_loop_flare_max_mm` ≤ 3 — the maximum
+  per 2 cm segment of the whole top edge round the body, sampled every 2 mm (`edge_loop`) — and
+  `front_fold_max_deg` ≤ `CORSET_FOLD_DEG` 55 (`front_folds`: the dihedral angle of the front's inner edges).
+
+Rosi's Red Corset Top, dry run against round 1 (65bf47a3a): edge loop gap max 1.77 mm, flare max 1.12 mm (was 5-17 mm
+under the arms), top edge p95 0.88, front fold max 47° (v4 98°), waist 2.07 / hem 2.12 / under edge 4.68 mm (p95).
+Not fixed: the sitting pose stretches the hem over the buttocks to 1.50× (walking 1.18×; the hem's horizontal edges
+at the back, the hip widening under it). It is not gated per pose; shortening the back hem or freeing the hem from
+the thigh weights would be its fix. Smoke: `smoke_corset_underarm.py`.
+
 **Live 2026-11-22** (copies, chain MiniMax-H3-Image, P-H3-Image; 7 image jobs, every one MiniMax in attempt 1):
 Tilda's buttoned blouse (placket buttons, 7; no collar — see above): plain cream, seven buttons on the centre line, no
 second placket — but its cut is the split one above (band + band_2, jagged strips in the pattern), so it is **not

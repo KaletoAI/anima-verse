@@ -1,4 +1,4 @@
-"""Corset v2/v3/v4 (user report 2026-11-22: "lots of air below, thick at the top"): a strapless top's front rises over the
+"""Corset v2/v3/v4/v5 (user report 2026-11-22: "lots of air below, thick at the top"): a strapless top's front rises over the
 shaped chest (``garment_template.cup_rise`` / ``cup_drop``), it is laid on the body as a shell
 (``build_args`` sends ``shell_clear_m`` / ``shell_gap_mm``) and its gaps are gated (``judge_build``). No server, no
 world DB, no Blender. Every number below is derived by hand.
@@ -18,7 +18,8 @@ world DB, no Blender. Every number below is derived by hand.
     ``cup_drop(0.05, 5, base=0.02)``: 0.02 + 0.03 x smoothstep -> centre 0.02, pi/4 0.02 + 0.03 x 0.095484 = 0.022865
     -> 0.02286 (5 places, half-even on the float), pi/2 0.05.
 [3] ``build_args`` of a strapless top carries shell_clear_m = CORSET_CLEAR_M 0.0015 and shell_gap_mm = CORSET_GAP_MM
-    {waist 3, hem 5, top_edge 2, under_edge 5} + CORSET_MAX_MM {edge_outer 3, edge_spill 1}; a skirt carries neither.
+    {waist 3, hem 5, top_edge 2, under_edge 5} + CORSET_MAX_MM {edge_outer 3, edge_spill 1, edge_loop_gap 2,
+    edge_loop_flare 3 (corset v5)}; a skirt carries neither. The v5 rows themselves: scripts/smoke_corset_underarm.py.
 [4] ``judge_build`` with fit_gap waist 2.9 / hem 5.1 / top_edge 1.5 (p95): rows gap_waist_p95_mm ok, gap_hem_p95_mm
     NOT ok, gap_top_edge_p95_mm ok, all three gates; without fit_gap no gap row. Corset v4, on the MAXIMUM: edge_outer
     3.1 > 3 fails (a gate), edge_spill 0.5 <= 1 ok.
@@ -60,8 +61,8 @@ def check(label, ok, detail=""):
         FAILS.append(label)
 
 
-check("v4 constants", (gt.CUP_COVER_MAX_M, gt.CUP_TIP_M, gt.CORSET_MAX_MM) == (0.08, 0.01, {"edge_outer": 3.0,
-                                                                                         "edge_spill": 1.0}))
+check("v4/v5 constants", (gt.CUP_COVER_MAX_M, gt.CUP_TIP_M, gt.CORSET_MAX_MM) == (0.08, 0.01, {
+    "edge_outer": 3.0, "edge_spill": 1.0, "edge_loop_gap": 2.0, "edge_loop_flare": 3.0}))
 check("constants", (gt.STRAPLESS_UNDERARM_M, gt.CUP_COVER_M, gt.CUP_RISE_MAX_M, gt.CUP_HALF_RAD, gt.CORSET_CLEAR_M,
                     gt.CORSET_GAP_MM, gt.STRAPLESS_TUCK_M, gt.TUCK_KINDS)
       == (0.02, 0.035, 0.10, 0.6, 0.0015, {"waist": 3.0, "hem": 5.0, "top_edge": 2.0, "under_edge": 5.0}, 0.02,

@@ -110,7 +110,11 @@ NECK_VERSION = 1
 #: the top of the chest tissue (``cup_edge``), the sweetheart dip ends over the apex (``CUP_TIP_M``), the front's
 #: vertical hull reaches every column with chest tissue (no dent under the outer cup), new max gates
 #: (``CORSET_MAX_MM``).
-CORSET_VERSION = 4
+#: 5 (review 2026-11-23): the side and back edge runs under the fold to the arm instead of flaring out on it
+#: (``garment_template_build.underarm_edge``), the front runs from the cup into the panel as a stiff strip
+#: (``boned_profile``: no crease), the whole top edge is gated on its maximum per 2 cm (``edge_loop_gap`` /
+#: ``edge_loop_flare``) and the front's bend (``CORSET_FOLD_DEG``).
+CORSET_VERSION = 5
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
@@ -204,7 +208,18 @@ CORSET_GAP_MM = {"waist": 3.0, "hem": 5.0, "top_edge": 2.0, "under_edge": 5.0}
 #: gates passed): gated on the MAXIMUM, millimetres — ``edge_outer`` = the gap of the top edge over the outer part of
 #: the cups (``garment_template_build.EDGE_OUTER_RAD``), ``edge_spill`` = how far the skin up to 3 cm over the top edge
 #: of a column with chest tissue stands out beyond the skin at the edge (``garment_template_build.shell_gaps``).
-CORSET_MAX_MM = {"edge_outer": 3.0, "edge_spill": 1.0}
+#: Corset v5 (review 2026-11-23: two flaps under the arms passed the p95 gate): the WHOLE top edge round the body (the
+#: cleavage bridge left out) on its maximum per 2 cm — ``edge_loop_gap`` = its distance to the surface under it,
+#: ``edge_loop_flare`` = how far it stands out beyond the straight line of the cloth 1.5..3 cm under it
+#: (``garment_template_build.edge_loop``).
+CORSET_MAX_MM = {"edge_outer": 3.0, "edge_spill": 1.0, "edge_loop_gap": 2.0, "edge_loop_flare": 3.0}
+#: Corset v5 (review 2026-11-23: a dark crease where the lifted cup met the straight panel under it): the largest
+#: angle between the normals of two neighbouring faces of the front, from the hem to the top edge
+#: (``garment_template_build.front_folds``), degrees. Set from the measured shells (Rosi, same body): the straight hull
+#: of corset v4 (65bf47a3a) bent up to 98 degrees at its corners (p99 56), the first v5 shell with a keel down the
+#: centre 77, the stiff strip of v5 bends 47 at most (the waist's own curve under the 1.3 cm grid); the limit sits
+#: between the keel and the strip.
+CORSET_FOLD_DEG = 55.0
 #: Corset v3 (review 2026-11-22: a strip of bare skin between the corset's hem and the skirt's waistband): a strapless
 #: top worn with a template skirt or trousers (``tuck_lines``) reaches this far below the lowest of their waist lines
 #: (``_waist_line``) — the skirt drapes on the plain body and stands a few millimetres off it, the corset lies on the
@@ -2769,6 +2784,10 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         gap = ((data.get("fit_gap") or {}).get(part) or {}).get("max_mm")
         if gap is not None:
             row(f"gap_{part}_max_mm", gap, limit, gap <= limit)
+    # corset v5: the front's sharpest bend between its hem and top edge (degrees)
+    fold = ((data.get("fit_gap") or {}).get("front_fold") or {}).get("max_deg")
+    if fold is not None:
+        row("front_fold_max_deg", fold, CORSET_FOLD_DEG, fold <= CORSET_FOLD_DEG)
     # corset v3: a hem moved under the worn skirt's / trousers' waistband (``STRAPLESS_TUCK_M``) reaches under it
     tucked = (data.get("outline") or {}).get("hem_tucked")
     if tucked:
