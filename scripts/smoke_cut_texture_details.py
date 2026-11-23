@@ -35,9 +35,12 @@ No server, no world DB (a throwaway ``paths.init``), no Blender, no hub job. Eve
     within 0.04 x 300 = 12 px is the five at 250.5 -> count 5, x 250.5 / 512 = 0.489, the eroded discs' median
     (140, 70, 20) exactly. Without the five (only 2 in any column < ``min_count`` 3) -> None.
     ``button_colours`` with an rgb: the disc IS that rgb, the rim 15 L* darker (L* >= 30) or lighter (L* < 30).
+    ``button_rgb`` (``get_item`` / ``_item_path`` stubbed, the cut directory under the throwaway storage): a text
+    without buttons and the cut's ``<stem>.item.png`` = the five-disc picture -> (140, 70, 20) "picture"; with the
+    raw item picture the two-disc one and no stem file -> None; the text "two silver buttons" wins over both.
 [5] ``busy_halo`` at 20 px/cm on a 400 px square panel of flat green (40, 100, 60): the energy of a flat panel is 0,
-    the quiet level 0, the limit the floor 4.0. A field of 3 x 3 px dark dots (10, 40, 20) every 6 px, 120 x 120 px
-    (6 x 6 cm, at x/y 240..359): a dot share p = 9 / 36 = 0.25 of a step dL ~ 24, rms sqrt(p (1 - p)) x 24 ~ 10 > 4
+    the quiet level 0, the limit the floor 2.0; the panel is eroded by ``edge_cm`` 0.9 cm = 18 px. A field of 3 x 3 px dark dots (10, 40, 20) every 6 px, 120 x 120 px
+    (6 x 6 cm, at x/y 240..359): a dot share p = 9 / 36 = 0.25 of a step dL ~ 24, rms sqrt(p (1 - p)) x 24 ~ 10 > 2
     inside it; each dot is 0.15 cm < ``deco_cm`` 1 cm, never decoration. A white stroke 4 x 200 px (10 cm, dE > 30,
     long >= 1 cm: decoration) at x 60..63. Expected: busy covers >= 0.8 of the field eroded by the energy Gaussian
     (15 px), nothing farther than 30 px outside the field, nothing within ``near_cm`` 0.6 cm = 12 px of the stroke.
@@ -175,6 +178,24 @@ check("own colour: the disc is the rgb, the rim 15 L* darker", list(col["disc"])
 col = post.button_colours([40.0, -30.0, 20.0], [20, 20, 24])
 check("a dark own colour: the rim 15 L* lighter", abs(col["rim_l"] - col["disc_l"] - 15.0) < 0.6)
 
+from app.models import inventory  # noqa: E402
+from PIL import Image  # noqa: E402
+
+texts = {"it": "dark green linen shirt with nordic silver embroidery"}
+raw_pic = Path(tempfile.mkdtemp(prefix="smoke_cut_details_item_")) / "raw.png"
+Image.fromarray(pic2).save(raw_pic)
+inventory.get_item = lambda iid: {"prompt_fragment": texts[iid]}
+gct._item_path = lambda iid: raw_pic
+stem_png = gct._file(gct._stem("Smoke", "it", "0123456789ab"), ".item.png")
+stem_png.parent.mkdir(parents=True, exist_ok=True)
+check("no stem picture: the raw picture's two discs -> None", gct.button_rgb("it", "Smoke", "0123456789ab")
+      == (None, ""))
+Image.fromarray(pic).save(stem_png)
+check("the cut's own picture: copper from the picture", gct.button_rgb("it", "Smoke", "0123456789ab")
+      == ([140, 70, 20], "picture"), f"{gct.button_rgb('it', 'Smoke', '0123456789ab')}")
+texts["it"] = "black tailored blazer, fitted, two silver buttons"
+check("the text wins", gct.button_rgb("it", "Smoke", "0123456789ab") == ([184, 184, 190], "text"))
+
 print("[5] busy_halo")
 size = 440
 panel = np.zeros((size, size), bool)
@@ -199,7 +220,7 @@ check("the dot field is busy (>= 0.8 of its inner part)", (busy & inner).sum() >
       f"{(busy & inner).sum()} / {inner.sum()} {info}")
 check("nothing busy beyond 30 px of the field", not (busy & ~outer).any(), f"{(busy & ~outer).sum()}")
 check("nothing busy within 0.6 cm of the stroke", not (busy & near).any())
-check("the limit is the floor 4.0 on a flat panel", abs(info["limit"] - 4.0) < 1e-6 and info["quiet"] < 0.1, f"{info}")
+check("the limit is the floor 2.0 on a flat panel", abs(info["limit"] - 2.0) < 1e-6 and info["quiet"] < 0.1, f"{info}")
 busy2, info2 = post.busy_halo(stroke, panel, base_lab, 20.0)
 check("stroke alone: nothing busy", not busy2.any(), f"{info2}")
 alldots = flat.copy()

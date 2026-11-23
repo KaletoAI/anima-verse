@@ -1251,13 +1251,17 @@ def tile_fill(img: np.ndarray, region: np.ndarray, patch: np.ndarray, target_lab
 #: strokes and a faint motif round them stay). Applied only to the FRONT job of a top-family piece whose prompt was
 #: "decorated" (``refs["halo"]``): on the 53 saved fronts the measure also flags a plain leather jacket's zip shading
 #: (0.118 of the panel), Kai's jeans' whiskers (0.103) and Kira's lace (0.150) — real details, none decorated-top.
-#: Measured (raw answer, 13.88 px/cm, high-pass 0.3 cm, energy 0.75 cm): Dario's plain linen around the motif 3.2-3.8
-#: (p10-p90), the dot field 5.4-15.9, median 9.2; the panel's quiet level 3.49 -> limit 6.3 (``factor`` 1.8; 2.5 gave
-#: 8.7 and missed half the field): 0.146 of the panel cleared. Decorated fronts that are right: Ylva's moon dress 0
-#: (its grey motif is decoration), Dario's clean embroidered fronts 0 and 0.010 (a model placket line, wiped by the
-#: placket anyway). The busy pixels that are not decoration are filled from the panel's plainest patch (``tile_fill``).
+#: Measured on the registered ANSWER (``resample_register``: the answer at the atlas frame; the colour match after it
+#: flattens the contrast, so it is not measured there), 13.5-13.9 px/cm, high-pass 0.3 cm, energy 0.75 cm, inside the
+#: panel eroded by ``edge_cm`` (its outline is no texture field). Group B's dot grid (Dario, 1947cab1874c): quiet 2.32
+#: -> limit 4.18, 0.139 of the panel cleared. This stage's live answer (2026-11-23, MiniMax again, 7f908766420a): a
+#: fainter grid on smoother linen — plain 0.55-0.60 (p10-p90), dots 3.0-4.7, median 3.7, quiet 0.65: ``floor`` 3.0
+#: kept most of it, 2.0 clears 0.041. At 2.0 Dario's clean front 849e gives 0.051 (the model's own placket line, which
+#: the placket wipes anyway), dario-v7 0.004, Ylva's moon dress 0.001 (its grey motif is decoration), Tilda's
+#: blouses 0-0.016, the linen fronts 0-0.012. The busy pixels that are not decoration are filled from the panel's
+#: plainest patch (``tile_fill``).
 HALO = {"deco_de": 30.0, "deco_cm": 1.0, "keep_cm": 0.15, "hp_cm": 0.3, "energy_cm": 0.75, "away_cm": 1.0,
-        "factor": 1.8, "floor": 4.0, "min_cm": 2.0, "near_cm": 0.6}
+        "factor": 1.8, "floor": 2.0, "min_cm": 2.0, "near_cm": 0.6, "edge_cm": 0.9}
 
 
 def busy_halo(img: np.ndarray, panel: np.ndarray, base_lab, px_per_cm: float) -> tuple[np.ndarray, dict]:
@@ -1265,9 +1269,12 @@ def busy_halo(img: np.ndarray, panel: np.ndarray, base_lab, px_per_cm: float) ->
     ``info`` = ``{"px", "quiet", "limit"}``; an empty mask when the panel is too small or nothing is busy."""
     from scipy import ndimage
     g = HALO
-    panel = np.asarray(panel, bool)
-    empty = np.zeros(panel.shape, bool)
-    if px_per_cm <= 0 or panel.sum() < 64:
+    empty = np.zeros(np.asarray(panel).shape, bool)
+    if px_per_cm <= 0:
+        return empty, {"px": 0}
+    # the panel's own border (the answer's outline, the rim) is never a texture field
+    panel = ndimage.binary_erosion(np.asarray(panel, bool), iterations=max(1, int(round(g["edge_cm"] * px_per_cm))))
+    if panel.sum() < 64:
         return empty, {"px": 0}
     ys, xs = np.nonzero(panel)
     y0, y1 = max(0, ys.min() - 2), ys.max() + 3

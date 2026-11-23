@@ -1789,8 +1789,12 @@ def _post_job(answer: bytes, islands: dict, size: int, px_per_cm: float, job: st
     filled, fill = fill_fabric(matched, labels, grown, islands, job, px_per_cm, sleeve_print, fabric=fabric)
     halo = None
     if job == "front" and refs.get("halo") and "skipped" not in fabric:
-        # stage "details": an invented texture field round a decorated front's motif becomes the plain fabric
-        busy, halo = post.busy_halo(filled, panel, fabric["base"]["lab"], px_per_cm)
+        # stage "details": an invented texture field round a decorated front's motif becomes the plain fabric —
+        # measured on the registered ANSWER (the colour match after it flattens the contrast),
+        # filled on the matched image (the same frame)
+        own = post.fabric_colour(reg, panel)
+        busy, halo = (post.busy_halo(reg, panel, own["lab"], px_per_cm) if own
+                      else (np.zeros(panel.shape, bool), {"px": 0}))
         if busy.any():
             filled, _t = post.tile_fill(filled, busy, fabric["patch"], fabric["base"]["lab"])
     metrics.update({"de_before": cm.get("de_before"), "de_after": cm.get("de_after"),
@@ -2974,18 +2978,22 @@ def button_text_colour(text: str) -> tuple[int, int, int] | None:
     return None
 
 
-def button_rgb(item_id: str) -> tuple[list[int] | None, str]:
+def button_rgb(item_id: str, character_name: str = "", csig: str = "") -> tuple[list[int] | None, str]:
     """The painted buttons' colour (stage "details"): the item TEXT's (``button_text_colour``), else the item
-    PICTURE's (``cut_texture_post.picture_buttons``, cached by the file's stat), else None (a shade of the fabric,
-    ``button_colours``). ``(rgb, source)`` with source "text" / "picture" / ""."""
+    PICTURE's (``cut_texture_post.picture_buttons``, cached by the file's stat) — the cut's own upscaled picture
+    (``<stem>.item.png`` of ``csig``, the one the front job saw) when there is one: on Dario's 392 x 512 shirt picture
+    the buttons are ~5 px and found at no analysis size reliably, on its 1024 px upscale at 512, 768 and 1024 —,
+    else None (a shade of the fabric, ``button_colours``). ``(rgb, source)`` with source "text" / "picture" / ""."""
     from app.models.inventory import get_item
     said = button_text_colour(str((get_item(item_id) or {}).get("prompt_fragment") or ""))
     if said is not None:
         return list(said), "text"
-    try:
-        path = _item_path(item_id)
-    except NotReady:
-        return None, ""
+    path = _file(_stem(character_name, item_id, csig), ".item.png") if character_name and csig else None
+    if path is None or not path.is_file():
+        try:
+            path = _item_path(item_id)
+        except NotReady:
+            return None, ""
     st = path.stat()
     key = (str(path), st.st_mtime_ns, st.st_size)
     if key not in _button_pic_cache:
@@ -2997,14 +3005,14 @@ def button_rgb(item_id: str) -> tuple[list[int] | None, str]:
     return (list(found["rgb"]), "picture") if found else (None, "")
 
 
-def placket_key(item_id: str) -> str:
+def placket_key(item_id: str, character_name: str = "", csig: str = "") -> str:
     """The assembly key part of a piece's painted placket ("" without one): a changed style, button count, button
     colour (``button_rgb``) or ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and
     csig stay."""
     style, buttons, _, _ = placket_of(item_id)
     if style == "none":
         return ""
-    colour = button_rgb(item_id)[0] if style == "buttons" else None
+    colour = button_rgb(item_id, character_name, csig)[0] if style == "buttons" else None
     tint = "-" + "".join(f"{int(v):02x}" for v in colour) if colour else ""
     return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}"
 
@@ -3033,7 +3041,8 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     labels = rasterise_islands(islands, size)
     ids = island_ids(islands)
     masks = {n: labels == ids[n] for n in {str(v.get("island")) for v in marks.values()} if n in ids}
-    colour, source = button_rgb(item_id) if style == "buttons" else (None, "")
+    colour, source = (button_rgb(item_id, character_name, current_csig(character_name, item_id) or "")
+                      if style == "buttons" else (None, ""))
     out, info = cut_texture_post.draw_placket(rgb, masks, marks, kind=kind, style=style, buttons=buttons,
                                               px_per_cm=float(islands.get("px_per_cm") or 0.0),
                                               lapel=collar == "lapel", button_rgb=colour)

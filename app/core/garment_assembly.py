@@ -652,7 +652,7 @@ def _texture_key(character_name: str, garment: Dict[str, Any]) -> str:
     lace = f":lace{cut_texture_post.LACE_VERSION}" if _is_sheer(garment) else ""
     # plan group B, C3: a placket is painted onto the atlas at assembly (``_apply_cut_atlas``)
     from app.core import garment_cut_texture
-    return f"cut:{info['csig']}{lace}{garment_cut_texture.placket_key(garment['item_id'])}"
+    return f"cut:{info['csig']}{lace}{garment_cut_texture.placket_key(garment['item_id'], character_name, info['csig'])}"
 
 
 def _apply_cut_atlas(character_name: str, garment: Dict[str, Any], mesh: Any) -> Dict[str, Any]:

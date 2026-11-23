@@ -480,9 +480,12 @@ time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back cent
   3 in one column; Dario's green shirt: 5, copper (140, 68, 19)); without either the old contrast colour. The rim is
   15 L* darker (lighter below L* 30). The tint is part of `placket_key`, so a change is a CPU re-assembly.
 - **No invented dot grid round a motif** (`POST_VERSION` 12, `cut_texture_post.busy_halo`, `HALO`): on the FRONT job
-  of a top whose prompt was "decorated", texture busier than 1.8 x the panel's quiet level (floor 4.0) that is not
+  of a top whose prompt was "decorated", texture of the registered answer busier than 1.8 x the panel's quiet level (floor 2.0;
+  the panel eroded 0.9 cm) that is not
   the decoration and lies at least 0.6 cm from it is filled from the panel's plainest patch. Dario's MiniMax dot grid:
-  0.146 of the panel cleared; his clean embroidered fronts 0 / 0.010, Ylva's moon dress 0.
+  0.139 of the panel cleared, the fainter grid of this stage's live answer 0.041; his clean embroidered front 0.051
+  (its own placket line, wiped anyway), Ylva's moon dress 0.001. A button colour found in the picture is read off the
+  cut's own upscaled item picture (`<stem>.item.png`): on the 392 x 512 original the buttons are ~5 px.
 - `scripts/smoke_cut_texture_details.py`.
 
 ## 1e. Geometry round (stage "geometry", 2026-11-22)
