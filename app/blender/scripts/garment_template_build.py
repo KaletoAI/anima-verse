@@ -445,6 +445,14 @@ UNDERARM_SPREAD_COLS = 10
 #: front's cup edge held as it is: the scoop runs into the cup edge's rise without a corner, never above a column's
 #: own need.
 UNDERARM_SMOOTH_PASSES = 8
+#: Corset v7 (review 2026-11-23 of v6: the cup's top edge dropped 4.5 cm over the two columns beside the side seam, a
+#: box corner in the side view): ``underarm_edge``'s side blend smooths the edge height over the columns between
+#: ``SIDE_BLEND_RAD`` off the front centre on either side (the outer cup, the side seam, the scoop's start), the cup
+#: columns free to come down from their tissue top by up to ``SIDE_CUP_DROP_M`` x a smoothstep of how far they lie past
+#: ``SIDE_BLEND_RAD[0]`` toward the side (0 there, all of it at the side seam), the others never above their need.
+SIDE_BLEND_RAD = (math.radians(55.0), math.radians(115.0))
+SIDE_CUP_DROP_M = 0.025
+SIDE_BLEND_PASSES = 40
 
 
 def skin_flare(btree, centre, ang, z):
@@ -533,6 +541,7 @@ def underarm_edge(spec, btree, centre):
             break
         for k in moved:
             need[k] = scan(k, wide[k])
+    wide, blend = side_blend(ring, top0, wide, need, locked, tissue, bad)
     for (p, c, _a), low in zip(ring, wide):
         drops[p][c] = round(float(drops[p][c]) + low, 5)
         if p == "back" and c == 0:
@@ -540,7 +549,48 @@ def underarm_edge(spec, btree, centre):
         if p == "back" and c == cols - 1:
             drops["front"][0] = drops["back"][cols - 1]
     return {"lowered_cols": int(sum(1 for w in wide if w > 1e-4)), "max_drop_m": round(max(wide), 4),
-            "drops": [round(w, 4) for w in wide]}
+            "drops": [round(w, 4) for w in wide], "side_blend": blend}
+
+
+def _smoothstep(t):
+    t = min(1.0, max(0.0, t))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def side_blend(ring, top0, wide, need, locked, tissue, bad=None):
+    """Corset v7 (review 2026-11-23 of v6: a box corner where the cup's edge met the scoop under the arm): the edge
+    height ``z = top0 - wide`` of the ring's columns between ``SIDE_BLEND_RAD`` off the front centre is smoothed
+    (1, 2, 1) / 4 ``SIDE_BLEND_PASSES`` times, each column clamped to its bounds: a column with chest tissue
+    (``tissue``, front) between its tissue top less ``SIDE_CUP_DROP_M`` x smoothstep((off - SIDE_BLEND_RAD[0]) /
+    (pi/2 - SIDE_BLEND_RAD[0])) and its tissue top; any other locked column (the dip) held; every other column at most
+    at its need (``top0 - need``), as low as the smoothing takes it. Columns outside the window hold. A column that
+    ends on the fold (``bad``) goes down to its need again. Returns ``(wide, {cols, max_cup_drop_m})``."""
+    n = len(ring)
+    z = [top0[k] - wide[k] for k in range(n)]
+    lo, hi, win = [0.0] * n, [0.0] * n, [False] * n
+    for k, (p, c, a) in enumerate(ring):
+        off = _angle_off(a)
+        win[k] = SIDE_BLEND_RAD[0] <= off <= SIDE_BLEND_RAD[1]
+        if p == "front" and c in tissue:
+            w = _smoothstep((off - SIDE_BLEND_RAD[0]) / (math.pi / 2 - SIDE_BLEND_RAD[0]))
+            lo[k], hi[k] = z[k] - SIDE_CUP_DROP_M * w, z[k]
+        elif locked[k]:
+            lo[k] = hi[k] = z[k]
+        else:
+            lo[k], hi[k] = -1e9, top0[k] - need[k]
+    for _ in range(SIDE_BLEND_PASSES):
+        z = [min(hi[k], max(lo[k], (z[(k - 1) % n] + 2 * z[k] + z[(k + 1) % n]) / 4.0)) if win[k] else z[k]
+             for k in range(n)]
+    out = [max(0.0, top0[k] - z[k]) for k in range(n)]
+    refold = 0
+    if bad is not None:
+        for k in range(n):
+            if win[k] and not locked[k] and out[k] < wide[k] - 1e-6 and bad(k, z[k]):
+                out[k] = wide[k]
+                refold += 1
+    cup = [out[k] - wide[k] for k, (p, c, _a) in enumerate(ring) if p == "front" and c in tissue]
+    return out, {"cols": int(sum(1 for k in range(n) if win[k] and abs(out[k] - wide[k]) > 1e-4)),
+                 "max_cup_drop_m": round(max(cup) if cup else 0.0, 4), "refold": refold}
 
 
 #: Corset v5: ``boned_profile`` solves its strip on heights this far apart (metres) and clamps it on the body over
@@ -772,6 +822,11 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
         # corset v6: a strip the smoothing lifted off its own line by more than ``SHELL_BRIDGE_M`` spans the hollow
         # beside the cleavage with its neighbours (out of the band gap, as the bridge itself)
         hollow.extend(int(i) for i in boned_s if rad[i] - own[i] > SHELL_BRIDGE_M)
+        # corset v7: the outer strips' rise over the body runs out round the side seam (``side_strip_blend``)
+        blend = side_strip_blend(rad, body_r, zz0, angles, spec, clear, strips, edge_set,
+                                 float(waist_y) + SHELL_FRONT_WAIST_M)
+        boned.extend(blend["moved"])
+        hollow.extend(blend["hollow"])
     raised = 0
     fixed = set(int(i) for i in edge)
     zz = np.array([float(v[2]) for v in verts])
@@ -922,8 +977,177 @@ def corset_shell(verts, angles, spec, btree, centre, clear, edge=()):
     for i in range(n):
         verts[i] = (centre[0] + rad[i] * math.cos(angles[i]), centre[1] + rad[i] * math.sin(angles[i]), zz[i])
     return {"rows": int(rows), "bridged": int(bridged), "raised": int(raised), "settled": int(settled),
-            "edge_raised": int(edge_raised),
+            "edge_raised": int(edge_raised), "side_blend": int(len(blend["moved"])) if waist_y is not None else 0,
             "hollow": hollow}
+
+
+#: Corset v7 (review 2026-11-23 of v6: a dark band where the lifted cup turns into the panel under it, no seam there
+#: as in the item's picture): ``under_cup_rows`` puts the cup seam where the chest tissue ends under the apex — the
+#: first height down from the column's fullest point (searched ``CUP_SEAM_ABOVE_M`` over to ``CUP_SEAM_BELOW_M``
+#: under the apex) where the body stands no more than ``CUP_SEAM_TISSUE_SHARE`` of the tissue's depth over the rib
+#: cage (its radius ``CUP_UNDER_M`` under the apex), smoothed (1, 2, 1) ``CUP_SEAM_SMOOTH`` times along each cup.
+CUP_SEAM_ABOVE_M = 0.03
+CUP_SEAM_BELOW_M = 0.1
+CUP_SEAM_TISSUE_SHARE = 0.2
+CUP_SEAM_SMOOTH = 3
+
+
+def under_cup_rows(spec, btree, centre):
+    """Corset v7: ``{front column: row}`` of the seam under the cups, for every column with chest tissue
+    (``cup_edge``'s ``tissue_cols``) and the columns between the cups (their heights linear between the cups' inner
+    columns): the row of ``wrap``'s grid (its heights under the lowered top edge,
+    ``spec["top_drop"]["front"]``) nearest the height where the column's tissue ends (``CUP_SEAM_*``), at least row
+    2. {} without a cup edge."""
+    ce = spec.get("cup_edge") or {}
+    tissue = sorted(int(c) for c in ce.get("tissue_cols") or ())
+    drops = (spec.get("top_drop") or {}).get("front")
+    if not tissue or not drops:
+        return {}
+    rows, cols = int(spec["rows"]), int(spec["cols"])
+    row_y = [float(y) for y in spec["row_y"]]
+    hem_z, top_z = row_y[-1], row_y[0]
+    apex = float(ce["apex_y"])
+    zu = {}
+    for c in tissue:
+        ang = math.pi + math.pi * c / (cols - 1)
+        wall = gd.body_radius(btree, centre, ang, apex - CUP_UNDER_M)
+        hs = np.arange(apex + CUP_SEAM_ABOVE_M, apex - CUP_SEAM_BELOW_M - 1e-9, -0.002)
+        rs = np.array([gd.body_radius(btree, centre, ang, float(h)) for h in hs])
+        k = int(np.argmax(rs))
+        depth = float(rs[k]) - wall
+        z = float(hs[-1])
+        for j in range(k, len(hs)):
+            if rs[j] - wall <= CUP_SEAM_TISSUE_SHARE * depth:
+                z = float(hs[j])
+                break
+        zu[c] = z
+    # the columns between the two cups (the cleavage) take the height linearly between the cups' inner columns, so
+    # the seam runs as one line under both cups, as in the item's picture
+    for lo, hi in zip(tissue, tissue[1:]):
+        for c in range(lo + 1, hi):
+            t = (c - lo) / float(hi - lo)
+            zu[c] = zu[lo] * (1 - t) + zu[hi] * t
+    zu = dict(sorted(zu.items()))
+    for _ in range(CUP_SEAM_SMOOTH):
+        zu = {c: (zu.get(c - 1, zu[c]) + 2 * zu[c] + zu.get(c + 1, zu[c])) / 4.0 for c in zu}
+    out = {}
+    for c, z in zu.items():
+        d = float(drops[c])
+        hs = [row_y[r] - d * (row_y[r] - hem_z) / max(1e-6, top_z - hem_z) for r in range(rows)]
+        out[c] = max(2, int(np.argmin([abs(h - z) for h in hs])))
+    return out
+
+
+def corset_diagonals(verts, faces):
+    """Corset v7 (review 2026-11-23 of v6: the crease beside the cups was sharper on the character's left than on the
+    right): Blender splits a quad along its first and third corner (the GLB's triangles, ``mesh.loop_triangles``); where
+    the rows of two neighbouring columns lie at different heights (the edge coming down from the cup into the scoop)
+    the quads are twisted, and on one side of the body that fixed split ran against the twist — a fold of up to 85
+    degrees between its two triangles. Each quad's corners are turned so that it splits along the diagonal whose two
+    triangles meet at the smaller angle (the order round the face kept, so the normals and the vertices stay).
+    Returns ``(faces, turned)``."""
+    P = np.asarray(verts, float)
+
+    def bend(a, b, c, d):
+        n1 = np.cross(P[b] - P[a], P[c] - P[a])
+        n2 = np.cross(P[c] - P[a], P[d] - P[a])
+        l1, l2 = np.linalg.norm(n1), np.linalg.norm(n2)
+        if l1 < 1e-15 or l2 < 1e-15:
+            return math.pi
+        return math.acos(max(-1.0, min(1.0, float(np.dot(n1, n2) / (l1 * l2)))))
+    out, turned = [], 0
+    for f in faces:
+        if len(f) == 4:
+            a, b, c, d = f
+            if bend(b, c, d, a) + 1e-9 < bend(a, b, c, d):
+                out.append((b, c, d, a))
+                turned += 1
+                continue
+        out.append(tuple(f))
+    return out, turned
+
+
+#: Corset v7 (review 2026-11-23 of v6: a vertical crease down each side of the cups, dihedral angles up to 91 degrees
+#: at 83-92 degrees off the front): the outermost boned strip bridged the fold under the side of the chest 10-15 mm
+#: over the skin, the column beside it lay on the skin, so the cloth turned at a corner one column (1 cm) wide.
+#: ``side_strip_blend`` smooths the cloth's rise over the body round each side seam, at every vertex's own height,
+#: from ``SIDE_STRIP_IN`` columns inside the outermost strip to ``SIDE_STRIP_BACK`` columns past the side seam (both
+#: ends held), ``SIDE_STRIP_PASSES`` rounds of (1, 2, 1) / 4 — near-linear round the side. Under the top edge the
+#: change fades in over ``SIDE_STRIP_EDGE_M`` (smoothstep), so the band under the edge stays on the skin.
+SIDE_STRIP_IN = 2
+SIDE_STRIP_BACK = 4
+SIDE_STRIP_PASSES = 30
+SIDE_STRIP_EDGE_M = 0.1
+
+
+def side_strip_blend(rad, body_r, zz0, angles, spec, clear, strips, edge, bot):
+    """Corset v7: in place on ``rad`` (radii along each vertex's ray): round each side seam, the columns between
+    ``SIDE_STRIP_IN`` columns inside the outermost boned strip (``strips``: (panel, column) -> its vertex ids, top
+    down) and ``SIDE_STRIP_BACK`` columns past the seam, in angle order (the seam's two columns, front and back, are
+    one), take the (1, 2, 1) / 4 mean of their rise over the body (``rad - body_r - clear``) with their neighbours'
+    rise at the vertex's own height, ``SIDE_STRIP_PASSES`` times, the two end columns held, never under the body;
+    only over ``bot`` (the strips' waist end), never the top ``edge``, the change weighted by smoothstep(depth under
+    the column's edge / ``SIDE_STRIP_EDGE_M``). Returns ``{moved, hollow}``: the vertices it changed (kept out of the
+    settle, like the strips) and those it raised more than ``SHELL_BRIDGE_M`` (over the fold: out of the band gap)."""
+    rows, cols = int(spec["rows"]), int(spec["cols"])
+    panels = len(rad) // (rows * cols)
+    moved, hollow = [], []
+    if not strips:
+        return {"moved": moved, "hollow": hollow}
+    step = math.pi / (cols - 1)
+    # every column of every panel by its signed angle off the front centre (+ = the character's left)
+    colmap = {}
+    for k in range(panels):
+        for c in range(cols):
+            i0 = k * rows * cols + c
+            a = ((float(angles[i0]) - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi
+            colmap.setdefault(round(a, 5), []).append([k * rows * cols + r * cols + c for r in range(rows)])
+    strip_off = [abs(((float(angles[ids[0]]) - 1.5 * math.pi) + math.pi) % (2 * math.pi) - math.pi)
+                 for ids in strips.values()]
+    start = max(strip_off) - (SIDE_STRIP_IN + 0.5) * step
+    end = math.pi / 2 + (SIDE_STRIP_BACK + 0.5) * step
+    rise = rad - body_r - clear
+    for sign in (1, -1):
+        seq = [colmap[a] for a in sorted(colmap, key=lambda a: abs(a)) if a * sign > 0 and start <= abs(a) <= end]
+        if len(seq) < 3:
+            continue
+        # one profile per position: the first member's vertices (the seam's twin follows it)
+        lead = [grp[0] for grp in seq]
+        z = [np.array([zz0[i] for i in ids]) for ids in lead]
+        o = [np.array([rise[i] for i in ids]) for ids in lead]
+        top = [float(zc[0]) for zc in z]
+
+        def at(j, h):
+            order = np.argsort(z[j])
+            return float(np.interp(h, z[j][order], o[j][order]))
+        orig = [v.copy() for v in o]
+        for _ in range(SIDE_STRIP_PASSES):
+            new = [v.copy() for v in o]
+            for j in range(1, len(seq) - 1):
+                for r in range(1, rows):
+                    h = float(z[j][r])
+                    if h <= bot:
+                        continue
+                    new[j][r] = max(0.0, (at(j - 1, h) + 2 * o[j][r] + at(j + 1, h)) / 4.0)
+            o = new
+        for j in range(1, len(seq) - 1):
+            for r in range(1, rows):
+                h = float(z[j][r])
+                if h <= bot:
+                    continue
+                w = _smoothstep((top[j] - h) / SIDE_STRIP_EDGE_M)
+                val = orig[j][r] + (o[j][r] - orig[j][r]) * w
+                if abs(val - orig[j][r]) <= 1e-5:
+                    continue
+                for ids in seq[j]:
+                    i = ids[r]
+                    if i in edge:
+                        continue
+                    rad[i] = body_r[i] + clear + val
+                    moved.append(int(i))
+                    if val - orig[j][r] > SHELL_BRIDGE_M:
+                        hollow.append(int(i))
+    return {"moved": moved, "hollow": hollow}
 
 
 #: Corset v3 (review 2026-11-22: the side cup edge rolled out as a flap the top-edge row alone did not see): the band
@@ -1109,20 +1333,36 @@ def edge_loop(obj, co, ftree, centre, spec, top_ids, gap_mm):
 
 #: Corset v5 (review 2026-11-23: a dark crease where the lifted cup met the straight panel under it): ``front_folds``
 #: reads the bend of the front between the hem and the top edge, across each inner edge of the single layer.
+#: Corset v7 (review 2026-11-23 of v6: a crease of 91 degrees at the side seam, outside that window): ``side_fold`` the
+#: same out to ``SIDE_FOLD_RAD`` off the front centre, both on the triangles the GLB carries (each quad split along
+#: its first and third corner, as ``mesh.loop_triangles``: the quads' own normals hid the twisted ones).
 FOLD_LIMIT_KEY = "front_fold"
+SIDE_FOLD_KEY = "side_fold"
+SIDE_FOLD_RAD = math.radians(110.0)
+
+
+def fold_key(off):
+    """Corset v7: the fold gate an inner edge ``off`` radians off the front centre belongs to — ``front_fold`` up to
+    ``SHELL_HULL_RAD`` + 0.3, ``side_fold`` from there to ``SIDE_FOLD_RAD``, None beyond (the back)."""
+    if off <= SHELL_HULL_RAD + 0.3:
+        return FOLD_LIMIT_KEY
+    return SIDE_FOLD_KEY if off <= SIDE_FOLD_RAD else None
 
 
 def front_folds(obj, co, centre, spec):
-    """Corset v5: the angle between the normals of the two faces at every inner edge of the front (off the front
-    centre by less than ``SHELL_HULL_RAD`` + 0.3 rad, the cups and the panel under them; the top edge's own faces and
-    the hem row left out), degrees: ``front_fold`` = max / p99 / count over 20, with the worst edges ``[off-front
-    degrees, height, degrees]``. A crease between the cup and the panel shows as a run of large angles."""
+    """Corset v5: the angle between the normals of the two faces at every inner edge (off the front centre by less
+    than ``SHELL_HULL_RAD`` + 0.3 rad, the cups and the panel under them; the top edge's own faces and the hem row
+    left out), degrees: ``front_fold`` = max / p99 / count over 20, with the worst edges ``[off-front degrees, height,
+    degrees]``. A crease between the cup and the panel shows as a run of large angles. Corset v7: on the triangles
+    (``bmesh.ops.triangulate`` FIXED = the GLB's split), and ``side_fold`` the same from there out to
+    ``SIDE_FOLD_RAD`` either side (the side seam and the scoop under the arm)."""
     me = obj.data
     bm = bmesh.new()
     bm.from_mesh(me)
+    bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method="FIXED", ngon_method="BEAUTY")
     bm.normal_update()
     top_z, hem_z = float(spec["row_y"][0]), float(spec["row_y"][-1])
-    vals = []
+    vals = {FOLD_LIMIT_KEY: [], SIDE_FOLD_KEY: []}
     for e in bm.edges:
         if len(e.link_faces) != 2:
             continue
@@ -1131,19 +1371,24 @@ def front_folds(obj, co, centre, spec):
             continue
         m = (co[a.index] + co[b.index]) / 2
         off = _angle_off(math.atan2(m[1] - centre[1], m[0] - centre[0]))
-        if off > SHELL_HULL_RAD + 0.3 or m[2] < hem_z + 0.01 or m[2] > top_z + 0.01:
+        key = fold_key(off)
+        if key is None or m[2] < hem_z + 0.01 or m[2] > top_z + 0.01:
             continue
         f0, f1 = e.link_faces
         d = math.degrees(f0.normal.angle(f1.normal, 0.0))
-        vals.append((d, off, float(m[2])))
+        vals[key].append((d, off, float(m[2])))
     bm.free()
-    if not vals:
-        return {}
-    v = np.array([x[0] for x in vals])
-    worst = sorted(vals, reverse=True)[:6]
-    return {FOLD_LIMIT_KEY: {"n": int(len(v)), "max_deg": round(float(v.max()), 2),
-                             "p99_deg": round(float(np.percentile(v, 99)), 2), "over_20": int((v > 20).sum()),
-                             "worst": [[round(math.degrees(o), 1), round(z, 3), round(d, 1)] for d, o, z in worst]}}
+    out = {}
+    for key, vv in vals.items():
+        if not vv:
+            continue
+        v = np.array([x[0] for x in vv])
+        worst = sorted(vv, reverse=True)[:6]
+        out[key] = {"n": int(len(v)), "max_deg": round(float(v.max()), 2),
+                    "p99_deg": round(float(np.percentile(v, 99)), 2), "over_20": int((v > 20).sum()),
+                    "over_40": int((v > 40).sum()),
+                    "worst": [[round(math.degrees(o), 1), round(z, 3), round(d, 1)] for d, o, z in worst]}
+    return out
 
 
 # --- Ruling A142: the bodice (top, jacket, dress with straps or sleeves) -------------------------------------
@@ -3337,6 +3582,12 @@ def run(a):
             binfo["cup_edge"] = cup_edge(spec, btree, centre)
             # corset v5: the side and back edge runs under the fold to the arm (``underarm_edge``)
             binfo["underarm_edge"] = underarm_edge(spec, btree, centre)
+            if wrap_marks is not None:
+                # corset v7: the seam under each cup, the front's seams from there down (``under_cup_rows``)
+                cup_rows = under_cup_rows(spec, btree, centre)
+                wrap_marks.update(cdarts.seam_lines(spec["rows"], spec["cols"], cup_rows))
+                wrap_marks.update(cdarts.cup_seams(spec["cols"], cup_rows))
+                binfo["cup_seam"] = {"rows": {int(c): int(r) for c, r in sorted(cup_rows.items())}}
         row_c = leg_centres(bco[np.abs(bco[:, 0] - centre[0]) < half], centre, spec["row_y"],
                             lambda cen, r: wrap_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
         binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
@@ -3345,6 +3596,8 @@ def run(a):
             # corset v2: a strapless top lies on the body as a shell (``corset_shell``)
             binfo["shell"] = corset_shell(verts, angles, spec, btree, centre, float(prm["shell_clear_m"]), top_ids)
             shell_hollow = binfo["shell"].pop("hollow")
+            # corset v7: each quad split along its flatter diagonal (``corset_diagonals``)
+            faces, binfo["shell"]["diagonals_turned"] = corset_diagonals(verts, faces)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         me.uv_layers.new(name="UVMap")         # filled by ``pattern_uv_of_wrap`` below

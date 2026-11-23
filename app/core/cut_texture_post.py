@@ -1667,7 +1667,12 @@ def _wipe_line(out: np.ndarray, src: np.ndarray, sel: np.ndarray, p: np.ndarray,
 #: so it is darker on every fabric of L* >= SEAM_DARK_MIN_L (``_shade`` turns at L* 50: on a red of L* 45 the first
 #: dry run drew light lines); only a near-black fabric gets lighter lines. Part of the assembly key
 #: (``garment_cut_texture.placket_key``).
-SEAM_VERSION = 1
+#: 2 (corset v7, review 2026-11-23 of v6): a seam that crosses the grid's rows (``seam_cup_*``, under the cups) runs
+#: through the vertices of the row nearest its line in each column, a stair of one row at each change; its points are
+#: smoothed (``SEAM_CROSS_SMOOTH`` rounds of (1, 2, 1) / 4, the two ends held) before it is drawn.
+SEAM_VERSION = 2
+SEAM_CROSS_PREFIX = "seam_cup_"
+SEAM_CROSS_SMOOTH = 6
 SEAM_GROOVE_CM = 0.12
 SEAM_DL = 16.0
 SEAM_HALF_CM = 0.35
@@ -1679,6 +1684,16 @@ def _seam_shade(base_lab, dl: float) -> np.ndarray:
     lab = np.asarray(base_lab, np.float64).copy()
     lab[0] = float(np.clip(lab[0] - dl, 0.0, 100.0))
     return np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
+
+
+def _smooth_points(px, rounds: int) -> np.ndarray:
+    """``px`` (n x 2) after ``rounds`` of (1, 2, 1) / 4 on every inner point, the two ends held (SEAM_VERSION 2)."""
+    p = np.asarray(px, np.float64).reshape(-1, 2).copy()
+    for _ in range(max(0, int(rounds))):
+        if len(p) < 3:
+            break
+        p[1:-1] = (p[:-2] + 2.0 * p[1:-1] + p[2:]) / 4.0
+    return p
 
 
 def draw_seams(atlas: np.ndarray, masks: dict, marks: dict, *, px_per_cm: float) -> tuple[np.ndarray, dict]:
@@ -1694,7 +1709,10 @@ def draw_seams(atlas: np.ndarray, masks: dict, marks: dict, *, px_per_cm: float)
                 or line.get("island") not in masks:
             continue
         sel = np.asarray(masks[line["island"]], bool)
-        p, s = _polyline(line["px"])
+        px = line["px"]
+        if name.startswith(SEAM_CROSS_PREFIX):
+            px = _smooth_points(px, SEAM_CROSS_SMOOTH)
+        p, s = _polyline(px)
         if s[-1] <= 1.0:
             continue
         near = np.zeros_like(sel)

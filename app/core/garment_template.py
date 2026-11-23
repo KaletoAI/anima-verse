@@ -117,7 +117,11 @@ NECK_VERSION = 1
 #: 6 (review 2026-11-23 of v5): the section over the cleavage is closed by a rolling disc (round cups, no box), the
 #: front strips end at one waist height and are drawn onto the body (no centre pinch, no ridge under the cup), the
 #: lowering under the arms is mirrored and spread into one scoop (no V beside the side seam, even left and right).
-CORSET_VERSION = 6
+#: 7 (review 2026-11-23 of v6): the edge comes down from the outer cup into the scoop as one smooth curve
+#: (``underarm_edge``'s ``side_blend``), the outer strips' rise runs out round the side seam (``side_strip_blend``),
+#: each quad splits along its flatter diagonal (``corset_diagonals``), the fold gate reads the triangles out to 110
+#: degrees round the side (``side_fold``), and a seam is painted under each cup (``corset_darts.cup_seams``).
+CORSET_VERSION = 7
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
@@ -221,7 +225,9 @@ CORSET_MAX_MM = {"edge_outer": 3.0, "edge_spill": 1.0, "edge_loop_gap": 2.0, "ed
 #: (``garment_template_build.front_folds``), degrees. Set from the measured shells (Rosi, same body): the straight hull
 #: of corset v4 (65bf47a3a) bent up to 98 degrees at its corners (p99 56), the first v5 shell with a keel down the
 #: centre 77, the stiff strip of v5 bends 47 at most (the waist's own curve under the 1.3 cm grid); the limit sits
-#: between the keel and the strip.
+#: between the keel and the strip. Corset v7 (review 2026-11-23 of v6: a vertical crease at the side seam, 91 degrees,
+#: outside the front window): the same limit on ``side_fold`` (the side out to 110 degrees off the front), both read
+#: on the triangles the GLB carries.
 CORSET_FOLD_DEG = 55.0
 #: Corset v3 (review 2026-11-22: a strip of bare skin between the corset's hem and the skirt's waistband): a strapless
 #: top worn with a template skirt or trousers (``tuck_lines``) reaches this far below the lowest of their waist lines
@@ -2787,10 +2793,11 @@ def judge_build(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         gap = ((data.get("fit_gap") or {}).get(part) or {}).get("max_mm")
         if gap is not None:
             row(f"gap_{part}_max_mm", gap, limit, gap <= limit)
-    # corset v5: the front's sharpest bend between its hem and top edge (degrees)
-    fold = ((data.get("fit_gap") or {}).get("front_fold") or {}).get("max_deg")
-    if fold is not None:
-        row("front_fold_max_deg", fold, CORSET_FOLD_DEG, fold <= CORSET_FOLD_DEG)
+    # corset v5: the front's sharpest bend between its hem and top edge (degrees); v7: the side's too
+    for key in ("front_fold", "side_fold"):
+        fold = ((data.get("fit_gap") or {}).get(key) or {}).get("max_deg")
+        if fold is not None:
+            row(f"{key}_max_deg", fold, CORSET_FOLD_DEG, fold <= CORSET_FOLD_DEG)
     # corset v3: a hem moved under the worn skirt's / trousers' waistband (``STRAPLESS_TUCK_M``) reaches under it
     tucked = (data.get("outline") or {}).get("hem_tucked")
     if tucked:

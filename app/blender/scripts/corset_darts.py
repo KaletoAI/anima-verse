@@ -49,16 +49,39 @@ SEAM_FRONT_OUTER_COLS = 16
 SEAM_BACK_COLS = 10
 
 
-def seam_lines(rows: int, cols: int) -> dict:
+def seam_lines(rows: int, cols: int, cup_rows: dict = None) -> dict:
     """``{name: (part, construction ids top to bottom)}`` of the painted seams (front = part 1, back = part 2, as the
-    placket line ``centre_back``): ``seam_front_<k>`` / ``seam_back_<k>``, k left to right in column order."""
+    placket line ``centre_back``): ``seam_front_<k>`` / ``seam_back_<k>``, k left to right in column order.
+    Corset v7 (review 2026-11-23: the item's picture shows a seam under each cup, the front's seams start there):
+    ``cup_rows`` = {front column: row} of the line under the cups (``cup_seams``) — a front seam in such a column
+    starts at that row instead of the top edge."""
     c0 = (cols - 1) // 2
+    cup_rows = cup_rows or {}
     out = {}
     for part, base, offs in ((1, 0, (DART_COLS, SEAM_FRONT_OUTER_COLS)), (2, rows * cols, (SEAM_BACK_COLS,))):
         cs = sorted({c0 + sg * int(round(o * (cols - 1) / 40.0)) for o in offs for sg in (-1, 1)})
         for k, c in enumerate(cs):
-            out[f"seam_{'front' if part == 1 else 'back'}_{k}"] = (part, [base + r * cols + c for r in range(rows)])
+            r0 = int(cup_rows.get(c, 0)) if part == 1 else 0
+            out[f"seam_{'front' if part == 1 else 'back'}_{k}"] = (part, [base + r * cols + c
+                                                                           for r in range(r0, rows)])
     return out
+
+
+def cup_seams(cols: int, cup_rows: dict) -> dict:
+    """Corset v7: the seam under each cup — ``{"seam_cup_<k>": (1, construction ids)}`` through the front vertex of
+    row ``cup_rows[c]`` in each column ``c``, one line per run of neighbouring columns (k left to right in column
+    order; a run of one column draws nothing)."""
+    cs = sorted(int(c) for c in cup_rows)
+    runs, run = [], []
+    for c in cs:
+        if run and c != run[-1] + 1:
+            runs.append(run)
+            run = []
+        run.append(c)
+    if run:
+        runs.append(run)
+    return {f"seam_cup_{k}": (1, [int(cup_rows[c]) * cols + c for c in r]) for k, r in enumerate(x for x in runs
+                                                                                              if len(x) > 1)}
 
 
 def back_line(rows: int, cols: int) -> list:

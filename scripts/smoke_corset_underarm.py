@@ -24,6 +24,8 @@ are gated (``judge_build``). The helpers are taken out of the Blender script by 
            0.036, back 3 0.019125, back 4 0.00675.
     (two passes: ``UNDERARM_SMOOTH_PASSES`` is set to 2 for this derivation; the shipped 10 columns / 8 passes are
     checked for the shape: back 2 at its need, symmetric, falling away from it, wider than the derivation.)
+    (corset v7's side blend — ``side_blend``, its own derivation in ``smoke_corset_side.py`` — is switched off here:
+    ``SIDE_BLEND_RAD`` set to an empty window.)
     No smoothed column lies on the fold (the fold is at back 2 only) -> done. top_drop back
     [0.00675, 0.019125, 0.036, 0.019125, 0.00675]; the side seams: front 4 = back 0, front 0 = back 4 (0.00675);
     front 1..3 0. lowered_cols 5, max_drop_m 0.036. Mirror: the same fold at back 1 only (angle pi/4, mirror back 3)
@@ -38,7 +40,7 @@ are gated (``judge_build``). The helpers are taken out of the Blender script by 
     r0 = a = 0.01 and r2 = 0 fixed, lo 0, r1's spacing 0.01: E = 1e6 (a - 2 r1)^2 + 0.01 pull r1^2;
     dE/dr1 = -4e6 (a - 2 r1) + 0.02 pull r1 = 0 -> r1 = 4e6 a / (8e6 + 0.02 pull): pull 0 -> a/2 = 0.005,
     pull 4e8 -> a/4 = 0.0025 (the same with the weights given per point, [0, 4e8, 0]).
-[4] ``judge_build`` (garment_template): CORSET_VERSION 6; CORSET_FOLD_DEG 55: front_fold max 56 fails (a gate),
+[4] ``judge_build`` (garment_template): CORSET_VERSION 7; CORSET_FOLD_DEG 55: front_fold max 56 fails (a gate),
     47 ok; edge_loop_gap max 2.3 > 2 fails, edge_loop_flare max 1.12 <= 3 ok (gates on max_mm).
 [5] Fails on the old code: at 65bf47a3a ``CORSET_MAX_MM`` had no edge_loop_gap / edge_loop_flare and the build script
     no ``underarm_edge`` — the flaps (a 5-17 mm flare under the arms) passed every gate there. At bbf0617eb (v5, the
@@ -77,9 +79,9 @@ def check(label, ok, detail=""):
 
 
 BUILD = ROOT / "app" / "blender" / "scripts" / "garment_template_build.py"
-WANT = {"skin_flare", "skin_slope", "underarm_edge", "bone_bend"}
+WANT = {"skin_flare", "skin_slope", "underarm_edge", "bone_bend", "side_blend", "_smoothstep", "_angle_off"}
 CONSTS = {"UNDERARM_FLARE_M", "UNDERARM_BELOW_M", "UNDERARM_STEP_M", "UNDERARM_DROP_MAX_M", "UNDERARM_SLOPE_MAX",
-          "UNDERARM_SMOOTH_PASSES", "UNDERARM_SPREAD_COLS"}
+          "UNDERARM_SMOOTH_PASSES", "UNDERARM_SPREAD_COLS", "SIDE_BLEND_RAD", "SIDE_CUP_DROP_M", "SIDE_BLEND_PASSES"}
 
 
 def load(src):
@@ -115,6 +117,8 @@ def spec5():
 
 
 spec = spec5()
+SIDE = ns["SIDE_BLEND_RAD"]
+ns["SIDE_BLEND_RAD"] = (math.pi, math.pi)  # v7's side blend left out of the v6 derivation (smoke_corset_side.py)
 ns["UNDERARM_SMOOTH_PASSES"] = 2          # the hand derivation above: two passes, a spread of 2 columns
 ns["UNDERARM_SPREAD_COLS"] = 2
 res = ns["underarm_edge"](spec, None, None)
@@ -161,7 +165,7 @@ r = ns["bone_bend"](z3, [0.01, 0, 0], [0, 2], [0.0, 4e8, 0.0])
 check("[3] v6 pull per point [0, 4e8, 0]: r1 0.0025", abs(r[1] - 0.0025) < 1e-9, r)
 
 # [4]
-check("[4] CORSET_VERSION 6, CORSET_FOLD_DEG 55", (gt.CORSET_VERSION, gt.CORSET_FOLD_DEG) == (6, 55.0))
+check("[4] CORSET_VERSION 7, CORSET_FOLD_DEG 55", (gt.CORSET_VERSION, gt.CORSET_FOLD_DEG) == (7, 55.0))
 rows = {x["check"]: x for x in gt.judge_build({"fit_gap": {"front_fold": {"max_deg": 56.0}}})}
 check("[4] fold 56 > 55 fails (gate)", not rows["front_fold_max_deg"]["ok"] and rows["front_fold_max_deg"]["gate"])
 rows = {x["check"]: x for x in gt.judge_build({"fit_gap": {"front_fold": {"max_deg": 47.0}}})}

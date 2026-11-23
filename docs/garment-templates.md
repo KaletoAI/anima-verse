@@ -527,6 +527,34 @@ hem, z 1.018; v5 47° under the cups, the centre pinch 69°). The underarm scoop
 deep, 0.9 cm at the back centre). The cleavage bridge (5 vertices, p95 14.5 mm, v5 30.5) stays out of every edge gate
 on purpose: the cloth spans the hollow there. The dark crescent under a cup in a lit render is the cup's cast shadow
 (gone with shadows off). Sitting still stretches the hem to 1.51x (see v5). Smoke: `smoke_corset_underarm.py`.
+**Corset v7 (review 2026-11-23 of v6: a vertical crease where each cup met the side panel, dihedral angles up to 91°
+at 83-92° off the front, outside the fold gate; a dark band under the cups with no seam there).** `CORSET_VERSION` 7,
+in `garment_template_build.py`'s corset functions, `corset_darts.py` and `cut_texture_post.py` (`SEAM_VERSION` 2):
+- *The edge blends over the side seam* (`side_blend`, called by `underarm_edge`): between `SIDE_BLEND_RAD` 55°..115° off
+  the front the edge height is smoothed (1, 2, 1) `SIDE_BLEND_PASSES` 40 times; a column with chest tissue may come
+  down up to `SIDE_CUP_DROP_M` 2.5 cm x smoothstep((off - 55°) / 35°), other locked columns hold, free columns stay at
+  or under their need. A column the smoothing would put on the fold keeps its lowering. v6 dropped 4.5 cm over the
+  two columns beside the seam; v7 descends 1.264 m at 59° to 1.186 m at 95°, about 7 mm per column.
+- *The strips' rise blends over the side* (`side_strip_blend`): from `SIDE_STRIP_IN` 2 columns inside the outermost
+  cup strip to `SIDE_STRIP_BACK` 4 columns past the seam, each vertex's rise over the body is smoothed against its
+  neighbours' rise at its own height (`SIDE_STRIP_PASSES` 30, the end columns held), weighted by smoothstep(depth
+  under the edge / `SIDE_STRIP_EDGE_M` 10 cm) so the edge band stays on the skin. v6's outer strip bridged 14-17 mm
+  while the next column hugged the skin.
+- *The flatter quad diagonal* (`corset_diagonals`): each quad is turned to (b, c, d, a) when that split bends less
+  than Blender's fixed corner 0-2 split (on the character's left the fixed split ran against the twist).
+- *A side fold gate*: `front_folds` reads the triangulated shell and reports `front_fold` (up to `SHELL_HULL_RAD` +
+  0.3 rad) and `side_fold` (from there to `SIDE_FOLD_RAD` 110°, `fold_key`), both gated at `CORSET_FOLD_DEG` 55°. The
+  back centre (the groove over the spine, about 50°) stays outside both.
+- *The seam under the cups* (`under_cup_rows`, `corset_darts.cup_seams`): the grid row nearest the height where each
+  tissue column's chest ends (rise over the rib cage <= `CUP_SEAM_TISSUE_SHARE` 0.2 of the cup's depth, searched
+  `CUP_SEAM_ABOVE_M` 3 cm above to `CUP_SEAM_BELOW_M` 10 cm under the fullest point, smoothed `CUP_SEAM_SMOOTH` 3
+  times, the cleavage columns linear between the cups) carries a painted seam `seam_cup_<k>`, and the front seams
+  start there. `draw_seams` smooths a `seam_cup_*` line (`SEAM_CROSS_SMOOTH` 6 rounds of (1, 2, 1) / 4, ends held)
+  so the row changes do not draw stairs.
+
+Rosi's Red Corset Top, dry run against v6: side fold max 48° (v6 on the served model 91°, 35 edges over 40°, now 2),
+front fold 34°, edge loop gap 1.7 mm, flare 1.99 mm, under edge p95 4.58, waist p95 2.12. The band under the cups is
+the cup's cast shadow; with the viewer's soft light its edge has no stairs. Smoke: `smoke_corset_side.py`.
 `scripts/e2e_cut_texture.py --attempts N --max-jobs N` sets `CUT_ATTEMPTS` and refuses a live run whose worst case
 (the plan's `max`, every second attempt) exceeds the cap; its `e2e.json` carries the template record's gate blocks.
 
