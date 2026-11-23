@@ -21,7 +21,12 @@ Hand derivation:
   [5] align_status: relation k1 {auto_blocked, overlap, depth_mm [1, 2]} → summary auto_blocked; k2 auto_aligned beside
       it → still auto_blocked (the worst, ALIGN_STATE_ORDER); done true → done with a done_at; a later relations write
       (k1 → auto_improved) keeps done and done_at and the summary becomes auto_improved (k2 aligned is better); k1 null
-      → only k2, summary auto_aligned; a reason not of its state, an unknown state, depth_mm of one number → 400;
+      → only k2, summary auto_aligned; (owner rules of 2026-11-23 evening) k3 {auto_unchanged, notes [little_depth,
+      no_change], stroke_mm 12.04} → summary auto_unchanged (worse than aligned), stored notes and stroke_mm 12.0; k4
+      {auto_blocked, root_overlap, with "B", notes [shallower], shallower_mm 7, root_pulled true} → summary auto_blocked
+      with "with" B; k5 {auto_blocked, root_support} stored; all three removed again → auto_aligned; refused: the gone reasons root_inside / nothing_to_gain, "with"
+      on an overlap, a lower-case "b", an unknown note, a note twice, root_pulled "yes";
+      a reason not of its state, an unknown state, depth_mm of one number → 400;
       after reloading the caches the listing still shows it; a solo clip has none (null).
 """
 import asyncio
@@ -141,7 +146,27 @@ def main():
         assert st["done"] is True and st["done_at"] == done_at and st["summary"] == "auto_improved", st
         st = patch("pair__a.fbx", {"align_status": {"relations": {"a>b:mouth": None}}})[0]["align_status"]
         assert set(st["relations"]) == {"b>a:hand"} and st["summary"] == "auto_aligned", st
-        for value in ({"relations": {"k": {"state": "auto_blocked", "reason": "no_place"}}},
+        st = patch("pair__a.fbx", {"align_status": {"relations": {"k3": {
+            "state": "auto_unchanged", "notes": ["little_depth", "no_change"], "stroke_mm": 12.04}}}})[0]["align_status"]
+        assert st["summary"] == "auto_unchanged", st
+        assert st["relations"]["k3"]["notes"] == ["little_depth", "no_change"] and st["relations"]["k3"]["stroke_mm"] == 12.0, st
+        st = patch("pair__a.fbx", {"align_status": {"relations": {"k4": {
+            "state": "auto_blocked", "reason": "root_overlap", "with": "B", "notes": ["shallower"], "shallower_mm": 7,
+            "root_pulled": True}}}})[0]["align_status"]
+        k4 = st["relations"]["k4"]
+        assert st["summary"] == "auto_blocked" and k4["with"] == "B" and k4["root_pulled"] is True and k4["shallower_mm"] == 7.0, st
+        st = patch("pair__a.fbx", {"align_status": {"relations": {"k5": {"state": "auto_blocked", "reason": "root_support"}}}})[0]["align_status"]
+        assert st["relations"]["k5"]["reason"] == "root_support", st
+        st = patch("pair__a.fbx", {"align_status": {"relations": {"k3": None, "k4": None, "k5": None}}})[0]["align_status"]
+        assert st["summary"] == "auto_aligned", st
+        for value in ({"relations": {"k": {"state": "auto_blocked", "reason": "root_inside"}}},
+                      {"relations": {"k": {"state": "auto_blocked", "reason": "nothing_to_gain"}}},
+                      {"relations": {"k": {"state": "auto_blocked", "reason": "overlap", "with": "B"}}},
+                      {"relations": {"k": {"state": "auto_blocked", "reason": "root_overlap", "with": "b"}}},
+                      {"relations": {"k": {"state": "auto_improved", "notes": ["deep"]}}},
+                      {"relations": {"k": {"state": "auto_improved", "notes": ["shallower", "shallower"]}}},
+                      {"relations": {"k": {"state": "auto_improved", "root_pulled": "yes"}}},
+                      {"relations": {"k": {"state": "auto_blocked", "reason": "no_place"}}},
                       {"relations": {"k": {"state": "great"}}},
                       {"relations": {"k": {"state": "auto_improved", "depth_mm": 3}}}, {"done": "yes"}, {"other": 1}):
             refused(patch, "pair__a.fbx", {"align_status": value})

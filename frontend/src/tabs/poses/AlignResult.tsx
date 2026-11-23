@@ -6,8 +6,9 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { hasInside, targetWordOf } from './contactWords'
 import { LampDot } from './StatusLamp'
-import { alignGain, ALIGN_GAIN_MM, type AlignBound, type KeyReason } from '@anima/scene-render'
-import type { AutoAlignResult, KeyAlign, RelationAlign } from './PlacePreview'
+import { type AlignBound, type KeyReason } from '@anima/scene-render'
+import { noteText } from './alignStatus'
+import type { AutoAlignResult, KeyAlign } from './PlacePreview'
 
 type Ok = Extract<AutoAlignResult, { ok: true }>
 const CELL = { textAlign: 'right' as const, padding: '0 4px', whiteSpace: 'nowrap' as const }
@@ -98,11 +99,6 @@ function reasonWord(t: (s: string) => string, r: KeyReason): string {
 function gapWord(g: [number, number] | null): string {
   return g ? (Math.abs(g[0]) > Math.abs(g[1]) ? g[0] : g[1]).toFixed(0) : '–'
 }
-/** THE MINIMUM GAIN of one relation (mm): the larger of the axis error's and the depth error's drop. */
-function gainOf(x: RelationAlign): number {
-  const g = alignGain(x.keys.before, x.keys.after, hasInside(x.target))
-  return Math.max(g.axisMm, g.depthMm)
-}
 function boundWord(t: (s: string) => string, b: AlignBound, rangeCm: number, turnDeg: number): string {
   switch (b) {
     case 'side': return t('sideways (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
@@ -130,7 +126,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
         <LampDot lamp={r.lamp} title={r.lamp === 'green'
           ? t('At the deepest and the shallowest frame the shaft runs within 3 mm of the axis through the opening; at the deepest the root is outside and the tip inside.')
           : r.lamp === 'yellow' ? t('At both key frames within 10 mm of the axis, the root outside and the tip inside at the deepest.')
-            : t('More than 10 mm off the axis, the root or the tip on the wrong side of the opening, the deepest frame shallower than before, or a cap or slider range was hit.')} />
+            : t('More than 10 mm off the axis, the root or the tip on the wrong side of the opening, or a cap or slider range was hit.')} />
         <LampDot lamp={r.clearLamp} title={(r.clearLamp === 'green'
           ? t('Nothing else interpenetrates: only the attached part enters the other body, through the channel (at most 5 mm elsewhere).')
           : t('The bodies interpenetrate besides the channel by {mm} mm, deepest at {pair} (green at most 5 mm, yellow at most 20 mm).')
@@ -143,23 +139,44 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
             {r.relations[0]?.alternative ? ` — ${t('the automatic alternative: the part’s role was blocked')}` : ''}</span>
         ) : null}
       </div>
-      {r.relations.filter((x) => !x.applied).map((x, i) => (
+      {r.relations.filter((x) => !x.applied && x.discard).map((x, i) => (
         <div key={i} data-testid="align-discarded" style={{ color: 'var(--danger, #f85149)' }}>
           {(x.discard === 'overlap' && x.collide
             ? t('Not applied — {role} would go into place {who}: {pair} {mm} mm deep (the clip starts at {start} mm, allowed {allow} mm). The dials stay as they were.')
               .replace('{who}', x.collide.with).replace('{pair}', x.collide.worst).replace('{mm}', x.collide.afterMm.toFixed(0))
               .replace('{start}', x.collide.startMm.toFixed(0)).replace('{allow}', x.collide.allowMm.toFixed(0))
-            : x.discard === 'root'
-              ? t('Not applied — the visible root of the part would end {mm} mm inside the opening on a rendered frame (it starts at {start} mm). The dials stay as they were.')
-                .replace('{mm}', (x.rendered?.after.visMm ?? 0).toFixed(0)).replace('{start}', (x.rendered?.before.visMm ?? 0).toFixed(0))
-              : x.discard === 'support'
-                ? t('Not applied — {role} would float above or sink into its seat or bed: {mm} mm off its surface (it starts at {start} mm; allowed −5 to +10 mm). The dials stay as they were.')
-                  .replace('{mm}', gapWord(x.support.afterMm)).replace('{start}', gapWord(x.support.beforeMm))
-                : x.discard === 'nothing'
-                  ? t('Not applied — nothing to gain: {role} would get at most {gain} mm closer to the axis or the depth (at least {min} mm needed). The dials stay as they were.')
-                    .replace('{gain}', Math.max(0, gainOf(x)).toFixed(1)).replace('{min}', String(ALIGN_GAIN_MM))
-                  : t('Not applied — {role} would end further off its depth and further off the axis than it starts. The dials stay as they were.'))
+            : x.discard === 'support'
+              ? t('Not applied — {role} would float above or sink into its seat or bed: {mm} mm off its surface (it starts at {start} mm; allowed −5 to +10 mm). The dials stay as they were.')
+                .replace('{mm}', gapWord(x.support.afterMm)).replace('{start}', gapWord(x.support.beforeMm))
+              : t('Not applied — {role} would end further off the axis than it starts. The dials stay as they were.'))
             .replace('{role}', x.moved.toUpperCase())}
+        </div>
+      ))}
+      {r.relations.filter((x) => x.unchanged).map((x, i) => (
+        <div key={i} data-testid="align-unchanged" style={{ color: 'var(--success, #3fb950)' }}>
+          {t('Unchanged — {role} already fits: nothing to gain (less than 5 mm). The dials stay as they were.').replace('{role}', x.moved.toUpperCase())}
+        </div>
+      ))}
+      {r.relations.filter((x) => x.rootPull?.stuck).map((x, i) => (
+        <div key={i} data-testid="align-root-stuck" style={{ color: 'var(--danger, #f85149)' }}>
+          {(x.rootPull!.stuck!.why === 'overlap'
+            ? t('The visible root stays {mm} mm inside the opening: pulling {role} back further would go into place {who}.')
+              .replace('{who}', x.rootPull!.stuck!.with || '–')
+            : x.rootPull!.stuck!.why === 'support'
+              ? t('The visible root stays {mm} mm inside the opening: pulling {role} back further would take it off its surface.')
+              : t('The visible root stays {mm} mm inside the opening: pulling {role} back further is beyond its range cap.'))
+            .replace('{mm}', (x.rendered?.after.visMm ?? 0).toFixed(0)).replace('{role}', x.moved.toUpperCase())}
+        </div>
+      ))}
+      {r.relations.filter((x) => x.rootPull && x.rootPull.mm >= 0.5).map((x, i) => (
+        <div key={i} data-testid="align-root-pulled">
+          {t('Pulled {role} back {mm} mm along the axis so that the visible root is outside on every rendered frame.')
+            .replace('{role}', x.moved.toUpperCase()).replace('{mm}', x.rootPull!.mm.toFixed(0))}
+        </div>
+      ))}
+      {r.relations.filter((x) => x.notes.some((n) => n.code !== 'no_change')).map((x, i) => (
+        <div key={i} data-testid="align-notes" data-notes={x.notes.map((n) => n.code).join(' ')} style={{ color: 'var(--text-muted, #8b949e)' }}>
+          {t('Note')}: {x.notes.filter((n) => n.code !== 'no_change').map((n) => noteText(t, n)).join('; ')}
         </div>
       ))}
       {r.relations.filter((x) => x.rendered).map((x, i) => (

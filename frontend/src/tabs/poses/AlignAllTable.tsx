@@ -3,9 +3,11 @@
  *
  * Stage 1 measures every pair and group clip listed, relation by relation (Auto-align with `each`: the relations of a
  * clip one after the other, each on the previous one's result, the mover 'auto' unless the row names one), and sorts
- * each contact relation into a bucket (scene-render `alignBucket`): "would improve", "blocked" (discarded for an
- * overlap or for ending worse than its start, held by a cap or the posture, or nothing to gain) and "geometry mismatch"
- * (the shaft more than `ALIGN_MISMATCH_DEG` off the axis at the deepest frame); a clip that gave no relation to measure
+ * each contact relation into a bucket (scene-render `alignBucket`): "would improve", "unchanged" (already fits: nothing
+ * to gain, not a block), "blocked" (only a real block — an overlap, the support, a larger axis error, a cap hit with a
+ * condition unmet, or a visible root that cannot be pulled out of the opening, naming the range cap or the person) and
+ * "geometry mismatch" (the shaft more than `ALIGN_MISMATCH_DEG` off the axis at the deepest frame); a clip that gave no
+ * relation to measure
  * (no prop has a place for it, no persons were filled in, or the persons carry no part a channel accepts) is "not
  * measured", with the reason. Nothing is written in stage 1. Stage 2 applies and saves only the rows the user
  * leaves ticked (only "would improve" rows can be ticked); a blocked row may get another mover and be measured again.
@@ -14,11 +16,14 @@
  *
  * Owner decisions 2026-11-23: the moved role may TURN (tilt, roll, yaw within the clip's rotation range — the "turn"
  * column), must stay ON its surface (THE SUPPORT, ABSOLUTE — the "support" column, the moved role's gap over its
- * surface before → after), and a result counts only with THE MINIMUM GAIN (5 mm less axis error or depth error; else
- * "nothing to gain"). Stage 2 also records the status of every row of the table in its clip's sidecar
+ * surface before → after), and a result counts only with THE MINIMUM GAIN (5 mm less axis error, depth error or support
+ * excess, or a visible root pulled out of the opening; else "unchanged"). Owner rules of 2026-11-23 evening: a visible
+ * root inside is pulled back, never a discard; little depth is a NOTE (the "notes" column), never a block. Stage 2 also
+ * records the status of every row of the table in its clip's sidecar
  * (`alignStatus.ts`) — a saved row as improved / aligned, the others as blocked / mismatch / not measurable.
  */
-import { ALIGN_GAIN_MM, ALIGN_MISMATCH_DEG, type AlignBucket } from '@anima/scene-render'
+import { ALIGN_MISMATCH_DEG, type AlignBucket } from '@anima/scene-render'
+import { noteText } from './alignStatus'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { AlignMoverChoice, RelationAlign } from './PlacePreview'
 
@@ -39,7 +44,7 @@ export interface AlignAllRow {
   choice: AlignMoverChoice; tick: boolean; outcome: string
 }
 
-const BUCKETS: readonly (AlignBucket | 'unmeasured')[] = ['improve', 'blocked', 'mismatch', 'unmeasured']
+const BUCKETS: readonly (AlignBucket | 'unmeasured')[] = ['improve', 'unchanged', 'blocked', 'mismatch', 'unmeasured']
 
 export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpen, onApply }: {
   rows: readonly AlignAllRow[]; busy: boolean
@@ -50,7 +55,7 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
   onApply: () => void
 }) {
   const { t } = useI18n()
-  const bucketWord = (b: AlignAllRow['bucket']) => ({ improve: t('would improve'), blocked: t('blocked'),
+  const bucketWord = (b: AlignAllRow['bucket']) => ({ improve: t('would improve'), unchanged: t('unchanged'), blocked: t('blocked'),
     mismatch: t('geometry mismatch'), unmeasured: t('not measured') })[b]
   const why = (r: AlignAllRow): string => {
     const x = r.rel
@@ -62,14 +67,15 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
     if (x.discard === 'overlap' && x.collide) return t('would go into {who}: {pair} {mm} mm (allowed {allow} mm)')
       .replace('{who}', x.collide.with).replace('{pair}', x.collide.worst).replace('{mm}', x.collide.afterMm.toFixed(0))
       .replace('{allow}', x.collide.allowMm.toFixed(0))
-    if (x.discard === 'worse') return t('ends deeper off its depth and further off the axis than it starts')
+    if (x.discard === 'worse') return t('ends further off the axis than it starts')
     if (x.discard === 'support') return t('the moved role would float above or sink into its surface')
-    if (x.discard === 'root') return t('the visible root would end inside the opening')
     const parts: string[] = []
+    const st = x.rootPull?.stuck
+    if (st) parts.push(st.why === 'overlap' ? t('root inside: pulling back would go into place {who}').replace('{who}', st.with || '–')
+      : st.why === 'support' ? t('root inside: pulling back would take it off its surface') : t('root inside: the range cap is reached'))
     if (x.reasons.includes('caps')) parts.push(t('a cap was hit'))
     if (x.limitReason === 'posture') parts.push(t('the posture held it back'))
-    if (x.reasons.includes('root_inside')) parts.push(t('the visible root is inside the opening'))
-    if (r.bucket === 'blocked' && !parts.length) parts.push(t('nothing to gain (less than {mm} mm)').replace('{mm}', String(ALIGN_GAIN_MM)))
+    if (r.bucket === 'unchanged' && !parts.length) parts.push(t('already fits'))
     return parts.join(', ')
   }
   const gapMm = (g: [number, number] | null) => (g ? (Math.abs(g[0]) > Math.abs(g[1]) ? g[0] : g[1]).toFixed(0) : '–')
@@ -96,7 +102,9 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
           <th title={t('The moved role’s turn after the run: tilt / roll / yaw (degrees, from the saved state)')}>{t('turn')}</th>
           <th title={t('The moved role’s lowest support capsule over its surface, the frame furthest from it, before → after (mm; carried = on the other person or on its feet, held by its own posture instead)')}>{t('support')}</th>
           <th title={t('The clip has one root angle: the first relation that carries the part solves it, the others keep it.')}>{t('root')}</th>
-          <th style={{ textAlign: 'left' }}>{t('Reason')}</th><th /><th />
+          <th style={{ textAlign: 'left' }}>{t('Reason')}</th>
+          <th style={{ textAlign: 'left' }} title={t('Notes on the result, never a block: little depth (the bodies move together), shallower than the start (the root pulled outside), the support corrected, no change needed.')}>{t('Notes')}</th>
+          <th /><th />
         </tr></thead>
         <tbody>
           {rows.map((r, i) => {
@@ -117,6 +125,8 @@ export function AlignAllTable({ rows, busy, onTick, onChoice, onRemeasure, onOpe
                 <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{x ? supportCell(x) : ''}</td>
                 <td>{x ? ({ solved: t('solved'), kept: t('kept'), none: '–' })[x.root] : ''}</td>
                 <td style={{ maxWidth: 220 }}>{why(r)}{r.outcome ? <span style={{ opacity: 0.8 }}> · {r.outcome}</span> : null}</td>
+                <td style={{ maxWidth: 240 }} data-testid="align-all-notes" data-notes={x ? x.notes.map((n) => n.code).join(' ') : ''}>
+                  {x ? x.notes.filter((n) => n.code !== 'no_change').map((n) => noteText(t, n)).join('; ') : ''}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>{r.bucket === 'blocked' ? (<>
                   <select value={r.choice} disabled={busy} onChange={(e) => onChoice(i, e.target.value as AlignMoverChoice)}
                     style={{ fontSize: 11 }} title={t('Which role the re-measure moves')}>

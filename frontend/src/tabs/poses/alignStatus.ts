@@ -3,21 +3,28 @@
  * relation of a pair or group clip, stored in the clip's sidecar (server `app/core/animation_clips.py`
  * `set_clip_align_status`, PATCH `align_status`) with the key numbers, shown as a badge in the clip list.
  *
- * States: not checked (no entry) · auto: improved · auto: aligned (green contact lamp) · auto: blocked (reason) ·
- * auto: geometry mismatch · not measurable (reason) · manual: adjusted · and the clip's own tick "manual: done", which
- * later auto runs never clear. The clip summary is its worst relation (`ALIGN_STATE_ORDER`).
+ * States: not checked (no entry) · auto: improved · auto: aligned (green contact lamp) · auto: unchanged (already fits —
+ * nothing to gain, not a block) · auto: blocked (reason: overlap, support, worse, a cap hit with a condition unmet, or a
+ * visible root that cannot be pulled out of the opening — the range cap, the person it would go into, or its support) ·
+ * auto: geometry
+ * mismatch · not measurable (reason) · manual: adjusted · and the clip's own tick "manual: done", which later auto runs
+ * never clear. The clip summary is its worst relation (`ALIGN_STATE_ORDER`). NOTES (owner 2026-11-23 evening, notes
+ * instead of blocks) ride along: little depth, shallower than the start, support corrected, no change needed.
  */
-import { isPointTarget, keyWorstMm, type AlignDiscard } from '@anima/scene-render'
+import { isPointTarget, keyWorstMm, type AlignDiscard, type AlignNote } from '@anima/scene-render'
 import type { RelationAlign } from './PlacePreview'
 
-export type AlignState = 'auto_improved' | 'auto_aligned' | 'auto_blocked' | 'auto_mismatch' | 'not_measurable'
-  | 'manual_adjusted'
-export type AlignStateReason = 'overlap' | 'support' | 'range' | 'root_inside' | 'nothing_to_gain' | 'worse'
+export type AlignState = 'auto_improved' | 'auto_aligned' | 'auto_unchanged' | 'auto_blocked' | 'auto_mismatch'
+  | 'not_measurable' | 'manual_adjusted'
+export type AlignStateReason = 'overlap' | 'support' | 'range' | 'root_range' | 'root_overlap' | 'root_support' | 'worse'
   | 'no_place' | 'no_part' | 'no_pair'
-/** One relation's status as sent (the server stamps `at`). */
+export type AlignNoteCode = AlignNote['code']
+/** One relation's status as sent (the server stamps `at`): `with` = the place letter a 'root_overlap' would go into;
+ *  the notes and their numbers (the stroke, how much shallower, the support correction, mm). */
 export interface AlignStatusEntry {
-  state: AlignState; reason?: AlignStateReason
+  state: AlignState; reason?: AlignStateReason; with?: string
   depth_mm?: [number, number]; axis_mm?: [number, number]; root_mm?: number; support_mm?: number
+  notes?: AlignNoteCode[]; stroke_mm?: number; shallower_mm?: number; support_fix_mm?: number; root_pulled?: boolean
   mover?: string; turn_deg?: [number, number, number]; at?: string
 }
 /** The listing's view of a clip's status. */
@@ -27,7 +34,7 @@ export interface ClipAlignStatus {
 }
 /** Worst first (the server's `ALIGN_STATE_ORDER`). */
 export const ALIGN_STATE_ORDER: (AlignState | 'not_checked')[] = ['auto_mismatch', 'auto_blocked', 'not_measurable',
-  'not_checked', 'auto_improved', 'manual_adjusted', 'auto_aligned']
+  'not_checked', 'auto_improved', 'manual_adjusted', 'auto_unchanged', 'auto_aligned']
 
 const r1 = (v: number) => Math.round(v * 10) / 10
 const fin = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -47,23 +54,30 @@ function numbersOf(r: RelationAlign): Omit<AlignStatusEntry, 'state' | 'reason'>
   if (r.rendered && fin(r.rendered.after.visMm)) out.root_mm = r1(r.rendered.after.visMm)
   const g = r.support.afterMm
   if (g) out.support_mm = r1(Math.abs(g[0]) > Math.abs(g[1]) ? g[0] : g[1])
+  if (r.notes.length) out.notes = r.notes.map((n) => n.code)
+  for (const n of r.notes) {
+    if (n.code === 'little_depth') out.stroke_mm = r1(n.strokeMm)
+    else if (n.code === 'shallower') { out.shallower_mm = r1(n.mm); out.root_pulled = n.rootPulled }
+    else if (n.code === 'support_corrected') out.support_fix_mm = r1(n.mm)
+  }
   return out
 }
 
-const DISCARD_REASON: Record<AlignDiscard, AlignStateReason> = {
-  overlap: 'overlap', worse: 'worse', root: 'root_inside', support: 'support', nothing: 'nothing_to_gain',
-}
-/** The status a measured relation earns: applied → improved, or aligned when its contact lamp is green; not applied
- *  with a green lamp from the start → aligned (nothing to do); a geometry mismatch; otherwise blocked with THE
- *  VERDICT's reason ('range' when nothing was gained and the mover's range stopped it). */
+const DISCARD_REASON: Record<AlignDiscard, AlignStateReason> = { overlap: 'overlap', worse: 'worse', support: 'support' }
+/** The status a measured relation earns (owner rules of 2026-11-23 evening): a visible root that could not be pulled
+ *  out of the opening → blocked, naming the range cap or the person; applied → improved, or aligned when its contact
+ *  lamp is green; a geometry mismatch; discarded → blocked with THE VERDICT's reason; a cap hit with the deepest
+ *  frame's conditions unmet → blocked 'range'; otherwise unchanged — or aligned when the start's lamp was green. */
 export function relationStatus(r: RelationAlign): AlignStatusEntry {
   const nums = numbersOf(r)
+  const st = r.rootPull?.stuck
+  if (st) return { state: 'auto_blocked', reason: st.why === 'overlap' ? 'root_overlap' : st.why === 'support' ? 'root_support' : 'root_range',
+    ...(st.with ? { with: st.with } : {}), ...nums }
   if (r.applied) return { state: r.lamp === 'green' ? 'auto_aligned' : 'auto_improved', ...nums }
-  if (r.lampBefore === 'green' && r.discard === 'nothing') return { state: 'auto_aligned', ...nums }
   if (r.bucket === 'mismatch') return { state: 'auto_mismatch', ...nums }
-  const why = r.discard ?? 'nothing'
-  const reason: AlignStateReason = why === 'nothing' && r.reasons.includes('caps') ? 'range' : DISCARD_REASON[why]
-  return { state: 'auto_blocked', reason, ...nums }
+  if (r.discard) return { state: 'auto_blocked', reason: DISCARD_REASON[r.discard], ...nums }
+  if (r.bucket === 'blocked') return { state: 'auto_blocked', reason: 'range', ...nums }
+  return { state: r.lampBefore === 'green' ? 'auto_aligned' : 'auto_unchanged', ...nums }
 }
 /** The relation key a "not measurable" status is stored under (a clip that gave no relation to measure). */
 export const UNMEASURED_KEY = '*'
@@ -78,6 +92,7 @@ export function stateWord(t: (s: string) => string, s: AlignState | 'not_checked
     case 'not_checked': return t('not checked')
     case 'auto_improved': return t('auto: improved')
     case 'auto_aligned': return t('auto: aligned')
+    case 'auto_unchanged': return t('auto: unchanged (already fits)')
     case 'auto_blocked': return t('auto: blocked')
     case 'auto_mismatch': return t('auto: geometry mismatch')
     case 'not_measurable': return t('not measurable')
@@ -85,21 +100,41 @@ export function stateWord(t: (s: string) => string, s: AlignState | 'not_checked
     case 'done': return t('manual: done')
   }
 }
-export function reasonText(t: (s: string) => string, r: AlignStateReason): string {
+export function reasonText(t: (s: string) => string, r: AlignStateReason, who?: string): string {
   switch (r) {
     case 'overlap': return t('overlap')
     case 'support': return t('support')
     case 'range': return t('range')
-    case 'root_inside': return t('root inside')
-    case 'nothing_to_gain': return t('nothing to gain')
+    case 'root_range': return t('root inside: the range cap is reached')
+    case 'root_support': return t('root inside: pulling back would take it off its surface')
+    case 'root_overlap': return who ? t('root inside: pulling back would go into place {who}').replace('{who}', who)
+      : t('root inside: pulling back would go into another person')
     case 'worse': return t('worse')
     case 'no_place': return t('no place')
     case 'no_part': return t('no figure with the part')
     case 'no_pair': return t('no pair filled in')
   }
 }
+/** A note in words — from a measured result (`AlignNote`) or a stored status entry (its code and numbers). */
+export function noteText(t: (s: string) => string, n: AlignNote): string {
+  const f = (v: number) => (Math.round(v) || 0).toFixed(0)
+  switch (n.code) {
+    case 'little_depth': return t('little depth: the bodies move together (stroke {s} mm, deepest {d} mm)')
+      .replace('{s}', f(n.strokeMm)).replace('{d}', f(n.deepMm))
+    case 'shallower': return (n.rootPulled ? t('shallower than the start by {mm} mm (root pulled outside)')
+      : t('shallower than the start by {mm} mm')).replace('{mm}', f(n.mm))
+    case 'support_corrected': return t('support corrected by {mm} mm').replace('{mm}', f(n.mm))
+    case 'no_change': return t('no change needed')
+  }
+}
+/** The notes of a stored status entry, rebuilt as `AlignNote`s (the numbers the entry keeps). */
+export function entryNotes(e: AlignStatusEntry): AlignNote[] {
+  return (e.notes ?? []).map((c): AlignNote => (c === 'little_depth' ? { code: c, strokeMm: e.stroke_mm ?? NaN, deepMm: e.depth_mm?.[1] ?? NaN }
+    : c === 'shallower' ? { code: c, mm: e.shallower_mm ?? NaN, rootPulled: !!e.root_pulled }
+      : c === 'support_corrected' ? { code: c, mm: e.support_fix_mm ?? NaN } : { code: 'no_change' }))
+}
 export const STATE_COLOR: Record<AlignState | 'not_checked' | 'done', string> = {
-  not_checked: 'var(--text-muted, #8b949e)', auto_improved: '#58a6ff', auto_aligned: '#3fb950',
+  not_checked: 'var(--text-muted, #8b949e)', auto_improved: '#58a6ff', auto_aligned: '#3fb950', auto_unchanged: '#56d4dd',
   auto_blocked: '#d29922', auto_mismatch: '#f85149', not_measurable: '#a371f7', manual_adjusted: '#db61a2',
   done: '#3fb950',
 }
@@ -112,12 +147,26 @@ export function worstState(states: readonly (AlignState | 'not_checked')[]): Ali
 /** The status a kind shows in the clip list: its A files' summaries, the worst of them; 'done' when every A file is
  *  ticked "manual: done". `key` is what the filter compares. */
 export function kindStatusOf(clips: readonly { role?: string | null; align_status?: ClipAlignStatus | null }[]):
-  { key: AlignState | 'not_checked' | 'done' | ''; reasons: AlignStateReason[] } {
+  { key: AlignState | 'not_checked' | 'done' | ''; reasons: AlignStateReason[]; who: string[]; notes: AlignNoteCode[] } {
   const own = clips.filter((c) => (c.role || '') === 'a' && c.align_status)
-  if (!own.length) return { key: '', reasons: [] }
-  if (own.every((c) => c.align_status!.done)) return { key: 'done', reasons: [] }
+  if (!own.length) return { key: '', reasons: [], who: [], notes: [] }
+  const notes = new Set<AlignNoteCode>()
+  for (const c of own) for (const e of Object.values(c.align_status!.relations)) for (const n of e.notes ?? []) if (n !== 'no_change') notes.add(n)
+  if (own.every((c) => c.align_status!.done)) return { key: 'done', reasons: [], who: [], notes: [...notes] }
   const key = worstState(own.map((c) => c.align_status!.summary))
-  const reasons = new Set<AlignStateReason>()
-  for (const c of own) for (const e of Object.values(c.align_status!.relations)) if (e.state === key && e.reason) reasons.add(e.reason)
-  return { key, reasons: [...reasons] }
+  const reasons = new Set<AlignStateReason>(), who = new Set<string>()
+  for (const c of own) for (const e of Object.values(c.align_status!.relations)) if (e.state === key && e.reason) {
+    reasons.add(e.reason)
+    if (e.with) who.add(e.with)
+  }
+  return { key, reasons: [...reasons], who: [...who], notes: [...notes] }
+}
+/** A note code in a few words (the badge). */
+export function noteWord(t: (s: string) => string, c: AlignNoteCode): string {
+  switch (c) {
+    case 'little_depth': return t('little depth')
+    case 'shallower': return t('shallower')
+    case 'support_corrected': return t('support corrected')
+    case 'no_change': return t('no change needed')
+  }
 }

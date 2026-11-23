@@ -47,7 +47,8 @@ import {
   alignByPasses, pairPivotCm, keyReport, keyLamp, keyReasons, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
   keyFrames, keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
-  type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket,
+  lampOf, solveLinear, ALIGN_ROOT_MARGIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM,
+  type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket, type AlignNote,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -311,8 +312,18 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       /** The relation's key in "Align all" (part role > receiving role : target). */
       key: string
       /** THE VERDICT (pairAlign): applied, or discarded — 'overlap' with `collide` (the other figure it would go into),
-       *  'worse' (shallower AND further off axis than its start); the dials then stay as they were. */
+       *  'support' (off its surface further than at the start), 'worse' (further off the axis than its start); the dials
+       *  then stay as they were. */
       applied: boolean; discard: AlignDiscard | null; collide: ClearView | null
+      /** THE VERDICT's other outcome: nothing gained, nothing written ("unchanged — already fits"), and the NOTES on the
+       *  result (little depth, shallower, support corrected, no change needed). */
+      unchanged: boolean; notes: AlignNote[]
+      /** THE ROOT PULL-BACK: how far the measured correction pulled the moved role back along the channel axis (mm), and
+       *  what stopped it while the rendered visible root was still inside — the range cap, the person (place letter)
+       *  it would have gone into, or its support (it would have left its surface); null for a point target. */
+      rootPull: { mm: number; stuck: { why: 'range' | 'overlap' | 'support'; with: string } | null
+        /** The solved state before the pull-back: its rendered visible root's deepest point and its axis error (mm). */
+        solvedVisMm: number; solvedAxisMm: number } | null
       /** THE CLEARANCE: the moved role against every other figure (mm over the loop: start, allowance, after). */
       clear: ClearView[]
       /** "Align all" stage 1: the bucket of this relation, and what it did with the clip's one root angle. */
@@ -1623,7 +1634,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // partners on (channel engagement, guidance), the chain bend applied every frame as `tick` does — per frame
           // the root joint's depth along the axis and the VISIBLE root's (pairAlign `visibleRootDepth`), mm, + = inside the
           // opening. The isolated samples the solve reads give the same numbers for the root joint.
-          type RootFrame = { k: number; rootMm: number; visMm: number; tipMm: number }
+          type RootFrame = { k: number; rootMm: number; visMm: number; tipMm: number; u: [number, number, number]; d: [number, number, number] }
           const renderedRoots = (draft: AlignmentDraft, hit: Hit, isolated = false): RootFrame[] => {
             const out: RootFrame[] = []
             resetAll()
@@ -1644,12 +1655,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const p0 = seg[0].a, tip = seg[seg.length - 1].b
               const vr = visibleRootOf(ie, hit.chain)
               const vis = visibleRootDepth({ o: v3(ch.o), u: v3(u), tip: v3(tip), ...vr }, v3(p0))
-              out.push({ k: i - loop, rootMm: s(p0) * 1000, visMm: vis * 1000, tipMm: s(tip) * 1000 })
+              const dl = Math.hypot(tip[0] - p0[0], tip[1] - p0[1], tip[2] - p0[2]) || 1
+              out.push({ k: i - loop, rootMm: s(p0) * 1000, visMm: vis * 1000, tipMm: s(tip) * 1000, u: [u[0], u[1], u[2]],
+                d: [(tip[0] - p0[0]) / dl, (tip[1] - p0[1]) / dl, (tip[2] - p0[2]) / dl] })
             }
             return out
           }
-          const rootPeak = (fr: readonly RootFrame[]) => fr.reduce((a, x) => (x.visMm > a.visMm ? x : a),
-            fr[0] ?? { k: -1, rootMm: NaN, visMm: NaN, tipMm: NaN })
+          const rootPeak = (fr: readonly RootFrame[]): RootFrameView => {
+            const p = fr.reduce((a, x) => (x.visMm > a.visMm ? x : a), fr[0] ?? { k: -1, rootMm: NaN, visMm: NaN, tipMm: NaN, u: [0, 0, 1], d: [0, 0, 1] })
+            return { k: p.k, rootMm: p.rootMm, visMm: p.visMm, tipMm: p.tipMm }
+          }
           // Every pass starts from the same rest state and samples WITHOUT partners (`placePhaseB` isolated): no
           // channel engagement, guidance or latch carries over from the frames before (module docstring of pairAlign).
           const resetAll = () => { for (const f of figs) f.runtime.reset() }
@@ -1788,23 +1803,33 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             }
             // THE ROLE TURN: the trial's rotation as rendered — the moved role's clip frame and what is already stored and
             // drafted under the base (pairAlign `roleTurnDelta`); a standing role keeps its tilt/roll within the posture cap.
-            const run = alignByPasses(measure, { cap,
-              turn: turns ? { frame: moverFrame, offsetDeg: [savedTurn[0] + tb[0], savedTurn[1] + tb[1], savedTurn[2] + tb[2]] } : null,
-              angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined },
-            { x: x0, deg: turns ? a0 : [], root: solveRoot ? root0 : null })
-            const cur = run.last.out
-            const extra = run.state.x
+            const frame0 = moverFrame
+            const solveRun = (seeds: boolean) => {
+              firstUsed = false
+              return alignByPasses(measure, { cap, seeds,
+                turn: turns ? { frame: frame0, offsetDeg: [savedTurn[0] + tb[0], savedTurn[1] + tb[1], savedTurn[2] + tb[2]] } : null,
+                angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined },
+              { x: x0, deg: turns ? a0 : [], root: solveRoot ? root0 : null })
+            }
+            // THE SEEDS are ranked by the solve's MODEL, which is least exact for the large turns they start from
+            // (crouching-doggy 2026-11-23: a seed at the 45° caps modelled 85 mm axis error and measured 154 mm against
+            // 114 mm at the start). A seeded run whose measured axis error ends worse than the start is run again from
+            // the start alone, and the better of the two measured results is kept.
+            const worstAxis = (r: ReturnType<typeof solveRun>) => Math.max(0, ...group.map((h, gi) => {
+              const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(r.last.out.per[gi], bendLim)
+              const inside = !isPointTarget(h.target)
+              return kb && ka ? keyWorstMm(ka, inside) - keyWorstMm(kb, inside) : 0
+            }))
+            let run = solveRun(true)
+            if (turns && cap.angleDeg >= 30 && worstAxis(run) > ALIGN_GAIN_SLACK_MM) {
+              const plain = solveRun(false)
+              if (worstAxis(plain) < worstAxis(run)) run = plain
+            }
+            let cur = run.last.out
+            let extra: [number, number, number] = [run.state.x[0], run.state.x[1], run.state.x[2]]
             const turn: [number, number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0, run.state.deg[2] ?? 0] : [0, 0, 0]
             const hitsNow = run.sol?.hits ?? []
-            const postureOf = (smps: readonly FitSample[]) => {
-              const r = postureReport(smps.map((x) => ({ support: x.support })))
-              return r.frames ? r : null
-            }
-            const shiftCm: [number, number, number] = [cm(bb[0] + extra[0]), cm(bb[1] + extra[1]), cm(bb[2] + extra[2])]
-            const turnDeg: [number, number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1]), deg(tb[2] + turn[2])]
-              : [deg(t0[0]), deg(t0[1]), deg(t0[2])]
-            const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
-            const adjustDeg: [number, number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1]), deg(turn[2] - a0[2])]
+            const slack = ALIGN_CLEAR_SLACK_MM / 1000
             // THE SUPPORT, ABSOLUTE: the moved role's gap over its surface over the loop, before and after, and every
             // other role's at the start (reported only).
             const gapRange = (smps: readonly AlignSample[]): [number, number] | null => {
@@ -1815,6 +1840,91 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const g = x.support?.mode === 'surface' ? surfaceGap(x.support) : null
               return g === null ? 0 : Math.abs(surfaceExcess(g)) * 1000
             }))
+            // THE ROOT PULL-BACK (owner 2026-11-23 evening): the solve holds the visible root outside on the isolated
+            // samples; what the page SHOWS is the loop as rendered (partners on, the chain bend). Measured there: while
+            // the visible root is inside the margin on some frame, the moved role is drawn back by the missing depth (the
+            // part's carrier out of the opening, the receiving role away from the part) along that frame's SHAFT — the
+            // line from the part's root through its tip, which is the channel axis once aligned. Along the shaft the
+            // shaft line stays where it is, so the axis error (the opening-plane offset, the angle) does not change; along
+            // the axis itself a shaft 50–60° off it slid sideways across the opening (crouching-doggy: +39 mm axis error
+            // for a 21 mm pull). The step travels need / cos θ (θ the shaft's angle to the axis, cos at least 0.3),
+            // within the range cap, THE CLEARANCE (a step that would go into a person is halved, at most three times) and
+            // THE SUPPORT (a role on a surface tries the shaft's horizontal part next, so it stays on its surface). What
+            // stopped it is named when the root stays inside: the range cap, the person, or the support. Depth is
+            // whatever remains.
+            const chHits = group.filter((h) => !isPointTarget(h.target))
+            const renderAll = (draft: AlignmentDraft) => chHits.map((h) => renderedRoots(draft, h))
+            let afterFrames = renderAll(cur.draft)
+            const solvedVisMm = Math.max(-Infinity, ...afterFrames.flat().map((x) => x.visMm))
+            const solvedAxisMm = Math.max(0, ...group.map((h, gi) => { const k = keyReport(cur.per[gi], bendLim); return k ? keyWorstMm(k, !isPointTarget(h.target)) : 0 }))
+            let pulledM = 0
+            let stuck: { why: 'range' | 'overlap' | 'support'; with: string } | null = null
+            const capM = [cap.sideM, cap.upM, cap.forwardM]
+            const mulB = (B: readonly number[], v: readonly number[]) => [B[0] * v[0] + B[1] * v[1] + B[2] * v[2],
+              B[3] * v[0] + B[4] * v[1] + B[5] * v[2], B[6] * v[0] + B[7] * v[1] + B[8] * v[2]]
+            // THE SUPPORT holds through the pull too: a role on a surface may not end further off it than at the start.
+            const onSurface = p0.per[0]?.some((x) => x.support?.mode === 'surface') ?? false
+            // (bounded by the start or the solved state, whichever is further off: the pull never makes it worse)
+            const excessCap = onSurface ? Math.max(0, excessOf(p0.per[0]), excessOf(cur.per[0])) + ALIGN_SUPPORT_SLACK_MM : Infinity
+            const supportOk = (got: PassOut) => !onSurface || excessOf(got.per[0]) <= excessCap
+            for (let it = 0; it < 8 && chHits.length; it++) {
+              let peak: RootFrame | null = null
+              for (const fr of afterFrames) for (const x of fr) if (!peak || x.visMm > peak.visMm) peak = x
+              if (!peak || !(peak.visMm > -ALIGN_ROOT_MARGIN_MM)) break
+              const needM = (peak.visMm + ALIGN_ROOT_MARGIN_MM + 0.5) / 1000
+              const sgn = moverKind === 'receiver' ? 1 : -1
+              const B = basisOf(cur.draft)
+              // The directions, in order: the shaft; for a role on a surface, the shaft's horizontal part (it stays on
+              // its surface — the shaft line then moves a little sideways, the price of keeping the support).
+              const d = peak.d, u = peak.u
+              const hl = Math.hypot(d[0], d[2])
+              const dirs: [number, number, number][] = [d]
+              if (onSurface && hl > 1e-6) dirs.push([d[0] / hl, 0, d[2] / hl])
+              let took = false, tookF = 0, hitWith = '', why: 'range' | 'overlap' | 'support' | '' = '', clampedStep = false
+              for (const dir of dirs) {
+                const along = dir[0] * u[0] + dir[1] * u[1] + dir[2] * u[2]
+                if (along < 0.3) continue
+                const travel = needM / along
+                const dx = solveLinear([[B[0], B[1], B[2]], [B[3], B[4], B[5]], [B[6], B[7], B[8]]],
+                  [dir[0] * travel * sgn, dir[1] * travel * sgn, dir[2] * travel * sgn])
+                if (!dx) continue
+                const want: [number, number, number] = [extra[0] + dx[0], extra[1] + dx[1], extra[2] + dx[2]]
+                const clamped = want.map((v, i) => Math.max(-capM[i], Math.min(capM[i], v))) as [number, number, number]
+                const step = clamped.map((v, i) => v - extra[i])
+                if (Math.max(...step.map(Math.abs)) < 1e-5) { why = why || 'range'; continue }
+                for (let h = 0; h < 4 && !took; h++) {
+                  const f = 0.5 ** h
+                  const tryX: [number, number, number] = [extra[0] + step[0] * f, extra[1] + step[1] * f, extra[2] + step[2] * f]
+                  const got = pass(tryX, turn, run.state.root)
+                  const over = others.find((j) => got.clearBy[j] > allow[j] + slack)
+                  if (over !== undefined) { if (!hitWith) hitWith = figs[over].letter; why = 'overlap'; continue }
+                  if (!supportOk(got)) { if (why !== 'overlap') why = 'support'; continue }
+                  const sw = mulB(B, [step[0] * f, step[1] * f, step[2] * f])
+                  pulledM += Math.hypot(sw[0], sw[1], sw[2])
+                  cur = got; extra = tryX; took = true; tookF = f
+                  clampedStep = clamped.some((v, i) => Math.abs(v - want[i]) > 1e-9)
+                }
+                if (took) break
+              }
+              afterFrames = renderAll(cur.draft)
+              if (!took) { stuck = { why: why || 'range', with: why === 'overlap' ? hitWith : '' }; break }
+              if (tookF === 1 && clampedStep) {
+                if (afterFrames.some((fr) => fr.some((x) => x.visMm > 0))) stuck = { why: 'range', with: '' }
+                break
+              }
+            }
+            const rootInsideNow = afterFrames.some((fr) => fr.some((x) => x.visMm > 0))
+            if (!rootInsideNow) stuck = null
+            else if (!stuck) stuck = { why: 'range', with: '' }
+            const postureOf = (smps: readonly FitSample[]) => {
+              const r = postureReport(smps.map((x) => ({ support: x.support })))
+              return r.frames ? r : null
+            }
+            const shiftCm: [number, number, number] = [cm(bb[0] + extra[0]), cm(bb[1] + extra[1]), cm(bb[2] + extra[2])]
+            const turnDeg: [number, number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1]), deg(tb[2] + turn[2])]
+              : [deg(t0[0]), deg(t0[1]), deg(t0[2])]
+            const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
+            const adjustDeg: [number, number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1]), deg(turn[2] - a0[2])]
             const modes = new Set(p0.per[0].map((x) => x.support?.mode ?? 'none'))
             const othersSupport = figs.map((f, j) => ({ f, j })).filter(({ j }) => j !== mi).map(({ f, j }) => {
               const g: number[] = []
@@ -1831,26 +1941,34 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             // THE CLEARANCE after the run, over the whole loop of the last measurement.
             const clearRows: ClearRow[] = others.map((j) => ({ name: figs[j].letter, startM: p0.clearBy[j], allowM: allow[j],
               afterM: cur.clearBy[j], worst: cur.clearWorst[j] || p0.clearWorst[j] }))
-            const slack = ALIGN_CLEAR_SLACK_MM / 1000
+            // THE WHOLE SCENE's deepest overlap (any pair, the A129.5 honest check) may not deepen either: the other roles'
+            // placement and bend follow the moved one, so a pair without the mover can go deeper (sitting-mission
+            // 2026-11-23: C↔D 176 → 191 mm while every pair with the mover got shallower).
+            if (cur.overlap > p0.overlap + slack) {
+              const pair = [...new Set((cur.worst.match(/(?:^|↔ )([A-Z])\b/g) ?? []).map((s) => s.replace('↔', '').trim()))].join('↔')
+              clearRows.push({ name: pair || '–', startM: p0.overlap, allowM: p0.overlap, afterM: cur.overlap, worst: cur.worst })
+            }
             const clearOk = clearRows.every((c) => c.afterM <= c.allowM + slack)
             // THE RENDERED ROOT before and after (and the isolated loop the solve reads, frame by frame).
             const rendered = group.map((hit) => {
               if (isPointTarget(hit.target)) return null
-              const before = renderedRoots(p0.draft, hit), after = renderedRoots(cur.draft, hit)
+              const before = renderedRoots(p0.draft, hit), after = afterFrames[chHits.indexOf(hit)] ?? renderedRoots(cur.draft, hit)
               const iso = renderedRoots(cur.draft, hit, true)
               return { before: rootPeak(before), after: rootPeak(after), isolated: rootPeak(iso),
-                frames: after.map((x, i) => ({ ...x, isoRootMm: iso[i]?.rootMm ?? NaN, isoVisMm: iso[i]?.visMm ?? NaN })) }
+                frames: after.map((x, i) => ({ k: x.k, rootMm: x.rootMm, visMm: x.visMm, tipMm: x.tipMm,
+                  isoRootMm: iso[i]?.rootMm ?? NaN, isoVisMm: iso[i]?.visMm ?? NaN })) }
             })
             const reports = group.map((hit, gi) => {
               const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(cur.per[gi], bendLim)
               const inside = !isPointTarget(hit.target)
               const rr = rendered[gi]
               return { kb, ka, inside, verdict: alignVerdict(kb, ka, inside, clearRows,
-                rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm } : null,
+                rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm, pulledMm: pulledM * 1000 } : null,
                 support.mode === 'surface' ? { beforeMm: support.excessBeforeMm, afterMm: support.excessAfterMm } : null) }
             })
-            const bad = reports.find((x) => !x.verdict.applied)?.verdict ?? null
-            const applied = !bad
+            // A group is discarded by any of its relations' hard conditions, applied when none is broken and one gains.
+            const bad = reports.find((x) => x.verdict.why)?.verdict ?? null
+            const applied = !bad && reports.some((x) => x.verdict.applied)
             const posture0 = postureOf(cur.per[0])
             const deepOk = reports.every((x) => deepHolds(x.ka, x.inside))
             const cand: AlignCandidate = { applied, deepOk, clearOk,
@@ -1865,18 +1983,22 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const { kb, ka, inside } = reports[gi]
               const before = rep(p0.per[gi]), after = rep(cur.per[gi])
               const posture = gi === 0 ? posture0 : null
-              // THE RENDERED ROOT: a visible root inside the opening on a rendered frame is red, with its reason.
+              // THE RENDERED ROOT decides 'root_inside': a visible root inside the opening on a rendered frame is red,
+              // with its reason; one outside on every rendered frame is not, whatever the isolated samples say.
               const rootIn = inside && (rendered[gi]?.after.visMm ?? -Infinity) > 0
-              const reasons = keyReasons(ka, hitsNow, inside, kb)
+              const reasons = keyReasons(ka, hitsNow, inside, kb).filter((x) => x !== 'root_inside' || !rendered[gi])
               if (rootIn && !reasons.includes('root_inside')) reasons.push('root_inside')
-              const lamp = rootIn ? 'red' as const : keyLamp(ka, hitsNow, inside, kb)
+              const lamp = lampOf(ka, reasons, inside)
+              const v = reports[gi].verdict
               const insideCount = (smps: readonly AlignSample[]) => smps.filter((x) =>
                 (x.tip[0] - x.o[0]) * x.u[0] + (x.tip[1] - x.o[1]) * x.u[1] + (x.tip[2] - x.o[2]) * x.u[2] > 0).length
               return { by: figs[hit.e].letter, of: figs[hit.r].letter, channel: hit.channel, target: hit.target, part: figs[hit.e].role,
                 key: relKey(hit), moved: mr, mover: moverKind, alternative: false, tried: [moverKind],
-                applied, discard: bad?.why ?? null, collide,
+                applied, discard: bad?.why ?? null, collide, unchanged: !applied && !bad, notes: v.notes,
+                rootPull: inside ? { mm: pulledM * 1000, stuck: rootIn ? stuck : null, solvedVisMm, solvedAxisMm } : null,
                 clear: clearRows.map(view),
-                bucket: alignBucket(kb, ka, inside, applied),
+                bucket: alignBucket(kb, ka, inside, { applied, why: bad?.why ?? null },
+                  { stuck: rootIn && !!stuck, capUnmet: hitsNow.length > 0 && !deepHolds(ka, inside) }),
                 root: solveRoot ? 'solved' : turnsRoot ? 'kept' : 'none',
                 reasons,
                 tipInside: { before: insideCount(p0.per[gi]), after: insideCount(cur.per[gi]), frames: cur.per[gi].length },
@@ -1891,7 +2013,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               adjustDeg, rangeCm, turnRangeDeg: cap.angleDeg, lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
               passes: run.trace, converged: run.converged }
             return { rows, moverRow, draft: cur.draft, applied, solvedRoot: solveRoot && applied, pivot: applied ? cur.per : p0.per, cand,
-              blocked: alignBlocked({ applied, postureLimited: !!posture0?.limited, hits: hitsNow, deepOk }) }
+              blocked: alignBlocked({ applied, postureLimited: !!posture0?.limited, hits: hitsNow, deepOk, stuck: !!stuck }) }
           }
           // The groups: one per relation, one after the other (a click, "Align all"), each with the role its choice
           // names — 'auto' tries the part's carrier first and the receiving role when that run is blocked; without

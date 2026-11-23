@@ -2837,7 +2837,12 @@ beim Start einmal nach `role_turn_deg.b` übertragen
 (`scripts/smoke_clip_role_turn.py`). Wie weit Auto-align die bewegte Rolle drehen
 darf, steht im Sidecar als `align_turn_deg` (Listing `align_turn`, Standard 45°);
 was Auto-align/Align all/eine Hand-Speicherung je Kontaktbeziehung hinterließ, als
-`align_status` (Listing mit `summary` = die schlechteste Beziehung).
+`align_status` (Listing mit `summary` = die schlechteste Beziehung). Seit dem
+Abend des 2026-11-23: Zustand `auto_unchanged` (passt schon, keine Sperre); eine
+sichtbare Wurzel in der Öffnung wird zurückgezogen statt verworfen — gesperrt nur,
+wenn das nicht geht (`root_range` / `root_overlap` mit `with` = Platzbuchstabe);
+`notes` (`little_depth`, `shallower`, `support_corrected`, `no_change`) mit
+`stroke_mm` / `shallower_mm` / `support_fix_mm` / `root_pulled` sind Anmerkungen.
 
 **Gruppen abspielen (G3, 2026-11-03).** Eine Gruppe spielt wie ein Paar, nur
 mit mehr Figuren:

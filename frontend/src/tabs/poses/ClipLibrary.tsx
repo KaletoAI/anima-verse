@@ -56,6 +56,7 @@ import { PlacePreview, type AlignMoverChoice, type AutoAlignOptions, type AutoAl
 import { AlignResultBlock } from './AlignResult'
 import { AlignAllTable, type AlignAllRow } from './AlignAllTable'
 import { kindStatusOf, relationStatus, unmeasuredStatus, stateWord, reasonText, STATE_COLOR, UNMEASURED_KEY,
+  noteText, noteWord, entryNotes,
   type AlignStatusEntry, type AlignState } from './alignStatus'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
@@ -1779,7 +1780,7 @@ export function ClipLibrary({
                             void apiPatch(clipPath(orientTarget), { align_status: { relations: statusNow } })
                               .then(() => onReload()).catch((e) => setOrientError((e as Error).message))
                           }
-                          // THE VERDICT (2026-11-22): a discarded result writes nothing — the dials stay as they were.
+                          // THE VERDICT: a discarded or unchanged result writes nothing — the dials stay as they were.
                           if (!res.ok || !res.applied) return
                           // Ruling A212 (2026-11-20): Auto-align writes the clip's root angle to its dials (a draft).
                           if (res.rootAngle) setRootDraft({ pitch_deg: res.rootAngle.pitchDeg, yaw_deg: res.rootAngle.yawDeg })
@@ -2006,7 +2007,7 @@ const OPEN_FIGURES_S = 180
 interface OpenWait { s: number; stage: 'ok' | 'no_place' | 'scene' | 'figures'; figures: number }
 /** A STATUS PER CLIP: the filter's keys, worst first, and "manual: done" last. */
 const STATUS_KEYS: (AlignState | 'not_checked' | 'done')[] = ['auto_mismatch', 'auto_blocked', 'not_measurable', 'not_checked',
-  'auto_improved', 'manual_adjusted', 'auto_aligned', 'done']
+  'auto_improved', 'manual_adjusted', 'auto_unchanged', 'auto_aligned', 'done']
 /** A kind's status in the list (a solo kind: none). */
 function kindStatus(clips: readonly ApiClipRow[]) {
   return kindStatusOf(clips)
@@ -2021,7 +2022,8 @@ function StatusBadge({ clips, long = false }: { clips: readonly ApiClipRow[]; lo
   const s = kindStatus(clips)
   if (!s.key) return null
   const word = stateWord(t, s.key)
-  const why = s.reasons.map((r) => reasonText(t, r)).join(', ')
+  const why = s.reasons.map((r) => reasonText(t, r, s.who.join(', ') || undefined)).join(', ')
+  const notes = s.notes.map((c) => noteWord(t, c)).join(', ')
   const tip = clips.filter((c) => (c.role || '') === 'a' && c.align_status).map((c) => {
     const st = c.align_status!
     const rels = Object.entries(st.relations).map(([k, e]) => {
@@ -2032,14 +2034,15 @@ function StatusBadge({ clips, long = false }: { clips: readonly ApiClipRow[]; lo
         e.mover ? `${t('moved')} ${e.mover.toUpperCase()}` : '',
         e.turn_deg?.some((v) => v !== 0) ? `${t('turn')} ${e.turn_deg.join(' / ')}°` : '',
         e.at ? e.at.slice(0, 16).replace('T', ' ') : ''].filter(Boolean).join(', ')
-      return `${k === UNMEASURED_KEY ? '–' : k}: ${stateWord(t, e.state)}${e.reason ? ` (${reasonText(t, e.reason)})` : ''}${nums ? ` — ${nums}` : ''}`
+      const notesNow = entryNotes(e).map((n) => noteText(t, n)).join('; ')
+      return `${k === UNMEASURED_KEY ? '–' : k}: ${stateWord(t, e.state)}${e.reason ? ` (${reasonText(t, e.reason, e.with)})` : ''}${nums ? ` — ${nums}` : ''}${notesNow ? ` · ${notesNow}` : ''}`
     })
     return [`${c.set || t('neutral')}${st.done ? ` · ${t('manual: done')}` : ''}`, ...rels].join('\n')
   }).join('\n\n')
   return (
-    <span className="ga-tag" data-testid="clip-status-badge" data-status={s.key} title={tip}
+    <span className="ga-tag" data-testid="clip-status-badge" data-status={s.key} data-notes={s.notes.join(' ')} title={tip}
       style={{ padding: '0 4px', fontSize: 10, whiteSpace: 'nowrap', color: STATE_COLOR[s.key], borderColor: STATE_COLOR[s.key] }}>
-      {long ? `${word}${why ? ` (${why})` : ''}` : word}
+      {long ? `${word}${why ? ` (${why})` : ''}${notes ? ` · ${notes}` : ''}` : `${word}${notes ? ' ·' : ''}`}
     </span>
   )
 }

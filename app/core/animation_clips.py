@@ -2766,21 +2766,30 @@ def set_clip_align_turn(library: str, rel: str, deg: Any) -> List[Dict[str, Any]
 # ── THE ALIGNMENT STATUS of a pair/group clip (owner decision 2026-11-23) ──
 #: Per contact relation: what the last SAVED Auto-align / Align all result or a hand save left. "not checked" is the
 #: absence of an entry. "manual: done" is the clip's own tick (``done``), kept through later auto runs until the
-#: user unticks it.
-ALIGN_STATES = ("auto_improved", "auto_aligned", "auto_blocked", "auto_mismatch", "not_measurable", "manual_adjusted")
+#: user unticks it. Owner rules of 2026-11-23 evening: "auto_unchanged" = already fits (nothing to gain, not a block);
+#: a visible root inside is never a block of its own — only when it cannot be pulled out ("root_range": the range
+#: cap; "root_overlap": the person ``with`` it would go into; "root_support": it would leave its surface); little
+#: depth etc. are NOTES, never a state.
+ALIGN_STATES = ("auto_improved", "auto_aligned", "auto_unchanged", "auto_blocked", "auto_mismatch", "not_measurable",
+                "manual_adjusted")
 ALIGN_STATE_REASONS = {
-    "auto_blocked": ("overlap", "support", "range", "root_inside", "nothing_to_gain", "worse"),
+    "auto_blocked": ("overlap", "support", "range", "root_range", "root_overlap", "root_support", "worse"),
     "not_measurable": ("no_place", "no_part", "no_pair"),
 }
+#: The notes a relation's result may carry (frontend ``AlignNote``).
+ALIGN_NOTES = ("little_depth", "shallower", "support_corrected", "no_change")
 #: The clip summary is its WORST relation, in this order (worst first).
 ALIGN_STATE_ORDER = ("auto_mismatch", "auto_blocked", "not_measurable", "not_checked", "auto_improved",
-                     "manual_adjusted", "auto_aligned")
-_STATUS_NUMBERS = {"depth_mm": 2, "axis_mm": 2, "root_mm": 1, "support_mm": 1}
+                     "manual_adjusted", "auto_unchanged", "auto_aligned")
+_STATUS_NUMBERS = {"depth_mm": 2, "axis_mm": 2, "root_mm": 1, "support_mm": 1, "stroke_mm": 1, "shallower_mm": 1,
+                   "support_fix_mm": 1}
 
 
 def _status_entry(key: str, raw: Any, stamp: str) -> Dict[str, Any]:
-    """One relation's status as stored: ``{state, reason?, depth_mm?: [before, after], axis_mm?: [before, after],
-    root_mm?, support_mm?, mover?, turn_deg?: [tilt, roll, yaw], at}`` (``at`` = system time, set here)."""
+    """One relation's status as stored: ``{state, reason?, with?, depth_mm?: [before, after], axis_mm?: [before, after],
+    root_mm?, support_mm?, notes?: [code], stroke_mm?, shallower_mm?, support_fix_mm?, root_pulled?, mover?,
+    turn_deg?: [tilt, roll, yaw], at}`` (``at`` = system time, set here; ``with`` = the place letter a
+    "root_overlap" would go into)."""
     if not isinstance(key, str) or not key or len(key) > 80:
         raise ClipLibraryError("align_status relation keys must be strings of 1..80 characters")
     if not isinstance(raw, dict) or raw.get("state") not in ALIGN_STATES:
@@ -2792,6 +2801,23 @@ def _status_entry(key: str, raw: Any, stamp: str) -> Dict[str, Any]:
         if reason not in ALIGN_STATE_REASONS.get(state, ()):
             raise ClipLibraryError(f"align_status.{key}: '{reason}' is no reason for {state}")
         out["reason"] = reason
+    who = raw.get("with")
+    if who is not None:
+        if reason != "root_overlap" or not isinstance(who, str) or not re.fullmatch(r"[A-Z]", who):
+            raise ClipLibraryError(f"align_status.{key}.with must be a place letter A..Z of a root_overlap")
+        out["with"] = who
+    notes = raw.get("notes")
+    if notes is not None:
+        if (not isinstance(notes, list) or len(notes) > len(ALIGN_NOTES) or len(set(map(str, notes))) != len(notes)
+                or any(n not in ALIGN_NOTES for n in notes)):
+            raise ClipLibraryError(f"align_status.{key}.notes must be distinct notes of {', '.join(ALIGN_NOTES)}")
+        if notes:
+            out["notes"] = list(notes)
+    pulled = raw.get("root_pulled")
+    if pulled is not None:
+        if not isinstance(pulled, bool):
+            raise ClipLibraryError(f"align_status.{key}.root_pulled must be true or false")
+        out["root_pulled"] = pulled
     for field, n in _STATUS_NUMBERS.items():
         v = raw.get(field)
         if v is None:

@@ -50,17 +50,22 @@
  * a millimetre over the allowance cost as much as 10 cm of axis error, so the solve keeps it within a few µm; the
  * root angle's re-pose of the part's own capsules is not modelled in the solve (the re-measure sees it). Pairs that
  * cannot reach overlap within the cap (start depth below a_f − the cap's reach) are left out.
- * THE VERDICT (`alignVerdict`): the run's last measurement over the WHOLE loop decides — a role deeper into some f
- * than a_f + `ALIGN_CLEAR_SLACK_MM` (0.5 mm, the re-measure repeatability) is DISCARDED ('overlap', the dials stay),
- * and so is a result worse than its start ('worse': the axis error AND the depth error at the deepest frame both larger by
- * more than `ALIGN_GAIN_SLACK_MM`), and — THE MINIMUM GAIN (owner 2026-11-23, `alignGain`) — one that is not at least
- * `ALIGN_GAIN_MM` = 5 mm better in one of them without being worse in the other ('nothing': nothing to gain). THE
- * SUPPORT, ABSOLUTE (`postureSupport.ts`): a moved role whose excess over the surface's touch band grows ('support').
- * THE RENDERED ROOT (owner finding
- * 2026-11-22): the page measures the VISIBLE root over the loop as rendered (partners on, the chain bend applied); a
- * channel whose visible root ends deeper than max(0, its start) + `ALIGN_ROOT_SLACK_MM` on some rendered frame is
- * discarded too ('root'); one still inside but not deeper than it started is applied, red, with the reason named.
- * Anything else is applied, caps or not.
+ * THE VERDICT (`alignVerdict`, owner rules of 2026-11-23 evening): the run's last measurement over the WHOLE loop
+ * decides. DISCARDED (the dials stay) only for a hard condition: a role deeper into some f than a_f +
+ * `ALIGN_CLEAR_SLACK_MM` (0.5 mm, the re-measure repeatability; 'overlap'), a moved role whose excess over the surface's
+ * touch band grows (THE SUPPORT, ABSOLUTE, `postureSupport.ts`; 'support'), an axis error larger than at the start by
+ * more than `ALIGN_GAIN_SLACK_MM` ('worse'). Otherwise APPLIED when it gains `ALIGN_GAIN_MM` = 5 mm (THE MINIMUM GAIN,
+ * `alignGain`) in the axis error, the depth error at the deepest frame or the support excess, or when its rendered
+ * visible root comes out of the opening; UNCHANGED ("already fits") when it gains nothing — not a block. Depth is a
+ * NOTE (`AlignNote`): little depth (`ALIGN_LITTLE_STROKE_MM` / `ALIGN_LITTLE_DEPTH_MM`), shallower than the start, the
+ * support corrected, no change needed.
+ * THE ROOT PULL-BACK (owner 2026-11-23 evening — "too deep is not discarded as long as the root is outside the channel;
+ * when the root is inside, the distance of the bodies must grow"): the visible root outside is a CONSTRAINT of the solve
+ * (`ALIGN_ROOT_WEIGHT`, the clearance's weight, at the deep key frame and the `ALIGN_ROOT_FRAMES` = 8 frames whose
+ * visible root lies deepest at the measurement — the passes pick them afresh), so depth yields to it; the page then measures the loop AS RENDERED (partners on, the chain bend
+ * applied) and pulls the moved role back along the channel axis until the visible root is at least
+ * `ALIGN_ROOT_MARGIN_MM` outside on every frame — or as far as the range cap and THE CLEARANCE let it, and then says
+ * which of the two stopped it. A root inside is never a discard.
  *
  * THE RESIDUALS (`solveAlign`), per relation, at its deep and its shallow frame (one frame when they coincide). With
  * the rigid shaft's direction d = (T' − P'_0)/|T' − P'_0| (T' the tip, P'_0 the root joint, both after the trial):
@@ -92,7 +97,9 @@
  *     deeper while posture and clearance held the offset at 37 mm, and the shaft line then entered the receiving mesh
  *     44 mm before the root joint). Plus the inequalities (only a VIOLATED one
  *     costs, `ALIGN_LIMIT_WEIGHT` per metre): max(0, m − s_tip) the tip not inside, max(0, s_tip − (depth − r_tip) + m)
- *     past the bottom, max(0, s_root + m) the root not outside; the margin m = `ALIGN_MARGIN_M`.
+ *     past the bottom, and — THE ROOT PULL-BACK, weight `ALIGN_ROOT_WEIGHT` — max(0, s_vis + m) the visible root not
+ *   outside, at the deep frame and at the `ALIGN_ROOT_FRAMES` frames whose visible root lies deepest at the measurement;
+ *   the margin m = `ALIGN_MARGIN_M`.
  *   Why (the diagnosis of 2026-11-21, crouching-doggy): the receiving axis turns between the key frames (8° there), so
  *   the two frames' axis LINES cross — 0.2 m outside the opening. The old residuals (root and tip off the line, at both
  *   frames) were least where both lines are close, i.e. near that crossing, outside; only the "tip inside" inequality
@@ -166,6 +173,19 @@ export const ALIGN_CLEAR_WEIGHT = 100
 export const ALIGN_CLEAR_TOL_MM = 5
 export const ALIGN_CLEAR_SLACK_MM = 0.5
 export const ALIGN_MISMATCH_DEG = 60
+/** THE ROOT PULL-BACK (owner 2026-11-23 evening): the visible root's weight in the solve (per metre of root inside the
+ *  margin — the clearance's weight, so depth always yields to it), the number of frames per channel relation it is held
+ *  at (those whose visible root lies deepest at the measurement, plus the deep key frame), and the margin (mm) the page's
+ *  measured correction keeps the RENDERED visible root outside by (= `ALIGN_MARGIN_M`). */
+export const ALIGN_ROOT_WEIGHT = 100
+export const ALIGN_ROOT_FRAMES = 8
+export const ALIGN_ROOT_MARGIN_MM = 2
+/** LITTLE DEPTH (owner 2026-11-23 evening, a NOTE, never a block): a channel whose stroke (deepest minus shallowest tip
+ *  depth, mm) or whose deepest tip depth stays below these — the bodies move WITH each other rather than onto each
+ *  other. Measured on the licensed library (run4, 58 channel/mouth relations): the stroke's lower decile is 16–19 mm
+ *  (median 49–55 mm), the deepest tip's lower quartile 1–4 mm (median 49–61 mm). */
+export const ALIGN_LITTLE_STROKE_MM = 20
+export const ALIGN_LITTLE_DEPTH_MM = 20
 
 export interface AlignCap { sideM: number; upM: number; forwardM: number; angleDeg: number }
 export type AlignLamp = 'green' | 'yellow' | 'red'
@@ -272,7 +292,7 @@ export interface AlignProblem {
    *  absent = the sample's own. */
   depthHold?: readonly (number | null)[] | null
   /** THE SEEDS: also start the solve from large turns (`turn` with a range of 30° or more); `alignByPasses` sets it on its
-   *  first pass. */
+   *  first pass unless its `fixed` says `seeds: false` (the page's re-run when a seeded result measured worse). */
   seeds?: boolean
   iterations?: number
 }
@@ -442,6 +462,9 @@ export function solveAlign(p: AlignProblem): AlignSolution {
   const keys = p.relations.map((r) => keyFrames(r.samples))
   // THE DEPTH GATE: `gate` per relation (shared by its key frames), set between the two stages of the solve below.
   const picks: { s: AlignSample; deep: boolean; rooted: boolean; g: { gate: number }; hold: number }[] = []
+  // THE ROOT PULL-BACK: per channel relation the frames whose visible root lies deepest at the measurement (besides the
+  // deep key frame, which holds it in `picks`).
+  const rootPicks: { s: AlignSample; rooted: boolean }[] = []
   p.relations.forEach((r, i) => {
     const k = keys[i]
     if (!k) return
@@ -450,6 +473,11 @@ export function solveAlign(p: AlignProblem): AlignSolution {
     const hold = p.depthHold?.[i] ?? axial(sd, r0)
     picks.push({ s: sd, deep: true, rooted: !!r.rooted, g, hold })
     if (k.shallow !== k.deep) picks.push({ s: r.samples[k.shallow], deep: false, rooted: !!r.rooted, g, hold })
+    if (sd.channel) {
+      const byRoot = r.samples.map((s, j) => ({ j, v: visibleRootDepth(s, s.chain?.[0] ?? s.base) }))
+        .filter((x) => x.j !== k.deep).sort((a, b) => b.v - a.v).slice(0, ALIGN_ROOT_FRAMES)
+      for (const x of byRoot) rootPicks.push({ s: r.samples[x.j], rooted: !!r.rooted })
+    }
   })
   const rooted = !!p.root && picks.some((x) => x.rooted && !!x.s.body && (x.s.chain?.length ?? 0) >= 2)
   const rt = p.turn ?? null
@@ -508,7 +536,7 @@ export function solveAlign(p: AlignProblem): AlignSolution {
         const g = k.g.gate
         out.push(g * ALIGN_DEPTH_WEIGHT * (sr - tgt))
         out.push((1 - g) * ALIGN_DEPTH_WEIGHT * (sr - keep), (1 - g) * W * Math.max(0, sr - keep))
-        out.push(W * Math.max(0, m - st), W * Math.max(0, sv + m))
+        out.push(W * Math.max(0, m - st), ALIGN_ROOT_WEIGHT * Math.max(0, sv + m))
         const bottom = (k.s.depthM ?? 0) - (k.s.tipRadiusM ?? 0)
         if ((k.s.depthM ?? 0) > 0) out.push(W * Math.max(0, st - bottom + m))
       }
@@ -523,6 +551,10 @@ export function solveAlign(p: AlignProblem): AlignSolution {
           if (d !== null) out.push(POSTURE.weight * postureExcess(d))
         }
       }
+    }
+    for (const k of rootPicks) {
+      const s = moveSample(k.s, fix, k.rooted ? root0 : null, k.rooted ? to : null)
+      out.push(ALIGN_ROOT_WEIGHT * Math.max(0, visibleRootDepth(s, s.chain?.[0] ?? s.base) + m))
     }
     if (posture) {
       const kt = POSTURE.turnCostM * Math.sqrt(N)
@@ -658,12 +690,18 @@ export function keyReasons(rep: KeyReport | null, hits: readonly AlignBound[], i
   return out
 }
 /** The lamp of a key report (module docstring THE LAMP); `inside` = a channel (step 1 applies); `before` = the report
- *  before the run (a shallower deepest frame is red). */
+ *  before the run. A shallower deepest frame is named among the reasons but does not turn the lamp red (owner
+ *  2026-11-23 evening: little depth is a note). */
 export function keyLamp(rep: KeyReport | null, hits: readonly AlignBound[], inside: boolean, before?: KeyReport | null): AlignLamp {
+  return lampOf(rep, keyReasons(rep, hits, inside, before), inside)
+}
+/** The lamp from a report and its reasons (`keyReasons`, possibly corrected by the caller — the RENDERED visible root
+ *  decides 'root_inside'): red for any reason but 'off_axis' and 'shallower', else green/yellow/red by the axis error. */
+export function lampOf(rep: KeyReport | null, reasons: readonly KeyReason[], inside: boolean): AlignLamp {
   if (!rep) return 'red'
-  const why = keyReasons(rep, hits, inside, before)
-  if (why.some((r) => r !== 'off_axis')) return 'red'
-  return keyWorstMm(rep, inside) <= KEY_GREEN_MM ? 'green' : keyWorstMm(rep, inside) <= KEY_YELLOW_MM ? 'yellow' : 'red'
+  if (reasons.some((r) => r !== 'off_axis' && r !== 'shallower')) return 'red'
+  const w = keyWorstMm(rep, inside)
+  return w <= KEY_GREEN_MM ? 'green' : w <= KEY_YELLOW_MM ? 'yellow' : 'red'
 }
 
 /** What a pass applies: the totals of the unknowns (offset relative to the base, tilt/roll, the root angle). */
@@ -695,7 +733,7 @@ export function alignByPasses<M extends AlignMeasure>(measure: (s: AlignState) =
   let converged = false
   for (let i = 0; i < passes; i++) {
     sol = solveAlign({ ...fixed, relations: cur.relations, basis: cur.basis, join: cur.join, clear: cur.clear, depthHold, start: st.x,
-      startDeg: st.deg, root: st.root, seeds: i === 0 })
+      startDeg: st.deg, root: st.root, seeds: i === 0 && fixed.seeds !== false })
     const step: AlignPass = {
       shiftMm: Math.hypot(sol.x[0] - st.x[0], sol.x[1] - st.x[1], sol.x[2] - st.x[2]) * 1000,
       turnDeg: Math.max(0, ...sol.deg.map((v, k) => Math.abs(v - (st.deg[k] ?? 0)))),
@@ -730,54 +768,84 @@ export function alignMovers<T extends { e: number; r: number }>(hits: readonly T
   return out
 }
 
-/** THE VERDICT of one run (module docstring THE CLEARANCE): 'overlap' when the role ends deeper into another figure
- *  than its allowance plus the slack (the measured `clear` rows over the whole loop, metres), 'worse' when the result
- *  is worse than its start by the lamp's own measures — a channel's deepest frame shallower (not counted when the start
- *  was past the bottom) AND its axis error larger, a point target's error larger (each by more than
- *  `KEY_SHALLOWER_MM`). Applied otherwise. */
+/** THE VERDICT of one run (owner rules of 2026-11-22/23, revised 2026-11-23 evening). The HARD conditions — a result
+ *  that breaks one is DISCARDED and the dials stay: 'overlap' when the role ends deeper into another figure than its
+ *  allowance plus the slack (the measured `clear` rows over the whole loop, metres); 'support' when the moved role's
+ *  excess over its surface's touch band grows (THE SUPPORT, ABSOLUTE); 'worse' when the axis error (`keyWorstMm`) ends
+ *  larger than it started by more than `ALIGN_GAIN_SLACK_MM`. The visible root is a hard condition too, but it is never
+ *  a discard: the solve holds it (THE ROOT PULL-BACK) and the page's measured correction pulls the moved role back along
+ *  the channel axis until the rendered visible root is outside, or as far as that can go — the caller names why not.
+ *  Depth is whatever remains: a shallower result is a NOTE, never a reason to discard.
+ *  A result that keeps the hard conditions is APPLIED when it gains something (THE MINIMUM GAIN, `ALIGN_GAIN_MM`): the
+ *  axis error drops by it, or the depth error at the deepest frame shrinks by it, or the support excess shrinks by it,
+ *  or the rendered visible root comes out of the opening (inside before, outside after — or, when it cannot be pulled
+ *  out, at least `ALIGN_GAIN_MM` nearer to it). Otherwise it is UNCHANGED
+ *  ("already fits"): not written, not a block. */
 export interface ClearRow { name: string; startM: number; allowM: number; afterM: number; worst: string }
-export type AlignDiscard = 'overlap' | 'worse' | 'root' | 'support' | 'nothing'
-/** The verdict's slack on the visible root of the RENDERED loop (mm). */
-export const ALIGN_ROOT_SLACK_MM = 0.5
+export type AlignDiscard = 'overlap' | 'worse' | 'support'
 /** The verdict's slack on THE SUPPORT, ABSOLUTE (mm beyond the touch band, `postureSupport.ts`). */
 export const ALIGN_SUPPORT_SLACK_MM = 1
+/** A NOTE on a result (owner 2026-11-23 evening — notes instead of blocks): 'little_depth' (LITTLE DEPTH, the stroke and
+ *  the deepest tip depth, mm, of the state that stands), 'shallower' (the deepest tip ended `mm` shallower than it
+ *  started; `rootPulled` = because the visible root was pulled outside), 'support_corrected' (the support excess
+ *  shrank by `mm`), 'no_change' (the start already satisfies everything within THE MINIMUM GAIN). */
+export type AlignNote = { code: 'little_depth'; strokeMm: number; deepMm: number }
+  | { code: 'shallower'; mm: number; rootPulled: boolean }
+  | { code: 'support_corrected'; mm: number }
+  | { code: 'no_change' }
 /** THE MINIMUM GAIN of a result over its start (mm): `axisMm` = the drop of the axis error (`keyWorstMm`); `depthMm` =
  *  a channel's shrink of the depth error at the deepest frame, |root joint − its depth target| — for a part that starts
  *  too shallow that is exactly how much deeper the (rigid) part goes, for one that starts too deep how much it comes
- *  back out. `improved` = one of them ≥ `ALIGN_GAIN_MM` and neither negative beyond `ALIGN_GAIN_SLACK_MM`;
- *  `worse` = both negative beyond it (a point target: its error alone). */
+ *  back out. `worse` = the axis error grew by more than `ALIGN_GAIN_SLACK_MM`. */
 export function alignGain(before: KeyReport | null, after: KeyReport | null, inside: boolean):
-  { axisMm: number; depthMm: number; improved: boolean; worse: boolean } {
-  if (!before || !after) return { axisMm: 0, depthMm: 0, improved: false, worse: false }
+  { axisMm: number; depthMm: number; worse: boolean } {
+  if (!before || !after) return { axisMm: 0, depthMm: 0, worse: false }
   const axisMm = keyWorstMm(before, inside) - keyWorstMm(after, inside)
   const err = (r: KeyRow) => Math.abs(r.rootDepthMm - r.rootTargetMm)
   const depthMm = inside ? err(before.deep) - err(after.deep) : 0
-  const lost = (v: number) => v < -ALIGN_GAIN_SLACK_MM
-  return { axisMm, depthMm, improved: (axisMm >= ALIGN_GAIN_MM || depthMm >= ALIGN_GAIN_MM) && !lost(axisMm) && !lost(depthMm),
-    worse: lost(axisMm) && (!inside || lost(depthMm)) }
+  return { axisMm, depthMm, worse: axisMm < -ALIGN_GAIN_SLACK_MM }
 }
+/** LITTLE DEPTH of a channel's key report: the stroke (deepest minus shallowest tip depth) and the deepest tip depth
+ *  (mm), and whether either stays below its threshold. */
+export function littleDepth(rep: KeyReport | null, inside: boolean): { strokeMm: number; deepMm: number; little: boolean } | null {
+  if (!rep || !inside) return null
+  const strokeMm = rep.deep.depthMm - rep.shallow.depthMm, deepMm = rep.deep.depthMm
+  return { strokeMm, deepMm, little: strokeMm < ALIGN_LITTLE_STROKE_MM || deepMm < ALIGN_LITTLE_DEPTH_MM }
+}
+export interface AlignVerdict { applied: boolean; why: AlignDiscard | null; collide: ClearRow | null; unchanged: boolean
+  notes: AlignNote[] }
+/** THE VERDICT (see above). `rendered` = the visible root's deepest point over the RENDERED loop before and after (mm,
+ *  + = inside) and how far the measured correction pulled the moved role back (mm); `support` = the moved role's
+ *  support excess over the loop before and after (mm; null = not on a surface). */
 export function alignVerdict(before: KeyReport | null, after: KeyReport | null, inside: boolean,
-  clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number } | null,
-  support?: { beforeMm: number; afterMm: number } | null):
-  { applied: boolean; why: AlignDiscard | null; collide: ClearRow | null } {
+  clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number; pulledMm?: number } | null,
+  support?: { beforeMm: number; afterMm: number } | null): AlignVerdict {
   const slack = ALIGN_CLEAR_SLACK_MM / 1000
-  // THE RENDERED ROOT: the visible root's deepest point over the loop as rendered may not end inside the opening when
-  // it started outside, nor deeper than it started.
-  if (inside && rendered && Number.isFinite(rendered.afterMm)
-    && rendered.afterMm > Math.max(0, rendered.beforeMm) + ALIGN_ROOT_SLACK_MM) return { applied: false, why: 'root', collide: null }
+  const little = (rep: KeyReport | null): AlignNote[] => {
+    const l = littleDepth(rep, inside)
+    return l?.little ? [{ code: 'little_depth', strokeMm: l.strokeMm, deepMm: l.deepMm }] : []
+  }
+  const discard = (why: AlignDiscard, collide: ClearRow | null = null): AlignVerdict =>
+    ({ applied: false, why, collide, unchanged: false, notes: little(before) })
   const over = clear.filter((c) => c.afterM > c.allowM + slack)
-  if (over.length) {
-    const collide = over.reduce((w, c) => (c.afterM - c.allowM > w.afterM - w.allowM ? c : w), over[0])
-    return { applied: false, why: 'overlap', collide }
-  }
+  if (over.length) return discard('overlap', over.reduce((w, c) => (c.afterM - c.allowM > w.afterM - w.allowM ? c : w), over[0]))
   // THE SUPPORT, ABSOLUTE: the moved role's largest excess over the touch band (mm, over the loop) may not grow.
-  if (support && support.afterMm > Math.max(0, support.beforeMm) + ALIGN_SUPPORT_SLACK_MM) {
-    return { applied: false, why: 'support', collide: null }
-  }
+  if (support && support.afterMm > Math.max(0, support.beforeMm) + ALIGN_SUPPORT_SLACK_MM) return discard('support')
   const gain = alignGain(before, after, inside)
-  if (gain.worse) return { applied: false, why: 'worse', collide: null }
-  if (!gain.improved) return { applied: false, why: 'nothing', collide: null }
-  return { applied: true, why: null, collide: null }
+  if (gain.worse) return discard('worse')
+  const supportFix = support ? support.beforeMm - support.afterMm : 0
+  // the rendered visible root came out of the opening, or (pulled back as far as it could go) at least 5 mm nearer
+  const rootOut = inside && !!rendered && Number.isFinite(rendered.beforeMm) && Number.isFinite(rendered.afterMm)
+    && rendered.beforeMm > 0 && (rendered.afterMm <= 0 || rendered.beforeMm - rendered.afterMm >= ALIGN_GAIN_MM)
+  const applied = !!before && !!after
+    && (gain.axisMm >= ALIGN_GAIN_MM || gain.depthMm >= ALIGN_GAIN_MM || supportFix >= ALIGN_GAIN_MM || rootOut)
+  if (!applied) return { applied: false, why: null, collide: null, unchanged: true, notes: [...little(before), { code: 'no_change' }] }
+  const notes: AlignNote[] = little(after)
+  if (inside && before && after && after.deep.depthMm < before.deep.depthMm - KEY_SHALLOWER_MM) {
+    notes.push({ code: 'shallower', mm: before.deep.depthMm - after.deep.depthMm, rootPulled: rootOut || (rendered?.pulledMm ?? 0) > 0 })
+  }
+  if (supportFix >= ALIGN_SUPPORT_SLACK_MM) notes.push({ code: 'support_corrected', mm: supportFix })
+  return { applied: true, why: null, collide: null, unchanged: false, notes }
 }
 /** Whether the deepest frame's conditions hold (a channel: root outside, tip inside, not past the bottom; a point
  *  target always). */
@@ -786,10 +854,11 @@ export function deepHolds(rep: KeyReport | null, inside: boolean): boolean {
   return !inside || (rep.deep.rootOutside && rep.deep.tipInside && !rep.deep.pastBottom)
 }
 /** THE AUTOMATIC ALTERNATIVE (owner 2026-11-22): a run is BLOCKED — the other role is tried as well — when it was
- *  discarded, when the posture held the moving role back, or when an unknown hit its cap while the deepest frame's
- *  conditions are not met. */
-export function alignBlocked(r: { applied: boolean; postureLimited: boolean; hits: readonly AlignBound[]; deepOk: boolean }): boolean {
-  return !r.applied || r.postureLimited || (r.hits.length > 0 && !r.deepOk)
+ *  not applied (discarded or unchanged), when the posture held the moving role back, when an unknown hit its cap while
+ *  the deepest frame's conditions are not met, or when the visible root could not be pulled out (`stuck`). */
+export function alignBlocked(r: { applied: boolean; postureLimited: boolean; hits: readonly AlignBound[]; deepOk: boolean
+  stuck?: boolean }): boolean {
+  return !r.applied || r.postureLimited || (r.hits.length > 0 && !r.deepOk) || !!r.stuck
 }
 /** One candidate of THE AUTOMATIC ALTERNATIVE: whether it may be applied, the deepest frame's conditions, the
  *  clearance, the axis error (mm) and the deepest tip depth (mm). */
@@ -805,14 +874,18 @@ export function compareCandidates(a: AlignCandidate, b: AlignCandidate): number 
   if (Math.abs(a.depthMm - b.depthMm) > 1e-9) return b.depthMm - a.depthMm
   return 0
 }
-/** "Align all" stage 1 (owner 2026-11-22/23): the bucket of one contact relation — 'improve' when the run may be applied
- *  (THE VERDICT, which includes THE MINIMUM GAIN); 'mismatch' when there is no key report before, or when it may not be
- *  applied and a channel's shaft stood more than `ALIGN_MISMATCH_DEG` off the axis at the deepest frame before AND
- *  still does after (the role turn could not bring it round); 'blocked' otherwise (discarded, with its reason). */
-export type AlignBucket = 'improve' | 'blocked' | 'mismatch'
-export function alignBucket(before: KeyReport | null, after: KeyReport | null, inside: boolean, applied: boolean): AlignBucket {
+/** "Align all" stage 1 (owner 2026-11-22/23, revised 2026-11-23 evening): the bucket of one contact relation —
+ *  'mismatch' when there is no key report before; 'improve' when the run is applied (THE VERDICT) and its visible root
+ *  came out; 'mismatch' when it is not and a channel's shaft stood more than `ALIGN_MISMATCH_DEG` off the axis at the
+ *  deepest frame before AND still does after (the role turn could not bring it round); 'blocked' only for a real block —
+ *  discarded (overlap, support, worse), the visible root that could not be pulled out (`stuck`), or a cap hit while the
+ *  deepest frame's conditions are unmet (`capUnmet`); 'unchanged' otherwise (already fits). */
+export type AlignBucket = 'improve' | 'unchanged' | 'blocked' | 'mismatch'
+export function alignBucket(before: KeyReport | null, after: KeyReport | null, inside: boolean,
+  v: { applied: boolean; why: AlignDiscard | null }, flags: { stuck?: boolean; capUnmet?: boolean } = {}): AlignBucket {
   if (!before) return 'mismatch'
-  if (applied && after) return 'improve'
+  if (v.applied && after && !flags.stuck) return 'improve'
   if (inside && before.deep.shaftDeg > ALIGN_MISMATCH_DEG && (!after || after.deep.shaftDeg > ALIGN_MISMATCH_DEG)) return 'mismatch'
-  return 'blocked'
+  if (v.why || flags.stuck || flags.capUnmet) return 'blocked'
+  return 'unchanged'
 }
