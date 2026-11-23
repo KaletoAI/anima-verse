@@ -21,7 +21,7 @@
  *   8 frames φ = k/8: tip s(φ) = 0.03 + 0.035·(1 − cos 2πφ) (shallow φ = 0: s = 0.03, deep φ = ½: s = 0.10), the
  *   root P_0 = O + (s − L)·u (deep: s_root = −0.02, outside), the chain P_k = P_0 + 0.03·k·q(A)·d₀, the pivot (hips)
  *   P_0 + B·(0, 0.1, −0.1). A misplacement by a partner shift e is P ↦ P + B·e for every point and the pivot.
- *   Cap: alignCap() = side 3 cm, up/forward 8 cm, tilt/roll 10°; root ranges ±60° / ±30°.
+ *   Cap: alignCap() = 8 cm in every direction (side, up, forward), tilt/roll 10°; root ranges ±60° / ±30°.
  *   [1] RECOVERY: measured with the root angle A_m = (4°, 3°) (error −8° / +8°) and the partner shift
  *       e = (2, 3 cos 15°, 3 sin 15°) cm = (2, 2.8978, 0.7765) cm (B·e ⊥ u: a misplacement ACROSS the axis — along u
  *       no lateral residual can see it, and none should). The unique zero of the lateral residuals: x = −e (the root
@@ -43,7 +43,7 @@
  *       inside). Laterally nothing is wrong, so only the hinge max(0, s_root + 0.002) costs: the solve moves the figure
  *       along −u by exactly 0.012 → x = −0.012·(0, −sin 15°, cos 15°) = (0, 0.31058, −1.15911) cm (±0.05 mm), deep
  *       s_root −2 mm (rootOutside), s_tip 0.118; lamp green.
- *   [4] CAPS: [1] with e = (5, 0, 0) cm: side needs −5 cm, the cap stops it at −3 cm → hits ∋ 'side', lamp red, the
+ *   [4] CAPS: [1] with e = (10, 0, 0) cm: side needs −10 cm, the cap stops it at −8 cm → hits ∋ 'side', lamp red, the
  *       reasons name 'caps'. (Roll and root yaw then take what they can of the rest at the cost of the angle's lever;
  *       how much is not asserted.) A* = (12°, −35°) measured at (12°, 0°): the yaw needs −35°, beyond its range ±30° →
  *       hits ∋ 'yaw', red.
@@ -66,8 +66,8 @@
  *       d = (0, 0.1, 1), frameᵀd = (−1, 0.1, 0); joinDelta of that rel from the same hips = (0, 0, 0); from hips
  *       (1, 0.1, 2.5) = (0, 0, 0.5).
  *   [8] THE RECEIVING FIGURE NEVER MOVES: hits {e 1, r 0}, {e 2, r 0}, {e 1, r 3} → alignMovers keys exactly {1, 2}.
- *   [9] keyFrames of tips s = 0.05, 0.02, 0.09, 0.02, 0.09 → deep 2 (first of the ties), shallow 1; alignCap(4) = side 3,
- *       up/forward 4 cm.
+ *   [9] keyFrames of tips s = 0.05, 0.02, 0.09, 0.02, 0.09 → deep 2 (first of the ties), shallow 1; alignCap(4) = side,
+ *       up and forward 4 cm (the range is the only shift cap, the same in every direction).
  *   [10] REAL-SHAPED: THE AXIS TURNS BETWEEN THE KEY FRAMES (the crouching-doggy capture of 2026-11-21: the receiving
  *       axis 8° apart at the deep and the shallow frame, the two axis lines crossing about 0.2 m in front of the
  *       opening, a 0.107 m part). Basis B = I (side x, up y, forward z), shift only (no root angle, no tilt/roll axes —
@@ -106,6 +106,35 @@
  *         c = 0.1:  t = 0.05·0.1/0.04 = 0.125,    sin θ = √0.99 = 0.9949874  → 0.1243734 m (the taper)
  *         c = 0:    t = 0 → 0 (the root joint, which lies on the axis); c = −0.3: t = 0 → 0.
  *       The lever is L·|d − u| = 0.1·√(2 − 2c): c = 0.5 → 0.1 m.
+ *   [13] THE CLEARANCE (owner 2026-11-22): [2]'s correct stroke unrooted, no tilt/roll axes, no root angle — shift only;
+ *       the depth target wants a = 0.018 along u. The mover carries a capsule M (a point, r 0.05) at O + B·(0.3, 0, 0);
+ *       another figure a capsule C (r 0.05) at M + 0.11·u: the start depth 0.1 − 0.11 = −0.01 (apart), the allowance
+ *       clearAllowM(0) = max(0, 5 mm) = 0.005. A move a along u brings M to 0.11 − a from C: depth a − 0.01, over the
+ *       allowance by a − 0.015, at the weight 100: (a − 0.018)² + 100²(a − 0.015)² least at
+ *       a = (0.018 + 10⁴·0.015)/(1 + 10⁴) = 150.018/10001 = 0.0150003 m (a move across u only lengthens the distance to
+ *       second order and costs the axis error to first, so it stays 0). Expect x = a·(0, −sin 15°, cos 15°) =
+ *       (0, −0.38823, 1.44889) cm (±0.05 mm) and the overlap 0.0050003 at the allowance (±0.05 mm).
+ *   [14] THE VERDICT, THE ORDER, THE BUCKETS, BLOCKED with hand-built reports (deep depth / opening offset, mm; the
+ *       lever and the shallow frame 0): a clearance row 5.6 mm against the allowance 5 + slack 0.5 → 'overlap' naming C,
+ *       5.4 → applied; (50, 10) → (40, 12) is shallower AND further off → 'worse'; (40, 9) and (55, 12) are applied.
+ *       THE RENDERED ROOT (visible root mm, before → after): 1.8 → 5.4 'root' (deeper than its start + 0.5); −3 → 0.4
+ *       applied (≤ max(0, −3) + 0.5); −3 → 0.6 'root'; 1.8 → 2.2 applied. compareCandidates: applied first, then the
+ *       deep conditions, the clearance, the smaller axis error, the deeper tip; equal → 0. alignBucket: shaft 61° → mismatch,
+ *       no report → mismatch, not applied → blocked, 0.6 mm deeper → improve, 0.6 mm straighter → improve, 0.4 / 0.4 →
+ *       blocked. alignBlocked: discarded, posture-limited, or a cap hit with the deep conditions unmet.
+ *   [15] THE VISIBLE ROOT AND THE DEPTH GATE (owner finding 2026-11-22, crouching-mission). visibleRootDepth: o = 0,
+ *       u = +Z, the joint at s = −0.01, the shaft 30° off the axis, lead 0.01, ring 0.02 → −0.01 + 0.01·cos 30° +
+ *       0.02·sin 30° = 0.0086603; no lead/ring = the joint, −0.01. depthGate(e, ρ) = clamp((2ρ − e)/ρ, 0, 1):
+ *       (10, 15) mm → 1, (22.5, 15) → ½, (30, 15) → 0, (25, none → 15) → ⅓.
+ *       (d) [13]'s stroke with lead 0.01 (d = u, so cos θ = 1, sin θ = 0): the VISIBLE root goes to −2 mm, the joint to
+ *       −12 mm: a = −0.012 − (−0.02) = 0.008 → x = (0, −0.20706, 0.77274) cm; deep visible root −2, joint −12 mm.
+ *       (c) [13]'s stroke 4 cm off sideways (B·side ⊥ u), cap 2 cm: stage A (every gate 0) puts side on −2 cm and keeps
+ *       the depth (the start, s_keep = min(−0.02, −0.002) = −0.02), leaving e = 0.02 → gate g = (0.03 − 0.02)/0.015 = ⅔.
+ *       Stage B along u (a from the start): g(a − 0.018), (1 − g)(a − 0) and (1 − g)·10·max(0, a): least at
+ *       a = g²·0.018/(g² + (1 − g)²·(1 + 10²)) = (4/9·0.018)/(4/9 + 101/9) = 0.072/105 = 0.00068571 → x =
+ *       (−2, −0.0177474, 0.0662346) cm (±0.05 mm). Cap 1 cm: e = 0.03 → g = 0, the depth stays: x = (−1, 0, 0) cm, the
+ *       deep root joint −20 mm. FAILS ON THE OLD CODE (commit 9d2ece2139b6ba8f3e7b500fca93239592db3276, no gate): the
+ *       depth target pulls the root toward −2 mm regardless (forward capped at 1 cm: deeper than −15 mm).
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -223,9 +252,9 @@ const AM = { pitchDeg: 4, yawDeg: 3 }
   ok(`[3] root inside pushed out: x = ${sol.x.map((v) => (v * 100).toFixed(4)).join(' / ')} cm, root at ${rep.deep.rootDepthMm.toFixed(3)} mm`)
 }
 { // [4]
-  const meas = stroke({ aShown: AM, e: [0.05, 0, 0] })
+  const meas = stroke({ aShown: AM, e: [0.1, 0, 0] })
   const sol = SR.solveAlign(problem([{ samples: meas, rooted: true }], AM))
-  assert.ok(sol.hits.includes('side'), `[4] hits ${sol.hits}`); near(sol.x[0], -0.03, 1e-9, '[4] side on its cap')
+  assert.ok(sol.hits.includes('side'), `[4] hits ${sol.hits}`); near(sol.x[0], -0.08, 1e-9, '[4] side on its cap')
   assert.equal(SR.keyLamp(SR.keyReport(after(meas, sol, AM)), sol.hits, true), 'red')
   assert.ok(SR.keyReasons(SR.keyReport(after(meas, sol, AM)), sol.hits, true).includes('caps'), '[4] reason caps')
   const aStar = { pitchDeg: 12, yawDeg: -35 }, a0 = { pitchDeg: 12, yawDeg: 0 }
@@ -269,7 +298,7 @@ const AM = { pitchDeg: 4, yawDeg: 3 }
   const k = SR.keyFrames([0.05, 0.02, 0.09, 0.02, 0.09].map((s) => ({ tip: [0, 0, s], o: [0, 0, 0], u: [0, 0, 1] })))
   assert.deepEqual(k, { deep: 2, shallow: 1 })
   const c4 = SR.alignCap(4)
-  near(c4.sideM, 0.03, 1e-12, '[9] side'); near(c4.upM, 0.04, 1e-12, '[9] up'); near(c4.forwardM, 0.04, 1e-12, '[9] fwd')
+  near(c4.sideM, 0.04, 1e-12, '[9] side'); near(c4.upM, 0.04, 1e-12, '[9] up'); near(c4.forwardM, 0.04, 1e-12, '[9] fwd')
   ok('[9] key frames and the cap of a 4 cm range')
 }
 { // [10]
@@ -329,4 +358,77 @@ const AM = { pitchDeg: 4, yawDeg: 3 }
   near(Math.hypot(...at(0.5).lever), 0.1, 1e-9, '[12] lever')
   ok('[12] the opening-plane offset is continuous: 86.603 / 244.949 / 244.949 / 124.373 / 0 / 0 mm')
 }
-console.log(`\n${n}/14 checks passed`)
+{ // [13]
+  const meas = stroke({ rooted: false })
+  const PM = add(O1, Bv([0.3, 0, 0])), PC = add(PM, mul(U, 0.11))
+  const clear = [{ pivot: meas[0].pivot, mover: [{ id: 'm', a: PM, b: PM, r: 0.05 }],
+    others: [{ name: 'C', allowM: SR.clearAllowM(0), caps: [{ id: 'c', a: PC, b: PC, r: 0.05 }] }] }]
+  near(SR.clearAllowM(0), 0.005, 1e-12, '[13] allowance floor'); near(SR.clearAllowM(0.02), 0.02, 1e-12, '[13] allowance = start')
+  const sol = SR.solveAlign({ relations: [{ samples: meas }], basis: B, axes: [], cap, root: null, clear })
+  const a = 150.018 / 10001
+  ;[0, -a * s15, a * c15].forEach((v, i) => near(sol.x[i], v, 5e-5, `[13] x[${i}]`))
+  const moved = add(PM, sol.fix.shift)
+  near(0.1 - Math.hypot(...sub(PC, moved)), 0.005, 5e-5, '[13] overlap at the allowance')
+  ok(`[13] the clearance holds the move at the allowance: x = ${sol.x.map((v) => (v * 100).toFixed(4)).join(' / ')} cm (a = ${(a * 1000).toFixed(4)} mm)`)
+}
+{ // [14]
+  const rep = (depth, open, shaft = 5) => ({ deep: { depthMm: depth, openOffMm: open, leverMm: 0, pastBottom: false, shaftDeg: shaft,
+    rootOutside: true, tipInside: true }, shallow: { openOffMm: 0, leverMm: 0 } })
+  const row = (afterM) => [{ name: 'C', startM: 0.002, allowM: 0.005, afterM, worst: 'm ↔ c' }]
+  let v = SR.alignVerdict(rep(50, 10), rep(55, 5), true, row(0.0056))
+  assert.equal(v.why, 'overlap'); assert.equal(v.collide.name, 'C'); assert.equal(v.applied, false)
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 5), true, row(0.0054)).applied, true)
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(40, 12), true, []).why, 'worse')
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(40, 9), true, []).applied, true)
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 12), true, []).applied, true)
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 5), true, [], { beforeMm: 1.8, afterMm: 5.4 }).why, 'root')
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 5), true, [], { beforeMm: -3, afterMm: 0.4 }).applied, true)
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 5), true, [], { beforeMm: -3, afterMm: 0.6 }).why, 'root')
+  assert.equal(SR.alignVerdict(rep(50, 10), rep(55, 5), true, [], { beforeMm: 1.8, afterMm: 2.2 }).applied, true)
+  const c = (o) => ({ applied: true, deepOk: true, clearOk: true, axisMm: 5, depthMm: 50, ...o })
+  assert.ok(SR.compareCandidates(c({}), c({ applied: false, axisMm: 0 })) < 0, '[14] applied first')
+  assert.ok(SR.compareCandidates(c({ deepOk: false, axisMm: 0 }), c({})) > 0, '[14] deep conditions')
+  assert.ok(SR.compareCandidates(c({ clearOk: false, axisMm: 0 }), c({})) > 0, '[14] clearance')
+  assert.ok(SR.compareCandidates(c({ axisMm: 4 }), c({ depthMm: 90 })) < 0, '[14] axis error')
+  assert.ok(SR.compareCandidates(c({ depthMm: 60 }), c({})) < 0, '[14] deeper'); assert.equal(SR.compareCandidates(c({}), c({})), 0)
+  assert.equal(SR.alignBucket(rep(50, 10, 61), rep(55, 5), true, true), 'mismatch')
+  assert.equal(SR.alignBucket(null, rep(55, 5), true, true), 'mismatch')
+  assert.equal(SR.alignBucket(rep(50, 10), rep(55, 5), true, false), 'blocked')
+  assert.equal(SR.alignBucket(rep(50, 10), rep(50.6, 10), true, true), 'improve')
+  assert.equal(SR.alignBucket(rep(50, 10), rep(50, 9.4), true, true), 'improve')
+  assert.equal(SR.alignBucket(rep(50, 10), rep(50.4, 9.6), true, true), 'blocked')
+  const bl = (o) => SR.alignBlocked({ applied: true, postureLimited: false, hits: [], deepOk: true, ...o })
+  assert.equal(bl({}), false); assert.equal(bl({ applied: false }), true); assert.equal(bl({ postureLimited: true }), true)
+  assert.equal(bl({ hits: ['side'] }), false); assert.equal(bl({ hits: ['side'], deepOk: false }), true)
+  ok('[14] the verdict, the candidates\' order, the buckets and "blocked"')
+}
+{ // [15]
+  const th = 30 * D2R, P = [0, 0, -0.01], T = add(P, mul([Math.sin(th), 0, Math.cos(th)], 0.1))
+  near(SR.visibleRootDepth({ o: [0, 0, 0], u: [0, 0, 1], tip: T, rootLeadM: 0.01, rootRingM: 0.02 }, P), 0.0086603, 1e-7, '[15] visible root')
+  near(SR.visibleRootDepth({ o: [0, 0, 0], u: [0, 0, 1], tip: T }, P), -0.01, 1e-12, '[15] no lead = the joint')
+  near(SR.depthGate(0.01, 0.015), 1, 1e-12, '[15] gate 1'); near(SR.depthGate(0.0225, 0.015), 0.5, 1e-12, '[15] gate ½')
+  near(SR.depthGate(0.03, 0.015), 0, 1e-12, '[15] gate 0'); near(SR.depthGate(0.025, 0), 1 / 3, 1e-12, '[15] default radius')
+  // (d) the visible root 10 mm beyond the joint (d = u): the joint's target is −12 mm → a = 0.008 along u
+  const vis = stroke({ rooted: false }).map((s) => ({ ...s, rootLeadM: 0.01, rootRingM: 0.02 }))
+  const sv = SR.solveAlign({ relations: [{ samples: vis }], basis: B, axes: [], cap, root: null })
+  ;[0, -0.008 * s15, 0.008 * c15].forEach((v, i) => near(sv.x[i], v, 5e-5, `[15] visible x[${i}]`))
+  const rv = SR.keyReport(vis.map((s) => SR.moveSample(s, sv.fix)))
+  near(rv.deep.visRootMm, -2, 0.05, '[15] visible root at −2 mm'); near(rv.deep.rootDepthMm, -12, 0.05, '[15] joint at −12 mm')
+  // (c) the shaft 4 cm off the opening sideways, the cap 2 cm: stage A leaves 2 cm → gate ⅔
+  const off = stroke({ rooted: false, e: [0.04, 0, 0] })
+  const s2 = SR.solveAlign({ relations: [{ samples: off }], basis: B, axes: [], cap: SR.alignCap(2), root: null })
+  const a2 = 0.072 / 105
+  ;[-0.02, -a2 * s15, a2 * c15].forEach((v, i) => near(s2.x[i], v, 5e-5, `[15] gate ⅔ x[${i}]`))
+  // cap 1 cm: 3 cm left → gate 0, the root keeps its start depth (−20 mm)
+  const s1 = SR.solveAlign({ relations: [{ samples: off }], basis: B, axes: [], cap: SR.alignCap(1), root: null })
+  ;[-0.01, 0, 0].forEach((v, i) => near(s1.x[i], v, 5e-5, `[15] gate 0 x[${i}]`))
+  const r1 = SR.keyReport(off.map((s) => SR.moveSample(s, s1.fix)))
+  near(r1.deep.rootDepthMm, -20, 0.05, '[15] gate 0 keeps the depth')
+  ok(`[15] visible root and depth gate: x = ${sv.x.map((v) => (v * 100).toFixed(4)).join(' / ')} cm; gate ⅔ along u ${(a2 * 1000).toFixed(4)} mm; gate 0 root ${r1.deep.rootDepthMm.toFixed(3)} mm`)
+  const OLD = await loadSR('9d2ece2139b6ba8f3e7b500fca93239592db3276')
+  const o1 = OLD.solveAlign({ relations: [{ samples: off }], basis: B, axes: [], cap: OLD.alignCap(1), root: null })
+  const or1 = OLD.keyReport(off.map((s) => OLD.moveSample(s, o1.fix)))
+  assert.ok(or1.deep.rootDepthMm > -15, `[15] old root ${or1.deep.rootDepthMm}`)
+  ok(`[15] fails on 9d2ece21: the old solve takes the root of a shaft 3 cm off the opening to ${or1.deep.rootDepthMm.toFixed(3)} mm`)
+}
+console.log(`\n${n}/18 checks passed`)

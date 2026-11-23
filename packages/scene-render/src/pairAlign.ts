@@ -30,10 +30,34 @@
  *       sample's body axes), and the partner fix moves the result. What the simulated chain does beyond that rigid
  *       turn is caught by RE-MEASURING (`alignByPasses`).
  *
- * THE CAP (`alignCap`): totals, never per step — |x_forward|, |x_up| ≤ range (default `ALIGN_RANGE_CM_DEFAULT` = 8 cm,
- * per clip in the sidecar `align_range_cm`), |x_side| ≤ min(3 cm, range), |α_k| ≤ 10° (or the place type's posture
- * cap), |pitch| ≤ `ROOT_PITCH_MAX_DEG`, |yaw| ≤ `ROOT_YAW_MAX_DEG` (the slider ranges). Only the mover moves.
- * An unknown that ends on its bound is a HIT (`AlignBound`), named in the result; a hit makes the lamp red.
+ * THE CAP (`alignCap`): totals, never per step — the clip's alignment range is the ONLY shift cap, the same in every
+ * direction: |x_side|, |x_up|, |x_forward| ≤ range (default `ALIGN_RANGE_CM_DEFAULT` = 8 cm, per clip in the sidecar
+ * `align_range_cm`), measured from the user's base arrangement; |α_k| ≤ 10° (or the place type's posture cap),
+ * |pitch| ≤ `ROOT_PITCH_MAX_DEG`, |yaw| ≤ `ROOT_YAW_MAX_DEG` (the slider ranges). Only the mover moves. An unknown
+ * that ends on its bound is a HIT (`AlignBound`), named in the result; a hit makes the lamp red. (Owner 2026-11-22:
+ * the centimetre caps were meant to stop a person being pushed onto another — THE CLEARANCE below guards that
+ * directly, so the former 3 cm side cap is gone.)
+ *
+ * THE CLEARANCE (`AlignProblem.clear`, owner 2026-11-22): the moved role must not go deeper into ANY other person of
+ * the scene than the clip's own arrangement already does. Per other figure f the ALLOWANCE is
+ * a_f = max(the start's worst capsule overlap with f over the sampled loop, `ALIGN_CLEAR_TOL_MM` = 5 mm — the honest
+ * check's green limit, below which the capsules' own approximation is the larger error). Exempt, as in the honest
+ * check (`pairInterpenetration`), is only an attached-part capsule against a receiving channel's suppress capsules.
+ * In the solve every capsule pair (mover capsule, capsule of f) costs `ALIGN_CLEAR_WEIGHT`·max(0, depth − a_f) per
+ * metre (depth = r₁ + r₂ − the axis segments' distance), with the mover's capsules moved rigidly by the trial about
+ * the frame's pivot, at the key frames of every relation plus the frame where the measurement found the largest excess
+ * over the allowance (`ClearFrame`; re-measuring between the passes picks it afresh). The weight 100 per metre makes
+ * a millimetre over the allowance cost as much as 10 cm of axis error, so the solve keeps it within a few µm; the
+ * root angle's re-pose of the part's own capsules is not modelled in the solve (the re-measure sees it). Pairs that
+ * cannot reach overlap within the cap (start depth below a_f − the cap's reach) are left out.
+ * THE VERDICT (`alignVerdict`): the run's last measurement over the WHOLE loop decides — a role deeper into some f
+ * than a_f + `ALIGN_CLEAR_SLACK_MM` (0.5 mm, the re-measure repeatability) is DISCARDED ('overlap', the dials stay),
+ * and so is a result worse than its start by the lamp's own measures: the deepest frame shallower (`KEY_SHALLOWER_MM`,
+ * not counted for a start past the bottom) AND the axis error larger ('worse'). THE RENDERED ROOT (owner finding
+ * 2026-11-22): the page measures the VISIBLE root over the loop as rendered (partners on, the chain bend applied); a
+ * channel whose visible root ends deeper than max(0, its start) + `ALIGN_ROOT_SLACK_MM` on some rendered frame is
+ * discarded too ('root'); one still inside but not deeper than it started is applied, red, with the reason named.
+ * Anything else is applied, caps or not.
  *
  * THE RESIDUALS (`solveAlign`), per relation, at its deep and its shallow frame (one frame when they coincide). With
  * the rigid shaft's direction d = (T' − P'_0)/|T' − P'_0| (T' the tip, P'_0 the root joint, both after the trial):
@@ -52,7 +76,18 @@
  *   deep frame, a channel only — THE DEPTH TARGET (weight `ALIGN_DEPTH_WEIGHT`):
  *     s_root − s*,  s* = min(−m, (depth − r_tip) − m − (s_tip − s_root))
  *     the root joint just outside the opening (−m), or further out when the shaft would otherwise push the tip past
- *     the bottom (whichever binds first; without a known depth s* = −m). Plus the inequalities (only a VIOLATED one
+ *     the bottom (whichever binds first; without a known depth s* = −m). THE VISIBLE ROOT (owner finding 2026-11-22,
+ *     crouching-mission): "the root" is where the part's mesh meets the body — the body-side end of the part capsule
+ *     nearest the root joint, `rootLeadM` along the shaft beyond the joint, with its ring radius r: its depth is
+ *     s_root + lead·cos θ + r·sin θ (`visibleRootDepth`), and the target and the "root outside" inequality hold IT just
+ *     outside, not the joint (there the visible root sat 10 mm deeper than the joint). THE DEPTH GATE: the target pulls
+ *     with the gate g = `depthGate` of the shaft's opening-plane offset e against the part's radius ρ (`partRadiusOf`;
+ *     1 for e ≤ ρ, 0 from e ≥ 2ρ), e measured where stage A of THE SOLVE (every gate 0) leaves the shaft:
+ *     g·(s_root − s*) plus (1 − g)·[(s_root − s_keep), W·max(0, s_root − s_keep)], s_keep = min(s_hold, s*), s_hold
+ *     the joint's depth at the deepest frame of the run's first measurement — a shaft that misses the opening keeps
+ *     the depth it started with and never buys depth (there the full-depth pull took the root 5 mm
+ *     deeper while posture and clearance held the offset at 37 mm, and the shaft line then entered the receiving mesh
+ *     44 mm before the root joint). Plus the inequalities (only a VIOLATED one
  *     costs, `ALIGN_LIMIT_WEIGHT` per metre): max(0, m − s_tip) the tip not inside, max(0, s_tip − (depth − r_tip) + m)
  *     past the bottom, max(0, s_root + m) the root not outside; the margin m = `ALIGN_MARGIN_M`.
  *   Why (the diagnosis of 2026-11-21, crouching-doggy): the receiving axis turns between the key frames (8° there), so
@@ -90,14 +125,16 @@ import { bendSample, fixPoint, solveLinear, supportDelta, turnMatrix, type FitSa
 import { quatMul, quatRotate, rootTurnQuat, ROOT_PITCH_MAX_DEG, ROOT_YAW_MAX_DEG, type BendFrame, type BendLimits,
   type RootAngle } from './chainBend'
 import { POSTURE, postureExcess } from './postureSupport'
+import { segmentSegmentDistance } from './figureInspect'
 
 export const ALIGN_RANGE_CM_DEFAULT = 8
-export const ALIGN_SIDE_CM = 3
 export const ALIGN_ANGLE_DEG = 10
 export const JOIN_WEIGHT = 1
 /** The inequality weight (per metre of violation) and the margin the inequalities keep (metres). */
 export const ALIGN_LIMIT_WEIGHT = 10
 export const ALIGN_MARGIN_M = 0.002
+/** THE DEPTH GATE's part radius when a sample names none (metres). */
+export const ALIGN_PART_RADIUS_M = 0.015
 /** The fixed lever the shaft-to-axis angle is weighted by (metres per radian), and the depth target's weight. */
 export const ALIGN_AXIS_LEVER_M = 0.1
 export const ALIGN_DEPTH_WEIGHT = 1
@@ -112,6 +149,12 @@ export const KEY_GREEN_MM = 3
 export const KEY_YELLOW_MM = 10
 /** A deepest frame this much shallower after the run than before turns the lamp red (THE LAMP). */
 export const KEY_SHALLOWER_MM = 0.5
+/** THE CLEARANCE: the residual weight per metre over the allowance, the allowance's floor (mm), the verdict's slack
+ *  (mm) and the shaft angle beyond which a relation's geometry does not match its target ("Align all", degrees). */
+export const ALIGN_CLEAR_WEIGHT = 100
+export const ALIGN_CLEAR_TOL_MM = 5
+export const ALIGN_CLEAR_SLACK_MM = 0.5
+export const ALIGN_MISMATCH_DEG = 60
 
 export interface AlignCap { sideM: number; upM: number; forwardM: number; angleDeg: number }
 export type AlignLamp = 'green' | 'yellow' | 'red'
@@ -121,7 +164,35 @@ export type AlignBound = 'side' | 'up' | 'forward' | 'tilt' | 'roll' | 'pitch' |
 /** The cap for a clip's alignment range (cm; null/invalid = the default). */
 export function alignCap(rangeCm?: number | null): AlignCap {
   const r = typeof rangeCm === 'number' && Number.isFinite(rangeCm) && rangeCm > 0 ? rangeCm : ALIGN_RANGE_CM_DEFAULT
-  return { sideM: Math.min(ALIGN_SIDE_CM, r) / 100, upM: r / 100, forwardM: r / 100, angleDeg: ALIGN_ANGLE_DEG }
+  return { sideM: r / 100, upM: r / 100, forwardM: r / 100, angleDeg: ALIGN_ANGLE_DEG }
+}
+
+/** One collision capsule (stage space): the axis segment a–b and the radius. */
+export interface ClearCapsule { id: string; a: Vec3; b: Vec3; r: number }
+/** THE CLEARANCE at one sampled frame: the mover's capsules (moved by the trial about `pivot`), every other figure's
+ *  capsules with its allowance (metres), and the exempt pairs `<mover capsule>|<figure>|<capsule>`. */
+export interface ClearFrame {
+  pivot: Vec3
+  mover: readonly ClearCapsule[]
+  others: readonly { name: string; allowM: number; caps: readonly ClearCapsule[] }[]
+  exempt?: ReadonlySet<string>
+}
+/** The allowance of one other figure (metres): its start overlap, at least the tolerance (THE CLEARANCE). */
+export function clearAllowM(startM: number): number {
+  return Math.max(startM, ALIGN_CLEAR_TOL_MM / 1000)
+}
+/** The deepest overlap of the mover against each other figure at one frame (metres, ≥ 0; THE CLEARANCE), the exempt
+ *  pairs skipped, with the worst pair `<mover capsule> ↔ <capsule>`. */
+export function clearDepths(f: ClearFrame): { name: string; depthM: number; worst: string }[] {
+  return f.others.map((o) => {
+    let depthM = 0, worst = ''
+    for (const m of f.mover) for (const c of o.caps) {
+      if (f.exempt?.has(`${m.id}|${o.name}|${c.id}`)) continue
+      const d = m.r + c.r - segmentSegmentDistance(m.a, m.b, c.a, c.b)
+      if (d > depthM) { depthM = d; worst = `${m.id} ↔ ${c.id}` }
+    }
+    return { name: o.name, depthM, worst }
+  })
 }
 
 /** One measured frame of a contact relation. */
@@ -138,6 +209,11 @@ export interface AlignSample extends FitSample {
    *  support and body axes move about `pivot`; 'receiver' = the receiving role — its opening `o` and axis `u` move
    *  about `pivot` (then the RECEIVING figure's pivot) and `support` is the receiving figure's. */
   mover?: 'part' | 'receiver'
+  /** THE VISIBLE ROOT (owner finding 2026-11-22): where the part's mesh meets the body lies `rootLeadM` along the shaft
+   *  beyond the root joint (the body-side end of the part capsule nearest the joint; never negative) with the ring
+   *  radius `rootRingM` there. Absent = the root joint itself. */
+  rootLeadM?: number
+  rootRingM?: number
 }
 /** A contact relation's samples over the loop; `rooted` = its chain is the one the clip's root angle turns. */
 export interface AlignRelation { samples: readonly AlignSample[]; rooted?: boolean }
@@ -158,6 +234,11 @@ export interface AlignProblem {
   posture?: boolean
   /** The world shift still missing to join the base clip's end (end clips), and its weight (× key-frame count). */
   join?: { deltaM: Vec3; weight?: number } | null
+  /** THE CLEARANCE: the frames the mover must keep clear of every other figure at (absent/empty = no term). */
+  clear?: readonly ClearFrame[] | null
+  /** THE DEPTH GATE: per relation, the root joint's depth at the deepest frame of the run's FIRST measurement (metres);
+   *  absent = the sample's own. */
+  depthHold?: readonly (number | null)[] | null
   iterations?: number
 }
 export interface AlignSolution {
@@ -232,12 +313,35 @@ export function axisError(s: { o: Vec3; u: Vec3; tip: Vec3 }, root: Vec3): { off
   const q = add(root, scale(d, t))
   return { offset: lateral(sub(q, s.o), s.u), lever: scale(sub(d, s.u), ALIGN_AXIS_LEVER_M) }
 }
-/** THE DEPTH TARGET of a deep channel sample (metres along u): where the root joint should be. */
-export function depthTarget(s: { o: Vec3; u: Vec3; tip: Vec3; depthM?: number; tipRadiusM?: number }, root: Vec3): number {
+/** THE VISIBLE ROOT's depth along the axis (metres, + = inside): the root joint's, plus the lead along the shaft
+ *  (lead·cos θ) and the ring's reach toward the inside (r·sin θ), θ the shaft's angle to the axis. */
+export function visibleRootDepth(s: { o: Vec3; u: Vec3; tip: Vec3; rootLeadM?: number; rootRingM?: number }, root: Vec3): number {
+  const d = sub(s.tip, root), l = Math.hypot(d[0], d[1], d[2])
+  const c = l > 1e-12 ? clampTo(dot(d, s.u) / l, -1, 1) : 1
+  return axial(s, root) + Math.max(0, s.rootLeadM ?? 0) * c + Math.max(0, s.rootRingM ?? 0) * Math.sqrt(1 - c * c)
+}
+/** THE DEPTH TARGET of a deep channel sample (metres along u): where the root joint should be — the VISIBLE root just
+ *  outside the opening (−m), or further out when the shaft would otherwise push the tip past the bottom. */
+export function depthTarget(s: { o: Vec3; u: Vec3; tip: Vec3; depthM?: number; tipRadiusM?: number; rootLeadM?: number
+  rootRingM?: number }, root: Vec3): number {
   const m = ALIGN_MARGIN_M
-  if (!((s.depthM ?? 0) > 0)) return -m
+  const lead = visibleRootDepth(s, root) - axial(s, root)
+  if (!((s.depthM ?? 0) > 0)) return -m - lead
   const bottom = (s.depthM ?? 0) - (s.tipRadiusM ?? 0)
-  return Math.min(-m, bottom - m - (axial(s, s.tip) - axial(s, root)))
+  return Math.min(-m - lead, bottom - m - (axial(s, s.tip) - axial(s, root)))
+}
+/** THE DEPTH GATE: how much of the depth target pulls (0 … 1) when the shaft line crosses the opening plane `offM` from
+ *  the opening, for a part of radius ρ (metres) — 1 while the crossing lies within ρ (the shaft goes through the
+ *  opened ring), 0 from 2ρ (it misses the opening by its own thickness and would go into the body beside it), linear
+ *  between. */
+export function depthGate(offM: number, radiusM: number): number {
+  const r = radiusM > 0 ? radiusM : ALIGN_PART_RADIUS_M
+  return clampTo((2 * r - offM) / r, 0, 1)
+}
+/** The part's radius for THE DEPTH GATE: the largest of its root ring and its tip, or `ALIGN_PART_RADIUS_M`. */
+export function partRadiusOf(s: { rootRingM?: number; tipRadiusM?: number }): number {
+  const r = Math.max(s.rootRingM ?? 0, s.tipRadiusM ?? 0)
+  return r > 0 ? r : ALIGN_PART_RADIUS_M
 }
 
 /** The active-set Gauss–Newton of the module docstring THE SOLVE: the increment z with (start + z) within ±half that
@@ -300,12 +404,16 @@ function solveBounded(res: (z: number[]) => number[], start: readonly number[], 
 export function solveAlign(p: AlignProblem): AlignSolution {
   const axes = p.axes ?? []
   const keys = p.relations.map((r) => keyFrames(r.samples))
-  const picks: { s: AlignSample; deep: boolean; rooted: boolean }[] = []
+  // THE DEPTH GATE: `gate` per relation (shared by its key frames), set between the two stages of the solve below.
+  const picks: { s: AlignSample; deep: boolean; rooted: boolean; g: { gate: number }; hold: number }[] = []
   p.relations.forEach((r, i) => {
     const k = keys[i]
     if (!k) return
-    picks.push({ s: r.samples[k.deep], deep: true, rooted: !!r.rooted })
-    if (k.shallow !== k.deep) picks.push({ s: r.samples[k.shallow], deep: false, rooted: !!r.rooted })
+    const sd = r.samples[k.deep], r0 = sd.chain?.[0] ?? sd.base
+    const g = { gate: 1 }
+    const hold = p.depthHold?.[i] ?? axial(sd, r0)
+    picks.push({ s: sd, deep: true, rooted: !!r.rooted, g, hold })
+    if (k.shallow !== k.deep) picks.push({ s: r.samples[k.shallow], deep: false, rooted: !!r.rooted, g, hold })
   })
   const rooted = !!p.root && picks.some((x) => x.rooted && !!x.s.body && (x.s.chain?.length ?? 0) >= 2)
   const nA = axes.length
@@ -328,6 +436,14 @@ export function solveAlign(p: AlignProblem): AlignSolution {
   const jw = p.join ? Math.sqrt((p.join.weight ?? JOIN_WEIGHT) * N) : 0
   const posture = p.posture !== false && picks.some((x) => !!x.s.support)
   const W = ALIGN_LIMIT_WEIGHT, m = ALIGN_MARGIN_M
+  // THE CLEARANCE: the capsule pairs that can reach their allowance within the cap (the farthest a capsule can move:
+  // the shift cap's diagonal plus a turn's sweep of up to 0.2 m).
+  const reach = Math.hypot(p.cap.sideM, p.cap.upM, p.cap.forwardM) + 0.2
+  const clearPairs: { f: ClearFrame; m: ClearCapsule; c: ClearCapsule; allowM: number }[] = []
+  for (const f of p.clear ?? []) for (const o of f.others) for (const mc of f.mover) for (const c of o.caps) {
+    if (f.exempt?.has(`${mc.id}|${o.name}|${c.id}`)) continue
+    if (mc.r + c.r - segmentSegmentDistance(mc.a, mc.b, c.a, c.b) > o.allowM - reach) clearPairs.push({ f, m: mc, c, allowM: o.allowM })
+  }
   const res = (z: number[]): number[] => {
     const fix = toFix(z)
     const to = rooted ? rootOf(z) : null
@@ -343,9 +459,12 @@ export function solveAlign(p: AlignProblem): AlignSolution {
         out.push(lr[0], lr[1], lr[2], lt[0], lt[1], lt[2])
       }
       if (k.deep && k.s.channel) {
-        const st = axial(s, s.tip), sr = axial(s, r0)
-        out.push(ALIGN_DEPTH_WEIGHT * (sr - depthTarget(s, r0)))
-        out.push(W * Math.max(0, m - st), W * Math.max(0, sr + m))
+        const st = axial(s, s.tip), sr = axial(s, r0), sv = visibleRootDepth(s, r0)
+        const tgt = depthTarget(s, r0), keep = Math.min(k.hold, tgt)
+        const g = k.g.gate
+        out.push(g * ALIGN_DEPTH_WEIGHT * (sr - tgt))
+        out.push((1 - g) * ALIGN_DEPTH_WEIGHT * (sr - keep), (1 - g) * W * Math.max(0, sr - keep))
+        out.push(W * Math.max(0, m - st), W * Math.max(0, sv + m))
         const bottom = (k.s.depthM ?? 0) - (k.s.tipRadiusM ?? 0)
         if ((k.s.depthM ?? 0) > 0) out.push(W * Math.max(0, st - bottom + m))
       }
@@ -358,6 +477,10 @@ export function solveAlign(p: AlignProblem): AlignSolution {
       const kt = POSTURE.turnCostM * Math.sqrt(N)
       out.push(kt * fix.turn[0], kt * fix.turn[1], kt * fix.turn[2])
     }
+    for (const q of clearPairs) {
+      const a = fixPoint(fix, q.f.pivot, q.m.a), b = fixPoint(fix, q.f.pivot, q.m.b)
+      out.push(ALIGN_CLEAR_WEIGHT * Math.max(0, q.m.r + q.c.r - segmentSegmentDistance(a, b, q.c.a, q.c.b) - q.allowM))
+    }
     if (p.join) {
       const sh = fix.shift, d = p.join.deltaM
       out.push(jw * (sh[0] - d[0]), jw * (sh[1] - d[1]), jw * (sh[2] - d[2]))
@@ -365,7 +488,26 @@ export function solveAlign(p: AlignProblem): AlignSolution {
     z.forEach((v, i) => out.push(v * (i < 3 ? ALIGN_RIDGE.shiftPerM : i < 3 + nA ? ALIGN_RIDGE.turnMPerDeg : ALIGN_RIDGE.rootMPerDeg)))
     return out
   }
-  const z = picks.length ? solveBounded(res, start, half, p.iterations ?? 30) : new Array(start.length).fill(0)
+  // THE DEPTH GATE in two stages: A — every depth target off (each relation keeps its start depth), the shaft brought
+  // as close to the opening as the caps, the posture and the clearance let it; the gate of each relation from the
+  // opening-plane offset A reaches at its deepest frame. B — the solve again from the start with those gates (all 1 =
+  // exactly the solve without a gate). The gate is fixed within a stage, so no stage can buy a smaller depth pull by
+  // staying off the axis.
+  const deepPicks = picks.filter((k) => k.deep && k.s.channel)
+  let z: number[]
+  if (!picks.length) z = new Array(start.length).fill(0)
+  else if (!deepPicks.length) z = solveBounded(res, start, half, p.iterations ?? 30)
+  else {
+    for (const k of deepPicks) k.g.gate = 0
+    const zA = solveBounded(res, start, half, p.iterations ?? 30)
+    const fixA = toFix(zA), toA = rooted ? rootOf(zA) : null
+    for (const k of deepPicks) {
+      const s = moveSample(k.s, fixA, k.rooted ? root0 : null, k.rooted ? toA : null)
+      const off = axisError(s, s.chain?.[0] ?? s.base).offset
+      k.g.gate = depthGate(Math.hypot(off[0], off[1], off[2]), partRadiusOf(k.s))
+    }
+    z = deepPicks.every((k) => k.g.gate === 0) ? zA : solveBounded(res, start, half, p.iterations ?? 30)
+  }
   const tot = z.map((v, i) => v + start[i])
   const names: AlignBound[] = ['side', 'up', 'forward', ...axes.map((_, k): AlignBound => (k === 0 ? 'tilt' : 'roll')),
     ...(rooted ? ['pitch', 'yaw'] as AlignBound[] : [])]
@@ -380,6 +522,8 @@ export function solveAlign(p: AlignProblem): AlignSolution {
 export interface KeyRow {
   index: number; phase: number
   depthMm: number; rootDepthMm: number
+  /** THE VISIBLE ROOT's depth (mm, + = inside); `rootOutside` reads it. */
+  visRootMm: number
   rootOutside: boolean; tipInside: boolean; pastBottom: boolean
   tipOffMm: number; rootOffMm: number; shaftDeg: number
   /** THE AXIS ERROR: the shaft line's offset at the opening plane and the angle's lever L·2 sin(θ/2) (mm); the depth
@@ -399,7 +543,8 @@ export function keyRow(s: AlignSample, index: number, limits?: BendLimits | null
   const bottom = (s.depthM ?? 0) > 0 ? (s.depthM ?? 0) - (s.tipRadiusM ?? 0) : Infinity
   const off = (p: Vec3) => { const v = lateral(sub(p, s.o), s.u); return Math.hypot(v[0], v[1], v[2]) * 1000 }
   const ax = axisError(s, r0), mm = (v: Vec3) => Math.hypot(v[0], v[1], v[2]) * 1000
-  return { index, phase: s.phase ?? 0, depthMm: st * 1000, rootDepthMm: sr * 1000, rootOutside: sr < 0, tipInside: st > 0,
+  const sv = visibleRootDepth(s, r0)
+  return { index, phase: s.phase ?? 0, depthMm: st * 1000, rootDepthMm: sr * 1000, visRootMm: sv * 1000, rootOutside: sv < 0, tipInside: st > 0,
     pastBottom: st > bottom, tipOffMm: off(s.tip), rootOffMm: off(r0), shaftDeg: Math.acos(clampTo(cos, -1, 1)) * 180 / Math.PI,
     openOffMm: mm(ax.offset), leverMm: mm(ax.lever), rootTargetMm: depthTarget(s, r0) * 1000,
     bendDeg: bend ? bend.deg : null, bendWantDeg: bend ? bend.wantDeg : null, bendAtLimit: !!bend?.atLimit }
@@ -443,7 +588,8 @@ export function keyLamp(rep: KeyReport | null, hits: readonly AlignBound[], insi
 /** What a pass applies: the totals of the unknowns (offset relative to the base, tilt/roll, the root angle). */
 export interface AlignState { x: Vec3; deg: number[]; root: RootAngle | null }
 /** What one measurement hands the solve. */
-export interface AlignMeasure { relations: readonly AlignRelation[]; basis: readonly number[]; join?: AlignProblem['join'] }
+export interface AlignMeasure { relations: readonly AlignRelation[]; basis: readonly number[]; join?: AlignProblem['join']
+  clear?: AlignProblem['clear'] }
 /** One pass: the increment it proposed (mm, largest tilt/roll degree, largest root-angle degree). */
 export interface AlignPass { shiftMm: number; turnDeg: number; rootDeg: number }
 
@@ -456,12 +602,19 @@ export function alignByPasses<M extends AlignMeasure>(measure: (s: AlignState) =
   let st = start
   const first = measure(st)
   let cur = first
+  // THE DEPTH GATE's hold: the root joint's depth at the first measurement's deepest frame, per relation.
+  const depthHold = first.relations.map((r) => {
+    const k = keyFrames(r.samples)
+    if (!k) return null
+    const sd = r.samples[k.deep]
+    return axial(sd, sd.chain?.[0] ?? sd.base)
+  })
   let sol: AlignSolution | null = null
   const trace: AlignPass[] = []
   let converged = false
   for (let i = 0; i < passes; i++) {
-    sol = solveAlign({ ...fixed, relations: cur.relations, basis: cur.basis, join: cur.join, start: st.x, startDeg: st.deg,
-      root: st.root })
+    sol = solveAlign({ ...fixed, relations: cur.relations, basis: cur.basis, join: cur.join, clear: cur.clear, depthHold, start: st.x,
+      startDeg: st.deg, root: st.root })
     const step: AlignPass = {
       shiftMm: Math.hypot(sol.x[0] - st.x[0], sol.x[1] - st.x[1], sol.x[2] - st.x[2]) * 1000,
       turnDeg: Math.max(0, ...sol.deg.map((v, k) => Math.abs(v - (st.deg[k] ?? 0)))),
@@ -494,4 +647,72 @@ export function alignMovers<T extends { e: number; r: number }>(hits: readonly T
   const out = new Map<number, T[]>()
   for (const h of hits) out.set(h.e, [...(out.get(h.e) ?? []), h])
   return out
+}
+
+/** THE VERDICT of one run (module docstring THE CLEARANCE): 'overlap' when the role ends deeper into another figure
+ *  than its allowance plus the slack (the measured `clear` rows over the whole loop, metres), 'worse' when the result
+ *  is worse than its start by the lamp's own measures — a channel's deepest frame shallower (not counted when the start
+ *  was past the bottom) AND its axis error larger, a point target's error larger (each by more than
+ *  `KEY_SHALLOWER_MM`). Applied otherwise. */
+export interface ClearRow { name: string; startM: number; allowM: number; afterM: number; worst: string }
+export type AlignDiscard = 'overlap' | 'worse' | 'root'
+/** The verdict's slack on the visible root of the RENDERED loop (mm). */
+export const ALIGN_ROOT_SLACK_MM = 0.5
+export function alignVerdict(before: KeyReport | null, after: KeyReport | null, inside: boolean,
+  clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number } | null):
+  { applied: boolean; why: AlignDiscard | null; collide: ClearRow | null } {
+  const slack = ALIGN_CLEAR_SLACK_MM / 1000
+  // THE RENDERED ROOT: the visible root's deepest point over the loop as rendered may not end inside the opening when
+  // it started outside, nor deeper than it started.
+  if (inside && rendered && Number.isFinite(rendered.afterMm)
+    && rendered.afterMm > Math.max(0, rendered.beforeMm) + ALIGN_ROOT_SLACK_MM) return { applied: false, why: 'root', collide: null }
+  const over = clear.filter((c) => c.afterM > c.allowM + slack)
+  if (over.length) {
+    const collide = over.reduce((w, c) => (c.afterM - c.allowM > w.afterM - w.allowM ? c : w), over[0])
+    return { applied: false, why: 'overlap', collide }
+  }
+  if (before && after) {
+    const worseAxis = keyWorstMm(after, inside) > keyWorstMm(before, inside) + KEY_SHALLOWER_MM
+    const shallower = !before.deep.pastBottom && after.deep.depthMm < before.deep.depthMm - KEY_SHALLOWER_MM
+    if (worseAxis && (!inside || shallower)) return { applied: false, why: 'worse', collide: null }
+  }
+  return { applied: true, why: null, collide: null }
+}
+/** Whether the deepest frame's conditions hold (a channel: root outside, tip inside, not past the bottom; a point
+ *  target always). */
+export function deepHolds(rep: KeyReport | null, inside: boolean): boolean {
+  if (!rep) return false
+  return !inside || (rep.deep.rootOutside && rep.deep.tipInside && !rep.deep.pastBottom)
+}
+/** THE AUTOMATIC ALTERNATIVE (owner 2026-11-22): a run is BLOCKED — the other role is tried as well — when it was
+ *  discarded, when the posture held the moving role back, or when an unknown hit its cap while the deepest frame's
+ *  conditions are not met. */
+export function alignBlocked(r: { applied: boolean; postureLimited: boolean; hits: readonly AlignBound[]; deepOk: boolean }): boolean {
+  return !r.applied || r.postureLimited || (r.hits.length > 0 && !r.deepOk)
+}
+/** One candidate of THE AUTOMATIC ALTERNATIVE: whether it may be applied, the deepest frame's conditions, the
+ *  clearance, the axis error (mm) and the deepest tip depth (mm). */
+export interface AlignCandidate { applied: boolean; deepOk: boolean; clearOk: boolean; axisMm: number; depthMm: number }
+/** The order two candidates are ranked by (negative = `a` first): 0. one that may be applied (a discarded result
+ *  cannot be written, so it never beats one that can), then the owner's order — 1. the deepest frame's conditions
+ *  hold, 2. the clearance holds, 3. the smaller axis error, 4. the deeper tip. Ties keep the first. */
+export function compareCandidates(a: AlignCandidate, b: AlignCandidate): number {
+  if (a.applied !== b.applied) return a.applied ? -1 : 1
+  if (a.deepOk !== b.deepOk) return a.deepOk ? -1 : 1
+  if (a.clearOk !== b.clearOk) return a.clearOk ? -1 : 1
+  if (Math.abs(a.axisMm - b.axisMm) > 1e-9) return a.axisMm - b.axisMm
+  if (Math.abs(a.depthMm - b.depthMm) > 1e-9) return b.depthMm - a.depthMm
+  return 0
+}
+/** "Align all" stage 1 (owner 2026-11-22): the bucket of one contact relation — 'mismatch' when there is no key report
+ *  before or the shaft stands more than `ALIGN_MISMATCH_DEG` off a channel's axis at the deepest frame before;
+ *  'improve' when the run may be applied and the deepest tip went deeper or the axis error got smaller (each by more
+ *  than `KEY_SHALLOWER_MM`); 'blocked' otherwise (discarded, held by a cap or the posture, or nothing to gain). */
+export type AlignBucket = 'improve' | 'blocked' | 'mismatch'
+export function alignBucket(before: KeyReport | null, after: KeyReport | null, inside: boolean, applied: boolean): AlignBucket {
+  if (!before || (inside && before.deep.shaftDeg > ALIGN_MISMATCH_DEG)) return 'mismatch'
+  if (!applied || !after) return 'blocked'
+  const deeper = inside && after.deep.depthMm > before.deep.depthMm + KEY_SHALLOWER_MM
+  const straighter = keyWorstMm(after, inside) < keyWorstMm(before, inside) - KEY_SHALLOWER_MM
+  return deeper || straighter ? 'improve' : 'blocked'
 }

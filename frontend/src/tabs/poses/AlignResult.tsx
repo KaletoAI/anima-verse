@@ -86,7 +86,7 @@ function reasonWord(t: (s: string) => string, r: KeyReason): string {
   switch (r) {
     case 'caps': return t('a cap or slider range stopped it')
     case 'shallower': return t('the deepest frame ended shallower than before')
-    case 'root_inside': return t('the root joint is inside the opening at the deepest frame')
+    case 'root_inside': return t('the visible root of the part is inside the opening')
     case 'tip_outside': return t('the tip is not inside at the deepest frame')
     case 'past_bottom': return t('the tip is past the bottom at the deepest frame')
     case 'off_axis': return t('the shaft is more than 3 mm off the axis')
@@ -96,7 +96,7 @@ function reasonWord(t: (s: string) => string, r: KeyReason): string {
 /** The names of the unknowns that hit their cap or slider range. */
 function boundWord(t: (s: string) => string, b: AlignBound, rangeCm: number): string {
   switch (b) {
-    case 'side': return t('side (±3 cm)')
+    case 'side': return t('sideways (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
     case 'up': return t('up/down (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
     case 'forward': return t('forward/back (±{r} cm)').replace('{r}', rangeCm.toFixed(0))
     case 'tilt': return t('tilt (±10°)')
@@ -129,9 +129,44 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
           .replace('{channel}', r.target === 'channel' ? (r.channel.split(':').pop() || r.channel) : targetWordOf(t, r.target))}</span>
         {r.movers.length === 1 ? (
           <span data-testid="align-moved" style={{ opacity: 0.8 }}>· {(r.movers[0].mover === 'receiver'
-            ? t('{role} moved (receiving role)') : t('{role} moved (part role)')).replace('{role}', r.movers[0].role.toUpperCase())}</span>
+            ? t('{role} moved (receiving role)') : t('{role} moved (part role)')).replace('{role}', r.movers[0].role.toUpperCase())}
+            {r.relations[0]?.alternative ? ` — ${t('the automatic alternative: the part’s role was blocked')}` : ''}</span>
         ) : null}
       </div>
+      {r.relations.filter((x) => !x.applied).map((x, i) => (
+        <div key={i} data-testid="align-discarded" style={{ color: 'var(--danger, #f85149)' }}>
+          {(x.discard === 'overlap' && x.collide
+            ? t('Not applied — {role} would go into place {who}: {pair} {mm} mm deep (the clip starts at {start} mm, allowed {allow} mm). The dials stay as they were.')
+              .replace('{who}', x.collide.with).replace('{pair}', x.collide.worst).replace('{mm}', x.collide.afterMm.toFixed(0))
+              .replace('{start}', x.collide.startMm.toFixed(0)).replace('{allow}', x.collide.allowMm.toFixed(0))
+            : x.discard === 'root'
+              ? t('Not applied — the visible root of the part would end {mm} mm inside the opening on a rendered frame (it starts at {start} mm). The dials stay as they were.')
+                .replace('{mm}', (x.rendered?.after.visMm ?? 0).toFixed(0)).replace('{start}', (x.rendered?.before.visMm ?? 0).toFixed(0))
+              : t('Not applied — {role} would end shallower and further off the axis than it starts. The dials stay as they were.'))
+            .replace('{role}', x.moved.toUpperCase())}
+        </div>
+      ))}
+      {r.relations.filter((x) => x.rendered).map((x, i) => (
+        <div key={i} data-testid="align-rendered-root"
+          style={x.rendered!.after.visMm > 0 ? { color: 'var(--danger, #f85149)' } : undefined}
+          title={t('Where the part’s mesh meets the body (the body-side end of its first capsule, with its radius), along the axis through the opening, at the frame of the loop as rendered where it is deepest; negative = outside.')}>
+          {t('Visible root at its deepest rendered frame: {after} mm (before {before} mm; negative = outside)')
+            .replace('{after}', x.rendered!.after.visMm.toFixed(0)).replace('{before}', x.rendered!.before.visMm.toFixed(0))}
+        </div>
+      ))}
+      {r.relations[0]?.clear.length ? (
+        <table data-testid="align-clear" style={{ borderCollapse: 'collapse' }}
+          title={t('The moved role against every other person over the loop: the deepest capsule overlap at the start, the allowance (the start, at least 5 mm) and after. The attached part inside its channel does not count.')}>
+          <thead><tr><th style={{ textAlign: 'left' }}>{t('Overlap with')}</th><th style={CELL}>{t('start')}</th>
+            <th style={CELL}>{t('allowed')}</th><th style={CELL}>{t('after')}</th><th style={{ textAlign: 'left' }}>{t('deepest pair')}</th></tr></thead>
+          <tbody>{r.relations[0].clear.map((c) => (
+            <tr key={c.with}><td>{t('place {p}').replace('{p}', c.with)}</td><td style={CELL}>{c.startMm.toFixed(0)} mm</td>
+              <td style={CELL}>{c.allowMm.toFixed(0)} mm</td>
+              <td style={{ ...CELL, color: c.afterMm > c.allowMm + 0.5 ? 'var(--danger, #f85149)' : undefined }}>{c.afterMm.toFixed(0)} mm</td>
+              <td>{c.worst || '–'}</td></tr>
+          ))}</tbody>
+        </table>
+      ) : null}
       {r.reasons.length ? (
         <div data-testid="align-reasons" style={{ color: r.lamp === 'red' ? 'var(--danger, #f85149)' : 'var(--warning, #d29922)' }}>
           {t('Contact lamp {lamp}: {why}.').replace('{lamp}', r.lamp === 'red' ? t('red') : r.lamp === 'yellow' ? t('yellow') : t('green'))
@@ -143,7 +178,7 @@ export function AlignResultBlock({ result }: { result: AutoAlignResult }) {
       ) : null}
       {r.movers.map((m) => {
         const v3 = (v: number[]) => v.map((x) => x.toFixed(1)).join(' / ')
-        const limit = t('Auto-align moves {role} at most ±{r} cm forward/back and up/down, ±3 cm sideways and ±10° tilt/roll around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
+        const limit = t('Auto-align moves {role} at most ±{r} cm in every direction and ±10° tilt/roll around the arrangement you set (the dials before the first click), and sets the root angle within its sliders; what lies beyond is yours to set by hand.')
           .replace('{role}', m.role.toUpperCase()).replace('{r}', m.rangeCm.toFixed(0))
         return (
           <div key={m.role} data-testid="align-cap" data-lamp={m.lamp} title={limit}>

@@ -49,11 +49,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
-import { bendLimitsOf, clipHeightGroup, keyWorstMm, ALIGN_RANGE_CM_DEFAULT, type ClipHeightOffsetsCm } from '@anima/scene-render'
-import { hasInside, targetWordOf } from './contactWords'
+import { bendLimitsOf, clipHeightGroup, ALIGN_RANGE_CM_DEFAULT, type ClipHeightOffsetsCm } from '@anima/scene-render'
+import { targetWordOf } from './contactWords'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
-import { PlacePreview, type AlignMover, type AutoAlignOptions, type AutoAlignResult, type AutoAlignRun, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AlignMoverChoice, type AutoAlignOptions, type AutoAlignResult, type AutoAlignRun, type PlaceReadout } from './PlacePreview'
 import { AlignResultBlock } from './AlignResult'
+import { AlignAllTable, type AlignAllRow } from './AlignAllTable'
 import type { AlignmentDraft, ContactRelation } from '@anima/scene-render'
 import { ClipPreview, ROLE_COLOR } from './ClipPreview'
 import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
@@ -335,9 +336,8 @@ export function ClipLibrary({
   const [clipShift, setClipShift] = useState<[number, number]>([0, 0])
   const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
   // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot an Auto-align run measured ([side,
-  // forward] cm, null = none pending) — stored with Save; `pivotFill` carries an "Align all" result into the clip it opens.
+  // forward] cm, null = none pending) — stored with Save.
   const [pivotDraft, setPivotDraft] = useState<[number, number] | null>(null)
-  const pivotFill = useRef<[number, number] | null>(null)
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
   const [footprint, setFootprint] = useState('')
@@ -348,19 +348,17 @@ export function ClipLibrary({
   const [placeReadout, setPlaceReadout] = useState<PlaceReadout | null>(null)
   /** Ruling A126: the place preview's Auto-align (set while a pair scene runs) and its last outcome. */
   const autoAlignRef = useRef<AutoAlignRun | null>(null)
-  /** Ruling A129.6: "Align all" — Auto-align over every pair clip listed, one result per clip, nothing saved. The
-   *  results wait per clip (kind|set) and fill the Partner B dials when that clip is opened. */
-  const [alignAll, setAlignAll] = useState<{ running: boolean; done: number; rows: { kind: string; set: string
-    result: AutoAlignResult }[] } | null>(null)
-  const pendingAlign = useRef<Record<string, { turnDeg: [number, number]
-    roleShiftCm: Record<string, [number, number, number]>; rootAngle: { pitchDeg: number; yawDeg: number } | null
-    pivotCm: [number, number] | null }>>({})
+  /** "Align all" in two stages (owner 2026-11-22, `AlignAllTable`): stage 1 measures every pair and group clip listed,
+   *  one row per contact relation, nothing written; stage 2 applies and saves the ticked rows. `running` names the
+   *  stage at work, `done`/`total` count clips. */
+  const [alignAll, setAlignAll] = useState<{ running: '' | 'measure' | 'apply'; done: number; total: number
+    rows: AlignAllRow[] } | null>(null)
   const alignAllStop = useRef(false)
   const [autoAlign, setAutoAlign] = useState<AutoAlignResult | null>(null)
   /** ONE RELATION, ONE MOVER (2026-11-22): the contact relation one Auto-align click aligns (an index into
    *  `alignChoices`) and which of its two roles moves. */
   const [alignPick, setAlignPick] = useState(0)
-  const [alignMover, setAlignMover] = useState<AlignMover>('part')
+  const [alignMover, setAlignMover] = useState<AlignMoverChoice>('auto')
   /** Ruling A212: "Also align end clips" — one row per end clip: the Auto-align result and whether it was stored. */
   const [finaleRun, setFinaleRun] = useState<{ running: boolean; rows: { kind: string; result: AutoAlignResult; saved: boolean
     error: string; note: string }[] } | null>(null)
@@ -502,17 +500,6 @@ export function ClipLibrary({
       const own = clips.filter((c) => c.kind === kind).map((c) => c.set || '')
       const nextSet = set !== undefined ? set : orderSets(Array.from(new Set(own)))[0] || ''
       setPreviewSet(nextSet)
-      // A129.6: an "Align all" result for this clip fills the Partner B dials as a draft (Save stores it).
-      // The base stays the clip as loaded (the reset dials), not the filled-in result (Ruling A212 review H1).
-      const waiting = pendingAlign.current[`${kind}|${nextSet}`]
-      pivotFill.current = waiting?.pivotCm ?? null
-      if (waiting) {
-        autoWrite.current = dialKey(waiting.turnDeg, waiting.roleShiftCm)
-        setAlignBase({ roleShiftM: {}, turnDeg: [0, 0] })
-        setPartnerTurn(waiting.turnDeg)
-        setRoleShift(waiting.roleShiftCm)
-        if (waiting.rootAngle) rootFill.current = `${kind}|${nextSet}`
-      }
       setAction(null)
       setError('')
       setConflict(null)
@@ -520,36 +507,136 @@ export function ClipLibrary({
     [clips, heightBusy, orientBusy, resetDials],
   )
 
-  /** A129.6: Auto-align every pair clip listed, one after the other, on the pair each one's preview fills in. */
+  /** "Align all" (owner 2026-11-22): open one clip and wait for its Places scene with two or more figures (or for its
+   *  answer that no prop has a place for it); null = it never came. */
+  const openRun = useCallback(async (kind: string, set: string): Promise<AutoAlignRun | null> => {
+    pick(kind, set)
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    // up to 120 s for the clip's scene, then up to 60 s for its figures (a prop loaded for the first time); a scene rebuilt meanwhile (the persons filled
+    // in after the props loaded) is waited for again
+    let seen = -1
+    for (let k = 0; k < 240 && !alignAllStop.current; k++) {
+      await wait(500)
+      const cur = autoAlignRef.current
+      if (!cur || cur.kind !== kind || (cur.set ?? '') !== set) continue
+      if (cur.noPlace) return cur
+      if (seen < 0) seen = k
+      if ((cur.figures ?? 0) < 2) { if (k - seen > 120) return null; continue }
+      // a moment for the figures' first frames
+      await wait(1500)
+      if (autoAlignRef.current === cur) return cur
+    }
+    return null
+  }, [pick])
+  /** Stage 1's rows of one clip: one per measured contact relation, or one that says why there is none. */
+  const allRowsOf = useCallback((kind: string, set: string, res: AutoAlignResult | null,
+    choices: Record<string, AlignMoverChoice> = {}): AlignAllRow[] => {
+    if (!res || !res.ok) {
+      // no relation was measured (no place, no persons filled, or the persons have no fitting part): not measured
+      return [{ kind, set, key: '', label: '–', bucket: 'unmeasured', rel: null,
+        reason: res && !res.ok ? res.reason : t('No pair was filled on a place of this clip.'), choice: 'auto', tick: false, outcome: '' }]
+    }
+    return res.relations.map((x) => ({ kind, set, key: x.key, label: `${x.by} → ${x.of} (${targetWordOf(t, x.target)})`,
+      bucket: x.bucket, rel: x, reason: '', choice: choices[x.key] ?? 'auto', tick: x.bucket === 'improve', outcome: '' }))
+  }, [t])
+  /** Stage 1: measure every pair and group clip listed, relation by relation (mover 'auto'); nothing is written. */
   const runAlignAll = useCallback(async () => {
     const targets = shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing)
     const back = selected
     alignAllStop.current = false
-    const out: { kind: string; set: string; result: AutoAlignResult }[] = []
-    setAlignAll({ running: true, done: 0, rows: [] })
-    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    const out: AlignAllRow[] = []
+    setAlignAll({ running: 'measure', done: 0, total: targets.length, rows: [] })
+    let done = 0
     for (const r of targets) {
       if (alignAllStop.current) break
       const set = orderSets(Array.from(new Set(r.clips.map((c) => c.set || ''))))[0] || ''
-      delete pendingAlign.current[`${r.kind}|${set}`]
-      pick(r.kind, set)
-      let run: AutoAlignRun | null = null
-      // The preview of THIS clip with two figures; then a moment for the figures' first frames.
-      for (let k = 0; k < 240 && !alignAllStop.current; k++) {
-        await wait(500)
-        const cur = autoAlignRef.current
-        if (cur && cur.kind === r.kind && (cur.set ?? '') === set && (cur.figures ?? 0) >= 2) { run = cur; break }
-      }
-      await wait(1500)
-      const result: AutoAlignResult = run ? run() : { ok: false, reason: t('No pair was filled on a place of this clip.') }
-      if (result.ok) pendingAlign.current[`${r.kind}|${set}`] = { turnDeg: result.turnDeg,
-        roleShiftCm: result.roleShiftCm, rootAngle: result.rootAngle, pivotCm: result.pivotCm }
-      out.push({ kind: r.kind, set, result })
-      setAlignAll({ running: true, done: out.length, rows: [...out] })
+      const run = await openRun(r.kind, set)
+      const res = run ? run({ each: true, mover: 'auto' }) : null
+      out.push(...allRowsOf(r.kind, set, res))
+      done += 1
+      setAlignAll({ running: 'measure', done, total: targets.length, rows: [...out] })
     }
-    setAlignAll({ running: false, done: out.length, rows: out })
+    setAlignAll({ running: '', done, total: targets.length, rows: out })
     if (back) pick(back)
-  }, [pick, selected, shown, t])
+  }, [allRowsOf, openRun, pick, selected, shown])
+  /** Stage 1, one clip again: the row's mover choice for its relation, the movers the other rows of the clip used. */
+  const remeasureAll = useCallback(async (i: number) => {
+    const cur = alignAll
+    const row = cur?.rows[i]
+    if (!cur || !row) return
+    const same = (x: AlignAllRow) => x.kind === row.kind && x.set === row.set
+    const moverOf: Record<string, AlignMoverChoice> = {}
+    for (const x of cur.rows.filter(same)) if (x.key) moverOf[x.key] = x === row ? row.choice : x.rel?.mover ?? 'auto'
+    alignAllStop.current = false
+    setAlignAll({ ...cur, running: 'measure' })
+    const back = selected
+    const run = await openRun(row.kind, row.set)
+    const res = run ? run({ each: true, moverOf }) : null
+    const fresh = allRowsOf(row.kind, row.set, res, row.key ? { [row.key]: row.choice } : {})
+    setAlignAll((prev) => {
+      if (!prev) return prev
+      const at = prev.rows.findIndex(same)
+      const rest = prev.rows.filter((x) => !same(x))
+      return { ...prev, running: '', rows: [...rest.slice(0, at), ...fresh, ...rest.slice(at)] }
+    })
+    if (back) pick(back)
+  }, [alignAll, allRowsOf, openRun, pick, selected])
+  /** Stage 2: each clip with a ticked row is measured again with ONLY its ticked relations and the movers shown, and
+   *  stored (orient: the role offsets and B's tilt/roll; the root angle; the contact pivot) only when every one of them
+   *  still applies and improves. */
+  const applyAlignAll = useCallback(async () => {
+    const cur = alignAll
+    if (!cur) return
+    const byClip = new Map<string, AlignAllRow[]>()
+    for (const r of cur.rows) if (r.tick && r.rel) byClip.set(`${r.kind}|${r.set}`, [...(byClip.get(`${r.kind}|${r.set}`) ?? []), r])
+    let rows = cur.rows.map((r) => ({ ...r, outcome: '' }))
+    alignAllStop.current = false
+    setAlignAll({ ...cur, running: 'apply', done: 0, total: byClip.size, rows })
+    const back = selected
+    let done = 0
+    for (const ticked of byClip.values()) {
+      if (alignAllStop.current) break
+      const { kind, set } = ticked[0]
+      const file = clips.find((c) => c.kind === kind && (c.set || '') === set && (c.role || '') === 'a')
+      const pair = file ? clips.filter((c) => c.kind === kind && (c.set || '') === set && libraryOf(c) === libraryOf(file)).length === 2 : false
+      const keys = new Set(ticked.map((x) => x.key))
+      const declared = (file?.contact_target?.relations ?? []).filter((x) => x.target !== 'none')
+      const opts: AutoAlignOptions = { each: true, moverOf: Object.fromEntries(ticked.map((x) => [x.key, x.rel!.mover])),
+        ...(declared.length ? { relations: declared.filter((x) => keys.has(`${x.part}>${x.at}:${x.target}`)) } : {}) }
+      const run = file ? await openRun(kind, set) : null
+      const res = run ? run(opts) : null
+      let outcome: string
+      if (!file) outcome = t('No clip file for this set.')
+      else if (!res || !res.ok) outcome = res && !res.ok ? res.reason : t('No pair was filled on a place of this clip.')
+      else if (!res.relations.every((x) => x.applied && x.bucket === 'improve')) outcome = t('changed when measured again — not saved')
+      else {
+        try {
+          const moved = Object.fromEntries(Object.entries(res.roleShiftCm).filter(([, v]) => v.some((x) => x !== 0)))
+          const lastB = [...res.movers].reverse().find((m) => m.applied && m.role === 'b')
+          const turn: [number, number] = pair && lastB ? lastB.turnDeg : [0, 0]
+          if (Object.keys(moved).length || turn.some((v) => v !== 0)) {
+            await apiPost(`${clipPath(file)}/orient`, { yaw_deg: 0, tilt_deg: 0, roll_deg: 0,
+              ...(Object.keys(moved).length ? { role_shift_cm: moved } : {}),
+              ...(turn.some((v) => v !== 0) ? { partner_turn_deg: turn } : {}) })
+          }
+          const root = res.rootAngle
+          if (root && (root.pitchDeg !== (file.root_angle?.pitch_deg ?? 0) || root.yawDeg !== (file.root_angle?.yaw_deg ?? 0))) {
+            await apiPatch(clipPath(file), { root_angle: { pitch_deg: root.pitchDeg, yaw_deg: root.yawDeg } })
+          }
+          if (res.pivotCm) await apiPatch(clipPath(file), { pair_pivot_cm: res.pivotCm })
+          outcome = t('saved')
+        } catch (e) { outcome = (e as Error).message }
+      }
+      rows = rows.map((r) => (r.kind === kind && r.set === set && r.tick ? { ...r, outcome } : r))
+      done += 1
+      setAlignAll({ ...cur, running: 'apply', done, total: byClip.size, rows })
+    }
+    invalidateAnimationPreviewClips()
+    try { await onReload() } catch { /* the rows above already say what was stored */ }
+    setSeq((n) => n + 1)
+    setAlignAll({ ...cur, running: '', done, total: byClip.size, rows })
+    if (back) pick(back)
+  }, [alignAll, clips, onReload, openRun, pick, selected, t])
 
   // Opened from a pose: every filter off so the row is in the list, the kind
   // selected and scrolled into view — once per `seq`, after the listing is in.
@@ -597,20 +684,9 @@ export function ClipLibrary({
   const savedRoot = orientTarget?.root_angle ?? null
   const savedRootKey = JSON.stringify(savedRoot ?? { pitch_deg: 0, yaw_deg: 0 })
   const [rootDraft, setRootDraft] = useState<RootAngleWire>({ pitch_deg: 0, yaw_deg: 0 })
-  // Ruling A212 (2026-11-20): an "Align all" result for the clip just opened fills the root-angle dials too (a draft;
-  // Save stores it) — once, when the clip opens.
-  const rootFill = useRef<string | null>(null)
-  useEffect(() => {
-    const key = `${selected}|${previewSet}`
-    const waiting = rootFill.current === key ? pendingAlign.current[key]?.rootAngle : null
-    rootFill.current = null
-    setRootDraft(waiting ? { pitch_deg: waiting.pitchDeg, yaw_deg: waiting.yawDeg } : JSON.parse(savedRootKey) as RootAngleWire)
-  }, [savedRootKey, selected, previewSet])
-  // The contact pivot: an "Align all" result fills it once when its clip opens; any other clip or set starts without.
-  useEffect(() => {
-    setPivotDraft(pivotFill.current)
-    pivotFill.current = null
-  }, [selected, previewSet])
+  useEffect(() => { setRootDraft(JSON.parse(savedRootKey) as RootAngleWire) }, [savedRootKey, selected, previewSet])
+  // The contact pivot: every clip or set starts without a pending one.
+  useEffect(() => { setPivotDraft(null) }, [selected, previewSet])
   const savedPivot = orientTarget?.pair_pivot_cm ?? null
   const pivotDirty = !!pivotDraft && !!orientTarget?.role
     && (!savedPivot || pivotDraft[0] !== savedPivot[0] || pivotDraft[1] !== savedPivot[1])
@@ -712,8 +788,6 @@ export function ClipLibrary({
     setFinaleRun({ running: true, rows: [] })
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
     for (const kind of finaleKinds) {
-      // A pending "Align all" draft of this clip must not be filled into the dials (it would be baked twice).
-      delete pendingAlign.current[`${kind}|${baseSet}`]
       pick(kind, baseSet)
       let run: AutoAlignRun | null = null
       for (let k = 0; k < 240; k++) {
@@ -1590,8 +1664,9 @@ export function ClipLibrary({
                         {alignChoices.map((c, i) => <option key={i} value={i}>{c.label}</option>)}
                       </select>
                       <select data-testid="align-mover" value={alignMover} disabled={orientLocked}
-                        title={t('Which of the two roles Auto-align moves for this contact; every other role stays where it is.')}
-                        onChange={(e) => setAlignMover(e.target.value as AlignMover)} style={{ fontSize: 11 }}>
+                        title={t('Which of the two roles Auto-align moves for this contact; every other role stays where it is. Auto moves the part’s role and, when that run is blocked (discarded, a cap hit short of the deepest frame’s conditions, or held by the posture), tries the receiving role too and keeps the better result.')}
+                        onChange={(e) => setAlignMover(e.target.value as AlignMoverChoice)} style={{ fontSize: 11 }}>
+                        <option value="auto">{t('Auto')}</option>
                         <option value="part">{alignChoice?.rel
                           ? t('move {r} (part)').replace('{r}', alignChoice.rel.part.toUpperCase()) : t('move the part’s role')}</option>
                         <option value="receiver">{alignChoice?.rel
@@ -1601,30 +1676,32 @@ export function ClipLibrary({
                         disabled={orientLocked || innerTab !== 'places'}
                         title={innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
-                          : t('Aligns the chosen contact by moving the chosen role (at most the alignment range forward/back and up/down, 3 cm sideways, and for partner B 10° tilt/roll, around the arrangement you set) and the part’s root angle: at the deepest frame the part goes in as far as it can — its root just outside the opening, or less when the bottom stops the tip — and at both the deepest and the shallowest frame the shaft runs along the axis through the opening. Every other role stays. Writes the role and root-angle dials and measures the contact pivot; Save stores them.')}
+                          : t('Aligns the chosen contact by moving the chosen role (at most the alignment range in every direction, and for partner B 10° tilt/roll, around the arrangement you set) and the part’s root angle: at the deepest frame the part goes in as far as it can — its root just outside the opening, or less when the bottom stops the tip — and at both the deepest and the shallowest frame the shaft runs along the axis through the opening. The moved role may not go deeper into any other person than the clip already does (at least 5 mm allowed); a result that would, or that ends worse than it started, is not applied. Every other role stays. Writes the role and root-angle dials and measures the contact pivot; Save stores them.')}
                         onClick={() => {
                           const run = autoAlignRef.current
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, base: alignBase,
                             only: alignChoice?.rel ?? 'detected', mover: alignMover }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
+                          // THE VERDICT (2026-11-22): a discarded result writes nothing — the dials stay as they were.
+                          if (!res.ok || !res.applied) return
                           // Ruling A212 (2026-11-20): Auto-align writes the clip's root angle to its dials (a draft).
-                          if (res.ok && res.rootAngle) setRootDraft({ pitch_deg: res.rootAngle.pitchDeg, yaw_deg: res.rootAngle.yawDeg })
+                          if (res.rootAngle) setRootDraft({ pitch_deg: res.rootAngle.pitchDeg, yaw_deg: res.rootAngle.yawDeg })
                           // Owner decision 2026-11-20: and the contact pivot it measured (Save stores it).
-                          if (res.ok) setPivotDraft(res.pivotCm)
-                          if (res.ok) {
-                            // Only the role that moved changes; B's tilt/roll only when B moved.
-                            const turn: [number, number] = isPairTarget && res.movers.some((m) => m.role === 'b')
-                              ? [+res.turnDeg[0].toFixed(1), +res.turnDeg[1].toFixed(1)] : partnerTurn
-                            autoWrite.current = dialKey(turn, res.roleShiftCm)
-                            setRoleShift(res.roleShiftCm)
-                            setPartnerTurn(turn)
-                            if (res.movers[0]) setShiftRole(res.movers[0].role)
-                          }
+                          setPivotDraft(res.pivotCm)
+                          // Only the role that moved changes; B's tilt/roll only when B moved.
+                          const movedB = res.movers.find((m) => m.applied && m.role === 'b')
+                          const turn: [number, number] = isPairTarget && movedB
+                            ? [+movedB.turnDeg[0].toFixed(1), +movedB.turnDeg[1].toFixed(1)] : partnerTurn
+                          autoWrite.current = dialKey(turn, res.roleShiftCm)
+                          setRoleShift(res.roleShiftCm)
+                          setPartnerTurn(turn)
+                          const moved = res.movers.find((m) => m.applied)
+                          if (moved) setShiftRole(moved.role)
                         }}>
                         {t('Auto-align')}
                       </button>
                       <label style={{ display: 'flex', gap: 3, alignItems: 'center', fontSize: 11 }}
-                        title={t('How far Auto-align may move the role with the attached part forward/back and up/down around your arrangement (sideways at most 3 cm, tilt/roll at most 10°). Stored in this clip’s sidecar; default 8 cm.')}>
+                        title={t('How far Auto-align may move a role around your arrangement, the same in every direction (tilt/roll at most 10°). Stored in this clip’s sidecar; default 8 cm.')}>
                         {t('Alignment range')}
                         <input type="number" min={1} max={40} step={1} value={alignRangeCm} data-testid="align-range"
                           style={{ width: 48 }} disabled={orientLocked}
@@ -1663,41 +1740,19 @@ export function ClipLibrary({
                         </table>
                       ) : null}
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-all"
-                        disabled={innerTab !== 'places' || orientBusy || heightBusy}
-                        title={t('Runs Auto-align on every pair clip in the list, one after the other, with the pair each clip’s Places view fills in (the persons you picked stay). Nothing is saved: open a clip from the table and Save it there.')}
+                        disabled={innerTab !== 'places' || orientBusy || heightBusy || alignAll?.running === 'apply'}
+                        title={t('Stage 1 of Align all: measures every pair and group clip in the list, relation by relation, with the persons each clip’s Places view fills in, and sorts each contact into would improve / blocked / geometry mismatch. Nothing is written; stage 2 applies and saves only the rows you leave ticked.')}
                         onClick={() => { if (alignAll?.running) alignAllStop.current = true; else guardSwitch(() => { void runAlignAll() }) }}>
-                        {alignAll?.running ? t('Stop ({n} done)').replace('{n}', String(alignAll.done))
-                          : t('Align all pair and group clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing).length))}
+                        {alignAll?.running ? t('Stop ({n} of {m} clips)').replace('{n}', String(alignAll.done)).replace('{m}', String(alignAll.total))
+                          : t('Measure all pair and group clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing).length))}
                       </button>
                       {alignAll?.rows.length ? (
-                        <table data-testid="align-all-result" data-result={JSON.stringify(alignAll.rows)}
-                          style={{ borderCollapse: 'collapse', fontSize: 11 }}>
-                          <thead><tr><th style={{ textAlign: 'left' }}>{t('Clip')}</th><th /><th>{t('depth')}</th>
-                            <th>{t('off axis')}</th><th>{t('angle')}</th><th>{t('else')}</th><th /></tr></thead>
-                          <tbody>
-                            {alignAll.rows.map((x) => (
-                              <tr key={`${x.kind}|${x.set}`}>
-                                <td title={x.set ? `${x.kind} (${x.set})` : x.kind} style={{ maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.kind}</td>
-                                {x.result.ok ? (
-                                  <>
-                                    <td style={{ whiteSpace: 'nowrap' }}><LampDot lamp={x.result.lamp} title={t('Channel contact')} />
-                                      <LampDot lamp={x.result.clearLamp} title={t('Nothing else interpenetrates (green at most 5 mm)')} /></td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? x.result.keys.after.deep.depthMm.toFixed(0) : '–'}</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? keyWorstMm(x.result.keys.after, hasInside(x.result.target)).toFixed(0) : '–'}</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.keys.after ? x.result.keys.after.deep.shaftDeg.toFixed(0) : '–'}°</td>
-                                    <td style={{ textAlign: 'right' }}>{x.result.overlapAfterMm.toFixed(0)}</td>
-                                  </>
-                                ) : <td colSpan={5} style={{ color: 'var(--danger, #f85149)' }} title={x.result.reason}>{x.result.reason}</td>}
-                                <td><button type="button" className="ga-btn ga-btn-sm" onClick={() => guardSwitch(() => pick(x.kind, x.set))}
-                                  disabled={alignAll.running}>{t('Open')}</button></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      ) : null}
-                      {alignAll && !alignAll.running && alignAll.rows.length ? (
-                        <div className="ga-form-hint" style={{ margin: 0 }}>
-                          {t('mm at the deepest / shallowest frame; nothing is saved. Open a clip: its Partner B and root-angle dials and its contact pivot carry the result; Save stores it.')}</div>
+                        <AlignAllTable rows={alignAll.rows} busy={!!alignAll.running}
+                          onTick={(i, on) => setAlignAll((p) => p && ({ ...p, rows: p.rows.map((r, k) => (k === i ? { ...r, tick: on } : r)) }))}
+                          onChoice={(i, c) => setAlignAll((p) => p && ({ ...p, rows: p.rows.map((r, k) => (k === i ? { ...r, choice: c } : r)) }))}
+                          onRemeasure={(i) => guardSwitch(() => { void remeasureAll(i) })}
+                          onOpen={(i) => { const r = alignAll.rows[i]; guardSwitch(() => pick(r.kind, r.set)) }}
+                          onApply={() => guardSwitch(() => { void applyAlignAll() })} />
                       ) : null}
                       {autoAlign ? (
                         <AlignResultBlock result={autoAlign} />

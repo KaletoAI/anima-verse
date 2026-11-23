@@ -46,6 +46,8 @@ import {
   supportSample, supportHeight, postureReport, postureAngleCapDeg, type PostureReport, type ContactRelation,
   alignByPasses, pairPivotCm, keyReport, keyLamp, keyReasons, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
+  keyFrames, keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
+  type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -285,8 +287,22 @@ function savePeople(byIndex: typeof placeMemory.byIndex) {
 export interface KeyAlign { before: KeyReport | null; after: KeyReport | null }
 /** Ruling A126/A139: one solved contact relation (the moving place `part`, the target it aims at). */
 export interface RelationAlign { by: string; of: string; channel: string; target: ContactTarget; part: string
-      /** The role that moved for it (ONE RELATION, ONE MOVER) and which of the two it is. */
-      moved: string; mover: AlignMover
+      /** The role that moved for it (ONE RELATION, ONE MOVER) and which of the two it is; `alternative` = the automatic
+       *  alternative was taken (the receiving role, after the part's carrier was blocked), `tried` = the movers run. */
+      moved: string; mover: AlignMover; alternative: boolean; tried: AlignMover[]
+      /** The relation's key in "Align all" (part role > receiving role : target). */
+      key: string
+      /** THE VERDICT (pairAlign): applied, or discarded — 'overlap' with `collide` (the other figure it would go into),
+       *  'worse' (shallower AND further off axis than its start); the dials then stay as they were. */
+      applied: boolean; discard: AlignDiscard | null; collide: ClearView | null
+      /** THE CLEARANCE: the moved role against every other figure (mm over the loop: start, allowance, after). */
+      clear: ClearView[]
+      /** "Align all" stage 1: the bucket of this relation, and what it did with the clip's one root angle. */
+      bucket: AlignBucket; root: 'solved' | 'kept' | 'none'
+      /** THE RENDERED ROOT: the part's root joint and visible root over the loop as rendered (mm along the axis, + =
+       *  inside), the frame where the visible root is deepest, before and after; null for a point target. */
+      rendered: { before: RootFrameView; after: RootFrameView; isolated: RootFrameView
+        frames: (RootFrameView & { isoRootMm: number; isoVisMm: number })[] } | null
       /** Why the contact lamp is not green (`keyReasons`; empty = green). */
       reasons: KeyReason[]
       /** How many sampled frames hold the tip inside (s_tip > 0) before and after, of `frames`. */
@@ -303,8 +319,12 @@ export interface RelationAlign { by: string; of: string; channel: string; target
       /** Ruling A150: the moving figure's support before/after against its own posture (null = none read), and why the
        *  contact lamp is not green when the posture held it back. */
       postureBefore: PostureReport | null; posture: PostureReport | null; limitReason: 'posture' | null }
+/** THE CLEARANCE of the moved role against one other figure (place letter; mm): the start's worst overlap over the loop,
+ *  the allowance (at least `ALIGN_CLEAR_TOL_MM`, 5 mm), after the run, and the worst capsule pair. */
+export interface RootFrameView { k: number; rootMm: number; visMm: number; tipMm: number }
+export interface ClearView { with: string; startMm: number; allowMm: number; afterMm: number; worst: string }
 /** Ruling A212: one moving role — its total offset around the base arrangement, and whether the cap stopped it. */
-export interface MoverAlign { role: string; letter: string; mover: AlignMover; shiftCm: [number, number, number]; turnDeg: [number, number]
+export interface MoverAlign { role: string; letter: string; mover: AlignMover; applied: boolean; shiftCm: [number, number, number]; turnDeg: [number, number]
   /** What THIS run moved (cm, degrees): the result minus the dials when it was clicked. */
   adjustCm: [number, number, number]; adjustDeg: [number, number]
   rangeCm: number
@@ -335,7 +355,9 @@ export type AutoAlignResult =
       /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the clip's contact pivot [side, forward] cm in the clip
        *  frame — the contact target's point at the deepest key frame after the run, the mean over the relations; real
        *  figure heights are scaled about it in the game (null = not measured). */
-      pivotCm: [number, number] | null }
+      pivotCm: [number, number] | null
+      /** Whether any group of the run was applied (THE VERDICT); none = the dials stay as they were. */
+      applied: boolean }
 
 /** Ruling A212: the base clip's last frame — each role's hips relative to each other role's, in that role's clip frame
  *  (`relativeOf`; key `<moving>|<anchor>`). End clips are joined to it. */
@@ -343,19 +365,26 @@ export interface EndPose { kind: string; rel: Record<string, [number, number, nu
 /** Ruling A212: what an Auto-align run may be told — another clip's relations (end clips align with the base's), the
  *  clip's alignment range (cm) and the end pose to join. */
 /** ONE RELATION, ONE MOVER (2026-11-22): which of a relation's two roles a click moves — the part's carrier or the
- *  receiving role. */
+ *  receiving role; 'auto' (the default) tries the part's carrier first and, when that run is blocked, the receiving
+ *  role too, and takes the better (pairAlign `compareCandidates`). */
 export type AlignMover = 'part' | 'receiver'
+export type AlignMoverChoice = AlignMover | 'auto'
 export interface AutoAlignOptions { relations?: ContactRelation[]; rangeCm?: number | null; join?: EndPose | null
   /** One click = one contact relation: the relation to align ('detected' = the auto-detected contact of a clip without
    *  declared relations) and which of its roles moves (default 'part'). Absent = every relation, each moved by its
    *  part's carrier ("Align all", end clips). */
-  only?: ContactRelation | 'detected' | null; mover?: AlignMover
+  only?: ContactRelation | 'detected' | null; mover?: AlignMoverChoice
+  /** "Align all": every relation one after the other, each on the previous one's result (default mover 'auto'), and
+   *  a mover per relation key (`RelationAlign.key`). */
+  each?: boolean; moverOf?: Record<string, AlignMoverChoice>
   /** The arrangement the cap is measured from (draft values: role shifts in metres, B's tilt/roll in degrees); absent =
    *  the dials now. */
   base?: { roleShiftM?: Record<string, [number, number, number]>; turnDeg?: [number, number] } | null }
 /** The Auto-align of the scene that runs now, tagged with what it shows (A129.6: "Align all" waits for its clip). */
 export type AutoAlignRun = ((opts?: AutoAlignOptions) => AutoAlignResult) & { kind?: string; set?: string; figures?: number
-  endPose?: () => EndPose | null }
+  endPose?: () => EndPose | null
+  /** No prop has a place this clip fits on: the run only says so (the scene never starts). */
+  noPlace?: boolean }
 
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
   onReadout, autoAlignRef, height = 360 }: {
@@ -491,6 +520,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     [props, wantType, roles])
   const groundOk = groundFits(wantType, roles)
   const nothingFits = props !== null && !groundOk && !propGroups.length
+  // "Align all" (owner 2026-11-22): a clip no prop has a place for answers at once instead of being waited for.
+  useEffect(() => {
+    if (!nothingFits || !autoAlignOut.current) return
+    const stub: AutoAlignRun = Object.assign((): AutoAlignResult => ({ ok: false, reason: t('No prop has a place this clip fits on.') }),
+      { kind, set, figures: 0, noPlace: true })
+    autoAlignOut.current.current = stub
+    return () => { if (autoAlignOut.current?.current === stub) autoAlignOut.current.current = null }
+  }, [nothingFits, kind, set, t])
 
   // ── its places from the server (the draft scene preview) ──
   useEffect(() => {
@@ -528,12 +565,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   // The assignment a fill just set: until it is rendered, what is shown belongs to the previous clip or to the
   // empty first render and must not be remembered (it would wipe the memory the fill is about to read).
   const fillResult = useRef<object | null>(null)
+  /** The places the last fill planned for this clip: only those are remembered (a place the clip does not take must not
+   *  overwrite what the previous clip remembered there — it emptied every later clip's persons in "Align all"). */
+  const planned = useRef<Set<string>>(new Set())
   const fill = (all: boolean) => {
     const names = chars ? [...chars.filter((c) => c.built).map((c) => c.name), MANNEQUIN] : null
     const plan = planFill(places.map((p) => ({ letter: p.letter, markerId: p.marker.id, group: p.marker.group })),
       { names, want: wantType, roles: solo ? [''] : roleList, all, max: MAX_FIGURES,
         body: (name) => defaultBody(plain[name], name === MANNEQUIN) })
     const next = { ...plan.assign }
+    planned.current = new Set(Object.keys(plan.assign))
     if (!all) {
       // A129.8: the persons, bodies and poses picked on the last clip, per place index — only on the places the
       // default fill gives this clip; a remembered figure never adds a place the clip does not take (a place
@@ -577,6 +618,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
     // An emptied place is remembered as empty — so "— empty" survives the next clip and the next page load.
     places.forEach((p, i) => {
       const a = assign[p.letter]
+      if (!a?.character && !planned.current.has(p.letter)) return
       placeMemory.byIndex[i] = a?.character
         ? { character: a.character, role: a.role, body: a.body, poses: a.poses }
         : { character: '', role: '', body: 'outfit', poses: {} }
@@ -1148,6 +1190,28 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         // the capsules a baseline pass chose).
         // ONE RELATION, ONE MOVER: `mover` = the figure the trial moves (its pivot `pl`, its support); the receiving one
         // marks the sample `mover: 'receiver'` (pairAlign `moveSample` then moves the channel, not the part).
+        /** THE VISIBLE ROOT (pairAlign): the body-side end of the part capsule nearest the chain's root joint — how far
+         *  along the shaft beyond the joint (never negative) and its radius. */
+        const v3 = (p: readonly number[]): [number, number, number] => [p[0], p[1], p[2]]
+        const visibleRootOf = (ie: NonNullable<NonNullable<ReturnType<typeof placePhaseB>>['figures'][number]['inspection']>,
+          chain: number): { rootLeadM: number; rootRingM: number } => {
+          const seg = ie.chains[chain]?.segments
+          if (!seg?.length) return { rootLeadM: 0, rootRingM: 0 }
+          const p0 = seg[0].a, tip = seg[seg.length - 1].b
+          const d = [tip[0] - p0[0], tip[1] - p0[1], tip[2] - p0[2]], dl = Math.hypot(d[0], d[1], d[2]) || 1
+          let best = Infinity, lead = 0, ring = 0
+          for (const c of ie.capsules) {
+            if (!PART_REGIONS.includes(c.region)) continue
+            for (const end of [c.now.a, c.now.b]) {
+              const g = Math.hypot(end[0] - p0[0], end[1] - p0[1], end[2] - p0[2])
+              if (g < best) {
+                best = g; ring = c.now.r
+                lead = ((end[0] - p0[0]) * d[0] + (end[1] - p0[1]) * d[1] + (end[2] - p0[2]) * d[2]) / dl
+              }
+            }
+          }
+          return { rootLeadM: Math.max(0, lead), rootRingM: ring }
+        }
         const sampleAt = (res: NonNullable<ReturnType<typeof placePhaseB>>, hit: Hit,
           pl: { pivot: [number, number, number]; frame: number[] }, ids?: readonly string[] | null, mover = hit.e): AlignSample | null => {
           const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
@@ -1163,6 +1227,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             chain: w.chain?.map((p) => toStageP(p)), raised: w.raised, channel: w.channel,
             body: { side: toStageP(body.side, true), up: toStageP(body.up, true) },
             ...(depth > 0 ? { depthM: depth, tipRadiusM: segs.length ? segs[segs.length - 1].r : 0 } : {}),
+            ...(w.channel ? visibleRootOf(ie, hit.chain) : {}),
             ...(support ? { support } : {}), ...(mover === hit.r ? { mover: 'receiver' as const } : {}) }
         }
         // ── Ruling A145: the attached part bends toward its target near the opening — at its root when raised, at every
@@ -1419,9 +1484,17 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           f.hips.getWorldPosition(scratch).applyMatrix4(stageInv)
           return [scratch.x, scratch.y, scratch.z]
         }
-        type PassOut = { per: AlignSample[][]; overlap: number; worst: string; draft: AlignmentDraft
-          heights: Map<number, { ids: string[]; h: number }> }
+        type FigCaps = { pivot: [number, number, number]; caps: ClearCapsule[][] }
+        type PassOut = { per: AlignSample[][]; ks: number[][]; overlap: number; worst: string; draft: AlignmentDraft
+          heights: Map<number, { ids: string[]; h: number }>
+          /** THE CLEARANCE (pairAlign): per sampled frame k every figure's stage capsules and the mover's pivot; per figure
+           *  the mover's worst overlap with it over the loop (metres) and its capsule pair; per frame the per-figure depths. */
+          caps: Map<number, FigCaps>; clearBy: number[]; clearWorst: string[]; clearAt: Map<number, number[]> }
         const relLabel = (h: Hit) => `${figs[h.e].letter} → ${figs[h.r].letter} (${targetWordOf(t, h.target)})`
+        /** A relation's key in "Align all" (part role > receiving role : target) — the per-row mover choice. */
+        const relKey = (h: Hit) => `${figs[h.e].role}>${figs[h.r].role}:${h.target}`
+        const stageCaps = (insp: NonNullable<NonNullable<ReturnType<typeof placePhaseB>>['figures'][number]['inspection']>): ClearCapsule[] =>
+          contactCapsules(insp).map((c) => ({ id: c.id, a: toStageP(c.now.a), b: toStageP(c.now.b), r: c.now.r }))
         const autoAlign = (opts: AutoAlignOptions = {}): AutoAlignResult => {
           if (solo || figs.length < 2) return { ok: false, reason: t('Auto-align needs a pair clip on a place.') }
           const loop = Math.max(8, Math.ceil(duration / step))
@@ -1436,14 +1509,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             if (needs.length) return { ok: false, reason: needs.join(' ') }
           }
           if (!all.length) return { ok: false, reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') }
-          // ONE RELATION, ONE MOVER (2026-11-22): a click names the relation and the role that moves; without one
-          // ("Align all", end clips) every relation is aligned by its part's carrier.
+          // ONE RELATION, ONE MOVER (2026-11-22): a click names the relation and the role that moves; "Align all" runs
+          // every relation one after the other (`each`); without either (end clips) every relation is aligned by its part's
+          // carrier, one solve per figure.
           const only = opts.only
           const hits = !only ? all : only === 'detected' ? all.slice(0, 1)
             : all.filter((h) => figs[h.e].role === only.part && figs[h.r].role === only.at && h.target === only.target)
           if (!hits.length) return { ok: false, reason: t('This contact is not in the scene: {rel}.').replace('{rel}',
             only && only !== 'detected' ? `${only.part.toUpperCase()} → ${only.at.toUpperCase()} (${targetWordOf(t, only.target)})` : '–') }
-          const moverKind: AlignMover = only ? opts.mover ?? 'part' : 'part'
           const isPair = roles === 2
           const bendLim = bendLimitsNow()
           const cap = alignCap(opts.rangeCm ?? clips.find((c) => (c.set || '') === set.trim() && c.role === 'a')?.align_range?.cm
@@ -1454,30 +1527,68 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const rep = (smps: readonly FitSample[]) => contactReport(smps)
           const cm = (v: number) => Math.round(v * 1000) / 10
           const deg = (v: number) => Math.round(v * 10) / 10
-          // The groups the run solves, each by its moving figure: one click = its relation's chosen role; otherwise the
-          // part carriers (`alignMovers`), one solve per figure for all its relations.
-          const movers = moverKind === 'receiver' ? new Map([[hits[0].r, hits]]) : alignMovers(hits)
           // Ruling A158: the clip has ONE root angle; it turns the attached part of every part place (`placeRoot`). The
           // first group whose part chain it turns solves it, the others keep it.
           const partRels = rels.filter((x) => x.target !== 'none')
           const partRoles = partRels.map((x) => x.part)
           const rootTurns = (role: string) => !partRoles.length || partRoles.includes(role)
-          let rootSolved = false
-          let cur0 = base
-          const rows: RelationAlign[] = []
-          const moverRows: MoverAlign[] = []
-          // The aligned samples of every relation, for the contact pivot (`pairPivotCm`).
-          const pivotRels: AlignSample[][] = []
+          // THE CLEARANCE: the pairs the honest check exempts (an attached-part capsule against a receiving channel's
+          // suppress capsules) for every contact of the scene, seen from either figure as the mover.
+          const exempt = new Set<string>()
+          for (const h of all) {
+            const ie = probe?.figures[h.e].inspection, ir = probe?.figures[h.r].inspection
+            const parts = (ie?.capsules ?? []).filter((c) => PART_REGIONS.includes(c.region)).map((c) => c.id)
+            const sup = ir?.channels.find((x) => x.id === h.channel)?.suppress ?? []
+            for (const p of parts) for (const s of sup) {
+              exempt.add(`${p}|${entries[h.r].name}|${s}`)
+              exempt.add(`${s}|${entries[h.e].name}|${p}`)
+            }
+          }
+          // THE RENDERED ROOT (owner finding 2026-11-22, crouching-mission): the part's root over the loop AS RENDERED —
+          // partners on (channel engagement, guidance), the chain bend applied every frame as `tick` does — per frame
+          // the root joint's depth along the axis and the VISIBLE root's (pairAlign `visibleRootDepth`), mm, + = inside the
+          // opening. The isolated samples the solve reads give the same numbers for the root joint.
+          type RootFrame = { k: number; rootMm: number; visMm: number; tipMm: number }
+          const renderedRoots = (draft: AlignmentDraft, hit: Hit, isolated = false): RootFrame[] => {
+            const out: RootFrame[] = []
+            resetAll()
+            const lim = bendLimitsNow()
+            for (let i = 0; i < 2 * loop; i++) {
+              const time = (i % loop) * step % duration
+              const res = runAt(time, draft, true, isolated)
+              if (!res) continue
+              if (!isolated) bendBones(res, hit, lim)
+              if (i < loop) continue
+              const ie = res.figures[hit.e].inspection, ir = res.figures[hit.r].inspection
+              const ch = ir?.channels.find((x) => x.id === hit.channel)
+              const seg = ie?.chains[hit.chain]?.segments
+              if (!ie || !ch || !seg?.length || isPointTarget(hit.target)) continue
+              const u0 = ch.u, ul = Math.hypot(u0[0], u0[1], u0[2]) || 1
+              const u = [u0[0] / ul, u0[1] / ul, u0[2] / ul]
+              const s = (p: readonly number[]) => (p[0] - ch.o[0]) * u[0] + (p[1] - ch.o[1]) * u[1] + (p[2] - ch.o[2]) * u[2]
+              const p0 = seg[0].a, tip = seg[seg.length - 1].b
+              const vr = visibleRootOf(ie, hit.chain)
+              const vis = visibleRootDepth({ o: v3(ch.o), u: v3(u), tip: v3(tip), ...vr }, v3(p0))
+              out.push({ k: i - loop, rootMm: s(p0) * 1000, visMm: vis * 1000, tipMm: s(tip) * 1000 })
+            }
+            return out
+          }
+          const rootPeak = (fr: readonly RootFrame[]) => fr.reduce((a, x) => (x.visMm > a.visMm ? x : a),
+            fr[0] ?? { k: -1, rootMm: NaN, visMm: NaN, tipMm: NaN })
           // Every pass starts from the same rest state and samples WITHOUT partners (`placePhaseB` isolated): no
           // channel engagement, guidance or latch carries over from the frames before (module docstring of pairAlign).
           const resetAll = () => { for (const f of figs) f.runtime.reset() }
-          for (const [mi, group] of movers) {
+          type Cand = { rows: RelationAlign[]; moverRow: MoverAlign; draft: AlignmentDraft; applied: boolean; solvedRoot: boolean
+            pivot: AlignSample[][]; cand: AlignCandidate; blocked: boolean }
+          /** One bounded solve of `group` (relations of one part figure) moving figure `mi` from `start`, and its
+           *  verdict (pairAlign THE CLEARANCE / THE VERDICT). A string = why it could not be measured. */
+          const runGroup = (group: Hit[], mi: number, moverKind: AlignMover, start: AlignmentDraft, mayRoot: boolean): Cand | string => {
             const moving = figs[mi]
             const mr = moving.role
             const partFig = group[0].e
             const anchor = figs[moverKind === 'receiver' ? group[0].e : group[0].r]
-            const b0 = cur0.roleShiftM[mr] ?? [0, 0, 0]
-            const t0 = cur0.partnerTurnDeg ?? [0, 0]
+            const b0 = start.roleShiftM[mr] ?? [0, 0, 0]
+            const t0 = start.partnerTurnDeg ?? [0, 0]
             // The BASE the cap is measured from (Ruling A212 review H1): the arrangement the user set, not the dials an
             // earlier Auto-align already moved — a second click stays inside the same cap.
             const bb = opts.base ? opts.base.roleShiftM?.[mr] ?? [0, 0, 0] : b0
@@ -1485,11 +1596,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const savedTurn = (savedRef.current.b ?? moving.saved).partnerTurnDeg ?? [0, 0]
             // Tilt/roll stay a pair's partner B dials: only B turns.
             const turns = isPair && mr === 'b'
-            const start = cur0
             const root0: RootAngle = { pitchDeg: start.rootAngle?.pitchDeg ?? 0, yawDeg: start.rootAngle?.yawDeg ?? 0 }
             // The chain the root angle turns: the PART figure's first chain with a point-target op (`applyRootAngle`).
             const rootChain = probe!.figures[partFig].inspection?.chains.findIndex((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op)) ?? -1
-            const solveRoot = !rootSolved && rootTurns(figs[partFig].role) && group.some((h) => h.chain === rootChain)
+            const turnsRoot = rootTurns(figs[partFig].role) && group.some((h) => h.chain === rootChain)
+            const solveRoot = mayRoot && turnsRoot
             const draftOf = (extra: [number, number, number], turn: [number, number], root: RootAngle | null): AlignmentDraft => ({ ...start,
               roleShiftM: { ...start.roleShiftM, [mr]: [bb[0] + extra[0], bb[1] + extra[1], bb[2] + extra[2]] },
               partnerTurnDeg: turns ? [tb[0] + turn[0], tb[1] + turn[1]] : start.partnerTurnDeg,
@@ -1499,10 +1610,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const placeGroup = moving.place.marker.group
             let baseline: Map<number, { ids: string[]; h: number }> | null = null
             let axes: [number, number, number][] = []
+            const moverName = entries[mi].name
+            const nameAt = new Map(entries.map((e, j) => [e.name, j]))
             const pass = (extra: [number, number, number], turn: [number, number] = [0, 0], root: RootAngle | null = null): PassOut => {
               const draft = draftOf(extra, turn, root)
               const per: AlignSample[][] = group.map(() => [])
+              const ks: number[][] = group.map(() => [])
               const heights = new Map<number, { ids: string[]; h: number }>()
+              const caps = new Map<number, FigCaps>()
+              const clearAt = new Map<number, number[]>()
+              const clearBy = figs.map(() => 0), clearWorst = figs.map(() => '')
               let overlap = 0, worst = ''   // mm while sampling (A129.5 honest check)
               resetAll()
               for (let i = 0; i < 2 * loop; i++) {
@@ -1521,11 +1638,25 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                     if (b) smp.support = { ...smp.support, base: b.h }
                   } else if (gi > 0) delete smp.support
                   per[gi].push({ ...smp, phase: duration > 0 ? time / duration : 0 })
+                  ks[gi].push(k)
                   const h = honestAt(res, hit)
                   if (h.mm > overlap) { overlap = h.mm; worst = h.worst }
                 })
+                if (k < 0) continue
+                // THE CLEARANCE: the mover against every other figure this frame (exempt pairs skipped).
+                caps.set(k, { pivot: pl.pivot, caps: res.figures.map((f) => (f.inspection ? stageCaps(f.inspection) : [])) })
+                const ds = figs.map(() => 0)
+                for (const c of res.frame.contacts) {
+                  const mine = c.a === moverName ? { cap: c.capA, other: c.b, oc: c.capB } : c.b === moverName ? { cap: c.capB, other: c.a, oc: c.capA } : null
+                  if (!mine || exempt.has(`${mine.cap}|${mine.other}|${mine.oc}`)) continue
+                  const j = nameAt.get(mine.other)
+                  if (j === undefined || c.depth <= ds[j]) continue
+                  ds[j] = c.depth
+                  if (c.depth > clearBy[j]) { clearBy[j] = c.depth; clearWorst[j] = `${moving.letter} ${mine.cap} ↔ ${figs[j].letter} ${mine.oc}` }
+                }
+                clearAt.set(k, ds)
               }
-              return { per, overlap: overlap / 1000, worst, draft, heights }
+              return { per, ks, overlap: overlap / 1000, worst, draft, heights, caps, clearBy, clearWorst, clearAt }
             }
             // the moving role's clip frame → world shift: B = frame · diag(1, k, 1) (the vertical through the hips-drop
             // gain: root.y moves by hipsBind.y / standRef per metre of clip hips).
@@ -1547,19 +1678,40 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const x0: [number, number, number] = [b0[0] - bb[0], b0[1] - bb[1], b0[2] - bb[2]]
             const a0: [number, number] = turns ? [t0[0] - tb[0], t0[1] - tb[1]] : [0, 0]
             const p0 = pass(x0, a0)
-            if (p0.per.some((x) => x.length < 4)) return { ok: false, reason: t('The contact could not be sampled over the clip.') }
+            if (p0.per.some((x) => x.length < 4)) return t('The contact could not be sampled over the clip.')
+            // THE CLEARANCE: each other figure's allowance from the start (the dials when clicked).
+            const others = figs.map((_, j) => j).filter((j) => j !== mi)
+            const allow = figs.map((_, j) => clearAllowM(p0.clearBy[j]))
+            const clearOf = (got: PassOut): ClearFrame[] => {
+              const want = new Set<number>()
+              got.per.forEach((smps, gi) => {
+                const kf = keyFrames(smps)
+                if (kf) { want.add(got.ks[gi][kf.deep]); want.add(got.ks[gi][kf.shallow]) }
+              })
+              // plus the frame with the largest excess over an allowance (any overlap at all; none = no such frame)
+              let wk = -1, wx = -Infinity
+              for (const [k, ds] of got.clearAt) for (const j of others) if (ds[j] > 0 && ds[j] - allow[j] > wx) { wx = ds[j] - allow[j]; wk = k }
+              if (wk >= 0) want.add(wk)
+              const out: ClearFrame[] = []
+              for (const k of want) {
+                const fc = got.caps.get(k)
+                if (!fc) continue
+                out.push({ pivot: fc.pivot, mover: fc.caps[mi], exempt,
+                  others: others.map((j) => ({ name: entries[j].name, allowM: allow[j], caps: fc.caps[j] })) })
+              }
+              return out
+            }
             // Measure → solve → measure again (`alignByPasses`); the first measurement is p0.
             let firstUsed = false
             const measure = (s: { x: [number, number, number]; deg: number[]; root: RootAngle | null }) => {
               const got = firstUsed ? pass(s.x, turns ? [s.deg[0] ?? 0, s.deg[1] ?? 0] : [0, 0], s.root) : p0
               firstUsed = true
               return { relations: got.per.map((samples, gi) => ({ samples, rooted: solveRoot && group[gi].chain === rootChain })),
-                basis: basisOf(got.draft), join: joinOf(got.draft), out: got }
+                basis: basisOf(got.draft), join: joinOf(got.draft), clear: clearOf(got), out: got }
             }
             const run = alignByPasses(measure, { axes: turns ? axes : [], cap,
               angleCapDeg: turns ? postureAngleCapDeg(placeGroup, cap.angleDeg) : undefined },
             { x: x0, deg: turns ? a0 : [], root: solveRoot ? root0 : null })
-            if (solveRoot) rootSolved = true
             const cur = run.last.out
             const extra = run.state.x
             const turn: [number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0] : [0, 0]
@@ -1572,31 +1724,102 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const turnDeg: [number, number] = turns ? [deg(tb[0] + turn[0]), deg(tb[1] + turn[1])] : [deg(t0[0]), deg(t0[1])]
             const adjustCm: [number, number, number] = [cm(extra[0] - x0[0]), cm(extra[1] - x0[1]), cm(extra[2] - x0[2])]
             const adjustDeg: [number, number] = [deg(turn[0] - a0[0]), deg(turn[1] - a0[1])]
-            const rootAngle = solveRoot && run.state.root
-              ? { pitchDeg: deg(run.state.root.pitchDeg), yawDeg: deg(run.state.root.yawDeg) } : null
-            group.forEach((hit, gi) => {
-              pivotRels.push(cur.per[gi])
-              const before = rep(p0.per[gi]), after = rep(cur.per[gi])
+            // THE CLEARANCE after the run, over the whole loop of the last measurement.
+            const clearRows: ClearRow[] = others.map((j) => ({ name: figs[j].letter, startM: p0.clearBy[j], allowM: allow[j],
+              afterM: cur.clearBy[j], worst: cur.clearWorst[j] || p0.clearWorst[j] }))
+            const slack = ALIGN_CLEAR_SLACK_MM / 1000
+            const clearOk = clearRows.every((c) => c.afterM <= c.allowM + slack)
+            // THE RENDERED ROOT before and after (and the isolated loop the solve reads, frame by frame).
+            const rendered = group.map((hit) => {
+              if (isPointTarget(hit.target)) return null
+              const before = renderedRoots(p0.draft, hit), after = renderedRoots(cur.draft, hit)
+              const iso = renderedRoots(cur.draft, hit, true)
+              return { before: rootPeak(before), after: rootPeak(after), isolated: rootPeak(iso),
+                frames: after.map((x, i) => ({ ...x, isoRootMm: iso[i]?.rootMm ?? NaN, isoVisMm: iso[i]?.visMm ?? NaN })) }
+            })
+            const reports = group.map((hit, gi) => {
               const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(cur.per[gi], bendLim)
-              const posture = gi === 0 ? postureOf(cur.per[gi]) : null
               const inside = !isPointTarget(hit.target)
-              const lamp = keyLamp(ka, hitsNow, inside, kb)
+              const rr = rendered[gi]
+              return { kb, ka, inside, verdict: alignVerdict(kb, ka, inside, clearRows,
+                rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm } : null) }
+            })
+            const bad = reports.find((x) => !x.verdict.applied)?.verdict ?? null
+            const applied = !bad
+            const posture0 = postureOf(cur.per[0])
+            const deepOk = reports.every((x) => deepHolds(x.ka, x.inside))
+            const cand: AlignCandidate = { applied, deepOk, clearOk,
+              axisMm: Math.max(...reports.map((x) => (x.ka ? keyWorstMm(x.ka, x.inside) : Infinity))),
+              depthMm: Math.min(...reports.map((x) => (x.ka ? x.ka.deep.depthMm : -Infinity))) }
+            const rootAngle = solveRoot && applied && run.state.root
+              ? { pitchDeg: deg(run.state.root.pitchDeg), yawDeg: deg(run.state.root.yawDeg) } : null
+            const view = (c: ClearRow): ClearView => ({ with: c.name, startMm: c.startM * 1000, allowMm: c.allowM * 1000,
+              afterMm: c.afterM * 1000, worst: c.worst })
+            const collide = bad?.collide ? view(bad.collide) : null
+            const rows: RelationAlign[] = group.map((hit, gi) => {
+              const { kb, ka, inside } = reports[gi]
+              const before = rep(p0.per[gi]), after = rep(cur.per[gi])
+              const posture = gi === 0 ? posture0 : null
+              // THE RENDERED ROOT: a visible root inside the opening on a rendered frame is red, with its reason.
+              const rootIn = inside && (rendered[gi]?.after.visMm ?? -Infinity) > 0
+              const reasons = keyReasons(ka, hitsNow, inside, kb)
+              if (rootIn && !reasons.includes('root_inside')) reasons.push('root_inside')
+              const lamp = rootIn ? 'red' as const : keyLamp(ka, hitsNow, inside, kb)
               const insideCount = (smps: readonly AlignSample[]) => smps.filter((x) =>
                 (x.tip[0] - x.o[0]) * x.u[0] + (x.tip[1] - x.o[1]) * x.u[1] + (x.tip[2] - x.o[2]) * x.u[2] > 0).length
-              rows.push({ by: figs[hit.e].letter, of: figs[hit.r].letter, channel: hit.channel, target: hit.target, part: figs[hit.e].role,
-                moved: mr, mover: moverKind, reasons: keyReasons(ka, hitsNow, inside, kb),
+              return { by: figs[hit.e].letter, of: figs[hit.r].letter, channel: hit.channel, target: hit.target, part: figs[hit.e].role,
+                key: relKey(hit), moved: mr, mover: moverKind, alternative: false, tried: [moverKind],
+                applied, discard: bad?.why ?? null, collide,
+                clear: clearRows.map(view),
+                bucket: alignBucket(kb, ka, inside, applied),
+                root: solveRoot ? 'solved' : turnsRoot ? 'kept' : 'none',
+                reasons,
                 tipInside: { before: insideCount(p0.per[gi]), after: insideCount(cur.per[gi]), frames: cur.per[gi].length },
                 postureBefore: gi === 0 ? postureOf(p0.per[gi]) : null, posture,
                 limitReason: lamp !== 'green' && posture?.limited ? 'posture' : null, shiftCm, turnDeg,
                 before, after, overlapBeforeMm: p0.overlap * 1000, overlapAfterMm: cur.overlap * 1000,
                 clearWorst: cur.worst, clearLamp: clearLamp(cur.overlap * 1000), lampBefore: keyLamp(kb, [], inside), lamp,
                 keys: { before: kb, after: ka },
-                bend: bendReadout(cur.per[gi].map((x) => bendOf(x, bendLim))) })
+                bend: bendReadout(cur.per[gi].map((x) => bendOf(x, bendLim))), rendered: rendered[gi] }
             })
-            moverRows.push({ role: mr, letter: moving.letter, mover: moverKind, shiftCm, turnDeg, adjustCm, adjustDeg, rangeCm,
-              lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
-              passes: run.trace, converged: run.converged })
-            cur0 = cur.draft
+            const moverRow: MoverAlign = { role: mr, letter: moving.letter, mover: moverKind, applied, shiftCm, turnDeg, adjustCm,
+              adjustDeg, rangeCm, lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
+              passes: run.trace, converged: run.converged }
+            return { rows, moverRow, draft: cur.draft, applied, solvedRoot: solveRoot && applied, pivot: applied ? cur.per : p0.per, cand,
+              blocked: alignBlocked({ applied, postureLimited: !!posture0?.limited, hits: hitsNow, deepOk }) }
+          }
+          // The groups: one per relation, one after the other (a click, "Align all"), each with the role its choice
+          // names — 'auto' tries the part's carrier first and the receiving role when that run is blocked; without
+          // either, one group per part figure moved by it (end clips).
+          const sequential = !!only || !!opts.each
+          const groups: { group: Hit[]; choice: AlignMover | 'auto' }[] = sequential
+            ? hits.map((h) => ({ group: [h], choice: (only ? opts.mover : opts.moverOf?.[relKey(h)] ?? opts.mover) ?? 'auto' }))
+            : [...alignMovers(hits).values()].map((g) => ({ group: g, choice: 'part' as const }))
+          let rootSolved = false
+          let cur0 = base
+          const rows: RelationAlign[] = []
+          const moverRows: MoverAlign[] = []
+          // The aligned samples of every relation, for the contact pivot (`pairPivotCm`).
+          const pivotRels: AlignSample[][] = []
+          for (const { group, choice } of groups) {
+            const kind: AlignMover = choice === 'auto' ? 'part' : choice
+            const moverOf = (k: AlignMover) => (k === 'receiver' ? group[0].r : group[0].e)
+            const first = runGroup(group, moverOf(kind), kind, cur0, !rootSolved)
+            if (typeof first === 'string') return { ok: false, reason: first }
+            let pick = first
+            if (choice === 'auto' && first.blocked) {
+              // THE AUTOMATIC ALTERNATIVE: the same relation with the receiving role moving, from the same start.
+              const second = runGroup(group, moverOf('receiver'), 'receiver', cur0, !rootSolved)
+              if (typeof second !== 'string') {
+                const better = compareCandidates(second.cand, first.cand) < 0
+                pick = better ? second : first
+                for (const r of pick.rows) { r.tried = ['part', 'receiver']; r.alternative = better }
+              }
+            }
+            rows.push(...pick.rows)
+            moverRows.push(pick.moverRow)
+            pivotRels.push(...pick.pivot)
+            if (pick.applied) { cur0 = pick.draft; if (pick.solvedRoot) rootSolved = true }
           }
           resetAll()
           runAt(timeRef.current, draftRef.current, false)
@@ -1605,10 +1828,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // The pivot in the clip frame of the receiving figure's place anchor (every role of a clip shares it).
           const recv = figs[hits[0].r]
           const pivotCm = pairPivotCm(pivotRels, recv.anchor, recv.placeYaw)
-          const rootAngle = moverRows.find((m) => m.rootAngle)?.rootAngle ?? null
+          const rootAngle = moverRows.find((m) => m.applied && m.rootAngle)?.rootAngle ?? null
           // The other contacts whose part the one root angle turns as well (only a one-relation click can surprise there).
           const rootShared = only && rootAngle ? all.filter((h) => !hits.includes(h) && rootTurns(figs[h.e].role)).map(relLabel) : []
-          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows, rootAngle, rootShared, pivotCm }
+          return { ok: true, ...rows[0], relations: rows, roleShiftCm, movers: moverRows, rootAngle, rootShared, pivotCm,
+            applied: moverRows.some((m) => m.applied) }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {
