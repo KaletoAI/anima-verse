@@ -138,9 +138,17 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      [17.1] ``build_args`` sends no ``uv_mode`` for a skirt and a strapless top (B17), and a skirt's
             ``waistband_m`` = ``WAISTBAND_M[waistband]`` (wide 0.03, thin 0.012); a top with a bodice gets no
             ``waistband_m`` key.
-     [17.2] ``PANEL_VERSION`` is 1: a skirt's / a strapless top's ``tsig`` is md5 of the [16] payload PLUS
-            ``"panels": 1`` (and differs from it); a top with sleeves carries none (its key is the base commit's,
-            [16]); a fitted kind none either.
+     [17.2] ``PANEL_VERSION`` is 1: a strapless top's ``tsig`` is md5 of the [16] payload PLUS ``"panels": 1``, a
+            skirt's PLUS ``"panels": 1`` and ``"legs": 1`` (stage "geometry", [17.5]) — each differs from the bare
+            payload; a top with sleeves carries none (its key is the base commit's, [16]); a fitted kind none either.
+     [17.5] Stage "geometry": ``LEG_VERSION`` 1 keys a skirt and a dress (``leg_piece``), ``STRAP_VERSION`` 1 a
+            strapped dress / top whose neckline is not strapless (``strap_piece``): a dress with straps and a crew
+            neck has ``tsig`` = md5(payload + panels 1 + legs 1 + straps 1); a strapped top with a sweetheart neckline
+            (A221's corset, its straps drawn in already) and a jacket have neither key. ``build_args`` sends
+            ``leg_centres`` True for the skirt and the dress, ``straight_straps`` True for the strapped crew dress,
+            neither key for the jacket. ``garment_template_cut.cut_sig`` gains ``"legs"`` / ``"straps"`` the same
+            way: the strapped dress's cut key differs from the same key with ``strap_piece`` and ``leg_piece``
+            stubbed False.
      [17.3] ``validate_params({"kind": "skirt"})`` keeps the PARAM_SPEC waistband "thin" (a saved skirt is unchanged);
             ``kind_defaults("skirt")["waistband"]`` is "wide" (a new skirt, B2); "waistband" and "texture" are skirt
             fields; ``slit`` "front_left" / "front_right" are valid (not reset to "none").
@@ -714,8 +722,9 @@ for _p17 in (_sk17, _sl17):
     _pre17 = {"params": gt.keyed_params(_p17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got17 = gt.tsig(_p17, **_kw16)
-    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1",
-          _got17 == gt._md5({**_pre17, "panels": 1}) and _got17 != gt._md5(_pre17))
+    _want17 = {**_pre17, "panels": 1, **({"legs": 1} if _p17["kind"] == "skirt" else {})}
+    check(f"[17.2] {_p17['kind']} {_p17['shoulders']}: tsig = payload + panels 1 (+ legs 1 for the skirt)",
+          _got17 == gt._md5(_want17) and _got17 != gt._md5(_pre17))
 check("[17.2] a top with sleeves and a fitted kind are no panel piece",
       not gt.panel_piece(_top15) and not gt.panel_piece(gt.validate_params({"kind": "briefs"})[0]))
 check("[17.3] a saved skirt keeps waistband thin", gt.validate_params({"kind": "skirt"})[0]["waistband"] == "thin")
@@ -724,6 +733,31 @@ check("[17.3] waistband + texture are skirt fields", {"waistband", "texture"} <=
 for _side17 in ("front_left", "front_right"):
     check(f"[17.3] slit {_side17} is valid",
           gt.validate_params({"kind": "skirt", "slit": _side17, "slit_m": 0.2})[0]["slit"] == _side17)
+# [17.5] stage "geometry"
+check("[17.5] LEG_VERSION 1, STRAP_VERSION 1", (gt.LEG_VERSION, gt.STRAP_VERSION) == (1, 1))
+_dr17 = gt.validate_params({"kind": "dress", "shoulders": "straps", "sleeves": "none", "neckline": "crew"})[0]
+_ct17 = gt.validate_params({"kind": "top", "shoulders": "straps", "neckline": "sweetheart"})[0]
+_jk17 = gt.validate_params({"kind": "jacket"})[0]
+_pd17 = {"params": gt.keyed_params(_dr17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+         "lower": ["a", "b"]}
+check("[17.5] strapped crew dress: tsig = payload + panels + legs + straps",
+      gt.tsig(_dr17, **_kw16) == gt._md5({**_pd17, "panels": 1, "legs": 1, "straps": 1}))
+check("[17.5] corset top with straps, jacket: no legs / straps key",
+      not gt.strap_piece(_ct17) and not gt.leg_piece(_ct17) and not gt.strap_piece(_jk17) and not gt.leg_piece(_jk17))
+_bd17 = gt.build_args(_dr17, gt.panel_spec(_dr17, MU), item_id="x")
+_bj17 = gt.build_args(_jk17, gt.panel_spec(_jk17, MU), item_id="x")
+check("[17.5] build_args: skirt / dress leg_centres, strapped dress straight_straps, jacket neither",
+      _ba17.get("leg_centres") is True and _bd17.get("leg_centres") is True and _bd17.get("straight_straps") is True
+      and "leg_centres" not in _bj17 and "straight_straps" not in _bj17 and "straight_straps" not in _ba17)
+from app.core import garment_template_cut as _gtc17  # noqa: E402
+_cs17 = _gtc17.cut_sig(_dr17, base_sha="a" * 64, lower=[])
+_lp17, _sp17 = gt.leg_piece, gt.strap_piece
+gt.leg_piece = gt.strap_piece = lambda p: False
+try:
+    _cs17_off = _gtc17.cut_sig(_dr17, base_sha="a" * 64, lower=[])
+finally:
+    gt.leg_piece, gt.strap_piece = _lp17, _sp17
+check("[17.5] cut_sig of the strapped dress carries legs / straps", _cs17 != _cs17_off, (_cs17, _cs17_off))
 import math as _m17  # noqa: E402
 import re as _re17  # noqa: E402
 _b17 = (ROOT / "app" / "blender" / "scripts" / "garment_template_build.py").read_text(encoding="utf-8")

@@ -553,13 +553,101 @@ def _outer_layer_only(obj, col):
     bm.free()
 
 
-def _join_extra(col, extra, dg):
+#: Stage "geometry" (Tilda's grey cardigan over her elbow-sleeved blouse, 2026-11-22): in the collider an outer
+#: layer meets, a lower layer's SLEEVE HEM is ramped down onto the arm over this length — the last ``HEM_RAMP_M`` of
+#: the sleeve before its open hem drawn in towards the arm's skin (smoothstep). Without it the hanging hem of a loose
+#: sleeve (13 cm deep under the arm) stood as a step in the collider, the jacket sleeve slid over it while the arms
+#: moved and caught on it: stretch 1.462 along the arm, both arms, right at the blouse's hem.
+HEM_RAMP_M = 0.06
+#: Stage "geometry": a sleeve ending closer to the shoulder joint than this is not ramped — it ends under the jacket's
+#: armhole room. Measured (cardigan, CPU copies): Tilda's old short blouse sleeve (reach 0.142 m) drapes the cardigan
+#: at 1.181 unramped and 1.25 ramped; her elbow sleeve (reach ~0.25 m) at 1.424 unramped and 1.297 ramped.
+HEM_RAMP_FROM_M = 0.18
+#: Stage "geometry": how far over the arm's skin the ramp ends (the lower cloth's own thickness).
+HEM_RAMP_SKIN_M = 0.004
+
+
+def _ramp_sleeve_hems(tmp, col, arm):
+    """Stage "geometry": draw the last ``HEM_RAMP_M`` of every open sleeve hem of the lower layer ``tmp`` in onto the
+    arm (``col``: the collider built so far, the body inside it). Per arm, the layer's vertices nearest it (upper arm
+    or forearm, past the shoulder joint) are its sleeve; the hem's place along the arm is how far they reach.
+    Returns the number of vertices moved."""
+    if arm is None:
+        return 0
+    from mathutils.bvhtree import BVHTree
+    tree = BVHTree.FromObject(col, bpy.context.evaluated_depsgraph_get())
+    mw = tmp.matrix_world
+    inv = mw.inverted()
+    bm = bmesh.new()
+    bm.from_mesh(tmp.data)
+    bm.verts.ensure_lookup_table()
+    co = np.array([tuple(mw @ v.co) for v in bm.verts])
+    moved = 0
+    for side in ("Left", "Right"):
+        segs = _chain_segments(arm, ((side + "Arm", side + "ForeArm", side + "Hand"),))
+        others = _chain_segments(arm, CORE_CHAINS)
+        if len(segs) < 2:
+            continue
+        a0, a1, a2 = segs[0][0], segs[0][1], segs[1][1]
+        l0, l1 = float(np.linalg.norm(a1 - a0)), float(np.linalg.norm(a2 - a1))
+
+        def along(p):
+            """(distance along the arm from the shoulder joint, axis point, distance to the axis) per point."""
+            t0 = np.clip(((p - a0) @ (a1 - a0)) / l0 ** 2, 0.0, 1.0)
+            t1 = np.clip(((p - a1) @ (a2 - a1)) / l1 ** 2, 0.0, 1.0)
+            q0 = a0 + t0[:, None] * (a1 - a0)
+            q1 = a1 + t1[:, None] * (a2 - a1)
+            d0, d1 = np.linalg.norm(p - q0, axis=1), np.linalg.norm(p - q1, axis=1)
+            first = d0 <= d1
+            return (np.where(first, t0 * l0, l0 + t1 * l1), np.where(first[:, None], q0, q1),
+                    np.minimum(d0, d1))
+        s, q, d = along(co)
+        near_other = np.full(len(co), np.inf)
+        for b0, b1 in others:
+            if np.allclose(b0, a0) or np.allclose(b0, a1) or np.allclose(b0, a2):
+                continue                    # the arm's own segments
+            t = np.clip(((co - b0) @ (b1 - b0)) / max(float((b1 - b0) @ (b1 - b0)), 1e-12), 0.0, 1.0)
+            near_other = np.minimum(near_other, np.linalg.norm(co - (b0 + t[:, None] * (b1 - b0)), axis=1))
+        on_arm = (d < near_other) & (s > 0.0)
+        # the hem: how far down the arm the layer reaches (its 99th percentile: a stray vertex does not move it); a
+        # sleeve ending within HEM_RAMP_FROM_M of the shoulder joint is left as it is. (The open
+        # borders do not tell the hem: the drape's mesh is split at every pattern seam, so each piece's border runs
+        # round the armhole and down the underarm seam too.)
+        if not on_arm.any():
+            continue
+        s_hem = float(np.percentile(s[on_arm], 99))
+        if s_hem < HEM_RAMP_FROM_M:
+            continue
+        w = np.clip((s - (s_hem - HEM_RAMP_M)) / HEM_RAMP_M, 0.0, 1.0)
+        w = w * w * (3 - 2 * w)
+        for i in np.flatnonzero(on_arm & (w > 0)):
+            out = co[i] - q[i]
+            r = float(np.linalg.norm(out))
+            if r < 1e-6:
+                continue
+            u = out / r
+            hit = tree.ray_cast(Vector(q[i] + u * 0.25), Vector(-u), 0.25)
+            skin = (0.25 - hit[3]) if hit[0] is not None else 0.0
+            if skin <= 0.0 or r <= skin + HEM_RAMP_SKIN_M:
+                continue
+            new_r = r + float(w[i]) * (skin + HEM_RAMP_SKIN_M - r)
+            bm.verts[int(i)].co = inv @ Vector(q[i] + u * new_r)
+            moved += 1
+    bm.to_mesh(tmp.data)
+    bm.free()
+    return moved
+
+
+def _join_extra(col, extra, dg, arm=None, hem_ramp=False):
     """Join the evaluated mesh of ``extra`` (a lower garment, Ruling A142) into the collider object ``col``,
-    thickened to EXTRA_SOLID_M so the voxel remesh keeps it."""
+    thickened to EXTRA_SOLID_M so the voxel remesh keeps it. ``hem_ramp``: its sleeve hems ramped onto the arm
+    (``_ramp_sleeve_hems``; an outer layer over a sleeved one)."""
     tmp = bpy.data.objects.new("extra_col", bpy.data.meshes.new_from_object(extra.evaluated_get(dg)))
     tmp.matrix_world = extra.matrix_world.copy()
     bpy.context.scene.collection.objects.link(tmp)
     _outer_layer_only(tmp, col)
+    if hem_ramp:
+        HEM_RAMPED.append(_ramp_sleeve_hems(tmp, col, arm))
     so = tmp.modifiers.new("so", "SOLIDIFY")
     so.thickness = EXTRA_SOLID_M
     so.offset = -1.0
@@ -584,6 +672,8 @@ CORE_CHAINS = (("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head"),
                ("Spine2", "RightShoulder", "RightArm", "RightForeArm", "RightHand"),
                ("Hips", "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase"),
                ("Hips", "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase"))
+#: Stage "geometry": lower-layer vertices moved by each sleeve-hem ramp (``_ramp_sleeve_hems``), for the record.
+HEM_RAMPED = []
 #: Inner-wall faces removed by each collider build (``_drop_inner_walls``), for the cost record.
 COLLIDER_INNER = []
 
@@ -1027,7 +1117,7 @@ BUILD_CLEAR_PASSES = 80
 BUILD_CLEAR_RINGS = 4
 
 
-def rest_collider(body, extra=(), faces=80000):
+def rest_collider(body, extra=(), faces=80000, hem_ramp=False):
     """A179 — the drape's collider in the rest pose, built ONCE per piece: the body (+ the ``extra`` lower layers,
     thickened) voxel-remeshed, so it is closed and wound outward. The bodice builder reads its sections from it, the
     clearance pass projects onto it and ``drape`` collides with it (``collider=``): what is built outside it starts
@@ -1038,7 +1128,7 @@ def rest_collider(body, extra=(), faces=80000):
     col.matrix_world = body.matrix_world.copy()
     bpy.context.scene.collection.objects.link(col)
     for ex in extra:
-        _join_extra(col, ex, dg)
+        _join_extra(col, ex, dg, arm=armature_of(body), hem_ramp=hem_ramp)
     _remesh(col, faces, core_segments(armature_of(body)))
     drop_outer_shells(col, body, layered=bool(extra), faces=faces, record=True)
     tree = collider_tree(col)

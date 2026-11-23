@@ -462,6 +462,38 @@ placket: it stays "projection" until a live run; Rosi's corset with darts over h
 pencil skirt: plain red, no split line at the darts or the centre cut; the picture's boning seams were not painted this
 time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back centre.
 
+## 1e. Geometry round (stage "geometry", 2026-11-22)
+
+- **Rows round the legs** (`LEG_VERSION` 1, `garment_template.leg_piece`: a skirt, a dress; build arg `leg_centres`,
+  `garment_template_build.leg_centres`). In the bind pose the legs run 8-15 cm behind the waist's centre, so the rows
+  below the crotch were wrapped round a centre in front of them and the back panel was forced round the calves (Ylva's
+  wrap skirt: back panel 95.7 cm wide against a front of 54.6 cm, 15.26 px/cm; her dress's skirt back 98.5 cm). Each
+  row below the crotch now takes the centre shift (0.5 cm steps, -10 .. +25 cm in Y) that gives the smallest girth
+  (`wrap_radii` / `bodice_radii`: the path's own radius rule), the smallest shift within 1 mm of it; the shifts are
+  smoothed to a slope of 0.5 both ways. A piece whose rows gain less than 2 cm keeps the old centre object — its mesh
+  and islands byte for byte, so its atlas stays valid (`csig` reads the islands). Ylva's wrap skirt 17.67 px/cm
+  (back 60.7 cm wide), her dress 11.41 px/cm (skirt back 76.7 cm), Tilda's wool skirt 16.09, Lirien's dress 12.06.
+  The sketch's 18.4 px/cm for Ylva's skirt is out of reach: hip girth 0.989 m + 2 cm clearance = 111.5 cm of panel
+  width side by side, plus the margins 116 cm on a 2048 atlas -> at most 17.66 px/cm; the corrected floor is
+  0.95 x 17.66 = 16.8.
+- **Straight straps** (`STRAP_VERSION` 1, `strap_piece`: a strapped dress or top whose neckline is not strapless;
+  build arg `straight_straps`). The faces are kept by their centre, so the straps' sides and the top edge stepped
+  one column / one row at a time (Lirien's dress: saw-tooth straps, a stepped top edge). Every border vertex above
+  the band is drawn onto its line — a strap face's onto the strap's nearer edge, a band face's onto the band top —
+  and back onto its own distance from the body; border edges shorter than `STRAP_MERGE_M` 8 mm after that are merged
+  (a 3.5 mm edge took the drape's stretch, 1.459). The armhole is scooped: the top edge drops by `ARMHOLE_DROP_M`
+  3 cm towards the side seam (the band's ends stood up to the armpit and hung out 7 cm from the body as flaps).
+  Lirien's dress drapes at 1.182.
+- **A jacket over sleeves** (`OUTER_SLEEVE_VERSION` 1, part of the `ease:over_sleeves` key token): its sleeve rings
+  hang from and clear the lower layer's sleeve (the collider), not the bare arm, and the collider it drapes against
+  has every lower sleeve that reaches past `HEM_RAMP_FROM_M` 18 cm ramped onto the arm over its last `HEM_RAMP_M`
+  6 cm (`garment_template_drape._ramp_sleeve_hems`). Tilda's cardigan over her elbow-sleeved blouse (the blouse
+  sleeve hangs 13 cm under the arm): 1.462 before, 1.424 with the rings alone, 1.297 with both; over her old short
+  blouse 1.181 (unramped, the sleeve ends inside the armhole room).
+- **The waist line** of a cut atlas came from the post-processing, not the geometry: the eroded rim and the bleed were
+  regrown as rays from the core, a streaked band along every island edge that met the next one at the waist seam.
+  They mirror the core now (`POST_VERSION` 11, `cut_texture_post.cut_and_bleed`).
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`
@@ -628,7 +660,7 @@ hold, so:
   its detail gate from the back view's own detail (`references` → `detail.back`). A missing back view is made first
   and the counts assume the back job until it is measured.
 
-`POST_VERSION` 10 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
+`POST_VERSION` 11 and the reworded prompts (`PROMPT_SHA`) make every older cut atlas stale.
 
 ### One hub-job flow per piece
 
@@ -675,7 +707,8 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
 | `spill` | foreground beyond `SPILL_CM` outside the mask, as a share of the mask area | ≤ 0.03 |
 
 - `SPILL_CM` = 1.0 cm — foreground closer than that to an island is a smeared edge, not spill.
-- `BLEED_CM` = 1.0 cm — every island is regrown that far past its border (the model's outline is eroded away first),
+- `BLEED_CM` = 1.0 cm — every island is regrown that far past its border (the model's outline is eroded away first;
+  the eroded rim and the bleed mirror the core across its border, `POST_VERSION` 11),
   so mip-maps and bilinear lookups at a seam never read the background.
 - The erosion is the answer's own outline width (`outline_rim`): ring k = the pixels k px inside the mask; a ring
   whose share of pixels more than `RIM_DE` 12 (ΔE76) from the median cloth colour 10–20 px deep exceeds that band's
@@ -695,14 +728,16 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   the match never adds contrast: a photo's sigma is shading and highlights. Live 2026-11-22, Lirien's glossy brown
   leather: the item's pixel mean L* 34.1 sat 5 above its base 29.1 and its sigma L* 8.6 against the plain answer's
   1.1 gave a 7.7 x gain — the faithful answer (ΔE00 1.0 from the item) came out pale taupe with a weave of noise.
-- `POST_VERSION` = 10 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
+- `POST_VERSION` = 11 — bump it whenever the post-processing changes an atlas; it is part of `csig` (2: the
   post-processing runs per job and the two answers are composed; 3: pre-fill, answer gates, sleeve fabric fill; 4:
   foreground pieces apart from the islands dropped before the registration; 5: the back job in its zoom frame; 6: a
   plain back is the front's fabric, no back job; 7: the erosion is the answer's outline width, `outline_rim`; 8: only a whole island thinner than the erosion keeps
   its own pixels, a thin part of a cored island — a fitted border's jagged teeth, a corner — is regrown from the core:
   the teeth kept the light outline as bleed seed, a pale zigzag along Kai's jeans waist seam, live 2026-11-21; 9: the
   composed atlas fills its background pockets, `fill_pockets`; 10: the colour match base onto base without added
-  contrast, the fine rim pass).
+  contrast, the fine rim pass; 11: the eroded rim and the bleed MIRROR the core across its border instead of
+  regrowing rays from it — the rays drew a streaked band along every island edge, the waist line of Lirien's dress,
+  live 2026-11-22).
 - `POCKET_CM` = 3.0 cm — after the compose, every background pixel this close to the islands + bleed, and every
   pocket they enclose, takes its nearest filled colour (`fill_pockets`, exact distance transform): the round notch
   between the two front leg islands of Lirien's trousers stayed white past the 1 cm bleed and showed as a white spot

@@ -135,6 +135,12 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.neck_piece(params):
         # phases E + F: a covered top's neck ring (the B8 neckband, the stand-collar strip, the placket line)
         payload["neck"] = gt.NECK_VERSION
+    if gt.leg_piece(params):
+        # stage "geometry": the rows below the crotch round the legs (``garment_template.LEG_VERSION``)
+        payload["legs"] = gt.LEG_VERSION
+    if gt.strap_piece(params):
+        # stage "geometry": straight straps and top edge (``garment_template.STRAP_VERSION``)
+        payload["straps"] = gt.STRAP_VERSION
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 

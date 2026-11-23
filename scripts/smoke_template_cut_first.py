@@ -11,7 +11,9 @@ equal.py``. Every expectation is derived by hand below.
     [1.1] the builder: every ``prm[...]`` / ``prm.get(...)`` key read in ``run`` before the top's ``if cut_only:`` (the
           last one in ``run``; the fitted kinds' branch returns at the first, step 3a) is one of
           progress_file, spec, lower_offsets, lower_shapes, torso_half_m, thickness, node, slit, cut_only,
-          kind, waistband_m, neck_rules (a top with a collar or a placket, phases E + F) —
+          kind, waistband_m, neck_rules (a top with a collar or a placket, phases E + F), leg_centres and
+          straight_straps (stage "geometry": a skirt's / dress's rows round the legs, a strapped piece's straight
+          straps — both shape the cut) —
           none of fabric, drape_quality, frames, poses, shape_groups, smooth_weights, render (read after it); and
           ``inp["front"]`` / ``inp["back"]`` (the views) only after it.
     [1.2] the parameters: ``build_args`` of a top with fabric "medium" and with "stiff" (same spec) differ in exactly
@@ -151,7 +153,7 @@ cut_at = run_src.rindex("if cut_only:")
 before = run_src[:cut_at]
 read = set(re.findall(r'prm\["(\w+)"\]', before)) | set(re.findall(r'prm\.get\("(\w+)"', before))
 allowed = {"progress_file", "spec", "lower_offsets", "lower_shapes", "torso_half_m", "thickness", "node",
-           "slit", "cut_only", "kind", "waistband_m", "neck_rules"}
+           "slit", "cut_only", "kind", "waistband_m", "neck_rules", "leg_centres", "straight_straps"}
 check("[1.1] the cut reads only the cut's build args", read <= allowed and "spec" in read and "slit" in read,
       sorted(read))
 drape_only_args = {"fabric", "drape_quality", "frames", "poses", "shape_groups", "smooth_weights", "render"}

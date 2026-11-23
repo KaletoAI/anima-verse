@@ -55,16 +55,101 @@ SLIT_ANGLE = {"left": 0.0, "back": math.pi / 2, "right": math.pi, "front": 3 * m
               "front_left": 3 * math.pi / 2 + 6 * math.pi / 40, "front_right": 3 * math.pi / 2 - 6 * math.pi / 40}
 TOP_CLEAR_M = 0.006
 ROW_CLEAR_M = 0.02
+#: Round geometry (plan group B, stage "geometry"): under the crotch the legs of the bind pose run BACKWARD (the leg
+#: section's middle lies 8-15 cm behind the waist's centre at mid-calf on the world's bodies). A row wrapped round the
+#: waist's centre had to reach round the calves at the back only: Ylva's straight skirt hemmed at a back arc of 0.99 m
+#: beside a front of 0.51 m (its back panel 95.7 cm wide, the dress's skirt back 98.5 cm). Each row under the crotch is
+#: wrapped round the centre on the front-back line that gives it the SHORTEST girth (the smallest shift within
+#: GIRTH_TOL_M of it): a row the pattern's circle already clears keeps the waist's centre (every shift gives the same
+#: circle), a row the legs force is shared by front and back.
+#: The body's centre line strip (|x - centre| under this) holds no vertex under the crotch.
+CROTCH_X_M = 0.015
+#: Rows from this far under the crotch on are re-centred (at the crotch the section still holds the seat).
+CROTCH_BELOW_M = 0.01
+#: The shifts tried (metres along +Y, back), nearest to 0 first among equals.
+CENTRE_SHIFTS_M = tuple(round(0.005 * k, 3) for k in range(-20, 51))
+GIRTH_TOL_M = 0.001
+#: A piece is re-centred only when some row's girth shortens by at least this much (measured: Vallerie's short flared
+#: dress at most 8 mm — it keeps its cut byte for byte; Lirien's dress 9 cm, Tilda's wool skirt 17 cm, Ylva's straight
+#: skirt 46 cm).
+GIRTH_GAIN_MIN_M = 0.02
+#: The shift changes by at most this much per metre of height between rows (the rows over the crotch are lifted into
+#: it), so the panels lean without a step: the girth-shortest shift jumps to 5 cm in the first row under the crotch.
+SHIFT_SLOPE = 0.5
 
 
-def wrap(spec, btree, centre, band_rows=0):
+def leg_centres(bco, centre, row_y, radii_of):
+    """The wrap centre per row (see CROTCH_X_M), or None when the piece keeps ``centre`` for every row. Under
+    ``CROTCH_BELOW_M`` below the crotch (the lowest body vertex on the centre line) each row takes the
+    ``CENTRE_SHIFTS_M`` shift along Y whose girth (the closed polygon of ``radii_of(cen, r)`` = ``(angles, radii)``
+    round ``cen``) is within ``GIRTH_TOL_M`` of the shortest — the smallest |shift| among those; None when no row
+    gains ``GIRTH_GAIN_MIN_M`` by it (or the body has no vertex on the centre line). The shifts are then evened to
+    ``SHIFT_SLOPE`` both ways (only ever raised), rows over the crotch included. A row with shift 0 gets ``centre``
+    itself (its arithmetic, float32 included, as without a shift)."""
+    cx, cy = centre[0], centre[1]
+    line = bco[np.abs(bco[:, 0] - cx) < CROTCH_X_M]
+    if not len(line):
+        return None
+    below = float(line[:, 2].min()) - CROTCH_BELOW_M
+    shift, gain = [0.0] * len(row_y), 0.0
+    for r, z in enumerate(row_y):
+        if z >= below:
+            continue
+        girth = {}
+        for sh in CENTRE_SHIFTS_M:
+            ang, rad = radii_of((cx, cy + sh), r)
+            ang, rad = np.asarray(ang), np.asarray(rad)
+            x, y = rad * np.cos(ang), rad * np.sin(ang)
+            girth[sh] = float(np.sum(np.hypot(np.diff(np.r_[x, x[:1]]), np.diff(np.r_[y, y[:1]]))))
+        best = min(girth.values())
+        shift[r] = min((k for k, g in girth.items() if g <= best + GIRTH_TOL_M), key=lambda k: (abs(k), k))
+        gain = max(gain, girth[0.0] - girth[shift[r]])
+    if gain < GIRTH_GAIN_MIN_M:
+        return None
+    for order in (range(len(row_y) - 2, -1, -1), range(1, len(row_y))):
+        for r in order:
+            o = r + 1 if order.step < 0 else r - 1
+            lim = SHIFT_SLOPE * abs(float(row_y[r]) - float(row_y[o]))
+            if abs(shift[o]) - lim > abs(shift[r]) and shift[o] * shift[r] >= 0:
+                shift[r] = shift[o] - math.copysign(lim, shift[o])
+    return [centre if sh == 0 else (cx, cy + sh) for sh in shift]
+
+
+def centre_at(row_c, row_y):
+    """``z -> (x, y)``: the row centres of ``leg_centres`` between the rows (linear in Z, the end rows held)."""
+    zs = np.asarray(row_y, float)[::-1]
+    ys = np.asarray([c[1] for c in row_c], float)[::-1]
+    cx = float(row_c[0][0])
+    return lambda z: (cx, float(np.interp(z, zs, ys)))
+
+
+def wrap_radii(spec, btree, row_c_r, r, z=None):
+    """The radius per column of row ``r`` of ``wrap`` round ``row_c_r`` (both panels, the band rows' rule aside):
+    ``(angles, radii)`` — the girth ``leg_centres`` compares."""
+    spans = {"front": (math.pi, 2 * math.pi), "back": (0.0, math.pi)}
+    z = spec["row_y"][r] if z is None else z
+    ang_all, rad_all = [], []
+    for p in spec["panels"]:
+        row = np.array(p["grid_m"][r])
+        circ = 2 * float(np.sum(np.linalg.norm(np.diff(row, axis=0), axis=1)))
+        a0, a1 = spans[p["name"]]
+        cols = spec["cols"]
+        for c in range(cols - 1):
+            ang = a0 + (a1 - a0) * c / (cols - 1)
+            ang_all.append(ang)
+            rad_all.append(max(circ / (2 * math.pi), gd.body_radius(btree, row_c_r, ang, z) + ROW_CLEAR_M))
+    return ang_all, rad_all
+
+
+def wrap(spec, btree, centre, band_rows=0, row_c=None):
     """Vertices / quads of the panels wrapped round the body axis, and the indices of the top row (the pin).
     A221: ``spec["top_drop"]`` {panel: [metres per column]} lowers a panel's top edge per column (a sweetheart
     dip); the rows of that column are pressed together linearly between the hem (unmoved) and the lowered top.
     Step 3b (plan group B): the ``band_rows`` vertex rows under the top (a skirt's waistband,
     ``uv_pattern.wrap_parts``) hug the body like the top row (``TOP_CLEAR_M``) — a waistband is fitted, and a band
     standing off by ``ROW_CLEAR_M`` under a top row at 6 mm was a cone its ring strip could not unroll (area 0.59-0.71,
-    stretch p95 1.6-4.4 on five skirts)."""
+    stretch p95 1.6-4.4 on five skirts).
+    Stage "geometry": ``row_c`` (``leg_centres``) = the centre each row is wrapped round (None: ``centre``)."""
     rows, cols = spec["rows"], spec["cols"]
     row_y = spec["row_y"]
     drops = spec.get("top_drop") or {}
@@ -83,12 +168,13 @@ def wrap(spec, btree, centre, band_rows=0):
                 if r == 0:
                     top.append(len(verts))
                 ang = a0 + (a1 - a0) * c / (cols - 1)
-                body_r = gd.body_radius(btree, centre, ang, z)
+                cen = row_c[r] if row_c else centre
+                body_r = gd.body_radius(btree, cen, ang, z)
                 if r <= band_rows:
                     rad = body_r + TOP_CLEAR_M if body_r > 0 else circ / (2 * math.pi)
                 else:
                     rad = max(circ / (2 * math.pi), body_r + ROW_CLEAR_M)
-                verts.append((centre[0] + rad * math.cos(ang), centre[1] + rad * math.sin(ang), z))
+                verts.append((cen[0] + rad * math.cos(ang), cen[1] + rad * math.sin(ang), z))
                 angles.append(ang)
         base = pi_ * rows * cols
         for r in range(rows - 1):
@@ -96,6 +182,33 @@ def wrap(spec, btree, centre, band_rows=0):
                 i = base + r * cols + c
                 faces.append((i, i + 1, i + cols + 1, i + cols))
     return verts, faces, angles, top
+
+
+def bodice_radii(spec, btree, row_c_r, r):
+    """The radius per column of ``build_bodice``'s torso row ``r`` (a row under the chest band: ``row_radii`` with
+    its blend weight) round ``row_c_r``: ``(angles, radii)`` — the girth ``leg_centres`` compares."""
+    N = 2 * (spec["cols"] - 1)
+    angles = np.array([1.5 * math.pi + c * 2 * math.pi / N for c in range(N)])
+    z = spec["row_y"][r]
+    circ = sum(float(np.sum(np.linalg.norm(np.diff(np.array(p_["grid_m"][r]), axis=0), axis=1)))
+               for p_ in spec["panels"])
+    w = min(1.0, max(0.0, (z - spec["bodice"]["band_y"]) / ROW_BLEND_M))
+    return angles, row_radii(btree, row_c_r, angles, z, circ, w=w)
+
+
+#: Stage "geometry": an outer layer's sleeve rings are built round the lower layers' collider (``build_bodice``).
+OUTER_SLEEVE_CLEAR = True
+#: Stage "geometry": how far under the band top a border vertex of a strapped piece is still drawn up onto it — the
+#: kept faces' lower corners one row down left notches beside the straps' feet (Lirien's dress: rows ~1 cm apart).
+BAND_SNAP_M = 0.012
+#: Stage "geometry": a strapped piece's armhole is scooped: the top edge drops by ARMHOLE_DROP_M towards the side seam,
+#: from ARMHOLE_DROP_FROM_M outside the strap's outer edge over ARMHOLE_DROP_RAMP_M (Lirien's dress: the band's ends
+#: stood up to the armpit and hung out 7 cm from the body as flaps).
+ARMHOLE_DROP_M = 0.03
+ARMHOLE_DROP_FROM_M = 0.02
+ARMHOLE_DROP_RAMP_M = 0.05
+#: Stage "geometry": a border edge of a strapped piece's drawn top shorter than this is merged into one point.
+STRAP_MERGE_M = 0.008
 
 
 # --- Ruling A142: the bodice (top, jacket, dress with straps or sleeves) -------------------------------------
@@ -408,7 +521,8 @@ def sleeve_ring_count(girths, loop_n):
     return min(int(loop_n), max(12, int(round(float(np.mean(girths)) / SLEEVE_EDGE_M))))
 
 
-def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=None, waist_y=None):
+def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=None, waist_y=None, row_c=None,
+                 straight_straps=False):
     """Ruling A142 — the vertices and faces of a piece with a bodice (Blender world, Z up, front =
     -Y): the torso rows wrapped round the body like a skirt (row 0 = the shoulder line), a yoke ("cap") from the
     shoulder line in to the neck opening, laid on the shoulders, the armholes cut at the side seams with the sleeves
@@ -442,7 +556,10 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
     whole and its rows go to ``info["collar_rows"]`` (top to bottom, construction ids, u order) for a strip relaxed
     like the waistband (B9); ``info["marks"]`` = {line: (part, construction ids top to bottom)} — the closed front's
     centre line, an open front's two edges, from the neckline down to the hem (a dress: to the waist seam) — for the
-    painted placket (B10, ``uv_pattern.mark_px``)."""
+    painted placket (B10, ``uv_pattern.mark_px``).
+
+    Stage "geometry": ``row_c`` (``leg_centres``) = the centre a row under the chest band is wrapped round (a dress's
+    skirt rows under the crotch; None: ``centre``)."""
     rows, cols = spec["rows"], spec["cols"]
     bod = spec["bodice"]
     N = 2 * (cols - 1)
@@ -539,8 +656,9 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
         w = min(1.0, max(0.0, (z - band_y) / ROW_BLEND_M))
         sec = section_row(ctree, centre, angles[:N], z, planes, interior) if ctree is not None and r < r_band else None
         if sec is None:
-            rad = row_radii(btree, centre, angles[:N], z, circ[r], w=w)
-            xy = np.c_[centre[0] + rad * np.cos(angles[:N]), centre[1] + rad * np.sin(angles[:N])]
+            cen = row_c[r] if row_c else centre
+            rad = row_radii(btree, cen, angles[:N], z, circ[r], w=w)
+            xy = np.c_[cen[0] + rad * np.cos(angles[:N]), cen[1] + rad * np.sin(angles[:N])]
             if ctree is not None:
                 # A179: the collider closes the crease between the arm's underside and the lat that the body mesh
                 # leaves open: a chest-band vertex built in that crease stood 12-22 mm inside the collider. Such a
@@ -909,6 +1027,10 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
             e2 = np.cross(e1, t0)
             phi = np.unwrap(np.arctan2((L - Q0) @ e2, (L - Q0) @ e1))
             turn = math.copysign(2 * math.pi, phi[-1] - phi[0])
+            # stage "geometry" (Tilda's cardigan over an elbow-sleeved blouse, 1.462): an outer layer's sleeve
+            # (``layer_ease``: a jacket over a sleeved layer) hangs from and clears the LOWER sleeve, not the bare arm
+            # — built round the arm it hung from the arm's top, inside the blouse sleeve that hangs from there too
+            stree = ctree if (spec.get("layer_ease") and ctree is not None and OUTER_SLEEVE_CLEAR) else ftree
             ring_ds = [(d, c) for d, c in sl["rings"] if d > d0 + 0.02]
             if not ring_ds or ring_ds[-1][0] < sl["len_m"] - 1e-3:
                 ring_ds.append((max(sl["len_m"], d0 + 0.03), sl["rings"][-1][1]))
@@ -941,7 +1063,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
                 # on its top two vertices and the collider's friction kept the pull of the fall in the edge between
                 # them: 1.31 on one edge of an otherwise slack ring.
                 r_ring = cj / (2 * math.pi)
-                hang = max(0.0, r_ring - (_ray_in(ftree, Q, f2) + SLEEVE_CLEAR_M))
+                hang = max(0.0, r_ring - (_ray_in(stree, Q, f2) + SLEEVE_CLEAR_M))
                 cur = []
                 for i in range(Ms):
                     ang = (1 - w) * phi_m[i] + w * even[i]
@@ -949,7 +1071,7 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
                     target = Q - hang * f2 + r_ring * dirv
                     off = target - Q
                     dist = float(np.linalg.norm(off))
-                    need = _ray_in(ftree, Q, off / max(dist, 1e-9)) + SLEEVE_CLEAR_M
+                    need = _ray_in(stree, Q, off / max(dist, 1e-9)) + SLEEVE_CLEAR_M
                     if dist < need:
                         target = Q + off / max(dist, 1e-9) * need
                     moved = L_m[i] + (Q - Q0)
@@ -1018,6 +1140,13 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
     edge = bod.get("top_edge") or {}
     dip, half_rad = float(edge.get("dip_m") or 0.0), float(edge.get("half_rad") or 0.5)
     off_cut = off_shoulder_cutter(bod.get("off_shoulder"), arm, ncx, ncy)
+
+    def side_drop(dx):
+        """Stage "geometry": how far a strapped piece's top edge is lowered |x - centre| = ``dx`` out (0 to the strap's
+        outer edge + ARMHOLE_DROP_FROM_M, ARMHOLE_DROP_M at the side, smoothstep between)."""
+        w_ = (dx - bod["strap_x"] - bod["strap_w"] / 2 - ARMHOLE_DROP_FROM_M) / ARMHOLE_DROP_RAMP_M
+        w_ = min(1.0, max(0.0, w_))
+        return ARMHOLE_DROP_M * w_ * w_ * (3 - 2 * w_)
     for f, fp in zip(faces, face_part):
         cen = V[list(f)].mean(0)
         x, z = cen[0] - ncx, cen[2]
@@ -1025,6 +1154,9 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
             continue
         if straps and z > band_y + 0.005 and abs(abs(x) - bod["strap_x"]) > bod["strap_w"] / 2:
             continue
+        if (straps and straight_straps and abs(x) > bod["strap_x"] + bod["strap_w"] / 2
+                and z > band_y + 0.005 - side_drop(abs(x))):
+            continue                        # stage "geometry": the armhole scooped down towards the side seam
         if straps and dip > 0 and cen[1] < centre[1]:
             # A221: a sweetheart top edge — round the front centre (1.5 pi about the axis) the band is lowered by
             # dip * (1 - |angle off centre| / half_rad)^2, the drop of the strapless top's ``top_drop``
@@ -1034,8 +1166,8 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
         keep.append((f, fp))
     faces = [f for f, _ in keep]
     face_part = [fp for _, fp in keep]
-    if straps and edge:
-        # A221: a corset top's straps are cut along the columns, which cross the strap's edge at a slant (a saw-tooth
+    if straps and (edge or straight_straps):
+        # A221 (stage "geometry": every strapped piece with ``straight_straps``, Lirien's dress): a corset top's straps are cut along the columns, which cross the strap's edge at a slant (a saw-tooth
         # border): every vertex only of strap faces (centre above the band) is drawn in to the strap's straight edge |x - strap_x| <= w / 2
         # (two vertices drawn onto one point leave a degenerate edge the caller dissolves)
         hw = bod["strap_w"] / 2
@@ -1047,6 +1179,60 @@ def build_bodice(spec, btree, ftree, centre, arm, ctree=None, clear=0.008, kind=
             d = x - ncx
             sx = math.copysign(bod["strap_x"], d)
             verts[i] = (ncx + sx + max(-hw, min(hw, d - sx)), y, z)
+        if straight_straps:
+            # stage "geometry" (Lirien's dress, live 2026-11-22: saw-tooth straps and a stepped top edge): the faces are
+            # kept by their centre, so the open border still steps one column / one row at a time. Every BORDER vertex
+            # above the band is drawn onto the line it belongs to — one of a strap face onto the strap's nearer edge
+            # (x = strap_x +- w / 2), one of band faces only (and a strap's foot) down onto the band top (band_y +
+            # 5 mm) — a straight strap and a straight top edge in the cloth and so in the pattern.
+            count = {}
+            for f in faces:
+                for a_, b_ in zip(f, f[1:] + f[:1]):
+                    e_ = (min(a_, b_), max(a_, b_))
+                    count[e_] = count.get(e_, 0) + 1
+            border = {i for e_, n_ in count.items() if n_ == 1 for i in e_}
+            on_strap = {i for f, u in zip(faces, up) if u for i in f}
+            on_band = {i for f, u in zip(faces, up) if not u for i in f}
+            top = band_y + 0.005
+            for i in border:
+                x, y, z = verts[i]
+                if z <= band_y - side_drop(abs(x - ncx)) - BAND_SNAP_M:
+                    continue
+                v0 = Vector((x, y, z))
+                loc, out = gd.signed_out(ctree, v0, 0.12) if ctree is not None else (None, None)
+                gap = (v0 - loc).dot(out) if loc is not None else None
+                for _ in range(3):
+                    # drawn onto its line, then back onto its own distance from the body (a strap over the shoulder
+                    # blade moved in x alone stood off or sank in: a saw-tooth in depth the flattening kept)
+                    d = x - ncx
+                    sx = math.copysign(bod["strap_x"], d)
+                    if i in on_strap:
+                        x = ncx + sx + math.copysign(hw, d - sx)
+                    if i in on_band:
+                        z = top - side_drop(abs(x - ncx))
+                    if gap is None:
+                        break
+                    loc, out = gd.signed_out(ctree, Vector((x, y, z)), 0.12)
+                    if loc is None:
+                        break
+                    x, y, z = (float(c) for c in loc + out * gap)
+                d = x - ncx
+                sx = math.copysign(bod["strap_x"], d)
+                if i in on_strap:
+                    x = ncx + sx + math.copysign(hw, d - sx)
+                if i in on_band:
+                    z = top - side_drop(abs(x - ncx))
+                verts[i] = (x, y, z)
+            # a step's two corners drawn onto one line stand a few mm apart: a border edge that short took the
+            # drape's stretch (Lirien's dress 1.459 on a 3.5 mm edge) — its two ends become one point, which the
+            # caller's ``dissolve_degenerate`` merges
+            for (a_, b_), n_ in count.items():
+                if n_ != 1 or a_ not in border or b_ not in border:
+                    continue
+                pa, pb = np.array(verts[a_]), np.array(verts[b_])
+                if max(pa[2], pb[2]) > band_y - ARMHOLE_DROP_M - BAND_SNAP_M and float(np.linalg.norm(pa - pb)) < STRAP_MERGE_M:
+                    mid = tuple(float(c) for c in (pa + pb) / 2)
+                    verts[a_] = verts[b_] = mid
     used = {i for f in faces for i in f}
     cap_ids = sorted(cap_set & used)
     loops = {int(i) for rows_ids in sleeve_rows.values() for i in rows_ids[0]}
@@ -1240,8 +1426,9 @@ def neck_metrics(p):
             "drop_mm": round(float((lp_q[:, 2].max() - lp_q[:, 2].min()) * 1000), 1)}
 
 
-def split_slit(obj, angles, slit, hem_z, centre):
-    """Split the vertical edges at the slit's angle from the hem up to ``depth_m``."""
+def split_slit(obj, angles, slit, hem_z, centre, centre_of=None):
+    """Split the vertical edges at the slit's angle from the hem up to ``depth_m``. ``centre_of`` (``centre_at``):
+    the angle of a vertex is taken round the centre its row was built round (None: ``centre``)."""
     side, depth = slit.get("side"), float(slit.get("depth_m") or 0)
     if side not in SLIT_ANGLE or depth <= 0:
         return 0
@@ -1251,7 +1438,8 @@ def split_slit(obj, angles, slit, hem_z, centre):
     bm.verts.ensure_lookup_table()
 
     def ang_of(v):
-        a = math.atan2(v.co.y - centre[1], v.co.x - centre[0]) % (2 * math.pi)
+        cen = centre_of(v.co.z) if centre_of else centre
+        a = math.atan2(v.co.y - cen[1], v.co.x - cen[0]) % (2 * math.pi)
         d = abs(a - target)
         return min(d, 2 * math.pi - d)
     step = 2 * math.pi / 80
@@ -2112,13 +2300,18 @@ def run(a):
         sp = _bone_world(arm, "Spine2")
         centre = np.array([sp[0], (_bone_world(arm, "LeftArm")[1] + _bone_world(arm, "RightArm")[1]) / 2])
         thickness = float(prm.get("thickness", 0.004))
-        col, ctree = gd.rest_collider(body, extra=lower)
+        # stage "geometry": an outer layer over a sleeved one (``layer_ease``) meets the lower sleeves' hems ramped
+        col, ctree = gd.rest_collider(body, extra=lower, hem_ramp=bool(spec.get("layer_ease")) and OUTER_SLEEVE_CLEAR)
         # phases E + F: a top is cut by the neck-ring rules only with a collar or a placket (``neck_rules``); without
         # them it takes the path from before the phases (kind None), its islands the same bytes
         bodice_kind = prm.get("kind") if prm.get("kind") != "top" or prm.get("neck_rules") else None
+        row_c = leg_centres(bco[np.abs(bco[:, 0] - centre[0]) < half], centre, spec["row_y"],
+                            lambda cen, r: bodice_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
         verts, faces, binfo = build_bodice(spec, btree, ftree, centre, arm, ctree=ctree,
                                            clear=thickness + gd.BUILD_CLEAR_EXTRA_M, kind=bodice_kind,
-                                           waist_y=(spec.get("outline") or {}).get("waist_y"))
+                                           waist_y=(spec.get("outline") or {}).get("waist_y"), row_c=row_c,
+                                           straight_straps=bool(prm.get("straight_straps")))
+        binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
         pattern = {k: binfo.pop(k) for k in ("face_part", "seam_edges", "band_strip", "uv_caps", "collar_rows",
                                              "marks")}
         binfo["inside"] = inside_report(ctree, verts, binfo.pop("regions"), thickness)
@@ -2164,7 +2357,8 @@ def run(a):
         # angles from 1.5 pi as the skirt's wrap (``split_slit``'s step), measured up from its lowest row (the hem)
         if prm.get("slit"):
             hem_b = float(min(v.co.z for v in obj.data.vertices))
-            slit_edges = split_slit(obj, None, prm.get("slit") or {}, hem_b, centre)
+            slit_edges = split_slit(obj, None, prm.get("slit") or {}, hem_b, centre,
+                                    centre_of=centre_at(row_c, spec["row_y"]) if row_c else None)
         uv_info = pattern_uv_of(obj, arm, centre, pattern, out / "islands.json", kind=bodice_kind)
         uv_info["parts_built"] = parts_built
         uv_info["parts_kept"] = parts_kept
@@ -2192,7 +2386,10 @@ def run(a):
             # centre is the placket line (``corset_darts``)
             fseams = list(fseams) + cdarts.dart_seams(spec["rows"], spec["cols"])
             wrap_marks = {"centre_back": (2, cdarts.back_line(spec["rows"], spec["cols"]))}
-        verts, faces, angles, top_ids = wrap(spec, btree, centre, band_rows=winfo["waistband_rows"])
+        row_c = leg_centres(bco[np.abs(bco[:, 0] - centre[0]) < half], centre, spec["row_y"],
+                            lambda cen, r: wrap_radii(spec, btree, cen, r)) if prm.get("leg_centres") else None
+        binfo["leg_shift_m"] = [round(float(c[1] - centre[1]), 3) for c in row_c] if row_c else None
+        verts, faces, angles, top_ids = wrap(spec, btree, centre, band_rows=winfo["waistband_rows"], row_c=row_c)
         me = bpy.data.meshes.new("template")
         me.from_pydata(verts, [], faces)
         me.uv_layers.new(name="UVMap")         # filled by ``pattern_uv_of_wrap`` below
@@ -2222,7 +2419,8 @@ def run(a):
         bm.to_mesh(me)
         bm.free()
         hem_z = spec["row_y"][-1]
-        slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre)
+        slit_edges = split_slit(obj, angles, prm.get("slit") or {}, hem_z, centre,
+                                centre_of=centre_at(row_c, spec["row_y"]) if row_c else None)
         uv_info = pattern_uv_of_wrap(obj, centre, top_z, WRAP_ROWS.get(prm.get("kind"), "skirt"),
                                      out / "islands.json", band=winfo["band"], marks=wrap_marks)
         if cut_only:

@@ -101,6 +101,16 @@ NECK_VERSION = 1
 #: (``app/blender/scripts/corset_darts.py``; the mesh stays whole) and its back centre is the placket line. Part of the
 #: CUT key of a strapless top only: its islands change once; its drape (the same mesh) does not.
 CORSET_VERSION = 1
+#: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
+#: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
+#: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back
+#: 98 cm wide). Part of the drape AND the cut key of a skirt and a dress (``leg_piece``); a piece whose rows gain less
+#: than 2 cm keeps its mesh and its islands byte for byte (its atlas stays valid: ``csig`` reads the islands).
+LEG_VERSION = 1
+#: Stage "geometry" (2026-11-22): a strapped dress or top that is not a corset (``strap_piece``) has its straps drawn
+#: straight, its top edge onto the band and its armhole scooped (``garment_template_build`` ``straight_straps``; Lirien's dress had saw-tooth
+#: straps and a stepped top edge). Part of the drape and the cut key of such a piece only.
+STRAP_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -513,6 +523,18 @@ def panel_piece(params: Dict[str, Any]) -> bool:
     top. Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live ``uv_pattern.py``."""
     return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
                                                  and params.get("shoulders") == "strapless")
+
+
+def leg_piece(params: Dict[str, Any]) -> bool:
+    """Stage "geometry": a piece whose rows below the crotch may follow the legs (``LEG_VERSION``) — a skirt, a dress."""
+    return params.get("kind") in ("skirt", "dress")
+
+
+def strap_piece(params: Dict[str, Any]) -> bool:
+    """Stage "geometry": a strapped dress or top built with a crew-like yoke (not a corset with a strapless neckline,
+    whose straps A221 draws in already) — its straps and top edge are drawn straight (``STRAP_VERSION``)."""
+    return (params.get("kind") in ("dress", "top") and params.get("shoulders") == "straps"
+            and params.get("neckline") not in STRAPLESS_NECKLINES)
 
 
 def neck_rules(params: Dict[str, Any]) -> bool:
@@ -1267,6 +1289,12 @@ SLEEVE_EASE = (0.05, 0.40)
 #: magnitude: the sleeve gap alone does not decide the drape (a jacket sleeve_fit 0 over the same shirt passes with
 #: a ring gap of 0). Series and girths: ``scripts/smoke_jacket_layer_ease.py``.
 JACKET_SLEEVE_EASE = 0.10
+#: Stage "geometry" (2026-11-22): a jacket over a sleeved layer builds its sleeve rings round that layer's sleeves (not
+#: the bare arm) and meets their hems ramped onto the arm in its collider (``garment_template_build`` /
+#: ``garment_template_drape._ramp_sleeve_hems``): Tilda's cardigan over her elbow-sleeved blouse 1.462 -> 1.297 (CPU,
+#: copies), over her old short-sleeved blouse 1.181 unchanged. Part of the ``ease:over_sleeves`` token, so only a
+#: jacket over sleeves re-drapes.
+OUTER_SLEEVE_VERSION = 1
 ARMHOLE_BLEND_M = 0.06
 #: Neck opening: the neck girth's radius + NECK_CLEAR_M (crew); a boat neck opens to BOAT_SHARE of the half shoulder
 #: width.
@@ -1933,6 +1961,10 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if panel_piece(params):
         # step 3b (B16): the panel kinds' own version — only skirts and strapless tops are due again
         payload["panels"] = PANEL_VERSION
+    if leg_piece(params):
+        payload["legs"] = LEG_VERSION
+    if strap_piece(params):
+        payload["straps"] = STRAP_VERSION
     return _md5(payload)
 
 
@@ -2211,7 +2243,7 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
     if layer_ease(params, over_sleeved_layer(params["kind"], ready)):
         # bug round 2026-11-20: a jacket over a draped sleeved layer is cut wider (``layer_ease``) — only these
         # re-drape, and again when that layer's drape becomes ready or goes, or the allowance changes
-        under.append(f"ease:over_sleeves:{JACKET_SLEEVE_EASE}")
+        under.append(f"ease:over_sleeves:{JACKET_SLEEVE_EASE}:outer{OUTER_SLEEVE_VERSION}")
     if under and params["kind"] in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
@@ -2529,7 +2561,10 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {}),
             # phases E + F: a top with a collar or a placket is cut by the neck-ring rules (``neck_rules``); without
             # them the arguments are the ones before the phases
-            **({"neck_rules": True} if params["kind"] == "top" and neck_rules(params) else {})}
+            **({"neck_rules": True} if params["kind"] == "top" and neck_rules(params) else {}),
+            # stage "geometry": rows below the crotch round the legs (``LEG_VERSION``), straight straps (``STRAP_VERSION``)
+            **({"leg_centres": True} if leg_piece(params) else {}),
+            **({"straight_straps": True} if strap_piece(params) else {})}
 
 
 def work_wall_s(data: Dict[str, Any]) -> Optional[float]:
