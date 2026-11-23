@@ -124,7 +124,9 @@ NECK_VERSION = 1
 #: 8 (review 2026-11-23 of v7: the seam's two arcs met the centre front at different heights, an "M" with a kink): the
 #: seam under the cups is mirror-symmetric (``under_cup_rows``), meets the centre front at the end of the centre cut
 #: and runs as two halves that share that point (``corset_darts.centre_cup_rows`` / ``cup_seams``).
-CORSET_VERSION = 8
+#: 9 (owner decision 2026-11-23 on the bridge over the cleavage): the disc that closes the front's section between the
+#: cups has a radius of 3 cm instead of 5 (``garment_template_build.SHELL_CLOSE_M``), so the edge lies closer to the skin.
+CORSET_VERSION = 9
 #: Stage "geometry" (2026-11-22): a skirt's and a dress's rows below the crotch are wrapped round the legs' own middle
 #: when that saves girth (``garment_template_build.leg_centres``: in the bind pose the legs run 8-15 cm behind the
 #: waist's centre, and the back panel was forced round the calves — Ylva's wrap skirt 15.3 px/cm, her dress's back

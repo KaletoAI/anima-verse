@@ -45,7 +45,8 @@ number below is derived by hand.
     row 2 (1.20, 1.8 cm off; 1.15 is 3.2 cm off) in all three -> {1: 2, 2: 2, 3: 2}.
     Without the mirror (b309f93ec): column 1 at 1.1727 is nearer 1.15 (2.27 cm) than 1.20 (2.73 cm) -> row 3, columns
     2 and 3 row 2 -> {1: 3, 2: 2, 3: 2}, one arc a row lower than the other.
-[6] ``CORSET_VERSION`` 8; ``SEAM_VERSION`` stays 3 (the drawing is unchanged, the cut's marks change).
+[6] ``CORSET_VERSION`` 9 (v9 only narrows the cleavage's closing disc, ``smoke_corset_bridge.py``; v8 brought this
+    seam); ``SEAM_VERSION`` stays 3 (the drawing is unchanged, the cut's marks change).
 [7] Fails on the old code: at b309f93ec (v7, the review's BEFORE) ``corset_darts`` has no ``centre_cup_rows``, its
     ``cup_seams`` draws [3] as ONE line through all 11 columns (no shared point), and its ``under_cup_rows`` gives
     {1: 3, 2: 2, 3: 2} for [5].
@@ -182,7 +183,7 @@ got5 = ns["under_cup_rows"](SPEC5, None, (0.0, 0.0))
 check("[5] an uneven body: the mirror puts both arcs on row 2", got5 == {1: 2, 2: 2, 3: 2}, got5)
 
 # [6]
-check("[6] CORSET_VERSION 8, SEAM_VERSION 3", gt.CORSET_VERSION == 8 and ctp.SEAM_VERSION == 3,
+check("[6] CORSET_VERSION 9, SEAM_VERSION 3", gt.CORSET_VERSION == 9 and ctp.SEAM_VERSION == 3,
       (gt.CORSET_VERSION, ctp.SEAM_VERSION))
 
 # [7]

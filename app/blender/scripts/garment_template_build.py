@@ -225,8 +225,10 @@ SHELL_HULL_RAD = 0.6
 #: whole front between the cups as one flat plane, up to 7 cm off the cleavage): the front's section is CLOSED by a
 #: disc of this radius instead (``_close_radius``) — the cloth spans a hollow narrower than the disc and dips into a
 #: wider one along an arc of this radius, so two round cups stay two (the cleavage's top 4 cm instead of 7 cm over the
-#: skin, under the cups 2 cm instead of 5.5).
-SHELL_CLOSE_M = 0.05
+#: skin, under the cups 2 cm instead of 5.5). Corset v9 (owner decision 2026-11-23): 3 cm instead of 5 — the edge over
+#: the cleavage lies closer to the skin (Rosi's middle column 12.6 -> 9.2 mm); 2 cm drew a vertical fold down between
+#: the cups.
+SHELL_CLOSE_M = 0.03
 SHELL_CLOSE_SAMPLES = 8
 
 

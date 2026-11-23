@@ -508,7 +508,7 @@ the thigh weights would be its fix. Smoke: `smoke_corset_underarm.py`.
 
 **Corset v6 (review 2026-11-23 of v5: the cups a wide box, a pinch at the centre front, a V beside the side seam,
 the back edge uneven).** `CORSET_VERSION` 6, all in `garment_template_build.py`'s corset functions:
-- *Round cups.* Between the cups each row's section is CLOSED by a rolling disc of radius `SHELL_CLOSE_M` 5 cm
+- *Round cups.* Between the cups each row's section is CLOSED by a rolling disc of radius `SHELL_CLOSE_M` 5 cm (3 cm since v9)
   (`_close_section` / `_close_radius`, sampled `SHELL_CLOSE_SAMPLES` per stretch) instead of the convex hull: the hull
   ran a straight chord from apex to apex (a flat plateau, vertical outer sides); the disc bridges only the cleavage
   and leaves each cup its own curve.
@@ -580,6 +580,16 @@ different heights, with a kink and a short spike up from the meeting point).** `
 - *Two halves* (`corset_darts.cup_seams`): a run through the centre column becomes `seam_cup_0` (ending on the centre
   vertex) and `seam_cup_1` (starting on it); `draw_seams` smooths each with its ends held, so both end on one point
   with mirrored tangents — a soft point where the two arcs meet. Smoke: `smoke_corset_cup_centre.py`.
+**Corset v9 (owner decision 2026-11-23 on the bridge over the cleavage, the options 5 / 3 / 2 cm).** `CORSET_VERSION`
+9: `SHELL_CLOSE_M` 3 cm instead of 5 — the disc closing the front's section rolls deeper into the cleavage, so the top
+edge there lies closer to the skin. On an analytic 90-degree notch the gap under the disc's arc is rho (sqrt 2 - 1) on
+its axis (20.7 mm at 5 cm, 12.4 mm at 3 cm); `smoke_corset_bridge.py` derives the five dip columns by hand. Rosi's Red
+Corset Top, dry run from 32056ce9d with the saved live answer replayed (the top edge's inner layer to the nearest body
+point, columns 4.5 degrees apart, -13.5 .. +9 degrees): 5 cm 3.1 / 8.0 / 15.0 / 12.6 / 6.8 / 0.8 mm, 3 cm
+0.8 / 5.1 / 11.6 / 9.2 / 4.3 / 0.8 mm (metric `bridge` n 5 p95 14.5 -> n 4 p95 11.2). Every gate stays green: front fold
+33.6 -> 31.5 degrees, side fold 48.3 -> 51.4, flare 1.99 -> 2.33 mm, under edge p95 4.58 -> 4.18 mm. The crease just
+under the notch (-4.5 degrees off the front, 1-2.6 cm under the edge) grows from 21 to 27.5 degrees; at 2 cm it was
+39 degrees, a visible vertical fold between the cups. Only strapless tops change key (`tsig`, `cut_sig`).
 `scripts/e2e_cut_texture.py --attempts N --max-jobs N` sets `CUT_ATTEMPTS` and refuses a live run whose worst case
 (the plan's `max`, every second attempt) exceeds the cap; its `e2e.json` carries the template record's gate blocks.
 

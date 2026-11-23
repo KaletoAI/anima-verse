@@ -51,7 +51,7 @@ stubbed). No server, no world DB, no Blender. Every number below is derived by h
     ends held. ``_forward_points`` [(0, 0), (4, 1), (6, 2), (5, 3), (5.5, 1), (7, 0), (10, 0)]: x 5 and 5.5 are not past
     6 -> [(0, 0), (4, 1), (6, 2), (7, 0), (10, 0)]; reversed (x falling) only 6 is not under 5 -> [(10, 0), (7, 0),
     (5.5, 1), (5, 3), (4, 1), (0, 0)].
-[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 8 (v8: the seam's centre); SEAM_VERSION 3.
+[6] ``judge_build``: side_fold 56 > 55 fails (a gate), 48 passes; CORSET_VERSION 9 (v9: the cleavage's disc); SEAM_VERSION 3.
 [7] Fails on the old code: at 6b076ad15 (v6, the review's BEFORE) the build script has no ``side_blend``, no
     ``side_strip_blend``, no ``corset_diagonals`` and no ``side_fold`` (its fold gate stopped at ``SHELL_HULL_RAD``
     + 0.3 rad = 51.6 degrees, so the 90.8-degree crease at 83.5 degrees passed at 34).
@@ -217,7 +217,7 @@ rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_d
 check("[6] side_fold 56 > 55 fails (gate)", not rows6["side_fold_max_deg"]["ok"] and rows6["side_fold_max_deg"]["gate"])
 rows6 = {x["check"]: x for x in gt.judge_build({"fit_gap": {"side_fold": {"max_deg": 48.0}}})}
 check("[6] side_fold 48 ok", rows6["side_fold_max_deg"]["ok"])
-check("[6] CORSET_VERSION 8, SEAM_VERSION 3", gt.CORSET_VERSION == 8 and ctp.SEAM_VERSION == 3)
+check("[6] CORSET_VERSION 9, SEAM_VERSION 3", gt.CORSET_VERSION == 9 and ctp.SEAM_VERSION == 3)
 
 # [7]
 OLD = "6b076ad15"
