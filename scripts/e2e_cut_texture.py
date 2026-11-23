@@ -625,6 +625,20 @@ def render_figure(glb: Path, out_dir: Path) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def code_state() -> Dict[str, Any]:
+    """The commit the run's code comes from and the files of ``app/`` / ``scripts/`` that differ from it (a run of a
+    committed state lists none)."""
+    import subprocess
+
+    def git(*a: str) -> str:
+        r = subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else ""
+    # porcelain lines are "XY path": the status columns may start with a space, so the output is not stripped
+    dirty = [ln[3:] for ln in git("status", "--porcelain", "--", "app", "scripts", "shared").splitlines()
+             if ln.strip() and not ln.startswith("??")]
+    return {"commit": git("rev-parse", "HEAD").strip(), "dirty": dirty}
+
+
 def wait_quiet(character: str, timeout: float = 4 * 3600.0, settle: float = 4.0) -> None:
     from app.core import figure_build, garment_assembly, model3d
     deadline = time.time() + timeout
@@ -845,7 +859,11 @@ def main() -> int:
                   f"{'before' if JOBS[0]['t'] < max(s['t1'] for s in drapes) else 'after'} the last drape ended")
         if served and not args.no_renders:
             render_figure(Path(served), out_dir)
-        (out_dir / "e2e.json").write_text(json.dumps({"plan": [s.as_dict() for s in steps], "cost": cost,
+        if served:
+            # the served figure itself, for renders from other angles
+            shutil.copyfile(served, out_dir / "served.glb")
+        (out_dir / "e2e.json").write_text(json.dumps({"code": code_state(), "plan": [s.as_dict() for s in steps],
+                                                     "cost": cost,
                                                      "jobs": JOBS, "payloads": PAYLOADS, "items": items,
                                                      "steps": STEPS, "state": state, "fails": FAILS},
                                                     indent=1, default=str))
