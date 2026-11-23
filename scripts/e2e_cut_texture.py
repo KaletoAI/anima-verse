@@ -6,7 +6,7 @@ Usage:
     ./.venv/bin/python scripts/e2e_cut_texture.py --world <world dir> --character <name> \
         [--item <item id>[,<item id>...]] [--instance <instance dir>] [--shared-items <shared/items dir>] [--dry-run] \
         [--wear <item id>[,<item id>...]] [--take-off <item id>[,...]] [--no-redrape] [--fresh-back-view] [--chain MiniMax-H3-Image,P-H3-Image] [--reject-attempt 1] \
-        [--backend-set NAME.ATTR=JSON] [--set-param ITEM.KEY=JSON] [--set-text ITEM=TEXT] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
+        [--backend-set NAME.ATTR=JSON] [--set-param ITEM.KEY=JSON] [--set-text ITEM=TEXT] [--set-lift ITEM=VALUE] [--no-renders] [--workdir <dir>] [--out <dir>] [--keep] [--replay <dir>]
 
     # the stage before the live run: real Blender, the hub stubbed (no image job leaves the process)
     ./.venv/bin/python scripts/e2e_cut_texture.py --world worlds/demo --character demo --dry-run
@@ -62,6 +62,9 @@ assembly's ``placket_atlas`` of the record's atlas (written beside it to ``--out
 
 ``--set-text ITEM=TEXT`` (repeatable) sets a piece's prompt fragment in the COPY (``update_item``) — e.g. the trims'
 own colour the texture from cut reads from it (``garment_cut_texture.trim_style``, stage "layers").
+``--set-lift ITEM=VALUE`` (repeatable) sets a piece's ``outfit_piece.lift`` in the COPY (0..1, ``null`` = the slot
+default) — lift 0 drapes and cuts a top or dress on the plain body, so its proof does not move with the chest
+shaping (``bust_shaping``).
 
 ``--chain a,b`` overrides the ``garment_cut_texture`` routing chain IN THE PROCESS (``routing._rules``; nothing is
 written — the recorder still fails the run on a config write); every entry must be in ``ALLOWED_BACKENDS``.
@@ -412,6 +415,25 @@ def set_text(spec: str) -> str:
     return f"{item_id}.prompt_fragment = {(get_item(item_id) or {}).get('prompt_fragment')!r}"
 
 
+def set_lift(spec: str) -> str:
+    """``--set-lift ITEM=VALUE``: the piece's ``outfit_piece.lift`` (0..1, ``null`` = the slot default) set in the COPY's
+    item (``update_item``), the render purge skipped as for ``--set-text`` — e.g. lift 0 so a dress drapes on the plain
+    body and its cut does not move with the chest shaping (``bust_shaping``)."""
+    from app.models import inventory
+    from app.models.inventory import get_item, update_item
+    item_id, _, raw = spec.partition("=")
+    item = get_item(item_id)
+    if not item or not raw or not isinstance(item.get("outfit_piece"), dict):
+        raise SystemExit(f"--set-lift {spec!r}: no outfit piece {item_id!r} or no value")
+    purge = inventory._invalidate_renders_for_item
+    inventory._invalidate_renders_for_item = lambda _item_id: None
+    try:
+        update_item(item_id, {"outfit_piece": {**item["outfit_piece"], "lift": json.loads(raw)}})
+    finally:
+        inventory._invalidate_renders_for_item = purge
+    return f"{item_id}.lift = {((get_item(item_id) or {}).get('outfit_piece') or {}).get('lift')!r}"
+
+
 def set_param(spec: str) -> str:
     """``--set-param ITEM.KEY=JSON``: one template parameter of a piece set in the COPY's item (``set_params``,
     validated) — e.g. a placket to see it painted with no image job (``--dry-run --replay``)."""
@@ -716,6 +738,8 @@ def main() -> int:
                     help="set one template parameter of a piece IN THE COPY first (repeatable)")
     ap.add_argument("--set-text", action="append", default=[], metavar="ITEM=TEXT",
                     help="a piece's prompt fragment in the copy")
+    ap.add_argument("--set-lift", action="append", default=[], metavar="ITEM=VALUE",
+                    help="a piece's outfit_piece.lift in the copy (0..1, null = the slot default)")
     ap.add_argument("--no-redrape", action="store_true")
     ap.add_argument("--fresh-back-view", action="store_true")
     ap.add_argument("--chain", default="", help="comma list: the garment_cut_texture chain, in-process only")
@@ -788,6 +812,8 @@ def main() -> int:
             print("param (copy): " + set_param(spec))
         for spec in args.set_text:
             print("text (copy): " + set_text(spec))
+        for spec in args.set_lift:
+            print("lift (copy): " + set_lift(spec))
         if args.wear or args.take_off:
             print("worn now (copy): " + str(wear(args.character, [w for w in args.wear.split(",") if w.strip()],
                                                   [w for w in args.take_off.split(",") if w.strip()])))
