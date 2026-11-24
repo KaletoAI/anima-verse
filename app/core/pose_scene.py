@@ -308,11 +308,19 @@ def _finale_live(finale) -> bool:
                              < finale["duration_s"] + FINALE_SHOW_S)
 
 
-def _start_finale(scene_id, name, pose, role, tempo):
-    """Books the finale (the caller checked the scene) — ``(result, kind)``."""
+def _start_finale(scene_id, name, pose, role, tempo, roles=None):
+    """Books the finale (the caller checked the scene) — ``(result, kind)``. ``roles`` (``{clip role:
+    character}`` of a pair or group scene) gate the finale clip's contact like any next clip: refused with
+    ``contact_clothing.REASON`` (and who still wears what) while clothes are in the way."""
     kind = finale_kind(pose, name)
     if not kind:
         return dict(ok=False, reason="no_finale"), ""
+    if roles:
+        from app.core import contact_clothing
+        refused = contact_clothing.refusal(pose or "", kind=kind, roles=roles)
+        if refused:
+            return dict(ok=False, reason=refused["reason"], message=refused["message"],
+                        blockers=refused["blockers"]), ""
     clip_s, cycles = _finale_clip_s(kind, role, name)
     if clip_s <= 0:
         return dict(ok=False, reason="no_finale"), ""
@@ -362,7 +370,8 @@ def begin_finale(scene_id: str, name: str, *, tempo: float = 1.0) -> dict:
             pose = engine._held_pose(run)
             role = (next((r for r, member in run["data"].get("clip_roles", {}).items() if member == name), "")
                     if run["members"] else "")
-            result, kind = _start_finale(scene_id, name, pose, role, tempo)
+            result, kind = _start_finale(scene_id, name, pose, role, tempo,
+                                         roles=dict(run["data"].get("clip_roles") or {}) if run["members"] else None)
             if result["ok"]:
                 engine._notify(run)
     else:
@@ -370,9 +379,9 @@ def begin_finale(scene_id: str, name: str, *, tempo: float = 1.0) -> dict:
         if not inter or inter["id"] != scene_id:
             return dict(ok=False, reason="no_scene")
         pose = str(inter.get("pose_key") or "")
-        result, kind = _start_finale(scene_id, name, pose, inter["role"], tempo)
+        from app.core.interaction_engine import members_of
+        result, kind = _start_finale(scene_id, name, pose, inter["role"], tempo, roles=members_of(inter))
         if result["ok"]:
-            from app.core.interaction_engine import members_of
             _notify_names(members_of(inter).values())
     if result["ok"]:
         _after_locks(lambda: emit("scene.finale_started", scene_id=scene_id, name=name,

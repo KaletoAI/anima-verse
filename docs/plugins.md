@@ -416,6 +416,25 @@ source bump above the fitted surface before → after); switching the part on or
 off makes that row due. When the source placement is missing nothing changes
 and the row says so. CPU only, in the extension rebuild.
 
+`contact_free: [<clothing slot>, ...]` (list of non-empty strings, default empty; also on a `channel`
+region, see below) names the clothing slots the group's ATTACHED PART needs free for a contact clip
+(`app/core/contact_clothing.py`, owner decisions 2026-11-25). A pair or group clip declares contact relations
+(`{part, at, target}`, the clip's `contact_relations` or a package default for its kind); the role in `part`
+needs every `contact_free` slot of the rig groups that apply to its body, the `at` role of a `channel` target
+those of its applicable channel regions; a `mouth` or hand target asks nothing of the receiving role. A worn
+piece that sits on (`slots`) or `covers` such a slot blocks the clip — unless it is worn open or carries
+`outfit_piece.open_below: true` (a skirt, a dress, a kilt; the item editor's "Open below" switch, offered only
+for pieces touching a declared slot — `GET /inventory/body-under-piece` → `contact_free_slots`). A blocked clip
+is refused with the code `clothing` and a reason naming who still wears what (`message` for the LLM, rendered
+from `chat/contact_clothing.md`; `reason_text` for the player); nothing is taken off automatically. A character
+dressed by free text keeps its package's start-time undress and never blocks. A clip WITHOUT relations is checked by
+a per-anatomy default when a package declares it a contact clip (capability `contact.default_requirement`,
+docs/skill-core-api.md): every participant with a part needs the part free, every participant without a part but
+with a channel the channel — a little strict for a third person who only watches or uses hands or mouth in a group;
+an authored relation is exact. Non-contact clips (a hug, a dance) are never gated. Applicability follows the rig
+rules with the slot's mesh-part switch read as "on" (the requirement follows the anatomy, not the built mesh).
+`contact_free` is not part of the extension fingerprint: no rebuild. The core never names a slot.
+
 `clothing_lift_default: {<clothing slot>: 0..1}` (mapping, default empty; keys
 must be in the body slot's `covered_by`) declares which clothing slots LIFT a
 rig group and by how much when a worn piece sets no `outfit_piece.lift` of its
@@ -1126,6 +1145,7 @@ body_slots:
 | `min_length` | Default 1.0, within [0.25, 4]. The entering chain's effective state `length` must be at least this for the channel to engage. |
 | `compress_min` | Default 1.0 (no compression), within (0, 1]. The least depth scale k. |
 | `exposed_only` | Default `true`, a boolean. The channel exists only on a model whose worn pieces leave the slot uncovered; a base model is uncovered. A piece with `outfit_piece.exposed_detail: true` shows it through, and the item editor offers that switch for the slot's `covered_by` slots. |
+| `contact_free` | Optional: a list of clothing slots this channel needs free when a contact clip targets it (`target: channel` on the receiving role). Same rule as `rigs[].contact_free` above: a worn piece on or covering such a slot blocks the clip unless it is worn open or `outfit_piece.open_below: true`. |
 | `interaction_kinds` | Optional: a non-empty list of non-empty strings. When given, the channel engages only within a running pair interaction of one of these kinds. When absent, any running pair interaction counts. |
 | `from_rig` | Optional: the id of a rig of the SAME slot (see below). |
 | `templates` | As `rigs[].templates`: `*`, a list of template names, or `{feature: …}`. When absent, the slot decides. |

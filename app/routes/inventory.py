@@ -1137,11 +1137,15 @@ def body_under_piece_route() -> Dict[str, Any]:
     - ``lift_defaults``: ``{slot: default}`` from rigs declaring
       ``clothing_lift_default`` → ``outfit_piece.lift`` (placeholder = default).
     - ``motion_damping_slots``: slots covering a moving rig →
-      ``outfit_piece.motion_damping``."""
+      ``outfit_piece.motion_damping``.
+    - ``contact_free_slots``: slots a package's part or channel needs free
+      for a contact clip (``contact_free``) → ``outfit_piece.open_below``."""
+    from app.core.contact_clothing import declared_slots
     from app.core.extension_rig import clothing_lift_slots, exposed_only_slots, motion_damping_slots
     return {"exposed_detail_slots": exposed_only_slots(),
             "lift_defaults": clothing_lift_slots(),
-            "motion_damping_slots": motion_damping_slots()}
+            "motion_damping_slots": motion_damping_slots(),
+            "contact_free_slots": declared_slots()}
 
 
 @router.post("/characters/{character_name}/apply-equipped")

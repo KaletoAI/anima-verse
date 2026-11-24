@@ -7169,6 +7169,11 @@
     "Note": "Anmerkung",
     "More than 10 mm off the axis, the root or the tip on the wrong side of the opening, or a cap or slider range was hit.": "Mehr als 10 mm neben der Achse, Wurzel oder Spitze auf der falschen Seite der Öffnung, oder eine Grenze bzw. ein Reglerbereich wurde erreicht.",
     "root inside: pulling back would take it off its surface": "Wurzel innen: Zurückziehen nähme es von seiner Auflage",
-    "The visible root stays {mm} mm inside the opening: pulling {role} back further would take it off its surface.": "Die sichtbare Wurzel bleibt {mm} mm in der Öffnung: {role} weiter zurückzuziehen nähme es von seiner Auflage."
+    "The visible root stays {mm} mm inside the opening: pulling {role} back further would take it off its surface.": "Die sichtbare Wurzel bleibt {mm} mm in der Öffnung: {role} weiter zurückzuziehen nähme es von seiner Auflage.",
+    "{name} still wears {items}": "{name} trägt noch {items}",
+    "Someone involved still wears clothes that are in the way": "Jemand Beteiligtes trägt noch Kleidung, die im Weg ist",
+    "Open below": "Unten offen",
+    "Open below (skirt, dress)": "Unten offen (Rock, Kleid)",
+    "A skirt, a dress or a kilt: the piece leaves the body free below, so it does not block a two-person contact action. A closed piece (trousers, shorts, underwear) blocks it until it is taken off. No model rebuild.": "Rock, Kleid oder Kilt: Das Stück lässt den Körper unten frei und sperrt daher keine Kontakt-Aktion zu zweit. Ein geschlossenes Stück (Hose, Shorts, Unterwäsche) sperrt sie, bis es ausgezogen ist. Kein Modell-Neubau."
   }
 }

@@ -74,8 +74,23 @@ def _result(run):
     return result
 
 
-def _refused(reason):
-    return dict(execution_id="", status="refused", reason=reason)
+def _refused(reason, run=None):
+    """A refusal; one for the clothes in the way of a contact clip (``contact_clothing.REASON``) also names who
+    still wears what (``message`` for an LLM, ``blockers`` for a route to word for its player)."""
+    out = dict(execution_id="", status="refused", reason=reason)
+    if run is not None:
+        out.update(_clothing_details(run, reason))
+    return out
+
+
+def _clothing_details(run, reason) -> dict:
+    """``{message, blockers}`` of a run refused for the clothes in the way of its contact clip, else {}."""
+    from app.core import contact_clothing
+    if reason != contact_clothing.REASON or run["definition"].get("ability") != "pair":
+        return {}
+    refused = contact_clothing.refusal(run["definition"].get("pose_key") or "", store.people(run),
+                                       roles=run["data"].get("clip_roles") or None)
+    return {key: refused[key] for key in ("message", "blockers")} if refused else {}
 
 
 def _members(run):
@@ -428,6 +443,13 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                 (rule == "others" and not present - {run["actor"]}) or
                 (rule == "participants_only" and present != members)):
             return "presence_not_met"
+    if definition["ability"] == "pair" and run["status"] in ("awaiting_consent", "approaching"):
+        # The clothes in the way of the clip's contact (owner decision 2026-11-25): asked for every offer, request,
+        # answer, walk and entry — never once the run is active (a piece put back on does not stop a running clip).
+        from app.core import contact_clothing
+        if contact_clothing.refusal(definition["pose_key"], store.people(run),
+                                    roles=run["data"].get("clip_roles") or None, profiles=profiles):
+            return contact_clothing.REASON
     reason = _requirements(run, profiles) if presence else ""
     if reason:
         return reason
@@ -718,7 +740,7 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     # has taken the place over).
     reason = _validate(run, replaces=replaces)
     if reason:
-        return _refused(reason), False
+        return _refused(reason, run), False
     direct = _switches_in_place(run, replaces)
     with _replacing(run, replaces):
         return _admit(run, fingerprint, direct=direct)
@@ -762,7 +784,7 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
             if previous:
                 return (_result(previous) if previous["request_fingerprint"] == fingerprint
                         else _refused("request_id_conflict")), False
-            return _refused(reason), False
+            return _refused(reason, run), False
         run["data"]["plans"] = plans
         reacts = _reacts(run)
         if reacts:
@@ -777,7 +799,7 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
                         else _refused("request_id_conflict")), False
             reason = _revalidate_admission(run, conn, planned_state, replaces)
             if reason:
-                return _refused(reason), False
+                return _refused(reason, run), False
             store.insert(conn, run)
             if starts:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
@@ -2250,7 +2272,7 @@ def check(actor: str, target: dict, action_id: str, revision: str, members=(), *
                                                                  offer=offer)
     if not reason:
         plans, reason = _plan(run, conn=store.db.get_connection(), _query=query, replaces=replaces)
-    result = dict(enabled=not reason, reason=reason)
+    result = dict(enabled=not reason, reason=reason, **_clothing_details(run, reason))
     if include_plans:
         result["plans"] = plans if not reason else {}
     return result

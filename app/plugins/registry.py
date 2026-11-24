@@ -153,6 +153,10 @@ class RigSpec:
     poses: Dict[str, Dict[str, float]] = field(default_factory=dict)
     # The pose the Poses → Places preview pre-selects for this group ("" = at rest); must name one of ``poses``.
     preview_pose: str = ""
+    # The clothing slots that must be FREE before this group's part may be used in a contact clip (owner decision
+    # 2026-11-25, ``app/core/contact_clothing.py``): a piece on one of them, or one that ``covers`` one, blocks the
+    # clip unless it is worn open or declared ``outfit_piece.open_below``. Empty = the group is no contact part.
+    contact_free: List[str] = field(default_factory=list)
 
     @classmethod
     def parse(cls, raw, attributes=None, covered_by=None):
@@ -304,7 +308,16 @@ class RigSpec:
         if not isinstance(preview_pose, str) or (preview_pose and preview_pose not in spec.poses):
             raise ValueError("rig.preview_pose must name one of the group's poses")
         spec.preview_pose = preview_pose
+        spec.contact_free = _parse_contact_free(raw, "rig")
         return spec
+
+
+def _parse_contact_free(raw, label):
+    """``contact_free`` of a rig or region: a list of non-empty clothing-slot names (absent = [])."""
+    value = raw.get("contact_free", [])
+    if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() for v in value):
+        raise ValueError(f"{label}.contact_free must be a list of clothing slot names")
+    return list(dict.fromkeys(v.strip().lower() for v in value))
 
 
 def _parse_reference_text(raw, attributes, field, *, allow_by=True):
@@ -433,7 +446,7 @@ REGION_KINDS = ("channel",)
 REGION_SCALED_PARAMS = ("radius", "depth")
 _REGION_KEYS = {"id", "kind", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts",
                 "min_length", "compress_min", "exposed_only", "interaction_kinds", "from_rig", "templates",
-                "applies_to", "attribute_params"}
+                "applies_to", "attribute_params", "contact_free"}
 
 
 @dataclass
@@ -463,6 +476,9 @@ class RegionSpec:
     templates: Any = None
     applies_to: Dict[str, List[Any]] = field(default_factory=dict)
     attribute_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # The clothing slots that must be FREE before this channel may be the target of a contact clip (owner decision
+    # 2026-11-25, ``app/core/contact_clothing.py``); empty = no requirement.
+    contact_free: List[str] = field(default_factory=list)
 
     @classmethod
     def parse(cls, raw, attributes, rig_ids):
@@ -548,7 +564,8 @@ class RegionSpec:
             templates=templates, applies_to=dict(conditions),
             attribute_params={param: {"attribute": mapping["attribute"],
                                       "values": {key: float(value) for key, value in mapping["values"].items()}}
-                              for param, mapping in mappings.items()})
+                              for param, mapping in mappings.items()},
+            contact_free=_parse_contact_free(raw, "region"))
 
 
 @dataclass

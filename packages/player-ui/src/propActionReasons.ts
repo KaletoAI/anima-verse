@@ -58,6 +58,9 @@ const REASONS: Record<string, string> = {
   // characters' own privacy setting does not allow the people present.
   privacy: "Not with others here — someone involved keeps this private",
   sated: "Someone involved is still sated — not now",
+  // The clothes in the way of a contact clip (contact_clothing); the server
+  // usually sends its own words (`reason_text`), this is the fallback.
+  clothing: "Someone involved still wears clothes that are in the way",
   no_capability: "Someone involved does not take part in this",
   slot_claim_lost: "The reserved place is no longer available",
   approach_target_changed: "The furniture access changed; try again",
@@ -98,8 +101,10 @@ const REASONS: Record<string, string> = {
   invalid: "That choice is not valid",
 }
 
-/** Unknown server codes stay inspectable in the caller's title tooltip. */
-export function propActionReason(reason: string, t: (source: string) => string): string {
+/** Unknown server codes stay inspectable in the caller's title tooltip. `text`: the server's own words for
+ *  this refusal, already translated (`reason_text`, e.g. who still wears what) — shown as they are. */
+export function propActionReason(reason: string, t: (source: string) => string, text?: string): string {
+  if (text) return text
   return t(Object.prototype.hasOwnProperty.call(REASONS, reason) ? REASONS[reason] : 'Not possible right now')
 }
 
@@ -108,6 +113,8 @@ export function propActionReason(reason: string, t: (source: string) => string):
 export function propActionErrorText(e: unknown, t: (source: string) => string): string {
   const detail = e instanceof ApiError ? e.detail : undefined
   const reason = detail && typeof detail === 'object' ? (detail as { reason?: unknown }).reason : undefined
+  const text = detail && typeof detail === 'object' ? (detail as { reason_text?: unknown }).reason_text : undefined
+  if (typeof text === 'string' && text) return text
   if (typeof reason === 'string' && Object.prototype.hasOwnProperty.call(REASONS, reason)) return propActionReason(reason, t)
   return e instanceof Error ? e.message : String(e)
 }

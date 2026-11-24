@@ -373,6 +373,17 @@ def set_alt(character_name: str, alt: str) -> Dict[str, Any]:
     from app.models.character import (_write_character_pos, get_character_current_location,
                                       get_character_profile, save_character_profile)
     alt = str(alt or "").strip().lower()
+    if alt:
+        # An alt half is a next clip: the clothes in the way of its contact block it (the role's own half,
+        # the one already running, is never refused).
+        from app.core import contact_clothing
+        current = get_interaction(character_name)
+        refused = (contact_clothing.refusal(str(current.get("pose_key") or ""), kind=current["kind"],
+                                            roles=members_of(current))
+                   if current else {})
+        if refused:
+            return {"ok": False, "reason": refused["reason"], "message": refused["message"],
+                    "blockers": refused["blockers"]}
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         inter = get_interaction(character_name, profile)
@@ -502,7 +513,9 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
     two different, awake, present, unoccupied characters in one room.
     With ``pose_key`` the packages are asked as well whether THIS pose may
     happen here and now (``participation.check``, kind ``"pose"`` — e.g.
-    not in front of others); their English message is the reason.
+    not in front of others); their English message is the reason. Last, the
+    clothes in the way of the pose's contact clip (``contact_clothing.refusal``,
+    owner decision 2026-11-25): who still wears what.
 
     Shared by the invitation (asked before anyone is troubled with a
     question) and by ``start_interaction`` (asked again on acceptance,
@@ -541,7 +554,8 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
         room = get_character_current_room(actor) or ""
         if room != (get_character_current_room(partner) or ""):
             return f"{partner} is in another room"
-        return _pose_participation(actor, partner, pose_key, loc_a, room)
+        return (_pose_participation(actor, partner, pose_key, loc_a, room)
+                or _contact_clothing(actor, partner, pose_key))
     # Both stand in the OPEN, where "" == "" would otherwise make two figures
     # a kilometre apart count as being in one room. Out there the only
     # measure is the metre: a rough reach, generous enough that the question
@@ -552,7 +566,8 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
         return f"{partner} is not here"
     if math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"])) > OPEN_FIELD_REACH_M:
         return f"{partner} is too far away"
-    return _pose_participation(actor, partner, pose_key, "", "")
+    return (_pose_participation(actor, partner, pose_key, "", "")
+            or _contact_clothing(actor, partner, pose_key))
 
 
 def _pose_participation(actor: str, partner: str, pose_key: str,
@@ -564,6 +579,15 @@ def _pose_participation(actor: str, partner: str, pose_key: str,
     refused = participation.check("pose", pose_key.strip().lower(), [actor, partner],
                                   location_id, room_id)
     return refused.get("message", "")
+
+
+def _contact_clothing(actor: str, partner: str, pose_key: str) -> str:
+    """The clothes in the way of the pose's contact clip ("" = none, or no pose) — the reason text of
+    ``contact_clothing.refusal``, the one gate (roles as ``start_interaction`` assigns them)."""
+    if not pose_key:
+        return ""
+    from app.core import contact_clothing
+    return contact_clothing.refusal(pose_key, [actor, partner]).get("message", "")
 
 
 # ------------------------------------------------------------------ writing
@@ -824,6 +848,10 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
         roles_now = {}
     if roles_now != clip_roles:
         raise ValueError("pair_roles_changed")
+    # The clothes in the way of the clip's contact (the run's own _validate asked already; the start does again).
+    from app.core import contact_clothing
+    if contact_clothing.refusal(pose_key, names, kind=kind, roles=clip_roles, profiles=profiles):
+        raise ValueError(contact_clothing.REASON)
     anchors = [plans[n]["entry_anchor"] for n in names]
     first = anchors[0]
     # Distinct seats for a pose over several places; ONE shared seat otherwise.
@@ -1418,6 +1446,14 @@ def create_invite(inviter: str, invitee: str, pose_key: str, *,
     if not inviter or not invitee or inviter == invitee or not pose_key:
         return None
     if request_id is not None and (not isinstance(request_id, str) or not request_id):
+        return None
+    # A contact clip with clothes in the way is not even asked for (owner decision 2026-11-25, R4); the callers
+    # that relay a reason asked check_can_pair first and name it.
+    from app.core import contact_clothing
+    refused = contact_clothing.refusal(pose_key, [inviter, invitee])
+    if refused:
+        logger.info("interaction invite %s -> %s for '%s' not recorded: %s", inviter, invitee, pose_key,
+                    refused["message"])
         return None
     invite_id = request_id if request_id is not None else "iinv_" + uuid.uuid4().hex[:10]
     created = True

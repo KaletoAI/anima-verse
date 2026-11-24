@@ -72,12 +72,22 @@ def _avatar(user):
     return name
 
 
-def _answer(result):
+def _answer(result, actor=""):
     if result["status"] == "refused":
         reason = result["reason"]
         status = 403 if reason in ("not_invitee", "not_participant") else 409
-        raise HTTPException(status, detail=result)
+        raise HTTPException(status, detail=_worded(result, actor))
     return result
+
+
+def _worded(result, actor):
+    """A refusal naming the clothes in the way of a contact clip (``blockers``) also as ``reason_text`` in the
+    avatar's language — what the player panels show instead of the code's generic sentence."""
+    if not actor or not result.get("blockers"):
+        return result
+    from app.core.contact_clothing import player_text
+    from app.models.character import get_character_language
+    return dict(result, reason_text=player_text(result["blockers"], get_character_language(actor)))
 
 
 def _request(actor, body):
@@ -120,19 +130,19 @@ def _request_route(body: ActionRequest, user):
         if store.by_request(actor, body.request_id):
             # Core verifies the full fingerprint; a mismatched nonce is never
             # a gate bypass and never pays a cost.
-            return _with_motion(actor, _answer(_request(actor, body)))
+            return _with_motion(actor, _answer(_request(actor, body), actor))
         try:
             skill = _player_action_gate(actor, "prop_action")
         except HTTPException:
             # Another Core caller/process may have committed this nonce while
             # the gate read the newly depleted profile. Recheck before refusing.
             if store.by_request(actor, body.request_id):
-                return _with_motion(actor, _answer(_request(actor, body)))
+                return _with_motion(actor, _answer(_request(actor, body), actor))
             raise
         result, created = engine.request_with_creation(
             actor, body.target.model_dump(), body.action_id, body.revision,
             body.members, body.request_id, body.consent)
-        result = _answer(result)
+        result = _answer(result, actor)
         if created and skill is not None and result["status"] not in ("failed", "cancelled"):
             from app.core.skill_gate import charge
             charge(actor, skill.SKILL_ID)
@@ -162,8 +172,9 @@ def check(body: CheckRequest, user=Depends(get_current_user)):
     """Read-only preflight of one exact choice — the people a group action
     was offered with ``candidates`` (G4); ``{enabled, reason}``, no claim,
     no run."""
-    return engine.check(_avatar(user), body.target.model_dump(), body.action_id, body.revision,
-                        body.members, offer=True)
+    actor = _avatar(user)
+    return _worded(engine.check(actor, body.target.model_dump(), body.action_id, body.revision,
+                                body.members, offer=True), actor)
 
 
 @router.post("/play/prop-actions/respond")
@@ -189,9 +200,10 @@ def hold(body: HoldRequest, user=Depends(get_current_user)):
 @router.post("/play/prop-actions/alt")
 def alt(body: AltRequest, user=Depends(get_current_user)):
     """The player's avatar plays an alt half of its role (§ A8a), ``""`` = its own."""
-    result = pose_scene.set_alt(body.execution_id, _avatar(user), body.alt)
+    actor = _avatar(user)
+    result = pose_scene.set_alt(body.execution_id, actor, body.alt)
     if not result["ok"]:
-        raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=result)
+        raise HTTPException(403 if result["reason"] == "not_participant" else 409, detail=_worded(result, actor))
     return result
 
 

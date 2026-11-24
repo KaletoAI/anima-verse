@@ -510,6 +510,14 @@ def _clean_exposed_detail(raw) -> bool:
     return raw is True
 
 
+def _clean_open_below(raw) -> bool:
+    """``outfit_piece.open_below``: the piece leaves the body free below (a skirt, a dress, a kilt), so it does not
+    block a contact clip although it sits on or ``covers`` a slot the clip needs free
+    (``app/core/contact_clothing.py``, owner decision 2026-11-25). Only a real ``true`` counts; never part of a
+    2D key or of a model (contact rules only)."""
+    return raw is True
+
+
 def _clean_piece_lora(raw) -> Dict[str, Any]:
     """Normalize an outfit piece LoRA, at most one per piece.
 
@@ -741,6 +749,7 @@ def add_item(name: str,
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
             "closable": _clean_closable(outfit_piece.get("closable"), slots),
             "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
+            "open_below": _clean_open_below(outfit_piece.get("open_below")),
         }
         # The mode only when the input names a valid one (a choice, Ruling
         # A10); without it the piece follows the default. An ``own_mesh`` key
@@ -934,6 +943,8 @@ def update_item(item_id: str,
         # dict is normalized (an unknown kind refuses the save), null clears it.
         prev_jewellery = prev_piece.get("jewellery")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
+        # Same for ``open_below`` (contact rules): kept when the update does not name it.
+        prev_open_below = _clean_open_below((item.get("outfit_piece") or {}).get("open_below"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
         for key, value in updates.items():
@@ -960,6 +971,8 @@ def update_item(item_id: str,
                 "lora": _clean_piece_lora(op.get("lora")),
                 "exposed_detail": (_clean_exposed_detail(op.get("exposed_detail")) if "exposed_detail" in op
                                    else prev_exposed_detail),
+                "open_below": (_clean_open_below(op.get("open_below")) if "open_below" in op
+                               else prev_open_below),
             }
             mesh_mode = _clean_mesh_mode(op.get("mesh_mode") if "mesh_mode" in op else prev_mesh_mode)
             if mesh_mode is not None:
