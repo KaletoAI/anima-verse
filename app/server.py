@@ -30,11 +30,13 @@ _cap_malloc_arenas(MALLOC_ARENA_MAX)
 
 #: How long a thread may keep the GIL before another one is let in. Python's
 #: default is 5 ms, and a thread that drops the GIL for a syscall waits up to
-#: that long to get it back — per CPU-bound thread in the process. With four
-#: of them (figure builds, cut textures, geometry) one SELECT took 308 ms and
-#: one os.stat 33 ms; at 0.5 ms it is 0.5 ms and 1.6 ms, and the CPU-bound
-#: threads lose nothing measurable (99-109 % throughput). Measured
-#: 2026-11-25, see docs/superpowers/plans/2026-11-25-event-loop-stability.md.
+#: that long to get it back — per CPU-bound thread in the process (figure
+#: builds, cut textures, geometry). Two measurements of 2026-11-25, mean per
+#: SELECT at 5 ms -> 0.5 ms: 4 CPU-bound threads 42 -> 8.5 ms, 16 threads
+#: 250 -> 54 ms (single runs go from 308 ms down to 0.5 ms; the spread is
+#: wide). Count on a factor of about five; the CPU-bound threads lose nothing
+#: measurable. It cannot preempt C code that keeps the GIL (a large json
+#: decode). Plan: docs/superpowers/plans/2026-11-25-event-loop-stability.md.
 GIL_SWITCH_INTERVAL_S = 0.0005
 
 import sys as _sys

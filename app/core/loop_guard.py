@@ -38,6 +38,14 @@ _allow_depth = 0
 _lock = threading.Lock()
 _counts: Dict[str, int] = {}
 _last_report = 0.0
+#: Strict mode records every violation here BEFORE it raises: much of the code
+#: under watch wraps its reads in ``except Exception``, which would swallow the
+#: raise and let a smoke pass falsely. A strict smoke asserts this stays empty.
+violations: List[str] = []
+
+
+def clear_violations() -> None:
+    del violations[:]
 
 
 def register_server_loop() -> None:
@@ -48,8 +56,14 @@ def register_server_loop() -> None:
 
 
 def unregister() -> None:
+    """Forget the loop; the counts of the last minute are still reported."""
     global _tid
     _tid = None
+    try:
+        for line in flush():
+            logger.warning(line)
+    except Exception:
+        pass
 
 
 def on_server_loop() -> bool:
@@ -65,7 +79,9 @@ def strict(on: bool) -> None:
 @contextmanager
 def allowed() -> Iterator[None]:
     """A wanted exception: startup and shutdown work inside the lifespan,
-    where nothing is served yet. Only meaningful on the loop thread."""
+    where nothing is served yet. Only meaningful on the loop thread, and for
+    SYNCHRONOUS sections only: the depth is one number for the whole loop, so
+    an ``await`` inside the block would exempt every other task meanwhile."""
     global _allow_depth
     mine = on_server_loop()
     if mine:
@@ -84,8 +100,9 @@ def _caller_key() -> str:
     frame = sys._getframe(2)
     while frame is not None:
         filename = frame.f_code.co_filename
-        cut = filename.rfind("/app/")
-        if cut >= 0 and not filename.endswith(("/loop_guard.py", "/core/db.py")):
+        cut = max(filename.rfind("/app/"), filename.rfind("/plugins/"))
+        if cut >= 0 and not filename.endswith(
+                ("/loop_guard.py", "/core/db.py", "/event_loop_watchdog.py")):
             names.append(f"{filename[cut + 1:-3]}:{frame.f_code.co_name}")
         frame = frame.f_back
     if not names:
@@ -98,17 +115,60 @@ def check(what: str) -> None:
     if _tid is None or threading.get_ident() != _tid or _allow_depth:
         return
     if _strict:
-        raise LoopBlockingCall(f"{what} on the event loop: {_caller_key()}")
+        key = _caller_key()
+        violations.append(f"{what}:{key}")
+        raise LoopBlockingCall(f"{what} on the event loop: {key}")
     try:
         key = _caller_key()
         with _lock:
             _counts[key] = _counts.get(key, 0) + 1
-            due = time.monotonic() - _last_report >= REPORT_EVERY_S
-        if due:
-            for line in flush():
-                logger.warning(line)
+        report_if_due()
     except Exception:
         pass   # statistics never disturb the caller
+
+
+def server_loop_tid() -> Optional[int]:
+    return _tid
+
+
+def report_if_due() -> None:
+    """Write the report line once a minute has passed. Never raises."""
+    try:
+        if time.monotonic() - _last_report < REPORT_EVERY_S:
+            return
+        for line in flush():
+            logger.warning(line)
+    except Exception:
+        pass
+
+
+def note_lag(frame, lag_ms: float) -> None:
+    """The watchdog's catch-all: the loop has not answered for ``lag_ms``.
+    Counts what the loop thread is doing right now under ``lag:<entry>><leaf>``
+    — this also sees what never reaches a choke point (a lock, a file, a pure
+    wait for the GIL inside the selector). Called from the watchdog thread with
+    the loop thread's current frame."""
+    try:
+        names: List[str] = []
+        leaf = ""
+        while frame is not None:
+            filename = frame.f_code.co_filename
+            if not leaf:
+                leaf = f"{filename.rsplit('/', 1)[-1][:-3]}:{frame.f_code.co_name}"
+            cut = max(filename.rfind("/app/"), filename.rfind("/plugins/"))
+            if cut >= 0:
+                names.append(f"{filename[cut + 1:-3]}:{frame.f_code.co_name}")
+            frame = frame.f_back
+        if not names:
+            key = f"lag:(no app frame)>{leaf}"
+        elif len(names) == 1:
+            key = f"lag:{names[0]}"
+        else:
+            key = f"lag:{names[-1]}>{names[0]}"
+        with _lock:
+            _counts[key] = _counts.get(key, 0) + 1
+    except Exception:
+        pass
 
 
 def flush(now: Optional[float] = None) -> List[str]:

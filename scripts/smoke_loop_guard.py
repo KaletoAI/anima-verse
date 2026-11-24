@@ -14,6 +14,13 @@ Expected numbers, derived by hand:
   [G5] allowed(): inside the block nothing is counted and strict does not raise
   [G6] 17 different keys with counts 17..1 -> 15 named, other = 2 + 1 = 3, n = 153
   [G7] after unregister(): counts nothing again
+  [G8] strict mode records the violation BEFORE raising: a caller that swallows the
+       exception (as the agent loop's predicates do) still leaves violations == 1 entry
+       that starts with "db:"
+  [G9] note_lag(frame of this script): no "/app/" frame -> key "lag:(no app frame)>smoke_loop_guard:<function>",
+       counted once -> line "loop_sync n=1 lag:(no app frame)>smoke_loop_guard:scenario=1"
+  [G10] the task queue's own connection is a choke point too: TaskQueue._connect on the
+        loop in strict mode appends a violation that starts with "tq:"
 """
 import asyncio
 import sys
@@ -84,6 +91,32 @@ with tempfile.TemporaryDirectory() as tmp:
         line = loop_guard.flush()[0]
         ok("[G6] n = 153", line.startswith("loop_sync n=153 "), line)
         ok("[G6] 15 named, other=3", line.endswith(" k14=3 other=3") and line.count("=") == 17, line)
+
+        loop_guard.strict(True)
+        loop_guard.clear_violations()
+        try:
+            db.get_connection()
+        except Exception:
+            pass   # what a swallowing caller does
+        ok("[G8] a swallowed raise still leaves one violation",
+           len(loop_guard.violations) == 1 and loop_guard.violations[0].startswith("db:"),
+           str(loop_guard.violations))
+        from app.core.task_queue import TaskQueue
+        loop_guard.clear_violations()
+        try:
+            TaskQueue._connect(TaskQueue.__new__(TaskQueue))
+        except Exception:
+            pass
+        ok("[G10] task-queue connect is watched",
+           len(loop_guard.violations) == 1 and loop_guard.violations[0].startswith("tq:"),
+           str(loop_guard.violations))
+        loop_guard.clear_violations()
+        loop_guard.strict(False)
+
+        loop_guard.flush()
+        loop_guard.note_lag(sys._getframe(), 250.0)
+        lines = loop_guard.flush()
+        ok("[G9] lag note", lines == ["loop_sync n=1 lag:(no app frame)>smoke_loop_guard:scenario=1"], str(lines))
 
         loop_guard.unregister()
         db.get_connection()

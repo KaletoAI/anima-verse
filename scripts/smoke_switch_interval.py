@@ -5,22 +5,19 @@ Usage: ./.venv/bin/python scripts/smoke_switch_interval.py
 Needs no world and no server.
 
 Why: a thread that drops the GIL for a syscall waits up to one switch interval PER CPU-bound
-thread to get it back. Measured 2026-11-25 with four CPU-bound threads: one SELECT 308 ms at
-Python's default of 5 ms, 0.5 ms at 0.5 ms.
+thread to get it back. Measured 2026-11-25 with four CPU-bound threads: a SELECT costs 42 ms on
+average at Python's default of 5 ms and 8.5 ms at 0.5 ms (single runs: 308 ms against 0.5 ms).
 
   [W1] app/server.py assigns GIL_SWITCH_INTERVAL_S = 0.0005 and calls setswitchinterval with it
        before its first "from app" import (AST — importing app.server would need a world).
-  [W2] with that interval and four CPU-bound threads, 200 SELECTs average under 20 ms each.
-       The bound is 40 times the measured value so a loaded host does not flicker; the default
-       interval misses it by a factor of 15.
+
+No timing is asserted: the effect is bimodal on a multi-core host (in some runs the measuring
+thread never loses the GIL at either interval — 0.0 / 11.6 / 19.5 ms in three runs of the same
+check), so a bound either flickers or proves nothing. The measurement is repeatable by hand with
+four CPU-bound threads and a loop of SELECTs under sys.setswitchinterval(0.005) and (0.0005).
 """
 import ast
-import os
-import sqlite3
 import sys
-import tempfile
-import threading
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,38 +52,6 @@ ok("[W1] GIL_SWITCH_INTERVAL_S == 0.0005", value == 0.0005, str(value))
 ok("[W1] set before the first app import",
    set_line is not None and first_app_import is not None and set_line < first_app_import,
    f"set at {set_line}, first app import at {first_app_import}")
-
-before = sys.getswitchinterval()
-sys.setswitchinterval(value or 0.0005)
-stop = threading.Event()
-
-
-def burn():
-    x = 0
-    while not stop.is_set():
-        for k in range(2000):
-            x += k * k
-
-
-with tempfile.TemporaryDirectory() as tmp:
-    conn = sqlite3.connect(os.path.join(tmp, "t.db"))
-    conn.execute("create table t(a, b)")
-    conn.execute("insert into t values (1, 'x')")
-    conn.commit()
-    threads = [threading.Thread(target=burn, daemon=True) for _ in range(4)]
-    for t in threads:
-        t.start()
-    time.sleep(0.2)
-    t0 = time.perf_counter()
-    for _ in range(200):
-        conn.execute("select * from t").fetchone()
-    per_call_ms = (time.perf_counter() - t0) / 200 * 1000
-    stop.set()
-    for t in threads:
-        t.join()
-    conn.close()
-sys.setswitchinterval(before)
-ok("[W2] SELECT under four CPU threads < 20 ms", per_call_ms < 20.0, f"{per_call_ms:.2f} ms per call")
 
 print("FAILED" if failed else "Switch interval checks passed")
 sys.exit(1 if failed else 0)
