@@ -10,8 +10,31 @@ which is re-issued by the caller whenever ``get_session`` reports a refresh —
 otherwise the browser drops the credential exactly one session TTL after
 login, mid-session. The DB write is throttled to SLIDE_THROTTLE_SECONDS so
 short-interval polling does not hammer world.db on every request.
+
+Lookup cache (``resolve_session_user`` / ``cached_session_user``): every
+HTTP request resolves its cookie, and the auth middleware runs on the event
+loop, so the session + user lookup sits in front of a small in-process cache
+(token -> session row, user dict; LOOKUP_CACHE_TTL_SECONDS). Rules:
+- A hit does no DB access. It re-checks the cached ``expires_at`` against the
+  clock, so an expired session is never served from the cache.
+- Every writer of ``user_sessions`` and of ``users`` invalidates AFTER its
+  commit (``invalidate_token`` / ``invalidate_user``); logout and "end the
+  other sessions" therefore take effect on the very next lookup, not after the
+  TTL. A fill that read the DB before such an invalidation is not stored
+  (generation check), so a lookup racing a logout cannot re-insert the dead
+  session.
+- Sliding is unchanged: it happens in ``get_session``, i.e. on every refill
+  from the DB. A continuously used session refills at least every
+  LOOKUP_CACHE_TTL_SECONDS (5 s), far below SLIDE_THROTTLE_SECONDS (60 s), so
+  it still slides about once a minute (at most 60 + 5 s after the last slide).
+- A process that writes world.db from OUTSIDE (another process, a hand edit)
+  is seen after at most LOOKUP_CACHE_TTL_SECONDS.
 """
+import copy
 import secrets
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
@@ -29,10 +52,19 @@ REMEMBER_TTL_DAYS = 30
 # Only slide the DB row (and re-issue the cookie) once per minute — the play UI
 # polls every few seconds, and every slide is a write to world.db.
 SLIDE_THROTTLE_SECONDS = 60
+#: How long a resolved (session, user) pair is served from memory. Must stay
+#: far below SLIDE_THROTTLE_SECONDS so an active session keeps sliding.
+LOOKUP_CACHE_TTL_SECONDS = 5.0
+#: Bound of the lookup cache; the oldest entry goes first.
+LOOKUP_CACHE_MAX_ENTRIES = 1024
 
 
 def _now() -> datetime:
     return utc_now()
+
+
+def _monotonic() -> float:
+    return time.monotonic()
 
 
 def _iso(dt: datetime) -> str:
@@ -167,12 +199,20 @@ def get_session(token: str) -> Tuple[Optional[Dict[str, Any]], bool]:
             "UPDATE user_sessions SET last_activity=?, expires_at=? WHERE token=?",
             (_iso(now), _iso(new_expires), token),
         )
+    # The returned row is the row as it is NOW — the lookup cache checks expiry
+    # against this expires_at, and the pre-slide value would end a cached
+    # session early.
+    session["last_activity"] = _iso(now)
+    session["expires_at"] = _iso(new_expires)
     return session, True
 
 
 def delete_session(token: str) -> None:
-    with transaction() as conn:
-        conn.execute("DELETE FROM user_sessions WHERE token=?", (token,))
+    try:
+        with transaction() as conn:
+            conn.execute("DELETE FROM user_sessions WHERE token=?", (token,))
+    finally:
+        invalidate_token(token)
 
 
 def delete_sessions_for_user(user_id: str) -> int:
@@ -180,9 +220,12 @@ def delete_sessions_for_user(user_id: str) -> int:
 
     Returns how many sessions were ended.
     """
-    with transaction() as conn:
-        cur = conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
-        return cur.rowcount
+    try:
+        with transaction() as conn:
+            cur = conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
+            return cur.rowcount
+    finally:
+        invalidate_user(user_id)
 
 
 def delete_other_sessions(user_id: str, keep_token: str) -> int:
@@ -196,9 +239,115 @@ def delete_other_sessions(user_id: str, keep_token: str) -> int:
 
     Returns how many sessions were ended.
     """
-    with transaction() as conn:
-        cur = conn.execute(
-            "DELETE FROM user_sessions WHERE user_id=? AND token<>?",
-            (user_id, keep_token or ""),
-        )
-        return cur.rowcount
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM user_sessions WHERE user_id=? AND token<>?",
+                (user_id, keep_token or ""),
+            )
+            return cur.rowcount
+    finally:
+        # All of the user's entries, the kept one included: it simply refills.
+        invalidate_user(user_id)
+
+
+# ── Lookup cache ──────────────────────────────────────────────────────
+#
+# token -> (session dict, user dict, expires_at datetime, fetched_at monotonic).
+# The lock guards the dict and the generation only; it is never held during DB
+# access. Values are deep-copied in and out: callers mutate the user dict they
+# get (account._update_current_user_settings writes user["settings"] back into
+# the request's context object), and that must never reach the shared entry.
+_cache: "OrderedDict[str, Tuple[Dict[str, Any], Dict[str, Any], datetime, float]]" = OrderedDict()
+_cache_lock = threading.Lock()
+#: Bumped by every invalidation. A fill stores its result only when the
+#: generation is still the one it saw BEFORE reading the DB — otherwise a write
+#: (a logout, a role change) committed while it was reading, and what it read
+#: may be exactly what that write ended.
+_cache_generation = 0
+
+#: Returned by ``cached_session_user`` when only the DB can answer.
+MISS = object()
+
+
+def invalidate_token(token: str) -> None:
+    """Drop one token's entry. Call AFTER the write that changed it committed."""
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        _cache.pop(token, None)
+
+
+def invalidate_user(user_id: str) -> None:
+    """Drop every entry of a user (session delete, any change to the users row).
+    Call AFTER the write committed."""
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        for token in [t for t, entry in _cache.items()
+                      if entry[0].get("user_id") == user_id]:
+            del _cache[token]
+
+
+def clear_lookup_cache() -> None:
+    """Drop everything (tests; a world switch)."""
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        _cache.clear()
+
+
+def cached_session_user(token: str):
+    """The cached ``(session, user, refreshed=False)`` for ``token`` — no DB
+    access, safe on the event loop. ``(None, None, False)`` when the cached
+    session has expired since it was read (refused without asking the DB; the
+    next DB lookup deletes the row). ``MISS`` when only the DB can answer."""
+    if not token:
+        return None, None, False
+    with _cache_lock:
+        entry = _cache.get(token)
+        if entry is None:
+            return MISS
+        session, user, expires, fetched = entry
+        if _monotonic() - fetched >= LOOKUP_CACHE_TTL_SECONDS:
+            del _cache[token]
+            return MISS
+        if _now() >= expires:
+            del _cache[token]
+            return None, None, False
+        return copy.deepcopy(session), copy.deepcopy(user), False
+
+
+def resolve_session_user(token: str):
+    """``(session, user, refreshed)`` for a session cookie — from the cache when
+    possible, otherwise from the DB (sliding the row like ``get_session``).
+
+    Touches the DB on a miss: never call it on the event loop (the auth
+    middleware tries ``cached_session_user`` there and sends a miss to a
+    thread). ``session`` may be set while ``user`` is None (a session whose
+    user is gone); such a pair is not cached.
+    """
+    hit = cached_session_user(token)
+    if hit is not MISS:
+        return hit
+    from app.core import users
+    with _cache_lock:
+        generation = _cache_generation
+    session, refreshed = get_session(token)
+    if not session:
+        return None, None, refreshed
+    user = users.get_user_by_id(session["user_id"])
+    if not user:
+        return session, None, refreshed
+    try:
+        expires = parse_iso(session["expires_at"])
+    except (TypeError, ValueError):
+        return session, user, refreshed
+    with _cache_lock:
+        if generation == _cache_generation:
+            _cache[token] = (copy.deepcopy(session), copy.deepcopy(user),
+                             expires, _monotonic())
+            _cache.move_to_end(token)
+            while len(_cache) > LOOKUP_CACHE_MAX_ENTRIES:
+                _cache.popitem(last=False)
+    return session, user, refreshed

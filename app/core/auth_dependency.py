@@ -13,6 +13,7 @@ Usage in routes:
 Additionally the contextvar `current_user_ctx` — set by the middleware and
 readable from arbitrary code (get_current_user_from_ctx) without a request.
 """
+import asyncio
 from contextvars import ContextVar
 from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status
@@ -55,25 +56,18 @@ def _sets_session_cookie(response) -> bool:
     )
 
 
-def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
-    """Resolves the session cookie to a user.
+def _apply_lookup(request: Request, token: str, result) -> Optional[Dict[str, Any]]:
+    """Turns a ``sessions.resolve_session_user`` result into the user, with
+    the request-side effects. Pure memory — safe on the event loop.
 
-    Side effect for the middleware: when the session slid (sessions.get_session
-    reports a refresh), the token is remembered on ``request.state`` so the
+    When the session slid, the token is remembered on ``request.state`` so the
     response can carry a fresh cookie. The flag is only ever set to True — a
-    later call within the same request (dependencies run after the middleware)
-    is throttled and must not erase an earlier refresh.
+    later lookup within the same request is throttled (or a cache hit) and
+    must not erase an earlier refresh.
     """
-    token = request.cookies.get(sessions.SESSION_COOKIE_NAME)
+    sess, user, refreshed = result
     path = request.url.path
-    if not token:
-        if path.startswith("/world-dev/") or path.startswith("/admin/"):
-            cookie_keys = list(request.cookies.keys())
-            logger.warning("auth: no session cookie at %s (available cookies=%s)",
-                           path, cookie_keys)
-        return None
-    sess, refreshed = sessions.get_session(token)
-    if refreshed:
+    if refreshed and sess:
         request.state.session_refresh_token = token
         request.state.session_refresh_ttl_hours = sess["ttl_hours"]
     if not sess:
@@ -81,11 +75,61 @@ def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
             logger.warning("auth: session token unknown/expired at %s (token=%s...)",
                            path, token[:8])
         return None
-    user = users.get_user_by_id(sess["user_id"])
     if not user and (path.startswith("/world-dev/") or path.startswith("/admin/")):
         logger.warning("auth: session ok but user_id %s not in DB at %s",
                        sess["user_id"], path)
     return user
+
+
+def _session_token(request: Request) -> str:
+    """The session cookie, or "" (logged for the admin/world-dev paths)."""
+    token = request.cookies.get(sessions.SESSION_COOKIE_NAME)
+    if not token:
+        path = request.url.path
+        if path.startswith("/world-dev/") or path.startswith("/admin/"):
+            cookie_keys = list(request.cookies.keys())
+            logger.warning("auth: no session cookie at %s (available cookies=%s)",
+                           path, cookie_keys)
+        return ""
+    return token
+
+
+def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
+    """Resolves the session cookie to a user.
+
+    Inside a served request the middleware has already resolved it: that
+    result (the very object in ``current_user_ctx``) is returned, without any
+    DB access. That matters for the callers on the event loop — async routes
+    that call ``get_current_user_optional(request)`` directly (the SSE routes
+    in routes/events.py, /account/switch-character). Without the middleware
+    (a direct call in a script) the lookup goes through the session cache and,
+    on a miss, the DB — so never call it on the loop there.
+    """
+    state = request.state
+    if getattr(state, "auth_resolved", False):
+        return state.auth_user
+    token = _session_token(request)
+    if not token:
+        return None
+    return _apply_lookup(request, token, sessions.resolve_session_user(token))
+
+
+async def _resolve_request_user(request: Request) -> Optional[Dict[str, Any]]:
+    """The middleware's lookup: a cache hit on the loop, a miss in a thread —
+    the session/user SELECTs (and the sliding UPDATE) never run on the event
+    loop. Returns to the request task, which then sets the contextvar.
+
+    The miss goes through ``_get_session_user`` (module attribute, looked up
+    at call time) because that is the seam the route smokes stub to log a test
+    user in. Without a cookie the real function does no I/O, so it runs inline.
+    """
+    token = request.cookies.get(sessions.SESSION_COOKIE_NAME)
+    if not token:
+        return _get_session_user(request)
+    result = sessions.cached_session_user(token)
+    if result is sessions.MISS:
+        return await asyncio.to_thread(_get_session_user, request)
+    return _apply_lookup(request, token, result)
 
 
 def get_current_user(request: Request) -> Dict[str, Any]:
@@ -145,7 +189,11 @@ async def user_context_middleware(request: Request, call_next):
     """
     from fastapi.responses import JSONResponse
 
-    user = _get_session_user(request)
+    # Set in THIS task, after the awaited lookup: a contextvar set inside the
+    # worker thread would never reach the request.
+    user = await _resolve_request_user(request)
+    request.state.auth_resolved = True
+    request.state.auth_user = user
     token = current_user_ctx.set(user)
     try:
         if user and user.get("role") != users.ROLE_ADMIN:
