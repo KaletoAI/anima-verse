@@ -35,13 +35,16 @@ The forced_thought handler stays on ThoughtRunner (registered separately at
 startup); this loop does not handle external triggers.
 """
 import asyncio
+import functools
 import logging
 import random
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
-from app.core.turn_trace import begin_trace, set_trace
+from app.core.turn_trace import begin_trace, bind_trace, set_trace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from app.core.config_schema import field_default
@@ -49,6 +52,29 @@ from app.core.log import get_logger
 from app.core.perception import CONTENTLESS_KINDS, STORYTELLER_SPEAKER
 
 logger = get_logger("agent_loop")
+
+# The agent loop's OWN pool for its storage reads (world DB, character files,
+# the task-queue DB). Not the default executor: that one (asyncio.to_thread)
+# is shared with whole chat turns, blocking lane acquisitions, tool calls,
+# image renders and the route offloads, and a pick or a respond tick that
+# queued behind those would stall the loop's scheduling for as long. Two
+# workers: the reads are short, and the serial loop, the respond dispatcher
+# and the respond turns' starts are what uses them. LLM calls never run here
+# (they keep asyncio.to_thread) — one of them would hold a worker for minutes.
+_READ_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent-loop")
+
+
+async def _off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a blocking read of the agent loop in ``_READ_POOL``.
+
+    ``run_in_executor`` does not copy the context, so the caller's turn
+    trace is carried over by value (``bind_trace``, as ``chat_engine`` does
+    for its follow-ups); a pooled thread would otherwise log under whatever
+    trace its previous job left behind. The function is looked up by the
+    caller at call time, so a module-level patch of it still takes effect.
+    """
+    call = bind_trace(functools.partial(fn, *args, **kwargs))
+    return await asyncio.get_running_loop().run_in_executor(_READ_POOL, call)
 
 
 # Sleep when nothing is eligible (everyone sleeping, world paused, etc.)
@@ -260,6 +286,26 @@ class AgentLoop:
         # — for the turns that never reach that call at all.
         self._respond_turn_claims: Dict[str, str] = {}
         self._room_locks: Dict[str, asyncio.Lock] = {}
+        # ONE lock around every change to the queues and the room-energy maps
+        # (_bump_queue, _bump_hints, _bump_perception, _respond_queue,
+        # _respond_to, _respond_resolved, _respond_wait_reason,
+        # _room_ai_turns, _room_winddown_done, _room_avatar_idle,
+        # _outdoor_ai_key). bump / bump_respond / dispatch_room_reactions are
+        # called from worker threads (travel ticker, scheduler, tools, the NPC
+        # tick) as well as from the loop, and _pop_next_respond used to walk a
+        # copy of the queue and then remove() a name a thread had removed in
+        # between (ValueError, a 5 s dispatcher nap). A lock rather than
+        # call_soon_threadsafe because those callers rely on the effect being
+        # there when the call returns (the bool of bump_respond, the queued
+        # entries wait_room_responds_settled waits for). Held only for short
+        # in-memory sections: never across an await, never around a storage
+        # read. Re-entrant, because some sections call helpers that lock too.
+        self._state_lock = threading.RLock()
+        # Name -> room key read in the dispatcher's thread hop for a respond
+        # turn it has just started; the worker pops it in its first step and
+        # takes that room's lock (it reads the room itself, in a thread, only
+        # when nothing was handed over).
+        self._respond_room_keys: Dict[str, str] = {}
         self._respond_task: Optional[asyncio.Task] = None
         # Room conversation energy (plan-room-conversation phase 3b): per room
         # a counter of consecutive AI utterances since the last avatar input.
@@ -333,6 +379,7 @@ class AgentLoop:
         # this its entry would survive a stop/start of this instance and
         # shrink that pool's budget by one for good.
         self._respond_pools.clear()
+        self._respond_room_keys.clear()
         # Same reasoning for the claims of the respond dispatcher: nobody
         # refreshes them once its task is gone, and until they ran out by TTL
         # they would keep background work off those pools for nothing. The
@@ -349,6 +396,10 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     def status(self) -> Dict[str, Any]:
+        with self._state_lock:
+            return self._status_locked()
+
+    def _status_locked(self) -> Dict[str, Any]:
         return {
             "running": self._task is not None and not self._stop.is_set(),
             "paused": _is_paused(),
@@ -402,17 +453,21 @@ class AgentLoop:
         if not _is_agent_eligible(character_name):
             logger.debug("AgentLoop.bump skipped: %s ineligible", character_name)
             return False
-        if hint:
-            self.add_hint(character_name, hint)
-        if perception_template:
-            self._bump_perception[character_name] = {
-                "template": perception_template,
-                "vars": dict(perception_vars or {}),
-                "tool_whitelist": list(tool_whitelist) if tool_whitelist else None,
-            }
-        if character_name in self._bump_queue:
-            return True  # already bumped
-        self._bump_queue.append(character_name)
+        # Storage read above, mutation below — under the state lock, because
+        # this is called from worker threads (travel ticker, scheduler, tools)
+        # as well as from the loop.
+        with self._state_lock:
+            if hint:
+                self._append_hint(character_name, hint)
+            if perception_template:
+                self._bump_perception[character_name] = {
+                    "template": perception_template,
+                    "vars": dict(perception_vars or {}),
+                    "tool_whitelist": list(tool_whitelist) if tool_whitelist else None,
+                }
+            if character_name in self._bump_queue:
+                return True  # already bumped
+            self._bump_queue.append(character_name)
         logger.info("AgentLoop.bump: %s queued for next slot%s%s",
                     character_name,
                     " (with hint)" if hint else "",
@@ -423,11 +478,16 @@ class AgentLoop:
         """Append context for the next ordinary thought without queue priority."""
         if not character_name or not _is_agent_eligible(character_name):
             return False
-        if hint:
-            existing = self._bump_hints.get(character_name, "")
-            self._bump_hints[character_name] = (
-                existing + "\n" + hint if existing else hint)
+        self._append_hint(character_name, hint)
         return True
+
+    def _append_hint(self, character_name: str, hint: str) -> None:
+        """The in-memory half of ``add_hint`` (eligibility already checked)."""
+        if hint:
+            with self._state_lock:
+                existing = self._bump_hints.get(character_name, "")
+                self._bump_hints[character_name] = (
+                    existing + "\n" + hint if existing else hint)
 
     @staticmethod
     def _finish_respond_request(character_name: str, respond: Dict[str, Any], outcome: str) -> None:
@@ -470,30 +530,6 @@ class AgentLoop:
         if not _is_respond_eligible(character_name):
             logger.debug("AgentLoop.bump_respond skipped: %s ineligible", character_name)
             return False
-        existing = self._respond_to.get(character_name)
-        if existing and (
-                (existing.get("obligatory") and not obligatory)
-                or (existing.get("on_demand") and not on_demand)):
-            return True  # ordinary reactions cannot replace an explicit request
-        if existing and existing.get("request_id") != request_id:
-            self._finish_respond_request(character_name, existing, "superseded")
-        self._respond_to[character_name] = {
-            "speaker": speaker, "content": content,
-            "volume": volume, "obligatory": obligatory,
-            "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
-            "request_id": request_id, "cascade": cascade, "utterance_id": utterance_id,
-        }
-        # Mandatory answers go to the FRONT (the lane pops FIFO) so they
-        # never starve behind chime opportunities — otherwise the scene can
-        # consolidate before the answer ran. A character already running a
-        # respond turn stays queued: they answer again afterwards (new
-        # utterance, new context); the dispatcher skips active names.
-        if character_name in self._respond_queue:
-            self._respond_queue.remove(character_name)
-        if obligatory:
-            self._respond_queue.insert(0, character_name)
-        else:
-            self._respond_queue.append(character_name)
         # The LLM entry of this reply, resolved HERE and kept for as long as
         # this queue entry lives: the dispatcher looks at every waiting name
         # twice a second, and the lookup behind it reads the character config
@@ -501,9 +537,41 @@ class AgentLoop:
         # is the only invalidation, and it is enough, because the two things
         # that move the answer to another entry (the character becoming a
         # temporary NPC, an edit to the routing) both come with a new
-        # utterance long before they matter.
-        self._respond_resolved[character_name] = _respond_pool_of(character_name)
-        self._respond_wait_reason.pop(character_name, None)
+        # utterance long before they matter. Read BEFORE the state lock: the
+        # lock never covers a storage read.
+        pool_key = _respond_pool_of(character_name)
+        superseded = None
+        # Called from worker threads (tools, the NPC tick, perception) as well
+        # as from the loop: every change below happens under the state lock.
+        with self._state_lock:
+            existing = self._respond_to.get(character_name)
+            if existing and (
+                    (existing.get("obligatory") and not obligatory)
+                    or (existing.get("on_demand") and not on_demand)):
+                return True  # ordinary reactions cannot replace an explicit request
+            if existing and existing.get("request_id") != request_id:
+                superseded = existing
+            self._respond_to[character_name] = {
+                "speaker": speaker, "content": content,
+                "volume": volume, "obligatory": obligatory,
+                "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
+                "request_id": request_id, "cascade": cascade, "utterance_id": utterance_id,
+            }
+            # Mandatory answers go to the FRONT (the lane pops FIFO) so they
+            # never starve behind chime opportunities — otherwise the scene can
+            # consolidate before the answer ran. A character already running a
+            # respond turn stays queued: they answer again afterwards (new
+            # utterance, new context); the dispatcher skips active names.
+            if character_name in self._respond_queue:
+                self._respond_queue.remove(character_name)
+            if obligatory:
+                self._respond_queue.insert(0, character_name)
+            else:
+                self._respond_queue.append(character_name)
+            self._respond_resolved[character_name] = pool_key
+            self._respond_wait_reason.pop(character_name, None)
+        if superseded is not None:
+            self._finish_respond_request(character_name, superseded, "superseded")
         logger.info("AgentLoop.bump_respond: %s %s to %s", character_name,
                     "answers" if obligatory else "(opportunity)", speaker)
         return True
@@ -539,13 +607,14 @@ class AgentLoop:
         """Move a speaker's conversation budget with its outdoor utterance."""
         if not key.startswith("open:"):
             return
-        old = self._outdoor_ai_key.get(who)
-        if old and old != key:
-            self._room_ai_turns[key] = max(
-                self._room_ai_turns.get(key, 0), self._room_ai_turns.get(old, 0))
-            if old in self._room_winddown_done:
-                self._room_winddown_done.add(key)
-        self._outdoor_ai_key[who] = key
+        with self._state_lock:
+            old = self._outdoor_ai_key.get(who)
+            if old and old != key:
+                self._room_ai_turns[key] = max(
+                    self._room_ai_turns.get(key, 0), self._room_ai_turns.get(old, 0))
+                if old in self._room_winddown_done:
+                    self._room_winddown_done.add(key)
+            self._outdoor_ai_key[who] = key
 
     def reset_room_energy(self, location_id: str, room_id: str,
                           who: str = "") -> None:
@@ -561,11 +630,21 @@ class AgentLoop:
         avatar in the room the effective backstop is still 1.
         """
         key = self._room_key(location_id, room_id, who)
-        self._outdoor_ai_key.pop(who, None)
-        self._room_ai_turns[key] = 0
-        self._room_winddown_done.discard(key)
+        with self._state_lock:
+            self._outdoor_ai_key.pop(who, None)
+            self._room_ai_turns[key] = 0
+            self._room_winddown_done.discard(key)
 
-    def _rooms_with_pending_obligatory(self) -> set:
+    def _pending_obligatory_names(self) -> set:
+        """The names with a pending MANDATORY answer in the respond lane or a
+        respond turn running — loop state only, read on the loop."""
+        with self._state_lock:
+            names = {n for n in self._respond_queue
+                     if (self._respond_to.get(n) or {}).get("obligatory")}
+        names.update(self._respond_active.keys())
+        return names
+
+    def _rooms_with_pending_obligatory(self, names: Optional[set] = None) -> set:
         """Room keys (loc/room) with a pending MANDATORY answer in the
         respond lane, or with a respond turn currently running. These rooms
         must NOT be idle-consolidated — the stream would be pruned before
@@ -573,14 +652,18 @@ class AgentLoop:
 
         Location keys only, deliberately: the caller compares them against
         open SCENES, and the wilderness has none (see ``scene_manager.touch``).
-        Outdoor cells here would be keys nothing could ever match."""
+        Outdoor cells here would be keys nothing could ever match.
+
+        Reads every name's place from storage, so the loop calls it inside a
+        thread with ``names`` taken beforehand on the loop
+        (``_pending_obligatory_names``); without ``names`` it takes them
+        itself."""
         keys: set = set()
         try:
             from app.models.character import (get_character_current_location,
                                               get_character_current_room)
-            names = {n for n in list(self._respond_queue)
-                     if (self._respond_to.get(n) or {}).get("obligatory")}
-            names.update(self._respond_active.keys())
+            if names is None:
+                names = self._pending_obligatory_names()
             for name in names:
                 loc = get_character_current_location(name) or ""
                 if loc:
@@ -596,21 +679,19 @@ class AgentLoop:
         respond lane uses, so both sides talk about the same room."""
         return self._room_key(location_id, room_id, who)
 
-    def _respond_pending_in_room(self, room_key: str, watch: set) -> bool:
-        """Is a respond turn for this room still running or waiting?
+    def _any_in_room(self, names: Sequence[str], room_key: str) -> bool:
+        """Does any of ``names`` stand in ``room_key`` right now? Storage
+        reads only (``_char_room_key``) — the thread half of
+        ``wait_room_responds_settled``.
 
         A queue entry is only a NAME — the room it belongs to is derived the
         same way the worker derives its lock (``_char_room_key``). That reads
         the character's CURRENT place, so someone who walked out mid-wait no
-        longer counts for this room; ``watch`` (the names the dispatch just
-        bumped) keeps them counted anyway, which also covers the open world,
-        where two people in one conversation can sit in neighbouring cells.
-        """
-        for name in list(self._respond_active.keys()) + list(self._respond_queue):
-            if not name:
-                continue
-            if name in watch:
-                return True
+        longer counts for this room; the caller's ``watch`` (the names the
+        dispatch just bumped) keeps them counted anyway, which also covers the
+        open world, where two people in one conversation can sit in
+        neighbouring cells."""
+        for name in names:
             try:
                 if self._char_room_key(name) == room_key:
                     return True
@@ -642,7 +723,19 @@ class AgentLoop:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0.0, float(timeout_s))
         while True:
-            if not self._respond_pending_in_room(room_key, watch):
+            # The names are loop state (taken here); where each one stands is
+            # storage — read in a thread, only when no watched name decides.
+            with self._state_lock:
+                pending_names = [n for n in list(self._respond_active.keys())
+                                 + list(self._respond_queue) if n]
+            if any(n in watch for n in pending_names):
+                pending = True
+            elif not pending_names:
+                pending = False
+            else:
+                pending = await _off_loop(
+                    self._any_in_room, pending_names, room_key)
+            if not pending:
                 return True
             if loop.time() >= deadline:
                 logger.info("wait_room_responds_settled: timeout (%.0fs) for room %s",
@@ -788,11 +881,12 @@ class AgentLoop:
         effective_backstop = 1 if floor_mode else self._chime_backstop
 
         if is_avatar:
-            for name in {*in_earshot, speaker}:
-                self._outdoor_ai_key.pop(name, None)
-            self._room_ai_turns[key] = 0  # avatar sets the beat: energy reset
-            self._room_winddown_done.discard(key)  # new cascade → exit allowed again
-            self._room_avatar_idle.pop(key, None)  # avatar active → floor clock reset
+            with self._state_lock:
+                for name in {*in_earshot, speaker}:
+                    self._outdoor_ai_key.pop(name, None)
+                self._room_ai_turns[key] = 0  # avatar sets the beat: energy reset
+                self._room_winddown_done.discard(key)  # new cascade → exit allowed again
+                self._room_avatar_idle.pop(key, None)  # avatar active → floor clock reset
         else:
             self._carry_outdoor_energy(speaker, key)
             if self._room_ai_turns.get(key, 0) >= effective_backstop:
@@ -804,8 +898,10 @@ class AgentLoop:
                     return {"obligatory": [], "chime": []}
                 # Otherwise (no avatar / avatar idle for longer): ONE visible
                 # exit (concept §5), then silence until the avatar speaks.
-                if key not in self._room_winddown_done:
+                with self._state_lock:
+                    first_winddown = key not in self._room_winddown_done
                     self._room_winddown_done.add(key)
+                if first_winddown:
                     present = [c for c in in_earshot
                                if c and c != speaker and _is_respond_eligible(c)
                                and not _leaving(c) and c not in _excl]
@@ -909,7 +1005,8 @@ class AgentLoop:
         if there is none. Mutates internal state — caller must use the
         returned text in this turn or the hint is lost.
         """
-        return self._bump_hints.pop(character_name, "")
+        with self._state_lock:
+            return self._bump_hints.pop(character_name, "")
 
     def pop_perception(self, character_name: str) -> Optional[Dict[str, Any]]:
         """Pop a queued perception payload (template/vars/tool_whitelist).
@@ -917,7 +1014,8 @@ class AgentLoop:
         Returns None if no perception was queued. Mutates internal state —
         caller must use the returned payload in this turn or it is lost.
         """
-        return self._bump_perception.pop(character_name, None)
+        with self._state_lock:
+            return self._bump_perception.pop(character_name, None)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -933,7 +1031,11 @@ class AgentLoop:
 
         while not self._stop.is_set():
             try:
-                if _is_paused():
+                # Both gates read storage (world flags, the task-queue DB,
+                # the routing) — one thread hop for the two of them, never
+                # on the event loop.
+                paused, llm_ok = await _off_loop(_loop_gates)
+                if paused:
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
 
@@ -942,7 +1044,7 @@ class AgentLoop:
                 # character in milliseconds (each turn early-returns "no_llm")
                 # — flooding logs and blocking the admin UI you'd use to fix
                 # the LLM config. State transitions are logged once.
-                if not _thought_llm_available():
+                if not llm_ok:
                     if not self._llm_standby:
                         logger.warning("AgentLoop standby: no 'thought' LLM reachable — loop paused")
                         self._llm_standby = True
@@ -960,16 +1062,19 @@ class AgentLoop:
                     self._last_scene_check = _now
                     try:
                         from app.core import scene_manager
-                        # Do NOT consolidate rooms with a pending mandatory answer.
-                        _skip = self._rooms_with_pending_obligatory()
+                        # Do NOT consolidate rooms with a pending mandatory
+                        # answer. The NAMES are loop state and are taken here;
+                        # their rooms are read in the thread with the rest.
+                        _names = self._pending_obligatory_names()
                         n = await asyncio.to_thread(
-                            scene_manager.run_idle_consolidation, _skip)
+                            lambda: scene_manager.run_idle_consolidation(
+                                self._rooms_with_pending_obligatory(_names)))
                         if n:
                             logger.info("AgentLoop: %d scene(s) consolidated", n)
                     except Exception as _sce:
                         logger.debug("scene consolidation tick failed: %s", _sce)
 
-                agent = self._pick_next_agent()
+                agent = await self._pick_next_agent_async()
                 if not agent:
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
@@ -1241,7 +1346,9 @@ class AgentLoop:
             get_lane_manager().release_reservation(
                 pool_key, cache_key_for(_RESPOND_TASK_TYPE, name))
 
-    def _pop_next_respond(self, on_demand_only: bool = False) -> Optional[tuple]:
+    def _pop_next_respond(self, on_demand_only: bool = False,
+                          verdicts: Optional[Dict[str, Dict[str, Any]]] = None
+                          ) -> Optional[tuple]:
         """Pop the first queued respond that may start right now. Returns
         (name, payload, pool_key) or None.
 
@@ -1271,6 +1378,14 @@ class AgentLoop:
         ``_respond_wait_reason`` (see ``status()``); it is dropped as soon as
         the name starts or leaves the queue.
 
+        ``verdicts`` (the running dispatcher): eligibility, LLM entry and
+        room per name, read in the dispatcher's thread hop. A name without a
+        verdict — queued, or bumped again with a new payload, while the
+        verdicts were being read — is left in place for the next tick: the
+        verdict it would be judged by belongs to another payload. Without
+        ``verdicts`` they are read here first, outside the lock (synchronous
+        callers off the server).
+
         Both ways out end in ``_sync_respond_reservations``: the reasons this
         walk just wrote are what decides which pools stay reserved for a reply
         and which are let go (§ 4 R7). It runs on the way out, after the
@@ -1278,6 +1393,33 @@ class AgentLoop:
         its turn one line before that, so the sync finds nothing of it to
         release (``_hand_over_respond_reservation``).
         """
+        if verdicts is None:
+            # Synchronous callers: the same verdicts, read here — before the
+            # lock, which never covers a storage read.
+            with self._state_lock:
+                names = [n for n in self._respond_queue if n]
+                payloads = {n: self._respond_to.get(n) for n in names}
+                unresolved = {n for n in names if n not in self._respond_resolved}
+            verdicts = {}
+            for n in names:
+                ok = bool(_is_respond_eligible(n))
+                verdicts[n] = {"eligible": ok, "payload": payloads[n], "room": None,
+                               "pool": _respond_pool_of(n) if ok and n in unresolved else None}
+        dropped_requests: List[tuple] = []
+        try:
+            with self._state_lock:
+                return self._pop_next_respond_locked(
+                    on_demand_only, verdicts, dropped_requests)
+        finally:
+            # Hooks run outside the lock: a listener may bump again.
+            for name, dropped in dropped_requests:
+                self._finish_respond_request(name, dropped, "ineligible")
+
+    def _pop_next_respond_locked(self, on_demand_only: bool,
+                                 verdicts: Dict[str, Dict[str, Any]],
+                                 dropped_requests: List[tuple]) -> Optional[tuple]:
+        """The walk of ``_pop_next_respond``, under the state lock. Reads no
+        storage: everything it needs is in ``verdicts``."""
         for name in list(self._respond_queue):
             if on_demand_only and not self._respond_to.get(name, {}).get("on_demand"):
                 self._respond_wait_reason[name] = "frozen"
@@ -1285,17 +1427,21 @@ class AgentLoop:
             if name in self._respond_active:
                 self._respond_wait_reason[name] = "active"
                 continue  # never two turns for the same character at once
-            if not _is_respond_eligible(name):
+            verdict = verdicts.get(name)
+            if verdict is None or self._respond_to.get(name) is not verdict["payload"]:
+                continue   # arrived or changed during the read: next tick
+            if not verdict["eligible"]:
                 self._respond_queue.remove(name)
-                dropped = self._respond_to.pop(name, {})
-                self._finish_respond_request(name, dropped, "ineligible")
+                dropped_requests.append((name, self._respond_to.pop(name, {})))
                 self._respond_resolved.pop(name, None)
                 self._respond_wait_reason.pop(name, None)
                 logger.debug("respond lane: %s became ineligible — dropped", name)
                 continue
             pool_key = self._respond_resolved.get(name)
             if pool_key is None:
-                pool_key = _respond_pool_of(name)
+                pool_key = verdict.get("pool")
+                if pool_key is None:
+                    continue   # resolved on the next tick's read
                 self._respond_resolved[name] = pool_key
             if not self._respond_lane_free(name, pool_key):
                 self._respond_wait_reason[name] = "no_lane"
@@ -1311,6 +1457,43 @@ class AgentLoop:
             return name, payload, pool_key
         self._sync_respond_reservations(on_demand_only)
         return None
+
+    def _read_respond_tick(self, names: List[str], unresolved: List[str],
+                           on_demand: set, any_on_demand: bool) -> Dict[str, Any]:
+        """Thread side of one dispatcher tick: every storage read it needs.
+
+        Reads only its arguments and storage and RETURNS a dict; the queue,
+        the payloads and the reservations are changed by the dispatcher on
+        the loop. ``state``: "paused" (queue pause / world sleep, or a world
+        freeze with no on-demand answer waiting), "no_llm" (the chat route
+        resolves to nothing) or "ok". Only an "ok" tick reads the per-name
+        verdicts: ``eligible`` (``_is_respond_eligible``), ``pools`` (the LLM
+        entry of the names in ``unresolved``) and ``rooms`` (the room key
+        each would lock). Under a world freeze only the on-demand names are
+        read — the others stay "frozen" anyway.
+        """
+        out: Dict[str, Any] = {"state": "ok", "paused": False,
+                               "eligible": {}, "pools": {}, "rooms": {}}
+        paused = _is_paused()
+        out["paused"] = paused
+        if paused and (not any_on_demand or _is_reaction_paused()):
+            out["state"] = "paused"
+            return out
+        if not _chat_llm_available():
+            out["state"] = "no_llm"
+            return out
+        unresolved_set = set(unresolved)
+        for name in names:
+            if paused and name not in on_demand:
+                continue
+            ok = bool(_is_respond_eligible(name))
+            out["eligible"][name] = ok
+            if not ok:
+                continue
+            if name in unresolved_set:
+                out["pools"][name] = _respond_pool_of(name)
+            out["rooms"][name] = self._char_room_key(name)
+        return out
 
     async def _respond_dispatcher(self) -> None:
         """Own asyncio task feeding the respond lane. Spawns a respond turn
@@ -1333,18 +1516,36 @@ class AgentLoop:
                     self._release_respond_reservations()
                     await asyncio.sleep(1)
                     continue
-                on_demand_only = _is_paused()
-                if on_demand_only and (
-                        not any(p.get("on_demand") for p in self._respond_to.values())
-                        or _is_reaction_paused()):
+                # Loop side: the names and payloads this tick looks at. Thread
+                # side: everything about them that lives in storage — the
+                # pause switches, the chat route, eligibility, the LLM entry
+                # of names not resolved yet and the room each would lock. One
+                # hop per tick; the queue itself is only changed back here.
+                with self._state_lock:
+                    names = [n for n in self._respond_queue
+                             if n and n not in self._respond_active]
+                    payloads = {n: self._respond_to.get(n) for n in names}
+                    any_on_demand = any(p.get("on_demand")
+                                        for p in self._respond_to.values())
+                    unresolved = [n for n in names
+                                  if n not in self._respond_resolved]
+                on_demand = {n for n, p in payloads.items()
+                             if (p or {}).get("on_demand")}
+                tick = await _off_loop(
+                    self._read_respond_tick, names, unresolved, on_demand,
+                    any_on_demand)
+                if tick["state"] != "ok":
+                    # "paused" (nothing may answer) or "no_llm" (the chat
+                    # route is down): keep the queue, hold no pool.
                     self._release_respond_reservations()
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
-                if not _chat_llm_available():
-                    self._release_respond_reservations()
-                    await asyncio.sleep(_IDLE_SLEEP_SECONDS)
-                    continue
-                nxt = self._pop_next_respond(on_demand_only)
+                on_demand_only = tick["paused"]
+                verdicts = {n: {"eligible": ok, "payload": payloads.get(n),
+                                "pool": tick["pools"].get(n),
+                                "room": tick["rooms"].get(n)}
+                            for n, ok in tick["eligible"].items()}
+                nxt = self._pop_next_respond(on_demand_only, verdicts=verdicts)
                 if not nxt:
                     # Either nobody is startable or every entry is busy — the
                     # short nap is what makes the second case a wait for a
@@ -1352,6 +1553,12 @@ class AgentLoop:
                     await asyncio.sleep(0.5)
                     continue
                 name, payload, pool_key = nxt
+                room = (verdicts.get(name) or {}).get("room")
+                if room is not None:
+                    # Read in this tick's thread hop: the worker takes its
+                    # room lock in its FIRST step, as before, so two answers
+                    # started back to back lock their room in start order.
+                    self._respond_room_keys[name] = room
                 self._respond_pools[name] = pool_key
                 self._respond_active[name] = asyncio.create_task(
                     self._respond_worker(name, payload))
@@ -1378,7 +1585,10 @@ class AgentLoop:
         outcome = "respond"
         turn_info: Dict[str, Any] = {}
         try:
-            room_key = self._char_room_key(character_name)
+            room_key = self._respond_room_keys.pop(character_name, None)
+            if room_key is None:
+                room_key = await _off_loop(self._char_room_key,
+                                                   character_name)
             async with self._room_lock(room_key):
                 turn_info = await asyncio.wait_for(
                     self._run_respond_turn(character_name, respond),
@@ -1410,7 +1620,7 @@ class AgentLoop:
             # the timeout above. The TTL then really only has to survive a
             # dying process.
             self._release_turn_claim(character_name)
-            self._record_turn(character_name, started_at, outcome, turn_info)
+            await self._finish_turn(character_name, started_at, outcome, turn_info)
 
     # ------------------------------------------------------------------
     # Agent selection (weighted round-robin)
@@ -1437,25 +1647,202 @@ class AgentLoop:
         order (R5, plan-cache-lanes.md § 4): see ``_take_from_tickets``. They
         decide nothing else — tickets, cooldowns and eligibility keep saying
         WHO is due, and a bump stays a bump.
+
+        THREE STEPS, and only the middle one reads storage:
+        (1) ``_pick_snapshot`` takes the candidate names and the loop state
+        the reads need, on the caller's thread; (2) ``_read_pick_verdicts``
+        reads every per-name verdict (eligibility — including the lazy
+        ``wake_from_offmap`` — the rut rest and the R5 lane hint) and returns
+        them as a dict; (3) ``_pick_with_verdicts`` runs the selection on
+        loop state with those verdicts. This synchronous form does all three
+        in one go; the running loop uses ``_pick_next_agent_async``, which
+        does step (2) — and the round refill — in a worker thread, so no
+        profile, status or DB read ever runs on the event loop.
         """
+        snap = self._pick_snapshot()
+        verdicts = self._read_pick_verdicts(snap)
+        picked = self._pick_with_verdicts(verdicts, snap)
+        if picked:
+            return picked
+        # Refill round (``_build_round_tickets`` in one piece: the caller's
+        # thread does everything here).
+        tickets = _build_round_tickets()
+        more = self._read_pick_verdicts(
+            snap, [n for n in dict.fromkeys(tickets) if n not in verdicts])
+        return self._take_refilled_round(tickets, verdicts, more, snap)
+
+    async def _pick_next_agent_async(self) -> Optional[str]:
+        """``_pick_next_agent`` for the running loop: the same three steps,
+        with every storage read in a worker thread.
+
+        At most two thread hops per pick — the verdicts of the current
+        candidates, and (only when the current round has nobody due) the
+        refill together with the verdicts of the new round. The thread only
+        RETURNS values; every change to ``_tickets``, ``_bump_queue`` and
+        the other loop state is made here, on the loop.
+
+        A bump that arrives while the verdicts are being read has none: it
+        counts as "not due" for this pick, stays at the front of the bump
+        queue and is decided on the next pick. It is never lost, and since
+        the respond-turn check is made on the loop at selection time (step 3,
+        no await between it and the turn's start), a character never gets two
+        turns at once.
+        """
+        snap = self._pick_snapshot()
+        verdicts = await _off_loop(self._read_pick_verdicts, snap)
+        picked = self._pick_with_verdicts(verdicts, snap)
+        if picked:
+            return picked
+        weights, more = await _off_loop(
+            self._read_round_refill, snap, set(verdicts))
+        tickets = _tickets_from_weights(weights)
+        return self._take_refilled_round(tickets, verdicts, more, snap)
+
+    def _pick_snapshot(self) -> Dict[str, Any]:
+        """Step (1) of the pick: the candidate names and COPIES of the loop
+        state the verdict read needs. Taken on the loop; the thread that
+        reads the verdicts only ever sees these copies.
+
+        ``skip``: ticket names that cannot be due right now for a reason in
+        loop memory (mid-respond, cooldown, in-chat skip) — the rut rest and
+        the lane hint are not read for them, exactly as the old ``_due``
+        never reached those reads for them.
+        """
+        now = utc_now()
+        cooldown = timedelta(minutes=_get_per_char_cooldown_min())
+        last = dict(self._last_real_turn_at)
+        skip_until = dict(self._chat_skip_until)
+        active = set(self._respond_active)
+        with self._state_lock:
+            bumps = list(self._bump_queue)
+        tickets = list(dict.fromkeys(self._tickets))
+        return {"now": now, "cooldown": cooldown, "last": last,
+                "skip_until": skip_until, "active": active,
+                "bumps": bumps, "tickets": tickets}
+
+    @staticmethod
+    def _memory_blocked(name: str, snap: Dict[str, Any]) -> bool:
+        """Not due for a reason in the loop-state copies of ``snap``."""
+        if name in snap["active"]:
+            return True
+        last = snap["last"].get(name)
+        if last and (snap["now"] - last) < snap["cooldown"]:
+            return True
+        until = snap["skip_until"].get(name)
+        return bool(until and until > snap["now"])
+
+    def _read_pick_verdicts(self, snap: Dict[str, Any],
+                            names: Optional[Sequence[str]] = None
+                            ) -> Dict[str, Dict[str, Any]]:
+        """Step (2) of the pick — every storage read it needs, in ONE pass.
+
+        Runs in a worker thread when the loop calls it. Reads only the copies
+        in ``snap`` and storage, and RETURNS ``{name: verdict}``; it never
+        writes into loop state. A verdict holds:
+
+        * ``eligible`` — ``_is_agent_eligible`` (its lazy
+          ``wake_from_offmap`` included: the same write path with the same
+          locks as before, only on this thread now);
+        * ``rut`` — ``_on_rut_rest``, or None where it was not read (not a
+          ticket, not eligible, or blocked by loop memory — see
+          ``_pick_snapshot``);
+        * ``hot`` — the R5 lane hint (``_has_hot_lane``), read for the
+          names that may be due.
+
+        ``names``: the ticket names to read (default: the bumps and the
+        tickets of the snapshot). Bump-only names get their eligibility only —
+        a bump ignores cooldown and rut rest.
+        """
+        if names is None:
+            ticket_names = list(snap["tickets"])
+            bump_only = [n for n in snap["bumps"] if n not in set(ticket_names)]
+        else:
+            ticket_names, bump_only = list(names), []
+        out: Dict[str, Dict[str, Any]] = {}
+        for name in bump_only:
+            if name not in out:
+                out[name] = {"eligible": bool(_is_agent_eligible(name)),
+                             "rut": None, "hot": False}
+        for name in ticket_names:
+            if name in out:
+                continue
+            verdict: Dict[str, Any] = {"eligible": bool(_is_agent_eligible(name)),
+                                       "rut": None, "hot": False}
+            if verdict["eligible"] and not self._memory_blocked(name, snap):
+                verdict["rut"] = bool(self._on_rut_rest(
+                    name, snap["now"], last=snap["last"].get(name)))
+                if not verdict["rut"]:
+                    verdict["hot"] = bool(_has_hot_lane(name))
+            out[name] = verdict
+        return out
+
+    def _read_round_refill(self, snap: Dict[str, Any], known: set
+                           ) -> tuple:
+        """The refill half of step (2), read side: the round's weights
+        (``_read_round_weights`` — it reads every character) plus the
+        verdicts of every weighted name not read yet. Returns
+        ``(weights, verdicts)``; the loop turns the weights into tickets
+        (``_tickets_from_weights`` owns ``_ticket_credit``) and installs
+        them. Verdicts are read for every weighted name, a superset of the
+        names that end up with a ticket."""
+        weights = _read_round_weights()
+        fresh = [n for n in (weights or {}) if n not in known]
+        return weights, self._read_pick_verdicts(snap, fresh)
+
+    def _take_refilled_round(self, tickets: List[str],
+                             verdicts: Dict[str, Dict[str, Any]],
+                             more: Dict[str, Dict[str, Any]],
+                             snap: Dict[str, Any]) -> Optional[str]:
+        """Step (3) after a refill: install the new round and pick from it."""
+        self._tickets = list(tickets)
+        if not self._tickets:
+            return None
+        merged = dict(verdicts)
+        merged.update(more)
+        return self._take_from_tickets(self._due_from(merged, snap),
+                                       is_hot=lambda n: bool(
+                                           (merged.get(n) or {}).get("hot")))
+
+    def _pick_with_verdicts(self, verdicts: Dict[str, Dict[str, Any]],
+                            snap: Dict[str, Any]) -> Optional[str]:
+        """Step (3) of the pick: bumps first, then the current round — the
+        selection logic of old, on loop state, with the verdicts read in
+        step (2). None means: nobody in the current round is due, refill."""
         # 1) Bumped agents come first — cooldown ignored (bump = priority).
-        #    A bumped char who is mid-respond stays queued for later.
+        #    A bumped char who is mid-respond stays queued for later, and so
+        #    does one that arrived after the verdicts were read: it is decided
+        #    on the next pick, never dropped unread.
         deferred: List[str] = []
         picked: Optional[str] = None
-        while self._bump_queue and picked is None:
-            candidate = self._bump_queue.pop(0)
-            if candidate in self._respond_active:
-                deferred.append(candidate)
-                continue
-            if _is_agent_eligible(candidate):
-                picked = candidate
-        if deferred:
-            self._bump_queue[:0] = deferred
+        with self._state_lock:
+            while self._bump_queue and picked is None:
+                candidate = self._bump_queue.pop(0)
+                if candidate in self._respond_active:
+                    deferred.append(candidate)
+                    continue
+                verdict = verdicts.get(candidate)
+                if verdict is None:
+                    deferred.append(candidate)
+                    continue
+                if verdict["eligible"]:
+                    picked = candidate
+            if deferred:
+                self._bump_queue[:0] = deferred
         if picked:
             return picked
 
-        cooldown = timedelta(minutes=_get_per_char_cooldown_min())
-        now = utc_now()
+        # 2) Current round.
+        return self._take_from_tickets(
+            self._due_from(verdicts, snap),
+            is_hot=lambda n: bool((verdicts.get(n) or {}).get("hot")))
+
+    def _due_from(self, verdicts: Dict[str, Dict[str, Any]],
+                  snap: Dict[str, Any]) -> Callable[[str], bool]:
+        """The ``is_due`` predicate of the round: the read verdicts plus the
+        LIVE loop state (respond turns, cooldowns and in-chat skips may have
+        changed while the verdicts were read — the live state wins)."""
+        now = snap["now"]
+        cooldown = snap["cooldown"]
 
         def _on_cooldown(name: str) -> bool:
             last = self._last_real_turn_at.get(name)
@@ -1478,36 +1865,46 @@ class AgentLoop:
             at all — unchanged, and asked before R5 ever sees a name."""
             if name in self._respond_active:
                 return False   # mid-respond — never two turns at once
-            if not _is_agent_eligible(name):
+            verdict = verdicts.get(name)
+            if verdict is None or not verdict["eligible"]:
                 return False
             if _on_cooldown(name):
                 return False
             if _in_chat_skip(name):
                 return False
-            if self._on_rut_rest(name, now):
+            if verdict["rut"] is None:
+                # Not read: loop memory blocked it when the verdicts were
+                # taken. Not due this time; the next pick reads it again.
+                return False
+            if verdict["rut"]:
+                self._note_rut_rest(name)
                 return False
             return True
 
-        # 2) Current round.
-        candidate = self._take_from_tickets(_due)
-        if candidate:
-            return candidate
+        return _due
 
-        # 3) Refill round.
-        self._tickets = _build_round_tickets()
-        if not self._tickets:
-            return None
-        return self._take_from_tickets(_due)
+    def _note_rut_rest(self, name: str) -> None:
+        """Log an applied rut rest once per completed turn (loop side)."""
+        last = self._last_real_turn_at.get(name)
+        if self._rut_rest_logged.get(name) != last:
+            self._rut_rest_logged[name] = last
+            from app.core import config
+            minutes = max(0, int(config.get("thoughts.rut_rest_minutes", 20)))
+            logger.info("Thought rut rest applied: %s (%d SYSTEM minutes)", name, minutes)
 
-    def _on_rut_rest(self, name: str, now: datetime) -> bool:
-        """Defer regular turns from the last completed turn, never from polling."""
+    def _on_rut_rest(self, name: str, now: datetime, last: Any = None) -> bool:
+        """Defer regular turns from the last completed turn, never from polling.
+
+        Read-only (the pick calls it in a worker thread): ``last`` is the
+        character's last real turn as the pick's snapshot saw it; the
+        once-per-turn log line is written on the loop (``_note_rut_rest``).
+        """
         from app.core import config
         from app.core.thought_rut import rut_hint, rut_here
         from app.core.thought_context import _build_presence
         from app.models.character import get_character_profile
 
         minutes = max(0, int(config.get("thoughts.rut_rest_minutes", 20)))
-        last = self._last_real_turn_at.get(name)
         if not minutes or not last or not rut_hint(name):
             return False
         if now - last >= timedelta(minutes=minutes):
@@ -1519,13 +1916,12 @@ class AgentLoop:
             return False
         if not _build_presence(name, location, room)[2]:
             return False
-        if self._rut_rest_logged.get(name) != last:
-            self._rut_rest_logged[name] = last
-            logger.info("Thought rut rest applied: %s (%d SYSTEM minutes)", name, minutes)
         return True
 
     def _take_from_tickets(self,
-                           is_due: Callable[[str], bool]) -> Optional[str]:
+                           is_due: Callable[[str], bool],
+                           is_hot: Optional[Callable[[str], bool]] = None
+                           ) -> Optional[str]:
         """One turn out of the current round — R5 decides the order.
 
         The tickets are walked in their (shuffled) order, and the walk spends
@@ -1584,7 +1980,8 @@ class AgentLoop:
             index += 1
         if not due:
             return None
-        picked = next((name for name in due if _has_hot_lane(name)), due[0])
+        hot = is_hot or _has_hot_lane
+        picked = next((name for name in due if hot(name)), due[0])
         self._tickets.remove(picked)
         return picked
 
@@ -1607,50 +2004,10 @@ class AgentLoop:
         if not content.strip():
             return {"preview": "respond: empty", "tools": [], "intents": []}
 
-        # Wake on being addressed (like the old chat path): clear the sleep
-        # flag, clear the activity, pull back from off-map. Afterwards the
-        # character is awake — answers normally and rejoins the autonomous loop.
-        try:
-            from app.models.character import (
-                is_character_sleeping, set_is_sleeping, wake_from_offmap)
-            if is_character_sleeping(character_name):
-                set_is_sleeping(character_name, False)
-                try:
-                    wake_from_offmap(character_name)
-                except Exception:
-                    pass
-                logger.info("respond-turn: %s woken by being addressed", character_name)
-        except Exception as e:
-            logger.debug("respond-turn wake failed for %s: %s", character_name, e)
-
-        # The responder's room perception stream as conversation context: what
-        # they HEARD in the room (multi-party) instead of the old 1:1 history.
-        # That way an addressed third party knows what was just said and
-        # answers coherently. An empty location is not "no context" but the
-        # wilderness stream (E6) — a character answering on the road needs the
-        # words it just heard exactly as much as one in a tavern.
-        _loc = _room = ""
-        room_stream = []
-        try:
-            from app.models import perception_store
-            from app.models.character import (get_character_current_location,
-                                               get_character_current_room)
-            _loc = get_character_current_location(character_name) or ""
-            _room = get_character_current_room(character_name) or ""
-            room_stream = perception_store.get_character_room_stream(
-                character_name, _loc, _room, limit=40)
-            # B (plan-follow-room-conversation-bug): direct follow → prepend
-            # the previous room round with the conversation partner so the
-            # conversation does not break on a room/location change.
-            if speaker:
-                carried = perception_store.get_followed_conversation_tail(
-                    character_name, speaker, _loc, _room, limit=20)
-                if carried:
-                    _seen = {r.get("utterance_id") for r in room_stream}
-                    carried = [c for c in carried if c.get("utterance_id") not in _seen]
-                    room_stream = carried + room_stream
-        except Exception as e:
-            logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
+        # Wake + perception stream: storage reads and writes, in one thread
+        # hop (_respond_prelude) — never on the event loop.
+        _loc, _room, room_stream = await _off_loop(
+            _respond_prelude, character_name, speaker)
 
         reply = ""
         # Token usage of the reply call, prompt-cache hits included — rides on
@@ -1690,23 +2047,25 @@ class AgentLoop:
             _room = reply_receipt.source.room_id
             if not respond.get("cascade", True):
                 clipped = reply[:300] + "…" if len(reply) > 300 else reply
-                self.add_hint(
-                    speaker,
-                    f'{character_name} answered what you said to them: "{clipped}"')
+                # add_hint's eligibility read, done in a thread; the hint
+                # itself is stored here, on the loop.
+                if speaker and await _off_loop(_is_agent_eligible, speaker):
+                    self._append_hint(
+                        speaker,
+                        f'{character_name} answered what you said to them: "{clipped}"')
             else:
                 # Cascade: this AI utterance consumes a hop (decay) and gives the
                 # remaining characters present a Chime opportunity — until the
                 # Backstop kicks in. This is how emergent NPC↔NPC conversations
                 # arise and ebb away.
+                # Reads the roster, eligibility, relationships and (outdoors)
+                # the speaker's point: in the agent loop's pool, with the
+                # queue and energy changes under the state lock.
                 try:
-                    key = self._room_key(_loc, _room, character_name)
-                    self._carry_outdoor_energy(character_name, key)
-                    self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
-                    self.dispatch_room_reactions(
-                        speaker=character_name, content=reply, volume=_reply_vol,
-                        location_id=_loc, room_id=_room,
-                        addressees=[speaker] if speaker else [], is_avatar=False,
-                        utterance_id=int(reply_receipt.source.event_id.removeprefix("room:")))
+                    await _off_loop(
+                        self._cascade_after_reply, character_name, reply,
+                        _reply_vol, _loc, _room, speaker,
+                        int(reply_receipt.source.event_id.removeprefix("room:")))
                 except Exception as e:
                     logger.debug("respond-turn %s: cascade dispatch failed: %s",
                                  character_name, e)
@@ -1719,6 +2078,33 @@ class AgentLoop:
                 # Full reply for the multi-line preview; the tool phase runs
                 # inside run_chat_turn and is not surfaced here.
                 "rp_response": reply or ""}
+
+    def _cascade_after_reply(self, character_name: str, reply: str, volume: str,
+                             location_id: str, room_id: str, speaker: str,
+                             utterance_id: int) -> None:
+        """A published AI reply consumes a hop of the room's energy and offers
+        the others present a reaction (``dispatch_room_reactions``). Thread-
+        safe: storage reads happen outside the state lock, every change to
+        the energy maps and queues inside it."""
+        key = self._room_key(location_id, room_id, character_name)
+        self._carry_outdoor_energy(character_name, key)
+        with self._state_lock:
+            self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
+        self.dispatch_room_reactions(
+            speaker=character_name, content=reply, volume=volume,
+            location_id=location_id, room_id=room_id,
+            addressees=[speaker] if speaker else [], is_avatar=False,
+            utterance_id=utterance_id)
+
+    async def dispatch_room_reactions_async(self, **kwargs: Any) -> Dict[str, List[str]]:
+        """``dispatch_room_reactions`` for a caller ON the event loop (the
+        ``/play/say`` route): the same call, run in the agent loop's read
+        pool. Its storage reads (roster, eligibility, relationships, the
+        location) leave the loop; its changes to the queues and the room
+        energy are made under the state lock, as for every thread caller.
+        Everything it bumps is queued when the await returns, so
+        ``wait_room_responds_settled`` right after it still sees it all."""
+        return await _off_loop(self.dispatch_room_reactions, **kwargs)
 
     def _avatar_holds_floor(self, key: str, in_earshot: Sequence[str], *,
                             start_clock: bool) -> bool:
@@ -1743,11 +2129,11 @@ class AgentLoop:
             return False
         from app.core.timeutils import utc_now as _un
         now_ts = _un().timestamp()
-        idle_since = self._room_avatar_idle.get(key)
-        if idle_since is None:
-            idle_since = now_ts
-            if start_clock:
-                self._room_avatar_idle[key] = idle_since
+        if start_clock:
+            with self._state_lock:
+                idle_since = self._room_avatar_idle.setdefault(key, now_ts)
+        else:
+            idle_since = self._room_avatar_idle.get(key, now_ts)
         try:
             from app.core import config as _cfg
             timeout_min = float(_cfg.get("chat.avatar_floor_timeout_minutes", 8) or 8)
@@ -1865,9 +2251,15 @@ class AgentLoop:
                 # Chat-answer bumps do NOT pass through here anymore — they
                 # run in the respond lane; the room lock below keeps this
                 # serial-loop chime serialized with the lane's answers.
-                _chime = self._maybe_active_conversation_chime(character_name)
+                # Read in a thread: it reads storage, and of the loop state
+                # only reads (room energy, the avatar-floor clock — it never
+                # starts that clock), so it writes nothing of the loop's.
+                _chime = await _off_loop(
+                    self._maybe_active_conversation_chime, character_name)
                 if _chime:
-                    async with self._room_lock(self._char_room_key(character_name)):
+                    _key = await _off_loop(self._char_room_key,
+                                                   character_name)
+                    async with self._room_lock(_key):
                         turn_info = await self._run_respond_turn(character_name, _chime)
                     outcome = "respond"
                     return
@@ -1879,7 +2271,8 @@ class AgentLoop:
 
                 # In-chat gating: HOT (<10min) skip, WARM (10-30min) use the
                 # trimmed in-chat template, otherwise regular thought.
-                chat_age_min = _minutes_since_last_chat_with_avatar(character_name)
+                chat_age_min = await _off_loop(
+                    _minutes_since_last_chat_with_avatar, character_name)
                 if chat_age_min is not None and chat_age_min < _IN_CHAT_HOT_MIN:
                     # Set the per-char cooldown: while the chat is still HOT,
                     # eligible again only after the missing remainder.
@@ -1897,36 +2290,14 @@ class AgentLoop:
                                  "tools": [], "intents": []}
                     return
 
-                # Activity stat tick: the RUNNING activity influences status
-                # values over time (exercise drains, resting restores) —
-                # cheap interval gate here, LLM round in a background thread
-                # (plan-activity-stat-effects.md component 2).
-                try:
-                    from app.core.stat_effects import maybe_activity_tick
-                    maybe_activity_tick(character_name)
-                except Exception as e:
-                    logger.debug("activity stat tick failed for %s: %s",
-                                 character_name, e)
+                # Activity stat tick + discovery check (_pre_thought_reads):
+                # storage work, one thread hop.
+                await _off_loop(_pre_thought_reads, character_name)
 
                 template_name = "chat/agent_thought.md"
                 if (chat_age_min is not None
                         and _IN_CHAT_HOT_MIN <= chat_age_min < _IN_CHAT_WARM_MIN):
                     template_name = "chat/agent_thought_in_chat.md"
-
-                # Discovery check: before the thought build, so the discovered
-                # place shows up in the list_locations_for_character context
-                # right away and the character can think about it in this tick.
-                # Live again since E6: the rule rolls over what is within
-                # SIGHT RANGE in metres (it walked grid neighbours before, and
-                # the seamless world has none). This is the condition-gated,
-                # announced variant — the silent deterministic pass runs in
-                # the travel ticker (``core/discovery.py``).
-                try:
-                    from app.models.rules import check_discover_rules
-                    check_discover_rules(character_name)
-                except Exception as _de:
-                    logger.debug("Discover check for %s failed: %s",
-                                 character_name, _de)
 
                 # Perception payload (e.g. announcement) overrides the
                 # template before render. Pop'd here so the choice stays
@@ -1961,15 +2332,17 @@ class AgentLoop:
                         and not str(ctx.get("inbox_block") or "").strip()):
                     from app.core import decision, decision_points
                     _dkey = f"{character_name}:{uuid.uuid4().hex[:8]}"
+                    _in_chat = template_name == "chat/agent_thought_in_chat.md"
                     _dec = await asyncio.to_thread(
-                        decision.decide, decision_points.THOUGHT_SKIP,
-                        decision_points.thought_state(
-                            ctx, in_chat=(template_name == "chat/agent_thought_in_chat.md")),
-                        decision_points.thought_questions(character_name),
-                        key=_dkey)
+                        lambda: decision.decide(
+                            decision_points.THOUGHT_SKIP,
+                            decision_points.thought_state(ctx, in_chat=_in_chat),
+                            decision_points.thought_questions(character_name),
+                            key=_dkey))
                     _turn_ans = _dec.answers.get("turn") if _dec else None
                     if _turn_ans is not None and _turn_ans.value == "idle":
-                        decision.mark_taken(decision_points.THOUGHT_SKIP, _dkey)
+                        await _off_loop(
+                            decision.mark_taken, decision_points.THOUGHT_SKIP, _dkey)
                         outcome = "decision_skip"
                         turn_info = {"preview": f"decision skip ({_turn_ans.confidence:.2f})",
                                      "tools": [], "intents": []}
@@ -1992,7 +2365,8 @@ class AgentLoop:
                             outcome = "ok_skip"
                     if _dkey and outcome in ("ok", "ok_skip"):
                         from app.core import decision, decision_points
-                        decision.record_outcome(
+                        await _off_loop(
+                            decision.record_outcome,
                             decision_points.THOUGHT_SKIP, _dkey,
                             {"turn": "idle" if outcome == "ok_skip" else "act"})
                 except asyncio.TimeoutError:
@@ -2003,7 +2377,7 @@ class AgentLoop:
                 # Mark inbox as processed regardless of outcome — even if the
                 # agent ignored unread messages, we don't want them to pile
                 # up indefinitely on every future turn.
-                mark_thought_processed(character_name)
+                await _off_loop(mark_thought_processed, character_name)
 
             except Exception as e:
                 # Log transient network errors from the LLM provider (stream
@@ -2020,19 +2394,35 @@ class AgentLoop:
                                  character_name, e, exc_info=True)
                     outcome = f"error: {type(e).__name__}"
             finally:
-                self._record_turn(character_name, started_at, outcome, turn_info)
                 self._current_agent = ""
+                await self._finish_turn(character_name, started_at, outcome, turn_info)
+
+    async def _finish_turn(self, name: str, started_at: datetime, outcome: str,
+                           turn_info: Optional[Dict[str, Any]] = None) -> None:
+        """``_record_turn`` for the loop's coroutines: the game clock is read
+        in the read pool afterwards (a cold clock cache reads the world DB)
+        and filled into the entry. A task that is being cancelled keeps
+        game_ts ''."""
+        # Recorded FIRST, in the same step as the caller's other bookkeeping
+        # (a respond turn drops out of _respond_active right before this): the
+        # cooldown must be set before the pick can look at the name again.
+        entry = self._record_turn(name, started_at, outcome, turn_info, game_ts="")
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            return
+        try:
+            entry["game_ts"] = await _off_loop(_game_ts_now)
+        except Exception:
+            pass
 
     def _record_turn(self, name: str, started_at: datetime, outcome: str,
-                     turn_info: Optional[Dict[str, Any]] = None) -> None:
+                     turn_info: Optional[Dict[str, Any]] = None,
+                     game_ts: Optional[str] = None) -> Dict[str, Any]:
         info = turn_info or {}
         # Game time at turn end — same format as thoughts.game_ts (canonical
-        # GameTime string); '' when the game clock is unavailable.
-        try:
-            from app.core.timeutils import game_time
-            _game_ts = game_time().canonical()
-        except Exception:
-            _game_ts = ""
+        # GameTime string); '' when the game clock is unavailable. Read here
+        # only when the caller did not bring it (``_finish_turn`` does).
+        _game_ts = _game_ts_now() if game_ts is None else game_ts
         self._recent.append({
             "agent": name,
             "started_at": started_at.isoformat(),
@@ -2062,11 +2452,108 @@ class AgentLoop:
                    or outcome in ("respond", "decision_skip"))
         if is_real:
             self._last_real_turn_at[name] = utc_now()
+        return self._recent[-1]
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _respond_prelude(character_name: str, speaker: str) -> tuple:
+    """Storage half of a respond turn's start, run in a worker thread:
+    the wake and the perception stream. Returns ``(loc, room, room_stream)``.
+
+    Wake on being addressed (like the old chat path): clear the sleep flag,
+    clear the activity, pull back from off-map. Afterwards the character is
+    awake — answers normally and rejoins the autonomous loop.
+
+    The responder's room perception stream as conversation context: what
+    they HEARD in the room (multi-party) instead of the old 1:1 history. That
+    way an addressed third party knows what was just said and answers
+    coherently. An empty location is not "no context" but the wilderness
+    stream (E6) — a character answering on the road needs the words it just
+    heard exactly as much as one in a tavern.
+    """
+    try:
+        from app.models.character import (
+            is_character_sleeping, set_is_sleeping, wake_from_offmap)
+        if is_character_sleeping(character_name):
+            set_is_sleeping(character_name, False)
+            try:
+                wake_from_offmap(character_name)
+            except Exception:
+                pass
+            logger.info("respond-turn: %s woken by being addressed", character_name)
+    except Exception as e:
+        logger.debug("respond-turn wake failed for %s: %s", character_name, e)
+
+    _loc = _room = ""
+    room_stream: List[Dict[str, Any]] = []
+    try:
+        from app.models import perception_store
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        _loc = get_character_current_location(character_name) or ""
+        _room = get_character_current_room(character_name) or ""
+        room_stream = perception_store.get_character_room_stream(
+            character_name, _loc, _room, limit=40)
+        # B (plan-follow-room-conversation-bug): direct follow → prepend the
+        # previous room round with the conversation partner so the
+        # conversation does not break on a room/location change.
+        if speaker:
+            carried = perception_store.get_followed_conversation_tail(
+                character_name, speaker, _loc, _room, limit=20)
+            if carried:
+                _seen = {r.get("utterance_id") for r in room_stream}
+                carried = [c for c in carried if c.get("utterance_id") not in _seen]
+                room_stream = carried + room_stream
+    except Exception as e:
+        logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
+    return _loc, _room, room_stream
+
+
+def _pre_thought_reads(character_name: str) -> None:
+    """Storage work at the start of a thought turn, in one thread hop:
+    the activity stat tick and the discovery check."""
+    # Activity stat tick: the RUNNING activity influences status values over
+    # time (exercise drains, resting restores) — cheap interval gate here,
+    # LLM round in a background thread (plan-activity-stat-effects.md
+    # component 2).
+    try:
+        from app.core.stat_effects import maybe_activity_tick
+        maybe_activity_tick(character_name)
+    except Exception as e:
+        logger.debug("activity stat tick failed for %s: %s", character_name, e)
+    # Discovery check: before the thought build, so the discovered place shows
+    # up in the list_locations_for_character context right away and the
+    # character can think about it in this tick. Live again since E6: the
+    # rule rolls over what is within SIGHT RANGE in metres (it walked grid
+    # neighbours before, and the seamless world has none). This is the
+    # condition-gated, announced variant — the silent deterministic pass runs
+    # in the travel ticker (``core/discovery.py``).
+    try:
+        from app.models.rules import check_discover_rules
+        check_discover_rules(character_name)
+    except Exception as _de:
+        logger.debug("Discover check for %s failed: %s", character_name, _de)
+
+
+def _game_ts_now() -> str:
+    """The canonical game time, '' when the game clock is unavailable."""
+    try:
+        from app.core.timeutils import game_time
+        return game_time().canonical()
+    except Exception:
+        return ""
+
+
+def _loop_gates() -> tuple:
+    """``(paused, thought_llm_available)`` — the two gates at the top of every
+    loop tick, read together in ONE thread hop. The LLM probe is skipped
+    while paused, as the loop never asked it then."""
+    paused = _is_paused()
+    return paused, (False if paused else _thought_llm_available())
+
 
 def _is_paused() -> bool:
     """Pause autonomous turns and ordinary room reactions."""
@@ -2325,19 +2812,28 @@ def _build_round_tickets() -> List[str]:
     weights; ineligible characters lose their credit.
     The list is shuffled so order within a round varies, but the count
     guarantees High runs 3x as often as Low at equal modifier factors.
+
+    Two halves: ``_read_round_weights`` reads storage (the running loop
+    calls it in its read pool), ``_tickets_from_weights`` turns weights into
+    tickets and owns ``_ticket_credit`` (the loop calls it on the loop).
     """
+    return _tickets_from_weights(_read_round_weights())
+
+
+def _read_round_weights() -> Optional[Dict[str, float]]:
+    """Storage half of a round: ``{eligible name: importance x factor}``,
+    None when the character list cannot be read. Read-only apart from the
+    lazy ``wake_from_offmap`` inside ``_is_agent_eligible``."""
     try:
         from app.models.character import (
             list_available_characters, get_character_config)
     except Exception as e:
         logger.error("AgentLoop: cannot list characters: %s", e)
-        return []
+        return None
 
     from app.core.modifiers import factor, modify_rules
-    import math
     rules = modify_rules()  # one load for the whole round
-    tickets: List[str] = []
-    eligible = set()
+    weights: Dict[str, float] = {}
     for name in list_available_characters():
         if not _is_agent_eligible(name):
             continue
@@ -2351,13 +2847,25 @@ def _build_round_tickets() -> List[str]:
             weight = max(_MIN_IMPORTANCE, min(_MAX_IMPORTANCE, weight))
         except Exception:
             weight = 1
-        eligible.add(name)
-        credit = _ticket_credit.get(name, 0.0) + weight * factor(name, "thought_frequency", rules=rules)
+        weights[name] = weight * factor(name, "thought_frequency", rules=rules)
+    return weights
+
+
+def _tickets_from_weights(weights: Optional[Dict[str, float]]) -> List[str]:
+    """In-memory half of a round: credit, tickets, shuffle. Mutates the
+    module-level ``_ticket_credit`` — called on the loop (or by a
+    synchronous caller), never from the read pool."""
+    import math
+    if weights is None:
+        return []
+    tickets: List[str] = []
+    for name, weight in weights.items():
+        credit = _ticket_credit.get(name, 0.0) + weight
         count = math.floor(credit + 1e-9)
         _ticket_credit[name] = max(0.0, credit - count)
         tickets.extend([name] * count)
 
-    for name in _ticket_credit.keys() - eligible:
+    for name in _ticket_credit.keys() - set(weights):
         del _ticket_credit[name]
 
     random.shuffle(tickets)

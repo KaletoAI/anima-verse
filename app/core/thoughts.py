@@ -64,6 +64,24 @@ def _presence_context(character_name: str, system_prompt: str) -> Dict[str, Any]
 _thought_runner: Optional["ThoughtRunner"] = None
 
 
+def _thought_setup_reads(character_name: str, want_sources: bool) -> tuple:
+    """The opening storage reads of a thought turn, in ONE worker-thread hop:
+    profile, config, unread stat sources, the active avatar and the place
+    name. Returns ``(profile, config, sources, user_name, location_name)``."""
+    from app.core.agent_inbox import load_unread_stat_sources
+    from app.models.account import get_active_character
+    from app.models.character import get_character_config, get_character_profile
+    from app.models.world import get_location_name
+    profile = get_character_profile(character_name)
+    config = get_character_config(character_name)
+    sources = list(load_unread_stat_sources(character_name)) if want_sources else []
+    # Use the active avatar identity, or empty: no pseudo-character sentinel.
+    user_name = (get_active_character() or "").strip()
+    location_id = profile.get("current_location", "")
+    location_name = get_location_name(location_id) if location_id else "Unbekannt"
+    return profile, config, sources, user_name, location_name
+
+
 def _char_lang(character_name: str) -> str:
     """The character's own language — season names in a world date are
     localized data fields, so they follow it."""
@@ -290,9 +308,7 @@ class ThoughtRunner:
         """
         from app.models.character import (
             get_character_profile,
-            get_character_config,
             get_character_appearance)
-        from app.models.world import get_location_name
         from app.models.character import get_character_current_location
         from app.core.dependencies import get_skill_manager
         from app.core.llm_router import resolve_llm, resolve_llm_async
@@ -300,16 +316,13 @@ class ThoughtRunner:
                                         ExtractionEvent, ToolResultEvent)
         from app.core.tool_formats import build_tool_instruction, get_format_for_model
 
-        profile = await asyncio.to_thread(get_character_profile, character_name)
-        config = get_character_config(character_name)
-        from app.core.agent_inbox import load_unread_stat_sources
         stat_collector = get_stat_source_collector()
+        (profile, config, _stat_sources, user_name,
+         location_name) = await asyncio.to_thread(
+            _thought_setup_reads, character_name, stat_collector is not None)
         if stat_collector is not None:
-            for stat_source in load_unread_stat_sources(character_name):
+            for stat_source in _stat_sources:
                 stat_collector.add(stat_source)
-        from app.models.account import get_active_character
-        # Use the active avatar identity, or empty: no pseudo-character sentinel.
-        user_name = (get_active_character() or "").strip()
 
         # Turn summary for the agent loop / admin panel.
         # tools = list of tool-name strings actually invoked (stream + narrative).
@@ -323,7 +336,6 @@ class ThoughtRunner:
         # Collect character data
         task = (profile.get("character_task", "") or "").strip()
         location_id = profile.get("current_location", "")
-        location_name = get_location_name(location_id) if location_id else "Unbekannt"
         activity = ("Sleeping" if profile.get("is_sleeping")
                     else (profile.get("pose_flavor")
                           or profile.get("pose_key") or "")) or "Keine"
@@ -343,9 +355,11 @@ class ThoughtRunner:
             _turn_info["status"] = "no_llm"
             return _turn_info
 
-        # Load skills and determine the mode.
+        # Load skills and determine the mode (the skill list reads the
+        # character's config and skill directory — off the event loop).
         sm = get_skill_manager()
-        agent_tools = sm.get_agent_tools(character_name, turn="thought")
+        agent_tools = await asyncio.to_thread(
+            sm.get_agent_tools, character_name, turn="thought")
 
         # Observer turns restrict tools to prevent role confusion.
         if tool_whitelist:
@@ -358,9 +372,12 @@ class ThoughtRunner:
         # The tool instance books a quota slot only in fast mode, where it
         # narrates the turn for sure; otherwise it may never be sent (single
         # mode), and a send without a reservation claims a free slot then.
-        _tool_inst = (resolve_llm("intent", agent_name=character_name, reserve=bool(fast))
-                      if agent_tools else None)
-        tool_llm = _tool_inst.create_llm() if _tool_inst else None
+        def _tool_llm_reads():
+            _inst = (resolve_llm("intent", agent_name=character_name, reserve=bool(fast))
+                     if agent_tools else None)
+            return _inst, (_inst.create_llm() if _inst else None)
+
+        _tool_inst, tool_llm = await asyncio.to_thread(_tool_llm_reads)
 
         # Fast mode: the tool LLM takes over the whole thought (no dual pass).
         # Mode is forced to "single" so the LLM writes the tool calls itself
@@ -384,7 +401,9 @@ class ThoughtRunner:
         _anti_rep: Dict[str, Any] = {}
         _narrator_inst = _tool_inst if _is_fast else _thought_inst
         if _narrator_inst:
-            _anti_rep = thought_anti_repetition_overrides(
+            # Reads the thought journal: off the event loop.
+            _anti_rep = await asyncio.to_thread(
+                thought_anti_repetition_overrides,
                 character_name, float(getattr(_narrator_inst, "temperature", 0.7)),
                 getattr(_narrator_inst, "repetition_penalty", None))
             if _anti_rep:
@@ -424,8 +443,10 @@ class ThoughtRunner:
         available_tool_names = [t.name for t in agent_tools] if agent_tools else []
         tools_hint = ""
         if available_tool_names and mode != "rp_first":
-            appearance = get_character_appearance(character_name)
-            usage = sm.get_agent_usage_instructions(character_name, tool_format, turn="thought")
+            appearance, usage = await asyncio.to_thread(
+                lambda: (get_character_appearance(character_name),
+                         sm.get_agent_usage_instructions(
+                             character_name, tool_format, turn="thought")))
             tools_hint = (
                 f"\n"
                 + build_tool_instruction(
@@ -464,7 +485,8 @@ class ThoughtRunner:
         _arc_context_loaded = False
         try:
             from app.core.story_engine import get_story_engine
-            arc_context = get_story_engine().inject_arc_context(character_name) or ""
+            arc_context = await asyncio.to_thread(
+                lambda: get_story_engine().inject_arc_context(character_name) or "")
             _arc_context_loaded = True
         except Exception:
             arc_context = ""
@@ -773,7 +795,8 @@ class ThoughtRunner:
             if has_private_prose:
                 if stat_collector is not None:
                     await asyncio.to_thread(stat_collector.wait_for_source_work)
-                stat_context = extraction_context(
+                stat_context = await asyncio.to_thread(
+                    extraction_context,
                     character_name, stat_collector.snapshot() if stat_collector else (),
                     narrative=private_prose,
                     self_event_id=stat_collector.self_event_id if stat_collector else None,
@@ -814,13 +837,14 @@ class ThoughtRunner:
         except Exception as pp_err:
             logger.error("%s: post_process_response failed: %s", character_name, pp_err)
 
-        # Count tool executions as progress for unified intents.
-        try:
+        # Count tool executions as progress for unified intents (DB writes:
+        # off the event loop).
+        def _track_progress():
             from app.models.intents import auto_track_progress, progress_type_for_tool
 
             # Count both streamed and narrated tool calls.
             for _label, _counts in (("", _tool_exec_counts),
-                                    (" (narrativ)", _narrative_exec_counts)):
+                                    (" (narrative)", _narrative_exec_counts)):
                 for _tn, _tc in _counts.items():
                     _tool_type = progress_type_for_tool(_tn)
                     if not _tool_type:
@@ -830,6 +854,8 @@ class ThoughtRunner:
                         logger.info("%s: Intent auto-progress%s: %s +%d (%s)%s",
                                     character_name, _label, _atp.get("title"), _tc, _tn,
                                     " -> COMPLETED" if _atp.get("completed") else "")
+        try:
+            await asyncio.to_thread(_track_progress)
         except Exception as _ate:
             logger.debug("Intent auto-progress error: %s", _ate)
 
@@ -866,6 +892,32 @@ class ThoughtRunner:
         # Store cognition in the private journal, never in chat history.
         # SKIP and suppress_notification turns have already returned above.
         if full_response and len(full_response) > 10:
+            # Storage reads + the journal write: one thread hop.
+            await asyncio.to_thread(
+                self._journal_thought, character_name, full_response,
+                context_hint, profile, location_id)
+
+        # No telepathic cross-memory: characters explicitly contact each other
+        # through speech or messaging tools.
+
+        # Advance story arcs after a participant has interacted.
+        if arc_context and (full_response or had_notification_tool):
+            await asyncio.to_thread(
+                self._advance_arcs, character_name,
+                (full_response or notification_tool_content)[:300])
+
+        # [INTENT:…] markers of a thought turn are applied ONCE, by
+        # chat_engine.post_process_response above (feature-gated there). A
+        # second parse here used to create every plan twice.
+
+        return _turn_info
+
+    @staticmethod
+    def _journal_thought(character_name: str, full_response: str, context_hint: str,
+                         profile: Dict[str, Any], location_id: str) -> None:
+        """Store cognition in the private journal, never in chat history.
+        Runs in a worker thread (presence reads + the journal write)."""
+        if full_response and len(full_response) > 10:
             try:
                 from app.models.thought_store import add_thought
                 from app.routes.chat import _strip_tool_hallucinations
@@ -900,29 +952,22 @@ class ThoughtRunner:
                                 location_id=location_id, room_id=_room,
                                 present=_present, nearby=_nearby)
             except Exception as _je:
-                logger.debug("Thought-Journal Fehler: %s", _je)
+                logger.debug("Thought journal error: %s", _je)
 
-        # No telepathic cross-memory: characters explicitly contact each other
-        # through speech or messaging tools.
-
-        # Advance story arcs after a participant has interacted.
-        if arc_context and (full_response or had_notification_tool):
-            try:
-                from app.models.story_arcs import get_active_arcs
-                from app.core.task_queue import get_task_queue
-                active_arcs = get_active_arcs(character_name)
-                for arc in active_arcs:
-                    get_task_queue().submit("story_arc_advance", {
-                        "user_id": "",
-                        "arc_id": arc["id"],
-                        "interaction_summary": (full_response or notification_tool_content)[:300],
-                    })
-                    logger.debug("Arc-Advancement getriggert: %s", arc["id"])
-            except Exception as e:
-                logger.debug("Arc-Advancement Fehler: %s", e)
-
-        # [INTENT:…] markers of a thought turn are applied ONCE, by
-        # chat_engine.post_process_response above (feature-gated there). A
-        # second parse here used to create every plan twice.
-
-        return _turn_info
+    @staticmethod
+    def _advance_arcs(character_name: str, summary: str) -> None:
+        """Queue an arc advancement for every active arc of the character.
+        Runs in a worker thread (arc read + task-queue writes)."""
+        try:
+            from app.models.story_arcs import get_active_arcs
+            from app.core.task_queue import get_task_queue
+            active_arcs = get_active_arcs(character_name)
+            for arc in active_arcs:
+                get_task_queue().submit("story_arc_advance", {
+                    "user_id": "",
+                    "arc_id": arc["id"],
+                    "interaction_summary": summary,
+                })
+                logger.debug("Arc advancement triggered: %s", arc["id"])
+        except Exception as e:
+            logger.debug("Arc advancement error: %s", e)
