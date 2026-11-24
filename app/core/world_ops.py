@@ -548,7 +548,9 @@ def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
 
 
 def build_worldmap_payload(avatar_name: Optional[str] = None,
-                           show_all: bool = False) -> Dict[str, Any]:
+                           show_all: bool = False,
+                           timings: Optional[Dict[str, float]] = None
+                           ) -> Dict[str, Any]:
     """Aggregated world map in METRES: locations (centre/rotation/footprint
     edge + optional map3d metadata), character positions (+avatar/activity/
     room/mood/travel target) and active disruption/danger events. One request
@@ -587,7 +589,37 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     placed location contributes the world-space box of its DRAWN boundary
     when it has one and its bare CENTRE POINT when it has none, and every
     painted terrain area contributes the box of its polygon (E4 finding B7).
+
+    ``timings`` (hot-path statistics): when a dict is handed in, it receives
+    the milliseconds of the phases ``world_props`` (the props snapshot),
+    ``locations_read`` (``list_locations()`` alone), ``locations`` (the
+    location loop incl. fog, without the read), ``characters`` (the
+    position/fog pre-reads plus the character loop), and ``model_sig`` /
+    ``motion`` (summed over every character, already inside
+    ``characters``). Measuring never changes the payload.
     """
+    _pc = time.perf_counter
+    if timings is not None:
+        for _k in ("world_props", "locations_read", "locations", "characters",
+                   "model_sig", "motion"):
+            timings[_k] = 0.0
+
+    def _lap(key: str, started: float) -> None:
+        """Add the milliseconds since ``started`` to phase ``key``."""
+        if timings is not None:
+            timings[key] += (_pc() - started) * 1000.0
+
+    def _timed_motion(fn, name: str, profile: Dict[str, Any]) -> Any:
+        """``fn(name, profile=profile)``, its time added to phase ``motion``
+        — evaluated in place inside the row, so the call order is unchanged."""
+        if timings is None:
+            return fn(name, profile=profile)
+        started = _pc()
+        try:
+            return fn(name, profile=profile)
+        finally:
+            _lap("motion", started)
+
     from app.models.events import list_active_world_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
@@ -613,7 +645,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
 
     # Capture matching rows and signature together: a later write must not
     # pair an older payload with a newer cache token.
+    _t = _pc()
     _world_props, _world_props_sig = payload_snapshot()
+    _lap("world_props", _t)
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
@@ -655,7 +689,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         _min_z = z0 if _min_z is None else min(_min_z, z0)
         _max_z = z1 if _max_z is None else max(_max_z, z1)
 
-    for loc in list_locations():
+    _t = _pc()
+    _all_locations = list_locations()
+    _lap("locations_read", _t)
+    _t = _pc()
+    for loc in _all_locations:
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
         # ONE geometry source: the DRAWN boundary decides both the extent and
@@ -737,6 +775,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             entry["layout_sig"] = layout_signature(_lay_map3d,
                                                    _lay_rooms)[:10]
         locations.append(entry)
+    _lap("locations", _t)
 
     # The painted map is part of the world frame too (E4 finding B7). Without
     # this a largely painted world with few placed locations gets cropped to
@@ -843,6 +882,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             return False
         return not point_explored(_seen, p)
 
+    _t_chars = _pc()
     _pos = {r["name"]: {"x": r["x"], "z": r["z"]}
             for r in list_character_positions()}
     _fog = _fog_inputs() if fogged else {}
@@ -1038,10 +1078,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # NOT fogged: a mesh signature is an opaque cache key, it names no
         # place and no route — and the figure whose row this is has already
         # passed all three visibility gates above.
+        _t = _pc()
         _model_sig = _model_signature(name, _prof)
         from app.core.model3d import model_revision
         from app.core.extension_rig import motion_payload
         _model_rev = model_revision(_MODEL_SIG_CACHE[name][2]) if _model_sig else ""
+        _lap("model_sig", _t)
         characters.append({
             "name": name,
             "location_id": loc_id,
@@ -1101,7 +1143,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             **({"badges": _badges} if (_badges := _badges_for(
                 name, profile=_prof, lang=_badge_lang)) else {}),
             "model_rev": _model_rev,
-            "motion": motion_payload(name, profile=_prof),
+            "motion": _timed_motion(motion_payload, name, _prof),
             # The `travel_speed` rule factor the AVATAR moves with
             # (`travel_engine.travel_pace_factor`, a party leader's is its
             # slowest member's): the client multiplies its own figure's
@@ -1120,6 +1162,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             **({"locomotion": _loco} if _loco_states and (_loco := collect_locomotion(
                 name, loc_id, _prof, definitions=_loco_states)) else {}),
         })
+    _lap("characters", _t_chars)
 
     events_by_location = {}
     for ev in list_active_world_events():

@@ -13,11 +13,13 @@ travel ticker). Matching a recipient and queueing happen under the
 connection's lock, so a rebind can never let a signal for the old avatar into
 the new queue. No I/O under bus/connection locks; ``notify`` never raises.
 """
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 
+from app.core import hot_path_stats
 from app.core.log import get_logger
 
 logger = get_logger("sync_topics")
@@ -158,20 +160,40 @@ def _call(fn, what: str) -> None:
         logger.debug("%s failed: %s", what, e)
 
 
+def _caller() -> str:
+    """``<last module part>.<function>`` of the first frame outside this
+    module — who sent the signal (hot-path statistics)."""
+    f = sys._getframe(1)
+    while f is not None and f.f_globals.get("__name__") == __name__:
+        f = f.f_back
+    if f is None:
+        return "?"
+    mod = str(f.f_globals.get("__name__") or "?").rsplit(".", 1)[-1]
+    return f"{mod}.{f.f_code.co_name}"
+
+
 def notify(topics, *, to) -> None:
-    """Send topic(s) to the connections the recipient(s) match. Never raises."""
+    """Send topic(s) to the connections the recipient(s) match. Never raises.
+
+    Feeds the hot-path statistics: ``notify`` counts ``<topic>:<caller>``,
+    ``notify_woke`` counts ``<topic>`` once per connection that took it."""
     try:
         tops = (topics,) if isinstance(topics, str) else tuple(topics)
         tops = tuple(t for t in tops if t in TOPICS)
         recips = (to,) if isinstance(to, _RECIPIENT_TYPES) else tuple(to)
         if not tops or not recips:
             return
+        caller = _caller()
+        for t in tops:
+            hot_path_stats.count("notify", f"{t}:{caller}")
         with _lock:
             conns = list(_conns)
         if _before_offer is not None:
             _before_offer()
         for c in conns:
             if c._offer(tops, recips):
+                for t in tops:
+                    hot_path_stats.count("notify_woke", t)
                 _call(c.wake, "wake")
     except Exception as e:
         logger.warning("notify(%s) failed: %s", topics, e)
