@@ -259,8 +259,10 @@ def case_7_thought_path_bump():
     # entry point is actually wired into run_thought_turn instead of only
     # existing.
     turn_src = inspect.getsource(thoughts_mod.ThoughtRunner.run_thought_turn)
+    # Either called directly or handed to asyncio.to_thread (the journal read
+    # runs off the event loop) — both name the entry point in the turn.
     check("run_thought_turn calls the anti-repetition entry point",
-          "thought_anti_repetition_overrides(" in turn_src,
+          "thought_anti_repetition_overrides" in turn_src,
           "run_thought_turn does not use thought_anti_repetition_overrides")
 
     journal = []
