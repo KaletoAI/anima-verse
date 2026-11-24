@@ -71,21 +71,21 @@ def main():
 
         from app.core.character_ops import DEFAULT_NEW_CHARACTER_SKILLS
         from app.models.character import get_character_skills_dir, save_character_skill_config
-        from app.routes.world_dev import _apply_character_internal
+        from app.core.world_dev_apply import apply_character
         with patch("app.plugins.registry.default_enabled_skill_ids",
                    return_value=sorted(EXPECTED_ON)):
-            _apply_character_internal({"character_name": "Mira"}, "human-default")
+            apply_character({"character_name": "Mira"}, "human-default")
             files = {f.stem: json.loads(f.read_text())
                      for f in get_character_skills_dir("Mira").glob("*.json")}
             assert set(files) == EXPECTED_ON | set(DEFAULT_NEW_CHARACTER_SKILLS), set(files)
             assert all(v == {"enabled": True} for v in files.values())
             print("PASS [b]")
             save_character_skill_config("Mira", "sleep", {"enabled": False})
-            _apply_character_internal({"character_name": "Mira"}, "human-default")
+            apply_character({"character_name": "Mira"}, "human-default")
             sleep = get_character_skills_dir("Mira") / "sleep.json"
             assert json.loads(sleep.read_text()) == {"enabled": False}
             print("PASS [c]")
-            _apply_character_internal({"character_name": "Tamsin"}, "npc-temporary")
+            apply_character({"character_name": "Tamsin"}, "npc-temporary")
             assert list(get_character_skills_dir("Tamsin").glob("*.json")) == []
             print("PASS [d]")
     print("PASS smoke_new_character_skills")

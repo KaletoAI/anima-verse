@@ -95,6 +95,20 @@ WHAT IS CHECKED, and where every expected value comes from
       The prompt block is "" without context locations and names
       `home_location` / `daily_schedule` with them.
 
+  (f) THE CORE CONTRACT of ``world_dev_apply.apply_character`` (moved out of
+      the route for the free mode). A new ``human-roleplay`` character "Smoke
+      Tailor" with one outfit "Work" of two pieces: {slots [top], "Linen
+      Shirt"} and {slots [bogus], "Ghost Piece"}. By hand: "bogus" is no
+      VALID_PIECE_SLOTS entry → that piece is skipped; the shirt is new →
+      one catalog item via ``add_item`` → ``created_items`` has length 1 and
+      is exactly the outfit's piece list (pieces_created 1). Applying the same
+      draft again reuses the shirt → ``created_items`` == [].
+      ``must_be_new=True``: "Smoke Tailor" exists → ValueError; " Smoke
+      Tailor " (raw name unknown, VALIDATED name = "Smoke Tailor") →
+      ValueError too, and no second row appears. An invalid new name
+      "a/b" (forbidden "/") raises a ValueError (CharacterNameError), never an
+      HTTPException.
+
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_body_slots.py
 """
@@ -122,9 +136,12 @@ from app.core.body_slots import _format_conditions, llm_slot_block  # noqa: E402
 from app.core.npc_ops import npc_generable_fields  # noqa: E402
 from app.models import world  # noqa: E402
 from app.models.character import (get_character_config,  # noqa: E402
-                                  get_character_daily_schedule)
+                                  get_character_daily_schedule,
+                                  get_character_outfits,
+                                  list_available_characters)
+from app.core.world_dev_apply import apply_character  # noqa: E402
 from app.routes.world_dev import (  # noqa: E402
-    _apply_character_internal, _apply_profile_patch_data_sync,
+    _apply_profile_patch_data_sync,
     _format_generable_fields_for_templates, _format_home_schedule_block)
 
 FAILS = []
@@ -181,7 +198,7 @@ check("(a) block is part of {generable_fields}",
 
 # (b) apply of a new character
 NAME = "Smoke Ylva"
-result = _apply_character_internal({
+result = apply_character({
     "character_name": NAME, "template": "human-roleplay", "gender": "female",
     "body_slots": {
         "hair": {"color": "copper-red", "length": "medium", "lora": "x.safetensors"},
@@ -236,7 +253,7 @@ _hb = _format_home_schedule_block([INN])
 check("(e) block names the fields", ("`home_location`" in _hb, "`daily_schedule`" in _hb),
       (True, True))
 WANDERER = "Smoke Wanderer"
-result = _apply_character_internal({
+result = apply_character({
     "character_name": WANDERER, "template": "human-roleplay", "gender": "female",
     "home_location": "waldgasthaus", "home_room": "Gästezimmer",
     "daily_schedule": [
@@ -262,7 +279,7 @@ check("(e) placed at home", (profile.get("current_location"), profile.get("curre
 check("(e) chat_mode", cfg.get("chat_mode"), "rp_first")
 check("(e) warning count", len(result["warnings"]), 3)
 
-_apply_character_internal({"character_name": WANDERER, "template": "human-roleplay",
+apply_character({"character_name": WANDERER, "template": "human-roleplay",
                            "home_location": "Kontor"}, created_by="smoke")
 cfg = get_character_config(WANDERER)
 profile = get_character_profile(WANDERER)
@@ -280,9 +297,48 @@ patch = _apply_profile_patch_data_sync({"character_name": WANDERER,
                                         "fields": {"home_room": "Keller"}})
 check("(e) unknown room", (len(patch["warnings"]),
                            get_character_config(WANDERER).get("home_room")), (1, DESK))
-_apply_character_internal({"character_name": WANDERER, "template": "human-roleplay",
+apply_character({"character_name": WANDERER, "template": "human-roleplay",
                            "home_location": "Kontor"}, created_by="smoke")
 check("(e) same home keeps the room", get_character_config(WANDERER).get("home_room"), DESK)
+
+# (f) core contract: created_items, must_be_new, ValueError
+TAILOR = "Smoke Tailor"
+DRAFT = {"character_name": TAILOR, "template": "human-roleplay", "gender": "male",
+         "outfits": [{"name": "Work", "pieces": [
+             {"slots": ["top"], "name": "Linen Shirt", "prompt_fragment": "linen shirt"},
+             {"slots": ["bogus"], "name": "Ghost Piece", "prompt_fragment": "ghost"},
+         ]}]}
+result = apply_character(dict(DRAFT), created_by="smoke")
+_work = next((o for o in get_character_outfits(TAILOR) if o.get("name") == "Work"), {})
+check("(f) one item created", len(result.get("created_items") or []), 1)
+check("(f) created_items are the outfit's pieces", result.get("created_items"),
+      _work.get("pieces"))
+check("(f) pieces_created", [o["pieces_created"] for o in result["outfits"]], [1])
+result = apply_character(dict(DRAFT), created_by="smoke")
+check("(f) re-apply creates nothing", result.get("created_items"), [])
+
+
+def raises_value_error(data, **kw):
+    try:
+        apply_character(data, created_by="smoke", **kw)
+    except ValueError as e:
+        return type(e).__name__
+    except Exception as e:  # an HTTPException here is the old route contract
+        return "wrong:" + type(e).__name__
+    return "no error"
+
+
+check("(f) must_be_new on an existing name",
+      raises_value_error({"character_name": TAILOR, "template": "human-roleplay"},
+                         must_be_new=True), "ValueError")
+check("(f) must_be_new compares the VALIDATED name",
+      raises_value_error({"character_name": " Smoke Tailor ", "template": "human-roleplay"},
+                         must_be_new=True), "ValueError")
+check("(f) still one Smoke Tailor",
+      [n for n in list_available_characters() if n.strip() == TAILOR], [TAILOR])
+check("(f) invalid new name is a ValueError",
+      raises_value_error({"character_name": "a/b", "template": "human-roleplay"}),
+      "CharacterNameError")
 
 print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
 sys.exit(1 if FAILS else 0)

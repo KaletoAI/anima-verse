@@ -386,9 +386,10 @@ _bel_key = next((f.get("key") for s_ in (get_template(_glut_prof.get("template",
                  if str(f.get("source_file") or "").endswith("beliefs.md")), None)
 check("template has a beliefs source_file field", bool(_bel_key), True)
 if _bel_key:
-    world_dev._apply_character_internal({"character_name": "Glut",
-                                         "template": _glut_prof.get("template", ""),
-                                         _bel_key: "# Beliefs\n- Smoke lies."})
+    from app.core.world_dev_apply import apply_character  # noqa: E402
+    apply_character({"character_name": "Glut",
+                     "template": _glut_prof.get("template", ""),
+                     _bel_key: "# Beliefs\n- Smoke lies."})
 check("world-dev apply-character kept Tilda's beliefs",
       "Fire is honest" in (_tdir / "soul" / "beliefs.md").read_text(encoding="utf-8"), True)
 check("world-dev apply-character wrote no body copy",

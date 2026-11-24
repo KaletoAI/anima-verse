@@ -16,7 +16,7 @@ Everything that makes it "temporary" is template content, not code:
 
 The generation pipeline reuses the World-Dev machinery unchanged: the same
 schema-markdown loader, the same ```json:<type>``` fence extractor, the same
-``_apply_character_internal``. What this module adds is the sequencing —
+``world_dev_apply.apply_character``. What this module adds is the sequencing —
 generate → validate → repair → apply — with no human in the loop.
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ def npc_generable_fields(template: str = "") -> str:
         # loudly in the prompt rather than sending an empty section.
         return "(no generable fields — the NPC template is broken)"
     # The species body slots: not template fields, so the loop above cannot
-    # see them. The apply (``_apply_character_internal``) stores them.
+    # see them. The apply (``world_dev_apply.apply_character``) stores them.
     from app.core.body_slots import llm_slot_block
     body_slots = llm_slot_block(npc_template_name(template))
     return "\n".join(lines) + (f"\n\n{body_slots}" if body_slots else "")
@@ -371,7 +371,7 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
               home: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Create the character, then stamp the NPC-only bookkeeping onto it.
 
-    The heavy lifting is ``_apply_character_internal`` — the very same call the
+    The heavy lifting is ``world_dev_apply.apply_character`` — the very same call the
     World-Dev apply uses, with the template pinned. Everything after it is the
     handful of fields the LLM must NOT write: where the NPC stands, what it was
     generated from, and when it dies.
@@ -383,7 +383,7 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     """
     from app.models.character import (get_character_profile,
                                       save_character_profile)
-    from app.routes.world_dev import _apply_character_internal
+    from app.core.world_dev_apply import apply_character
 
     tmpl_name = npc_template_name(template)
     payload = dict(data)
@@ -393,12 +393,12 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     if not name:
         raise ValueError("character_name missing")
 
-    result = _apply_character_internal(payload, selected_template=tmpl_name,
-                                       created_by=created_by or "npc_generator")
+    result = apply_character(payload, selected_template=tmpl_name,
+                             created_by=created_by or "npc_generator")
 
     # Bookkeeping the generator is not allowed to set.
     # Read AND write under the per-character profile lock (DATA-3): the save
-    # rewrites the whole profile_json blob, and ``_apply_character_internal``
+    # rewrites the whole profile_json blob, and ``apply_character``
     # above has just written this very profile. Leaf span — the skill set, the
     # finish gate and the placement all follow outside it.
     from app.core.keyed_lock import keyed_lock
