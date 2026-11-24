@@ -3855,6 +3855,12 @@ def play_worldmap(user=Depends(get_current_user),
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
     ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
+
+    Hot-path statistics: every poll is recorded under ``worldmap``
+    (``build_ms``, ``encode_ms``, ``bytes`` of the response body and the build
+    phases of ``build_worldmap_payload(timings=…)``); once a minute
+    ``hot_path_stats`` logs it as one line
+    ``hot_path worldmap n=<n> <key>_p50=<x> <key>_p95=<y> …``.
     """
     t0 = time.monotonic()
     from app.models.account import get_active_character
@@ -3870,12 +3876,25 @@ def play_worldmap(user=Depends(get_current_user),
     # character knows — never the unfiltered admin view — and nobody in the
     # payload is marked as its own avatar.
     lens = avatar or (_spectator_lens(user) if released else "")
-    payload = build_worldmap_payload(lens, show_all=bool(show_all) and is_admin)
+    timings: Dict[str, float] = {}
+    payload = build_worldmap_payload(lens, show_all=bool(show_all) and is_admin,
+                                     timings=timings)
     if not avatar:
         payload["avatar"] = ""
     payload["avatar_released"] = released
-    payload["sync"]["build_ms"] = round((time.monotonic() - t0) * 1000, 1)
-    return _json_off_loop(payload)
+    build_ms = (time.monotonic() - t0) * 1000
+    payload["sync"]["build_ms"] = round(build_ms, 1)
+    t_enc = time.monotonic()
+    response = _json_off_loop(payload)
+    try:
+        from app.core import hot_path_stats
+        hot_path_stats.record("worldmap", {
+            "build_ms": build_ms,
+            "encode_ms": (time.monotonic() - t_enc) * 1000,
+            "bytes": len(response.body), **timings})
+    except Exception:
+        pass  # statistics never disturb the poll
+    return response
 
 
 @router.get("/play/terrain")

@@ -548,7 +548,8 @@ def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
 
 
 def build_worldmap_payload(avatar_name: Optional[str] = None,
-                           show_all: bool = False) -> Dict[str, Any]:
+                           show_all: bool = False,
+                           timings: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
     """Aggregated world map in METRES: locations (centre/rotation/footprint
     edge + optional map3d metadata), character positions (+avatar/activity/
     room/mood/travel target) and active disruption/danger events. One request
@@ -565,6 +566,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     ``GET /play/heightfield`` the payload (§ A16), and so does the avatar's
     EXPLORATION MEMORY — ``explored_sig`` here, ``GET /play/explored`` there
     (§ A12).
+    ``timings`` (hot-path statistics): when a dict is passed, it is filled
+    with the milliseconds of the phases ``world_props``, ``locations_read``
+    (``list_locations()`` alone), ``locations`` (the location loop including
+    the fog, without ``locations_read``), ``characters`` (the character loop)
+    and, summed over every figure and contained in ``characters``,
+    ``model_sig`` and ``motion``. Without it no timer runs.
     The AUTHORED world props (§ A9a) DO ride along — a hand-set list capped
     at 500 rows is not a raster, and it is never fogged: deco blocks nothing
     and belongs to no location, so it leaks no knowledge.
@@ -611,9 +618,17 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.models.terrain import areas_snapshot, terrain_sig
     from app.models.world_props import payload_snapshot
 
+    # Phase timers only when the caller asked for them (hot-path statistics).
+    _clk = time.perf_counter if timings is not None else None
+    _t_model_sig = _t_motion = 0.0
+
     # Capture matching rows and signature together: a later write must not
     # pair an older payload with a newer cache token.
+    _t = _clk() if _clk else 0.0
     _world_props, _world_props_sig = payload_snapshot()
+    if _clk:
+        timings["world_props"] = (_clk() - _t) * 1000.0
+        _t_loc = _clk()
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
@@ -655,7 +670,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         _min_z = z0 if _min_z is None else min(_min_z, z0)
         _max_z = z1 if _max_z is None else max(_max_z, z1)
 
-    for loc in list_locations():
+    _t = _clk() if _clk else 0.0
+    _all_locations = list_locations()
+    if _clk:
+        _t_read = _clk() - _t
+        timings["locations_read"] = _t_read * 1000.0
+    for loc in _all_locations:
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
         # ONE geometry source: the DRAWN boundary decides both the extent and
@@ -737,6 +757,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             entry["layout_sig"] = layout_signature(_lay_map3d,
                                                    _lay_rooms)[:10]
         locations.append(entry)
+    if _clk:
+        # Fog context above plus the loop, without the read itself.
+        timings["locations"] = (_clk() - _t_loc - _t_read) * 1000.0
 
     # The painted map is part of the world frame too (E4 finding B7). Without
     # this a largely painted world with few placed locations gets cropped to
@@ -860,6 +883,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.travel_engine import travel_pace_factor
     _loco_states = locomotion_states()
     characters = []
+    _t_chars = _clk() if _clk else 0.0
     for name in list_available_characters():
         pos = _avatar_snap["pos"] if name == avatar and _avatar_snap else _pos.get(name)
         if fogged and name != avatar:
@@ -1038,10 +1062,17 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # NOT fogged: a mesh signature is an opaque cache key, it names no
         # place and no route — and the figure whose row this is has already
         # passed all three visibility gates above.
+        _t = _clk() if _clk else 0.0
         _model_sig = _model_signature(name, _prof)
         from app.core.model3d import model_revision
         from app.core.extension_rig import motion_payload
         _model_rev = model_revision(_MODEL_SIG_CACHE[name][2]) if _model_sig else ""
+        if _clk:
+            _t_model_sig += _clk() - _t
+            _t = _clk()
+        _motion = motion_payload(name, profile=_prof)
+        if _clk:
+            _t_motion += _clk() - _t
         characters.append({
             "name": name,
             "location_id": loc_id,
@@ -1101,7 +1132,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             **({"badges": _badges} if (_badges := _badges_for(
                 name, profile=_prof, lang=_badge_lang)) else {}),
             "model_rev": _model_rev,
-            "motion": motion_payload(name, profile=_prof),
+            "motion": _motion,
             # The `travel_speed` rule factor the AVATAR moves with
             # (`travel_engine.travel_pace_factor`, a party leader's is its
             # slowest member's): the client multiplies its own figure's
@@ -1120,6 +1151,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             **({"locomotion": _loco} if _loco_states and (_loco := collect_locomotion(
                 name, loc_id, _prof, definitions=_loco_states)) else {}),
         })
+    if _clk:
+        timings["characters"] = (_clk() - _t_chars) * 1000.0
+        timings["model_sig"] = _t_model_sig * 1000.0
+        timings["motion"] = _t_motion * 1000.0
 
     events_by_location = {}
     for ev in list_active_world_events():
