@@ -46,10 +46,25 @@
  * In the solve every capsule pair (mover capsule, capsule of f) costs `ALIGN_CLEAR_WEIGHT`·max(0, depth − a_f) per
  * metre (depth = r₁ + r₂ − the axis segments' distance), with the mover's capsules moved rigidly by the trial about
  * the frame's pivot, at the key frames of every relation plus the frame where the measurement found the largest excess
- * over the allowance (`ClearFrame`; re-measuring between the passes picks it afresh). The weight 100 per metre makes
- * a millimetre over the allowance cost as much as 10 cm of axis error, so the solve keeps it within a few µm; the
+ * over the allowance (`ClearFrame`; re-measuring between the passes picks it afresh). The weight 1000 per metre makes
+ * a millimetre over the allowance cost as much as 1 m of axis error and ten times a millimetre of visible root inside
+ * (owner rules: never deeper than the start is a hard condition, a root left inside is red with its reason — so the
+ * wall wins where the two meet; with equal weights resting-spooning split the difference and broke both), so the solve
+ * keeps it within a few µm; the
  * root angle's re-pose of the part's own capsules is not modelled in the solve (the re-measure sees it). Pairs that
  * cannot reach overlap within the cap (start depth below a_f − the cap's reach) are left out.
+ * THE START OVERLAP (owner 2026-11-24 — clips that start inside each other): the allowance is a wall, so a clip whose
+ * start overlap sits exactly on it could not turn at all. Besides the wall the solve REDUCES the mover's overlap with
+ * each other figure toward the tolerated contact depth T = `ALIGN_OVERLAP_TOL_MM` (40 mm): per clearance frame and
+ * figure f the deepest pair costs `ALIGN_OVERLAP_WEIGHT`·max(0, depth − T) per metre (0.5 — half the axis error's
+ * weight, so it yields to the hard conditions and trades against the axis error within the caps; only pairs within
+ * `ALIGN_CLEAR_NEAR_M` of T at the measurement take part) — at ONE frame per figure, the frame of its deepest overlap at
+ * the measurement (`ClearFrame.reduce`). The WALL holds at EVERY sampled frame of the loop (the page hands them all,
+ * pairs within `ALIGN_CLEAR_NEAR_M` of their allowance): with the key frames and one worst frame only, the last
+ * measurement kept finding a deeper frame the last solve never saw (resting-cunnilingus 61 → 64 mm, resting-spooning
+ * 44 → 46 mm). Exempt as above. What the rigid model still misses (every other figure is re-posed by the
+ * measurement) the page catches with THE CLEARANCE BACK-OFF: a result that measures deeper than an allowance is taken
+ * back toward the start along its own path (½ … 1/32 of the way) until it is clear, or else discarded.
  * THE VERDICT (`alignVerdict`, owner rules of 2026-11-23 evening): the run's last measurement over the WHOLE loop
  * decides. DISCARDED (the dials stay) only for a hard condition: a role deeper into some f than a_f +
  * `ALIGN_CLEAR_SLACK_MM` (0.5 mm, the re-measure repeatability; 'overlap'), a moved role whose excess over the surface's
@@ -61,7 +76,7 @@
  * support corrected, no change needed.
  * THE ROOT PULL-BACK (owner 2026-11-23 evening — "too deep is not discarded as long as the root is outside the channel;
  * when the root is inside, the distance of the bodies must grow"): the visible root outside is a CONSTRAINT of the solve
- * (`ALIGN_ROOT_WEIGHT`, the clearance's weight, at the deep key frame and the `ALIGN_ROOT_FRAMES` = 8 frames whose
+ * (`ALIGN_ROOT_WEIGHT` 100 — a tenth of the clearance's wall, which wins where the two meet — at the deep key frame and the `ALIGN_ROOT_FRAMES` = 8 frames whose
  * visible root lies deepest at the measurement — the passes pick them afresh), so depth yields to it; the page then measures the loop AS RENDERED (partners on, the chain bend
  * applied) and pulls the moved role back along the channel axis until the visible root is at least
  * `ALIGN_ROOT_MARGIN_MM` outside on every frame — or as far as the range cap and THE CLEARANCE let it, and then says
@@ -169,12 +184,22 @@ export const KEY_YELLOW_MM = 10
 export const KEY_SHALLOWER_MM = 0.5
 /** THE CLEARANCE: the residual weight per metre over the allowance, the allowance's floor (mm), the verdict's slack
  *  (mm) and the shaft angle beyond which a relation's geometry does not match its target ("Align all", degrees). */
-export const ALIGN_CLEAR_WEIGHT = 100
+export const ALIGN_CLEAR_WEIGHT = 1000
 export const ALIGN_CLEAR_TOL_MM = 5
 export const ALIGN_CLEAR_SLACK_MM = 0.5
 export const ALIGN_MISMATCH_DEG = 60
+/** THE CLEARANCE over many frames: only capsule pairs within this of their allowance (or of T) at the measurement take
+ *  part (metres; a pass that moves a pair further is re-measured by the next). */
+export const ALIGN_CLEAR_NEAR_M = 0.15
+/** THE START OVERLAP (owner 2026-11-24): the capsule overlap of the moved role with another person that bodies in
+ *  contact may keep (mm — the capsules are the limbs' largest girth, so touching limbs overlap by a few centimetres;
+ *  measured on run5's 60 applied mover↔person pairs: the lower quartile ends at 36–46 mm, the lower cluster at 59 mm,
+ *  the rest 78–169 mm), the weight per metre beyond it in the solve, and the exchange rate of the verdict: a millimetre
+ *  of overlap removed pays for `ALIGN_OVERLAP_WEIGHT` mm of axis error (the solve's own rate). */
+export const ALIGN_OVERLAP_TOL_MM = 40
+export const ALIGN_OVERLAP_WEIGHT = 0.5
 /** THE ROOT PULL-BACK (owner 2026-11-23 evening): the visible root's weight in the solve (per metre of root inside the
- *  margin — the clearance's weight, so depth always yields to it), the number of frames per channel relation it is held
+ *  margin — depth always yields to it, and the clearance's wall, ten times heavier, wins over it), the number of frames per channel relation it is held
  *  at (those whose visible root lies deepest at the measurement, plus the deep key frame), and the margin (mm) the page's
  *  measured correction keeps the RENDERED visible root outside by (= `ALIGN_MARGIN_M`). */
 export const ALIGN_ROOT_WEIGHT = 100
@@ -215,16 +240,23 @@ export function roleTurnDelta(fromDeg: readonly number[], toDeg: readonly number
 /** One collision capsule (stage space): the axis segment a–b and the radius. */
 export interface ClearCapsule { id: string; a: Vec3; b: Vec3; r: number }
 /** THE CLEARANCE at one sampled frame: the mover's capsules (moved by the trial about `pivot`), every other figure's
- *  capsules with its allowance (metres), and the exempt pairs `<mover capsule>|<figure>|<capsule>`. */
+ *  capsules with its allowance (metres), and the exempt pairs `<mover capsule>|<figure>|<capsule>`; `reduce` = the
+ *  figures whose overlap THE START OVERLAP reduces at this frame (absent = every figure, [] = none). */
 export interface ClearFrame {
   pivot: Vec3
   mover: readonly ClearCapsule[]
   others: readonly { name: string; allowM: number; caps: readonly ClearCapsule[] }[]
   exempt?: ReadonlySet<string>
+  reduce?: readonly string[]
 }
 /** The allowance of one other figure (metres): its start overlap, at least the tolerance (THE CLEARANCE). */
 export function clearAllowM(startM: number): number {
   return Math.max(startM, ALIGN_CLEAR_TOL_MM / 1000)
+}
+/** The mover's overlap EXCESS over the tolerated contact depth (THE START OVERLAP), mm: the worst over the other figures
+ *  of max(0, their deepest overlap over the loop − T); `depthsM` per other figure, metres. */
+export function overlapExcessMm(depthsM: readonly number[]): number {
+  return Math.max(0, ...depthsM.map((d) => d * 1000 - ALIGN_OVERLAP_TOL_MM))
 }
 /** The deepest overlap of the mover against each other figure at one frame (metres, ≥ 0; THE CLEARANCE), the exempt
  *  pairs skipped, with the worst pair `<mover capsule> ↔ <capsule>`. */
@@ -512,9 +544,21 @@ export function solveAlign(p: AlignProblem): AlignSolution {
   const sweep = rt ? 2 * Math.sin(Math.min(Math.PI, (Math.max(...angHalf) * Math.PI / 180) * Math.sqrt(3)) / 2) : 0
   const reach = Math.hypot(p.cap.sideM, p.cap.upM, p.cap.forwardM) + Math.max(0.2, sweep)
   const clearPairs: { f: ClearFrame; m: ClearCapsule; c: ClearCapsule; allowM: number }[] = []
-  for (const f of p.clear ?? []) for (const o of f.others) for (const mc of f.mover) for (const c of o.caps) {
-    if (f.exempt?.has(`${mc.id}|${o.name}|${c.id}`)) continue
-    if (mc.r + c.r - segmentSegmentDistance(mc.a, mc.b, c.a, c.b) > o.allowM - reach) clearPairs.push({ f, m: mc, c, allowM: o.allowM })
+  // THE START OVERLAP: per frame and other figure the pairs that can be deeper than T within the cap.
+  const tolM = ALIGN_OVERLAP_TOL_MM / 1000
+  const reduceSets: { f: ClearFrame; pairs: { m: ClearCapsule; c: ClearCapsule }[] }[] = []
+  // (Many frames — the page holds every sampled one: only pairs within `ALIGN_CLEAR_NEAR_M` of their allowance.)
+  const near = (p.clear?.length ?? 0) > 4 ? Math.min(reach, ALIGN_CLEAR_NEAR_M) : reach
+  for (const f of p.clear ?? []) for (const o of f.others) {
+    const red: { m: ClearCapsule; c: ClearCapsule }[] = []
+    const reduces = !f.reduce || f.reduce.includes(o.name)
+    for (const mc of f.mover) for (const c of o.caps) {
+      if (f.exempt?.has(`${mc.id}|${o.name}|${c.id}`)) continue
+      const d = mc.r + c.r - segmentSegmentDistance(mc.a, mc.b, c.a, c.b)
+      if (d > o.allowM - near) clearPairs.push({ f, m: mc, c, allowM: o.allowM })
+      if (reduces && d > tolM - ALIGN_CLEAR_NEAR_M) red.push({ m: mc, c })
+    }
+    if (red.length) reduceSets.push({ f, pairs: red })
   }
   const res = (z: number[]): number[] => {
     const fix = toFix(z)
@@ -566,6 +610,14 @@ export function solveAlign(p: AlignProblem): AlignSolution {
     for (const q of clearPairs) {
       const a = fixPoint(fix, q.f.pivot, q.m.a), b = fixPoint(fix, q.f.pivot, q.m.b)
       out.push(ALIGN_CLEAR_WEIGHT * Math.max(0, q.m.r + q.c.r - segmentSegmentDistance(a, b, q.c.a, q.c.b) - q.allowM))
+    }
+    for (const rs of reduceSets) {
+      let worst = 0
+      for (const q of rs.pairs) {
+        const a = fixPoint(fix, rs.f.pivot, q.m.a), b = fixPoint(fix, rs.f.pivot, q.m.b)
+        worst = Math.max(worst, q.m.r + q.c.r - segmentSegmentDistance(a, b, q.c.a, q.c.b))
+      }
+      out.push(ALIGN_OVERLAP_WEIGHT * Math.max(0, worst - tolM))
     }
     if (p.join) {
       const sh = fix.shift, d = p.join.deltaM
@@ -779,7 +831,10 @@ export function alignMovers<T extends { e: number; r: number }>(hits: readonly T
  *  A result that keeps the hard conditions is APPLIED when it gains something (THE MINIMUM GAIN, `ALIGN_GAIN_MM`): the
  *  axis error drops by it, or the depth error at the deepest frame shrinks by it, or the support excess shrinks by it,
  *  or the rendered visible root comes out of the opening (inside before, outside after — or, when it cannot be pulled
- *  out, at least `ALIGN_GAIN_MM` nearer to it). Otherwise it is UNCHANGED
+ *  out, at least `ALIGN_GAIN_MM` nearer to it), or the moved role's overlap excess over the tolerated contact depth
+ *  shrinks by it (THE START OVERLAP). THE START OVERLAP also moves 'worse': the axis error may grow by
+ *  `ALIGN_GAIN_SLACK_MM` plus `ALIGN_OVERLAP_WEIGHT` × the overlap excess removed (the solve's exchange rate) — a result
+ *  that leaves the bodies less inside each other may sit somewhat further off the axis. Otherwise it is UNCHANGED
  *  ("already fits"): not written, not a block. */
 export interface ClearRow { name: string; startM: number; allowM: number; afterM: number; worst: string }
 export type AlignDiscard = 'overlap' | 'worse' | 'support'
@@ -793,6 +848,13 @@ export type AlignNote = { code: 'little_depth'; strokeMm: number; deepMm: number
   | { code: 'shallower'; mm: number; rootPulled: boolean }
   | { code: 'support_corrected'; mm: number }
   | { code: 'no_change' }
+  /** THE START OVERLAP (owner 2026-11-24): the moved role's start overlap with another person reduced by `mm` (`pair`
+   *  the place letters "X↔Y", `worst` the capsule pair of the start); one that remains above the tolerated contact depth
+   *  (`mm` = the overlap left, `worst` its capsule pair) — a hand correction or another mover may fix it; and an overlap
+   *  of the relation's OTHER role with a third person (`pair`, `mm`) — its own posture, nothing the aligned pair fixes. */
+  | { code: 'overlap_reduced'; mm: number; pair: string; worst: string }
+  | { code: 'overlap_remains'; mm: number; pair: string; worst: string }
+  | { code: 'overlap_third'; mm: number; pair: string; worst: string }
 /** THE MINIMUM GAIN of a result over its start (mm): `axisMm` = the drop of the axis error (`keyWorstMm`); `depthMm` =
  *  a channel's shrink of the depth error at the deepest frame, |root joint − its depth target| — for a part that starts
  *  too shallow that is exactly how much deeper the (rigid) part goes, for one that starts too deep how much it comes
@@ -816,10 +878,12 @@ export interface AlignVerdict { applied: boolean; why: AlignDiscard | null; coll
   notes: AlignNote[] }
 /** THE VERDICT (see above). `rendered` = the visible root's deepest point over the RENDERED loop before and after (mm,
  *  + = inside) and how far the measured correction pulled the moved role back (mm); `support` = the moved role's
- *  support excess over the loop before and after (mm; null = not on a surface). */
+ *  support excess over the loop before and after (mm; null = not on a surface); `overlap` = the moved role's overlap
+ *  excess over the tolerated contact depth before and after (`overlapExcessMm`; null = not measured). */
 export function alignVerdict(before: KeyReport | null, after: KeyReport | null, inside: boolean,
   clear: readonly ClearRow[], rendered?: { beforeMm: number; afterMm: number; pulledMm?: number } | null,
-  support?: { beforeMm: number; afterMm: number } | null): AlignVerdict {
+  support?: { beforeMm: number; afterMm: number } | null,
+  overlap?: { beforeMm: number; afterMm: number } | null): AlignVerdict {
   const slack = ALIGN_CLEAR_SLACK_MM / 1000
   const little = (rep: KeyReport | null): AlignNote[] => {
     const l = littleDepth(rep, inside)
@@ -832,13 +896,15 @@ export function alignVerdict(before: KeyReport | null, after: KeyReport | null, 
   // THE SUPPORT, ABSOLUTE: the moved role's largest excess over the touch band (mm, over the loop) may not grow.
   if (support && support.afterMm > Math.max(0, support.beforeMm) + ALIGN_SUPPORT_SLACK_MM) return discard('support')
   const gain = alignGain(before, after, inside)
-  if (gain.worse) return discard('worse')
+  const overlapFix = overlap ? overlap.beforeMm - overlap.afterMm : 0
+  if (gain.axisMm < -(ALIGN_GAIN_SLACK_MM + ALIGN_OVERLAP_WEIGHT * Math.max(0, overlapFix))) return discard('worse')
   const supportFix = support ? support.beforeMm - support.afterMm : 0
   // the rendered visible root came out of the opening, or (pulled back as far as it could go) at least 5 mm nearer
   const rootOut = inside && !!rendered && Number.isFinite(rendered.beforeMm) && Number.isFinite(rendered.afterMm)
     && rendered.beforeMm > 0 && (rendered.afterMm <= 0 || rendered.beforeMm - rendered.afterMm >= ALIGN_GAIN_MM)
   const applied = !!before && !!after
-    && (gain.axisMm >= ALIGN_GAIN_MM || gain.depthMm >= ALIGN_GAIN_MM || supportFix >= ALIGN_GAIN_MM || rootOut)
+    && (gain.axisMm >= ALIGN_GAIN_MM || gain.depthMm >= ALIGN_GAIN_MM || supportFix >= ALIGN_GAIN_MM || rootOut
+      || overlapFix >= ALIGN_GAIN_MM)
   if (!applied) return { applied: false, why: null, collide: null, unchanged: true, notes: [...little(before), { code: 'no_change' }] }
   const notes: AlignNote[] = little(after)
   if (inside && before && after && after.deep.depthMm < before.deep.depthMm - KEY_SHALLOWER_MM) {
@@ -861,16 +927,21 @@ export function alignBlocked(r: { applied: boolean; postureLimited: boolean; hit
   return !r.applied || r.postureLimited || (r.hits.length > 0 && !r.deepOk) || !!r.stuck
 }
 /** One candidate of THE AUTOMATIC ALTERNATIVE: whether it may be applied, the deepest frame's conditions, the
- *  clearance, the axis error (mm) and the deepest tip depth (mm). */
-export interface AlignCandidate { applied: boolean; deepOk: boolean; clearOk: boolean; axisMm: number; depthMm: number }
+ *  clearance, the axis error (mm), the deepest tip depth (mm) and the overlap excess the moved role leaves over the
+ *  tolerated contact depth (mm, THE START OVERLAP; absent = 0). */
+export interface AlignCandidate { applied: boolean; deepOk: boolean; clearOk: boolean; axisMm: number; depthMm: number
+  overlapMm?: number }
 /** The order two candidates are ranked by (negative = `a` first): 0. one that may be applied (a discarded result
  *  cannot be written, so it never beats one that can), then the owner's order — 1. the deepest frame's conditions
- *  hold, 2. the clearance holds, 3. the smaller axis error, 4. the deeper tip. Ties keep the first. */
+ *  hold, 2. the clearance holds, 3. the smaller axis error plus `ALIGN_OVERLAP_WEIGHT` × the overlap excess left
+ *  (THE START OVERLAP, owner 2026-11-24: the other role is often the better lever against an overlap, at the solve's
+ *  exchange rate), 4. the deeper tip. Ties keep the first. */
 export function compareCandidates(a: AlignCandidate, b: AlignCandidate): number {
   if (a.applied !== b.applied) return a.applied ? -1 : 1
   if (a.deepOk !== b.deepOk) return a.deepOk ? -1 : 1
   if (a.clearOk !== b.clearOk) return a.clearOk ? -1 : 1
-  if (Math.abs(a.axisMm - b.axisMm) > 1e-9) return a.axisMm - b.axisMm
+  const sa = a.axisMm + ALIGN_OVERLAP_WEIGHT * (a.overlapMm ?? 0), sb = b.axisMm + ALIGN_OVERLAP_WEIGHT * (b.overlapMm ?? 0)
+  if (Math.abs(sa - sb) > 1e-9) return sa - sb
   if (Math.abs(a.depthMm - b.depthMm) > 1e-9) return b.depthMm - a.depthMm
   return 0
 }

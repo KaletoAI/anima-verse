@@ -280,7 +280,8 @@ export { solveAlign, alignByPasses, keyFrames, keyRow, keyReport, keyLamp, keyRe
   ALIGN_LITTLE_STROKE_MM, ALIGN_LITTLE_DEPTH_MM,
   ALIGN_CLEAR_WEIGHT, ALIGN_CLEAR_TOL_MM, ALIGN_CLEAR_SLACK_MM, ALIGN_MISMATCH_DEG,
   ALIGN_RANGE_CM_DEFAULT, ALIGN_ANGLE_DEG, ALIGN_TURN_DEG_DEFAULT, ALIGN_GAIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM, JOIN_WEIGHT, ALIGN_LIMIT_WEIGHT, ALIGN_MARGIN_M, ALIGN_RIDGE, ALIGN_PASSES,
-  ALIGN_AXIS_LEVER_M, ALIGN_DEPTH_WEIGHT, ALIGN_CROSS_MIN, KEY_GREEN_MM, KEY_YELLOW_MM, KEY_SHALLOWER_MM } from './pairAlign'
+  ALIGN_AXIS_LEVER_M, ALIGN_DEPTH_WEIGHT, ALIGN_CROSS_MIN, KEY_GREEN_MM, KEY_YELLOW_MM, KEY_SHALLOWER_MM,
+  ALIGN_OVERLAP_TOL_MM, ALIGN_OVERLAP_WEIGHT, overlapExcessMm } from './pairAlign'
 export type { AlignCap, AlignLamp, AlignBound, AlignSample, AlignRelation, AlignProblem, AlignSolution, KeyRow, KeyReport, KeyReason,
   AlignState, AlignMeasure, AlignPass, ClearCapsule, ClearFrame, ClearRow, AlignDiscard, AlignCandidate, AlignBucket, AlignNote, AlignVerdict } from './pairAlign'
 export { POSTURE, SURFACE, SUPPORT_CAPSULES, POSTURE_ANGLE_CAP_DEG, postureAngleCapDeg, supportSample, supportHeight, postureExcess,

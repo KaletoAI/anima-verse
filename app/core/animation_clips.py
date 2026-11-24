@@ -2776,19 +2776,25 @@ ALIGN_STATE_REASONS = {
     "auto_blocked": ("overlap", "support", "range", "root_range", "root_overlap", "root_support", "worse"),
     "not_measurable": ("no_place", "no_part", "no_pair"),
 }
-#: The notes a relation's result may carry (frontend ``AlignNote``).
-ALIGN_NOTES = ("little_depth", "shallower", "support_corrected", "no_change")
+#: The notes a relation's result may carry (frontend ``AlignNote``). THE START OVERLAP (owner 2026-11-24): the moved
+#: role's start overlap reduced, one that remains above the tolerated contact depth, and the relation's other role
+#: overlapping a third person.
+ALIGN_NOTES = ("little_depth", "shallower", "support_corrected", "no_change", "overlap_reduced", "overlap_remains",
+               "overlap_third")
 #: The clip summary is its WORST relation, in this order (worst first).
 ALIGN_STATE_ORDER = ("auto_mismatch", "auto_blocked", "not_measurable", "not_checked", "auto_improved",
                      "manual_adjusted", "auto_unchanged", "auto_aligned")
 _STATUS_NUMBERS = {"depth_mm": 2, "axis_mm": 2, "root_mm": 1, "support_mm": 1, "stroke_mm": 1, "shallower_mm": 1,
-                   "support_fix_mm": 1}
+                   "support_fix_mm": 1, "overlap_fix_mm": 1, "overlap_left_mm": 1, "third_mm": 1}
+#: The start-overlap notes' names: the place letters "X↔Y" and the capsule pair "X cap ↔ Y cap".
+_STATUS_TEXTS = ("overlap_pair", "overlap_worst", "left_pair", "left_worst", "third_pair", "third_worst")
 
 
 def _status_entry(key: str, raw: Any, stamp: str) -> Dict[str, Any]:
     """One relation's status as stored: ``{state, reason?, with?, depth_mm?: [before, after], axis_mm?: [before, after],
     root_mm?, support_mm?, notes?: [code], stroke_mm?, shallower_mm?, support_fix_mm?, root_pulled?, mover?,
-    turn_deg?: [tilt, roll, yaw], at}`` (``at`` = system time, set here; ``with`` = the place letter a
+    turn_deg?: [tilt, roll, yaw], overlap_fix_mm?, overlap_left_mm?, third_mm?, overlap_pair?, overlap_worst?,
+    left_pair?, left_worst?, third_pair?, third_worst?, at}`` (``at`` = system time, set here; ``with`` = the place letter a
     "root_overlap" would go into)."""
     if not isinstance(key, str) or not key or len(key) > 80:
         raise ClipLibraryError("align_status relation keys must be strings of 1..80 characters")
@@ -2828,6 +2834,14 @@ def _status_entry(key: str, raw: Any, stamp: str) -> Dict[str, Any]:
             raise ClipLibraryError(f"align_status.{key}.{field} must be {n} finite number(s)")
         r = [round(float(x), 1) for x in vals]
         out[field] = r if n > 1 else r[0]
+    for field in _STATUS_TEXTS:
+        v = raw.get(field)
+        if v is None:
+            continue
+        if not isinstance(v, str) or len(v) > 120 or any(ord(ch) < 32 for ch in v):
+            raise ClipLibraryError(f"align_status.{key}.{field} must be a text of at most 120 characters")
+        if v:
+            out[field] = v
     mover = raw.get("mover")
     if mover is not None:
         if mover not in CLIP_ROLES:

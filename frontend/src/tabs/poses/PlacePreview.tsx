@@ -46,8 +46,9 @@ import {
   supportSample, supportHeight, postureReport, postureAngleCapDeg, supportMode, surfaceGap, surfaceExcess, SUPPORT_CAPSULES, type PostureReport, type ContactRelation,
   alignByPasses, pairPivotCm, keyReport, keyLamp, keyReasons, alignMovers, alignCap, relativeOf, joinDelta, type AlignLamp, type AlignBound, type AlignSample,
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
-  keyFrames, keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
-  lampOf, solveLinear, ALIGN_ROOT_MARGIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM,
+  keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
+  lampOf, solveLinear, ALIGN_ROOT_MARGIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM, ALIGN_GAIN_MM, ALIGN_OVERLAP_TOL_MM,
+  overlapExcessMm,
   type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket, type AlignNote,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
@@ -369,8 +370,10 @@ export interface MoverAlign { role: string; letter: string; mover: AlignMover; a
   lamp: AlignLamp; hits: AlignBound[]
   /** The root angle this run wrote (null = not solved for this role) and the one before (degrees). */
   rootAngle: RootAngle | null; rootBefore: RootAngle | null
-  /** The measure → solve passes (increments) and whether they converged. */
-  passes: AlignPass[]; converged: boolean }
+  /** The measure → solve passes (increments) and whether they converged; `backoff` = the share of the way the
+   *  CLEARANCE BACK-OFF kept (null = the full result measured clear). */
+  passes: AlignPass[]; converged: boolean; backoff: number | null
+  backoffTrace: { f: number; overMm: number; sceneMm: number }[] }
 export type AutoAlignResult =
   /** `code`: why nothing could be measured, for the clip's status (no place fits, no figure has the part, the pair
    *  never filled in). */
@@ -1587,7 +1590,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           heights: Map<number, { ids: string[]; h: number; mode: 'surface' | 'band' }>
           /** THE CLEARANCE (pairAlign): per sampled frame k every figure's stage capsules and the mover's pivot; per figure
            *  the mover's worst overlap with it over the loop (metres) and its capsule pair; per frame the per-figure depths. */
-          caps: Map<number, FigCaps>; clearBy: number[]; clearWorst: string[]; clearAt: Map<number, number[]> }
+          caps: Map<number, FigCaps>; clearBy: number[]; clearWorst: string[]; clearAt: Map<number, number[]>
+          /** THE START OVERLAP: per figure the frame of the mover's deepest overlap with it (-1 = none), and per pair of
+           *  two OTHER figures (indices "i|j", i < j) their deepest overlap over the loop (metres) and its capsule pair. */
+          clearPeak: number[]; third: Map<string, { depth: number; worst: string; a: number; b: number }> }
         const relLabel = (h: Hit) => `${figs[h.e].letter} → ${figs[h.r].letter} (${targetWordOf(t, h.target)})`
         /** A relation's key in "Align all" (part role > receiving role : target) — the per-row mover choice. */
         const relKey = (h: Hit) => `${figs[h.e].role}>${figs[h.r].role}:${h.target}`
@@ -1721,6 +1727,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               const caps = new Map<number, FigCaps>()
               const clearAt = new Map<number, number[]>()
               const clearBy = figs.map(() => 0), clearWorst = figs.map(() => '')
+              const clearPeak = figs.map(() => -1)
+              const third = new Map<string, { depth: number; worst: string; a: number; b: number }>()
               let overlap = 0, worst = ''   // mm while sampling (A129.5 honest check)
               resetAll()
               for (let i = 0; i < 2 * loop; i++) {
@@ -1749,16 +1757,26 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 caps.set(k, { pivot: pl.pivot, caps: res.figures.map((f) => (f.inspection ? stageCaps(f.inspection) : [])) })
                 const ds = figs.map(() => 0)
                 for (const c of res.frame.contacts) {
+                  if (c.a !== moverName && c.b !== moverName) {
+                    // THE START OVERLAP: two other figures against each other (their own postures), exempt pairs skipped.
+                    const ja = nameAt.get(c.a), jb = nameAt.get(c.b)
+                    if (ja === undefined || jb === undefined || exempt.has(`${c.capA}|${c.b}|${c.capB}`)) continue
+                    const key = ja < jb ? `${ja}|${jb}` : `${jb}|${ja}`
+                    const had = third.get(key)
+                    if (!had || c.depth > had.depth) third.set(key, { depth: c.depth, a: ja, b: jb,
+                      worst: `${figs[ja].letter} ${c.capA} ↔ ${figs[jb].letter} ${c.capB}` })
+                    continue
+                  }
                   const mine = c.a === moverName ? { cap: c.capA, other: c.b, oc: c.capB } : c.b === moverName ? { cap: c.capB, other: c.a, oc: c.capA } : null
                   if (!mine || exempt.has(`${mine.cap}|${mine.other}|${mine.oc}`)) continue
                   const j = nameAt.get(mine.other)
                   if (j === undefined || c.depth <= ds[j]) continue
                   ds[j] = c.depth
-                  if (c.depth > clearBy[j]) { clearBy[j] = c.depth; clearWorst[j] = `${moving.letter} ${mine.cap} ↔ ${figs[j].letter} ${mine.oc}` }
+                  if (c.depth > clearBy[j]) { clearBy[j] = c.depth; clearPeak[j] = k; clearWorst[j] = `${moving.letter} ${mine.cap} ↔ ${figs[j].letter} ${mine.oc}` }
                 }
                 clearAt.set(k, ds)
               }
-              return { per, ks, overlap: overlap / 1000, worst, draft, heights, caps, clearBy, clearWorst, clearAt }
+              return { per, ks, overlap: overlap / 1000, worst, draft, heights, caps, clearBy, clearWorst, clearAt, clearPeak, third }
             }
             // the moving role's clip frame → world shift: B = frame · diag(1, k, 1) (the vertical through the hips-drop
             // gain: root.y moves by hipsBind.y / standRef per metre of clip hips).
@@ -1784,21 +1802,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             // THE CLEARANCE: each other figure's allowance from the start (the dials when clicked).
             const others = figs.map((_, j) => j).filter((j) => j !== mi)
             const allow = figs.map((_, j) => clearAllowM(p0.clearBy[j]))
+            // THE CLEARANCE holds at every sampled frame; THE START OVERLAP reduces each figure at its deepest frame.
             const clearOf = (got: PassOut): ClearFrame[] => {
-              const want = new Set<number>()
-              got.per.forEach((smps, gi) => {
-                const kf = keyFrames(smps)
-                if (kf) { want.add(got.ks[gi][kf.deep]); want.add(got.ks[gi][kf.shallow]) }
-              })
-              // plus the frame with the largest excess over an allowance (any overlap at all; none = no such frame)
-              let wk = -1, wx = -Infinity
-              for (const [k, ds] of got.clearAt) for (const j of others) if (ds[j] > 0 && ds[j] - allow[j] > wx) { wx = ds[j] - allow[j]; wk = k }
-              if (wk >= 0) want.add(wk)
+              const peakOf = new Map<number, string[]>()
+              for (const j of others) if (got.clearPeak[j] >= 0) peakOf.set(got.clearPeak[j], [...(peakOf.get(got.clearPeak[j]) ?? []), entries[j].name])
               const out: ClearFrame[] = []
-              for (const k of want) {
-                const fc = got.caps.get(k)
-                if (!fc) continue
-                out.push({ pivot: fc.pivot, mover: fc.caps[mi], exempt,
+              for (const [k, fc] of got.caps) {
+                out.push({ pivot: fc.pivot, mover: fc.caps[mi], exempt, reduce: peakOf.get(k) ?? [],
                   others: others.map((j) => ({ name: entries[j].name, allowM: allow[j], caps: fc.caps[j] })) })
               }
               return out
@@ -1840,6 +1850,33 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const turn: [number, number, number] = turns ? [run.state.deg[0] ?? 0, run.state.deg[1] ?? 0, run.state.deg[2] ?? 0] : [0, 0, 0]
             const hitsNow = run.sol?.hits ?? []
             const slack = ALIGN_CLEAR_SLACK_MM / 1000
+            // THE CLEARANCE BACK-OFF (owner 2026-11-24): the solve's model moves the mover's capsules rigidly, the
+            // measurement re-poses every figure — a result can measure a few mm deeper into a person than the start
+            // (resting-spooning 44 → 48 mm, wall-doggy-climax 55 → 59 mm, the wall held at every frame). Then the run is
+            // taken back toward the start along its own path (½, ¼, … 1/32 of the way) and the first step that keeps every
+            // allowance and the scene's deepest overlap stands; none = the full result stands and THE VERDICT discards it.
+            const clearBroken = (got: PassOut) => others.some((j) => got.clearBy[j] > allow[j] + slack) || got.overlap > p0.overlap + slack
+            let backoff: number | null = null
+            const backoffTrace: { f: number; overMm: number; sceneMm: number }[] = []
+            const brokenBy = (got: PassOut, f: number) => backoffTrace.push({ f,
+              overMm: Math.round(Math.max(...others.map((j) => got.clearBy[j] - allow[j])) * 1e4) / 10,
+              sceneMm: Math.round((got.overlap - p0.overlap) * 1e4) / 10 })
+            if (clearBroken(cur)) {
+              brokenBy(cur, 1)
+              const x1 = extra, d1 = [...turn], r1 = run.state.root
+              for (const f of [0.5, 0.25, 0.125, 0.0625, 0.03125]) {
+                const x: [number, number, number] = [x0[0] + (x1[0] - x0[0]) * f, x0[1] + (x1[1] - x0[1]) * f, x0[2] + (x1[2] - x0[2]) * f]
+                const dg: [number, number, number] = turns ? [a0[0] + (d1[0] - a0[0]) * f, a0[1] + (d1[1] - a0[1]) * f, a0[2] + (d1[2] - a0[2]) * f] : [0, 0, 0]
+                const rt = r1 && solveRoot ? { pitchDeg: root0.pitchDeg + (r1.pitchDeg - root0.pitchDeg) * f, yawDeg: root0.yawDeg + (r1.yawDeg - root0.yawDeg) * f } : r1
+                const got = pass(x, dg, rt)
+                brokenBy(got, f)
+                if (clearBroken(got)) continue
+                cur = got; extra = x; turn[0] = dg[0]; turn[1] = dg[1]; turn[2] = dg[2]
+                run.state = { x, deg: turns ? [...dg] : run.state.deg, root: rt }
+                backoff = f
+                break
+              }
+            }
             // THE SUPPORT, ABSOLUTE: the moved role's gap over its surface over the loop, before and after, and every
             // other role's at the start (reported only).
             const gapRange = (smps: readonly AlignSample[]): [number, number] | null => {
@@ -1968,22 +2005,51 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
                 frames: after.map((x, i) => ({ k: x.k, rootMm: x.rootMm, visMm: x.visMm, tipMm: x.tipMm,
                   isoRootMm: iso[i]?.rootMm ?? NaN, isoVisMm: iso[i]?.visMm ?? NaN })) }
             })
+            // THE START OVERLAP (owner 2026-11-24): the mover's overlap excess over the tolerated contact depth, before and
+            // after — the verdict trades it against the axis error at the solve's rate.
+            const ovBefore = overlapExcessMm(others.map((j) => p0.clearBy[j])), ovAfter = overlapExcessMm(others.map((j) => cur.clearBy[j]))
             const reports = group.map((hit, gi) => {
               const kb = keyReport(p0.per[gi], bendLim), ka = keyReport(cur.per[gi], bendLim)
               const inside = !isPointTarget(hit.target)
               const rr = rendered[gi]
               return { kb, ka, inside, verdict: alignVerdict(kb, ka, inside, clearRows,
                 rr ? { beforeMm: rr.before.visMm, afterMm: rr.after.visMm, pulledMm: pulledM * 1000 } : null,
-                support.mode === 'surface' ? { beforeMm: support.excessBeforeMm, afterMm: support.excessAfterMm } : null) }
+                support.mode === 'surface' ? { beforeMm: support.excessBeforeMm, afterMm: support.excessAfterMm } : null,
+                { beforeMm: ovBefore, afterMm: ovAfter }) }
             })
             // A group is discarded by any of its relations' hard conditions, applied when none is broken and one gains.
             const bad = reports.find((x) => x.verdict.why)?.verdict ?? null
             const applied = !bad && reports.some((x) => x.verdict.applied)
+            // THE START OVERLAP's notes, on the state that stands (the result when applied, else the start): how much of
+            // the mover's start overlap went (the pair with the largest reduction), the deepest one left above the
+            // tolerated contact depth, and the relation's other role against a third person (its own posture).
+            const stands = applied ? cur : p0
+            const tolM = ALIGN_OVERLAP_TOL_MM / 1000
+            const ovNotes: AlignNote[] = []
+            if (applied) {
+              let best = -1, bestMm = 0
+              for (const j of others) {
+                const red = (p0.clearBy[j] - cur.clearBy[j]) * 1000
+                if (p0.clearBy[j] > tolM && red >= 1 && red > bestMm) { best = j; bestMm = red }
+              }
+              if (best >= 0) ovNotes.push({ code: 'overlap_reduced', mm: bestMm, pair: `${moving.letter}↔${figs[best].letter}`,
+                worst: p0.clearWorst[best] })
+            }
+            const left = others.filter((j) => stands.clearBy[j] > tolM).sort((a, b) => stands.clearBy[b] - stands.clearBy[a])[0]
+            if (left !== undefined) ovNotes.push({ code: 'overlap_remains', mm: stands.clearBy[left] * 1000,
+              pair: `${moving.letter}↔${figs[left].letter}`, worst: stands.clearWorst[left] })
+            const otherRole = moverKind === 'receiver' ? group[0].e : group[0].r
+            const thirdHit = [...stands.third.values()].filter((x) => (x.a === otherRole || x.b === otherRole) && x.depth > tolM)
+              .sort((a, b) => b.depth - a.depth)[0]
+            if (thirdHit) ovNotes.push({ code: 'overlap_third', mm: thirdHit.depth * 1000,
+              pair: `${figs[thirdHit.a].letter}↔${figs[thirdHit.b].letter}`, worst: thirdHit.worst })
+            for (const x of reports) x.verdict.notes.push(...ovNotes)
             const posture0 = postureOf(cur.per[0])
             const deepOk = reports.every((x) => deepHolds(x.ka, x.inside))
             const cand: AlignCandidate = { applied, deepOk, clearOk,
               axisMm: Math.max(...reports.map((x) => (x.ka ? keyWorstMm(x.ka, x.inside) : Infinity))),
-              depthMm: Math.min(...reports.map((x) => (x.ka ? x.ka.deep.depthMm : -Infinity))) }
+              depthMm: Math.min(...reports.map((x) => (x.ka ? x.ka.deep.depthMm : -Infinity))),
+              overlapMm: applied ? ovAfter : ovBefore }
             const rootAngle = solveRoot && applied && run.state.root
               ? { pitchDeg: deg(run.state.root.pitchDeg), yawDeg: deg(run.state.root.yawDeg) } : null
             const view = (c: ClearRow): ClearView => ({ with: c.name, startMm: c.startM * 1000, allowMm: c.allowM * 1000,
@@ -2021,7 +2087,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             })
             const moverRow: MoverAlign = { role: mr, letter: moving.letter, mover: moverKind, applied, shiftCm, turnDeg, adjustCm,
               adjustDeg, rangeCm, turnRangeDeg: cap.angleDeg, lamp: hitsNow.length ? 'red' : 'green', hits: hitsNow, rootAngle, rootBefore: solveRoot ? root0 : null,
-              passes: run.trace, converged: run.converged }
+              passes: run.trace, converged: run.converged, backoff, backoffTrace }
             return { rows, moverRow, draft: cur.draft, applied, solvedRoot: solveRoot && applied, pivot: applied ? cur.per : p0.per, cand,
               blocked: alignBlocked({ applied, postureLimited: !!posture0?.limited, hits: hitsNow, deepOk, stuck: !!stuck }) }
           }
@@ -2044,7 +2110,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             const first = runGroup(group, moverOf(kind), kind, cur0, !rootSolved)
             if (typeof first === 'string') return { ok: false, reason: first }
             let pick = first
-            if (choice === 'auto' && first.blocked) {
+            // THE START OVERLAP (owner 2026-11-24): the other role is often the better lever against an overlap the mover
+            // leaves — it is tried too when the first run leaves an excess of `ALIGN_GAIN_MM` or more, and the order of
+            // preference (`compareCandidates`: the axis error plus half the excess) picks.
+            if (choice === 'auto' && (first.blocked || (first.cand.overlapMm ?? 0) >= ALIGN_GAIN_MM)) {
               // THE AUTOMATIC ALTERNATIVE: the same relation with the receiving role moving, from the same start.
               const second = runGroup(group, moverOf('receiver'), 'receiver', cur0, !rootSolved)
               if (typeof second !== 'string') {

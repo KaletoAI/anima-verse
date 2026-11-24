@@ -2842,7 +2842,11 @@ Abend des 2026-11-23: Zustand `auto_unchanged` (passt schon, keine Sperre); eine
 sichtbare Wurzel in der Öffnung wird zurückgezogen statt verworfen — gesperrt nur,
 wenn das nicht geht (`root_range` / `root_overlap` mit `with` = Platzbuchstabe);
 `notes` (`little_depth`, `shallower`, `support_corrected`, `no_change`) mit
-`stroke_mm` / `shallower_mm` / `support_fix_mm` / `root_pulled` sind Anmerkungen.
+`stroke_mm` / `shallower_mm` / `support_fix_mm` / `root_pulled` sind Anmerkungen. Seit 2026-11-24 (die
+Start-Überlappung, `pairAlign.ts` THE START OVERLAP) dazu `overlap_reduced` (`overlap_fix_mm`, `overlap_pair` "X↔Y",
+`overlap_worst` = das Kapselpaar), `overlap_remains` (`overlap_left_mm`, `left_pair`, `left_worst`) und
+`overlap_third` (`third_mm`, `third_pair`, `third_worst`: die andere Rolle gegen eine dritte Person); Texte je
+höchstens 120 Zeichen.
 
 **Gruppen abspielen (G3, 2026-11-03).** Eine Gruppe spielt wie ein Paar, nur
 mit mehr Figuren:

@@ -9,7 +9,9 @@
  * auto: geometry
  * mismatch · not measurable (reason) · manual: adjusted · and the clip's own tick "manual: done", which later auto runs
  * never clear. The clip summary is its worst relation (`ALIGN_STATE_ORDER`). NOTES (owner 2026-11-23 evening, notes
- * instead of blocks) ride along: little depth, shallower than the start, support corrected, no change needed.
+ * instead of blocks) ride along: little depth, shallower than the start, support corrected, no change needed, and THE
+ * START OVERLAP's (owner 2026-11-24): the start overlap reduced (by how much, which pair and capsules), one that remains
+ * (how deep, the worst capsule pair — a hand correction or another mover), the other role against a third person.
  */
 import { isPointTarget, keyWorstMm, type AlignDiscard, type AlignNote } from '@anima/scene-render'
 import type { RelationAlign } from './PlacePreview'
@@ -26,6 +28,10 @@ export interface AlignStatusEntry {
   depth_mm?: [number, number]; axis_mm?: [number, number]; root_mm?: number; support_mm?: number
   notes?: AlignNoteCode[]; stroke_mm?: number; shallower_mm?: number; support_fix_mm?: number; root_pulled?: boolean
   mover?: string; turn_deg?: [number, number, number]; at?: string
+  /** THE START OVERLAP's notes: reduced by (mm, pair "X↔Y", capsules), left (mm, pair, capsules), a third person. */
+  overlap_fix_mm?: number; overlap_pair?: string; overlap_worst?: string
+  overlap_left_mm?: number; left_pair?: string; left_worst?: string
+  third_mm?: number; third_pair?: string; third_worst?: string
 }
 /** The listing's view of a clip's status. */
 export interface ClipAlignStatus {
@@ -59,6 +65,9 @@ function numbersOf(r: RelationAlign): Omit<AlignStatusEntry, 'state' | 'reason'>
     if (n.code === 'little_depth') out.stroke_mm = r1(n.strokeMm)
     else if (n.code === 'shallower') { out.shallower_mm = r1(n.mm); out.root_pulled = n.rootPulled }
     else if (n.code === 'support_corrected') out.support_fix_mm = r1(n.mm)
+    else if (n.code === 'overlap_reduced') { out.overlap_fix_mm = r1(n.mm); out.overlap_pair = n.pair; out.overlap_worst = n.worst }
+    else if (n.code === 'overlap_remains') { out.overlap_left_mm = r1(n.mm); out.left_pair = n.pair; out.left_worst = n.worst }
+    else if (n.code === 'overlap_third') { out.third_mm = r1(n.mm); out.third_pair = n.pair; out.third_worst = n.worst }
   }
   return out
 }
@@ -125,13 +134,23 @@ export function noteText(t: (s: string) => string, n: AlignNote): string {
       : t('shallower than the start by {mm} mm')).replace('{mm}', f(n.mm))
     case 'support_corrected': return t('support corrected by {mm} mm').replace('{mm}', f(n.mm))
     case 'no_change': return t('no change needed')
+    case 'overlap_reduced': return t('start overlap reduced by {mm} mm ({pair}: {worst})').replace('{mm}', f(n.mm))
+      .replace('{pair}', n.pair || '–').replace('{worst}', n.worst || '–')
+    case 'overlap_remains': return t('start overlap remains {mm} mm ({pair}: {worst})').replace('{mm}', f(n.mm))
+      .replace('{pair}', n.pair || '–').replace('{worst}', n.worst || '–')
+    case 'overlap_third': return t('{pair} overlap {mm} mm by their own posture ({worst}) — not the aligned pair')
+      .replace('{mm}', f(n.mm)).replace('{pair}', n.pair || '–').replace('{worst}', n.worst || '–')
   }
 }
 /** The notes of a stored status entry, rebuilt as `AlignNote`s (the numbers the entry keeps). */
 export function entryNotes(e: AlignStatusEntry): AlignNote[] {
   return (e.notes ?? []).map((c): AlignNote => (c === 'little_depth' ? { code: c, strokeMm: e.stroke_mm ?? NaN, deepMm: e.depth_mm?.[1] ?? NaN }
     : c === 'shallower' ? { code: c, mm: e.shallower_mm ?? NaN, rootPulled: !!e.root_pulled }
-      : c === 'support_corrected' ? { code: c, mm: e.support_fix_mm ?? NaN } : { code: 'no_change' }))
+      : c === 'support_corrected' ? { code: c, mm: e.support_fix_mm ?? NaN }
+        : c === 'overlap_reduced' ? { code: c, mm: e.overlap_fix_mm ?? NaN, pair: e.overlap_pair ?? '', worst: e.overlap_worst ?? '' }
+          : c === 'overlap_remains' ? { code: c, mm: e.overlap_left_mm ?? NaN, pair: e.left_pair ?? '', worst: e.left_worst ?? '' }
+            : c === 'overlap_third' ? { code: c, mm: e.third_mm ?? NaN, pair: e.third_pair ?? '', worst: e.third_worst ?? '' }
+              : { code: 'no_change' }))
 }
 export const STATE_COLOR: Record<AlignState | 'not_checked' | 'done', string> = {
   not_checked: 'var(--text-muted, #8b949e)', auto_improved: '#58a6ff', auto_aligned: '#3fb950', auto_unchanged: '#56d4dd',
@@ -147,19 +166,24 @@ export function worstState(states: readonly (AlignState | 'not_checked')[]): Ali
 /** The status a kind shows in the clip list: its A files' summaries, the worst of them; 'done' when every A file is
  *  ticked "manual: done". `key` is what the filter compares. */
 export function kindStatusOf(clips: readonly { role?: string | null; align_status?: ClipAlignStatus | null }[]):
-  { key: AlignState | 'not_checked' | 'done' | ''; reasons: AlignStateReason[]; who: string[]; notes: AlignNoteCode[] } {
+  { key: AlignState | 'not_checked' | 'done' | ''; reasons: AlignStateReason[]; who: string[]; notes: AlignNoteCode[]
+    overlap: AlignNote[] } {
   const own = clips.filter((c) => (c.role || '') === 'a' && c.align_status)
-  if (!own.length) return { key: '', reasons: [], who: [], notes: [] }
+  if (!own.length) return { key: '', reasons: [], who: [], notes: [], overlap: [] }
   const notes = new Set<AlignNoteCode>()
   for (const c of own) for (const e of Object.values(c.align_status!.relations)) for (const n of e.notes ?? []) if (n !== 'no_change') notes.add(n)
-  if (own.every((c) => c.align_status!.done)) return { key: 'done', reasons: [], who: [], notes: [...notes] }
+  // THE START OVERLAP's notes in full on the badge (how much, which pair and capsules), deepest first.
+  const overlap = own.flatMap((c) => Object.values(c.align_status!.relations).flatMap((e) => entryNotes(e)))
+    .filter((n) => n.code === 'overlap_reduced' || n.code === 'overlap_remains' || n.code === 'overlap_third')
+    .sort((a, b) => ('mm' in b ? b.mm : 0) - ('mm' in a ? a.mm : 0))
+  if (own.every((c) => c.align_status!.done)) return { key: 'done', reasons: [], who: [], notes: [...notes], overlap }
   const key = worstState(own.map((c) => c.align_status!.summary))
   const reasons = new Set<AlignStateReason>(), who = new Set<string>()
   for (const c of own) for (const e of Object.values(c.align_status!.relations)) if (e.state === key && e.reason) {
     reasons.add(e.reason)
     if (e.with) who.add(e.with)
   }
-  return { key, reasons: [...reasons], who: [...who], notes: [...notes] }
+  return { key, reasons: [...reasons], who: [...who], notes: [...notes], overlap }
 }
 /** A note code in a few words (the badge). */
 export function noteWord(t: (s: string) => string, c: AlignNoteCode): string {
@@ -168,5 +192,8 @@ export function noteWord(t: (s: string) => string, c: AlignNoteCode): string {
     case 'shallower': return t('shallower')
     case 'support_corrected': return t('support corrected')
     case 'no_change': return t('no change needed')
+    case 'overlap_reduced': return t('start overlap reduced')
+    case 'overlap_remains': return t('start overlap remains')
+    case 'overlap_third': return t('third-person overlap')
   }
 }

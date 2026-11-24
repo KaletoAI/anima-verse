@@ -2023,7 +2023,9 @@ function StatusBadge({ clips, long = false }: { clips: readonly ApiClipRow[]; lo
   if (!s.key) return null
   const word = stateWord(t, s.key)
   const why = s.reasons.map((r) => reasonText(t, r, s.who.join(', ') || undefined)).join(', ')
-  const notes = s.notes.map((c) => noteWord(t, c)).join(', ')
+  // THE START OVERLAP's notes in full (how much, which pair and capsules); the other notes as words.
+  const overlapNotes = s.overlap.map((n) => noteText(t, n)).join('; ')
+  const notes = [...s.notes.filter((c) => !c.startsWith('overlap_')).map((c) => noteWord(t, c)), ...(overlapNotes ? [overlapNotes] : [])].join(', ')
   const tip = clips.filter((c) => (c.role || '') === 'a' && c.align_status).map((c) => {
     const st = c.align_status!
     const rels = Object.entries(st.relations).map(([k, e]) => {
