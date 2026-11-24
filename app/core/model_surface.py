@@ -608,11 +608,18 @@ def _scene_specs(location: Dict[str, Any],
     the storey-0 rooms that declare a ``walk_y_world`` with the hull it
     applies inside. Everything in tile-local metres, like every scene number.
 
-    The same composition ``GET /play/locations/{id}/scene`` serves, down to
-    its 404 gate: a location with no room layout, no building outline and no
-    building model composes nothing, and that empty answer is cached too.
+    The same composition AND the same cache as
+    ``GET /play/locations/{id}/scene`` (``scene_recipe.scene_for_location``),
+    down to its 404 gate: a location with no room layout, no building outline
+    and no building model composes nothing (``None``), and that empty answer
+    is cached here too. The scene payload is SHARED with the route — it is only
+    read here, never written; the lists built from it are new lists.
 
-    EVERYTHING that reads is inside the guard, ``scene_inputs`` included: it
+    The 5-second TTL below no longer saves a composition (the scene cache does
+    that whenever no input moved); it saves the input fingerprint the scene
+    cache has to compute on every lookup.
+
+    EVERYTHING that reads is inside the guard, the fingerprint included: it
     goes to disk for the model metas, and a failure there that escaped the
     cache would send every single report down the same failing disk reads,
     four times a second per walker.
@@ -625,17 +632,9 @@ def _scene_specs(location: Dict[str, Any],
     specs: List[Dict[str, Any]] = []
     declarations: List[Dict[str, Any]] = []
     try:
-        from app.core.scene_recipe import compose_scene, scene_inputs
-        from app.core.surface_textures import library_kinds
-        map3d = location.get("map3d") or {}
-        has_layout = any(isinstance(r, dict) and r.get("layout")
-                         for r in location.get("rooms") or [])
-        plan_width_m, building_meta, room_metas = scene_inputs(location, loc_id)
-        if has_layout or len(map3d.get("outline") or []) >= 3 or building_meta:
-            scene = compose_scene(location, plan_width_m=plan_width_m,
-                                  building_meta=building_meta,
-                                  room_metas=room_metas,
-                                  surface_kinds=library_kinds())
+        from app.core.scene_recipe import scene_for_location
+        scene = scene_for_location(location, loc_id)
+        if scene is not None:
             models = scene.get("models") or []
             specs = [m for m in models if m.get("surface") or m.get("water")]
             declarations = _room_declarations(scene, models)
