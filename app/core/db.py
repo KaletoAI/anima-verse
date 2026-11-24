@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, List
 
+from app.core import loop_guard
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 
@@ -37,6 +38,7 @@ def _configure(conn: sqlite3.Connection) -> None:
 
 def get_connection() -> sqlite3.Connection:
     """Thread-local connection: SQLite needs one connection per thread."""
+    loop_guard.check("db")
     tid = threading.get_ident()
     conn = _connections.get(tid)
     if conn is None:

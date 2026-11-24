@@ -27,6 +27,18 @@ def _cap_malloc_arenas(limit: int) -> None:
 
 
 _cap_malloc_arenas(MALLOC_ARENA_MAX)
+
+#: How long a thread may keep the GIL before another one is let in. Python's
+#: default is 5 ms, and a thread that drops the GIL for a syscall waits up to
+#: that long to get it back — per CPU-bound thread in the process. With four
+#: of them (figure builds, cut textures, geometry) one SELECT took 308 ms and
+#: one os.stat 33 ms; at 0.5 ms it is 0.5 ms and 1.6 ms, and the CPU-bound
+#: threads lose nothing measurable (99-109 % throughput). Measured
+#: 2026-11-25, see docs/superpowers/plans/2026-11-25-event-loop-stability.md.
+GIL_SWITCH_INTERVAL_S = 0.0005
+
+import sys as _sys
+_sys.setswitchinterval(GIL_SWITCH_INTERVAL_S)
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.core.log import get_logger
@@ -1074,9 +1086,14 @@ async def lifespan(app: FastAPI):
 
     from app.core import event_loop_watchdog
     event_loop_watchdog.start(tick=0.1, threshold_ms=1000.0)
+    # From here on requests are served: every world-DB access on this thread
+    # is counted and reported once a minute (app/core/loop_guard.py).
+    from app.core import loop_guard
+    loop_guard.register_server_loop()
 
     yield
 
+    loop_guard.unregister()
     event_loop_watchdog.stop()
     _consolidation_task.cancel()
     try:
