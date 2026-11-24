@@ -45,6 +45,18 @@ def get_messaging_partners(character_name: str, limit: int = 10) -> List[str]:
     return UnifiedChatManager.get_messaging_partners(character_name, limit=limit)
 
 
+def count_messages_involving(character_name: str) -> int:
+    """Number of ``chat_messages`` rows the character wrote or is the
+    partner of. Read-only; a read error propagates."""
+    if not character_name:
+        return 0
+    from app.core.db import get_connection
+    row = get_connection().execute(
+        "SELECT COUNT(*) FROM chat_messages WHERE character_name=? OR partner=?",
+        (character_name, character_name)).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def save_message(message: Dict[str, str], character_name: str = "",
                  partner_name: str = "") -> bool:
     """Stores a message. partner_name: explicit partner character (C2C).

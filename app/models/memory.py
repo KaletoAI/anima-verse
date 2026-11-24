@@ -281,6 +281,21 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
     sync_topics.avatars(family_of(character_name), "self")
 
 
+def count_other_memories_naming(name: str) -> int:
+    """Number of memory rows of OTHER characters whose content contains
+    ``name`` as a literal substring (SQLite LIKE, so ASCII case-insensitive;
+    ``%`` and ``_`` in the name are escaped, never wildcards). Read-only;
+    a read error propagates."""
+    if not name:
+        return 0
+    pattern = "%" + (name.replace("\\", "\\\\").replace("%", "\\%")
+                     .replace("_", "\\_")) + "%"
+    row = get_connection().execute(
+        "SELECT COUNT(*) FROM memories WHERE character_name<>? "
+        "AND content LIKE ? ESCAPE '\\'", (name, pattern)).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def add_memory(character_name: str,
     content: str,
     memory_type: str = "semantic",
