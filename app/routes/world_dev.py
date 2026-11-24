@@ -1580,7 +1580,7 @@ def _get_pause_state() -> Dict[str, bool]:
 
 
 @router.post("/pause-all")
-async def pause_all():
+def pause_all():
     """Pauses all LLM and background activities (except World Dev Chat).
 
     The llm_task_state "world_dev" preset disables background tasks,
@@ -1612,7 +1612,7 @@ async def pause_all():
 
 
 @router.post("/resume-all")
-async def resume_all():
+def resume_all():
     """Resumes all LLM and background activities."""
     from app.core.task_queue import get_task_queue
     from app.routes.scheduler import get_scheduler_manager

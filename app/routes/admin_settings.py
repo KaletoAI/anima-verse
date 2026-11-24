@@ -814,7 +814,7 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
 # ── States (prompt-filters block) Import / Export ──
 
 @router.get("/prompt-filters/export")
-async def prompt_filters_export(user=Depends(require_admin)):
+def prompt_filters_export(user=Depends(require_admin)):
     """Stream the world-level prompt-filters block as a ZIP."""
     import io as _io
     from fastapi.responses import StreamingResponse
@@ -2180,7 +2180,7 @@ def agent_loop_status(user=Depends(require_admin)):
 
 
 @router.post("/agent-loop/pause")
-async def agent_loop_pause(user=Depends(require_admin)):
+def agent_loop_pause(user=Depends(require_admin)):
     """Pause the AgentLoop (and the task_queue 'default' it shares).
 
     The pause is persistent — survives restart because it lives in the
@@ -2194,7 +2194,7 @@ async def agent_loop_pause(user=Depends(require_admin)):
 
 
 @router.post("/agent-loop/resume")
-async def agent_loop_resume(user=Depends(require_admin)):
+def agent_loop_resume(user=Depends(require_admin)):
     """Resume the AgentLoop."""
     from app.core.task_queue import get_task_queue
     tq = get_task_queue()

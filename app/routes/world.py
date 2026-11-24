@@ -139,7 +139,7 @@ def get_freeze_status() -> Dict[str, Any]:
 
 
 @router.post("/freeze")
-async def freeze_world(
+def freeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Freezes the world: AgentLoop, hourly ticks and scheduler jobs
@@ -152,7 +152,7 @@ async def freeze_world(
 
 
 @router.post("/unfreeze")
-async def unfreeze_world(
+def unfreeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Unfreezes the world — the autonomous simulation continues."""
@@ -265,7 +265,7 @@ def get_sleep_status() -> Dict[str, Any]:
 
 
 @router.post("/sleep")
-async def sleep_world_route(
+def sleep_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Sleep mode ON: all NPCs fall asleep at once — no more NPC LLM chat
@@ -275,7 +275,7 @@ async def sleep_world_route(
 
 
 @router.post("/wake")
-async def wake_world_route(
+def wake_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Sleep mode OFF: NPCs put to sleep by sleep mode wake up; naturally
@@ -2533,8 +2533,8 @@ async def prop_surface(prop_id: str, request: Request,
 
 
 @router.delete("/props/{prop_id}/surface")
-async def prop_surface_delete(prop_id: str, variant: Optional[str] = None,
-                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+def prop_surface_delete(prop_id: str, variant: Optional[str] = None,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Remove a prop variant's baked walkable surface (``?variant=<store
     index>``; absent = every active variant).
 
