@@ -778,23 +778,31 @@ def load_source_file(character_name: str, relpath: str) -> str:
     try:
         from app.models.character import get_character_dir
         p = Path(os.path.abspath(get_character_dir(character_name) / relpath))
-        with _SOURCE_CACHE_LOCK:
-            try:
-                st = os.stat(p)
-            except OSError:
+        # A HIT never takes the lock. Every profile load asks once per soul
+        # field, from many threads at once, and each handoff of a contended
+        # lock costs the next thread one wait for the GIL — under CPU-bound
+        # worker threads that queue held the event loop for 83 s
+        # (2026-11-25). The stat releases the GIL, so it stays outside the
+        # lock too; a single dict read is atomic.
+        try:
+            st = os.stat(p)
+        except OSError:
+            with _SOURCE_CACHE_LOCK:
                 _SOURCE_CACHE.pop(p, None)
-                return ""
-            identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-            cached = _SOURCE_CACHE.get(p)
-            if cached is not None and cached[:5] == identity:
-                _SOURCE_CACHE.move_to_end(p)
-                return cached[5]
-            text = strip_empty_sections(p.read_text(encoding="utf-8"))
+            return ""
+        identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        cached = _SOURCE_CACHE.get(p)
+        if cached is not None and cached[:5] == identity:
+            return cached[5]
+        text = strip_empty_sections(p.read_text(encoding="utf-8"))
+        # Only writers of the cache serialize. Eviction is by insertion
+        # order: a hit no longer refreshes its entry.
+        with _SOURCE_CACHE_LOCK:
             _SOURCE_CACHE[p] = (*identity, text)
             _SOURCE_CACHE.move_to_end(p)
             if len(_SOURCE_CACHE) > 2048:
                 _SOURCE_CACHE.popitem(last=False)
-            return text
+        return text
     except Exception:
         return ""
 

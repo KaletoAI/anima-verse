@@ -119,4 +119,19 @@ with tempfile.TemporaryDirectory() as tmp, patch.object(
     assert target.stat().st_ino != before, "rewrite atomically replaces inode"
     assert stat.S_IMODE(target.stat().st_mode) == 0o640, "rewrite preserves mode"
     assert "Third" in template.load_source_file("demo", "soul/beliefs.md")
+
+    # A cache HIT never waits for the cache lock: every profile load asks once
+    # per soul field from many threads, and a queue at that lock held the event
+    # loop for 83 s (2026-11-25). While another thread holds the lock, a hit
+    # still answers; before the fix this reader blocked until the release.
+    import threading
+    answer = []
+    reader = threading.Thread(
+        target=lambda: answer.append(template.load_source_file("demo", "soul/beliefs.md")),
+        daemon=True)
+    with template._SOURCE_CACHE_LOCK:
+        reader.start()
+        reader.join(timeout=5)
+        assert not reader.is_alive(), "a cache hit must not take _SOURCE_CACHE_LOCK"
+    assert answer and "Third" in answer[0]
 print("Soul cache checks passed")
