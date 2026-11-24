@@ -1,5 +1,17 @@
-"""Pure ASGI request timing with bounded route samples and slow-request logs."""
+"""Pure ASGI request timing with bounded route samples and slow-request logs.
+
+The slow-request log is written by ONE daemon writer thread, never by the
+caller: ``_record`` runs on the event loop (it is called from the middleware's
+``finally``), and an append under a lock there cost up to 8 s on a loaded
+host (three watchdog dumps, plan 2026-11-25-event-loop-stability Task 1.3).
+The loop only appends the row to a bounded in-memory queue; when the queue is
+full the OLDEST row is dropped (counted in ``_dropped``), so enqueueing never
+blocks and never raises. ``flush()`` writes everything queued and ends the
+writer; it is registered with ``atexit``, and a later ``_record`` simply
+starts a new writer.
+"""
 import asyncio
+import atexit
 from collections import deque
 import json
 import math
@@ -15,12 +27,54 @@ from app.utils import llm_logger
 
 LOG_FILE = llm_logger.LOG_DIR / "request_timing.jsonl"
 _stats_lock = threading.Lock()
-_log_lock = threading.Lock()
 _METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 _samples: dict[tuple[str, str], deque] = {}
 
 
+# Slow-request rows waiting for the writer thread. A deque with maxlen drops
+# its oldest entry on append when full; _cond guards it (held only for an
+# append or a swap, never across file I/O).
+_QUEUE_MAX = 5000
+_pending: deque = deque(maxlen=_QUEUE_MAX)
+_cond = threading.Condition(threading.Lock())
+_writer: threading.Thread | None = None
+_stop = False
+_dropped = 0
+
+
+def _writer_main() -> None:
+    """Drain the queue into LOG_FILE until stopped AND empty."""
+    while True:
+        with _cond:
+            while not _pending and not _stop:
+                _cond.wait()
+            if not _pending and _stop:
+                return
+            batch = list(_pending)
+            _pending.clear()
+        try:
+            lines = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in batch)
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(lines)
+        except Exception:
+            # Diagnostics must never take the server down; the batch is lost.
+            pass
+
+
+def _ensure_writer() -> None:
+    """Start the writer thread if none is running. Caller holds _cond."""
+    global _writer, _stop
+    if _writer is not None and _writer.is_alive():
+        return
+    _stop = False
+    _writer = threading.Thread(target=_writer_main, name="request-timing-writer",
+                               daemon=True)
+    _writer.start()
+
+
 def _record(route, method, status, ms, size, outcome):
+    global _dropped
     method = method if method in _METHODS else "OTHER"
     with _stats_lock:
         _samples.setdefault((route, method), deque(maxlen=500)).append((ms, outcome))
@@ -29,14 +83,31 @@ def _record(route, method, status, ms, size, outcome):
     try:
         row = {"ts": utc_now_iso(), "route": route, "method": method,
                "status": status, "ms": ms, "bytes": size, "outcome": outcome}
-        line = json.dumps(row, ensure_ascii=False)
-        with _log_lock:
-            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with LOG_FILE.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        with _cond:
+            if len(_pending) >= (_pending.maxlen or 0) > 0:
+                _dropped += 1
+            _pending.append(row)
+            _ensure_writer()
+            _cond.notify()
     except Exception:
         # Diagnostics must never affect request handling.
         pass
+
+
+def flush(timeout: float = 5.0) -> None:
+    """Write every queued row and end the writer thread. Idempotent; a later
+    ``_record`` starts a fresh writer."""
+    global _stop
+    with _cond:
+        writer = _writer
+        if writer is None or not writer.is_alive():
+            return
+        _stop = True
+        _cond.notify_all()
+    writer.join(timeout)
+
+
+atexit.register(flush)
 
 
 def route_stats() -> list[dict]:
