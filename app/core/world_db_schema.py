@@ -12,7 +12,7 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 10  # 10: durable prop action executions and exclusive claims
+SCHEMA_VERSION = 11  # 11: World Dev free-mode runs + journal
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1058,6 +1058,56 @@ SCHEMA_STATEMENTS = [
         finished_at TEXT,
         duration_s REAL,
         PRIMARY KEY (improvement_id, candidate_key)
+    )""",
+    # World Dev free mode (app/core/world_dev_runs.py): one row per agent run.
+    # Open statuses: running | awaiting_review | interrupted; terminal:
+    # accepted | rolled_back | rollback_incomplete. The PARTIAL unique index
+    # over a constant is the atomic "at most one open run" claim.
+    """CREATE TABLE IF NOT EXISTS world_dev_runs (
+        id               TEXT PRIMARY KEY,
+        task             TEXT NOT NULL DEFAULT '',
+        model            TEXT NOT NULL DEFAULT '',
+        provider         TEXT NOT NULL DEFAULT '',
+        user_id          TEXT NOT NULL DEFAULT '',
+        status           TEXT NOT NULL DEFAULT 'running',
+        was_frozen       INTEGER NOT NULL DEFAULT 0,
+        turn             INTEGER NOT NULL DEFAULT 0,
+        steps            INTEGER NOT NULL DEFAULT 0,
+        max_steps        INTEGER NOT NULL DEFAULT 0,
+        max_tokens_total INTEGER NOT NULL DEFAULT 0,
+        tokens_in        INTEGER NOT NULL DEFAULT 0,
+        tokens_out       INTEGER NOT NULL DEFAULT 0,
+        cost_total       REAL NOT NULL DEFAULT 0,
+        backup_path      TEXT NOT NULL DEFAULT '',
+        note             TEXT NOT NULL DEFAULT '',
+        skipped_json     TEXT NOT NULL DEFAULT '[]',
+        created_at       TEXT NOT NULL,
+        ended_at         TEXT
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_world_dev_runs_one_open
+       ON world_dev_runs ((1))
+       WHERE status IN ('running', 'awaiting_review', 'interrupted')""",
+    # Two-phase journal: a write step is inserted 'pending' BEFORE the write
+    # (with its inverse when the target is known) and completed 'done' with
+    # the values read back from storage. kind: read | write | refused;
+    # target_kind: location | terrain | height | character.
+    """CREATE TABLE IF NOT EXISTS world_dev_journal (
+        run_id       TEXT NOT NULL,
+        seq          INTEGER NOT NULL,
+        turn         INTEGER NOT NULL DEFAULT 0,
+        kind         TEXT NOT NULL,
+        tool         TEXT NOT NULL DEFAULT '',
+        args_json    TEXT NOT NULL DEFAULT '{}',
+        target_kind  TEXT,
+        target_id    TEXT,
+        state        TEXT NOT NULL DEFAULT 'pending',
+        before_json  TEXT,
+        written_json TEXT,
+        inverse_json TEXT,
+        line         TEXT NOT NULL DEFAULT '',
+        created_at   TEXT NOT NULL,
+        undone_at    TEXT,
+        PRIMARY KEY (run_id, seq)
     )""",
 ]
 
