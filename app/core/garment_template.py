@@ -2531,6 +2531,11 @@ def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List
     ``failure_info`` of the record),
     ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``; ``CUT_REDRAPE`` for a drape of
     another cut, ``cut_behind``) or ``blocked`` (no key: reason from ``key_for``). Read-only."""
+    try:
+        from app.core import read_scope
+        read_scope.tally("drape_state")
+    except Exception:  # noqa: BLE001 — statistics never disturb the read
+        pass
     from app.core.garment_store import read_record
     sig, reason, _sources, params, key_lower = _key(character_name, item_id, base_sha=base_sha, lower=lower,
                                                     item=item)

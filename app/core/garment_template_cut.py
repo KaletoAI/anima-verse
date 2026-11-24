@@ -218,6 +218,11 @@ def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, An
     None with the plain ``reason`` when it cannot be cut (no parameters, not a pattern kind or a strapless top, no
     plain body, a lower layer still to be draped — ``sig_of``). ``lower``
     is the worn set under the rule of the drape key (``garment_template.lower_layers``; [] while not worn)."""
+    try:
+        from app.core import read_scope
+        read_scope.tally("cut_key")
+    except Exception:  # noqa: BLE001 — statistics never disturb the read
+        pass
     from app.core import base_body, figure
     from app.core import garment_template as gt
     from app.models.character import get_character_profile

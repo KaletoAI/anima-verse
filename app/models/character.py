@@ -395,6 +395,11 @@ def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[
     of returning a replacement profile. Existing callers retain their defaults.
     """
     try:
+        from app.core import read_scope
+        read_scope.tally("profile")
+    except Exception:  # noqa: BLE001 — statistics never disturb the read
+        pass
+    try:
         conn = get_connection()
         row = conn.execute(
             "SELECT profile_json, config_json, template FROM characters WHERE name=?",
