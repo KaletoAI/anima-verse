@@ -173,6 +173,7 @@ from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
+from app.core.route_limits import FIGURE_POLLS, FIGURE_POLLS_LIMIT, limited
 from app.models.character import get_character_dir
 
 logger = get_logger("figure_routes")
@@ -186,6 +187,7 @@ def _require_character(character_name: str) -> None:
 
 
 @router.get("/open-steps")
+@limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
 def get_open_steps(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The character list's badges (Ruling A112): ``{"characters": {name: figure_build.open_steps(name)}}`` for
     every character of the roster (dormant included) — only those with an open step or a running Build."""
@@ -239,6 +241,7 @@ def cancel_build_all(lang: str = "en", _: Dict[str, Any] = Depends(require_admin
 
 
 @router.get("/{character_name}/figure")
+@limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
 def get_figure(character_name: str, plain: bool = False,
                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import figure_build
