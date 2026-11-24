@@ -59,6 +59,12 @@ class SecretPhotos(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.loop = SimpleNamespace(bump_respond=Mock(), dispatch_room_reactions=Mock(
             return_value={"obligatory": ["Bob"], "chime": []}))
+
+        # /play/say awaits the loop's awaitable variant; here it is the same
+        # recorded call, so the assertions below read one mock.
+        async def dispatch_async(**kwargs):
+            return self.loop.dispatch_room_reactions(**kwargs)
+        self.loop.dispatch_room_reactions_async = dispatch_async
         self.stack.enter_context(patch("app.core.agent_loop.get_agent_loop", return_value=self.loop))
         self.stack.enter_context(patch("app.models.account.is_player_controlled", side_effect=lambda n: n in {"Ann", "Cid"}))
         self.stack.enter_context(patch("app.core.attention.is_distracted", return_value=False))
