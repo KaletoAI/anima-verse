@@ -67,8 +67,16 @@ Cases:
         advance_validate exactly once, and only the first run moved (entering).
   [E8]  O1 with the NPC taken over as an avatar (reports_arrival): no
         arrival by itself; at 113.6 approaching, at 113.8 failed
-        approach_timeout, and ONE cancel order whose actor stands where it
-        stands, (4, 2).
+        approach_timeout, and ONE cancel order whose actor stands where its
+        order has it: (113.8 - 100 - 1.2) * 1.4 = 17.64 m > L = 2.795 -> the end
+        of the polyline, the access (6.5, 5.25), written as its position too.
+  [E17] O1 NPC (plan [[4, 4], [6.5, 5.25]]) cancelled at 102.5: it has walked
+        (102.5 - 100 - 1.2) * 1.4 = 1.82 m along the unit (2.5, 1.25) / 2.795085
+        = (0.894427, 0.447214) -> (4 + 1.627857, 4 + 0.813929) = (5.628, 4.814),
+        stored at centimetres (set_character_pos rounds to 0.01) -> (5.63, 4.81):
+        the cancel's stand and its position, place None (never the seat (4, 2)).
+  [E17b] the same cancelled at 100.5, inside the 1.2 s exit: 0 m -> the
+        polyline's first point (4, 4).
   [E9]  boot (a)/(b): a run without data.order -> cancelled e3_migration; a
         profile journey with an approach_target -> removed.
   [E13] STANDING combined (prepare 5 s, drink 5 s game): only due_only steps:
@@ -173,8 +181,7 @@ def set_alive(value):
 class Timer(unittest.TestCase):
     def setUp(self):
         MO.boot()
-        if hasattr(MO, "_last_alive"):    # a fresh process: no liveness write yet
-            MO._last_alive[0] = None
+        MO._last_alive[0] = None    # a fresh process: no liveness write yet
 
     def tearDown(self):
         F.W.set_world_frozen(False)
@@ -370,7 +377,37 @@ class Timer(unittest.TestCase):
         self.assertEqual(len(cancels), 1, cancels)
         self.assertEqual([a["name"] for a in cancels[0]["actors"]], [name])
         stand = cancels[0]["actors"][0]["stand"]
-        self.assertEqual((stand["x"], stand["z"]), (4.0, 2.0))
+        # Its order has it at the access by now (17.64 m > L), not on the seat.
+        self.assertEqual((stand["x"], stand["z"]), (6.5, 5.25))
+        pos = F.C.get_character_pos(name)
+        self.assertEqual((pos["x"], pos["z"]), (6.5, 5.25))
+
+    def _cancel_o1_at(self, t):
+        name, target = seated_o1()
+        seen, spy = OR.published()
+        with spy:
+            eid = S.request(name, target)["execution_id"]
+            self.assertEqual(R.get(eid)["data"]["plans"][name]["waypoints"], [[4, 4], [6.5, 5.25]])
+            F.MOTION[0] = float(t)
+            A.cancel(name, eid)
+        self.assertEqual(R.get(eid)["status"], "cancelled")
+        cancels = [o for o in seen if o["kind"] == "cancel"]
+        self.assertEqual(len(cancels), 1, cancels)
+        stand = cancels[0]["actors"][0]["stand"]
+        pos = F.C.get_character_pos(name)
+        return (stand["x"], stand["z"]), (pos["x"], pos["z"]), F.C.get_character_profile(name).get("place")
+
+    def test_e17_cancel_on_the_way(self):
+        print("[E17] a cancel on the way stands on the plan's polyline, never on the seat")
+        stand, pos, place = self._cancel_o1_at(102.5)
+        self.assertEqual(stand, (5.63, 4.81))
+        self.assertEqual(pos, (5.63, 4.81))
+        self.assertIsNone(place)
+
+    def test_e17b_cancel_during_exit(self):
+        stand, pos, place = self._cancel_o1_at(100.5)
+        self.assertEqual(stand, (4.0, 4.0))
+        self.assertEqual(pos, (4.0, 4.0))
 
     def test_e9_boot_migration(self):
         name, target, eid = standing()

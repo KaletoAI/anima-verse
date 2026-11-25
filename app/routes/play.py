@@ -1461,7 +1461,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                    t("That slope is too steep to climb.", lang))
 
     from contextlib import nullcontext
-    with (_engine._internal_mutation() if _mode == "quiet" else nullcontext()):
+    with (_engine.quiet_report() if _mode == "quiet" else nullcontext()):
         written = set_character_pos(avatar, x, z,
                                     origin=(session, seq) if session is not None else None, yaw=yaw)
     if entry_room:

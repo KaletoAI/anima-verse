@@ -166,6 +166,7 @@ public static partial class OrderCheck
                         if (name != m.AvatarName) return;
                         foreach (var e in frame.Events) reportsAt.TryAdd(e, source.PositionReports);
                     };
+                    int reportsAtClick = source.PositionReports;
                     Click("bench-56");
                     await offers.PendingPropAction!;
                     while (m.Clock < t0 + 7.0) Frame();
@@ -180,12 +181,15 @@ public static partial class OrderCheck
                         // No wait at the access: the entry starts on the arrival, the loop follows (entry ≤ 2.5 s).
                         Is("R6 Walk → Entry → Loop", states.Select(s => s.State).SequenceEqual(new[] { OrderState.Walk, OrderState.Entry, OrderState.Loop }), States());
                         Near("R6 the entry starts at the arrival, 3.642 s", states.Count > 1 ? states[1].T - t0 : -1, 3.642157, TolS);
-                        // R6b: from arrived_access to loop_started no /play/pos went out.
+                        // R6b: the order owns the avatar from the click to the loop: no /play/pos
+                        // goes out during the walk either (the server keeps the plan's position;
+                        // contract § A11b transport (5)), so none between arrived_access and loop_started.
                         Is("R6b arrived_access and loop_started seen", reportsAt.ContainsKey("arrived_access") && reportsAt.ContainsKey("loop_started"),
                            string.Join(",", reportsAt.Keys));
-                        Is("R6b no /play/pos between arrived_access and loop_started",
-                           reportsAt.GetValueOrDefault("arrived_access", -1) == reportsAt.GetValueOrDefault("loop_started", -2),
-                           $"{reportsAt.GetValueOrDefault("arrived_access", -1)} → {reportsAt.GetValueOrDefault("loop_started", -2)}");
+                        Is("R6b no /play/pos from the click to loop_started",
+                           reportsAt.GetValueOrDefault("arrived_access", -1) == reportsAtClick
+                           && reportsAt.GetValueOrDefault("loop_started", -2) == reportsAtClick,
+                           $"{reportsAtClick} → {reportsAt.GetValueOrDefault("arrived_access", -1)} → {reportsAt.GetValueOrDefault("loop_started", -2)}");
                     }
                     else
                     {

@@ -1657,9 +1657,20 @@ def _finish(run, status, reason, *, keep_seated="", follow=False):
         if follows:
             stood.update(_follow_up(run, follows))
         # Whoever was still on the way (plan E3 Task 7: no journey holds it)
-        # gets a cancel row as well, standing where it stands now.
-        walking = ({name: C.get_character_pos(name) for _role, name in _members(run)
-                    if name not in kept and name not in stood} if before == "approaching" else {})
+        # gets a cancel row as well: it stands where its order put it by now
+        # (_walk_point), written as its position first. Only members whose
+        # seat _start already released — a member _start failed on before its
+        # write still sits.
+        walking = {}
+        if before == "approaching":
+            now_s = _motion_now()
+            for _role, name in _members(run):
+                if name in kept or name in stood or (C.get_character_profile(name) or {}).get("place"):
+                    continue
+                point = _walk_point(run, name, now_s)
+                if point is not None:
+                    C.set_character_pos(name, point[0], point[1])
+                walking[name] = C.get_character_pos(name)
         _order_ended(run, stood, walking)
         _narrate_finish(run, before, status, reason, kept)
         return _result(run)
@@ -2118,12 +2129,6 @@ def _motion_now() -> float:
     return round(timeutils.motion_time(), 3)
 
 
-def _entry_seconds(data) -> float:
-    """REAL seconds the longest entry clip of a run takes. A stored entry from
-    before real-time entries (no ``duration_s``) counts as already over."""
-    return max(float(e.get("duration_s") or 0.0) for e in data["entries"].values())
-
-
 def _clock(run, now):
     """Advance a run's two clocks to ``now`` and return ``(game_delta,
     motion_delta)``: GAME seconds for what is gameplay (phases, gauges, the
@@ -2343,6 +2348,40 @@ def _arrive(run, name, at_s):
     _save(run)
 
 
+def _walk_point(run, name, now_s):
+    """Where ``name``'s order has it at motion second ``now_s`` while it walks
+    (plan E3 Task 7): the point on its planned polyline after
+    ``(now_s - issued_s - exit_s) * speed_m_s`` metres (the walk the client
+    plays from the published order), at the earliest the polyline's first
+    point (where the exit ends), at the latest its last (the access). None
+    when it has arrived (it stands on its access) or the run never started
+    (no ``issued_s``: it never left its place)."""
+    data = run["data"]
+    if name in data.get("arrived", []) or data.get("issued_s") is None:
+        return None
+    plan = data["plans"].get(name) or {}
+    points = [(float(p[0]), float(p[1])) for p in plan.get("waypoints") or []]
+    if not points:
+        return None
+    departure = plan.get("departure_seat")
+    exit_s = float(departure["exit_s"]) if isinstance(departure, dict) else 0.0
+    left = max(0.0, (float(now_s) - float(data["issued_s"]) - exit_s) * float(data.get("speed_m_s") or 0.0))
+    for a, b in zip(points, points[1:]):
+        leg = math.dist(a, b)
+        if leg > 0 and left <= leg:
+            f = left / leg
+            return (round(a[0] + (b[0] - a[0]) * f, 3), round(a[1] + (b[1] - a[1]) * f, 3))
+        left -= leg
+    return points[-1]
+
+
+def quiet_report():
+    """The context ``/play/pos`` writes a quiet report in (``pos_report_mode``
+    == "quiet"): the avatar's own approaching run does not take the write
+    for an interruption."""
+    return _internal_mutation()
+
+
 def migrate_cancel(execution_id: str) -> None:
     """Boot (a) of plan E3: an approaching run from before the orders (it
     walks a journey, carries no ``data.order``) is cancelled, its slot freed."""
@@ -2400,8 +2439,8 @@ def arrived(actor: str, order_id: str, x: float, z: float, yaw: float, room_id: 
     Everyone there and no reaction open → the entry starts (``_begin_entry``)."""
     from app.core import motion_orders as mo
     try:
-        x, z = float(x), float(z)
-        if not (math.isfinite(x) and math.isfinite(z)):
+        x, z, yaw = float(x), float(z), float(yaw)
+        if not (math.isfinite(x) and math.isfinite(z) and math.isfinite(yaw)):
             raise ValueError
     except (TypeError, ValueError, OverflowError):
         return _refused("invalid_request")

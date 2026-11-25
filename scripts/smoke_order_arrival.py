@@ -30,6 +30,9 @@ Fixture (hand-derived, ``smoke_order_timer.py`` STANDING): the avatar stands at
        names the avatar (it held no place: a row without steps).
   [A8] after the arrival (phase entry) /play/pos at (8.1, 7): dropped
        (server_owned), the point stays (8, 7); at 103.1 the run is active.
+  [A8b] the avatar entered in arrived (on its access) while the entry has not
+       begun (phase "", as in a pair run waiting for the partner): /play/pos at
+       (8.1, 7) is dropped as well (server_owned), the point stays (8, 7).
   [A9] a recorder on _validate: whenever the avatar is in arrived, it stands
        exactly on its access — the position is written BEFORE the entry.
 """
@@ -107,6 +110,20 @@ class Arrival(unittest.TestCase):
         F.MOTION[0] = 103.1
         A.advance(F.game_time())
         self.assertEqual(R.get(self.eid)["status"], "active")
+
+    def test_a8b_arrived_before_entry(self):
+        print("[A8b] in arrived, entry not begun: a report is dropped, the point stays")
+        F.MOTION[0] = 101.0
+        run = R.get(self.eid)
+        with A._lock(self.eid):
+            A._arrive(run, self.name, 101.0)    # arrived, but no _enter_or_wait (a pair waiting for B)
+        run = R.get(self.eid)
+        self.assertEqual((run["status"], run["phase"], run["data"]["arrived"]), ("approaching", "", [self.name]))
+        pos = self.http.post("/play/pos", json=dict(x=8.1, z=7.0))
+        self.assertEqual(pos.status_code, 200, pos.text)
+        self.assertEqual(pos.json(), {"ok": False, "server_owned": True})
+        self.assertEqual(F.C.get_character_pos(self.name), ACCESS)
+        self.assertEqual(R.get(self.eid)["status"], "approaching")
 
     def test_a2_a3_a4_a7_refusals(self):
         print("[A2] 0.6 m: arrive_too_far")

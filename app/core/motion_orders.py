@@ -26,11 +26,14 @@ and scripts/smoke_orders_route.py (publication, index, visibility).
 from __future__ import annotations
 
 import copy
+import logging
 import math
 import threading
 import uuid
 from collections import deque
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
 
 # Fixed grace between the order and the first step (request round trip,
 # path planning on the client).
@@ -362,8 +365,13 @@ def publish(order: dict, *, names: list[str], locations: list[str]) -> dict:
         first_live = before == 0 and _live_count() > 0
     if first_live:
         # 0 -> 1 live orders: stamp the liveness at once, so a restart after a
-        # long idle stretch never shifts this order by that stretch.
-        _write_alive(_now_s())
+        # long idle stretch never shifts this order by that stretch. A failed
+        # stamp costs only that precision, never the publication (the order
+        # is already in the index; the caller must still record it).
+        try:
+            _write_alive(_now_s())
+        except Exception:  # noqa: BLE001
+            logger.exception("motion_alive_s write failed at the first live order")
     from app.core import sync_topics
     from app.core.keyed_lock import _after_locks
     who, where = list(names), list(locations)

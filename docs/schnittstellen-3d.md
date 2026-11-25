@@ -4169,11 +4169,17 @@ arrived at its own `eta_i` (its position is written onto the access); a member
 with `reports_arrival` only through `POST /play/order/arrived` (below). Once all
 have arrived the entry begins (`status entering`, `flip` = the latest arrival +
 the longest entry) and the run becomes active at `flip`. The deadline counts only
-while somebody has not arrived (`approach_timeout`). Without a walk (a switch in
+while somebody has not arrived (`approach_timeout`). A run that ends while a
+member is still on the way gives that member a `cancel` row without steps whose
+`stand` is where its order has it by then: the point on its planned path after
+`(now − issued − exit_s) · speed` metres (at the earliest the path's first point,
+at the latest the access), also written as its position. Without a walk (a switch in
 place, a follow pose) issued = eta = the publication second. The runs keep these
 times as absolute motion seconds; a server restart shifts every live order by
 its downtime (world_kv `motion_alive_s`, written at most every 5 s while orders
-live), so nothing flips during the downtime.
+live), so nothing flips during the downtime. A shifted order carries
+`boot_alive_s` (the stamp the downtime was measured from; it keeps a second boot
+from shifting it twice), a field clients ignore.
 
 **Revisions** (spec 5b, two cases). (1) A NEW `order_id` for the same figure
 replaces the running chain; the client continues from its current picture
@@ -4210,11 +4216,13 @@ member's `access`, the avatar stands in the target room and the run is still
 valid; the position is then written exactly onto the access. Otherwise 409 with
 the refusal object (`reason` `order_unknown` · `arrive_too_far` ·
 `room_mismatch` · the run's own reason, which fails the run). The client plays
-the entry without waiting for the answer and aborts on a refusal; from the
-arrival to the loop's end it sends no `/play/pos`. While the avatar walks, a
+the entry without waiting for the answer and aborts on a refusal. The native
+client sends no `/play/pos` for the whole order (from the click to the loop's
+end, the walk included): the server's position of a walking avatar is the plan's
+(see the cancel `stand` above). For a client that does report while it walks, a
 `/play/pos` report inside the target room is written without interrupting the
-run; one from elsewhere interrupts it as before; after the arrival (and in the
-entry) it is `server_owned`.
+run; one from elsewhere interrupts it as before; once the avatar has arrived
+(and in the entry) it is `server_owned`.
 
 **Visibility** (`motion_orders.visible` / `for_observer`, decision 4). A
 participant sees the whole order. Anybody else sees it only when a

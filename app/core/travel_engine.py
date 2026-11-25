@@ -2336,7 +2336,6 @@ def _next_beat_s() -> float:
     return max(_MIN_BEAT_S, soonest)
 
 
-
 def _prop_action_engine():
     """The prop-action engine when it is loaded — opt-in like the periodic
     job (periodic_jobs._sub_prop_action_runs); never imported from here."""
