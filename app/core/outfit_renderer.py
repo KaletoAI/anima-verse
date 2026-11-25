@@ -170,8 +170,13 @@ def piece_text(item: Dict[str, Any], state: str, *, for_llm: bool = False) -> st
     """The text of one worn piece in ``state`` (``open`` / ``closed``): its ``prompt_fragment``, plus
     ``", worn open"`` when open and the item is closable. Closed is the fragment alone (ruling A7: no words, every
     image / mesh text as before the option) — except ``for_llm`` (ruling A9): the text an LLM reads says
-    ``", worn closed"`` for a closed closable piece. An empty fragment stays empty."""
+    ``", worn closed"`` for a closed closable piece. An empty fragment stays empty. A chain's / belt's linked part items
+    (design G: buckle, pendant, charms — no slot, no piece of their own) are described here, once, through their host
+    (``accessory_parts.host_text``), before the state words."""
     frag = ((item or {}).get("prompt_fragment") or "").strip()
+    if frag and item:
+        from app.core import accessory_parts
+        frag = accessory_parts.host_text(item, frag)
     words = state_words(item, state, for_llm=for_llm) if frag else ""
     return f"{frag}, {words}" if words else frag
 
