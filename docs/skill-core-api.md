@@ -165,7 +165,10 @@ empty or null baseline values keep the resolved default. Settings use the shared
 | `is_state_active(name, state_id, *, profile=None) -> bool` | Enabled state active through its profile tag OR expression, using the same evaluator as triggered filters. A ContextVar guard returns false for a state already being evaluated, including indirect cycles. |
 
 Condition expressions also accept `at_home`, `offmap`, `travelling`,
-`location_danger>N` (also `<` and `=`), and `state:<id>`. Location atoms read the
+`location_danger>N` (also `<` and `=`), `state:<id>`, and `exposed:<group id>` /
+`covered:<group id>` (an extension group under the worn pieces, `extension_rig.cover_state_for`: `exposed:` only
+uncovered, `covered:` covered or hidden; a group the character does not have even unclothed —
+`rig_groups_unclothed` — is false for both). Location atoms read the
 character's own current location/position, even during target access checks.
 
 A state never fires on a stat the character does not have (inside
@@ -426,6 +429,18 @@ Deklaration ausschließlich über das Manifest (`body_slots`/`piece_slots`/
 `GET/POST /characters/<c>/body-slots[/<slot>]` (generischer Editor im
 WardrobeTab), `GET /characters/<c>/silhouette` (Paket-Asset); Belongings
 liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getrieben.
+
+## Extension groups under clothing — `app.core.extension_rig` ✅
+
+| Function | Semantics |
+|---|---|
+| `cover_state(group, pieces, items, *, open_ids=()) -> str` | `EXPOSED` / `COVERED` / `HIDDEN` of a group or region (`covered_by`, optional `hide_under`) under `pieces` (`{clothing slot: item id}`). No piece touches `covered_by` → exposed; a piece on or `covers`-ing a `hide_under` slot without `outfit_piece.exposed_detail` → hidden; else covered (a partial cover is never hidden). Slot names compared after `strip().lower()`. |
+| `cover_state_for(group, profile, *, pieces=None, items=None) -> str` | The same on a character: its worn pieces (or `pieces`), open pieces skipped, a free-text wardrobe covered while dressed (never hidden). Every caller with a profile uses this. |
+| `pieces_of(item_ids, items) -> Dict[str, str]` | `{slot: item id}` from the pieces' `outfit_piece.slots`. |
+| `rig_groups_unclothed(character_name, profile=None)` | The groups the character has unclothed (every active mesh part on). |
+
+The model paths (outfit variant, assembly part nodes, channels, drape colliders, motion) read only this; the image
+paths keep `body_slots.is_slot_exposed`.
 
 ## Outfit / Decency — `app.core.outfit_compliance` ✅
 

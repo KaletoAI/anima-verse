@@ -390,9 +390,10 @@ exists only while its slot is uncovered. A base body (every humanoid has one
 on the base-body pipeline) then also gets a **covered variant** `model3d/covered/<bsig>.glb`,
 built from the same clean prerig source with every other group identical
 (same colour markers, same placement) and without the `exposed_only` groups.
-An outfit model is built on the covered variant when ANY worn piece covers
-a slot of the group's `covered_by` (its slots, `covers` or `partially_covers`)
-and does not set `outfit_piece.exposed_detail: true` (the item editor's "Shows
+An outfit model is built on the covered variant when the worn pieces HIDE the
+group (`extension_rig.cover_state` is `hidden`, see `hide_under` below: a piece
+fully on or `covers`-ing a `hide_under` slot) and do not set
+`outfit_piece.exposed_detail: true` (the item editor's "Shows
 detail through (sheer)", offered only for pieces touching such a slot —
 `GET /inventory/body-under-piece` → `exposed_detail_slots`); otherwise onto the full base. The
 outfit sidecar records `base_variant` (`covered`/`rigged`); a piece whose flag
@@ -434,6 +435,31 @@ with a channel the channel — a little strict for a third person who only watch
 an authored relation is exact. Non-contact clips (a hug, a dance) are never gated. Applicability follows the rig
 rules with the slot's mesh-part switch read as "on" (the requirement follows the anatomy, not the built mesh).
 `contact_free` is not part of the extension fingerprint: no rebuild. The core never names a slot.
+
+`hide_under: [<clothing slot>, ...]` (list, default = the slot's `covered_by`; a subset of it, also on a
+`channel` region) splits the covering slots in two. ONE rule decides every model consumer
+(`extension_rig.cover_state`): a group no worn piece touches (on, `covers` or `partially_covers` a slot of
+`covered_by`) is **exposed**; a piece that sits on or `covers` a `hide_under` slot (and does not set
+`outfit_piece.exposed_detail: true`) makes it **hidden**; any other cover — a piece on a `covered_by` slot
+outside `hide_under`, or a partial cover of any — leaves it **covered**. Hidden removes the detail as before (an
+`exposed_only` group: the covered variant; a channel: none). Covered keeps it: the `exposed_only` group stays on
+the outfit model, the channel exists, and with a `drape_collider` the part shapes the cloth over it. A piece worn
+open covers nothing. A free-text wardrobe is covered while dressed, never hidden. In every case the attached
+part (`mesh_part`) of a covered OR hidden slot stays out of the assembly (stage 1). Without the key nothing
+changes against the rule before it, except that a partial cover counts as covered, never hidden. The 2D paths
+(image prompts, `body_slots.is_slot_exposed`, the mesh variant) are unchanged. Neither part of a fingerprint nor
+of `channels_sig`: a changed exposure re-filters a stored channel record on its next refresh.
+
+`drape_collider: {inflate: 0..0.01, radius: 0.002..0.02}` (optional; `inflate` required, metres) makes a
+COVERED group a collider of the template drape of every piece that touches its `covered_by`: its attached part
+(the `Part` node of the base model the drape runs on, `radius` absent) or, for a group without a part node, a
+sphere of `radius` around the last bone of each chain, each grown by `inflate`. Such a piece's drape key gains a
+`body:` token, so only those drapes rebuild (CPU). While covered, the group rests in its bind pose (no swing, sag
+or rest angle) — the drape laid the cloth over exactly that shape.
+
+`poses.<id>.requires: exposed` (optional; the only value) holds that pose while the group is covered or hidden:
+`motion_payload` skips it and reports it in `held` (`{group: {pose, state, by: [item ids]}}`), and the 3D tab's
+state preview names the pose and the covering pieces. Not part of the motion `rev` unless a pose is held.
 
 `clothing_lift_default: {<clothing slot>: 0..1}` (mapping, default empty; keys
 must be in the body slot's `covered_by`) declares which clothing slots LIFT a
@@ -1144,7 +1170,8 @@ body_slots:
 | `accepts` | Required: exactly `{ops: [...]}`, a non-empty list of non-empty core op names whose chains may enter (e.g. `appendage_chain`, `attached_part`). Rig ids are not offered. |
 | `min_length` | Default 1.0, within [0.25, 4]. The entering chain's effective state `length` must be at least this for the channel to engage. |
 | `compress_min` | Default 1.0 (no compression), within (0, 1]. The least depth scale k. |
-| `exposed_only` | Default `true`, a boolean. The channel exists only on a model whose worn pieces leave the slot uncovered; a base model is uncovered. A piece with `outfit_piece.exposed_detail: true` shows it through, and the item editor offers that switch for the slot's `covered_by` slots. |
+| `exposed_only` | Default `true`, a boolean. The channel exists only on a model whose worn pieces do not hide the slot (`hide_under`); a base model is uncovered. A piece with `outfit_piece.exposed_detail: true` shows it through, and the item editor offers that switch for the slot's `covered_by` slots. |
+| `hide_under` | Optional: a subset of the slot's `covered_by` (default: all of it). Only a piece on or `covers`-ing one of these removes an `exposed_only` channel; any other cover leaves it (`extension_rig.cover_state`, see `rigs[].hide_under` above). |
 | `contact_free` | Optional: a list of clothing slots this channel needs free when a contact clip targets it (`target: channel` on the receiving role). Same rule as `rigs[].contact_free` above: a worn piece on or covering such a slot blocks the clip unless it is worn open or `outfit_piece.open_below: true`. |
 | `interaction_kinds` | Optional: a non-empty list of non-empty strings. When given, the channel engages only within a running pair interaction of one of these kinds. When absent, any running pair interaction counts. |
 | `from_rig` | Optional: the id of a rig of the SAME slot (see below). |

@@ -5456,6 +5456,8 @@
     "Generate…": "Generieren…",
     "none built yet — asking for it starts the build, reload in a moment": "noch keins gebaut — die Anfrage startet den Bau, gleich neu laden",
     "Preview state": "Vorschau-Zustand",
+    "Pose \"{pose}\" not applied: {group} is covered by {pieces}": "Pose „{pose}“ nicht angewendet: {group} ist bedeckt von {pieces}",
+    "Pose \"{pose}\" not applied: {group} is covered (outfit text)": "Pose „{pose}“ nicht angewendet: {group} ist bedeckt (Outfit-Text)",
     "Current (live)": "Aktuell (live)",
     "Situations": "Situationen",
     "Rig failed": "Rig fehlgeschlagen",

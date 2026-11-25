@@ -208,6 +208,8 @@ export interface Model3DStatus {
     collision_scales?: Record<string, number>
     collision_channels?: ChannelOverrides }
   extension_groups?: ExtensionRigDeclaration[]
+  /** Item id -> name of the pieces ``motion.held`` names. */
+  held_item_names?: Record<string, string>
   /** Switches the served outfit model takes from its base model (locked here). */
   extension_inherited?: Record<string, { enabled: boolean; reason: string }>
   rig_backends?: MeshBackend[]
@@ -1268,6 +1270,16 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
               {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
             </select>
           </label>
+          {Object.entries(st.motion?.held ?? {}).map(([group, held]) => (
+            <div key={group} className="ga-hint" role="status">
+              {held.by.length
+                ? t('Pose "{pose}" not applied: {group} is covered by {pieces}')
+                  .replace('{pose}', held.pose).replace('{group}', group)
+                  .replace('{pieces}', held.by.map(id => st.held_item_names?.[id] ?? id).join(', '))
+                : t('Pose "{pose}" not applied: {group} is covered (outfit text)')
+                  .replace('{pose}', held.pose).replace('{group}', group)}
+            </div>
+          ))}
           </div>
           ) : null}
           </div>
