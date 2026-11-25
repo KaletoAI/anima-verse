@@ -40,10 +40,21 @@ Expected values, derived by hand:
 [8] a flat buckle whose mesher put a long prong behind it (review finding, run 1 / run 2): frame 50 × 40 × 6 mm + prong
     4 × 4 × 60 mm behind (extents 50 × 40 × 66), image 50 : 40 → ``front_ratio`` 1.25, size 50, at the front of [1]'s
     circle, band thickness 0.004. ``orient`` keeps z as the depth (smoke_accessory_pendant [G3c]); the size is the front
-    (50 mm, factor 1). ``FLAT_DEPTH_SHARE`` 0.20 · 50 = 10 mm: everything deeper than 10 mm behind the front (z 66 in
-    the normalised part) is pressed onto it → depth 10 mm, ``depth_cut_from_mm`` 66.0. On the band: back at
+    (50 mm, factor 1). ``FLAT_DEPTH_SHARE`` 0.20 · 50 = 10 mm → depth 10 mm, ``depth_cut_from_mm`` 66.0. On the band: back at
     0.15 + 0.002 + 0.0005 = 0.1525, front at 0.1625; width (x) 0.050, height (y) 0.040 — the frame faces out, not
     turned on its side. Metrics: ``size_mm`` 50.0, ``depth_mm`` 10.0.
+[8d] how the 66 mm become 10 (``FLAT_KEEP_SHARE`` 0.5 → keep 5 mm): in the normalised part the prong spans z 0..60 mm
+    and the frame z 60..66 mm. The front 5 mm (z 61..66) keep their relief, shifted by 66 − 10 = 56 → 5..10 mm; behind
+    them z is scaled by (10 − 5) / (66 − 5) = 5/61 → the frame's back z 60 → 60·5/61 = 4.918 mm, the prong 0..4.918 mm.
+    On the band: the frame's back face at 0.1525 + 0.004918 = 0.157418, its front at 0.1625 — the frame stays
+    5.082 mm deep. The part's vertices keep their 3 distinct depths (0, 60, 66 → 0, 4.918, 10).
+[8e] the deep piece IN FRONT (the real buckle of the 2026-11-25 acceptance: a 19 mm keeper beside a frame whose front lies
+    9 mm behind the keeper's): keeper box 10 × 40 × 20 mm (x 40..50, z 0..20) + frame box 40 × 40 × 6 mm (x 0..40,
+    z 6..12), image 50 : 40 → ``orient`` keeps z (extents 50 × 40 × 20), size 50 (factor 1). Keep 5 mm: z ≥ 15 shifted
+    by 10, behind scaled by 5/15 → keeper 0..20 → 0..10, frame 6..12 → 2..4 mm. Distinct depths 0, 2, 4, 10 (4); on
+    the band 0.1525 + those. The frame's back (2 mm) stays off the keeper's back plane. The press of a769da9e8
+    (``max(z, 10) − 10``) gave the frame 6..12 → 0..2: its back on the keeper's back plane, 3 distinct depths — on the
+    real buckle that put 74 % of the faces into one sheet on the band, which showed through it when sitting.
 [8b] the same as a HANGING charm keeps its depth (no cut; ``depth_cut_from_mm`` absent): ``depth_mm`` 66.0.
 [8c] the same mesh with an image of 3 : 1 → no turn shows it (best |ln(1.65/3)| = 0.598 > ln 1.35) → ValueError naming
     the outline, before any placement.
@@ -242,6 +253,27 @@ check("[8] faces out: 50 wide, 40 high", abs(float(e[0]) - 0.050) < 1e-6 and abs
 m = h["metrics"]
 check("[8] metrics", (m["size_mm"], m["depth_mm"], m.get("depth_cut_from_mm")) == (50.0, 10.0, 66.0),
       str((m["size_mm"], m["depth_mm"], m.get("depth_cut_from_mm"))))
+print("[8d] squeezed, not pressed")
+zs = np.unique(np.round(V[:, 2], 7))
+check("[8d] 3 distinct depths: 0.1525, 0.157418, 0.1625",
+      len(zs) == 3 and np.allclose(zs, [0.1525, 0.1525 + 0.06 * 5 / 61, 0.1625], atol=1e-6), str(zs))
+fr = np.abs(V[:, 0]) > 0.003     # the frame's corners (the prong is 4 mm wide round x 0)
+check("[8d] the frame stays 5.082 mm deep", abs(float(np.ptp(V[fr, 2])) - (0.010 - 0.06 * 5 / 61)) < 1e-6,
+      f"{np.ptp(V[fr, 2]) * 1000:.3f} mm")
+print("[8e] a deep piece in front: nothing pressed onto the back plane")
+kp, fb = box(0.010, 0.040, 0.020), box(0.040, 0.040, 0.006)
+Vk = np.vstack([kp["V"] + [0.020, 0.0, 0.0], fb["V"] + [-0.005, 0.0, -0.001]])
+Fk = np.vstack([kp["F"], fb["F"] + len(kp["V"])])
+Jc = np.zeros((len(C), 4), np.int64)
+Wc = np.zeros((len(C), 4))
+Wc[:, 0] = 1.0
+hk = ab.attach_part(b"", BODY, None, PW, FW, FO, None, C, C, Jc, Wc, {**link(role="buckle"), "size_mm": 50.0},
+                    {"V": Vk, "F": Fk, "UV": np.zeros((len(Vk), 2)), "image": b"", "mime": "", "material": {},
+                     "front_ratio": 1.25}, 50.0, False, 0.004, [])
+zk = np.unique(np.round(hk["V"][:, 2] - 0.1525, 7))
+check("[8e] 4 distinct depths: 0, 2, 4, 10 mm", len(zk) == 4 and np.allclose(zk, [0.0, 0.002, 0.004, 0.010], atol=1e-6),
+      str(np.round(zk * 1000, 3)))
+check("[8e] depth_cut_from_mm 20.0", hk["metrics"].get("depth_cut_from_mm") == 20.0, str(hk["metrics"]))
 print("[8b] hanging keeps its depth")
 h = attach_fp({**link(role="charm", mount="hang"), "size_mm": 50.0})
 check("[8b] depth 66, no cut", (h["metrics"]["depth_mm"], "depth_cut_from_mm" in h["metrics"]) == (66.0, False),

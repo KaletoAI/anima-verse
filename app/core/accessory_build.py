@@ -47,7 +47,9 @@ logger = logging.getLogger(__name__)
 #: its link with its thinnest side as the depth. 5: a part's depth is the axis whose two others match its image's
 #: outline (``accessory_pendant.orient``), its size the longer front side, and a flat part is cut to
 #: ``FLAT_DEPTH_SHARE`` of its size behind its front (a mesher's invented loop or prong no longer stands off the band).
-ACCESSORY_VERSION = 5
+#: 6: that depth is squeezed, never pressed flat — the front ``FLAT_KEEP_SHARE`` of it as delivered, everything behind
+#: scaled into the rest (a pressed buckle frame lay on the band as one flat sheet that showed through it when sitting).
+ACCESSORY_VERSION = 6
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -1346,9 +1348,14 @@ def curve_point_at(curve: np.ndarray, deg: float) -> int:
 #: ``attach_part``: the AABB overlap (m, on every axis) at which two parts count as one on top of the other.
 PART_OVERLAP_M = 0.001
 #: ``attach_part``: a FLAT part keeps at most this share of its size as depth behind its front — it lies on the band
-#: like a buckle frame; what a mesher invented behind it (the strap loop, the prong, a bail) is pressed into that
+#: like a buckle frame; what a mesher invented behind it (the strap loop, the prong, a bail) is squeezed into that
 #: depth (50 mm buckle → 10 mm). A hanging part keeps its depth (it hangs free, ``place`` clears the body).
 FLAT_DEPTH_SHARE = 0.20
+#: ``attach_part``: of a squeezed flat part, this share of ``FLAT_DEPTH_SHARE``'s depth at the front keeps its relief as
+#: delivered; everything behind it is scaled linearly into the rest. Never pressed onto one plane: the real buckle
+#: of the 2026-11-25 acceptance had its 19 mm deep keeper in front, so a press from the front flattened 74 % of its
+#: faces — the frame itself — into one sheet on the band.
+FLAT_KEEP_SHARE = 0.5
 #: How a part's role reads in its overlap reason.
 PART_WORDS = {"buckle": "buckle", "pendant": "pendant", "charm": "charm"}
 
@@ -1360,7 +1367,8 @@ def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray
     curve point ``curve_point_at(link.at_deg)``, turned to face the horizontal outward direction there.
 
     ``flat``: centred on that point, its back ``thickness / 2 + 0.5 mm`` out (on the band), no push; deeper than
-    ``FLAT_DEPTH_SHARE`` of its size, what lies further behind its front is pressed onto that depth. ``hang``: its top
+    ``FLAT_DEPTH_SHARE`` of its size, it is squeezed to that depth — the front ``FLAT_KEEP_SHARE`` of it as delivered,
+    what lies behind scaled linearly into the rest (no two depths become one). ``hang``: its top
     centre at the same distance out and ``drop_cm`` lower, hung through ``accessory_pendant.place`` against ``Fw`` (the
     whole welded body — the rest pose, as the necklace's pendant), at most ``PENDANT_MAX_PUSH_MM`` off its point.
     Rigid with the band's skin at the nearest band vertex; the test poses judge it against the outer wall ``Fo``
@@ -1385,7 +1393,9 @@ def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray
     if mount != "hang":
         cap = FLAT_DEPTH_SHARE * float(size_mm) / 1000.0
         if raw_depth > cap:
-            Vn[:, 2] = np.maximum(Vn[:, 2], raw_depth - cap) - (raw_depth - cap)
+            keep = FLAT_KEEP_SHARE * cap
+            z = Vn[:, 2]
+            Vn[:, 2] = np.where(z >= raw_depth - keep, z - (raw_depth - cap), z * (cap - keep) / (raw_depth - keep))
             how["depth_cut_from_mm"] = round(raw_depth * 1000.0, 2)
     local = Vn.copy()
     if mount == "hang":
