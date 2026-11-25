@@ -2982,28 +2982,70 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
             tuple(_stat(root / name) for name in ("model_refs", "model3d", "garments")))
 
 
+def _memo_stat(key: str) -> None:
+    """Count one ``figure_memo`` event (``hot_path_stats``); never raises. Called outside every lock."""
+    try:
+        from app.core import hot_path_stats
+        hot_path_stats.count("figure_memo", key)
+    except Exception:  # noqa: BLE001 — statistics never disturb the poll
+        pass
+
+
+#: The read functions a cold figure / open-steps computation counts (``read_scope.tally`` names).
+_COMPUTE_READS = ("drape_state", "cut_key", "read_record", "garment_fsig", "get_item", "profile")
+
+
+def _compute_stat(ms_key: str, started: float, calls: Dict[str, int]) -> None:
+    """Record one cold computation as ``figure_compute``: its wall time under ``ms_key`` plus how often each of
+    ``_COMPUTE_READS`` ran inside it; never raises. Called outside every lock."""
+    try:
+        import time
+        from app.core import hot_path_stats
+        values: Dict[str, float] = {ms_key: (time.perf_counter() - started) * 1000.0}
+        values.update({name: calls.get(name, 0) for name in _COMPUTE_READS})
+        hot_path_stats.record("figure_compute", values)
+    except Exception:  # noqa: BLE001 — statistics never disturb the poll
+        pass
+
+
 def figure_info(character_name: str) -> Dict[str, Any]:
     """``_figure_info`` memoised (fix round T12-F1, ruling F13 f: the Figure
     tab's GET took 2–5 s): an answer is served again while its ``_info_key``
     holds, for at most ``figure.MEMO_TTL_S``, and stored only when no write
-    moved the figure generation while it was computed. A copy is returned."""
+    moved the figure generation while it was computed. A copy is returned.
+    Statistics: ``figure_memo`` counts ``info_hit`` (served from the memo) or ``info_miss`` (computed), plus
+    ``info_unstored`` for a computation not stored because the generation moved; each computation records
+    ``figure_compute`` (``info_ms`` and the read calls inside it, ``read_scope``)."""
     import copy
     import time
-    from app.core import figure
+    from app.core import figure, read_scope
     profile = _profile_of(character_name, None)
     build = state(character_name)
     key = _info_key(character_name, profile, build)
     now = time.monotonic()
+    served = None
     with _info_lock:
         hit = _info_memo.get(character_name)
         if hit is not None and hit[0] == key and now - hit[1] < figure.MEMO_TTL_S:
-            return copy.deepcopy(hit[2])
-    info = _figure_info(character_name, profile=profile, build=build)
+            served = copy.deepcopy(hit[2])
+    if served is not None:
+        _memo_stat("info_hit")
+        return served
+    _memo_stat("info_miss")
+    started = time.perf_counter()
+    with read_scope.measure() as calls:
+        try:
+            info = _figure_info(character_name, profile=profile, build=build)
+        finally:
+            _compute_stat("info_ms", started, calls)
     with _info_lock:
-        if key[0] == figure._generation[0]:
+        stored = key[0] == figure._generation[0]
+        if stored:
             if len(_info_memo) >= 256:
                 _info_memo.clear()
             _info_memo[character_name] = (key, now, copy.deepcopy(info))
+    if not stored:
+        _memo_stat("info_unstored")
     return info
 
 
@@ -3028,7 +3070,9 @@ def open_steps(character_name: str) -> Dict[str, Any]:
     steps: [{label, jobs, hold, why}]}``; ``hold`` a step only a manual Build runs (``Step.manual``) or one that
     failed for its inputs (``Step.failed``). Plus ``building`` (a run goes). Off the pipeline both are empty.
     Read-only, no hub / LLM / Blender work; memoised like ``figure_info`` (``_info_key``, ``figure.MEMO_TTL_S``).
-    Never raises: an unreadable plan answers ``error`` with empty groups."""
+    Never raises: an unreadable plan answers ``error`` with empty groups. Statistics: ``figure_memo`` counts
+    ``open_hit`` (same key within the TTL), ``open_stale`` (same key past the TTL, served while a background
+    re-plan refreshes it) or ``open_miss`` (computed now); ``_compute_open`` records ``figure_compute``."""
     import copy
     import time
     from app.core import figure
@@ -3040,16 +3084,22 @@ def open_steps(character_name: str) -> Dict[str, Any]:
         logger.debug("open steps of %s: key not read", character_name, exc_info=True)
         return {"building": False, "base": _open_group([]), "outfit": _open_group([]), "error": str(e)}
     now = time.monotonic()
+    served, stale = None, False
     with _info_lock:
         hit = _open_memo.get(character_name)
         if hit is not None and hit[0] == key:
-            if now - hit[1] >= figure.MEMO_TTL_S and character_name not in _open_refreshing:
+            stale = now - hit[1] >= figure.MEMO_TTL_S
+            if stale and character_name not in _open_refreshing:
                 # Past the TTL with the same key: served once more while ONE background re-plan refreshes it
                 # (the list polls every character; a cold plan of ~30 characters takes about a second).
                 _open_refreshing.add(character_name)
                 threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
                                  name=f"open-steps-{character_name}").start()
-            return copy.deepcopy(hit[2])
+            served = copy.deepcopy(hit[2])
+    if served is not None:
+        _memo_stat("open_stale" if stale else "open_hit")
+        return served
+    _memo_stat("open_miss")
     return _compute_open(character_name, profile, build, key, now)
 
 
@@ -3072,16 +3122,22 @@ def _refresh_open(character_name: str) -> None:
 def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str, Any],
                   key: Tuple[Any, ...], now: float) -> Dict[str, Any]:
     import copy
-    from app.core import figure
-    try:
-        steps = plan(character_name, profile=profile)
-        error = ""
-    except Exception as e:  # noqa: BLE001
-        logger.warning("open steps of %s not computable: %s", character_name, e)
-        steps, error = [], str(e)
-    out: Dict[str, Any] = {"building": bool(build.get("running")),
-                           "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
-                           "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
+    import time
+    from app.core import figure, read_scope
+    started = time.perf_counter()
+    with read_scope.measure() as calls:
+        try:
+            try:
+                steps = plan(character_name, profile=profile)
+                error = ""
+            except Exception as e:  # noqa: BLE001
+                logger.warning("open steps of %s not computable: %s", character_name, e)
+                steps, error = [], str(e)
+            out: Dict[str, Any] = {"building": bool(build.get("running")),
+                                   "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
+                                   "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
+        finally:
+            _compute_stat("open_ms", started, calls)
     if error:
         out["error"] = error
         return out

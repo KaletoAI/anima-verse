@@ -19,6 +19,7 @@ import uuid
 from datetime import date, datetime
 
 from app.core.timeutils import utc_now_iso, game_time
+from app.core import read_scope
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -312,6 +313,10 @@ def list_items() -> List[Dict[str, Any]]:
 
 def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     """Return an item, looking in world items before the global shared library."""
+    try:
+        read_scope.tally("get_item")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     db_read = False
     try:
         conn = get_connection()
