@@ -2,8 +2,9 @@
  * The ONE rule of a Vite dev server in this repository: what Vite answers
  * itself, everything else goes to the backend.
  *
- * Both browser apps run their own dev server (`frontend` on :5173, `client3d`
- * on :5183) against the same FastAPI backend, so both need the same rule.
+ * All three browser apps run their own dev server (`frontend` on :5173,
+ * `client3d` on :5183, `hud` on :5184) against the same FastAPI backend, so
+ * all need the same rule.
  * It lives here for the reason every other package under `packages/` exists:
  * it was written twice and the two copies drifted — `client3d` still forwarded
  * a hand-kept list of sixteen prefixes, one of which (`/state`) had no route

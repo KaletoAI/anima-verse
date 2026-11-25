@@ -3,7 +3,7 @@
  * renderers. Its counterpart on the server side: `app/core/scene_recipe.py`.
  *
  * Merged out of `frontend/src/tabs/world/worldTypes.ts` (admin) and
- * `client3d/src/api.ts` (client). Both described the same payload but had
+ * `hud/src/api.ts` (client). Both described the same payload but had
  * drifted apart in three places; this is how that was settled:
  *
  *   - `SceneStyle.elevator_*`: the admin had them REQUIRED, the client

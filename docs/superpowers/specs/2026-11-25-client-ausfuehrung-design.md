@@ -860,8 +860,12 @@ eingearbeitet. Abweichungen:
   - **HUD-Workspace `hud/`** (`@anima/hud`), baut nach `static/hud/`, Dev-Port 5184; der CEF-HUD lädt
     `/static/hud/hud.html` (`HudOverlay.HudPath`).
   - **Typkanten (Plan-Entscheidung 6) gekappt:** `FinaleBlock` liegt in `hud/src/types.ts` (`finaleClip.ts`
-    importiert ihn aus `@anima/hud/types`); `game/soundtrack.ts` deklariert `interface Point` lokal;
-    `game/photoMode.ts` exportiert `interface PhotoEngine` statt `Pick<Engine, …>`.
+    importiert ihn aus `@anima/hud/types`); `hud/src/game/soundtrack.ts` deklariert `interface Point` lokal;
+    `hud/src/game/photoMode.ts` exportiert `interface PhotoEngine` statt `Pick<Engine, …>`.
   - Bekannt rot schon vor E1, unverändert: `client3d/scripts/smoke_stand_settle.mjs` und
     `smoke_prop_action_motion.mjs` (Test-Figur ohne `setRootAngle`), `smoke_secondary_motion.mjs`
     („drag tilt before solver“); deren Vektoren laufen grün in den Vektor-Smokes und in C#.
+    Entscheidung (Fix-Welle E0/E1): kein eigener Fix-Auftrag — E3 löscht die drei JS-Läufer ersatzlos,
+    sobald ihre Klasse-B-Vektoren nur noch über die Vektor-Smokes und C# laufen; bis dahin bleiben sie bekannt rot.
+  - Ebenfalls schon vor E1 rot (seit 09ff16d3a): `scripts/smoke_hud_notice_hits.mjs` („Unexpected import
+    ./ShowPhotoButton“, fehlender require-Stub) — in der Fix-Welle E0/E1 behoben, wieder grün.

@@ -40,6 +40,7 @@ runInNewContext(ts.transpileModule(await read('packages/player-ui/src/NoticeBann
   'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'fragment' },
   './syncEndpoints': { SYNC_ENDPOINTS: {} }, './I18nProvider': { useI18n: () => ({ t: text => text }) },
   './api': { apiGet() {}, apiPost() {} }, './usePolling': { usePoll: () => ({ data: DATA }) },
+  './ShowPhotoButton': { PhotoReadyActions: () => null },
 })[id] ?? (() => { throw new Error(`Unexpected import ${id}`) })() });
 
 const walk = (tree, inside, out) => {
