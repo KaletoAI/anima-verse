@@ -24,6 +24,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflo
 .status-ok { background: #216e39; }
 .status-error { background: #a12731; }
 .status-blocked { background: #805500; }
+.status-refused { background: #8a6d1d; }
 .status-unknown_tool { background: #7945a8; }
 .status-suppressed { background: #315f8c; }
 .status-exception { background: #b63f12; }

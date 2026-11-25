@@ -37,6 +37,18 @@ from app.models.world import (
 from plugins.movement.go_to_resolve import resolve_go_to
 
 
+def _is_json_object(text: str) -> bool:
+    """True when the text parses as a JSON object (the tool wrapper keeps
+    the raw call text under "input" next to its parsed fields)."""
+    if not text.startswith("{"):
+        return False
+    try:
+        json.JSONDecoder().raw_decode(text)
+        return True
+    except ValueError:
+        return False
+
+
 class GoToCharacterSkill(PluginSkill):
     """Moves the agent to the place another character currently occupies.
 
@@ -66,7 +78,8 @@ class GoToCharacterSkill(PluginSkill):
     def execute(self, raw_input: str) -> str:
         """Moves the agent to the current whereabouts of a named person.
 
-        Input from the LLM: the person's name, e.g. "Lirien".
+        Input from the LLM: {"character": "<name>"} ("name" and "target" are
+        read too), or the person's plain name, e.g. "Lirien".
         """
         if not self.enabled:
             return "The GoToCharacter skill is disabled."
@@ -79,10 +92,16 @@ class GoToCharacterSkill(PluginSkill):
     def _execute_inner(self, raw_input: str) -> str:
         ctx = self._parse_base_input(raw_input)
         character_name = (ctx.get("agent_name") or "").strip()
-        requested = str(ctx.get("character") or ctx.get("input") or "").strip()
-        # A model that packs everything into one line ("Lirien, hurry") —
-        # only the first field is a name, the rest is prose.
-        requested = requested.split(",")[0].strip().strip('"\'')
+        requested = str(ctx.get("character") or ctx.get("name")
+                        or ctx.get("target") or "").strip()
+        if not requested:
+            # Plain text only: a JSON object without one of the keys above
+            # is no name (its raw text used to be looked up as one).
+            raw = str(ctx.get("input") or "").strip()
+            if not _is_json_object(raw):
+                # A model that packs everything into one line ("Lirien,
+                # hurry") — only the first field is a name, the rest is prose.
+                requested = raw.split(",")[0].strip().strip('"\'')
 
         if not character_name:
             return "Error: character_name missing."
@@ -201,16 +220,16 @@ class GoToCharacterSkill(PluginSkill):
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
         fmt = format_name or "tag"
-        return format_example(fmt, self.name, "Mira")
+        return format_example(fmt, self.name, '{"character": "Mira"}')
 
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(
             name=self.name,
             description=(
                 f"{self.description} "
-                f"Input: the exact name of the person, nothing else "
-                f"(e.g. 'Mira'). Use this instead of SetLocation whenever "
-                f"you want to be WITH someone — it resolves where that "
+                f"Input: JSON with \"character\" set to the exact full name "
+                f"of the person (e.g. {{\"character\": \"Mira\"}}). Use this "
+                f"instead of SetLocation whenever you want to be WITH someone — it resolves where that "
                 f"person actually is right now, so you never have to guess "
                 f"a place name. Same location, other room: you are there "
                 f"instantly. Another place: a timed journey starts, and only "

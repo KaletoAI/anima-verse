@@ -84,6 +84,11 @@ _IDLE_SLEEP_SECONDS = 30
 _BOOT_GRACE_SECONDS = 15
 # Per-turn timeout — guards a hung LLM call from blocking the loop forever.
 _TURN_TIMEOUT_SECONDS = 600
+# A narrated action of the speaker a respond turn answers, arriving this soon
+# after the turn started, folds into it (bump_respond) instead of a 2nd answer.
+_RESPOND_MERGE_SECONDS = 5.0
+# A respond entry that waited longer than this in the queue gets an INFO line.
+_RESPOND_WAIT_LOG_SECONDS = 10.0
 # Cap on importance (defensive — config could be junk).
 _MIN_IMPORTANCE = 1
 _MAX_IMPORTANCE = 3
@@ -306,6 +311,13 @@ class AgentLoop:
         # takes that room's lock (it reads the room itself, in a thread, only
         # when nothing was handed over).
         self._respond_room_keys: Dict[str, str] = {}
+        # Per RUNNING respond turn: (speaker it answers, start time) — set by
+        # the dispatcher when the worker starts, dropped in the worker's
+        # finally. Lets bump_respond fold a narrated action of that same
+        # speaker, arriving right after the start, into the running turn.
+        self._respond_started: Dict[str, tuple] = {}
+        # Per QUEUE ENTRY: when it was queued — for the long-wait log line.
+        self._respond_queued_at: Dict[str, datetime] = {}
         self._respond_task: Optional[asyncio.Task] = None
         # Room conversation energy (plan-room-conversation phase 3b): per room
         # a counter of consecutive AI utterances since the last avatar input.
@@ -528,6 +540,15 @@ class AgentLoop:
         present → opportunity (chime-in): the turn may stay silent via SKIP.
         A pending mandatory answer is never downgraded by an opportunity.
 
+        Folding: an opportunity WITHOUT an utterance id — a narrated direct
+        action (``perception.announce_action``: the player takes off two
+        pieces one second apart), never a spoken line, which is always
+        dispatched with the id of its recorded utterance — is merged into a
+        respond turn of this character that answers the SAME speaker and
+        started less than ``_RESPOND_MERGE_SECONDS`` ago, instead of queueing
+        a second answer behind it. Nothing obligatory, on-demand, correlated
+        (``request_id``) or already queued is ever folded.
+
         ``on_demand`` marks an explicit tool/UI request, such as a pair
         invitation. It may answer during world freeze, but never during
         queue pause or world sleep. Ordinary room reactions stay frozen.
@@ -557,8 +578,23 @@ class AgentLoop:
                     (existing.get("obligatory") and not obligatory)
                     or (existing.get("on_demand") and not on_demand)):
                 return True  # ordinary reactions cannot replace an explicit request
+            if (existing is None and not obligatory and utterance_id is None
+                    and not (on_demand or request_id or winding_down)):
+                started = self._respond_started.get(character_name)
+                if (started and started[0] == speaker
+                        and character_name in self._respond_active
+                        and (utc_now() - started[1]).total_seconds()
+                        < _RESPOND_MERGE_SECONDS):
+                    logger.info(
+                        "AgentLoop.bump_respond: %s (opportunity) to %s folded "
+                        "into the respond turn started %.1fs ago",
+                        character_name, speaker,
+                        (utc_now() - started[1]).total_seconds())
+                    return True
             if existing and existing.get("request_id") != request_id:
                 superseded = existing
+            if character_name not in self._respond_queue:
+                self._respond_queued_at[character_name] = utc_now()
             self._respond_to[character_name] = {
                 "speaker": speaker, "content": content,
                 "volume": volume, "obligatory": obligatory,
@@ -1444,6 +1480,7 @@ class AgentLoop:
                 dropped_requests.append((name, self._respond_to.pop(name, {})))
                 self._respond_resolved.pop(name, None)
                 self._respond_wait_reason.pop(name, None)
+                self._respond_queued_at.pop(name, None)
                 logger.debug("respond lane: %s became ineligible — dropped", name)
                 continue
             pool_key = self._respond_resolved.get(name)
@@ -1458,7 +1495,14 @@ class AgentLoop:
             self._respond_queue.remove(name)
             payload = self._respond_to.pop(name, None)
             self._respond_resolved.pop(name, None)
-            self._respond_wait_reason.pop(name, None)
+            reason = self._respond_wait_reason.pop(name, None)
+            queued_at = self._respond_queued_at.pop(name, None)
+            if queued_at is not None:
+                waited = (utc_now() - queued_at).total_seconds()
+                if waited > _RESPOND_WAIT_LOG_SECONDS:
+                    logger.info("respond lane: %s starts after %.1fs in the "
+                                "queue (last wait reason: %s)", name, waited,
+                                reason or "none recorded")
             if not payload:
                 continue
             self._hand_over_respond_reservation(name, pool_key)
@@ -1569,6 +1613,9 @@ class AgentLoop:
                     # started back to back lock their room in start order.
                     self._respond_room_keys[name] = room
                 self._respond_pools[name] = pool_key
+                with self._state_lock:
+                    self._respond_started[name] = (
+                        (payload.get("speaker") or "").strip(), utc_now())
                 self._respond_active[name] = asyncio.create_task(
                     self._respond_worker(name, payload))
                 if payload.get("request_id"):
@@ -1622,6 +1669,8 @@ class AgentLoop:
         finally:
             self._respond_active.pop(character_name, None)
             self._respond_pools.pop(character_name, None)
+            with self._state_lock:
+                self._respond_started.pop(character_name, None)
             # Whatever is left of this turn's claim on its pool (§ 4 R7). In
             # the normal case the reply's own LLM call consumed it long ago;
             # this is the backstop for a turn that never reached that call —
@@ -2015,8 +2064,11 @@ class AgentLoop:
 
         # Wake + perception stream: storage reads and writes, in one thread
         # hop (_respond_prelude) — never on the event loop.
+        _prelude_started = utc_now()
         _loc, _room, room_stream = await _off_loop(
             _respond_prelude, character_name, speaker)
+        logger.info("respond-turn %s: prelude %.0f ms", character_name,
+                    (utc_now() - _prelude_started).total_seconds() * 1000)
 
         reply = ""
         # Token usage of the reply call, prompt-cache hits included — rides on

@@ -836,6 +836,8 @@ def run_chat_turn(
             # the row itself carries no addressee list.
             addressed_to = [responder]
 
+    from time import perf_counter
+    _ctx_started = perf_counter()
     ctx = build_chat_context(owner_id, responder, incoming_message,
         speaker=speaker, medium=medium,
         partner_name=speaker, room_stream=room_stream,
@@ -844,6 +846,8 @@ def run_chat_turn(
         # One-off immediate context (e.g. a spell effect) — the character
         # reacts to it narratively without it staying in the prompt.
         moment_notes=([f"[{hint}]"] if hint else None))
+    logger.info("run_chat_turn[%s]: build_chat_context %.0f ms", responder,
+                (perf_counter() - _ctx_started) * 1000)
 
     if ctx["llm"] is None:
         logger.error("run_chat_turn: Kein LLM fuer %s verfuegbar", responder)
