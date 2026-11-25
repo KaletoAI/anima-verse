@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_ambience.mjs",
+  "source": "native/tests/Derivations/ambience.md",
   "fixtures": {
     "NEUTRAL": { "daylight": 1, "tint": [1, 1, 1] },
     "RED_DIM": { "daylight": 0.3, "tint": [1, 0, 0] },

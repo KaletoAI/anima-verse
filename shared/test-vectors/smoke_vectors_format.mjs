@@ -182,7 +182,7 @@ for (const name of ['walk_control', 'collide', 'enter', 'embody', 'camera', 'pai
 
 console.log('\n[15] E8 audio obeys the shared format');
 const audio = loadVectors('audio');
-check(audio.source === 'client3d/scripts/smoke_audio_math.mjs'
+check(audio.source === 'native/tests/Derivations/audio_math.md'
   && audio.cases.length >= 120 && audio.cases.every(c => /^\[\d+\]/.test(c.label)),
   'audio: single canonical source, numbered cases, fixtures and finite JSON');
 

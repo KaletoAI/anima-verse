@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_world_props.mjs",
+  "source": "native/tests/Derivations/world_props.md",
   "fixtures": {
     "ROW": {
       "id": "wp_fixture",

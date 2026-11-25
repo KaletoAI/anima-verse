@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_audio_math.mjs",
+  "source": "native/tests/Derivations/audio_math.md",
   "fixtures": {
     "MANIFEST": {
       "music": {

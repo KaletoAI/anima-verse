@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_fog_veil.mjs",
+  "source": "native/tests/Derivations/fog_veil.md",
   "cases": [
     {"label": "[1] fog_veil: (b) 0 → 0","fn": "fogCellOf","args": [0],"expect": 0,"eps": 1e-09},
     {"label": "[1] fog_veil: …63.999 → 0","fn": "fogCellOf","args": [63.999],"expect": 0,"eps": 1e-09},

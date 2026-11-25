@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_shadow_snap.mjs",
+  "source": "native/tests/Derivations/shadow_snap.md",
   "cases": [
     {"label": "[1] shadow_snap: (a) 140 / 2048","fn": "shadowTexelM","args": [],"expect": 0.068359375,"eps": 0},
     {"label": "[2] shadow_snap: …x-axis = (5/13, 0, 12/13): x","fn": "lightBasisValue","args": [[[-60,6.4,25]],["x",0]],"expect": 0.38461538461538464,"eps": 1e-12},

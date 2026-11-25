@@ -68,7 +68,7 @@ start.
                   [V2] 69 - 6 - 2 = 61, [V1] 0 -> 61 violations, all of them
                   class B. Tasks 10-12 move those 61 derivations to
                   native/tests/Derivations/ (Task 10: 22, leaving 39;
-                  Task 11: 20, leaving 19; Task 12 the rest).
+                  Task 11: 20, leaving 19; Task 12: the last 19, leaving 0).
   After Task 12:  0 violations - the guard passes.
 
 The guard is therefore deliberately RED between Task 9 and Task 12.
@@ -144,6 +144,26 @@ MOVED: dict[str, tuple[str, str]] = {
     "camera": ("client3d/scripts/smoke_camera_math.mjs", "native/tests/Derivations/camera_math.md"),
     "view_shift": ("client3d/scripts/smoke_view_shift.mjs", "native/tests/Derivations/view_shift.md"),
     "bench_math": ("client3d/scripts/smoke_bench_math.mjs", "native/tests/Derivations/bench_math.md"),
+    # Task 12, class B: terrain, scene, light, audio -> native/tests/Derivations/.
+    "ambience": ("client3d/scripts/smoke_ambience.mjs", "native/tests/Derivations/ambience.md"),
+    "audio": ("client3d/scripts/smoke_audio_math.mjs", "native/tests/Derivations/audio_math.md"),
+    "backdrop": ("client3d/scripts/smoke_backdrop_math.mjs", "native/tests/Derivations/backdrop_math.md"),
+    "fog_veil": ("client3d/scripts/smoke_fog_veil.mjs", "native/tests/Derivations/fog_veil.md"),
+    "height_tiles": ("client3d/scripts/smoke_height_tiles.mjs", "native/tests/Derivations/height_tiles.md"),
+    "impostors": ("client3d/scripts/smoke_impostors.mjs", "native/tests/Derivations/impostors.md"),
+    "layer_ground": ("client3d/scripts/smoke_layer_cut.mjs", "native/tests/Derivations/layer_cut.md"),
+    "light_pool": ("client3d/scripts/smoke_light_pool.mjs", "native/tests/Derivations/light_pool.md"),
+    "occlusion": ("client3d/scripts/smoke_occlusion.mjs", "native/tests/Derivations/occlusion.md"),
+    "scatter": ("client3d/scripts/smoke_scatter_math.mjs", "native/tests/Derivations/scatter_math.md"),
+    "scatter_rows": ("client3d/scripts/smoke_scatter_math.mjs", "native/tests/Derivations/scatter_math.md"),
+    "scene_models": ("client3d/scripts/smoke_scene_models.mjs", "native/tests/Derivations/scene_models.md"),
+    "scene_view": ("client3d/scripts/smoke_scene_view.mjs", "native/tests/Derivations/scene_view.md"),
+    "sky_light": ("client3d/scripts/smoke_shadow_snap.mjs", "native/tests/Derivations/shadow_snap.md"),
+    "terrain_lod": ("client3d/scripts/smoke_terrain_lod.mjs", "native/tests/Derivations/terrain_lod.md"),
+    "undergrowth": ("client3d/scripts/smoke_undergrowth.mjs", "native/tests/Derivations/undergrowth.md"),
+    "water": ("client3d/scripts/smoke_water_shade.mjs", "native/tests/Derivations/water_shade.md"),
+    "world_props": ("client3d/scripts/smoke_world_props.mjs", "native/tests/Derivations/world_props.md"),
+    "residency": ("client3d/scripts/smoke_residency_gen.mjs", "native/tests/Derivations/residency_gen.md"),
     # clip_shift has no entry: at PIN its source was a formula, not a file; the
     # formula is native/tests/Derivations/clip_shift.md word for word.
 }

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_occlusion.mjs",
+  "source": "native/tests/Derivations/occlusion.md",
   "cases": [
     {
       "label": "[4] distance 25",

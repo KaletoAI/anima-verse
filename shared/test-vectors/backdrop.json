@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_backdrop_math.mjs",
+  "source": "native/tests/Derivations/backdrop_math.md",
   "cases": [
     {"label": "[0] backdrop_math: A1 the front ring stands at 380 m","fn": "layerRadiusM","args": [0],"expect": 380,"eps": 1e-09},
     {"label": "[0] backdrop_math: A1 the back ring 60 m farther out","fn": "layerRadiusM","args": [1],"expect": 440,"eps": 1e-09},

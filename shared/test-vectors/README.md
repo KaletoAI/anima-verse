@@ -140,9 +140,9 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 |---|---|---|
 | `bench_math.json` | `native/tests/Derivations/bench_math.md` | `percentile`, `summarize` (`client3d/src/bench/benchStats.ts`) |
 | `ground_polygons.json` | `scripts/smoke_ground_math.mjs` | `signedArea`, `polygonArea`, `cleanRing` (`packages/scene-render/src/groundAreas.ts`) |
-| `scatter.json` | `client3d/scripts/smoke_scatter_math.mjs` | the C#-ported functions of `packages/scene-render/src/scatter.ts` and `client3d/src/scene/scatterLod.ts` (TS↔C# table in the smoke's header). A sampler's `rng` option is a list of numbers, fed in order; drawing past its end throws |
+| `scatter.json` | `native/tests/Derivations/scatter_math.md` | the C#-ported functions of `packages/scene-render/src/scatter.ts` and `client3d/src/scene/scatterLod.ts` (TS↔C# table in the derivation document). A sampler's `rng` option is a list of numbers, fed in order; drawing past its end throws |
 | `camera.json` | `native/tests/Derivations/camera_math.md` | the overview camera: `fitDistance`, `worldCentreXZ`, `wheelZoom`, `zoomTowardCursor`, `damp`, `flyAdvance`, `flyEase`, `orbitStep`, `clampPitchDeg`, `cameraPose` (`client3d/src/scene/cameraMath.ts`) and `basePitchDeg` (`client3d/src/scene/cameraFraming.ts`). Points are `[x, y, z]` / `[x, z]` lists, a bounds object `{min_x, max_x, min_z, max_z}`; an optional last argument may be omitted |
-| `occlusion.json` | `client3d/scripts/smoke_occlusion.mjs` | Task 53 / E7-T8: `occlusionUniforms`, clamped segment/rim hide and Bayer threshold/discard; 47 hand-derived cases |
+| `occlusion.json` | `native/tests/Derivations/occlusion.md` | Task 53 / E7-T8: `occlusionUniforms`, clamped segment/rim hide and Bayer threshold/discard; 47 hand-derived cases |
 | `view_shift.json` | `native/tests/Derivations/view_shift.md` | `viewShiftFor` (`client3d/src/scene/viewShift.ts`); the panel is `{x, y, w, h}` or `null` |
 | `overview_hud.json` | `native/tests/Derivations/walk_math.md` | `bubbleText`, `bubbleMs` (`game/bubble.ts`), `bootProgress` (`game/boot.ts`; the finished stages as a LIST), `infoPanelData` (`game/infoPanel.ts`; `roomOf` as an object name → room, `null` for an absent view / avatar), `checkScatterPrefs`, `scatterLodCfgOf` (`game/prefs.ts`) — all under `client3d/src/` |
 | `poll_schedule.json` | `scripts/smoke_sync_client.mjs` | `pollIntervalMs`, `nextErrorFactor` (`packages/player-ui/src/pollCore.ts`) |
@@ -152,36 +152,37 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `scene_place.json` | `scripts/smoke_place_rotation.mjs` | Three-free `placeTransform(spec, meshBoxes)`; each mesh box has local `min`/`max` triples and an optional column-major glTF `matrix`. Returns `fixPos`, `fitScale`, scalar `outerScale`, `outerPos`. |
 | `scene_primitives.json` | `scripts/smoke_scene_primitives.mjs` | `wallTransform`, `boxFaceUVs`, `extraCorners` (intrinsic XYZ, unlike model fix YXZ), `plateShape`, `placeholderBox`; aggregate measurement arrays preserve all wall/extra/plate geometry assertions. |
 | `scene_verify.json` | `scripts/smoke_scene_verify.mjs` | `inFrame`, `primitiveRows`, `placementRows`, `wallTargets`. Boxes are `{min:{x,y,z},max:{x,y,z}}`; rows return `{checked,rows}`; wall targets serialize as `{field,target}`. |
-| `scene_view.json` | `client3d/scripts/smoke_scene_view.mjs` | Pure `sceneView.ts` decisions and transforms, `storeyPieceOpacity`, `farShellSource`, `ringFor`, `placeDistance`, `detectStyle`; tile frames are `{center:{x,y,z},yaw}` with radians. |
-| `scene_models.json` | `client3d/scripts/smoke_scene_models.mjs` | Model variants, hinge/terrain/marker/slot/glyph/surface arithmetic, material looks, cut planes and clip/cutout point predicates. JSON wrappers and dispatch conventions are documented in the source smoke. |
-| `light_pool.json` | `client3d/scripts/smoke_light_pool.mjs` | `pickLights` (`visibleRooms` as a LIST), `flickerFactor`, `nightLightGain`, `haloVisible`, `fireColourMix`, `stepLightSlot`, `lightPositionInFrame` (column-major frame), `lightPoolSize` (`client3d/src/scene/lightPool.ts`) |
-| `ambience.json` | `client3d/scripts/smoke_ambience.mjs` | `ambienceTarget`, `stepAmbience`, `stepAmbienceN` (n steps), `nightFactorAt` (`client3d/src/scene/ambience.ts`), `roomRectOf`, `roomAtRects` (rects as `[id, rect]` pairs), `corridorAtOutline` (`client3d/src/game/roomAt.ts`), `worldToTile` (`{center:{x,z}, yaw}`, tiles.ts → scene-render `worldToLocalXZ`) |
+| `scene_view.json` | `native/tests/Derivations/scene_view.md` | Pure `sceneView.ts` decisions and transforms, `storeyPieceOpacity`, `farShellSource`, `ringFor`, `placeDistance`, `detectStyle`; tile frames are `{center:{x,y,z},yaw}` with radians. |
+| `scene_models.json` | `native/tests/Derivations/scene_models.md` | Model variants, hinge/terrain/marker/slot/glyph/surface arithmetic, material looks, cut planes and clip/cutout point predicates. JSON wrappers and dispatch conventions are documented in the source smoke. |
+| `light_pool.json` | `native/tests/Derivations/light_pool.md` | `pickLights` (`visibleRooms` as a LIST), `flickerFactor`, `nightLightGain`, `haloVisible`, `fireColourMix`, `stepLightSlot`, `lightPositionInFrame` (column-major frame), `lightPoolSize` (`client3d/src/scene/lightPool.ts`) |
+| `ambience.json` | `native/tests/Derivations/ambience.md` | `ambienceTarget`, `stepAmbience`, `stepAmbienceN` (n steps), `nightFactorAt` (`client3d/src/scene/ambience.ts`), `roomRectOf`, `roomAtRects` (rects as `[id, rect]` pairs), `corridorAtOutline` (`client3d/src/game/roomAt.ts`), `worldToTile` (`{center:{x,z}, yaw}`, tiles.ts → scene-render `worldToLocalXZ`) |
 | `mirror_plane.json` | `scripts/smoke_mirror_plane.mjs` | `planeOfFaces`, `planeOfSquareMix`, `mirrorBudgetRun`, `mirrorRefreshes` (`null` = Infinity), `mirrorPreset` (`packages/scene-render/src/mirrorSurface.ts`); wrappers in the smoke's header |
 | `slot_materials.json` | `scripts/smoke_slot_materials.mjs` | `slotFill`, `glassPreset`, `materialPresets` (`packages/scene-render/src/slotMaterials.ts`) |
 | `door_swing.json` | `native/tests/Derivations/door_swing.md` | `doorConstants`, `doorTargetAngle`, `doorDistance`, `easeAngle`, `doorSwingFrames` (`client3d/src/game/doorSwing.ts`); a `null` distance is Infinity |
 | `figure_clips.json` | `native/tests/Derivations/figure_clips.md` | `resolveMovementPoses`, `moveClip`, `idleClip`, `standingClipFor` (`null` animation = none), `movementOf`, `canRun`, `movementPoseOf`, `resolveClipTransitions`, `clipTransition`, `bridgePace` (`client3d/src/game/walk.ts`), `clipKindChain`, `resolveClipKind`, `proceduralGait` (`client3d/src/scene/clipCoverage.ts`). The server tables are explicit arguments: a pose table is the resolved `{pose: {kind, publicKind}}` form, a transition table the resolved rule list |
 | `prop_water.json` | `scripts/smoke_prop_water.py` | `waterRegionAt`, `pointInRegion` (`client3d/src/scene/propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (`client3d/src/game/walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
 | `graphics_prefs.json` | `scripts/smoke_graphics_prefs.mjs` | `loadGraphicsPrefs` (stored string or `null`), `checkGraphicsPrefs`, `saveGraphicsPrefs` (exact string), `msaaSamplesOf`, `browserAntialias`, `pickBrowserAntiAliasing` (`hud/src/game/prefs.ts`); `graphicsPrefsConstants()` is a smoke adapter → `{key, levels, defaults}` |
-| `audio.json` | `client3d/scripts/smoke_audio_math.mjs` | Task 58 / E8-T1: 145 cases for audio prefs, soundtrack decisions, eight-segment equal-power gains, playlist scheduling, stop/volume ramps, seeded shuffle and the browser's waiting-speech queue. Adapter signatures below. |
+| `audio.json` | `native/tests/Derivations/audio_math.md` | Task 58 / E8-T1: 145 cases for audio prefs, soundtrack decisions, eight-segment equal-power gains, playlist scheduling, stop/volume ramps, seeded shuffle and the browser's waiting-speech queue. Adapter signatures below. |
 
 ## E3 terrain, water and atmosphere
 
 Run `timeout 300 node client3d/scripts/smoke_e3_vectors.mjs` to execute **every**
 case in the seven E3 files. The original smokes also read their migrated cases;
 their shader, integration, invariant and mutation checks remain in place.
-Companion smoke headers are collected into the single canonical `source`'s
-opening docstring as well as retained at their original sites. `[20]` and `[21]` labels
-refer to the additional hand derivations in that docstring.
+Companion smoke headers were collected into the canonical smoke's opening docstring, which
+moved word for word to the derivation document named as `source` in E1 (the companions keep
+theirs at their original sites). `[20]` and `[21]` labels refer to the additional hand
+derivations in that document. `client3d/scripts/smoke_e3_vectors.mjs` stays the runner until E3.
 
-| File | Canonical source smoke | Areas |
+| File | Canonical source | Areas |
 |---|---|---|
-| `terrain_lod.json` | `client3d/scripts/smoke_terrain_lod.mjs` | Rings, error maxima, bounds/selection/fit, morphs, pyramids, caps, fragment normals, water lift, near-window policy |
-| `height_tiles.json` | `client3d/scripts/smoke_height_tiles.mjs` | Loading/batching, world/tile/lattice sampling, wire water-field decoding |
-| `layer_ground.json` | `client3d/scripts/smoke_layer_cut.mjs` | Cut weights/noise/decode/window/readers; natural-ground UV/tint/AO and constants |
-| `water.json` | `client3d/scripts/smoke_water_shade.mjs` | Look/packing, shore/foam/opaque/gate, profile and raster readers, waterfall detection/quad, wave-normal texel |
-| `sky_light.json` | `client3d/scripts/smoke_shadow_snap.mjs` | Clock lights, night-factor cross-reference, shadow basis/snap, distance fog |
-| `backdrop.json` | `client3d/scripts/smoke_backdrop_math.mjs` | Radius/height/clamp, compass, explicit-random and seeded ridge profiles |
-| `fog_veil.json` | `client3d/scripts/smoke_fog_veil.mjs` | Cell/key/grid, texture addressing, height/veil alpha, constants |
+| `terrain_lod.json` | `native/tests/Derivations/terrain_lod.md` | Rings, error maxima, bounds/selection/fit, morphs, pyramids, caps, fragment normals, water lift, near-window policy |
+| `height_tiles.json` | `native/tests/Derivations/height_tiles.md` | Loading/batching, world/tile/lattice sampling, wire water-field decoding |
+| `layer_ground.json` | `native/tests/Derivations/layer_cut.md` | Cut weights/noise/decode/window/readers; natural-ground UV/tint/AO and constants |
+| `water.json` | `native/tests/Derivations/water_shade.md` | Look/packing, shore/foam/opaque/gate, profile and raster readers, waterfall detection/quad, wave-normal texel |
+| `sky_light.json` | `native/tests/Derivations/shadow_snap.md` | Clock lights, night-factor cross-reference, shadow basis/snap, distance fog |
+| `backdrop.json` | `native/tests/Derivations/backdrop_math.md` | Radius/height/clamp, compass, explicit-random and seeded ridge profiles |
+| `fog_veil.json` | `native/tests/Derivations/fog_veil.md` | Cell/key/grid, texture addressing, height/veil alpha, constants |
 
 The native consumer should mirror the adapters in
 `client3d/scripts/e3VectorDispatch.mjs`. These are ordinary JSON argument values,
@@ -543,10 +544,10 @@ Unknown dispatch functions fail through the common vector runner.
 
 | File | Canonical source | Consumer |
 |---|---|---|
-| `scatter_rows.json` | `client3d/scripts/smoke_scatter_math.mjs` | Scatter smoke; stroke smoke also runs its station/decoration subset |
-| `impostors.json` | `client3d/scripts/smoke_impostors.mjs` | Impostor smoke; scatter smoke also runs `[W...]` seam cases |
-| `undergrowth.json` | `client3d/scripts/smoke_undergrowth.mjs` | Undergrowth smoke |
-| `world_props.json` | `client3d/scripts/smoke_world_props.mjs` | World-prop smoke |
+| `scatter_rows.json` | `native/tests/Derivations/scatter_math.md` | Scatter smoke; stroke smoke also runs its station/decoration subset |
+| `impostors.json` | `native/tests/Derivations/impostors.md` | Impostor smoke; scatter smoke also runs `[W...]` seam cases |
+| `undergrowth.json` | `native/tests/Derivations/undergrowth.md` | Undergrowth smoke |
+| `world_props.json` | `native/tests/Derivations/world_props.md` | World-prop smoke |
 
 `client3d/scripts/e4VectorDispatch.mjs` supplies the row shape adapters:
 `areaAxis({line,ring,sides,at})`, sampler `axisFrom:{line,ring,sides}`, finite
@@ -572,7 +573,7 @@ and `SeedEpochSuffix` functions. `scatter.json` also pins both JS sway ties.
 | File | Canonical source | Cases |
 |---|---|---:|
 | `travel.json` | `native/tests/Derivations/travel_math.md` | 134 |
-| `residency.json` | `client3d/scripts/smoke_residency_gen.mjs` | 18 |
+| `residency.json` | `native/tests/Derivations/residency_gen.md` | 18 |
 
 The travel source collects the reckon and relief/densify hand derivations (moved word for word
 from the opening docstring of `client3d/scripts/smoke_travel_math.mjs` in E1); that smoke runs every case. `smoke_travel_reckon.mjs` consumes the two dead-reckoning
@@ -754,7 +755,8 @@ unchanged.
 ## Audio (Task 58 / E8-T1)
 
 Run `node client3d/scripts/smoke_audio_math.mjs`. All 145 cases have one canonical
-source: that smoke's numbered hand derivations. The existing walk, voiceover
+source: the numbered hand derivations in `native/tests/Derivations/audio_math.md`, moved
+word for word from that smoke's opening docstring in E1. The existing walk, voiceover
 and bridge smokes keep their checks. C# consumers arrive in Task 59.
 P3-R31 keeps `client3d/src` and `packages/` unchanged: the smoke transforms the
 original modules in a sandbox and exposes private engine functions there.
