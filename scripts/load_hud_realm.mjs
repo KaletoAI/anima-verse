@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import ts from 'typescript';
 
-const root = fileURLToPath(new URL('../../', import.meta.url));
+const root = fileURLToPath(new URL('../', import.meta.url));
 const nodeRequire = createRequire(import.meta.url);
 
 /** Execute the real HUD modules with independent module caches, like two JS

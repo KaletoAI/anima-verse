@@ -16,7 +16,7 @@ export function smokeHudText(wire) {
   const chrome = candidates.find(path => existsSync(path));
   assert.ok(chrome, 'HUD text smoke needs Chromium (set CHROME_BIN)');
   const script = buildSync({
-    stdin: { resolveDir: fileURLToPath(new URL('../../', import.meta.url)), contents: `
+    stdin: { resolveDir: fileURLToPath(new URL('../', import.meta.url)), contents: `
       import React, { useState } from 'react';
       import { createRoot } from 'react-dom/client';
       import { flushSync } from 'react-dom';

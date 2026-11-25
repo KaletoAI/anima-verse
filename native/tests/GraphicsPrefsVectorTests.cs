@@ -9,7 +9,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/graphics_prefs.json against the C# port <see cref="GraphicsPrefs"/> (hand derivations:
-/// client3d/scripts/smoke_graphics_prefs.mjs; TS source: hud/src/game/prefs.ts).
+/// scripts/smoke_graphics_prefs.mjs; TS source: hud/src/game/prefs.ts).
 ///
 /// <code>
 ///   TS fn                     C#                                     shape translation

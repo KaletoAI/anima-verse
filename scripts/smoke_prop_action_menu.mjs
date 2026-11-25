@@ -1,4 +1,5 @@
-/** Task 80: the real canvas menu preserves Core's enabled verdict beside an active owned run. */
+/** Task 80: the real canvas menu preserves Core's enabled verdict beside an active owned run.
+ * Usage (repo root): node scripts/smoke_prop_action_menu.mjs */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
@@ -15,7 +16,7 @@ const compiled = await build({
       return renderToStaticMarkup(h(I18nProvider, null,
         h(PropActionExecutionRow, { run, kind: 'current', busy: false, perform() {} }),
         h(PlaceMenu, { menu })));
-    }`, resolveDir: new URL('../../', import.meta.url).pathname, loader: 'ts' },
+    }`, resolveDir: new URL('../', import.meta.url).pathname, loader: 'ts' },
   bundle: true, jsx: 'automatic', platform: 'node', format: 'cjs', write: false,
   external: ['react', 'react/*', 'react-dom/*'], loader: { '.css': 'empty' },
 });

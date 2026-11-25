@@ -166,7 +166,7 @@ await import('./smoke_prop_action_storey.mjs');
 
 await import('./smoke_prop_action_offers.mjs');
 
-await import('./smoke_prop_action_menu.mjs');
+await import('../../scripts/smoke_prop_action_menu.mjs');
 
 await import('./smoke_prop_action_recovery.mjs');
 

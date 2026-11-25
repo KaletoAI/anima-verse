@@ -1,4 +1,5 @@
-/** Dot picking uses the same projection as the painted minimap. */
+/** Dot picking uses the same projection as the painted minimap.
+ * Usage (repo root): node scripts/smoke_travel_pick.mjs */
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { build } from 'esbuild';

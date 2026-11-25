@@ -1,6 +1,7 @@
 /** Hand-derived: encode each URL value; avatar wins duplicate Ava; names sort
  * Ava,Bo,Kira independently of payload order. Room/roster changes invalidate
- * renders; pending beats cooldown, which beats a cached signature. */
+ * renders; pending beats cooldown, which beats a cached signature.
+ * Usage (repo root): node scripts/smoke_scene_tile.mjs */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 const result = await build({ entryPoints: ['hud/src/hud/sceneTile.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });

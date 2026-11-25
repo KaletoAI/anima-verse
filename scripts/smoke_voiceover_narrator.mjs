@@ -4,7 +4,7 @@
  * (`hud/src/game/voiceover.ts`, bugrunde-2026-08-29 point 8) — numbers,
  * no listening (docs/schnittstellen-3d.md § B5a).
  *
- * Usage:  node client3d/scripts/smoke_voiceover_narrator.mjs
+ * Usage:  node scripts/smoke_voiceover_narrator.mjs
  *         (self-bundles through esbuild like its siblings)
  *
  * WHAT WAS WRONG. The filter carried a fixed list of narrator NAMES,
@@ -64,7 +64,7 @@ const __dirname = path.dirname(__filename)
 async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_voiceover_narrator_bundled.mjs'
-    const root = path.join(__dirname, '../../')
+    const root = path.join(__dirname, '../')
     const bin = ['client3d/node_modules/.bin/esbuild',
                  'node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
@@ -84,7 +84,7 @@ async function main() {
     process.exit(runResult.status ?? 1)
   }
 
-  const { isNarratorLine, speakableLines } = await import('../../hud/src/game/voiceover.ts')
+  const { isNarratorLine, speakableLines } = await import('../hud/src/game/voiceover.ts')
 
   const FAILED = []
   function checkTrue(label, ok) {

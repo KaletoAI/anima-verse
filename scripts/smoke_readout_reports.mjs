@@ -5,7 +5,7 @@
  * LAST restRadiusM and depthM, and the number of reach EDGES (insertionOfDepth going from < 1, or from not engaged,
  * to >= 1) — one send per scene with all its due rows.
  *
- * Usage: node client3d/scripts/smoke_readout_reports.mjs
+ * Usage: node scripts/smoke_readout_reports.mjs
  *
  * EXPECTATIONS, DERIVED BY HAND (interval 1000 ms; sceneOf: R -> "S1", R2 -> "S2", Q -> "")
  * Key A = (R, inset, E), key B = (R2, mouth, E), key C = (Q, inset, E) — values (insertionOfDepth, partRadiusM,
@@ -33,7 +33,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
 const ts = require('typescript');
-const source = readFileSync(new URL('../../hud/src/game/readoutReports.ts', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../hud/src/game/readoutReports.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { createReadoutReporter, REPORT_INTERVAL_MS } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));

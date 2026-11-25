@@ -2,7 +2,7 @@
  * Smoke run for the graphics settings of `hud/src/game/prefs.ts`
  * (Task 26d — the game menu's Graphics tab: anti-aliasing and shadows).
  *
- * Usage:  node client3d/scripts/smoke_graphics_prefs.mjs
+ * Usage:  node scripts/smoke_graphics_prefs.mjs
  *         (transforms the module with esbuild — a Vite dependency, already
  *          installed; no bundler, no DOM, no server)
  *
@@ -104,9 +104,9 @@ import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'hud', 'src', 'game', 'prefs.ts');
 
 /** The module, transformed and imported — it has no imports of its own, so a

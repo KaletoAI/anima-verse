@@ -3040,7 +3040,7 @@ the two collision records — `insertion_of_depth = share_max · L / D`, the par
 surface radius, the channel's rest radius and depth, `reaches =
 reaches_per_cycle · cycles` since the previous beat (clip clock) when
 `share_max · L ≥ D`, else 0; no profile or record = no entry.
-Hand-computed: `client3d/scripts/smoke_readout_reports.mjs`,
+Hand-computed: `scripts/smoke_readout_reports.mjs`,
 `scripts/smoke_scene_readouts.py`, `scripts/smoke_scene_readout_estimate.py`.
 
 **Der Clip läuft in ECHTZEIT, im Tempo der Szene** — unabhängig vom
@@ -6196,7 +6196,7 @@ sie produziert.
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
 | `client3d/scripts/smoke_pair_clip_tempo.mjs` | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge), [7] die Uhr eines Solo-Möbellaufs am `place`-Block |
-| `client3d/scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
+| `scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
 | `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
 | `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |

@@ -3,7 +3,7 @@
  * y edges ±10. Camera at y=3 over floor y=1 is 2 m high. Euclidean head
  * distance at (-20,3,-10) is sqrt(500). A 30° downward look has pitch -30°.
  * Catches inverted screen axes, behind-camera inclusion and wrong pitch/depth.
- * Usage: node client3d/scripts/smoke_photo_view.mjs
+ * Usage: node scripts/smoke_photo_view.mjs
  */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { loadHudRealm } from './load_hud_realm.mjs';
+import { loadHudRealm } from '../../scripts/load_hud_realm.mjs';
 import { mainFunction } from './mainFunction.mjs';
 const compile = source => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const url = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');

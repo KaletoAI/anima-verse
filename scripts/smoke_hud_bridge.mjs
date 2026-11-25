@@ -1,4 +1,5 @@
-/** HUD bridge: independent realms, both directions and protocol rejection. */
+/** HUD bridge: independent realms, both directions and protocol rejection.
+ * Usage (repo root): node scripts/smoke_hud_bridge.mjs */
 import assert from 'node:assert/strict';
 import { loadHudRealm } from './load_hud_realm.mjs';
 import { smokeHudText } from './smoke_hud_text.mjs';

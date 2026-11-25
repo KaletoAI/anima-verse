@@ -1,7 +1,7 @@
 /**
  * HUD bridge over gdCEF's JS binding (`gdcefTransport`, native client spike S4).
  *
- * Usage (repo root): node client3d/scripts/smoke_hud_gdcef.mjs
+ * Usage (repo root): node scripts/smoke_hud_gdcef.mjs
  *
  * A fake gdCEF host stands in for the native client's Chromium:
  * `godotMethods.hud_bridge(data)` is what a page calls to reach Godot,

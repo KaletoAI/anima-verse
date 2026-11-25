@@ -1,6 +1,6 @@
 /** Actual detached-HUD HTTP mutations deliver their answers through the bridge. */
 import assert from 'node:assert/strict';
-import {loadHudRealm} from './load_hud_realm.mjs';
+import {loadHudRealm} from '../../scripts/load_hud_realm.mjs';
 const scene=loadHudRealm(),hud=loadHudRealm();
 const [a,b]=scene.loopbackPair();
 const previews=[];scene.gameActions.preparePropAction=async(_requestId,target)=>{previews.push(target)};
