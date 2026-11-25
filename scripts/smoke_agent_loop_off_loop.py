@@ -380,6 +380,39 @@ async def respond_turn(inline=False):
 asyncio.run(respond_turn())
 asyncio.run(respond_turn(inline=True))
 
+
+# [7] status() reads the pause gate (world DB + task-queue DB) BEFORE it takes
+# the state lock. The loop takes that lock for every pick and every dispatcher
+# tick; a status poll from the admin page that held it across the read stalled
+# the loop for as long as the read took. Probe: while the gate is being read,
+# ANOTHER thread must be able to take the lock (it is an RLock, so the probe
+# cannot run in the reading thread itself).
+print("[7] status() does not hold the state lock across the pause read")
+_probe = {}
+_status_loop = al.AgentLoop()
+
+
+def _slow_gate():
+    def other():
+        got = _status_loop._state_lock.acquire(timeout=1.0)
+        _probe["free"] = got
+        if got:
+            _status_loop._state_lock.release()
+    t = threading.Thread(target=other)
+    t.start()
+    t.join()
+    return False
+
+
+_real_gate = al._is_paused
+al._is_paused = _slow_gate
+try:
+    _answer = _status_loop.status()
+finally:
+    al._is_paused = _real_gate
+check("[7] the lock was free while the gate was read", _probe.get("free"), True)
+check("[7] status still reports the gate", _answer.get("paused"), False)
+
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
     print("FAILED:", ", ".join(FAILURES))

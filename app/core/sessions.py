@@ -315,7 +315,9 @@ def cached_session_user(token: str):
         if _now() >= expires:
             del _cache[token]
             return None, None, False
-        return copy.deepcopy(session), copy.deepcopy(user), False
+    # Copied outside the lock: a stored entry is never changed afterwards, and
+    # this runs on the event loop for every request.
+    return copy.deepcopy(session), copy.deepcopy(user), False
 
 
 def resolve_session_user(token: str):

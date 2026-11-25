@@ -15,7 +15,7 @@ from app.core.http_files import etag_file_response, etag_matches
 from app.core.portrait_images import (
     PortraitProcessingError, character_image_path, transparent_portrait_path)
 from app.core.log import get_logger
-from app.core.route_limits import FIGURE_POLLS, FIGURE_POLLS_LIMIT, limited
+from app.core.route_limits import MODEL3D_POLL, MODEL3D_POLL_LIMIT, limited
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
                                     ensure_mp4, guard_content_length,
                                     max_pack_bytes, read_upload_capped)
@@ -3852,7 +3852,7 @@ def get_character_animations(character_name: str, pose: str = "") -> Dict[str, A
 
 
 @router.get("/{character_name}/model3d")
-@limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
+@limited(MODEL3D_POLL, MODEL3D_POLL_LIMIT)
 def get_character_model3d(character_name: str, request: Request, preview_states: Optional[str] = None) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination
     ({signature, has_input, model, pending}) + the character's animation set

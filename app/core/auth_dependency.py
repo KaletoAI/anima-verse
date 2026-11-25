@@ -14,6 +14,9 @@ Additionally the contextvar `current_user_ctx` — set by the middleware and
 readable from arbitrary code (get_current_user_from_ctx) without a request.
 """
 import asyncio
+import contextvars
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status
@@ -27,6 +30,12 @@ logger = get_logger("auth_dep")
 current_user_ctx: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "current_user_ctx", default=None
 )
+
+# The session lookup's OWN pool for a cache miss. Not the default executor:
+# that one is shared with whole chat turns, lane waits and renders, and every
+# session misses at least once per cache TTL — all authenticated requests
+# would queue behind that long work. The lookup is two short SELECTs.
+_LOOKUP_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="auth-lookup")
 
 
 def get_current_user_from_ctx() -> Optional[Dict[str, Any]]:
@@ -128,7 +137,10 @@ async def _resolve_request_user(request: Request) -> Optional[Dict[str, Any]]:
         return _get_session_user(request)
     result = sessions.cached_session_user(token)
     if result is sessions.MISS:
-        return await asyncio.to_thread(_get_session_user, request)
+        # Like asyncio.to_thread (the context travels along), on the own pool.
+        ctx = contextvars.copy_context()
+        return await asyncio.get_running_loop().run_in_executor(
+            _LOOKUP_POOL, functools.partial(ctx.run, _get_session_user, request))
     return _apply_lookup(request, token, result)
 
 

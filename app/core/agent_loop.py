@@ -334,6 +334,10 @@ class AgentLoop:
         self._last_real_turn_at: Dict[str, datetime] = {}
         self._current_agent: str = ""
         self._recent: List[Dict[str, Any]] = []  # [{name, ts, action}]
+        # The record of the serial loop's OWN last turn. The back-off guard
+        # judges this one, not _recent[-1]: a respond turn that ends while
+        # the turn's game clock is read would otherwise be judged instead.
+        self._last_turn_entry: Optional[Dict[str, Any]] = None
         self._lock = asyncio.Lock()
         # Standby mode: set when no 'thought' LLM is reachable. Loop polls
         # availability on each idle tick instead of running turns.
@@ -396,13 +400,17 @@ class AgentLoop:
     # ------------------------------------------------------------------
 
     def status(self) -> Dict[str, Any]:
+        # The pause gate reads the world DB and the task-queue DB: BEFORE the
+        # lock, never under it — the loop takes the same lock for every pick
+        # and every dispatcher tick and would wait for that read.
+        paused = _is_paused()
         with self._state_lock:
-            return self._status_locked()
+            return self._status_locked(paused)
 
-    def _status_locked(self) -> Dict[str, Any]:
+    def _status_locked(self, paused: bool) -> Dict[str, Any]:
         return {
             "running": self._task is not None and not self._stop.is_set(),
-            "paused": _is_paused(),
+            "paused": paused,
             "standby": self._llm_standby,
             "current_agent": self._current_agent,
             "remaining_in_round": list(self._tickets),
@@ -1079,6 +1087,7 @@ class AgentLoop:
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
 
+                self._last_turn_entry = None
                 try:
                     await self._run_turn(agent)
                 finally:
@@ -1094,7 +1103,7 @@ class AgentLoop:
                 # log and starving the rest of the server (incl. the admin
                 # UI you'd use to fix the LLM config). Sleep when we detect
                 # the symptom instead of trying to enumerate causes.
-                last = self._recent[-1] if self._recent else None
+                last = self._last_turn_entry
                 if last:
                     outcome_val = last.get("outcome")
                     if outcome_val == "in_chat_skip":
@@ -2098,13 +2107,17 @@ class AgentLoop:
 
     async def dispatch_room_reactions_async(self, **kwargs: Any) -> Dict[str, List[str]]:
         """``dispatch_room_reactions`` for a caller ON the event loop (the
-        ``/play/say`` route): the same call, run in the agent loop's read
-        pool. Its storage reads (roster, eligibility, relationships, the
-        location) leave the loop; its changes to the queues and the room
-        energy are made under the state lock, as for every thread caller.
-        Everything it bumps is queued when the await returns, so
-        ``wait_room_responds_settled`` right after it still sees it all."""
-        return await _off_loop(self.dispatch_room_reactions, **kwargs)
+        ``/play/say`` route): the same call, run in a worker thread. Its
+        storage reads (roster, eligibility, relationships, the location)
+        leave the loop; its changes to the queues and the room energy are
+        made under the state lock, as for every thread caller. Everything it
+        bumps is queued when the await returns, so
+        ``wait_room_responds_settled`` right after it still sees it all.
+
+        Not the read pool: a player's line must not queue behind the loop's
+        own background reads (a refill reads the whole roster), and
+        ``to_thread`` carries the request context along."""
+        return await asyncio.to_thread(self.dispatch_room_reactions, **kwargs)
 
     def _avatar_holds_floor(self, key: str, in_earshot: Sequence[str], *,
                             start_clock: bool) -> bool:
@@ -2395,25 +2408,27 @@ class AgentLoop:
                     outcome = f"error: {type(e).__name__}"
             finally:
                 self._current_agent = ""
-                await self._finish_turn(character_name, started_at, outcome, turn_info)
+                self._last_turn_entry = await self._finish_turn(
+                    character_name, started_at, outcome, turn_info)
 
     async def _finish_turn(self, name: str, started_at: datetime, outcome: str,
-                           turn_info: Optional[Dict[str, Any]] = None) -> None:
+                           turn_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """``_record_turn`` for the loop's coroutines: the game clock is read
         in the read pool afterwards (a cold clock cache reads the world DB)
         and filled into the entry. A task that is being cancelled keeps
-        game_ts ''."""
+        game_ts ''. Returns the turn's own record."""
         # Recorded FIRST, in the same step as the caller's other bookkeeping
         # (a respond turn drops out of _respond_active right before this): the
         # cooldown must be set before the pick can look at the name again.
         entry = self._record_turn(name, started_at, outcome, turn_info, game_ts="")
         task = asyncio.current_task()
         if task is not None and task.cancelling():
-            return
+            return entry
         try:
             entry["game_ts"] = await _off_loop(_game_ts_now)
         except Exception:
             pass
+        return entry
 
     def _record_turn(self, name: str, started_at: datetime, outcome: str,
                      turn_info: Optional[Dict[str, Any]] = None,

@@ -39,9 +39,9 @@ F = TypeVar("F", bound=Callable[..., Any])
 # call time, so a smoke can patch it.
 MAX_WAIT_S = 30.0
 
-# The three most expensive figure polls share this pool:
-# GET /characters/{c}/model3d, GET /characters/open-steps and
-# GET /characters/{c}/figure. Evidence (logs/request_timing.jsonl since
+# The two admin figure polls share this pool: GET /characters/open-steps and
+# GET /characters/{c}/figure (GET /characters/{c}/model3d has its own, below).
+# Evidence (logs/request_timing.jsonl since
 # 2026-11-22, only requests > 250 ms): /model3d 5972 requests / 15,554 s total,
 # up to 12 in flight; /open-steps 1550 / 11,689 s (max 764 s), up to 10 in
 # flight; /figure 1134 / 7,293 s, up to 7 in flight. Their clients poll with
@@ -49,6 +49,12 @@ MAX_WAIT_S = 30.0
 # runnable thread competing with the event loop for the GIL.
 FIGURE_POLLS = "figure_polls"
 FIGURE_POLLS_LIMIT = 3
+
+# GET /characters/{c}/model3d has its own pool: the 3D clients fetch it per
+# figure when a player enters a room, and it must not wait behind the two
+# admin polls above, which run for minutes during a Build.
+MODEL3D_POLL = "model3d_poll"
+MODEL3D_POLL_LIMIT = 4
 
 _pools_lock = threading.Lock()
 _pools: Dict[str, threading.Semaphore] = {}
