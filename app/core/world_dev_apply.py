@@ -10,7 +10,7 @@ generator (``npc_ops.apply_npc``) and by the World Dev free mode. Errors are
 Also home of ``_map_world_context``, the one reader of the world facts the
 map-layout sanitizer needs.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -24,10 +24,9 @@ logger = get_logger("world_dev")
 
 def _row_exists(char_name: str) -> bool:
     """Whether a ``characters`` row with exactly this name exists."""
-    from app.core.db import get_connection
-    from app.models.character import _character_row_exists
+    from app.models.character import character_row_exists
     try:
-        return _character_row_exists(get_connection(), char_name)
+        return character_row_exists(char_name)
     except Exception:  # an unreadable DB reads as "new", as before the move
         return False
 
@@ -69,7 +68,8 @@ def _get_generable_fields(template_name: str) -> tuple[set, set]:
 def apply_character(char_data: Dict[str, Any],
                     selected_template: str = "",
                     created_by: str = "",
-                    must_be_new: bool = False) -> Dict[str, Any]:
+                    must_be_new: bool = False,
+                    on_claim: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
     """Apply character JSON in-process (profile + soul MD + outfits + config).
 
     Used by /apply-character (HTTP), /apply-json (smart import), the temp-NPC
@@ -82,7 +82,10 @@ def apply_character(char_data: Dict[str, Any],
     Raises ``ValueError`` (a ``CharacterNameError`` for a name the rule
     refuses) — the routes map it to a 400. With ``must_be_new=True`` a
     character whose VALIDATED name already exists is a ``ValueError`` too,
-    before anything is written.
+    before anything is written. It is checked once more under the
+    ``character_profile`` lock, right before the new row is stored; only
+    then is ``on_claim()`` called — the caller's proof that a row found after
+    a later failure is the one THIS call created, never a foreign one.
 
     Returns {status, character, template, outfits, warnings, created_items};
     ``created_items`` are the catalog item ids the outfits created via
@@ -179,16 +182,24 @@ def apply_character(char_data: Dict[str, Any],
             if k in soul_field_map:
                 profile.pop(k, None)
 
-        save_character_profile(char_name, profile, create_new=_is_new)
+        if must_be_new:
+            if _row_exists(char_name):
+                raise ValueError(f"Character '{char_name}' already exists")
+            if on_claim is not None:
+                on_claim()
+        if not save_character_profile(char_name, profile, create_new=_is_new):
+            raise ValueError(f"The profile of '{char_name}' was not stored")
 
     # A linked character's SHARED soul sections belong to its leader: an
     # applied JSON never writes them (neither the leader's file nor a dead
     # copy beside the body) — they are edited on the leader.
+    # Soul markdown goes through soul_writer.write_text: atomic, under the
+    # soul_file lock, source-file cache invalidated in a finally.
+    from app.core import soul_writer
     from app.core.linked_characters import soul_owner
-    from app.models.character_template import invalidate_source_file
 
     if soul_field_map:
-        char_dir = get_character_dir(char_name, create=True)
+        get_character_dir(char_name, create=True)
         for fk, rel_path in soul_field_map.items():
             content = char_data.get(fk)
             if content is None or not str(content).strip():
@@ -197,19 +208,14 @@ def apply_character(char_data: Dict[str, Any],
                 logger.info("WorldDev: %s of %s is shared with %s — not applied",
                             rel_path, char_name, soul_owner(char_name, rel_path))
                 continue
-            md_path = char_dir / rel_path
-            md_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
-            finally:
-                invalidate_source_file(md_path)
+            soul_writer.write_text(char_name, rel_path, str(content))
 
     # Extra soul MDs (sections without template source_file mapping —
     # Smart import may render nested ``"# Soul"``/``"# Tasks"`` headings there).
     extra_md = char_data.get("_extra_soul_md") or {}
     if isinstance(extra_md, dict) and extra_md:
         from app.core.soul_sections import SECTION_FILE_MAP
-        char_dir = get_character_dir(char_name, create=True)
+        get_character_dir(char_name, create=True)
         for section_key, content in extra_md.items():
             rel = SECTION_FILE_MAP.get(section_key)
             if not rel or not str(content or "").strip():
@@ -218,12 +224,7 @@ def apply_character(char_data: Dict[str, Any],
                 logger.info("WorldDev: %s of %s is shared with %s — not applied",
                             rel, char_name, soul_owner(char_name, rel))
                 continue
-            md_path = char_dir / rel
-            md_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
-            finally:
-                invalidate_source_file(md_path)
+            soul_writer.write_text(char_name, rel, str(content))
 
     config = get_character_config(char_name)
     config_changed = False
@@ -252,8 +253,8 @@ def apply_character(char_data: Dict[str, Any],
         config["chat_mode"] = "rp_first"
         config_changed = True
 
-    if config_changed:
-        save_character_config(char_name, config)
+    if config_changed and not save_character_config(char_name, config):
+        raise ValueError(f"The configuration of '{char_name}' was not stored")
 
     # Same starting repertoire as a character created in the Characters tab.
     # A temporary NPC gets its closed list from npc_ops.activate_default_skills.
@@ -278,6 +279,7 @@ def apply_character(char_data: Dict[str, Any],
     for outfit in raw_outfits:
         applied = _apply_one_outfit(char_name, outfit)
         created_items.extend(applied.pop("created_items", []))
+        apply_warnings.extend(applied.pop("warnings", []))
         outfits_applied.append(applied)
     # After the outfits: placing a new character at home runs the outfit
     # compliance of that place, which needs the wardrobe to exist.
@@ -444,7 +446,8 @@ def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],
                 home_room = str(cfg.get("home_room") or "")
             cfg["home_location"] = home["id"]
             cfg["home_room"] = home_room
-            save_character_config(char_name, cfg)
+            if not save_character_config(char_name, cfg):
+                raise ValueError(f"The home of '{char_name}' was not stored")
     elif data.get("home_room"):
         # A room alone (a patch) refers to the home the character already has.
         cfg = get_character_config(char_name)
@@ -452,7 +455,8 @@ def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],
         home_room = _resolve_room_id(current, data["home_room"]) if current else ""
         if home_room:
             cfg["home_room"] = home_room
-            save_character_config(char_name, cfg)
+            if not save_character_config(char_name, cfg):
+                raise ValueError(f"The home room of '{char_name}' was not stored")
         else:
             warnings.append(f"Room '{data['home_room']}' is not a room of the "
                             "character's home — skipped.")
@@ -530,21 +534,42 @@ def _template_has_wardrobe(template_name: str) -> bool:
 def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
     """Create one outfit using deduplicated pieces or a free-text fallback.
 
-    Returns: {name, pieces_created, pieces_reused, created_items} —
-    ``created_items`` are the ids of the catalog items ``add_item`` created.
+    Returns: {name, pieces_created, pieces_reused, created_items, warnings} —
+    ``created_items`` are the ids of the catalog items ``add_item`` created,
+    ``warnings`` name every piece that was skipped (also logged).
     """
     if not outfit.get("name"):
         return {"name": "", "pieces_created": 0, "pieces_reused": 0,
-                "created_items": []}
+                "created_items": [], "warnings": []}
     raw_pieces = outfit.get("pieces") or []
     if raw_pieces and isinstance(raw_pieces[0], dict):
         from app.models.inventory import (
             add_item, add_to_inventory, find_inventory_piece_by_name_slot,
-            VALID_PIECE_SLOTS)
+            get_item, has_item, VALID_PIECE_SLOTS)
         piece_ids: List[str] = []
         created_ids: List[str] = []
+        warnings: List[str] = []
         created = reused = 0
         for p in raw_pieces:
+            # An EXISTING catalog piece, named by its id (the World Dev free
+            # mode dresses a new character in pieces the world already has):
+            # handed to the character, never created, never in created_items.
+            ref = str(p.get("item_id") or "").strip()
+            if ref:
+                ref_item = get_item(ref)
+                if not ref_item or ref_item.get("category") != "outfit_piece":
+                    logger.warning("WorldDev outfit '%s': no outfit piece %r — skipped",
+                                   outfit.get("name"), ref)
+                    warnings.append(f"Outfit '{outfit.get('name')}': no outfit piece "
+                                    f"'{ref}' — skipped.")
+                    continue
+                if not has_item(char_name, ref):
+                    add_to_inventory(character_name=char_name, item_id=ref,
+                                     obtained_method="generated",
+                                     obtained_from="world_dev")
+                piece_ids.append(ref)
+                reused += 1
+                continue
             # Schema: {slots: [...], name, prompt_fragment, outfit_types, covers, partially_covers}.
             # Do not interpret legacy slot/additional_slots input;
             # add_item rejects it with "needs non-empty 'slots' list".
@@ -555,6 +580,8 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
             if not slots or not name:
                 logger.warning("WorldDev outfit '%s': Piece skipped (slots=%r, name=%r)",
                                outfit.get("name"), slots, name)
+                warnings.append(f"Outfit '{outfit.get('name')}': a piece without a "
+                                "valid slot or name — skipped.")
                 continue
             existing = find_inventory_piece_by_name_slot(
                 char_name, name, slots[0], prompt_fragment=fragment)
@@ -577,13 +604,17 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
             if not iid:
                 logger.warning("WorldDev outfit '%s': add_item failed for '%s'",
                                outfit.get("name"), name)
+                warnings.append(f"Outfit '{outfit.get('name')}': piece '{name}' "
+                                "could not be created — skipped.")
                 continue
             add_to_inventory(character_name=char_name, item_id=iid,
                 obtained_method="generated", obtained_from="world_dev")
             piece_ids.append(iid)
             created_ids.append(iid)
             created += 1
-        frags = [(p.get("prompt_fragment") or "").strip()
+        frags = [str((get_item(str(p["item_id"]).strip()) or {}).get("prompt_fragment")
+                     or "").strip() if p.get("item_id")
+                 else (p.get("prompt_fragment") or "").strip()
                  for p in raw_pieces if isinstance(p, dict)]
         outfit_text = "wearing: " + ", ".join(f for f in frags if f) if any(frags) else ""
         add_character_outfit(char_name, {
@@ -596,11 +627,12 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
         })
         logger.info("WorldDev outfit '%s': %d new, %d reused", outfit["name"], created, reused)
         return {"name": outfit["name"], "pieces_created": created,
-                "pieces_reused": reused, "created_items": created_ids}
+                "pieces_reused": reused, "created_items": created_ids,
+                "warnings": warnings}
     # Old path: free-text outfit.
     add_character_outfit(char_name, outfit)
     return {"name": outfit["name"], "pieces_created": 0, "pieces_reused": 0,
-            "created_items": []}
+            "created_items": [], "warnings": []}
 
 
 def _map_world_context() -> Tuple[Dict[str, Any], Dict[str, Any], Any, str]:

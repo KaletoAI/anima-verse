@@ -1,8 +1,9 @@
 """World Dev free mode — the tool registry the agent works through.
 
 Plan docs/superpowers/plans/2026-11-22-world-dev-free-mode.md, Task 5 (read
-tools, locations, terrain, height areas; the character tools follow in
-Task 6). Spec docs/superpowers/specs/2026-11-22-world-dev-free-mode-design.md
+tools, locations, terrain, height areas) and Task 6 (create_character,
+update_character — one journal step per group: soul section, profile+config,
+home+schedule). Spec docs/superpowers/specs/2026-11-22-world-dev-free-mode-design.md
 ("Tools").
 
 ONE ENTRY POINT. run_tool() runs one tool call and journals it as one step
@@ -213,7 +214,7 @@ class _Step:
 _KEPT_HINTS = {"location": ("location", "update_location"),
                "terrain": ("terrain area", "update_terrain_area"),
                "height": ("height area", "update_height_area"),
-               "character": ("character", "")}
+               "character": ("character", "update_character")}
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -1351,6 +1352,494 @@ def _update_height_area(step: _Step, args: Dict[str, Any]) -> str:
             + _warn_suffix(warnings))
     step.complete(written, line)
     return line
+
+
+# ── Character writes ─────────────────────────────────────────────────────
+
+#: Keys of a create_character draft besides the template fields.
+_CHAR_DRAFT_SPECIAL = {"character_name", "template", "outfits", "body_slots",
+                       "home_location", "home_room", "daily_schedule"}
+#: update_character patch keys for home and daily schedule -> the draft key
+#: world_dev_apply._apply_home_and_schedule reads.
+#: Exactly one spelling each (the tool signature's); the draft spellings
+#: home_location / daily_schedule are refused in a patch, so two spellings
+#: of one value can never silently override each other.
+_HOME_PATCH_KEYS = {"home": "home_location", "home_room": "home_room",
+                    "schedule": "daily_schedule"}
+#: Draft keys of the home group -> the patch / argument key to use instead.
+_HOME_DRAFT_SPELLINGS = {"home_location": "home", "daily_schedule": "schedule"}
+_OUTFIT_KEYS = {"name", "outfit", "pieces", "locations", "activities",
+                "excluded_locations"}
+_PIECE_KEYS = {"item_id", "slots", "name", "prompt_fragment", "description",
+               "covers", "partially_covers"}
+
+
+def _template_fields(template: str) -> Dict[str, Dict[str, Any]]:
+    """Every field of the (merged) character template by key; {} when the
+    template does not exist."""
+    from app.models.character_template import get_template
+    out: Dict[str, Dict[str, Any]] = {}
+    for section in (get_template(template) or {}).get("sections", []) or []:
+        for field in section.get("fields", []) or []:
+            key = str(field.get("key") or "")
+            if key:
+                out[key] = field
+    return out
+
+
+def _same_option(value: Any, option: Any) -> bool:
+    """A value matches a select option only with the option's own JSON type
+    (the number 2 for importance, never the string "2"; never a bool)."""
+    if isinstance(option, str):
+        return isinstance(value, str) and value == option
+    if _is_num(option):
+        return _is_num(value) and float(value) == float(option)
+    return False
+
+
+def _check_field_value(key: str, field: Dict[str, Any], value: Any) -> None:
+    """The template field type decides what a value may be:
+    text/textarea -> string; number -> number; select with fixed options (no
+    ``source``, no ``allow_custom``) -> one of the option values in the
+    option's JSON type, any other select -> string; season_day -> a
+    "<season>:<day>" of this world's calendar ("" clears it). A field type
+    this tool does not know is refused rather than stored unchecked."""
+    kind = str(field.get("type") or "")
+    if kind in ("text", "textarea"):
+        if not isinstance(value, str):
+            raise ToolRefusal(f"'{key}' must be a string")
+        return
+    if kind == "number":
+        if not _is_num(value):
+            raise ToolRefusal(f"'{key}' must be a number")
+        return
+    if kind == "select":
+        options = [o["value"] for o in field.get("options") or []
+                   if isinstance(o, dict) and "value" in o]
+        if options and not field.get("source") and not field.get("allow_custom"):
+            if not any(_same_option(value, o) for o in options):
+                raise ToolRefusal(f"'{key}' must be one of: "
+                                  + ", ".join(json.dumps(o, ensure_ascii=False)
+                                              for o in options))
+            return
+        if not isinstance(value, str):
+            raise ToolRefusal(f"'{key}' must be a string")
+        return
+    if kind == "season_day":
+        from app.core.game_time import get_calendar, parse_season_day
+        if not isinstance(value, str) or (value.strip()
+                                          and parse_season_day(value) is None):
+            seasons = ", ".join(f"{s.key} 1-{s.days}" for s in get_calendar().seasons)
+            raise ToolRefusal(f"'{key}' must be \"<season>:<day>\" of this world's "
+                              f"calendar ({seasons}), e.g. \"spring:14\"")
+        return
+    raise ToolRefusal(f"'{key}' (field type {kind or 'unknown'}) cannot be set "
+                      "with this tool")
+
+
+def _check_str_list(value: Any, what: str) -> None:
+    if value is not None and (not isinstance(value, list)
+                              or not all(isinstance(v, str) for v in value)):
+        raise ToolRefusal(f"'{what}' must be a list of strings")
+
+
+def _check_outfits(outfits: Any) -> None:
+    """Shape of the draft's outfits; a piece is either a NEW piece {slots,
+    name, ...} or an existing catalog piece {item_id}."""
+    from app.models.inventory import VALID_PIECE_SLOTS, get_item
+    if not isinstance(outfits, list):
+        raise ToolRefusal("'outfits' must be a list of outfit objects")
+    for i, outfit in enumerate(outfits):
+        where = f"outfits[{i}]"
+        if not isinstance(outfit, dict):
+            raise ToolRefusal(f"{where} must be an object")
+        _only_keys(outfit, _OUTFIT_KEYS, where)
+        try:
+            _str(outfit, "name", required=True)
+            _str(outfit, "outfit")
+            for key in ("locations", "activities", "excluded_locations"):
+                _check_str_list(outfit.get(key), key)
+        except ToolRefusal as exc:
+            raise ToolRefusal(f"{where}: {exc}")
+        pieces = outfit.get("pieces")
+        if pieces is None:
+            continue
+        if not isinstance(pieces, list):
+            raise ToolRefusal(f"{where}.pieces must be a list of piece objects")
+        for j, piece in enumerate(pieces):
+            pw = f"{where}.pieces[{j}]"
+            if not isinstance(piece, dict):
+                raise ToolRefusal(f"{pw} must be an object")
+            _only_keys(piece, _PIECE_KEYS, pw)
+            try:
+                if piece.get("item_id") is not None:
+                    iid = _str(piece, "item_id", required=True)
+                    item = get_item(iid)
+                    if not item or item.get("category") != "outfit_piece":
+                        raise ToolRefusal(f"no outfit piece with item_id {iid!r}")
+                    if set(piece) - {"item_id"}:
+                        raise ToolRefusal("an existing piece is given by item_id "
+                                          "alone")
+                    continue
+                _str(piece, "name", required=True)
+                for key in ("prompt_fragment", "description"):
+                    _str(piece, key)
+                _check_str_list(piece.get("slots"), "slots")
+                slots = [s.strip().lower() for s in piece.get("slots") or []]
+                if not slots or any(s not in VALID_PIECE_SLOTS for s in slots):
+                    raise ToolRefusal("'slots' must name at least one of "
+                                      + ", ".join(VALID_PIECE_SLOTS))
+                for key in ("covers", "partially_covers"):
+                    _check_str_list(piece.get(key), key)
+            except ToolRefusal as exc:
+                raise ToolRefusal(f"{pw}: {exc}")
+
+
+def _check_home_values(data: Dict[str, Any]) -> None:
+    """home_location / home_room strings, daily_schedule a list of slot
+    objects ({hour, location?, role?, sleep?})."""
+    _str(data, "home_location")
+    _str(data, "home_room")
+    slots = data.get("daily_schedule")
+    if slots is None:
+        return
+    if not isinstance(slots, list):
+        raise ToolRefusal("'schedule' must be a list of {hour, location?, role?, "
+                          "sleep?} objects")
+    for i, slot in enumerate(slots):
+        if not isinstance(slot, dict):
+            raise ToolRefusal(f"schedule[{i}] must be an object")
+        _only_keys(slot, {"hour", "location", "role", "sleep"}, f"schedule[{i}]")
+        try:
+            hour = _num(slot, "hour", required=True)
+            if hour != int(hour):
+                raise ToolRefusal("'hour' must be a whole number")
+            _str(slot, "location")
+            _str(slot, "role")
+            _bool(slot, "sleep")
+        except ToolRefusal as exc:
+            raise ToolRefusal(f"schedule[{i}]: {exc}")
+
+
+def _check_home_targets(data: Dict[str, Any], current_home: Any = None) -> None:
+    """Refuse a home, home room or schedule place that does not exist BEFORE
+    anything is written (the apply would only skip it with a warning and
+    leave an empty journal step). ``current_home``: the stored home a room
+    alone refers to (update_character)."""
+    from app.core.world_dev_apply import _resolve_room_id, _resolve_world_location
+    home = None
+    if data.get("home_location"):
+        home = _resolve_world_location(data["home_location"])
+        if home is None:
+            raise ToolRefusal(f"home {data['home_location']!r} is no place of this "
+                              "world — use find_locations")
+    elif data.get("home_room"):
+        home = _resolve_world_location(current_home) if current_home else None
+        if home is None:
+            raise ToolRefusal("'home_room' needs a home — send 'home' as well")
+    if data.get("home_room") and not _resolve_room_id(home, data["home_room"]):
+        rooms = [str(r.get("name")) for r in _real_rooms(home) if r.get("name")]
+        raise ToolRefusal(f"room {data['home_room']!r} is not a room of "
+                          f"{home.get('name')} — rooms: " + (", ".join(rooms) or "none"))
+    for i, slot in enumerate(data.get("daily_schedule") or []):
+        if slot.get("location") and _resolve_world_location(slot["location"]) is None:
+            raise ToolRefusal(f"schedule[{i}]: {slot['location']!r} is no place of "
+                              "this world — use find_locations")
+
+
+@_tool("create_character", True,
+       "create_character{data, home?, home_room?, schedule?:[{hour, location?, role?, sleep?}]}",
+       "new character (character schema fields + outfits); home = a place id or name")
+def _create_character(step: _Step, args: Dict[str, Any]) -> str:
+    from app.core.character_name import validate_character_name
+    from app.core.world_dev_apply import _get_generable_fields, apply_character
+    from app.models.character import character_row_exists
+    from app.models.character_template import get_template, list_templates
+    from app.models.inventory import get_carried_item_ids, list_items
+    _only_keys(args, {"data", "home", "home_room", "schedule"}, "create_character")
+    data = args.get("data")
+    if not isinstance(data, dict):
+        raise ToolRefusal("'data' must be an object with the character fields")
+    draft = {k: copy.deepcopy(v) for k, v in data.items() if v is not None}
+    if "name" in draft and "character_name" not in draft:
+        draft["character_name"] = draft.pop("name")
+    for arg, key in (("home", "home_location"), ("home_room", "home_room"),
+                     ("schedule", "daily_schedule")):
+        if args.get(arg) is not None:
+            if draft.get(key) is not None:
+                # Two spellings of one value: refuse instead of letting one
+                # silently win.
+                raise ToolRefusal(f"'{arg}' is given twice (as argument and as "
+                                  f"data.{key}) — send it once")
+            draft[key] = copy.deepcopy(args[arg])
+    raw_name = _str(draft, "character_name", required=True)
+    template = _str(draft, "template") or "human-default"
+    tmpl = get_template(template)
+    if tmpl is None:
+        raise ToolRefusal(f"no character template {template!r}")
+    # Only the templates the World Dev character schema offers (the
+    # selectable ones), and no temporary-NPC template: a temporary NPC comes
+    # from the NPC pipeline (npc_ops), which owns its slot, home and rhythm.
+    offered = sorted(t["name"] for t in list_templates("character")
+                     if not ((get_template(t["name"]) or {}).get("features") or {})
+                     .get("temporary_npc"))
+    if template not in offered or (tmpl.get("features") or {}).get("temporary_npc"):
+        raise ToolRefusal(f"template {template!r} cannot be created here — "
+                          "templates: " + ", ".join(offered))
+    draft["template"] = template
+    fields = _template_fields(template)
+    profile_keys, config_keys = _get_generable_fields(template)
+    soul_keys = {k for k, f in fields.items() if f.get("source_file")}
+    allowed = (_CHAR_DRAFT_SPECIAL | profile_keys | config_keys | soul_keys)
+    _only_keys(draft, allowed, "character")
+    for key, value in draft.items():
+        if key in fields and key not in _CHAR_DRAFT_SPECIAL:
+            _check_field_value(key, fields[key], value)
+    if draft.get("outfits") is not None:
+        _check_outfits(draft["outfits"])
+    if draft.get("body_slots") is not None and not isinstance(draft["body_slots"], dict):
+        raise ToolRefusal("'body_slots' must be an object")
+    _check_home_values(draft)
+    _check_home_targets(draft)
+    # THE name rule (CharacterNameError is a ValueError -> refused), then
+    # "taken" by the name it would be stored under.
+    name = validate_character_name(raw_name)
+    if character_row_exists(name):
+        raise ToolRefusal(f"a character {name!r} already exists — use update_character")
+    draft["character_name"] = name
+
+    step.prepare()
+    # The backup can take seconds: a character of that name created by
+    # someone else meanwhile is refused here, before any journal row exists.
+    if character_row_exists(name):
+        raise ToolRefusal(f"a character {name!r} already exists — use update_character")
+    items_before = {str(i.get("id")) for i in list_items()}
+    inverse = {"op": "delete_character", "name": name, "items": []}
+    step.begin("character", name, inverse)
+    # Set by apply_character once it has confirmed, under the profile lock,
+    # that the name is still free and is about to store the new row. Only
+    # then is a row found after a failure THIS apply's character; without
+    # it the row is a foreign one (a race after the re-check above) and must
+    # never be claimed — a discard would delete it.
+    claimed: List[bool] = []
+
+    def reconcile():
+        if not claimed or not character_row_exists(name):
+            return None
+        # The catalog items the failed apply created and already handed to
+        # the character (a piece add_item stored but never handed over is
+        # left to the backup).
+        items = sorted(get_carried_item_ids(name) - items_before)
+        return (name, {**inverse, "items": items}, {"name": name, "items": items})
+
+    with step.writing(reconcile):
+        result = apply_character(draft, created_by="world_dev", must_be_new=True,
+                                 on_claim=lambda: claimed.append(True))
+        items = [str(i) for i in result.get("created_items") or []]
+        step.attach(name, {**inverse, "items": items})
+    outfits = result.get("outfits") or []
+    reused = sum(int(o.get("pieces_reused") or 0) for o in outfits)
+    from app.models.character import get_character_config
+    cfg = get_character_config(name) or {}
+    home = str(cfg.get("home_location") or "")
+    line = (f'created character "{name}" (template {template}'
+            + (f", {len(outfits)} outfit(s), {len(items)} new piece(s)"
+               + (f", {reused} existing" if reused else "") if outfits else "")
+            + ")" + (f" home {home}" + (f" / {cfg.get('home_room')}"
+                                        if cfg.get("home_room") else "")
+                     if home else "")
+            + _warn_suffix([str(w) for w in result.get("warnings") or []]))
+    step.complete({"name": name, "items": items}, line)
+    return line
+
+
+@_tool("update_character", True, "update_character{name, patch}",
+       "change fields of a character; 'soul:<field>' = the whole new text of a "
+       "soul section; home / home_room / schedule")
+def _update_character(step: _Step, args: Dict[str, Any]) -> str:
+    from app.core import soul_writer
+    from app.core.keyed_lock import keyed_lock
+    from app.core.linked_characters import LOCKED_PROFILE_FIELDS, soul_owner
+    from app.core.world_dev_apply import _apply_home_and_schedule
+    from app.models.character import (character_row_exists, get_character_config,
+                                      get_character_profile, save_character_config,
+                                      save_character_profile)
+    _only_keys(args, {"name", "patch"}, "update_character")
+    name = _str(args, "name", required=True)
+    patch = args.get("patch")
+    if not isinstance(patch, dict) or not patch:
+        raise ToolRefusal("'patch' must be a non-empty object of character fields")
+    if not character_row_exists(name):
+        raise ToolRefusal(f"no character {name!r} — use find_characters")
+    prof0 = get_character_profile(name) or {}
+    template = str(prof0.get("template") or "human-default")
+    fields = _template_fields(template)
+    soul_map = {k: str(f["source_file"]) for k, f in fields.items()
+                if f.get("source_file")}
+    linked = bool(str(prof0.get("linked_to") or "").strip())
+
+    prof_patch: Dict[str, Any] = {}
+    cfg_patch: Dict[str, Any] = {}
+    soul_patch: Dict[str, str] = {}  # rel path -> full new text
+    home_data: Dict[str, Any] = {}
+    for key, value in patch.items():
+        if key.startswith("soul:"):
+            fk = key[len("soul:"):]
+            rel = soul_map.get(fk)
+            if not rel:
+                raise ToolRefusal(f"no soul field {fk!r} in template {template} — "
+                                  "soul fields: " + (", ".join(sorted(soul_map)) or "none"))
+            if not isinstance(value, str):
+                raise ToolRefusal(f"'{key}' must be the whole new text (a string)")
+            owner = soul_owner(name, rel)
+            if owner != name:
+                raise ToolRefusal(f"{rel} of {name} is shared with {owner} — "
+                                  f"change it on {owner}")
+            soul_patch[rel] = value
+        elif key in _HOME_PATCH_KEYS:
+            home_data[_HOME_PATCH_KEYS[key]] = value
+        elif key in _HOME_DRAFT_SPELLINGS:
+            raise ToolRefusal(f"send '{key}' as '{_HOME_DRAFT_SPELLINGS[key]}'")
+        elif key in fields:
+            field = fields[key]
+            if field.get("source_file"):
+                raise ToolRefusal(f"'{key}' is a soul section — send it as "
+                                  f"'soul:{key}' with the whole new text")
+            if key in ("character_name", "template") or field.get("readonly"):
+                raise ToolRefusal(f"'{key}' cannot be changed here")
+            if linked and key in LOCKED_PROFILE_FIELDS:
+                raise ToolRefusal(f"'{key}' of a linked character is its leader's "
+                                  "— change it there")
+            if value is None:
+                raise ToolRefusal(f"'{key}' must not be null")
+            _check_field_value(key, field, value)
+            if field.get("store") == "config":
+                cfg_patch[key] = copy.deepcopy(value)
+            else:
+                prof_patch[key] = copy.deepcopy(value)
+        else:
+            raise ToolRefusal(f"unknown character field {key!r} — use get_character "
+                              "for the field names")
+    _check_home_values(home_data)
+    if home_data and not any(home_data.get(k) for k in home_data):
+        raise ToolRefusal("home / home_room / schedule must not be empty — "
+                          "they cannot be cleared here")
+    if home_data:
+        _check_home_targets(home_data,
+                            (get_character_config(name) or {}).get("home_location"))
+
+    step.prepare()
+    lines: List[str] = []
+
+    def group_step() -> _Step:
+        # One journal step per group: the call's own step first, then one
+        # more row per further group (same tool and arguments).
+        return step if step.seq is None else _Step(step.ctx, step.tool, step.args)
+
+    def picked(record: Dict[str, Any], keys) -> Dict[str, Any]:
+        return {k: (copy.deepcopy(record[k]) if k in record else wu.ABSENT)
+                for k in keys}
+
+    # Lock order: character_profile -> soul_file (both re-entrant).
+    with keyed_lock("character_profile", name):
+        if not character_row_exists(name):
+            raise ToolRefusal(f"no character {name!r} — use find_characters")
+        # Soul sections first: a profile save (below) creates missing soul
+        # files from their scaffold, which must not become a section's
+        # "before" text.
+        for rel, text in soul_patch.items():
+            sstep = group_step()
+            path = soul_writer.soul_text_path(name, rel)
+            with keyed_lock("soul_file", str(path)):
+                before_text = soul_writer.read_text(name, rel)
+                inverse = {"op": "restore_soul", "name": name, "file_id": rel,
+                           "before_text": before_text}
+                sstep.begin("character", name, inverse)
+
+                def reconcile_soul(rel=rel, before_text=before_text, inverse=inverse):
+                    now = soul_writer.read_text(name, rel)
+                    return None if now == before_text else (name, inverse, now)
+
+                with sstep.writing(reconcile_soul):
+                    soul_writer.write_text(name, rel, text)
+                written = soul_writer.read_text(name, rel)
+                sline = (f"soul {rel}" + ("" if before_text is not None else " (new file)")
+                         if written != before_text else f"soul {rel} unchanged")
+                sstep.complete(written, sline)
+            lines.append(sline)
+
+        if prof_patch or cfg_patch:
+            cstep = group_step()
+            prof = copy.deepcopy(get_character_profile(name) or {})
+            cfg = copy.deepcopy(get_character_config(name) or {})
+            b_prof, b_cfg = picked(prof, prof_patch), picked(cfg, cfg_patch)
+
+            def diff_now():
+                p = get_character_profile(name) or {}
+                c = get_character_config(name) or {}
+                bp, wp = wu.diff_keys(b_prof, picked(p, prof_patch))
+                bc, wc = wu.diff_keys(b_cfg, picked(c, cfg_patch))
+                # diff_keys compares two maps; ABSENT on both sides is equal.
+                return bp, wp, bc, wc
+
+            inverse = {"op": "restore_character", "name": name,
+                       "profile": b_prof, "config": b_cfg}
+            cstep.begin("character", name, inverse)
+
+            def reconcile_char():
+                bp, wp, bc, wc = diff_now()
+                if not bp and not bc:
+                    return None
+                return (name, {"op": "restore_character", "name": name,
+                               "profile": bp, "config": bc},
+                        {"profile": wp, "config": wc})
+
+            with cstep.writing(reconcile_char):
+                if prof_patch:
+                    new_prof = copy.deepcopy(prof)
+                    new_prof.update(prof_patch)
+                    # Soul values are injected on read; they never go back
+                    # through a profile save (the MD file is the source).
+                    for k in soul_map:
+                        new_prof.pop(k, None)
+                    if not save_character_profile(name, new_prof):
+                        raise ValueError(f"the profile of {name} was not stored")
+                if cfg_patch:
+                    new_cfg = copy.deepcopy(get_character_config(name) or {})
+                    new_cfg.update(cfg_patch)
+                    if not save_character_config(name, new_cfg):
+                        raise ValueError(f"the config of {name} was not stored")
+            bp, wp, bc, wc = diff_now()
+            cstep.attach(name, {"op": "restore_character", "name": name,
+                                "profile": bp, "config": bc})
+            changed = ([f"profile {k}" for k in sorted(bp)]
+                       + [f"config {k}" for k in sorted(bc)])
+            cline = ", ".join(changed) if changed else "fields unchanged"
+            cstep.complete({"profile": wp, "config": wc}, cline)
+            lines.append(cline)
+
+        if home_data:
+            hstep = group_step()
+            h_before = wu.home_schedule_state(name)
+            hstep.begin("character", name, {"op": "restore_home_schedule",
+                                             "name": name, "before": h_before})
+
+            def reconcile_home():
+                b, w = wu.diff_keys(h_before, wu.home_schedule_state(name))
+                return None if not b else (
+                    name, {"op": "restore_home_schedule", "name": name, "before": b}, w)
+
+            with hstep.writing(reconcile_home):
+                warnings = _apply_home_and_schedule(name, copy.deepcopy(home_data), False)
+            b, w = wu.diff_keys(h_before, wu.home_schedule_state(name))
+            hstep.attach(name, {"op": "restore_home_schedule", "name": name,
+                                "before": b}, before=b)
+            hline = (("home " + ", ".join(sorted(b))) if b else "home unchanged") \
+                + _warn_suffix([str(x) for x in warnings])
+            hstep.complete(w, hline)
+            lines.append(hline)
+
+    return f'updated character "{name}": ' + "; ".join(lines)
 
 
 # ── delete_created ───────────────────────────────────────────────────────

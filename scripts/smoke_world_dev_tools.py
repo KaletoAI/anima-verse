@@ -132,6 +132,107 @@ Run 8, turn 1:
       value; partly written: location <id> exists — ... delete_created ...";
       the place is stored; undo(run, turn=1) removes it.
 
+Task 6 — character tools (runs 9-12):
+
+  Fixture: "Demo Lakeside" with room Bedroom (add_location); "Demo Other"
+  (human-roleplay, dialogue_style "terse", personality "calm" ->
+  soul/personality.md = "calm\n"); a catalog piece "Demo Boots" (feet).
+  (v) create_character{data: Demo Lake, human-roleplay, outfit "Daily" =
+      2 NEW pieces (Tunic top, Trousers bottom) + {item_id: Boots}, home
+      "Demo Lakeside", home_room "Bedroom"} -> row exists, home_location =
+      Lakeside id, home_room = Bedroom id; the creating entry's inverse is
+      delete_character with exactly 2 items (Tunic, Trousers — the reused
+      Boots is not created, so not listed); Boots is in Demo Lake's
+      inventory. Same name again -> refused "already exists"; "a/b" and an
+      unknown item_id -> refused, nothing created.
+      update_character{Demo Other, {dialogue_style: "chatty"}} -> one
+      restore_character step, inverse profile {dialogue_style: "terse"},
+      written profile {dialogue_style: "chatty"}. Refused: an unknown key,
+      the soul field character_personality without "soul:", "soul:bogus",
+      the readonly current_location, age "old" (a number field).
+      undo(run) -> complete; Demo Lake gone, Tunic + Trousers deleted, Boots
+      kept, dialogue_style "terse" again.
+  (w) the same create, then one new piece added to Demo Other's inventory
+      -> undo: Demo Lake gone, that piece and its inventory row stay with
+      skip reason "item still in use", the other new piece is deleted.
+  (x) soul: presence.md removed first, beliefs.md "beliefs before",
+      tasks.md "tasks before". ONE update with soul:character_personality
+      "bold and loud  \n\n", soul:character_presence, soul:character_task
+      -> stored "bold and loud\n" (rstrip + newline); three restore_soul
+      steps with before_text {personality "calm\n", presence None, tasks
+      "tasks before\n"}. A human then writes beliefs.md and tasks.md ->
+      undo: personality.md == "calm\n" exactly, presence.md absent again,
+      beliefs.md is the human's text, tasks.md is the human's text with
+      the one skip "changed since".
+  (y) soul_owner patched to name a leader -> the shared section is refused
+      naming the leader. update_character home/home_room/schedule [8
+      Lakeside "fishing"] -> home = Lakeside/Bedroom, one slot at Lakeside,
+      Lakeside known; one restore_home_schedule step. delete_created of the
+      pre-existing Demo Other -> refused; of "Demo Brief" created in this
+      turn -> ok, its one new piece deleted. undo -> home_schedule_state is
+      the one read before.
+  (z) apply_character contract: save_character_profile -> False (new
+      "Demo Fail"), save_character_config -> False (a generable config
+      field "popularity"; and a home_location edit, the save inside
+      _apply_home_and_schedule) -> ValueError each, no Demo Fail row; the
+      soul markdown of an apply goes through soul_writer.write_text.
+
+Task 6 review findings (runs 13-16, after (z); Demo Other is human-roleplay):
+
+  (aa) field values by template type: chat_mode is a select with the fixed
+       options "" / "rp_first" -> "banana" refused, the line lists "rp_first";
+       importance has the NUMBER options 1/2/3 -> "9", the string "2" and
+       true refused, the number 2 stored as the int 2; gender "zzz" refused;
+       birthday is a season_day -> [1, 2, {"x": 1}] refused, "spring:31"
+       refused (the default calendar's spring has 30 days), "summer:14"
+       stored. No refused call leaves a write row: 2 write rows in the run
+       (importance, birthday). undo -> complete.
+  (ab) one spelling per home value: patch {home: Demo Lakeside,
+       home_location: Atlantis} -> refused "send 'home_location' as 'home'";
+       {home: "Atlantis"} -> refused "no place", NO write row (the target is
+       checked before anything is written); {home_room: "Bedroom"} while
+       Demo Other has no home -> refused "needs a home"; {home: Demo
+       Lakeside, home_room: "Cellar"} -> refused, the line lists "Bedroom";
+       schedule [{hour 9, location "Atlantis"}] -> refused; create_character
+       with the argument home AND data.home_location -> refused "given
+       twice". Run 13 still has exactly its 2 write rows.
+  (ac) templates: the offered ones are the selectable templates without the
+       temporary_npc feature = animal-default, human-default, human-roleplay.
+       create_character with template npc-temporary -> refused, the line
+       names "human-roleplay"; base-character (not selectable) -> refused;
+       neither creates a row.
+  (ad) a foreign character must never be claimed (finding 2):
+       1. a foreign "Demo Race" stored during step.prepare() (the backup
+          window) -> the re-check refuses "already exists"; no write row
+          names Demo Race; undo leaves Demo Race.
+       2. a foreign "Demo Race Two" stored right AFTER step.begin (behind the
+          tool's re-check) -> apply_character refuses "already exists" before
+          on_claim, the reconcile finds the row but no claim -> ok False,
+          wrote False, the begun row ends kind "refused", so undo() does not
+          see it; Demo Race Two survives the undo (the old reconcile claimed
+          it and the undo deleted it).
+       3. the claim still works: _apply_body_slots raises ValueError for a
+          NEW "Demo Claim" (after the profile save) -> ok False, wrote True,
+          "partly written: character Demo Claim exists"; the write row's
+          inverse is delete_character Demo Claim; undo removes it.
+  (ae) one call, three groups: Demo Other has no profile "age", no config
+       "popularity" and no soul/presence.md (removed first: the profile saves
+       of (z)/(aa) recreated it from the soul scaffold). update {soul:character_presence
+       "present", age 30, popularity 7, home Demo Lakeside} -> ok, 3 write
+       rows oldest-first: restore_soul (before_text None),
+       restore_character {profile {age: ABSENT}, config {popularity:
+       ABSENT}}, restore_home_schedule. undo -> complete; age and popularity
+       absent again, presence.md absent, home_schedule_state as before.
+  (af) a later group failing: save_character_config patched to return False;
+       update {soul:character_presence "x", popularity 9} -> the soul group
+       is written and journaled, the config group raises ValueError and
+       stores nothing -> ok False, wrote True, the line says "changed in
+       part"; exactly 1 write row (restore_soul); undo -> presence.md
+       absent again.
+  (ag) apply_character reports a skipped item_id: an outfit with
+       {item_id: "item_nope"} given straight to apply_character (the route
+       path, no tool pre-check) -> a warning naming "item_nope".
+
 (h)/(u) patch world_ops._sanitize_map3d so that only the WRITER's call fails;
 the tool's own map3d pre-check calls the same function first and gets the
 real one.
@@ -635,6 +736,446 @@ check("(u) line names what stayed",
 wu.undo(run8, turn=1)
 check("(u) undo removed it", by_name("Demo Partial") == [])
 wr.set_status(run8, "rolled_back")
+
+# ── Task 6: character write tools ────────────────────────────────────────
+print("run 9 (characters)")
+from app.core import soul_writer  # noqa: E402
+from app.core import world_dev_apply  # noqa: E402
+from app.core.world_dev_apply import apply_character  # noqa: E402
+from app.models.character import (character_row_exists,  # noqa: E402
+                                  delete_character)
+from app.models.inventory import (add_item, add_to_inventory,  # noqa: E402
+                                  get_carried_item_ids, get_item)
+
+lakeside = add_location("Demo Lakeside", "a lake house", rooms=[{"name": "Bedroom"}])
+LS = lakeside["id"]
+bedroom = next(r for r in lakeside["rooms"] if r["name"] == "Bedroom")["id"]
+apply_character({"character_name": "Demo Other", "template": "human-roleplay",
+                 "dialogue_style": "terse", "character_personality": "calm"})
+check("(v) fixture Demo Other", character_row_exists("Demo Other"))
+boots = add_item(name="Demo Boots", description="", category="outfit_piece",
+                 image_prompt="", prompt_fragment="sturdy leather boots",
+                 outfit_piece={"slots": ["feet"], "covers": [], "partially_covers": []})
+BOOTS = boots["id"]
+
+
+def lake_draft():
+    return {"character_name": "Demo Lake", "template": "human-roleplay",
+            "dialogue_style": "warm",
+            "outfits": [{"name": "Daily", "pieces": [
+                {"slots": ["top"], "name": "Demo Tunic",
+                 "prompt_fragment": "a green linen tunic"},
+                {"slots": ["bottom"], "name": "Demo Trousers",
+                 "prompt_fragment": "brown wool trousers"},
+                {"item_id": BOOTS}]}]}
+
+
+run9 = wr.create_run("chars", "m", "p", "u", 40, 300000)
+ctx9 = wt.ToolCtx(run_id=run9, turn=1)
+res = wt.run_tool(ctx9, "create_character",
+                  {"data": lake_draft(), "home": "Demo Lakeside", "home_room": "Bedroom"})
+check("(v) create_character ok", res.ok and res.wrote, res)
+check("(v) Demo Lake exists", character_row_exists("Demo Lake"))
+cfg_lake = get_character_config("Demo Lake") or {}
+check("(v) home set (place + room)",
+      cfg_lake.get("home_location") == LS and cfg_lake.get("home_room") == bedroom,
+      cfg_lake)
+create_e = next((e for e in wr.entries(run9) if e["tool"] == "create_character"), {})
+inv_items = (create_e.get("inverse") or {}).get("items") or []
+check("(v) inverse delete_character with the 2 new item ids",
+      (create_e.get("inverse") or {}).get("op") == "delete_character"
+      and len(inv_items) == 2 and BOOTS not in inv_items, create_e.get("inverse"))
+TUNIC, TROUSERS = (inv_items + ["?", "?"])[:2]
+check("(v) the existing piece is worn, not created",
+      BOOTS in get_carried_item_ids("Demo Lake"), get_carried_item_ids("Demo Lake"))
+res = wt.run_tool(ctx9, "create_character", {"data": lake_draft()})
+check("(v) a taken name refused", not res.ok and "already exists" in res.line, res)
+res = wt.run_tool(ctx9, "create_character", {"data": {"character_name": "a/b"}})
+check("(v) an invalid name refused", not res.ok and not character_row_exists("a/b"), res)
+res = wt.run_tool(ctx9, "create_character",
+                  {"data": {"character_name": "Demo Odd", "template": "human-roleplay",
+                            "outfits": [{"name": "X", "pieces": [{"item_id": "item_nope"}]}]}})
+check("(v) an unknown item_id refused, nothing created",
+      not res.ok and not character_row_exists("Demo Odd"), res)
+res = wt.run_tool(ctx9, "update_character",
+                  {"name": "Demo Other", "patch": {"dialogue_style": "chatty"}})
+check("(v) update_character ok", res.ok and res.wrote, res)
+from app.models.character import get_character_profile  # noqa: E402
+check("(v) dialogue_style stored",
+      get_character_profile("Demo Other").get("dialogue_style") == "chatty")
+upd_e = [e for e in wr.entries(run9) if e["tool"] == "update_character"]
+check("(v) journaled as restore_character with the stored diff",
+      len(upd_e) == 1 and upd_e[0]["inverse"].get("op") == "restore_character"
+      and upd_e[0]["inverse"].get("profile") == {"dialogue_style": "terse"}
+      and (upd_e[0].get("written") or {}).get("profile") == {"dialogue_style": "chatty"},
+      upd_e)
+for bad, why in (({"bogus_field": "x"}, "unknown"),
+                 ({"character_personality": "x"}, "soul:"),
+                 ({"soul:bogus": "x"}, "no soul field"),
+                 ({"current_location": LS}, "cannot be changed"),
+                 ({"age": "old"}, "number")):
+    res = wt.run_tool(ctx9, "update_character", {"name": "Demo Other", "patch": bad})
+    check(f"(v) patch {sorted(bad)} refused ({why})", not res.ok and why in res.line, res)
+rep = wu.undo(run9)
+check("(v) undo complete", rep["complete"], rep)
+check("(v) undo: Demo Lake gone", not character_row_exists("Demo Lake"))
+check("(v) undo: both new items gone",
+      get_item(TUNIC) is None and get_item(TROUSERS) is None, (TUNIC, TROUSERS))
+check("(v) undo: the pre-existing piece stays", get_item(BOOTS) is not None)
+check("(v) undo: Demo Other's dialogue_style restored",
+      get_character_profile("Demo Other").get("dialogue_style") == "terse",
+      get_character_profile("Demo Other").get("dialogue_style"))
+wr.set_status(run9, "rolled_back")
+
+# Variant: one new piece given to Demo Other before the undo.
+print("run 10 (item still in use)")
+run10 = wr.create_run("chars2", "m", "p", "u", 40, 300000)
+ctx10 = wt.ToolCtx(run_id=run10, turn=1)
+res = wt.run_tool(ctx10, "create_character", {"data": lake_draft()})
+check("(w) create again ok", res.ok, res)
+items10 = (next(e for e in wr.entries(run10)
+                if e["tool"] == "create_character").get("inverse") or {}).get("items") or []
+check("(w) two new items", len(items10) == 2, items10)
+GIVEN, OTHER = (items10 + ["?", "?"])[:2]
+add_to_inventory(character_name="Demo Other", item_id=GIVEN,
+                 obtained_method="gift", obtained_from="smoke")
+rep = wu.undo(run10)
+check("(w) Demo Lake gone", not character_row_exists("Demo Lake"))
+check("(w) the given item stays, with its inventory row",
+      get_item(GIVEN) is not None and GIVEN in get_carried_item_ids("Demo Other"))
+check("(w) skip reason 'item still in use' for it",
+      any(s.get("item") == GIVEN and s.get("reason") == wu.REASON_ITEM_IN_USE
+          for s in rep["skipped"]), rep)
+check("(w) the other new item gone", get_item(OTHER) is None)
+wr.set_status(run10, "rollback_incomplete")
+
+# Soul sections.
+print("run 11 (soul)")
+P_REL, PR_REL, B_REL, T_REL = ("soul/personality.md", "soul/presence.md",
+                               "soul/beliefs.md", "soul/tasks.md")
+soul_writer.write_text("Demo Other", PR_REL, None)  # presence.md absent before
+soul_writer.write_text("Demo Other", B_REL, "beliefs before")
+soul_writer.write_text("Demo Other", T_REL, "tasks before")
+p_before = soul_writer.read_text("Demo Other", P_REL)
+check("(x) fixture personality.md", p_before == "calm\n", p_before)
+check("(x) fixture presence.md absent", soul_writer.read_text("Demo Other", PR_REL) is None)
+run11 = wr.create_run("soul", "m", "p", "u", 40, 300000)
+ctx11 = wt.ToolCtx(run_id=run11, turn=1)
+res = wt.run_tool(ctx11, "update_character",
+                  {"name": "Demo Other",
+                   "patch": {"soul:character_personality": "bold and loud  \n\n",
+                             "soul:character_presence": "a quiet presence",
+                             "soul:character_task": "agent tasks"}})
+check("(x) soul update ok", res.ok and res.wrote, res)
+check("(x) stored text = rstrip + newline",
+      soul_writer.read_text("Demo Other", P_REL) == "bold and loud\n"
+      and soul_writer.read_text("Demo Other", PR_REL) == "a quiet presence\n")
+soul_steps = [e for e in wr.entries(run11) if (e.get("inverse") or {}).get("op") == "restore_soul"]
+check("(x) one restore_soul step per section, before_text read from storage",
+      len(soul_steps) == 3
+      and {e["inverse"]["file_id"]: e["inverse"]["before_text"] for e in soul_steps}
+      == {P_REL: "calm\n", PR_REL: None, T_REL: "tasks before\n"}, soul_steps)
+# A human edits another section file and the agent-written tasks.md.
+soul_writer.write_text("Demo Other", B_REL, "beliefs by a human")
+soul_writer.write_text("Demo Other", T_REL, "tasks by a human")
+rep = wu.undo(run11)
+check("(x) personality.md exactly as before",
+      soul_writer.read_text("Demo Other", P_REL) == "calm\n",
+      soul_writer.read_text("Demo Other", P_REL))
+check("(x) presence.md (absent before) gone again",
+      soul_writer.read_text("Demo Other", PR_REL) is None)
+check("(x) the human's beliefs.md untouched",
+      soul_writer.read_text("Demo Other", B_REL) == "beliefs by a human\n")
+check("(x) the human's tasks.md kept, skipped 'changed since'",
+      soul_writer.read_text("Demo Other", T_REL) == "tasks by a human\n"
+      and [s["reason"] for s in rep["skipped"]] == [wu.REASON_CHANGED], rep)
+wr.set_status(run11, "rollback_incomplete")
+
+# Shared soul section of a linked character -> refused.
+from app.core import linked_characters  # noqa: E402
+_orig_owner = linked_characters.soul_owner
+linked_characters.soul_owner = (lambda n, s: "Demo Leader" if n == "Demo Other"
+                                else _orig_owner(n, s))
+run12 = wr.create_run("misc", "m", "p", "u", 40, 300000)
+ctx12 = wt.ToolCtx(run_id=run12, turn=1)
+try:
+    res = wt.run_tool(ctx12, "update_character",
+                      {"name": "Demo Other", "patch": {"soul:character_personality": "x"}})
+finally:
+    linked_characters.soul_owner = _orig_owner
+check("(y) a linked character's shared section refused",
+      not res.ok and "Demo Leader" in res.line
+      and soul_writer.read_text("Demo Other", P_REL) == "calm\n", res)
+
+# Home + schedule through update_character, then undo.
+h0 = wu.home_schedule_state("Demo Other")
+res = wt.run_tool(ctx12, "update_character",
+                  {"name": "Demo Other",
+                   "patch": {"home": "Demo Lakeside", "home_room": "Bedroom",
+                             "schedule": [{"hour": 8, "location": "Demo Lakeside",
+                                           "role": "fishing"}]}})
+h1 = wu.home_schedule_state("Demo Other")
+check("(y) home + schedule ok", res.ok and h1["home_location"] == LS
+      and h1["home_room"] == bedroom
+      and [s.get("location") for s in h1["daily_schedule"]["slots"]] == [LS]
+      and LS in (h1["known_locations"] or []), (res, h1))
+home_e = [e for e in wr.entries(run12) if (e.get("inverse") or {}).get("op")
+          == "restore_home_schedule"]
+check("(y) journaled restore_home_schedule", len(home_e) == 1, home_e)
+
+# delete_created of a character created in this turn.
+res = wt.run_tool(ctx12, "create_character",
+                  {"data": {"character_name": "Demo Brief", "template": "human-roleplay",
+                            "outfits": [{"name": "Plain", "pieces": [
+                                {"slots": ["top"], "name": "Demo Smock",
+                                 "prompt_fragment": "a plain grey smock"}]}]}})
+brief_items = (next(e for e in wr.entries(run12)
+                    if e["tool"] == "create_character").get("inverse") or {}).get("items") or []
+res = wt.run_tool(ctx12, "delete_created", {"kind": "character", "id": "Demo Other"})
+check("(y) delete_created of a pre-existing character refused",
+      not res.ok and character_row_exists("Demo Other"), res)
+res = wt.run_tool(ctx12, "delete_created", {"kind": "character", "id": "Demo Brief"})
+check("(y) delete_created of the run's own character ok",
+      res.ok and not character_row_exists("Demo Brief")
+      and len(brief_items) == 1 and get_item(brief_items[0]) is None, (res, brief_items))
+rep = wu.undo(run12)
+check("(y) undo: home and schedule as before",
+      rep["complete"] and wu.home_schedule_state("Demo Other") == h0,
+      (rep, wu.home_schedule_state("Demo Other"), h0))
+wr.set_status(run12, "rolled_back")
+
+# apply_character contract (Task 1 acceptance): a False save is a ValueError;
+# soul markdown goes through soul_writer.write_text.
+print("apply_character contract")
+for target, draft, label in (
+        ("save_character_profile", {"character_name": "Demo Fail",
+                                    "template": "human-roleplay"}, "profile"),
+        ("save_character_config", {"character_name": "Demo Other",
+                                   "template": "human-roleplay",
+                                   "popularity": 5}, "config"),
+        ("save_character_config", {"character_name": "Demo Other",
+                                   "home_location": "Demo Lakeside"}, "home config")):
+    _saved = getattr(world_dev_apply, target)
+    setattr(world_dev_apply, target, lambda *a, **k: False)
+    raised = None
+    try:
+        apply_character(dict(draft))
+    except ValueError as e:
+        raised = e
+    finally:
+        setattr(world_dev_apply, target, _saved)
+    check(f"(z) {label} save False -> ValueError", raised is not None, raised)
+check("(z) no Demo Fail row", not character_row_exists("Demo Fail"))
+_calls = []
+_orig_write_text = soul_writer.write_text
+
+
+def _rec_write_text(name, rel, text):
+    _calls.append((name, rel))
+    return _orig_write_text(name, rel, text)
+
+
+soul_writer.write_text = _rec_write_text
+try:
+    apply_character({"character_name": "Demo Other", "template": "human-roleplay",
+                     "character_personality": "calm again"})
+finally:
+    soul_writer.write_text = _orig_write_text
+check("(z) soul markdown written through soul_writer.write_text",
+      ("Demo Other", P_REL) in _calls
+      and soul_writer.read_text("Demo Other", P_REL) == "calm again\n", _calls)
+
+# ── Task 6 review findings ───────────────────────────────────────────────
+print("run 13 (field values, home spellings, templates)")
+from app.models import character as character_model  # noqa: E402
+run13 = wr.create_run("review", "m", "p", "u", 40, 300000)
+ctx13 = wt.ToolCtx(run_id=run13, turn=1)
+for bad, why in (({"chat_mode": "banana"}, "rp_first"),
+                 ({"importance": "9"}, "one of"),
+                 ({"importance": "2"}, "one of"),
+                 ({"importance": True}, "one of"),
+                 ({"gender": "zzz"}, "one of"),
+                 ({"birthday": [1, 2, {"x": 1}]}, "season"),
+                 ({"birthday": "spring:31"}, "season")):
+    res = wt.run_tool(ctx13, "update_character", {"name": "Demo Other", "patch": bad})
+    check(f"(aa) {bad} refused ({why})", not res.ok and why in res.line, res)
+res = wt.run_tool(ctx13, "update_character", {"name": "Demo Other",
+                                              "patch": {"importance": 2}})
+imp = (get_character_config("Demo Other") or {}).get("importance")
+check("(aa) importance 2 stored as the number 2",
+      res.ok and imp == 2 and not isinstance(imp, str), (res, imp))
+res = wt.run_tool(ctx13, "update_character", {"name": "Demo Other",
+                                              "patch": {"birthday": "summer:14"}})
+check("(aa) birthday summer:14 stored",
+      res.ok and get_character_profile("Demo Other").get("birthday") == "summer:14", res)
+check("(aa) only the two good calls left write rows", len(wr.entries(run13)) == 2,
+      wr.entries(run13))
+
+h_before13 = wu.home_schedule_state("Demo Other")
+for bad, why in (({"home": "Demo Lakeside", "home_location": "Atlantis"},
+                  "send 'home_location' as 'home'"),
+                 ({"home": "Atlantis"}, "no place"),
+                 ({"home_room": "Bedroom"}, "needs a home"),
+                 ({"home": "Demo Lakeside", "home_room": "Cellar"}, "Bedroom"),
+                 ({"schedule": [{"hour": 9, "location": "Atlantis"}]}, "no place")):
+    res = wt.run_tool(ctx13, "update_character", {"name": "Demo Other", "patch": bad})
+    check(f"(ab) {sorted(bad)} refused ({why})", not res.ok and why in res.line, res)
+res = wt.run_tool(ctx13, "create_character",
+                  {"data": {"character_name": "Demo Twice", "template": "human-roleplay",
+                            "home_location": "Demo Lakeside"}, "home": "Demo Lakeside"})
+check("(ab) home as argument AND data.home_location refused",
+      not res.ok and "given twice" in res.line and not character_row_exists("Demo Twice"),
+      res)
+check("(ab) no write row, home unchanged",
+      len(wr.entries(run13)) == 2 and wu.home_schedule_state("Demo Other") == h_before13)
+
+for tpl, why in (("npc-temporary", "human-roleplay"), ("base-character", "cannot be created")):
+    res = wt.run_tool(ctx13, "create_character",
+                      {"data": {"character_name": "Demo Tmpl", "template": tpl}})
+    check(f"(ac) template {tpl} refused", not res.ok and why in res.line
+          and not character_row_exists("Demo Tmpl"), res)
+rep = wu.undo(run13)
+check("(aa) undo complete", rep["complete"], rep)
+wr.set_status(run13, "rolled_back")
+
+print("run 14 (a foreign character is never claimed)")
+run14 = wr.create_run("race", "m", "p", "u", 40, 300000)
+ctx14 = wt.ToolCtx(run_id=run14, turn=1)
+_orig_prepare, _orig_begin = wt._Step.prepare, wt._Step.begin
+
+
+def _prepare_then_foreign(self):
+    _orig_prepare(self)
+    apply_character({"character_name": "Demo Race", "template": "human-roleplay"})
+
+
+wt._Step.prepare = _prepare_then_foreign
+try:
+    res = wt.run_tool(ctx14, "create_character",
+                      {"data": {"character_name": "Demo Race", "template": "human-roleplay"}})
+finally:
+    wt._Step.prepare = _orig_prepare
+check("(ad) 1. a name taken during the backup -> refused",
+      not res.ok and not res.wrote and "already exists" in res.line, res)
+
+
+def _begin_then_foreign(self, *a, **k):
+    seq = _orig_begin(self, *a, **k)
+    if self.tool == "create_character":
+        apply_character({"character_name": "Demo Race Two", "template": "human-roleplay"})
+    return seq
+
+
+wt._Step.begin = _begin_then_foreign
+try:
+    res = wt.run_tool(ctx14, "create_character",
+                      {"data": {"character_name": "Demo Race Two",
+                                "template": "human-roleplay"}})
+finally:
+    wt._Step.begin = _orig_begin
+check("(ad) 2. a name taken behind the re-check -> refused, nothing claimed",
+      not res.ok and not res.wrote and "already exists" in res.line, res)
+race_rows = [e for e in wr.steps(run14) if e["tool"] == "create_character"]
+check("(ad) 2. the begun row ended as refused",
+      race_rows and race_rows[-1]["kind"] == "refused", race_rows)
+check("(ad) no write row names a race character",
+      not any((e.get("inverse") or {}).get("name") in ("Demo Race", "Demo Race Two")
+              for e in wr.entries(run14)), wr.entries(run14))
+
+_orig_slots = world_dev_apply._apply_body_slots
+
+
+def _slots_fail(*a, **k):
+    raise ValueError("simulated body-slot failure")
+
+
+world_dev_apply._apply_body_slots = _slots_fail
+try:
+    res = wt.run_tool(ctx14, "create_character",
+                      {"data": {"character_name": "Demo Claim", "template": "human-roleplay"}})
+finally:
+    world_dev_apply._apply_body_slots = _orig_slots
+check("(ad) 3. a failure after the own row was stored -> claimed",
+      not res.ok and res.wrote and "partly written: character Demo Claim exists" in res.line,
+      res)
+claim_rows = wr.entries(run14)
+check("(ad) 3. its write row carries delete_character Demo Claim",
+      len(claim_rows) == 1 and claim_rows[0]["inverse"].get("op") == "delete_character"
+      and claim_rows[0]["inverse"].get("name") == "Demo Claim", claim_rows)
+rep = wu.undo(run14)
+check("(ad) undo: Demo Claim gone, both foreign characters stay",
+      rep["complete"] and not character_row_exists("Demo Claim")
+      and character_row_exists("Demo Race") and character_row_exists("Demo Race Two"),
+      rep)
+wr.set_status(run14, "rolled_back")
+
+print("run 15 (three groups in one call)")
+# A profile save (z, aa) recreates a missing soul file from its scaffold:
+# remove presence.md again so the fixture is "absent".
+soul_writer.write_text("Demo Other", PR_REL, None)
+check("(ae) fixture: age, popularity and presence.md absent",
+      "age" not in (character_model.get_character_profile("Demo Other") or {})
+      and "popularity" not in (get_character_config("Demo Other") or {})
+      and soul_writer.read_text("Demo Other", PR_REL) is None)
+h_before15 = wu.home_schedule_state("Demo Other")
+run15 = wr.create_run("groups", "m", "p", "u", 40, 300000)
+ctx15 = wt.ToolCtx(run_id=run15, turn=1)
+res = wt.run_tool(ctx15, "update_character",
+                  {"name": "Demo Other",
+                   "patch": {"soul:character_presence": "present", "age": 30,
+                             "popularity": 7, "home": "Demo Lakeside"}})
+rows15 = list(reversed(wr.entries(run15)))  # oldest-first
+check("(ae) ok, three write rows", res.ok and res.wrote and len(rows15) == 3,
+      (res, rows15))
+check("(ae) inverses: restore_soul / restore_character / restore_home_schedule",
+      [e["inverse"].get("op") for e in rows15]
+      == ["restore_soul", "restore_character", "restore_home_schedule"], rows15)
+check("(ae) restore_soul before_text None",
+      rows15 and rows15[0]["inverse"].get("before_text") is None, rows15[:1])
+check("(ae) restore_character records the absent keys",
+      len(rows15) > 1 and rows15[1]["inverse"].get("profile") == {"age": wu.ABSENT}
+      and rows15[1]["inverse"].get("config") == {"popularity": wu.ABSENT}, rows15[1:2])
+rep = wu.undo(run15)
+check("(ae) undo complete", rep["complete"], rep)
+check("(ae) undo: age and popularity absent again, presence.md gone, home as before",
+      "age" not in (character_model.get_character_profile("Demo Other") or {})
+      and "popularity" not in (get_character_config("Demo Other") or {})
+      and soul_writer.read_text("Demo Other", PR_REL) is None
+      and wu.home_schedule_state("Demo Other") == h_before15,
+      (character_model.get_character_profile("Demo Other").get("age"),
+       get_character_config("Demo Other").get("popularity"),
+       soul_writer.read_text("Demo Other", PR_REL),
+       wu.home_schedule_state("Demo Other"), h_before15))
+wr.set_status(run15, "rolled_back")
+
+print("run 16 (a later group fails)")
+run16 = wr.create_run("partial", "m", "p", "u", 40, 300000)
+ctx16 = wt.ToolCtx(run_id=run16, turn=1)
+_orig_save_cfg = character_model.save_character_config
+character_model.save_character_config = lambda *a, **k: False
+try:
+    res = wt.run_tool(ctx16, "update_character",
+                      {"name": "Demo Other",
+                       "patch": {"soul:character_presence": "x", "popularity": 9}})
+finally:
+    character_model.save_character_config = _orig_save_cfg
+check("(af) ok False, wrote True, 'changed in part'",
+      not res.ok and res.wrote and "changed in part" in res.line, res)
+rows16 = wr.entries(run16)
+check("(af) exactly the soul group journaled",
+      [e["inverse"].get("op") for e in rows16] == ["restore_soul"]
+      and "popularity" not in (get_character_config("Demo Other") or {}), rows16)
+rep = wu.undo(run16)
+check("(af) undo: presence.md absent again",
+      rep["complete"] and soul_writer.read_text("Demo Other", PR_REL) is None,
+      (rep, soul_writer.read_text("Demo Other", PR_REL)))
+wr.set_status(run16, "rolled_back")
+
+result_ag = apply_character({"character_name": "Demo Other", "template": "human-roleplay",
+                             "outfits": [{"name": "Ghost", "pieces": [
+                                 {"item_id": "item_nope"}]}]})
+check("(ag) a skipped item_id is a warning in the apply result",
+      any("item_nope" in w for w in result_ag.get("warnings") or []), result_ag)
 
 print()
 if failures:
