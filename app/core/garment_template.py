@@ -2182,10 +2182,11 @@ def failed_path(character_name: str, item_id: str, sig: str) -> Path:
 
 
 def _file_sha(path: str) -> str:
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError:
-        return ""
+    """sha256 of a texture source, "" when missing, through the stat-keyed
+    (size, mtime_ns, inode) hash cache of ``base_body.file_sha256``, so a poll
+    does not re-read unchanged images."""
+    from app.core.base_body import file_sha256
+    return file_sha256(Path(path))
 
 
 def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
