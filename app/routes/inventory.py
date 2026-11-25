@@ -785,6 +785,14 @@ def list_room_items_route(
     return {"items": enriched}
 
 
+def _refuse_part(item_id: str) -> None:
+    """400 for a part item (plan-anhaenger Task 2): it is worn through its chain or belt — never carried, placed in a
+    room or put on a slot."""
+    from app.core import accessory_parts
+    if accessory_parts.is_part_id(item_id):
+        raise HTTPException(status_code=400, detail=accessory_parts.REFUSED_WEAR)
+
+
 @router.post("/rooms/{location_id}/{room_id}")
 async def add_room_item_route(
     location_id: str,
@@ -805,6 +813,7 @@ def _add_room_item_route_sync(location_id: str, room_id: str,
     item_id = body.get("item_id", "")
     if not item_id:
         raise HTTPException(status_code=400, detail="user_id and item_id required")
+    _refuse_part(item_id)
 
     success = add_item_to_room(
         location_id=location_id,
@@ -912,6 +921,7 @@ def _add_inventory_item_route_sync(character_name: str,
     item_id = body.get("item_id", "")
     if not item_id:
         raise HTTPException(status_code=400, detail="user_id and item_id required")
+    _refuse_part(item_id)
 
     success = add_to_inventory(
         character_name=character_name,
@@ -1047,6 +1057,7 @@ def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
+    _refuse_part(item_id)
     with keyed_lock("character_profile", character_name):
         if item.get("category") == "outfit_piece":
             result = equip_piece(character_name, item_id, source="wardrobe_ui")
