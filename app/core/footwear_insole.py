@@ -182,6 +182,21 @@ BACKWARDS — the heel under the toe straps, the toes in the heel counter. Measu
 30"). The eight other shoe sources of the world keep their frame and every measured number (insole rise −41.6 …
 +0.13, stack rise −9.96 … −1.24; their underside at 0.90 L stands 1.8 – 5.8 % L off the ground — every one has a toe
 spring).
+
+**Platform soles (INSOLE_VERSION 10, 2026-11-25).** The topline keeps per side only the cut points at least
+``TOPLINE_SIDE_SHARE`` of that side's widest point out; on a platform boot the widest point is the SOLE, which stands
+out beyond the shaft, so the shaft's walls fall under the filter and the topline (the lower side) reads the upper's
+bulge just above the platform. Ylva's Black Platform Boots (``item_black_platform_boots/fe3442f72ebb``, a laced
+ankle boot on a 6.6 cm platform, UniForge): at 0.15 L the sole reaches 0.118 L out on one side, the shaft 0.068 –
+0.077 L (0.58 – 0.65 of it), so the collar read 3.5 cm and the class ``none`` — no boot split, and the fit refused the
+foot ("deep_outside 0.1638 > 0.02", "visible_poke 0.1429 > 0.005"). Its tube slabs told the truth all along: 39 slabs,
+closed share 1.0, the highest closed ring 15.7 cm above the heel seat, and the HIGHER side's topline 15.7 cm too. Now
+a closed tube (``closed_share`` at the shaft gate's 0.9, its ring above the topline's collar) gives the collar
+(``shaft.collar_source`` "slab_ring") and the fit's shaft height ``shaft_h_raw`` (its ring top): the boots read
+``ankle``, 15.7 cm, ``shaft_h`` 22.3 cm nominal (was 10.1), and Ylva's fit is accepted. Every other stored shoe of the
+world (sneakers, pumps, loafers, sandals, four boots incl. the knee-highs) gives a byte-identical analysis apart from
+the version: on a real boot the topline's collar stands at or above its ring (11.9 / 11.4, 32.1 / 31.5, 21.8 / 21.7,
+11.5 / 11.1 cm), and a low shoe has no closed ring at all.
 """
 import math
 from dataclasses import dataclass
@@ -205,7 +220,10 @@ from app.core.footwear_gates import check_gates
 #:    is no longer read as its insole (module docstring, "Sole layers"); stored insoles re-run on the CPU.
 #: 9: the flip reads the stack (insole over the sole's underside), not the insole — a toe spring no longer flips a flat
 #:    shoe (module docstring, "Toe spring"); stored insoles re-run on the CPU.
-INSOLE_VERSION = 9
+#: 10: a closed tube gives the collar when its ring stands above the topline's (``collar_source`` "slab_ring") — a
+#:    platform sole wider than the shaft no longer reads a boot as a low shoe (module docstring, "Platform soles");
+#:    stored insoles re-run on the CPU.
+INSOLE_VERSION = 10
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -877,13 +895,8 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
             vamp_top = float(np.nanmax(front))
     top_behind = top[behind & ~np.isnan(top)]
     collar = None if seat is None or not len(top_behind) else float(top_behind.max()) - float(seat)
-    nominal = None if collar is None or k != k else collar * k
     hi_behind = np.zeros(0) if top_hi is None else top_hi[behind & ~np.isnan(top_hi)]
     upper = None if seat is None or k != k or not len(hi_behind) else (float(hi_behind.max()) - float(seat)) * k
-    cls = "none"
-    if nominal is not None:
-        rounded = _r(nominal)
-        cls = next((name for name, limit in SHAFT_CLASS_M.items() if rounded <= limit), "overknee")
     slabs: List[Dict[str, Any]] = []
     y0 = None if seat is None else max(float(seat) + SHAFT_CLASS_M["none"] / k, vamp_top or -np.inf)
     eps = 1e-9 * max(L, 1e-12)
@@ -899,11 +912,26 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
     if slabs:
         below = [c for s, c in zip(slabs, closed) if top_raw is not None and s["y"] <= top_raw + eps]
         closed_share = float(sum(below) / len(below)) if below else 0.0
+    # a closed tube is a shaft (INSOLE_VERSION 10): when the slab rings close up to ``top_raw`` (the shaft gate's
+    # closed share) and that ring stands higher than the topline's collar, the collar is the ring's — a platform sole
+    # wider than the shaft keeps the shaft's walls out of the topline's 75 % lateral filter (module docstring,
+    # "Platform soles")
+    collar_source = "topline"
+    if (top_raw is not None and seat is not None and closed_share is not None
+            and closed_share >= SHAFT_GATES["shaft_closed_share"][1]
+            and (collar is None or float(top_raw) - float(seat) > collar)):
+        collar, collar_source = float(top_raw) - float(seat), "slab_ring"
+    nominal = None if collar is None or k != k else collar * k
+    cls = "none"
+    if nominal is not None:
+        rounded = _r(nominal)
+        cls = next((name for name, limit in SHAFT_CLASS_M.items() if rounded <= limit), "overknee")
     # a low shoe has no shaft and so no cap: the closed rings above its slab floor are the tongue or the counter's
     # lip (INSOLE_VERSION 6); a wall that stands on ONE side only is still a shaft (a mesher hole, refused)
     has_shaft = has_shaft_of(cls, upper)
     cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum()) if has_shaft else 0
-    return {"collar_h_raw": collar, "collar_h_nominal": nominal, "class": cls, "top_raw": top_raw,
+    return {"collar_h_raw": collar, "collar_h_nominal": nominal, "collar_source": collar_source, "class": cls,
+            "top_raw": top_raw,
             "vamp_top_raw": vamp_top, "slabs": slabs, "closed_share": closed_share, "cap_removed": cap_removed,
             "upper_collar_h_nominal": upper, "has_shaft": has_shaft}
 
@@ -1123,7 +1151,11 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "kind": kind,
         "open": open_block,
         "cavity_end_x": cavity_end,
-        "shaft_h_raw": float(finite_top.max()) if len(finite_top) else None,
+        # the boot split's shaft height (``footwear_fit``): the topline's highest point, or the closed ring's when it
+        # gave the collar (INSOLE_VERSION 10)
+        "shaft_h_raw": (max(float(finite_top.max()) if len(finite_top) else -np.inf, float(shaft["top_raw"]))
+                        if shaft.get("collar_source") == "slab_ring"
+                        else float(finite_top.max()) if len(finite_top) else None),
         "shaft": shaft,
         "contacts": contacts,
         "nominal": nominal,
