@@ -33,8 +33,9 @@ The acceptance play-through is `scripts/smoke_quest_playthrough.py`.
 template at start (`template_snapshot`, D2): evaluation and the quest book read only the snapshot, so editing or
 deleting the template never changes a running quest. Deleting a template while one of its runs has not ended is
 refused (409 `has_open_runs`). A run carries `current_step`, a `step_log` (`{step, avatar, mind, game_ts}` per
-done step), `issues` (why it broke), `started_game_ts` / `ended_game_ts` (GAME time), `expires_at` and the
-`news_event_id` of its announcement.
+done step), `issues` (why it broke), `started_game_ts` / `ended_game_ts` (GAME time), `expires_at`, the
+`news_event_id` of its announcement and `binding_labels` (role key → display label, frozen at start — see
+[Placeholders](#placeholders)).
 
 **Fact** — something a MIND did, written once: `(mind, kind, subject)`. Stage 1 has one kind, `spoke_with`.
 
@@ -44,11 +45,11 @@ done step), `issues` (why it broke), `started_game_ts` / `ended_game_ts` (GAME t
 |---|---|
 | `preparing` | Reserved for stage 2 (setup effects); nothing creates it in stage 1 |
 | `hidden` | Started with a non-empty start condition that has not passed yet. Not in the quest book, no time limit running |
-| `open` | Playing. Started with an empty start condition, or a hidden run whose start condition passed for an avatar |
+| `open` | Playing. Started with an empty start condition, or a hidden run whose start condition passed for an avatar that meets the prerequisites |
 | `done` | The last step was fulfilled |
 | `failed` | The time limit ran out (`expires_at` is set when the run opens: `time_limit_s` after that moment) |
 | `cancelled` | Cancelled by the admin |
-| `broken` | A bound entity is gone or a used type is no longer registered; `issues` says which |
+| `broken` | A bound entity is gone or a used type is no longer registered (at two consecutive ticks); `issues` says which |
 
 `preparing`, `hidden` and `open` are the not-yet-ended states; an ended run never changes state again. Steps are
 sequential: only the CURRENT step's condition is read, and when it passes the run moves on in the same evaluation as
@@ -100,10 +101,23 @@ all), `steps.<i>.id`, `steps.<i>.text`, `steps.<i>.condition<expr>`, `start_cond
 ends in `.type` or `.params.<key>`. At start the bindings add `bindings.<role key>`. An issue is
 `{"path", "code", "message"}`.
 
+### Placeholders
+
+A text the player reads may name a role: `{role_key}` in `title`, `summary`, a step's `text` and `hint`, and
+`prerequisites.locked_text` (`gm_notes` is never substituted). `{{` and `}}` are literal braces. A placeholder
+naming an undeclared role is the issue `unknown_role` at that field's path (`title`, `summary`,
+`steps.<i>.text`, `steps.<i>.hint`, `prerequisites.locked_text`); a single `{` or `}` is `bad_text`.
+
+The labels are frozen when the run starts (`binding_labels`): character → its name, location → the location's name,
+room → the room's name, item → the item's name (a label that cannot be read falls back to the id). Renaming the room
+afterwards does not change what the quest book says. `quest_engine.render_text(text, run)` is the one renderer: the
+quest book (title, summary, step texts, lock text), the step and completion notices, the announcement and the admin
+run row's title use it. A label is not a spoiler; ids and hints stay withheld.
+
 ### Steps and prerequisites (D8)
 
 A step is `{"id", "text", "hint", "condition": expr}`. `prerequisites` is `{"condition": expr, "locked_text": str}`:
-an avatar that does not meet them is **locked** — its actions do not count — and the quest book shows the author's
+an avatar that does not meet them is **locked** — its actions do not count, it does not open a hidden run either — and the quest book shows the author's
 `locked_text`, never an evaluator's reason (fallback "You do not meet the requirements.", translated). Prerequisite
 positions accept types of kind `condition` and `prerequisite`; steps and the start condition only `condition`.
 
@@ -115,7 +129,7 @@ positions accept types of kind `condition` and `prerequisite`; steps and the sta
 | `holds_item` | condition | `item` (role: item), `count` (int, default 1) | `inventory.changed` |
 | `stat_compare` | condition | `stat` (str), `op` (`>=` `<=` `>` `<` `=`), `value` (int) | `world_tick` |
 | `spoke_with` | condition | `character` (role: character) | `utterance.heard` |
-| `time_elapsed` | condition | `hours` (int, game hours since the run opened) | `world_tick` |
+| `time_elapsed` | condition | `hours` (int, game hours since the run opened); not allowed in a start condition | `world_tick` |
 | `expression` | condition | `expression` (the activity condition grammar) | `world_tick`, `character.entered_room`, `inventory.changed` |
 | `relationship_at_least` | prerequisite | `character` (role: character), `strength` (0–100) | — |
 
@@ -136,6 +150,7 @@ A type is a `QuestType` (`app.core.quest_catalog`):
 | `signals` | The hook events after which the type may have changed its answer. A step is re-read on those signals and on every tick |
 | `evaluate(params, ctx)` | Returns `ConditionResult`; `ctx` is a `QuestContext` (`avatar`, `mind`, `profile`, `location_id`, `room_id`, `now`, `bindings`, `run`). Return unavailable (never false) when a read fails |
 | `validate(params, bindings)` | Optional; returns `list[ConditionIssue]`. `bindings` is `None` at template time (check only what needs no world entity) and the run's bindings at start and at every tick |
+| `needs_open_run` | Default `False`. `True` for a type that can only be read once the run has opened (it counts from `started_game_ts`, like `time_elapsed`): `validate_template` refuses it under `start_condition` (code `not_allowed_here`), where a hidden run has not opened and the type would stay unavailable forever |
 
 What the catalog guarantees a type:
 
@@ -144,8 +159,12 @@ What the catalog guarantees a type:
   defaults in and DROPS an absent parameter that has no default (absent = missing, `null` or blank text) — so a type
   reads its parameters with `params.get(...)`.
 - **The type list is never cached.** `quest_catalog.types()` is rebuilt from the provider registry on every call, so
-  an unloaded package's types are gone at once: its leaves evaluate unavailable ("type not registered") and the next
-  tick marks such a run `broken`.
+  an unloaded package's types are gone at once: its leaves evaluate unavailable ("type not registered"). The tick
+  marks such a run `broken` only when the type is missing at TWO consecutive ticks — one catalog read without it (a
+  package reloading, a contributor that raised once) is no evidence, and the tick reads the catalog strictly
+  (`types(strict=True)`): a raising contributor skips the run for that tick.
+- **Expressions nest at most 16 group levels** (`quest_catalog.MAX_DEPTH`); a deeper node is a `shape` issue, so
+  such an expression never becomes ready.
 - **A raising type is contained.** A raising `evaluate` makes that leaf unavailable; the other runs are evaluated as
   usual. A raising `validate` becomes a `bad_param` issue when the template is checked and REFUSES a start; at the
   tick the run is SKIPPED for that tick — a failed read or a raising validator is no evidence that a reference is
@@ -207,7 +226,7 @@ register(OWNER, _types)
 ```
 
 The Game-Admin's condition editor offers it at once (`GET /quests/catalog`); removing the folder removes the type, and
-a run that used it turns `broken` at the next tick (the deletion test).
+a run that used it turns `broken` once the type has been missing at two ticks (the deletion test).
 
 ## Evaluation and signals
 
@@ -230,8 +249,10 @@ Only `quest_engine` subscribes (hook tag `"quest_engine"`) to four events (D9):
   not a quest is running — a talk before the quest started counts — and it belongs to the MIND, so it survives a
   body swap.
 - Only a player-controlled character fulfils anything: an NPC entering the bound room changes nothing. A run is read
-  only when its current expression listens to the signal; a run whose start condition passes for an avatar opens
-  (without announcement).
+  only when its current expression listens to the signal; a run whose start condition passes for an avatar that meets
+  the prerequisites opens (without announcement).
+- **Time limit.** A signal never records a step of an open run past its `expires_at`; the tick ends it `failed`
+  (the tick does not run while the queue is paused, the game clock does).
 - **Threading (D11).** The listeners only enqueue; one worker thread writes facts and evaluates.
   `quest_engine.drain()` waits for it (tests and smokes).
 - **Freeze.** An avatar's own action is evaluated in a frozen world too; the tick is not (below), so nothing expires
@@ -245,17 +266,19 @@ task queue paused (`tick()` itself has no freeze check). Order:
 
 1. **Expiry** — every hidden/open run past `expires_at` turns `failed`.
 2. **Reference check** — per live run, each binding (`check_binding`) and each leaf type's `validate(params,
-   bindings)`; a binding whose entity is definitely gone, or a type that is no longer registered, turns the run
-   `broken` with the issues. A storage error or a raising validator skips that run for this tick (neither checked nor
-   evaluated, never marked broken). Deleting a character breaks its runs at once (`delete_character` calls
-   `quest_engine.on_character_deleted`); everything else is caught here, within one tick.
+   bindings)`; a binding whose entity is definitely gone, or a type that was not registered at this AND the previous
+   tick, turns the run `broken` with the issues. A storage error, a raising validator or a raising type contributor
+   skips that run for this tick (neither checked nor evaluated, never marked broken). Deleting a character breaks its
+   runs at once, after its rows are deleted (`delete_character` calls `quest_engine.on_character_deleted`; a failed
+   delete breaks nothing); everything else is caught here, within one tick.
 3. **Full re-evaluation** of every avatar against every live run — this is what notices changes that have no signal
    (stats, time, activity, the silent inventory writes).
 
 ## Notices and push (D15)
 
 - A fulfilled step notifies only the avatar that fulfilled it: `create_notification(..., notification_type="quest",
-  once_unread=True)`, text "Quest step done: <step text>" (or "Quest complete: <title>" for the last step). Because of
+  once_unread=True)`, text "Quest step done: <step text>" (or "Quest complete: <title>" for the last step), with the
+  role placeholders rendered. Because of
   `once_unread`, two runs whose current steps have the same text store ONE unread notice.
 - A run that opens at start (empty start condition) is announced as a global world event (`category "social"`, text
   "<title>: <summary>"); a run that opens from `hidden` is not announced. When an announced run ends `cancelled`,
@@ -275,7 +298,8 @@ task queue paused (`tick()` itself has no freeze check). Order:
 
 - Built up from whitelists (`quest_book.QUEST_FIELDS`, `STEP_FIELDS`) out of the snapshot: `gm_notes`, roles,
   bindings, every `hint`, every condition and the text of every future step are never sent.
-- Listed: every `open` run (newest first), then at most 10 ENDED runs that had opened (latest end first). `hidden` and
+- Listed: every `open` run (newest first), then at most 10 ENDED runs that had opened (latest end first; the store
+  query `list_chronicle` filters and cuts in SQL, so a poll decodes at most ten ended snapshots). `hidden` and
   `preparing` runs are not listed, and neither is an ended run that never opened — its title would be a spoiler.
 - Steps: an open run shows its done steps and the current one (`state` `done` / `current`); an ENDED run that is not
   `done` shows only its done steps; a `done` run all of them. A done step carries `done_by` (the avatar) and
@@ -299,12 +323,15 @@ task queue paused (`tick()` itself has no freeze check). Order:
 | `PUT /quests/templates/{id}` | Edit with `base_revision` (D13) |
 | `DELETE /quests/templates/{id}` | Refused with 409 `has_open_runs` while a run has not ended |
 | `POST /quests/templates/{id}/start` | `{"bindings": {role: binding}}` → the run |
-| `GET /quests/runs?state=` | Not-yet-ended runs first, then the newest 50 ended ones |
+| `GET /quests/runs?state=` | Not-yet-ended runs first, then the newest 50 ended ones; a row carries `binding_labels` and a `game_label` per step-log entry |
 | `POST /quests/runs/{id}/cancel` | `{"ok": bool}` (false when it had ended or is unknown) |
 
 Every error detail is an object with a `code`: `{code, message}`, `stale` adds the stored `current` revision, and the
-two refusals with an issue list answer `{code, issues}`. Codes: `bad_json` (400), `bad_request` (400), `not_found`
-(404), `revision_required` (428), `stale` (409), `invalid` (422), `has_open_runs` (409), `refused` (422 at start).
+two refusals with an issue list answer `{code, issues}`. Codes: `bad_json` (400, also a body nested too deep to
+parse), `bad_request` (400: a text field that is not text, a `time_limit_s` outside 0..2⁶³−1, anything the store
+cannot write), `not_found` (404), `revision_required` (428), `stale` (409), `invalid` (422), `has_open_runs` (409),
+`refused` (422 at start), `too_large` (413, a body over 256 KiB). The Game-Admin translates the code; issue messages
+stay English.
 
 **The ready rule.** `PUT` checks the RESULTING template (stored fields merged with the body): whenever its state would
 be `ready` with issues it answers 422 `invalid` and writes nothing — also when the body does not name `state`, so a
