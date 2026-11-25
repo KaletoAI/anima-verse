@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
+using AnimaNative.Nav;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
@@ -179,28 +180,67 @@ public sealed class AvatarRoomsController : IDisposable
             _hud.SetState("elevatorOpen",false);
     }
 
-    public Task RideStairsAsync()
+    public Task<bool> RideStairsAsync()
     {
-        if(!CanUse || _stairs is not { } s || Tile is not { } tile) return Task.CompletedTask;
+        if(!CanUse || _stairs is not { } s || Tile is not { } tile) return Task.FromResult(false);
         string? target=Elevator.NearestRoomAt(s.Dest.Level,new(s.Dest.Pos.X,s.Dest.Pos.Z),Rooms(tile));
         var leg=Stairs.LegTo(tile.Places.Stairs,s.Dest);
         return RideAsync(tile,target,s.Dest.Level,s.Dest.Pos,leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true });
     }
-    public Task RideElevatorAsync(int level)
+    public Task<bool> RideElevatorAsync(int level)
     {
-        if(!CanUse || _elevator is not { } e || !Elevator.Options(e).Contains(level) || Tile is not { } tile || !tile.Places.ElevatorStops.TryGetValue(level,out var stop)) return Task.CompletedTask;
+        if(!CanUse || _elevator is not { } e || !Elevator.Options(e).Contains(level) || Tile is not { } tile || !tile.Places.ElevatorStops.TryGetValue(level,out var stop)) return Task.FromResult(false);
         _hud.SetState("elevatorOpen",false);
         return RideAsync(tile,Elevator.TargetRoom(level,Stops(tile),Rooms(tile)),level,stop,null);
     }
 
-    /// <summary>Capture identity/generation before await; exit, remount or a foreign footprint cannot revive a ride.</summary>
-    private async Task RideAsync(LocationSlot tile,string? target,int level,Vec3 goal,StairRide? stair)
+    /// <summary>
+    /// Plan E2 Task 6: ride one link of the avatar's navmesh route (owner ids of decision 13). Stairs: to the end of the
+    /// flight that is not on the current storey, as <see cref="RideStairsAsync"/> does; lift hop: to its other stop, as
+    /// <see cref="RideElevatorAsync"/> without the picker. Both keep the route (<c>keepNavRoute</c>) and send the
+    /// unchanged enter-room request. An unknown owner, or a storey the link does not touch → false.
+    /// </summary>
+    public Task<bool> RideLinkAsync(ulong owner)
     {
-        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.VerticalRide is not null) return;
+        if(!CanUse || Tile is not { } tile) return Task.FromResult(false);
+        int level=Level(tile,Room(tile)) ?? 0;
+        if(NavLinkOwner.TryStairs(owner,out int flight))
+        {
+            if(flight<0 || flight>=tile.Places.Stairs.Count) return Task.FromResult(false);
+            var s=tile.Places.Stairs[flight];
+            var dest=s.Foot.Level!=level ? s.Foot : s.Head;
+            if(dest.Level==level) return Task.FromResult(false);
+            string? target=Elevator.NearestRoomAt(dest.Level,new(dest.Pos.X,dest.Pos.Z),Rooms(tile));
+            var leg=Stairs.LegTo(new[]{s},dest);
+            return RideAsync(tile,target,dest.Level,dest.Pos,leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true },keepNavRoute:true);
+        }
+        if(NavLinkOwner.TryElevator(owner,out int lower))
+        {
+            // The hop runs between the stop of its lower storey and the next stop of the same list (NavSource.Build).
+            var stops=tile.Places.ElevatorStops.ToList();
+            int i=stops.FindIndex(p=>p.Key==lower);
+            if(i<0 || i+1>=stops.Count) return Task.FromResult(false);
+            int upper=stops[i+1].Key;
+            int to=level==lower ? upper : level==upper ? lower : int.MinValue;
+            if(to==int.MinValue || !tile.Places.ElevatorStops.TryGetValue(to,out var stop)) return Task.FromResult(false);
+            _hud.SetState("elevatorOpen",false);
+            return RideAsync(tile,Elevator.TargetRoom(to,Stops(tile),Rooms(tile)),to,stop,null,keepNavRoute:true);
+        }
+        return Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// Capture identity/generation before await; exit, remount or a foreign footprint cannot revive a ride. True once the
+    /// vertical ride is set, false at every refusal. <paramref name="keepNavRoute"/> (a navmesh link ride) clears only the
+    /// straight route state, so the navmesh route continues after the ride.
+    /// </summary>
+    private async Task<bool> RideAsync(LocationSlot tile,string? target,int level,Vec3 goal,StairRide? stair,bool keepNavRoute=false)
+    {
+        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.VerticalRide is not null) return false;
         int generation=_generation;
-        _steering.CancelRoute();
+        if(keepNavRoute) _steering.CancelStraightRoute(); else _steering.CancelRoute();
         if(!await Channel.EnterAsync(target,true) || generation!=_generation || !CanUse || Avatar!=f || Tile!=tile
-            || !_world.Slots.TryGetValue(tile.Loc.Id,out var mounted) || mounted!=tile) return;
+            || !_world.Slots.TryGetValue(tile.Loc.Id,out var mounted) || mounted!=tile) return false;
         _steering.RoomId=target; AdoptRoom?.Invoke(target);
         var point=new Vector3((float)goal.X,(float)goal.Y,(float)goal.Z);
         _figures.SetPlayerTarget(f.CharacterName,point);
@@ -208,6 +248,7 @@ public sealed class AvatarRoomsController : IDisposable
         _steering.VerticalRide=new(point,_steering.Clock+4);
         _world.SetLevel(tile.Loc.Id,level); _followedLevel=level;
         Channel.Idle(); ClearOffers(); Picking.Clear();
+        return true;
     }
 
     private Vec3? Stand(LocationSlot tile,int level,VerticalTarget target)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using AnimaNative.Nav;
+using AnimaNative.Scatter;
 using AnimaNative.Scene;
 using Godot;
 
@@ -60,6 +61,15 @@ public sealed partial class WorldBuilder
     /// while it reports <c>Ready == false</c> until its next iteration (review N-W4).
     /// </summary>
     public LocationNav? NavFor(LocationSlot? slot) => slot?.Nav;
+
+    /// <summary>
+    /// Task 6: the outer points of the slot's outside doors (<see cref="NavThreshold.OuterPoint"/>, threshold centre +
+    /// outward normal · (t/2 + r)) — where a click walk to a target outside the footprint leaves the navmesh.
+    /// </summary>
+    public IReadOnlyList<P2> NavOutsideDoors(LocationSlot slot)
+        => slot.Nav is { } nav
+            ? nav.Source.Thresholds.Where(t => t.Outside && t.OuterPoint is not null).Select(t => t.OuterPoint!.Value).ToList()
+            : Array.Empty<P2>();
 
     /// <summary>
     /// Decision 8: the measured world boxes of the slot's furniture (role prop, no door, not walkable), from the one

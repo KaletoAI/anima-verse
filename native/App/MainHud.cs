@@ -233,6 +233,8 @@ public partial class Main : Node3D
             if (_avatarOffers?.Pick(o, d, click) == true) return true;
             if (_avatarRooms?.Picking.Hit(o, d) is { } vertical)
             { _avatarRooms.UseVertical(vertical.Target); return true; }
+            // Plan E2 Task 6: embodied, a click on the floor or the ground walks there (after offers and stairs/lifts).
+            if (Embodied && TryGroundWalk(o, d)) return true;
             return false;
         }, embodied: Embodied);
         Log($"pick at ({click.X:0},{click.Y:0}): "

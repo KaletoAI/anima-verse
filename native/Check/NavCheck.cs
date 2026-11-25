@@ -5,6 +5,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Embody;
+using AnimaNative.Figures;
+using AnimaNative.Hud;
 using AnimaNative.Nav;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
@@ -42,6 +44,10 @@ namespace AnimaNative.Check;
 ///   N12 a lock on r-b keeps NavFor in its frame, closes T0, survives a rebake (T0 of the new map off), unlock opens it;
 ///   N13 no MapChanged subscription before the first bake or once nothing is pending, the first map swapped on its
 ///       first MapChanged, StopResidency during a bake unsubscribes and leaves no map.
+///
+/// Task 6 lets the avatar walk on it (<see cref="AvatarAsync"/>): A0 the ground click, A1 a click walk through the door T0,
+/// A2/A2b the furniture clamp, A3 a click into furniture, A4 a lock refuses the click, A5/A5b the stair link ride (accepted /
+/// refused), A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge.
 /// </summary>
 public static class NavCheck
 {
@@ -136,8 +142,9 @@ public static class NavCheck
             Eq("N8 active maps back", mapsAfter, mapsBefore);
 
             var worldPart = await WorldAsync(host, fixtures);
+            var avatarPart = await AvatarAsync(host, fixtures);
             return $"nav regions={nav.Storeys.Count} thresholds={nav.Thresholds.Count} links={nav.Links.Count} p1={p1.Length:0.###} "
-                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {worldPart}";
+                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {worldPart}; {avatarPart}";
         }
         finally
         {
@@ -417,6 +424,233 @@ public static class NavCheck
             builder.StopResidency();
             builder.Models?.FreeAll();
             world.QueueFree();
+        }
+    }
+
+// ---- A0–A7: the avatar walks on the navigation (Task 6) -------------------------------------------------------
+
+    /// <summary>
+    /// The nav world with the avatar "Nia Nav" walking on the swapped navigation (plan E2 Task 6), set up like
+    /// <c>EmbodyRoomsCheck</c>: a real <see cref="FigureManager"/>, <see cref="PlayerSteering"/> in r-a, a real
+    /// <see cref="AvatarRoomsController"/> whose clock stays at 0 (no walk-in room request ever falls due, so the only
+    /// enter-room call is the link ride's), <c>RideLink = rooms.RideLinkAsync</c>. A frame is
+    /// <c>steering.Step(dt, keys, yaw) + manager.Tick(dt) + rooms.Tick()</c> at dt 0.25 (A7: 1/60). Every number is the hand
+    /// derivation of native/fixtures/README.md, section "Nav world" (A0–A7 there).
+    /// </summary>
+    private static async Task<string> AvatarAsync(Node3D host, string fixtures)
+    {
+        var dir = Path.Combine(fixtures, "nav");
+        var source = new FixtureSource(dir, fixtures);
+        var world = new Node3D { Name = "NavAvatarWorld" };
+        host.AddChild(world);
+        var builder = new WorldBuilder(source, _ => { }, strict: true);
+        var hud = new HudOverlay();
+        AvatarRoomsController? rooms = null;
+        try
+        {
+            await builder.BuildAsync(world, "Navhaus");
+            var slot = builder.Slots["loc-nav"];
+            builder.SetOpen("loc-nav", true);
+            slot.Fade.Snap(1);
+            var nav = await AwaitNav(host, builder, slot, null, "A");
+            var manager = new FigureManager(source, builder.Height!, _ => { }, strict: true)
+            {
+                AutoTick = false, ClipFit = ClipFitMode.OnDemandSync, Slots = () => builder.Slots,
+                GroundMoveAt = builder.FigureGroundMove, GroundYAt = builder.FigureGroundY,
+            };
+            world.AddChild(manager);
+            await manager.InitAsync();
+            manager.SetProcess(false);
+            using var map = await source.GetWorldMapAsync();
+            await manager.Apply(map.RootElement);
+            await manager.EnsurePool();
+            var f = manager.Figures[manager.AvatarName];
+            var steering = new PlayerSteering(manager, builder) { RoomId = "r-a" };
+            steering.SetActive(true);
+            double now = 0;
+            rooms = new AvatarRoomsController(manager, builder, steering, source, hud, () => now);
+            rooms.SetActive(true);
+            hud.SetState("mode", "embodied");
+            steering.RideLink = rooms.RideLinkAsync;
+            var none = new HashSet<string>();
+            var w = new HashSet<string> { "w" };
+            var s = new HashSet<string> { "s" };
+            void At(double x, double z, string room = "r-a")
+            {
+                steering.CancelRoute();
+                steering.RoomId = room;
+                manager.SnapPlayerTo(f.CharacterName, new((float)x, (float)builder.PlayerFloorY(slot, room, x, z), (float)z));
+            }
+            void Frame(IReadOnlySet<string> keys, double dt = 0.25, double yaw = 0)
+            {
+                steering.Step(dt, keys, yaw);
+                manager.Tick(dt);
+                rooms.Tick();
+            }
+            Vec3 Pos() => new(f.Position.X, f.Position.Y, f.Position.Z);
+            void NearP(string what, P2? got, double x, double z, double tol)
+                => Expect(what, got is { } g && Math.Abs(g.X - x) <= tol && Math.Abs(g.Z - z) <= tol, got is { } h ? $"got ({h.X:0.###}, {h.Z:0.###})" : "got null");
+
+            // ---- A0 the ground click over the wiring ----
+            var rayO = new Vec3(98, 10, 5);
+            var rayD = new Vec3(0, -10, -6);
+            At(97, -1);
+            builder.SetLevel("loc-nav", 0);
+            Expect("A0 a ground click on storey 0 walks", Main.TryGroundWalk(builder, steering, Pos(), rayO, rayD), "");
+            NearP("A0 storey 0 → route (98, −1)", steering.Route, 98, -1, 0.01);
+            steering.CancelRoute();
+            builder.SetLevel("loc-nav", 1);
+            Expect("A0 a ground click on storey 1 walks", Main.TryGroundWalk(builder, steering, Pos(), rayO, rayD), "");
+            Expect("A0 storey 1 → a navmesh route", steering.NavRoute is not null, "");
+            NearV("A0 storey 1 → the nearest loft point", steering.NavRoute!.Final, new Vec3(100.35, 3, 0.8));
+            steering.CancelRoute();
+            builder.SetLevel("loc-nav", 0);
+
+            // ---- A1 through the door T0, not through W5 ----
+            At(97, -1);
+            Expect("A1 WalkTo (103, −1)", steering.WalkTo(new P2(103, -1)), "");
+            NearP("A1 Route = the end goal", steering.Route, 103, -1, 0.01);
+            var corners = new List<Vec3>();
+            double? crossZ = null;
+            int a1 = 0;
+            for (; a1 < 40 && steering.NavRoute is not null; a1++)
+            {
+                if (steering.NavRoute.Next is { } next && (corners.Count == 0 || Dist(corners[^1], next) > 1e-6)) corners.Add(next);
+                var before = Pos();
+                Frame(none);
+                var after = Pos();
+                if (crossZ is null && before.X < 100 && after.X >= 100)
+                    crossZ = before.Z + (after.Z - before.Z) * (100 - before.X) / (after.X - before.X);
+            }
+            string cs = string.Join(" ", corners.Select(Fmt));
+            Expect("A1 the route has the corner (99.65, 1.8)", corners.Any(c => Math.Abs(c.X - 99.65) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Expect("A1 the route has the corner (100.35, 1.8)", corners.Any(c => Math.Abs(c.X - 100.35) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Expect("A1 arrives within 40 frames", steering.NavRoute is null && Dist(Pos(), new Vec3(103, Pos().Y, -1)) <= 0.2 && Math.Abs(Pos().Y) <= 0.2,
+                   $"{a1} frames, at {Fmt(Pos())}");
+            // The door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45). A corner counts as reached 0.2 m before it
+            // (NavRoute.CornerArriveM), so the step towards (100.35, 1.8) may start 0.2 m short of (99.65, 1.8): the lowest
+            // crossing of x 100 is 1.8 − 0.2·0.35/0.7 = 1.70 (README "Nav world", A1).
+            Expect("A1 crosses x 100 through the door (z 1.70…2.25)", crossZ is >= 1.70 and <= 2.25, $"z {crossZ}");
+
+            // ---- A2 the clamp at the armchair; A2b out of the chair ----
+            At(97, -1);
+            double minZ = double.PositiveInfinity;
+            for (int i = 0; i < 8; i++)
+            {
+                Frame(w);
+                minZ = Math.Min(minZ, Pos().Z);
+            }
+            Expect("A2 never deeper than z −1.36", minZ >= -1.36, $"min z {minZ:0.####}");
+            Near("A2 stops at the eroded edge z −1.35", Pos().Z, -1.35, 0.02);
+            At(97, -1.8);
+            for (int i = 0; i < 8; i++) Frame(s);
+            Expect("A2b walks out of the chair", Pos().Z > -1.35, $"z {Pos().Z:0.####}");
+
+            // ---- A3 a click into the furniture ends at its edge ----
+            // (97, −1.9), not the box centre (97, −2): the centre is 0.65 from all four eroded edges (x 96.35 / 97.65,
+            // z −2.65 / −1.35) and the map picks one of the tie; from (97, −1.9) the edge z −1.35 is 0.55 away, the others
+            // 0.65 / 0.65 / 0.75 (README "Nav world", A3).
+            At(97, -0.5);
+            Expect("A3 WalkTo into the armchair", steering.WalkTo(new P2(97, -1.9)), "");
+            NearP("A3 goal = the eroded edge (97, −1.35)", steering.Route, 97, -1.35, 0.02);
+            for (int i = 0; i < 40 && steering.NavRoute is not null; i++) Frame(none);
+            Expect("A3 arrives at the edge", steering.NavRoute is null && Math.Abs(Pos().X - 97) <= 0.2 && Math.Abs(Pos().Z + 1.35) <= 0.2, Fmt(Pos()));
+
+            // ---- A4 a lock on r-b refuses the click instead of walking through the wall ----
+            At(97, -1);
+            builder.SetLocks(new LockState(new Dictionary<string, string> { ["r-b"] = "" }, "loc-nav", new Dictionary<string, string>(), "r-a"));
+            await AwaitReady(host, builder.NavFor(slot)!, "A4 locked");
+            var still = Pos();
+            Expect("A4 locked r-b: WalkTo (103, −1) refused", !steering.WalkTo(new P2(103, -1)), "");
+            for (int i = 0; i < 4; i++) Frame(none);
+            Expect("A4 the avatar stands still", Dist(Pos(), still) <= 1e-4, Fmt(Pos()));
+            builder.SetLocks(LockState.None);
+            await AwaitReady(host, builder.NavFor(slot)!, "A4 unlocked");
+            Expect("A4 unlocked: WalkTo (103, −1) walks", steering.WalkTo(new P2(103, -1)), "");
+            steering.CancelRoute();
+
+            // ---- A5 up the stairs over the link ride ----
+            At(97, -1);
+            source.SelectRoomScenario("nav-up");
+            Expect("A5 WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
+            var owners = new HashSet<ulong>();
+            bool rode = false, kept = true;
+            int a5 = 0;
+            for (; a5 < 160 && (steering.NavRoute is not null || steering.VerticalRide is not null); a5++)
+            {
+                if (steering.NavRoute?.Current is NavLink link) owners.Add(link.Owner);
+                if (steering.VerticalRide is not null)
+                {
+                    rode = true;
+                    kept &= steering.NavRoute is not null;
+                }
+                Frame(none);
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            }
+            Expect("A5 exactly one enter-room r-up", source.RoomRequests.SequenceEqual(new[] { "r-up" }), string.Join(",", source.RoomRequests));
+            Expect("A5 one link section, the stairs 65536", owners.SetEquals(new ulong[] { Stairs }), string.Join(",", owners));
+            Expect("A5 the ride ran and kept the route", rode && kept, $"rode {rode} kept {kept}");
+            double loftY = builder.PlayerFloorY(slot, "r-up", 104, 2);
+            Expect("A5 stands in the loft at (104, floor, 2)", steering.NavRoute is null && Dist(Pos(), new Vec3(104, loftY, 2)) <= 0.25,
+                   $"{a5} frames, at {Fmt(Pos())}, floor {loftY:0.###}");
+            Expect("A5 the room is r-up", steering.RoomId == "r-up", steering.RoomId);
+
+            // ---- A5b the ride refused: the route ends at the stair foot ----
+            source.SelectRoomScenario("nav-up-rejected");
+            At(97, -1);
+            builder.SetLevel("loc-nav", 0);
+            rooms.Tick();
+            Expect("A5b WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
+            int a5b = 0;
+            for (; a5b < 160 && steering.NavRoute is not null; a5b++)
+            {
+                Frame(none);
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            }
+            Expect("A5b one enter-room r-up, refused", source.RoomRequests.SequenceEqual(new[] { "r-up" }), string.Join(",", source.RoomRequests));
+            Expect("A5b the route is cancelled", steering.NavRoute is null && steering.Route is null && steering.VerticalRide is null, $"{a5b} frames");
+            Expect("A5b stays on storey 0 at the stair foot", Pos().Y < 0.1 && Dist(Pos(), new Vec3(101, Pos().Y, -3.3)) <= 0.5, Fmt(Pos()));
+
+            // ---- A6 a prop action owns the avatar ----
+            At(97, -1);
+            steering.PropActionDriven = true;
+            var held = Pos();
+            Expect("A6 WalkTo refused while a prop action drives", !steering.WalkTo(new P2(97, -2)), "");
+            for (int i = 0; i < 4; i++) Frame(none);
+            Expect("A6 Step moves nothing", Dist(Pos(), held) <= 1e-6, Fmt(Pos()));
+            steering.PropActionDriven = false;
+
+            // ---- A7 keys at 60 Hz through T1 into the yard and over the plot edge ----
+            At(97, -3);
+            double? doorX = null;
+            bool yard = false, beyond = false, stood = false;
+            int a7 = 0;
+            for (; a7 < 240 && !beyond; a7++)
+            {
+                var before = Pos();
+                Frame(w, 1.0 / 60);
+                var after = Pos();
+                stood |= Dist(before, after) <= 1e-4;
+                if (doorX is null && before.Z > -4 && after.Z <= -4)
+                    doorX = before.X + (after.X - before.X) * (-4 - before.Z) / (after.Z - before.Z);
+                yard |= after.Z < -4.4;
+                beyond = yard && after.Z < -7.1;
+            }
+            Expect("A7 passes T1 (x 96.8…97.2 at z −4)", doorX is >= 96.8 and <= 97.2, $"x {doorX}");
+            Expect("A7 reaches the yard and the plot edge", yard && beyond && builder.FootprintAt(Pos().X, Pos().Z) is null, $"{a7} frames, at {Fmt(Pos())}");
+            Expect("A7 never stands while the key is held", !stood, $"{a7} frames, at {Fmt(Pos())}");
+
+            return $"avatar A0-A7=ok a1={a1} a5={a5} a5b={a5b} a7={a7}";
+        }
+        finally
+        {
+            rooms?.Dispose();
+            hud.Free();
+            builder.StopResidency();
+            builder.Models?.FreeAll();
+            world.QueueFree();
+            await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
         }
     }
 

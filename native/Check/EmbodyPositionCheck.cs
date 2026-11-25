@@ -38,6 +38,10 @@ public static class EmbodyPositionCheck
         {
             n += await PositionChannelCheck.RunAsync(source);
             await builder.BuildAsync(world,"Fixture Hall");
+            // Plan E2 Task 6 (review N-W3): the hall's navigation is swapped in before the first step, so every section
+            // below walks on the navmesh (clamp, click routes) whatever the bake timing.
+            for (int i=0; i<240 && builder.NavFor(builder.Slots["loc-hall"]) is null; i++) await host.ToSignal(host.GetTree(),SceneTree.SignalName.PhysicsFrame);
+            Is("navigation swapped in within 240 physics frames",builder.NavFor(builder.Slots["loc-hall"]) is not null);
             var manager = new FigureManager(source,builder.Height!,_=>{},strict:true)
             { AutoTick=false,ClipFit=ClipFitMode.OnDemandSync,Slots=()=>builder.Slots, GroundMoveAt=builder.FigureGroundMove,GroundYAt=builder.FigureGroundY };
             world.AddChild(manager); await manager.InitAsync(); manager.SetProcess(false);

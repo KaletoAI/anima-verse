@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using AnimaNative.Embody;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
+using AnimaNative.Nav;
 using AnimaNative.Overview;
 using AnimaNative.Sync;
 using AnimaNative.World;
@@ -297,6 +298,8 @@ public partial class Main
                     AdoptRoom = room => _avatarPosition?.AdoptRoom(room),
                     AutoOpen = id => { if (id is null) CloseOpenLocation(); else OpenLocation(id); }
                 };
+            // Plan E2 Task 6: a navmesh route rides its stairs and lift links through the rooms controller.
+            _playerSteering.RideLink = owner => _avatarRooms?.RideLinkAsync(owner) ?? Task.FromResult(false);
             if (_hud is { } offerHud)
                 _avatarOffers = new AvatarOffersController(_figures, _builder, _playerSteering, _source!, offerHud, _avatarPosition)
                 {
@@ -331,6 +334,32 @@ public partial class Main
     }
 
     private void ReassertEmbodyLens() => _camera?.RefreshFirstPerson();
+
+    /// <summary>Plan E2 Task 6: an embodied click on the floor or the ground walks there (MainHud.PickAt).</summary>
+    private bool TryGroundWalk(Vec3 origin, Vec3 dir)
+        => Embodied && _builder is { } world && _playerSteering is { } steering && AvatarFigure() is { } f
+           && TryGroundWalk(world, steering, V3(f.Position), origin, dir);
+
+    /// <summary>
+    /// Plan E2 Task 6: the ground click. Inside a footprint the ray is cut with the floor of the storey the location
+    /// shows (<c>LevelFilter</c>; plane y = datum + the scene's floor y of that storey); a hit outside that footprint is
+    /// cut again with the ground under it (<c>FigureGroundY</c>), and the walk aims at that storey. Outside a footprint
+    /// the first plane is the avatar's height, the second the ground under the first hit (review N-W5), storey null.
+    /// Static so that --check nav (A0) runs the same code with its own ray.
+    /// </summary>
+    internal static bool TryGroundWalk(WorldBuilder world, PlayerSteering steering, Vec3 avatar, Vec3 origin, Vec3 dir)
+    {
+        var slot = world.FootprintAt(avatar.X, avatar.Z);
+        if (slot?.Scene is { } scene)
+        {
+            int level = slot.LevelFilter;
+            double planeY = slot.Stands.Frame.Center.Y + scene.FloorY(level);
+            var hit = NavClick.GroundHit(origin, dir, planeY,
+                (x, z) => world.FootprintAt(x, z) == slot ? planeY : world.FigureGroundY(x, z));
+            return hit is { } inside && steering.WalkTo(inside, level);
+        }
+        return NavClick.GroundHit(origin, dir, avatar.Y, world.FigureGroundY) is { } outside && steering.WalkTo(outside);
+    }
 
     private void DetachEmbody()
     {

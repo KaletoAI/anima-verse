@@ -1767,7 +1767,8 @@ The client navmesh of plan E2 (docs/superpowers/plans/2026-11-25-client-ausfuehr
 `nav/scene_loc-nav.json` (signature `"nav-house"`) and the Godot-free source `AnimaNative.Nav.NavSource`
 (`tests/NavSourceTests.cs`). Task 3 adds the world around it — `worldmap.json` (only `loc-nav` at (100, 0), yaw 0, and
 the avatar "Nia Nav" in `r-a` at (97, −1)), `locations.json`, `model3d.json` (`{"Nia Nav": null}`) and copies of
-`walk/`'s `heightfield.json` (flat 0), `terrain.json` and `urls.json`; `pos_answers.json` follows with a later task.
+`walk/`'s `heightfield.json` (flat 0), `terrain.json` and `urls.json`; Task 6 adds `pos_answers.json` (scenarios `nav-up`,
+`nav-up-rejected`, see the table).
 The derivations below hold for all tasks.
 
 Location `loc-nav` "Navhaus" at world (100, 0), yaw 0, flat height field 0 → datum 0,
@@ -1920,6 +1921,68 @@ The source fingerprint is the cache key (16 entries, memory only); every bake lo
   value before the world.
 - The Task 3 part takes its `ActiveMaps` baseline two physics frames after it starts: an earlier check's world frees its
   location maps when it leaves the tree, and the server counts a freed map until its next sync.
+
+**`--check nav`, avatar part (Task 6, `NavCheck.AvatarAsync`):** the nav world again, built and opened (`SetOpen`, fade 1),
+physics frames until `NavFor(slot)` is set; then a real `FigureManager` (`GroundYAt = FigureGroundY`), `PlayerSteering` in
+`r-a`, a real `AvatarRoomsController` whose clock stays 0 (the walk-in hold of 1500 ms never falls due, so the only enter-room
+request is the link ride's) and `steering.RideLink = rooms.RideLinkAsync`. One frame = `Step(dt, keys, yaw 0)` +
+`manager.Tick(dt)` + `rooms.Tick()`, dt 0.25 (A7: 1/60); at dt 0.25 a walking step is 3.4·0.25 = 0.85 m. `At(x, z)` snaps
+the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks (−sin 0, −cos 0) = (0, −1), `s` walks (0, +1).
+
+- **A0** the ground click through `Main.TryGroundWalk(builder, steering, avatar, o, d)` (the code `MainHud.PickAt` runs), ray
+  o (98, 10, 5), d (0, −10, −6) of `tests/NavClickTests.cs`, avatar (97, −1). Storey view 0: plane y = datum 0 + `FloorY(0)` 0 →
+  t 1 → (98, −1), inside the footprint → `WalkTo((98, −1), 0)` → on the mesh (planner case 1) → `Route` (98, −1) ± 0.01. Storey
+  view 1: plane y 3 → t 0.7 → (98, 0.8), inside → `WalkTo(…, 1)`, target y 3 (storey 1 of the source): the nearest mesh point is
+  the loft's eroded edge (100.35, 3, 0.8) (horizontal 2.35 < 3 to the floor below) → planner case 3 → `NavRoute.Final`
+  (100.35, 3, 0.8) ± 0.05.
+- **A1** `WalkTo((103, −1))` → P1: the route's corners include (99.65, 1.8) and (100.35, 1.8) (± 0.05; the polygon path also has
+  edge points between them), `Route` = (103, −1) (the end goal, review W5); arrival within 0.2 of (103, 0, −1) in ≤ 40 frames
+  (8.41 m / 0.85 ≈ 10, measured 12). Crossing x 100: the door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45). A
+  corner counts as reached 0.2 m before it (`NavRoute.CornerArriveM` = `ClickMove.GoalArriveM`), so the step to (100.35, 1.8) may
+  start up to 0.2 m short of (99.65, 1.8): the lowest crossing is 1.8 − 0.2·0.35/0.7 = **1.70** (the plan's 1.75 assumed exact
+  corners; measured 1.748). Bound z ∈ [1.70, 2.25] — through the door, 0.15 m clear of W5's end.
+- **A2** keys `w` from (97, −1), 8 frames: frame 1 asks (97, −1.85), inside the eroded armchair; the clamp slides to its nearest
+  mesh point (97, −1.35) (0.50 away against 0.65 / 0.80). Frame 2 asks (97, −2.2), whose nearest mesh point is the FAR edge
+  (97, −2.65) (0.45 against 0.85): a slide longer than the 0.85 m step is the far side of the obstacle, so the avatar stays
+  (`PlayerSteering.ClampToNav`; at 60 Hz a 0.15 m step never gets there). z never < −1.36, end z −1.35 ± 0.02. **A2b** from
+  (97, −1.8) (in the eroded chair, off the mesh by 0.45) keys `s`: (97, −0.95) is on the mesh → passes → z > −1.35.
+- **A3** `WalkTo((97, −1.9))` from (97, −0.5): inside the box, off the mesh → planner case 3 → goal = the nearest edge point
+  (97, −1.35) (0.55 away; x 96.35 / 97.65 are 0.65, z −2.65 is 0.75) ± 0.02, arrival within 0.2. The plan's (97, −2) is the box
+  centre, 0.65 from all four eroded edges — a tie the map decides (measured (97.65, −2)), so the click moved 0.1 m north.
+- **A4** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → after Ready `WalkTo((103, −1))` → the path ends ≥ 0.5 short
+  → no plan, start and goal inside the footprint → false; four frames later the avatar has not moved (≤ 1e-4). `LockState.None`
+  → after Ready → true.
+- **A5** scenario `nav-up`; `WalkTo((104, 2), level: 1)` (target y 3) → P2 over the stairs: exactly one link section, owner 65536.
+  At the foot (within 0.4 of (101, 0, −3.3)) the route asks `RideLink(65536)` → `RideLinkAsync`: flight 0, current storey 0 (room
+  r-a) → the head (104.5, 3, −3.3) on storey 1, target room `NearestRoomAt(1, …)` = r-up, leg foot → head, ride like
+  `RideStairsAsync` with `keepNavRoute` (only the straight state is cleared) → one `POST /play/enter-room {room_id: r-up}`
+  (200) → `VerticalRide` set, `RoomId` r-up; the route stays alive through the ride, `LinkFinished` once `VerticalRide` is null
+  again, then walks (104.5, −3.3) → (104, 2). End: `NavRoute` null, within 0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up.
+- **A5b** scenario `nav-up-rejected` (same request → 409): back to (97, −1), room r-a, view 0; the same click walks to the foot,
+  the ride is refused (`RideAsync` → false) → `LinkResult(false)` → `Abort` → `CancelRoute`: `NavRoute` and `Route` null,
+  `VerticalRide` null, y < 0.1, within 0.5 of (101, 0, −3.3) (`LinkArriveM` 0.4); exactly one request.
+- **A6** `PropActionDriven` → `WalkTo((97, −2))` false and four frames move nothing (the prop action's own motion path, decision 12).
+- **A7** keys `w` at 1/60 from (97, −3): the step lead max(3.4/60, `MinLead` 0.15) = 0.15 m < the erosion 0.25 m. The avatar passes
+  T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
+  `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
+
+**Embody checks on the navmesh (Task 6, review N-W3).** `EmbodyWalkCheck`, `EmbodyPositionCheck`, `EmbodyOffersCheck` and
+`EmbodyRoomsCheck` now wait (physics frames, ≤ 240) until the hall's navigation is swapped in, right after the build, so every
+section walks on the navmesh whatever the bake timing. Re-derived (fixture `embody/scene_loc-hall.json`: walls t 0.2, r 0.25 →
+eroded edges 0.35 from a wall line):
+
+- **W2** (5.7, 1) in r-b is off the mesh (east wall face 5.9 → edge 5.65); keys `d` at yaw π/4 push east (wall collision keeps
+  x ≤ 5.75) and north. The clamp holds a step that goes deeper, then tries its axis parts (larger first, like `SlideBlocked`):
+  the z part keeps x and is not deeper → the avatar slides north as before (z < −0.5 after 1 s, x ≤ 5.75).
+- **W6** a click behind the hall from (−3, −3.75) is now a navmesh route out through the outside door (planner case 2), `Route`
+  (−3, −8). The straight walk's 20-frame stall is checked where no navigation applies: from (−3, −4.1), outside every footprint,
+  the click (−3, 8) on the far side walks into the hall's footprint (foreign, with an authored opening → `PlayerBlocked`); the
+  first lead (−3, −3.95) is already inside it, so every target is the start: frame 19 keeps the route, frame 20 drops it and the marker.
+- **W "upper-floor object approach"** (−2.01, 0) at y 3.01 in r-up: on the loft mesh → case 1 → `Route` = the click, X −2.01 unchanged.
+- **R5** `UseVertical` on the stairs → `WalkTo` the foot (0, −2), which lies in the party wall (x −0.1…0.1): eroded edges
+  x −0.35 (r-a) and 0.35 (r-b), both 0.35 away — case 3 goal (±0.35, −2) ± 0.02 (measured (−0.352, −2), the tie's r-a side).
+- **P2** (`EmbodyPositionCheck`) and **O8** (`EmbodyOffersCheck` (−2, 2)): unchanged — the refusal disc runs in `Blocked` before
+  any navmesh plan, and (−2, 2) lies on the r-a mesh (case 1, goal = the click).
 
 **`--check navcompare` (Task 5, `NavCheck.RunCompareAsync`; never part of the full `--check`):** the measurement of
 decision 9. Task 5 ran it with both bake modes (docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md):
