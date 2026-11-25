@@ -4471,6 +4471,49 @@ async def generate_time_variant_core(location_name: str, image_name: str,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# World freeze — the header unfreeze
+# ═══════════════════════════════════════════════════════════════════════════
+
+def freeze_world() -> None:
+    """Freeze the world (the Game-Admin header's freeze).
+
+    While a World Dev free-mode run is open the world is already frozen, and
+    the run restores its pre-run state when it ends; the click is recorded
+    on the run (``was_frozen`` = True) so that close leaves the world
+    frozen instead of silently dropping the admin's wish. (Not locked
+    against ``RunManager.start``: a click between start reading the freeze
+    state and recording it can still be overwritten — milliseconds.)"""
+    from app.core import world_dev_runs
+    from app.models.world import set_world_frozen
+    set_world_frozen(True)
+    run = world_dev_runs.open_run()
+    if run is not None:
+        world_dev_runs.set_was_frozen(run["id"], True)
+
+
+def unfreeze_world() -> None:
+    """Thaw the world (the Game-Admin header's unfreeze).
+
+    Refused with ``world_dev_runs.RunOpenError`` while a World Dev free-mode
+    run is open: the run froze the world and restores the pre-run state
+    itself when it ends (``RunManager._close`` calls ``set_world_frozen``
+    directly, never this function). The check is repeated AFTER the thaw: a
+    run that started in between (check-then-act, no shared lock with
+    ``RunManager.start``) gets its world frozen again and the unfreeze is
+    refused."""
+    from app.core import world_dev_runs
+    from app.models.world import set_world_frozen
+    run = world_dev_runs.open_run()
+    if run is not None:
+        raise world_dev_runs.RunOpenError(run["id"])
+    set_world_frozen(False)
+    run = world_dev_runs.open_run()
+    if run is not None:
+        set_world_frozen(True)
+        raise world_dev_runs.RunOpenError(run["id"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # World sleep mode — all NPCs really fall asleep (plan-game-time.md)
 # ═══════════════════════════════════════════════════════════════════════════
 

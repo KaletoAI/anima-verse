@@ -144,10 +144,11 @@ def freeze_world(
 ) -> Dict[str, Any]:
     """Freezes the world: AgentLoop, hourly ticks and scheduler jobs
     pause. TaskQueue (image generation) + LLM tools stay
-    active. Persistent (survives a restart)."""
-    from app.models.world import set_world_frozen
-    set_world_frozen(True)
-    logger.info("World freeze AKTIVIERT (autonome Simulation angehalten)")
+    active. Persistent (survives a restart). During an open World Dev
+    free-mode run the wish is recorded on the run, so its end keeps the
+    world frozen."""
+    world_ops.freeze_world()
+    logger.info("World freeze ACTIVATED (autonomous simulation paused)")
     return {"frozen": True}
 
 
@@ -155,10 +156,15 @@ def freeze_world(
 def unfreeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Unfreezes the world — the autonomous simulation continues."""
-    from app.models.world import set_world_frozen
-    set_world_frozen(False)
-    logger.info("World freeze DEAKTIVIERT (autonome Simulation laeuft)")
+    """Unfreezes the world — the autonomous simulation continues. Refused
+    with 409 ``{detail, run_id}`` while a World Dev free-mode run is open."""
+    from app.core.world_dev_runs import RunOpenError
+    try:
+        world_ops.unfreeze_world()
+    except RunOpenError as e:
+        return JSONResponse(status_code=409,
+                            content={"detail": str(e), "run_id": e.run_id})
+    logger.info("World freeze DEACTIVATED (autonomous simulation running)")
     return {"frozen": False}
 
 
