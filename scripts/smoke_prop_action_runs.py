@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real temporary world/profile/indoor journey execution regressions.
+"""Real temporary world/profile prop-action execution regressions.
 
 Reuses Task3's canonical published-variant fixture and external-work tripwire.
 Controller: ./.venv/bin/python scripts/smoke_prop_action_runs.py
@@ -1243,7 +1243,6 @@ def execution_scenario(stage):
         raise RuntimeError("real arrival never reached the entry")
     data = json.loads(path.read_text())
     run = R.get(data["execution_id"])
-    A.register_owner()
     if stage == "terminal":
         if run["status"] != "completed" or R.claims(run["execution_id"]):
             raise RuntimeError("terminal execution reopened after process restart")

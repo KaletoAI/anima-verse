@@ -110,8 +110,6 @@ class Relax(unittest.TestCase):
         A.advance(F.game_time())
         run = S.R.get(result['execution_id'])
         self.assertEqual(run['status'], 'active', run)
-        profile = F.C.get_character_profile(name)
-        self.assertFalse(profile.get('prop_action_entry'))
         pos = F.C.get_character_pos(name)
         self.assertEqual((pos['x'], pos['z']), (8, 5))
 

@@ -1,10 +1,11 @@
 """Persistent exact-target prop actions shared by authenticated HTTP and tools.
 
-Run locks are reentrant (travel cancellation can call back inside its guard).
-Claims use SQLite, never actor-global locks. No owner callback runs under a
-profile lock. Offline intervals pause execution; receipts recover actual Core
-arrival writes, not inferred animation completion. Effects and lifecycle
-progress share one transaction, with notifications strictly after commit.
+Run locks are reentrant. Claims use SQLite, never actor-global locks. A run
+walks no journey: its members walk on the published order (``motion_orders``)
+and the run flips on its own estimate timer (plan E3); a player-controlled
+member reports its arrival (``arrived``). Offline intervals pause execution.
+Effects and lifecycle progress share one transaction, with notifications
+strictly after commit.
 """
 from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
@@ -459,7 +460,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         if profile.get("is_sleeping") and run["status"] != "sleeping" and not owned_sleep_transition:
             return "participant_asleep"
         journey = profile.get("journey")
-        if journey and not _own_journey(run, name, journey) and journey.get("execution_ref") not in replaces:
+        if journey and journey.get("execution_ref") not in replaces:
             return "journey_already_active"
         ref = (profile.get("interaction") or {}).get("execution_ref")
         if profile.get("interaction") and ref != run["execution_id"] and ref not in replaces:
@@ -810,7 +811,7 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     run = dict(execution_id=uuid.uuid4().hex, actor=actor, members=invitees, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
                status="awaiting_consent" if asks else "approaching", phase="", reason="", target=target,
-               definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
+               definition=definition, data=dict(plans={}, arrived=[], process=_PROCESS,
                                                 last_game=now, last_motion=_motion_now(),
                                                 **({"consent": consent} if invitees else {}),
                                                 **({"consents": {m: "pending" for m in invitees},
@@ -1164,86 +1165,12 @@ def _run_entry_nominal_s(run) -> float:
     return float(capability[1]["duration_s"]) if capability else 0.0
 
 
-def _motion_snapshot(run, name, journey):
-    """What the participant's OWN client plays, taken from the very journey
-    and plan the server runs (B1: the server decides and plans, the owner
-    plays it at once on its own clock). Stored with the run; paces are
-    derived from the timed polyline when it is read."""
-    plan = run["data"]["plans"][name]
-    definition = run["definition"]
-    pose = definition["phases"][0]["pose_key"] if definition["ability"] == "combined" else definition["pose_key"]
-    spec, reason = _entry_spec(name, plan, pose)
-    entry = None
-    if not reason:
-        from app.core.animation_clips import clip_meta
-        seconds = float((clip_meta(spec["kind"]) or {}).get("duration_s") or 0) if spec["kind"] else 0.0
-        entry = dict(mode=plan.get("entry_mode", "bridge"), kind=spec["kind"], pose_key=spec["pose_key"],
-                     duration_s=round(seconds, 3))
-    anchor = plan["entry_anchor"]
-    root_offset = float(anchor.get("root_offset", 0))
-    from app.core.height import height_cm
-    cm = height_cm(C.get_character_profile(name) or {})
-    if cm is None and entry and entry["kind"]:
-        from app.core.animation_clips import clip_ref_height_m
-        reference = clip_ref_height_m(entry["kind"])
-        cm = reference * 100 if reference else None
-    seat = journey.get("departure_seat")
-    departure = None
-    if seat:
-        departure = dict(seat=list(seat), stand=list(journey["waypoints"][1][:2]),
-                         exit_clip=journey.get("exit_clip", ""), exit_s=float(journey.get("exit_s", 0.0)))
-    return dict(execution_id=run["execution_id"], journey_id=journey["journey_id"],
-                room_id=run["target"]["room_id"], floor_y=journey.get("floor_y"),
-                timed=[list(p) for p in journey["waypoints"]], departure=departure,
-                access={k: float(plan["access"][k]) for k in ("x", "y", "z", "yaw")},
-                anchor=dict(x=float(anchor["x"]), y=float(anchor["y"]) - root_offset, z=float(anchor["z"]),
-                            yaw=float(anchor.get("yaw") or 0), root_offset=root_offset,
-                            place_id=anchor["place_id"], slot=anchor["slot"]),
-                entry=entry, height_cm=cm,
-                role=next((r for r, member in run["data"].get("clip_roles", {}).items()
-                           if member == name), None))
-
-
-def motion_for(name: str, run) -> dict | None:
-    """The participant's own motion plan while its approach runs, else None.
-
-    Public to the participant only (request/respond answers, its own
-    ``state_for`` rows). ``waypoints`` are world-XZ metres, the first leg is
-    the zero-time seat leg when ``departure`` is set; ``paces_m_s_real`` are
-    per segment (null = timeless), REAL metres per second from the motion
-    clock (null while the world is frozen) — the game clock's factor plays no
-    part (movement runs in real time).
-    """
-    if not run or run["status"] != "approaching" or name not in store.people(run):
-        return None
-    snapshot = run["data"].get("motions", {}).get(name)
-    if not snapshot:
-        return None
-    motion = {k: v for k, v in snapshot.items() if k != "timed"}
-    motion["waypoints"] = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in snapshot["timed"]]
-    motion["paces_m_s_real"] = travel.segment_paces_m_s_real(snapshot["timed"], timeutils.motion_rate())
-    return motion
-
-
-def _own_journey(run, name, journey):
-    matches = (journey.get("execution_kind") == "prop_action" and journey.get("execution_ref") == run["execution_id"]
-               and journey.get("journey_id") == run["data"]["journey_ids"].get(name))
-    if not matches or "approach_target" not in journey:
-        return matches  # A durable receipt has identity, not an approach body.
-    plan = run["data"]["plans"][name]
-    target = journey["approach_target"]
-    return (journey.get("approach_role") == run["data"]["access_roles"][name]
-            and journey.get("entry_anchor") == plan["entry_anchor"]
-            and target.get("marker_id") == plan["entry_anchor"]["marker_id"]
-            and target.get("slot") == plan["entry_anchor"]["slot"])
-
-
-# --- Orders (plan E3 task 4: published beside the journey the run still walks) ---
+# --- Orders (plan E3: what every client plays of a run) ---
 
 def _departure(name):
     """The seat ``name`` leaves at the start of an approach (the order's
     ``exit`` step): ``{seat, pose_key, pose_kind, exit_s}``, or None when it
-    holds no place. Read BEFORE start_approach_journey releases the place —
+    holds no place. Read BEFORE _start's profile write releases the place —
     afterwards places.place_of answers None (review W1)."""
     if places.place_of(name) is None:
         return None
@@ -1691,10 +1618,7 @@ def _cleanup(run, keep=()):
     really got up (_stand_up), for the cancel order of _order_ended."""
     reason = run["reason"]
     stood = {}
-    for role, name in _members(run):
-        jid = run["data"]["journey_ids"].get(name)
-        if jid:
-            travel.cancel_journey(name, journey_id=jid, execution_kind="prop_action", execution_ref=run["execution_id"], reason=reason)
+    for _role, name in _members(run):
         if name not in keep:
             departure = _stand_up(run, name)
             if departure:
@@ -1707,15 +1631,14 @@ def _cleanup(run, keep=()):
         if inter.get("execution_ref") == run["execution_id"]:
             from app.core.interaction_engine import end_interaction
             end_interaction(name, reason=reason, interaction_id=inter["id"], keep_places=keep)
-    store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+    store.cleanup_finished(run["execution_id"])
     return stood
 
 
 def _stand_up(run, name):
-    """Release ``name``'s place of ``run``, recording the departure the
-    client plays (``exit_motions``) when it really got up from it. Returns
-    that departure (``{pose, before, after}``: the pose it left, its point
-    before and after) when it got up, else None."""
+    """Release ``name``'s place of ``run``. Returns the departure the cancel
+    order carries (``{pose, before, after}``: the pose it left, its point
+    before and after) when it really got up from it, else None."""
     pose = C.get_effective_pose_key(name)
     before = C.get_character_pos(name)
     place = (C.get_character_profile(name) or {}).get("place") or {}
@@ -1724,7 +1647,6 @@ def _stand_up(run, name):
     after = C.get_character_pos(name)
     if released and held and before and after:
         after["yaw"] = C.get_avatar_sync_snapshot(name)["yaw"]
-        run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
         return dict(pose=pose, before=before, after=after)
     return None
 
@@ -1819,7 +1741,7 @@ def _follow_up(run, follows):
                               request_fingerprint=fingerprint, action_id=action["id"],
                               definition_revision=revision, status="approaching", phase="", reason="",
                               target=dict(target), definition=definition,
-                              data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
+                              data=dict(plans={}, arrived=[], process=_PROCESS,
                                         last_game=now, last_motion=_motion_now(),
                                         follow_of=run["execution_id"],
                                         **({} if name in avatars else {"follow_limit_s": FOLLOW_NPC_LIMIT_S})))
@@ -1832,7 +1754,7 @@ def _follow_up(run, follows):
             departure = _stand_up(run, name)
             if departure:
                 stood[name] = departure
-    store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+    store.cleanup_finished(run["execution_id"])
     return stood
 
 
@@ -1846,32 +1768,6 @@ def _left_behind(run):
         return set()
     return {n for _, n in _members(old)
             if ((C.get_character_profile(n) or {}).get("place") or {}).get("execution_id") == ref}
-
-
-def cancel_with_motion(actor: str, execution_id: str) -> dict:
-    """``cancel`` plus, for a participant who was seated or lying, the
-    stand-up its own client plays at once: the exit clip of the pose it held
-    and the standing point the server put it on (``motion: null`` when the
-    actor did not move)."""
-    result = cancel(actor, execution_id)
-    if result["status"] == "refused":
-        return result
-    run = store.get(execution_id)
-    return dict(result, motion=run["data"].get("exit_motions", {}).get(actor))
-
-
-def _exit_motion(pose, before, after):
-    """The released place's departure, shared by state and cancel answers."""
-    kind, seconds = travel.exit_bridge_for_pose(pose)
-    if not kind:
-        from app.core.animation_clips import clip_meta, resolve_pose_transition, rule_kind
-        rule = resolve_pose_transition(pose, "standing") or {}
-        kind = rule_kind(rule)
-        seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
-    return dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
-                exit_clip=kind, exit_s=round(seconds, 3),
-                stand_yaw_deg=(None if after.get("yaw") is None
-                               else math.degrees(float(after["yaw"]))))
 
 
 def cancel(actor: str, execution_id: str) -> dict:
@@ -1913,8 +1809,8 @@ def _replace(actor, execution_id):
     """End the actor's own run for a new request, with cancel()'s outcome.
 
     A solo actor already seated keeps its place: the new approach departs
-    from the seat through the pose's exit clip, and start_approach_journey
-    clears the place in its own write. The request stands it up if no new
+    from the seat through the pose's exit clip, and _start clears the place
+    in its own write. The request stands it up if no new
     approach starts.
     """
     with _lock(execution_id):
@@ -2154,101 +2050,14 @@ def _clock(run, now):
     motion_gap = max(0.0, now_s - float(data.get("last_motion", now_s)))
     restarted = data["process"] != _PROCESS
     if restarted:
-        # Reanchor every still-owned real journey before travel may advance it.
-        # Downtime is shifted out on the motion clock the journey runs on.
-        from app.core.keyed_lock import keyed_lock
-        for role, name in _members(run):
-            with keyed_lock("character_profile", name):
-                profile = C.get_character_profile(name)
-                journey = profile.get("journey")
-                if journey and _own_journey(run, name, journey):
-                    checkpoint = float(journey.get("position_checkpoint_s",
-                                                   data.get("last_motion", now_s)))
-                    anchored = float(journey.get("prop_action_reanchored_at_s", checkpoint))
-                    shift = max(0.0, now_s - max(checkpoint, anchored))
-                    journey["started_at_s"] = round(float(journey["started_at_s"]) + shift, 3)
-                    journey["prop_action_reanchored_at_s"] = now_s
-                    if not C.save_character_profile(name, profile):
-                        raise RuntimeError("prop_action_reanchor_write_failed")
+        # The downtime of the motion seconds was shifted out at boot
+        # (motion_orders.boot); here only the deltas restart at 0.
         data["process"] = _PROCESS
     data["last_game"] = now.canonical()
     data["last_motion"] = now_s
     if restarted or is_world_frozen():
         return 0.0, 0.0
     return float(gap), float(motion_gap)
-
-
-@contextmanager
-def owner_guard(actor, journey):
-    ref = journey.get("execution_ref", "")
-    with _lock(ref):
-        run = store.get(ref)
-        allowed = bool(run and run["status"] == "approaching" and actor in store.people(run)
-                       and _own_journey(run, actor, journey))
-        if allowed:
-            # On restart pause this ticker snapshot: _clock rewrites its exact
-            # stored start, so Core's snapshot equality rejects the stale tick.
-            restarted = run["data"]["process"] != _PROCESS
-            if restarted:
-                _clock(run, game_time())
-                _save(run)
-            reason = _validate(run, require_claims=True)
-            data = run["data"]
-            elapsed = data.get("elapsed", 0.0) + max(0.0, _motion_now() - float(data.get("last_motion", _motion_now())))
-            if not is_world_frozen() and elapsed > run["data"].get("deadline", 60):
-                reason = "approach_timeout"
-            if reason:
-                _finish(run, "failed", reason)
-                allowed = False
-            allowed = allowed and not restarted and not is_world_frozen()
-        else:
-            # False is only a pause for a VALID frozen/reanchored run. Missing,
-            # terminal or mismatched authority must remove this exact journey.
-            travel.cancel_journey(actor, journey_id=journey.get("journey_id"),
-                execution_kind="prop_action", execution_ref=ref, reason="journey_owner_mismatch")
-            if run and run["status"] not in store.TERMINAL:
-                _finish(run, "failed", "journey_owner_mismatch")
-        yield allowed
-
-
-def _arrival_validate(actor, journey, room_id):
-    run = store.get(journey["execution_ref"])
-    if not run or run["status"] != "approaching" or not _own_journey(run, actor, journey):
-        return False, "journey_owner_mismatch"
-    reason = _validate(run, require_claims=True)
-    if reason:
-        return False, reason
-    if room_id != run["target"]["room_id"]:
-        return False, "room_mismatch"
-    return True, ""
-
-
-def _arrived(actor, journey):
-    with _lock(journey["execution_ref"]):
-        run = store.get(journey["execution_ref"])
-        if not run or run["status"] != "approaching" or not _own_journey(run, actor, journey):
-            return
-        if actor not in run["data"]["arrived"]:
-            run["data"]["arrived"].append(actor)
-            _save(run)
-        if len(run["data"]["arrived"]) == len(_members(run)):
-            _enter_or_wait(run)
-
-
-def _arrived_callback(actor, journey):
-    _arrived(actor, journey)
-
-
-def _cancelled(actor, journey, reason):
-    with _lock(journey.get("execution_ref", "")):
-        run = store.get(journey.get("execution_ref", ""))
-        if run and run["status"] not in store.TERMINAL and _own_journey(run, actor, journey):
-            _finish(run, "cancelled" if reason in ("cancelled", "pose", "position") else "failed", reason)
-
-
-def register_owner():
-    travel.register_execution_owner("prop_action", guard=owner_guard, validate_arrival=_arrival_validate,
-                                    arrived=_arrived_callback, cancelled=_cancelled)
 
 
 def _entry_capability(pose):
@@ -2303,8 +2112,8 @@ def _begin_entry(run, at_s=None):
     ``entering`` with ``flip`` = ``at_s`` + the entry's nominal seconds —
     ``at_s`` defaults to the last logical arrival (an NPC's own eta, a
     player's report), so an NPC run flips exactly when its first order said.
-    The profile field ``prop_action_entry`` is no longer written: the order
-    tells every client what plays (plan E3 Task 7)."""
+    The order tells every client what plays; no profile field carries the
+    entry (plan E3)."""
     reason = _validate(run, require_claims=True)
     if reason:
         _finish(run, "failed", reason)
@@ -2336,7 +2145,7 @@ def _begin_entry(run, at_s=None):
         # Display the bridge at the exact access; no place/body anchor until it ends.
         _commit(run, runtime={name: dict(pos_x=data["plans"][name]["access"]["x"],
                                          pos_z=data["plans"][name]["access"]["z"],
-                                         pos_session=None, pos_seq=None, prop_action_entry=None)
+                                         pos_session=None, pos_seq=None)
                               for _role, name in _members(run)})
     _revise(run, status="entering", awaits="", flip_motion_s=flip)
     if not entry_s:
@@ -2558,7 +2367,7 @@ def _activate(run):
             anchor = run["data"]["plans"][name]["entry_anchor"]
             place = dict(id=anchor["place_id"], slot=anchor["slot"],
                          room_id=run["target"]["room_id"], execution_id=run["execution_id"])
-            entered({name: dict(pose_key=pose, pose_flavor="", place=place, prop_action_entry=None,
+            entered({name: dict(pose_key=pose, pose_flavor="", place=place,
                                 pos_x=anchor["x"], pos_z=anchor["z"], pos_session=None, pos_seq=None)})
     if run["status"] == "active":
         _revise(run, status="active")
@@ -2694,7 +2503,6 @@ def advance(now: GameTime, *, due_only: bool = False) -> int:
     step is due (``_is_due``) are stepped; the full round (``periodic_jobs``)
     steps every run."""
     _count_ticker("advance")
-    register_owner()
     advanced = 0
     beats = []
     for pending in store.pending_cleanup():
@@ -2960,7 +2768,7 @@ def check(actor: str, target: dict, action_id: str, revision: str, members=(), *
     run = dict(execution_id="", actor=actor, members=invitees, action_id=action_id,
                definition_revision=revision, target=target, definition=definition,
                status="awaiting_consent" if invitees else "approaching",
-               data=dict(plans={}, journey_ids={}, access_roles={}))
+               data=dict(plans={}, access_roles={}))
     plans = {}
     # Preserve definition/partner/freeze/participant/requirement precedence.
     # Never build a route for an already refused offer.
@@ -3054,13 +2862,11 @@ def state_for(actor: str) -> dict:
             from app.core.interaction_engine import alt_choices
             row["alt"] = alt_choices(actor)
         if terminal:
-            row["motion"] = run["data"].get("exit_motions", {}).get(actor)
             row["effects"] = run["data"].get("effect_results", {})
             result["recent_results"].append(row)
         elif pending:
             result["incoming" if invited else "outgoing"].append(row)
         else:
-            row["motion"] = motion_for(actor, run)
             result["current"].append(row)
     return result
 

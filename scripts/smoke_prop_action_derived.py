@@ -89,7 +89,6 @@ with tempfile.TemporaryDirectory(prefix='prop-derived-') as root:
     with patch('app.core.places_migration.migrate_places_once', side_effect=prerequisite), \
          patch('app.core.prop_field_migration.migrate_prop_fields_once', side_effect=prerequisite), \
          patch('app.core.place_group_migration.migrate_place_groups_once', side_effect=prerequisite), \
-         patch('app.core.prop_action_engine.register_owner'), \
          patch('app.core.prop_action_migration._catalog_snapshot', return_value=catalogs), \
          patch('app.core.pose_catalog.get_catalog', return_value=poses):
         prepare_runtime()

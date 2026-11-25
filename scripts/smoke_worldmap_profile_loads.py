@@ -79,8 +79,6 @@ Hand-derived expectations
     Row fields added after 718322ce, hand-derived from the seed:
       yaw                 null on every row — like pos_origin it is the
                           avatar's reported facing, and nobody reported one.
-      local_approach,     null on every row — no profile holds a prop
-      prop_action_entry   approach or a prop-action entry.
       finale              null on every row — nobody runs an action.
       travel_speed_factor null on every row of the admin view (no avatar);
                           in the fogged view the avatar npc_lead's row holds
@@ -445,10 +443,10 @@ def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
     for c in old["characters"]:
         name = c["name"]
         # P1's origin and the avatar's facing: nobody reported a position.
-        # No profile holds a prop approach or entry, nobody runs an action.
-        # The avatar's travel_speed_factor: no shipped travel_speed rule fires.
-        c = dict(c, pos_origin=None, yaw=None, local_approach=None,
-                 prop_action_entry=None, finale=None,
+        # Nobody runs an action. The avatar's travel_speed_factor: no shipped
+        # travel_speed rule fires. (Since plan E3 Task 8 the rows carry no
+        # furniture approach or entry field, just as 718322ce had none.)
+        c = dict(c, pos_origin=None, yaw=None, finale=None,
                  travel_speed_factor=1.0 if name == avatar else None)
         if name in journeys:
             if c["travel"] is None:

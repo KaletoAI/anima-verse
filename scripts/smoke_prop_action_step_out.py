@@ -89,7 +89,7 @@ class StepOut(unittest.TestCase):
 
     def test_c_seated_unchanged(self):
         name, target, _ = S.setup_run()
-        F.Ownership.seat_actor(self, name)
+        F.seat_actor(self, name)
         plan = F.N.plan_approach(name, target, 'actor')
         self.assertEqual(plan['status'], 'ok', plan)
         self.assertEqual(plan['departure_seat'], [8, 5])
@@ -99,7 +99,7 @@ class StepOut(unittest.TestCase):
     def short_exit(self, name):
         from app.core import animation_clips as clips
         before = clips.world_transitions()
-        F.Ownership.seat_actor(self, name)
+        F.seat_actor(self, name)
         # seat_actor's world layer holds only its exit; keep the entry rules.
         clips._write_world_transitions(before + clips.world_transitions())
         (F.ROOT / "clips" / "path-rise.json").write_text(S.json.dumps({

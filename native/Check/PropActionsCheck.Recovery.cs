@@ -313,7 +313,7 @@ public static partial class PropActionsCheck
             // commit must not stay pending on the bare kind (fails on 781bd9c1: the figure kept its entry clip).
             observer.Player!.GetAnimationLibrary("").AddAnimation("pair-pose__b",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
             mgr.Clips.Index.PairRoots["pair-pose__b"]=new(){[""]=new PairRoot(new RootPath(new float[]{0},new float[]{0,0}),PairScale.Origin)};
-            var paired=Read("worldmap_entry.json"); foreach(var c in paired["characters"]!.AsArray()) c!.AsObject().Remove("prop_action_entry"); var npcRow=paired["characters"]![1]!;
+            var paired=Read("worldmap_entry.json"); var npcRow=paired["characters"]![1]!;
             npcRow["activity_animation"]="pair-pose";
             npcRow["place"]=JsonNode.Parse("""{"id":"prop-bench-56-seat56","slot":1,"x":2,"z":0,"facing":180,"room_id":"r-props"}""");
             npcRow["interaction"]=JsonNode.Parse("""{"id":"npc-pair","kind":"pair-pose","role":"b","members":{"a":"fixture-avatar","b":"fixture-npc"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");

@@ -488,8 +488,9 @@ class Orders(unittest.TestCase):
         from app.routes import prop_actions as routes
         result = S.request(self.name, self.target)
         print("[R11] the participant's answer carries the whole order")
-        answer = routes._with_motion(self.name, result)
-        self.assertIn("motion", answer)
+        answer = routes._with_order(self.name, result)
+        # The answers carry no ``motion`` any more (plan E3 Task 8).
+        self.assertNotIn("motion", answer)
         self.assertEqual(answer["order"]["target"]["execution_id"], result["execution_id"])
         self.assertEqual([a["name"] for a in answer["order"]["actors"]], [self.name])
 

@@ -15,7 +15,7 @@ M = 1000.0, a 1.4 m leg baked at 1.4 m/s = 1 real second). Since plan E3
 Task 7 a furniture approach walks no journey: its beats come from the run's
 own times (due_in_s), a journey row gives no early beat any more:
 - no journeys                                   -> 5.0
-- an (old) approach journey 1 real s to go      -> 5.0
+- an (old) furniture journey 1 real s to go     -> 5.0
 - an overland journey 1 s from arrival           -> 5.0 (fixed beat only)
 - a frozen world (motion rate 0)                 -> 5.0
 - a run's next step in 2 real s                  -> 2 + 0.1 = 2.1
@@ -32,10 +32,6 @@ now = M + 1, game now = last game stamp + 1 game s:
 - an NPC walking, eta_s M + 3, deadline M + 13   -> 3 - 1 = 2
 - the earliest wins (factor 1)                   -> 1; an active plain pose
   run waits on no clock                          -> None
-An approach starts the exit clip, and at least the 0.3 s lead, after the
-motion now (``_approach_start``, rounded UP to the millisecond; M = 1000.0):
-- no exit clip               -> 1000.3
-- exit 2.23 s, at factor 1 and factor 10 alike -> 1002.23
 A woken ticker starts its next pass at once instead of after its 5 s sleep.
 places._compose and room_stand.room_geometry compose once per scene
 fingerprint, recompose when it moves, and hand out private copies; since
@@ -70,11 +66,12 @@ def check(label, ok, detail=""):
 
 
 def row(journey_id, *, approach=True, started=M):
-    # 1.4 m at 1.4 m/s: arrival 1 real second after the start.
+    # 1.4 m at 1.4 m/s: arrival 1 real second after the start. `approach`: a
+    # journey a prop-action run walked before plan E3 (its owner kind).
     journey = dict(journey_id=journey_id, started_at_s=started,
                    waypoints=[[0.0, 0.0, 0.0], [1.4, 0.0, 1.0]])
     if approach:
-        journey["approach_target"] = {"location_id": "l", "room_id": "r"}
+        journey.update(execution_kind="prop_action", execution_ref="run-old")
     return dict(name=journey_id, journey=journey)
 
 
@@ -159,15 +156,6 @@ def due_steps():
                 patch.object(A, "game_speed_factor", return_value=factor):
             got = A.due_in_s(LATER)
         check(f"due_in_s at factor {factor} -> {expected}", got == expected, got)
-
-
-def approach_start():
-    for exit_s, factor, expected in ((0.0, 1.0, 1000.3), (2.23, 1.0, 1002.23), (2.23, 10.0, 1002.23)):
-        with patch.object(timeutils, "motion_time", return_value=M), \
-                patch.object(timeutils, "game_speed_factor", return_value=factor):
-            got = T._approach_start(exit_s)
-        check(f"approach start exit {exit_s} factor {factor} -> {expected}",
-              abs(got - expected) < 1e-9, got)
 
 
 def wake():
@@ -258,7 +246,6 @@ def main():
     beats()
     entry_beats()
     due_steps()
-    approach_start()
     wake()
     memos()
     if failures:

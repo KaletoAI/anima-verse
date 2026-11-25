@@ -62,13 +62,20 @@ else — ``journey_state``, the ticker, the party formation, the leave re-check
 There is no migration: a stored OLD journey — the one with a ``path`` of
 location ids (v1), or one timed on the game clock (``started_at_game``, before
 2026-11-05) — is discarded on read together with its movement target.
+
+A walk to a piece of furniture is NOT a journey (plan E3): a prop-action run
+walks on its published order (``motion_orders``) and flips on the estimate
+timer of ``prop_action_engine``; the server writes no indoor approach steps.
+The only OWNED journeys left are party trip intents (``execution_kind``
+``party_intent``, the package's ``journey_execution_context`` /
+``journey_arrival_validate`` providers); any other owned journey has no owner
+and is cancelled (``unknown_execution_owner``).
 """
 import asyncio
 import math
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Lock
 from typing import Callable
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -101,46 +108,22 @@ _TICK_SECONDS = 5.0
 
 @dataclass(frozen=True)
 class JourneyExecutionOwner:
-    """Owner callbacks run under its guard's execution lock, never a profile lock.
+    """The owner of an owned journey (today only a party trip intent, whose
+    package provides both callbacks). They run under its guard's execution
+    lock, never a profile lock.
 
     guard(name, journey) returns a context manager yielding bool. A false value
     may pause a live execution (e.g. Freeze), or mean the owner cancelled it.
     validate_arrival(name, journey, room_id) returns (allowed, reason).
-    arrived(name, journey) runs after exact endpoint settlement/removal.
-    cancelled(name, journey, reason) runs after ownership-checked removal.
     """
     guard: Callable
     validate_arrival: Callable
-    arrived: Callable | None = None
-    cancelled: Callable | None = None
-
-
-_execution_owners: dict[str, JourneyExecutionOwner] = {}
-_execution_owners_lock = Lock()
-
-
-def register_execution_owner(kind: str, *, guard: Callable,
-                             validate_arrival: Callable, arrived: Callable,
-                             cancelled: Callable) -> None:
-    """Register a real execution owner; never replace the party single-provider.
-
-    Task4 registers ``prop_action`` from its actual executor, with all four
-    callbacks. There is deliberately no default prop owner or runtime activation.
-    An identical registration is idempotent; another owner cannot take its kind.
-    """
-    if not isinstance(kind, str) or not kind.strip() or kind != kind.strip() or kind == "party_intent":
-        raise ValueError("a nonreserved execution kind is required")
-    if not all(callable(fn) for fn in (guard, validate_arrival, arrived, cancelled)):
-        raise ValueError("all execution owner callbacks are required")
-    owner = JourneyExecutionOwner(guard, validate_arrival, arrived, cancelled)
-    with _execution_owners_lock:
-        previous = _execution_owners.get(kind)
-        if previous is not None and previous != owner:
-            raise ValueError(f"execution owner already registered: {kind}")
-        _execution_owners[kind] = owner
 
 
 def _execution_owner(journey: dict) -> JourneyExecutionOwner | None:
+    """The owner of an owned journey: the party package's providers for a
+    ``party_intent`` journey, None for any other kind (which
+    ``_execution_context`` then cancels as ``unknown_execution_owner``)."""
     kind = journey.get("execution_kind")
     if not journey.get("execution_ref"):
         return None
@@ -150,8 +133,7 @@ def _execution_owner(journey: dict) -> JourneyExecutionOwner | None:
         guard = get_provider("journey_execution_context")
         validate = get_provider("journey_arrival_validate")
         return JourneyExecutionOwner(guard, validate) if guard and validate else None
-    with _execution_owners_lock:
-        return _execution_owners.get(kind)
+    return None
 
 
 def _owned(journey: dict) -> bool:
@@ -185,12 +167,6 @@ def _validate_owned_arrival(name: str, journey: dict, room: str) -> tuple[bool, 
     owner = _execution_owner(journey)
     return (owner.validate_arrival(name, journey, room) if owner else
             (False, "unknown_execution_owner"))
-
-
-def _owner_arrived(name: str, journey: dict) -> None:
-    owner = _execution_owner(journey)
-    if owner and owner.arrived:
-        owner.arrived(name, journey)
 
 
 def get_travel_speed_m_s() -> float:
@@ -1074,299 +1050,13 @@ def start_journey_to_point(character_name: str, x: float,
     return journey, "ok"
 
 
-#: Least real seconds an in-room approach waits before it walks off: time
-#: for the requesting client's worldmap poll right after the answer, so the
-#: walk is not already under way when the figure adopts it.
-_APPROACH_LEAD_S = 0.3
-
-
-def _approach_start(exit_s: float) -> float:
-    """MOTION-clock second an approach walks off: the exit clip, and at least
-    the poll lead, after now — real seconds at every game-clock factor."""
-    return _departure_start(max(float(exit_s or 0.0), _APPROACH_LEAD_S))
-
-
-def start_approach_journey(character_name: str, target: dict, role: str, *,
-                           execution_kind: str, execution_ref: str,
-                           journey_id: str = "") -> Tuple[Dict[str, Any] | None, str]:
-    """Persist a real indoor polyline for a registered execution owner.
-
-    Task4 supplies kind=prop_action, ref=run_id and its reserved marker/slot.
-    The core independently replans the current binding. It never accepts an
-    executor/client's unchecked waypoints or replaces a running journey.
-    """
-    from app.core import places
-    from app.core.keyed_lock import keyed_lock
-    from app.core.prop_action_paths import plan_approach
-    from app.models.character import get_character_profile, get_character_pos, save_character_profile
-    from app.models.world import is_world_frozen
-    if (not isinstance(character_name, str) or not character_name
-            or not isinstance(execution_kind, str) or not execution_kind
-            or not isinstance(execution_ref, str) or not execution_ref):
-        return None, "invalid_execution_owner"
-    if execution_kind == "party_intent" or _execution_owner({
-            "execution_kind": execution_kind, "execution_ref": execution_ref}) is None:
-        return None, "unknown_execution_owner"
-    if is_world_frozen():
-        return None, "world_frozen"
-    if get_journey(character_name):
-        return None, "journey_already_active"
-    plan = plan_approach(character_name, target, role)
-    if plan["status"] != "ok":
-        return None, plan["reason"]
-    speed = get_travel_speed_m_s()
-    points = plan["waypoints"]
-    if not points:
-        return None, "no_route"
-    elapsed = 0.0
-    timed = [[*points[0], 0.0]]
-    for a, b in zip(points, points[1:]):
-        elapsed += math.dist(a, b) / speed
-        timed.append([*b, elapsed])
-    exit_clip, exit_s = departure_bridge(character_name)
-    starts = _approach_start(exit_s)
-    chosen_target = {**target, "marker_id": plan["entry_anchor"]["marker_id"],
-                     "slot": plan["entry_anchor"]["slot"]}
-    journey = dict(target="", target_point=dict(plan["access"]), approach_target=chosen_target,
-                   approach_role=role, entry_anchor=plan["entry_anchor"], entry_mode=plan["entry_mode"],
-                   waypoints=_with_seat_leg(timed, plan.get("departure_seat")),
-                   started_at_s=starts, speed_m_s=speed, gait="walk",
-                   journey_id=journey_id or uuid.uuid4().hex,
-                   execution_kind=execution_kind, execution_ref=execution_ref,
-                   floor_y=plan["access"]["y"], departure_seat=plan.get("departure_seat"),
-                   step_out=plan.get("step_out"),
-                   departure_point=points[0], departure_placement_id=plan["departure_placement_id"],
-                   position_checkpoint_s=round(timeutils.motion_time(), 3))
-    if exit_clip:
-        journey.update(exit_clip=exit_clip, exit_s=round(exit_s, 3))
-    origin = plan.get("departure_seat") or points[0]
-    # Departure release and journey ownership land in ONE write. Calling the
-    # generic release/clear_pose writer here would choose a raster stand point
-    # and teleport before the exit clip; only its measured bridge may move us.
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        pos = get_character_pos(character_name)
-        if profile.get("journey"):
-            return None, "journey_already_active"
-        if places.where(character_name, profile=profile) != (target["location_id"], target["room_id"]):
-            return None, "target_not_in_actor_room"
-        if pos is None or (pos["x"], pos["z"]) != tuple(origin):
-            return None, "actor_moved"
-        if profile.get("interaction"):
-            return None, "interaction_active"
-        profile.update(journey=journey, movement_target="", place=None, pose_key="", pose_flavor="")
-        if not save_character_profile(character_name, profile):
-            return None, "write_failed"
-    logger.info("Approach started: %s -> %s slot %s, %.2f m via %s%s%s, starts in %.2f s",
-                character_name, target["placement_id"], plan["entry_anchor"]["slot"],
-                elapsed * speed, [[round(p[0], 2), round(p[1], 2)] for p in points],
-                f" (seat {list(plan['departure_seat'])})" if plan.get("departure_seat") else "",
-                f" (step-out {plan['step_out']})" if plan.get("step_out") else "",
-                starts - timeutils.motion_time())
-    from app.core import sync_topics
-    sync_topics.travel_changed(character_name)
-    # An approach is about a second long: let the ticker plan its arrival beat
-    # now instead of after the fixed sleep it is in.
-    get_travel_ticker().wake()
-    return journey, ""
-
-
-def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: bool = False,
-                              now_s: float | None = None) -> bool:
-    """Compare-and-write one indoor step under the cancellation write lock.
-
-    The entire stored snapshot (including journey_id/kind/ref) must still
-    match. Raw position columns are appropriate only here: the room/location
-    were checked and must not run a world-crossing cascade under this lock.
-    Owner callbacks run only after this function releases the profile lock.
-    """
-    from app.core import places
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile
-    from app.core import db
-    from app.core.timeutils import utc_now_iso
-    import json
-    failure_reason = ""
-    with keyed_lock("character_profile", name):
-        profile = get_character_profile(name) or {}
-        if profile.get("journey") != journey:
-            return False
-        target = journey["approach_target"]
-        if places.where(name, profile=profile) != (target["location_id"], target["room_id"]):
-            failure_reason = "target_not_in_actor_room"
-        elif not places.inside(target["location_id"], *pos):
-            failure_reason = "approach_location_boundary_changed"
-        else:
-            # Position and its journey checkpoint/arrival receipt are ONE
-            # durable transition. A run's slower scheduler stamp is not proof
-            # of the most recent movement the independent ticker committed.
-            with db.transaction() as conn:
-                row = conn.execute("SELECT profile_json FROM characters WHERE name=?", (name,)).fetchone()
-                raw = json.loads(row[0] or "{}")
-                if raw.get("journey") != journey:
-                    return False
-                if arrived:
-                    raw.pop("journey", None)
-                    raw["last_journey_result"] = dict(
-                        journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                        execution_ref=journey["execution_ref"], status="arrived", reason="")
-                else:
-                    raw["journey"] = dict(journey, position_checkpoint_s=round(
-                        timeutils.motion_time() if now_s is None else now_s, 3))
-                conn.execute("UPDATE characters SET profile_json=?,updated_at=? WHERE name=?",
-                             (json.dumps(raw), utc_now_iso(), name))
-                sql = "UPDATE character_state SET pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=NULL"
-                if arrived:
-                    sql += ",meta=json_set(meta,'$.movement_target','')"
-                conn.execute(sql + " WHERE character_name=?", (round(pos[0], 2), round(pos[1], 2), name))
-    if failure_reason:
-        # The snapshot was current but its location boundary is no longer
-        # usable. Cancel AFTER releasing the write lock so the owner's callback
-        # can reconcile safely. Exact selectors cannot remove a new journey.
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason=failure_reason)
-        return False
-    return True
-
-
-_approach_validation_cache: dict = {}
-_approach_validation_lock = Lock()
-
-
-def _advance_approach(name: str, journey: dict, now_s: float) -> None:
-    """Recheck concrete provenance and the remaining floor path before movement."""
-    from app.core.prop_action_paths import (_plan_approach, _Space, _departure_walkable, access_space,
-                                            seat_escape_ok)
-    from app.core import sync_topics
-    from app.models.character import get_character_pos, get_character_profile
-    from app.models.world import is_world_frozen
-    if is_world_frozen():
-        return
-    target = journey["approach_target"]
-    pos = get_character_pos(name)
-    departure = None
-    if journey.get("departure_seat") and pos is not None and (
-            pos["x"], pos["z"]) == tuple(journey["departure_seat"]):
-        departure = (tuple(journey["departure_point"]), tuple(journey["departure_seat"]), "")
-    from app.core import places
-    from copy import deepcopy
-    query = places._GeometryQuery()
-    inventory = query.room_places(target["location_id"], target["room_id"])
-    geometry = query.room_geometry(target["location_id"], target["room_id"])
-    profile = get_character_profile(name) or {}
-    # Fresh authored inputs invalidate immediately. Normal movement changes
-    # only its checkpoint and expected position, never the promised route.
-    key = ({k: v for k, v in journey.items() if k != "position_checkpoint_s"},
-           {k: v for k, v in profile.items() if k != "journey"},
-           places.where(name, profile=profile), inventory, geometry,
-           # A room-level marker (source "room") carries no prop.
-           [query.prop_document(pid) for pid in sorted({p["prop_id"] for p in inventory if p.get("prop_id")})])
-    position = (pos["x"], pos["z"]) if pos is not None else None
-    with _approach_validation_lock:
-        cached = _approach_validation_cache.get(name)
-    if cached and cached[0] == key and cached[1] == position:
-        plan = cached[2]
-    else:
-        plan = _plan_approach(name, target, journey["approach_role"], departure=departure,
-                             departure_placement_id=journey.get("departure_placement_id", ""),
-                             _query=query, route_start=journey.get("step_out") or journey["departure_point"])
-        cached = (deepcopy(key), position, plan)
-        with _approach_validation_lock:
-            if len(_approach_validation_cache) >= 128:
-                _approach_validation_cache.pop(next(iter(_approach_validation_cache)))
-            _approach_validation_cache[name] = cached
-    before_start = now_s < float(journey["started_at_s"])
-    if plan["status"] != "ok":
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason=plan["reason"])
-        return
-    st = journey_state(journey["waypoints"], journey["started_at_s"], now_s)
-    if before_start:
-        return
-    space = _Space(*geometry) if geometry else None
-    if journey.get("departure_seat") and (geometry is None or not _departure_walkable(
-            tuple(journey["departure_seat"]), tuple(journey["departure_point"]), geometry,
-            journey.get("departure_placement_id", ""))):
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason="departure_not_walkable")
-        return
-    # Never replace the promised polyline with a fresh route. Revalidate EVERY
-    # walking segment, including the interval a large ticker step would cross;
-    # checking only the new position/remaining suffix could jump a new blocker.
-    walking = journey["waypoints"][1:] if journey.get("departure_seat") else journey["waypoints"]
-    route = [tuple(p[:2]) for p in walking]
-    # Only the explicitly planned standing escape may cross keepouts. Preserve
-    # its original endpoints during revalidation, including after a partial tick.
-    step_out = journey.get("step_out")
-    escaping = False
-    if step_out is not None:
-        seat = journey.get("departure_seat")
-        if (space is None or len(route) < 2 or list(route[1]) != step_out or not space.free(route[1])
-                # A standing escape: 1.5 m at most, inside the hull. A seated
-                # one: from the exit clip's end to the stand-up point, clear
-                # of everything but the furniture being left.
-                or (not seat and (math.dist(route[0], route[1]) > 1.5 + 1e-9
-                                  or not space.inside_segment(route[0], route[1])))
-                or (seat and not seat_escape_ok(tuple(seat), route[0], route[1], geometry,
-                                                journey.get("departure_placement_id", "")))):
-            cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                           execution_ref=journey["execution_ref"], reason="approach_route_changed")
-            return
-        # The escape is the first WALKING leg: behind a seated exit leg
-        # (zero-time seat -> stand) that is segment 1.
-        escaping = st["seg"] == (1 if journey.get("departure_seat") else 0) and not st["arrived"]
-        route = route[1:]
-    final = (access_space(geometry, target["placement_id"])
-             if geometry and journey.get("entry_mode", "bridge") == "bridge" else space)
-    # The persisted segment index includes the seated exit / standing step-out.
-    on_final = st["arrived"] or st["seg"] == len(journey["waypoints"]) - 2
-    position_space = final if on_final else space
-    if (space is None or not space.valid or final is None or not route
-            or (not escaping and not position_space.free(tuple(st["pos"])))
-            or not all(space.free(p) for p in route[:-1]) or not final.free(route[-1])
-            or not all((final if i == len(route) - 2 else space).visible(a, b)
-                       for i, (a, b) in enumerate(zip(route, route[1:])))):
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason="approach_route_changed")
-        return
-    if plan["status"] == "ok" and (plan.get("entry_mode", "bridge") != journey.get("entry_mode", "bridge")
-                                   or plan["access"] != journey["target_point"]
-                                   or plan["entry_anchor"] != journey["entry_anchor"]):
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason="approach_target_changed")
-        return
-    if not st["arrived"]:
-        if _commit_approach_position(name, journey, st["pos"], now_s=now_s):
-            with _approach_validation_lock:
-                if _approach_validation_cache.get(name) is cached:
-                    _approach_validation_cache[name] = (
-                        cached[0], tuple(round(v, 2) for v in st["pos"]), cached[2])
-        else:
-            with _approach_validation_lock:
-                if _approach_validation_cache.get(name) is cached:
-                    _approach_validation_cache.pop(name, None)
-        return
-    allowed, reason = _validate_owned_arrival(name, journey, target["room_id"])
-    if not allowed:
-        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                       execution_ref=journey["execution_ref"], reason=reason)
-        return
-    # The endpoint is the authored ACCESS, never the body anchor. No generic
-    # room arrival/stand-up cascade is allowed to replace it with another point.
-    if not _commit_approach_position(name, journey, st["pos"], arrived=True, now_s=now_s):
-        return
-    _owner_arrived(name, journey)
-    sync_topics.travel_changed(name)
-
-
 def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
                    execution_ref: Optional[str] = None,
                    execution_kind: Optional[str] = None, reason: str = "cancelled") -> None:
-    """Remove only the selected journey, then notify its typed owner.
-
-    All supplied selectors must match. Callbacks run AFTER the profile lock;
-    an executor may hold its run lock and cancel its own exact journey safely.
-    """
+    """Remove only the selected journey. All supplied selectors must match;
+    an owned journey leaves its result in ``last_journey_result``, which its
+    owner reads (a party trip intent), so an owner may hold its own lock and
+    cancel its exact journey safely."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     with keyed_lock("character_profile", character_name):
@@ -1393,12 +1083,6 @@ def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
                 "status": "arrived" if reason == "arrived" else "cancelled", "reason": reason}
         if not save_character_profile(character_name, profile):
             return
-    owner = _execution_owner(journey)
-    if owner and owner.cancelled and reason != "arrived":
-        try:
-            owner.cancelled(character_name, journey, reason)
-        except Exception:
-            logger.exception("Journey owner cancellation failed for %s", character_name)
     try:
         from app.core.state_events import publish as _publish_state
         _publish_state("travel_cancelled", character_name, reason=reason,
@@ -1801,7 +1485,6 @@ def _settle_point_arrival(name: str, journey: Dict[str, Any],
         cancel_journey(name, journey_id=journey.get("journey_id"),
                        execution_kind=journey.get("execution_kind"),
                        execution_ref=journey.get("execution_ref"), reason="arrived")
-        _owner_arrived(name, journey)
     else:
         set_character_pos(name, gx, gz)
     logger.info("Journey arrived: %s @ (%.2f, %.2f)", name, gx, gz)
@@ -2050,7 +1733,6 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         get_agent_loop().bump(name)    # think at the destination
     except Exception:
         pass
-    _owner_arrived(name, journey)
     logger.info("Journey arrived: %s @ %s (room %s)", name, target_id,
                 entry_room)
 
@@ -2127,9 +1809,6 @@ def advance_all_journeys() -> None:
                 continue
             with _execution_context(name, j) as allowed:
                 if not allowed:
-                    continue
-                if j.get("approach_target") is not None:
-                    _advance_approach(name, j, now_s)
                     continue
                 st = journey_state(j["waypoints"], j["started_at_s"], now_s)
                 # Point journeys have no named destination.

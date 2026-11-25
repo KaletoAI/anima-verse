@@ -900,7 +900,7 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
             runtime[name] = dict(interaction=interaction,
                                  place=dict(id=point["place_id"], slot=point["slot"],
                                             room_id=point["room_id"], execution_id=execution_id),
-                                 pose_key=pose_key, pose_flavor="", prop_action_entry=None,
+                                 pose_key=pose_key, pose_flavor="",
                                  pos_x=point["x"], pos_z=point["z"], pos_session=None, pos_seq=None)
         commit_profiles(runtime)
     publish("interaction_started", names[0], members=dict(clip_roles), kind=kind,

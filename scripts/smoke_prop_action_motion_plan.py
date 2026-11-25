@@ -39,7 +39,7 @@ from app.core import paths
 # The imported fixture already initialized this private root; make the direct
 # DB-import boundary explicit for the repository storage guard as well.
 paths.init(F.ROOT / "world")
-from app.core import prop_actions, travel_engine as T
+from app.core import motion_orders as MO, prop_actions
 
 
 def exit_clip_fixture():
@@ -92,7 +92,8 @@ class MotionPlan(unittest.TestCase):
         # Same piece: in place.
         prop_actions.invalidate_offers_cache()
         here = player.post('/play/prop-actions/request', json=API.payload(dict(target, action_id='rest-2'))).json()
-        self.assertEqual((here['status'], here['motion']), ('active', None), here)
+        self.assertEqual(here['status'], 'active', here)
+        self.assertNotIn('motion', here)
         profile = F.C.get_character_profile(name)
         self.assertIsNone(profile.get('journey'))
         self.assertEqual(profile['place']['execution_id'], here['execution_id'])
@@ -110,26 +111,33 @@ class MotionPlan(unittest.TestCase):
         second = player.post('/play/prop-actions/request',
                              json=API.payload(dict(target, placement_id='other-device'))).json()
         self.assertEqual(second['status'], 'approaching', second)
-        self.assertIsNone(second['motion'])
+        self.assertNotIn('motion', second)
+        self.assertEqual(second['order']['target']['execution_id'], second['execution_id'])
         self.assertIsNone(F.C.get_character_profile(name).get('journey'))
         run = R.get(second['execution_id'])
         exit_step = run['data']['order']['actors'][0]['sequence'][0]
         self.assertEqual((exit_step['step'], exit_step['pose_kind'], exit_step['nominal_s']), ('exit', 'seat', 1.0))
         self.assertEqual(run['data']['plans'][name]['departure_seat']['seat'], [seat['x'], seat['z']])
 
-    def test_terminal_motion_is_null_without_a_released_place(self):
+    def test_no_stand_up_without_a_released_place(self):
         name, target, _ = S.setup_run()
         walking = S.request(name, target)
-        self.assertIsNone(A.cancel_with_motion(name, walking['execution_id'])['motion'])
+        A.cancel(name, walking['execution_id'])
         row = next(r for r in A.state_for(name)['recent_results'] if r['execution_id'] == walking['execution_id'])
-        self.assertIsNone(row['motion'])
+        self.assertNotIn('motion', row)
+        # The walker stands where it is: a cancel row without an exit step.
+        order = MO.index_get(name) or {}
+        self.assertEqual(order.get('kind'), 'cancel', order)
+        self.assertEqual(order['actors'][0]['sequence'], [])
+        pos = F.C.get_character_pos(name)
+        self.assertEqual((order['actors'][0]['stand']['x'], order['actors'][0]['stand']['z']), (pos['x'], pos['z']))
         seated = S.request(name, target)
         run = until_active(seated['execution_id'])
         A._finish(run, 'completed', 'ended', keep_seated=name)
         row = next(r for r in A.state_for(name)['recent_results'] if r['execution_id'] == seated['execution_id'])
-        self.assertIsNone(row['motion'])
+        self.assertNotIn('motion', row)
         self.assertIsNotNone(F.C.get_character_profile(name).get('place'))
-        self.assertIsNone(A.cancel_with_motion(name, seated['execution_id'])['motion'])
+        self.assertNotEqual((MO.index_get(name) or {}).get('kind'), 'cancel')
 
     def test_terminal_poll_waits_for_departure_cleanup(self):
         name, target, _ = S.setup_run()
@@ -163,7 +171,20 @@ class MotionPlan(unittest.TestCase):
             finish.result(timeout=5)
             row = next(r for r in state.result(timeout=5)['recent_results']
                        if r['execution_id'] == first['execution_id'])
-        self.assertEqual(row['motion'], dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0))
+        self.assertNotIn('motion', row)
+        self.assertStandUp(name, seat=(8, 5), stand=(8, 7), yaw=0)
+
+    def assertStandUp(self, name, *, seat, stand, yaw):
+        """The end's cancel order for ``name``: from the seat, exit 1.0 s
+        (run-exit), standing at ``stand`` with compass ``yaw``."""
+        order = MO.index_get(name) or {}
+        self.assertEqual(order.get('kind'), 'cancel', order)
+        actor = next(a for a in order['actors'] if a['name'] == name)
+        self.assertEqual((actor['start']['x'], actor['start']['z']), seat)
+        self.assertEqual([(s['step'], s['pose_kind'], s['nominal_s']) for s in actor['sequence']],
+                         [('exit', 'seat', 1.0)])
+        self.assertEqual((actor['stand']['x'], actor['stand']['z']), stand)
+        self.assertAlmostEqual(actor['stand']['yaw'], yaw)
 
     def test_server_end_persists_departure(self):
         # By hand: the fixture exit travels 2 m forward from (8,5), yaw 0,
@@ -174,29 +195,31 @@ class MotionPlan(unittest.TestCase):
         run = until_active(first['execution_id'])
         stale = deepcopy(run)
         S.A._finish(run, 'cancelled', 'interaction_avatar')
-        expected = dict(seat=[8, 5], stand=[8, 7], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0)
         stand = F.C.get_character_pos(name)
-        self.assertEqual([stand['x'], stand['z']], expected['stand'])
+        self.assertEqual([stand['x'], stand['z']], [8, 7])
         row = next(r for r in S.A.state_for(name)['recent_results'] if r['execution_id'] == first['execution_id'])
-        self.assertEqual(row['motion'], expected)
+        self.assertNotIn('motion', row)
         saved = R.get(first['execution_id'])
         self.assertFalse(saved['data']['cleanup_pending'])
-        self.assertEqual(saved['data']['exit_motions'][name], expected)
-        S.A._cleanup(saved)  # A retry cannot replace a released place's motion.
+        self.assertNotIn('exit_motions', saved['data'])
+        self.assertStandUp(name, seat=(8, 5), stand=(8, 7), yaw=0)
+        cancel_id = MO.index_get(name)['order_id']
+        S.A._cleanup(saved)  # A retry cannot stand a released place up again.
         S.A._cleanup(stale)  # Neither can a snapshot taken before the finish.
-        self.assertEqual(S.A.cancel_with_motion(name, first['execution_id'])['motion'], expected)
+        stand = F.C.get_character_pos(name)
+        self.assertEqual([stand['x'], stand['z']], [8, 7])
+        self.assertEqual(MO.index_get(name)['order_id'], cancel_id)
 
     def test_turning_exit_persists_heading(self):
-        # Facing 0 plus turn 90 -> stored pi/2 radians, motion heading 90.
+        # Facing 0 plus turn 90 -> stored pi/2 radians, cancel stand yaw 90.
         # Travel remains rotated by the initial facing: (8,5) -> (8,7).
         name, target, _ = S.setup_run()
         exit_clip_fixture()
         first = S.request(name, target)
         until_active(first['execution_id'])
         with patch('app.core.animation_clips.clip_turn_deg', return_value=90):
-            answer = A.cancel_with_motion(name, first['execution_id'])
-        self.assertEqual(answer['motion']['stand'], [8, 7])
-        self.assertAlmostEqual(answer['motion']['stand_yaw_deg'], 90)
+            A.cancel(name, first['execution_id'])
+        self.assertStandUp(name, seat=(8, 5), stand=(8, 7), yaw=90)
         self.assertAlmostEqual(F.C.get_avatar_sync_snapshot(name)['yaw'], math.pi / 2)
 
     def test_cancel_while_seated_returns_the_stand_up(self):
@@ -210,13 +233,14 @@ class MotionPlan(unittest.TestCase):
         self.assertEqual(answer.status_code, 200, answer.text)
         stand = F.C.get_character_pos(name)
         self.assertNotEqual((stand['x'], stand['z']), (seat['x'], seat['z']))
-        self.assertEqual(answer.json()['motion'], dict(
-            seat=[seat['x'], seat['z']], stand=[stand['x'], stand['z']], exit_clip='run-exit', exit_s=1.0, stand_yaw_deg=0))
-        # Cancelling a walk moves nobody: no stand-up to play.
+        self.assertNotIn('motion', answer.json())
+        self.assertStandUp(name, seat=(seat['x'], seat['z']), stand=(stand['x'], stand['z']), yaw=0)
+        # Cancelling a walk stands the walker where it is: no exit to play.
         again = player.post('/play/prop-actions/request', json=API.payload(target)).json()
         self.assertEqual(again['status'], 'approaching', again)
         stopped = player.post('/play/prop-actions/cancel', json={'execution_id': again['execution_id']}).json()
-        self.assertIsNone(stopped['motion'])
+        self.assertNotIn('motion', stopped)
+        self.assertEqual((MO.index_get(name) or {})['actors'][0]['sequence'], [])
 
 
 if __name__ == '__main__':

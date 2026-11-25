@@ -89,7 +89,8 @@ Cases:
         with a recorded departure_seat stands at the polyline's first point
         (4, 4) (its exit's end, the seat was released); one without -> None.
   [E9]  boot (a)/(b): a run without data.order -> cancelled e3_migration; a
-        profile journey with an approach_target -> removed.
+        profile journey a prop-action run walked before E3 (execution_kind
+        "prop_action") -> removed.
   [E13] STANDING combined (prepare 5 s, drink 5 s game): only due_only steps:
         105.8 entering, 107.8 active "prepare", +4 game s still "prepare",
         +1 game s "drink".
@@ -463,7 +464,6 @@ class Timer(unittest.TestCase):
             R.save(conn, run)
         profile = F.C.get_character_profile(name)
         profile["journey"] = dict(journey_id="old-approach", execution_kind="prop_action", execution_ref=eid,
-                                  approach_target=dict(target, marker_id="body", slot=0),
                                   target="", waypoints=[[1, 5, 0.0], [8, 7, 5.2]], started_at_s=100.0,
                                   speed_m_s=1.4, gait="walk")
         F.C.save_character_profile(name, profile)

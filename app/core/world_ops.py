@@ -399,138 +399,6 @@ def _fog_inputs() -> Dict[str, dict]:
     return out
 
 
-def _local_prop_approach(name, observer, profile, observer_profile, journey, visible,
-                         now_s, rate):
-    """Public motion only, withdrawn on room/sight/ownership loss.
-
-    No target, execution/consent identity, foreign room or overland segment.
-    Remaining waypoints start at the actual current interpolated room point.
-    """
-    if (not observer or name == observer or name not in visible or not journey
-            or journey.get("execution_kind") != "prop_action"):
-        return None
-    from app.core import places
-    room = places.where(name, profile=profile)
-    if not all(room) or room != places.where(observer, profile=observer_profile):
-        return None
-    target = journey.get("approach_target") or {}
-    if (target.get("location_id"), target.get("room_id")) != room:
-        return None
-    from app.core.prop_action_engine import _own_journey
-    from app.core.prop_action_store import get
-    run = get(journey.get("execution_ref", ""))
-    if not run or run["status"] != "approaching" or not _own_journey(run, name, journey):
-        return None
-    from app.core.travel_engine import journey_state, segment_paces_m_s_real
-    from app.core.room_stand import room_geometry
-    from app.core.prop_action_paths import _Space
-    state = journey_state(journey["waypoints"], journey["started_at_s"], now_s)
-    if state["arrived"]:
-        return None
-    remaining = [list(state["pos"])] + [list(point[:2]) for point in journey["waypoints"][state["seg"] + 1:]]
-    geometry = room_geometry(*room)
-    if not geometry:
-        return None
-    space = _Space(*geometry)
-    # The departure legs (seat -> stand, stand -> step-out) leave the furniture
-    # and cross it by design; the travel engine checks them by its own rule
-    # (travel_engine._advance_approach). Sight applies to the walk behind them.
-    escape = (1 if journey.get("departure_seat") else 0) + (1 if journey.get("step_out") else 0)
-    if not all(space.visible(tuple(a), tuple(b))
-               for i, (a, b) in enumerate(zip(remaining, remaining[1:]))
-               if state["seg"] + i + 1 > escape):
-        return None
-    # Motion-clock seconds are real seconds: the wait IS the countdown.
-    pending = max(0.0, float(journey["started_at_s"]) - now_s)
-    paces = segment_paces_m_s_real(journey["waypoints"], rate) if rate > 0 and not pending else None
-    return dict(journey_id=journey.get("journey_id"), room_id=room[1], floor_y=journey.get("floor_y"),
-                waypoints=remaining, progress_m=0, walked_m=state["progress_m"],
-                remaining_m=round(max(0, state["total_m"] - state["progress_m"]), 2),
-                paces_m_s_real=paces[state["seg"]:] if paces else None,
-                starts_in_s=round(pending, 3) if pending and rate > 0 else None)
-
-
-def _prop_action_entry(name, observer, profile, observer_profile, visible,
-                       now_s, cm):
-    """Only the live owned entry's render geometry, never its private identity.
-
-    Both y values are body-root heights (access is the floor); yaw retains
-    Core's compass degrees. The persisted entry origin is a clock timestamp,
-    not an execution identifier or a poll-relative reconstruction.
-    """
-    entry = profile.get("prop_action_entry")
-    if (not observer or (name != observer and name not in visible)
-            or not isinstance(entry, dict)):
-        return None
-    from app.core import places, prop_action_engine as engine, prop_action_store as store
-    room = places.where(name, profile=profile)
-    if not all(room) or room != places.where(observer, profile=observer_profile):
-        return None
-    ref = entry.get("execution_id")
-    if not isinstance(ref, str) or not ref:
-        return None
-    try:
-        with engine._lock(ref):
-            run = store.get(ref)
-            if (not run or run["status"] != "approaching" or run["phase"] != "entry"
-                    or name not in store.people(run)
-                    or room != (run["target"]["location_id"], run["target"]["room_id"])):
-                return None
-            data = run["data"]
-            plan, spec = data["plans"][name], data["entries"][name]
-            access, anchor = plan["access"], plan["entry_anchor"]
-            if (name not in data["arrived"] or profile.get("journey")
-                    or profile.get("place") or profile.get("interaction") or profile.get("is_sleeping")
-                    or entry != dict(execution_id=ref, **spec, access=access, anchor=anchor)
-                    or store.held(store.person_key(name)) != ref
-                    or store.held(store.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != ref):
-                return None
-            pos = engine.C.get_character_pos(name)
-            if not pos or math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) > .05:
-                return None
-            # The entry clip runs in REAL seconds on the motion clock, like
-            # every movement — the game clock's factor plays no part.
-            duration = float(spec["duration_s"])
-            elapsed = float(data["entry_elapsed"])
-            started = float(data["entry_started_s"])
-            rate = 1.0
-            # Match the executor: downtime and frozen ticks earn no entry
-            # progress. A restart stays paused until its owner reanchors.
-            if data["process"] != engine._PROCESS:
-                rate = 0.0
-            elif not engine.is_world_frozen():
-                elapsed += max(0.0, now_s - float(data["last_motion"]))
-            else:
-                rate = 0.0
-            # An unspecified character height uses the measured rig at scale
-            # one in _entry_spec. Publish that same effective height.
-            if cm is None:
-                from app.core.animation_clips import clip_ref_height_m
-                reference = clip_ref_height_m(spec["kind"])
-                cm = reference * 100 if reference else None
-            public_access = {key: float(access[key]) for key in ("x", "y", "z", "yaw")}
-            public_anchor = {key: float(anchor[key]) for key in ("x", "y", "z")}
-            root_offset = float(anchor.get("root_offset", 0))
-            public_anchor["y"] -= root_offset
-            public_anchor["yaw"] = float(anchor.get("yaw") or 0)
-            if (not all(math.isfinite(value) for value in (
-                    duration, elapsed, started, rate, cm, root_offset,
-                    *public_access.values(), *public_anchor.values()))
-                    or duration <= 0 or elapsed < 0 or started < 0 or rate < 0 or cm <= 0):
-                return None
-            role = next((role for role, member in data.get("clip_roles", {}).items()
-                         if role in ("a", "b") and member == name), None)
-            if run["definition"]["ability"] == "pair" and role is None:
-                return None
-            return dict(kind=spec["kind"], pose_key=spec["pose_key"], access=public_access,
-                        anchor=public_anchor, root_offset=root_offset, duration_s=duration,
-                        elapsed_s=min(duration, elapsed), clock_rate=rate,
-                        height_cm=cm, role=role, started_s=started)
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        logger.debug("prop entry payload failed for %s: %s", name, exc)
-        return None
-
-
 def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     """The existing off-map, sight, location and explored-ground gates."""
     if not loc_id and pos is None:
@@ -978,8 +846,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # of them loading it again.
     _lang = (get_character_language(avatar, profile=_observer_profile)
              if avatar else "") or "en"
-    from app.core.perception import addressable_for
-    _local_visible = set(addressable_for(avatar)) if avatar else set()
 
     _t_chars = _pc()
     _pos = {r["name"]: {"x": r["x"], "z": r["z"]}
@@ -1221,12 +1087,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "movement_target_id": mt,
             "movement_target_name": target_name,
             "travel": travel,
-            "local_approach": _local_prop_approach(
-                name, avatar, _prof, _observer_profile, _j, _local_visible,
-                _now_s, _rate),
-            "prop_action_entry": _prop_action_entry(
-                name, avatar, _prof, _observer_profile, _local_visible,
-                _now_s, cm),
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.

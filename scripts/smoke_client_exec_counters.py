@@ -53,7 +53,7 @@ collaborator, so no world DB is read.
      early return of _TICK_SECONDS) still exactly one beat.
 [T2] prop_action_engine.advance(now) with pending_cleanup -> [], live_runs
      -> [{"execution_id": "r1"}, {"execution_id": "r2"}], _advance_run -> 0,
-     end_finales and register_owner no-ops: one "advance" (first statement),
+     end_finales a no-op: one "advance" (first statement),
      one "advance_run" right before each of the two _advance_run calls ->
      advance x1, advance_run x2, advance_validate x0.
 [T3] _advance_run("r1", now, []) on an "approaching" run (not active, not
@@ -255,7 +255,6 @@ def t2():
     from app.core import prop_action_engine as pae, pose_scene
 
     def setup(p):
-        p.set(pae, "register_owner", lambda: None)
         p.set(pae.store, "pending_cleanup", lambda: [])
         p.set(pae.store, "live_runs",
               lambda: [{"execution_id": "r1"}, {"execution_id": "r2"}])

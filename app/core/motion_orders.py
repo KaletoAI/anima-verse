@@ -581,7 +581,8 @@ def boot() -> None:
 
     (a) an approaching prop-action run without an order (older than plan E3)
         is cancelled (``e3_migration``), its slot freed;
-    (b) a profile still carrying an approach journey loses it;
+    (b) a profile still walking a furniture approach journey (one owned by a
+        prop-action run, ``execution_kind`` ``prop_action``) loses it;
     (c) every live order is shifted by the downtime ``max(0, motion_time() -
         motion_alive_s)`` (missing stamp → 0; decision 7d): its times and its
         run's times, revision + 1, republished, marked ``boot_alive_s`` with
@@ -598,7 +599,7 @@ def boot() -> None:
             engine.migrate_cancel(run["execution_id"])
     for entry in list_active_journeys():
         journey = entry.get("journey") or {}
-        if isinstance(journey, dict) and journey.get("approach_target") is not None:
+        if isinstance(journey, dict) and journey.get("execution_kind") == "prop_action":
             travel.cancel_journey(entry["name"], journey_id=journey.get("journey_id"), reason="e3_migration")
     alive = read_alive()
     shift = max(0.0, _now_s() - alive) if alive is not None else 0.0

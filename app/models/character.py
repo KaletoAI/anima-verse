@@ -4984,11 +4984,11 @@ def write_effect_profile(conn, character_name: str, profile: dict, *, runtime: d
     conn.execute("UPDATE character_state SET " + ",".join(key + "=?" for key in columns) +
                  " WHERE character_name=?", (*columns.values(), character_name))
     if patch:
-        # Owned entry/pair fields live in profile_json, not a second state store.
+        # Owned place/pair fields live in profile_json, not a second state store.
         row = conn.execute("SELECT profile_json FROM characters WHERE name=?", (character_name,)).fetchone()
         body = json.loads(row[0] or "{}")
         for key, value in patch.items():
-            if key not in ("place", "interaction", "prop_action_entry"):
+            if key not in ("place", "interaction"):
                 raise ValueError("unsupported_owned_runtime_patch")
             if value is None:
                 body.pop(key, None)
@@ -5097,6 +5097,12 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
     There is no unlocked ownership decision followed by a generic setter.
     Place/pose/flag and an unchanged position/origin commit together. A newer
     manual position wins even while the old owned place is still present.
+
+    Ownership is the held ``place`` of this execution only. A run that ends in
+    its entry (its order's status ``entering``) holds no place yet and nothing
+    of it lives in the profile: _start already cleared the old seat and pose,
+    and its members stand on their access, which the run's cancel order names
+    (prop_action_engine._finish) — so it answers False here.
     """
     from app.core import places
     from app.core.keyed_lock import keyed_lock, _after_locks
@@ -5106,16 +5112,14 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
     with keyed_lock("places", location), keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name)
         field = profile.get("place") or {}
-        own_place = field.get("execution_id") == execution_id
-        own_entry = (profile.get("prop_action_entry") or {}).get("execution_id") == execution_id
-        if not own_place and not own_entry:
+        if field.get("execution_id") != execution_id:
             return False
         old_pose = get_effective_pose_key(character_name, profile=profile)
-        old_place = dict(field) if own_place else None
+        old_place = dict(field)
         point = None
         position_authority = None
         stand_yaw = None
-        if own_place and places.where(character_name, profile=profile) == (location, room):
+        if places.where(character_name, profile=profile) == (location, room):
             row = get_connection().execute(
                 "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
                 (character_name,)).fetchone()
@@ -5141,51 +5145,39 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
         # A bounded state transition, not a whole-profile save: JSON operations
         # preserve unrelated concurrent fields, with a final DB ownership CAS.
         with transaction() as conn:
-            if own_place:
-                expression = ("CASE WHEN json_extract(profile_json,'$.prop_action_entry.execution_id')=? "
-                              "THEN json_remove(profile_json,'$.place','$.prop_action_entry') "
-                              "ELSE json_remove(profile_json,'$.place') END")
-                changed = conn.execute(
-                    "UPDATE characters SET profile_json=" + expression + ",updated_at=? WHERE name=? "
-                    "AND json_extract(profile_json,'$.place.execution_id')=?",
-                    (execution_id, utc_now_iso(), character_name, execution_id)).rowcount
-                if not changed:
-                    return False
-                state = conn.execute("SELECT meta,is_sleeping,current_activity,pos_x,pos_z,pos_session,pos_seq "
-                                     "FROM character_state WHERE character_name=?",
-                                     (character_name,)).fetchone()
-                meta = json.loads(state[0] or "{}")
-                profile["is_sleeping"] = bool(state[1])
-                profile["current_activity"] = state[2]
-                profile["state_flag_since"] = dict(meta.get("state_flag_since") or {})
-                woke = _set_sleep_flag(profile, False)
-                meta["state_flag_since"] = profile["state_flag_since"]
-                sql = "UPDATE character_state SET pose_key='',pose_flavor='',is_sleeping=?,current_activity=?,meta=?"
-                args = [int(profile["is_sleeping"]), profile["current_activity"], json.dumps(meta)]
-                # The first owned-state UPDATE holds SQLite write authority.
-                # A raw/manual writer may have won during stand calculation,
-                # without changing this solo place; preserve all four columns
-                # in that case (including same-XZ reports with a newer origin).
-                if point is not None and tuple(state)[3:] == position_authority:
-                    # The heading the exit clip ends with (radians) commits with
-                    # the point; None clears it as before.
-                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=?"
-                    args.extend((round(point[0], 2), round(point[1], 2), stand_yaw))
-                conn.execute(sql + " WHERE character_name=?", (*args, character_name))
-            else:
-                changed = conn.execute(
-                    "UPDATE characters SET profile_json=json_remove(profile_json,'$.prop_action_entry') "
-                    "WHERE name=? AND json_extract(profile_json,'$.prop_action_entry.execution_id')=?",
-                    (character_name, execution_id)).rowcount
-                if not changed:
-                    return False
+            changed = conn.execute(
+                "UPDATE characters SET profile_json=json_remove(profile_json,'$.place'),updated_at=? "
+                "WHERE name=? AND json_extract(profile_json,'$.place.execution_id')=?",
+                (utc_now_iso(), character_name, execution_id)).rowcount
+            if not changed:
+                return False
+            state = conn.execute("SELECT meta,is_sleeping,current_activity,pos_x,pos_z,pos_session,pos_seq "
+                                 "FROM character_state WHERE character_name=?",
+                                 (character_name,)).fetchone()
+            meta = json.loads(state[0] or "{}")
+            profile["is_sleeping"] = bool(state[1])
+            profile["current_activity"] = state[2]
+            profile["state_flag_since"] = dict(meta.get("state_flag_since") or {})
+            woke = _set_sleep_flag(profile, False)
+            meta["state_flag_since"] = profile["state_flag_since"]
+            sql = "UPDATE character_state SET pose_key='',pose_flavor='',is_sleeping=?,current_activity=?,meta=?"
+            args = [int(profile["is_sleeping"]), profile["current_activity"], json.dumps(meta)]
+            # The first owned-state UPDATE holds SQLite write authority.
+            # A raw/manual writer may have won during stand calculation,
+            # without changing this solo place; preserve all four columns
+            # in that case (including same-XZ reports with a newer origin).
+            if point is not None and tuple(state)[3:] == position_authority:
+                # The heading the exit clip ends with (radians) commits with
+                # the point; None clears it as before.
+                sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL,pos_yaw=?"
+                args.extend((round(point[0], 2), round(point[1], 2), stand_yaw))
+            conn.execute(sql + " WHERE character_name=?", (*args, character_name))
         if woke:
             # Existing canonical lifecycle is DB-only; finish it before another
             # sleeper can replace this generation's sleep_start bookkeeping.
             _note_sleep_transition(character_name, False)
-        if own_place:
-            _after_locks(lambda: _publish_activity_changed(character_name, "", old_pose, "",
-                                                           None, old_place, stored=True))
+        _after_locks(lambda: _publish_activity_changed(character_name, "", old_pose, "",
+                                                       None, old_place, stored=True))
     return True
 
 

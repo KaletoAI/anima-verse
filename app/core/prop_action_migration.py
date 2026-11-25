@@ -250,7 +250,6 @@ def prepare_runtime() -> dict:
     from app.core.places_migration import migrate_places_once
     from app.core.prop_field_migration import migrate_prop_fields_once
     from app.core.place_group_migration import migrate_place_groups_once
-    from app.core.prop_action_engine import register_owner
     from app.core.log import get_logger
     logger = get_logger("prop_action_migration")
     # Retain migration input before prerequisite store reads project old fields
@@ -286,5 +285,4 @@ def prepare_runtime() -> dict:
         for issue in applied["issues"]:
             logger.error("Prop action migration application issue: %s", issue)
         raise RuntimeError("Prop action migration application requires repair")
-    register_owner()
     return dict(prerequisites=prerequisites, inventory=inventory, applied=applied)
