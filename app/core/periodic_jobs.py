@@ -698,12 +698,47 @@ _SUB_TASKS: List[tuple] = [
 #: with "Run now" must go on through them.
 _RUNS_WHILE_PAUSED = {"improvements"}
 
+#: Sub-tasks that run BESIDE the loop instead of inside it, each as its own
+#: task with a "still running -> skip" guard. ``npc_wanderers`` bakes a
+#: journey (``nav_grid`` A*) for every wanderer it sends off; a route across
+#: the largest world takes up to a minute (2026-11-25 measurement in
+#: ``nav_grid.NAV_MAX_EXPANSIONS``), and the short state ticks after it in
+#: the table must not wait for that.
+_DETACHED = {"npc_wanderers"}
+
+#: A sub-task running longer than this is logged as a WARNING (seconds).
+SLOW_SUB_TASK_WARN_S = 30.0
+
 _tick_task: Optional[asyncio.Task] = None
 _last_run: Dict[str, float] = {}  # label -> unix-ts of last successful run
+_detached_tasks: Dict[str, asyncio.Task] = {}
+
+
+def _log_duration(label: str, duration: float) -> None:
+    """One line for a slow sub-task: INFO past 5 s, WARNING past
+    :data:`SLOW_SUB_TASK_WARN_S`."""
+    if duration > SLOW_SUB_TASK_WARN_S:
+        logger.warning("admin_tick %s took %.1fs (over %.0fs)", label,
+                       duration, SLOW_SUB_TASK_WARN_S)
+    elif duration > 5:
+        logger.info("admin_tick %s done in %.1fs", label, duration)
+
+
+async def _run_sub(func, label: str) -> None:
+    """Run one sub-task off the event loop, stamp its success, log its time."""
+    started = utc_now()
+    try:
+        await asyncio.to_thread(func)
+        _last_run[label] = utc_now().timestamp()
+    except Exception as _se:
+        logger.error("admin_tick sub %s error: %s", label, _se, exc_info=True)
+    _log_duration(label, (utc_now() - started).total_seconds())
 
 
 async def _world_admin_tick_loop():
-    """Run world-admin sub-tasks sequentially at their own frequencies."""
+    """Run world-admin sub-tasks sequentially at their own frequencies — the
+    :data:`_DETACHED` ones as their own task beside the loop, skipped while
+    their previous run is still going."""
     # Delay the first sweep by 30s so startup does not trigger every task at
     # once and cause a CPU spike.
     try:
@@ -723,16 +758,16 @@ async def _world_admin_tick_loop():
                 last = _last_run.get(label, 0.0)
                 if min_iv and (now - last) < min_iv:
                     continue
-                started = utc_now()
-                try:
-                    await asyncio.to_thread(func)
-                    _last_run[label] = utc_now().timestamp()
-                except Exception as _se:
-                    logger.error("admin_tick sub %s error: %s",
-                                 label, _se, exc_info=True)
-                duration = (utc_now() - started).total_seconds()
-                if duration > 5:
-                    logger.info("admin_tick %s done in %.1fs", label, duration)
+                if label in _DETACHED:
+                    running = _detached_tasks.get(label)
+                    if running is not None and not running.done():
+                        logger.debug("admin_tick %s still running — skipped",
+                                     label)
+                        continue
+                    _detached_tasks[label] = asyncio.create_task(
+                        _run_sub(func, label))
+                    continue
+                await _run_sub(func, label)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -762,5 +797,8 @@ async def stop() -> None:
     except (asyncio.CancelledError, Exception):
         pass
     _tick_task = None
+    for task in _detached_tasks.values():
+        task.cancel()
+    _detached_tasks.clear()
     _last_run.clear()
     logger.info("World-Admin-Tick gestoppt")

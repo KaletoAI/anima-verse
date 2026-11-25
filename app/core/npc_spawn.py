@@ -960,8 +960,15 @@ def wanderer_count() -> int:
 def wanderer_tick() -> Dict[str, Any]:
     """Keep the road populated: settle arrivals, then top the quota up.
 
-    The tick itself never generates: a spawn is a queue job, so a slow LLM
-    turn cannot hold up the world-admin tick that calls this.
+    The tick itself never GENERATES an NPC: a spawn is a queue job, so a slow
+    LLM turn cannot hold up the world-admin tick that calls this. It does BAKE
+    ROUTES, though: settling an arrival may send the wanderer off again
+    (``_send_wanderer`` -> ``travel_engine.start_journey`` -> the nav-grid
+    A*), right here in the tick — and the spawn job bakes one the same way.
+    A route across a large world can take up to a minute
+    (``nav_grid.NAV_MAX_EXPANSIONS`` / ``NAV_MAX_SECONDS`` bound it), which is
+    why the world-admin tick runs this sub-task beside its loop
+    (``periodic_jobs._DETACHED``) rather than in it.
     """
     if not spawn_enabled():
         return {"skipped": "disabled"}
