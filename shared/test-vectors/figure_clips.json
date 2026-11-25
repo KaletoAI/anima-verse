@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_figure_clips.mjs",
+  "source": "native/tests/Derivations/figure_clips.md",
   "fixtures": {
     "RAW_SERVER": {
       "walking": { "kind": " MOB1-Walk ", "public_kind": "walk" },

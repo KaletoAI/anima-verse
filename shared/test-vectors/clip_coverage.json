@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_clip_coverage.mjs",
+  "source": "native/tests/Derivations/clip_coverage.md",
   "cases": [
     {
       "label": "[1] library swim missing, own walk/idle bound",

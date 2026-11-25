@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_pair_blend.mjs",
+  "source": "native/tests/Derivations/pair_blend.md",
   "cases": [
     {
       "label": "[1] elapsed -1 real seconds",

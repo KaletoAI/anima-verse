@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_bridge_root.mjs",
+  "source": "native/tests/Derivations/bridge_root.md",
   "fixtures": {
     "toy": {
       "times": [0, 1, 2],

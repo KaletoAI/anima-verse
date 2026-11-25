@@ -100,6 +100,29 @@ MOVED: dict[str, tuple[str, str]] = {
     # Task 9, class C: a Python smoke already replays the vector.
     "group_role_points": ("client3d/scripts/smoke_group_role_points.mjs", "scripts/smoke_group_role_points.py"),
     "prop_water": ("client3d/scripts/smoke_prop_water.mjs", "scripts/smoke_prop_water.py"),
+    # Task 10, class B: figures, bridges, pairs, clips -> native/tests/Derivations/.
+    "bridge_heading": ("client3d/scripts/smoke_bridge_heading.mjs", "native/tests/Derivations/bridge_heading.md"),
+    "bridge_lift": ("client3d/scripts/smoke_bridge_lift.mjs", "native/tests/Derivations/bridge_lift.md"),
+    "bridge_travel": ("client3d/scripts/smoke_bridge_root.mjs", "native/tests/Derivations/bridge_root.md"),
+    "foot_lock": ("client3d/scripts/smoke_foot_lock_math.mjs", "native/tests/Derivations/foot_lock_math.md"),
+    "foot_lock_measure": ("client3d/scripts/smoke_foot_lock_measure.mjs", "native/tests/Derivations/foot_lock_measure.md"),
+    "leg_pin": ("client3d/scripts/smoke_leg_pin.mjs", "native/tests/Derivations/leg_pin.md"),
+    "stand_settle": ("client3d/scripts/smoke_stand_settle.mjs", "native/tests/Derivations/stand_settle.md"),
+    "hips_tracks": ("client3d/scripts/smoke_rig_stand_ref.mjs", "native/tests/Derivations/rig_stand_ref.md"),
+    "clip_commit": ("client3d/scripts/smoke_clip_order.mjs", "native/tests/Derivations/clip_order.md"),
+    "clip_coverage": ("client3d/scripts/smoke_clip_coverage.mjs", "native/tests/Derivations/clip_coverage.md"),
+    "figure_clips": ("client3d/scripts/smoke_figure_clips.mjs", "native/tests/Derivations/figure_clips.md"),
+    "figure_normalisation": ("client3d/scripts/smoke_figure_normalisation.mjs", "native/tests/Derivations/figure_normalisation.md"),
+    "pair_blend": ("client3d/scripts/smoke_pair_blend.mjs", "native/tests/Derivations/pair_blend.md"),
+    "pair_clip_geometry": ("client3d/scripts/smoke_clip_pair.mjs", "native/tests/Derivations/clip_pair.md"),
+    "pair_clip_phase": ("client3d/scripts/smoke_pair_realtime.mjs", "native/tests/Derivations/pair_realtime.md"),
+    "pair_height": ("client3d/scripts/smoke_pair_storey.mjs", "native/tests/Derivations/pair_storey.md"),
+    "secondary_angle": ("client3d/scripts/smoke_secondary_motion.mjs", "native/tests/Derivations/secondary_motion.md"),
+    "secondary_chain": ("client3d/scripts/smoke_secondary_motion.mjs", "native/tests/Derivations/secondary_motion.md"),
+    "secondary_params": ("client3d/scripts/smoke_secondary_motion.mjs", "native/tests/Derivations/secondary_motion.md"),
+    "secondary_particle": ("client3d/scripts/smoke_secondary_motion.mjs", "native/tests/Derivations/secondary_motion.md"),
+    "animal_gait": ("client3d/scripts/smoke_animal_vectors.mjs", "native/tests/Derivations/animal_vectors.md"),
+    "animal_legs": ("client3d/scripts/smoke_animal_vectors.mjs", "native/tests/Derivations/animal_vectors.md"),
     # clip_shift has no entry: at PIN its source was a formula, not a file; the
     # formula is native/tests/Derivations/clip_shift.md word for word.
 }

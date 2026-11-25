@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_figure_normalisation.mjs",
+  "source": "native/tests/Derivations/figure_normalisation.md",
   "cases": [
     {
       "label": "[N] offset box",

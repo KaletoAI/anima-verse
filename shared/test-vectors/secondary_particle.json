@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_secondary_motion.mjs",
+  "source": "native/tests/Derivations/secondary_motion.md",
   "fixtures": {
     "defaults": {
       "bones": [
