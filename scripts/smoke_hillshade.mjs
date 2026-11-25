@@ -3,7 +3,7 @@
  * Smoke check for the shared HILLSHADE layer —
  * `packages/scene-render/src/hillshade.ts`.
  *
- * Usage:  node client3d/scripts/smoke_hillshade.mjs
+ * Usage:  node scripts/smoke_hillshade.mjs
  *
  * Every number below is derived BY HAND from the formulas in that file's
  * header and never recorded from its output. A check that only writes down what
@@ -208,7 +208,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
+const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SRC = join(ROOT, 'packages/scene-render/src/hillshade.ts');
 
 /** Transpile one module without a RUNTIME import and load it. `hillshade.ts`
@@ -229,7 +229,7 @@ async function loadModule(path, name) {
 }
 
 // Task 55 / E7-T10: the hand derivations above feed ONE shared expectation file.
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 const { hillshadeImage } = await loadModule(SRC, 'hillshade');
 const result = runVectors(loadVectors('hillshade'), {
   hillshadeImage(field, opts) {

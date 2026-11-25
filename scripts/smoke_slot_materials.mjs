@@ -41,7 +41,7 @@
  *
  * The package is TypeScript, so the script bundles itself into /tmp on EVERY
  * run and executes that (same harness as
- * `client3d/scripts/smoke_place_rotation.mjs`, including the esbuild lookup
+ * `scripts/smoke_place_rotation.mjs`, including the esbuild lookup
  * that file fixed on 2026-08-27 — a missing binary must be LOUD, never a
  * silent exit 0).
  */

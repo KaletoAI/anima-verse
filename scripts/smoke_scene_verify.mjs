@@ -47,12 +47,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 import * as THREE from 'three';
-const root = fileURLToPath(new URL('../../', import.meta.url));
+const root = fileURLToPath(new URL('../', import.meta.url));
 const require_ = createRequire(import.meta.url);
 let esbuild;
-for (const path of ['esbuild', join(root,'client3d/node_modules/esbuild')]) {
+for (const path of ['esbuild', join(root,'node_modules/esbuild')]) {
   try { esbuild=require_(path); break; } catch { /* Try workspace install. */ }
 }
 if (!esbuild) throw new Error('esbuild not found; nothing was checked');

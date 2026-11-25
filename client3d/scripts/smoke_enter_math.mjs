@@ -6,7 +6,7 @@
  *
  * Usage:  node client3d/scripts/smoke_enter_math.mjs
  *
- * Same discipline as `client3d/scripts/smoke_ground_math.mjs` and
+ * Same discipline as `scripts/smoke_ground_math.mjs` and
  * `smoke_travel_math.mjs`: every expected number below is derived BY HAND from
  * the contract (§ A1.1, § A1.3 and § B1 Nr. 13 of docs/schnittstellen-3d.md)
  * and from the server's own `app/core/boundary_entry.py`, written out in this

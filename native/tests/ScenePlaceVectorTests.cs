@@ -12,7 +12,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scene_place.json against <see cref="PlaceTransform"/> (hand derivations:
-/// client3d/scripts/smoke_place_rotation.mjs; TS source: packages/scene-render/src/placeTransform.ts).
+/// scripts/smoke_place_rotation.mjs; TS source: packages/scene-render/src/placeTransform.ts).
 ///
 /// <code>
 ///   TS fn            C#                        shape translation

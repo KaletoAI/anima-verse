@@ -1,6 +1,6 @@
 {
  "format": "anima-test-vectors/1",
- "source": "client3d/scripts/smoke_group_role_points.mjs",
+ "source": "scripts/smoke_group_role_points.py",
  "fixtures": {
   "group": {
    "tile": {

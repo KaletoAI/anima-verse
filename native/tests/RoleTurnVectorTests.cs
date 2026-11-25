@@ -10,7 +10,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/role_turn.json against <see cref="RoleTurn"/> (hand derivations:
-/// client3d/scripts/smoke_role_turn_vectors.mjs), plus the listing parse of <c>orientation.role_turn_deg</c>.
+/// scripts/smoke_role_turn_vectors.mjs), plus the listing parse of <c>orientation.role_turn_deg</c>.
 /// <code>
 ///   TS fn            C#                                   shape translation
 ///   roleTurnFix      RoleTurn.RoleTurnFix                 frame [9] ↔ double[]; {shift, turn} ↔ PairFix

@@ -67,7 +67,7 @@ export function wallLength(wall: SceneWall): number {
  * carries has a POSITIVE shoelace (`world_geometry`: positive = clockwise in
  * map view, x east / z south), which three reads as "not clockwise" — so the
  * branch DOES run, and it then re-winds every hole however it was written.
- * `client3d/scripts/smoke_plate_hole.mjs` pins the good case (8/8 outer walls
+ * `scripts/smoke_plate_hole.mjs` pins the good case (8/8 outer walls
  * outward, 8/8 hole walls inward). Measured counter-case: with a NEGATIVE
  * shoelace outline the branch is skipped, the hole's own winding decides, and
  * a hole wound like its outline gives 0/8 — walls facing out of the stairwell

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_role_turn_vectors.mjs",
+  "source": "scripts/smoke_role_turn_vectors.mjs",
   "cases": [
     {
       "label": "[1] identity: no tilt, roll or yaw is the identity fix",

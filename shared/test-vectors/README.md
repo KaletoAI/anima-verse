@@ -7,9 +7,18 @@ implementations: when both pass the same file, they compute the same numbers.
 
 ## Rules
 
-- **The derivation stays in the source smoke's docstring.** A vector file carries only inputs,
-  expectations and `source`, the repo path of the smoke whose docstring derives every number by
-  hand from the spec. Case labels start with the `[n]` of that derivation.
+- **Every vector names where its numbers are derived.** A vector file carries only inputs,
+  expectations and `source`, a repo path that is either
+  (a) a smoke (JavaScript or Python) whose docstring derives every number by hand from the spec, or
+  (b) a derivation document `native/tests/Derivations/<name>.md` whose numbers the C# vector tests
+  execute — for logic that after E3 exists only natively (format: `native/tests/Derivations/README.md`).
+  Case labels start with the `[n]` of that derivation.
+- **E1 (2026-11-25) moved every derivation out of `client3d/`**, which E3 deletes with the browser
+  scene: smokes that test only package code moved to `scripts/`, a vector a Python smoke already
+  replays got the derivation in that smoke's docstring, and the rest moved word for word to
+  `native/tests/Derivations/`; a browser smoke that stays until E3 keeps a pointer docstring
+  (`Derivation moved to <new source>`). `scripts/smoke_vector_sources.py` guards this: `source` is an
+  existing repo file outside `client3d/` that names the vector file literally.
 - **A vector is never edited to match an implementation.** When an implementation disagrees with
   a vector, the implementation is fixed. A vector changes only when the spec (and with it the
   hand derivation in the docstring) changes.
@@ -31,7 +40,7 @@ implementations: when both pass the same file, they compute the same numbers.
 | Key | Required | Meaning |
 |---|---|---|
 | `format` | yes | exactly `"anima-test-vectors/1"` |
-| `source` | yes | repo path of the smoke holding the hand derivations |
+| `source` | yes | repo path of the smoke or derivation document holding the hand derivations (see Rules) |
 | `fixtures` | no | object, name → any JSON value, referenced from `args` |
 | `cases` | yes | non-empty array of cases |
 | `cases[].label` | yes | non-empty string, unique within the file (it is the test's display name) |
@@ -130,7 +139,7 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | File | Source smoke | Functions |
 |---|---|---|
 | `bench_math.json` | `client3d/scripts/smoke_bench_math.mjs` | `percentile`, `summarize` (`client3d/src/bench/benchStats.ts`) |
-| `ground_polygons.json` | `client3d/scripts/smoke_ground_math.mjs` | `signedArea`, `polygonArea`, `cleanRing` (`packages/scene-render/src/groundAreas.ts`) |
+| `ground_polygons.json` | `scripts/smoke_ground_math.mjs` | `signedArea`, `polygonArea`, `cleanRing` (`packages/scene-render/src/groundAreas.ts`) |
 | `scatter.json` | `client3d/scripts/smoke_scatter_math.mjs` | the C#-ported functions of `packages/scene-render/src/scatter.ts` and `client3d/src/scene/scatterLod.ts` (TS↔C# table in the smoke's header). A sampler's `rng` option is a list of numbers, fed in order; drawing past its end throws |
 | `camera.json` | `client3d/scripts/smoke_camera_math.mjs` | the overview camera: `fitDistance`, `worldCentreXZ`, `wheelZoom`, `zoomTowardCursor`, `damp`, `flyAdvance`, `flyEase`, `orbitStep`, `clampPitchDeg`, `cameraPose` (`client3d/src/scene/cameraMath.ts`) and `basePitchDeg` (`client3d/src/scene/cameraFraming.ts`). Points are `[x, y, z]` / `[x, z]` lists, a bounds object `{min_x, max_x, min_z, max_z}`; an optional last argument may be omitted |
 | `occlusion.json` | `client3d/scripts/smoke_occlusion.mjs` | Task 53 / E7-T8: `occlusionUniforms`, clamped segment/rim hide and Bayer threshold/discard; 47 hand-derived cases |
@@ -140,9 +149,9 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `event_pins.json` | `client3d/scripts/smoke_event_pins.mjs` | `pinGlyph`, `pinY` (`client3d/src/game/eventPins.ts`); events are `{category}` objects, `null` = no list |
 | `overview_labels.json` | `client3d/scripts/smoke_overview_labels.mjs` | `tagVisible`, `tagTravelling`, `tagName`, `tagAnchorY`, `locationLabelLift` (`client3d/src/scene/nameTags.ts`; `travel` is the `{starts_in_s, eta_hhmm}` block or `null`, `tagAnchorY(null)` = a portrait), `closeTargetDist`, `openViewShouldClose` (`client3d/src/game/openView.ts`) |
 
-| `scene_place.json` | `client3d/scripts/smoke_place_rotation.mjs` | Three-free `placeTransform(spec, meshBoxes)`; each mesh box has local `min`/`max` triples and an optional column-major glTF `matrix`. Returns `fixPos`, `fitScale`, scalar `outerScale`, `outerPos`. |
-| `scene_primitives.json` | `client3d/scripts/smoke_scene_primitives.mjs` | `wallTransform`, `boxFaceUVs`, `extraCorners` (intrinsic XYZ, unlike model fix YXZ), `plateShape`, `placeholderBox`; aggregate measurement arrays preserve all wall/extra/plate geometry assertions. |
-| `scene_verify.json` | `client3d/scripts/smoke_scene_verify.mjs` | `inFrame`, `primitiveRows`, `placementRows`, `wallTargets`. Boxes are `{min:{x,y,z},max:{x,y,z}}`; rows return `{checked,rows}`; wall targets serialize as `{field,target}`. |
+| `scene_place.json` | `scripts/smoke_place_rotation.mjs` | Three-free `placeTransform(spec, meshBoxes)`; each mesh box has local `min`/`max` triples and an optional column-major glTF `matrix`. Returns `fixPos`, `fitScale`, scalar `outerScale`, `outerPos`. |
+| `scene_primitives.json` | `scripts/smoke_scene_primitives.mjs` | `wallTransform`, `boxFaceUVs`, `extraCorners` (intrinsic XYZ, unlike model fix YXZ), `plateShape`, `placeholderBox`; aggregate measurement arrays preserve all wall/extra/plate geometry assertions. |
+| `scene_verify.json` | `scripts/smoke_scene_verify.mjs` | `inFrame`, `primitiveRows`, `placementRows`, `wallTargets`. Boxes are `{min:{x,y,z},max:{x,y,z}}`; rows return `{checked,rows}`; wall targets serialize as `{field,target}`. |
 | `scene_view.json` | `client3d/scripts/smoke_scene_view.mjs` | Pure `sceneView.ts` decisions and transforms, `storeyPieceOpacity`, `farShellSource`, `ringFor`, `placeDistance`, `detectStyle`; tile frames are `{center:{x,y,z},yaw}` with radians. |
 | `scene_models.json` | `client3d/scripts/smoke_scene_models.mjs` | Model variants, hinge/terrain/marker/slot/glyph/surface arithmetic, material looks, cut planes and clip/cutout point predicates. JSON wrappers and dispatch conventions are documented in the source smoke. |
 | `light_pool.json` | `client3d/scripts/smoke_light_pool.mjs` | `pickLights` (`visibleRooms` as a LIST), `flickerFactor`, `nightLightGain`, `haloVisible`, `fireColourMix`, `stepLightSlot`, `lightPositionInFrame` (column-major frame), `lightPoolSize` (`client3d/src/scene/lightPool.ts`) |
@@ -151,7 +160,7 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `slot_materials.json` | `scripts/smoke_slot_materials.mjs` | `slotFill`, `glassPreset`, `materialPresets` (`packages/scene-render/src/slotMaterials.ts`) |
 | `door_swing.json` | `client3d/scripts/smoke_door_swing.mjs` | `doorConstants`, `doorTargetAngle`, `doorDistance`, `easeAngle`, `doorSwingFrames` (`client3d/src/game/doorSwing.ts`); a `null` distance is Infinity |
 | `figure_clips.json` | `client3d/scripts/smoke_figure_clips.mjs` | `resolveMovementPoses`, `moveClip`, `idleClip`, `standingClipFor` (`null` animation = none), `movementOf`, `canRun`, `movementPoseOf`, `resolveClipTransitions`, `clipTransition`, `bridgePace` (`client3d/src/game/walk.ts`), `clipKindChain`, `resolveClipKind`, `proceduralGait` (`client3d/src/scene/clipCoverage.ts`). The server tables are explicit arguments: a pose table is the resolved `{pose: {kind, publicKind}}` form, a transition table the resolved rule list |
-| `prop_water.json` | `client3d/scripts/smoke_prop_water.mjs` | `waterRegionAt`, `pointInRegion` (`client3d/src/scene/propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (`client3d/src/game/walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
+| `prop_water.json` | `scripts/smoke_prop_water.py` | `waterRegionAt`, `pointInRegion` (`client3d/src/scene/propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (`client3d/src/game/walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
 | `graphics_prefs.json` | `scripts/smoke_graphics_prefs.mjs` | `loadGraphicsPrefs` (stored string or `null`), `checkGraphicsPrefs`, `saveGraphicsPrefs` (exact string), `msaaSamplesOf`, `browserAntialias`, `pickBrowserAntiAliasing` (`hud/src/game/prefs.ts`); `graphicsPrefsConstants()` is a smoke adapter → `{key, levels, defaults}` |
 | `audio.json` | `client3d/scripts/smoke_audio_math.mjs` | Task 58 / E8-T1: 145 cases for audio prefs, soundtrack decisions, eight-segment equal-power gains, playlist scheduling, stop/volume ramps, seeded shuffle and the browser's waiting-speech queue. Adapter signatures below. |
 
@@ -369,10 +378,11 @@ network or a DOM. The canonical source smokes also run their own vectors:
 | `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 28 |
 | `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
 | `figure_normalisation.json` | `smoke_figure_normalisation.mjs` | 4 |
-| `group_role_points.json` | `smoke_group_role_points.mjs` | 24 |
+| `group_role_points.json` | `scripts/smoke_group_role_points.py` | 24 |
 
-All source paths are under `client3d/scripts/`. Derivations stay in those
-smokes' docstrings. `pairVectorDispatch.mjs` only constructs Three objects,
+The other source paths are under `client3d/scripts/`. Derivations stay in those
+smokes' docstrings; the derivation of `group_role_points.json` moved to the Python smoke
+that replays it against the server (E1). `pairVectorDispatch.mjs` only constructs Three objects,
 executes production functions and selects result fields. A placement fixture
 with `clip` (a group role, `group_role_points.json`) plays that half, and its
 library stand-in answers the root only for that name. No production code
@@ -386,7 +396,7 @@ they still use real model files and sidecars, outside the standalone vectors.
 after scaling, = C); `pairPlacedRoot(root, pivot, heightM, anchor)` = scale, then `x = ax + rx·cos + rz·sin`,
 `z = az − rx·sin + rz·cos` (npcs.ts `tickInteraction`'s order; the numbers of `smoke_pair_root_sets.mjs` [B]).
 
-`role_turn.json` (source `client3d/scripts/smoke_role_turn_vectors.mjs`, 19 cases, eps 1e-12, replayed by that smoke and
+`role_turn.json` (source `scripts/smoke_role_turn_vectors.mjs`, 19 cases, eps 1e-12, replayed by that smoke and
 native `RoleTurnVectorTests`): scene-render `pairFit.ts` — `roleTurnFix(tilt, roll, frame, yaw)` → `{shift, turn}`,
 `turnMatrix`, `matrixTurn` (incl. the half-turn branch), `fixPivot(root, frame, hipsBind)`, `fixRoot(fix, pivot, root)` →
 `{position, quaternion [x,y,z,w]}`; frames row-major. `roleTurnPlaced(map, role, root, yawDeg, hipsBind)` is the whole

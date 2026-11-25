@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Canonical hand oracle for shared/test-vectors/scene_primitives.json.
- * Run from the repository root: node client3d/scripts/smoke_scene_primitives.mjs.
+ * Run from the repository root: node scripts/smoke_scene_primitives.mjs.
  *
  * [1] wallMeshMeasurements is the ordered list of the 31 checks in smoke_wall_uv.
  * Its input is [length, height, thickness, tileM]; the sill is 1.2 by 0.9.
@@ -46,7 +46,7 @@
  * the broad face AND the narrow ones a door or window leaves behind.
  *
  * Usage (the package is TypeScript, so it is bundled first):
- *     node_modules/.bin/esbuild client3d/scripts/smoke_wall_uv.mjs --bundle \
+ *     node_modules/.bin/esbuild scripts/smoke_wall_uv.mjs --bundle \
  *         --platform=node --format=esm --outfile=/tmp/wuv.mjs && node /tmp/wuv.mjs
  *
  * Runs headless against the SHARED buildWall — the one routine both renderers
@@ -128,11 +128,11 @@
  * Smoke: a floor plate with a HOLE in it — the opening a staircase cuts into
  * the floor it arrives on (`plates[].holes`, contract addendum "Treppen v2").
  *
- * Usage:  node client3d/scripts/smoke_plate_hole.mjs
+ * Usage:  node scripts/smoke_plate_hole.mjs
  *
  * (Node 22 strips the types of the imported `.ts` itself and resolves `three`
- * out of `client3d/node_modules`. On an older runtime, bundle it first:
- *     client3d/node_modules/.bin/esbuild client3d/scripts/smoke_plate_hole.mjs \
+ * out of the root `node_modules`. On an older runtime, bundle it first:
+ *     node_modules/.bin/esbuild scripts/smoke_plate_hole.mjs \
  *         --bundle --platform=node --format=esm --outfile=/tmp/ph.mjs \
  *         && node /tmp/ph.mjs )
  *
@@ -210,7 +210,7 @@ import { build } from 'esbuild';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 
 const dir = await mkdtemp(join(tmpdir(), 'scene-primitives-'));
 try {
@@ -224,8 +224,8 @@ try {
   const math = await import(await compile('packages/scene-render/src/primitiveMath.ts', 'math'));
   const measurements = {}
   try {
-    for (const [name, entry] of Object.entries({ wall: 'client3d/scripts/smoke_wall_uv.mjs',
-      extra: 'packages/scene-render/scripts/smoke_extra_box.mjs', plate: 'client3d/scripts/smoke_plate_hole.mjs' })) {
+    for (const [name, entry] of Object.entries({ wall: 'scripts/smoke_wall_uv.mjs',
+      extra: 'packages/scene-render/scripts/smoke_extra_box.mjs', plate: 'scripts/smoke_plate_hole.mjs' })) {
       globalThis.__scenePrimitiveMeasure = (values) => { measurements[name] = values }
       await import(name === 'plate' ? new URL('./smoke_plate_hole.mjs', import.meta.url).href : await compile(entry, name))
       if (!measurements[name]) throw new Error('Smoke returned no measurements: ' + entry)

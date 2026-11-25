@@ -8,7 +8,7 @@
  * This smoke runs shared/test-vectors/role_turn.json through the TypeScript; native/tests/RoleTurnVectorTests.cs runs
  * it through the C# port. Every expected number is derived BY HAND below (§ B5a), never recorded from a run.
  *
- * Usage: node client3d/scripts/smoke_role_turn_vectors.mjs   (no server, no world; bundles pairFit.ts with esbuild)
+ * Usage: node scripts/smoke_role_turn_vectors.mjs   (no server, no world; bundles pairFit.ts with esbuild)
  *
  * Conventions: matrices row-major; rotY(φ) = [cφ,0,sφ; 0,1,0; −sφ,0,cφ], rotX(φ) = [1,0,0; 0,cφ,−sφ; 0,sφ,cφ],
  * rotZ(φ) = [cφ,−sφ,0; sφ,cφ,0; 0,0,1]; a rotation vector θ = angle·axis. I = the identity frame,
@@ -52,10 +52,10 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 
-const root = fileURLToPath(new URL('../../', import.meta.url));
-const dir = await mkdtemp(join(root, 'client3d/scripts/.smoke-role-turn-'));
+const root = fileURLToPath(new URL('../', import.meta.url));
+const dir = await mkdtemp(join(root, 'scripts/.smoke-role-turn-'));
 let m;
 try {
   const esbuild = await import(join(root, 'node_modules/esbuild/lib/main.js'));

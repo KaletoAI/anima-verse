@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_hillshade.mjs",
+  "source": "scripts/smoke_hillshade.mjs",
   "fixtures": {
     "flat": {
       "origin_x": 0,

@@ -4,7 +4,7 @@
  * (plan-freie-weltkarte-e4-3d-client.md, task 2) —
  * `packages/scene-render/src/groundAreas.ts`.
  *
- * Usage:  node client3d/scripts/smoke_ground_math.mjs
+ * Usage:  node scripts/smoke_ground_math.mjs
  *
  * Same discipline as `client3d/scripts/smoke_walk_math.mjs` and
  * `scripts/smoke_scene_recipe.py`: every expected number below is derived BY
@@ -129,9 +129,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
 
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
+const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SRC = join(ROOT, 'packages/scene-render/src/groundAreas.ts');
 
 /**

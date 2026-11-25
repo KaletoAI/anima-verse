@@ -3,7 +3,7 @@
  * the broad face AND the narrow ones a door or window leaves behind.
  *
  * Usage (the package is TypeScript, so it is bundled first):
- *     node_modules/.bin/esbuild client3d/scripts/smoke_wall_uv.mjs --bundle \
+ *     node_modules/.bin/esbuild scripts/smoke_wall_uv.mjs --bundle \
  *         --platform=node --format=esm --outfile=/tmp/wuv.mjs && node /tmp/wuv.mjs
  *
  * Runs headless against the SHARED buildWall — the one routine both renderers
@@ -47,11 +47,11 @@
  * implies. A three release that reorders `buildPlane` would therefore be
  * caught by this check instead of silently passing it.
  */
-import { loadVectorFile } from '../../shared/test-vectors/vectors.mjs'
+import { loadVectorFile } from '../shared/test-vectors/vectors.mjs'
 import * as THREE from 'three'
-// '../../' = the repo root: this file lives in client3d/scripts/, the shared
+// '../' = the repo root: this file lives in scripts/, the shared
 // package at packages/scene-render. esbuild resolves it relative to THIS file.
-import { buildWall } from '../../packages/scene-render/src/primitives.ts'
+import { buildWall } from '../packages/scene-render/src/primitives.ts'
 
 const vectors = loadVectorFile('shared/test-vectors/scene_primitives.json').cases[0]
 const oracle = vectors.expect

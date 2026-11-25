@@ -11,7 +11,7 @@
  * `three` is a PARAMETER, never an import (package rule): the admin bundle
  * loads Three lazily and an import here would drag it into its main chunk. The
  * type-only import below vanishes on compile, which is also what keeps this
- * module loadable by `client3d/scripts/smoke_ground_math.mjs` — the pure ring
+ * module loadable by `scripts/smoke_ground_math.mjs` — the pure ring
  * maths (`signedArea`, `polygonArea`, `cleanRing`, `shapePoints`) is checked
  * there against hand-derived areas, with no bundler and no Three.
  *

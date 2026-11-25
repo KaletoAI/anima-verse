@@ -44,7 +44,7 @@ public readonly record struct PairFix(V3 Shift, V3 Turn)
 /// <c>turnAxes</c>, <c>fixPivot</c>, <c>fixPoint</c>, <c>fixRoot</c>, <c>turnMatrix</c>, <c>matrixTurn</c> — double
 /// precision, the same operations in the same order. A frame is a row-major 3×3 (the figure root's rotation; at pair
 /// placement <see cref="YawFrame"/>, client3d's <c>eulerYXZ(0, yaw, 0)</c>). Vectors shared/test-vectors/role_turn.json
-/// (hand derivations: client3d/scripts/smoke_role_turn_vectors.mjs).
+/// (hand derivations: scripts/smoke_role_turn_vectors.mjs).
 /// </summary>
 public static class RoleTurn
 {

@@ -2,7 +2,7 @@
  * Smoke: how BIG a model is must not depend on how it is TURNED.
  *
  * Usage: direct node call, self-bundling via esbuild:
- *     node client3d/scripts/smoke_place_rotation.mjs
+ *     node scripts/smoke_place_rotation.mjs
  *
  * The package is TypeScript, so the script bundles itself into /tmp on EVERY
  * run and executes that. It used to keep the bundle and re-run it — which
@@ -19,8 +19,8 @@ import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
-import { loadVectorFile, runVectors } from '../../shared/test-vectors/vectors.mjs'
-const vectors = loadVectorFile(path.join(process.env.SMOKE_ROOT || fileURLToPath(new URL('../../', import.meta.url)), 'shared/test-vectors/scene_place.json'))
+import { loadVectorFile, runVectors } from '../shared/test-vectors/vectors.mjs'
+const vectors = loadVectorFile(path.join(process.env.SMOKE_ROOT || fileURLToPath(new URL('../', import.meta.url)), 'shared/test-vectors/scene_place.json'))
 const oracle = vectors.fixtures.ORACLES
 
 const __filename = fileURLToPath(import.meta.url)
@@ -30,14 +30,13 @@ async function main() {
   // Bundle ourselves and re-run — always, see the header.
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_place_rotation_bundled.mjs'
-    // WHERE esbuild actually is: the workspace install puts it in
-    // client3d/node_modules, and the root path this used to hard-code does
-    // not exist. spawnSync then answers status `null`, `process.exit(null)`
+    // WHERE esbuild actually is: the npm workspaces hoist it to the root
+    // node_modules; an older per-workspace install had it elsewhere, and a
+    // hard-coded path that does not exist went unnoticed. spawnSync then answers status `null`, `process.exit(null)`
     // is exit 0 — and the run reported "green" without executing a single
     // check (found 2026-08-27). Missing tooling has to be LOUD.
-    const root = path.join(__dirname, '../../')
-    const bin = ['client3d/node_modules/.bin/esbuild',
-                 'node_modules/.bin/esbuild']
+    const root = path.join(__dirname, '../')
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
       console.error('esbuild not found (npm install) — nothing was checked')
@@ -68,7 +67,7 @@ async function main() {
 
   // Bundled version: dynamically import with resolved TypeScript
   const THREE = await import('three')
-  const { placeModelSpec } = await import('../../packages/scene-render/src/place.ts')
+  const { placeModelSpec } = await import('../packages/scene-render/src/place.ts')
 
 /**
  * The rule (contract v5.1 Nr. 4, extended 2026-07-28): the orientation fix is
@@ -151,7 +150,7 @@ async function main() {
  *       x = 10 + 4.5·0 + 4.5·(−1) = 5.5,  z = 20 + 4.5·1 + 0 = 24.5
  *   — mirrored through the centre, which is what this check exists to catch.
  */
-  const { placeTransform } = await import('../../packages/scene-render/src/placeTransform.ts')
+  const { placeTransform } = await import('../packages/scene-render/src/placeTransform.ts')
   const vectorResult = runVectors(vectors, { placeTransform })
   const FAILED = vectorResult.failed ? ['shared vectors'] : []
 

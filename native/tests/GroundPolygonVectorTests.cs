@@ -10,7 +10,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/ground_polygons.json against the C# ring helpers of <see cref="ScatterMath"/>
-/// (hand derivations: client3d/scripts/smoke_ground_math.mjs; TS source:
+/// (hand derivations: scripts/smoke_ground_math.mjs; TS source:
 /// packages/scene-render/src/groundAreas.ts).
 ///
 /// <code>

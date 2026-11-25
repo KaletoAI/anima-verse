@@ -2,11 +2,11 @@
  * Smoke: a floor plate with a HOLE in it — the opening a staircase cuts into
  * the floor it arrives on (`plates[].holes`, contract addendum "Treppen v2").
  *
- * Usage:  node client3d/scripts/smoke_plate_hole.mjs
+ * Usage:  node scripts/smoke_plate_hole.mjs
  *
  * (Node 22 strips the types of the imported `.ts` itself and resolves `three`
- * out of `client3d/node_modules`. On an older runtime, bundle it first:
- *     client3d/node_modules/.bin/esbuild client3d/scripts/smoke_plate_hole.mjs \
+ * out of the root `node_modules`. On an older runtime, bundle it first:
+ *     node_modules/.bin/esbuild scripts/smoke_plate_hole.mjs \
  *         --bundle --platform=node --format=esm --outfile=/tmp/ph.mjs \
  *         && node /tmp/ph.mjs )
  *
@@ -80,9 +80,9 @@
  *   flat   shape (x, −z), a bare ShapeGeometry, rotated −90° about x
  * Both must put the point (px, pz) of the payload at world (px, ·, pz).
  */
-import { loadVectorFile } from '../../shared/test-vectors/vectors.mjs'
+import { loadVectorFile } from '../shared/test-vectors/vectors.mjs'
 import * as THREE from 'three'
-// '../../' = the repo root: this file lives in client3d/scripts/, the shared
+// '../' = the repo root: this file lives in scripts/, the shared
 // package at packages/scene-render. esbuild resolves it relative to THIS file.
 import { build } from 'esbuild'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'

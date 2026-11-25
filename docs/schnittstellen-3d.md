@@ -565,7 +565,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >    aber auch dort gerundet drin** (Nachtrag 2026-07-28): gemessen wird der
 >    YAW mit auf 90° gerundetem Fix, gezeichnet mit dem echten. Vorher
 >    schrumpfte auch ein Location-Modell, sobald man seinen Fix fein
->    einstellte. Geprüft in `client3d/scripts/smoke_place_rotation.mjs` — und zwar am
+>    einstellte. Geprüft in `scripts/smoke_place_rotation.mjs` — und zwar am
 >    SKALIERUNGSFAKTOR, nicht an der achsparallelen Hülle: die Hülle eines
 >    gekippten 4-m-Würfels ist bis zu 4·√3 groß, und das ist richtig.
 > 5. **Eine `ground`-Location bringt ihren Boden mit.** Kein Renderer legt
@@ -6204,7 +6204,7 @@ sie produziert.
 | `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
-| `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
+| `scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
 
 
 ## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload
@@ -7609,7 +7609,7 @@ jedem Neuaufbau).
 | ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
 | Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
 | Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
-| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |
+| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `scripts/smoke_place_rotation.mjs` **[7]** |
 | Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
 | `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
 | Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
