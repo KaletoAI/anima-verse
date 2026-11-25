@@ -316,8 +316,9 @@ public sealed class OrderWalk
                 // and mesh-edge float noise (ClampNoiseM) near a corner on the boundary is no block that ends the walk early.
                 var on = clamp.ClosestOnVertical(next, ClampHalfHeightM);
                 double push = NavRoutePlanner.Horizontal(on, next);
-                double off = NavRoutePlanner.Horizontal(clamp.ClosestOnVertical(p, ClampHalfHeightM), p);
-                if (push > Math.Max(off, 0) + ClampNoiseM && push <= NavRoutePlanner.OnMeshM)
+                // The second query (how far off the figure already stood) only when the step would be clamped at all.
+                if (push > ClampNoiseM && push <= NavRoutePlanner.OnMeshM
+                    && push > NavRoutePlanner.Horizontal(clamp.ClosestOnVertical(p, ClampHalfHeightM), p) + ClampNoiseM)
                 {
                     blocked = true;
                     next = on;

@@ -32,7 +32,9 @@ namespace AnimaNative.Check;
 ///   R11 a phase revision changes the pose from the row, no new run;  R12 late entry in phase 2 shows that phase;
 ///   R13 a row without order (order_seq ≥ seq) blends into the rest placement; R13b an older row changes nothing;
 ///   R13c a local walk outlives a row without order;
-///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one.
+///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one;
+///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
+///       for 1 s stands still and ends its chain 1 s later.
 /// </summary>
 public static class OrderCheck
 {
@@ -47,6 +49,7 @@ public static class OrderCheck
         public required FigureManager M;
         public readonly List<(string Name, OrderState State, double T)> States = new();
         public readonly List<(string Name, string Event, double T)> Events = new();
+        public readonly List<(string Name, string OrderId, double T)> Arrivals = new();
         public IEnumerable<OrderState> Of(string name) => States.Where(s => s.Name == name).Select(s => s.State);
         public double? At(string name, OrderState st) => States.Where(s => s.Name == name && s.State == st).Select(s => (double?)s.T).FirstOrDefault();
         public void Until(double t) { while (M.Clock < t - 1e-9) M.Tick(Dt); }
@@ -103,6 +106,7 @@ public static class OrderCheck
                     last[name] = frame.State;
                     foreach (var e in frame.Events) run.Events.Add((name, e, m.Clock));
                 };
+                m.OrderArrivedAtAccess += (name, order) => run.Arrivals.Add((name, order.Id, m.Clock));
                 await m.Apply(JsonSerializer.SerializeToElement(map));
                 return run;
             }
@@ -155,6 +159,8 @@ public static class OrderCheck
             Is("R1 |end − (flip − issued)| ≤ 1.5", r1.At(Ona, OrderState.Loop) is { } chainEnd && Math.Abs(chainEnd - FlipRelS) <= 1.5);
             Near("R1 walked length", r1.M.OrderPlayerOf(Ona)?.WalkedM, WalkLenM, TolM);
             NearXZ("R1 on the bed slot", r1.F(Ona).Position, BedSlot);
+            Near("R1 at the slot's height", r1.F(Ona).Position.Y, BedSlot.Y, TolM);
+            Is("R1 the loop pose on the lie surface (the order's loop pose kind; the row names no marker)", r1.F(Ona).SurfaceGroup == "lie", r1.F(Ona).SurfaceGroup);
             var settled = r1.F(Ona).Position;
             await Poll(r1, poll2); r1.Until(7.5);
             Is("R1 a poll after the loop does not move the figure", r1.F(Ona).Position.DistanceTo(settled) <= 1e-4, $"{r1.F(Ona).Position}");
@@ -181,6 +187,8 @@ public static class OrderCheck
             r3b.Until(Dt);
             Is("R3b starts in Loop", r3b.Of(Ona).FirstOrDefault() == OrderState.Loop, Seq(r3b, Ona));
             NearXZ("R3b on the slot", r3b.F(Ona).Position, BedSlot);
+            Near("R3b at the slot's height", r3b.F(Ona).Position.Y, BedSlot.Y, TolM);
+            Is("R3b on the lie surface", r3b.F(Ona).SurfaceGroup == "lie", r3b.F(Ona).SurfaceGroup);
 
             // ---- R4 a revision moves nothing, a new id aborts ----
             var r4 = await Start(Map());
@@ -207,6 +215,10 @@ public static class OrderCheck
             r5.Until(4.0);
             Is("R5 waits at the access", r5.Of(Ona).LastOrDefault() == OrderState.WaitAccess, Seq(r5, Ona));
             NearXZ("R5 stands at the access", r5.F(Ona).Position, new Vec3(103.15, 0, 1.5));
+            // README "Orders world": exit 1.2 + walk 2.911549 / 1.4 = 3.279678 s.
+            Is("R5 OrderArrivedAtAccess once, for Ona's order", r5.Arrivals.Count(a => a.Name == Ona) == 1 && r5.Arrivals.All(a => a.OrderId == "ord-o1"),
+               string.Join(" ", r5.Arrivals.Select(a => $"{a.Name}:{a.OrderId}@{a.T:0.###}")));
+            Near("R5 arrived at 3.28", r5.Arrivals.FirstOrDefault(a => a.Name == Ona).T, 1.2 + WalkLenM / 1.4, TolS);
             await Poll(r5, Map(m => { var o = OrderOf(m); o["revision"] = 2; o["seq"] = 2; m["order_seq"] = 2; m["motion_now"] = 104; }));
             r5.Until(4.5);
             Near("R5 entry from 4.0", r5.At(Ona, OrderState.Entry), 4.0, 2 * Dt);
@@ -234,8 +246,10 @@ public static class OrderCheck
             var r10 = await Start(PairMap());
             r10.Until(0.5);
             Is("R10 both in Loop", r10.Of(Ona).FirstOrDefault() == OrderState.Loop && r10.Of(Uli).FirstOrDefault() == OrderState.Loop, Seq(r10, Ona) + " / " + Seq(r10, Uli));
+            // Exactly the row's clip_s 2.5: the figures are portraits without a rig, and TickPair returns before it advances
+            // the pair clock for a portrait (with a rig it would read 2.5 + 0.5 = 3.0 here; PairCheck covers that clock).
             Is("R10 both adopt the row's pair on clip_s", r10.F(Ona).Pair is { Id: "pair-1" } po && r10.F(Uli).Pair is { Id: "pair-1" } pu
-               && Math.Abs(po.ClipT - 2.5) <= 0.6 && Math.Abs(pu.ClipT - 2.5) <= 0.6, $"{r10.F(Ona).Pair?.ClipT} {r10.F(Uli).Pair?.ClipT}");
+               && Math.Abs(po.ClipT - 2.5) <= 1e-6 && Math.Abs(pu.ClipT - 2.5) <= 1e-6, $"{r10.F(Ona).Pair?.ClipT} {r10.F(Uli).Pair?.ClipT}");
             NearXZ("R10 Ona on her slot", r10.F(Ona).Position, BedSlot);
             NearXZ("R10 Uli on his slot", r10.F(Uli).Position, new Vec3(104, 0.5, 1.0));
             var (ona10, uli10) = (r10.F(Ona).Position, r10.F(Uli).Position);
@@ -264,6 +278,7 @@ public static class OrderCheck
                $"{r11.F(Ona).Activity} {r11.M.OrderPlayerOf(Ona)!.PhasePoseKind}");
             Near("R11 no new run (IssuedLocal)", r11.M.OrderPlayerOf(Ona)!.IssuedLocal, issued11, 1e-9);
             NearXZ("R11 stays on the slot", r11.F(Ona).Position, BedSlot);
+            Is("R11 the phase-2 pose on the seat surface", r11.F(Ona).SurfaceGroup == "seat", r11.F(Ona).SurfaceGroup);
 
             // ---- R12 late entry in phase 2 ----
             var r12 = await Start(Phased(2, late: true));
@@ -339,6 +354,32 @@ public static class OrderCheck
             r14.Until(3.0);
             Is("R14 the held member never exits", !r14.Of(Uli).Contains(OrderState.Exit), Seq(r14, Uli));
             Is("R14 exactly one exit, for Ona", r14.Of(Ona).Count(s => s == OrderState.Exit) == 1, Seq(r14, Ona));
+
+            // ---- R15 the world freeze (game_rate 0): the loop stays the row's, the walk stands and finishes later ----
+            var r15 = await Start(PairMap(m => m["game_rate"] = 0));
+            r15.Until(0.5);
+            Is("R15 frozen at the accept: shown Frozen", r15.Of(Ona).FirstOrDefault() == OrderState.Frozen && r15.Of(Uli).FirstOrDefault() == OrderState.Frozen,
+               Seq(r15, Ona) + " / " + Seq(r15, Uli));
+            NearXZ("R15 Ona on her slot although frozen", r15.F(Ona).Position, BedSlot);
+            NearXZ("R15 Uli on his slot although frozen", r15.F(Uli).Position, new Vec3(104, 0.5, 1.0));
+            Near("R15 Ona at the slot's height", r15.F(Ona).Position.Y, BedSlot.Y, TolM);
+            // The pair is the row's (decision 18), adopted although frozen; that its clock stands still is TickPair's
+            // (not reachable on portraits, see R10) — here: the row's branches run, the order no longer swallows the frame.
+            Is("R15 the row's pair adopted while frozen", r15.F(Ona).Pair is { Id: "pair-1" } && r15.F(Uli).Pair is { Id: "pair-1" },
+               $"{r15.F(Ona).Pair?.Id} {r15.F(Uli).Pair?.Id}");
+            var r15b = await Start(Map());
+            r15b.Until(2.0);
+            await Poll(r15b, Map(m => m["game_rate"] = 0));
+            var frozenAt = r15b.F(Ona).Position;
+            r15b.Until(3.0);
+            Is("R15b the walk stands while frozen", r15b.F(Ona).Position.DistanceTo(frozenAt) <= 1e-4, $"{frozenAt} → {r15b.F(Ona).Position}");
+            await Poll(r15b, Map());
+            r15b.Until(8.0);
+            Is("R15b Exit → Walk → Frozen → Walk → Entry → Loop", r15b.Of(Ona).SequenceEqual(new[]
+               { OrderState.Exit, OrderState.Walk, OrderState.Frozen, OrderState.Walk, OrderState.Entry, OrderState.Loop }), Seq(r15b, Ona));
+            // The 1.0 s frozen span (2.0 → 3.0) delays the chain end by exactly that much.
+            Near("R15b chain end 5.68 + 1.0", r15b.At(Ona, OrderState.Loop), ChainEndS + 1.0, TolS);
+            NearXZ("R15b on the bed slot", r15b.F(Ona).Position, BedSlot);
 
             return $"orders {checks} checks (chain end {r1.At(Ona, OrderState.Loop):0.###} s, walked {r1.M.OrderPlayerOf(Ona)?.WalkedM:0.###} m)";
         }

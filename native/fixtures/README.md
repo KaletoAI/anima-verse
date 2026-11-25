@@ -2070,22 +2070,25 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
 
 - **R1** O1 from t = 0, `worldmap_poll2.json` polled at t = 1.0 / 3.0 / 5.0 (same id + revision = no-op): Exit → Walk →
   Entry → Loop, each once; Exit from the first frame; Loop at 5.679678 ± 0.1; |5.68 − 6.096489| ≤ 1.5; Ona on the bed slot
-  (104, 1.5); a poll after the loop moves nothing (≤ 0.1 mm).
+  (104, 1.5) at the anchor height **0.5**, on the surface **lie** (the row names no place marker, so the group is the
+  order's loop pose kind lie — not the ground's height correction); a poll after the loop moves nothing (≤ 0.1 mm).
 - **R1b** the row without order (`order_seq` 0), the `orders` topic pulled twice: `since` 0, then 1 (the answer's seq);
   the same order twice starts nothing again.
 - **R3** `motion_now` 102.5 (lag 2.5 > 2): the first frame is Walk at (2.5 − 1.2) · 1.4 = **1.82 m** walked.
-- **R3b** status active: Loop on the slot (104, 1.5) at once.
+- **R3b** status active: Loop on the slot (104, 1.5) at once, height 0.5, surface lie.
 - **R4** revision 2 at t = 2.0 (+30 s on every time, `motion_now` 102): states stay Exit → Walk, IssuedLocal unchanged.
   At t = 3.0 the new id `ord-cancel` (kind cancel): Abort at 3.0 (± 2 frames), then Idle.
 - **R5** awaits reaction, no flip: WaitAccess at the access (103.15, 1.5) (reached at 5.68 − 2.4 = 3.28 < 4); the revision
-  without awaits at t = 4.0 starts the entry at 4.0 (± 2 frames).
+  without awaits at t = 4.0 starts the entry at 4.0 (± 2 frames). `OrderArrivedAtAccess` fires exactly once, for `ord-o1`,
+  at exit 1.2 + 2.911549 / 1.4 = **3.279678 s** (± 0.1).
 - **R9** the three fixture orders: every access ≤ 0.4 m from the mesh (Ona's: 0.103),
   the final piece Closest(access) → access crosses no wall of storey 0, every link end within the map's connection radius.
 - **R10** Ona + Uli in one active order (Uli's slot (104, 0.5, 1.0)), both rows with the pair `pair-1` (clip_s 2.5): both
-  Loop, both adopt `pair-1` near clip_s 2.5 (± 0.6: half a second of play), both on their slots; a poll with other row
-  positions moves neither (≤ 0.1 mm).
+  Loop, both adopt `pair-1` on clip_s **2.5** exactly (± 1e-6: the portraits have no rig, so `TickPair` returns before it
+  advances the pair clock — with a rig it would read 2.5 + 0.5 = 3.0; PairCheck owns that clock), both on their slots; a
+  poll with other row positions moves neither (≤ 0.1 mm).
 - **R11** active (revision 1) then revision 2 with a `phase` step (seat/sitting) and the row's activity sitting: still the
-  one Loop, PhasePoseKind seat, figure activity sitting, IssuedLocal unchanged, on the slot.
+  one Loop, PhasePoseKind seat, figure activity sitting, surface seat, IssuedLocal unchanged, on the slot.
 - **R12** the same phase-2 order entered late (`motion_now` 130): Loop at once with the phase-2 pose.
 - **R13** active O1, then a row without order: with `order_seq` 0 (< 1, **R13b**) nothing ends; with `order_seq` 1 the order
   ends and the figure blends in 0.3 s from the slot (104, 1.5) to the row's rest (103.6, 1.5): the first frame still at
@@ -2094,3 +2097,9 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
   (`order_seq` 9) at t = 0.5 does not end it; arrival at (99, 0).
 - **R14** the pair, then a follow order `ord-follow` for Uli alone (sequence loop only): no exit for Uli; a cancel for Ona
   alone (exit lie/laying 1.0 s, stand (103.05, 1.5)) plays exactly one exit, for Ona.
+- **R15** the world freeze (`game_rate` 0). The R10 pair accepted frozen: both shown Frozen, yet the chain's own state is
+  the loop, so the row's branches run — both on their slots (Ona at height 0.5) with `pair-1` adopted (the order no
+  longer swallows the frame). **R15b** O1 from t = 0, a poll with `game_rate` 0 at t = 2.0 (in the walk: 2.0 − 1.2 = 0.8 s
+  of it) and one with `game_rate` 1 at t = 3.0: the figure stands still from 2.0 to 3.0 (≤ 0.1 mm); states Exit → Walk →
+  Frozen → Walk → Entry → Loop; the frozen 1.0 s delays the chain end to 5.679678 + 1.0 = **6.679678 s** (± 0.1); on the
+  bed slot.

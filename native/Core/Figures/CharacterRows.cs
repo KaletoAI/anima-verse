@@ -31,6 +31,9 @@ public sealed record CharacterRow(
     /// <c>order_seq</c> (decision 6).
     /// </summary>
     public AnimaNative.Orders.Order? Order { get; init; }
+
+    /// <summary>The row carries an <c>order</c> that does not parse: not a row without order (it ends nothing).</summary>
+    public bool OrderUnreadable { get; init; }
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
     /// <summary>Optional authoritative facing in radians; older servers do not publish it.</summary>
     public double? Yaw { get; init; }
@@ -126,13 +129,15 @@ public sealed record CharacterRow(
                 : sl.ValueKind == JsonValueKind.Number ? (int)sl.GetDouble() : 0;
             place = new PlaceRef(pid, slot);
         }
+        var order = c.TryGetProperty("order", out var orderEl) ? AnimaNative.Orders.OrderParse.From(orderEl) : null;
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
             Yaw = Json.NumOrNull(c, "yaw"),
             Badges = ParseBadges(c),
             PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
-            Order = c.TryGetProperty("order", out var od) ? AnimaNative.Orders.OrderParse.From(od) : null,
+            Order = order,
+            OrderUnreadable = order is null && c.TryGetProperty("order", out var od) && od.ValueKind != JsonValueKind.Null,
             ActivityAnimation = Json.Str(c, "activity_animation"),
             AnimationSets = sets,
             ModelRev = rev,

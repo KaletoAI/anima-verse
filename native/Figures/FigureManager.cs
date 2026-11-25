@@ -327,6 +327,9 @@ public partial class FigureManager : Node3D
         _rowByName = _rows.GroupBy(r => r.Name).ToDictionary(g => g.Key, g => g.Last());
         _mapPlaces = MapPlace.ParsePlaced(root);
         var plans = Place();
+        // Orders first: a poll that brings a new order must not re-place (or snap) the figure through ApplyPlan before
+        // the order holds its placement; a figure created by this poll gets its order parked and accepted at its first frame.
+        AdoptRowOrders(root);
         var loads = new List<Task>();
         foreach (var row in _rows)
         {
@@ -339,8 +342,7 @@ public partial class FigureManager : Node3D
                 fig = new Figure(row.Name);
                 _figures[row.Name] = fig;
                 AddChild(fig);
-            }
-            // Finale adoption precedes placement ownership, including the seated own B1 avatar.
+            }            // Finale adoption precedes placement ownership, including the seated own B1 avatar.
             AdoptFinale(fig!, row);
             // A solo furniture scene's clip clock rides on the place (§ A8a): per poll; when it goes, the clip's own pace.
             bool hadHeld = fig!.Held is not null;
@@ -353,6 +355,9 @@ public partial class FigureManager : Node3D
             fig.AvatarUrl = row.AvatarUrl;
             fig.IsAvatar = row.Name == AvatarName;
             ApplyPlan(fig, plan, fresh);
+            // The order of a figure this poll created was parked by AdoptRowOrders above: accepted now, from the point
+            // the first placement put it on, on this poll's clock.
+            if (fresh && !SkipsOrders(row.Name)) AcceptParked(fig);
             if (fresh && fig.IsAvatar)
             {
                 if (row.Place is null && row.Interaction is null && row.Yaw is { } yaw && double.IsFinite(yaw))
@@ -381,7 +386,6 @@ public partial class FigureManager : Node3D
             _shown.Remove(gone);
             ForgetOrders(gone);
         }
-        AdoptRowOrders(root);
         UpdateStats();
         PositionMapApplied?.Invoke(root, _source.ReceiptOf(root)?.PolledAt ?? _source.MonotonicMs);
         return Task.WhenAll(loads);

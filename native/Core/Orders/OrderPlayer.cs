@@ -86,6 +86,12 @@ public sealed class OrderPlayer
 
     public OrderState State => _frozen && _state is not (OrderState.Idle or OrderState.Abort) ? OrderState.Frozen : _state;
 
+    /// <summary>The chain's own state, the world freeze NOT folded in (<see cref="State"/> reports every live state as Frozen).</summary>
+    public OrderState RunState => _state;
+
+    /// <summary>The length the running exit or entry was given at its start (its clip's seconds, else the nominal ones).</summary>
+    public double PhaseDuration => _phaseDur;
+
     public double IssuedLocal { get; private set; }
 
     /// <summary>The horizontal metres walked in the current order (a late seek included).</summary>

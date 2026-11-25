@@ -33,6 +33,7 @@ public partial class FigureManager
     private readonly Dictionary<string, string> _orderLoopShown = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OrderState> _orderShownState = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _orderExitY = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string Key, JsonObject Spec)> _orderEntrySpecs = new(StringComparer.Ordinal);
     private long _orderSeqSeen;
     private Task? _ordersPull;
     private bool _ordersPullAgain;
@@ -81,7 +82,12 @@ public partial class FigureManager
                         _parkedOrders[name] = (order, motionNow, _clock);
                     continue;
                 }
-                if (_parkedOrders.TryGetValue(name, out var old) && !Newer(old.Order, order)) _parkedOrders.Remove(name);
+                if (_parkedOrders.TryGetValue(name, out var old))
+                {
+                    // A newer order waits for its mount: an older one arriving meanwhile (a stale row) must not replace it.
+                    if (Newer(old.Order, order)) continue;
+                    _parkedOrders.Remove(name);
+                }
                 AcceptOrder(fig, order, motionNow);
             }
         }
@@ -117,7 +123,10 @@ public partial class FigureManager
                 && Slots?.Invoke().GetValueOrDefault(o.LocationId) is { } tile ? tile.Places.Stairs : Array.Empty<AnimaNative.Scene.StairLink>()),
             ["lift"] = new NpcLiftRide(),
         };
-        return _orderPlayers[name] = new OrderPlayer(name, new OrderClipDurations(this, name), rides);
+        var created = new OrderPlayer(name, new OrderClipDurations(this, name), rides);
+        // A player born between two polls (a pull, a mount) starts in the world's freeze state, not unfrozen.
+        created.SetFrozen(WorldFrozen, _clock);
+        return _orderPlayers[name] = created;
     }
 
     /// <summary>
@@ -135,7 +144,8 @@ public partial class FigureManager
         var named = orders.SelectMany(o => o.Actors.Select(a => a.Name)).ToHashSet(StringComparer.Ordinal);
         foreach (var row in _rows)
         {
-            if (row.Order is not null || named.Contains(row.Name) || SkipsOrders(row.Name)) continue;
+            // A row whose order did not parse is no "row without order": it must not end the running one.
+            if (row.Order is not null || row.OrderUnreadable || named.Contains(row.Name) || SkipsOrders(row.Name)) continue;
             if (_orderPlayers.TryGetValue(row.Name, out var player)) player.RowWithoutOrder(orderSeq, _clock);
             if (_parkedOrders.TryGetValue(row.Name, out var parked) && !parked.Order.IsLocal && orderSeq >= parked.Order.Seq)
                 _parkedOrders.Remove(row.Name);
@@ -146,7 +156,7 @@ public partial class FigureManager
     /// <summary>
     /// The push topic <c>orders</c>: <c>GET /play/orders?since=</c> the highest seq seen, adopted on the answer's
     /// <c>motion_now</c>. One request at a time; a push during one asks once more afterwards. A source without the
-    /// endpoint (404) changes nothing.
+    /// endpoint (404) changes nothing and logs nothing.
     /// </summary>
     public Task PullOrdersAsync()
     {
@@ -170,12 +180,25 @@ public partial class FigureManager
                 if (payload.MotionNow is { } now) AdoptOrders(payload.Orders, now);
                 _orderSeqSeen = Math.Max(_orderSeqSeen, payload.Seq);
             }
+            catch (ApiException e) when (e.Status == 404)
+            {
+                return;
+            }
             catch (Exception e)
             {
                 _log($"[orders] pull failed: {e.Message}");
                 return;
             }
         } while (_ordersPullAgain);
+    }
+
+    /// <summary>A parked order whose figure exists and whose location is mounted now: accepted (lag counted from the park).</summary>
+    private void AcceptParked(Figure fig)
+    {
+        string name = fig.CharacterName;
+        if (!_parkedOrders.TryGetValue(name, out var parked) || !Mounted(parked.Order.LocationId)) return;
+        _parkedOrders.Remove(name);
+        AcceptOrder(fig, parked.Order, parked.MotionNow + (_clock - parked.At));
     }
 
     private void ForgetOrders(string name)
@@ -186,6 +209,7 @@ public partial class FigureManager
         _orderLoopShown.Remove(name);
         _orderShownState.Remove(name);
         _orderExitY.Remove(name);
+        _orderEntrySpecs.Remove(name);
     }
 
     /// <summary>
@@ -197,13 +221,10 @@ public partial class FigureManager
     {
         string name = fig.CharacterName;
         if (SkipsOrders(name)) return false;
-        if (_parkedOrders.TryGetValue(name, out var parked) && Mounted(parked.Order.LocationId))
-        {
-            _parkedOrders.Remove(name);
-            AcceptOrder(fig, parked.Order, parked.MotionNow + (_clock - parked.At));
-        }
+        AcceptParked(fig);
         if (_orderBlends.TryGetValue(name, out var blend)) return TickOrderBlend(fig, blend, dt, camDist);
         if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is not { } order) return false;
+        player.SetFrozen(WorldFrozen, _clock);
         var frame = player.Tick(_clock, NavOf?.Invoke(order.LocationId));
         bool shownBefore = _orderShownState.TryGetValue(name, out var wasState);
         if (frame.Events.Count > 0 || frame.State != OrderState.Idle || (shownBefore && wasState != OrderState.Idle))
@@ -223,18 +244,24 @@ public partial class FigureManager
             }
         }
         if (_orderBlends.TryGetValue(name, out var ended)) return TickOrderBlend(fig, ended, dt, camDist);
-        switch (frame.State)
+        // The world freeze folds every live state into Frozen; the chain's own state decides who draws: from the loop on
+        // the row's branches do, frozen or not (decision 18 — they hold the pair, the solo clip and the finale still).
+        bool frozen = frame.State == OrderState.Frozen;
+        switch (frozen ? player.RunState : frame.State)
         {
             case OrderState.Idle:
             case OrderState.Abort:
                 return false;
             case OrderState.Loop:
                 if (!_orderLoopShown.TryGetValue(name, out var shownId) || shownId != order.Id) ShowLoopStart(fig, player, frame);
+                ApplyLoopSurface(fig, player);
                 return false;
-            case OrderState.Frozen:
-                fig.SecondaryFrozen = true;
-                fig.UpdateFigure(0);
-                return true;
+        }
+        if (frozen)
+        {
+            fig.SecondaryFrozen = true;
+            fig.UpdateFigure(0);
+            return true;
         }
         DrawOrderFrame(fig, player, frame, dt, camDist);
         return true;
@@ -255,7 +282,7 @@ public partial class FigureManager
                 double floor = OrderFloorY(fig, p);
                 fig.Position = new Vector3((float)p.X, (float)floor, (float)p.Z);
                 string clip = rules.ExitKind(frame.PoseKey ?? "") ?? "";
-                double dur = PhaseSeconds(name, player, "exit");
+                double dur = player.PhaseDuration;
                 double startLift = (_orderExitY.TryGetValue(name, out var y0) ? y0 : floor) - floor;
                 if (clip.Length == 0 || !fig.PlayOwnPropDeparture(clip, dur > 0 ? frame.PhaseTime / dur : 1, startLift))
                     fig.Play(FigureClips.PoseKind("standing", fig.Poses));
@@ -280,15 +307,8 @@ public partial class FigureManager
                 fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
                 var actor = player.Current!.ActorNamed(name)!;
                 string clip = rules.EntryKind(frame.PoseKey ?? "") ?? "";
-                double dur = PhaseSeconds(name, player, "entry");
-                var access = actor.Access ?? new OrderPoint(p.X, p.Y, p.Z, frame.YawDeg);
-                var anchor = actor.Anchor ?? access;
-                JsonObject Point(OrderPoint q) => new() { ["x"] = q.X, ["y"] = q.Y, ["z"] = q.Z, ["yaw"] = q.YawDeg };
-                var spec = new JsonObject
-                {
-                    ["kind"] = clip, ["access"] = Point(access), ["anchor"] = Point(anchor), ["root_offset"] = actor.RootOffset,
-                    ["height_cm"] = actor.HeightCm ?? fig.HeightM * 100, ["clock_rate"] = WorldFrozen ? 0 : 1,
-                };
+                double dur = player.PhaseDuration;
+                var spec = EntrySpec(fig, player.Current!, actor, clip, p, frame.YawDeg);
                 if (clip.Length == 0 || !fig.PlayPropEntry(spec, dur > 0 ? frame.PhaseTime / dur : 1))
                 {
                     // Decision 14: no clip in the loaded model — the phase is a held pose of its nominal length.
@@ -351,12 +371,42 @@ public partial class FigureManager
         return true;
     }
 
-    /// <summary>The phase's real clip length (<see cref="OrderClipDurations"/>), else its nominal seconds; 0 without the step.</summary>
-    private double PhaseSeconds(string name, OrderPlayer player, string step)
+    /// <summary>
+    /// The entry clip's spec for <see cref="Figure.PlayPropEntry"/> (it only reads it): built once per order revision,
+    /// clip and freeze state, not every frame.
+    /// </summary>
+    private JsonObject EntrySpec(Figure fig, Order order, OrderActor actor, string clip, Vec3 p, double yawDeg)
     {
-        var s = player.Current?.ActorNamed(name)?.Sequence.FirstOrDefault(q => q.Step == step);
-        if (s is null) return 0;
-        return new OrderClipDurations(this, name).Seconds(step, s.PoseKind, s.PoseKey) ?? s.NominalS;
+        string name = fig.CharacterName;
+        string key = $"{order.Id}/{order.Revision}/{clip}/{WorldFrozen}";
+        if (_orderEntrySpecs.TryGetValue(name, out var cached) && cached.Key == key) return cached.Spec;
+        var access = actor.Access ?? new OrderPoint(p.X, p.Y, p.Z, yawDeg);
+        var anchor = actor.Anchor ?? access;
+        JsonObject Point(OrderPoint q) => new() { ["x"] = q.X, ["y"] = q.Y, ["z"] = q.Z, ["yaw"] = q.YawDeg };
+        var spec = new JsonObject
+        {
+            ["kind"] = clip, ["access"] = Point(access), ["anchor"] = Point(anchor), ["root_offset"] = actor.RootOffset,
+            ["height_cm"] = actor.HeightCm ?? fig.HeightM * 100, ["clock_rate"] = WorldFrozen ? 0 : 1,
+        };
+        _orderEntrySpecs[name] = (key, spec);
+        return spec;
+    }
+
+    /// <summary>
+    /// From the loop on the row poses the figure (decision 18), on the slot's surface: the plan's group and lean when
+    /// the row's place resolved a marker (as the placement did before orders), else the group of the order's loop pose
+    /// kind (seat / lie). Without this the loop pose got the ground's height correction: the hold branch of
+    /// <see cref="ApplyPlan"/> returns before it sets the group and the lean.
+    /// </summary>
+    private void ApplyLoopSurface(Figure fig, OrderPlayer player)
+    {
+        _lastPlans.TryGetValue(fig.CharacterName, out var plan);
+        string group = plan is { SurfaceGroup: not "ground" } ? plan.SurfaceGroup : ClipHeightOffsets.Surface(player.PhasePoseKind);
+        var lean = plan?.Lean;
+        if (fig.SurfaceGroup == group && fig.Lean == lean) return;
+        fig.SurfaceGroup = group;
+        fig.Lean = lean;
+        fig.ApplyRotation();
     }
 
     /// <summary>
