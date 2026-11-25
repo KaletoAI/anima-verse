@@ -14,7 +14,8 @@ the same thing.
 WHAT IS CHECKED, and where every expected value comes from
 -----------------------------------------------------------
 
-A) ``TEMPLATE_VERSION`` (``app/core/garment_template.py``) — the document says "TEMPLATE_VERSION <n>".
+A) ``TEMPLATE_VERSIONS`` (``app/core/garment_template.py``): every kind holds the same value n, and the document says
+   "`TEMPLATE_VERSIONS` <n>".
 B) The atlas: ``PATTERN_ATLAS_PX`` and ``PATTERN_MARGIN_CM`` (``app/blender/scripts/garment_template_build.py``)
    appear with their values ("2048", "1.5 cm").
 C) The parts: every name of ``PARTS`` and every id of ``STRIP_PARTS`` (``app/blender/scripts/uv_pattern.py``)
@@ -113,8 +114,9 @@ def main() -> int:
     gt = GT.read_text(encoding="utf-8")
 
     # A
-    v = const(GT, "TEMPLATE_VERSION")
-    check(f"A  TEMPLATE_VERSION {v}", f"TEMPLATE_VERSION {v}" in doc or f"`TEMPLATE_VERSION` {v}" in doc)
+    versions = set(const(GT, "TEMPLATE_VERSIONS").values())
+    v = min(versions)
+    check(f"A  TEMPLATE_VERSIONS {v}", len(versions) == 1 and f"`TEMPLATE_VERSIONS` {v}" in doc, versions)
 
     # B
     px, margin = const(BUILD, "PATTERN_ATLAS_PX"), const(BUILD, "PATTERN_MARGIN_CM")

@@ -31,7 +31,7 @@ The path, per (piece, body):
    (``garment_assembly``; Ruling A133 hides the body faces it covers).
 
 Cache: ``templates/{item}_{tsig}.glb + .json`` under the character's garment
-store; ``tsig`` = md5[:12] over the parameters, ``TEMPLATE_VERSION``, the base
+store; ``tsig`` = md5[:12] over the parameters, the kind's ``template_version``, the base
 model sha256, the texture source sha256 and what the drape is cut against: the worn
 pieces UNDER it (their drape keys / fit identities, a boot it hangs over), the jacket
 allowance and the chest shaping (``key_for``) — never a piece worn over it. A ``PATTERN_KINDS`` drape also keeps its pattern islands beside it
@@ -77,14 +77,21 @@ SPIKE_SCRIPT = "garment_template_drape.py"
 #: stocking's hem and a trouser's crotch anchor move up on a body whose thighs stand apart.
 #: 10: tops get pattern-piece UVs (front/back/sleeves/band at one px/cm) and an islands output
 #: (``{item}_{tsig}.islands.json`` beside the drape; plan 2026-11-20-template-cut-uv-texture).
-TEMPLATE_VERSION = 10
+#: Key isolation (2026-11-25, Glut's gloves): the version is held PER BUILT KIND (``TEMPLATE_VERSIONS``,
+#: ``template_version``) — a change that drapes or cuts one kind differently bumps that kind's entry only (or a feature
+#: version gated on what it touches, like ``FITTED_VERSIONS`` / ``PANEL_VERSION``), never every kind's. All entries
+#: started at 10, the old shared value, so no key moved when the table came in.
+TEMPLATE_VERSIONS: Dict[str, int] = {"skirt": 10, "dress": 10, "top": 10, "jacket": 10, "trousers": 10, "briefs": 10,
+                                     "bra": 10, "gloves": 10, "tights": 10}
 #: Step 3a (decision D7 b): the fitted kinds' own version, in the drape key of a ``FITTED_KINDS`` piece only — so a
 #: change of the fitted cut re-drapes the fitted pieces and no top / skirt / dress / jacket.
 #: 1 (group A cut texture, 2026-11-21): the fitted kinds' sewing-pattern UV islands (``fitted_pattern``) replace the
 #: planar box UV, and their ``texture`` may be "cut" (``KIND_FIELDS``) — released together, so every existing briefs,
 #: bra, gloves, tights and trousers drape is re-draped ONCE (CPU, 0 hub jobs) on the next Build and gets its islands.
 #: (0 held the key of the drapes made before the islands while nothing could use them.)
-FITTED_VERSION = 1
+#: Key isolation (2026-11-25): held PER FITTED KIND (``fitted_version``) — a bra-only change never re-drapes or re-cuts
+#: the gloves. All started at 1, the old shared value (no key moved).
+FITTED_VERSIONS: Dict[str, int] = {"briefs": 1, "bra": 1, "gloves": 1, "tights": 1, "trousers": 1}
 #: Step 3b (plan group B, B16): the panel kinds' own version, in the drape key AND the cut key of a ``panel_piece``
 #: only (``PANEL_KINDS`` and the strapless top) — so their pattern pieces re-drape these pieces once (CPU, 0 hub jobs)
 #: and no other top or fitted kind.
@@ -553,6 +560,18 @@ def build_kind(params: Dict[str, Any]) -> str:
     kind. Every build decision (fitted or bodice / corset / panel, poses, shape groups, keys, the cut's family, the
     preview) reads this; the piece's layer rank (``LAYER_RANK``), body regions and name stay its kind's."""
     return "bra" if cupped_top(params) else str(params.get("kind") or "")
+
+
+def template_version(params: Dict[str, Any]) -> int:
+    """The builder version a piece's drape and cut keys carry: its BUILT kind's entry of ``TEMPLATE_VERSIONS`` (a top
+    with cups is built as a bra and follows the bra's)."""
+    return TEMPLATE_VERSIONS[build_kind(params)]
+
+
+def fitted_version(params: Dict[str, Any]) -> int:
+    """The fitted kinds' own version of a piece (``FITTED_VERSIONS`` of its built kind; 0 for a kind that is not
+    fitted — no ``fitted`` entry in its keys)."""
+    return FITTED_VERSIONS.get(build_kind(params), 0)
 
 
 def fields_of(params: Dict[str, Any]) -> Tuple[str, ...]:
@@ -2248,14 +2267,14 @@ def keyed_params(params: Dict[str, Any]) -> Dict[str, Any]:
 def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List[str]) -> str:
     """The cache key of one drape (module docstring)."""
     params = keyed_params(params)
-    payload = {"params": params, "version": TEMPLATE_VERSION, "base": base_sha, "texture": texture_sha,
+    payload = {"params": params, "version": template_version(params), "base": base_sha, "texture": texture_sha,
                "lower": sorted(lower)}
     if params.get("kind") == "dress" and not has_bodice(params):
         # A223: a strapless dress's top edge moved under the chest band — only these drapes are due again
         payload["strapless_top_m"] = STRAPLESS_UNDERARM_M
-    if build_kind(params) in FITTED_KINDS and FITTED_VERSION:
-        # step 3a (D7 b): the fitted kinds' own version — only their drapes are due again (0 = the keys before it)
-        payload["fitted"] = FITTED_VERSION
+    if build_kind(params) in FITTED_KINDS and fitted_version(params):
+        # step 3a (D7 b): the fitted kinds' own version — only that kind's drapes are due again (0 = the keys before it)
+        payload["fitted"] = fitted_version(params)
     if panel_piece(params):
         # step 3b (B16): the panel kinds' own version — only skirts and strapless tops are due again
         payload["panels"] = PANEL_VERSION
@@ -2848,7 +2867,7 @@ def refused_only_by_time(failed: Dict[str, Any]) -> bool:
     """Whether a failure record's ONLY failed gate row is ``build_wall_s`` — written while the wall time still
     gated (before 2026-11-18). Such a drape passed every quality row, so it is no refusal now: ``drape_state``
     treats its key as not draped yet (its GLB was not kept), the next Build — automatic too — drapes it again, and
-    the record goes when that drape is accepted or is overwritten by a real verdict. No ``TEMPLATE_VERSION`` bump:
+    the record goes when that drape is accepted or is overwritten by a real verdict. No ``TEMPLATE_VERSIONS`` bump:
     the same parameters drape the same, and a bump would re-drape every READY piece of every character as well."""
     bad = [r for r in failed.get("rows") or [] if isinstance(r, dict) and r.get("gate") and not r.get("ok")]
     return bool(bad) and all(r.get("check") == "build_wall_s" for r in bad)
@@ -3716,7 +3735,7 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
                                                   item=item, wait=False, own_mode=inner["mode"])[0]
         folder = templates_dir(character_name)
         folder.mkdir(parents=True, exist_ok=True)
-        record = {"item_id": item_id, "tsig": sig, "params": params, "version": TEMPLATE_VERSION,
+        record = {"item_id": item_id, "tsig": sig, "params": params, "version": template_version(params),
                   "base_signature": base[0], "base_model_sha256": base_sha, "lower": lower,
                   "texture": {k: Path(v).name if k != "source" else v for k, v in sources.items()},
                   # the key's texture part (``cut_stand_in``: a cut-textured piece keeps this drape when only

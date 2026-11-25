@@ -388,18 +388,30 @@ def _cut_texture_step(character_name: str, item_id: str) -> Optional[Step]:
     """The texture from cut of a worn template top whose ``texture`` is "cut" (user test 2026-11-21:
     ``garment_cut_texture.build_state``): None when it is made (or not wanted); "failed — Retry" for a cached failure
     of the current key (a rejected answer, a failed cut, no item picture — a manual Build retries it, an automatic one
-    skips it); else the step with the image jobs it spends (``jobs`` — an estimate while the pattern is not cut yet)."""
+    skips it); a rejected answer the same request would get again (``held``) is listed with 0 jobs and no Retry (the
+    texture dialog's Redo renders a new seed); else the step with the image jobs it spends (``jobs`` — an estimate
+    while the pattern is not cut yet; "up to" the second attempts, ``max``)."""
     from app.core import garment_cut_texture as gct
     st = gct.build_state(character_name, item_id)
     name = _item_name(item_id)
+
+    def label() -> str:
+        if st["estimate"]:
+            return gct.BUILD_LABEL_ESTIMATE.format(name=name, n=st["jobs"])
+        if int(st.get("max") or 0) > int(st["jobs"]):
+            return gct.BUILD_LABEL_UP_TO.format(name=name, n=st["jobs"], m=st["max"])
+        return gct.BUILD_LABEL.format(name=name, n=st["jobs"])
+
     if st["state"] == gct.BUILD_DUE:
-        label = (gct.BUILD_LABEL_ESTIMATE if st["estimate"] else gct.BUILD_LABEL).format(name=name, n=st["jobs"])
-        return Step("cut_texture", label, int(st["jobs"]), item_id)
+        return Step("cut_texture", label(), int(st["jobs"]), item_id)
     if st["state"] == gct.BUILD_COMPOSE:
         return Step("cut_texture", gct.BUILD_COMPOSE_LABEL.format(name=name), 0, item_id)
+    if st["state"] == gct.BUILD_FAILED and st.get("held"):
+        # key isolation 2026-11-25: the same request would be rejected again — listed, never rendered by a Build
+        return Step("cut_texture", gct.BUILD_HELD_LABEL.format(name=name), 0, item_id,
+                    failed=str(st["reason"] or "rejected"))
     if st["state"] == gct.BUILD_FAILED:
-        label = (gct.BUILD_LABEL_ESTIMATE if st["estimate"] else gct.BUILD_LABEL).format(name=name, n=st["jobs"])
-        return Step("cut_texture", label + FAILED_SUFFIX, int(st["jobs"]), item_id,
+        return Step("cut_texture", label() + FAILED_SUFFIX, int(st["jobs"]), item_id,
                     failed=str(st["reason"] or "failed"))
     return None
 

@@ -14,7 +14,7 @@ The functions of part B do not exist at d98133fca (``section_row``, ``neck_ring`
 rows above the chest band came from a torso-only radius.
 
 PART A — core (app/core/garment_template.py)
-[A1] TEMPLATE_VERSION is 5 (the same parameters drape differently since A179).
+[A1] the top's template version is at least 5 (the same parameters drape differently since A179).
 [A2] build_args: ``drape_quality`` = round(fabric quality x BODICE_DRAPE_QUALITY 1.5) for a piece with a bodice,
      the fabric's own for a skirt. top/medium: 6 -> 9; top/flowing: 7 -> round(10.5) = 10 (banker's rounding);
      top/stiff: 6 -> 9; skirt/medium: 6 -> 6; top/medium at quality_scale 2: fabric 12 -> 18.
@@ -282,7 +282,7 @@ def part_a():
     from app.core import paths
     paths.init(tmp)
     from app.core import garment_template as gt
-    check("[A1] TEMPLATE_VERSION >= 5", gt.TEMPLATE_VERSION >= 5, gt.TEMPLATE_VERSION)   # A198 made it 6
+    check("[A1] TEMPLATE_VERSIONS[top] >= 5", gt.TEMPLATE_VERSIONS["top"] >= 5, gt.TEMPLATE_VERSIONS["top"])   # A198 made it 6
     spec = {"row_y": [1.0], "measure": {}}
 
     def dq(scale=1.0, **p):

@@ -150,7 +150,8 @@ def install():
     gct.item_sha = lambda iid: "itemsha"
     gct.csig_for = lambda c, i, sha, islands=None, has_back_panel=None: "csig00000001"
     gct.read_record = lambda c, i, sig: dict(S.record)
-    gct.job_plan = lambda c, i, islands=None, islands_sha="": {"total": S.plan_total}
+    # "max" = "total": the stub counts no second attempt (key isolation 2026-11-25 reads it for the label)
+    gct.job_plan = lambda c, i, islands=None, islands_sha="": {"total": S.plan_total, "max": S.plan_total}
 
     class _Atlas:
         def is_file(self):

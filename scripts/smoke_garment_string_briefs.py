@@ -41,7 +41,7 @@ old = {k: v for k, v in brief.items() if k not in ("leg_length_m", "sides", "str
 check("fabric brief key unchanged", gt.tsig(brief, base_sha="b", texture_sha="t", lower=[]),
       gt._md5({"params": {k: v for k, v in old.items() if k not in gt.MATERIAL_ONLY
                           and k not in gt.TEXTURE_ONLY and k not in gt.OFF_SHOULDER_FIELDS},
-               "version": gt.TEMPLATE_VERSION, "base": "b", "texture": "t", "lower": []}))
+               "version": gt.template_version(brief), "base": "b", "texture": "t", "lower": []}))
 s, errs = gt.validate_params({"kind": "briefs", "sides": "string", "string_width_m": 0.006, "leg_length_m": 0.1,
                               "leg_cut": 0.8, "back_coverage": 0.05, "side_width_m": 0.02})
 check("string: no legs", s["leg_length_m"], 0.0)

@@ -32,7 +32,8 @@ PRINTED = the same block with light (220, 220, 220) stripes 24 px high every 48 
     - ``_estimate_jobs`` (the pattern not cut yet): PLAIN + 600 px -> 0 + 1 + 1 + 0 = 2; PRINTED + 600 px -> 3; no
       back view + 600 px -> 1 + 1 + 1 + 1 = 4.
     - ``build_state`` due with the PLAIN back and 600 px: jobs 2 (= plan total); ``figure_build._cut_texture_step``:
-      label "Texture from cut · Cream Blouse (+2 image jobs)", jobs 2; ``figure_build.cost`` of that step: hub_jobs 2,
+      label "Texture from cut · Cream Blouse (+2 image jobs, up to 3 when an attempt is rejected)" (``max`` = total 2 +
+      the front job's second attempt 1 x (CUT_ATTEMPTS 2 - 1) = 3, key isolation 2026-11-25), jobs 2; ``figure_build.cost`` of that step: hub_jobs 2,
       note "2 hub jobs (estimate, retries extra) — +2 image jobs for the cut texture".
 [3] ``fill_plain_back`` on a 400 px atlas, px_per_cm 10 (bleed 1 cm = 10 px): islands front (20..200)^2, sleeve_l
     x 20..100 / y 220..300 (front job), back x 220..380 / y 20..200 (back job). The front answer: the front panel
@@ -206,7 +207,7 @@ def section_counts(plain: Path, printed: Path):
         st = gct.build_state(CHAR, ITEM)
         check("[2] build_state due 2", (st["state"], st["jobs"], st["estimate"]), ("due", 2, False))
         step = fb._cut_texture_step(CHAR, ITEM)
-        check("[2] the Build's step", (step.label, step.jobs), ("Texture from cut · Cream Blouse (+2 image jobs)", 2))
+        check("[2] the Build's step", (step.label, step.jobs), ("Texture from cut · Cream Blouse (+2 image jobs, up to 3 when an attempt is rejected)", 2))
         cost = fb.cost(CHAR, [step])
         check("[2] the cost note", (cost["hub_jobs"], cost["note"]),
               (2, "2 hub jobs (estimate, retries extra) — +2 image jobs for the cut texture"))

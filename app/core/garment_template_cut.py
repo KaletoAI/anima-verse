@@ -19,11 +19,11 @@ The CUT SIGNATURE (``cut_sig``) is exactly what the cut reads (derived from ``ga
   the colliders ``clear_of_body`` lays the panels out of, the jacket allowance shapes ``panel_spec``, the chest
   shaping shapes the body) plus which lower template drapes are READY (only those are handed over as colliders);
   while one is still to be draped there is no sig (``WAITING_LOWER``: the Build drapes it first, ``sig_of``);
-- ``TEMPLATE_VERSION`` and the flattening's key (``uv_pattern_key``): a fitted piece's is ``UV_PATTERN_SHA`` (md5 of
-  ``app/blender/scripts/uv_pattern.py``: any change of the flattening re-cuts it, seconds); a top's is
-  ``TOP_UV_PATTERN_SHA``, the md5 of the ``uv_pattern.py`` that last changed a top's islands — the step 3a additions
-  (the fitted kinds' parts, rows, ring strips, direct solves) leave a top's islands byte-identical, and keying the top
-  on the whole file re-draped every top once for nothing (decision D7 b).
+- the kind's ``garment_template.template_version`` and the flattening's key (``uv_pattern_key``): the piece's
+  ``pattern_group`` entry of ``UV_PATTERN_KEYS``, the md5 of the ``uv_pattern.py`` that last changed that group's
+  islands — keying a piece on the whole file re-cut (and re-draped) every fitted and panel piece on any byte, a
+  comment or a rule of another kind included (decision D7 b for tops; key isolation 2026-11-25 for every group). A
+  fitted piece also keys its kind's ``FITTED_PATTERN_KEYS`` entry (``fitted_pattern.py``) and ``fitted_version``.
 
 Of the drape key's ``body:`` token only the attached parts (``garment_template.cut_body_colliders``; the cut run is
 handed them) — a tip's sphere joins the drape's collider after the pattern UVs.
@@ -65,15 +65,36 @@ logger = get_logger("garment_template_cut")
 #: The parameters the builder reads only for the cloth run (after the cut): never in ``cut_sig``.
 DRAPE_ONLY = ("fabric",)
 UV_PATTERN_FILE = Path(__file__).resolve().parents[1] / "blender" / "scripts" / "uv_pattern.py"
-#: md5[:12] of the flattening code (part of ``cut_sig``; the core never imports the Blender scripts).
-UV_PATTERN_SHA = hashlib.md5(UV_PATTERN_FILE.read_bytes()).hexdigest()[:12]
-#: md5[:12] of the ``uv_pattern.py`` that last changed a top's islands (c926b67f0) — a top's cut key. Bump it to the
-#: new file's md5 (and ``scripts/smoke_uv_pattern.py`` [21]'s base commit to the new one) only when a change alters a
-#: top's islands: [21] fails then, as it compares a top's payload with that commit's flattening.
-TOP_UV_PATTERN_SHA = "9f1a4a8ce3b8"
+#: The flattening's part of the cut key PER PATTERN GROUP (``pattern_group``; key isolation, 2026-11-25): the md5[:12]
+#: of the ``uv_pattern.py`` that last changed that group's islands. The core never imports the Blender scripts, and
+#: the md5 of the whole file re-cut every fitted and panel piece on any byte (a comment, a skirt-only rule) — and
+#: ``cut_behind`` re-draped them under the same ``tsig``. A change of the file sets the entries of the groups whose
+#: islands it changes to the new md5 and ``UV_PATTERN_REVIEWED`` to it as well; ``scripts/smoke_key_isolation.py``
+#: fails while the file's md5 differs from ``UV_PATTERN_REVIEWED``, so the decision is never skipped. "top" (a top with
+#: a bodice) is the md5 at c926b67f0 (``scripts/smoke_uv_pattern.py`` [21] compares a top's flattening with that
+#: commit's); the others are the md5 at ac232ef4d, the file they were keyed by before the table.
+UV_PATTERN_KEYS: Dict[str, str] = {
+    "top": "9f1a4a8ce3b8",
+    "corset_top": "248bd40d5e6e", "skirt": "248bd40d5e6e", "jacket": "248bd40d5e6e", "dress": "248bd40d5e6e",
+    "briefs": "248bd40d5e6e", "bra": "248bd40d5e6e", "gloves": "248bd40d5e6e", "tights": "248bd40d5e6e",
+    "trousers": "248bd40d5e6e",
+}
+#: md5[:12] of the ``uv_pattern.py`` whose effect on every group ``UV_PATTERN_KEYS`` reflects (the guard above).
+UV_PATTERN_REVIEWED = "248bd40d5e6e"
 FITTED_PATTERN_FILE = UV_PATTERN_FILE.parent / "fitted_pattern.py"
-#: md5[:12] of the fitted kinds' part rules (step 3a; in ``cut_sig`` of a fitted piece only).
-FITTED_PATTERN_SHA = hashlib.md5(FITTED_PATTERN_FILE.read_bytes()).hexdigest()[:12]
+#: The fitted kinds' part rules (step 3a) PER FITTED KIND, in the cut key of that kind only: the md5[:12] of the
+#: ``fitted_pattern.py`` that last changed the kind's islands — a bra or trouser rule never re-cuts the gloves. Same
+#: guard as ``UV_PATTERN_KEYS`` (``FITTED_PATTERN_REVIEWED``); all started at the md5 at ac232ef4d (no key moved).
+FITTED_PATTERN_KEYS: Dict[str, str] = {"briefs": "7c6512ca8e33", "bra": "7c6512ca8e33", "gloves": "7c6512ca8e33",
+                                       "tights": "7c6512ca8e33", "trousers": "7c6512ca8e33"}
+FITTED_PATTERN_REVIEWED = "7c6512ca8e33"
+
+
+def file_sha(path: Path) -> str:
+    """md5[:12] of a file's bytes (the guard of ``UV_PATTERN_KEYS`` / ``FITTED_PATTERN_KEYS``)."""
+    return hashlib.md5(path.read_bytes()).hexdigest()[:12]
+
+
 CORSET_DARTS_FILE = UV_PATTERN_FILE.parent / "corset_darts.py"
 #: md5[:12] of the corset top's dart rules (phase G; in ``cut_sig`` of a strapless top only).
 CORSET_DARTS_SHA = hashlib.md5(CORSET_DARTS_FILE.read_bytes()).hexdigest()[:12]
@@ -110,25 +131,30 @@ def cut_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in gt.keyed_params(params).items() if k not in DRAPE_ONLY}
 
 
-def uv_pattern_key(params: Dict[str, Any]) -> str:
-    """The flattening's part of the cut key (module docstring): ``UV_PATTERN_SHA`` for a fitted kind and a panel piece
-    (step 3b, ``garment_template.panel_piece``: a skirt, a strapless top), ``TOP_UV_PATTERN_SHA`` for a top with a
-    bodice."""
+def pattern_group(params: Dict[str, Any]) -> str:
+    """The piece's group in ``UV_PATTERN_KEYS``: its built kind (``garment_template.build_kind``: a top with cups is a
+    bra), a corset top (``panel_piece`` top: strapless or with straps) "corset_top"."""
     from app.core import garment_template as gt
-    live = gt.build_kind(params) in gt.FITTED_KINDS or gt.panel_piece(params)
-    return UV_PATTERN_SHA if live else TOP_UV_PATTERN_SHA
+    kind = gt.build_kind(params)
+    return "corset_top" if kind == "top" and gt.panel_piece(params) else kind
+
+
+def uv_pattern_key(params: Dict[str, Any]) -> str:
+    """The flattening's part of the cut key (module docstring): the piece's ``pattern_group`` entry of
+    ``UV_PATTERN_KEYS``."""
+    return UV_PATTERN_KEYS[pattern_group(params)]
 
 
 def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     """The cut signature (module docstring): md5[:12]; ``lower`` = the drape key's lower-layer tokens."""
     from app.core import garment_template as gt
-    payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION,
+    payload = {"params": cut_params(params), "version": gt.template_version(params),
                "uv_pattern": uv_pattern_key(params),
                "base": base_sha, "lower": sorted(lower)}
     if gt.build_kind(params) in gt.FITTED_KINDS:
         # step 3a: a fitted piece's cut also follows its own version and the part rules (``fitted_pattern.py``)
-        payload["fitted"] = gt.FITTED_VERSION
-        payload["fitted_pattern"] = FITTED_PATTERN_SHA
+        payload["fitted"] = gt.fitted_version(params)
+        payload["fitted_pattern"] = FITTED_PATTERN_KEYS[gt.build_kind(params)]
     if gt.panel_piece(params):
         # step 3b (B16): a panel piece's cut follows the panel version (``garment_template.PANEL_VERSION``)
         payload["panels"] = gt.PANEL_VERSION
@@ -430,7 +456,7 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
                           body_colliders=gt.cut_body_colliders(character_name, item_id, lower,
                                                                base_sha=key["base_sha"]))
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
-                                  "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params),
+                                  "version": gt.template_version(params), "uv_pattern": uv_pattern_key(params),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,
                                   "under": key["under"], "colliders": [Path(c[0]).name for c in colliders + own],
                                   "own_mode": own_mode,

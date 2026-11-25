@@ -34,7 +34,7 @@ def old_key(params, **kw):
     params = {k: v for k, v in params.items() if k not in gt.MATERIAL_ONLY}
     if params.get("fabric") in gt.DRAPE_FABRIC:
         params["fabric"] = gt.DRAPE_FABRIC[params["fabric"]]
-    return gt._md5({"params": params, "version": gt.TEMPLATE_VERSION, "base": kw["base_sha"],
+    return gt._md5({"params": params, "version": gt.template_version(params), "base": kw["base_sha"],
                     "texture": kw["texture_sha"], "lower": sorted(kw["lower"])})
 
 
