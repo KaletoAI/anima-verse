@@ -27,10 +27,15 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
     PUT {"state": "ready", "base_revision": 1} on "Empty" -> its issues are not empty (no steps) -> 422, detail.code
     "invalid", an issue at path "steps"; nothing written (GET still revision 1, state "draft").
     PUT {"summary": "x", "base_revision": 1} -> 200, revision 2. Again with base_revision 1 -> 409 "stale".
-    PUT {"bogus": 1, "base_revision": 2} -> 400 (not an editable key).
+    PUT {"bogus": 1, "base_revision": 2} -> 400 "bad_request" (not an editable key; every error detail has a code).
+    POST /quests/templates with the body "{not json" -> 400 "bad_json" (never a 500), with an empty body the same.
  5. Errand: POST the reference quest -> draft, revision 1, issues [] (validate_template of the reference quest is
     empty, Task 5). PUT {"state": "ready", "base_revision": 1} -> 200, state "ready", revision 2, issues [].
     GET /quests/templates/<id> -> gm_notes "GM ONLY" (the admin reads everything); unknown id -> 404.
+ 5b. The ready rule checks the RESULTING template (module docstring): a second Errand E2, made ready (revision 2).
+    PUT {"steps": [], "base_revision": 2} does not name state, yet the result is ready with no steps -> 422
+    "invalid" with an issue at "steps"; nothing written (revision 2, three steps). The way out, the same body plus
+    "state": "draft" -> 200, state "draft", revision 3, no steps.
  6. Start: bindings without "thing" -> 422, detail.code "refused", an issue at "bindings.thing".
     Starting the draft "Empty" -> 422 "refused" with issue code "not_ready". Unknown template -> 404.
     Bindings E -> 200, a run R1 in state "open" (no start condition), current_step 0 (nobody spoke with N).
@@ -172,7 +177,13 @@ def main() -> int:
         resp = call("PUT", f"/quests/templates/{eid}", {"summary": "y", "base_revision": 1})
         check("stale", (resp.status_code, code(resp)), (409, "stale"))
         resp = call("PUT", f"/quests/templates/{eid}", {"bogus": 1, "base_revision": 2})
-        check("not editable", resp.status_code, 400)
+        check("not editable", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = client.request("POST", "/quests/templates", content=b"{not json",
+                              headers={"x-test-user": "admin", "content-type": "application/json"})
+        check("malformed JSON", (resp.status_code, code(resp)), (400, "bad_json"))
+        resp = client.request("POST", "/quests/templates", content=b"",
+                              headers={"x-test-user": "admin", "content-type": "application/json"})
+        check("empty body", (resp.status_code, code(resp)), (400, "bad_json"))
 
         print("[5] errand")
         resp = call("POST", "/quests/templates", ERRAND)
@@ -185,6 +196,22 @@ def main() -> int:
               (200, "ready", 2, []))
         check("admin reads gm_notes", call("GET", f"/quests/templates/{tid}").json().get("gm_notes"), "GM ONLY")
         check("unknown template", call("GET", "/quests/templates/qt_nope").status_code, 404)
+
+        print("[5b] the ready rule and its way out")
+        e2 = call("POST", "/quests/templates", ERRAND).json().get("id", "missing")
+        check("E2 ready", call("PUT", f"/quests/templates/{e2}", {"state": "ready", "base_revision": 1}).status_code,
+              200)
+        resp = call("PUT", f"/quests/templates/{e2}", {"steps": [], "base_revision": 2})
+        detail = resp.json().get("detail") if resp.status_code == 422 else {}
+        check("emptying a ready template", (resp.status_code, code(resp)), (422, "invalid"))
+        check("invalid names steps", "steps" in {i["path"] for i in (detail or {}).get("issues", [])}, True)
+        got = call("GET", f"/quests/templates/{e2}").json()
+        check("nothing written", (got.get("revision"), got.get("state"), len(got.get("steps") or [])),
+              (2, "ready", 3))
+        resp = call("PUT", f"/quests/templates/{e2}", {"steps": [], "state": "draft", "base_revision": 2})
+        got = resp.json()
+        check("with state draft", (resp.status_code, got.get("state"), got.get("revision"), got.get("steps")),
+              (200, "draft", 3, []))
 
         print("[6] start")
         partial = {k: v for k, v in bindings.items() if k != "thing"}

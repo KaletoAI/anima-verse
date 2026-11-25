@@ -9,6 +9,15 @@ and the router carries `Depends(require_admin)` as the second layer. The player'
 Errors answer `{"detail": ...}`; a refusal with issues carries them unchanged as
 `{"detail": {"code", "issues": [{"path", "code", "message"}]}}`. Template edits follow the revision
 convention: `PUT` needs `base_revision` (428 `revision_required`, 409 `stale`).
+
+Every error detail is an object with a `code` (`bad_json`, `bad_request`, `not_found`, `revision_required`,
+`stale`, `invalid`, `has_open_runs`, `refused`) and, except for the issue lists, a `message`.
+
+The ready rule of `PUT`: the RESULTING template is checked — stored fields merged with the body — and when its
+state is `ready` it must have no issues, else 422 `invalid` and nothing is written. That holds even when the body
+does not name `state`, so a ready template that became invalid without an edit (a package whose type it uses was
+unloaded) answers 422 to every plain edit. The way out is to send `"state": "draft"` in the same `PUT` as the fix;
+set it `ready` again once its issues are gone.
 """
 import asyncio
 from typing import Any, Dict, List
@@ -32,9 +41,21 @@ def _not_found(what: str, ident: str) -> HTTPException:
     return HTTPException(404, {"code": "not_found", "message": f"{what} '{ident}' does not exist"})
 
 
+def _bad(message: str) -> HTTPException:
+    return HTTPException(400, {"code": "bad_request", "message": message})
+
+
+async def _json(request: Request) -> Any:
+    """The parsed request body; a malformed or empty one is 400 `bad_json`, never a 500."""
+    try:
+        return await request.json()
+    except ValueError:
+        raise HTTPException(400, {"code": "bad_json", "message": "the body is not valid JSON"})
+
+
 def _body_dict(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
-        raise HTTPException(400, "body must be a JSON object")
+        raise _bad("body must be a JSON object")
     return body
 
 
@@ -105,7 +126,7 @@ def get_template_route(template_id: str) -> Dict[str, Any]:
 @router.post("/templates")
 async def create_template_route(request: Request):
     """Create a template; it always starts as a `draft` of origin `admin`."""
-    body = await request.json()
+    body = await _json(request)
     return await asyncio.to_thread(_create_template_sync, body)
 
 
@@ -113,13 +134,13 @@ def _create_template_sync(body: Any) -> Dict[str, Any]:
     body = _body_dict(body)
     unknown = sorted(set(body) - set(_CREATE_KEYS))
     if unknown:
-        raise HTTPException(400, f"not a quest template field: {', '.join(unknown)}")
+        raise _bad(f"not a quest template field: {', '.join(unknown)}")
     if not isinstance(body.get("title"), str) or not body["title"].strip():
-        raise HTTPException(400, "title is required")
+        raise _bad("title is required")
     try:
         template = quests.create_template(**body)
     except (TypeError, ValueError) as e:
-        raise HTTPException(400, str(e))
+        raise _bad(str(e))
     return _with_issues(template)
 
 
@@ -127,7 +148,7 @@ def _create_template_sync(body: Any) -> Dict[str, Any]:
 async def update_template_route(template_id: str, request: Request):
     """Edit the editable keys of a template against `base_revision`. A template whose resulting state is
     `ready` must have no issues (422 `invalid`)."""
-    body = await request.json()
+    body = await _json(request)
     return await asyncio.to_thread(_update_template_sync, template_id, body)
 
 
@@ -138,17 +159,18 @@ def _update_template_sync(template_id: str, body: Any) -> Dict[str, Any]:
                                   "base_revision missing — load the template first (field revision)"})
     base = body.pop("base_revision")
     if isinstance(base, bool) or not isinstance(base, int):
-        raise HTTPException(400, "base_revision must be an integer")
+        raise _bad("base_revision must be an integer")
     unknown = sorted(set(body) - set(quests.EDITABLE_TEMPLATE_KEYS))
     if unknown:
-        raise HTTPException(400, f"not editable on a quest template: {', '.join(unknown)}")
+        raise _bad(f"not editable on a quest template: {', '.join(unknown)}")
     if "state" in body and body["state"] not in ("draft", "ready"):
-        raise HTTPException(400, "state is draft or ready")
+        raise _bad("state is draft or ready")
     current = quests.get_template(template_id)
     if current is None:
         raise _not_found("Quest template", template_id)
     if int(current.get("revision") or 0) != base:
-        raise HTTPException(409, {"code": "stale", "current": current.get("revision")})
+        raise HTTPException(409, {"code": "stale", "current": current.get("revision"),
+                                  "message": "The template changed since it was loaded"})
     merged = {**current, **body}
     if merged.get("state") == "ready":
         issues = quest_engine.validate_template(merged)
@@ -157,11 +179,12 @@ def _update_template_sync(template_id: str, body: Any) -> Dict[str, Any]:
     try:
         updated = quests.update_template(template_id, body, base_revision=base)
     except quests.StaleRevision as e:
-        raise HTTPException(409, {"code": "stale", "current": e.current})
+        raise HTTPException(409, {"code": "stale", "current": e.current,
+                                  "message": "The template changed since it was loaded"})
     except KeyError:
         raise _not_found("Quest template", template_id)
     except (TypeError, ValueError) as e:
-        raise HTTPException(400, str(e))
+        raise _bad(str(e))
     return _with_issues(updated)
 
 
@@ -186,14 +209,14 @@ def _delete_template_sync(template_id: str) -> Dict[str, bool]:
 async def start_template_route(template_id: str, request: Request,
                                user: Dict[str, Any] = Depends(require_admin)):
     """Start a run of a `ready` template with `{"bindings": {role: binding}}`."""
-    body = await request.json()
+    body = await _json(request)
     return await asyncio.to_thread(_start_sync, template_id, body, str(user.get("username") or ""))
 
 
 def _start_sync(template_id: str, body: Any, started_by: str) -> Dict[str, Any]:
     bindings = _body_dict(body).get("bindings", {})
     if not isinstance(bindings, dict):
-        raise HTTPException(400, "bindings must be an object")
+        raise _bad("bindings must be an object")
     if quests.get_template(template_id) is None:
         raise _not_found("Quest template", template_id)
     try:
@@ -210,7 +233,7 @@ def list_runs_route(state: str = "", lang: str = "en") -> Dict[str, List[Dict[st
     `state` narrows the list to that one state."""
     all_states = quests.RUN_OPEN_STATES + quests.RUN_ENDED_STATES
     if state and state not in all_states:
-        raise HTTPException(400, f"state is one of {', '.join(all_states)}")
+        raise _bad(f"state is one of {', '.join(all_states)}")
     if state:
         limit = 0 if state in quests.RUN_OPEN_STATES else _ENDED_RUNS_LIMIT
         runs = quests.list_runs(states=(state,), limit=limit)
