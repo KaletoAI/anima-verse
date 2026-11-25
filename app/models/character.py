@@ -8,6 +8,7 @@ Storage: world.db — characters and character_state tables
 from datetime import datetime
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
+from app.core import read_scope
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import json
@@ -402,6 +403,10 @@ def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[
     ``strict=True`` propagates storage/decoding errors and missing rows instead
     of returning a replacement profile. Existing callers retain their defaults.
     """
+    try:
+        read_scope.tally("profile")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     try:
         conn = get_connection()
         row = conn.execute(
