@@ -162,6 +162,11 @@ CORSET_STRAPS_VERSION = 1
 #: (``garment_template_fitted.stitch_strip_end``) — one piece with the cups and the band — and moves with the cup's
 #: push-up, the draw toward the middle included, fading out along it.
 BRA_EDGE_VERSION = 4
+#: Round 2026-11-25 (Kai's jeans: an outward dome over the upper calf under a pinch ring in the knee hollow): a widened
+#: trouser leg (``knee_piece``: every leg shape but skinny) bridges the knee hollow from the lower thigh to the calf's
+#: widest point and falls straight to the hem (``garment_template_fitted.knee_bridge``), after the pattern UVs. Part of
+#: the DRAPE key of such a piece only; its cut and islands keep their bytes, so its cut atlas stays valid.
+KNEE_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -371,12 +376,15 @@ SEAT_RELAX_PASSES = 8
 SEAT_FILL_PASSES = 200
 #: The leggings preset of the dialog: trousers that are a second skin from the waist to the ankle.
 LEGGINGS = {"kind": "trousers", "leg_shape": "skinny", "seat": "fitted", "fit": 0.0, "trouser_length": "full"}
-#: The waist finish: an elastic band, a belt band (belt loops are the picture's) or none — its height (the pinned
-#: band, at least MIN_PIN_BAND_M) and how much thicker it lies.
+#: The waist finish: an elastic band, a belt band (its belt loops are painted on the cut atlas,
+#: ``cut_texture_post.draw_trouser_details``) or none — its height (the pinned band, at least MIN_PIN_BAND_M) and how
+#: much thicker it lies.
 TROUSER_WAISTS = ("elastic", "belt", "none")
 TROUSER_WAIST_M = {"elastic": 0.03, "belt": 0.04, "none": 0.0}
 TROUSER_WAIST_EXTRA_M = {"elastic": 0.0015, "belt": 0.003, "none": 0.0}
-#: The fly is painted by the picture (no geometry): the field is for the dialog and the preview, never in the key.
+#: The fly is no geometry: it is painted by code on the cut atlas with the trouser's other construction details
+#: (round 2026-11-25, ``cut_texture_post.trouser_lines`` / ``draw_trouser_details``: the J stitch, the front and back
+#: pockets, the waistband's rows, button and loops) — never in the drape key.
 FLIES = ("none", "zip", "buttons")
 #: The hem: plain, cuffed (a turn-up TROUSER_CUFF_M high, TROUSER_CUFF_FOLD_M thicker) or a stirrup under the arch
 #: (skinny full-length only: leggings / ski pants).
@@ -2291,7 +2299,16 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if build_kind(params) == "bra" and BRA_EDGE_VERSION:
         # round 2026-11-25: straight band top, smoothed free edges (``BRA_EDGE_VERSION``; 0 = the keys before it)
         payload["bra_edges"] = BRA_EDGE_VERSION
+    if knee_piece(params):
+        # round 2026-11-25: the knee bridge of a widened trouser leg (``KNEE_VERSION``)
+        payload["knee"] = KNEE_VERSION
     return _md5(payload)
+
+
+def knee_piece(params: Dict[str, Any]) -> bool:
+    """Round 2026-11-25: a trouser whose legs are widened to a leg shape (``LEG_SHAPE_R``: every shape but skinny) — its
+    drape bridges the knee hollow (``KNEE_VERSION``)."""
+    return params.get("kind") == "trousers" and bool(LEG_SHAPE_R.get(str(params.get("leg_shape") or "")))
 
 
 def templates_dir(character_name: str) -> Path:

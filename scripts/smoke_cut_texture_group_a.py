@@ -97,7 +97,7 @@ def md5(payload):
 tp = gt.validate_params({"kind": "trousers"})[0]
 base = {"params": gt.keyed_params(tp), "version": gt.template_version(tp), "base": "b", "texture": "t", "lower": []}
 check("[2] trousers tsig carries fitted 1", gt.tsig(tp, base_sha="b", texture_sha="t", lower=[]),
-      md5({**base, "fitted": 1}))
+      md5({**base, "fitted": 1, "knee": 1}))  # a straight leg (the default) also carries the knee bridge
 check("[2] ... and differs without it", md5(base) != gt.tsig(tp, base_sha="b", texture_sha="t", lower=[]), True)
 top = gt.validate_params({"kind": "top", "shoulders": "covered", "sleeves": "short"})[0]
 check("[2] a top's tsig has no fitted key", gt.tsig(top, base_sha="b", texture_sha="t", lower=[]),

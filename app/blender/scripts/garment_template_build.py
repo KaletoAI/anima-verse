@@ -3722,6 +3722,7 @@ def run(a):
         # step 3a: the fitted kinds' sewing-pattern islands, from the parts cut in ``build_fitted`` (the drape below
         # only moves vertices, so a ``cut_only`` run writes the same islands bytes)
         pattern = binfo.pop("pattern")
+        knee = binfo.pop("knee_sides", None)
         uv_info = pattern_uv_of_fitted(obj, pattern, out / "islands.json")
         uv_info["planes"] = pattern["planes"]
         uv_info["parts_cut"] = pattern["faces_per_part"]
@@ -3731,6 +3732,14 @@ def run(a):
                               "script_wall_s": round(time.time() - t_all, 2),
                               "script_cpu_s": round(time.process_time() - c_all, 2)}), \
                 {"islands": str(out / "islands.json")}
+        if knee is not None and spec["fitted"].get("shape_r"):
+            # round 2026-11-25: a widened trouser leg bridges the knee hollow (``knee_bridge``) — after the pattern
+            # UVs, so the cut's islands keep their bytes; the drape below starts from the bridged leg
+            kco = np.empty(len(obj.data.vertices) * 3)
+            obj.data.vertices.foreach_get("co", kco)
+            kV, binfo["knee_bridge"] = gf.knee_bridge(kco.reshape(-1, 3), spec["fitted"], knee["sides"], knee["cx"])
+            obj.data.vertices.foreach_set("co", kV.ravel())
+            obj.data.update()
     elif bod:
         # the torso axis of a bodice is the spine (the slice at the shoulder line holds the arms' roots)
         # A179: its Y is the arm joints' (the armhole windows open either side of the axis: an axis 3 cm in front of

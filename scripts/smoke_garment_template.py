@@ -692,7 +692,9 @@ for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
               "lower": ["a", "b"]}
     _got16 = gt.tsig(_pp16, **_kw16)
     _edge16 = {"bra_edges": 4} if _k16 == "bra" else {}
-    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{' + bra_edges 4' if _edge16 else ''}",
+    # round 2026-11-25: a default (straight-leg) trousers carries the knee bridge, knee 1
+    _edge16 = {"knee": 1} if _k16 == "trousers" else _edge16
+    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{''.join(f' + {k} {v}' for k, v in _edge16.items())}",
           _got16 == gt._md5({**_pre16, "fitted": 1, **_edge16}))
     check(f"[16] ... and differs from the pre-release key", _got16 != gt._md5(_pre16))
 import importlib.util  # noqa: E402

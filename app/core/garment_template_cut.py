@@ -127,6 +127,10 @@ WAITING_LOWER = "Waiting for the layers under it to be draped — the next Build
 #: wants a placket is cut ONCE more under the same sig — CPU, seconds; its islands must come out byte-identical.
 MARKS_MISSING = "Writing the placket line into the cut (CPU, 0 hub jobs)"
 MARKS_ISLANDS_CHANGED = "islands changed while writing marks"
+#: Round 2026-11-25: a trouser cut whose islands could not carry a configured detail (``record["details"]["missing"]``:
+#: the fly needs the centre-front seam, a pocket its panel's centre and side seams, the band its seams to the panels —
+#: ``cut_texture_post.trouser_lines``) is cut ONCE more under the same sig; the second record keeps what it found.
+DETAILS_MISSING = "Cutting the pattern again for the trouser details it could not carry (CPU, 0 hub jobs)"
 
 _lock = threading.Lock()
 #: (character, item, cut sig) -> "running"
@@ -341,7 +345,8 @@ def state(character_name: str, item_id: str, *, key: Optional[Dict[str, Any]] = 
     record = read_record(character_name, item_id, sig)
     path = islands_file(character_name, item_id, sig)
     if record.get("state") == "ready" and path.is_file() and (record.get("islands") or {}).get("sha256") \
-            and not marks_due(key.get("params"), record, marks_file(character_name, item_id, sig)):
+            and not marks_due(key.get("params"), record, marks_file(character_name, item_id, sig)) \
+            and not details_due(record):
         out.update(state="ready", reason="", islands_path=path, islands_sha=str(record["islands"]["sha256"]),
                    cut_at=str(record.get("created_at") or ""), wall_s=record.get("wall_s"), record=record)
         return out
@@ -355,7 +360,7 @@ def state(character_name: str, item_id: str, *, key: Optional[Dict[str, Any]] = 
     elif left is not None:
         out.update(state="missing", reason=CUT_LEFT.format(outcome=left[1]))
     elif record.get("state") == "ready":
-        out.update(state="missing", reason=MARKS_MISSING)
+        out.update(state="missing", reason=DETAILS_MISSING if details_due(record) else MARKS_MISSING)
     else:
         out.update(state="missing", reason=NOT_CUT)
     return out
@@ -367,6 +372,28 @@ def marks_due(params: Optional[Dict[str, Any]], record: Dict[str, Any], marks: P
     wrote one, so a cut that had none to write is never cut again)."""
     return bool(params) and str(params.get("placket") or "none") != "none" and "marks" not in record \
         and not marks.is_file()
+
+
+def details_due(record: Dict[str, Any]) -> bool:
+    """Round 2026-11-25: a ready trouser cut whose islands could not carry a configured detail (its record's
+    ``details.missing``) and that was not cut again for it yet (``details.retried``)."""
+    det = record.get("details") or {}
+    return bool(det.get("missing")) and not det.get("retried")
+
+
+def trouser_details(params: Dict[str, Any], item: Optional[Dict[str, Any]], islands: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Round 2026-11-25: what the islands of a trouser cut carry of its configured details
+    (``cut_texture_post.trouser_lines``): ``{"wanted", "placed", "missing"}``, None for another kind or one asking for
+    none."""
+    from app.core import cut_texture_post
+    if params.get("kind") != "trousers":
+        return None
+    fly, waist = str(params.get("fly") or "none"), str(params.get("trouser_waist") or "none")
+    if not cut_texture_post.trouser_wanted(fly, waist):
+        return None
+    text = " ".join(str((item or {}).get(k) or "") for k in ("name", "prompt_fragment"))
+    lines = cut_texture_post.trouser_lines(islands, fly=fly, waist=waist, style=cut_texture_post.trouser_style(text))
+    return {k: lines[k] for k in ("wanted", "placed", "missing")}
 
 
 def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir: Path,
@@ -439,7 +466,7 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
     # B11: a ready cut without its placket line is cut again under the same sig — its islands must not move
     before = read_record(character_name, item_id, sig)
     old_raw = islands_file(character_name, item_id, sig).read_bytes() \
-        if current["reason"] == MARKS_MISSING and before.get("state") == "ready" else None
+        if current["reason"] in (MARKS_MISSING, DETAILS_MISSING) and before.get("state") == "ready" else None
     params, item, lower, base = key["params"], key["item"], key["lower"], key["base"]
     colliders: List[Tuple[Path, Any]] = []
     ready = []
@@ -482,6 +509,14 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
             raw = res["islands"].read_bytes()
             _write_atomic(islands_file(character_name, item_id, sig), raw)
             record["marks"] = bool(res.get("marks"))
+            details = trouser_details(params, item, json.loads(raw))
+            if details is not None:
+                # round 2026-11-25: the trouser details the islands carry; a second cut for missing ones is the last
+                details["retried"] = current["reason"] == DETAILS_MISSING
+                record["details"] = details
+                if details["missing"]:
+                    logger.warning("Cut %s %s: trouser details not carried %s%s", character_name, item_id,
+                                   details["missing"], " (after a second cut)" if details["retried"] else "")
             if res.get("marks"):
                 _write_atomic(marks_file(character_name, item_id, sig), res["marks"].read_bytes())
             try:

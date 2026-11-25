@@ -3275,17 +3275,157 @@ def button_rgb(item_id: str, character_name: str = "", csig: str = "") -> tuple[
     return (list(found["rgb"]), "picture") if found else (None, "")
 
 
+#: Round 2026-11-25: the thread nouns of an item text (``thread_text_colour``).
+THREAD_NOUNS = ("stitch", "stitching", "topstitch", "topstitching", "thread", "seam")
+_thread_pic_cache: dict[tuple[str, int, int], dict | None] = {}
+
+
+def thread_text_colour(text: str) -> tuple[int, int, int] | None:
+    """The topstitching's colour as the item ``text`` names it ("jeans with orange stitching", "gold contrast
+    stitches"), None without one — ``button_text_colour``'s clause rule with the thread nouns (``THREAD_NOUNS``) and
+    the trims' colour words only."""
+    low = (text or "").lower()
+    for clause in (c for part in re.split(r"[,;]", low) for c in re.split(r"\b(?:with|and)\b", part)):
+        words = _TRIM_WORD.findall(clause)
+        at = next((i for i, w in enumerate(words) if _noun(w, THREAD_NOUNS)), None)
+        if at is None:
+            continue
+        colour = next((w for w in reversed(words[:at]) if w in TRIM_COLOURS), None) \
+            or next((w for w in words[at + 1:] if w in TRIM_COLOURS), None)
+        if colour:
+            return tuple(TRIM_COLOURS[colour])
+    return None
+
+
+def trouser_of(item_id: str) -> dict | None:
+    """Round 2026-11-25: a trouser piece's painted details — ``{"fly", "waist", "style", "band_cm", "wanted"}``
+    (``cut_texture_post.trouser_style`` of its text, ``trouser_wanted``), None for any other kind or one that asks for
+    none."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    item = get_item(item_id) or {}
+    p = gt.params_of(item) or {}
+    if p.get("kind") != "trousers":
+        return None
+    fly, waist = str(p.get("fly") or "none"), str(p.get("trouser_waist") or "none")
+    wanted = cut_texture_post.trouser_wanted(fly, waist)
+    if not wanted:
+        return None
+    text = " ".join(str(item.get(k) or "") for k in ("name", "prompt_fragment"))
+    return {"fly": fly, "waist": waist, "style": cut_texture_post.trouser_style(text),
+            "band_cm": round(float(gt.TROUSER_WAIST_M.get(waist, 0.0)) * 100.0, 2), "wanted": wanted}
+
+
+def thread_rgb(item_id: str, character_name: str = "", csig: str = "") -> tuple[list[int] | None, str]:
+    """The painted topstitching's colour (round 2026-11-25): the item TEXT's (``thread_text_colour``), else the item
+    PICTURE's (``cut_texture_post.picture_thread``, cached by the file's stat; the cut's own upscaled picture of
+    ``csig`` when there is one, as ``button_rgb``), else None (a contrast shade of the fabric,
+    ``cut_texture_post.thread_colour``). ``(rgb, source)`` with source "text" / "picture" / ""."""
+    from app.models.inventory import get_item
+    said = thread_text_colour(str((get_item(item_id) or {}).get("prompt_fragment") or ""))
+    if said is not None:
+        return list(said), "text"
+    path = _file(_stem(character_name, item_id, csig), ".item.png") if character_name and csig else None
+    if path is None or not path.is_file():
+        try:
+            path = _item_path(item_id)
+        except NotReady:
+            return None, ""
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _thread_pic_cache:
+        with Image.open(path) as im:
+            rgba = np.asarray(im.convert("RGBA")).astype(np.float64)
+        rgb = rgba[..., :3] * (rgba[..., 3:] / 255.0) + 255.0 * (1.0 - rgba[..., 3:] / 255.0)  # flattened on white
+        _thread_pic_cache[key] = cut_texture_post.picture_thread(rgb)
+    found = _thread_pic_cache[key]
+    return (list(found["rgb"]), "picture") if found else (None, "")
+
+
+def _trouser_key(item_id: str, character_name: str, csig: str) -> str:
+    """The assembly key part of a trouser's painted details ("" without any): their version, the fly, the waist, the
+    style and the thread / button colours."""
+    tr = trouser_of(item_id)
+    if tr is None:
+        return ""
+    thread = thread_rgb(item_id, character_name, csig)[0]
+    button = button_text_colour(_item_text(item_id))
+    tint = "".join(f"{int(v):02x}" for v in (thread or [])) + "-" + "".join(f"{int(v):02x}" for v in (button or []))
+    return f":trousers{cut_texture_post.TROUSER_DETAIL_VERSION}-{tr['fly']}-{tr['waist']}-{tr['style']}-{tint}"
+
+
+def _item_text(item_id: str) -> str:
+    from app.models.inventory import get_item
+    return str((get_item(item_id) or {}).get("prompt_fragment") or "")
+
+
 def placket_key(item_id: str, character_name: str = "", csig: str = "") -> str:
     """The assembly key part of a piece's painted placket ("" without one): a changed style, button count, button
     colour (``button_rgb``) or ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and
-    csig stay."""
+    csig stay. A trouser's painted details (``_trouser_key``) are part of it."""
     style, buttons, _, _ = placket_of(item_id)
     seams = f":seams{cut_texture_post.SEAM_VERSION}" if _has_seams(item_id) else ""
+    seams += _trouser_key(item_id, character_name, csig)
     if style == "none":
         return seams
     colour = button_rgb(item_id, character_name, csig)[0] if style == "buttons" else None
     tint = "-" + "".join(f"{int(v):02x}" for v in colour) if colour else ""
     return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}{seams}"
+
+
+def trouser_atlas(character_name: str, item_id: str, atlas: bytes, trousers: dict) -> tuple[bytes, dict | None]:
+    """Round 2026-11-25: the composed cut atlas of a trouser with its construction details painted
+    (``cut_texture_post.trouser_lines`` from the ready cut's islands, ``draw_trouser_details``) — at assembly, so a
+    changed fly or waist is a CPU re-assembly without an image job. The gate (``trouser_detail_gate``): every configured
+    detail the islands could not carry or the painting did not put on the atlas is listed in ``info["missing"]`` and
+    logged; ``garment_template_cut`` cuts a piece whose islands could not carry them once more (``details_due``).
+    Unchanged (info None) without a ready cut."""
+    try:
+        pattern = _ready_pattern(character_name, item_id)
+    except NotReady:
+        return atlas, None
+    islands = json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8"))
+    lines = cut_texture_post.trouser_lines(islands, fly=trousers["fly"], waist=trousers["waist"],
+                                           style=trousers["style"], band_cm=trousers["band_cm"])
+    with Image.open(io.BytesIO(atlas)) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    size = rgb.shape[0]
+    scale = size / float(islands.get("atlas_px") or size)
+    if scale != 1.0:
+        lines = _scaled_lines(lines, scale)
+    labels = rasterise_islands(islands, size)
+    ids = island_ids(islands)
+    names = {v["island"] for v in list(lines["lines"].values()) + list(lines["points"].values()) + lines["loops"]}
+    masks = {n: labels == ids[n] for n in names if n in ids}
+    csig = current_csig(character_name, item_id) or ""
+    thread, tsource = thread_rgb(item_id, character_name, csig)
+    button = button_text_colour(_item_text(item_id))
+    ppc = float(islands.get("px_per_cm") or 0.0) * scale
+    out, info = cut_texture_post.draw_trouser_details(rgb, masks, lines, px_per_cm=ppc, thread_rgb=thread,
+                                                      button_rgb=button)
+    if cut_texture_post.trouser_detail_gate(info, lines["placed"]) and thread is not None:
+        # the gate's second attempt: the details painted again in the fabric's contrast shade (an item thread too
+        # close to the atlas's fabric left a detail unseen)
+        out, info = cut_texture_post.draw_trouser_details(rgb, masks, lines, px_per_cm=ppc, thread_rgb=None,
+                                                          button_rgb=button)
+        info["attempts"] = 2
+        tsource = ""
+    missing = sorted(set(lines["missing"]) | set(cut_texture_post.trouser_detail_gate(info, lines["placed"])))
+    info.update(style="trousers", details=trousers["style"], fly=trousers["fly"], waist=trousers["waist"],
+                wanted=lines["wanted"], missing=missing, thread_from=tsource or info.get("thread_source"),
+                lines=sorted(info.get("painted") or {}))
+    if missing:
+        logger.warning("Trouser details %s %s: not painted %s", character_name, item_id, missing)
+    return _png(Image.fromarray(out, "RGB")), info
+
+
+def _scaled_lines(lines: dict, k: float) -> dict:
+    """``trouser_lines`` with every pixel coordinate scaled by ``k`` (an atlas stored at another size)."""
+    sc = lambda p: [[round(x * k, 2), round(y * k, 2)] for x, y in p]  # noqa: E731
+    return {**lines,
+            "lines": {n: {**v, "px": sc(v["px"])} for n, v in lines["lines"].items()},
+            "points": {n: {**v, "px": sc([v["px"]])[0]} for n, v in lines["points"].items()},
+            "loops": [{**v, "a": sc([v["a"]])[0], "b": sc([v["b"]])[0]} for v in lines["loops"]]}
 
 
 def _has_seams(item_id: str) -> bool:
@@ -3303,6 +3443,9 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     cut or without a marks file (a cut that wrote no line; an old top cut is cut once more for it, B11)."""
     style, buttons, kind, collar = placket_of(item_id)
     seams = _has_seams(item_id)
+    trousers = trouser_of(item_id)
+    if trousers is not None:
+        return trouser_atlas(character_name, item_id, atlas, trousers)
     if style == "none" and not seams:
         return atlas, None
     try:
