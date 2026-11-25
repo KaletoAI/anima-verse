@@ -402,7 +402,12 @@ gibt es einen Frame ohne Pfad. Große Locations in Chunks mit `filter_baking_aab
 bereits 2D-Polygone; ein direkt aus ihnen gebautes Navmesh (bzw. der 2D-Bake pro Stockwerk) wäre exakt, ohne
 Voxelraster und ohne das Zellgrößenproblem an Türen. E2 misst beide und nimmt das genauere, sofern es Links und
 Abfragen gleich bedient. Vor der ersten
-Pfadabfrage auf `MapGetIterationId(map) > 0` warten; bis dahin bleibt die Figur in `exit` bzw. am Start.
+Pfadabfrage warten, bis `MapGetIterationId(map)` seit der letzten wirksamen Änderung an der Map (Erzeugen, ein
+`RegionSetEnabled`/`LinkSetEnabled`, das den Zustand wirklich umschaltet) gestiegen ist; die Map und jede Region laufen
+mit synchronen Iterationen (`MapSetUseAsyncIterations`/`RegionSetUseAsyncIterations` `false`). `MapGetIterationId > 0`
+reicht nicht: mit den asynchronen Standard-Iterationen ist `iter = 1` in Godot 4.7.2 eine **leere** Map (`QueryPath` → `[]`,
+`MapGetClosestPoint` → (0,0,0)), und nach `RegionSetEnabled` zeigt der nächste Wechsel noch den alten Zustand (gemessen,
+E2-Review B4). Bis dahin bleibt die Figur in `exit` bzw. am Start.
 
 Geschätzte Kosten (nicht gemessen, mit `native/Bench/` messen): Raum ~10⁴ Zellen, wenige ms; Location bis
 100 m ~10⁶ Zellen, 50–300 ms asynchron, Main-Thread unberührt.
@@ -869,3 +874,53 @@ eingearbeitet. Abweichungen:
     sobald ihre Klasse-B-Vektoren nur noch über die Vektor-Smokes und C# laufen; bis dahin bleiben sie bekannt rot.
   - Ebenfalls schon vor E1 rot (seit 09ff16d3a): `scripts/smoke_hud_notice_hits.mjs` („Unexpected import
     ./ShowPhotoButton“, fehlender require-Stub) — in der Fix-Welle E0/E1 behoben, wieder grün.
+
+- **E2 umgesetzt (2026-11-25, Plan `docs/superpowers/plans/2026-11-25-client-ausfuehrung-e2.md`, Tasks 1–8).**
+  Navmesh im nativen Client: `Core/Nav/NavSource` (Godot-frei), `World/NavBake`, `World/NavMaps` (`LocationNav`),
+  `World/WorldBuilder.Nav`, `NavCheck` (`--check nav`, `--check navcompare`), Overlay `NavOverlay` (F9).
+  - **Bake-Modus: Polygon** (2D-Bake `NavigationServer2D` auf den Stockwerks-Umrissen, `NavigationPolygon.GetNavigationMesh()`,
+    auf die Stockwerkshöhe gehoben; Zelle 0,05 m, `agent_radius` 0,25). Messregel (Messdokument
+    `docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md`): Polygon besteht die Pfadabschnitte
+    N4–N7b, Voxel scheitert an N4 (Türecken 0,025 m daneben, Netz bis 0,1 m über dem Boden); größter Kantenfehler
+    0,0016 m gegen 0,05 m; Backzeit der vier Vergleichs-Locations 0,128 ms gegen 10,558 ms (Median aus 5 synchronen
+    Bakes, größte einzelne 0,057 ms). Voxel-Weg, `NavBakeMode` und seine Parameter sind gelöscht;
+    `NavBakeParams.Current` = Zelle 0,05/0,05, Version 2. Die 300-ms-Schwelle für einen Plattencache ist um mehr als drei
+    Größenordnungen unterschritten — kein Plattencache.
+  - **Türschwellen (Plan-Entscheidung 2):** Jeder benutzbare Durchgang mit angrenzender Wand wird mit einem **Siegel**
+    (Hindernis-Rechteck über die Türbreite, Tiefe = Wanddicke) verschlossen; die **Schwelle** ist eine eigene kleine Region
+    (halbe Länge `width/2 − 0,25`, halbe Tiefe `t/2 + 0,25`), deren Querkanten genau auf den erodierten Raumkanten liegen
+    und per Edge-Connection verschweißt werden. Sperre = `RegionSetEnabled(false)` ohne Rebake, nur über
+    `WorldBuilder.SetLocks` (dieselbe `Locks.DoorwayLock`-Regel wie Türblätter). Durchgang ohne angrenzende Wand = offener
+    Boden; zu schmale Tür = Siegel ohne Schwelle (`NavProblem("door_too_narrow")`).
+  - **Cache-Schlüssel = Fingerabdruck der Quelle (Plan-Entscheidung 6)** statt `scene_etag`: SHA-256 über die kanonische
+    Zahlentextform der ganzen `NavSourceData` + `NavBakeParams.Version`. So lösen auch Möbelboxen nach dem Modell-Laden
+    einen Rebake aus, ein unveränderter Remount nicht. Speicher-LRU mit 16 Einträgen. Gebacken wird nach `slot.Ring = Near`
+    in `MountDetailAsync` und am Ende von `DeriveStands`; bei `Far`/`FreeSlot` wird freigegeben.
+  - **Map-Tausch statt Region-Tausch (Plan-Entscheidung 4):** Jeder Bake baut eine **neue** Map mit synchronen Map- und
+    Region-Iterationen; Bereitschaft = `MapGetIterationId` seit der letzten wirksamen Änderung gestiegen
+    (`ChangedAtIteration`; `ApplyLocks`/`SetLinkEnabled` schalten nur bei echter Abweichung). Scharfschalten über das
+    Signal `NavigationServer3D.MapChanged` (nur abonniert, solange eine Map aussteht): erst `ApplyLocks` mit den aktuellen
+    Sperren, dann Tausch, danach die alte Map samt Regionen und Links freigeben — nie ein Frame ohne Pfad. Abschnitt 5d
+    ist entsprechend nachgetragen (statt `MapGetIterationId > 0`).
+  - **Links (Plan-Entscheidung 13):** Owner-Id Treppe `(1 << 16) | flightIndex`, Aufzug `(2 << 16) | (lowerLevel + 128)`;
+    Kosten Treppe enter 0 / travel 1, Aufzug `enter_cost` 20 und **`travel_cost` 10** (`enter_cost` allein hielt die
+    Pfadsuche in 4.7.2 nicht vom Aufzug fern). Godot markiert nur den Einstiegspunkt (`PathTypes` = Link); Vertrag
+    `NavPath.Owners[i] ≠ 0` ⇒ Link-Abschnitt `(Points[i], Points[i+1])`. Den Ritt fährt weiter `Stairs.RideStep` bzw. der
+    Aufzugsstopp (`AvatarRoomsController.RideLinkAsync`). Layer: Stockwerk `1 << (level + 8)`, Links `1 << 31`, Abfrage
+    immer alle.
+  - **Laufflächen (Plan-Entscheidung 7):** Ebene 0 jeder Location = `boundary`-Ring um 0,30 m nach außen versetzt
+    (`NavSource.OffsetRing`, Rückfall + `NavProblem("boundary_offset")`) plus `floor_plan`, Platten und Korridore der
+    Ebene 0 — so gehört der Hof (`is_ground`, nicht in `floor_plan`) zum Netz; Höhe pro Vertex: in den
+    `floor_plan`-Hüllen Boden, außerhalb Gelände. Obere Ebenen: jede Platte als eigener Boden + Korridore; ein Plattenloch
+    sperrt nur, wenn keine andere Platte es überdeckt.
+  - **Boden-Klick (Plan-Entscheidung 11):** neu im nativen Client — `MainHud.PickAt` nach Angeboten und Vertikalzielen, nur
+    verkörpert; Schnitt über die reine Core-Funktion `NavClick.GroundHit` (Stockwerksebene, außerhalb des Grundrisses bzw.
+    draußen einmal mit `FigureGroundY` nachgeschnitten). `PlayerSteering.WalkTo` prüft zuerst die Sperren (`Blocked`),
+    plant dann über `NavRoutePlanner`/`QueryPath`; draußen ohne Navmesh bleibt der gerade Weg (`ClickMove.PlanClickWalk`).
+    Die Klemme `NavClamp` sperrt jetzt Möbel für den Avatar; der alte `OwnPropMotion`-Weg ist ausgenommen.
+  - **`NavRoute` ist ein Wegwerf-Abspieler** (Verfolgung, Feststecken, Neuplanung, Link-Ritt), den E3 durch den
+    `OrderPlayer` ersetzt.
+  - **Offene Übergabepunkte an E3:** Avoidance (`Agent*`-RIDs, `max_speed` = `order.speed_m_s`), `OrderPlayer` statt
+    `NavRoute`, NPC-Pfade über das Navmesh (heute unverändert), die Welt-Map draußen (in E2 nicht angelegt), die
+    `access`-Prüfung (Abstand < 0,4 m, Schlussstück ohne Wand) gegen echte Aufträge in `OrderCheck` — E2 prüft sie nur
+    an den Fixtures.
