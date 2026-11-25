@@ -53,7 +53,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -1129,6 +1129,62 @@ _UNNEEDED_REASONS = ("stored, not needed now", "outdated: a live outfit was buil
 _SHAPE_NEEDED_REASONS = ("shape of a live outfit", "shape of its outfit not computable", "base unknown")
 
 
+#: ``stored`` reason of a shape whose views are stored but that was never meshed (a run superseded mid-way): never
+#: needed by itself, deletable — wearing its combination again renders and meshes it anew.
+SHAPE_SUPERSEDED = "superseded, not meshed"
+#: ``stored`` reason of a shape whose outfit can still be produced but is neither worn nor a saved outfit set (round
+#: 2026-11-25, Arvid's six body shapes): kept for reuse, deletable — wearing that combination again meshes it anew.
+SHAPE_NOT_WORN = "shape of an outfit that is neither worn nor saved as an outfit set"
+
+
+def saved_set_pieces(outfit: Dict[str, Any]) -> Dict[str, str]:
+    """``{slot: item id}`` a saved outfit set puts on: every slot of each of its outfit pieces (``outfit_piece.slots``
+    — what ``apply_equipped_pieces`` fills when the set is worn)."""
+    from app.models.inventory import get_item
+    out: Dict[str, str] = {}
+    for item_id in outfit.get("pieces") or []:
+        item = get_item(str(item_id)) or {}
+        if item.get("category") != "outfit_piece":
+            continue
+        for slot in (item.get("outfit_piece") or {}).get("slots") or []:
+            out.setdefault(str(slot), str(item_id))
+    return out
+
+
+def needed_shapes(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                  wanted: Optional["Figure"] = None) -> Set[str]:
+    """The body shapes a Delete must keep (round 2026-11-25): the one the worn figure stands on and the one each saved
+    outfit set would stand on when worn (``predicted_keys`` of its pieces, its open pieces and its hairstyle on the
+    profile's other items) — every other shape of a merely producible combination is spare. Plain keys (``base…``)
+    are left out. Raises when the profile or a set cannot be judged (the caller keeps the old rule)."""
+    from app.core.garment_hair import HAIR_KIND
+    from app.core.outfit_options import PIECE_STATE_KEY, clean_piece_state_map
+    from app.core import outfit_bodies
+    profile = _profile_of(character_name, profile)
+    wanted = wanted or wanted_figure(character_name, profile=profile)
+    out = {wanted.shape}
+    items = _items_of(profile, None)
+    for outfit in outfit_bodies._saved_outfits(character_name):
+        trial = profile
+        hairstyle = str(outfit.get("hairstyle") or "").strip()
+        if hairstyle:
+            worn = profile.get("equipped_mesh_pieces")
+            trial = {**profile, "equipped_mesh_pieces": {**(worn if isinstance(worn, dict) else {}),
+                                                         HAIR_KIND: hairstyle}}
+        options = outfit.get("options") if isinstance(outfit.get("options"), dict) else {}
+        state = clean_piece_state_map(options.get(PIECE_STATE_KEY)) if PIECE_STATE_KEY in options else None
+        shape, _texture = predicted_keys(character_name, saved_set_pieces(outfit), items, bsig=wanted.bsig,
+                                         profile=trial, piece_state=state)
+        out.add(shape)
+    return {k for k in out if k and not is_plain(k)}
+
+
+def _shape_meshed(root, key: str) -> bool:
+    """Whether the body shape ``key`` has its model (``model3d/<key>.<ext>``) — else only its views are stored."""
+    from app.core.model3d import MODEL_EXTS
+    return any((root / "model3d" / f"{key}{ext}").is_file() for ext in MODEL_EXTS)
+
+
 def stored(character_name: str) -> List[Dict[str, Any]]:
     """Every stored body shape (``ob…``) and texture body (texture key) of
     the character — the Figure tab's "Stored bodies and textures" (plan
@@ -1140,10 +1196,16 @@ def stored(character_name: str) -> List[Dict[str, Any]]:
     "running" a run works on it · "current" the worn figure stands on it ·
     "needed" an outfit would be built on it now · "" deletable), history (a
     shape kept only because an outfit model was built on it — deletable,
-    Ruling A64), running (a run works on it), current (the worn figure's
-    shape or texture, wanted or delivered)}``. A shape is deletable unless
-    it runs, is current or its verdict is one of ``_SHAPE_NEEDED_REASONS``;
-    when the worn figure cannot be resolved, only an unreachable shape is. A
+    Ruling A64), spare (round 2026-11-25: a shape of a combination that is
+    neither worn nor a saved outfit set — ``needed_shapes`` — or one never
+    meshed: deletable, ``unneeded``), meshed (a shape has its model; one with
+    views only reads ``SHAPE_SUPERSEDED``), running (a run works on it),
+    current (the worn figure's shape or texture, wanted or delivered)}``. A
+    shape is deletable unless it runs, is current or its verdict is one of
+    ``_SHAPE_NEEDED_REASONS`` while ``needed_shapes`` names it ("shape of a
+    live outfit" alone no longer keeps it: every combination ever built whose
+    items are owned is one — reason ``SHAPE_NOT_WORN``); nothing is deleted
+    automatically (Ruling 5a); when the worn figure cannot be resolved, only an unreachable shape is. A
     texture body is deletable when no root reaches it and no run works on
     it. The current ones first, then newest first. Read-only; the plain body
     (a base) is not listed."""
@@ -1165,12 +1227,15 @@ def stored(character_name: str) -> List[Dict[str, Any]]:
             groups[("shape", str(node.parents["body_id"]))].append(node)
     current: set = set()
     current_known = False
+    needed: Optional[Set[str]] = None
     try:
-        wanted, delivered = _delivered(character_name, profile=_profile_of(character_name, None))
+        profile = _profile_of(character_name, None)
+        wanted, delivered = _delivered(character_name, profile=profile)
         current = {k for k in (wanted.shape, wanted.texture, delivered.shape, delivered.texture) if k}
         current_known = True
+        needed = needed_shapes(character_name, profile=profile, wanted=wanted)
     except Exception:  # noqa: BLE001 — a marker, never a failure (then only the graph's verdict decides)
-        pass
+        logger.debug("Stored bodies of %s: the worn figure or a saved set not judged", character_name, exc_info=True)
     root = artefact_graph._char_dir(character_name)
     saved = outfit_bodies._saved_outfits(character_name)
     out: List[Dict[str, Any]] = []
@@ -1189,11 +1254,21 @@ def stored(character_name: str) -> List[Dict[str, Any]]:
         is_current = key in current
         history = (kind == "shape" and reachable and current_known and not is_current
                    and head.reason not in _SHAPE_NEEDED_REASONS)
+        meshed = kind != "shape" or _shape_meshed(root, key)
+        # Round 2026-11-25: a producible combination's shape is kept only when it is worn or a saved set's; a shape
+        # never meshed (views only — a run superseded mid-way) is never needed by itself.
+        spare = (kind == "shape" and reachable and needed is not None and not is_current and not history
+                 and ((head.reason == "shape of a live outfit" and key not in needed) or not meshed))
+        reason = head.reason
+        if kind == "shape" and not meshed and not is_current and not running:
+            reason = SHAPE_SUPERSEDED
+        elif spare:
+            reason = SHAPE_NOT_WORN
         if running:
             refusal = "running"
         elif is_current:
             refusal = "current"
-        elif reachable and not history:
+        elif reachable and not history and not spare:
             refusal = "needed"
         else:
             refusal = ""
@@ -1205,8 +1280,10 @@ def stored(character_name: str) -> List[Dict[str, Any]]:
                     "outfits": outfits,
                     "last_used": last or (datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
                                           if mtime else ""),
-                    "reason": head.reason, "unneeded": head.reason in _UNNEEDED_REASONS,
+                    "reason": reason,
+                    "unneeded": head.reason in _UNNEEDED_REASONS or spare or reason == SHAPE_SUPERSEDED,
                     "deletable": not refusal, "refusal": refusal, "history": history,
+                    "spare": spare, "meshed": meshed,
                     "running": running, "current": is_current,
                     "_mtime": mtime})
     out.sort(key=lambda e: e["_mtime"], reverse=True)

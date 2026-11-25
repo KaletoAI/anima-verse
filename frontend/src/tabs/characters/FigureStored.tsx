@@ -17,6 +17,11 @@
  * GET …/figure/stored/{key}/preview); a row that cannot be deleted says why
  * under it (`refusal`), a shape kept only by an outfit model built on it
  * (`history`) is deletable and says so.
+ *
+ * Round 2026-11-25 (Arvid's six body shapes): a shape is kept only for the worn combination and the saved outfit
+ * sets (`spare`: neither — deletable), a shape with views only says "superseded, not meshed" (`meshed` false), and
+ * "Delete all not needed…" opens the same dialog with every deletable not-needed entry. Nothing is deleted
+ * without that confirmation.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -48,6 +53,10 @@ export interface StoredEntry {
   refusal?: StoredRefusal
   /** A shape kept only because an outfit model was built on it: deletable, that model goes with it. */
   history?: boolean
+  /** A shape neither worn nor of a saved outfit set, or never meshed — deletable (round 2026-11-25). */
+  spare?: boolean
+  /** A shape has its model; false = views only (a run superseded mid-way). */
+  meshed?: boolean
 }
 
 const CELL: CSSProperties = { padding: '3px 6px', verticalAlign: 'top' }
@@ -64,6 +73,7 @@ export function FigureStored({ character, onDeleted }: {
   const [entries, setEntries] = useState<StoredEntry[] | null>(null)
   const [error, setError] = useState('')
   const [confirm, setConfirm] = useState<StoredEntry | null>(null)
+  const [bulk, setBulk] = useState<StoredEntry[] | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -84,13 +94,25 @@ export function FigureStored({ character, onDeleted }: {
   const why = (e: StoredEntry) => refusalText(e.refusal ?? (e.running ? 'running' : e.current ? 'current' : 'needed'),
     e.reason, t)
   const totalUnneeded = entries.filter((e) => e.unneeded).reduce((sum, e) => sum + e.bytes, 0)
+  const bulkEntries = entries.filter((e) => e.unneeded && e.deletable)
+  const labelOf = (e: StoredEntry) => `${e.kind === 'shape' ? t('Body shape') : t('Texture body')}${e.built_for_name
+    ? ` (${e.built_for_name})` : ''}`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div className="ga-hint">
         {t('Kept for reuse: switching back to an outfit built on one of these costs nothing. Only Delete removes what no outfit needs now.')}
         {totalUnneeded ? ` ${t('Not needed now: {size}.').replace('{size}', megabytes(totalUnneeded))}` : ''}
+        {' '}{t('Every combination of in-body pieces is its own body shape with its own mesh run; one is kept for the outfit worn now and for each saved outfit set.')}
       </div>
+      {bulkEntries.length > 1 ? (
+        <div>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => setBulk(bulkEntries)}
+            title={t('Opens the confirmation with every entry not needed now — nothing is deleted before it')}>
+            {t('Delete all not needed…')} ({bulkEntries.length} · {megabytes(bulkEntries.reduce((sum, e) => sum + e.bytes, 0))})
+          </button>
+        </div>
+      ) : null}
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.92em' }}>
         <thead>
           <tr style={{ textAlign: 'left', ...MUTED }}>
@@ -129,10 +151,15 @@ export function FigureStored({ character, onDeleted }: {
       </table>
       {confirm ? (
         <StoredDeleteDialog character={character} entryKey={confirm.key} kind={confirm.kind}
-          label={`${confirm.kind === 'shape' ? t('Body shape') : t('Texture body')}${confirm.built_for_name
-            ? ` (${confirm.built_for_name})` : ''}`}
+          label={labelOf(confirm)}
           onClose={() => setConfirm(null)}
           onDeleted={() => { setConfirm(null); onDeleted?.(); void load() }} />
+      ) : null}
+      {bulk && bulk.length ? (
+        <StoredDeleteDialog character={character} entryKey={bulk[0].key} kind={bulk[0].kind} label={labelOf(bulk[0])}
+          more={bulk.slice(1).map((e) => ({ key: e.key, label: labelOf(e) }))}
+          onClose={() => setBulk(null)}
+          onDeleted={() => { setBulk(null); onDeleted?.(); void load() }} />
       ) : null}
     </div>
   )

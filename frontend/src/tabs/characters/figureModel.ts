@@ -46,7 +46,7 @@ export const HAIR_MODE_LABELS: Record<HairMode, string> = {
 export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   own_mesh: 'A finished mesh of its own, fitted on top of the body.',
   shell: 'Made from the body’s own surface where the piece-only views show the piece, 4 mm over the skin, coloured from those views — no generated mesh and no cut-outs (0 hub jobs after the views), fitted on the CPU. For close-fitting pieces: underwear, tights.',
-  in_body: 'Meshed as part of the body.',
+  in_body: 'Meshed as part of the body. Every combination of in-body pieces is its own body shape with its own mesh run.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
   accessory: 'A thin piece made on the CPU from the body (0 hub jobs): a chain or cord along the neck, optionally with a pendant from the item image (1 hub job per item). Its kind, drop, material and pendant are set in the Wardrobe.',
 }
@@ -772,6 +772,23 @@ export interface FigureChange {
   front?: 'reference' | 'text'
 }
 
+/** One view of the worn body shape (`figure_build._shape_views`): `stamp` is the picture's cache key, `empty` an
+ *  EMPTY composite (the base view unchanged), `lost_clothing` EMPTY although the dressed front wears clothing. */
+export interface ShapeViewInfo {
+  view: string
+  exists: boolean
+  stamp: string
+  empty: boolean
+  lost_clothing: boolean
+  jobs: number
+}
+
+/** `base_body.shape_view_state`: the view a Regenerate renders now, and the last one's outcome. */
+export interface ShapeViewRegenerateState {
+  running: { shape: string; view: string } | null
+  last: { shape: string; view: string; ok: boolean; error: string } | null
+}
+
 export interface FigureBodyPart {
   key: string
   state: string
@@ -835,8 +852,9 @@ export interface FigurePayload {
         after_front: number | null
         model_followup?: ModelFollowup | null }
     }
-    /** `state`: ready · missing · plain (nothing in the body). */
-    shape: FigureBodyPart
+    /** `state`: ready · missing · plain (nothing in the body). `views` / `regenerate` (round 2026-11-25) only when
+     *  something is worn in the body. */
+    shape: FigureBodyPart & { views?: ShapeViewInfo[]; regenerate?: ShapeViewRegenerateState }
   } | null
 }
 
