@@ -2146,6 +2146,13 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
   flip + 5 = **8.357 s** and on their goals (± 0.05), both agents of the location's map while walking and in the loop
   (static, velocity 0). The earlier runs' figures leave the map first (`ReleaseAvoidance`), else R13c's Uli would stand
   as an agent on (99, 0). Measured on the reference machine: gap 0.5, both arrivals 3.033 s.
+- **R8b** (review Task 11 I2, frame-rate parity) the same meeting (`ord-R8bu` / `ord-R8bo`, seq 8/9) with **two ticks of
+  1/120 s per physics frame** — a client drawing at twice the physics rate. The navigation server still answers once per
+  physics frame; the answer is held (`HeldAvoidance`, at most 2 physics frames old) and applied by both ticks with their
+  own dt, so the sideways velocity per second is the same as in R8. Expected: the R8 bounds (gap ≥ 0.3, arrivals before
+  8.357 s, on the goals) and a gap within **0.03 m** of R8's (RVO varies by ≤ 0.005 m run to run). Measured before the
+  hold (answer used once): gap 0.444 against R8's 0.498, arrivals 3.192 / 3.325 s; with the hold: 0.499 against 0.499,
+  arrivals 3.042 / 3.033 s.
 
 **The avatar's orders (plan E3 Task 6, `Check/OrderCheck.Avatar.cs`).** R2–R2c run on the propactions world through the
 real offers controller (`fixture-avatar` at (−3, −2); bench-56: slot (2, 0.129, 0), the actor's access (2, −1); no

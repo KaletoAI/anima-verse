@@ -33,7 +33,8 @@ public sealed record WalkStep(Vec3 Pos, double YawDeg, bool Arrived, bool Stuck,
 /// A step with <c>dt ≤ 0</c> is neutral.
 /// Avoidance (plan E3 Task 11, spec 5d): every step reports the velocity of its path step (<see cref="DesiredVelocity"/>);
 /// the RVO answer to an earlier report (<see cref="Avoidance"/>: that desired velocity and its safe velocity) adds its
-/// change of velocity to the next path step, clamped by <see cref="AvoidanceClamp.Step"/> (the final piece unclamped).
+/// change of velocity to the next path step, clamped by <see cref="AvoidanceClamp.Step"/>. The final piece to the access
+/// takes no answer: it is walked as planned (review Task 11 M1).
 /// Without an answer, or with one equal to its desire (no neighbour), the walk is exactly the path walk above.
 /// </summary>
 public sealed class OrderWalk
@@ -218,7 +219,9 @@ public sealed class OrderWalk
             return Make(q, atLink: true);
         }
         DesiredVelocity = new P2((q.X - pos.X) / dt, (q.Z - pos.Z) / dt);
-        if (avoid is { } a)
+        // The final piece is walked as planned (review Task 11 M1): it ends inside the furniture's erosion on purpose, so
+        // an avoided step there could not be clamped and a passing neighbour would push the figure into the furniture.
+        if (avoid is { } a && !_final)
             q = Avoided(pos, q, a, dt, nav);
 
         bool slow = _last is { } before && NavRoutePlanner.Horizontal(q, before) / dt < OrderPlayer.StuckSpeedMS;
@@ -372,7 +375,7 @@ public sealed class OrderWalk
 
     /// <summary>
     /// The path step <paramref name="q"/> plus the avoidance's change of velocity (safe − desired) · dt, clamped
-    /// (<see cref="AvoidanceClamp.Step"/>; the final piece unclamped); the facing follows the avoided step.
+    /// (<see cref="AvoidanceClamp.Step"/>; never called on the final piece); the facing follows the avoided step.
     /// </summary>
     private Vec3 Avoided(Vec3 pos, Vec3 q, (P2 Desired, P2 Safe) a, double dt, IPathProvider nav)
     {

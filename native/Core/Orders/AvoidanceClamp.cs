@@ -19,6 +19,48 @@ public enum AvoidanceMode
 }
 
 /// <summary>
+/// The latest RVO answer of one agent, held until the next one (review Task 11 I2). The navigation server answers once
+/// per physics frame, the client ticks once per drawn frame: at 144 Hz only every 2.4th frame would get an answer that
+/// was used once and dropped, and the sideways step per second would fall to about 40 %. Held, every frame applies it
+/// with its own dt. An answer older than <see cref="MaxAgePhysicsFrames"/> physics frames (the agent stopped being
+/// answered: it left the map, its velocity is no longer reported) is dropped.
+/// <code>
+///   set at physics frame 10: taken at 10, 10 again (a second drawn frame), 11 and 12; at 13 it is gone (13 − 10 = 3 &gt; 2)
+/// </code>
+/// </summary>
+public sealed class HeldAvoidance
+{
+    /// <summary>How many physics frames an answer stays valid after the one that brought it.</summary>
+    public const long MaxAgePhysicsFrames = 2;
+
+    private (P2 Desired, P2 Safe)? _answer;
+    private long _at;
+
+    /// <summary>The navigation server's answer <paramref name="answer"/> arrived in physics frame <paramref name="physicsFrame"/>.</summary>
+    public void Set((P2 Desired, P2 Safe) answer, long physicsFrame)
+    {
+        _answer = answer;
+        _at = physicsFrame;
+    }
+
+    /// <summary>The held answer in physics frame <paramref name="physicsFrame"/>; null when there is none or it is too old.</summary>
+    public (P2 Desired, P2 Safe)? Take(long physicsFrame)
+    {
+        if (_answer is null)
+            return null;
+        if (physicsFrame - _at > MaxAgePhysicsFrames)
+        {
+            _answer = null;
+            return null;
+        }
+        return _answer;
+    }
+
+    /// <summary>Drops the held answer (a change of map: the old map's neighbours no longer apply).</summary>
+    public void Clear() => _answer = null;
+}
+
+/// <summary>
 /// The RVO avoidance of an order walk (plan E3 Task 11, spec 5d). RVO knows neither the navmesh nor the walls, so its
 /// safe velocity may push a figure through a wall or into furniture: every avoided step is clamped — onto the navmesh of
 /// the figure's storey (<see cref="NavClamp.Step"/>), then against the walls (inside a building

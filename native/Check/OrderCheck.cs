@@ -37,7 +37,8 @@ namespace AnimaNative.Check;
 ///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
 ///       for 1 s stands still and ends its chain 1 s later;
-///   R8  avoidance: two walks head-on through r-a keep ≥ 0.3 m between their centres and both arrive before flip + 5.
+///   R8  avoidance: two walks head-on through r-a keep ≥ 0.3 m between their centres and both arrive before flip + 5;
+///   R8b the same with two ticks per physics frame: the held answer keeps the meeting (gap within 0.03 m of R8's).
 /// </summary>
 public static partial class OrderCheck
 {
@@ -462,39 +463,56 @@ public static partial class OrderCheck
                  "actors":[{"name":"{{name}}","role":"actor","clip_role":"","height_cm":180,"start":{"x":{{fromX}},"y":0,"z":0,"yaw":0,"room_id":"r-a","level":0},
                             "access":null,"anchor":null,"entry_mode":"","sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}],"reports_arrival":false}]}
                 """)!;
-            // The earlier runs' figures still stand on this map as agents (R13c's Uli on (99, 0)): they leave it first.
-            foreach (var earlier in runs) earlier.ReleaseAvoidance();
-            var r8 = await Start(Map(m =>
+            // R8b (review Task 11 I2): the same meeting with two ticks of half a frame per physics frame — the client's frame
+            // rate above the physics rate (VSync at 120 Hz). The navigation server answers once per physics frame; an answer
+            // held until the next one keeps the sideways step the same per second, so the same 0.3 m bound applies.
+            long r8Seq = 6;
+            double r8Gap = double.NaN;
+            foreach (int ticksPerPhysics in new[] { 1, 2 })
             {
-                foreach (var (n, x, to, id, seq) in new[] { (Uli, 95.0, 99.0, "ord-r8u", 6L), (Ona, 99.0, 95.0, "ord-r8o", 7L) })
+                string tag = ticksPerPhysics == 1 ? "R8" : "R8b";
+                // The earlier runs' figures still stand on this map as agents (R13c's Uli on (99, 0)): they leave it first.
+                foreach (var earlier in runs) earlier.ReleaseAvoidance();
+                long su = ++r8Seq - 1, so = ++r8Seq - 1;
+                var r8 = await Start(Map(m =>
                 {
-                    var row = Row(m, n);
-                    row["room_id"] = "r-a";
-                    row["pos"] = new JsonObject { ["x"] = x, ["z"] = 0 };
-                    row["activity_animation"] = "standing";
-                    row["order"] = WalkOrder(id, seq, n, x, to);
+                    foreach (var (n, x, to, id, seq) in new[] { (Uli, 95.0, 99.0, $"ord-{tag}u", su), (Ona, 99.0, 95.0, $"ord-{tag}o", so) })
+                    {
+                        var row = Row(m, n);
+                        row["room_id"] = "r-a";
+                        row["pos"] = new JsonObject { ["x"] = x, ["z"] = 0 };
+                        row["activity_animation"] = "standing";
+                        row["order"] = WalkOrder(id, seq, n, x, to);
+                    }
+                    m["order_seq"] = so;
+                }));
+                double minGap = double.PositiveInfinity;
+                bool agentsSeen = false;
+                while (r8.M.Clock < R8FlipRel + 5 + 0.5 - 1e-9)
+                {
+                    await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
+                    for (int k = 0; k < ticksPerPhysics; k++)
+                    {
+                        r8.M.Tick(Dt / ticksPerPhysics);
+                        var (u8, o8) = (r8.F(Uli).Position, r8.F(Ona).Position);
+                        minGap = Math.Min(minGap, Math.Sqrt((u8.X - o8.X) * (u8.X - o8.X) + (u8.Z - o8.Z) * (u8.Z - o8.Z)));
+                    }
+                    agentsSeen |= r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav);
                 }
-                m["order_seq"] = 7;
-            }));
-            double minGap = double.PositiveInfinity;
-            bool agentsSeen = false;
-            while (r8.M.Clock < R8FlipRel + 5 + 0.5 - 1e-9)
-            {
-                await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
-                r8.M.Tick(Dt);
-                var (u8, o8) = (r8.F(Uli).Position, r8.F(Ona).Position);
-                minGap = Math.Min(minGap, Math.Sqrt((u8.X - o8.X) * (u8.X - o8.X) + (u8.Z - o8.Z) * (u8.Z - o8.Z)));
-                agentsSeen |= r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav);
+                Is($"{tag} both walkers are agents of the location's map", agentsSeen);
+                GD.Print($"[orders] {tag} min gap {minGap:0.###} m, arrivals {r8.At(Uli, OrderState.Loop):0.###} / {r8.At(Ona, OrderState.Loop):0.###} s");
+                Is($"{tag} they kept ≥ 0.3 m between their centres", minGap >= 0.3, $"min {minGap:0.###} m");
+                // Frame-rate parity: the held answer gives R8b the same meeting as R8. RVO varies run to run by ≤ 0.005 m
+                // (measured 0.496–0.5 m); an answer used once per physics frame gave 0.444 m against 0.498 m (0.054 apart).
+                if (ticksPerPhysics == 1) r8Gap = minGap;
+                else Is("R8b the same meeting as R8 (gaps within 0.03 m)", Math.Abs(minGap - r8Gap) <= 0.03, $"R8 {r8Gap:0.###} m, R8b {minGap:0.###} m");
+                foreach (var (n, goal) in new[] { (Uli, new Vec3(99, 0, 0)), (Ona, new Vec3(95, 0, 0)) })
+                {
+                    Is($"{tag} {n} arrived before flip + 5", r8.At(n, OrderState.Loop) is { } at8 && at8 <= R8FlipRel + 5, Seq(r8, n));
+                    NearXZ($"{tag} {n} on the goal", r8.F(n).Position, goal);
+                }
+                Is($"{tag} in the loop both stay agents (static, velocity 0)", r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav));
             }
-            Is("R8 both walkers are agents of the location's map", agentsSeen);
-            GD.Print($"[orders] R8 min gap {minGap:0.###} m, arrivals {r8.At(Uli, OrderState.Loop):0.###} / {r8.At(Ona, OrderState.Loop):0.###} s");
-            Is("R8 they kept ≥ 0.3 m between their centres", minGap >= 0.3, $"min {minGap:0.###} m");
-            foreach (var (n, goal) in new[] { (Uli, new Vec3(99, 0, 0)), (Ona, new Vec3(95, 0, 0)) })
-            {
-                Is($"R8 {n} arrived before flip + 5", r8.At(n, OrderState.Loop) is { } at8 && at8 <= R8FlipRel + 5, Seq(r8, n));
-                NearXZ($"R8 {n} on the goal", r8.F(n).Position, goal);
-            }
-            Is("R8 in the loop both stay agents (static, velocity 0)", r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav));
 
             checks += await AvatarAsync(host, fixtures, builder, world, runs);
             return $"orders {checks} checks (chain end {r1.At(Ona, OrderState.Loop):0.###} s, walked {r1.M.OrderPlayerOf(Ona)?.WalkedM:0.###} m)";

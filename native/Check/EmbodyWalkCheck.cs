@@ -276,6 +276,11 @@ public static class EmbodyWalkCheck
             Frame(none);
             // (The order plays the walking clip; a start rule idle → walking may open its bridge then — the order moves on.)
             Is("click walk order lets the stop go and walks",fig.BridgeFrom!=walking && fig.Position.X>stopStart.X && steering.WalkOrderId is not null);
+            // Review Task 11 I1: the click walk (3.4 m/s, NpcWalk.WalkSpeed) keeps the key walk's clip pace, never 3.4 / 1.4 ≈ 2.4×.
+            if (fig.Bridging) fig.CancelBridge(); // the start bridge holds the clip's pace; the walk's own frame follows
+            Frame(none);
+            GD.Print($"[embody] click walk clip: bridging {fig.Bridging} scale {fig.Player?.SpeedScale} pace {fig.CurrentPace}");
+            Is("click walk clip at the key walk's pace",!fig.Bridging && fig.Player is { } cwp && Math.Abs(cwp.SpeedScale-fig.CurrentPace)<1e-6);
             steering.CancelRoute();
             Is("cancel ends the click walk order",steering.WalkOrderId is null && !manager.HasLiveOrder(fig.CharacterName) && manager.OrderPlayerOf(fig.CharacterName) is null);
             // The stop bridge again, for the keys (the start bridge the order's walking clip opened let go first).

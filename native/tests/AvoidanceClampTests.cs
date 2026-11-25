@@ -29,6 +29,13 @@ namespace AnimaNative.Tests;
 ///   gait clip rate = speed / 1.4 within [0.25, 3]: 1.4 → 1, 0.7 → 0.5, 0.1 → 0.25, 10 → 3
 ///   along the north edge (path (1, 9.95) → (9, 9.95)): the answer desired (1, 0) → safe (0, 1) gives (1.1, 9.95) +
 ///     (−1, 1)·0.1 = (1.0, 10.05), 0.05 off the mesh → clamped onto (1.0, 10.0)
+///   the same answer on two steps (a held answer, two drawn frames per physics frame): (1.1, 5) → (1.16, 5.08) → the
+///     path step heads for the corner (9, 5): direction (7.84, −0.08) / L, L = √(7.84² + 0.08²) ≈ 7.840408, so
+///     (1.16 + 0.784 / L, 5.08 − 0.008 / L) + (−0.04, 0.08) ≈ (1.219995, 5.158980) — the second step moves sideways by
+///     the same 0.08 again
+///   the final piece takes no answer: a plan without steps (only the piece to the access (9, 5)) from (1, 5) with the
+///     answer (1, 0) → (0, 1) steps (1.1, 5), exactly the plain walk
+///   the held answer (HeldAvoidance, max age 2 physics frames): set at 10 → taken at 10, 10, 11, 12; gone at 13
 /// </code>
 /// </summary>
 public class AvoidanceClampTests
@@ -133,6 +140,49 @@ public class AvoidanceClampTests
         walk.Avoidance = (new P2(1, 0), new P2(1, 0));
         var s2 = walk.Step(s1.Pos, Dt, Room());
         Same(new P2(1.2, 5), new P2(s2.Pos.X, s2.Pos.Z));
+    }
+
+    [Fact]
+    public void AHeldAnswerActsOnEveryStepItIsGivenTo()
+    {
+        var walk = Walk(5);
+        var s1 = walk.Step(new Vec3(1, 0, 5), Dt, Room());
+        var answer = (new P2(1, 0), new P2(0.6, 0.8));
+        walk.Avoidance = answer;
+        var s2 = walk.Step(s1.Pos, Dt, Room());
+        Same(new P2(1.16, 5.08), new P2(s2.Pos.X, s2.Pos.Z));
+        walk.Avoidance = answer;
+        var s3 = walk.Step(s2.Pos, Dt, Room());
+        double l = Math.Sqrt(7.84 * 7.84 + 0.08 * 0.08);
+        Same(new P2(1.16 + 0.784 / l - 0.04, 5.08 - 0.008 / l + 0.08), new P2(s3.Pos.X, s3.Pos.Z));
+    }
+
+    [Fact]
+    public void TheFinalPieceTakesNoAnswer()
+    {
+        var plan = new NavPlan(Array.Empty<NavStep>(), new Vec3(9, 0, 5), 8);
+        var walk = new OrderWalk(plan, new Vec3(9, 0, 5), 1.0, NoRides);
+        walk.Avoidance = (new P2(1, 0), new P2(0, 1));
+        var s = walk.Step(new Vec3(1, 0, 5), Dt, Room());
+        Same(new P2(1.1, 5), new P2(s.Pos.X, s.Pos.Z));
+    }
+
+    [Fact]
+    public void AHeldAnswerLastsTwoPhysicsFrames()
+    {
+        var held = new HeldAvoidance();
+        Assert.Null(held.Take(10));
+        var answer = (new P2(1, 0), new P2(0.6, 0.8));
+        held.Set(answer, 10);
+        Assert.Equal(answer, held.Take(10));
+        Assert.Equal(answer, held.Take(10));
+        Assert.Equal(answer, held.Take(11));
+        Assert.Equal(answer, held.Take(12));
+        Assert.Null(held.Take(13));
+        Assert.Null(held.Take(12)); // dropped for good
+        held.Set(answer, 20);
+        held.Clear();
+        Assert.Null(held.Take(20));
     }
 
     [Fact]

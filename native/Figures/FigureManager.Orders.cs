@@ -623,14 +623,14 @@ public partial class FigureManager
                     fig.Position = new Vector3((float)p.X, (float)EaseRootY(fig, before.Y, open.RootY, dt), (float)p.Z);
                     fig.SetMotion(moving, false, open.Movement);
                     PlayLifting(fig, open.Clip, open.TerrainClip, open.Sink, before.Y, open.RootY, "ground");
-                    if (moving && dt > 0) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
+                    if (moving && dt > 0 && ScalesGait(player)) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
                     break;
                 }
                 fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
                 fig.SetMotion(moving, false, FigureClips.WalkRun);
                 fig.Play(FigureClips.PoseKind(moving ? "walking" : "standing", fig.Poses));
                 // Spec 5d: the gait clip runs at the order's tempo (the step's own speed: RVO may slow it).
-                if (moving && dt > 0) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
+                if (moving && dt > 0 && ScalesGait(player)) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
                 break;
             }
             case OrderState.Entry:
@@ -791,7 +791,7 @@ public partial class FigureManager
     {
         public required LocationNav Nav;
         public P2 Sent;
-        public (P2 Desired, P2 Safe)? Answer;
+        public readonly HeldAvoidance Answer = new();
         public Vector3? LastPos;
         public AvoidanceMode Mode = AvoidanceMode.None;
         public float Priority = -1;
@@ -802,6 +802,16 @@ public partial class FigureManager
     }
 
     private readonly Dictionary<string, AvoidAgent> _agents = new(StringComparer.Ordinal);
+    /// <summary>Scratch list of agents whose figure is gone (reused per tick, no allocation in the hot path).</summary>
+    private readonly List<string> _goneAgents = new();
+
+    /// <summary>
+    /// The gait clip follows the order's tempo (spec 5d) — except on the avatar's click walk (review Task 11 I1): it still
+    /// walks at <c>NpcWalk.WalkSpeed</c> 3.4 m/s like key walking, whose clip runs at rate 1, so scaling it would play the
+    /// legs at 3.4 / 1.4 ≈ 2.4×. Until the click walk's tempo is decided, it keeps the key walk's clip pace.
+    /// </summary>
+    private bool ScalesGait(OrderPlayer player)
+        => player.Current is not { } order || !_clickWalkIds.Contains(order.Id);
 
     /// <summary>The figure has an avoidance agent on <paramref name="nav"/> (check R8).</summary>
     public bool HasAgentOn(string name, LocationNav nav)
@@ -820,8 +830,8 @@ public partial class FigureManager
         if (player.RunState != OrderState.Walk || name == AvatarName) return;
         if (_agents.TryGetValue(name, out var agent))
         {
-            player.Avoidance = agent.Answer;
-            agent.Answer = null;
+            // Held until the next answer (review Task 11 I2): every drawn frame between two physics frames applies it.
+            player.Avoidance = agent.Answer.Take((long)Engine.GetPhysicsFrames());
         }
         if (order.LocationId.Length == 0) return;
         if (OrderWallsAt?.Invoke(order.LocationId, fig.Position.Y) is { } walls)
@@ -875,10 +885,17 @@ public partial class FigureManager
                 // The figure entered another location (or a released map left it without one): AgentSetMap, never a new agent.
                 if (agent.Nav.HasAgent(agent.Key)) agent.Nav.MoveAgentTo(agent.Key, map);
                 agent.Nav = map;
-                agent.Answer = null;
+                agent.Answer.Clear();
+            }
+            if (!map.HasAgent(agent.Key))
+            {
+                // A new RID (its map was released and another came in the same tick, review Task 11 M2): nothing of the
+                // old agent's settings is on it, so mode and priority are set again.
+                agent.Mode = AvoidanceMode.None;
+                agent.Priority = -1;
             }
             var a = agent;
-            a.Callback ??= v => a.Answer = (a.Sent, new P2(v.X, v.Z));
+            a.Callback ??= v => a.Answer.Set((a.Sent, new P2(v.X, v.Z)), (long)Engine.GetPhysicsFrames());
             var rid = map.AgentFor(agent.Key, fig.AvoidanceRadiusM, a.Callback);
             if (agent.Mode != mode)
             {
@@ -898,7 +915,10 @@ public partial class FigureManager
             agent.Sent = velocity;
             agent.LastPos = fig.Position;
         }
-        foreach (var gone in _agents.Keys.Where(n => !_figures.ContainsKey(n)).ToList()) ReleaseAgent(gone);
+        _goneAgents.Clear();
+        foreach (var n in _agents.Keys)
+            if (!_figures.ContainsKey(n)) _goneAgents.Add(n);
+        foreach (var gone in _goneAgents) ReleaseAgent(gone);
     }
 
     /// <summary>The avoidance map of a location: its navigation (none yet: none), out in the open the world map.</summary>
