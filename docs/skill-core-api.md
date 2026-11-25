@@ -273,6 +273,38 @@ and a true OR branch cannot hide it. An empty expression is available/true.
 This opt-in path does not change ordinary `evaluate_condition` or the legacy
 missing-value defaults described above.
 
+## Quest catalog — `app.core.quest_catalog`
+
+The types a quest expression is made of (reference: [`docs/quests.md`](quests.md)). One capability,
+`quest.types`: a package registers ONE contributor per owner from its `on_load` module; the contributor answers
+the LIST of all that owner's types. The core names no package (R1); the plugin loader's
+`unregister_owned_providers` removes a package's types with it.
+
+| Name | Contract |
+|---|---|
+| `QuestType(id, kind, label, description, params, signals, validate, evaluate)` | Frozen dataclass. `kind` is one of `KINDS` (`condition`, `prerequisite`, `effect`); `params` a tuple of parameter dicts (default empty), `signals` a tuple of hook event names (default empty); `validate` and `evaluate` are optional callables (default `None`) — see "Type hooks" below |
+| `register(owner, contributor) -> None` | Register the contributor of `owner` — a function without arguments that returns `list[QuestType]`. A second call by the same owner replaces the first (a `hooks` provider of `CAPABILITY` with `owner` and `multiple=True`) |
+| `types() -> Dict[str, QuestType]` | id → type of every type registered NOW, rebuilt from the registry on every call (never cached). A raising contributor is skipped, an entry that is not a `QuestType` with an id and a known kind is dropped, of two equal ids the first registered wins (each logged) |
+| `get(type_id) -> Optional[QuestType]` | One type, or `None` |
+| `public_descriptor(t) -> Dict[str, Any]` | The JSON-safe part of a type (`id`, `kind`, `label`, `description`, `params`, `signals`) |
+| `catalog_payload() -> Dict[str, List[Dict[str, Any]]]` | `{"conditions", "prerequisites", "effects"}` of public descriptors, sorted by label (`GET /quests/catalog`) |
+| `walk(expr) -> Iterator[Tuple[str, dict]]` | `(path, leaf)` of every `{"type", "params"}` leaf, paths relative to `expr` (`""` = the root); malformed parts are skipped |
+| `check_expression(expr, roles, *, allowed_kinds) -> List[Dict[str, str]]` | Every issue `{"path", "code", "message"}` of `expr`, paths relative to it (the caller prefixes its position). `roles` are the template's role dicts, `allowed_kinds` the type kinds this position accepts. Codes `shape`, `unknown_type`, `wrong_kind`, `missing_param`, `bad_param`, `unknown_role`, `wrong_role_kind`, plus whatever a type's own validate hook names (reported at `.type`) |
+| `evaluate_expression(expr, ctx) -> ConditionResult` | Three-state value; never raises. Unavailable is contagious through `all` / `any` / `not`; a type that is not registered, has no evaluate hook, raises or answers no `ConditionResult` is unavailable |
+| `signals_of(expr) -> set[str]` | The union of the signals of every registered leaf type |
+| `CAPABILITY`, `KINDS`, `ROLE_KINDS`, `PARAM_TYPES` | `"quest.types"`; the type kinds; `character`, `location`, `room`, `item`; `str`, `text`, `int`, `float`, `bool`, `select`, `role` |
+| `app.core.quest_types.check_binding(kind, binding) -> list[ConditionIssue]` | The issues of one role binding (D6 shapes). RAISES on a storage error; an issue only when the binding is malformed or the entity is definitely gone |
+| `app.core.quest_types.build_context(avatar, run) -> QuestContext \| None` | The evaluation context of an avatar for a run: `avatar` (acting body), `mind`, `profile`, `location_id`, `room_id`, `now` (`GameTime`), `bindings`, `run`. `None` when the profile or the clock cannot be read |
+
+**Type hooks.** The evaluate hook is called with `(params, ctx)` and returns a `ConditionResult` of
+`app.core.activity_engine` — unavailable, never false, when a read fails. The optional validate hook is called with
+`(params, bindings)` and returns a list of `ConditionIssue`; `bindings` is `None` at template time (check only
+what needs no world entity) and the run's bindings at start and at every tick. Both receive CLEANED parameters: the
+generic checks passed, declared defaults filled in, and an absent parameter without a default DROPPED — read them with
+`params.get`. A validate hook may raise: at start that refuses the run (a `bad_param` issue), at the tick the run is
+skipped for that tick, never marked broken. Location, room and inventory are read for `ctx.avatar` (the acting
+body); facts for `ctx.mind`.
+
 ## Skill gate — `app.core.skill_gate` ⚠
 
 Rules of type `block` with `target.scope = "skill"` and the world setting
@@ -1310,6 +1342,7 @@ Capabilities, die der Core heute abfragt:
 | `prop_action.consent_carries` | `prop_action_engine.request_with_creation`: an "ask" for another furniture action on the piece the actor and every invitee already use together in ONE active run that the request ends — every invitee requested that run or said "yes" to it (the partner of a "react" run did not), nobody new joins (one of them may stay out) — switches in place at once without a question (`consents` all "yes", `consent_carried`). Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called with two positional arguments, copies of the old and the new action definition, and veto with anything but `True`; a raising contributor counts as a veto. Admission (`participation.check`, requirements) still runs on the switch. Free pair poses switch the same way (`interaction_engine.switch_consent_carries`, called with `{"ability": "pose", "pose_key": …}` for the old and the new pose): another pose for the two who play one free pair together keeps the interaction (id, consent record) and starts the new clip in place; it carries when that pair began with an accepted "ask" invitation between the two, otherwise the switch is asked (or reacted to) like any pair (`intimacy`: never carries into an intimate action from a non-intimate one) | The consent always carries |
 | `play.say_intercept` | `routes/play.py` `play_say`, after the addressees are filtered and before spell detection. Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called in registration order, off the event loop, with the keywords `avatar`, `content`, `volume`, `addressees` (the reachable ones), `location_id`, `room_id`; answer `None` to pass or `{"consumed": True, "result": {...}}` to take the message. The first consuming contributor wins: no utterance is recorded, no spell detection and no room reaction runs, the route answers `{"ok": true, "intercepted": <result>}`. A raising contributor is logged and skipped; image-only messages are not offered | Every message is spoken into the room as usual |
 | `character_panel:<package id>` | `app.core.character_panels` for the admin routes `/characters/{name}/panels/{package}` and the skill listing (`panel_package`); see "Character panels" below | No panel on the Skills tab, the routes answer 404 |
+| `quest.types` | `app.core.quest_catalog.types()` — every quest condition, prerequisite and effect type (`multiple=True`, one contributor per owner answering a LIST of `QuestType`; register through `quest_catalog.register`, see "Quest catalog" above) | Only the core's built-in types (owner `core`); a run using a removed package's type turns `broken` at the next tick |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |

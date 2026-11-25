@@ -409,7 +409,8 @@ stops acting autonomously).
   character, a place, an item), lists sequential steps with a condition each, and is started as a
   run that binds the roles to this world. Avatars fulfil the steps by acting in the world; the
   player reads them spoiler-free in the HUD's quest book (`/play/quests`: done steps and the current
-  one, never the hints or the GM notes).
+  one, never the hints or the GM notes). Reference and the type contract for packages:
+  [`docs/quests.md`](docs/quests.md).
 - **Relationships** with automatic decay over GAME time (a "week" is seven game days;
   a frozen or slow world clock slows the decay with it) and periodic summaries.
   Each pair also carries a **form of address per direction** — free text saying how A
@@ -906,6 +907,8 @@ imports anything that opens a database, and a tool meant for a real world gets `
 - **[`docs/room-conversation.md`](docs/room-conversation.md)** — who answers a line in a room:
   addressees, the single bystander the server picks, derived conversation pairs and the
   `chat.chattiness` / per-location chattiness settings.
+- **[`docs/quests.md`](docs/quests.md)** — the quest system: templates, roles and runs, the expression and
+  parameter shapes, the type contract for packages, signals and the tick, the player's quest book payload.
 - **[`docs/plugins.md`](docs/plugins.md)** / **[`docs/skill-core-api.md`](docs/skill-core-api.md)** —
   the plugin manifest reference and the callable core API a package may use.
 - **[`docs/hub-job-resume.md`](docs/hub-job-resume.md)** — how long AI-hub jobs survive a restart:
