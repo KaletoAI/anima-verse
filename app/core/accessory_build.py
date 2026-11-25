@@ -189,6 +189,10 @@ def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
     items = {i: (get_item(i) or {}) for i in ids}
     mesh_ids = [i for i in ids if garment_set.mesh_mode_of(items[i]) in (*garment_set.OWN_MESH_MODES,
                                                                          garment_set.TEMPLATE)]
+    # owner ruling 2: a bra hidden under a top with cups is in neither figure — nothing is fitted over it
+    hidden = garment_template.hidden_by_cups([i for i in mesh_ids
+                                              if garment_set.mesh_mode_of(items[i]) == garment_set.TEMPLATE])
+    mesh_ids = [i for i in mesh_ids if i not in hidden]
     region = set(accessory_band.UNDER_SLOTS.get(accessory_band.region_key(spec), ()))
     drapes = []
     for item_id in mesh_ids:

@@ -471,6 +471,11 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             {t('A switch only re-assembles the figure (no new drape, 0 hub jobs).')}
                           </span>
                         ) : null}
+                        {key === 'cups' && cuppedTop(draft) ? (
+                          <span className="ga-form-hint" data-cups-hides-bra="">
+                            {t('A bra worn under this top is hidden: the top\'s cups replace it.')}
+                          </span>
+                        ) : null}
                         {key === 'length_m' && cuppedTop(draft) && hemHeld ? (
                           <span className="ga-form-hint" style={WARN} data-hem-held={hemHeld > 0 ? 'waist' : 'cups'}>
                             {t(hemHeld > 0 ? 'Hem held at the waist' : 'Hem held under the cups')}

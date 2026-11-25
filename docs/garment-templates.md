@@ -701,7 +701,8 @@ A top can be cut like a bra with a long band: the field `cups` (top only, `CUPS`
 With `cups` `bra` the top is built as a bra everywhere: drape, cut, texture prompt and preview all read the one
 switch `build_kind` in `garment_template` ("bra" for a cupped top, else the kind; `cupped_top`). It gets the bra's cups,
 centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_l/r`, `cup_top_l/r`, `gore`,
-`band_l/r`, `strap_l/r`). What stays a top's: its slot, its layer rank and its body regions (chest, waist).
+`band_l/r`, `strap_l/r`). What stays a top's: its slot, its layer rank and its body regions (chest, waist — never
+the hip, whatever the length: the hem is held at the waist at the lowest, `body_regions`).
 
 - **Fields.** A cupped top shows the fields of `TOP_CUPS_FIELDS`: `kind`, `cups`, `fabric`, `opacity`, `length_m`,
   `cup_style`, `cup_coverage`, `push_up`, `center_gore`, `closure`, `straps`, `texture`, `sleeve_print` (the dialog
@@ -729,10 +730,24 @@ centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_
   straight line — and, after the pattern parts are taken, moves every free-edge vertex halfway to the mean of its two
   edge neighbours `EDGE_RELAX_STEPS` 6 times, back onto the collider after each step (`_relax_edges`; a straight run
   stays on its line, the band's ends round off). The version is in the drape AND the cut key of a bra and a cupped
-  top only, so each of them drapes and cuts once more; no other kind's key moves. Still open: the straps' own
-  surface stays lumpy (a strip a few collider faces wide), and the cup / band seams inside the pattern follow the
-  faces (`fitted_pattern.py`, a user decision because of its key).
-- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
+  top only, so each of them drapes and cuts once more; no other kind's key moves.
+- **Straps as strips, cups inside the back outline (`BRA_EDGE_VERSION` 2, owner rulings 1 and 6).** A strap is no
+  longer a band of collider faces: `strap_strip` builds it as its own regular strip along the `strap_spec` path — the
+  path's loops cut out (the over-shoulder section ran past the back section's start), resampled every 5 mm, evened,
+  4 quads across, its front end 1.5 cm inside the cup and its back end 1.2 cm into the band, laid 2.5 mm over the
+  cloth there and pinned whole; it lifts with its cup's push-up, fading out along it, but is never drawn in. Its
+  surface and edges are smooth, and its pattern piece is a clean strip. A cup's outer edge is a curve per height
+  (`_side_reach`): from the apex outward only as far as the cloth, laid out, stays inside the body's outline seen
+  from behind and no ray straight back from it misses the body; only the body the front sees is cup (the torso's side
+  under the breast is not). Before, the cup's side stood past the torso outline in the back view (a dark crescent
+  each side). The push-up fades out toward that edge and next to the gore, and the gore is laid on the breastbone
+  after the evening.
+- **A bra under a cupped top is hidden (owner ruling 2).** `garment_template.hidden_by_cups` names the worn template
+  bras a worn cupped top lies over by the usual layer rules (`inner_pieces`); `figure.worn_sets` leaves them out of
+  both figures with the reason `HIDDEN_BY_CUPS` ("Hidden: the top's cups replace it"), as underwear goes unseen under
+  a dress — never draped, never a lower layer, a collider or a shaping piece; the accessories ignore it too. The
+  dialog says so under the `cups` field.
+- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_top_cups_cover.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
   `scripts/smoke_garment_template_fitted.py`, [S-C1]-[S-C5] in `scripts/smoke_bust_shaping.py`.
 
 ## 2. Texture from cut (step 2)

@@ -7291,6 +7291,8 @@
     "Hem held at the waist": "Saum an der Taille gehalten",
     "Hem held under the cups": "Saum unter den Körbchen gehalten",
     "{style} cups": "Körbchen {style}",
-    "{straps} straps": "Träger {straps}"
+    "{straps} straps": "Träger {straps}",
+    "A bra worn under this top is hidden: the top's cups replace it.": "Ein BH unter diesem Oberteil wird ausgeblendet: Die Körbchen des Oberteils ersetzen ihn.",
+    "Hidden: the top's cups replace it": "Ausgeblendet: Die Körbchen des Oberteils ersetzen ihn"
   }
 }

@@ -146,8 +146,10 @@ CORSET_STRAPS_VERSION = 1
 #: the collider is cut along the underbust line before the faces are kept, so the band's top edge round the back is a
 #: straight line instead of the collider's sawtooth, and the free edges are smoothed along themselves
 #: (``garment_template_fitted._relax_edges``). Part of the drape AND the cut key of such a piece only (0 = the keys
-#: before it).
-BRA_EDGE_VERSION = 1
+#: before it). 2 (owner rulings 1 and 6): each strap is its own regular strip along its path
+#: (``garment_template_fitted.strap_strip``), a cup covers only body facing forward and its push-up fades out toward
+#: its side edge (no cup side past the torso outline in the back view).
+BRA_EDGE_VERSION = 2
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -2425,7 +2427,9 @@ def body_regions(params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]
             out = {"chest", "waist", "hip", "leg"}
         else:   # top, jacket
             out = {"chest", "waist"}
-            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M:
+            # owner ruling 3 (round 2026-11-25): a top with cups never reaches the hip — its hem is held at the waist
+            # at the lowest (``fitted_spec``), whatever its length says
+            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M and not cupped_top(params):
                 out.add("hip")
         if has_sleeves(params):
             out.add("arm")
@@ -2483,6 +2487,29 @@ def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[
         elif other in below and garment_set.garment_kind_of(it) == garment_set.CLOTHING:
             own.append((other, it))
     return templates, own
+
+
+#: Owner ruling 2 (round 2026-11-25): what ``figure.worn_sets`` says of a bra worn under a top with cups — it is left
+#: out of both figures (the top's cups replace it), as underwear goes unseen under a dress.
+HIDDEN_BY_CUPS = "Hidden: the top's cups replace it"
+
+
+def hidden_by_cups(item_ids: Any) -> Dict[str, str]:
+    """Owner ruling 2 (round 2026-11-25): ``{bra id: top id}`` of the worn template bras a worn top with cups
+    (``cupped_top``) lies over — by the layer rules every outer piece uses (``inner_pieces``: ``layer_order`` /
+    ``LAYER_RANK``, and only when the two can touch, ``regions_overlap``). Such a bra is hidden: the top is built as a
+    bra on the skin and its cups replace the bra's (built both, the top's cups lay under the bra's and its straps
+    were lost). Empty when no top with cups is worn."""
+    from app.models.inventory import get_item
+    ids = sorted({str(i) for i in item_ids or () if i})
+    out: Dict[str, str] = {}
+    for top in ids:
+        if not cupped_top(params_of(get_item(top))):
+            continue
+        for other, it in inner_pieces(top, "top", ids)[0]:
+            if (params_of(it) or {}).get("kind") == "bra" and other not in out:
+                out[other] = top
+    return out
 
 
 def collider_pieces(item_id: str, kind: str, lower: List[str]) -> List[Tuple[str, Dict[str, Any]]]:
