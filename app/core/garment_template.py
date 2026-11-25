@@ -2535,6 +2535,74 @@ def own_fallback_mode(character_name: str, item_id: str, *, base_sha: str, lower
     return mode if mode in OWN_FALLBACK_MODES else "full"
 
 
+#: Version of the drape's extension-part colliders (``body_colliders``; the ``body:`` token of ``under_tokens``).
+BODY_COLLIDER_VERSION = 1
+
+
+def base_meta_for(character_name: str, base_sha: str) -> Dict[str, Any]:
+    """The sidecar of the base model the drape runs on (``model3d/<bsig>.json``) while the current base is the one
+    of ``base_sha``; {} otherwise (no stored variant: ``stored_mesh_variant`` gives "")."""
+    from app.core import base_body
+    from app.models.character import get_character_dir
+    base = base_body.current_base(character_name)
+    if not base or base[1] != base_sha:
+        return {}
+    path = get_character_dir(character_name) / "model3d" / f"{base[0]}.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def body_colliders(character_name: str, item_id: str, lower: List[str], *, base_meta: Dict[str, Any],
+                   profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The extension groups the drape of ``item_id`` over ``lower`` lays its cloth over (plan anatomy, H3): every
+    group of the base model (``rig_groups_for`` at the base's stored mesh variant — the group set follows the
+    model the drape loads, not the clothing) that declares ``drape_collider``, is COVERED (``cover_state`` over
+    ``lower`` + the piece; hidden = the part is not on the model) and whose ``covered_by`` the piece itself touches.
+    ``[{group, inflate, radius (None = the attached part itself), bones (the last bone of each chain)}]``, sorted
+    by group."""
+    from app.core import model3d
+    from app.core.extension_rig import COVERED, _slot_names, cover_state, pieces_of, rig_groups_for
+    from app.models.inventory import get_item
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    ids = sorted({str(i) for i in (lower or [])} | {str(item_id)})
+    items = {i: get_item(i) or {} for i in ids}
+    pieces = pieces_of(ids, items)
+    piece = (items.get(str(item_id)) or {}).get("outfit_piece") or {}
+    touched = _slot_names(list(piece.get("slots") or []) + list(piece.get("covers") or [])
+                          + list(piece.get("partially_covers") or []))
+    out = []
+    for group in rig_groups_for(character_name, profile, mesh_variant=model3d.stored_mesh_variant(character_name,
+                                                                                                    base_meta)):
+        spec = group.get("drape_collider")
+        if not spec or not touched & _slot_names(group.get("covered_by") or []):
+            continue
+        if cover_state(group, pieces, items) != COVERED:
+            continue
+        out.append({"group": group["id"], "inflate": float(spec["inflate"]),
+                    "radius": None if spec.get("radius") is None else float(spec["radius"]),
+                    "bones": [chain[-1]["bone"] for chain in group.get("chains") or [] if chain]})
+    return sorted(out, key=lambda entry: entry["group"])
+
+
+def any_drape_collider() -> bool:
+    """Whether any loaded package declares a ``drape_collider`` (else the key path reads no base sidecar)."""
+    from app.plugins.registry import packages
+    return any(rig.drape_collider for package in packages() for slot in package.body_slots for rig in slot.rigs)
+
+
+def body_token(colliders: List[Dict[str, Any]]) -> Optional[str]:
+    """The ``body:`` token of ``under_tokens`` for ``body_colliders``; None for none."""
+    if not colliders:
+        return None
+    return "body:" + ",".join(f"{c['group']}:{c['inflate']}:{c['radius'] if c['radius'] is not None else '-'}"
+                              for c in colliders) + f":v{BODY_COLLIDER_VERSION}"
+
+
 def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
                  item: Optional[Dict[str, Any]] = None,
                  states: Optional[List[Tuple[str, Dict[str, Any], Dict[str, Any]]]] = None) -> List[str]:
@@ -2565,6 +2633,12 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
     tucks = tuck_lines(params, lower)
     if tucks:
         under.append("tuck:" + ",".join(tucks) + f":{STRAPLESS_TUCK_M}")
+    # plan anatomy (H3): a covered extension part the piece lies over is a drape collider — only these re-drape
+    if any_drape_collider():
+        token = body_token(body_colliders(character_name, item_id, lower,
+                                          base_meta=base_meta_for(character_name, base_sha)))
+        if token:
+            under.append(token)
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower, character_name=character_name)
@@ -3293,7 +3367,8 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
               lower: Optional[List[Tuple[Path, Any]]] = None,
               live: Optional[Tuple[str, str]] = None,
               lower_offsets: Optional[List[float]] = None, over_sleeves: bool = False,
-              tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
+              tuck: Tuple[str, ...] = (),
+              body_colliders: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH`` or a narrow miss, ``retry_due``; the retry's result is
     judged and carries ``data.retry``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
@@ -3329,6 +3404,9 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
         args = build_args(params, spec, item_id=item_id, render=render, poses=poses, quality_scale=scale,
                           corrective=corrective, lower_shapes=[payload for _p, payload in lower or []],
                           lower_offsets=lower_offsets)
+        if body_colliders:
+            # plan anatomy (H3): the covered extension parts / tips the cloth lies over (``body_colliders``)
+            args["body_colliders"] = body_colliders
         if live is not None:
             progress_file.unlink(missing_ok=True)
             args["progress_file"] = str(progress_file)
@@ -3483,10 +3561,12 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         from app.core import bust_shaping
         body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping",
                                                            character_name=character_name)
+        parts = body_colliders(character_name, item_id, lower, profile=profile,
+                               base_meta=base_meta_for(character_name, base_sha))
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over,
-                                                 tuck=tuck_lines(params, lower)),
+                                                 tuck=tuck_lines(params, lower), body_colliders=parts),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
         # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``); stage
