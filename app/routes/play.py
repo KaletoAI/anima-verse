@@ -3003,6 +3003,19 @@ def play_story_arcs(user=Depends(get_current_user)):
     return build_player_story_arcs(get_active_character() or "")
 
 
+@router.get("/play/quests")
+def play_quests(user=Depends(get_current_user)):
+    """The avatar's quest book (quest stage 1, D14): open quests first, then the last ended ones.
+    Spoiler-free by construction — see ``app/core/quest_book.py``. Labels are in the avatar's language,
+    as ``/play/news`` builds them; without an avatar ``{"avatar": "", "quests": []}``."""
+    from app.core.quest_book import build_player_quests
+    from app.models.account import get_active_character
+    from app.models.character import get_character_language
+    avatar = (get_active_character() or "").strip()
+    lang = get_character_language(avatar) if avatar else "en"
+    return _json_off_loop(build_player_quests(avatar, lang))
+
+
 @router.get("/play/notices")
 def play_notices(user=Depends(get_current_user)):
     """Avatar banner hints (B tier 1): critical local events, active

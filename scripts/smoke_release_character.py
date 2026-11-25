@@ -135,7 +135,7 @@ async def main():
         # An empty allowed list may never borrow the legacy account's avatar.
         assert account._active_for_user({"settings": {}, "allowed_characters": []}) == ""
         reads = ["scene", "self", "others", "notices", "places", "worldmap", "explored",
-                 "belongings", "gallery", "galleries", "scenes", "schedule", "story-arcs", "news",
+                 "belongings", "gallery", "galleries", "scenes", "schedule", "story-arcs", "quests", "news",
                  "messages", "messages/thread?partner=Other", "item/missing", "interact/options", "prop-actions", "prop-actions/state"]
         for path in reads:
             r = await c.get("/play/" + path)
