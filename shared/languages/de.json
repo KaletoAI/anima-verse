@@ -7294,6 +7294,10 @@
     "{style} cups": "Körbchen {style}",
     "{straps} straps": "Träger {straps}",
     "A bra worn under this top is hidden: the top's cups replace it.": "Ein BH unter diesem Oberteil wird ausgeblendet: Die Körbchen des Oberteils ersetzen ihn.",
-    "Hidden: the top's cups replace it": "Ausgeblendet: Die Körbchen des Oberteils ersetzen ihn"
+    "Hidden: the top's cups replace it": "Ausgeblendet: Die Körbchen des Oberteils ersetzen ihn",
+    "Nothing to adjust yet: the shoe itself was refused at its “{step}” step, so it has no fit.": "Noch nichts anzupassen: Der Schuh selbst wurde im Schritt „{step}“ abgelehnt, er hat daher keine Anpassung.",
+    "Regenerate that step in the steps beside (the mesh: 1 mesh job). Width and Length apply to the first fit.": "Diesen Schritt in den Schritten daneben neu erzeugen (das Mesh: 1 Mesh-Job). Breite und Länge gelten ab der ersten Anpassung.",
+    "This mesh passed its own checks, but the Insole step refused it — no fit can be made from it. Regenerate the mesh (1 mesh job).": "Dieses Mesh hat seine eigenen Prüfungen bestanden, aber der Schritt „Innensohle“ hat es abgelehnt — daraus lässt sich keine Anpassung machen. Mesh neu erzeugen (1 Mesh-Job).",
+    "The piece itself was refused before any fit — regenerate the refused step in the Wardrobe": "Das Stück selbst wurde vor jeder Anpassung abgelehnt — den abgelehnten Schritt in der Garderobe neu erzeugen"
   }
 }

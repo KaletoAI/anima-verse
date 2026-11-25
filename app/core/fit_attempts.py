@@ -1457,7 +1457,10 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
         same = current_attempt and strip_prefix(attempt.get("error") or "") == strip_prefix(error)
         words(error, attempt.get("gates") if same else None)
     elif status.get("source_failure") is not None:
-        entry["reason"] = SHOE_STEP_REFUSED
+        # the refused step and its words: "see its steps above" alone sent the reader to a row of green steps
+        source = status["source_failure"]
+        step, error = str(source.get("step") or ""), str(source.get("error") or "")
+        entry.update(reason=SHOE_STEP_REFUSED, reason_detail=f"{step} — {error}" if step and error else error)
     elif status["state"] in ("stale", "outdated") or (current_attempt and attempt):
         entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm, or with other fit "
                                              "settings — Re-fit with this body selected, or the next Build, fits "

@@ -1329,10 +1329,13 @@ def preview_frame(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 def allowance_view(character_name: str, item_id: str, profile: Dict[str, Any], fsig: Optional[str],
                    preview_fsig: str) -> Dict[str, Any]:
     """The Wardrobe's footwear allowance box (Ruling A82): ``{settings, steps, auto, applied, foot_len_m,
-    ball_width_mm, frame, due}`` — the settings saved (``allowance``), the steps offered, what the shown fit applied
-    (its record's ``scale.allowance``: width / length percent, Auto's pick), the references the mm beside a step are
-    read from (the foot's length — Length is that share of it — and the shoe's ball width at +0 width — Width is that
-    share of it), ``preview_frame`` of the shown fit, and ``due`` when the shown fit is not the current settings'."""
+    ball_width_mm, frame, due, blocked}`` — the settings saved (``allowance``), the steps offered, what the shown fit
+    applied (its record's ``scale.allowance``: width / length percent, Auto's pick), the references the mm beside a
+    step are read from (the foot's length — Length is that share of it — and the shoe's ball width at +0 width — Width
+    is that share of it), ``preview_frame`` of the shown fit, ``due`` when the shown fit is not the current settings',
+    and ``blocked`` — ``{step, error}`` of the refused SHOE step (``footwear_source.refused_step``) while there is no
+    fit at all: nothing can apply an allowance until that step passes (its own Regenerate), so the box says so
+    instead of offering sliders that change nothing; None otherwise."""
     from app.core import garment_store as gs
     from app.core.footwear_fit import ALLOWANCE_STEPS
     record: Dict[str, Any] = {}
@@ -1355,7 +1358,17 @@ def allowance_view(character_name: str, item_id: str, profile: Dict[str, Any], f
                         "length_pct": float(applied.get("length_pct") or 0.0),
                         "auto": applied.get("auto")} if record else None,
             "foot_len_m": scale.get("foot_len_m"), "ball_width_mm": max(widths) if widths else None,
-            "frame": preview_frame(record), "due": _allowance_due(character_name, item_id, fsig, preview_fsig)}
+            "frame": preview_frame(record), "due": _allowance_due(character_name, item_id, fsig, preview_fsig),
+            "blocked": _allowance_blocked(item_id) if not record else None}
+
+
+def _allowance_blocked(item_id: str) -> Optional[Dict[str, str]]:
+    """``{step, error}`` of the item's refused shoe source step (``allowance_view``'s ``blocked``), None without one."""
+    from app.core import footwear_source
+    refused = footwear_source.refused_step(item_id)
+    if refused is None:
+        return None
+    return {"step": str(refused.get("step") or ""), "error": str(refused.get("error") or "")}
 
 
 def _allowance_due(character_name: str, item_id: str, fsig: Optional[str], preview_fsig: str) -> bool:

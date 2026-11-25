@@ -2490,21 +2490,30 @@ SERVED_PLAIN_REASON = "The model of the outfit worn now is not built yet: the pl
 PIECE_REFUSED = "Its fit on this body was refused"
 PIECE_NO_FIT = "It has no accepted fit on this body"
 PIECE_REFUSED_PLAIN = "Its fit on the base body was refused"
+#: A refused SHOE step (its mesh, cut-out or insole — A187 ``source_failure``): no fit was made, the piece itself was
+#: refused; the remedy is the piece's own step in the Wardrobe, never a Re-fit.
+PIECE_SOURCE_REFUSED = "The piece itself was refused before any fit — regenerate the refused step in the Wardrobe"
 PIECE_PENDING = "Its fit on this body is made now"
 
 
-def _plain_fit_refusal(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]) -> str:
-    """The recorded refusal (its error text) of the piece's fit on the plain body (``fit_attempts.fit_status``) — a
-    piece without that fit has none on a body shape either —, "" without one."""
+def _plain_fit_refusal(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    """``(reason, detail)`` of the piece's recorded refusal on the plain body (``fit_attempts.fit_status``) — a piece
+    without that fit has none on a body shape either —: a refused fit → ``PIECE_REFUSED_PLAIN``, a refused SHOE step
+    (A187 ``source_failure``: no fit was made) → ``PIECE_SOURCE_REFUSED`` with the step named in the detail;
+    ``("", "")`` without one."""
     from app.core import fit_attempts
     try:
         st = fit_attempts.fit_status(character_name, item_id, "", profile=profile)
-        failure = st.get("failure") or st.get("source_failure")  # A187: a refused shoe step names the piece too
     except Exception:  # noqa: BLE001 — the reason falls back to the general one
         logger.debug("Plain fit status of %s/%s unreadable", character_name, item_id, exc_info=True)
-        return ""
-    error = str((failure or {}).get("error") or "") if isinstance(failure, dict) else ""
-    return error
+        return "", ""
+    failure, source = st.get("failure"), st.get("source_failure")
+    if isinstance(failure, dict) and failure.get("error"):
+        return PIECE_REFUSED_PLAIN, str(failure["error"])
+    if isinstance(source, dict) and source.get("error"):
+        step = str(source.get("step") or "")
+        return PIECE_SOURCE_REFUSED, (f"{step} — {source['error']}" if step else str(source["error"]))
+    return "", ""
 
 
 def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -2522,7 +2531,7 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
       sidecar) that the served bytes do not carry (the assembled sidecar's ``garments``; none when the bare file is
       served) → ``missing``, each with its reason (``detail``: a refusal's measured text): a fit refused on the model's body (``garment_assembly._wanted``
       ``left_off``, read only — ``PIECE_REFUSED``), a fit refused on the plain body already (``PIECE_REFUSED_PLAIN``,
-      ``_plain_fit_refusal``), a fit still to be made (``pending``, ``PIECE_PENDING``) or no accepted fit there
+      ``_plain_fit_refusal``) or the piece itself refused before any fit (``PIECE_SOURCE_REFUSED``), a fit still to be made (``pending``, ``PIECE_PENDING``) or no accepted fit there
       (``PIECE_NO_FIT``). Any not
       pending → red ``SERVED_WITHOUT`` (the stored model stays served: the serving path re-assembles it without the
       piece); only pending → blue ``SERVED_ASSEMBLING``;
@@ -2555,10 +2564,9 @@ def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = No
                     reason, detail = PIECE_REFUSED, left_off[item_id]
                 elif pending:
                     reason = PIECE_PENDING
-                elif detail := _plain_fit_refusal(character_name, item_id, profile):
-                    reason = PIECE_REFUSED_PLAIN
                 else:
-                    reason = PIECE_NO_FIT
+                    reason, detail = _plain_fit_refusal(character_name, item_id, profile)
+                    reason = reason or PIECE_NO_FIT
                 missing.append({"item_id": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
                                 "reason": reason, "detail": detail, "pending": pending})
         if match == "base":
