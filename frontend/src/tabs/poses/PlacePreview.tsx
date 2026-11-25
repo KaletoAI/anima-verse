@@ -80,8 +80,6 @@ interface ModelAnswer {
     foot_pose?: FootPose | null
   }
   motion?: SecondaryMotionPayload
-  /** The character's profile height (cm; null = unset, the 1.70 m figure) — "Real heights". */
-  height_cm?: number | null
 }
 interface PropRow {
   id: string; name?: string; marker_count?: number; marker_groups?: string[]; marker_capacities?: Record<string, number>; has_model?: boolean
@@ -826,6 +824,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         // Owner decision 2026-11-25 ("Real heights"): the profile heights of the cast (metres; absent = 1.70 m).
         const realOn = realHeights && !solo
         const heightOf = new Map<string, number>()
+        // the profile height rides on the model meta (`GET /characters/{c}/model/meta` → height_cm; 404 = no model)
+        if (realOn) {
+          await Promise.all([...new Set(assigned.map((p) => assign[p.letter].character))].filter((n) => n !== MANNEQUIN).map(async (name) => {
+            const meta = await apiGet<{ height_cm?: number | null }>(`/characters/${encodeURIComponent(name)}/model/meta`).catch(() => null)
+            if (typeof meta?.height_cm === 'number' && meta.height_cm > 0) heightOf.set(name, meta.height_cm / 100)
+          }))
+        }
         for (const a of assigned.map((p) => assign[p.letter])) {
           const name = a.character
           const mk = modelKey(a)
@@ -838,10 +843,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (a.body === 'base') {
             const base = plain[name]
             if (!base) continue
-            if (realOn) {
-              const hc = (await apiGet<ModelAnswer>(`/characters/${encodeURIComponent(name)}/model3d`).catch(() => null))?.height_cm
-              if (typeof hc === 'number' && hc > 0) heightOf.set(name, hc / 100)
-            }
             const poses = posesOf(a)
             const motion = (poses ? poseMotions[`${name}|${poses}`] : null) ?? base.motion
             const gltf = await gltfLoader.loadAsync(base.url).catch(() => null)
@@ -850,7 +851,6 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             continue
           }
           const answer = await apiGet<ModelAnswer>(`/characters/${encodeURIComponent(name)}/model3d`).catch(() => null)
-          if (typeof answer?.height_cm === 'number' && answer.height_cm > 0) heightOf.set(name, answer.height_cm / 100)
           if (!answer?.model?.url) continue
           const gltf = await gltfLoader.loadAsync(answer.model.url)
           let record: HairStrandRecord | null = null
