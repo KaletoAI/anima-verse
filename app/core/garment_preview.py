@@ -567,7 +567,7 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
     from app.core import garment_template as gt
     p = params
     m = meas
-    kind = p["kind"]
+    kind = gt.build_kind(p)             # a top with cups is drawn as the bra it is built as
     out: List[Dict[str, Any]] = []
     marks: List[Dict[str, Any]] = []
     x0 = reg.x0
@@ -872,7 +872,7 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
     from app.core import garment_template as gt
     x0 = reg.x0
     spec = gt.fitted_spec(p, m)["fitted"]
-    kind = p["kind"]
+    kind = spec["kind"]
     if kind == "briefs" and spec.get("leg_length_m"):
         _boxers(p, m, reg, spec, cap_m, add, mark)
         return

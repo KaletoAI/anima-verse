@@ -630,7 +630,7 @@ ARM_GROUPS = [{"name": "arm_" + side[0].lower(), "side": side[0].lower(), "frame
 def has_bodice(params: Dict[str, Any]) -> bool:
     """A jacket, a covered or off-shoulder top (A221; a corset top — strapless or with straps — is a shell,
     ``corset_top``), or a dress with straps or a covered bodice (Ruling A142)."""
-    kind = params["kind"]
+    kind = build_kind(params)
     if kind == "top":
         return not corset_top(params)
     return kind == "jacket" or (kind == "dress" and params["shoulders"] != "strapless")
@@ -640,25 +640,25 @@ def panel_piece(params: Dict[str, Any]) -> bool:
     """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a corset
     top (``corset_top``). Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live
     ``uv_pattern.py``."""
-    return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
-                                                 and params.get("shoulders") in ("strapless", "straps"))
+    kind = build_kind(params)
+    return kind in PANEL_KINDS or (kind == "top" and params.get("shoulders") in ("strapless", "straps"))
 
 
 def corset_straps(params: Dict[str, Any]) -> bool:
     """Round 2026-11-25 (Lirien): a corset top with straps — the shell of a strapless one (``corset_top``) plus two
     straps over the shoulders (``corset_strap_spec``). Its drape and cut keys carry ``CORSET_STRAPS_VERSION``."""
-    return params.get("kind") == "top" and params.get("shoulders") == "straps"
+    return build_kind(params) == "top" and params.get("shoulders") == "straps"
 
 
 def leg_piece(params: Dict[str, Any]) -> bool:
     """Stage "geometry": a piece whose rows below the crotch may follow the legs (``LEG_VERSION``) — a skirt, a dress."""
-    return params.get("kind") in ("skirt", "dress")
+    return build_kind(params) in ("skirt", "dress")
 
 
 def strap_piece(params: Dict[str, Any]) -> bool:
     """Stage "geometry": a strapped dress or top built with a crew-like yoke (not a corset with a strapless neckline,
     whose straps A221 draws in already) — its straps and top edge are drawn straight (``STRAP_VERSION``)."""
-    return (params.get("kind") in ("dress", "top") and params.get("shoulders") == "straps"
+    return (build_kind(params) in ("dress", "top") and params.get("shoulders") == "straps"
             and params.get("neckline") not in STRAPLESS_NECKLINES)
 
 
@@ -667,7 +667,7 @@ def neck_rules(params: Dict[str, Any]) -> bool:
     the B8 neckband, the relaxed band and stand-collar strips, the placket's lines) — every jacket and dress, and a top
     only with a ``collar`` or a ``placket`` set. A top with neither keeps the cut it had before the phases, byte for
     byte (its band and all: ``scripts/smoke_template_cut_tops_main.py``)."""
-    kind = params.get("kind")
+    kind = build_kind(params)
     if kind in ("jacket", "dress"):
         return True
     return kind == "top" and (str(params.get("collar") or "none") != "none"
@@ -678,7 +678,7 @@ def neck_piece(params: Dict[str, Any]) -> bool:
     """Phases E + F: a piece whose CUT key carries ``NECK_VERSION`` — a jacket, a dress, and a covered top cut by the
     phase rules (``neck_rules``: a collar or a placket). An off-shoulder / strapped top with a placket keeps its key:
     its islands are the same bytes either way, only its placket line is written (B11)."""
-    if params.get("kind") in ("jacket", "dress"):
+    if build_kind(params) in ("jacket", "dress"):
         return True
     return neck_rules(params) and params.get("shoulders") == "covered"
 
@@ -688,7 +688,7 @@ def corset_top(params: Dict[str, Any]) -> bool:
     sweetheart), the straps (if any) run from it over the shoulders. Corset v2..v9: laid on the body as a shell
     (``garment_template_build.corset_shell``), never draped; round 2026-11-25: with straps too (they were a bodice's
     yoke cut down to the band: stepped edges, flaps under the arms, a gap at the back)."""
-    return params["kind"] == "top" and params["shoulders"] in ("strapless", "straps")
+    return build_kind(params) == "top" and params["shoulders"] in ("strapless", "straps")
 
 
 def has_sleeves(params: Dict[str, Any]) -> bool:
@@ -742,7 +742,7 @@ def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[st
     piece with a bodice gets the two arm groups (``ARM_SHAPE_POSES``; a dress only ``DRESS_ARM_SHAPE_POSES``); a top
     or jacket whose hem reaches below the hip joints (``long_top``) also the sit shape (its hem lies on the lap)."""
     groups: List[Dict[str, Any]] = []
-    if params["kind"] in FITTED_KINDS:
+    if build_kind(params) in FITTED_KINDS:
         # A223: a fitted piece follows the skin by its weights alone (a sit shape drape of briefs was tried on Glut's
         # body: the pinned cloth folded through the chest, stretch 648 — left out)
         return []
@@ -767,8 +767,8 @@ FITTED_POSES = {"briefs": MEASURED_POSES, "bra": ("rest", "walk", "arms_down", "
 
 
 def measured_poses(params: Dict[str, Any]) -> Tuple[str, ...]:
-    if params["kind"] in FITTED_POSES:
-        return FITTED_POSES[params["kind"]]
+    if build_kind(params) in FITTED_POSES:
+        return FITTED_POSES[build_kind(params)]
     if has_bodice(params):
         return MEASURED_UPPER_POSES if params["kind"] != "dress" else (*MEASURED_POSES, "arms_down", "arms_up")
     return MEASURED_POSES
@@ -923,7 +923,7 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
     z = _number(((metrics.get("drape") or {}).get("stretch_at") or {}).get("z"))
     top_y, length, asked = (_number(outline_.get("top_y")), _number(outline_.get("length")),
                             _number(params.get("length_m") if isinstance(params, dict) else None))
-    if (not isinstance(params, dict) or params.get("kind") not in ("top", "jacket") or None in (z, top_y, length, asked)
+    if (not isinstance(params, dict) or build_kind(params) not in ("top", "jacket") or None in (z, top_y, length, asked)
             or "band_y" not in meas or "waist_y" not in meas):
         return None
     try:
@@ -1619,7 +1619,7 @@ def _clear_underbust(params: Dict[str, Any], meas: Dict[str, Any], hem_y: float,
     record and the UI (``{under_y, from_y, hem_y, length_m (asked), draped_length_m}``, lengths counted from
     ``length_from``, the line ``length_m`` counts from); any other hem stays (``moved`` None), and so does every hem
     on a body without a fold (``_underbust_fold``)."""
-    fold = _underbust_fold(meas) if params.get("kind") in ("top", "jacket") else None
+    fold = _underbust_fold(meas) if build_kind(params) in ("top", "jacket") else None
     if fold is None:
         return hem_y, None
     under_y = fold[0]
@@ -1835,7 +1835,7 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
     from app.third_party.pygarment.garmentcode.panel import Panel
     if params["kind"] not in BUILT_KINDS:
         raise ValueError(KIND_NOT_BUILT.format(kind=params["kind"]))
-    if params["kind"] in FITTED_KINDS:
+    if build_kind(params) in FITTED_KINDS:
         return fitted_spec(params, meas)
     shape = outline(params, meas, over_sleeves=over_sleeves, tuck=tuck)
     knots = shape["knots"]
@@ -2078,7 +2078,7 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
     * trousers (A233): ``trouser_spec`` — the waistband, the hem rule, the leg shape's radii, the gap, the pins;
     * gloves: ``reach_m`` = how far the cuff reaches from the wrist up the arm (``GLOVE_REACH`` of the measured
       forearm / upper arm), the gap ``offset_m`` (``FITTED_OFFSET_M`` + ``GLOVE_FIT_M`` x fit), the cuff."""
-    kind = params["kind"]
+    kind = build_kind(params)
     fit: Dict[str, Any] = {"kind": kind, "offset_m": FITTED_OFFSET_M, "frames": FITTED_FRAMES}
     if kind == "briefs":
         top = meas["hip_y"] + RISE_SHARE[params["rise"]] * (meas["waist_y"] - meas["hip_y"])
@@ -2225,7 +2225,7 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if params.get("kind") == "dress" and not has_bodice(params):
         # A223: a strapless dress's top edge moved under the chest band — only these drapes are due again
         payload["strapless_top_m"] = STRAPLESS_UNDERARM_M
-    if params.get("kind") in FITTED_KINDS and FITTED_VERSION:
+    if build_kind(params) in FITTED_KINDS and FITTED_VERSION:
         # step 3a (D7 b): the fitted kinds' own version — only their drapes are due again (0 = the keys before it)
         payload["fitted"] = FITTED_VERSION
     if panel_piece(params):
@@ -2705,7 +2705,7 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
         # bug round 2026-11-20: a jacket over a draped sleeved layer is cut wider (``layer_ease``) — only these
         # re-drape, and again when that layer's drape becomes ready or goes, or the allowance changes
         under.append(f"ease:over_sleeves:{JACKET_SLEEVE_EASE}:outer{OUTER_SLEEVE_VERSION}")
-    if under and params["kind"] in FITTED_KINDS:
+    if under and build_kind(params) in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
     # corset v3: a strapless top reaches under the waistband of the skirt / trousers worn with it (``tuck_lines``)
@@ -3035,7 +3035,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
     groups = shape_groups(params, long_top=long_top) if corrective else []
     return {"spec": spec, "fabric": fabric, "torso_half_m": round(torso, 4), "slit": {"side": params["slit"], "depth_m": params["slit_m"]},
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
-            "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
+            "pin": "top", "kind": build_kind(params), "item_id": item_id, "node": f"garment_template_{item_id}",
             # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
             **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if corset_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
@@ -3049,7 +3049,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {}),
             # phases E + F: a top with a collar or a placket is cut by the neck-ring rules (``neck_rules``); without
             # them the arguments are the ones before the phases
-            **({"neck_rules": True} if params["kind"] == "top" and neck_rules(params) else {}),
+            **({"neck_rules": True} if build_kind(params) == "top" and neck_rules(params) else {}),
             # stage "geometry": rows below the crotch round the legs (``LEG_VERSION``), straight straps (``STRAP_VERSION``)
             **({"leg_centres": True} if leg_piece(params) else {}),
             **({"straight_straps": True} if strap_piece(params) else {})}

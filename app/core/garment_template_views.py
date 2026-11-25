@@ -136,6 +136,9 @@ def missing_views(character_name: str, item_id: str) -> List[str]:
 #: strapless bra was pictured with straps and chains: coverage 0.43; her fingerless gloves with full fingers).
 #: ``{field: {value: line}}``, read per kind (``template_lines``); the lines describe what IS there.
 TEMPLATE_LINES: Dict[str, Dict[str, str]] = {
+    # round 2026-11-25: a top with cups (no line for "none": no prompt of a piece without cups changes)
+    "cups": {"bra": "The top has two shaped cups over the chest, a centre piece between them and a band of the same "
+                    "material below them."},
     "fingers": {"fingerless": "The gloves are fingerless: they end at the knuckles and the fingers come out bare.",
                 "none": "The gloves have no hand part: they end at the wrist and the whole hand is bare."},
     "straps": {"none": "The piece is strapless: nothing runs over the shoulders, and nothing hangs from it."},
@@ -161,15 +164,15 @@ GLOVES_LINE = "Show the pair side by side and upright, the fingers pointing up a
 
 
 def template_lines(params: Optional[Dict[str, Any]]) -> List[str]:
-    """The ``TEMPLATE_LINES`` of the fields the piece's kind has (``garment_template.KIND_FIELDS``), in field order;
-    the gloves' orientation line first; a strapless top's edge line (``STRAPLESS_EDGE_LINES``) after its strapless
-    line. [] without template parameters."""
+    """The ``TEMPLATE_LINES`` of the piece's active fields (``garment_template.fields_of``: its kind's, a top with cups'
+    own list), in field order; the gloves' orientation line first; a strapless top's edge line
+    (``STRAPLESS_EDGE_LINES``) after its strapless line. [] without template parameters."""
     if not params:
         return []
-    from app.core.garment_template import KIND_FIELDS
+    from app.core.garment_template import fields_of
     kind = params.get("kind") or ""
     lines = [GLOVES_LINE] if kind == "gloves" else []
-    for field in KIND_FIELDS.get(kind, ()):
+    for field in fields_of(params):
         line = TEMPLATE_LINES.get(field, {}).get(str(params.get(field)))
         if line and line not in lines:
             lines.append(line)

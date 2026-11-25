@@ -115,7 +115,7 @@ def uv_pattern_key(params: Dict[str, Any]) -> str:
     (step 3b, ``garment_template.panel_piece``: a skirt, a strapless top), ``TOP_UV_PATTERN_SHA`` for a top with a
     bodice."""
     from app.core import garment_template as gt
-    live = params.get("kind") in gt.FITTED_KINDS or gt.panel_piece(params)
+    live = gt.build_kind(params) in gt.FITTED_KINDS or gt.panel_piece(params)
     return UV_PATTERN_SHA if live else TOP_UV_PATTERN_SHA
 
 
@@ -125,14 +125,14 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     payload = {"params": cut_params(params), "version": gt.TEMPLATE_VERSION,
                "uv_pattern": uv_pattern_key(params),
                "base": base_sha, "lower": sorted(lower)}
-    if params.get("kind") in gt.FITTED_KINDS:
+    if gt.build_kind(params) in gt.FITTED_KINDS:
         # step 3a: a fitted piece's cut also follows its own version and the part rules (``fitted_pattern.py``)
         payload["fitted"] = gt.FITTED_VERSION
         payload["fitted_pattern"] = FITTED_PATTERN_SHA
     if gt.panel_piece(params):
         # step 3b (B16): a panel piece's cut follows the panel version (``garment_template.PANEL_VERSION``)
         payload["panels"] = gt.PANEL_VERSION
-    if params.get("kind") == "top" and gt.panel_piece(params):
+    if gt.build_kind(params) == "top" and gt.panel_piece(params):
         # phase G: a strapless top's darts and back line (``corset_darts.py``)
         payload["corset"] = gt.CORSET_VERSION
         payload["corset_rules"] = CORSET_DARTS_SHA
