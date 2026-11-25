@@ -21,6 +21,7 @@ import { type TmplSection } from '@anima/player-ui'
 import { TemplateTab, useExpressionSets } from '@anima/player-ui'
 import { BodyEditor } from '@anima/player-ui'
 import { StatsPanel } from './StatsPanel'
+import { TtsConfigPanel } from './TtsConfigPanel'
 import { FieldModel3D } from './FieldModel3D'
 import { Model3DDetails } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
@@ -141,7 +142,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
   'placement', 'body_editor', 'pose_ref', 'model3d_gen', 'figure', 'base_body',
-  'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
+  'stats', 'tts_config', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
 
@@ -1189,6 +1190,15 @@ export function CharactersTab() {
                               | Record<string, unknown>
                               | undefined
                           }
+                          discardSignal={discardSignal}
+                          savedSignal={savedSignal}
+                        />
+                      ),
+                      tts_config: (
+                        <TtsConfigPanel
+                          character={selected}
+                          queueField={queueField}
+                          draftConfig={templateDraft.config}
                           discardSignal={discardSignal}
                           savedSignal={savedSignal}
                         />

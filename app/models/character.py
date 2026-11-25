@@ -1246,7 +1246,9 @@ def _get_character_defaults() -> Dict[str, Any]:
     return {
         "tts_enabled": True,
         "tts_auto": False,
+        "tts_model": "",
         "tts_voice": "",
+        "tts_param": "",
         "tts_speaker_wav": "",
         "tool_format": "auto",
         # Agent-Loop scheduling weight: 1=Low, 2=Medium, 3=High. High agents

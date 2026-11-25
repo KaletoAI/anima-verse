@@ -48,7 +48,22 @@ async def speak(request: Request) -> Dict[str, Any]:
     agent_config = {}
     if user_id and character_name:
         agent_config = get_character_config(character_name)
+    elif character_name:
+        agent_config = get_character_config(character_name)
     tts_config = service.get_character_config(agent_config)
+
+    # Optional preview overrides from the Character editor (unsaved draft values)
+    override_model = data.get("model")
+    override_voice = data.get("voice")
+    override_param = data.get("param")
+    model = str(override_model).strip() if override_model is not None else tts_config.get("model", "")
+    param = str(override_param).strip() if override_param is not None else tts_config.get("param", "")
+    if override_voice is not None:
+        from app.core.tts_service import split_generic_voice
+        voice, speaker_wav = split_generic_voice(str(override_voice), "")
+    else:
+        voice = tts_config.get("voice", "")
+        speaker_wav = tts_config.get("speaker_wav", "")
 
     clean_text = clean_text_for_tts(text)
     if not clean_text.strip():
@@ -57,9 +72,11 @@ async def speak(request: Request) -> Dict[str, Any]:
     audio_path = await asyncio.to_thread(
         service.generate,
         text=clean_text,
-        voice=tts_config.get("voice", ""),
-        speaker_wav=tts_config.get("speaker_wav", ""),
-        language=tts_config.get("language", "de"))
+        voice=voice,
+        speaker_wav=speaker_wav,
+        language=tts_config.get("language", "de"),
+        model=model,
+        param=param)
 
     if audio_path and audio_path.exists():
         return {"audio_url": f"/tts/tmp/{audio_path.name}"}
@@ -78,57 +95,51 @@ def serve_tts_audio(filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio not found")
 
+    low = filename.lower()
     media_type = "audio/wav"
-    if filename.endswith(".mp3"):
+    if low.endswith(".mp3"):
         media_type = "audio/mpeg"
+    elif low.endswith(".flac"):
+        media_type = "audio/flac"
+    elif low.endswith(".ogg"):
+        media_type = "audio/ogg"
+    elif low.endswith(".opus"):
+        media_type = "audio/opus"
+    elif low.endswith(".aac"):
+        media_type = "audio/aac"
 
     return FileResponse(path, media_type=media_type)
+
+
+@router.get("/capabilities")
+def tts_capabilities() -> Dict[str, Any]:
+    """Returns discovered TTS models/aliases, preset voices, cloned voices, and controls."""
+    service = get_tts_service()
+    return service.capabilities()
 
 
 @router.get("/speakers")
 def list_speakers() -> Dict[str, Any]:
     """Listet verfuegbare Speaker-WAV-Dateien aus dem voices/ Verzeichnis."""
-    voices_dir = Path("./voices")
-    speakers: List[Dict[str, str]] = []
-    if voices_dir.exists():
-        for f in sorted(voices_dir.iterdir()):
-            if f.suffix.lower() in (".wav", ".mp3", ".flac", ".ogg"):
-                # Label: Dateiname ohne _ref und Extension
-                label = f.stem
-                if label.endswith("_ref"):
-                    label = label[:-4]
-                speakers.append({
-                    "value": f"./voices/{f.name}",
-                    "label": label,
-                })
+    from app.core.tts_service import list_local_cloned_voices
+    speakers = [
+        {"value": entry["path"], "label": entry["label"]}
+        for entry in list_local_cloned_voices()
+    ]
     return {"speakers": speakers}
 
 
 @router.get("/voices")
 def list_voices() -> Dict[str, Any]:
-    """Listet verfuegbare TTS Voices."""
+    """Listet verfuegbare TTS Voices (fuer das aktive Backend bzw. Default-Alias)."""
     service = get_tts_service()
+    caps = service.capabilities()
+    default_id = caps.get("default_model", "")
     voices: List[Dict[str, str]] = []
-
-    if service.backend == "magpie" and service.magpie_url:
-        # Riva /v1/audio/list_voices: {"lang-group": {"voices": [...]}}
-        try:
-            import requests
-            resp = requests.get(f"{service.magpie_url}/v1/audio/list_voices", timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict):
-                    for lang_group, info in data.items():
-                        voice_list = info.get("voices", []) if isinstance(info, dict) else []
-                        for v in voice_list:
-                            if isinstance(v, str):
-                                voices.append({"value": v, "label": v})
-        except Exception:
-            pass
-
-    # Fallback: Aktuelle Default-Voice als einzige Option
-    if not voices:
-        if service.backend == "magpie" and service.magpie_voice:
-            voices.append({"value": service.magpie_voice, "label": service.magpie_voice})
-
+    for m in caps.get("models", []):
+        if m.get("id") == default_id:
+            voices = list(m.get("voices") or [])
+            break
+    if not voices and service.backend == "magpie" and service.magpie_voice:
+        voices.append({"value": service.magpie_voice, "label": service.magpie_voice})
     return {"voices": voices}

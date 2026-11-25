@@ -1,6 +1,7 @@
-"""TTS Service - XTTS v2, F5-TTS, and Magpie backends.
+"""TTS Service - AI-Hub aliases, XTTS v2, F5-TTS, and Magpie backends.
 
-Provides text-to-speech generation with three configurable backends:
+Provides text-to-speech generation with configurable backends:
+- AI-Hub: Dynamic TTS aliases discovered at startup (e.g. ZONOS3-Mini, ming-3.0-tts-0.5b)
 - XTTS v2: Voice cloning capable, higher quality, slower
 - F5-TTS: High-quality voice cloning via Gradio API
 - Magpie: Multilingual TTS via REST API (multipart form)
@@ -21,7 +22,68 @@ import requests
 
 from app.core.config_schema import field_default
 from app.core.log import get_logger
+from app.core.tts_ai_hub import (
+    HUB_MODEL_PREFIX,
+    TTSAliasSpec,
+    discover_ai_hub_tts,
+    generate_ai_hub_tts,
+)
 logger = get_logger("tts")
+
+CLONE_VOICE_PREFIX = "clone:"
+_AUDIO_SUFFIXES = (".wav", ".mp3", ".flac", ".ogg", ".opus", ".m4a")
+
+
+def split_generic_voice(tts_voice: str, legacy_speaker_wav: str = "") -> Tuple[str, str]:
+    """Splits a generic ``tts_voice`` value into ``(preset_voice, speaker_wav)``.
+
+    Values starting with ``clone:`` (or pointing directly to an audio file)
+    become ``speaker_wav`` for voice-cloning backends; everything else is a
+    named preset voice. Falls back to legacy ``tts_speaker_wav`` when
+    ``tts_voice`` is empty.
+    """
+    raw = (tts_voice or "").strip()
+    legacy = (legacy_speaker_wav or "").strip()
+    if raw.startswith(CLONE_VOICE_PREFIX):
+        return "", raw[len(CLONE_VOICE_PREFIX):].strip()
+    if raw and (raw.lower().endswith(_AUDIO_SUFFIXES) or "/" in raw or "\\" in raw):
+        return "", raw
+    if raw:
+        return raw, ""
+    if legacy:
+        return "", legacy
+    return "", ""
+
+
+def list_local_cloned_voices() -> List[Dict[str, str]]:
+    """Lists reference audio files in ``./voices`` as generic clone voice entries."""
+    voices_dir = Path("./voices")
+    out: List[Dict[str, str]] = []
+    if not voices_dir.exists():
+        return out
+    seen_stems = set()
+    for f in sorted(voices_dir.iterdir()):
+        if not f.is_file() or f.suffix.lower() not in (".wav", ".mp3", ".flac", ".ogg"):
+            continue
+        stem = f.stem
+        # Avoid showing both foo_ref.wav and its cached foo_ref_norm.wav copy
+        if stem.endswith("_norm"):
+            orig_stem = stem[:-5]
+            if orig_stem in seen_stems:
+                continue
+        seen_stems.add(stem)
+        label = stem
+        if label.endswith("_norm"):
+            label = label[:-5]
+        if label.endswith("_ref"):
+            label = label[:-4]
+        rel = f"./voices/{f.name}"
+        out.append({
+            "value": f"{CLONE_VOICE_PREFIX}{rel}",
+            "path": rel,
+            "label": label,
+        })
+    return out
 
 from app.core.paths import get_storage_dir as _get_storage_dir
 _REF_AUDIO_CACHE: Dict[str, str] = {}
@@ -282,12 +344,23 @@ def split_tts_chunk(buffer: str, min_chars: int) -> tuple:
 
 
 class TTSService:
-    """Manages TTS backends (XTTS v2, F5-TTS, Magpie) with global + per-character config."""
+    """Manages TTS backends (AI-Hub aliases, XTTS v2, F5-TTS, Magpie) with global + per-character config."""
 
     def __init__(self):
         self.enabled = False
         self.auto = False
         self.backend = "xtts"
+        self.ai_hub_url = ""
+        self.ai_hub_api_key = ""
+        self.ai_hub_default_alias = ""
+        self.ai_hub_extra_aliases: List[str] = []
+        self.ai_hub_include_cloud = False
+        self.ai_hub_mode = "sync"
+        self.ai_hub_timeout = 120
+        self._ai_hub_specs: Dict[str, TTSAliasSpec] = {}
+        self._ai_hub_reachable = False
+        self._ai_hub_discovered = False
+        self._ai_hub_lock = threading.Lock()
         self.xtts_url = ""
         self.xtts_speaker_wav = ""
         self.xtts_language = "de"
@@ -320,6 +393,22 @@ class TTSService:
         self.chunk_size = int(os.environ.get("TTS_CHUNK_SIZE", field_default("tts", "chunk_size")))
         self.backend = os.environ.get("TTS_BACKEND", "xtts").lower()
         self.fallback_backend = os.environ.get("TTS_FALLBACK_BACKEND", "").lower()
+
+        # AI-Hub TTS aliases
+        self.ai_hub_url = os.environ.get("TTS_AI_HUB_URL", "").strip().rstrip("/")
+        self.ai_hub_api_key = os.environ.get("TTS_AI_HUB_API_KEY", "").strip()
+        self.ai_hub_default_alias = os.environ.get("TTS_AI_HUB_DEFAULT_ALIAS", "").strip()
+        raw_extra = os.environ.get("TTS_AI_HUB_EXTRA_ALIASES", "")
+        self.ai_hub_extra_aliases = [a.strip() for a in raw_extra.split(",") if a.strip()]
+        self.ai_hub_include_cloud = os.environ.get("TTS_AI_HUB_INCLUDE_CLOUD", "false").lower() in ("true", "1", "yes")
+        self.ai_hub_mode = os.environ.get("TTS_AI_HUB_MODE", "sync").strip().lower() or "sync"
+        try:
+            self.ai_hub_timeout = max(5, int(os.environ.get("TTS_AI_HUB_TIMEOUT", "120")))
+        except ValueError:
+            self.ai_hub_timeout = 120
+        self._ai_hub_specs = {}
+        self._ai_hub_reachable = False
+        self._ai_hub_discovered = False
 
         # XTTS
         self.xtts_url = os.environ.get("TTS_XTTS_URL", "http://localhost:8020").rstrip("/")
@@ -369,9 +458,67 @@ class TTSService:
             }
             logger.info("F5-TTS: legacy single-model config (no TTS_F5_MODEL_* variables)")
 
+    def _discover_ai_hub(self, force: bool = False) -> bool:
+        """Discovers available AI-Hub TTS aliases + schemas (cached until reload)."""
+        if not self.ai_hub_url:
+            return False
+        with self._ai_hub_lock:
+            if self._ai_hub_discovered and not force:
+                return self._ai_hub_reachable and bool(self._ai_hub_specs)
+            reachable, specs = discover_ai_hub_tts(
+                self.ai_hub_url,
+                self.ai_hub_api_key,
+                default_alias=self.ai_hub_default_alias,
+                extra_aliases=self.ai_hub_extra_aliases,
+                include_cloud=self.ai_hub_include_cloud,
+            )
+            self._ai_hub_reachable = reachable
+            self._ai_hub_specs = specs
+            self._ai_hub_discovered = True
+            return reachable and bool(specs)
+
+    def _default_ai_hub_alias(self) -> str:
+        """Returns the configured default AI-Hub TTS alias or first discovered local one."""
+        if self.ai_hub_default_alias and self.ai_hub_default_alias in self._ai_hub_specs:
+            return self.ai_hub_default_alias
+        for alias, spec in self._ai_hub_specs.items():
+            if spec.local:
+                return alias
+        if self._ai_hub_specs:
+            return next(iter(self._ai_hub_specs))
+        return self.ai_hub_default_alias
+
+    def _default_model_id(self) -> str:
+        if self.backend == "ai_hub":
+            alias = self._default_ai_hub_alias()
+            return f"{HUB_MODEL_PREFIX}{alias}" if alias else "ai_hub"
+        return self.backend
+
+    def _resolve_target(self, model: str = "") -> Tuple[str, str]:
+        """Resolves a generic model identifier into ``(backend, alias)``."""
+        raw = (model or "").strip()
+        if raw.startswith(HUB_MODEL_PREFIX):
+            return "ai_hub", raw[len(HUB_MODEL_PREFIX):].strip()
+        if raw == "ai_hub":
+            self._discover_ai_hub()
+            return "ai_hub", self._default_ai_hub_alias()
+        if raw in ("xtts", "magpie", "f5"):
+            return raw, ""
+        if raw:
+            # Bare alias name (e.g. "ZONOS3-Mini")
+            self._discover_ai_hub()
+            if raw in self._ai_hub_specs:
+                return "ai_hub", raw
+        if self.backend == "ai_hub":
+            self._discover_ai_hub()
+            return "ai_hub", self._default_ai_hub_alias()
+        return self.backend, ""
+
     def _check_backend_reachable(self, backend: str) -> bool:
         """Checks whether a given backend is reachable (without loading models)."""
         try:
+            if backend == "ai_hub":
+                return self._discover_ai_hub(force=True)
             if backend == "xtts":
                 resp = requests.get(f"{self.xtts_url}/docs", timeout=5)
                 return resp.status_code == 200
@@ -386,13 +533,26 @@ class TTSService:
             return False
 
     def is_available(self) -> bool:
-        """Checks whether the configured TTS backend is reachable."""
+        """Checks whether the configured TTS backend is reachable.
+
+        Also discovers AI-Hub TTS aliases at startup whenever an AI-Hub URL is
+        configured, so per-character AI-Hub overrides and ``/tts/capabilities``
+        are immediately populated.
+        """
+        if self.ai_hub_url:
+            try:
+                self._discover_ai_hub(force=True)
+            except Exception as e:
+                logger.debug("AI-Hub TTS startup discovery failed: %s", e)
+
         if not self.enabled:
             self._available = False
             return False
 
         try:
-            if self.backend == "xtts":
+            if self.backend == "ai_hub":
+                self._available = self._ai_hub_reachable and bool(self._ai_hub_specs)
+            elif self.backend == "xtts":
                 resp = requests.get(f"{self.xtts_url}/docs", timeout=5)
                 self._available = resp.status_code == 200
             elif self.backend == "magpie":
@@ -429,27 +589,91 @@ class TTSService:
     def get_character_config(self, agent_config: Dict[str, Any]) -> Dict[str, Any]:
         """Merges global + per-character TTS settings.
 
-        Per-character values override global defaults.
+        Per-character values override global defaults. ``tts_voice`` is generic:
+        a ``clone:<path>`` entry resolves to ``speaker_wav`` while a preset name
+        resolves to ``voice``. Legacy ``tts_speaker_wav`` remains supported as a
+        fallback when ``tts_voice`` is empty.
         """
-        # speaker_wav default depends on the backend
-        if self.backend == "f5":
+        raw_model = str(agent_config.get("tts_model", "") or "").strip()
+        target_backend, _alias = self._resolve_target(raw_model)
+
+        preset_voice, clone_wav = split_generic_voice(
+            str(agent_config.get("tts_voice", "") or ""),
+            str(agent_config.get("tts_speaker_wav", "") or ""),
+        )
+
+        # Global fallback defaults depend on the effective target backend
+        if target_backend == "f5":
             default_speaker = self.f5_ref_audio
-        else:
+        elif target_backend == "xtts":
             default_speaker = self.xtts_speaker_wav
-        # voice default: Magpie has its own named voices
-        if self.backend == "magpie":
+        else:
+            default_speaker = ""
+
+        if target_backend == "magpie":
             default_voice = self.magpie_voice
             default_language = self.magpie_language
         else:
             default_voice = ""
             default_language = self.xtts_language
+
         return {
             "enabled": agent_config.get("tts_enabled", self.enabled),
             "auto": agent_config.get("tts_auto", self.auto),
-            "voice": agent_config.get("tts_voice", "") or default_voice,
-            "speaker_wav": agent_config.get("tts_speaker_wav", "") or default_speaker,
+            "model": raw_model,
+            "voice": preset_voice or default_voice,
+            "speaker_wav": clone_wav or default_speaker,
+            "param": str(agent_config.get("tts_param", "") or "").strip(),
             "language": agent_config.get("tts_language", "") or default_language,
         }
+
+    def _generate_ai_hub(
+        self,
+        alias: str,
+        text: str,
+        voice: str = "",
+        speaker_wav: str = "",
+        language: str = "de",
+        param: str = "",
+    ) -> Optional[Path]:
+        """Generates audio via an AI-Hub TTS alias."""
+        if not self.ai_hub_url:
+            logger.error("AI-Hub TTS error: URL not configured")
+            return None
+        self._discover_ai_hub()
+        eff_alias = alias or self._default_ai_hub_alias()
+        spec = self._ai_hub_specs.get(eff_alias)
+        if spec is None and eff_alias:
+            # On-demand schema fetch for an alias chosen after startup
+            _, fetched = discover_ai_hub_tts(
+                self.ai_hub_url,
+                self.ai_hub_api_key,
+                extra_aliases=[eff_alias],
+            )
+            spec = fetched.get(eff_alias)
+            if spec:
+                self._ai_hub_specs[eff_alias] = spec
+        if spec is None:
+            logger.error("AI-Hub TTS error: alias '%s' not available", eff_alias)
+            return None
+
+        out_dir = _get_storage_dir() / "tmp" / "tts_audio"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return generate_ai_hub_tts(
+            self.ai_hub_url,
+            self.ai_hub_api_key,
+            spec,
+            text=text,
+            voice=voice,
+            speaker_wav=speaker_wav,
+            language=language,
+            param=param,
+            mode=self.ai_hub_mode,
+            timeout=self.ai_hub_timeout,
+            out_dir=out_dir,
+            normalize_fn=_normalize_reference_audio,
+            transcribe_fn=self._transcribe_ref_audio,
+        )
 
     def _generate_with_backend(
         self,
@@ -457,9 +681,21 @@ class TTSService:
         text: str,
         voice: str = "",
         speaker_wav: str = "",
-        language: str = "") -> Optional[Path]:
+        language: str = "",
+        alias: str = "",
+        param: str = "",
+    ) -> Optional[Path]:
         """Generates audio with a specific backend."""
-        if backend == "xtts":
+        if backend == "ai_hub":
+            return self._generate_ai_hub(
+                alias,
+                text,
+                voice=voice,
+                speaker_wav=speaker_wav,
+                language=language or self.xtts_language,
+                param=param,
+            )
+        elif backend == "xtts":
             return self._generate_xtts(
                 text,
                 speaker_wav or self.xtts_speaker_wav,
@@ -471,6 +707,12 @@ class TTSService:
                 language or self.magpie_language)
         elif backend == "f5":
             effective_language = language or self.xtts_language
+            speed_override = None
+            if param:
+                try:
+                    speed_override = max(0.1, min(3.0, float(param)))
+                except ValueError:
+                    pass
             # Thread lock: model switch + generation are atomic
             with self._f5_model_lock:
                 if not self._ensure_f5_model(effective_language):
@@ -480,7 +722,8 @@ class TTSService:
                     text,
                     speaker_wav or self.f5_ref_audio,
                     self.f5_ref_text,
-                    effective_language)
+                    effective_language,
+                    speed_override=speed_override)
         else:
             logger.error("Unknown backend: %s", backend)
             return None
@@ -490,34 +733,37 @@ class TTSService:
         text: str,
         voice: str = "",
         speaker_wav: str = "",
-        language: str = "") -> Optional[Path]:
-        """Generates an audio file via the configured backend.
+        language: str = "",
+        model: str = "",
+        param: str = "",
+    ) -> Optional[Path]:
+        """Generates an audio file via the resolved backend (character model override or global default).
 
-        Tries the primary backend first. On failure, the fallback backend
+        Tries the primary target first. On failure, the fallback backend
         (TTS_FALLBACK_BACKEND) is used if configured.
-
-        Args:
-            text: Cleaned text for TTS.
-            voice: Voice name for Magpie (override).
-            speaker_wav: XTTS/F5-TTS reference audio (override).
-            language: Language (for XTTS and F5-TTS model selection).
-
-        Returns:
-            Path to the generated audio file, or None on failure.
         """
         if not text.strip():
             return None
 
         (_get_storage_dir() / "tmp" / "tts_audio").mkdir(parents=True, exist_ok=True)
 
-        logger.debug("Text to TTS (%s): %s%s", self.backend, text[:500], '...' if len(text) > 500 else '')
+        target_backend, target_alias = self._resolve_target(model)
+        label = f"ai_hub:{target_alias}" if target_backend == "ai_hub" else target_backend
+        logger.debug("Text to TTS (%s): %s%s", label, text[:500], '...' if len(text) > 500 else '')
 
-        result = self._generate_with_backend(self.backend, text, voice, speaker_wav, language)
+        result = self._generate_with_backend(
+            target_backend, text, voice, speaker_wav, language,
+            alias=target_alias, param=param,
+        )
 
-        if result is None and self.fallback_backend and self.fallback_backend != self.backend:
+        if result is None and self.fallback_backend and self.fallback_backend != target_backend:
             logger.warning("Primary backend '%s' failed, trying fallback '%s'...",
-                          self.backend, self.fallback_backend)
-            result = self._generate_with_backend(self.fallback_backend, text, voice, speaker_wav, language)
+                          label, self.fallback_backend)
+            fb_alias = self._default_ai_hub_alias() if self.fallback_backend == "ai_hub" else ""
+            result = self._generate_with_backend(
+                self.fallback_backend, text, voice, speaker_wav, language,
+                alias=fb_alias, param=param,
+            )
             if result:
                 logger.info("Fallback '%s' succeeded", self.fallback_backend)
 
@@ -872,7 +1118,14 @@ class TTSService:
             logger.error("F5-TTS: auto-transcription failed: %s", e)
             return ""
 
-    def _generate_f5(self, text: str, ref_audio: str, ref_text: str, language: str = "de") -> Optional[Path]:
+    def _generate_f5(
+        self,
+        text: str,
+        ref_audio: str,
+        ref_text: str,
+        language: str = "de",
+        speed_override: Optional[float] = None,
+    ) -> Optional[Path]:
         """F5-TTS: Sends text to the F5-TTS Gradio server via gradio_client."""
         if not ref_audio:
             logger.error("F5-TTS error: ref_audio is required. Set TTS_F5_REF_AUDIO.")
@@ -894,7 +1147,7 @@ class TTSService:
                 gen_text_input=text,
                 remove_silence=self.f5_remove_silence,
                 nfe_slider=self.f5_nfe_steps,
-                speed_slider=self.f5_speed,
+                speed_slider=speed_override if speed_override is not None else self.f5_speed,
                 api_name="/basic_tts")
             # Result is tuple: (audio_filepath, spectrogram_filepath, ref_text, seed)
             audio_file = result[0] if isinstance(result, (list, tuple)) else result
@@ -922,9 +1175,101 @@ class TTSService:
         self._f5_ref_text_cache.clear()
         self._f5_current_language = None
 
+    def _fetch_magpie_voices(self) -> List[Dict[str, str]]:
+        voices: List[Dict[str, str]] = []
+        if self.magpie_url:
+            try:
+                resp = requests.get(f"{self.magpie_url}/v1/audio/list_voices", timeout=3)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        for _lang_group, info in data.items():
+                            voice_list = info.get("voices", []) if isinstance(info, dict) else []
+                            for v in voice_list:
+                                if isinstance(v, str):
+                                    voices.append({"value": v, "label": v})
+            except Exception:
+                pass
+        if not voices and self.magpie_voice:
+            voices.append({"value": self.magpie_voice, "label": self.magpie_voice})
+        return voices
+
+    def capabilities(self) -> Dict[str, Any]:
+        """Returns all selectable TTS models (AI-Hub aliases + legacy backends) and cloned voices."""
+        if self.ai_hub_url and not self._ai_hub_discovered:
+            self._discover_ai_hub()
+
+        models: List[Dict[str, Any]] = []
+        # 1. Discovered AI-Hub aliases (local first, then cloud)
+        ordered_specs = sorted(
+            self._ai_hub_specs.values(),
+            key=lambda s: (0 if s.local else 1, s.alias.lower()),
+        )
+        for spec in ordered_specs:
+            models.append(spec.to_capability_dict())
+
+        # 2. Existing legacy backends (XTTS v2, Magpie, F5-TTS)
+        models.append({
+            "id": "xtts",
+            "label": "XTTS v2",
+            "source": "legacy",
+            "available": self.backend == "xtts" and bool(self._available),
+            "voices": [],
+            "default_voice": "",
+            "supports_clone": True,
+            "clone_required": True,
+            "extra_param": None,
+        })
+        models.append({
+            "id": "magpie",
+            "label": "Magpie (NVIDIA Riva)",
+            "source": "legacy",
+            "available": self.backend == "magpie" and bool(self._available),
+            "voices": self._fetch_magpie_voices() if self.backend == "magpie" or self.magpie_voice else [],
+            "default_voice": self.magpie_voice,
+            "supports_clone": False,
+            "clone_required": False,
+            "extra_param": None,
+        })
+        models.append({
+            "id": "f5",
+            "label": "F5-TTS",
+            "source": "legacy",
+            "available": self.backend == "f5" and bool(self._available),
+            "voices": [],
+            "default_voice": "",
+            "supports_clone": True,
+            "clone_required": True,
+            "extra_param": {
+                "kind": "speed",
+                "param": "speed",
+                "label": "Speaking rate",
+                "label_de": "Sprechtempo",
+                "default": self.f5_speed,
+                "neutral": 1.0,
+                "min": 0.1,
+                "max": 3.0,
+                "placeholder": str(self.f5_speed),
+                "placeholder_de": str(self.f5_speed),
+                "hint": "Speed multiplier (1.0 = normal, e.g. 0.85 slower, 1.15 faster)",
+                "hint_de": "Sprechtempo-Faktor (1.0 = normal, z. B. 0.85 langsamer, 1.15 schneller)",
+            },
+        })
+
+        return {
+            "enabled": self.enabled,
+            "default_model": self._default_model_id(),
+            "models": models,
+            "cloned_voices": list_local_cloned_voices(),
+        }
+
     def status_info(self) -> Dict[str, Any]:
         """Returns status info for availability summary."""
-        if self.backend == "f5":
+        if self.backend == "ai_hub":
+            url = self.ai_hub_url
+            default_alias = self._default_ai_hub_alias()
+            voice = f"{default_alias} ({len(self._ai_hub_specs)} aliases)" if default_alias else f"{len(self._ai_hub_specs)} aliases"
+        elif self.backend == "f5":
             url = self.f5_url
             if self._f5_language_models:
                 langs = [k for k in self._f5_language_models if k != "_legacy"]
@@ -953,6 +1298,7 @@ class TTSService:
             "url": url,
             "voice": voice,
             "auto": self.auto,
+            "ai_hub_aliases": sorted(self._ai_hub_specs.keys()),
         }
 
 
@@ -1030,7 +1376,9 @@ class ChunkedTTSHandler:
             text=text,
             voice=self._cfg.get("voice", ""),
             speaker_wav=self._cfg.get("speaker_wav", ""),
-            language=self._cfg.get("language", "de")))
+            language=self._cfg.get("language", "de"),
+            model=self._cfg.get("model", ""),
+            param=self._cfg.get("param", "")))
 
     @staticmethod
     def _audio_sse(url: str, index: int, final: bool) -> str:

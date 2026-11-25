@@ -229,7 +229,17 @@ def _check_tts(config: dict) -> list:
 
     backend = tts.get("backend", "")
 
-    if backend == "xtts":
+    if backend == "ai_hub":
+        ai_hub = tts.get("ai_hub", {})
+        has_inherited_hub = any(
+            isinstance(be, dict) and be.get("api_url")
+            and str(be.get("api_type") or "").lower() in ("openai_mesh", "openai_video", "openai_upscale", "openai_image", "localai")
+            for be in (config.get("image_generation") or {}).get("backends") or []
+        )
+        if not ai_hub.get("url") and not has_inherited_hub:
+            issues.append(_err("tts", "AI-Hub TTS: URL missing"))
+
+    elif backend == "xtts":
         xtts = tts.get("xtts", {})
         if not xtts.get("url"):
             issues.append(_err("tts", "XTTS: URL missing"))

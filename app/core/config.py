@@ -3049,6 +3049,45 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "TTS_BACKEND", tts.get("backend", field_default("tts", "backend")))
     _set(env, "TTS_FALLBACK_BACKEND", tts.get("fallback_backend", field_default("tts", "fallback_backend")))
 
+    ai_hub = tts.get("ai_hub", {})
+    hub_url = (ai_hub.get("url") or "").strip()
+    hub_key = (ai_hub.get("api_key") or "").strip()
+    if not hub_url or not hub_key:
+        # Fallback: inherit URL/key from an existing AI-Hub gateway entry in
+        # image_generation.backends or providers so TTS works out-of-the-box.
+        for be in (config.get("image_generation") or {}).get("backends") or []:
+            if not isinstance(be, dict):
+                continue
+            be_type = str(be.get("api_type") or "").strip().lower()
+            be_url = str(be.get("api_url") or "").strip()
+            if be_url and be_type in ("openai_mesh", "openai_video", "openai_upscale", "openai_image", "localai"):
+                if not hub_url:
+                    hub_url = be_url
+                if not hub_key and be.get("api_key"):
+                    hub_key = str(be.get("api_key") or "").strip()
+                if hub_url and hub_key:
+                    break
+        if not hub_url or not hub_key:
+            for prov in config.get("providers") or []:
+                if not isinstance(prov, dict):
+                    continue
+                pname = str(prov.get("name") or "").lower()
+                purl = str(prov.get("base_url") or "").strip()
+                if purl and ("gateway" in pname or "hub" in pname):
+                    if not hub_url:
+                        hub_url = purl.rstrip("/").removesuffix("/v1")
+                    if not hub_key and prov.get("api_key"):
+                        hub_key = str(prov.get("api_key") or "").strip()
+                    if hub_url and hub_key:
+                        break
+    _set(env, "TTS_AI_HUB_URL", hub_url)
+    _set(env, "TTS_AI_HUB_API_KEY", hub_key)
+    _set(env, "TTS_AI_HUB_DEFAULT_ALIAS", ai_hub.get("default_alias", ""))
+    _set(env, "TTS_AI_HUB_EXTRA_ALIASES", ai_hub.get("extra_aliases", ""))
+    _set(env, "TTS_AI_HUB_INCLUDE_CLOUD", ai_hub.get("include_cloud", field_default("tts", "ai_hub", "include_cloud")))
+    _set(env, "TTS_AI_HUB_MODE", ai_hub.get("mode", field_default("tts", "ai_hub", "mode")))
+    _set(env, "TTS_AI_HUB_TIMEOUT", ai_hub.get("timeout", field_default("tts", "ai_hub", "timeout")))
+
     xtts = tts.get("xtts", {})
     _set(env, "TTS_XTTS_URL", xtts.get("url", field_default("tts", "xtts", "url")))
     _set(env, "TTS_XTTS_SPEAKER_WAV", xtts.get("speaker_wav", ""))
