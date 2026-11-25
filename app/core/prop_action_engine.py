@@ -6,11 +6,12 @@ profile lock. Offline intervals pause execution; receipts recover actual Core
 arrival writes, not inferred animation completion. Effects and lifecycle
 progress share one transaction, with notifications strictly after commit.
 """
-from contextlib import contextmanager, ExitStack, nullcontext
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from threading import Lock, RLock
 from weakref import WeakValueDictionary
 import math
+import threading
 import operator
 import time
 import uuid
@@ -50,21 +51,69 @@ def _lock(ref):
         return _locks.setdefault(ref, RLock())
 
 
-def request_guard(actor: str, request_id: str):
-    """Serialize one actor/nonce's admission and adapter charge, not all actions.
+class RequestInProgress(Exception):
+    """Another request of the same actor is still being admitted
+    (``request_guard``); adapters answer it as the refusal
+    ``request_in_progress``."""
+    reason = "request_in_progress"
 
-    Weak lifetime bounds the caller-supplied key space. The existing deferred
-    RLock keeps invitation/model callbacks outside the adapter's outer guard.
+
+#: actor -> [owning thread ident, depth]: the actor's request in flight.
+_actors_busy: dict = {}
+
+
+@contextmanager
+def _actor_slot(actor: str):
+    """One request per actor at a time. A second one — another nonce, a second
+    click while the first is still validating/planning — is refused at once
+    (``RequestInProgress``) instead of running beside it and replacing its
+    run; the thread already inside may nest."""
+    me = threading.get_ident()
+    with _locks_mutex:
+        owner = _actors_busy.get(actor)
+        if owner is not None and owner[0] != me:
+            raise RequestInProgress(actor)
+        if owner is None:
+            owner = _actors_busy[actor] = [me, 0]
+        owner[1] += 1
+    try:
+        yield
+    finally:
+        with _locks_mutex:
+            owner[1] -= 1
+            if owner[1] <= 0:
+                _actors_busy.pop(actor, None)
+
+
+@contextmanager
+def request_guard(actor: str, request_id: str):
+    """Serialize one actor/nonce's admission and adapter charge, and admit one
+    request per actor at a time.
+
+    The same nonce waits for its first use (a replay returns that result);
+    another nonce of an actor with a request in flight raises
+    ``RequestInProgress`` at once (the HTTP adapter's 409, like every other
+    refusal). Weak lifetime bounds the caller-supplied key space. The existing
+    deferred RLock keeps invitation/model callbacks outside the adapter's
+    outer guard: the actor slot is released before the nonce guard, whose
+    release runs them.
     """
-    if not isinstance(actor, str) or not isinstance(request_id, str) or not request_id:
-        return nullcontext()
+    if not isinstance(actor, str) or not actor or not isinstance(request_id, str):
+        yield
+        return
+    if not request_id:
+        with _actor_slot(actor):
+            yield
+        return
     key = "request:" + store.encode([actor, request_id])
     with _locks_mutex:
         guard = _locks.get(key)
         if guard is None:
             guard = _DeferredRLock()
             _locks[key] = guard
-        return guard
+    with guard:
+        with _actor_slot(actor):
+            yield
 
 
 def _result(run):
@@ -264,13 +313,12 @@ def apply_execution_effects(execution_id: str, phase: str, now: GameTime) -> dic
         result = _commit(run, (phase,), now=now)
         return dict(effects=result.get(phase, {}))
 
-@contextmanager
-def _claim_transaction(run):
-    # Existing seating uses location-place -> profile. Keep that order and
-    # never call profile writers/callbacks in the SQLite acquisition span.
-    with keyed_lock("places", run["target"]["location_id"]):
-        with store.transaction() as conn:
-            yield conn
+def _place_lock(run):
+    """The seat-allocation lock of the run's location. Existing seating uses
+    location-place -> profile: keep that order, and never call profile
+    writers/callbacks in the SQLite acquisition span (``store.transaction``),
+    which this lock encloses."""
+    return keyed_lock("places", run["target"]["location_id"])
 
 
 def _definition(target, action_id, revision, *, _query=None):
@@ -589,7 +637,8 @@ def _plan(run, *, conn, _query=None, replaces=()):
                     last_reason = plan["reason"]
                     break
                 anchor = plan["entry_anchor"]
-                if not places.inside(target["location_id"], anchor["x"], anchor["z"]):
+                if not places.inside(target["location_id"], anchor["x"], anchor["z"],
+                                     _locations=query.locations()):
                     last_reason = "entry_anchor_outside_location"
                     break
                 plans[name] = plan
@@ -620,10 +669,40 @@ def _planning_state(run, query):
                            for p in inventory if p.get("prop_id")})
 
 
-def _revalidate_admission(run, conn, planned_state, replaces=()):
-    """No routing under the write lock: compare inputs and check chosen slots."""
-    query = places._GeometryQuery()
-    reason = "world_frozen" if is_world_frozen() else _validate(run, conn=conn, _query=query, replaces=replaces)
+# The claim of an admission (_admit_timed, _respond) comes in two parts, both
+# under the place lock of the run's location (_place_lock):
+#   a) _admission_check — the expensive re-check, read only, BEFORE the write
+#      transaction: validation, the planning inputs, the chosen slots' occupancy;
+#   b) _admission_claims — inside BEGIN IMMEDIATE, SQL on ``conn`` only: the
+#      person and slot claims and the characters' status, then insert/acquire.
+# The write lock on world.db is held for b alone (milliseconds), never for the
+# re-check: every other writer (sessions, chat, profiles) gives up after its
+# busy_timeout of 5 s, and the re-check once took more than a minute under load.
+#
+# Nothing that a) decided can change before b) commits:
+# - seat occupancy (a profile's ``place``) is written only under this same
+#   place lock (places.assign / assign_pair, character.py's owned-place release,
+#   this engine's seat entry), and so are slot claims: store.acquire runs only
+#   in b of an admission at this location, while a release only frees slots;
+# - a person claim may come from an admission at ANOTHER location (another
+#   place lock), and a character's status from anywhere: b re-reads both in
+#   the transaction, so a race ends as "participant_claimed" /
+#   "participant_unavailable", never as an IntegrityError on the claim key;
+# - other profile state (a journey, sleep) is re-checked by every tick of
+#   ``advance`` (``require_claims``), as it was between plan and claim before;
+# - a) reuses the admission's composed room, room geometry and prop documents
+#   (``with_fresh_profiles``): an admin's layout or prop edit landing inside
+#   the admission itself is caught by that same tick (a fresh query), not here.
+# Lock order: _lock(execution) -> places -> SQLite; a) reads profiles without
+# taking a character_profile lock, b) takes none.
+
+
+def _admission_check(run, planned_state, query, replaces=()):
+    """Part a of the claim (see above), under the place lock and outside the
+    write transaction. ``query`` is the admission's own (validate/plan)
+    geometry with fresh profiles (``with_fresh_profiles``), so the profile
+    comparison is meaningful and no room is composed a second time."""
+    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query, replaces=replaces)
     if reason:
         return reason
     if _planning_state(run, query) != planned_state:
@@ -631,15 +710,32 @@ def _revalidate_admission(run, conn, planned_state, replaces=()):
     target = run["target"]
     inventory = query.room_places(target["location_id"], target["room_id"])
     taken = places.occupancy(target["location_id"], target["room_id"], _places=inventory)
-    replaces = _refs(replaces)
-    own = _freed(run, replaces)
+    own = _freed(run, _refs(replaces))
     for plan in run["data"]["plans"].values():
         anchor = plan["entry_anchor"]
         place = next((p for p in inventory if p["id"] == anchor["place_id"]), None)
-        if (not place or anchor["slot"] not in places.free_slots(
-                place, [t for t in taken.get(place["id"], []) if t[0] not in own])
-                or store.held(store.slot_key(target, anchor["marker_id"], anchor["slot"]), conn=conn)
-                not in (None, "", *replaces)):
+        if not place or anchor["slot"] not in places.free_slots(
+                place, [t for t in taken.get(place["id"], []) if t[0] not in own]):
+            return "no_free_slot"
+    return ""
+
+
+def _admission_claims(run, conn, replaces=()):
+    """Part b of the claim (see above): inside BEGIN IMMEDIATE, SQL on ``conn``
+    only — each participant's status and person claim, each chosen slot's
+    claim."""
+    replaces = _refs(replaces)
+    for _role, name in _members(run):
+        row = conn.execute("SELECT status FROM characters WHERE name=?", (name,)).fetchone()
+        if row is None or row[0]:
+            return "participant_unavailable"
+        held = store.held(store.person_key(name), conn=conn)
+        if held and held not in (run["execution_id"], *replaces):
+            return "participant_claimed"
+    for plan in run["data"]["plans"].values():
+        anchor = plan["entry_anchor"]
+        if store.held(store.slot_key(run["target"], anchor["marker_id"], anchor["slot"]), conn=conn) \
+                not in (None, "", *replaces):
             return "no_free_slot"
     return ""
 
@@ -792,28 +888,40 @@ def _admit_timed(run, fingerprint, marks, replaces, direct):
         # Who starts at once: alone, without asking (react), or with a
         # consent carried over from the run it replaces (_consent_carries).
         starts = not members or bool(run["data"].get("consented"))
-        with _claim_transaction(run) as conn:
-            previous = store.by_request(actor, request_id, conn=conn)
+        with _place_lock(run):
+            previous = store.by_request(actor, request_id)
             if previous:
                 return (_result(previous) if previous["request_fingerprint"] == fingerprint
                         else _refused("request_id_conflict")), False
-            reason = _revalidate_admission(run, conn, planned_state, replaces)
+            reason = _admission_check(run, planned_state, query.with_fresh_profiles(), replaces)
             if reason:
                 return _refused(reason, run), False
-            store.insert(conn, run)
-            if starts:
-                store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
+            marks.append(("recheck", time.perf_counter()))
+            with store.transaction() as conn:
+                # The second nonce lookup under BEGIN IMMEDIATE: a competing
+                # caller/process without this adapter's nonce guard.
+                previous = store.by_request(actor, request_id, conn=conn)
+                if previous:
+                    return (_result(previous) if previous["request_fingerprint"] == fingerprint
+                            else _refused("request_id_conflict")), False
+                reason = _admission_claims(run, conn, replaces)
+                if reason:
+                    return _refused(reason, run), False
+                store.insert(conn, run)
+                if starts:
+                    store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         marks.append(("claim", time.perf_counter()))
         if starts:
             _launch(run, direct)
         marks.append(("start", time.perf_counter()))
     _notify(run)
     if reacts:
-        _narrate(run, "{actor} approaches {partner}: {pose}.")
+        _narrate(run, "{actor} approaches {partner}: {pose}.", _query=query)
         if run["data"]["reaction"]["state"] == "pending":
             _ask_reaction(run)
     elif members and not starts:
-        _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=_join(members))
+        _narrate(run, "{inviter} suggests {pose} to {invitee}.", _query=query, inviter=actor,
+                 invitee=_join(members))
         # A decision/model or respond-lane request must never run inside an
         # execution/profile/place lock or an SQLite transaction. One question
         # per invitee: each answers for itself.
@@ -917,35 +1025,42 @@ def _respond(actor: str, execution_id: str, accept: bool, direct: bool = False) 
         planned_access = dict(run["data"]["access_roles"])
         if not reason and planned_roles != agreed_roles:
             reason = "pair_roles_changed"
-        with _claim_transaction(run) as conn:
-            run = store.get(execution_id, conn=conn)
-            if run["status"] != "awaiting_consent":
-                return _result(run)
-            data = run["data"]
-            if _consent_over(run):
-                # Expired while this answer was planned. Lines and notices go
-                # out after the commit (the place lock defers them).
-                data["expired_at_s"] = data["last_motion"]
-                run.update(status="cancelled", reason="consent_expired")
-                store.save(conn, run)
-                _narrate_finish(run, "awaiting_consent", "cancelled", "consent_expired", set())
-                _late_answer(run, actor, accept)
-                return _result(run)
+        with _place_lock(run):
             if not reason:
-                data.update(plans=plans, clip_roles=planned_roles, access_roles=planned_access)
-                reason = _revalidate_admission(run, conn, planned_state)
-            if reason == "pair_roles_changed":
-                data.update(clip_roles=agreed_roles, access_roles=agreed_access)
-            if reason:
-                run.update(status="failed", reason=reason)
+                # Part a of the claim (see _admission_check), outside the
+                # write transaction; the run this answer planned on.
+                planned = dict(run, data=dict(run["data"], plans=plans, clip_roles=planned_roles,
+                                              access_roles=planned_access))
+                reason = _admission_check(planned, planned_state, query.with_fresh_profiles())
+            with store.transaction() as conn:
+                run = store.get(execution_id, conn=conn)
+                if run["status"] != "awaiting_consent":
+                    return _result(run)
+                data = run["data"]
+                if _consent_over(run):
+                    # Expired while this answer was planned. Lines and notices go
+                    # out after the commit (the place lock defers them).
+                    data["expired_at_s"] = data["last_motion"]
+                    run.update(status="cancelled", reason="consent_expired")
+                    store.save(conn, run)
+                    _narrate_finish(run, "awaiting_consent", "cancelled", "consent_expired", set())
+                    _late_answer(run, actor, accept)
+                    return _result(run)
+                if not reason:
+                    data.update(plans=plans, clip_roles=planned_roles, access_roles=planned_access)
+                    reason = _admission_claims(run, conn)
+                if reason == "pair_roles_changed":
+                    data.update(clip_roles=agreed_roles, access_roles=agreed_access)
+                if reason:
+                    run.update(status="failed", reason=reason)
+                    store.save(conn, run)
+                    return _result(run)
+                run["data"].update(plans=plans, consented=True, last_game=game_time().canonical(),
+                                   last_motion=_motion_now(), process=_PROCESS)
+                run["data"]["consents"][actor] = "yes"
+                run["status"] = "approaching"
+                store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
                 store.save(conn, run)
-                return _result(run)
-            run["data"].update(plans=plans, consented=True, last_game=game_time().canonical(),
-                               last_motion=_motion_now(), process=_PROCESS)
-            run["data"]["consents"][actor] = "yes"
-            run["status"] = "approaching"
-            store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
-            store.save(conn, run)
         _launch(run, direct)
         return _result(store.get(execution_id))
 
@@ -1096,14 +1211,17 @@ def _emit_lifecycle(event, run, **extra):
     _after_locks(lambda: emit(event, **payload))
 
 
-def _narrate(run, key, *, literal=False, quiet=False, **fmt):
+def _narrate(run, key, *, literal=False, quiet=False, _query=None, **fmt):
     """One storyteller line in the run's room, in the actor's language, after
     every lock is released. The room has to SEE a figure sit down or get up —
     the perception stream is what the characters remember of the scene, and
     the player's chat shows it. ``literal``: ``key`` is the finished line
     (a partner's reaction), neither translated nor formatted. ``quiet``: the
     line stays out of the players' chat transcript (``pose_scene.quiet``).
-    Never raises."""
+    ``_query``: the caller's geometry (the admission's), which already holds
+    the room's places and the prop document — the line needs only the
+    piece's name; without one a fresh query is read. Delivered on the same
+    thread (after its locks), the query's owner. Never raises."""
     from app.core.keyed_lock import _after_locks
 
     def deliver():
@@ -1113,7 +1231,7 @@ def _narrate(run, key, *, literal=False, quiet=False, **fmt):
             from app.core.pose_catalog import pose_label
             actor, target = run["actor"], run["target"]
             lang = C.get_character_language(actor)
-            query = places._GeometryQuery()
+            query = _query if _query is not None else places._GeometryQuery()
             place = next((p for p in query.room_places(target["location_id"], target["room_id"])
                           if p.get("placement_id") == target["placement_id"]), None) or {}
             document = query.prop_document(place["prop_id"]) if place.get("prop_id") else {}
@@ -2291,6 +2409,23 @@ def check(actor: str, target: dict, action_id: str, revision: str, members=(), *
     return result
 
 
+#: How long one ``state_for`` call waits for run locks in total before it
+#: reads the last committed rows instead.
+STATE_LOCK_WAIT_S = 0.25
+
+
+def _committed_run(execution_id, deadline):
+    """The run as committed: read under its lock when that is free before
+    ``deadline`` (``time.monotonic``), else without it."""
+    lock = _lock(execution_id)
+    if not lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        return store.get(execution_id)
+    try:
+        return store.get(execution_id)
+    finally:
+        lock.release()
+
+
 def state_for(actor: str) -> dict:
     """Only an execution's exact participants may see its question/result."""
     from datetime import timedelta
@@ -2298,6 +2433,7 @@ def state_for(actor: str) -> dict:
     if not isinstance(actor, str) or not actor:
         return result
     cutoff = utc_now() - timedelta(minutes=30)
+    deadline = time.monotonic() + STATE_LOCK_WAIT_S
     rows = store.db.get_connection().execute(
         "SELECT * FROM prop_action_runs WHERE " + store.TAKES_PART + " ORDER BY created_at,execution_id",
         (actor, actor)).fetchall()
@@ -2309,10 +2445,11 @@ def state_for(actor: str) -> dict:
                     continue
             except (ValueError, TypeError):
                 continue
-        # A terminal commit precedes cleanup; wait for its departure before
-        # publishing the row. Re-read even a formerly live cursor snapshot.
-        with _lock(raw["execution_id"]):
-            run = store.get(raw["execution_id"])
+        # A terminal commit precedes cleanup; wait briefly for its departure
+        # before publishing the row. Re-read even a formerly live cursor
+        # snapshot. A lock held longer (a tick, an admission under load) is
+        # not waited for: the last committed row is the answer then.
+        run = _committed_run(raw["execution_id"], deadline)
         if run is None:
             continue
         terminal = run["status"] in store.TERMINAL

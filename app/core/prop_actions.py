@@ -816,21 +816,25 @@ def execute(actor: str, payload: dict) -> dict:
         return refused
     from app.core.skill_gate import blocked_reason, charge
     request_id = payload.get("request_id", "")
-    with engine.request_guard(actor, request_id):
-        # The engine resolves replay identity/conflicts before current-world
-        # eligibility. Exhaustion must not hide an already admitted request.
-        previous = (engine.store.by_request(actor, request_id)
-                    if isinstance(actor, str) and isinstance(request_id, str) else None)
-        if not previous:
-            reason = blocked_reason(actor, "prop_action")
-            if reason:
-                return dict(status="refused", execution_id="", reason=reason)
-        result, created = engine.request_with_creation(
-            actor, payload.get("target"), payload.get("action_id"),
-            payload.get("revision"), payload.get("members", []), request_id,
-            payload.get("consent", "ask"))
-        if created and result["status"] not in ("failed", "cancelled"):
-            charge(actor, "prop_action")
+    try:
+        with engine.request_guard(actor, request_id):
+            # The engine resolves replay identity/conflicts before current-world
+            # eligibility. Exhaustion must not hide an already admitted request.
+            previous = (engine.store.by_request(actor, request_id)
+                        if isinstance(actor, str) and isinstance(request_id, str) else None)
+            if not previous:
+                reason = blocked_reason(actor, "prop_action")
+                if reason:
+                    return dict(status="refused", execution_id="", reason=reason)
+            result, created = engine.request_with_creation(
+                actor, payload.get("target"), payload.get("action_id"),
+                payload.get("revision"), payload.get("members", []), request_id,
+                payload.get("consent", "ask"))
+            if created and result["status"] not in ("failed", "cancelled"):
+                charge(actor, "prop_action")
+    except engine.RequestInProgress:
+        # Another request of this actor is still being admitted.
+        return dict(status="refused", execution_id="", reason=engine.RequestInProgress.reason)
     if created:
         # Invitation callbacks deferred by the outer guard may have advanced
         # the run. Return the same current projection as the HTTP adapter.

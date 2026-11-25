@@ -45,6 +45,18 @@ Expected, derived by hand:
       order leaves 3 entries, G1 (oldest) gone.
   [10] copies: mutating the returned user's allowed_characters / settings does not change
        what the next hit returns.
+  [11] a slide that cannot get the write lock (another connection holds BEGIN IMMEDIATE,
+       as a prop-action claim did for a minute): session X created at T=0, lookup at T=70
+       (last slide 70 s ago > 60 s, so the miss tries to slide). The slide waits at most
+       SLIDE_BUSY_TIMEOUT_MS = 200 ms instead of busy_timeout 5000 ms, so the lookup
+       returns the user in < 1 s (200 ms wait + a few ms of reads), raises nothing and
+       reports refreshed False; the entry is cached, so a second lookup at T=70 is a hit
+       with 0 DB calls. At T=76 the entry is 6 s old (> 5 s TTL) -> miss, the slide fails
+       again: still the user, and still exactly ONE warning (throttle 60 s on the
+       monotonic clock: 70 -> 76 is 6 s). The thread's connection is back to
+       busy_timeout 5000 after each failed slide. Lock released, T=82: miss (entry from
+       T=76 is 6 s old) and the slide succeeds -> refreshed True, expires_at =
+       T0+82s+24h.
 """
 import asyncio
 import sys
@@ -271,6 +283,56 @@ with tempfile.TemporaryDirectory() as tmp:
     ok("[10] the cached user cannot be poisoned",
        "Evil" not in u3["allowed_characters"] and u3["settings"].get("active_character") != "Evil"
        and u3["role"] == "admin", str(u3))
+
+    # [11]
+    import sqlite3
+    import time
+    sessions.clear_lookup_cache()
+    clock["t"] = 0
+    X = sessions.create_session(uid)
+    clock["t"] = 70
+    warnings = []
+    real_warning = sessions.logger.warning
+    sessions.logger.warning = lambda *a, **k: warnings.append(a)
+    holder = sqlite3.connect(str(db.get_db_path()), timeout=10)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+        started = time.perf_counter()
+        try:
+            got = lookup(X)
+            error = None
+        except Exception as exc:  # the old slide raised "database is locked" after 5 s
+            got, error = (None, None, False), exc
+        elapsed = time.perf_counter() - started
+        ok("[11] locked slide: lookup raises nothing", error is None, repr(error))
+        ok("[11] locked slide: the user, in < 1 s", (got[1] or {}).get("id") == uid and elapsed < 1.0,
+           f"{elapsed:.2f} s")
+        ok("[11] locked slide: refreshed False", got[2] is False, str(got[2]))
+        ok("[11] busy_timeout back to 5000",
+           _real_conn().execute("PRAGMA busy_timeout").fetchone()[0] == 5000)
+        (_, u_hit, _), n_hit = counted(lookup, X)
+        ok("[11] follow-up lookup is a cache hit (0 DB calls)",
+           n_hit == 0 and (u_hit or {}).get("id") == uid, f"n={n_hit}")
+        clock["t"] = 76
+        try:
+            again = lookup(X)
+        except Exception as exc:
+            again = (None, None, False)
+            ok("[11] second locked slide raises nothing", False, repr(exc))
+        ok("[11] second locked slide: still the user", (again[1] or {}).get("id") == uid)
+        ok("[11] one warning per minute", len(warnings) == 1, str(len(warnings)))
+    finally:
+        holder.rollback()
+        holder.close()
+        sessions.logger.warning = real_warning
+    clock["t"] = 82
+    _, u_after, refreshed_after = lookup(X)
+    row = _real_conn().execute("SELECT expires_at FROM user_sessions WHERE token=?", (X,)).fetchone()
+    ok("[11] lock released: the slide succeeds",
+       refreshed_after is True and (u_after or {}).get("id") == uid
+       and row["expires_at"] == sessions._iso(T0 + timedelta(seconds=82, hours=24)),
+       f"{refreshed_after} {row['expires_at']}")
+    clock["t"] = None
 
 print("FAILED" if failed else "Auth session cache checks passed")
 sys.exit(1 if failed else 0)
