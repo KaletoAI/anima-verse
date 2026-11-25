@@ -1,6 +1,20 @@
 """A covered extension part keys the template drape over it (plan anatomy, task 7: the key part, no Blender).
 
-Usage: ./.venv/bin/python scripts/smoke_drape_body_collider.py
+Usage: ./.venv/bin/python scripts/smoke_drape_body_collider.py [--blender <chain.glb> <tip.glb>]
+
+With ``--blender`` (task 8) the Blender half runs on COPIES of two base GLBs (``smoke_drape_body_collider_blender.py``,
+CPU) and is judged here:
+  B1 the chain base with keep_parts [genital_chain]: exactly one part object, its custom property ``attached_part``
+     set (the glTF import keeps the node extras), more than 0 faces, exactly one boundary loop longer than 16 edges
+     (the attachment loop; shorter loops are reported — a part-build finding, not this plan's), >= 1 vertex weighted
+     > 0.5 to the companion sack bone (the sack is built inside the part, no node of its own).
+  B2 inflate 3 mm, voxel 5 mm: the part's visible surface (ray along the normal free for 3 cm) lies inside or on the
+     collider: p95 of |distance| in [0, 8] mm (inflate + one voxel); at most 0.1 % of those vertices more than 1 mm
+     outside, none beyond 8 mm (the remesh may shave a thin spot by up to one voxel).
+  B3 ``drop_outer_shells`` keeps >= 95 % of the collider faces near the part / the tip sphere (the measured
+     counter-run without ``keep`` is reported).
+  B4 the tip sphere (r 4.5 mm + 2 mm, centre 4.5 mm out along the bone): the collider reaches >= 6 mm beyond the
+     bone head along the bone (4.5 + 6.5 - one 5 mm voxel); without it <= 5 mm.
 
 Fixture package ``pkgd`` (temporary world, template human-roleplay = piece wardrobe):
   slot ``lower`` covered_by [bottom, underwear_bottom], mesh part switch ``switch``:
@@ -160,5 +174,45 @@ def main():
     print("ALL OK")
 
 
+def blender_part(chain_glb, tip_glb):
+    """Task 8: run the Blender half on the two GLBs (never written: load_fit only reads) and judge B1-B4."""
+    blender = os.environ.get("BLENDER") or "blender"
+    with tempfile.TemporaryDirectory(prefix="drape-body-b-") as tmp:
+        out = Path(tmp) / "b.json"
+        run = subprocess.run([blender, "-b", "--factory-startup", "--python",
+                              str(ROOT / "scripts/smoke_drape_body_collider_blender.py"), "--", chain_glb, tip_glb,
+                              str(out)], capture_output=True, text=True)
+        if not out.is_file():
+            check(False, f"Blender run: {run.stdout[-800:]} {run.stderr[-800:]}")
+            return
+        r = json.loads(out.read_text())
+    print("  measured:", json.dumps(r))
+    long_loops = [n for n in r.get("b1_loop_edges") or [] if n > 16]
+    check(r.get("b1_parts") == 1 and r.get("b1_prop") == "genital_chain" and r.get("b1_faces", 0) > 0
+          and len(long_loops) == 1 and r.get("b1_sack_verts", 0) >= 1,
+          f"B1 one part node, extras kept, one attachment loop {long_loops}, sack inside ({r.get('b1_sack_verts')})")
+    if len(r.get("b1_loop_edges") or []) > 1:
+        print(f"  note B1: further short boundary loops {r['b1_loop_edges'][1:]} (part build)")
+    vis = max(1, r.get("b2_visible_verts", 0))
+    check(0 <= r.get("b2_dist_p95_mm", 99) <= 8 and r.get("b2_visible_over_1mm", vis) <= 0.001 * vis
+          and r.get("b2_depth_max_mm", 99) <= 8,
+          f"B2 p95 {r.get('b2_dist_p95_mm')} mm, over 1 mm {r.get('b2_visible_over_1mm')}/{vis}, "
+          f"max {r.get('b2_depth_max_mm')} mm")
+    for key in ("b3_with_keep", "b3_tip_with_keep"):
+        before, after = r.get(key) or (0, 0)
+        check(before > 0 and after >= 0.95 * before, f"B3 {key}: {after}/{before} faces kept "
+              f"(without keep: {r.get(key.replace('with', 'without'))})")
+    check((r.get("b4_reach_with_mm") or 0) >= 6 and (r.get("b4_reach_without_mm") or 99) <= 5,
+          f"B4 reach with sphere {r.get('b4_reach_with_mm')} mm, without {r.get('b4_reach_without_mm')} mm")
+
+
 if __name__ == "__main__":
-    main()
+    if "--blender" in sys.argv:
+        i = sys.argv.index("--blender")
+        blender_part(sys.argv[i + 1], sys.argv[i + 2])
+        if FAILS:
+            print(f"FAILED: {len(FAILS)}")
+            sys.exit(1)
+        print("ALL OK")
+    else:
+        main()

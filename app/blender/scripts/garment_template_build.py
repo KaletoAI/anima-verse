@@ -3623,7 +3623,14 @@ def run(a):
     out = Path(a["out_dir"])
     gd.PROGRESS["file"] = prm.get("progress_file") or None
     gd.progress(stage="setup", frame=None, frames=None, index=None, count=None, pose=None)
-    arm, body, _g = gd.load_fit(inp["body"])
+    # plan anatomy (H3): the covered extension parts (their own part node) and tips (a sphere on the bone) the cloth
+    # lies over — ``garment_template.body_colliders``
+    body_cols = list(prm.get("body_colliders") or [])
+    arm, body, _g, parts = gd.load_fit(inp["body"], keep_parts=[c["group"] for c in body_cols if c.get("radius") is None])
+    inflate = {c["group"]: float(c["inflate"]) for c in body_cols}
+    gd.set_body_collider(arm, [(o, inflate[str(o.get("attached_part"))]) for o in parts],
+                         [{"bone": b, "radius": float(c["radius"]), "inflate": float(c["inflate"])}
+                          for c in body_cols if c.get("radius") is not None for b in c.get("bones") or []])
     spec = prm["spec"]
     bod = spec.get("bodice")
     lower = []
@@ -4151,6 +4158,8 @@ def run(a):
                       "stretch_p99": round(float(np.percentile(st_all, 99)), 3),
                       "quality": int(prm.get("drape_quality") or fab["quality"])},
             "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S),
+            "body_colliders": {"parts": len(gd.BODY_COLLIDER["parts"]), "spheres": len(gd.BODY_COLLIDER["spheres"]),
+                               "kept_faces": list(gd.BODY_COLLIDER_KEPT)},
             "collider_inner": list(gd.COLLIDER_INNER), "collider_outer": list(gd.COLLIDER_OUTER),
             "outer_body_verts": {k: int(v.sum()) for k, v in gd.OUTER_BODY.items()}, "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)), **({"uv": uv_info} if uv_info else {}),
