@@ -54,7 +54,18 @@
 .ga-wd-free-status-accepted { color: #3fb950; }
 .ga-wd-free-status-rollback_incomplete { color: #f85149; }
 
-.ga-wd-free-counters { display: flex; gap: 14px; font-size: 12px; }
+.ga-wd-free-counters { display: flex; gap: 14px; font-size: 12px; flex-wrap: wrap; }
+
+/* A turn that did not end normally: rolled back (its writes are gone) or
+   cut off by its budget (its writes are kept). */
+.ga-wd-free-turn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  border: 1px solid;
+}
+.ga-wd-free-turn-rolled { border-color: #f85149; background: rgba(248, 81, 73, 0.12); color: #f85149; }
+.ga-wd-free-turn-cut { border-color: #d29922; background: rgba(210, 153, 34, 0.12); color: #d29922; }
 
 .ga-wd-free-steps {
   border: 1px solid var(--border, #30363d);

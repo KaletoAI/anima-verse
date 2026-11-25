@@ -51,7 +51,11 @@ Start state: world not frozen, no run.
     awaiting_review (turn 1: create + final reply -> awaiting_review), note
     "Built R1."; the detail carries steps (1 row, tool create_location),
     skipped [] and discard_preview naming "Demo R1" (the created location
-    still exists).
+    still exists). The detail's per-turn summary (finding C): turns ==
+    [{turn 1, status "kept" (the manager recorded the final reply), reason
+    "", writes 1, undone 0}], remaining_writes 1 (the one create row, not
+    undone), turn_usage {turn 1, steps 1, tokens > 0} (one write step this
+    turn; the token estimate is positive for any prompt).
 11. stop while awaiting_review -> 409 (stop only while running).
 12. GET /world-dev/free/{id}/events?after=0 -> SSE "data:" frames; at least
     one step and one status frame; ?after=999 -> first frame {"ev": 0,
@@ -75,6 +79,9 @@ Run 2 — a PRE-FROZEN world (set_world_frozen(True) before the start):
     turn fails with "stopped by the admin", _fail undoes turn 2 (no step)
     and, turn != 1, returns to awaiting_review with note
     "stopped by the admin — turn 2 was rolled back" (no step unreversed).
+    Detail: turns == [turn 1 kept 1 write 0 undone; turn 2 rolled_back,
+    reason "stopped by the admin" (the _fail note), 0 writes 0 undone];
+    remaining_writes 1 (turn 1's create still stands).
 22. discard -> 200 {"ok": true, "report": {"reversed": [1], "skipped": [],
     "complete": true}}: the run's only step is seq 1 (create Demo R2, turn
     1); the undo reverses it. Status rolled_back; "Demo R2" no longer in
@@ -304,6 +311,14 @@ def main(c):
     check("10 discard_preview names Demo R1",
           any("Demo R1" in line for line in detail.get("discard_preview") or []),
           detail.get("discard_preview"))
+    check("10 turns: turn 1 kept, 1 write",
+          detail.get("turns") == [{"turn": 1, "status": "kept", "reason": "",
+                                   "writes": 1, "undone": 0}], detail.get("turns"))
+    check("10 remaining_writes 1", detail.get("remaining_writes") == 1,
+          detail.get("remaining_writes"))
+    tu = detail.get("turn_usage") or {}
+    check("10 turn_usage: turn 1, 1 step, tokens > 0",
+          tu.get("turn") == 1 and tu.get("steps") == 1 and (tu.get("tokens") or 0) > 0, tu)
 
     r = c.post(f"/world-dev/free/{run_id}/stop", headers=ADMIN)
     check("11 stop while awaiting_review -> 409", r.status_code == 409, r.text)
@@ -372,10 +387,18 @@ def run2(c, body):
     r = c.post(f"/world-dev/free/{run_id}/stop", headers=ADMIN)
     check("21 stop while running -> 200", r.status_code == 200 and r.json() == {"ok": True},
           r.text)
-    run = settle(c, run_id).get("run") or {}
+    detail = settle(c, run_id)
+    run = detail.get("run") or {}
     check("21 back to awaiting_review with the rollback note",
           run.get("status") == "awaiting_review"
           and run.get("note") == "stopped by the admin — turn 2 was rolled back", run)
+    check("21 turns: turn 1 kept, turn 2 rolled_back by the stop",
+          detail.get("turns") == [
+              {"turn": 1, "status": "kept", "reason": "", "writes": 1, "undone": 0},
+              {"turn": 2, "status": "rolled_back", "reason": "stopped by the admin",
+               "writes": 0, "undone": 0}], detail.get("turns"))
+    check("21 remaining_writes 1", detail.get("remaining_writes") == 1,
+          detail.get("remaining_writes"))
 
     r = c.post(f"/world-dev/free/{run_id}/discard", headers=ADMIN)
     check("22 discard -> 200 with the report",
