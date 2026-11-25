@@ -1783,11 +1783,17 @@ def add_to_inventory(character_name: str,
     }
     if locked:
         new_entry["locked"] = True
+    # A second entry with the same item_id (non-stackable item already held,
+    # or a locked add onto a stack) is upserted OVER the stored row, so the
+    # stored quantity is replaced, not increased: the delta is measured
+    # against what was stored before.
+    before = next((e.get("quantity", 1) for e in inventory
+                   if e.get("item_id") == item_id), 0)
     inventory.append(new_entry)
     data["inventory"] = inventory
     if not _save_inventory(character_name, data):
         return False
-    _emit_inventory_changed(character_name, item_id, new_entry["quantity"])
+    _emit_inventory_changed(character_name, item_id, new_entry["quantity"] - before)
     logger.info("Item %s zum Inventar von %s hinzugefuegt%s",
                 item_id, character_name,
                 " (locked)" if locked else "")

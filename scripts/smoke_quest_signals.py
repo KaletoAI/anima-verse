@@ -28,7 +28,7 @@ Hand-derived expectations:
       listener sees this thread's lock depth 0. Its delta is +3 (5 + 3 = 8).
   [f] A failed write: with the DB transaction raising, add_to_inventory and
       remove_from_inventory return False and NO event is emitted; the quantity
-      stays 8. (The two "_save_inventory DB error" log lines are expected.)
+      stays 8. (This and [m] log three expected "_save_inventory DB error" lines.)
   [g] Wren (avatar) says a line in inn/hall at normal volume: the room members
       are Wren and Mira; Osric is in another room and an unaddressed normal line
       does not reach him. The speaker is not a listener of its own line, so
@@ -40,6 +40,21 @@ Hand-derived expectations:
   [i] A storyteller line, a display-only line and a dedupe hit (the same
       speaker/ts/content again with dedupe=True, which stores nothing) -> no
       event at all.
+
+  Fix round 1 (all on Mira, whose inventory is empty before [j]):
+  [j] Non-stackable "Key": the first add creates the row, delta +1, quantity 1.
+      A second add takes the new-entry path; the second entry with the same
+      item_id is upserted over the row (UNIQUE(character_name, item_id)), so
+      the stored quantity stays 1 -> 1 - 1 = 0 -> True, but NO event.
+  [k] A locked add onto a stack: add 5 coins -> +5. add(..., 1, locked=True)
+      skips the stack path, the new entry of 1 replaces the stored 5, so
+      1 - 5 = -4 -> one event with delta -4, quantity 1.
+  [l] Max-stack cap: "Pebble" stackable, max_stack 3. add 2 -> +2. add 5 ->
+      min(2 + 5, 3) = 3, so only 3 - 2 = +1 landed -> delta +1. add 1 more ->
+      min(3 + 1, 3) = 3, delta 0 -> no event, add still returns True.
+  [m] update_inventory_entry(Mira, pebble, {"quantity": 3}) on a stored 3 ->
+      3 - 3 = 0 -> no event. The same update to 2 with the DB transaction
+      raising -> False and no event; quantity stays 3.
 """
 import os
 import sys
@@ -207,10 +222,60 @@ def main() -> int:
           None)
     check("no event", heard, [])
 
+    def last_deltas():
+        return [e["delta"] for e in inv_events]
+
+    key = inventory.add_item("Key", stackable=False)["id"]
+    pebble = inventory.add_item("Pebble", stackable=True, max_stack=3)["id"]
+
+    SECTION[0] = "[j]"
+    print("[j] non-stackable item added twice")
+    inv_events.clear()
+    check("first add", inventory.add_to_inventory("Mira", key), True)
+    check("first delta", last_deltas(), [1])
+    inv_events.clear()
+    check("second add returns", inventory.add_to_inventory("Mira", key), True)
+    check("second add emits nothing", inv_events, [])
+    check("quantity", quantity("Mira", key), 1)
+
+    SECTION[0] = "[k]"
+    print("[k] locked add onto a stack")
+    inv_events.clear()
+    inventory.add_to_inventory("Mira", coin, 5)
+    check("stack delta", last_deltas(), [5])
+    inv_events.clear()
+    check("locked add returns",
+          inventory.add_to_inventory("Mira", coin, 1, locked=True), True)
+    check("delta", last_deltas(), [-4])
+    check("quantity", quantity("Mira", coin), 1)
+
+    SECTION[0] = "[l]"
+    print("[l] max-stack cap")
+    inv_events.clear()
+    inventory.add_to_inventory("Mira", pebble, 2)
+    inventory.add_to_inventory("Mira", pebble, 5)
+    check("deltas", last_deltas(), [2, 1])
+    inv_events.clear()
+    check("add at the cap returns", inventory.add_to_inventory("Mira", pebble, 1), True)
+    check("zero delta emits nothing", inv_events, [])
+    check("quantity", quantity("Mira", pebble), 3)
+
+    SECTION[0] = "[m]"
+    print("[m] update_inventory_entry without a change / with a failed write")
+    inv_events.clear()
+    check("same quantity returns",
+          inventory.update_inventory_entry("Mira", pebble, {"quantity": 3}), True)
+    check("same quantity emits nothing", inv_events, [])
+    with patch.object(inventory, "transaction", broken_transaction):
+        check("failed update returns False",
+              inventory.update_inventory_entry("Mira", pebble, {"quantity": 2}), False)
+    check("failed update emits nothing", inv_events, [])
+    check("quantity unchanged", quantity("Mira", pebble), 3)
+
     if FAILURES:
         print(f"FAIL smoke_quest_signals: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_signals: [a]-[i]")
+    print("PASS smoke_quest_signals: [a]-[m]")
     return 0
 
 
