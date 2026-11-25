@@ -34,7 +34,7 @@ Expected, by hand from the brief:
     axis [0, 1, 0], depth 0.12, radius 0.02 (size m is not mapped, so x1),
     cone_deg 30, funnel 0.03, accepts [appendage_chain, attached_part],
     min_length 1.5, compress_min 0.5, exposed_only True, interaction_kinds
-    [kind_x], from_rig pkgx_chain, covered_by [bottom], hide_under [bottom] (the default: covered_by)}. The minimal region
+    [kind_x], from_rig pkgx_chain, covered_by [bottom], hide_under [] (as declared; empty = covered_by in cover_state)}. The minimal region
     parses to the defaults min_length 1.0, compress_min 1.0, exposed_only True,
     interaction_kinds None, from_rig None.
 [2] Each malformed ``chan`` rejects the WHOLE package (``pkgx`` missing from
@@ -171,7 +171,7 @@ def main():
                     'axis': [0.0, 1.0, 0.0], 'depth': 0.12, 'radius': 0.02, 'cone_deg': 30.0, 'funnel': 0.03,
                     'accepts': ['appendage_chain', 'attached_part'], 'min_length': 1.5, 'compress_min': 0.5,
                     'exposed_only': True, 'interaction_kinds': ['kind_x'], 'from_rig': 'pkgx_chain',
-                    'covered_by': ['bottom'], 'hide_under': ['bottom']}
+                    'covered_by': ['bottom'], 'hide_under': []}
         check(rows and rows[0] == expected, f'[1] pkgx:chan entry {rows[0] if rows else None}')
         minimal = RegionSpec.parse({**MINIMAL, 'id': 'm'}, {}, set())
         check((minimal.min_length, minimal.compress_min, minimal.exposed_only, minimal.interaction_kinds,

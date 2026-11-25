@@ -93,7 +93,7 @@ def package_rig_groups_for(character_name, profile=None, mesh_variant=None):
                 group = asdict(rig)
                 # The clothing slots that cover this group, and those whose full cover hides it (``cover_state``).
                 group["covered_by"] = list(slot.covered_by)
-                group["hide_under"] = list(rig.hide_under or slot.covered_by)
+                group["hide_under"] = list(rig.hide_under)
                 if part_on and rig.id in slot.mesh_part.rigs:
                     part = slot.mesh_part.rigs[rig.id]
                     if rig.op == "appendage_chain":
@@ -155,7 +155,7 @@ def region_declarations_for(character_name, profile=None):
                     "interaction_kinds": (list(region.interaction_kinds)
                                           if region.interaction_kinds is not None else None),
                     "from_rig": region.from_rig, "covered_by": list(slot.covered_by),
-                    "hide_under": list(region.hide_under or slot.covered_by)})
+                    "hide_under": list(region.hide_under)})
     return result
 
 
@@ -231,29 +231,44 @@ def _slot_names(values):
 def cover_state(group, pieces, items, *, open_ids=()):
     """THE cover rule of every model consumer: ``exposed``, ``covered`` or ``hidden``.
 
-    ``group`` needs ``covered_by`` and may carry ``hide_under`` (absent or empty = ``covered_by``); ``pieces`` is
+    ``group`` needs ``covered_by`` and may carry ``hide_under`` and ``drape_collider``; ``pieces`` is
     ``{clothing slot: item id}``, ``items`` ``{item id: item}``; ``open_ids`` the pieces worn open (they cover
     nothing, Ruling A8). Every slot name is compared after ``strip().lower()``.
 
-    Per worn piece, FULL = the slots it occupies (its keys in ``pieces`` and its ``outfit_piece.slots``) plus
-    ``covers``, PART = ``partially_covers``. No piece touches ``covered_by`` -> exposed; a piece covers a
-    ``hide_under`` slot FULLY without ``outfit_piece.exposed_detail: true`` -> hidden; otherwise covered (a
-    partial cover alone is never hidden)."""
+    Per worn piece, ON = the slots it occupies (its keys in ``pieces`` and its ``outfit_piece.slots``), FULL = ON
+    plus ``covers``, PART = ``partially_covers``. No piece touches ``covered_by`` -> exposed. Otherwise hidden when
+    a piece without ``outfit_piece.exposed_detail: true``
+
+    * sits ON a declared ``hide_under`` slot — a piece that only ``covers`` such a slot lies over it from outside
+      (trousers over the underwear slot) and leaves the group covered; or, without a declared ``hide_under``
+      (every ``covered_by`` slot hides), covers one of them FULLY, as before ``hide_under`` existed;
+    * or, for a group with ``drape_collider``, covers a ``covered_by`` slot FULLY in a mesh mode outside
+      ``garment_set.BODY_COLLIDER_MODES`` (own mesh, shell, accessory): those meshes are built without the
+      group as a collider, so the group would push through them.
+
+    Else covered (a partial cover alone is never hidden)."""
+    from app.core.garment_set import BODY_COLLIDER_MODES, piece_mesh_mode
     covered_by = _slot_names(group.get("covered_by"))
     if not covered_by:
         return EXPOSED
-    hide_under = _slot_names(group.get("hide_under")) or covered_by
+    declared = _slot_names(group.get("hide_under"))
+    hide_under = declared or covered_by
+    collider = bool(group.get("drape_collider"))
     opened = {str(i) for i in open_ids or ()}
     worn = {str(slot).strip().lower(): str(iid) for slot, iid in (pieces or {}).items() if iid}
     touched = False
     for item_id in sorted(set(worn.values()) - opened):
         piece = ((items or {}).get(item_id) or {}).get("outfit_piece") or {}
-        full = ({slot for slot, iid in worn.items() if iid == item_id} | _slot_names(piece.get("slots"))
-                | _slot_names(piece.get("covers")))
+        on = {slot for slot, iid in worn.items() if iid == item_id} | _slot_names(piece.get("slots"))
+        full = on | _slot_names(piece.get("covers"))
         part = _slot_names(piece.get("partially_covers"))
         if (full | part) & covered_by:
             touched = True
-        if full & hide_under and piece.get("exposed_detail") is not True:
+        if piece.get("exposed_detail") is True:
+            continue
+        if (on if declared else full) & hide_under:
+            return HIDDEN
+        if collider and full & covered_by and piece_mesh_mode(piece) not in BODY_COLLIDER_MODES:
             return HIDDEN
     return COVERED if touched else EXPOSED
 
@@ -304,8 +319,8 @@ def rig_groups_unclothed(character_name, profile=None):
 def hides_exposed_detail(groups, pieces, items):
     """Whether an outfit hides its ``exposed_only`` groups: True when ``cover_state`` of ANY ``exposed_only`` group
     (``rig_groups_for``, each with ``covered_by`` / ``hide_under``) under ``pieces`` (``{clothing slot: item id}``,
-    ``items`` ``{item id: item}``) is ``hidden`` — a piece fully covers a ``hide_under`` slot and does not set
-    ``outfit_piece.exposed_detail``. A covered group (a partial cover, or a cover outside ``hide_under``) stays."""
+    ``items`` ``{item id: item}``) is ``hidden`` (a piece on a ``hide_under`` slot without
+    ``outfit_piece.exposed_detail``, see there). A covered group stays."""
     return any(group.get("exposed_only") and cover_state(group, pieces, items) == HIDDEN for group in groups)
 
 

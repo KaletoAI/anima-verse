@@ -2549,7 +2549,7 @@ def outfit_variant(character_name: str, pieces: Optional[Dict[str, str]], *,
     id}``) is built from: ``"covered"`` (``model3d/covered/<bsig>.glb``,
     without the ``exposed_only`` extension groups) when the worn pieces hide
     them (``extension_rig.hides_exposed_detail``: ``cover_state`` ``hidden`` —
-    a full cover of a ``hide_under`` slot without ``outfit_piece.exposed_detail``),
+    a piece on a ``hide_under`` slot without ``outfit_piece.exposed_detail``),
     else ``"rigged"`` (a merely covered group stays, as a collider under cloth)."""
     from app.core.extension_rig import HIDDEN, cover_state, exposed_only_slots, hides_exposed_detail, rig_groups_for
     from app.core.motion_item_cache import item_snapshot

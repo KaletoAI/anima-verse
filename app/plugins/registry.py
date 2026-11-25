@@ -157,9 +157,10 @@ class RigSpec:
     # 2026-11-25, ``app/core/contact_clothing.py``): a piece on one of them, or one that ``covers`` one, blocks the
     # clip unless it is worn open or declared ``outfit_piece.open_below``. Empty = the group is no contact part.
     contact_free: List[str] = field(default_factory=list)
-    # The clothing slots (a subset of the owning slot's ``covered_by``) whose FULL cover hides the group
-    # (``extension_rig.cover_state``): under any other covering piece the group stays as an invisible collider.
-    # Empty = ``covered_by`` (every cover hides, the rule before the field existed).
+    # The clothing slots (a subset of the owning slot's ``covered_by``) whose OCCUPANT hides the group
+    # (``extension_rig.cover_state``): under any other covering piece — one that only ``covers`` such a slot
+    # included — the group stays as an invisible collider. Empty = ``covered_by``, and a ``covers`` hides as well
+    # (the rule before the field existed).
     hide_under: List[str] = field(default_factory=list)
     # ``{"inflate": m, "radius": m|None}``: while covered (not hidden) the group shapes the drape over it — its part
     # node (``radius`` None) or a sphere of ``radius`` around each chain's last bone (a group without a part node).
@@ -536,7 +537,7 @@ class RegionSpec:
     # The clothing slots that must be FREE before this channel may be the target of a contact clip (owner decision
     # 2026-11-25, ``app/core/contact_clothing.py``); empty = no requirement.
     contact_free: List[str] = field(default_factory=list)
-    # Like ``RigSpec.hide_under``: the covers that remove the channel; empty = the slot's ``covered_by``.
+    # Like ``RigSpec.hide_under``: the slots whose occupant removes the channel; empty = the slot's ``covered_by``.
     hide_under: List[str] = field(default_factory=list)
 
     @classmethod

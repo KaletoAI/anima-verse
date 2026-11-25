@@ -392,7 +392,8 @@ built from the same clean prerig source with every other group identical
 (same colour markers, same placement) and without the `exposed_only` groups.
 An outfit model is built on the covered variant when the worn pieces HIDE the
 group (`extension_rig.cover_state` is `hidden`, see `hide_under` below: a piece
-fully on or `covers`-ing a `hide_under` slot) and do not set
+on a `hide_under` slot, or in a mesh mode without a body collider over a group with `drape_collider`)
+and do not set
 `outfit_piece.exposed_detail: true` (the item editor's "Shows
 detail through (sheer)", offered only for pieces touching such a slot —
 `GET /inventory/body-under-piece` → `exposed_detail_slots`); otherwise onto the full base. The
@@ -439,9 +440,14 @@ rules with the slot's mesh-part switch read as "on" (the requirement follows the
 `hide_under: [<clothing slot>, ...]` (list, default = the slot's `covered_by`; a subset of it, also on a
 `channel` region) splits the covering slots in two. ONE rule decides every model consumer
 (`extension_rig.cover_state`): a group no worn piece touches (on, `covers` or `partially_covers` a slot of
-`covered_by`) is **exposed**; a piece that sits on or `covers` a `hide_under` slot (and does not set
-`outfit_piece.exposed_detail: true`) makes it **hidden**; any other cover — a piece on a `covered_by` slot
-outside `hide_under`, or a partial cover of any — leaves it **covered**. Hidden removes the detail as before (an
+`covered_by`) is **exposed**; a piece that SITS ON a `hide_under` slot (its `slots`; and does not set
+`outfit_piece.exposed_detail: true`) makes it **hidden**. A piece that only `covers` a `hide_under` slot lies over
+it from outside — trousers declaring `covers: [underwear_bottom]` so that images do not show the underwear — and
+leaves it **covered**, like any other cover: a piece on a `covered_by` slot outside `hide_under`, or a partial
+cover of any. Without the key every `covered_by` slot hides and a `covers` counts as before. A group with a
+`drape_collider` is also **hidden** under a piece that fully covers (on or `covers`) a `covered_by` slot in a mesh
+mode other than `template` or `in_body` (`garment_set.BODY_COLLIDER_MODES`): an own mesh, a shell or an accessory
+is built without the group as a collider, so the group would push through it. Hidden removes the detail as before (an
 `exposed_only` group: the covered variant; a channel: none). Covered keeps it: the `exposed_only` group stays on
 the outfit model, the channel exists, and with a `drape_collider` the part shapes the cloth over it. A piece worn
 open covers nothing. A free-text wardrobe is covered while dressed, never hidden. In every case the attached
@@ -1171,7 +1177,7 @@ body_slots:
 | `min_length` | Default 1.0, within [0.25, 4]. The entering chain's effective state `length` must be at least this for the channel to engage. |
 | `compress_min` | Default 1.0 (no compression), within (0, 1]. The least depth scale k. |
 | `exposed_only` | Default `true`, a boolean. The channel exists only on a model whose worn pieces do not hide the slot (`hide_under`); a base model is uncovered. A piece with `outfit_piece.exposed_detail: true` shows it through, and the item editor offers that switch for the slot's `covered_by` slots. |
-| `hide_under` | Optional: a subset of the slot's `covered_by` (default: all of it). Only a piece on or `covers`-ing one of these removes an `exposed_only` channel; any other cover leaves it (`extension_rig.cover_state`, see `rigs[].hide_under` above). |
+| `hide_under` | Optional: a subset of the slot's `covered_by` (default: all of it). Only a piece sitting on one of these removes an `exposed_only` channel; a piece that only `covers` it, or any other cover, leaves it (`extension_rig.cover_state`, see `rigs[].hide_under` above). Without the key a `covers` of any `covered_by` slot removes it, as before. |
 | `contact_free` | Optional: a list of clothing slots this channel needs free when a contact clip targets it (`target: channel` on the receiving role). Same rule as `rigs[].contact_free` above: a worn piece on or covering such a slot blocks the clip unless it is worn open or `outfit_piece.open_below: true`. |
 | `interaction_kinds` | Optional: a non-empty list of non-empty strings. When given, the channel engages only within a running pair interaction of one of these kinds. When absent, any running pair interaction counts. |
 | `from_rig` | Optional: the id of a rig of the SAME slot (see below). |

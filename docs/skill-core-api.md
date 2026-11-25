@@ -434,7 +434,7 @@ liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getri
 
 | Function | Semantics |
 |---|---|
-| `cover_state(group, pieces, items, *, open_ids=()) -> str` | `EXPOSED` / `COVERED` / `HIDDEN` of a group or region (`covered_by`, optional `hide_under`) under `pieces` (`{clothing slot: item id}`). No piece touches `covered_by` → exposed; a piece on or `covers`-ing a `hide_under` slot without `outfit_piece.exposed_detail` → hidden; else covered (a partial cover is never hidden). Slot names compared after `strip().lower()`. |
+| `cover_state(group, pieces, items, *, open_ids=()) -> str` | `EXPOSED` / `COVERED` / `HIDDEN` of a group or region (`covered_by`, optional `hide_under`) under `pieces` (`{clothing slot: item id}`). No piece touches `covered_by` → exposed; without `outfit_piece.exposed_detail`, a piece on a declared `hide_under` slot (without the key: on or `covers`-ing any `covered_by` slot) → hidden, and for a group with `drape_collider` also a piece fully covering a `covered_by` slot in a mode outside `garment_set.BODY_COLLIDER_MODES`; else covered (a `covers` of a declared `hide_under` slot or a partial cover is never hidden). Slot names compared after `strip().lower()`. |
 | `cover_state_for(group, profile, *, pieces=None, items=None) -> str` | The same on a character: its worn pieces (or `pieces`), open pieces skipped, a free-text wardrobe covered while dressed (never hidden). Every caller with a profile uses this. |
 | `pieces_of(item_ids, items) -> Dict[str, str]` | `{slot: item id}` from the pieces' `outfit_piece.slots`. |
 | `rig_groups_unclothed(character_name, profile=None)` | The groups the character has unclothed (every active mesh part on). |

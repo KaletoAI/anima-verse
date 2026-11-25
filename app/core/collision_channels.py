@@ -18,8 +18,9 @@ renderers read (``collision.py`` "CHANNELS (version 7)"), with
   mm along the frame axes added to the opening, a radius scale, a depth scale, the funnel half-angle and the axis
   tilt ``tilt_deg`` (turned about the frame's side axis, + = toward the back, ±45°; Ruling A193);
 - EXPOSURE: an ``exposed_only`` channel exists on a model unless its worn pieces HIDE it (``extension_rig.
-  cover_state`` over the model's ``pieces`` is ``hidden``: a full cover of a ``hide_under`` slot, default
-  ``covered_by``; the item's ``exposed_detail`` switch shows it through); a base model is exposed. Exposure is
+  cover_state`` over the model's ``pieces`` is ``hidden``: a piece on a declared ``hide_under`` slot, without one
+  a full cover of a ``covered_by`` slot; the item's ``exposed_detail`` switch shows it through); a base model is
+  exposed. Exposure is
   identity: it is applied whenever a record is written (fit, relabel, apply) and is NOT part of ``channels_sig``
   (nor is ``hide_under``, which acts only through it); a stored record whose covered set differs is re-filtered on
   its next refresh, without ``apply_channels`` (``collision.exposure_current``);
@@ -236,7 +237,7 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
         entry = {key: declaration[key] for key in (
             "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
             "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig", "built")}
-        entry["hide_under"] = list(declaration.get("hide_under") or declaration["covered_by"])
+        entry["hide_under"] = list(declaration.get("hide_under") or [])
         entry["override"] = character_overrides(character_name, profile=profile).get(declaration["id"])
         entry["opening"], entry["opening_reason"] = _opening(meta.get("extension_rig"), declaration["from_rig"],
                                                              own_status=True)
@@ -250,7 +251,7 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
             entry = {key: declaration[key] for key in (
                 "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
                 "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig")}
-            entry["hide_under"] = list(declaration.get("hide_under") or declaration["covered_by"])
+            entry["hide_under"] = list(declaration.get("hide_under") or [])
             entry["override"] = overrides.get(declaration["id"])
             if declaration["from_rig"]:
                 entry["opening"], entry["opening_reason"] = _opening(state, declaration["from_rig"])
@@ -278,7 +279,7 @@ def exposure(meta: Dict[str, Any], *, items: Optional[Dict[str, Any]] = None) ->
             from app.core.motion_item_cache import item_snapshot
             cache["items"] = item_snapshot()
         covered_by = list(entry.get("covered_by") or [])
-        return cover_state({"covered_by": covered_by, "hide_under": list(entry.get("hide_under") or covered_by)},
+        return cover_state({"covered_by": covered_by, "hide_under": list(entry.get("hide_under") or [])},
                            pieces, cache["items"]) != HIDDEN
     return exposed
 

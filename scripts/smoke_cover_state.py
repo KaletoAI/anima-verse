@@ -5,13 +5,15 @@ equivalence with the two rules it replaces.
 Usage: ./.venv/bin/python scripts/smoke_cover_state.py
 
 THE RULE (``cover_state``), every slot name compared after ``strip().lower()``:
-  1. For every piece in ``pieces`` whose id is not in ``open_ids``: FULL = the slots it occupies
-     (its keys in ``pieces`` and its ``outfit_piece.slots``) plus ``covers``; PART = ``partially_covers``.
+  1. For every piece in ``pieces`` whose id is not in ``open_ids``: ON = the slots it occupies (its keys in
+     ``pieces`` and its ``outfit_piece.slots``); FULL = ON plus ``covers``; PART = ``partially_covers``.
   2. No piece touches a slot of ``covered_by`` (full or part)               -> exposed
-  3. A piece covers a slot of ``hide_under`` FULLY and does not set
-     ``outfit_piece.exposed_detail: true``                                   -> hidden
+  3. A piece without ``outfit_piece.exposed_detail: true`` sits ON a slot of a DECLARED ``hide_under``
+     (without the key: covers a ``covered_by`` slot FULLY, the rule before ``hide_under``) -> hidden
+  3b. For a group with ``drape_collider``: a piece without ``exposed_detail`` covers a ``covered_by`` slot FULLY
+     in a mesh mode outside ``garment_set.BODY_COLLIDER_MODES`` (template, in_body; the default mode is in_body)
+                                                                             -> hidden
   4. otherwise                                                               -> covered
-  ``hide_under`` absent = ``covered_by``.
 
 Fixtures: G = {covered_by [bottom, underwear_bottom], hide_under [underwear_bottom]},
 T = {covered_by [top, underwear_top, outer], hide_under [underwear_top]},
@@ -22,10 +24,15 @@ Hand-derived expectations:
   C2  G, {bottom: jeans}                         covered  (bottom in covered_by, not in hide_under -> rule 4)
   C3  G, {bottom: jeans, underwear_bottom: briefs}  hidden (briefs fully on underwear_bottom -> rule 3)
   C4  G, {underwear_bottom: briefs(exposed_detail)} covered (rule 3 excepts exposed_detail -> rule 4)
-  C5  G, {top: dress(covers [underwear_bottom])} hidden   (``covers`` is FULL -> rule 3)
+  C5  G, {top: dress(covers [underwear_bottom])} covered  (a ``covers`` of a declared hide_under slot is not ON it
+      -> not rule 3; it touches covered_by -> rule 4)
+  C5b D, {top: dress(covers [underwear_bottom])} hidden   (no declared hide_under -> a FULL cover hides, rule 3)
+  C5c G, {bottom: jeans_c(covers [underwear_bottom])} covered (the world's trousers: on bottom, cover the underwear
+      slot from outside -> rule 4); + {underwear_bottom: briefs} -> hidden (briefs ON underwear_bottom, rule 3)
   C6  G, {top: longshirt(partially_covers [bottom])} covered (part touches covered_by -> not rule 2; no full hit)
   C7  G, {top: shirt(partially_covers [underwear_bottom])} covered (a part cover is never rule 3)
-  C8  T, {top: shirt} covered; T, {top, underwear_top: bra} hidden; T, {outer: jacket(covers [underwear_top])} hidden
+  C8  T, {top: shirt} covered; T, {top, underwear_top: bra} hidden; T, {outer: jacket(covers [underwear_top])}
+      covered (covers, not on -> rule 4)
   C9  G, {bottom: jeans}, open_ids {jeans}       exposed  (an open piece is skipped in rule 1)
   C10 D, {bottom: jeans}                         hidden   (hide_under = covered_by -> today's rule)
   C11 parse errors (ValueError): hide_under [feet] on covered_by [bottom] (must be a subset, like
@@ -38,6 +45,12 @@ Hand-derived expectations:
   C13 free text (``cover_state_for``): a free-text wardrobe with outfit_worn true and no pieces -> covered,
       outfit_worn false -> exposed, a group with empty covered_by -> exposed. Counter-check:
       ``cover_state(G, {}, {})`` of the same situation is exposed, so the free-text rule lives in the wrapper only.
+  C15 mesh mode (rule 3b): GC = G + drape_collider, TC = T + drape_collider.
+      GC {bottom: jeans shell} hidden, own_mesh hidden, accessory hidden; template covered; in_body covered;
+      no mesh_mode (default in_body) covered. G (no drape_collider) {bottom: jeans shell} covered (3b needs the
+      collider). GC {bottom: shell + exposed_detail} covered (3b excepts it). GC {top: longshirt shell
+      (partially_covers [bottom])} covered (3b needs a FULL cover). TC {top: bandeau shell} hidden — the shell top
+      of a figure without underwear (no collider for the tips), as on the covered variant before the plan.
   C14 open (``cover_state_for``): equipped_pieces {bottom: jeans}, jeans stored open -> exposed (C9 via
       ``outfit_renderer.covering_pieces``).
 
@@ -121,6 +134,15 @@ def main():
             "shirt": item("shirt", ["top"]),
             "bra": item("bra", ["underwear_top"]),
             "jacket": item("jacket", ["outer"], covers=["underwear_top"]),
+            "jeans_c": item("jeans_c", ["bottom"], covers=["underwear_bottom"]),
+            "jeans_shell": item("jeans_shell", ["bottom"], mesh_mode="shell"),
+            "jeans_own": item("jeans_own", ["bottom"], mesh_mode="own_mesh"),
+            "jeans_acc": item("jeans_acc", ["bottom"], mesh_mode="accessory"),
+            "jeans_tpl": item("jeans_tpl", ["bottom"], mesh_mode="template"),
+            "jeans_body": item("jeans_body", ["bottom"], mesh_mode="in_body"),
+            "jeans_shell_x": item("jeans_shell_x", ["bottom"], mesh_mode="shell", exposed_detail=True),
+            "longshirt_shell": item("longshirt_shell", ["top"], mesh_mode="shell", partially_covers=["bottom"]),
+            "bandeau_shell": item("bandeau_shell", ["top"], mesh_mode="shell"),
         }
         cs = er.cover_state
         check(cs(G, {}, items) == er.EXPOSED, "C1 nothing worn -> exposed")
@@ -128,14 +150,30 @@ def main():
         check(cs(G, {"bottom": "jeans", "underwear_bottom": "briefs"}, items) == er.HIDDEN,
               "C3 trousers + underwear -> hidden")
         check(cs(G, {"underwear_bottom": "briefs_x"}, items) == er.COVERED, "C4 exposed_detail underwear -> covered")
-        check(cs(G, {"top": "dress"}, items) == er.HIDDEN, "C5 covers counts fully -> hidden")
+        check(cs(G, {"top": "dress"}, items) == er.COVERED, "C5 covers of a declared hide_under slot -> covered")
+        check(cs(D, {"top": "dress"}, items) == er.HIDDEN, "C5b no declared hide_under: covers hides as before")
+        check(cs(G, {"bottom": "jeans_c"}, items) == er.COVERED, "C5c trousers covering the underwear slot -> covered")
+        check(cs(G, {"bottom": "jeans_c", "underwear_bottom": "briefs"}, items) == er.HIDDEN,
+              "C5c same trousers + underwear -> hidden")
         check(cs(G, {"top": "longshirt"}, items) == er.COVERED, "C6 partial cover of bottom -> covered")
         check(cs(G, {"top": "shirt_p"}, items) == er.COVERED, "C7 partial cover of hide_under -> covered, never hidden")
         check(cs(T, {"top": "shirt"}, items) == er.COVERED, "C8a top without underwear -> covered")
         check(cs(T, {"top": "shirt", "underwear_top": "bra"}, items) == er.HIDDEN, "C8b top + underwear -> hidden")
-        check(cs(T, {"outer": "jacket"}, items) == er.HIDDEN, "C8c jacket covering underwear_top -> hidden")
+        check(cs(T, {"outer": "jacket"}, items) == er.COVERED, "C8c jacket covering underwear_top -> covered")
         check(cs(G, {"bottom": "jeans"}, items, open_ids={"jeans"}) == er.EXPOSED, "C9 open piece -> exposed")
         check(cs(D, {"bottom": "jeans"}, items) == er.HIDDEN, "C10 no hide_under -> covered_by -> hidden")
+
+        # C15 mesh modes without a body collider.
+        GC = {**G, "drape_collider": {"inflate": 0.003, "radius": None}}
+        TC = {**T, "drape_collider": {"inflate": 0.002, "radius": 0.0045}}
+        for iid, want in (("jeans_shell", er.HIDDEN), ("jeans_own", er.HIDDEN), ("jeans_acc", er.HIDDEN),
+                          ("jeans_tpl", er.COVERED), ("jeans_body", er.COVERED), ("jeans", er.COVERED),
+                          ("jeans_shell_x", er.COVERED)):
+            check(cs(GC, {"bottom": iid}, items) == want, f"C15 GC {iid} -> {want}")
+        check(cs(G, {"bottom": "jeans_shell"}, items) == er.COVERED, "C15 G (no drape_collider) shell -> covered")
+        check(cs(GC, {"top": "longshirt_shell"}, items) == er.COVERED, "C15 GC partial shell -> covered")
+        check(cs(TC, {"top": "bandeau_shell"}, items) == er.HIDDEN, "C15 TC shell top -> hidden")
+        check(cs(TC, {"top": "shirt"}, items) == er.COVERED, "C15 TC in-body top -> covered")
 
         # C11 parse errors.
         from app.plugins.registry import RegionSpec, RigSpec
