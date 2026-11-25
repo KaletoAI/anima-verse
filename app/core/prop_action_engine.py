@@ -460,7 +460,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         if profile.get("is_sleeping") and run["status"] != "sleeping" and not owned_sleep_transition:
             return "participant_asleep"
         journey = profile.get("journey")
-        if journey and journey.get("execution_ref") not in replaces:
+        if journey:  # no run owns a journey (E3): any journey blocks
             return "journey_already_active"
         ref = (profile.get("interaction") or {}).get("execution_ref")
         if profile.get("interaction") and ref != run["execution_id"] and ref not in replaces:

@@ -1054,9 +1054,9 @@ def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
                    execution_ref: Optional[str] = None,
                    execution_kind: Optional[str] = None, reason: str = "cancelled") -> None:
     """Remove only the selected journey. All supplied selectors must match;
-    an owned journey leaves its result in ``last_journey_result``, which its
-    owner reads (a party trip intent), so an owner may hold its own lock and
-    cancel its exact journey safely."""
+    an owned journey (a party trip intent) also records its result in
+    ``last_journey_result`` (written for diagnosis; no core reader), so an
+    owner may hold its own lock and cancel its exact journey safely."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     with keyed_lock("character_profile", character_name):

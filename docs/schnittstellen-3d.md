@@ -8871,8 +8871,8 @@ Player routes require the authenticated user's current authorized avatar:
   in offers and planning. `ask` ends nothing before the partner's "yes" (a "no"
   keeps them running); `react` and solo requests end them at once. When every
   participant is already active on the very piece, the new run begins in place:
-  no walk, no entry clip — the answer is `active` with `motion: null`, and the
-  seat or pair arrives with the next worldmap row. An open invitation survives
+  no walk, no entry clip — the answer is `active`, and the seat or pair
+  arrives with the next worldmap row. An open invitation survives
   a position, pose or journey change of either person; the "yes" checks and
   plans everything anew.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
@@ -8888,11 +8888,10 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
-  Terminal `recent_results` rows include participant-specific `motion`:
-  `{seat:[x,z], stand:[x,z], stand_yaw_deg, exit_clip, exit_s}` for a participant released
-  from a place, otherwise `null` (including a participant kept seated).
-  This persisted departure is identical to the cancel answer's `motion`.
-  Clients play it once per execution id across state and cancel answers.
+  Rows carry no motion. A participant released from a place stands up through
+  the `cancel` order of the run's end (§ A11b: exit step at the seat, then the
+  stand point and yaw), read from its worldmap row or `GET /play/orders`; a
+  participant kept seated gets no `cancel` order.
 
   Rows contain `execution_id,action_id,definition_revision,label,target,actor,
   members,viewer,roles,status,phase,phase_label,reason,can_respond,can_cancel,own_role,
@@ -8902,8 +8901,7 @@ Player routes require the authenticated user's current authorized avatar:
   name: `clip` `{a..e: name}`, `access` `{name: actor|partner}` (clip role A
   enters at the `actor` access, every other role at `partner`). `consent` is
   `ask`/`react` (empty for a solo run); `consents` `{name: pending|yes}` while the
-  run waits — `can_respond` is true for an invitee still `pending`. A row's
-  `motion.role` is the viewer's clip role `a`..`e` (`null` solo). Incoming is only for
+  run waits — `can_respond` is true for an invitee still `pending`. Incoming is only for
   the exact recipient; outgoing is only the initiator's; current is participant
   only. Own terminal rows/effect results disappear after 30 **system** minutes.
   `phase` remains the machine ID (which may be a UUID); `phase_label` comes
@@ -9100,7 +9098,7 @@ Besides `pickPropAction` (its sixth argument `members` carries the people picked
 action — then `partner` is unset; a host requests with `members`, else `[partner]`), v3 carries `closePlaceMenu`,
 `pickRoomPose`, `respondPropAction(executionId,accept)` and
 `cancelPropAction(executionId)`. The bidirectional `prop-actions-changed`
-notification invalidates own action state and motion after a mutation attempt
+notification invalidates own action state and order after a mutation attempt
 (success or refusal) without echoing across the iframe boundary. Own incoming/outgoing/
 current/recent state remains session-private; visible NPC motion is not consent.
 
@@ -9115,9 +9113,9 @@ acknowledgement; preparation errors/timeouts do not execute it. Finally
 so the host can refresh before releasing that barrier. Ordinary lifecycle
 invalidation carries no ID and must not release a different pending mutation.
 For B1, the same notification also carries the optional mutation `result`
-(the complete answer, including `motion`) and `source:"request"|"respond"|"cancel"`.
+(the complete answer, including the caller's `order`) and `source:"request"|"respond"|"cancel"`.
 The world host consumes that answer immediately, before refreshing state;
-a detached HUD must not discard the motion plan. Status-only invalidations
+a detached HUD must not discard the order. Status-only invalidations
 remain possible without a result. This uses the existing bridge version.
 This transport correlation is neither a Core execution identity nor a server
 request nonce. Disconnection clears pending HUD waits; preparation has a

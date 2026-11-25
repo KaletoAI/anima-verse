@@ -435,6 +435,8 @@ class Ownership(unittest.TestCase):
                 E.advance_all_journeys()
                 self.assertIsNone(E.get_journey(name))
                 self.assertEqual(C.get_character_pos(name), before)
+                pos = C.get_character_pos(name)
+                self.assertNotEqual((pos["x"], pos["z"]), (4, 5))  # the goal
                 self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"],
                                  "unknown_execution_owner")
 

@@ -607,10 +607,7 @@ def _travel_block(name: str, lang: str = "en"):
         from app.core.travel_engine import get_journey, journey_eta, journey_state
         from app.models.world import get_location_name
         j = get_journey(name)
-        # A walk to a seat in the same room is the prop action's approach, not
-        # a trip: no journey bar, no "cancel journey", no hidden scene tile.
-        # The motion itself still comes from the worldmap block.
-        if not j or j.get("execution_kind") == "prop_action":
+        if not j:
             return None
         st = journey_state(j["waypoints"], j["started_at_s"], motion_time())
         target_id = j.get("target") or ""

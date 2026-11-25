@@ -133,11 +133,18 @@ class MotionPlan(unittest.TestCase):
         self.assertEqual((order['actors'][0]['stand']['x'], order['actors'][0]['stand']['z']), (pos['x'], pos['z']))
         seated = S.request(name, target)
         run = until_active(seated['execution_id'])
+        before = MO.index_get(name)
         A._finish(run, 'completed', 'ended', keep_seated=name)
         row = next(r for r in A.state_for(name)['recent_results'] if r['execution_id'] == seated['execution_id'])
         self.assertNotIn('motion', row)
         self.assertIsNotNone(F.C.get_character_profile(name).get('place'))
-        self.assertNotEqual((MO.index_get(name) or {}).get('kind'), 'cancel')
+        # Kept seated: the end publishes no new order for this member — what it
+        # carries (if anything) is still the order it had before the end.
+        after = MO.index_get(name)
+        if after is not None:
+            self.assertIsNotNone(before)
+            self.assertEqual(after['order_id'], before['order_id'])
+            self.assertNotEqual(after.get('kind'), 'cancel')
 
     def test_terminal_poll_waits_for_departure_cleanup(self):
         name, target, _ = S.setup_run()
