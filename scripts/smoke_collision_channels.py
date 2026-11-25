@@ -65,7 +65,7 @@ Expected, derived by hand:
 [6] Review Focus 5 (``demo2``): the base record is current. The route body {channels: {pkgx:chan: <[4]>}} stores the
     override → answer {channels: {pkgx:chan: <[4]>}, due: True}; the profile holds it. The poll
     (``collision.ensure``) returns the record UNCHANGED (the sidecar bytes too, no fit); record_state = {current True,
-    channels_current False}; the overview's collision step is status "due" with the detail starting "Channel settings
+    channels_current False, exposure_current True}; the overview's collision step is status "due" with the detail starting "Channel settings
     changed — recompute to apply"; the Improvements ``collision_capsules`` is_done is False. ``POST …/collision``
     (force + apply_channels) then carries the [4] channel (a_pos (0, 0.91, 0.045)) and the step is "done";
     channels_due False; is_done True; the panel info lists pkgx:chan with placement "declared", reason "".
@@ -308,7 +308,7 @@ def main() -> int:
                                               len(fits) - n), (True, 0))
     meta = json.loads(base2.with_suffix(".json").read_text())
     state = collision.record_state("demo2", base2, meta)
-    check("record_state", state, {"current": True, "channels_current": False})
+    check("record_state", state, {"current": True, "channels_current": False, "exposure_current": True})
 
     def collision_row(meta, state):
         rows = model_overview.base_model_steps(meta, front_meta=None, collision_current=state["current"],
@@ -328,7 +328,7 @@ def main() -> int:
     near_vec("applied: a_pos", rec["a_pos"], [0, 0.91, 0.045])
     meta = json.loads(base2.with_suffix(".json").read_text())
     state = collision.record_state("demo2", base2, meta)
-    check("applied: record_state", state, {"current": True, "channels_current": True})
+    check("applied: record_state", state, {"current": True, "channels_current": True, "exposure_current": True})
     check("applied: step done", collision_row(meta, state)["status"], "done")
     check("applied: nothing due", collision.channels_due("demo2"), False)
     check("applied: Improvements done", improvement.is_done(candidate, {}), True)

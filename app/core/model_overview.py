@@ -73,6 +73,9 @@ DUE = "due"
 #: The collision step's reason when the stored record's channels no longer match the declarations, the
 #: per-character overrides or the opening (``collision.channels_current``).
 CHANNELS_CHANGED = "Channel settings changed — recompute to apply"
+#: The collision step's reason when the stored record's covered channels differ from what the worn pieces cover now
+#: (``collision.exposure_current``); the model's next refresh re-filters them.
+EXPOSURE_CHANGED = "Channel exposure changed"
 
 # Freshness reasons — fixed English phrases (the React badge translates
 # each part of a `` · `` joined reason).
@@ -466,11 +469,13 @@ def _extension_step(state: Dict[str, Any], *, source: str = "") -> Dict[str, Any
 
 
 def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None,
-                    channels_current: Optional[bool] = None) -> Dict[str, Any]:
+                    channels_current: Optional[bool] = None,
+                    exposure_current: Optional[bool] = None) -> Dict[str, Any]:
     """The collision capsules (``collision.py``): count and radius per region, the channels;
     ``current`` False = the record no longer describes the file (the next read refits it);
     ``channels_current`` False with current capsules = ``due`` (``CHANNELS_CHANGED``: only the
-    explicit recompute applies it)."""
+    explicit recompute applies it); ``exposure_current`` False with both current = ``due``
+    (``EXPOSURE_CHANGED``: the next refresh re-filters the channels)."""
     from app.core.collision import REGIONS, summary
     label = "Collision capsules"
     if (meta.get("rig") or "mixamo") != "mixamo":
@@ -505,6 +510,8 @@ def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None,
               **{f"{region}_cm": radii[region][1] for region in REGIONS if region in radii}}
     if current is not False and channels_current is False:
         return step("collision", label, DUE, " · ".join([CHANNELS_CHANGED, *parts]), values)
+    if current is not False and exposure_current is False:
+        return step("collision", label, DUE, " · ".join([EXPOSURE_CHANGED, *parts]), values)
     status = WARNING if skipped or current is False else DONE
     return step("collision", label, status, " · ".join(parts), values)
 
@@ -739,7 +746,8 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
                      covered_exists: bool = False, covered_current: Optional[bool] = None,
                      collision_current: Optional[bool] = None,
                      channels_current: Optional[bool] = None,
-                     tip_smoothing: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                     tip_smoothing: Optional[Dict[str, Any]] = None,
+                     exposure_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of a base model (pure). ``meta``: its sidecar;
     ``front_meta``: the sidecar of the current base front image (its
     ``hand_gate``), None without one; ``covered_exists`` / ``covered_current``:
@@ -760,7 +768,8 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
                 _tip_smoothing_step(tip_smoothing),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
-                _collision_step(meta, current=collision_current, channels_current=channels_current),
+                _collision_step(meta, current=collision_current, channels_current=channels_current,
+                                exposure_current=exposure_current),
                 _texture_step(meta), _measure_step(meta)):
         if row is not None:
             rows.append(row)
@@ -880,7 +889,8 @@ def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
 
 def outfit_body_steps(meta: Dict[str, Any], *,
                       collision_current: Optional[bool] = None,
-                      channels_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+                      channels_current: Optional[bool] = None,
+                      exposure_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit body of the mesh mode (pure): its parent
     record, then the old path's chain as on the base model — mesh, face
     cleanup, face retexture (+ black-eye check), rig, head twist, posture,
@@ -895,7 +905,8 @@ def outfit_body_steps(meta: Dict[str, Any], *,
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _hands_step(blender, str(meta.get("rig") or "")),
                 _extension_step(_dict(meta.get("extension_rig"))),
-                _collision_step(meta, current=collision_current, channels_current=channels_current),
+                _collision_step(meta, current=collision_current, channels_current=channels_current,
+                                exposure_current=exposure_current),
                 _texture_step(meta), _measure_step(meta)):
         if row is not None:
             rows.append(row)
@@ -1044,7 +1055,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        body_meta: Optional[Dict[str, Any]] = None,
                        missing_items: Iterable[str] = (),
                        collision_current: Optional[bool] = None,
-                       channels_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+                       channels_current: Optional[bool] = None,
+                       exposure_current: Optional[bool] = None) -> List[Dict[str, Any]]:
     """The steps of an outfit model on the base-body pipeline (pure).
     ``meta``: its sidecar; ``base``: the current ``(bsig, base model
     sha256)``; ``base_meta``: the sidecar of the base model it names (None
@@ -1095,7 +1107,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     else:
         source = ""
     rows.append(_extension_step(state, source=source))
-    rows.append(_collision_step(meta, current=collision_current, channels_current=channels_current))
+    rows.append(_collision_step(meta, current=collision_current, channels_current=channels_current,
+                                exposure_current=exposure_current))
     mesh_row = _mesh_items_step(meta, item_names or {}, missing_items)
     if mesh_row is not None:
         rows.append(mesh_row)
@@ -1329,7 +1342,8 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                              tip_smoothing=tip_smoothing_state(character_name, bsig),
                              covered_exists=covered.is_file(), covered_current=covered_current,
                              collision_current=state.get("current"),
-                             channels_current=state.get("channels_current"))
+                             channels_current=state.get("channels_current"),
+                             exposure_current=state.get("exposure_current"))
     fresh = base_model_freshness(meta, _base_view_shas(character_name, bsig), _base_view_stamps(character_name, bsig))
     return {"steps": steps, "freshness": fresh}
 
@@ -1347,7 +1361,8 @@ def outfit_body_overview(character_name: str, body_id: str) -> Optional[Dict[str
     from app.core import collision
     state = collision.record_state(character_name, path, meta) if meta.get("collision") else {}
     return {"steps": outfit_body_steps(meta, collision_current=state.get("current"),
-                                       channels_current=state.get("channels_current"))}
+                                       channels_current=state.get("channels_current"),
+                                       exposure_current=state.get("exposure_current"))}
 
 
 def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -1512,7 +1527,8 @@ def outfit_model_overview(character_name: str,
                                missing_items=[i for i, _reason in base_body.mesh_items_missing(
                                    character_name, meta, base_sha=base[1] if base else None)],
                                collision_current=collision_state.get("current"),
-                               channels_current=collision_state.get("channels_current"))
+                               channels_current=collision_state.get("channels_current"),
+                               exposure_current=collision_state.get("exposure_current"))
     return steps, dressed_changed(str(meta.get("created_at") or ""), records)
 
 

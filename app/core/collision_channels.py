@@ -21,7 +21,8 @@ renderers read (``collision.py`` "CHANNELS (version 7)"), with
   cover_state`` over the model's ``pieces`` is ``hidden``: a full cover of a ``hide_under`` slot, default
   ``covered_by``; the item's ``exposed_detail`` switch shows it through); a base model is exposed. Exposure is
   identity: it is applied whenever a record is written (fit, relabel, apply) and is NOT part of ``channels_sig``
-  (nor is ``hide_under``, which acts only through it);
+  (nor is ``hide_under``, which acts only through it); a stored record whose covered set differs is re-filtered on
+  its next refresh, without ``apply_channels`` (``collision.exposure_current``);
 - SUPPRESS: the receiving body's capsules a link tip inside the channel skips — every capsule whose bind-pose segment
   comes within its radius + the channel radius of the channel segment ``a_pos → b_pos``, plus every capsule whose
   start joint is the owning joint, in payload order.

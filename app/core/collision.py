@@ -762,18 +762,43 @@ def channels_current(record: Any, channels_sig: str) -> bool:
     return isinstance(record, dict) and bool(channels_sig) and record.get("channels_sig") == channels_sig
 
 
+def covered_channel_ids(record: Any) -> List[str]:
+    """The ids a record lists in ``channels_skipped`` as covered (``collision_channels.COVERED``), sorted — the
+    exposure of the record's last write."""
+    from app.core.collision_channels import COVERED
+    if not isinstance(record, dict):
+        return []
+    return sorted(str(s.get("id")) for s in record.get("channels_skipped") or []
+                  if isinstance(s, dict) and s.get("reason") == COVERED)
+
+
+def exposure_current(record: Any, wanted: List[Dict[str, Any]], exposed) -> bool:
+    """Whether a record's covered channels are the ones ``exposed`` (``collision_channels.exposure``) covers now.
+    A channel the record skipped for another reason (no capsule set, no opening) has no channel either way and is
+    left out, so it never keeps the record due."""
+    from app.core.collision_channels import COVERED
+    if not isinstance(record, dict):
+        return False
+    other = {str(s.get("id")) for s in record.get("channels_skipped") or []
+             if isinstance(s, dict) and s.get("reason") != COVERED}
+    return covered_channel_ids(record) == sorted(str(entry["id"]) for entry in wanted
+                                                 if not exposed(entry) and str(entry["id"]) not in other)
+
+
 def record_state(character_name: str, path: Path, meta: Dict[str, Any], *,
                  profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``{current, channels_current}`` of the stored record of the model ``path`` (sidecar ``meta``) — the capsules
-    (``is_current``) and the channels (``channels_current``) separately, for the model overview and the Improvements
-    queue. Both False without a record. Reads only."""
+    """``{current, channels_current, exposure_current}`` of the stored record of the model ``path`` (sidecar
+    ``meta``) — the capsules (``is_current``), the channels (``channels_current``) and their exposure
+    (``exposure_current``) separately, for the model overview and the Improvements queue. All False without a
+    record. Reads only."""
     from app.core import collision_channels
     profile = collision_channels._profile(character_name, profile)
     record = meta.get("collision")
     current = is_current(record, identity(path, meta)[1], character_scales(character_name, profile=profile),
                          [entry["group"] for entry in extension_chains(meta)])
-    _wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
-    return {"current": current, "channels_current": channels_current(record, sig)}
+    wanted, sig = collision_channels.wanted_channels(character_name, path, meta, profile=profile)
+    return {"current": current, "channels_current": channels_current(record, sig),
+            "exposure_current": exposure_current(record, wanted, collision_channels.exposure(meta))}
 
 
 def applies(path: Optional[Path], meta: Dict[str, Any]) -> bool:
@@ -843,6 +868,20 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
         built = [g for g in built if g in groups]
     if not force and is_current(record, sha, scales) and built == groups:
         if labelled:
+            if channels_current(record, sig) and not exposure_current(record, wanted, exposed):
+                # Exposure is identity, never deferred: a covered set that differs from the worn pieces' now is
+                # brought in line without ``apply_channels`` — a newly exposed channel is resolved on the file,
+                # newly covered ones only move to ``channels_skipped``.
+                if any(exposed(entry) for entry in wanted if str(entry["id"]) in covered_channel_ids(record)):
+                    try:
+                        meta["collision"] = _with_channels(record, path.read_bytes(), wanted, sig, exposed)
+                        return True
+                    except OSError as exc:
+                        logger.warning("Collision channels of %s (%s) not re-exposed: %s", character_name,
+                                       path.name, exc)
+                channels, skipped = collision_channels.filter_exposed(record, wanted, exposed)
+                meta["collision"] = {**record, "channels": channels, "channels_skipped": skipped}
+                return True
             if channels_current(record, sig) or not apply_channels:
                 return False
             try:
