@@ -3942,6 +3942,13 @@ def _json_fast(payload: Any) -> Response:
                           separators=(",", ":"),
                           default=_encode_default).encode("utf-8")
     except TypeError:
+        # Counted, so a key that ALWAYS falls back (both ways run on every
+        # poll) shows up in the minute line instead of staying silent.
+        try:
+            from app.core import hot_path_stats
+            hot_path_stats.count("worldmap_encode", "fallback")
+        except Exception:  # noqa: BLE001 — statistics never break a response
+            pass
         return _json_off_loop(payload)
     return Response(content=body, media_type="application/json")
 
