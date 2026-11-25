@@ -83,9 +83,42 @@ public class NavRouteTests
     [Fact]
     public void OtherStoreyIsNotOnMesh()
     {
-        // The mesh lies directly above (Closest.Y = y + 3, storey height 3 → |dy| = 3 ≥ 1.5): neither point counts.
+        // The mesh lies directly above (Closest.Y = y + 3, storey height 3 → |dy| = 3 ≥ 1.5): neither point counts, and
+        // an avatar off every mesh of its storey is never held (final review E2, I-1 (b)) — the step passes.
         var upstairs = new FakePathProvider { ClosestYOffset = 3 }.Mesh(0, 0, 10, 10);
-        Same(new P2(5, 5), NavClamp.Step(new P2(5, 5), new P2(5.2, 5), 0, 3, upstairs));
+        Same(new P2(5.2, 5), NavClamp.Step(new P2(5, 5), new P2(5.2, 5), 0, 3, upstairs));
+    }
+
+    [Fact]
+    public void StepOffTheStoreyFromTheMeshIsHeld()
+    {
+        // From (5, 5) stands on the level mesh (height 0); beyond x 5.1 the mesh lies 3 m higher (another storey,
+        // |dy| = 3 ≥ 1.5) → dTo infinite, dFrom 0 → held.
+        var split = new FakePathProvider { HeightAt = (x, _) => x > 5.1 ? 3 : 0 }.Mesh(0, 0, 10, 10);
+        Same(new P2(5, 5), NavClamp.Step(new P2(5, 5), new P2(5.2, 5), 0, 3, split));
+    }
+
+    [Fact]
+    public void SlopedMeshIsWalkableAboveItsPlane()
+    {
+        // The mesh rises 0.1 per metre of x (y = 0.1·x, x 0…10); the avatar at (5, 5) stands at y 1.0, 0.5 above the
+        // plane (0.5 there) — the terrain between the polygon corners is higher than the polygon. The 3D foot point of
+        // (5, 1.0, 5) is shifted in x by g·f/(1 + g²) = 0.1·0.5/1.01 = 0.049505 > OnMeshTolM 0.02: the old 3D rule saw
+        // the avatar 0.0495 off the mesh, and a step to (4.9, 5) (f = 0.51 → 0.050495, deeper by 0.00099 > 1e-4) was held.
+        var slope = new FakePathProvider { Grade = 0.1 }.Mesh(0, 0, 10, 10);
+        Assert.Equal(5.049505, slope.Closest(new Vec3(5, 1.0, 5)).X, 6);
+        // Straight below every point lies the mesh (horizontal distance 0): every direction passes.
+        foreach (var to in new[] { new P2(4.9, 5), new P2(5.1, 5), new P2(5, 4.9), new P2(5, 5.1) })
+            Same(to, NavClamp.Step(new P2(5, 5), to, 1.0, 3, slope));
+    }
+
+    [Fact]
+    public void FarAboveASlopeNeverFreezes()
+    {
+        // y 3.0 at (5, 5) is 2.5 above the plane (0.5): beyond the band ± 1.5 for both points → neither is on this
+        // storey's mesh → the step passes instead of freezing every key (final review E2, I-1 (b)).
+        var slope = new FakePathProvider { Grade = 0.1 }.Mesh(0, 0, 10, 10);
+        Same(new P2(4.9, 5), NavClamp.Step(new P2(5, 5), new P2(4.9, 5), 3.0, 3, slope));
     }
 
     // ---- NavRoutePlanner ------------------------------------------------------------------------------------------
@@ -221,6 +254,22 @@ public class NavRouteTests
             NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.Replan,
             NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.Abort,
         }, events);
+    }
+
+    [Fact]
+    public void ReplannedRouteKeepsTheStuckCount()
+    {
+        // A replan after the first stuck hands StuckCount 1 to the new route: its first 2 s stuck (four 0.5 s frames)
+        // aborts instead of replanning again (final review E2, I-2).
+        var first = Straight();
+        for (int i = 0; i < 4; i++) first.Tick(new Vec3(0, 0, 0), 0.5);
+        Assert.Equal(1, first.StuckCount);
+        var plan = NavRoutePlanner.Plan(Room(), new Vec3(0, 0, 0), new Vec3(10, 0, 0), AllInside, Array.Empty<P2>(), 0)!;
+        var replanned = new NavRoute(plan, first.StuckCount);
+        var events = new List<NavRouteEvent>();
+        for (int i = 0; i < 4; i++)
+            events.Add(replanned.Tick(new Vec3(0, 0, 0), 0.5));
+        Assert.Equal(new[] { NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.Abort }, events);
     }
 
     [Fact]

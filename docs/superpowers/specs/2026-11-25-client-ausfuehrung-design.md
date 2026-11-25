@@ -398,7 +398,10 @@ Avoidance-Agent und Pfadabfragen per `AgentSetMap`. Ein per Kamera ausgeblendete
 (`WorldBuilder.Models.cs:139/:325`, `WorldBuilder.Residency.cs:250/:338`) die Quelle ändert. Cache im Speicher,
 Schlüssel = `scene_etag` + Version der Bake-Parameter (Vorschlag (Claude); ein Plattencache erst, wenn Backzeiten
 über 300 ms gemessen werden). Beim Rebake die alte Region erst freigeben, wenn die neue synchronisiert ist, sonst
-gibt es einen Frame ohne Pfad. Große Locations in Chunks mit `filter_baking_aabb` + `border_size`. Messbare Alternative in E2: Die Quelle sind
+gibt es einen Frame ohne Pfad. **Umgesetzt anders (E2, siehe Abschnitt 9 „E2 umgesetzt“):** Cache-Schlüssel ist der
+Fingerabdruck der Navigationsquelle (Plan-Entscheidung 6), nicht `scene_etag`; statt „alte Region freigeben“ wird die
+neue Map als eigene Map vorbereitet und nach ihrer ersten Synchronisierung getauscht, erst dann wird die alte freigegeben;
+die Backzeiten sind gemessen (`docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md`). Große Locations in Chunks mit `filter_baking_aabb` + `border_size`. Messbare Alternative in E2: Die Quelle sind
 bereits 2D-Polygone; ein direkt aus ihnen gebautes Navmesh (bzw. der 2D-Bake pro Stockwerk) wäre exakt, ohne
 Voxelraster und ohne das Zellgrößenproblem an Türen. E2 misst beide und nimmt das genauere, sofern es Links und
 Abfragen gleich bedient. Vor der ersten
@@ -409,7 +412,7 @@ reicht nicht: mit den asynchronen Standard-Iterationen ist `iter = 1` in Godot 4
 `MapGetClosestPoint` → (0,0,0)), und nach `RegionSetEnabled` zeigt der nächste Wechsel noch den alten Zustand (gemessen,
 E2-Review B4). Bis dahin bleibt die Figur in `exit` bzw. am Start.
 
-Geschätzte Kosten (nicht gemessen, mit `native/Bench/` messen): Raum ~10⁴ Zellen, wenige ms; Location bis
+Geschätzte Kosten (Schätzung vor E2; gemessen in E2, siehe Abschnitt 9 und die Messdatei oben): Raum ~10⁴ Zellen, wenige ms; Location bis
 100 m ~10⁶ Zellen, 50–300 ms asynchron, Main-Thread unberührt.
 
 **Links:**

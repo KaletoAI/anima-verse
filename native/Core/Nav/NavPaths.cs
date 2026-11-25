@@ -22,4 +22,13 @@ public interface IPathProvider
     NavPath Query(Vec3 from, Vec3 to);
 
     Vec3 Closest(Vec3 p);
+
+    /// <summary>
+    /// The walkable point closest to the vertical segment <c>(p.X, p.Y ± halfHeight, p.Z)</c>: where the mesh lies under
+    /// or over <paramref name="p"/> within that band, the mesh point straight below/above it (horizontal distance 0,
+    /// whatever the mesh height between its corners); otherwise the nearest mesh edge point. Unlike
+    /// <see cref="Closest"/> the answer does not shift sideways when <paramref name="p"/> is above or below a sloped
+    /// polygon (final review E2, I-1).
+    /// </summary>
+    Vec3 ClosestOnVertical(Vec3 p, double halfHeight);
 }

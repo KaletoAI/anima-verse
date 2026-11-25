@@ -140,7 +140,8 @@ public enum NavRouteEvent { None, AtLink, Replan, Abort, Arrived }
 /// <summary>
 /// Follows a <see cref="NavPlan"/> frame by frame: advances corners, hands links to the caller's ride and watches
 /// for getting stuck (horizontal speed below <see cref="StuckSpeedMS"/> for <see cref="StuckSeconds"/> → Replan, the
-/// second time Abort) and for drifting off the current segment (more than <see cref="DeviationM"/> → Replan). While a
+/// second time Abort — counted over the whole click walk: a replanned route takes <see cref="StuckCount"/> over, so a
+/// route that runs into the same wall after every replan ends instead of looping, final review E2, I-2) and for drifting off the current segment (more than <see cref="DeviationM"/> → Replan). While a
 /// link section runs, neither stuck time nor deviation counts. A route that begins with a link and is not yet at its
 /// start counts stuck time while it approaches (so a start that never reaches the link ends in Replan/Abort instead
 /// of waiting forever). A frame with <c>dt ≤ 0</c> is neutral for the stuck clock.
@@ -160,11 +161,14 @@ public sealed class NavRoute
     private double _stuckTime;
     private int _stuckCount;
 
-    public NavRoute(NavPlan plan)
+    /// <param name="plan">The planned route (at least one step).</param>
+    /// <param name="stuckCount">The stuck count of the route this one replaces (0 for a new click walk).</param>
+    public NavRoute(NavPlan plan, int stuckCount = 0)
     {
         if (plan.Steps.Count == 0)
             throw new ArgumentException("a route needs at least one step", nameof(plan));
         _plan = plan;
+        _stuckCount = stuckCount;
         // A route that begins with a link gets its stuck baseline from its first tick.
         _last = plan.Steps[0] is NavWalk w ? w.Points[0] : null;
     }
@@ -177,6 +181,9 @@ public sealed class NavRoute
     public Vec3 Final => _plan.Goal;
 
     public bool Done { get; private set; }
+
+    /// <summary>How often the walk got stuck so far (a replan hands it to the next route).</summary>
+    public int StuckCount => _stuckCount;
 
     /// <summary>Set by <see cref="NavRouteEvent.AtLink"/> until <see cref="LinkResult"/> answers.</summary>
     public bool RideRequested => _link == LinkState.Requested;

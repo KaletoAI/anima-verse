@@ -181,8 +181,11 @@ public sealed partial class WorldBuilder
         }
         catch (Exception e)
         {
-            if (_navJobs.TryGetValue(slot, out var cur) && cur == job) _navJobs.Remove(slot);
+            bool mine = _navJobs.TryGetValue(slot, out var cur) && cur == job;
+            if (mine) _navJobs.Remove(slot);
             _log($"[nav] bake loc={slot.Loc.Id} failed: {e.Message}");
+            // A newer source waited for this bake (final review E2, M-2): bake it now; the failed source is not retried.
+            if (mine && job.Stale) RequestNavBake(slot);
             return;
         }
         RememberNav(src.Fingerprint, meshes);
@@ -266,10 +269,24 @@ public sealed partial class WorldBuilder
         _navCacheOrder.Clear();
     }
 
+    /// <summary>
+    /// The baked meshes become the slot's pending map. A failure while creating the map is logged and leaves the slot
+    /// with its active map (final review E2, M-2: it used to vanish in the discarded bake task).
+    /// </summary>
     private void AddPending(LocationSlot slot, NavSourceData src, NavigationMesh[] meshes, NavBakeParams p)
     {
         DropPending(slot);
-        _navPending[slot] = new PendingNav { Slot = slot, Nav = LocationNav.Create(src, meshes, p) };
+        LocationNav nav;
+        try
+        {
+            nav = LocationNav.Create(src, meshes, p);
+        }
+        catch (Exception e)
+        {
+            _log($"[nav] map loc={slot.Loc.Id} failed: {e.Message}");
+            return;
+        }
+        _navPending[slot] = new PendingNav { Slot = slot, Nav = nav };
         SyncNavSubscription();
     }
 

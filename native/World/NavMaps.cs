@@ -175,6 +175,22 @@ public sealed class LocationNav : IPathProvider
         return new Vec3(c.X, c.Y, c.Z);
     }
 
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => ClosestOnVertical(Map, p, halfHeight);
+
+    /// <summary>
+    /// <see cref="IPathProvider.ClosestOnVertical"/> on any map: <c>MapGetClosestPointToSegment</c> from the top of the band
+    /// down to its bottom, without collision mode. Godot 4.7.2 prefers a polygon the segment pierces (the piercing point,
+    /// the highest one first) over every edge point, so over the mesh the answer lies straight below/above
+    /// <paramref name="p"/> (check N14).
+    /// </summary>
+    public static Vec3 ClosestOnVertical(Rid map, Vec3 p, double halfHeight)
+    {
+        var top = new Vector3((float)p.X, (float)(p.Y + halfHeight), (float)p.Z);
+        var bottom = new Vector3((float)p.X, (float)(p.Y - halfHeight), (float)p.Z);
+        var c = NavigationServer3D.MapGetClosestPointToSegment(map, top, bottom, false);
+        return new Vec3(c.X, c.Y, c.Z);
+    }
+
     /// <summary>The state last written, else what the server reports (nothing written yet: its synced state).</summary>
     private bool EnabledOf(Rid rid, System.Func<Rid, bool> server) => _enabled.TryGetValue(rid, out var on) ? on : server(rid);
 

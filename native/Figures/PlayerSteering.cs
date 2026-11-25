@@ -204,7 +204,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
 
     /// <summary>
     /// One frame of the navmesh route: the direction to its next corner, or null (standing at a link, riding, done).
-    /// AtLink asks <see cref="RideLink"/> once; Replan plans again to the same goal; Abort and Arrived end the route.
+    /// AtLink asks <see cref="RideLink"/> once; Replan plans again to the same goal (keeping the stuck count, so the
+    /// second time stuck aborts even across replans); Abort and Arrived end the route.
     /// </summary>
     private ClickMove.Direction? FollowNav(NavRoute route, Figure f, double dt)
     {
@@ -223,8 +224,9 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
                 else route.LinkResult(false);
                 return null;
             case NavRouteEvent.Replan:
+                // The stuck count carries over (final review E2, I-2): only WalkTo starts a fresh one.
                 if (_navSlot is { } slot && world.NavFor(slot) is { Ready: true } nav && PlanNav(nav,slot,here,route.Final) is { } plan)
-                { NavRoute=route=new NavRoute(plan); break; }
+                { NavRoute=route=new NavRoute(plan,route.StuckCount); break; }
                 CancelRoute();
                 return null;
             case NavRouteEvent.Abort:

@@ -60,12 +60,20 @@ public static class NavBake
         return Lift(poly.GetNavigationMesh(), p, (_, _) => t.Y);
     }
 
+    /// <summary>
+    /// A storey bake whose callback has not arrived after this long fails with a <see cref="TimeoutException"/>: the
+    /// caller logs it and frees the slot's job, instead of waiting for ever with the location left without a mesh
+    /// (final review E2, M-1).
+    /// </summary>
+    public static readonly TimeSpan BakeTimeout = TimeSpan.FromSeconds(30);
+
     private static async Task<NavigationMesh> BakeAsync(NavStoreySource s, NavBakeParams p, Func<double, double, double>? groundAt)
     {
         var (poly, data) = Input(s, p);
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         NavigationServer2D.BakeFromSourceGeometryDataAsync(poly, data, Callable.From(() => done.TrySetResult(true)));
-        await done.Task;
+        if (await Task.WhenAny(done.Task, Task.Delay(BakeTimeout)) != done.Task)
+            throw new TimeoutException($"storey level {s.Level}: no bake callback within {BakeTimeout.TotalSeconds:0} s");
         return Lift(poly.GetNavigationMesh(), p, (x, z) => HeightAt(s, groundAt, x, z));
     }
 

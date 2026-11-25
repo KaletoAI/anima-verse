@@ -33,7 +33,8 @@ namespace AnimaNative.Check;
 ///   N4 P1 through the door threshold T0 (8.410); N5 P2 up the stairs (19.630, one link point, owner 65536) and back;
 ///   N6 stairs off → P3 over the lift (14.279, owner 131200, entry (105.2, 0, 3.2)); N7 a lock on r-b closes T0, the
 ///      avatar's own room is never closed; N7b an unchanged lock or link state changes nothing and keeps Ready;
-///   N8 Free() releases the map (the active map count is back to where it was after two physics frames).
+///   N8 Free() releases the map (the active map count is back to where it was after two physics frames);
+///   N14 the clamp on a sloped one-polygon mesh with the avatar above its plane (final review E2, I-1, <see cref="SlopeAsync"/>).
 ///
 /// Task 4 then builds the same scene as a world through <see cref="WorldBuilder"/> (<c>fixtures/nav/</c>, goto "Navhaus")
 /// and lets the real residency path bake it (the check never requests a bake itself):
@@ -47,7 +48,8 @@ namespace AnimaNative.Check;
 ///
 /// Task 6 lets the avatar walk on it (<see cref="AvatarAsync"/>): A0 the ground click, A1 a click walk through the door T0,
 /// A2/A2b the furniture clamp, A3 a click into furniture, A4 a lock refuses the click, A5/A5b the stair link ride (accepted /
-/// refused), A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge.
+/// refused), A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge, A8 a click behind the
+/// building ends after the second time stuck, across replans (final review E2, I-2).
 /// </summary>
 public static class NavCheck
 {
@@ -141,10 +143,11 @@ public static class NavCheck
             int mapsAfter = NavigationServer3D.GetProcessInfo(NavigationServer3D.ProcessInfo.ActiveMaps);
             Eq("N8 active maps back", mapsAfter, mapsBefore);
 
+            var slopePart = await SlopeAsync(host);
             var worldPart = await WorldAsync(host, fixtures);
             var avatarPart = await AvatarAsync(host, fixtures);
             return $"nav regions={nav.Storeys.Count} thresholds={nav.Thresholds.Count} links={nav.Links.Count} p1={p1.Length:0.###} "
-                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {worldPart}; {avatarPart}";
+                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {slopePart}; {worldPart}; {avatarPart}";
         }
         finally
         {
@@ -641,7 +644,28 @@ public static class NavCheck
             Expect("A7 reaches the yard and the plot edge", yard && beyond && builder.FootprintAt(Pos().X, Pos().Z) is null, $"{a7} frames, at {Fmt(Pos())}");
             Expect("A7 never stands while the key is held", !stood, $"{a7} frames, at {Fmt(Pos())}");
 
-            return $"avatar O1=ok o1_tris={o1} A0-A7=ok a1={a1} a5={a5} a5b={a5b} a7={a7}";
+            // ---- A8 a click behind the building ends after the second time stuck (final review E2, I-2) ----
+            // (97, 6) lies north of W2, outside the footprint (z ≤ 4): planner case 2 walks to T1's outer point
+            // (97, −4.35) and then straight north to (97, 6) — back through T1 into r-a, where the armchair (eroded z
+            // −2.65…−1.35 at x 97) and then W2 (eroded z 3.65) hold the clamped avatar. Held 2 s → Replan (from r-a: out
+            // through T1 again), held again → Abort, because the replanned route keeps the stuck count. One cycle at
+            // dt 0.25: ≤ 8 m at 3.4 m/s (≤ 10 frames) + 8 stuck frames, so two cycles end well within 120 frames; before the
+            // fix every replan started at count 0 and the walk never ended (README "Nav world", A8).
+            At(97, -1);
+            Expect("A8 WalkTo (97, 6) behind the building", steering.WalkTo(new P2(97, 6)), "");
+            Expect("A8 a navmesh route", steering.NavRoute is not null, "");
+            var seen = new HashSet<NavRoute>();
+            int a8 = 0;
+            for (; a8 < 120 && steering.NavRoute is not null; a8++)
+            {
+                seen.Add(steering.NavRoute);
+                Frame(none);
+            }
+            Expect("A8 the walk ends within 120 frames", steering.NavRoute is null && steering.Route is null, $"{a8} frames, at {Fmt(Pos())}, routes {seen.Count}");
+            Expect("A8 it replanned once before it ended", seen.Count >= 2, $"routes {seen.Count}");
+            Expect("A8 it never reached (97, 6)", Math.Abs(Pos().Z - 6) > 1, Fmt(Pos()));
+
+            return $"avatar O1=ok o1_tris={o1} A0-A8=ok a1={a1} a5={a5} a5b={a5b} a7={a7} a8={a8} a8_routes={seen.Count}";
         }
         finally
         {
@@ -709,6 +733,69 @@ public static class NavCheck
         Expect($"{what}: T0 {t0.ToHtml(false)}, T1 {t1.ToHtml(false)}",
                colors.Length == 12 && colors.Take(6).All(c => Rgb(c, t0)) && colors.Skip(6).All(c => Rgb(c, t1)),
                string.Join(" ", colors.Select(c => c.ToHtml(false))));
+    }
+
+    /// <summary>
+    /// N14 (final review E2, I-1): one quad x 0…10, z 0…10 sloped along x (y = 0.1·x: corners y 0 at x 0, y 1 at x 10)
+    /// on a map of its own — the shape a follow-ground storey gets when the 2D bake leaves few large polygons over
+    /// uneven terrain. The avatar stands at (5, 1.0, 5), 0.5 above the plane (0.5 there):
+    ///   - <c>ClosestOnVertical(p, 1.5)</c> pierces the quad straight below: (5, 0.5, 5) (± 0.01);
+    ///   - <c>MapGetClosestPoint</c> is the 3D foot point, x shifted by 0.1·0.5/1.01 = 0.0495 &gt; <c>OnMeshTolM</c> 0.02
+    ///     (the case of the finding: the old rule saw the avatar off the mesh and held every step uphill-away);
+    ///   - <c>NavClamp.Step</c> passes the steps ±0.1 in x and z unchanged (storey height 3);
+    ///   - at y 3.0 (2.5 above the plane, beyond the band ± 1.5) neither point is on the storey's mesh → the step passes.
+    /// </summary>
+    private static async Task<string> SlopeAsync(Node host)
+    {
+        var p = NavBakeParams.Current;
+        var map = NavigationServer3D.MapCreate();
+        NavigationServer3D.MapSetCellSize(map, (float)p.CellSize);
+        NavigationServer3D.MapSetCellHeight(map, (float)p.CellHeight);
+        NavigationServer3D.MapSetUseAsyncIterations(map, false);
+        NavigationServer3D.MapSetActive(map, true);
+        var mesh = new NavigationMesh { CellSize = (float)p.CellSize, CellHeight = (float)p.CellHeight };
+        mesh.Vertices = new[] { new Vector3(0, 0, 0), new Vector3(10, 1, 0), new Vector3(10, 1, 10), new Vector3(0, 0, 10) };
+        mesh.AddPolygon(new[] { 0, 1, 2, 3 });
+        var region = NavigationServer3D.RegionCreate();
+        NavigationServer3D.RegionSetUseAsyncIterations(region, false);
+        NavigationServer3D.RegionSetMap(region, map);
+        NavigationServer3D.RegionSetNavigationMesh(region, mesh);
+        try
+        {
+            for (int i = 0; i < MaxReadyFrames && NavigationServer3D.MapGetIterationId(map) == 0; i++)
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
+            Expect("N14 slope map iterated", NavigationServer3D.MapGetIterationId(map) > 0, "");
+            var probe = new MapProbe(map);
+            var at = new Vec3(5, 1.0, 5);
+            var below = probe.ClosestOnVertical(at, 1.5);
+            Expect("N14 the vertical query lands straight below at (5, 0.5, 5)", Dist(below, new Vec3(5, 0.5, 5)) <= 0.01, Fmt(below));
+            var foot = probe.Closest(at);
+            double shift = Math.Abs(foot.X - 5);
+            Expect("N14 the 3D closest point is shifted beyond OnMeshTolM", shift > NavClamp.OnMeshTolM, $"{Fmt(foot)} shift {shift:0.####}");
+            foreach (var to in new[] { new P2(4.9, 5), new P2(5.1, 5), new P2(5, 4.9), new P2(5, 5.1) })
+            {
+                var got = NavClamp.Step(new P2(5, 5), to, 1.0, 3, probe);
+                Expect($"N14 the step to ({to.X}, {to.Z}) passes", Math.Abs(got.X - to.X) <= 1e-6 && Math.Abs(got.Z - to.Z) <= 1e-6, $"got ({got.X:0.####}, {got.Z:0.####})");
+            }
+            var far = NavClamp.Step(new P2(5, 5), new P2(4.9, 5), 3.0, 3, probe);
+            Expect("N14 2.5 above the plane the step passes", Math.Abs(far.X - 4.9) <= 1e-6 && Math.Abs(far.Z - 5) <= 1e-6, $"got ({far.X:0.####}, {far.Z:0.####})");
+            return FormattableString.Invariant($"slope N14=ok shift3d={shift:0.####}");
+        }
+        finally
+        {
+            NavigationServer3D.FreeRid(region);
+            NavigationServer3D.FreeRid(map);
+            await PhysicsFrames(host, 2);
+        }
+    }
+
+    /// <summary>The closest-point side of <see cref="IPathProvider"/> on a bare map (N14); no path queries.</summary>
+    private sealed class MapProbe(Rid map) : IPathProvider
+    {
+        public bool Ready => true;
+        public NavPath Query(Vec3 from, Vec3 to) => throw new NotSupportedException("N14 asks no paths");
+        public Vec3 Closest(Vec3 p) => V(NavigationServer3D.MapGetClosestPoint(map, new Vector3((float)p.X, (float)p.Y, (float)p.Z)));
+        public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => LocationNav.ClosestOnVertical(map, p, halfHeight);
     }
 
     /// <summary>Physics frames until <c>NavFor(slot)</c> is a map other than <paramref name="old"/>, at most 240.</summary>

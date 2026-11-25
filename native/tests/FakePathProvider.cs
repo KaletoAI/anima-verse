@@ -8,10 +8,14 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// A hand-checkable <see cref="IPathProvider"/>: the walkable area is a union of axis-aligned rectangles minus
-/// axis-aligned rectangular holes (an eroded piece of furniture), all on one height <see cref="MeshY"/>.
-/// <see cref="Closest"/> is the exact nearest walkable point in xz (the query's y is ignored, the answer carries
-/// <see cref="MeshY"/> + <see cref="ClosestYOffset"/>); <see cref="Query"/> returns a registered answer for a
-/// (from, to) pair, otherwise the straight line with both owners 0.
+/// axis-aligned rectangular holes (an eroded piece of furniture). Its height is <see cref="MeshY"/> +
+/// <see cref="Grade"/>·x (a plane sloped along x), or <see cref="HeightAt"/> when set.
+/// <see cref="ClosestOnVertical"/> is the exact nearest walkable point in xz with the mesh height there
+/// (+ <see cref="ClosestYOffset"/>), like the vertical segment query of the real map. <see cref="Closest"/> is the
+/// same on a level mesh; on a sloped one (<see cref="Grade"/> ≠ 0) it is the true 3D foot point on the plane first
+/// (x shifted by <c>g·f/(1 + g²)</c>, f = the query's height above the plane), then clamped into the area — the
+/// sideways shift of a 3D closest point the clamp must not see (final review E2, I-1). <see cref="Query"/> returns a
+/// registered answer for a (from, to) pair, otherwise the straight line with both owners 0.
 /// </summary>
 public sealed class FakePathProvider : IPathProvider
 {
@@ -23,6 +27,12 @@ public sealed class FakePathProvider : IPathProvider
     private readonly List<(Vec3 From, Vec3 To, NavPath Path)> _answers = new();
 
     public double MeshY { get; init; }
+
+    /// <summary>The mesh rises by this much per metre of x (0 = level).</summary>
+    public double Grade { get; init; }
+
+    /// <summary>The mesh height at (x, z); overrides <see cref="MeshY"/> and <see cref="Grade"/> (not used by the 3D foot point).</summary>
+    public Func<double, double, double>? HeightAt { get; init; }
 
     /// <summary>Added to every <see cref="Closest"/> answer's y (a mesh on another storey).</summary>
     public double ClosestYOffset { get; init; }
@@ -61,6 +71,25 @@ public sealed class FakePathProvider : IPathProvider
 
     public Vec3 Closest(Vec3 p)
     {
+        if (Grade != 0)
+        {
+            double f = p.Y - Height(p.X, p.Z);
+            p = new Vec3(p.X + Grade * f / (1 + Grade * Grade), p.Y, p.Z);
+        }
+        var (x, z) = ClosestXz(p);
+        return new Vec3(x, Height(x, z) + ClosestYOffset, z);
+    }
+
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight)
+    {
+        var (x, z) = ClosestXz(p);
+        return new Vec3(x, Height(x, z) + ClosestYOffset, z);
+    }
+
+    private double Height(double x, double z) => HeightAt is { } h ? h(x, z) : MeshY + Grade * x;
+
+    private (double X, double Z) ClosestXz(Vec3 p)
+    {
         var candidates = new List<(double X, double Z)>();
         foreach (var r in _mesh)
             candidates.Add((Math.Clamp(p.X, r.X0, r.X1), Math.Clamp(p.Z, r.Z0, r.Z1)));
@@ -80,7 +109,7 @@ public sealed class FakePathProvider : IPathProvider
             double d = Sq(x - p.X) + Sq(z - p.Z);
             if (d < best) { best = d; bx = x; bz = z; }
         }
-        return new Vec3(bx, MeshY + ClosestYOffset, bz);
+        return (bx, bz);
     }
 
     private bool Walkable(double x, double z)

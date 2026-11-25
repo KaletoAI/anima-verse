@@ -1886,6 +1886,14 @@ for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
   wait); `SetLinkEnabled(65536, true)` on the enabled stairs → false.
 - **N8** `Free()` → after two physics frames (measured: in the same frame the server still counts the old map)
   `GetProcessInfo(ActiveMaps)` is back to its value before the bake.
+- **N14** (final review E2, I-1; `NavCheck.SlopeAsync`, a map of its own, not the nav world) one quad x 0…10, z 0…10 with
+  y = 0.1·x (corners y 0 at x 0, y 1 at x 10) — the shape a follow-ground storey gets when the 2D bake leaves few large
+  polygons over uneven terrain. Avatar at (5, 1.0, 5), f = 0.5 above the plane: `ClosestOnVertical(p, 1.5)` =
+  `MapGetClosestPointToSegment((5, 2.5, 5), (5, −0.5, 5))` pierces the quad at (5, 0.5, 5) (± 0.01); `MapGetClosestPoint`
+  is the 3D foot point, x shifted by g·f/(1 + g²) = 0.1·0.5/1.01 = 0.0495 > `OnMeshTolM` 0.02 (measured 0.0495 — the old 3D
+  rule saw the avatar off the mesh). `NavClamp.Step` (storey 3) passes the steps to (4.9, 5), (5.1, 5), (5, 4.9), (5, 5.1)
+  unchanged; at y 3.0 (2.5 above the plane, outside the band ± 1.5) neither point is on the storey's mesh and the step to
+  (4.9, 5) passes too (the clamp never holds an avatar that is off its storey's mesh).
 
 **`--check nav`, world part (Task 4, `World/WorldBuilder.Nav.cs`):** the same scene as a world — `new FixtureSource(nav/)`,
 `BuildAsync(world, "Navhaus")` — so the slot turns near on the real residency path (`UpResident`, right after
@@ -1965,6 +1973,13 @@ the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks (−sin 0, −cos 0) 
 - **A7** keys `w` at 1/60 from (97, −3): the step lead max(3.4/60, `MinLead` 0.15) = 0.15 m < the erosion 0.25 m. The avatar passes
   T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
   `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
+- **A8** (final review E2, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the footprint → planner case 2:
+  the path to T1's outer point (97, −4.35), then straight north to (97, 6) — back through T1 into `r-a`, where the eroded
+  armchair (x 96.35…97.65, z −2.65…−1.35) and behind it W2 (eroded z 3.65) hold the clamped avatar. Held 2 s
+  (`NavRoute.StuckSeconds`) → Replan from `r-a` (out through T1 again) → held again → Abort, because the replanned route
+  takes the stuck count over (`NavRoute(plan, StuckCount)`). One cycle at dt 0.25: ≤ 8 m at 3.4 m/s (≤ 10 frames) + 8 stuck
+  frames → the walk ends within 120 frames with `NavRoute` and `Route` null, at least two route instances seen, the avatar
+  never near z 6 (measured 29 frames, 2 routes). Before the fix every replan started at count 0 and the walk never ended.
 
 **O1 the F9 overlay (Task 7, `NavCheck.OverlayAsync`, run in the avatar world right after the first navigation is swapped in;
 `loc-nav` is the open location).** `NavOverlayVisible = true` → one `NavOverlay` node, visible, one `ArrayMesh` of three
