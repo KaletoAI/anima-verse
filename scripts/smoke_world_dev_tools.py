@@ -1626,6 +1626,14 @@ res = wt.run_tool(w1, "create_character",
                             "outfits": []}})
 check("(al) human-default with an empty outfit list -> ok (nothing dropped)",
       res.ok and character_row_exists("Demo Plain") and "dropped" not in res.line, res)
+res = wt.run_tool(w1, "create_character",
+                  {"data": {"character_name": "Demo Full",
+                            "outfits": [{"name": "Daily"}]}})
+# No template given -> human-roleplay (the full NPC template, it has the outfit
+# system), so the outfit is not refused.
+check("(al) no template -> human-roleplay, outfits accepted",
+      res.ok and get_character_profile("Demo Full").get("template") == "human-roleplay"
+      and "no outfit system" not in res.line, res)
 res = wt.run_tool(w1, "update_character",
                   {"name": "Demo Plain", "patch": {"outfits": [{"name": "Daily"}]}})
 check("(al) update_character outfits on human-default -> refused 'no outfit system'",
@@ -1644,8 +1652,9 @@ check("(al) manual_characters lists the templates with/without outfits",
       res.ok and "- `human-default` (Human Standard) — no outfits" in res.line
       and "- `human-roleplay` (" in res.line and "— outfits" in res.line, res.line[:600])
 rep = wu.undo(run21)
-check("(al) undo complete, Demo Plain gone",
-      rep["complete"] and not character_row_exists("Demo Plain"), rep)
+check("(al) undo complete, Demo Plain and Demo Full gone",
+      rep["complete"] and not character_row_exists("Demo Plain")
+      and not character_row_exists("Demo Full"), rep)
 wr.set_status(run21, "rolled_back")
 
 print("run 22 (delete + re-create the same name: preview equals undo)")

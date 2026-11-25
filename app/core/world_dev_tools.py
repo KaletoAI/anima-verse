@@ -1617,7 +1617,9 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
                                   f"data.{key}) — send it once")
             draft[key] = copy.deepcopy(args[arg])
     raw_name = _str(draft, "character_name", required=True)
-    template = _str(draft, "template") or "human-default"
+    # No template given = the full NPC template; human-default is a minimal
+    # template (no memory, relationships or outfits) and only on request.
+    template = _str(draft, "template") or "human-roleplay"
     tmpl = get_template(template)
     if tmpl is None:
         raise ToolRefusal(f"no character template {template!r}")

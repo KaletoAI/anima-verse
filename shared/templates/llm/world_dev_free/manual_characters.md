@@ -11,7 +11,7 @@ the field names a character has; `find_characters{query?, location?}` finds them
 - `name` (or `character_name`) — required. Letters of any script, digits, single spaces, `-`,
   `'`, `.` and `_` (not first); no leading/trailing space or period; at most 60 characters.
   A name that exists already is refused — use `update_character`.
-- `template` — one of the offered character templates; default `human-default`.
+- `template` — one of the offered character templates; default `human-roleplay`.
   For a real NPC — one that remembers, has relationships, thoughts, a soul and clothing — use
   `human-roleplay`. `human-default` is a MINIMAL template: no memory, no relationships, no
   clothing (no outfit system, no outfit field). Only a template WITH outfits takes `outfits` —
