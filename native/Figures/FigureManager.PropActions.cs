@@ -29,24 +29,6 @@ public partial class FigureManager
         f.Route=null; f.DropTravelLine();
         f.SetHidden(false);
     }
-    private bool AdoptExactPropRoute(Figure fig,CharacterRow row)
-    {
-        JsonObject? path=null;
-        if(row.Name!=AvatarName && row.LocalApproach is { } local && PropActionMotion.Text(local["room_id"])==row.RoomId) path=local;
-        if(path?["waypoints"] is not JsonArray { Count:>=2 } wp || path["progress_m"] is null) return false;
-        string key="prop|"+PropActionMotion.Text(path["journey_id"])+"|"+wp.ToJsonString();
-        var points=wp.Select(p=>(X:PropActionMotion.Number(p![0]),Z:PropActionMotion.Number(p[1]))).ToArray();
-        if(fig.Route is not { } route || route.Key!=key)
-            fig.Route=route=new JourneyRoute { Key=key,Points=points,TotalM=TravelPath.PolylineLength(points),Stamp=-1 };
-        if(route.Stamp!=Stats.Polls) {
-            route.ExactPath=(JsonObject)path.DeepClone(); route.ReceivedAt=_mapAppliedClock-_ageAtAppliedS; route.Stamp=Stats.Polls;
-            route.Paces=(path["paces_m_s_real"] as JsonArray)?.Select(p=>p?.GetValue<double>()).ToArray();
-            route.ShownM=route.TargetM=PropActionMotion.Number(path["progress_m"]);
-            if(PropActionMotion.Number(path["starts_in_s"])>_clock-route.ReceivedAt
-                && row.ActivityAnimation!=FigureClips.PoseKind("standing",fig.Poses)) route.DepartureClip=row.ActivityAnimation;
-        }
-        fig.Waypoints.Clear(); fig.Settle=null; fig.Reckon=null; return true;
-    }
     private bool AdoptPropEntry(Figure fig,FigurePlan plan)
     {
         if(!_rowByName.TryGetValue(fig.CharacterName,out var row)) return false;
@@ -110,49 +92,5 @@ public partial class FigureManager
         bool ready=fig.PlayPropEntry(spec,PropActionMotion.EntryPhase(spec,_clock-entry.ReceivedAt));
         if(!ready && !entry.Failed) (PropEntryError ?? _log).Invoke($"{fig.CharacterName}: measured entry clip/support {PropActionMotion.Text(spec["kind"])} unavailable");
         entry.Played|=ready; entry.Failed=!ready;
-    }
-    private double PropApproachFloor(Figure fig,JourneyRoute route,double x,double z)
-    {
-        // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
-        if(route.ExactPath?["floor_y"]?.GetValue<double>() is { } floor && double.IsFinite(floor)) return floor+AnimaNative.Figures.FigureGround.WalkClearanceM;
-        if(_rowByName.TryGetValue(fig.CharacterName,out var row)
-            && Slots?.Invoke().GetValueOrDefault(row.LocationId) is { } tile) {
-            var local=AnimaNative.Scene.SceneView.WorldToTile(tile.Stands.Frame,x,z);
-            if(tile.Stands.RoomStandY(row.RoomId,local.X,local.Z) is { } roomFloor) return roomFloor;
-        }
-        return RoomStandAt?.Invoke(fig.CharacterName,x,z) ?? GroundY(x,z);
-    }
-    private void StepExactPropRoute(Figure fig,JourneyRoute route,double dt,double camDist)
-    {
-        double age=_clock-route.ReceivedAt,starts=PropActionMotion.Number(route.ExactPath!["starts_in_s"]);
-        bool waiting=starts>age;
-        if(route.DepartureClip.Length>0 && !route.DepartureStarted) {
-            double rootY=fig.Position.Y,goalY=PropApproachFloor(fig,route,fig.Position.X,fig.Position.Z);
-            route.DepartureStarted=fig.PlayDeparture(route.DepartureClip);
-            if(route.DepartureStarted) { fig.Face=null; fig.Lean=null; fig.SurfaceGroup="ground"; fig.ApplyRotation(); }
-            if(route.DepartureStarted && fig.BeginBridgeLift(rootY-goalY))
-                fig.Position=new(fig.Position.X,(float)goalY,fig.Position.Z);
-        }
-        if(!fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig))
-            route.ShownM=PropActionMotion.ProjectApproachM(route.Points,(fig.Position.X,fig.Position.Z));
-        if(waiting || (route.DepartureStarted && fig.Bridging)) {
-            if(route.DepartureClip.Length==0 || route.DepartureStarted) fig.Play(FigureClips.PoseKind("standing",fig.Poses));
-            fig.SecondaryFrozen=WorldFrozen; fig.UpdateFigure(dt); fig.Portrait?.Tick(dt,camDist,false);
-            return;
-        }
-        var before=fig.Position;
-        var paces=route.Paces;
-        route.TargetM=TravelPath.AdvanceAlongPaces(route.Points,paces,PropActionMotion.Number(route.ExactPath!["progress_m"]),
-            Math.Max(0,_clock-route.ReceivedAt-Math.Max(0,PropActionMotion.Number(route.ExactPath["starts_in_s"]))));
-        var point=PropActionMotion.LocalApproachPoint(route.ExactPath!,_clock-route.ReceivedAt);
-        route.ShownM=route.TargetM;
-        fig.Position=new((float)point.X,(float)PropApproachFloor(fig,route,point.X,point.Z),(float)point.Z); fig.Target=fig.Position;
-        // The walking request opens its bridge even while that bridge forbids the first step.
-        bool moving=double.Hypot(point.X-before.X,point.Z-before.Z)>1e-6;
-        if(double.Hypot(point.X-before.X,point.Z-before.Z)>1e-6) fig.FaceTowards(fig.Position-before);
-        UpdateTravelLine(fig);
-        fig.SetMotion(moving,false,FigureClips.WalkRun);
-        fig.Play(FigureClips.PoseKind(moving ? "walking" : "standing",fig.Poses));
-        fig.SecondaryFrozen=WorldFrozen; fig.UpdateFigure(dt); fig.Portrait?.Tick(dt,camDist,moving);
     }
 }

@@ -131,13 +131,18 @@ public static partial class PropActionsCheck
             Is("terminal releases all local gates",mgr.OwnPropMotion is null && !mgr.ServerDriven && !steering.PropActionDriven && !steering.PropPreparationPending && !position.Channel.ReportsPaused);
 
             // A pair initiator and a reloaded owner receive their own plan through current, before any world poll.
+            int observed=0;
             foreach(string id in new[]{"pair-state","reload-state"}) {
                 var plan=Motion(id); source.StateOverride=RunState(plan); source.MapOverride=Read("worldmap_pair.json");
                 await offers.PropActions!.RefreshAsync(); Step(.5);
                 Near(id+" advances from private plan",avatar.Position.X,-2.5);
                 var npc=mgr.Figures["fixture-npc"];
-                Is(id+" observer retains local_approach",npc.Route?.ExactPath is not null);
-                Near(id+" observer route",npc.Position.X,4.5);
+                // Plan E3 Task 5: the observed NPC plays its public walk order (straight, 1 m/s from x 4 towards 5.5). The
+                // second poll repeats the same id + revision, a no-op: the walk goes on through the avatar's reload,
+                // 0.5 s per pass → x 4.5, then 5.0.
+                observed++;
+                Is(id+" observer plays its order",mgr.HasLiveOrder("fixture-npc") && mgr.OrderPlayerOf("fixture-npc")?.State==AnimaNative.Orders.OrderState.Walk);
+                Near(id+" observer walk",npc.Position.X,4+.5*observed);
                 await End(plan);
             }
             var accepted=Motion("respond"); await Start(accepted,respond:true); Step(.5); Near("respond answer starts own walk",avatar.Position.X,-2.5); await End(accepted);

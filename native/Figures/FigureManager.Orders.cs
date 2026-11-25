@@ -1,0 +1,399 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using AnimaNative.Api;
+using AnimaNative.Nav;
+using AnimaNative.Orders;
+using AnimaNative.Overview;
+using Godot;
+
+namespace AnimaNative.Figures;
+
+/// <summary>
+/// Plan E3 Task 5: the bridge between the motion orders (§ A11b) and the NPC figures. Every NPC that appears in an
+/// order's <c>actors</c> gets one <see cref="OrderPlayer"/>; the worldmap rows (field <c>order</c>, root
+/// <c>motion_now</c>/<c>order_seq</c>) and the push topic <c>orders</c> (<see cref="PullOrdersAsync"/>) feed it through
+/// <see cref="AdoptOrders"/>. The player owns the figure from <c>exit</c> through <c>walk</c> and <c>entry</c> up to the
+/// loop's start pose (<see cref="TickOrder"/>, the first branch of <c>StepFigure</c>); from <c>loop_started</c> on the
+/// order only means "no re-placement" (decision 18): pose, pair clip, solo scene clock, finale and phase pose come from
+/// the row as before. A row without <c>order</c> ends a server order covered by the root <c>order_seq</c> with a
+/// <see cref="OrderEndBlendS"/> blend into the rest placement (decision 6). The avatar is skipped (Task 6).
+/// </summary>
+public partial class FigureManager
+{
+    /// <summary>The blend from an ended order into the row's rest placement (decision 6).</summary>
+    public const double OrderEndBlendS = 0.3;
+
+    private readonly Dictionary<string, OrderPlayer> _orderPlayers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (Order Order, double MotionNow, double At)> _parkedOrders = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (Vector3 From, double At)> _orderBlends = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _orderLoopShown = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OrderState> _orderShownState = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _orderExitY = new(StringComparer.Ordinal);
+    private long _orderSeqSeen;
+    private Task? _ordersPull;
+    private bool _ordersPullAgain;
+
+    /// <summary>The navigation of a location (id → map; null = none yet: the player walks straight).</summary>
+    public Func<string, IPathProvider?>? NavOf { get; set; }
+
+    /// <summary>An NPC's order reached its access (event <c>arrived_access</c>).</summary>
+    public event Action<string, Order>? OrderArrivedAtAccess;
+
+    /// <summary>Every frame the bridge shows of a live order (the check records the states with it).</summary>
+    public event Action<string, OrderFrame>? OrderFrameShown;
+
+    /// <summary>The highest order <c>seq</c> seen (adopted, <c>/play/orders</c> or the worldmap's <c>order_seq</c>).</summary>
+    public long OrderSeqSeen => _orderSeqSeen;
+
+    public OrderPlayer? OrderPlayerOf(string name) => _orderPlayers.GetValueOrDefault(name);
+
+    /// <summary>The figure plays an order that is not over (Idle/Abort are over).</summary>
+    public bool HasLiveOrder(string name)
+        => _orderPlayers.TryGetValue(name, out var p) && p.Current is not null && p.State is not (OrderState.Idle or OrderState.Abort);
+
+    /// <summary>The order (or its end blend) owns the figure's place: <see cref="ApplyPlan"/> never re-places it (spec 2).</summary>
+    private bool HoldsOrderPlacement(Figure fig)
+        => !SkipsOrders(fig.CharacterName) && (HasLiveOrder(fig.CharacterName) || _orderBlends.ContainsKey(fig.CharacterName));
+
+    private bool SkipsOrders(string name) => name == AvatarName || IsPlayerDriven(name);
+
+    /// <summary>
+    /// Hands the orders to the players of their NPC actors. <paramref name="motionNow"/> is the server's motion clock the
+    /// orders were read at; the client clock is <see cref="Clock"/>. An order of a location that is not mounted (or of a
+    /// figure not drawn yet) is parked and accepted at its mount with the entry rule (lag counted from the park).
+    /// </summary>
+    public void AdoptOrders(IEnumerable<Order> orders, double motionNow)
+    {
+        foreach (var order in orders)
+        {
+            _orderSeqSeen = Math.Max(_orderSeqSeen, order.Seq);
+            foreach (var actor in order.Actors)
+            {
+                string name = actor.Name;
+                if (name.Length == 0 || SkipsOrders(name)) continue;
+                if (!_figures.TryGetValue(name, out var fig) || !Mounted(order.LocationId))
+                {
+                    if (!_parkedOrders.TryGetValue(name, out var parked) || Newer(order, parked.Order))
+                        _parkedOrders[name] = (order, motionNow, _clock);
+                    continue;
+                }
+                if (_parkedOrders.TryGetValue(name, out var old) && !Newer(old.Order, order)) _parkedOrders.Remove(name);
+                AcceptOrder(fig, order, motionNow);
+            }
+        }
+    }
+
+    private static bool Newer(Order a, Order b) => a.Seq != b.Seq ? a.Seq > b.Seq : a.Revision > b.Revision;
+
+    private bool Mounted(string locationId)
+        => locationId.Length == 0 || Slots is null || Slots.Invoke().ContainsKey(locationId);
+
+    private void AcceptOrder(Figure fig, Order order, double motionNow)
+    {
+        string name = fig.CharacterName;
+        var player = PlayerFor(name);
+        string? before = player.Current?.Id;
+        if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return;
+        if (before == order.Id) return;   // a revision (or the adoption of a local order): the figure keeps going
+        _orderBlends.Remove(name);
+        _orderLoopShown.Remove(name);
+        _orderExitY[name] = fig.Position.Y;
+        fig.Route = null; fig.Reckon = null; fig.Settle = null; fig.Ride = null;
+        fig.Waypoints.Clear(); fig.DropTravelLine();
+        fig.PropEntry = null; fig.PropEntryBlocked = false; fig.PropCommitPending = false; fig.PropCommitKey = "";
+        fig.Travelling = false;
+    }
+
+    private OrderPlayer PlayerFor(string name)
+    {
+        if (_orderPlayers.TryGetValue(name, out var player)) return player;
+        var rides = new Dictionary<string, ILinkRide>(StringComparer.Ordinal)
+        {
+            ["stairs"] = new NpcStairsRide(() => _orderPlayers.TryGetValue(name, out var p) && p.Current is { } o
+                && Slots?.Invoke().GetValueOrDefault(o.LocationId) is { } tile ? tile.Places.Stairs : Array.Empty<AnimaNative.Scene.StairLink>()),
+            ["lift"] = new NpcLiftRide(),
+        };
+        return _orderPlayers[name] = new OrderPlayer(name, new OrderClipDurations(this, name), rides);
+    }
+
+    /// <summary>
+    /// The order part of one worldmap payload: the rows' orders on the root <c>motion_now</c>; a row WITHOUT one ends a
+    /// server order its root <c>order_seq</c> covers (decision 6; a local order or an older row changes nothing); the
+    /// world freeze reaches every player.
+    /// </summary>
+    private void AdoptRowOrders(JsonElement root)
+    {
+        double? motionNow = root.TryGetProperty("motion_now", out var mn) && mn.ValueKind == JsonValueKind.Number ? mn.GetDouble() : null;
+        long orderSeq = root.TryGetProperty("order_seq", out var os) && os.ValueKind == JsonValueKind.Number && os.TryGetInt64(out var sv) ? sv : 0;
+        var orders = _rows.Where(r => r.Order is not null).Select(r => r.Order!).ToList();
+        if (motionNow is { } now) AdoptOrders(orders, now);
+        _orderSeqSeen = Math.Max(_orderSeqSeen, orderSeq);
+        var named = orders.SelectMany(o => o.Actors.Select(a => a.Name)).ToHashSet(StringComparer.Ordinal);
+        foreach (var row in _rows)
+        {
+            if (row.Order is not null || named.Contains(row.Name) || SkipsOrders(row.Name)) continue;
+            if (_orderPlayers.TryGetValue(row.Name, out var player)) player.RowWithoutOrder(orderSeq, _clock);
+            if (_parkedOrders.TryGetValue(row.Name, out var parked) && !parked.Order.IsLocal && orderSeq >= parked.Order.Seq)
+                _parkedOrders.Remove(row.Name);
+        }
+        foreach (var player in _orderPlayers.Values) player.SetFrozen(WorldFrozen, _clock);
+    }
+
+    /// <summary>
+    /// The push topic <c>orders</c>: <c>GET /play/orders?since=</c> the highest seq seen, adopted on the answer's
+    /// <c>motion_now</c>. One request at a time; a push during one asks once more afterwards. A source without the
+    /// endpoint (404) changes nothing.
+    /// </summary>
+    public Task PullOrdersAsync()
+    {
+        if (_ordersPull is { IsCompleted: false })
+        {
+            _ordersPullAgain = true;
+            return _ordersPull;
+        }
+        return _ordersPull = PullLoopAsync();
+    }
+
+    private async Task PullLoopAsync()
+    {
+        do
+        {
+            _ordersPullAgain = false;
+            try
+            {
+                using var doc = await _source.GetOrdersAsync(_orderSeqSeen);
+                var payload = OrdersPayload.Parse(doc.RootElement);
+                if (payload.MotionNow is { } now) AdoptOrders(payload.Orders, now);
+                _orderSeqSeen = Math.Max(_orderSeqSeen, payload.Seq);
+            }
+            catch (Exception e)
+            {
+                _log($"[orders] pull failed: {e.Message}");
+                return;
+            }
+        } while (_ordersPullAgain);
+    }
+
+    private void ForgetOrders(string name)
+    {
+        _orderPlayers.Remove(name);
+        _parkedOrders.Remove(name);
+        _orderBlends.Remove(name);
+        _orderLoopShown.Remove(name);
+        _orderShownState.Remove(name);
+        _orderExitY.Remove(name);
+    }
+
+    /// <summary>
+    /// The first branch of <c>StepFigure</c>: one frame of the figure's order. True when the order drew the figure
+    /// (exit, walk, waiting at the access, entry, the end blend); false from the loop on (decision 18: the row's
+    /// branches pose the figure, the order only keeps it on its slot) and without a live order.
+    /// </summary>
+    private bool TickOrder(Figure fig, double dt, double camDist)
+    {
+        string name = fig.CharacterName;
+        if (SkipsOrders(name)) return false;
+        if (_parkedOrders.TryGetValue(name, out var parked) && Mounted(parked.Order.LocationId))
+        {
+            _parkedOrders.Remove(name);
+            AcceptOrder(fig, parked.Order, parked.MotionNow + (_clock - parked.At));
+        }
+        if (_orderBlends.TryGetValue(name, out var blend)) return TickOrderBlend(fig, blend, dt, camDist);
+        if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is not { } order) return false;
+        var frame = player.Tick(_clock, NavOf?.Invoke(order.LocationId));
+        bool shownBefore = _orderShownState.TryGetValue(name, out var wasState);
+        if (frame.Events.Count > 0 || frame.State != OrderState.Idle || (shownBefore && wasState != OrderState.Idle))
+        {
+            _orderShownState[name] = frame.State;
+            OrderFrameShown?.Invoke(name, frame);
+        }
+        foreach (var e in frame.Events)
+        {
+            if (e == "arrived_access") OrderArrivedAtAccess?.Invoke(name, order);
+            else if (e == "ended") _orderBlends[name] = (fig.Position, _clock);
+            else if (e == "aborted")
+            {
+                fig.FinishPropEntry(FigureClips.PoseKind("standing", fig.Poses));
+                fig.Position = new Vector3((float)frame.Position.X, (float)OrderFloorY(fig, frame.Position), (float)frame.Position.Z);
+                fig.Target = fig.Position;
+            }
+        }
+        if (_orderBlends.TryGetValue(name, out var ended)) return TickOrderBlend(fig, ended, dt, camDist);
+        switch (frame.State)
+        {
+            case OrderState.Idle:
+            case OrderState.Abort:
+                return false;
+            case OrderState.Loop:
+                if (!_orderLoopShown.TryGetValue(name, out var shownId) || shownId != order.Id) ShowLoopStart(fig, player, frame);
+                return false;
+            case OrderState.Frozen:
+                fig.SecondaryFrozen = true;
+                fig.UpdateFigure(0);
+                return true;
+        }
+        DrawOrderFrame(fig, player, frame, dt, camDist);
+        return true;
+    }
+
+    /// <summary>Exit, walk, the wait at the access and the entry: the root from the frame, the foot height from the floor.</summary>
+    private void DrawOrderFrame(Figure fig, OrderPlayer player, OrderFrame frame, double dt, double camDist)
+    {
+        string name = fig.CharacterName;
+        var p = frame.Position;
+        var before = fig.Position;
+        bool moving = false;
+        var rules = Clips.PoseRules;
+        switch (frame.State)
+        {
+            case OrderState.Exit:
+            {
+                double floor = OrderFloorY(fig, p);
+                fig.Position = new Vector3((float)p.X, (float)floor, (float)p.Z);
+                string clip = rules.ExitKind(frame.PoseKey ?? "") ?? "";
+                double dur = PhaseSeconds(name, player, "exit");
+                double startLift = (_orderExitY.TryGetValue(name, out var y0) ? y0 : floor) - floor;
+                if (clip.Length == 0 || !fig.PlayOwnPropDeparture(clip, dur > 0 ? frame.PhaseTime / dur : 1, startLift))
+                    fig.Play(FigureClips.PoseKind("standing", fig.Poses));
+                break;
+            }
+            case OrderState.Walk:
+            case OrderState.WaitAccess:
+            {
+                // The exit's stand-up bridge is over once the walk runs: let it go into the standing pose.
+                if (fig.Bridging) fig.FinishPropEntry(FigureClips.PoseKind("standing", fig.Poses));
+                fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
+                double dx = p.X - before.X, dz = p.Z - before.Z;
+                moving = frame.State == OrderState.Walk && dx * dx + dz * dz > 1e-12;
+                var yaw = frame.YawDeg * Math.PI / 180;
+                fig.FaceTowards(new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)));
+                fig.SetMotion(moving, false, FigureClips.WalkRun);
+                fig.Play(FigureClips.PoseKind(moving ? "walking" : "standing", fig.Poses));
+                break;
+            }
+            case OrderState.Entry:
+            {
+                fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
+                var actor = player.Current!.ActorNamed(name)!;
+                string clip = rules.EntryKind(frame.PoseKey ?? "") ?? "";
+                double dur = PhaseSeconds(name, player, "entry");
+                var access = actor.Access ?? new OrderPoint(p.X, p.Y, p.Z, frame.YawDeg);
+                var anchor = actor.Anchor ?? access;
+                JsonObject Point(OrderPoint q) => new() { ["x"] = q.X, ["y"] = q.Y, ["z"] = q.Z, ["yaw"] = q.YawDeg };
+                var spec = new JsonObject
+                {
+                    ["kind"] = clip, ["access"] = Point(access), ["anchor"] = Point(anchor), ["root_offset"] = actor.RootOffset,
+                    ["height_cm"] = actor.HeightCm ?? fig.HeightM * 100, ["clock_rate"] = WorldFrozen ? 0 : 1,
+                };
+                if (clip.Length == 0 || !fig.PlayPropEntry(spec, dur > 0 ? frame.PhaseTime / dur : 1))
+                {
+                    // Decision 14: no clip in the loaded model — the phase is a held pose of its nominal length.
+                    var yaw = frame.YawDeg * Math.PI / 180;
+                    fig.FaceTowards(new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)));
+                    fig.Play(FigureClips.PoseKind("standing", fig.Poses));
+                }
+                break;
+            }
+        }
+        fig.Target = fig.Position;
+        fig.Waypoints.Clear();
+        if (_lastPlans.TryGetValue(name, out var plan)) fig.SetHidden(plan.Hidden);
+        fig.SecondaryFrozen = WorldFrozen;
+        fig.UpdateFigure(dt);
+        fig.Portrait?.Tick(dt, camDist, moving);
+    }
+
+    /// <summary>
+    /// <c>loop_started</c>: the figure on the order's slot (the anchor), facing its yaw; the entry bridge is let go — into
+    /// the pair's half when the row holds one, else into the row's pose. From here the row's branches play it.
+    /// </summary>
+    private void ShowLoopStart(Figure fig, OrderPlayer player, OrderFrame frame)
+    {
+        string name = fig.CharacterName;
+        _orderLoopShown[name] = player.Current!.Id;
+        var p = frame.Position;
+        fig.Position = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
+        fig.Target = fig.Position;
+        fig.Waypoints.Clear();
+        var yaw = frame.YawDeg * Math.PI / 180;
+        var facing = new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw));
+        fig.Face = facing;
+        fig.FaceTowards(facing, snap: true);
+        var row = _rowByName.GetValueOrDefault(name);
+        if (row?.Interaction is not null) fig.HoldPropPoseAtAnchor();
+        else if (fig.Bridging || fig.PropEntryLift != 0)
+            fig.FinishPropEntry(row is { ActivityAnimation.Length: > 0 } ? row.ActivityAnimation : FigureClips.PoseKind("standing", fig.Poses));
+    }
+
+    /// <summary>Decision 6: from where the ended order left the figure into the row's rest placement, then the rows again.</summary>
+    private bool TickOrderBlend(Figure fig, (Vector3 From, double At) blend, double dt, double camDist)
+    {
+        string name = fig.CharacterName;
+        var rest = _lastPlans.TryGetValue(name, out var plan)
+            ? new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z) : blend.From;
+        double f = Math.Clamp((_clock - blend.At) / OrderEndBlendS, 0, 1);
+        fig.Position = blend.From.Lerp(rest, (float)f);
+        fig.Target = fig.Position;
+        fig.Waypoints.Clear();
+        if (f >= 1)
+        {
+            _orderBlends.Remove(name);
+            fig.Settle = null;
+            return false;
+        }
+        fig.SecondaryFrozen = WorldFrozen;
+        fig.UpdateFigure(dt);
+        fig.Portrait?.Tick(dt, camDist, false);
+        return true;
+    }
+
+    /// <summary>The phase's real clip length (<see cref="OrderClipDurations"/>), else its nominal seconds; 0 without the step.</summary>
+    private double PhaseSeconds(string name, OrderPlayer player, string step)
+    {
+        var s = player.Current?.ActorNamed(name)?.Sequence.FirstOrDefault(q => q.Step == step);
+        if (s is null) return 0;
+        return new OrderClipDurations(this, name).Seconds(step, s.PoseKind, s.PoseKey) ?? s.NominalS;
+    }
+
+    /// <summary>
+    /// The foot height under an order frame (never the path's): the stand of the row's room at (x, z), else the room
+    /// stand callback, else the ground — the one nearest the frame's own height; a frame more than 0.5 m off every one of
+    /// them (a stair ride, an upper storey the row's room does not cover yet) keeps its own height.
+    /// </summary>
+    private double OrderFloorY(Figure fig, Vec3 p)
+    {
+        var floors = new List<double>();
+        if (_rowByName.TryGetValue(fig.CharacterName, out var row) && Slots?.Invoke().GetValueOrDefault(row.LocationId) is { } tile)
+        {
+            var local = AnimaNative.Scene.SceneView.WorldToTile(tile.Stands.Frame, p.X, p.Z);
+            if (tile.Stands.RoomStandY(row.RoomId, local.X, local.Z) is { } room) floors.Add(room);
+        }
+        if (RoomStandAt?.Invoke(fig.CharacterName, p.X, p.Z) is { } stand) floors.Add(stand);
+        floors.Add(GroundY(p.X, p.Z));
+        double best = floors.OrderBy(f => Math.Abs(f - p.Y)).First();
+        return Math.Abs(best - p.Y) <= 0.5 ? best : p.Y;
+    }
+
+    /// <summary>
+    /// <see cref="IClipDurations"/> of one figure: the entry/exit clip the pose rules name (<see cref="ClipLibrary.PoseRules"/>)
+    /// as the loaded model binds it; null (→ the nominal seconds) without a rule or without that clip.
+    /// </summary>
+    private sealed class OrderClipDurations(FigureManager manager, string name) : IClipDurations
+    {
+        public double? Seconds(string step, string poseKind, string poseKey)
+        {
+            if (!manager._figures.TryGetValue(name, out var fig)) return null;
+            string? clip = step switch
+            {
+                "exit" => manager.Clips.PoseRules.ExitKind(poseKey),
+                "entry" => manager.Clips.PoseRules.EntryKind(poseKey),
+                _ => null,
+            };
+            return clip is { Length: > 0 } && fig.HasClip(clip) ? fig.ClipSeconds(clip) : null;
+        }
+    }
+}

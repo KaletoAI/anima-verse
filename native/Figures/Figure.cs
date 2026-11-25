@@ -558,6 +558,8 @@ public partial class Figure : Node3D
 
     /// <summary>Exact action availability along this figure's set chain; finales never use a stand-in.</summary>
     public bool HasClip(string kind) => HasAction(kind);
+    /// <summary>The length of a bound clip in seconds; null when the figure has no such clip (plan E3: the order's real durations).</summary>
+    public double? ClipSeconds(string kind) => AnimOf(kind) is { Length: > 0 } a ? a.Length : null;
 
     private bool _finaleClip;
 

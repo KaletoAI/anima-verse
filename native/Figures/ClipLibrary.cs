@@ -108,6 +108,8 @@ public sealed class ClipLibrary
     public PoseClips Poses { get; private set; } = PoseClips.Default;
     /// <summary>The server's <c>transition_clips</c>, resolved: which bridge clip opens between two kinds.</summary>
     public IReadOnlyList<ClipTransition> Transitions { get; private set; } = Array.Empty<ClipTransition>();
+    /// <summary>The server's POSE rules (<c>pose_rules</c> + <c>pose_groups</c>): the entry and exit clip of an order phase (plan E3 decision 14).</summary>
+    public AnimaNative.Orders.PoseTransitions PoseRules { get; private set; } = AnimaNative.Orders.PoseTransitions.Parse(default);
     /// <summary>The committed library (empty until <see cref="LoadClipsAsync"/> is through).</summary>
     public ClipIndex<ClipSource> Index { get; private set; } = new();
     public int ClipsLoaded { get; private set; }
@@ -156,6 +158,7 @@ public sealed class ClipLibrary
         Entries.AddRange(ClipLibraryRules.ParseEntries(root));
         Poses = FigureClips.ResolveMovementPoses(root.TryGetProperty("movement_poses", out var mp) ? mp : null);
         Transitions = FigureClips.ResolveClipTransitions(root.TryGetProperty("transition_clips", out var tc) ? tc : null);
+        PoseRules = AnimaNative.Orders.PoseTransitions.Parse(root);
     }
 
     private Task? _clips;

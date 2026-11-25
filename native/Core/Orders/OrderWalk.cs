@@ -34,6 +34,8 @@ public sealed class OrderWalk
 {
     /// <summary>Half height of the vertical clamp query.</summary>
     public const double ClampHalfHeightM = 1.0;
+    /// <summary>How far a step may lie off the mesh before it counts as pushed back (float noise of the mesh edges).</summary>
+    public const double ClampNoiseM = 1e-3;
 
     private const double Eps = 1e-6;
 
@@ -157,7 +159,7 @@ public sealed class OrderWalk
             }
         }
 
-        if (!_final && Current is NavWalk w && SegmentDistance(pos, w.Points[_corner - 1], w.Points[_corner]) > OrderPlayer.ReplanDeviationM)
+        if (!_final && _corner >= 1 && Current is NavWalk w && SegmentDistance(pos, w.Points[_corner - 1], w.Points[_corner]) > OrderPlayer.ReplanDeviationM)
         {
             _stuckTime = _blockedTime = 0;
             _last = pos;
@@ -229,7 +231,9 @@ public sealed class OrderWalk
     private void Reset()
     {
         _step = 0;
-        _corner = 1;
+        // Corner 0 first: a start off the mesh walks onto the path's first point (the server counts that piece too, plan
+        // E3 Task 5, README "Orders world" — 0.10 m off the stool); on the mesh it is the start itself and costs nothing.
+        _corner = 0;
         _final = _plan.Steps.Count == 0;
     }
 
@@ -306,9 +310,14 @@ public sealed class OrderWalk
                 // Assumes a frame's step (speed · dt) stays well below OnMeshM: every corner of a navmesh path lies on
                 // the mesh, so only a short step can leave it, and a push up to OnMeshM is a correction. A step longer
                 // than that (a frame hitch) could be clamped into a gap or onto the far side of a thin hole.
+                // A step that does not take the figure further off the mesh than it already stood is not clamped: the
+                // piece from an off-mesh start onto the mesh (a seat, a stand inside a furniture's erosion) is walked at
+                // the order's speed like the server's path length counts it (plan E3 Task 5, README "Orders world"),
+                // and mesh-edge float noise (ClampNoiseM) near a corner on the boundary is no block that ends the walk early.
                 var on = clamp.ClosestOnVertical(next, ClampHalfHeightM);
                 double push = NavRoutePlanner.Horizontal(on, next);
-                if (push > Eps && push <= NavRoutePlanner.OnMeshM)
+                double off = NavRoutePlanner.Horizontal(clamp.ClosestOnVertical(p, ClampHalfHeightM), p);
+                if (push > Math.Max(off, 0) + ClampNoiseM && push <= NavRoutePlanner.OnMeshM)
                 {
                     blocked = true;
                     next = on;

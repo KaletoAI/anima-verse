@@ -3,6 +3,7 @@
 - Origin: `client3d/scripts/smoke_prop_action_motion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PropActionMotionVectorTests.cs`
 - Vectors: `shared/test-vectors/prop_action_motion.json`
+- E3 Task 5: the `localApproachPoint` cases ([1], [4]) went with the native NPC approach path they tested.
 
 ## Derivation
 
@@ -12,12 +13,6 @@
  * No expected value is sampled from production. Run:
  *   node client3d/scripts/smoke_prop_action_motion.mjs
  *
- * [1] Original ten routes: (0,0)->(2,0)->(2,3)->(5,3) has segment lengths
- * 2,3,3. Unit pace at ages 1,2,3,6 gives (1,0),(2,0),(2,1),(3,3).
- * Paces 2,1,3 consume 1+3 seconds to corner two; another .5*3 gives (3.5,3).
- * Null paces hold (0,0). Delay 2 at age 1 holds; age 5 leaves 3 seconds ->
- * (2,1). Trimmed (2,1)->(2,3)->(5,3) takes 2+1 seconds -> (3,3).
- * Age 100 exceeds length 8 -> exact endpoint (5,3).
  * [2] Entry fraction = clamp((elapsed + max(age,0)*max(rate,0))/duration,0,1).
  * Original (elapsed,duration,rate,age) values: (2,4,1,0),(1,4,1,1),
  * (1,8,2,1.5),(1,4,0,50),(3,4,1,20),(2,4,1,0) give
@@ -30,15 +25,6 @@
  * .5*.488=.244. Upper storey 3.527-.398-3=.129 -> half .0645.
  * Hips .4 overshoots .5 -> clamp to .129. Flat hips cannot realize .129
  * (null/unsupported); .398-.398=0 needs no correction (0/supported).
- * [4] Additional routes: progress 3 skips the 2 m leg, then 1 m initial +
- * 1 m timed -> (2,2). Progress exactly 2 plus 1 s on next leg -> (2,1).
- * Progress 4 on a 2 m route clamps (2,0). Negative progress/age clamp 0;
- * negative delay clamps 0, so age 1 -> (1,0). Zero-length first leg still
- * consumes a pace index: .5 s at second pace 2 -> (1,0). Null/negative pace
- * holds progress 1 -> (1,0). Missing second pace holds at (2,0). Empty
- * route -> (0,0), singleton (4,5) -> itself. Diagonal length sqrt(3²+4²)=5;
- * 1.25 s * 2 = 2.5 m, halfway -> (1.5,2). Initial progress 1 leaves 1 m
- * at pace 2 (.5 s); from age 1.5 the remaining 1 s gives (2,1).
  * [5] Negative age/rate hold 1/4=.25; elapsed -2 clamps to 0;
  * (1+1.5*2)/4=1 exactly at the end.
  * [6] Ascending hips 0->2 at 1: .5*.4=.2. Hips 1.2 before descent

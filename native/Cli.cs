@@ -71,6 +71,7 @@ namespace AnimaNative;
 ///   --check animals | --check=animals only the animals section (fixtures/animals: FBX takes, texture UV, leg chains,
 ///                               procedural gait, Task 34)
 ///   --check nav | --check=nav         only the navigation section (fixtures/nav: bake, thresholds, links, locks, plan E2 Task 3)
+///   --check orders                 NPC furniture approaches played from orders on the orders world (E3 Task 5)
 ///   --check navcompare             the nav bake measured per fixture (time, polygons, edge error; not in the full run, E2 Task 5)
 ///   --check embody                 embodied camera, first person and scene keys (Task 48)
 ///   --check minimap                the minimap state, cadence and relief over the bridge (Task 55)
@@ -252,11 +253,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "graphics" or "loginlook" or "update" or "cache" or "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio" or "resume" or "photo" or "nav" or "navcompare";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio" or "resume" or "photo" or "nav" or "navcompare" or "orders";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'graphics', 'loginlook', 'update', 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
-                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow', 'placement', 'walk', 'bridges', 'pairs', 'clips', 'secondary', 'animals', 'travel', 'residency', 'propactions', 'embody', 'minimap', 'photo', 'nav', 'navcompare' and 'audio', got '{v}'");
+                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow', 'placement', 'walk', 'bridges', 'pairs', 'clips', 'secondary', 'animals', 'travel', 'residency', 'propactions', 'embody', 'minimap', 'photo', 'nav', 'navcompare', 'orders' and 'audio', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

@@ -173,8 +173,14 @@ public static class EmbodyPositionCheck
 
             await Poll(row=> {row["travel"]=null; row["prop_action_entry"]=new JsonObject{["id"]="task57-hook"};});
             Is("B1 own public entry does not select driver",!steering.PropActionDriven && !manager.ServerDriven);
-            await Poll(row=> {row["travel"]=null; row["local_approach"]=new JsonObject{["room_id"]="r-a"};});
-            Is("B1 own public approach does not select driver",!steering.PropActionDriven && !manager.ServerDriven);
+            // Plan E3 Task 5: the own row's public order (§ A11b) is the avatar's — Task 6; the NPC bridge skips it.
+            await Poll(row=> {row["travel"]=null; row["order"]=JsonNode.Parse($$"""
+                {"order_id":"task5-own","revision":1,"seq":1,"kind":"walk","issued_motion_s":0,"eta_motion_s":1,"flip_motion_s":1,"deadline_motion_s":11,
+                 "status":"approaching","awaits":"","gait":"walk","speed_m_s":1.4,"target":{"location_id":"","room_id":"r-a","level":0,"x":0,"y":0,"z":0},
+                 "hint_route":[],"snap":false,"actors":[{"name":"{{fig.CharacterName}}","start":{"x":0,"y":0,"z":0,"yaw":0},"sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}]}]}
+                """);});
+            Is("B1 own public order does not select driver",!steering.PropActionDriven && !manager.ServerDriven && !manager.HasLiveOrder(fig.CharacterName));
+            await Poll(row=>row["order"]=null);
             controller.PropMotionOwned=()=>true;
             await Poll(row=>row["travel"]=null);
             Is("B1 private motion owns driver",steering.PropActionDriven && manager.ServerDriven);

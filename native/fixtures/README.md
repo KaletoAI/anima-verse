@@ -2034,3 +2034,63 @@ measurement of the winner, one line per fixture:
 - No expected times: the check only requires every fixture to bake and its map to become ready; the times are recorded
   in the measurement document (all four below 0.1 ms on the reference machine, against the 300 ms disk-cache threshold
   of spec 8).
+
+## Orders world (`orders/`, E3, `Check/OrderCheck.cs`, `--check orders`)
+
+Plan E3 Task 5: NPC furniture approaches played from motion orders (§ A11b) on the real navigation. The world is the
+nav world (`heightfield.json`, `locations.json`, `terrain.json`, `urls.json` copied from `nav/`) with the scene
+signature `orders-house` and one more model: the **stool** of Task 1 O1 (`id stool`, room r-b, tile-local anchor
+(1.5, −1) → world (101.5, −1), 0.5 × 0.5 × 0.45). Every figure is a portrait (`model3d.json` answers null), so every
+phase runs on its nominal seconds. `animation_clips.json` = the fallback library plus the server's pose rules
+(`@seat → standing: get-up-chair`, `walking → @lie: lie-down`; groups sitting → seat, laying → lie).
+
+| File | What it is |
+| --- | --- |
+| `worldmap.json` | root `motion_now` 100, `order_seq` 1, `game_rate` 1; **Ona Order** (r-b, row pos (101.5, −1), 168 cm, sitting) with order **O1**; **Uli Up** (r-a, (97, −1), 180 cm, no order) |
+| `worldmap_poll2.json` | the same O1 (same id, revision 1) with other position fields: row pos (102.6, 0.4), actor start (101.6, −0.8) yaw 0, access (103.0, 1.2) yaw 80 |
+| `orders.json` | `GET /play/orders`: `{orders: [O1], seq: 1, motion_now: 100}` |
+
+**O1** (`ord-o1`, prop_action, seq 1): issued 100, eta 103.696489, flip 106.096489, deadline 113.696489, approaching,
+walk at 1.4 m/s, target the bed (r-b, slot 0). Actor Ona: start (101.9, 0, −1) yaw 90, access (103.15, 0, 1.5) yaw 90,
+anchor (104, 0.5, 1.5) yaw 90, entry_mode bridge; sequence exit (seat/sitting, 1.2 s), walk, entry (lie/laying, 2.4 s),
+loop (lie/laying).
+
+**The client path of Ona.** The start (101.9, −1) lies in the stool's erosion (x 101.0 … 102.0); the walk goes onto the
+mesh at (102.0, −1): **0.10**. Then (102, −1) → Closest(access) = (103.05, 1.5) (the bed's erosion edge, 0.10 before the
+access): √(1.05² + 2.5²) = √(1.1025 + 6.25) = **2.711549** (the navmesh path's bend (102.299, −0.286) lies on that line).
+The final piece to the access: **0.10**. Total **2.911549 m** (measured 2.906, inside 0.05: the mesh's own corner sits
+at 103.0469). Chain with nominal durations: exit 1.2 + walk 2.911549 / 1.4 = 2.079678 + entry 2.4 = **5.679678 s**
+(measured 5.683 at frame step 1/60). Server flip − issued = 6.096489 → deviation **0.416811 s ≤ 1.5**.
+Client walk rule this pins (`OrderWalk`): the walk starts at the path's corner 0 (the piece from an off-mesh start is
+walked, not jumped), and a step is pushed back onto the mesh only when it lies further off the mesh than the figure
+already stood (plus 1 mm edge noise) — before that the start piece was skipped and an edge push 0.15 m before the
+access ended the walk early (chain 5.483, 0.196 s short).
+
+Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.05 m, length ± 0.05, time ± 0.1 s):
+
+- **R1** O1 from t = 0, `worldmap_poll2.json` polled at t = 1.0 / 3.0 / 5.0 (same id + revision = no-op): Exit → Walk →
+  Entry → Loop, each once; Exit from the first frame; Loop at 5.679678 ± 0.1; |5.68 − 6.096489| ≤ 1.5; Ona on the bed slot
+  (104, 1.5); a poll after the loop moves nothing (≤ 0.1 mm).
+- **R1b** the row without order (`order_seq` 0), the `orders` topic pulled twice: `since` 0, then 1 (the answer's seq);
+  the same order twice starts nothing again.
+- **R3** `motion_now` 102.5 (lag 2.5 > 2): the first frame is Walk at (2.5 − 1.2) · 1.4 = **1.82 m** walked.
+- **R3b** status active: Loop on the slot (104, 1.5) at once.
+- **R4** revision 2 at t = 2.0 (+30 s on every time, `motion_now` 102): states stay Exit → Walk, IssuedLocal unchanged.
+  At t = 3.0 the new id `ord-cancel` (kind cancel): Abort at 3.0 (± 2 frames), then Idle.
+- **R5** awaits reaction, no flip: WaitAccess at the access (103.15, 1.5) (reached at 5.68 − 2.4 = 3.28 < 4); the revision
+  without awaits at t = 4.0 starts the entry at 4.0 (± 2 frames).
+- **R9** the three fixture orders: every access ≤ 0.4 m from the mesh (Ona's: 0.103),
+  the final piece Closest(access) → access crosses no wall of storey 0, every link end within the map's connection radius.
+- **R10** Ona + Uli in one active order (Uli's slot (104, 0.5, 1.0)), both rows with the pair `pair-1` (clip_s 2.5): both
+  Loop, both adopt `pair-1` near clip_s 2.5 (± 0.6: half a second of play), both on their slots; a poll with other row
+  positions moves neither (≤ 0.1 mm).
+- **R11** active (revision 1) then revision 2 with a `phase` step (seat/sitting) and the row's activity sitting: still the
+  one Loop, PhasePoseKind seat, figure activity sitting, IssuedLocal unchanged, on the slot.
+- **R12** the same phase-2 order entered late (`motion_now` 130): Loop at once with the phase-2 pose.
+- **R13** active O1, then a row without order: with `order_seq` 0 (< 1, **R13b**) nothing ends; with `order_seq` 1 the order
+  ends and the figure blends in 0.3 s from the slot (104, 1.5) to the row's rest (103.6, 1.5): the first frame still at
+  x 104 ± 0.05, from t + 0.3 on at (103.6, 1.5).
+- **R13c** a local order `local:1` walks Uli (97, −1) → (99, 0): √(2² + 1²) = 2.236 m, 1.597 s; a row without order
+  (`order_seq` 9) at t = 0.5 does not end it; arrival at (99, 0).
+- **R14** the pair, then a follow order `ord-follow` for Uli alone (sequence loop only): no exit for Uli; a cancel for Ona
+  alone (exit lie/laying 1.0 s, stand (103.05, 1.5)) plays exactly one exit, for Ona.

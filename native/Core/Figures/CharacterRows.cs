@@ -24,8 +24,13 @@ public sealed record CharacterRow(
     public IReadOnlyList<CharacterBadge> Badges { get; init; } = Array.Empty<CharacterBadge>();
 
     /// <summary>Task 57: public geometry only; absent projections clear on the next poll.</summary>
-    public JsonObject? LocalApproach { get; init; }
     public JsonObject? PropActionEntry { get; init; }
+    /// <summary>
+    /// <c>order</c> (§ A11b): the order this figure plays (plan E3); null when the row carries none or it does not parse
+    /// (<see cref="AnimaNative.Orders.OrderParse.From"/>). A row without one ends a server order only through the root
+    /// <c>order_seq</c> (decision 6).
+    /// </summary>
+    public AnimaNative.Orders.Order? Order { get; init; }
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
     /// <summary>Optional authoritative facing in radians; older servers do not publish it.</summary>
     public double? Yaw { get; init; }
@@ -126,8 +131,8 @@ public sealed record CharacterRow(
         {
             Yaw = Json.NumOrNull(c, "yaw"),
             Badges = ParseBadges(c),
-            LocalApproach = c.TryGetProperty("local_approach",out var la) && la.ValueKind==JsonValueKind.Object ? JsonNode.Parse(la.GetRawText())!.AsObject() : null,
             PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
+            Order = c.TryGetProperty("order", out var od) ? AnimaNative.Orders.OrderParse.From(od) : null,
             ActivityAnimation = Json.Str(c, "activity_animation"),
             AnimationSets = sets,
             ModelRev = rev,

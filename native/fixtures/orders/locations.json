@@ -1,0 +1,24 @@
+{
+ "locations": [
+  {
+   "id": "loc-nav",
+   "name": "Navhaus",
+   "terrain": null,
+   "map3d": null,
+   "rooms": [
+    {
+     "id": "r-a",
+     "name": "West"
+    },
+    {
+     "id": "r-b",
+     "name": "East"
+    },
+    {
+     "id": "r-up",
+     "name": "Loft"
+    }
+   ]
+  }
+ ]
+}

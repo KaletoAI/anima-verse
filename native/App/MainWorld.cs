@@ -159,6 +159,8 @@ public partial class Main : Node3D
                 FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,
                 // Task 29: the room placement reads every mounted location's view state and stands.
                 Slots = () => builder.Slots,
+                // Plan E3 Task 5: an NPC order walks on its location's navigation mesh.
+                NavOf = loc => builder.Slots.TryGetValue(loc, out var navSlot) ? builder.NavFor(navSlot) : null,
                 PrepareAvatarPlacement = map => builder.PrepareAvatarArrival(map),
                 CamDist = () => _camera is { } c && IsInstanceValid(c) ? c.Distance : FigureManager.DefaultCamDist,
             };

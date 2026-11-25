@@ -379,7 +379,9 @@ public partial class FigureManager : Node3D
             _figures[gone].QueueFree();
             _figures.Remove(gone);
             _shown.Remove(gone);
+            ForgetOrders(gone);
         }
+        AdoptRowOrders(root);
         UpdateStats();
         PositionMapApplied?.Invoke(root, _source.ReceiptOf(root)?.PolledAt ?? _source.MonotonicMs);
         return Task.WhenAll(loads);
@@ -448,6 +450,15 @@ public partial class FigureManager : Node3D
         // Seed a new node before pair adoption captures the position it will first render at.
         if (fresh) fig.SnapTo(new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z));
         AdoptInteraction(fig);
+        // Plan E3 decision 18: an NPC playing an order (or blending out of one) is never re-placed by a poll; the row
+        // still hands it its interaction, visibility and — from the loop on, through the branches of StepFigure — its pose.
+        if (HoldsOrderPlacement(fig))
+        {
+            fig.Route = null;
+            fig.Travelling = false;
+            fig.SetHidden(plan.Hidden);
+            return;
+        }
         if (AdoptPropEntry(fig, plan)) return;
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
@@ -520,7 +531,6 @@ public partial class FigureManager : Node3D
     /// </summary>
     private bool AdoptRoute(Figure fig)
     {
-        if (_rowByName.TryGetValue(fig.CharacterName, out var propRow) && AdoptExactPropRoute(fig, propRow)) return false;
         var tr = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Travel : null;
         // Task 50: cancellation suppresses this journey in the E6 route branch, including cached placement.
         if (fig.CharacterName == AvatarName && SuppressAvatarJourney?.Invoke(tr?.JourneyId) == true) tr = null;
@@ -710,7 +720,6 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void StepRoute(Figure fig, JourneyRoute r, double dt, double camDist)
     {
-        if (r.ExactPath is not null) { StepExactPropRoute(fig, r, dt, camDist); return; }
         if (fig.Travelling && fig.Player is not null && !fig.Bridging && fig.HoldsTravel) ApplyBridgeTravel(fig);
         r.ShownM = TravelPath.StepShown(r.Points, r.Paces, r.ShownM, r.TargetM, dt);
         r.TargetM = TravelPath.AdvanceAlongPaces(r.Points, r.Paces, r.TargetM, dt);
@@ -751,6 +760,8 @@ public partial class FigureManager : Node3D
         // A solo scene's clip clock runs whatever path draws the figure (npcs.ts tick: stepHeldClock).
         if (fig.Held is { } heldClip) fig.Held = heldClip.Step(dt, WorldFrozen);
         if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
+        // Plan E3 Task 5: an NPC's order draws it from exit up to the loop's start pose (FigureManager.Orders.cs).
+        if (TickOrder(fig, dt, camDist)) return;
         if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
         {
             // Retry lazy held-pose fitting without ever opening an ordinary entry bridge at the anchor.

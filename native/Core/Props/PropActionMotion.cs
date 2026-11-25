@@ -27,25 +27,6 @@ public static class PropActionMotion
         return value.TryGetValue<double>(out var number) ? number : double.Parse(value.ToJsonString(),CultureInfo.InvariantCulture);
     }
     public static string Text(JsonNode? n) => n?.GetValue<string>() ?? "";
-    public static P2 LocalApproachPoint(JsonNode path,double ageS)
-    {
-        double distance=Math.Max(0,Number(path["progress_m"]));
-        double time=Math.Max(0,ageS-Math.Max(0,Number(path["starts_in_s"])));
-        var points=path["waypoints"]!.AsArray(); var paces=path["paces_m_s_real"] as JsonArray;
-        for(int i=1;i<points.Count;i++) {
-            double ax=Number(points[i-1]![0]),az=Number(points[i-1]![1]);
-            double bx=Number(points[i]![0]),bz=Number(points[i]![1]);
-            double length=double.Hypot(bx-ax,bz-az);
-            if(length==0) continue;
-            if(distance>=length) { distance-=length; continue; }
-            double pace=paces is not null && i-1<paces.Count ? Number(paces[i-1]) : 0;
-            double remaining=length-distance;
-            if(pace>0 && time*pace>=remaining) { time-=remaining/pace; distance=0; continue; }
-            double fraction=(distance+Math.Max(0,pace)*time)/length;
-            return new(ax+(bx-ax)*fraction,az+(bz-az)*fraction);
-        }
-        return points.Count>0 ? new(Number(points[^1]![0]),Number(points[^1]![1])) : new(0,0);
-    }
     /// <summary>Closest rendered route point by arc length. Equal projections keep the first leg.</summary>
     public static double ProjectApproachM(IReadOnlyList<(double X,double Z)> points,(double X,double Z) point)
     {

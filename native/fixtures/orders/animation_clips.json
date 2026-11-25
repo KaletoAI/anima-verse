@@ -1,0 +1,154 @@
+{
+ "clips": [
+  {
+   "kind": "stand-relaxed",
+   "role": "a",
+   "set": "",
+   "name": "stand-relaxed__a",
+   "filename": "stand-relaxed__a.fbx",
+   "url": "/assets/animation-clips/stand-relaxed__a.fbx?v=fixturepair00001",
+   "loop": true
+  },
+  {
+   "kind": "idle",
+   "role": "",
+   "set": "",
+   "name": "idle",
+   "filename": "idle.fbx",
+   "url": "/assets/animation-clips/idle.fbx?v=fixtureidle00001",
+   "loop": true
+  },
+  {
+   "kind": "stand-relaxed",
+   "role": "",
+   "set": "female",
+   "name": "stand-relaxed",
+   "filename": "stand-relaxed.fbx",
+   "url": "/assets/animation-clips/female/stand-relaxed.fbx?v=fixturefemale001",
+   "loop": true
+  },
+  {
+   "kind": "Stand-Relaxed",
+   "role": "",
+   "set": "",
+   "name": "stand-relaxed",
+   "filename": "stand-relaxed.fbx",
+   "url": "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001",
+   "loop": true
+  },
+  {
+   "kind": "walk",
+   "role": "",
+   "set": "female",
+   "name": "walk",
+   "filename": "walk.fbx",
+   "url": "/assets/animation-clips/female/walk.fbx?v=fixturefemale002"
+  },
+  {
+   "kind": "walk",
+   "role": "",
+   "set": "",
+   "name": "walk",
+   "filename": "walk.fbx",
+   "url": "/assets/animation-clips/walk.fbx?v=fixturewalk00001"
+  },
+  {
+   "kind": "waiting",
+   "role": "",
+   "set": "female",
+   "name": "waiting",
+   "filename": "waiting.fbx",
+   "url": "/assets/animation-clips/female/waiting.fbx?v=fixturefemale003",
+   "loop": true,
+   "root_motion": {
+    "mode": "keep",
+    "travel_m": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "kind": "waiting",
+   "role": "",
+   "set": "",
+   "name": "waiting",
+   "filename": "waiting.fbx",
+   "url": "/assets/animation-clips/waiting.fbx?v=fixturewaiting01",
+   "loop": false
+  },
+  {
+   "kind": "reading",
+   "role": "",
+   "set": "",
+   "name": "reading",
+   "filename": "reading.fbx",
+   "url": "/assets/animation-clips/reading.fbx?v=fixturereading01",
+   "loop": false,
+   "root_motion": {
+    "mode": "strip",
+    "travel_m": [
+     0,
+     0
+    ]
+   }
+  }
+ ],
+ "kinds": [
+  "idle",
+  "reading",
+  "stand-relaxed",
+  "waiting",
+  "walk"
+ ],
+ "movement_poses": {
+  "standing": {
+   "kind": " Stand-Relaxed ",
+   "public_kind": "idle"
+  },
+  "walking": {
+   "kind": "mob1-walk",
+   "public_kind": "walk"
+  },
+  "running": {
+   "kind": "",
+   "public_kind": "run"
+  }
+ },
+ "transition_clips": [
+  {
+   "from": "sitting",
+   "to": "*",
+   "kind": "get-up-chair",
+   "accel": 0
+  },
+  {
+   "from": " Stand-Relaxed ",
+   "to": "walk",
+   "kind": "Start-Walk",
+   "accel": 12
+  },
+  {
+   "from": "",
+   "to": "walk",
+   "kind": "lost"
+  }
+ ],
+ "transitions": [],
+ "pose_rules": [
+  {
+   "from": "@seat",
+   "to": "standing",
+   "kind": "get-up-chair"
+  },
+  {
+   "from": "walking",
+   "to": "@lie",
+   "kind": "lie-down"
+  }
+ ],
+ "pose_groups": {
+  "sitting": "seat",
+  "laying": "lie"
+ }
+}

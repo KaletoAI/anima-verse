@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text.Json.Nodes;
 
 namespace AnimaNative.Figures;
 
@@ -19,11 +18,6 @@ public sealed class JourneyRoute
     /// <summary>The bare floor an indoor journey walks on (the row's <c>travel.floor_y</c>, an upper storey); null
     /// outdoors, where the terrain decides.</summary>
     public double? FloorY { get; set; }
-    /// <summary>Task 57: exact public local prop route uses its receipt clock and unsmoothed sampled path.</summary>
-    public JsonObject? ExactPath { get; set; }
-    public string DepartureClip { get; set; } = "";
-    public bool DepartureStarted { get; set; }
-    public double ReceivedAt { get; set; }
 }
 
 /// <summary>
