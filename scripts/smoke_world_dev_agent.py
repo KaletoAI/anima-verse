@@ -23,6 +23,10 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     ended without a tool call after 1 step), note "Built A1.", world frozen
     (start froze it, was_frozen False), entries(run) = 1 write row.
     subscribe(run, 0) yields at least one "step" and one "status" event;
+    every "step" event carries the journal `seq` of its row, so the set of
+    step-event seqs equals the set of steps(run) seqs ({1}: the one create
+    row) — the Game-Admin panel merges its live rows into the journal list
+    by that number (Task 9);
     subscribe(run, 999) (a counter beyond this process's buffer of a few
     events) yields {"ev": 0, "type": "reset"} followed by exactly that list.
     accept -> accepted, world unfrozen (was_frozen False), open_run() None.
@@ -31,7 +35,8 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     discard -> rolled_back, "Demo B2" gone, still frozen.
 (c) [bad JSON, world_overview{}, final] -> awaiting_review (one bad body is
     answered "error: body is not a JSON object", the run goes on; the bad
-    call is journaled as a "refused" step -> steps(run) has 2 rows).
+    call is journaled as a "refused" step -> steps(run) has 2 rows; the two
+    step events carry seq 1 (refused) and 2 (the read), in that order).
     [bad, bad, bad] -> 3 in a row = hard failure in turn 1 -> rolled_back,
     note names "JSON".
 (d) turn 1 [create "Demo D1", final]; turn 2 (message) [create "Demo D2",
@@ -280,6 +285,10 @@ async def main():
     evs = [e async for e in rm.subscribe(run_id, 0)]
     types = {e["type"] for e in evs}
     check("(a) events carry step + status", {"step", "status"} <= types, types)
+    ev_seqs = {e.get("seq") for e in evs if e["type"] == "step"}
+    row_seqs = {s["seq"] for s in wr.steps(run_id)}
+    check("(a) step events carry the journal seq", ev_seqs == row_seqs == {1},
+          (ev_seqs, row_seqs))
     stale = [e async for e in rm.subscribe(run_id, 999)]
     check("(a) after beyond the buffer -> reset, then the buffer from its start",
           stale == [{"ev": 0, "type": "reset"}] + evs, stale[:2])
@@ -317,6 +326,10 @@ async def main():
           == ["refused", "read"], [(s["kind"], s["line"]) for s in steps])
     check("(c) bad line", steps and steps[0]["line"] == "error: body is not a JSON object",
           steps and steps[0]["line"])
+    c_evs = [e async for e in rm.subscribe(run_id, 0) if e["type"] == "step"]
+    check("(c) refused + read step events carry their journal seq",
+          [(e.get("kind", "read"), e.get("seq")) for e in c_evs]
+          == [("refused", 1), ("read", 2)], c_evs)
     await rm.discard(run_id)
     rm, _ = manager([BAD, BAD, BAD, "never"])
     run_id = await start(rm)

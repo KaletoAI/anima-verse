@@ -367,7 +367,9 @@ class RunManager:
             return report
 
     async def subscribe(self, run_id: str, after: int = 0) -> AsyncIterator[Dict[str, Any]]:
-        """Events with `ev` > after: {"ev", "type": text|step|status|usage, ...}.
+        """Events with `ev` > after: {"ev", "type": text|step|status|usage, ...};
+        a "step" event carries the journal `seq` of its row (None only for a
+        tool that raised, which ends the turn).
         Ends once the run's turn is no longer working and everything was
         delivered. A run this process holds no events for (never started
         here, or closed and forgotten) yields its stored status once, as ev 1.
@@ -665,10 +667,10 @@ class RunManager:
                 line = BAD_BODY_LINE
             if not isinstance(args, dict):
                 bad += 1
-                await asyncio.to_thread(self._journal_refused, ctx, name, body if m else reply,
-                                        line)
+                seq = await asyncio.to_thread(self._journal_refused, ctx, name,
+                                              body if m else reply, line)
                 await self._emit(st, {"type": "step", "tool": name, "ok": False,
-                                      "line": line, "kind": "refused"})
+                                      "line": line, "kind": "refused", "seq": seq})
                 self._add_result(st, name, line)
                 if bad >= MAX_BAD_CALLS:
                     return "fail", (f"{MAX_BAD_CALLS} tool calls in a row had a body that is "
@@ -686,15 +688,16 @@ class RunManager:
                                       "kind": "write" if spec and spec.write else "read"})
                 return "fail", f"tool {name} failed: {e}"
             await self._emit(st, {"type": "step", "tool": name, "ok": res.ok,
-                                  "line": res.line, "wrote": res.wrote})
+                                  "line": res.line, "wrote": res.wrote, "seq": res.seq})
             self._add_result(st, name, res.line)
             if st.stop:
                 return "fail", "stopped by the admin"
 
     @staticmethod
-    def _journal_refused(ctx: "wt.ToolCtx", tool: str, raw: str, line: str) -> None:
+    def _journal_refused(ctx: "wt.ToolCtx", tool: str, raw: str, line: str) -> int:
         seq = wr.begin(ctx.run_id, ctx.turn, "refused", tool, {"_raw": raw})
         wr.complete(ctx.run_id, seq, None, line)
+        return seq
 
 
 _MANAGER: Optional[RunManager] = None

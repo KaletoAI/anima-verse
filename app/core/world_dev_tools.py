@@ -89,6 +89,9 @@ class ToolResult:
     ok: bool
     line: str
     wrote: bool
+    #: The journal row of this call (the UI merges live step events into the
+    #: journal list by it).
+    seq: Optional[int] = None
 
 
 TOOLS: Dict[str, ToolSpec] = {}
@@ -251,21 +254,25 @@ def run_tool(ctx: ToolCtx, name: str, args: Any) -> ToolResult:
         if step.seq is None:
             seq = wr.begin(ctx.run_id, ctx.turn, "refused", name, step.args)
             wr.complete(ctx.run_id, seq, None, text)
-        elif not step.done and not step.writing_started:
+        else:
+            seq = step.seq
+        if step.seq is not None and not step.done and not step.writing_started:
             step.complete(None, text, kind="refused")
         # A row whose writer started and was not reconciled stays pending:
         # the undo then reports it instead of assuming nothing happened.
         if refusal:
             if step.wrote:
                 text += step.kept_note()
-            return ToolResult(False, text, step.wrote)
+            return ToolResult(False, text, step.wrote, seq)
         raise
     if step.seq is None:
         seq = wr.begin(ctx.run_id, ctx.turn, "read", name, step.args)
         wr.complete(ctx.run_id, seq, None, line)
-    elif not step.done:
-        step.complete(None, line)
-    return ToolResult(True, line, step.wrote)
+    else:
+        seq = step.seq
+        if not step.done:
+            step.complete(None, line)
+    return ToolResult(True, line, step.wrote, seq)
 
 
 def tool_list() -> List[str]:
