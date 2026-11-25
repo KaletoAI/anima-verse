@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AnimaNative.Nav;
 using AnimaNative.Overview;
 
@@ -411,4 +412,44 @@ internal sealed class StraightPath : IPathProvider
     public Vec3 Closest(Vec3 p) => p;
 
     public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => p;
+}
+
+/// <summary>
+/// A walk out in the open along the server's <c>hint_route</c> (plan E3 Task 9, § A11b): the query answers the route's
+/// inner points between the walk's own start and goal (the heights interpolated between the two; the foot height is the
+/// renderer's ground anyway). Every point counts as on the map: the server baked the route around water and slopes.
+/// </summary>
+internal sealed class HintRoutePath(IReadOnlyList<AnimaNative.Scatter.P2> route) : IPathProvider
+{
+    public bool Ready => true;
+
+    public NavPath Query(Vec3 from, Vec3 to)
+    {
+        var points = new List<Vec3> { from };
+        double total = 0;
+        var inner = route.Skip(1).Take(Math.Max(0, route.Count - 2)).ToList();
+        var flat = new List<(double X, double Z)> { (from.X, from.Z) };
+        flat.AddRange(inner.Select(p => (p.X, p.Z)));
+        flat.Add((to.X, to.Z));
+        double length = 0;
+        for (int i = 1; i < flat.Count; i++) length += Math.Sqrt(Sq(flat[i].X - flat[i - 1].X) + Sq(flat[i].Z - flat[i - 1].Z));
+        foreach (var p in inner)
+        {
+            var last = points[^1];
+            total += Math.Sqrt(Sq(p.X - last.X) + Sq(p.Z - last.Z));
+            double f = length > 0 ? total / length : 0;
+            points.Add(new Vec3(p.X, from.Y + (to.Y - from.Y) * f, p.Z));
+        }
+        points.Add(to);
+        double dist = 0;
+        for (int i = 1; i < points.Count; i++)
+            dist += Math.Sqrt(Sq(points[i].X - points[i - 1].X) + Sq(points[i].Y - points[i - 1].Y) + Sq(points[i].Z - points[i - 1].Z));
+        return new NavPath(points, new ulong[points.Count], dist);
+    }
+
+    public Vec3 Closest(Vec3 p) => p;
+
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => p;
+
+    private static double Sq(double v) => v * v;
 }

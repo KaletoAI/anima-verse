@@ -1061,12 +1061,13 @@ uses the same rule after its room/storey is revealed. The shared rotated two-roo
 
 The browser's `NpcManager` walk (`client3d/src/scene/npcs.ts` `update`/`tick`, pure rules `game/npcWalk.ts`), ported
 to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core/Scene/Doors.cs`, `Core/Scene/Stairs.cs`
-(the stair module by hand, `tests/StairsTests.cs`) and `Core/Figures/NpcRoute.cs`; the frame is
-`FigureManager.Tick`:
-- **Once a second** (the placement pass) a NEW goal adopts its stations; a snap (first sight, a view change) puts the
-  figure on it. A real room change is ROUTED (main.ts): the party-wall doorway if the two rooms share one, else out by
-  the old room's door (`roomDoor`: the outside door first), the storey change by STAIRS first (`stairChain`, the legs
-  become the figure's ride, unarmed) else the lift stops, in by the new room's door.
+(the stair module by hand, `tests/StairsTests.cs`); the frame is `FigureManager.Tick`:
+- **Once a second** (the placement pass) a NEW goal is adopted; a snap (first sight, a view change) puts the figure on
+  it. A real room change is an ORDER since plan E3 Task 9 (the old door/stair routing `NpcRoute` is gone): the
+  server's `walk` order when the row carries one, else a client-local `walk` (`local:<n>`,
+  `FigureManager.StartRoomWalk`) over the location's navmesh from where the figure is drawn to the row's new point —
+  links (stairs, lift) ridden on the way, at the goal a 0.3 s blend back into the rows. Out in the open a `walk`
+  follows the server's `hint_route` (`HintRoutePath`).
 - **Every frame**: stations retire at 1.5 m (0.4 m during a ride); the step is 3.4 m/s, ×1.8 beyond 6 m (+10 m while a
   station is left) on a ground that lets one run, never for a travelling character (journeys follow their polled
   point until E6); the yaw eases ×10/s; standing, the marker's facing beats the neighbours' centroid within 4.5 m.

@@ -2207,7 +2207,8 @@ def _shift_location_occupants(location_id: str,
         _write_character_pos(name, round(nx, 2), round(nz, 2))
 
 
-def _cancel_journey_for_manual_write(character_name: str) -> None:
+def _cancel_journey_for_manual_write(character_name: str,
+                                     at: Optional[Tuple[float, float]] = None) -> None:
     """A position write that is NOT a travel step ends a running journey.
 
     The travel ticker derives the position from the journey's baked polyline,
@@ -2216,6 +2217,7 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     would visibly undo itself. ``save_character_current_location`` already
     cancels on a real location CHANGE; this covers the writes that change no
     location at all (a shift inside the same boundary, a step in the open).
+    ``at``: the point the write is about to store, for a walk's cancel order.
     """
     if not character_name:
         return
@@ -2224,6 +2226,10 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     # manual move has to release it (and the partner).
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="moved")
+    # And for a walk order (plan E3 decision 20): its flip must not write the
+    # target over this position later.
+    from app.core.motion_orders import cancel_for
+    cancel_for(character_name, reason="position", at=at)
     profile = get_character_profile(character_name) or {}
     if not ((profile.get("movement_target") or "").strip()
             or isinstance(profile.get("journey"), dict)):
@@ -2303,7 +2309,7 @@ def set_character_pos(character_name: str, x: float, z: float,
         # Cancel BEFORE the location write: the setter only ends a journey on
         # a real location change, and this write may well change none at all
         # (a shift inside the same boundary, a step in the open).
-        _cancel_journey_for_manual_write(character_name)
+        _cancel_journey_for_manual_write(character_name, at=(fx, fz))
     from app.core.world_geometry import location_at_point
     from app.models.world import list_locations
     loc = location_at_point(fx, fz, list_locations())
@@ -3965,6 +3971,21 @@ def get_character_place(character_name: str
     location, room, x, z = row
     pos = {"x": float(x), "z": float(z)} if x is not None and z is not None else None
     return location or "", room or "", pos
+
+
+def list_profile_orders() -> List[str]:
+    """The names whose profile carries a walk order (field ``order``, plan E3
+    Task 9) — ONE query, for ``motion_orders.boot``; the roster gate of
+    :func:`list_available_characters` applies as in :func:`list_active_journeys`."""
+    try:
+        rows = get_connection().execute(
+            "SELECT c.name, COALESCE(c.status, '') FROM characters c "
+            f"WHERE json_extract({_PROFILE_JSON}, '$.order') IS NOT NULL "
+            "ORDER BY c.name ASC").fetchall()
+    except Exception as e:
+        logger.error("list_profile_orders DB error: %s", e, exc_info=True)
+        return []
+    return [name for name, status in rows if _is_real_character(name) and not is_out_of_world(status)]
 
 
 def list_active_journeys() -> List[Dict[str, Any]]:

@@ -475,11 +475,15 @@ def _evaluate_single_condition_inner(
         return bool(passed), "" if passed else f"Condition '{cond}' not met"
 
     if cond == "travelling":
+        # A walk order counts as on the way too (plan E3 decision 20, third
+        # review 4): a stroll and, for its few seconds, a room change.
+        from app.core.motion_orders import walking
         from app.core.travel_engine import get_journey
         if _STRICT_CONTEXT.get() is not None:
-            passed = get_journey(character_name, profile=_condition_profile(character_name)) is not None
+            _prof = _condition_profile(character_name)
+            passed = get_journey(character_name, profile=_prof) is not None or walking(character_name, profile=_prof)
         else:
-            passed = get_journey(character_name) is not None
+            passed = get_journey(character_name) is not None or walking(character_name)
         return passed, "" if passed else "No journey in progress"
 
     danger_match = _atom_match("danger", cond)

@@ -100,6 +100,9 @@ public sealed class OrderPlayer
     /// <summary>Where the current walk leads (null before the walk phase).</summary>
     public Vec3? WalkGoal => _walkTarget;
 
+    /// <summary>The path the current order's walk was first planned on (null before its walk); a replan keeps it.</summary>
+    public NavPlan? WalkPlan { get; private set; }
+
     /// <summary>The pose kind of the running phase; an exit names the kind it leaves.</summary>
     public string? PhasePoseKind => _poseKind;
 
@@ -469,7 +472,9 @@ public sealed class OrderPlayer
             AfterArrive(_walkC);
             return true;
         }
-        var map = nav is { Ready: true } ? nav : StraightPath.Instance;
+        // Out in the open (no navmesh) a walk follows the server's terrain route (plan E3 Task 9, § A11b hint_route).
+        IPathProvider map = nav is { Ready: true } ? nav
+            : Current!.HintRoute.Count >= 2 ? new HintRoutePath(Current.HintRoute) : StraightPath.Instance;
         double speed = Current!.SpeedMS;
         if (!(speed > 0))
         {
@@ -492,6 +497,7 @@ public sealed class OrderPlayer
                 _pending.Add("no_path");
                 return false;
             }
+            WalkPlan = plan;
             _walk = new OrderWalk(plan, target, speed, _rides, _name);
             if (_late)
             {

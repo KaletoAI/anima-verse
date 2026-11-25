@@ -95,9 +95,12 @@ def _write_member(conn, leader: str, member: str) -> Optional[str]:
 
 
 def _cancel_joiner_journey(member: str) -> None:
+    from app.core.motion_orders import cancel_for
     from app.core.travel_engine import cancel_journey, get_journey
     if get_journey(member):
         cancel_journey(member)
+    # A follower moves with its leader only: its own walk order ends too.
+    cancel_for(member, reason="party")
 
 
 def add_to_party(leader: str, member: str) -> Optional[str]:

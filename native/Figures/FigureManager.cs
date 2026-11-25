@@ -40,8 +40,8 @@ public sealed class FigureStats
 /// <c>NpcManager</c>:
 ///
 ///   • which and where: <see cref="FigurePlacement.Plan"/> once a second from the cached map (journeys, free points,
-///     the room ladder of every mounted location — Task 29), a real room change routed through doors, stairs or the
-///     lift (<see cref="NpcRoute"/>);
+///     the room ladder of every mounted location — Task 29), a real room change walked as an order: the server's
+///     <c>walk</c>, else a client-local one over the location's navmesh (plan E3 Task 9, <see cref="StartRoomWalk"/>);
 ///   • how it gets there: every frame the browser's NPC walk (<see cref="Tick"/>, Task 30) — 3.4 m/s, running beyond
 ///     6 m, stations retired at 1.5 m, the yaw eased ×10/s, the root height ×4/s, the ground word deciding swim / crawl
 ///     / treading and the float over water, the underwater ghost, the stair ride;
@@ -424,10 +424,7 @@ public partial class FigureManager : Node3D
             if (slots is null || locId.Length == 0 || !slots.TryGetValue(locId, out var slot)) return null;
             if (!IsInstanceValid(slot.Group)) return null;
             var stands = slot.Stands;
-            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY)
-            {
-                Route = slot.RouteView(),
-            };
+            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY);
         }
         var plans = FigurePlacement.Plan(_rows, TileOf, _height.GroundAt, _shown,
             id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null,
@@ -463,6 +460,13 @@ public partial class FigureManager : Node3D
             return;
         }
         if (AdoptPropEntry(fig, plan)) return;
+        // Plan E3 Task 9: a room change without a server order walks a client-local order over the navmesh, never a
+        // straight line through the walls.
+        if (!fresh && plan.RoomChange && StartRoomWalk(fig, plan))
+        {
+            fig.SetHidden(plan.Hidden);
+            return;
+        }
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
         bool arrived = AdoptRoute(fig);
@@ -484,15 +488,7 @@ public partial class FigureManager : Node3D
         }
         else if (!fresh && fig.Route is null)
         {
-            // main.ts: a routed room change ends whatever climb the figure was on (the avatar's own climb excepted), and
-            // a climb over stairs becomes the ride — unarmed, the figure is still a room away.
-            if (plan.Routed && fig.CharacterName != AvatarName) fig.Ride = null;
-            if (plan.Legs.Count > 0) fig.Ride = new Scene.StairRide { Legs = plan.Legs };
-            if (fig.Target != goal)
-            {
-                fig.Waypoints.Clear();
-                if (plan.Via is { } via) fig.Waypoints.AddRange(via.Select(v => new Vector3((float)v.X, (float)v.Y, (float)v.Z)));
-            }
+            if (fig.Target != goal) fig.Waypoints.Clear();
             if (plan.Snap)
             {
                 if (fig.Position.DistanceTo(goal) > 0.5f) Stats.PlaceSnaps++;

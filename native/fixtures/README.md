@@ -1467,28 +1467,25 @@ ground word there is `walk_run`, dry.
   standing pose `stand-relaxed`, dry (no drop, no ghost).
 Frame 0.25 s: Lia's root 0.6 + 0.9·1 = **1.5**.
 
-**W2 — poll 2** (`worldmap_poll2.json`). Dora → r-b (103, 1): a ROUTE (room change, interior shown both times):
-`doorwayBetween(r-a, r-b)` → stations **[(100, 0, 2)]**. Sam → r-up (no pos → its centre (100, 3.03, 0), hidden on
-storey 1): no shared doorway → leave by `roomDoor(r-a)` (its only doorway, the party wall) (100, 0, 2), storey 0 → 1 by
-the stair chain [foot, head], no door into r-up → stations **[(100, 0, 2), (100, 0.01, −2), (103.5, 3.01, −2)]** and the
-ride (one leg, UNARMED). Rex → (−70, 60), Lia → (46.8, 0). Frames of 0.25 s:
+**W2 — poll 2** (`worldmap_poll2.json`). Dora → r-b (103, 1) and Sam → r-up (no pos → its centre (100, 3.03, 0),
+hidden on storey 1) are real room changes WITHOUT a server order: since plan E3 Task 9 each walks a client-local `walk`
+(`local:<n>`, `FigureManager.StartRoomWalk`) over the hall's navmesh at `LocalOrders.DefaultSpeedMS` 1.4 m/s — the
+old door/stair stations and the guided ride of the room routing are gone (no waypoint, no ride on the figure). The
+walk world's navmesh bakes the floors only (no party wall), so Dora's path is the straight **6 m** from (97, 1) to
+(103, 1) and rides no link; Sam's path rides exactly **one** link section (the flight). Both end on their row's point
+— Dora **(103, 0.01, 1)**, Sam **(100, 3.03, 0)** — after the 0.3 s blend into the rest placement; the door gap of a
+real party wall is checked in the orders world (OrderCheck R7). Rex → (−70, 60), Lia → (46.8, 0), frames of 0.25 s:
 
-| frame | Dora | Sam | Rex | Lia |
-|---|---|---|---|---|
-| F1 | door 3.162 away (+10) → run 1.53 along (3, 1)/√10 → **(98.451485, 0, 1.483828)** (y eased to the door's 0) | door 3 → run → (98.53, 0, 2) | 10 > 6 → run → **−78.47** | swim 0.85 (no run on `swim`) → **40.85**, root max(0.35, 1.5) = 1.5, **breast-stroke**, drop 0.35, ghost 1.5 |
-| F2 | door 1.632 ≥ 1.5 → run 1.53 → **(99.902971, 0, 1.967657)** — the door is still ahead (straight to the goal would keep z = 1) | 1.47 → **(100, 0, 2)** | 8.47 → run → −76.94 | |
-| F3 | door 0.102 < 1.5 → retired; goal (103, 0.01, 1) 3.2447 ≤ 6 → **walk** 0.85 → **(100.714291, 0.01, 1.714163)** | door 0 < 0.4 → retired; stair foot 4 (+10) → run → (100, 0.01, 0.47) | 6.94 > 6 → run → **−75.41** | |
-| F4 | 2.3947 left | 2.47 → run → (100, 0.01, −1.06) | 5.41 ≤ 6 → **walk** → **−74.56** | |
-| F5 | 1.5447 left | 0.94 → **(100, 0.01, −2)**: the foot landing (3D 0 < 0.4) ARMS the ride; `stairY` t = 0 → 0.01 | | |
-| F6 | 0.6947 → **(103, 0.01, 1)** | foot retired; head 3.5 (+10) → run → x 101.53; `stairY` t = 1.03/2.5 = 0.412 → **1.246** | | |
-| F7 | | head 1.97 → run 1.53 → x 103.06; t = 2.56/2.5 → 1 → **3.01** | | 7·0.85 → **45.95** |
-| F8 | | head 0.44 ≥ 0.4 → 0.44 → **(103.5, 3.01, −2)**; the ride ends there (3D 0 < 0.4) | | 0.85 → **46.8** |
-| F9 | | head retired (1.5 m again); goal r-up 4.0311 ≤ 6 → walk along (−3.5, 2)/4.0311 → **(102.761993, 3.03, −1.578282)** | | |
-| F10 | | 2.3311 left | 0.31 → **−70** | |
-| F13 | | 3.1811 − 3·0.85 = 0.6311 → **(100, 3.03, 0)** | | |
+| frame | Rex | Lia |
+|---|---|---|
+| F1 | 10 > 6 → run → **−78.47** | swim 0.85 (no run on `swim`) → **40.85**, root max(0.35, 1.5) = 1.5, **breast-stroke**, drop 0.35, ghost 1.5 |
+| F3 | 6.94 > 6 → run → **−75.41** | |
+| F4 | 5.41 ≤ 6 → **walk** → **−74.56** | |
+| F7 | | 7·0.85 → **45.95** |
+| F8 | | 0.85 → **46.8** |
+| F10 | 0.31 → **−70** | |
 
-Clips: Dora runs `run` (the run pose's kind) at F1, walks `mob1-walk` from F3; Rex walks `mob1-walk` from F4; Sam walks
-`mob1-walk` from F9 and stands in `stand-relaxed` at F14. F14: everyone stands; Lia treads water again (drop 1.3), her
+Clips: Rex walks `mob1-walk` from F4. After both room walks: everyone stands; Lia treads water again (drop 1.3), her
 root stays at max(0 + 1.3, 1.5) = **1.5**.
 
 ## Bridges world (`bridges/`, Task 31, `Check/BridgeCheck.cs`, `--check bridges`)
@@ -2095,6 +2092,18 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
   x 104 ± 0.05, from t + 0.3 on at (103.6, 1.5).
 - **R13c** a local order `local:1` walks Uli (97, −1) → (99, 0): √(2² + 1²) = 2.236 m, 1.597 s; a row without order
   (`order_seq` 9) at t = 0.5 does not end it; arrival at (99, 0).
+- **R7** (plan E3 Task 9) a server `walk` `ord-r7` for Uli r-a (97, −1) → r-up (104, 3, 2), issued 100, flip = eta =
+  100 + 24.0573666 / 1.4 + 0.5 = **117.683833** (the server's room-chain estimate, Task 1 O2), delivered by the second poll
+  at t = 0.5 together with the new room. The client walks its own navmesh path: in this world the bed narrows r-b, so
+  the path bends there — corners (97, 0, −1) (98.367, 0, 0.445) (99.649, 0, 1.8) (100.351, 0, 1.8) (100.721, 0, 1.283)
+  (102, 0, −0.5) (102, 0, −1.5) (101, 0, −3.3), the flight (101, 0, −3.3) → (104.5, 3, −3.3) √(3.5² + 3²) = 4.610,
+  then (104.376, 3, −1.988) (104, 3, 2): 1.989 + 1.866 + 0.702 + 0.636 + 2.194 + 1 + 2.059 + 4.610 + 1.318 + 4.006 =
+  **20.379 m** (the nav world's P2 19.630 has no bed in its way); it crosses x = 100 at z 1.8 (in T0), exactly ONE link
+  section (owner 65536); horizontally 20.379 − (4.610 − 3.5) = 19.269 m at 1.4 m/s (the NPC ride keeps the pace) →
+  the loop on the goal at 0.5 + 13.76 ≈ **14.28 s**, long before flip + 5 = 22.68 s; no `healed` event.
+- **R7b** the same room change as a row WITHOUT order (poll 2 at t = 0.5: room r-up, pos (104, 2)) → a client-local
+  `walk` (`local:<n>`) over the same mesh: path length **20.379 ± 0.05**, every walk point on the mesh (≤ 0.05 m from
+  `Closest`); at the goal it blends into the row's point (104, 3, 2) and the rows place the figure again.
 - **R14** the pair, then a follow order `ord-follow` for Uli alone (sequence loop only): no exit for Uli; a cancel for Ona
   alone (exit lie/laying 1.0 s, stand (103.05, 1.5)) plays exactly one exit, for Ona.
 - **R15** the world freeze (`game_rate` 0). The R10 pair accepted frozen: both shown Frozen, yet the chain's own state is

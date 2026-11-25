@@ -20,8 +20,14 @@ Usage (from code):
     order = mo.new_order("prop_action", issued_s=now, eta_s=eta, flip_s=flip,
                          deadline_s=mo.deadline(now, eta), actors=[...], ...)
 
-Checked by scripts/smoke_order_estimate.py (vector shared/test-vectors/order_estimate.json)
-and scripts/smoke_orders_route.py (publication, index, visibility).
+Since plan E3 Task 9 it also issues the ``walk`` orders (room changes, a
+stroll inside a room, a walk in the open): ``issue_walk``, ``settle_due``,
+``cancel_for`` (the choke point every other movement write passes) and the
+"on the way" predicate ``walking``.
+
+Checked by scripts/smoke_order_estimate.py (vector shared/test-vectors/order_estimate.json),
+scripts/smoke_orders_route.py (publication, index, visibility),
+scripts/smoke_walk_orders.py and scripts/smoke_walk_outdoor.py (walk orders).
 """
 from __future__ import annotations
 
@@ -589,7 +595,8 @@ def boot() -> None:
         the stamp it was shifted against — a second boot against the same
         stamp (a crash before the heartbeat below) shifts nothing again;
 
-    then the index is rebuilt from the live runs and the heartbeat written."""
+    then the index is rebuilt from the live runs and the profiles' walks
+    (:func:`_boot_walks`, shifted the same way) and the heartbeat written."""
     from app.core import prop_action_store as store
     from app.core import prop_action_engine as engine
     from app.core import travel_engine as travel
@@ -614,10 +621,532 @@ def boot() -> None:
     if shift > 0:
         for run in store.live_runs():
             engine.shift_run(run["execution_id"], shift, alive)
+    _boot_walks(shift, alive)
     _write_alive(_now_s())
 
 
-def walking(name: str, *, profile: dict | None = None) -> bool:
-    """Whether ``name`` is on a live ``walk`` order (decision 20). There is no
-    ``walk`` order before plan E3 task 9: always False until then."""
-    return False
+# ---------------------------------------------------------------------------
+# Walk orders (plan E3 Task 9, decisions 9-11 and 20)
+# ---------------------------------------------------------------------------
+
+#: The profile field of a live walk: ``{"order": <published order>,
+#: "writes_at_flip": bool}`` — the order as the index holds it, and whether
+#: ``settle_due`` writes its target at the flip (a walk inside a room or out
+#: in the open) or not (a room change: the setter wrote room and stand point
+#: at once, decision 10).
+PROFILE_KEY = "order"
+
+
+def _room_level(location: dict, room_id: str) -> int:
+    """The storey of a room (its layout ``level``, 0 when unset)."""
+    room = next((r for r in (location or {}).get("rooms") or []
+                 if isinstance(r, dict) and r.get("id") == room_id), None) or {}
+    try:
+        return int((room.get("layout") or {}).get("level") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _recipe(location: dict | None, location_id: str) -> dict | None:
+    """The composed scene of a stored location out of the recipe cache
+    (``scene_recipe.scene_for_location``, no compose when nothing moved)."""
+    if not location or not location_id:
+        return None
+    try:
+        from app.core.scene_recipe import scene_for_location
+        return scene_for_location(location, location_id)
+    except Exception:  # noqa: BLE001 — no recipe: the estimate falls back
+        logger.debug("walk order: no scene recipe for %s", location_id, exc_info=True)
+        return None
+
+
+def _floor_y(recipe: dict | None, level: int) -> float:
+    """The floor height of storey ``level`` in the recipe (0 without one)."""
+    for entry in (recipe or {}).get("levels") or []:
+        try:
+            if int(entry.get("level")) == int(level):
+                return float(entry.get("floor_y") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _level_floor_y(location: dict | None, location_id: str, level: int) -> float:
+    """The floor height of a storey: 0 on the ground floor (no recipe read),
+    else the recipe's."""
+    return _floor_y(_recipe(location, location_id), level) if level else 0.0
+
+
+def start_of(name: str, *, profile: dict | None = None) -> dict | None:
+    """Where ``name`` stands right now, as a walk order's actor start plus
+    two private keys: ``{x, y, z, yaw, room_id, level, location_id,
+    pose_key}`` (``pose_key`` = the pose it holds, for the exit of a room
+    change). A decision point reads this BEFORE it calls a room setter
+    (decision 10); None for a character without a point."""
+    from app.core import places
+    from app.models.character import (get_avatar_sync_snapshot, get_character_pos,
+                                      get_character_profile, get_effective_pose_key)
+    from app.models.world import get_location_by_id
+    pos = get_character_pos(name)
+    if pos is None:
+        return None
+    profile = profile if profile is not None else (get_character_profile(name) or {})
+    loc_id, room_id = places.where(name, profile=profile)
+    location = get_location_by_id(loc_id) if loc_id else None
+    level = _room_level(location or {}, room_id)
+    yaw = (get_avatar_sync_snapshot(name) or {}).get("yaw")
+    try:
+        pose = get_effective_pose_key(name) or ""
+    except Exception:  # noqa: BLE001
+        pose = ""
+    return {"x": float(pos["x"]), "y": _level_floor_y(location, loc_id, level), "z": float(pos["z"]),
+            "yaw": None if yaw is None else round(math.degrees(float(yaw)), 3),
+            "room_id": room_id, "level": level, "location_id": loc_id, "pose_key": pose}
+
+
+def _point_in(poly, x: float, z: float) -> bool:
+    inside = False
+    pts = [(float(p[0]), float(p[1])) for p in poly or []]
+    for i in range(len(pts)):
+        (ax, az), (bx, bz) = pts[i], pts[i - 1]
+        if (az > z) != (bz > z) and x < (bx - ax) * (z - az) / (bz - az) + ax:
+            inside = not inside
+    return inside
+
+
+def chain_inputs(location: dict, location_id: str) -> tuple[dict, list, list] | None:
+    """``(rooms, doorways, stairs)`` of :func:`room_chain_length` in WORLD
+    metres, read off the location's cached scene recipe (location-local
+    there). A flight names its ``rooms`` when its foot lies in exactly one
+    room of its lower storey and its head in exactly one of its upper storey
+    (Task 1 concern 2); otherwise the level rule applies. None without a
+    recipe."""
+    from app.core.world_geometry import local_to_world
+    recipe = _recipe(location, location_id)
+    if not recipe:
+        return None
+    cx, cz = float(location.get("pos_x") or 0.0), float(location.get("pos_z") or 0.0)
+    yaw = float(location.get("yaw_deg") or 0.0)
+    outlines, rooms = [], {}
+    for room in recipe.get("rooms") or []:
+        rid = str(room.get("room_id") or "")
+        if not rid:
+            continue
+        level = int(room.get("level") or 0)
+        rooms[rid] = level
+        outlines.append((rid, level, room.get("outline") or []))
+    doorways = []
+    for door in recipe.get("doorways") or []:
+        at = door.get("at_world") or door.get("at")
+        if not at or len(door.get("rooms") or []) < 2:
+            continue
+        doorways.append({"at": local_to_world(float(at[0]), float(at[1]), cx, cz, yaw),
+                         "rooms": list(door["rooms"])})
+
+    def room_at(x, z, level):
+        hits = [rid for rid, lv, poly in outlines if lv == level and _point_in(poly, x, z)]
+        return hits[0] if len(hits) == 1 else None
+
+    stairs = []
+    for flight in recipe.get("stairs") or []:
+        try:
+            foot, head = flight["foot"], flight["head"]
+            lo, hi = int(flight["from_level"]), int(flight["to_level"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        fx, fz = local_to_world(float(foot[0]), float(foot[2]), cx, cz, yaw)
+        hx, hz = local_to_world(float(head[0]), float(head[2]), cx, cz, yaw)
+        entry = {"foot": (fx, float(foot[1]), fz), "head": (hx, float(head[1]), hz),
+                 "from_level": lo, "to_level": hi}
+        named = (room_at(float(foot[0]), float(foot[2]), lo), room_at(float(head[0]), float(head[2]), hi))
+        if all(named) and named[0] != named[1]:
+            entry["rooms"] = list(named)
+        stairs.append(entry)
+    return rooms, doorways, stairs
+
+
+def _index_walk(name: str) -> dict | None:
+    """The live walk order ``name`` carries in the index (not ended), or None."""
+    with _INDEX_LOCK:
+        entry = _INDEX.get(name)
+    if entry is None:
+        return None
+    order, until = entry
+    if until is not None or order.get("kind") != "walk":
+        return None
+    return order
+
+
+def _is_room_change(order: dict) -> bool:
+    start = ((order.get("actors") or [{}])[0] or {}).get("start") or {}
+    return str(start.get("room_id") or "") != str((order.get("target") or {}).get("room_id") or "")
+
+
+def walking(name: str, *, profile: dict | None = None, strolls_only: bool = False) -> bool:
+    """Whether ``name`` is on a live ``walk`` order whose flip lies ahead
+    (decision 20): the profile's ``order`` field when the caller holds the
+    profile, else the in-process index. ``strolls_only`` leaves a room-change
+    walk out: its room and stand point are already written (decision 10), so
+    a gate that starts something there (a pair) need not wait for the image."""
+    if profile is not None:
+        record = profile.get(PROFILE_KEY)
+        order = record.get("order") if isinstance(record, dict) else None
+    else:
+        order = _index_walk(name)
+    if not isinstance(order, dict) or order.get("kind") != "walk":
+        return False
+    if strolls_only and _is_room_change(order):
+        return False
+    try:
+        return float(order.get("flip_motion_s")) > _now_s()
+    except (TypeError, ValueError):
+        return False
+
+
+def walk_due_in_s() -> float | None:
+    """Motion seconds until the soonest live walk flips (≤ 0: due now), None
+    when no walk is live — the ticker's next beat (``_next_beat_s``)."""
+    with _INDEX_LOCK:
+        entries = list(_INDEX.values())
+    flips = [float(order["flip_motion_s"]) for order, until in entries
+             if until is None and order.get("kind") == "walk" and order.get("flip_motion_s") is not None]
+    if not flips:
+        return None
+    return min(flips) - _now_s()
+
+
+def _walk_length(name: str, start: dict, x: float, z: float, room_id: str, location: dict | None,
+                 location_id: str, goal_y: float) -> tuple[float | None, list, str]:
+    """``(L, hint_route, mode)`` of a walk (decisions 9 and 11), or
+    ``(None, [], reason)``. mode: ``room`` (inside the walker's room: the
+    visibility path on the room polygon), ``rooms`` (another room of the same
+    location: the room chain of the recipe), ``open`` (the target lies outside
+    every location outline: the nav-grid route of the travel engine,
+    published as ``hint_route`` — the only server route search a walk makes)."""
+    from app.core import places
+    from app.core.prop_action_paths import visibility_path
+    start_room = start.get("room_id") or ""
+    if not location_id:
+        from app.core import travel_engine as travel
+        from app.core.terrain_query import passability_at
+        from app.models.world import get_location_by_id
+        if not passability_at(x, z)[0]:
+            return None, [], "unpassable"
+        here_id = start.get("location_id") or ""
+        here = get_location_by_id(here_id) if here_id else None
+        waypoints, _speed = travel._bake_route((float(start["x"]), float(start["z"])), (x, z), here,
+                                               character_name=name)
+        if not waypoints or len(waypoints) < 2:
+            return None, [], "no_route"
+        route = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in waypoints]
+        return sum(math.dist(a, b) for a, b in zip(route, route[1:])), route, "open"
+    if room_id == start_room:
+        geometry = places._GeometryQuery().room_geometry(location_id, room_id)
+        if geometry is None:
+            return None, [], "no_route"
+        path = visibility_path((float(start["x"]), float(start["z"])), (x, z), *geometry)
+        if not path:
+            return None, [], "no_route"
+        return sum(math.dist(a, b) for a, b in zip(path, path[1:])), [], "room"
+    inputs = chain_inputs(location or {}, location_id)
+    rooms, doorways, stairs = inputs if inputs else ({}, [], [])
+    begin = (float(start["x"]), float(start.get("y") or 0.0), float(start["z"]))
+    try:
+        length = room_chain_length(rooms, doorways, stairs, begin, start_room, (x, goal_y, z), room_id)
+    except ValueError:
+        length = room_chain_length({}, [], [], begin, start_room, (x, goal_y, z), room_id)
+    return length, [], "rooms"
+
+
+def issue_walk(name: str, x: float, z: float, *, room_id: str = "", level: int = 0,
+               y: float | None = None, start: dict | None = None,
+               reason: str = "") -> tuple[dict | None, str]:
+    """Publish a ``walk`` order of ``name`` to the point ``(x, z)`` (plan E3
+    Task 9): ``(order, "ok")`` or ``(None, reason)`` with reason
+    ``no_route``, ``unpassable``, ``party_follower`` or the refusal of
+    ``interaction_engine.stale_against_pair``.
+
+    ``start`` is the position a decision point read BEFORE its room setter
+    (:func:`start_of`); without it the current position. Three kinds of walk,
+    by where the target lies (decisions 9-11; no server path search inside a
+    location):
+
+    * the walker's own room (``room_id`` = its room, or empty for a point
+      inside its location): the visibility path on the room polygon; the
+      position stays the start until the flip, then ONE write of the target
+      (:func:`settle_due`);
+    * another room of the same location: a room change the setter has already
+      written (room and stand point at once, decision 10) — the estimate is
+      the room chain of the recipe, the flip writes nothing;
+    * outside every location outline: the nav-grid route of the travel engine
+      as ``hint_route``, the passability gate on the target; the flip writes
+      the target.
+
+    A target outside the walker's own location (another location, or the
+    open from inside one, or a location from the open) is a journey, not a
+    walk (``no_route``).
+    ``level`` and ``y`` are informative: the target room decides the storey
+    and its floor (``y`` overrides the floor height). The times: ``exit_s`` of
+    the pose before the walk (a room change: the pose ``start`` carries),
+    ``entry_s`` 0, flip = eta. A walk inside a room or out in the open first
+    ends what the figure is doing (the stale gate, the prop action, a pair, a
+    journey) and frees a plain seat in the same profile write that stores
+    the order; a room change leaves that to its setter."""
+    from app.core import places
+    from app.core import travel_engine as travel
+    from app.core.height import height_cm
+    from app.core.keyed_lock import keyed_lock
+    from app.core.party_engine import is_party_follower
+    from app.core.pose_catalog import group_of
+    from app.core.world_geometry import location_at_point
+    from app.models.account import is_player_controlled
+    from app.models.character import get_character_profile, save_character_profile
+    from app.models.world import get_location_by_id, list_locations
+
+    if not name:
+        return None, "no_route"
+    try:
+        gx, gz = round(float(x), 2), round(float(z), 2)
+    except (TypeError, ValueError):
+        return None, "no_route"
+    if not (math.isfinite(gx) and math.isfinite(gz)):
+        return None, "no_route"
+    if is_party_follower(name):
+        return None, "party_follower"
+    here = dict(start) if start is not None else start_of(name)
+    if here is None:
+        return None, "no_route"
+    held_pose = str(here.pop("pose_key", "") or "")
+    walker_loc = here.pop("location_id", None)
+    if walker_loc is None:
+        walker_loc = places.where(name)[0]
+    at = location_at_point(gx, gz, list_locations())
+    location_id = (at.get("id") or "") if at else ""
+    if location_id != (walker_loc or ""):
+        # Entering or leaving a location (or crossing into another one) is
+        # a journey, never a walk: a walk stays where it starts.
+        return None, "no_route"
+    location = get_location_by_id(location_id) if location_id else None
+    if location_id:
+        room_id = room_id or places.where(name)[1]
+        if not any(isinstance(r, dict) and r.get("id") == room_id for r in (location or {}).get("rooms") or []):
+            return None, "no_route"
+        level = _room_level(location or {}, room_id)
+        goal_y = float(y) if y is not None else _level_floor_y(location, location_id, level)
+    else:
+        room_id, level = "", 0
+        goal_y = float(y) if y is not None else 0.0
+    room_change = bool(location_id) and room_id != (here.get("room_id") or "")
+    length, hint_route, mode = _walk_length(name, here, gx, gz, room_id, location, location_id, goal_y)
+    if length is None:
+        return None, mode
+
+    if room_change:
+        _kind, exit_s = travel.exit_bridge_for_pose(held_pose)
+    else:
+        from app.core.interaction_engine import end_interaction, stale_against_pair
+        stale = stale_against_pair(name)
+        if stale:
+            return None, stale
+        # The exit of the pose held BEFORE the seat is freed below.
+        _kind, exit_s = travel.departure_bridge(name)
+        held_pose = held_pose or ""
+        from app.models.character import _interrupt_prop_action
+        _interrupt_prop_action(name, "journey")
+        end_interaction(name, reason="journey")
+        journey = travel.get_journey(name)
+        if journey:
+            travel.cancel_journey(name, journey_id=journey.get("journey_id"), reason="walk")
+    issued = _now_s()
+    speed = float(travel.get_travel_speed_m_s())
+    eta, flip = estimate(issued, exit_s, length, speed, 0.0)
+    sequence = []
+    if exit_s > 0:
+        sequence.append(step("exit", group_of(held_pose), held_pose, exit_s))
+    sequence.append(step("walk"))
+    actor = actor_row(name, "actor", "", height_cm(get_character_profile(name) or {}), here,
+                      sequence=sequence, reports_arrival=is_player_controlled(name))
+    order = new_order("walk", issued_s=issued, eta_s=eta, flip_s=flip, deadline_s=deadline(issued, eta),
+                      actors=[actor], speed_m_s=speed, gait="walk", status="approaching",
+                      hint_route=hint_route,
+                      target={"location_id": location_id, "room_id": room_id, "level": level,
+                              "x": gx, "y": goal_y, "z": gz})
+    writes = not room_change
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        old = profile.get(PROFILE_KEY)
+        if writes and profile.get("place"):
+            # The seat release of _start (plan E3 Task 7, third review 3): a
+            # plain seat without a run is freed nowhere else, because the flip
+            # writes with preserve_movement_target=True.
+            profile.update(place=None, pose_key="", pose_flavor="")
+        # Published under the profile lock: the profile stores the order with
+        # its seq, and a settle of the same order waits for this write.
+        published = publish(order, names=[name], locations=[location_id or walker_loc or ""])
+        profile[PROFILE_KEY] = {"order": published, "writes_at_flip": writes}
+        if not save_character_profile(name, profile):
+            with _INDEX_LOCK:
+                entry = _INDEX.get(name)
+                if entry is not None and entry[0].get("order_id") == published["order_id"]:
+                    _INDEX.pop(name, None)
+            return None, "write_failed"
+    if isinstance(old, dict) and isinstance(old.get("order"), dict) \
+            and old["order"].get("order_id") != published["order_id"]:
+        logger.debug("walk %s of %s replaced by %s", old["order"].get("order_id"), name, published["order_id"])
+    try:
+        travel.get_travel_ticker().wake()
+    except Exception:  # noqa: BLE001 — no running ticker (scripts, tests)
+        pass
+    logger.info("Walk order %s: %s -> (%.2f, %.2f) %s (%s, %.2f m, flip in %.2f s)%s", published["order_id"],
+                name, gx, gz, room_id or "open", mode, length, flip - issued, f" [{reason}]" if reason else "")
+    return published, "ok"
+
+
+def walk_room_change(name: str, start: dict | None, *, reason: str = "") -> tuple[dict | None, str]:
+    """The decision points' second half of a room change (decision 10): the
+    setter has written the room and the stand point; publish the walk from
+    ``start`` (read before the setter, :func:`start_of`) to that point.
+    ``(None, "same_room")`` when the room did not change (the setter refused)."""
+    from app.core import places
+    from app.models.character import get_character_pos
+    if not start:
+        return None, "no_route"
+    loc_id, room_id = places.where(name)
+    if not room_id or room_id == start.get("room_id") or loc_id != start.get("location_id"):
+        return None, "same_room"
+    pos = get_character_pos(name)
+    if pos is None:
+        return None, "no_route"
+    return issue_walk(name, pos["x"], pos["z"], room_id=room_id, start=start, reason=reason)
+
+
+def cancel_for(name: str, *, reason: str, snap: bool = False, quiet: bool = False,
+               at: tuple[float, float] | None = None) -> None:
+    """The choke point that ends a live walk (decision 20): clears the profile
+    field ``order`` and publishes a ``cancel`` order (new id, ``stand`` = where
+    the figure stands now, ``snap`` for a teleport) — when a walk runs, or
+    always with ``snap``. ``quiet`` (only ``prop_action_engine._start``)
+    clears without a cancel order: the run's order replaces the walk at once.
+    ``at``: the point a position write is about to store (its caller cancels
+    BEFORE the write), so ``stand`` names where the figure will be."""
+    from app.core import places
+    from app.core.height import height_cm
+    from app.core.keyed_lock import keyed_lock
+    from app.models.account import is_player_controlled
+    from app.models.character import get_character_pos, get_character_profile, save_character_profile
+    from app.models.world import get_location_by_id
+    if not name:
+        return
+    if not snap and _index_walk(name) is None:
+        # The index is the truth while the server runs (boot fills it from the
+        # profiles): no live walk, nothing to read or write on this hot path.
+        return
+    walk = None
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        record = profile.get(PROFILE_KEY)
+        if isinstance(record, dict):
+            walk = record.get("order")
+            profile.pop(PROFILE_KEY, None)
+            save_character_profile(name, profile)
+    indexed = _index_walk(name)
+    for old in (walk, indexed):
+        if isinstance(old, dict):
+            retire(old.get("order_id", ""))
+    if quiet or (walk is None and indexed is None and not snap):
+        return
+    pos = get_character_pos(name) or {}
+    loc_id, room_id = places.where(name)
+    location = get_location_by_id(loc_id) if loc_id else None
+    level = _room_level(location or {}, room_id)
+    floor_y = _level_floor_y(location, loc_id, level)
+    sx, sz = at if at is not None else (pos.get("x") or 0.0, pos.get("z") or 0.0)
+    point = {"x": float(sx), "y": floor_y, "z": float(sz), "yaw": None}
+    now = _now_s()
+    actor = actor_row(name, "actor", "", height_cm(get_character_profile(name) or {}),
+                      dict(point, room_id=room_id, level=level), reports_arrival=is_player_controlled(name))
+    cancel = new_order("cancel", issued_s=now, eta_s=now, flip_s=now, deadline_s=deadline(now, now),
+                       actors=[actor], speed_m_s=0.0, gait="walk", status="ended", snap=snap,
+                       stand=point, target={"location_id": loc_id, "room_id": room_id, "level": level,
+                                            "floor_y": floor_y})
+    publish(cancel, names=[name], locations=[loc_id])
+    logger.info("Walk cancelled: %s (%s%s)", name, reason, ", snap" if snap else "")
+
+
+def settle_due(now_s: float | None = None) -> int:
+    """Settle every live walk whose flip has come (``flip ≤ now``): only when
+    its id is still the profile's current walk (review B4) — the field is
+    cleared under the profile lock FIRST, then a walk inside a room or out in
+    the open writes its target once with ``set_character_pos(...,
+    preserve_movement_target=True)`` (no ``cancel_for``, no interrupt, no pair
+    end; second review N3), a room change writes nothing (decision 10). The
+    order is revised to ``ended`` and published; the agent loop gets its
+    arrival bump. A walk another write has replaced only leaves the index.
+    Returns how many settled."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile, set_character_pos
+    now = _now_s() if now_s is None else float(now_s)
+    with _INDEX_LOCK:
+        due = [(name, order) for name, (order, until) in _INDEX.items()
+               if until is None and order.get("kind") == "walk"
+               and order.get("flip_motion_s") is not None and float(order["flip_motion_s"]) <= now]
+    settled = 0
+    for name, order in due:
+        record = None
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            current = profile.get(PROFILE_KEY)
+            if (isinstance(current, dict) and isinstance(current.get("order"), dict)
+                    and current["order"].get("order_id") == order.get("order_id")):
+                profile.pop(PROFILE_KEY, None)
+                if save_character_profile(name, profile):
+                    record = current
+        if record is None:
+            with _INDEX_LOCK:
+                entry = _INDEX.get(name)
+                if entry is not None and entry[0].get("order_id") == order.get("order_id"):
+                    _INDEX.pop(name, None)
+            continue
+        target = order.get("target") or {}
+        if record.get("writes_at_flip"):
+            try:
+                set_character_pos(name, float(target["x"]), float(target["z"]), preserve_movement_target=True)
+            except (KeyError, TypeError, ValueError):
+                logger.warning("walk %s of %s has no target point", order.get("order_id"), name)
+        ended = dict(order, status="ended", revision=int(order.get("revision", 1)) + 1)
+        publish(ended, names=[name], locations=[target.get("location_id") or ""])
+        settled += 1
+        try:
+            from app.core.agent_loop import get_agent_loop
+            get_agent_loop().bump(name)
+        except Exception:  # noqa: BLE001 — no loop (scripts, tests)
+            pass
+    return settled
+
+
+def _boot_walks(shift: float, alive: float | None) -> None:
+    """The live walks of the profiles back into the index at boot (decision
+    7c for a walk): shifted by ``shift`` unless already marked ``boot_alive_s``
+    = ``alive`` (revision + 1, republished, profile rewritten), otherwise
+    filed as they are — a walk whose flip has passed settles on the next beat."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, list_profile_orders, save_character_profile
+    for name in list_profile_orders():
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            record = profile.get(PROFILE_KEY)
+            order = record.get("order") if isinstance(record, dict) else None
+            if not isinstance(order, dict) or order.get("kind") != "walk" or order.get("status") == "ended":
+                continue
+            if shift > 0 and order.get("boot_alive_s") != alive:
+                moved = dict(order, revision=int(order.get("revision", 1)) + 1, boot_alive_s=alive)
+                for key in ("issued_motion_s", "eta_motion_s", "flip_motion_s", "deadline_motion_s"):
+                    if moved.get(key) is not None:
+                        moved[key] = round(float(moved[key]) + shift, _DECIMALS)
+                order = publish(moved, names=[name],
+                                locations=[(moved.get("target") or {}).get("location_id") or ""])
+                record["order"] = order
+                save_character_profile(name, profile)
+            else:
+                with _INDEX_LOCK:
+                    _INDEX[name] = (order, None)

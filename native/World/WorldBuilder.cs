@@ -160,25 +160,14 @@ public sealed class LocationSlot
     public IReadOnlySet<string> GroundRooms { get; init; } = new HashSet<string>();
 
     /// <summary>
-    /// What a room change of a figure walks through (main.ts' <c>route</c> branch, <see cref="Figures.NpcRoute"/>): the
-    /// scene's doorways in the tile frame, <c>roomIdOf</c> over the location's rooms (id or name → id), the room levels,
-    /// the world flights and the lift stops of the mount. Null without a scene.
+    /// <c>roomIdOf(tile, raw)</c>: a room id or name → the room's id over the location's rooms; null without a scene,
+    /// for an empty name or a room the location does not have.
     /// </summary>
-    public Figures.RouteTile? RouteView()
+    public string? RoomIdOf(string? raw)
     {
-        if (Scene is not { } scene) return null;
-        var rooms = DetailRooms;
-        return new Figures.RouteTile
-        {
-            Frame = Stands.Frame, Doorways = scene.Doorways, RoomLevels = Stands.RoomLevels,
-            RoomIdOf = raw =>
-            {
-                if (string.IsNullOrEmpty(raw)) return null;
-                foreach (var (id, name) in rooms) if (id == raw || name == raw) return id;
-                return null;
-            },
-            Stairs = Places.Stairs, LiftStops = Places.ElevatorStops,
-        };
+        if (Scene is null || string.IsNullOrEmpty(raw)) return null;
+        foreach (var (id, name) in DetailRooms) if (id == raw || name == raw) return id;
+        return null;
     }
     /// <summary><c>tile.isBuilding</c> (<c>!map3d.area_model</c>): the huddle lines up in front of a building, rings an area.</summary>
     public bool IsBuilding { get; init; }

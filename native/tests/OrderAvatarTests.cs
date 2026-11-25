@@ -158,6 +158,24 @@ public class OrderAvatarTests
     }
 
     [Fact]
+    public void OpenWalkFollowsTheHintRoute()
+    {
+        // Plan E3 Task 9: no navmesh out in the open — (0, 0) → (4, 4) along the hint (0, 0), (4, 0), (4, 4): 4 + 4 = 8 m
+        // at 1 m/s instead of the straight √32 = 5.657 m; at 2.0 s on (2, 0), the loop on the goal from 8.0 s on.
+        var walk = LocalOrders.Walk(4, 100, 1.0, "Ona", P(0, 0, 0), "", 0, P(4, 0, 4), "", "", 0)
+            with { HintRoute = new[] { new AnimaNative.Scatter.P2(0, 0), new AnimaNative.Scatter.P2(4, 0), new AnimaNative.Scatter.P2(4, 4) } };
+        var h = new OrderHarness(null);
+        h.Accept(walk);
+        var f = h.RunThrough(2.0);
+        Assert.True(Math.Abs(f.Position.X - 2) <= TolM && Math.Abs(f.Position.Z) <= TolM, $"{f.Position}");
+        Assert.True(Math.Abs(h.Player.WalkPlan!.Length - 8) <= 1e-9, $"{h.Player.WalkPlan!.Length}");
+        f = h.RunThrough(9.0);
+        Assert.True(Math.Abs(f.Position.X - 4) <= TolM && Math.Abs(f.Position.Z - 4) <= TolM, $"{f.Position}");
+        Assert.Equal(new[] { OrderState.Walk, OrderState.Loop }, h.States.Select(s => s.State));
+        Assert.True(Math.Abs(h.States[1].T - 8.0) <= 2 * Frame, $"loop at {h.States[1].T}");
+    }
+
+    [Fact]
     public void ServerOrderCarriesItsExecutionId()
     {
         var w = OrderParseTests.Wire();

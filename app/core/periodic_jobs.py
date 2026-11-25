@@ -215,7 +215,12 @@ def _sub_force_rules():
                             logger.info("Force-rule journey failed for %s: %s", name, reason)
                     # Failed starts and confinement apply flags at the origin.
                 elif dest_room and dest_room != _before_room:
+                    # A room change inside the location is a walk order
+                    # (plan E3 decision 10): the start is read BEFORE the setter.
+                    from app.core import motion_orders
+                    _walk_start = motion_orders.start_of(name, profile=_before_prof)
                     save_character_current_room(name, dest_room)
+                    motion_orders.walk_room_change(name, _walk_start, reason="force_rule")
 
                 # State flags are authoritative (is_sleeping wakes/sleeps).
                 # They replace the old activity-based sleeping state.

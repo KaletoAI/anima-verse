@@ -530,6 +530,7 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
                                       get_character_current_room,
                                       get_character_profile,
                                       is_character_sleeping)
+    from app.core import motion_orders
     from app.core.travel_engine import get_journey
     if not actor or not partner or actor == partner:
         return "an interaction needs two different characters"
@@ -540,7 +541,9 @@ def check_can_pair(actor: str, partner: str, pose_key: str = "") -> str:
         prof = get_character_profile(name)
         if prof is None:
             return f"{name} does not exist"
-        if get_journey(name, profile=prof):
+        # A stroll counts as away; a room change has already written its
+        # room and point, and start_interaction ends its walk image.
+        if get_journey(name, profile=prof) or motion_orders.walking(name, profile=prof, strolls_only=True):
             return f"{name} is travelling"
         if get_interaction(name, prof) and not together:
             return f"{name} is already busy with someone"
@@ -834,6 +837,11 @@ def start_interaction_at(names: List[str], pose_key: str, *, execution_id: str,
         raise ValueError(f"pair clip '{kind}' has no sidecar duration")
     loop = clip_loops(meta)
     loop_count = clip_loop_count(meta)
+    # A walk order ends here (plan E3 decision 20); the run's _start has
+    # normally done it already, so this is the net under it.
+    from app.core.motion_orders import cancel_for
+    for name in names:
+        cancel_for(name, reason="interaction")
     # The pose-independent side of "can they pair up"; the run asked its
     # furniture presence rule itself, so no pose goes to the packages here.
     for other in names[1:]:
@@ -952,6 +960,12 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # lasts is not a number here — a signal ends it (E4).
     loop = clip_loops(meta)
     loop_count = clip_loop_count(meta)
+    # A walk order of either ends here: the pair holds both figures from now
+    # on, so the walk's flip must not write a target over them (plan E3
+    # decision 20). Before the gate below, which counts a walker as away.
+    from app.core.motion_orders import cancel_for
+    for name in (actor, partner):
+        cancel_for(name, reason="interaction")
 
     # The pose-independent side of "can these two pair up" — one definition,
     # asked here and by the invitation. Checked AFTER the clip: a pose with no

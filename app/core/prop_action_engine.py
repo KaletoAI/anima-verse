@@ -1103,6 +1103,9 @@ def _start(run):
         origins[name] = tuple((seat["seat"] if isinstance(seat, dict) else seat) or points[0])
         lengths[name] = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
     for _role, name in _members(run):
+        # A walk order the member is on ends here without a cancel order of
+        # its own: the run's order replaces it at once (plan E3 decision 20).
+        mo.cancel_for(name, reason="prop_action", quiet=True)
         # What the order names as its exit and start, captured BEFORE the
         # write below releases the seat (afterwards places.place_of is None).
         departure = _departure(name)

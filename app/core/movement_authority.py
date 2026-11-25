@@ -89,12 +89,20 @@ def move_character(character_name: str, location_id: str, room_id: str = "",
                                             journey_id=journey_id, execution_ref=execution_ref)
             return ({"status": "travelling", "journey": journey, "reason": ""} if journey
                     else {"status": "blocked", "reason": reason})
-        if (get_character_current_location(character_name) or "") != location_id:
+        same_location = (get_character_current_location(character_name) or "") == location_id
+        if not same_location:
             save_character_current_location(character_name, location_id)
             if get_character_current_location(character_name) != location_id:
                 return {"status": "blocked", "reason": "location_write_failed", "gate": "persistence"}
         if get_character_current_room(character_name) != target_room:
+            # A room change inside the location is a walk order (plan E3
+            # decision 10): its start is read BEFORE the setter writes the new
+            # room and stand point. A placement into a new location is not.
+            from app.core import motion_orders
+            walk_start = motion_orders.start_of(character_name) if same_location else None
             save_character_current_room(character_name, target_room)
+            if walk_start is not None:
+                motion_orders.walk_room_change(character_name, walk_start, reason="move")
         if get_character_current_room(character_name) != target_room:
             return {"status": "blocked", "reason": "room_write_failed", "gate": "persistence"}
         if target_pose:

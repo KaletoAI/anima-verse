@@ -4141,13 +4141,13 @@ E3 task 8), and its times are the server's estimate (below).
 | `order_id` | `ord-<hex>`, new for every new order (a furniture run keeps its id across revisions; a follow pose, a replacement or a `cancel` is a NEW id). Not the execution id — that is private to the participants (`target.execution_id`) |
 | `revision` | 1 for a new order, + 1 for every change of THIS order |
 | `seq` | global publication number (world_kv `motion_order_seq`), new for every publication (start, revision, cancel) |
-| `kind` | `prop_action` · `walk` (task 9) · `cancel` |
+| `kind` | `prop_action` · `walk` (task 9: a room change or a stroll, below) · `cancel` |
 | `issued_motion_s`, `eta_motion_s`, `flip_motion_s`, `deadline_motion_s` | motion-clock seconds: issued, estimated arrival at the access point, estimated state flip (end of the entry), latest second the server waits. `flip_motion_s` is **absent** while `awaits` is set |
 | `status` | `approaching` · `waiting` · `entering` · `active` · `ended` (informative for the client) |
 | `awaits` | `""` or `reaction` (a react pair waits for the partner's reaction) |
 | `gait`, `speed_m_s` | gait and pace (m per real second); a `cancel` carries 0 |
-| `target` | `location_id`, `room_id`, `level`, `floor_y`; a `prop_action` adds `placement_id`, `marker_id`, `place_id`, `slot` (the initiator's) and `execution_id` |
-| `hint_route` | rough server waypoints; empty in task 4 |
+| `target` | `location_id`, `room_id`, `level`, `floor_y`; a `walk` adds the goal `x`, `y`, `z` (world metres; `location_id` `""` out in the open); a `prop_action` adds `placement_id`, `marker_id`, `place_id`, `slot` (the initiator's) and `execution_id` |
+| `hint_route` | rough server waypoints `[[x, z], …]` in world metres: a `walk` out in the open carries the terrain route the server baked (start … target); empty inside a location and on every other kind |
 | `snap` | only `cancel` after a teleport |
 | `phase` | only a `combined` action: the id of its running phase |
 | `actors[]` | per participant: `name`, `role` (actor/partner), `clip_role` (a..e or ""), `height_cm`, `start` {x, y, z, yaw, room_id, level}, `access` {x, y, z, yaw} (floor point the path leads to), `anchor` {x, y, z, yaw, root_offset} (`y` is the body root after the measured pose-root offset; support height = `y + root_offset`), `entry_mode` (`bridge`/`direct`), `sequence[]`, `reports_arrival` (true exactly for a player-controlled figure), and on a `cancel` `stand` {x, y, z, yaw} |
@@ -4256,6 +4256,38 @@ order with a 0.3 s blend into the row's rest placement when `order_seq ≥` the
 order's `seq`, and ignores the missing field when `order_seq` is lower (that
 poll was built before the publication). A client-local order (`local:n`) is
 never ended by a row.
+
+**Walk orders** (`kind walk`, plan E3 task 9, decisions 9–11 and 20). Two
+cases, both inside ONE place: a walk never enters or leaves a location (that
+is a journey, § A11; `issue_walk` answers `no_route`).
+(1) A **room change** inside a location at a decision point (NPC action turn,
+`movement_authority.move_character`, the chat room change of an agent, a
+force rule): the room setter writes the new room and its stand point AT ONCE;
+the order is only the picture of the way there (`start` read before the
+setter, `target` = the new room and point) and its flip writes nothing. The
+plain setter (admin, teleport, spawn, the scheduler's arrival room, belonging)
+issues no walk. (2) A **stroll** (an NPC roaming its home area, a walk inside
+one room): the position stays where it is until the flip, which writes the
+target once.
+Times: `eta = flip = issued + exit_s + L / speed + 0.5`, no entry; `L` is
+the room chain (rooms + doorways + stairs flights, the horizontal part × 1.3)
+for a room change, the straight visibility path around the room's furniture
+inside one room, and the baked terrain route (`hint_route`) in the open —
+the server runs no path search inside a location; the client walks its own
+navmesh path. `sequence` = `[exit?] + [walk]`, the `exit` of a held
+pose (a stroll first frees a plain seat). At the flip the order is revised to
+`status ended` (same id, revision + 1) and stays published for
+`ORDER_TAIL_S`. A position write, a teleport (`snap: true`), a journey,
+a pair start, a furniture run (quietly, its own order replaces the walk), a
+party join end a live walk through ONE choke point (`motion_orders.cancel_for`)
+with a `cancel` order whose `stand` is the written point. A live walk is
+"on the way" for the NPC action turn, NPC scenes, wanderer settling, linked
+swaps and the condition `travelling`; a pair is held off only by a stroll.
+The order is persisted on the profile (field `order`) and shifted on a
+server start like the runs. A row without an order that changes room lets
+the native client walk a client-local order (`local:n`) to the new point.
+Checked by `scripts/smoke_walk_orders.py` (W1–W16) and
+`scripts/smoke_walk_outdoor.py` (O1–O4).
 
 **Server start.** `motion_orders.boot()` runs in the lifespan before the
 AgentLoop, `periodic_jobs` and the TravelTicker and rebuilds the index from

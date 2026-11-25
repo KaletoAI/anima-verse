@@ -67,7 +67,8 @@ def _free(name: str) -> bool:
     if get_character_status(name) or not npc_actions.action_available(name):
         return False
     profile = get_character_profile(name) or {}
-    if is_character_sleeping(name) or profile.get("journey"):
+    from app.core.motion_orders import walking
+    if is_character_sleeping(name) or profile.get("journey") or walking(name, profile=profile):
         return False
     if npc_actions._is_busy(name, profile) or npc_actions._in_chat(name):
         return False

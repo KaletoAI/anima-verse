@@ -914,6 +914,10 @@ def start_journey(character_name: str, target_id: str,
     from app.models.character import _interrupt_prop_action
     _interrupt_prop_action(character_name, "journey")
     end_interaction(character_name, reason="journey")
+    # A walk order this journey replaces must not write its target at its
+    # flip (plan E3 decision 20).
+    from app.core.motion_orders import cancel_for
+    cancel_for(character_name, reason="journey")
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob, so a stale read would revert what a
     # concurrent writer (an equip route, the seat assignment) just stored.
@@ -1021,6 +1025,10 @@ def start_journey_to_point(character_name: str, x: float,
     from app.models.character import _interrupt_prop_action
     _interrupt_prop_action(character_name, "journey")
     end_interaction(character_name, reason="journey")
+    # A walk order this journey replaces must not write its target at its
+    # flip (plan E3 decision 20).
+    from app.core.motion_orders import cancel_for
+    cancel_for(character_name, reason="journey")
     # Same lock as ``start_journey`` — read and write of the profile blob
     # under ``character_profile``, with ``end_interaction`` kept outside it.
     from app.core.keyed_lock import keyed_lock
@@ -1056,9 +1064,15 @@ def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
     """Remove only the selected journey. All supplied selectors must match;
     an owned journey (a party trip intent) also records its result in
     ``last_journey_result`` (written for diagnosis; no core reader), so an
-    owner may hold its own lock and cancel its exact journey safely."""
+    owner may hold its own lock and cancel its exact journey safely. Without
+    any selector it also ends a live walk order (``motion_orders.cancel_for``)."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
+    if journey_id is None and execution_ref is None and execution_kind is None:
+        # "Stop moving" without a selector also ends a walk order (plan E3
+        # decision 20, the choke point of every movement write).
+        from app.core.motion_orders import cancel_for
+        cancel_for(character_name, reason=reason)
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         journey = profile.get("journey")
@@ -1959,6 +1973,13 @@ class TravelTicker:
             except Exception:
                 logger.exception("prop action advance failed")
             try:
+                # A walk order whose flip has come writes its target once
+                # (plan E3 Task 9).
+                from app.core import motion_orders
+                await asyncio.to_thread(motion_orders.settle_due)
+            except Exception:
+                logger.exception("walk order settle failed")
+            try:
                 # The motion orders' liveness stamp (plan E3 decision 7b): a
                 # restart shifts every order by the downtime after it.
                 from app.core import motion_orders
@@ -1995,7 +2016,7 @@ def _next_beat_s() -> float:
     """Real seconds until the next beat: the fixed tick, or sooner when a
     furniture run's next timed step comes first (``prop_action_engine.due_in_s``:
     an NPC's eta, the entry's flip, the deadline, a combined phase end, a
-    gauge beat) or a pose scene ends after its finale. Overland journeys keep
+    gauge beat), a walk order flips or a pose scene ends after its finale. Overland journeys keep
     the fixed beat — their arrival is minutes away and a few seconds do not
     show.
     """
@@ -2007,6 +2028,11 @@ def _next_beat_s() -> float:
     due = engine.due_in_s(game_time()) if engine is not None else None
     if due is not None:
         soonest = min(soonest, max(0.0, due) + _MIN_BEAT_S)
+    from app.core.motion_orders import walk_due_in_s
+    walk = walk_due_in_s()
+    if walk is not None:
+        # A walk order's flip (plan E3 Task 9): its one write is seconds away.
+        soonest = min(soonest, max(0.0, walk) + _MIN_BEAT_S)
     from app.core.pose_scene import next_end_in_s
     end = next_end_in_s()
     if end is not None:

@@ -296,6 +296,10 @@ def execute_cast(avatar_name: str, target_name: str,
                             save_character_current_location(moved, dest_loc)
                         if dest_room:
                             save_character_current_room(moved, dest_room)
+                        # The figure jumps: a walk ends and every client
+                        # puts it down at once (plan E3 decision 20).
+                        from app.core.motion_orders import cancel_for
+                        cancel_for(moved, reason="teleport", snap=True)
                         teleport_info = {
                             "moved_character": moved,
                             "to_location": dest_loc,
@@ -318,6 +322,8 @@ def execute_cast(avatar_name: str, target_name: str,
                         save_character_current_location(avatar_name, dest_loc)
                         if dest_room:
                             save_character_current_room(avatar_name, dest_room)
+                        from app.core.motion_orders import cancel_for
+                        cancel_for(avatar_name, reason="teleport", snap=True)
                         teleport_info = {
                             "moved_character": avatar_name,
                             "to_location": dest_loc,

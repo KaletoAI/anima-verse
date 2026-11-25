@@ -109,7 +109,7 @@ public sealed partial class WorldBuilder
         // Task 51 / E7-T6 §0.9: avatar proximity in ALL modes; light/camera focus never stands for the avatar.
         foreach (var slot in _slots.Values)
         {
-            var room = slot.RouteView()?.RoomIdOf(avatarRoom) ?? (avatarRoom == groundRoom ? groundRoom : "");
+            var room = slot.RoomIdOf(avatarRoom) ?? (avatarRoom == groundRoom ? groundRoom : "");
             int level = slot.Stands.RoomLevels.TryGetValue(room, out int own) ? own
                 : room.Length > 0 && room != groundRoom ? slot.LevelFilter : 0;
             var local = avatar is { } p ? SceneView.WorldToTile(slot.Stands.Frame, p.X, p.Z) : (AnimaNative.Scatter.P2?)null;

@@ -107,6 +107,35 @@ public partial class FigureManager
         return any;
     }
 
+    /// <summary>The ids of the client-local room walks (<c>local:&lt;n&gt;</c>), apart from the avatar's click counter.</summary>
+    private int _roomWalks = 1_000_000;
+    /// <summary>The ids of the room walks still played: at their goal they hand the figure back to the rows.</summary>
+    private readonly HashSet<string> _roomWalkIds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Plan E3 Task 9 (review W6): a room change of an NPC row WITHOUT a server order (a party follower, a refused walk,
+    /// an admin move) walks a client-local <c>walk</c> (<see cref="LocalOrders.Walk"/>) from where the figure is drawn to
+    /// the row's new point, over the navmesh of the location (links ridden on the way). Not for a player-driven figure
+    /// (input owns it), a row that carries an order, an unmounted location or a figure already on the point. True when the figure took it.
+    /// </summary>
+    private bool StartRoomWalk(Figure fig, FigurePlan plan)
+    {
+        string name = fig.CharacterName;
+        if (IsPlayerDriven(name)) return false;
+        if (!_rowByName.TryGetValue(name, out var row) || row.Order is not null || row.LocationId.Length == 0) return false;
+        if (Slots?.Invoke().GetValueOrDefault(row.LocationId) is not { } tile) return false;
+        double dx = plan.Pos.X - fig.Position.X, dz = plan.Pos.Z - fig.Position.Z;
+        if (dx * dx + dz * dz <= OrderPlayer.ArriveTolM * OrderPlayer.ArriveTolM) return false;
+        int Level(string? room) => room is not null && tile.Stands.RoomLevels.TryGetValue(room, out var l) ? l : 0;
+        var start = new OrderPoint(fig.Position.X, fig.Position.Y, fig.Position.Z, fig.Yaw * 180 / Math.PI);
+        var goal = new OrderPoint(plan.Pos.X, plan.Pos.Y, plan.Pos.Z, start.YawDeg);
+        var walk = LocalOrders.Walk(++_roomWalks, MotionNow, LocalOrders.DefaultSpeedMS, name, start, plan.FromRoom ?? "",
+                                    Level(plan.FromRoom), goal, row.LocationId, plan.InRoom ?? "", Level(plan.InRoom));
+        if (!StartLocalOrder(walk)) return false;
+        _roomWalkIds.Add(walk.Id);
+        return true;
+    }
+
     /// <summary>The server refused the figure's order (a reservation, a room): it stops where it stands (event <c>aborted</c>).</summary>
     public void RefuseOrder(string name, string reason)
     {
@@ -402,6 +431,12 @@ public partial class FigureManager
             case OrderState.Idle:
             case OrderState.Abort:
                 return false;
+            case OrderState.Loop when _roomWalkIds.Remove(order.Id):
+                // A room walk at its goal: blended into the row's rest placement, then the rows place the figure again.
+                _orderPlayers.Remove(name);
+                _orderShownState.Remove(name);
+                _orderBlends[name] = (fig.Position, _clock);
+                return TickOrderBlend(fig, _orderBlends[name], dt, camDist);
             case OrderState.Loop:
                 if (!_orderLoopShown.TryGetValue(name, out var shownId) || shownId != order.Id) ShowLoopStart(fig, player, frame);
                 ApplyLoopSurface(fig, player);

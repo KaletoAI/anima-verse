@@ -280,21 +280,18 @@ public sealed record FigurePlan(string Name, Vec3 Pos, string Rule, bool Snap, b
 {
     /// <summary>The actual marker or selected fallback surface; ground without one.</summary>
     public string SurfaceGroup { get; init; } = "ground";
-    /// <summary>A real room change was routed this pass (<c>transition === 'route'</c>): a climb left from before ends.</summary>
-    public bool Routed { get; init; }
-    /// <summary>The stations of that route (doors, landings, lift stops; npcs.ts <c>st.via</c>); null = none.</summary>
-    public IReadOnlyList<Vec3>? Via { get; init; }
-    /// <summary>The stair legs of that route (the NPC's guided climb, unarmed); empty = no ride.</summary>
-    public IReadOnlyList<Scene.StairLeg> Legs { get; init; } = Array.Empty<Scene.StairLeg>();
+    /// <summary>
+    /// A real room change this pass (<c>transition === 'route'</c>): without a server order the figure walks a
+    /// client-local <c>walk</c> over the location's navmesh to <see cref="FigurePlan.Pos"/> (plan E3 Task 9).
+    /// </summary>
+    public bool RoomChange { get; init; }
+    /// <summary>The room the figure was drawn in before that change (the local walk's start room); null = the ground.</summary>
+    public string? FromRoom { get; init; }
 }
 
 /// <summary>What a location's BUILT tile hands the placement (main.ts <c>residency.get(loc).tile</c> + its lookups).</summary>
 public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<double, double, double> GroundY,
-                                       Func<string, double, double, double?> RoomStandY)
-{
-    /// <summary>The doors, stairs and lift of the mounted scene for a room change (null = no routing: straight line).</summary>
-    public RouteTile? Route { get; init; }
-}
+                                       Func<string, double, double, double?> RoomStandY);
 
 /// <summary>
 /// WHICH characters stand on the map and WHERE — client3d/src/main.ts <c>computeNpcPlacements</c> without the avatar's
@@ -367,15 +364,12 @@ public static class FigurePlacement
                 // main.ts: the room the figure was drawn in is read BEFORE the new placement is filed — the start of the walk.
                 var prevRoom = shown.TryGetValue(f.Row.Name, out var prev) ? prev.Room : null;
                 if (f.Transition != FigureTransition.Stay) shown[f.Row.Name] = new ShownPlacement(f.InRoom, f.InteriorShown);
-                NpcRoutePlan? route = f.Transition == FigureTransition.Route && loc.Route is { } rt
-                    ? NpcRoute.Plan(rt, prevRoom, f.InRoom) : null;
                 plans.Add(new FigurePlan(f.Row.Name, f.Pos, f.Branch == "huddle" ? "tile" : f.Branch,
                                          f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom)
                 {
                     SurfaceGroup = f.SurfaceGroup,
-                    Routed = f.Transition == FigureTransition.Route,
-                    Via = route is { Via.Count: > 0 } ? route.Via : null,
-                    Legs = route?.Legs ?? (IReadOnlyList<Scene.StairLeg>)Array.Empty<Scene.StairLeg>(),
+                    RoomChange = f.Transition == FigureTransition.Route,
+                    FromRoom = prevRoom,
                 });
             }
         }

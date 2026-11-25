@@ -32,6 +32,8 @@ namespace AnimaNative.Check;
 ///   R11 a phase revision changes the pose from the row, no new run;  R12 late entry in phase 2 shows that phase;
 ///   R13 a row without order (order_seq ≥ seq) blends into the rest placement; R13b an older row changes nothing;
 ///   R13c a local walk outlives a row without order;
+///   R7  a server walk r-a → r-up: one stair link (owner 65536), through T0, length 20.379, arrival before flip + 5, no
+///       healing; R7b the same room change as a row without order → a client-local walk of the same path, on the mesh;
 ///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
 ///       for 1 s stands still and ends its chain 1 s later.
@@ -327,6 +329,71 @@ public static partial class OrderCheck
             Is("R13c the row does not end the local walk", r13c.M.HasLiveOrder(Uli) && r13c.Of(Uli).LastOrDefault() == OrderState.Walk, Seq(r13c, Uli));
             r13c.Until(3.0);
             NearXZ("R13c arrives at the goal", r13c.F(Uli).Position, new Vec3(99, 0, 0));
+
+            // ---- R7 a server walk r-a → r-up (plan E3 Task 9): one stair link, through T0, before flip + 5 ----
+            bool ThroughT0(NavPlan plan)
+            {
+                foreach (var w in plan.Steps.OfType<NavWalk>())
+                    for (int i = 1; i < w.Points.Count; i++)
+                    {
+                        var (a, b) = (w.Points[i - 1], w.Points[i]);
+                        if (a.Y > 1 || b.Y > 1 || (a.X - 100) * (b.X - 100) > 0 || a.X == b.X) continue;
+                        double z = a.Z + (b.Z - a.Z) * (100 - a.X) / (b.X - a.X);
+                        if (z >= 1.8 - TolM && z <= 2.2 + TolM) return true;
+                    }
+                return false;
+            }
+            const double R7FlipRel = 17.683833;   // README "Orders world" R7: 24.0573666 / 1.4 + 0.5
+            const double R7LenM = 20.379;         // README "Orders world" R7: the corner sum of the walk's path
+            // The client drew Uli in r-a (the first poll); the next poll carries the new room AND the order.
+            var r7 = await Start(Map());
+            r7.Until(0.5);
+            await Poll(r7, Map(m =>
+            {
+                var row = Row(m, Uli);
+                row["room_id"] = "r-up";
+                row["pos"] = new JsonObject { ["x"] = 104, ["z"] = 2 };
+                row["order"] = JsonNode.Parse($$"""
+                    {"order_id":"ord-r7","revision":1,"seq":5,"kind":"walk","issued_motion_s":100,"eta_motion_s":117.684,"flip_motion_s":117.684,
+                     "deadline_motion_s":127.684,"status":"approaching","awaits":"","gait":"walk","speed_m_s":1.4,
+                     "target":{"location_id":"loc-nav","room_id":"r-up","level":1,"floor_y":3,"x":104,"y":3,"z":2},"hint_route":[],"snap":false,
+                     "actors":[{"name":"{{Uli}}","role":"actor","clip_role":"","height_cm":180,"start":{"x":97,"y":0,"z":-1,"yaw":0,"room_id":"r-a","level":0},
+                                "access":null,"anchor":null,"entry_mode":"","sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}],"reports_arrival":false}]}
+                    """);
+                m["order_seq"] = 5;
+                m["motion_now"] = 100.5;
+            }));
+            r7.Until(0.5 + R7FlipRel + 5);
+            var plan7 = r7.M.OrderPlayerOf(Uli)?.WalkPlan;
+            Is("R7 the walk was planned", plan7 is not null, Seq(r7, Uli));
+            var links7 = plan7!.Steps.OfType<NavLink>().ToList();
+            Is("R7 exactly one link section, owner 65536 (the stairs)", links7.Count == 1 && links7[0].Owner == 65536,
+               $"links [{string.Join(",", links7.Select(l => l.Owner))}] length {plan7.Length:0.###} {Seq(r7, Uli)}");
+            // README "Orders world" R7: the orders world's bed narrows r-b, so the path bends at (102, −0.5)/(102, −1.5)
+            // and is 20.379 m, not the nav world's P2 19.630; the map's own query of the same two points must agree.
+            Near("R7 path length (orders world)", plan7.Length, R7LenM, TolM);
+            Near("R7 = the map's own query", plan7.Length, nav.Query(new Vec3(97, 0, -1), new Vec3(104, 3, 2)).Length, TolM);
+            Is("R7 through T0", ThroughT0(plan7));
+            Is("R7 arrived before flip + 5", r7.At(Uli, OrderState.Loop) is { } loop7 && loop7 <= 0.5 + R7FlipRel + 5, Seq(r7, Uli));
+            Is("R7 no healing", !r7.Events.Any(e => e.Name == Uli && e.Event == "healed"),
+               string.Join(" ", r7.Events.Where(e => e.Name == Uli).Select(e => e.Event)));
+            NearXZ("R7 on the goal", r7.F(Uli).Position, new Vec3(104, 3, 2));
+
+            // ---- R7b the same room change as a row without order: a client-local walk of the same path ----
+            var r7b = await Start(Map());
+            r7b.Until(0.5);
+            await Poll(r7b, Map(m => { var row = Row(m, Uli); row["room_id"] = "r-up"; row["pos"] = new JsonObject { ["x"] = 104, ["z"] = 2 }; }));
+            r7b.Until(0.5 + 2 * Dt);
+            var local7 = r7b.M.OrderPlayerOf(Uli)?.Current;
+            Is("R7b a client-local walk", local7 is { IsLocal: true, Kind: "walk" }, local7?.Id ?? "none");
+            var plan7b = r7b.M.OrderPlayerOf(Uli)?.WalkPlan;
+            Near("R7b path length (as R7)", plan7b?.Length, R7LenM, TolM);
+            var off = plan7b?.Steps.OfType<NavWalk>().SelectMany(w => w.Points)
+                .Select(p => (p, on: nav.Closest(p))).Where(q => Math.Sqrt((q.on.X - q.p.X) * (q.on.X - q.p.X) + (q.on.Z - q.p.Z) * (q.on.Z - q.p.Z)) > TolM).ToList();
+            Is("R7b no point off the mesh", off is { Count: 0 }, string.Join(" ", off?.Select(q => $"({q.p.X:0.##},{q.p.Z:0.##})") ?? Array.Empty<string>()));
+            r7b.Until(0.5 + R7FlipRel + 5);
+            Is("R7b the local walk ended", !r7b.M.HasLiveOrder(Uli), Seq(r7b, Uli));
+            NearXZ("R7b on the row's point", r7b.F(Uli).Position, new Vec3(104, 3, 2));
 
             // ---- R14 a held member's follow pose; a cancel for one member ----
             var r14 = await Start(PairMap());
