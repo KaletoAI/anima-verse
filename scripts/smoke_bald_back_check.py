@@ -141,7 +141,8 @@ def main() -> int:
             path.with_suffix(".json").write_text(json.dumps({"n": len(renders), **sidecar_extra}))
             return path
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False, base_alpha=False):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False, base_alpha=False,
+                    front_region=None, front_bands=None):
             Path(target).write_bytes(Path(draft_file).read_bytes())
             rec = {"version": vc.VERSION, "rule": rule, "ok": True, "iou": 0.99,
                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3}

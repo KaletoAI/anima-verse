@@ -1152,19 +1152,23 @@ def release_views(character_name: str, views: Iterable[str]) -> None:
 def base_steps_running(character_name: str) -> List[str]:
     """The base-body steps of the character queued or running now, by name (Ruling A26 — a Build does not
     start beside one): "Base body skin step", "Base body front view render", "Base body Run all" (from the
-    views' reservations, which a step takes from its click on) and "Base body model (mesh + rig)" (a base model
-    run, ``start_base_model`` from its click on). [] when none."""
+    views' reservations, which a step takes from its click on), "Base body model (mesh + rig)" (a base model
+    run, ``start_base_model`` from its click on) and "Body shape <view> view render" (``start_shape_view``: the
+    Figure tab's Regenerate of a body shape's view — a Build plans on the shape's views). [] when none."""
     out: List[str] = []
     with _status_lock:
         steps = {view: _running_step.get((character_name, view), RENDER_STEP)
                  for view in BASE_VIEWS if (character_name, view) in _running}
         model = character_name in _model_running
+        shape_view_run = _shape_view_running.get(character_name)
     for view, step in steps.items():
         name = (f"Base body {view} view render" if step == RENDER_STEP else f"Base body {step}")
         if name not in out:
             out.append(name)
     if model:
         out.append("Base body model (mesh + rig)")
+    if shape_view_run:
+        out.append(f"Body shape {shape_view_run['view']} view render")
     return out
 
 
@@ -2952,11 +2956,88 @@ def composite_outdated(record: Any) -> bool:
     return bool(composite.get("ok")) and bool(view_composite.check(composite))
 
 
+def front_garment_region(front: Optional[Path]) -> Optional[float]:
+    """The garment region of the DRESSED ``front`` (round 2026-11-25, ``view_composite`` EMPTY): its edit
+    composite's put-on region (sidecar ``edit_composite.coverage.region`` — every dressed front since Ruling A125 is
+    such an edit), else None (unknown: the old EMPTY rule applies). Read-only, the sidecar only."""
+    if front is None:
+        return None
+    record = _ref_sidecar(front).get("edit_composite")
+    coverage = record.get("coverage") if isinstance(record, dict) else None
+    if not isinstance(coverage, dict) or coverage.get("region") is None:
+        return None
+    try:
+        return float(coverage["region"])
+    except (TypeError, ValueError):
+        return None
+
+
+_BANDS_CACHE: Dict[Tuple[str, int, str, int], List[float]] = {}
+
+
+def front_garment_bands(front: Optional[Path], base_front: Optional[Path]) -> Optional[List[float]]:
+    """``view_composite.garment_bands`` of the DRESSED ``front`` on the plain ``base_front`` (round 2026-11-25: a
+    back / side view that keeps too little of a band the front is dressed in is refused), memoised per file
+    identity (path + mtime); None when a file is missing or unreadable. CPU, ~0.1 s on a miss."""
+    from app.core import view_composite
+    if front is None or base_front is None:
+        return None
+    try:
+        key = (str(front), Path(front).stat().st_mtime_ns, str(base_front), Path(base_front).stat().st_mtime_ns)
+    except OSError:
+        return None
+    if key not in _BANDS_CACHE:
+        try:
+            bands = view_composite.garment_bands(view_composite.load_rgba(base_front), view_composite.load_rgba(front))
+        except Exception:  # noqa: BLE001 — unknown bands: the band rule does not apply
+            logger.debug("Front garment bands of %s not measured", front, exc_info=True)
+            return None
+        if len(_BANDS_CACHE) > 256:
+            _BANDS_CACHE.clear()
+        _BANDS_CACHE[key] = bands
+    return list(_BANDS_CACHE[key])
+
+
+def view_lost_clothing(character_name: str, view: str, signature: str, front: Optional[Path],
+                       base_view: Optional[Path], base_front: Optional[Path]) -> bool:
+    """Whether the stored dressed ``view`` of ``signature`` lost clothing its dressed ``front`` wears: an EMPTY
+    composite of a dressed front (``empty_view_refused``) or a band the front is dressed in that the view keeps too
+    little of (``view_composite.clothing_lost`` of the two ``garment_bands``, measured on the files — memoised per
+    file identity). The Body sub-tab's red note beside the view (round 2026-11-25); planning never measures."""
+    from app.core import view_composite
+    from app.core.model_refs import find_ref_image
+    if view not in DRAFT_VIEWS or front is None:
+        return False
+    if empty_view_refused(character_name, view, signature, front):
+        return True
+    path = find_ref_image(character_name, _kind(view), signature)
+    return bool(path is not None and view_composite.clothing_lost(front_garment_bands(front, base_front),
+                                                                  front_garment_bands(path, base_view)))
+
+
+def empty_view_refused(character_name: str, view: str, signature: str, front: Optional[Path]) -> bool:
+    """Whether the stored dressed ``view`` of ``signature`` is an EMPTY composite (the base view unchanged) while
+    its dressed ``front`` wears clothing (``front_garment_region`` from the front's record, at least
+    ``view_composite.EMPTY_FRONT_MAX``) — a view that lost the clothing (round 2026-11-25, Henrik's naked back):
+    neither it nor its draft counts as current. Read-only, sidecars only (planning calls it)."""
+    from app.core import view_composite
+    from app.core.model_refs import find_ref_image
+    if view not in DRAFT_VIEWS or front is None:
+        return False
+    path = find_ref_image(character_name, _kind(view), signature)
+    if path is None or not view_composite.is_empty(_ref_sidecar(path).get("composite")):
+        return False
+    region = front_garment_region(front)
+    return region is not None and region >= view_composite.EMPTY_FRONT_MAX
+
+
 def stored_draft(character_name: str, view: str, signature: str, front: Optional[Path]) -> Optional[Path]:
     """The stored draft of a two-step view (``draft_path``) while it was made
     from ``front`` as it is now (its sidecar's ``front_sha256``) — the draft
     a view is composited from again without a new hub job (Ruling C2); None
-    when there is none or it follows another front."""
+    when there is none, it follows another front or its view is an EMPTY
+    composite of a dressed front (``empty_view_refused``: that draft lost the
+    clothing — round 2026-11-25)."""
     draft = draft_path(character_name, view, signature)
     if draft is None or front is None:
         return None
@@ -2964,8 +3045,10 @@ def stored_draft(character_name: str, view: str, signature: str, front: Optional
     sha = meta.get("front_sha256")
     # Ruling A125: only a draft that is an edit of the base view is composited again.
     # Ruling A175: a draft whose second picture was not the cut-out turned front is never reused.
-    return (draft if sha and sha == file_sha256(front) and meta.get("draft_method") == DRAFT_BASE_EDIT
-            and meta.get("turned_second") else None)
+    if not (sha and sha == file_sha256(front) and meta.get("draft_method") == DRAFT_BASE_EDIT
+            and meta.get("turned_second")):
+        return None
+    return None if empty_view_refused(character_name, view, signature, front) else draft
 
 
 # --- Refused views (Ruling FR-I3) ---------------------------------------------------------
@@ -2981,6 +3064,10 @@ def stored_draft(character_name: str, view: str, signature: str, front: Optional
 
 #: Subfolder of ``DRAFT_DIR`` that holds the refusal records of the dressed views.
 VIEW_REFUSED_DIR = "refused"
+#: Subfolder of ``DRAFT_DIR`` that keeps the cut-out turned front (``turned_cutout``, the draft's second picture) of
+#: each published draft as ``<kind>_<signature>.png`` — for a diagnosis whether the turn or the edit lost the
+#: clothing (round 2026-11-25); it goes with its signature (``outfit_cache_gc._ref_files``).
+TURN_CUT_DIR = "turn"
 
 
 def _view_refusal_path(character_name: str, view: str, signature: str) -> Path:
@@ -3264,7 +3351,8 @@ def _composite_extra(view: str, bsig: str, base_view: Path, draft: Path,
 
 def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Path,
                        base_views: Dict[str, Optional[Path]], extra: Dict[str, Any],
-                       front: Optional[Path] = None) -> Tuple[Path, Dict[str, Any]]:
+                       front: Optional[Path] = None,
+                       front_region: Optional[float] = None) -> Tuple[Path, Dict[str, Any]]:
     """The composite of ``draft`` onto the base view into ``stem.png``
     (``view_composite.compose``, rule "outfit", RGBA in the base view's
     frame) with its sidecar (``composite_sidecar``) and its result
@@ -3278,13 +3366,22 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
     A head that differs (``head_match`` of ``front`` below
     ``HEAD_MATCH_MIN``) is taken from the draft as well
     (``view_composite.compose(head=True)``, Ruling A21) — never a bald head
-    on the haired plain back."""
+    on the haired plain back. ``front_region``: the dressed front's garment
+    region (``front_garment_region``) — a draft that puts nothing on while the
+    front wears clothing is refused, never an EMPTY view (round 2026-11-25);
+    the front's ``front_garment_bands`` on the base front go along too — a
+    draft that keeps too little of a band the front is dressed in (a lost
+    shirt) is refused as well (``view_composite.clothing_lost``)."""
     from app.core import base_body_gates, view_composite
     base_view = base_views[view]
     path = stem.with_suffix(".png")
     match = head_match(front, base_views.get("front")) if front is not None else None
     other_head = {"head": True} if match is not None and match < HEAD_MATCH_MIN else {}
-    record = view_composite.compose(base_view, draft, path, rule="outfit", base_alpha=True, **other_head)
+    known: Dict[str, Any] = {"front_region": front_region} if front_region is not None else {}
+    bands = front_garment_bands(front, base_views.get("front"))
+    if bands is not None:
+        known["front_bands"] = bands   # round 2026-11-25: a band of the front's clothing lost here refuses the draft
+    record = view_composite.compose(base_view, draft, path, rule="outfit", base_alpha=True, **known, **other_head)
     path.with_suffix(".json").write_text(json.dumps(composite_sidecar(draft, view, extra, record),
                                                     ensure_ascii=False, indent=2), encoding="utf-8")
     if not record["ok"]:
@@ -3344,7 +3441,10 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     ``COVERAGE_MIN``) or a gate makes a new draft. A draft that lines up but
     wears nothing that shows in this view is no failure: the composite is
     EMPTY — the base view unchanged, sidecar ``composite: "empty"`` (fix
-    round 1). When no draft's composite passed its checks, nothing is published
+    round 1) — unless the dressed front wears clothing (``front_garment_region``
+    at least ``view_composite.EMPTY_FRONT_MAX``, round 2026-11-25): then it
+    is refused and the next draft runs. The chosen draft's cut-out turned
+    front is kept (``TURN_CUT_DIR``). When no draft's composite passed its checks, nothing is published
     — the stored view (if any) stays, the texture never takes it — and
     ``OutfitError`` carries the numbers (``view_composite.refusal``). Among
     composites that passed their checks the first passing every gate is
@@ -3366,6 +3466,9 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     # Ruling A24: a view composited by older rules is re-composited from its stored draft — no hub job: a
     # composite that passes its checks is published (the gates' warning kept) without a new draft.
     remake = composite_outdated(_ref_sidecar(final))
+    # Round 2026-11-25: EMPTY only where the dressed front may be bare in this view (``view_composite`` EMPTY).
+    front_region = front_garment_region(front)
+    turn_cuts: Dict[int, Path] = {}    # draft number -> its cut-out turned front (kept beside the chosen draft)
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
         first = 1
         render_failed = False   # a draft that did not render: no refusal is recorded for it (Ruling FR-I3)
@@ -3380,7 +3483,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=kept, base_views=base_views,
                                          extra=_composite_extra(view, bsig, base_view, kept, mesh_items, texture),
-                                         front=front)
+                                         front=front, front_region=front_region)
             attempts.append(attempt)
             first = 2
             logger.info("Dressed %s %s (%s): stored draft composite %s (%s; guard %s, noise %s)", view,
@@ -3408,6 +3511,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                                                                      "front_sha256": file_sha256(front)})
                 if second is None:
                     raise OutfitError(f"Dressed {view} turn failed")
+                turn_cuts[n] = Path(second)
                 draft = render_view_edit(
                     character_name, view, stem=draft_stem, base_view=base_view,
                     second=second, refs_dir=refs_dir,
@@ -3438,7 +3542,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=Path(draft), base_views=base_views,
                                          extra=_composite_extra(view, bsig, base_view, Path(draft), mesh_items,
-                                                                texture), front=front)
+                                                                texture), front=front, front_region=front_region)
             attempts.append(attempt)
             result = attempt[1]
             logger.info("Dressed %s %s (%s): draft %d composite %s (%s; guard %s, noise %s)", view, character_name,
@@ -3463,10 +3567,22 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
         for staged in sorted(chosen_draft.glob(f"{kind}_{signature}.*")):
             if staged.suffix.lower() != ".json":
                 _publish_staged(staged, drafts / f"{kind}_{signature}", {"chosen": chosen + 1}, key="composite_draft")
+        cut = turn_cuts.get(chosen + 1)
+        if cut is not None and cut.is_file():
+            _keep_turn_cut(cut, drafts / TURN_CUT_DIR / f"{kind}_{signature}.png")
         stored = _publish_staged(attempts[chosen][0], final, record, key="fit_gate")
     if stored is not None:
         clear_view_refusals(character_name, signature, (view,))
     return stored, warning
+
+
+def _keep_turn_cut(cut: Path, target: Path) -> None:
+    """Keep the chosen draft's cut-out turned front at ``target`` (``TURN_CUT_DIR``), atomically. Never raises: a
+    diagnosis picture never fails the view."""
+    try:
+        _atomic_write(target, cut.read_bytes())
+    except OSError:
+        logger.warning("Turned front %s not kept", cut, exc_info=True)
 
 
 # --- Texture bodies (plan 2026-11-10-texture-body-reuse-and-layering, Task 1; A224) ---
@@ -5075,12 +5191,18 @@ def shape_view(character_name: str, view: str, shape: str, bsig: str) -> Optiona
     """The stored view of the shape that is current for the plain body
     ``bsig`` (``shape_view_shas``) and — the shape is meshed from it — not a
     composite of older rules (``composite_outdated``, Ruling A24: re-composited
-    from its stored draft first), else None."""
+    from its stored draft first) nor an EMPTY composite of a dressed front
+    (``empty_view_refused``, round 2026-11-25), else None."""
     from app.core.model_refs import find_ref_image
     if not shape_view_shas(character_name, shape, bsig).get(view):
         return None
     path = find_ref_image(character_name, _kind(view), shape)
-    return None if path is None or composite_outdated(_ref_sidecar(path)) else path
+    if path is None or composite_outdated(_ref_sidecar(path)):
+        return None
+    if view != "front" and empty_view_refused(character_name, view, shape,
+                                              find_ref_image(character_name, "tpose", shape)):
+        return None   # round 2026-11-25: an EMPTY view of a dressed front lost the clothing — rendered anew
+    return path
 
 
 def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:
@@ -5169,6 +5291,108 @@ def _mark_shape_views(character_name: str, shape: str, parent: Dict[str, Any]) -
         meta = {k: val for k, val in _ref_sidecar(path).items() if k not in _OUTFIT_VIEW_KEYS}
         meta["outfit_body"] = parent
         _atomic_write(path.with_suffix(".json"), json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
+
+
+# --- Regenerate one view of the worn body shape (round 2026-11-25, Henrik's naked back) ----------------------------
+#
+# The Figure tab's Body sub-tab (and the Dressed views' tiles) re-render ONE view of the body shape the worn figure
+# stands on — ``render_shape_views(force=True)``: a new draft, never the stored one (front: 1 image job, the edit;
+# back / side: 2, the turn and the draft — a refused composite drafts once more). The view's new content makes the
+# stored shape outdated (``shape_view_shas``), so the next Build meshes it again (its hub jobs). While it runs a
+# Build does not start beside it (``base_steps_running``); it is refused while a Build runs (409).
+
+_shape_view_running: Dict[str, Dict[str, Any]] = {}     # character -> {shape, view, started_at}
+_shape_view_last: Dict[str, Dict[str, Any]] = {}        # character -> {shape, view, ok, error, ended_at}
+
+#: ``start_shape_view`` refusals (409 in the route).
+SHAPE_VIEW_PLAIN = ("Not rendered: nothing is worn in the body — the figure stands on the plain body, which has no "
+                    "body shape views")
+SHAPE_VIEW_RUNNING = "Not started: a body shape view is rendered for this character now"
+SHAPE_VIEW_FRONT_FIRST = "Not rendered: the body shape has no front view yet — Build makes it"
+
+
+def shape_view_jobs_of(view: str) -> int:
+    """Image jobs of ONE forced render of a body shape's ``view`` on its first attempts: the front edit 1, a back /
+    side view 2 (the turn and the draft, Ruling A175)."""
+    return 1 if view == "front" else 2
+
+
+def shape_view_state(character_name: str) -> Dict[str, Any]:
+    """``{running: {shape, view, started_at} | None, last: {shape, view, ok, error, ended_at} | None}`` of the
+    character's shape-view regeneration (``start_shape_view``)."""
+    with _status_lock:
+        run = _shape_view_running.get(character_name)
+        last = _shape_view_last.get(character_name)
+        return {"running": dict(run) if run else None, "last": dict(last) if last else None}
+
+
+def start_shape_view(character_name: str, view: str) -> Dict[str, Any]:
+    """Start the forced render of ``view`` of the body shape the WANTED figure stands on, in a worker thread
+    (``render_shape_views(force=True)``): ``{"status": "started", shape, view, jobs}``. ``ValueError`` for a view
+    that is not dressed (``dressed_views``); ``LookupError`` with the reason (409): off the pipeline, a Build or a
+    base step runs, one runs already, the figure stands on the plain body, or a back / side view without the shape's
+    front; ``MediaGenerationDisabled`` while media generation is off."""
+    from app.core import figure as figure_mod, figure_build
+    from app.core.model_refs import find_ref_image
+    from app.core.timeutils import utc_now_iso
+    from app.imagegen.base import MediaGenerationDisabled, media_generation_enabled
+    if view not in dressed_views():
+        raise ValueError(f"view must be one of {', '.join(dressed_views())}")
+    profile = _profile_of(character_name, None)
+    if not is_base_pipeline(character_name, profile=profile):
+        raise LookupError(figure_build.OFF_PIPELINE)
+    if not media_generation_enabled():
+        raise MediaGenerationDisabled("Media generation is switched off")
+    fig = figure_mod.wanted_figure(character_name, profile=profile)
+    if figure_mod.is_plain(fig.shape):
+        raise LookupError(SHAPE_VIEW_PLAIN)
+    if view != "front" and find_ref_image(character_name, "tpose", fig.shape) is None:
+        raise LookupError(SHAPE_VIEW_FRONT_FIRST)
+    with _status_lock:
+        if character_name in _shape_view_running:
+            raise LookupError(SHAPE_VIEW_RUNNING)
+        # registered BEFORE the Build check: a Build that starts from here on sees it (``base_steps_running``)
+        _shape_view_running[character_name] = {"shape": fig.shape, "view": view, "started_at": utc_now_iso()}
+    try:
+        if figure_build.running(character_name):
+            raise LookupError(figure_build.VIEWS_BUILD_RUNNING)
+        busy = [s for s in base_steps_running(character_name) if not s.startswith("Body shape ")]
+        if busy:
+            raise LookupError(figure_build.BASE_STEP_RUNNING.format(step=busy[0]))
+    except LookupError:
+        with _status_lock:
+            _shape_view_running.pop(character_name, None)
+        raise
+    figure_mod.invalidate()   # the Figure tab's memoised answer shows the run at once
+
+    def run() -> None:
+        from app.core.keyed_lock import keyed_lock
+        error = ""
+        try:
+            items = figure_mod._items_of(profile, None)
+            with keyed_lock("outfit_body", f"{character_name}:{fig.shape}"):
+                result = render_shape_views(character_name, fig, [view], items=items, force=True)
+            error = "" if result.get("ok") else str(result.get("error") or "not rendered")
+        except Exception as e:  # noqa: BLE001 — recorded for the tab, never raised into the thread
+            logger.exception("Body shape %s view of %s (%s) failed", view, character_name, fig.shape)
+            error = str(e) or type(e).__name__
+        finally:
+            with _status_lock:
+                _shape_view_running.pop(character_name, None)
+                _shape_view_last[character_name] = {"shape": fig.shape, "view": view, "ok": not error,
+                                                    "error": error, "ended_at": utc_now_iso()}
+            figure_mod.invalidate()
+            logger.info("Body shape %s view of %s (%s) regenerated%s", view, character_name, fig.shape,
+                        f": {error}" if error else "")
+
+    try:
+        threading.Thread(target=run, daemon=True, name=f"shape-view-{character_name}").start()
+    except Exception:
+        with _status_lock:
+            _shape_view_running.pop(character_name, None)
+        raise
+    logger.info("Body shape %s view of %s (%s): regenerate started", view, character_name, fig.shape)
+    return {"status": "started", "shape": fig.shape, "view": view, "jobs": shape_view_jobs_of(view)}
 
 
 def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, rebuild: bool = False,
