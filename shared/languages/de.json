@@ -7199,6 +7199,7 @@
     "No steps.": "Keine Schritte.",
     "undone": "rückgängig gemacht",
     "Skipped steps": "Übersprungene Schritte",
+    "Place anew": "Neu platzieren",
     "Backup": "Sicherung",
     "Follow-up for the model (a new turn of this run)…": "Nachtrag für das Modell (ein neuer Zug dieses Laufs)…",
     "Raise the budget of this run; empty = keep it": "Budget dieses Laufs erhöhen; leer = beibehalten",

@@ -53,6 +53,9 @@ interface SkipEntry {
   seq?: number
   line?: string
   reason?: string
+  /** set on an informational record: this character stands in a place the
+   *  undo removed — the step WAS reversed, the character must be placed anew */
+  occupant?: string
 }
 
 interface FreeDetail {
@@ -157,6 +160,11 @@ export function FreeModePanel({ model, provider, maxTokens }: {
   const runIdRef = useRef('')
   const refreshTimer = useRef<number | null>(null)
   const mounted = useRef(true)
+  // The run whose live stream this panel followed since it was attached. A
+  // run attached WITHOUT a stream (in review, or after a server restart) has
+  // a persisted counter that may come from an earlier server process, whose
+  // numbers restart at 1 — a follow-up then streams from 0.
+  const streamedRunRef = useRef('')
 
   const rememberEv = useCallback((run: string, ev: number) => {
     lastEvRef.current = { run, ev }
@@ -252,6 +260,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
     streamRef.current?.abort()
     const ctl = new AbortController()
     streamRef.current = ctl
+    streamedRunRef.current = id
     const after = lastEvRef.current.run === id ? lastEvRef.current.ev : 0
     if (lastEvRef.current.run !== id) rememberEv(id, 0)
     let sawEnd = false
@@ -308,6 +317,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       refreshTimer.current = null
     }
     runIdRef.current = id
+    streamedRunRef.current = ''
     setRunId(id)
     setLiveStatus('')
     setCounters(null)
@@ -364,6 +374,10 @@ export function FreeModePanel({ model, provider, maxTokens }: {
 
   const skipped: SkipEntry[] = discardSkipped && discardSkipped.length
     ? discardSkipped : (run?.status !== 'accepted' ? detail?.skipped || [] : [])
+  // Occupant records are not skipped steps: the step was reversed, only the
+  // character standing in the removed place has to be placed anew.
+  const occupants = skipped.filter((s) => s.occupant !== undefined)
+  const hardSkips = skipped.filter((s) => s.occupant === undefined)
 
   const start = useCallback(async () => {
     if (!model) { toast(t('Pick a model first'), 'error'); return }
@@ -432,13 +446,32 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       setFollowTotal('')
       setDiscardSkipped(null)
       setLiveStatus('running')
+      // Detail loaded without a live stream: the stored counter may belong
+      // to an earlier server process (its numbers restart at 1 and a small
+      // old counter would skip this turn's first events). Replay from 0 —
+      // step rows merge by seq, so nothing doubles.
+      if (streamedRunRef.current !== runId) rememberEv(runId, 0)
       void connect(runId)
     } catch (e) {
       toast(t('Sending failed') + ': ' + (e as Error).message, 'error')
     } finally {
       setBusy(false)
     }
-  }, [connect, followSteps, followTotal, followUp, runId, t, toast])
+  }, [connect, followSteps, followTotal, followUp, rememberEv, runId, t, toast])
+
+  /** Discard: re-read the run first, so the confirmation lists what exists
+   *  NOW (a player chat with a created character during a long review). */
+  const openDiscard = useCallback(async () => {
+    if (!runId) return
+    setBusy(true)
+    try {
+      const d = await loadDetail(runId)
+      if (d && mounted.current && runIdRef.current === runId
+          && REVIEW_STATUSES.includes(d.run.status)) setConfirmDiscard(true)
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }, [loadDetail, runId])
 
   const newRun = useCallback(() => {
     streamRef.current?.abort()
@@ -448,6 +481,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       refreshTimer.current = null
     }
     runIdRef.current = ''
+    streamedRunRef.current = ''
     setRunId('')
     setDetail(null)
     setLiveSteps([])
@@ -484,7 +518,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           </button>
           <button className="ga-btn ga-btn-sm ga-wd-free-danger" disabled={busy || !inReview}
             title={t('Undo everything the run built')}
-            onClick={() => setConfirmDiscard(true)}>
+            onClick={() => { void openDiscard() }}>
             {t('Discard')}
           </button>
         </div>
@@ -570,13 +604,29 @@ export function FreeModePanel({ model, provider, maxTokens }: {
             <pre className="ga-wd-free-note">{run.note}</pre>
           ) : null}
 
-          {skipped.length > 0 ? (
+          {hardSkips.length > 0 ? (
             <div className="ga-wd-free-skipped">
               <div className="ga-form-section-label">
-                {t('Skipped steps')} ({skipped.length})
+                {t('Skipped steps')} ({hardSkips.length})
               </div>
               <ul>
-                {skipped.map((s, i) => (
+                {hardSkips.map((s, i) => (
+                  <li key={i}>
+                    {s.seq !== undefined ? `#${s.seq} ` : ''}{s.line || ''}
+                    {s.reason ? <span className="ga-form-hint"> — {s.reason}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {occupants.length > 0 ? (
+            <div className="ga-wd-free-skipped">
+              <div className="ga-form-section-label">
+                {t('Place anew')} ({occupants.length})
+              </div>
+              <ul>
+                {occupants.map((s, i) => (
                   <li key={i}>
                     {s.seq !== undefined ? `#${s.seq} ` : ''}{s.line || ''}
                     {s.reason ? <span className="ga-form-hint"> — {s.reason}</span> : null}

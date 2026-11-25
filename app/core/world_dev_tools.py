@@ -1875,7 +1875,8 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
         raise ToolRefusal(f"{kind} {ident!r} was not created by this run in this turn "
                           f"— only those can be deleted")
     if kind == "location":
-        refs = _references_to_location(ident)
+        refs = _references_to_location(ident) + [
+            f"{n} (stands there)" for n, _room in wu.standing_in(ident)]
         if refs:
             raise ToolRefusal(f"location {ident} is still named by: " + "; ".join(refs))
     step.prepare()
@@ -1884,7 +1885,8 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
     step.begin(kind, ident)
     step.writing_started = True
     skips = wu.apply_inverse(creating)
-    hard = [s for s in skips if "item" not in s and s.get("reason") != wu.REASON_GONE]
+    hard = [s for s in skips if "item" not in s and "occupant" not in s
+            and s.get("reason") != wu.REASON_GONE]
     if hard:
         reason = "; ".join(str(s.get("reason")) for s in hard)
         step.complete(None, f"error: could not delete: {reason}", kind="refused")

@@ -500,7 +500,10 @@ class RunManager:
         if new_skips:
             await asyncio.to_thread(wr.set_skipped, run_id,
                                     list(run.get("skipped") or []) + new_skips)
-        not_reversed = [s for s in new_skips if s.get("reason") != wu.REASON_GONE]
+        # An occupant record (key "occupant") is informational: its step WAS
+        # reversed, the character only has to be placed anew.
+        not_reversed = [s for s in new_skips if s.get("reason") != wu.REASON_GONE
+                        and "occupant" not in s]
         if turn == 1 or (turn == 0 and int(run.get("turn") or 0) == 0):
             status = "rolled_back" if report.get("complete") else "rollback_incomplete"
             await self._close(run_id, status, note)

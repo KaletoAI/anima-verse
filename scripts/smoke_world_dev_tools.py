@@ -99,7 +99,11 @@ Run 5 (run 4 rolled back first), turn 1 — the findings of the Task 5 review:
   (p) create_location "Demo Home"; save "Demo Guest"'s home_location = it;
       delete_created{location} -> refused, the line names "Demo Guest" and
       "home"; home cleared -> delete_created ok, the place is gone; a second
-      delete_created -> refused (the creating entry is undone).
+      delete_created -> refused (the creating entry is undone). Before the
+      successful delete (references cleared) "Demo Guest" is put INTO the
+      place -> refused, the line names "Demo Guest (stands there)" (a
+      character in a deleted place would be stranded); moved out (and the
+      known place the visit added cleared again) -> ok.
 
   (p) continued: home cleared, known_locations = [it] -> refused naming
       "known place"; cleared, a schedule slot {"hour": 8, "location": it} ->
@@ -635,6 +639,22 @@ check("(p) delete with a schedule reference refused",
       not res.ok and "Demo Guest" in res.line and "schedule" in res.line
       and len(by_name("Demo Home")) == 1, res)
 save_character_daily_schedule("Demo Guest", {"enabled": False, "slots": []})
+from app.models.character import (list_character_places,  # noqa: E402
+                                  save_character_current_location)
+save_character_current_location("Demo Guest", HID)
+check("(p) Demo Guest stands in it",
+      list_character_places().get("Demo Guest", ("",))[0] == HID,
+      list_character_places().get("Demo Guest"))
+res = wt.run_tool(ctx6, "delete_created", {"kind": "location", "id": HID})
+check("(p) delete with someone standing there refused",
+      not res.ok and "Demo Guest (stands there)" in res.line
+      and len(by_name("Demo Home")) == 1, res)
+save_character_current_location("Demo Guest", "")
+# Entering a place makes it a known place: clear that reference again.
+save_character_config("Demo Guest", {"known_locations": []})
+check("(p) Demo Guest left it",
+      list_character_places().get("Demo Guest", ("",))[0] != HID,
+      list_character_places().get("Demo Guest"))
 res = wt.run_tool(ctx6, "delete_created", {"kind": "location", "id": HID})
 check("(p) delete after clearing ok", res.ok and by_name("Demo Home") == [], res)
 res = wt.run_tool(ctx6, "delete_created", {"kind": "location", "id": HID})
