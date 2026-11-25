@@ -2022,6 +2022,16 @@ def _abort_failed_step(execution_id):
                            execution_id, exc)
 
 
+def _count_ticker(key: str) -> None:
+    """Count one client-execution ticker event (hot-path line
+    ``client_exec_ticker``); a counter never breaks the tick."""
+    try:
+        from app.core import hot_path_stats
+        hot_path_stats.count("client_exec_ticker", key)
+    except Exception:  # noqa: BLE001 — a counter, never a failure
+        pass
+
+
 def advance(now: GameTime) -> int:
     """One scheduler step over every live run. Besides the run lifecycle it
     drops expired finales and beats each run that spent online game time
@@ -2032,6 +2042,7 @@ def advance(now: GameTime) -> int:
     Each run steps on its own: one that raises is rolled back, logged and
     retried, the others still advance; STEP_FAIL_LIMIT failures in a row end
     it (``_step_failed``)."""
+    _count_ticker("advance")
     register_owner()
     advanced = 0
     beats = []
@@ -2053,6 +2064,7 @@ def advance(now: GameTime) -> int:
             _abort_failed_step(execution_id)
             continue
         try:
+            _count_ticker("advance_run")
             advanced += _advance_run(execution_id, now, beats)
         except Exception:
             _step_failed(execution_id)
@@ -2090,6 +2102,7 @@ def _advance_run(execution_id, now, beats) -> int:
         # An invitation leaves the two's current runs going until the
         # "yes" (request_with_creation): those are not a busy participant.
         invited = run["status"] == "awaiting_consent"
+        _count_ticker("advance_validate")
         reason = _validate(run, require_claims=not invited,
                            presence=run["status"] in ("awaiting_consent", "approaching") or run["definition"]["interrupt_on_presence_change"],
                            replaces=_replaced_runs(run["actor"], run["members"], run["target"], run["action_id"])
