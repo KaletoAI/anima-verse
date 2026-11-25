@@ -215,7 +215,7 @@ check("[4e] jacket 0.27 -> 0.3097", close(o["length"], 0.3097) and o.get("hem_mo
 o = shape(kind="dress", length_m=0.27)
 check("[4f] dress: no move", "hem_moved" not in o, o.get("hem_moved"))
 o = shape(kind="top", length_m=0.27, shoulders="strapless")
-check("[4g] strapless top 0.27: moved to 1.138, length 0.142", gt.strapless_top(gt.validate_params(
+check("[4g] strapless top 0.27: moved to 1.138, length 0.142", gt.corset_top(gt.validate_params(
     {"kind": "top", "shoulders": "strapless"})[0]) and close(o["top_y"], 1.28) and close(o["length"], 0.142)
       and (o.get("hem_moved") or {}).get("draped_length_m") == 0.3097, (o["top_y"], o["length"], o.get("hem_moved")))
 o = shape(kind="top", length_m=0.24, shoulders="strapless")

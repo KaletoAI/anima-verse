@@ -93,9 +93,9 @@ check("[2] with a base", [round(v, 5) for v in front_b] == [0.05, 0.02286, 0.02,
 # [3]
 src = (ROOT / "app" / "core" / "garment_template.py").read_text(encoding="utf-8")
 check("[3] build_args sends shell_clear_m / shell_gap_mm for a strapless top only",
-      '{"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if strapless_top(params) '
+      '{"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if corset_top(params) '
       'else {}' in src)
-check("[3] a skirt is no strapless top", not gt.strapless_top(skirt) and gt.strapless_top(corset))
+check("[3] a skirt is no strapless top", not gt.corset_top(skirt) and gt.corset_top(corset))
 
 # [4]
 rows = {r["check"]: r for r in gt.judge_build({"fit_gap": {"waist": {"p95_mm": 2.9}, "hem": {"p95_mm": 5.1},

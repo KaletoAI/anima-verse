@@ -14,7 +14,8 @@ SWEETHEART_HALF_RAD 0.5, COLS 41).
     * top + straps + sweetheart + neck_depth_m 0.3 -> kept, sleeves "none", neck_depth_m clamped to 0.10.
     * top + covered + sweetheart -> neckline "crew".  jacket + strapless -> "covered".
     * dress + strapless keeps "strapless" (unchanged behaviour).
-[2] has_bodice: top/strapless False, top/straps True, top/covered True, dress/strapless False, jacket True.
+[2] has_bodice: top/strapless False, top/straps False (round 2026-11-25: a strapped corset top is the strapless one's
+    shell plus two straps, no bodice yoke), top/covered True, dress/strapless False, jacket True.
 [3] the strapless outline on a box body: torso girth 0.80 at every height, band 1.30, shoulder joints 1.40,
     floor 0. fit 0: every knot 0.80 x (1 + 0.03 + 0) + 0.02 = 0.844. top_y = 1.30 - 0.02 = 1.28.
     length 0.5: hem = 1.40 + 0.045 - 0.5 = 0.945 -> length 1.28 - 0.945 = 0.335.
@@ -23,7 +24,7 @@ SWEETHEART_HALF_RAD 0.5, COLS 41).
 [4] top_drop (sweetheart, strapless), column c at off = pi |c - 20| / 40 from the front centre:
     c 20 -> 0.05; c 22 -> off 0.15708, 0.05 x (1 - 0.31416)^2 = 0.02352; c 26 -> off 0.47124,
     0.05 x 0.05752^2 = 0.00017; c 27 -> off 0.54978 > 0.5 -> 0; c 0 -> 0. neck_depth_m 0.08 -> c 20 = 0.08.
-    straight / covered / straps -> None.
+    straight / covered -> None; round 2026-11-25: straps + sweetheart -> the same drop as strapless (c 20 0.05).
 [5] bodice_spec of a top with straps + sweetheart: neckline built as "crew", top_edge {neckline "sweetheart",
     dip_m 0.05, half_rad 0.5}; straps + straight: dip_m 0.0; a covered top: top_edge None.
 [6] the LLM template names the values: "strapless", "straps", "straight", "sweetheart".
@@ -71,7 +72,7 @@ check("[1] dress strapless kept", v(kind="dress", shoulders="strapless")["should
 
 check("[2] has_bodice", [gt.has_bodice(v(kind=k, shoulders=s)) for k, s in
                          (("top", "strapless"), ("top", "straps"), ("top", "covered"), ("dress", "strapless"),
-                          ("jacket", "strapless"))] == [False, True, True, False, True])
+                          ("jacket", "strapless"))] == [False, False, True, False, True])
 
 meas = {"band_y": 1.30, "shoulder_y": 1.40, "floor_y": 0.0, "waist_y": 1.05, "hip_y": 0.90, "waist_c": 0.7,
         "hip_c": 0.9, "band_c": 0.8, "torso": [[0.6, 0.8], [1.6, 0.8]]}
@@ -95,8 +96,10 @@ check("[4] sweetheart drop", d is not None and close(d[20], 0.05, 1e-5) and clos
 d = gt.top_drop(v(kind="top", shoulders="strapless", neckline="sweetheart", neck_depth_m=0.08), 41)
 check("[4] depth 0.08", close(d[20], 0.08, 1e-5))
 check("[4] None otherwise", all(gt.top_drop(v(kind="top", **kw), 41) is None for kw in
-                                ({"shoulders": "strapless"}, {"shoulders": "covered"},
-                                 {"shoulders": "straps", "neckline": "sweetheart"})))
+                                ({"shoulders": "strapless"}, {"shoulders": "covered"}, {"shoulders": "straps"})))
+d = gt.top_drop(v(kind="top", shoulders="straps", neckline="sweetheart"), 41)
+check("[4] straps + sweetheart: the strapless drop", d is not None and close(d[20], 0.05, 1e-5)
+      and close(d[22], 0.02352, 1e-5) and d[27] == 0.0, str(d and d[18:28]))
 
 bm = {**meas, "neck_c": 0.34, "neck_y": 1.45, "shoulder_w": 0.36, "arm_len": 0.5, "arm_c": [[0, 0.3], [1, 0.2]]}
 b = gt.bodice_spec(v(kind="top", shoulders="straps", neckline="sweetheart"), bm)

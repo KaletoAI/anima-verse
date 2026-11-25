@@ -138,6 +138,10 @@ LEG_VERSION = 1
 #: straight, its top edge onto the band and its armhole scooped (``garment_template_build`` ``straight_straps``; Lirien's dress had saw-tooth
 #: straps and a stepped top edge). Part of the drape and the cut key of such a piece only.
 STRAP_VERSION = 1
+#: Round 2026-11-25 (Lirien's leather top): a corset top with straps is the strapless corset's shell plus two straps
+#: laid along the body (``corset_straps`` / ``corset_strap_spec``; ``garment_template_build.shell_straps``). Part of
+#: its drape and cut keys only — a strapless corset's keys stay byte for byte.
+CORSET_STRAPS_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -594,21 +598,26 @@ ARM_GROUPS = [{"name": "arm_" + side[0].lower(), "side": side[0].lower(), "frame
 
 
 def has_bodice(params: Dict[str, Any]) -> bool:
-    """A jacket, a top that is not strapless (A221), or a dress with straps or a covered bodice (Ruling A142)."""
-    return params["kind"] in ("top", "jacket", "dress") and (params["kind"] == "jacket"
-                                                             or params["shoulders"] != "strapless")
-
-
-def strapless_top(params: Dict[str, Any]) -> bool:
-    """A221: a top with nothing over the shoulders (bodice, bustier, corset)."""
-    return params["kind"] == "top" and params["shoulders"] == "strapless"
+    """A jacket, a covered or off-shoulder top (A221; a corset top — strapless or with straps — is a shell,
+    ``corset_top``), or a dress with straps or a covered bodice (Ruling A142)."""
+    kind = params["kind"]
+    if kind == "top":
+        return not corset_top(params)
+    return kind == "jacket" or (kind == "dress" and params["shoulders"] != "strapless")
 
 
 def panel_piece(params: Dict[str, Any]) -> bool:
-    """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a strapless
-    top. Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live ``uv_pattern.py``."""
+    """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a corset
+    top (``corset_top``). Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live
+    ``uv_pattern.py``."""
     return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
-                                                 and params.get("shoulders") == "strapless")
+                                                 and params.get("shoulders") in ("strapless", "straps"))
+
+
+def corset_straps(params: Dict[str, Any]) -> bool:
+    """Round 2026-11-25 (Lirien): a corset top with straps — the shell of a strapless one (``corset_top``) plus two
+    straps over the shoulders (``corset_strap_spec``). Its drape and cut keys carry ``CORSET_STRAPS_VERSION``."""
+    return params.get("kind") == "top" and params.get("shoulders") == "straps"
 
 
 def leg_piece(params: Dict[str, Any]) -> bool:
@@ -646,7 +655,9 @@ def neck_piece(params: Dict[str, Any]) -> bool:
 
 def corset_top(params: Dict[str, Any]) -> bool:
     """A221: a top cut as a corset bodice — strapless or with straps; its top edge is the chest band (straight or
-    sweetheart), the straps (if any) run from it over the shoulders."""
+    sweetheart), the straps (if any) run from it over the shoulders. Corset v2..v9: laid on the body as a shell
+    (``garment_template_build.corset_shell``), never draped; round 2026-11-25: with straps too (they were a bodice's
+    yoke cut down to the band: stepped edges, flaps under the arms, a gap at the back)."""
     return params["kind"] == "top" and params["shoulders"] in ("strapless", "straps")
 
 
@@ -887,7 +898,7 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
         return None
     try:
         fold = _underbust_fold(meas)
-        origin = _length_origin(meas, top_y if strapless_top(params) else None)
+        origin = _length_origin(meas, top_y if corset_top(params) else None)
     except (KeyError, TypeError, ValueError):
         return None
     if fold is None:
@@ -1350,7 +1361,7 @@ def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: boo
     top_y = waist_y
     if has_bodice(params):
         return _bodice_outline(params, meas, waist_y, waist_c, hem_c, over_sleeves=over_sleeves)
-    if strapless_top(params):
+    if corset_top(params):
         return _strapless_top_outline(params, meas, waist_y, tuck)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
@@ -1594,8 +1605,9 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
 def tuck_lines(params: Dict[str, Any], lower: List[str]) -> Tuple[str, ...]:
     """Corset v3: the waist heights (``waist_height``) of the worn template skirts / trousers (``TUCK_KINDS``) a
     strapless top's hem reaches under (``STRAPLESS_TUCK_M``) — sorted, each once; () for every other piece. Part of
-    the piece's drape and cut key (``under_tokens``)."""
-    if not strapless_top(params):
+    the piece's drape and cut key (``under_tokens``). Round 2026-11-25: a strapless top only — a corset top with straps
+    keeps the length asked (Lirien's 27 cm leather crop top ends above her trousers)."""
+    if not corset_top(params) or params.get("shoulders") != "strapless":
         return ()
     from app.models.inventory import get_item
     out = set()
@@ -1610,7 +1622,7 @@ def cup_rise(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
     """Corset v2: how far a strapless top's front rises over its edge under the arms (``band_y`` -
     ``STRAPLESS_UNDERARM_M``) to cover the chest — corset v4: its top row, ``chest_apex_y`` + ``CUP_COVER_MAX_M`` less
     that edge, between 0 and ``CUP_RISE_MAX_M``; 0 for every other piece and on a body without the measure."""
-    if not strapless_top(params) or "chest_apex_y" not in meas:
+    if not corset_top(params) or "chest_apex_y" not in meas:
         return 0.0
     side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
     return round(min(CUP_RISE_MAX_M, max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_MAX_M - side_y)), 4)
@@ -1654,10 +1666,10 @@ def sweetheart_depth(params: Dict[str, Any]) -> float:
 
 
 def top_drop(params: Dict[str, Any], cols: int) -> Optional[List[float]]:
-    """A221: how far each column of the FRONT panel's top edge of a strapless top lies under the band (metres; column
-    c at the angle pi + pi * c / (cols - 1), the front centre 1.5 pi) — a sweetheart dip, None for every other
-    piece (a top with straps carries its dip in ``bodice_spec``'s ``top_edge``)."""
-    if not strapless_top(params) or params["neckline"] != "sweetheart":
+    """A221: how far each column of the FRONT panel's top edge of a corset top (``corset_top``: strapless or with
+    straps) lies under the band (metres; column c at the angle pi + pi * c / (cols - 1), the front centre 1.5 pi) — a
+    sweetheart dip, None for every other piece."""
+    if not corset_top(params) or params["neckline"] != "sweetheart":
         return None
     depth = sweetheart_depth(params)
     return [round(sweetheart_drop(depth, abs(math.pi * c / (cols - 1) - math.pi / 2)), 5) for c in range(cols)]
@@ -1815,6 +1827,8 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
                            "dip": drop or [0.0] * COLS}
     elif drop:
         out["top_drop"] = {"front": drop}
+    if corset_straps(params):
+        out["corset_straps"] = corset_strap_spec(meas)
     if has_bodice(params):
         out["bodice"] = bodice_spec(params, meas, over_sleeves=over_sleeves)
         if layer_ease(params, over_sleeves):
@@ -1922,6 +1936,19 @@ def strap_shoulder_x(meas: Dict[str, Any], neck_r: float) -> float:
     and ``PIN_SHARE`` of the half shoulder width — the straps of a dress / corset top (A221, ``bodice_spec``) and of a
     bra (A223, ``strap_spec``) alike."""
     return 0.5 * (neck_r + PIN_SHARE * meas["shoulder_w"] / 2.0)
+
+
+def corset_strap_spec(meas: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Round 2026-11-25: the straps of a corset top with straps (``corset_straps``) — the bra's strap record
+    (``strap_spec``, the same shoulder crossing ``strap_shoulder_x``) at a dress strap's width ``STRAP_W_M``, straight
+    down the back (``back_x`` = ``shoulder_x``). None on a body without arm / neck joints."""
+    if "shoulder_w" not in meas:
+        return None
+    neck_r = meas["neck_c"] / (2 * math.pi) + NECK_CLEAR_M
+    shoulder_x = strap_shoulder_x(meas, neck_r)
+    return {"style": "corset", "width_m": STRAP_W_M, "shoulder_x": round(shoulder_x, 4),
+            "back_x": round(shoulder_x, 4), "neck_y": round(meas["neck_y"] + NECK_SLICE_M, 4),
+            "neck_r": round(neck_r, 4)}
 
 
 def strap_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2145,9 +2172,12 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
         payload["legs"] = LEG_VERSION
     if strap_piece(params):
         payload["straps"] = STRAP_VERSION
-    if strapless_top(params):
+    if corset_top(params):
         # corset v2: the strapless top is a shell on the body with a cup line (``CORSET_VERSION``)
         payload["corset"] = CORSET_VERSION
+    if corset_straps(params):
+        # round 2026-11-25: a strapped corset top is that shell plus its straps
+        payload["corset_straps"] = CORSET_STRAPS_VERSION
     return _md5(payload)
 
 
@@ -2854,7 +2884,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
             # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
-            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if strapless_top(params) else {}),
+            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if corset_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
             "frames": (BODICE_FRAMES if has_bodice(params) else
                        int((spec.get("fitted") or {}).get("frames") or 50)),

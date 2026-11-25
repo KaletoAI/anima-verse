@@ -139,6 +139,9 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.leg_piece(params):
         # stage "geometry": the rows below the crotch round the legs (``garment_template.LEG_VERSION``)
         payload["legs"] = gt.LEG_VERSION
+    if gt.corset_straps(params):
+        # round 2026-11-25: a strapped corset top is the strapless shell plus two straps (``CORSET_STRAPS_VERSION``)
+        payload["corset_straps"] = gt.CORSET_STRAPS_VERSION
     if gt.strap_piece(params):
         # stage "geometry": straight straps and top edge (``garment_template.STRAP_VERSION``)
         payload["straps"] = gt.STRAP_VERSION
