@@ -1,0 +1,100 @@
+// Run from the repository root: node frontend/src/tabs/quests/questsModel.test.mjs
+// The pure model of the Quests tab (questsModel.ts): row <-> draft conversion, issue lookup by D7 path, step ids
+// and the role filter. Expectations derived by hand from the plan header:
+// - the reference quest "Errand" (header) survives rowToDraft -> draftToRow unchanged; the row has no state, the
+//   draft defaults to "draft", so the round trip adds exactly state: "draft";
+// - time_limit_s 7200 is 2 game hours (7200 / 3600), and 2 hours go back to 7200 seconds;
+// - issue paths are dot-joined with 0-based indices (D7), so "steps.1" is a prefix of
+//   "steps.1.condition.params.item" but NOT of "steps.10.text" (a plain startsWith would match both);
+// - step ids are "s<n>", the first free n from 1: [s1, s3] -> s2, [] -> s1, [s1, s2] -> s3;
+// - rolesOfKinds keeps the roles whose kind is listed, in their order.
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const require = createRequire(new URL('../../../package.json', import.meta.url));
+const ts = require('typescript');
+const modules = new Map();
+function moduleUrl(file) {
+  const key = file.href;
+  if (modules.has(key)) return modules.get(key);
+  const source = ts.transpileModule(readFileSync(file, 'utf8'), { compilerOptions: {
+    module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
+  }}).outputText.replace(/from (['"])([^'"]+)\1/g, (_, quote, specifier) => {
+    if (!specifier.startsWith('.')) return `from '${pathToFileURL(require.resolve(specifier)).href}'`;
+    const base = new URL(specifier, file);
+    const dependency = ['.ts', '.tsx'].map(extension => new URL(base.href + extension)).find(candidate => existsSync(fileURLToPath(candidate)));
+    assert.ok(dependency, `missing source dependency ${specifier}`);
+    return `from '${moduleUrl(dependency)}'`;
+  });
+  const url = 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
+  modules.set(key, url);
+  return url;
+}
+const { rowToDraft, draftToRow, issuesAt, newStepId, rolesOfKinds } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
+
+// The reference quest of the plan header, verbatim.
+const errand = {"title": "Errand", "summary": "Run an errand for someone.", "gm_notes": "GM ONLY",
+ "roles": [{"key": "giver", "kind": "character", "description": "who asks"},
+           {"key": "place", "kind": "room", "description": "where to go"},
+           {"key": "thing", "kind": "item", "description": "what to bring"}],
+ "steps": [{"id": "s1", "text": "Talk to the giver.", "hint": "HINT ONE",
+            "condition": {"type": "spoke_with", "params": {"character": "giver"}}},
+           {"id": "s2", "text": "Go to the place.", "hint": "HINT TWO",
+            "condition": {"type": "at_place", "params": {"place": "place"}}},
+           {"id": "s3", "text": "Hold the thing.", "hint": "HINT THREE",
+            "condition": {"type": "holds_item", "params": {"item": "thing", "count": 1}}}],
+ "start_condition": {}, "prerequisites": {}, "time_limit_s": 0};
+
+{
+  const draft = rowToDraft(errand);
+  assert.equal(draft.state, 'draft');
+  assert.equal(draft.id, '');
+  assert.equal(draft.time_limit_h, 0);
+  assert.deepEqual(draft.prerequisites, { condition: {}, locked_text: '' });
+  assert.deepEqual(draftToRow(draft), { ...errand, state: 'draft' }, 'the reference quest round-trips');
+  // The draft is a copy: editing it never reaches the row it came from.
+  draft.steps[0].condition.params.character = 'other';
+  assert.equal(errand.steps[0].condition.params.character, 'giver');
+}
+{
+  const stored = { ...errand, id: 'qt_abc', revision: 4, state: 'ready', time_limit_s: 7200,
+                   prerequisites: { condition: { type: 'relationship_at_least', params: { character: 'giver', strength: 50 } },
+                                    locked_text: 'Not yet.' } };
+  const draft = rowToDraft(stored);
+  assert.equal(draft.id, 'qt_abc');
+  assert.equal(draft.revision, 4);
+  assert.equal(draft.state, 'ready');
+  assert.equal(draft.time_limit_h, 2);
+  const row = draftToRow(draft);
+  assert.equal(row.time_limit_s, 7200);
+  assert.deepEqual(row.prerequisites, stored.prerequisites);
+  assert.equal('id' in row, false, 'the id is the URL, never a body field');
+  assert.equal('revision' in row, false, 'the revision travels as base_revision');
+  assert.equal(draftToRow({ ...draft, time_limit_h: 1.5 }).time_limit_s, 5400);
+}
+{
+  const issues = [
+    { path: 'steps.1.condition.params.item', code: 'unknown_role', message: 'A' },
+    { path: 'steps.10.text', code: 'required', message: 'B' },
+    { path: 'steps.1', code: 'shape', message: 'C' },
+    { path: 'title', code: 'required', message: 'D' },
+  ];
+  assert.deepEqual(issuesAt(issues, 'steps.1').map(i => i.message), ['A', 'C']);
+  assert.deepEqual(issuesAt(issues, 'steps.10').map(i => i.message), ['B']);
+  assert.deepEqual(issuesAt(issues, 'title').map(i => i.message), ['D']);
+  assert.deepEqual(issuesAt(issues, 'tit'), []);
+}
+{
+  const step = id => ({ id, text: '', hint: '', condition: {} });
+  assert.equal(newStepId([step('s1'), step('s3')]), 's2');
+  assert.equal(newStepId([]), 's1');
+  assert.equal(newStepId([step('s1'), step('s2')]), 's3');
+}
+{
+  const draft = rowToDraft(errand);
+  assert.deepEqual(rolesOfKinds(draft.roles, ['room', 'location']).map(r => r.key), ['place']);
+  assert.deepEqual(rolesOfKinds(draft.roles, ['character', 'item']).map(r => r.key), ['giver', 'thing']);
+  assert.deepEqual(rolesOfKinds(draft.roles, []), []);
+}
+console.log('questsModel: all checks passed');

@@ -3644,3 +3644,27 @@ a.ga-btn {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Quests tab — template editor (frontend/src/tabs/quests/). */
+.ga-quest-cond { display: flex; flex-direction: column; gap: 6px; }
+.ga-quest-cond-head > select { width: auto; }
+.ga-quest-cond-children {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-left: 8px; padding-left: 10px; border-left: 2px solid var(--border, #30363d);
+}
+.ga-quest-cond-child { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ga-quest-cond-child > .ga-quest-cond { align-self: stretch; }
+.ga-quest-cond .ga-form-row > select { width: auto; max-width: 320px; }
+.ga-quest-params > .ga-field { flex: 0 1 220px; }
+.ga-quest-step {
+  display: flex; flex-direction: column; gap: 8px; width: 100%;
+  padding: 8px 0; border-bottom: 1px solid var(--border, #30363d);
+}
+.ga-quest-key { width: 110px; }
+.ga-quest-num { width: 90px; }
+.ga-quest-role > .ga-field:nth-child(3) { flex: 0 1 360px; }
+.ga-quest-remove { align-self: flex-end; }
+.ga-quest-cond [role="alert"], .ga-quest-step [role="alert"], .ga-quest-role [role="alert"],
+.ga-quest-error { color: var(--danger, #f85149); margin: 2px 0; font-size: 12px; }
+.ga-quest-error ul { margin: 4px 0 0; padding-left: 18px; }
+.ga-subtabs .ga-tag-missing { margin-left: 6px; }
