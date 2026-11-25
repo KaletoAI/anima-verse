@@ -172,7 +172,8 @@ def walk(expr: dict) -> Iterator[Tuple[str, dict]]:
 def _with_defaults(t: QuestType, params: dict) -> dict:
     """The leaf's params over the declared defaults (a key the author left out takes its default)."""
     merged = {p["key"]: p.get("default") for p in t.params if "key" in p and p.get("default") is not None}
-    merged.update(params or {})
+    # An absent value (None / blank, as the check reads it) never hides the default it was accepted for.
+    merged.update({k: v for k, v in (params or {}).items() if not _absent(v)})
     return merged
 
 
@@ -217,9 +218,9 @@ def _check_param(path: str, spec: dict, value: Any, roles: Dict[str, str]) -> Op
     return None
 
 
-def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tuple[str, ...]
-                ) -> List[Dict[str, str]]:
-    t = get(leaf["type"])
+def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tuple[str, ...],
+                known: Dict[str, QuestType]) -> List[Dict[str, str]]:
+    t = known.get(leaf["type"])
     if t is None:
         return [_issue(path + ".type", "unknown_type", f"Unknown condition type '{leaf['type']}'")]
     if t.kind not in allowed_kinds:
@@ -245,10 +246,10 @@ def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tup
         return issues
     try:
         own = t.validate(_with_defaults(t, params), None) or []
-    except Exception as e:  # noqa: BLE001 — a package's validator never breaks the check
+        return [_issue(path + ".type", str(i.code), str(i.message)) for i in own]
+    except Exception as e:  # noqa: BLE001 — a package's validator (or its answer) never breaks the check
         logger.exception("validate of quest type %r failed", t.id)
         return [_issue(path + ".type", "bad_param", f"'{t.label}' could not check its parameters: {e}")]
-    return [_issue(path + ".type", str(i.code), str(i.message)) for i in own]
 
 
 def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str, ...]) -> List[Dict[str, str]]:
@@ -256,6 +257,7 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
     caller prefixes its own position). ``roles`` are the template's role dicts (``key``, ``kind``); ``allowed_kinds`` the
     type kinds this position accepts. Codes: shape, unknown_type, wrong_kind, missing_param, bad_param,
     unknown_role, wrong_role_kind — plus whatever code a type's own ``validate`` names (reported at ``.type``)."""
+    known = types()  # one catalog snapshot for the whole check
     role_kinds = {str(r.get("key")): str(r.get("kind")) for r in (roles or [])
                   if isinstance(r, dict) and r.get("key")}
     issues: List[Dict[str, str]] = []
@@ -268,7 +270,7 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
         if not node:
             return
         if _is_leaf(node):
-            issues.extend(_check_leaf(path, node, role_kinds, tuple(allowed_kinds)))
+            issues.extend(_check_leaf(path, node, role_kinds, tuple(allowed_kinds), known))
             return
         for sub, child in _children(node):
             rec(path + sub, child)
@@ -278,20 +280,24 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
 
 
 def evaluate_expression(expr: dict, ctx: "QuestContext") -> ConditionResult:
-    """Three-state value of ``expr`` (see the module docstring); never raises."""
+    """Three-state value of ``expr`` (see the module docstring); never raises. One catalog snapshot per call."""
+    return _evaluate(expr, ctx, types())
+
+
+def _evaluate(expr: Any, ctx: "QuestContext", known: Dict[str, QuestType]) -> ConditionResult:
     if _shape_error(expr):
         return ConditionResult(False, False, "Malformed expression")
     if not expr:
         return ConditionResult(True, True, "")
     if _is_leaf(expr):
-        return _evaluate_leaf(expr, ctx)
+        return _evaluate_leaf(expr, ctx, known)
     if "not" in expr:
-        inner = evaluate_expression(expr["not"], ctx)
+        inner = _evaluate(expr["not"], ctx, known)
         if not inner.available:
             return inner
         return ConditionResult(True, not inner.passed, "" if not inner.passed else "not: the condition holds")
     op = "all" if "all" in expr else "any"
-    results = [evaluate_expression(child, ctx) for child in expr[op]]  # EVERY child, no short cut
+    results = [_evaluate(child, ctx, known) for child in expr[op]]  # EVERY child, no short cut
     missing = [r for r in results if not r.available]
     if missing:
         return ConditionResult(False, False, "; ".join(r.reason for r in missing if r.reason))
@@ -300,9 +306,9 @@ def evaluate_expression(expr: dict, ctx: "QuestContext") -> ConditionResult:
     return ConditionResult(True, passed, reason)
 
 
-def _evaluate_leaf(leaf: dict, ctx: "QuestContext") -> ConditionResult:
+def _evaluate_leaf(leaf: dict, ctx: "QuestContext", known: Dict[str, QuestType]) -> ConditionResult:
     type_id = leaf["type"]
-    t = get(type_id)
+    t = known.get(type_id)
     if t is None:
         return ConditionResult(False, False, f"Quest type '{type_id}' is not registered")
     if t.evaluate is None:

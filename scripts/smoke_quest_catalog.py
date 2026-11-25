@@ -48,6 +48,18 @@ WHAT IS CHECKED, and where every expected value comes from
         {"all": [at(place), {"not": at(place, count=2)}]} → []
         {"any": [at(place), {"not": {"type": "nope"}}]} → unknown_type at ".any.1.not.type"
         {}                                             → []
+      A type's own validate (stub "v", param n: int, default 3):
+        validate answers ConditionIssue("too_far", ...) → [("too_far", ".type")]
+        validate raises                                → [("bad_param", ".type")]
+        validate answers a non-issue (a str)           → [("bad_param", ".type")] (never raises out)
+        n="x" (a generic bad_param)                    → [("bad_param", ".params.n")] and validate
+                                                         is NOT called (its call counter stays 0)
+        validate receives n=3 when n is omitted and when n is None (the default).
+
+  (d2) DEFAULTS REACH evaluate. Stub "cnt" (param count: int, default 1)
+      records the params evaluate gets: {"count": None} → count 1,
+      {} → count 1, {"count": 4} → count 4. A None / blank value is "absent"
+      for the check, so it must not hide the default in evaluation either.
 
   (e) evaluate_expression TRUTH TABLE (Review Focus 5), stub types
       T (passes), F (fails), U (unavailable), X (evaluate raises):
@@ -200,6 +212,58 @@ for label, expr, kinds, want in TABLE:
 for issue in qc.check_expression(at(place="ghost"), ROLES, allowed_kinds=COND):
     check("issue has path/code/message", set(issue) == {"path", "code", "message"} and issue["message"])
 hooks.unregister_owned_providers("C")
+
+from app.core.activity_engine import ConditionIssue  # noqa: E402
+
+vstate = {"mode": "issue", "calls": 0, "seen": []}
+
+
+def _validate(params, bindings):
+    vstate["calls"] += 1
+    vstate["seen"].append(params.get("n"))
+    if vstate["mode"] == "raise":
+        raise RuntimeError("validate exploded")
+    if vstate["mode"] == "junk":
+        return ["not an issue"]
+    if vstate["mode"] == "ok":
+        return []
+    return [ConditionIssue("too_far", "n is too far")]
+
+
+V_PARAMS = ({"key": "n", "type": "int", "label": "N", "default": 3},)
+qc.register("V", lambda: [stub("v", params=V_PARAMS, validate=_validate)])
+vstate["mode"] = "issue"
+got = codes({"type": "v", "params": {}})
+check("validate issue reported at .type", got == [("too_far", ".type")], str(got))
+vstate["mode"] = "raise"
+check("raising validate → bad_param at .type", codes({"type": "v", "params": {}}) == [("bad_param", ".type")])
+vstate["mode"] = "junk"
+check("non-issue answer → bad_param at .type", codes({"type": "v", "params": {}}) == [("bad_param", ".type")])
+vstate.update(mode="ok", calls=0)
+check("generic issue → bad_param at .params.n", codes({"type": "v", "params": {"n": "x"}}) ==
+      [("bad_param", ".params.n")])
+check("validate not called after a generic issue", vstate["calls"] == 0, str(vstate))
+vstate["seen"].clear()
+codes({"type": "v", "params": {}})
+codes({"type": "v", "params": {"n": None}})
+check("validate gets the default for omitted and None", vstate["seen"] == [3, 3], str(vstate["seen"]))
+hooks.unregister_owned_providers("V")
+
+print("(d2) defaults reach evaluate")
+got_params = []
+
+
+def _cnt(params, ctx):
+    got_params.append(dict(params))
+    return ConditionResult(True, True, "")
+
+
+qc.register("D", lambda: [stub("cnt", params=({"key": "count", "type": "int", "default": 1},), evaluate=_cnt)])
+for given, want in (({"count": None}, 1), ({}, 1), ({"count": 4}, 4)):
+    got_params.clear()
+    qc.evaluate_expression({"type": "cnt", "params": given}, None)
+    check(f"evaluate params {given} → count {want}", got_params == [{"count": want}], str(got_params))
+hooks.unregister_owned_providers("D")
 
 # --- (e) evaluate_expression truth table ------------------------------------------------
 print("(e) evaluate_expression")
