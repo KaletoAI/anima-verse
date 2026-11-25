@@ -1066,12 +1066,14 @@ async def lifespan(app: FastAPI):
 
         await _aio.sleep(60)  # Wait briefly for server readiness
         while True:
-            hours = _hours_since_last()
+            # The stamp file, the roster and the submissions are blocking
+            # reads and writes: off the event loop.
+            hours = await _aio.to_thread(_hours_since_last)
             if hours >= 6:
                 try:
                     from app.core.memory_service import run_consolidation_for_all_users
-                    run_consolidation_for_all_users()
-                    _mark_done()
+                    await _aio.to_thread(run_consolidation_for_all_users)
+                    await _aio.to_thread(_mark_done)
                 except Exception as ce:
                     logger.error("Memory consolidation error: %s", ce)
             # Check every 30 minutes whether six hours have elapsed

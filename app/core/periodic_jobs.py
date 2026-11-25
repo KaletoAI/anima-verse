@@ -714,7 +714,8 @@ async def _world_admin_tick_loop():
     while True:
         try:
             interval = _get_tick_interval()
-            paused = _is_paused()
+            # Reads the world DB and the task-queue DB: off the event loop.
+            paused = await asyncio.to_thread(_is_paused)
             now = utc_now().timestamp()
             for func, min_iv, label in _SUB_TASKS:
                 if paused and label not in _RUNS_WHILE_PAUSED:
