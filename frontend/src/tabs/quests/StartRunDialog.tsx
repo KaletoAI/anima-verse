@@ -4,7 +4,7 @@ import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { loadCharacters, loadItems, loadLocations } from '../../lib/refs'
 import type { CharacterRef, ItemRef, LocationRef } from '../../lib/refs'
-import { roomLabel } from '../world/worldTypes'
+import { GROUND_ROOM_ID, isFloorRoom, roomLabel } from '../world/worldTypes'
 import { questError, startRun } from './api'
 import { bindingFor, bindingsComplete, filterOptions, questErrorText } from './questsModel'
 import type { Issue, Role, RolePick } from './questsModel'
@@ -12,7 +12,7 @@ import type { Issue, Role, RolePick } from './questsModel'
 /**
  * The Start-run dialog: one picker per role of the template, matching the role's kind (D6) — a character
  * standing in the world (no dormant or pooled family member, no temporary NPC), a location, a location plus one of
- * its rooms, or an item. Start stays disabled until every role is bound; a refusal (422 `refused`) lists its
+ * its rooms (without the reserved ground and corridor rooms), or an item. Start stays disabled until every role is bound; a refusal (422 `refused`) lists its
  * issues here and keeps the dialog open. `onStarted` runs after the server accepted the run. A character or item
  * picker has a filter field above it (the item library is long).
  */
@@ -114,7 +114,11 @@ export function StartRunDialog({
       )
     }
     if (role.kind === 'location' || role.kind === 'room') {
-      const rooms = locations.find((l) => l.id === p.location_id)?.rooms || []
+      // The reserved rooms (the ground, the per-storey corridors) are left out: the ground would read as a second
+      // entry with the location's own name. /world/locations carries no is_ground/is_floor flag on a room, so the
+      // admin's shared world helpers decide, as in the location editor.
+      const rooms = (locations.find((l) => l.id === p.location_id)?.rooms || [])
+        .filter((r) => r.id !== GROUND_ROOM_ID && !isFloorRoom(r.id))
       return (
         <div className="ga-form-row">
           <select className="ga-input" value={p.location_id || ''}

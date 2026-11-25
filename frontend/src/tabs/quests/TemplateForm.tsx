@@ -9,7 +9,7 @@ import type { Catalog, Expr, Issue, Role, RoleKind, Step, TemplateDraft } from '
 type Section = 'basics' | 'roles' | 'steps' | 'start'
 
 const SECTIONS: { id: Section; label: string; paths: string[] }[] = [
-  { id: 'basics', label: 'Basics', paths: ['title', 'time_limit_s'] },
+  { id: 'basics', label: 'Basics', paths: ['title', 'time_limit_s', 'summary'] },
   { id: 'roles', label: 'Roles', paths: ['roles'] },
   { id: 'steps', label: 'Steps', paths: ['steps'] },
   { id: 'start', label: 'Start & requirements', paths: ['start_condition', 'prerequisites'] },
@@ -107,6 +107,7 @@ export function TemplateForm({
       <Field label={t('Summary')}
         hint={<>{t('Shown to the player in the quest book.')}{placeholderHint ? <><br />{placeholderHint}</> : null}</>}>
         <textarea className="ga-textarea" rows={2} value={draft.summary} onChange={(e) => set('summary', e.target.value)} />
+        <Alerts issues={issuesAt(issues, 'summary')} />
       </Field>
       <Field label={t('GM notes')} hint={t('Only for the game master; never shown to a player.')}>
         <textarea className="ga-textarea" rows={4} value={draft.gm_notes} onChange={(e) => set('gm_notes', e.target.value)} />
@@ -173,6 +174,7 @@ export function TemplateForm({
               </Field>
               <Field label={t('Hint')}>
                 <input className="ga-input" value={step.hint} onChange={(e) => setStep(index, { hint: e.target.value })} />
+                <Alerts issues={issuesAt(issues, `steps.${index}.hint`)} />
               </Field>
               <div className="ga-quest-move">
                 <button type="button" className="ga-btn ga-btn-sm" disabled={index === 0}
