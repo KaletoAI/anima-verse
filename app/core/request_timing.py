@@ -22,6 +22,7 @@ from time import perf_counter
 from anyio import BrokenResourceError, ClosedResourceError
 from starlette.requests import ClientDisconnect
 
+from app.core import hot_path_stats
 from app.core.timeutils import utc_now_iso
 from app.utils import llm_logger
 
@@ -29,6 +30,10 @@ LOG_FILE = llm_logger.LOG_DIR / "request_timing.jsonl"
 _stats_lock = threading.Lock()
 _METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 _samples: dict[tuple[str, str], deque] = {}
+
+# Routes the client-execution redesign watches: each finished request is
+# counted under the hot-path name "client_exec_routes" as "<METHOD>:<route>".
+CLIENT_EXEC_ROUTES: frozenset[str] = frozenset({"/play/pos", "/play/worldmap", "/play/orders"})
 
 
 # Slow-request rows waiting for the writer thread. A deque with maxlen drops
@@ -78,6 +83,12 @@ def _record(route, method, status, ms, size, outcome):
     method = method if method in _METHODS else "OTHER"
     with _stats_lock:
         _samples.setdefault((route, method), deque(maxlen=500)).append((ms, outcome))
+    if route in CLIENT_EXEC_ROUTES:
+        try:
+            # flush=False: the event loop never formats or logs a flush round.
+            hot_path_stats.count("client_exec_routes", f"{method}:{route}", flush=False)
+        except Exception:
+            pass
     if ms <= 250 or outcome == "stream":
         return
     try:

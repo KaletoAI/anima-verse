@@ -5,7 +5,10 @@ phases of one ``GET /play/worldmap``), ``count(name, key)`` counts one event.
 ``flush`` turns everything collected into finished lines and writes them
 through ``get_logger("hot_path")`` at INFO — at most once per 60 s of
 monotonic time. There is no thread of its own: ``record``/``count`` call
-``flush`` after collecting.
+``flush`` after collecting. ``count(..., flush=False)`` only collects: a
+caller on the event loop (``request_timing._record``) never formats or logs
+a flush round itself; the next ordinary call or an explicit ``flush`` writes
+its counts.
 
 Line formats::
 
@@ -59,13 +62,15 @@ def record(name: str, values: Dict[str, float]) -> None:
         pass
 
 
-def count(name: str, key: str) -> None:
-    """Count one event ``key`` under ``name``. Thread-safe, never raises."""
+def count(name: str, key: str, *, flush: bool = True) -> None:
+    """Count one event ``key`` under ``name``. With ``flush=False`` the
+    count is only collected, never flushed here. Thread-safe, never raises."""
     try:
         with _lock:
             per = _counts.setdefault(name, {})
             per[key] = per.get(key, 0) + 1
-        flush()
+        if flush:
+            _flush()
     except Exception:
         pass
 
@@ -120,3 +125,7 @@ def flush(now: Optional[float] = None) -> List[str]:
         return lines
     except Exception:
         return []
+
+
+# ``count`` has a parameter named ``flush``; it reaches the function here.
+_flush = flush
