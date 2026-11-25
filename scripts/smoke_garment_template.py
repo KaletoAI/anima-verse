@@ -9,7 +9,7 @@ run sheet (``~/claude-out/a138/``), not here.
 
 Expected numbers, derived by hand from ``app/core/garment_template.py``:
 
-[1] validate_params: an empty dict gives the PARAM_SPEC defaults (skirt, 0.5 m, flare 0.3, natural, no slit,
+[1] validate_params: an empty dict gives the PARAM_SPEC defaults (skirt, cups none (a top's field, round 2026-11-25), 0.5 m, flare 0.3, natural, no slit,
     0 m, strapless, no sleeves, sleeve fit 0.3, fit 0.3, crew, depth 0, closed, no collar, medium) and NO error. ``length_m`` 2.0 is clamped to the range top 1.2 and reported;
     ``kind`` "cape" is reported and becomes the default "skirt"; ``slit`` "left" with ``slit_m`` 0 takes
     min(0.25, 0.4 * length) — for length 0.5: min(0.25, 0.2) = 0.2; ``slit_m`` 0.6 on a 0.5 m piece is capped at
@@ -204,7 +204,7 @@ def close(a, b, tol=1e-4):
 
 # [1]
 p, e = gt.validate_params({})
-check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0.5, "flare": 0.3,
+check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "cups": "none", "length_m": 0.5, "flare": 0.3,
                                                   "waist_height": "natural", "slit": "none", "slit_m": 0.0,
                                                   "shoulders": "strapless", "sleeves": "none", "sleeve_fit": 0.3,
                                                   "fit": 0.3, "neckline": "crew", "neck_depth_m": 0.0,

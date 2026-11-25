@@ -620,7 +620,9 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
     for key, (kind, rule, default) in gt.PARAM_SPEC.items():
         spec[key] = ({"type": "choice", "choices": list(rule), "default": default} if kind == "choice"
                      else {"type": "number", "min": rule[0], "max": rule[1], "default": default})
-    return {"item_id": item_id, "name": str(item.get("name") or item_id), "params": gt.params_of(item),
+    return {"item_id": item_id, "name": str(item.get("name") or item_id),
+            # plan E6: the stored dict (a top's parked field set included) — the dialog shows ``fields_of`` of it
+            "params": gt.stored_of(item),
             "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
             "built": list(gt.BUILT_KINDS), "kind_fields": {k: list(v) for k, v in gt.KIND_FIELDS.items()},
             # A172: with nothing stored the dialog starts from the kind the item most likely is (slots / name),

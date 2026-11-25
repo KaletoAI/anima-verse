@@ -285,6 +285,9 @@ CLOSURES = ("back_hook", "front", "none")
 #: shoulders, down the back to the band) · halter (round the back of the neck) · cross (over the shoulders, crossing
 #: on the back to the other side of the band).
 STRAPS = ("none", "thin", "wide", "halter", "cross")
+#: Round 2026-11-25 (plan "cups in a top"): a top's own cups — "bra" = the top is cut as a bra whose band runs down to
+#: the top's hem (``cupped_top`` / ``build_kind``), "none" = a top as before.
+CUPS = ("none", "bra")
 STRAP_WIDTH_M = {"none": 0.0, "thin": 0.012, "wide": 0.022, "halter": 0.016, "cross": 0.014}
 #: Gloves.
 FINGERS = ("full", "fingerless", "none")
@@ -432,6 +435,7 @@ MATERIAL_ONLY = ("opacity",)
 #: the dialog and ``validate_params``).
 PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "kind": ("choice", KINDS, "skirt"),
+    "cups": ("choice", CUPS, "none"),               # a top only: "bra" = cut as a bra with a long band (``cupped_top``)
     "length_m": ("number", (0.15, 1.2), 0.5),       # skirt / dress: from the waist down; top / jacket: from the shoulder line down
     "flare": ("number", (0.0, 1.0), 0.3),           # 0 pencil .. 1 near-circle hem (skirt part)
     "waist_height": ("choice", WAIST_HEIGHTS, "natural"),
@@ -507,7 +511,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons",
               "texture", "sleeve_print"),
-    "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
+    "top": ("kind", "cups", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
             *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons", "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar", "placket", "buttons", "texture", "sleeve_print"),
@@ -518,6 +522,32 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit", "texture", "sleeve_print"),
     "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters", "texture", "sleeve_print"),
 }
+
+#: The fields of a top with cups (``cupped_top``): a bra's cup fields and the top's length (the band's hem) — no bodice,
+#: so no shoulders, neckline or sleeves. A top STORES these and its own ``KIND_FIELDS`` both (``stored_params``); only
+#: the set of ``fields_of`` is active (``validate_params``).
+TOP_CUPS_FIELDS = ("kind", "cups", "fabric", "opacity", "length_m", "cup_style", "cup_coverage", "push_up",
+                   "center_gore", "closure", "straps", "texture", "sleeve_print")
+
+
+def cupped_top(params: Optional[Dict[str, Any]]) -> bool:
+    """Round 2026-11-25: a top with its own cups (``cups`` "bra") — built as a bra whose band reaches the top's hem."""
+    return bool(params) and params.get("kind") == "top" and params.get("cups") == "bra"
+
+
+def build_kind(params: Dict[str, Any]) -> str:
+    """THE one switch between what a piece IS and how it is BUILT: "bra" for a top with cups (``cupped_top``), else its
+    kind. Every build decision (fitted or bodice / corset / panel, poses, shape groups, keys, the cut's family, the
+    preview) reads this; the piece's layer rank (``LAYER_RANK``), body regions and name stay its kind's."""
+    return "bra" if cupped_top(params) else str(params.get("kind") or "")
+
+
+def fields_of(params: Dict[str, Any]) -> Tuple[str, ...]:
+    """The ACTIVE fields of a piece: ``TOP_CUPS_FIELDS`` for a top with cups, else its kind's ``KIND_FIELDS``."""
+    if cupped_top(params):
+        return TOP_CUPS_FIELDS
+    return KIND_FIELDS.get(params.get("kind"), tuple(PARAM_SPEC))
+
 
 #: Spec section 8 pass marks (hand-derived in ``scripts/smoke_garment_template_spike.py``).
 THRESHOLDS = {
@@ -952,10 +982,28 @@ def _number(value: Any) -> Optional[float]:
 
 
 def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
-    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC``: every field present
-    (a missing one takes its default and is NOT an error), choices lower-cased, numbers
-    clamped into their range (a clamp is reported). Unknown keys are dropped. ``errors``
-    lists what was wrong; a non-dict is one error and all defaults."""
+    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC`` — the ACTIVE set every build, key, region and
+    prompt path reads (``params_of``): ``stored_params``, then every field outside ``fields_of`` at its default, so a
+    stale or parked field never changes a key. A top without cups gives exactly what it gave before ``cups``; a top
+    with cups has its top fields (shoulders, neckline, sleeves, ...) at the schema defaults."""
+    params, errors = stored_params(raw)
+    if isinstance(raw, dict) and params["kind"] == "top":
+        # only a top stores more than its active fields (plan E6): the parked set goes to its defaults — the cup
+        # fields of a top without cups (as before ``cups``), the top's own fields of a top with cups
+        active = fields_of(params)
+        for key in set(KIND_FIELDS["top"]) | set(TOP_CUPS_FIELDS):
+            if key not in active:
+                params[key] = PARAM_SPEC[key][2]
+    return params, errors
+
+
+def stored_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC`` as it is STORED (``set_params``) and edited (the
+    template dialog): every field present (a missing one takes its default and is NOT an error), choices lower-cased,
+    numbers clamped into their range (a clamp is reported). Unknown keys are dropped. ``errors`` lists what was wrong;
+    a non-dict is one error and all defaults. The fields of the piece's kind are kept, the others reset to their
+    defaults — a top keeps both its own fields and the cup fields (``TOP_CUPS_FIELDS``) whichever set is active, each
+    normalised by its own rules, so switching ``cups`` back and forth loses nothing (plan E6)."""
     params: Dict[str, Any] = {}
     errors: List[str] = []
     if not isinstance(raw, dict):
@@ -986,8 +1034,11 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     # stored top without the field keeps its bodice
     if kind == "top" and raw.get("shoulders") in (None, ""):
         params["shoulders"] = "covered"
+    keep = KIND_FIELDS.get(kind, tuple(PARAM_SPEC))
+    if kind == "top":
+        keep = keep + TOP_CUPS_FIELDS
     for key in PARAM_SPEC:
-        if key not in KIND_FIELDS.get(kind, tuple(PARAM_SPEC)):
+        if key not in keep:
             params[key] = PARAM_SPEC[key][2]
     if kind == "jacket":
         params["shoulders"] = "covered"
@@ -996,7 +1047,8 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if kind in ("dress", "top") and params["shoulders"] != "covered":
         params["collar"] = "none"      # a collar needs a neck ring (no straps, not strapless, not off-shoulder)
     params["buttons"] = int(round(params["buttons"]))
-    if corset_top(params):
+    # the top's own fields are normalised as a top's, parked or not (a corset top's edge, A221)
+    if kind == "top" and params["shoulders"] in ("strapless", "straps"):
         params["sleeves"] = "none"
         if params["neckline"] not in STRAPLESS_NECKLINES:
             params["neckline"] = "straight"
@@ -1164,6 +1216,15 @@ def params_of(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return validate_params(stored)[0]
 
 
+def stored_of(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The item's template parameters as stored and edited (``stored_params``: a top's parked field set included),
+    None when it has none stored. Only the template dialog reads this; every build path reads ``params_of``."""
+    stored = template_of(item).get("params")
+    if not isinstance(stored, dict):
+        return None
+    return stored_params(stored)[0]
+
+
 def suggest_params(item_id: str, *, character_name: str = "") -> Dict[str, Any]:
     """``{params, errors, raw}`` — the template parameters the vision task ``TASK`` reads off the item's picture
     and text (ONE queued ``llm_router.llm_call``; saves nothing). ValueError for an item that is no outfit piece
@@ -1188,7 +1249,7 @@ def suggest_params(item_id: str, *, character_name: str = "") -> Dict[str, Any]:
         raw = parse_answer(text)
     except ValueError as e:
         raise RuntimeError(str(e)) from e
-    params, errors = validate_params(raw)
+    params, errors = stored_params(raw)             # what the dialog edits (plan E6)
     return {"params": params, "errors": errors, "raw": raw}
 
 
@@ -1203,7 +1264,7 @@ def set_params(item_id: str, params: Dict[str, Any], *, source: str = "user") ->
         item = get_item(item_id)
         if not item or item.get("category") != "outfit_piece":
             raise ValueError(f"{item_id} is no outfit piece")
-        clean, errors = validate_params(params)
+        clean, errors = stored_params(params)       # plan E6: both field sets of a top are kept
         if errors:
             raise ValueError("; ".join(errors))
         piece = dict(item.get("outfit_piece") or {})
@@ -2138,6 +2199,8 @@ def keyed_params(params: Dict[str, Any]) -> Dict[str, Any]:
     that mean nothing for the piece's kind; the leather finishes share one drape fabric. ``garment_template_cut``
     keys the cut by the same set less the drape-only fields."""
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY and k not in TEXTURE_ONLY}
+    if params.get("cups") != "bra":                     # round 2026-11-25: only a top with cups keys ``cups``
+        params.pop("cups", None)
     if params.get("kind") != "trousers":                # A233: the trouser fields key only trousers
         params = {k: v for k, v in params.items() if k not in TROUSER_FIELDS}
     if params.get("shoulders") != "off_shoulder":      # A229: the off-shoulder fields key only an off-shoulder piece
