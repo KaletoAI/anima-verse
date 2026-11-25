@@ -8459,6 +8459,12 @@ receipts exist; each targeted numeric result contains its actual clamped
 `delta`, never the requested amount. Refusals have an empty execution ID and
 `status: refused`. Same actor/request ID with identical parameters returns its
 original execution; changed parameters return `request_id_conflict`.
+One request per actor is admitted at a time: a request with another request ID
+while the actor's previous one is still being admitted (validated, planned,
+started) is refused at once with `request_in_progress` (HTTP 409 with that
+`detail.reason`; the NPC tool adapter returns the same refusal). It is not
+queued; the client retries once the first request has answered. Cancel and
+respond do not wait for it.
 HTTP and installed tool adapters are described below; clients consume these
 same execution IDs instead of interpreting a successful request as seating.
 

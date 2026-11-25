@@ -42,6 +42,11 @@ Hand-derived expectations
 [8] static: ``fbx_import.import_fbx`` and ``clip_catalog.import_take`` call
     ``reload_clip_caches()``.
 [9] ``partner_poses()`` calls ``pair_kinds()`` exactly once.
+
+The fingerprint itself is memoised for ``_FINGERPRINT_TTL_S`` (5 s) since
+2026-11-25; this check is about the directory-mtime rule BEHIND it, so it runs
+with the memo off (``_FINGERPRINT_TTL_S = 0``, every call stats the roots as
+before). The memo is checked in ``scripts/smoke_prop_action_write_lock.py`` [6].
 """
 import ast
 import os
@@ -63,6 +68,8 @@ paths.init(WORLD)
 
 from app.core import animation_clips as ac  # noqa: E402
 from app.core import expression_pose_maps as epm  # noqa: E402
+
+ac._FINGERPRINT_TTL_S = 0.0   # the mtime rule itself, without the 5 s memo
 from app.core import interaction_engine as ie  # noqa: E402
 
 LICENSED = Path(str(CLIPS) + "-licensed")

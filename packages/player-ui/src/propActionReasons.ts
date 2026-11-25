@@ -79,6 +79,8 @@ const REASONS: Record<string, string> = {
   invalid_consent: "Only a pair can start at once",
   world_frozen: "The world is paused",
   request_id_conflict: "This request changed; try again",
+  // A second request of the same actor while the first one is still being admitted (409).
+  request_in_progress: "Your previous action is still being started",
   not_invitee: "Only the invited person can answer",
   invalid_response: "This invitation can no longer be answered",
   not_participant: "Only participants can stop this action",

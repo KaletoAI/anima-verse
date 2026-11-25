@@ -1,12 +1,12 @@
-"""LLM-Call-Statistik fuer Dauer-Schaetzung.
+"""LLM call statistics for duration estimates.
 
-Persistiert pro `(model, task)` einen Rolling-Window von Calls in der
-Welt-DB-Tabelle `llm_call_stats` und schaetzt daraus die erwartete Dauer
-neuer Calls anhand von Input-Tokens.
+Keeps a rolling window of calls per `(model, task)` in the world-DB table
+`llm_call_stats` and estimates the expected duration of new calls from
+their input tokens.
 
-Schaetzformel:
+Estimate:
     est_dur = median(duration) * (current_in / median(in))
-Mit hierarchischem Fallback (model,task) -> (model,*) -> None.
+With a hierarchical fallback (model,task) -> (model,*) -> None.
 """
 from datetime import datetime
 
@@ -29,19 +29,25 @@ _BUCKET_LIMIT = 5000
 # meant up to 3 x 5000 rows plus three Python sorts BEFORE every single LLM
 # call (the estimate runs per task start and per chat registration).
 _READ_WINDOW = 200
-# Mindest-Samples damit der primaere Bucket genutzt wird (sonst Fallback)
+# Minimum samples for the primary bucket to be used (otherwise fallback).
 _MIN_TASK_SAMPLES = 5
+# How long a stats insert waits for the world.db write lock (the connection's
+# busy_timeout is 5000 ms). A statistics row is not worth holding the finished
+# LLM call's thread: past this wait the row is dropped with a warning.
+_STATS_BUSY_TIMEOUT_MS = 250
 
 
 def record_call(model: str, task: str, provider: str,
                 in_tokens: int, out_tokens: int, duration_s: float,
                 agent_name: str = "", max_tokens: int = 0) -> None:
-    """Schreibt einen abgeschlossenen LLM-Call in die Statistik-Tabelle.
+    """Write one finished LLM call into the statistics table.
 
-    Defekte / unvollstaendige Records werden uebersprungen.
-    Nach dem Insert wird der Bucket auf `_BUCKET_LIMIT` Eintraege gekappt
-    pro `(model, task, provider)` — gleicher Model-Name auf anderer HW
-    laeuft anders schnell und bekommt deshalb einen eigenen Bucket.
+    Broken / incomplete records are skipped. After the insert the bucket is
+    capped at `_BUCKET_LIMIT` entries per `(model, task, provider)` — the
+    same model name on other hardware runs at another speed and therefore
+    gets its own bucket. Waits at most `_STATS_BUSY_TIMEOUT_MS` for the write
+    lock (set on this thread's own connection for this one write, restored
+    afterwards); a busy database drops the row, never fails the caller.
     """
     if not model or not task:
         return
@@ -51,6 +57,9 @@ def record_call(model: str, task: str, provider: str,
     prov = provider or ""
     agent = agent_name or ""
     mt = int(max_tokens) if max_tokens else 0
+    own = get_connection()
+    previous = int(own.execute("PRAGMA busy_timeout").fetchone()[0])
+    own.execute(f"PRAGMA busy_timeout={int(_STATS_BUSY_TIMEOUT_MS)}")
     try:
         with transaction() as conn:
             conn.execute(
@@ -69,33 +78,35 @@ def record_call(model: str, task: str, provider: str,
                 ")",
                 (model, task, prov, _BUCKET_LIMIT))
     except Exception as e:
-        logger.warning("Stats-Insert fehlgeschlagen: %s", e)
+        logger.warning("LLM stats insert failed: %s", e)
+    finally:
+        own.execute(f"PRAGMA busy_timeout={previous}")
 
 
 def estimate_duration(model: str, task: str, provider: str = "",
                       in_tokens: int = 0) -> Optional[Dict]:
-    """Schaetzt die Dauer eines LLM-Calls aus historischen Daten.
+    """Estimate the duration of an LLM call from historical data.
 
     Args:
-        model: Model-Name
-        task: task_type (z.B. "thought", "extraction")
-        provider: Provider/Channel-Name. Wichtig weil dasselbe Modell auf
-            anderer HW unterschiedlich schnell ist. Leer = providerunabhaengig
-            (nur als letzter Fallback genutzt).
-        in_tokens: aktuelle Input-Tokens. 0 = nicht bekannt, dann reiner Median.
+        model: model name
+        task: task_type (e.g. "thought", "extraction")
+        provider: provider/channel name. Matters because the same model runs
+            at a different speed on other hardware. Empty = any provider
+            (used only as the last fallback).
+        in_tokens: current input tokens. 0 = unknown, then the plain median.
 
     Returns:
-        dict mit `est_duration_s`, `p90_duration_s`, `est_out_tokens`,
-        `samples`, `source` ("task" | "model") oder None wenn nichts
-        Vergleichbares im Cache.
+        dict with `est_duration_s`, `p90_duration_s`, `est_out_tokens`,
+        `samples`, `source` ("task" | "model"), or None when nothing
+        comparable is recorded.
     """
     if not model:
         return None
 
-    # Hierarchischer Fallback:
-    # 1. (model, task, provider) — exakt
-    # 2. (model, *,    provider) — anderer Task auf gleicher HW
-    # 3. (model, task, *)        — gleicher Task auf anderer HW
+    # Hierarchical fallback:
+    # 1. (model, task, provider) — exact
+    # 2. (model, *,    provider) — another task on the same hardware
+    # 3. (model, task, *)        — the same task on other hardware
     prov_filter = provider if provider else None
     rows = _fetch_bucket(model, task, prov_filter)
     source = "task"
@@ -117,7 +128,7 @@ def estimate_duration(model: str, task: str, provider: str = "",
     med_out = int(median(outs)) if outs else 0
 
     if med_in > 0 and in_tokens > 0:
-        # Lineare Skalierung mit Input — bei extremen Ausreissern gedeckelt
+        # Linear scaling with the input — capped for extreme outliers
         ratio = max(0.3, min(3.0, in_tokens / med_in))
         est_dur = med_dur * ratio
     else:
@@ -137,11 +148,11 @@ def estimate_duration(model: str, task: str, provider: str = "",
 
 
 def _fetch_bucket(model: str, task: Optional[str], provider: Optional[str]):
-    """Holt die letzten N Eintraege fuer den angegebenen Bucket.
+    """The latest entries of one bucket.
 
-    `task=None` oder `provider=None` heisst "egal" (kein WHERE-Filter).
-    Es werden hoechstens `_READ_WINDOW` Zeilen gelesen (juengste zuerst).
-    Returns Liste von (in_tokens, out_tokens, duration_s).
+    `task=None` or `provider=None` means "any" (no WHERE filter). At most
+    `_READ_WINDOW` rows are read (newest first). Returns a list of
+    (in_tokens, out_tokens, duration_s).
     """
     conn = get_connection()
     where = ["model = ?"]

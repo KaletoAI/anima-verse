@@ -24,7 +24,10 @@ loop, so the session + user lookup sits in front of a small in-process cache
   (generation check), so a lookup racing a logout cannot re-insert the dead
   session.
 - Sliding is unchanged: it happens in ``get_session``, i.e. on every refill
-  from the DB. A continuously used session refills at least every
+  from the DB. A slide never fails a request: it waits at most
+  SLIDE_BUSY_TIMEOUT_MS for the world.db write lock and, when another writer
+  holds it longer, the still valid session is returned unslid (and cached);
+  the next refill tries again. A continuously used session refills at least every
   LOOKUP_CACHE_TTL_SECONDS (5 s), far below SLIDE_THROTTLE_SECONDS (60 s), so
   it still slides about once a minute (at most 60 + 5 s after the last slide).
 - A process that writes world.db from OUTSIDE (another process, a hand edit)
@@ -32,6 +35,7 @@ loop, so the session + user lookup sits in front of a small in-process cache
 """
 import copy
 import secrets
+import sqlite3
 import threading
 import time
 from collections import OrderedDict
@@ -57,6 +61,12 @@ SLIDE_THROTTLE_SECONDS = 60
 LOOKUP_CACHE_TTL_SECONDS = 5.0
 #: Bound of the lookup cache; the oldest entry goes first.
 LOOKUP_CACHE_MAX_ENTRIES = 1024
+#: How long a slide waits for the world.db write lock (the connection's
+#: busy_timeout is 5000 ms). A slide that cannot get it is skipped, never an
+#: error: the session is valid, the next refill slides it.
+SLIDE_BUSY_TIMEOUT_MS = 200
+#: A skipped slide warns at most once per this many seconds (monotonic).
+SLIDE_WARN_INTERVAL_SECONDS = 60.0
 
 
 def _now() -> datetime:
@@ -181,8 +191,12 @@ def get_session(token: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     now = _now()
     expires = parse_iso(row["expires_at"])
     if now >= expires:
-        # Expired — clean up.
-        delete_session(token)
+        # Expired — clean up. The row is refused either way; a lock held by
+        # another writer only postpones the delete to the next lookup.
+        try:
+            delete_session(token)
+        except sqlite3.OperationalError as e:
+            _warn_write_skipped("expired-session delete", e)
         return None, False
 
     # Sliding, throttled: only extend once the last slide is old enough.
@@ -194,17 +208,52 @@ def get_session(token: str) -> Tuple[Optional[Dict[str, Any]], bool]:
         return session, False
 
     new_expires = now + timedelta(hours=session["ttl_hours"])
-    with transaction() as conn:
-        conn.execute(
-            "UPDATE user_sessions SET last_activity=?, expires_at=? WHERE token=?",
-            (_iso(now), _iso(new_expires), token),
-        )
+    if not _slide(token, now, new_expires):
+        return session, False
     # The returned row is the row as it is NOW — the lookup cache checks expiry
     # against this expires_at, and the pre-slide value would end a cached
     # session early.
     session["last_activity"] = _iso(now)
     session["expires_at"] = _iso(new_expires)
     return session, True
+
+
+_slide_warned_at: Optional[float] = None
+_slide_warn_lock = threading.Lock()
+
+
+def _warn_write_skipped(what: str, error: Exception) -> None:
+    """One WARNING per SLIDE_WARN_INTERVAL_SECONDS for skipped session writes."""
+    global _slide_warned_at
+    now = _monotonic()
+    with _slide_warn_lock:
+        if _slide_warned_at is not None and now - _slide_warned_at < SLIDE_WARN_INTERVAL_SECONDS:
+            return
+        _slide_warned_at = now
+    logger.warning("session %s skipped (world.db write lock busy): %s", what, error)
+
+
+def _slide(token: str, now: datetime, new_expires: datetime) -> bool:
+    """Write the slid row; False when the write lock was not free within
+    SLIDE_BUSY_TIMEOUT_MS. The short wait is set on this thread's own
+    connection (``db.get_connection`` keeps one per thread) for this one
+    UPDATE and restored in ``finally``, so no other write of this thread
+    inherits it."""
+    conn = get_connection()
+    previous = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    conn.execute(f"PRAGMA busy_timeout={int(SLIDE_BUSY_TIMEOUT_MS)}")
+    try:
+        with transaction() as tx:
+            tx.execute(
+                "UPDATE user_sessions SET last_activity=?, expires_at=? WHERE token=?",
+                (_iso(now), _iso(new_expires), token),
+            )
+        return True
+    except sqlite3.OperationalError as e:
+        _warn_write_skipped("slide", e)
+        return False
+    finally:
+        conn.execute(f"PRAGMA busy_timeout={previous}")
 
 
 def delete_session(token: str) -> None:
