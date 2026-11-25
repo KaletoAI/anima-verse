@@ -352,6 +352,10 @@ def bra_region(f, co, tree, cx, cy):
     info_fold = {"folds": [round(z, 4) for z in folds]}
     if folds:
         under = max(under, min(folds))
+    if f.get("hem_y") is not None:
+        # round 2026-11-25: a top with cups — its band runs from the fold found here down to the top's hem (an
+        # absolute height, ``garment_template.fitted_spec``); a bra has no ``hem_y`` and keeps the band above
+        band = max(under - _gltf_y(f["hem_y"]), float(f["back_strap_m"]))
     info = {"apex": {("l" if s > 0 else "r"): [round(float(x), 4) for x in a] for s, a in apex.items()},
             "under_z": round(under, 4), **info_fold}
     tops = {}
