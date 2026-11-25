@@ -15,14 +15,20 @@ WHAT FOLLOWS BY HAND
  (a) Drop one-shot. A fresh world.db is seeded BEFORE init_schema with
        - a `story_arcs` table holding one row (id "sa1"),
        - `llm_template_overrides` rows: "tasks/story_arc_generation.md" (an arc template),
-         "chat/agent_thought.md" whose content contains "{{ arc_block }}" (would raise under StrictUndefined once
-         the key is gone), and "chat/agent_thought_in_chat.md" with plain content (the control: no arc reference).
+         "chat/agent_thought.md" = REPAIRED (a header comment whose variable list names arc_block on its own line,
+         then "before\n", a whitespace-control block {%- if arc_block -%}…{{ arc_block }}…{%- endif -%} and
+         "\nafter"), "chat/thought_extra.md" = DELETED (reads {{ arc_block }} outside any block), and
+         "chat/agent_thought_in_chat.md" with plain content (the control: no arc reference).
      After db.init_schema():
        - sqlite_master has no table "story_arcs" (DROP ran, and no CREATE statement brings it back),
-       - the overrides left are exactly {"chat/agent_thought_in_chat.md"} (the arc template row by its path, the
-         agent_thought row by its content; the control row stays),
+       - the overrides left are exactly {"chat/agent_thought.md", "chat/agent_thought_in_chat.md"} (the arc
+         template row goes by its path, thought_extra by its content; the control row stays),
+       - agent_thought.md is stored as REPAIRED_THOUGHT: the comment line that starts with arc_block is gone, the
+         block plus the one newline after it is gone -> "{# vars:\n     other — x\n#}\nbefore\nafter",
+       - the control row's content is unchanged ("a plain override"),
        - schema_meta holds story_arcs_dropped_v1 = "1",
-       - exactly ONE warning names "chat/agent_thought.md" together with the world path (the storage dir).
+       - exactly ONE warning names "chat/agent_thought.md" together with the world path (the repair note), and
+         exactly ONE names "chat/thought_extra.md" and carries its FULL content (logged before the delete).
      A second init_schema() leaves the table absent (the CREATE statement is gone from SCHEMA_STATEMENTS — with it
      still present the table would be recreated empty) and issues no further warning about the override.
  (b) importlib.import_module("app.core.story_engine") and ("app.models.story_arcs") raise ModuleNotFoundError.
@@ -39,7 +45,8 @@ WHAT FOLLOWS BY HAND
        app/core/config.py   the dead-field entry            DEAD_TOPLEVEL_ONLY_FIELDS ... "body_retexture", "story_engine")
        app/core/db.py       the drop one-shot: the flag lookup, the flag insert, DROP TABLE IF EXISTS story_arcs,
                             the three template paths tasks/story_arc_generation.md | _advancement.md | _resolve.md
-                            and the content test for 'arc_block'  (7 lines, listed verbatim in ALLOWED below)
+                            and the repair's variable name _ARC_VAR = "arc_block"  (7 lines, listed verbatim in
+                            ALLOWED below)
      Nor does any scanned FILE NAME contain story_arc / story_engine.
      The scanner is not looking away: at commit 3a444d8bf (before the removal) git grep of the same words over the
      same tracked directories counts >= 110 lines (hand count of that commit: config.py 7, story_engine.py 30,
@@ -51,6 +58,10 @@ WHAT FOLLOWS BY HAND
      file StoryArcsPanel.tsx — 7 lines in it: the doc comment's three endpoint mentions, the export, the three api
      calls — plus 2 lines in StorytellerTab.tsx: the import and the mount). shared/languages/de.json has 0 keys that
      contain "story arc" case-insensitively (before: "Story arcs", "No story arcs yet.", "Delete story arc" = 3).
+ (h) Built bundles (review R11). A byte scan of every file under static/client3d, static/game_admin and static/hud
+     (when present) finds "play/story-arcs" in none of them: the quest book of /play, of Game-Admin and of the native
+     HUD (static/hud/hud.html) polls /play/quests, and a bundle built from a tree before the removal would poll the
+     404 route. The scan is not looking away: it counts >= 1 scanned file per present directory.
 """
 import importlib
 import os
@@ -102,7 +113,7 @@ ALLOWED = {
     ("app/core/db.py", '("tasks/story_arc_generation.md",'),
     ("app/core/db.py", '"tasks/story_arc_advancement.md",'),
     ("app/core/db.py", '"tasks/story_arc_resolve.md"))'),
-    ("app/core/db.py", '"WHERE instr(content, \'arc_block\') > 0"'),
+    ("app/core/db.py", '_ARC_VAR = "arc_block"'),
     ("app/core/db.py", '"(\'story_arcs_dropped_v1\', \'1\')"'),
 }
 SCAN_DIRS = ("app", "plugins", "shared/templates", "shared/prompt_filters", "static/admin")
@@ -122,8 +133,13 @@ seed.execute("CREATE TABLE story_arcs (id TEXT PRIMARY KEY, title TEXT NOT NULL,
 seed.execute("INSERT INTO story_arcs (id, title, created_at, updated_at) VALUES ('sa1', 'Old arc', 'x', 'x')")
 seed.execute("CREATE TABLE llm_template_overrides (path TEXT PRIMARY KEY, content TEXT NOT NULL, "
              "base_hash TEXT NOT NULL, updated_at TEXT NOT NULL)")
+THOUGHT_OVERRIDE = ("{# vars:\n     arc_block   — Low: arc\n     other — x\n#}\nbefore\n"
+                    "{%- if arc_block -%}\n=== Story ===\n{{ arc_block }}\n{%- endif -%}\nafter")
+REPAIRED_THOUGHT = "{# vars:\n     other — x\n#}\nbefore\nafter"
+EXTRA_OVERRIDE = "Plain line.\n{{ arc_block }} is read here without a block."
 for path, content in (("tasks/story_arc_generation.md", "an old arc prompt"),
-                      ("chat/agent_thought.md", "before\n{% if arc_block %}{{ arc_block }}{% endif %}\nafter"),
+                      ("chat/agent_thought.md", THOUGHT_OVERRIDE),
+                      ("chat/thought_extra.md", EXTRA_OVERRIDE),
                       ("chat/agent_thought_in_chat.md", "a plain override")):
     seed.execute("INSERT INTO llm_template_overrides (path, content, base_hash, updated_at) VALUES (?, ?, 'h', 'x')",
                  (path, content))
@@ -162,6 +178,15 @@ def overrides() -> set:
         con.close()
 
 
+def override_content(path: str):
+    con = sqlite3.connect(str(DB_PATH))
+    try:
+        row = con.execute("SELECT content FROM llm_template_overrides WHERE path=?", (path,)).fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
+
 def flag() -> object:
     con = sqlite3.connect(str(DB_PATH))
     try:
@@ -173,15 +198,21 @@ def flag() -> object:
 
 world = str(paths.get_storage_dir())
 check("table story_arcs dropped", table_present(), False)
-check("overrides left: only the control row", overrides(), {"chat/agent_thought_in_chat.md"})
+check("overrides left: the repaired one and the control row", overrides(),
+      {"chat/agent_thought.md", "chat/agent_thought_in_chat.md"})
+check("agent_thought repaired, the rest kept", override_content("chat/agent_thought.md"), REPAIRED_THOUGHT)
+check("control row untouched", override_content("chat/agent_thought_in_chat.md"), "a plain override")
 check("flag story_arcs_dropped_v1 set", flag(), "1")
 named = [w for w in warnings if "chat/agent_thought.md" in w and world in w]
 check("one warning names the agent_thought override and the world path", len(named), 1)
+extra = [w for w in warnings if "chat/thought_extra.md" in w]
+check("one warning for the deleted override, with its full content",
+      (len(extra), all(EXTRA_OVERRIDE in w for w in extra)), (1, True))
 before = len(warnings)
 db.init_schema()
 check("second init_schema: table still absent", table_present(), False)
 check("second init_schema: no further override warning",
-      [w for w in warnings[before:] if "chat/agent_thought.md" in w], [])
+      [w for w in warnings[before:] if "chat/agent_thought.md" in w or "thought_extra" in w], [])
 db.logger.warning = _orig_warning
 
 # ── (b) modules ───────────────────────────────────────────────────────────
@@ -285,6 +316,28 @@ check("frontend sources: no StoryArcsPanel / story-arc / story_arc", front_hits,
 de = json.loads((ROOT / "shared/languages/de.json").read_text(encoding="utf-8"))["translations"]
 check("de.json has translations (the scan is not looking at an empty dict)", len(de) > 1000, True)
 check("de.json: no key containing 'story arc'", sorted(k for k in de if "story arc" in k.lower()), [])
+
+# ── (h) built bundles ─────────────────────────────────────────────────────
+print("(h) built bundles")
+BUNDLE_DIRS = ("static/client3d", "static/game_admin", "static/hud")
+bundle_hits = []
+for top in BUNDLE_DIRS:
+    base = ROOT / top
+    if not base.is_dir():
+        check(f"{top} exists", top in ("static/hud",), True)
+        continue
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        for fn in filenames:
+            full = Path(dirpath) / fn
+            scanned += 1
+            try:
+                if b"play/story-arcs" in full.read_bytes():
+                    bundle_hits.append(full.relative_to(ROOT).as_posix())
+            except OSError:
+                continue
+    check(f"{top}: files scanned", scanned >= 1, True)
+check("no built bundle polls play/story-arcs", sorted(bundle_hits), [])
 
 print()
 if FAILURES:

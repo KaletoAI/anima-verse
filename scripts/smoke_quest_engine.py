@@ -59,11 +59,17 @@ WHAT FOLLOWS BY HAND
  9. Broken (Review Focus 3): run of [① holds_item thing] with thing = P; delete_item(P) -> tick() -> "broken" with
     exactly one issue (bindings.thing, unknown_item), its announcement deleted. Run Errand with giver Nox;
     delete_character("Nox") -> "broken" at once, no tick.
- 10. Unloaded type (Review Focus 5): owner "smoke_x" registers condition "x_flag" (always passes, listens to
-    character.entered_room). Run RX = [① x_flag]. Unregister smoke_x: evaluate("A") raises nothing and RX stays at
-    current_step 0 (an unregistered type is unavailable, never passed). Then run RY = [① at_place place] while A
-    already stands in L1/r1 (nothing evaluated yet). tick() -> RX "broken" (issue code type_not_registered), RY
-    "done" in the same tick.
+ 10. Unloaded type (Review Focus 5, review R12): owner "smoke_x" registers condition "x_flag" (always passes,
+    listens to character.entered_room). Run RX = [① x_flag]. Unregister smoke_x: evaluate("A") raises nothing and
+    RX stays at current_step 0 (an unregistered type is unavailable, never passed). Then run RY = [① at_place place]
+    while A already stands in L1/r1 (nothing evaluated yet). tick() -> RX still "open" without issues (a type missing
+    from ONE catalog read is no evidence), RY "done" in the same tick. A second tick() -> RX "broken" (issue code
+    type_not_registered): the same run missed the type at two consecutive ticks.
+    RZ = [① z_flag] (owner smoke_z, never passes). Unregister, tick (missing once), register again, tick -> RZ open
+    (the set of runs that missed a type is replaced each tick). Unregister, tick (missing once); a contributor
+    "smoke_boom" that raises -> tick, tick: the strict catalog read raises, RZ is skipped both times, still "open"
+    (a skipped run keeps its "missed last time" mark); boom removed, tick -> missing again after a missing mark ->
+    RZ "broken" with type_not_registered.
  11. Freeze: RE = create_run of Errand E(N), open, expires_at = now - 1 game hour. set_world_frozen(True) ->
     periodic_jobs._is_paused() is True (the gate that keeps world_tick from firing) and RE is still "open". RF =
     [① at_place place2] with place2 = L1/r2: A walks to L1/r2 -> the signal is evaluated while frozen -> RF "done".
@@ -79,6 +85,46 @@ WHAT FOLLOWS BY HAND
     current_step 0 (not evaluated either), the arm used up. The one WARNING "reference check failed, skipped this
     tick: validator hiccup" in the output is expected. Next tick(): the validator passes, RV is evaluated ->
     "done".
+ 15. Role placeholders (final fix wave A). validate_template of Errand with
+      title "Errand for {giver}" -> no issue (giver is a role); summary "Bring {{the}} {thing}." -> no issue
+      ({{ }} are literal braces); step 0 text "Talk to {boss}." -> unknown_role at steps.0.text; step 1 hint
+      "{place" -> bad_text at steps.1.hint; step 2 text "Hold it}" -> bad_text at steps.2.text; locked_text
+      "Not you, {nobody}" -> unknown_role at prerequisites.locked_text; gm_notes "{whatever" -> no issue (never
+      substituted). Exactly those four (path, code) pairs.
+    Start: the labelled Errand (title "Errand for {giver}", step 0 text "Talk to {giver} now.", step 1 text
+      "Go to {place} in {{brackets}}.") with
+      E(N) -> binding_labels == {"giver": "N", "place": "Front", "thing": "Lamp"} (character name, room name,
+      item name). render_text("Talk to {giver} at {place}, {{ok}}", run) == "Talk to N at Front, {ok}"; a key the
+      run has no label for renders as the key: "{ghost}" -> "ghost".
+    Frozen: room r1 of L1 is renamed "Lobby" after the start -> the run's binding_labels still say "Front".
+    Quest book (quest_book.build_player_quests("A")): the entry of that run has title "Errand for N"; after A
+    talks to N... A already spoke with N in [4], so evaluate("A") records ① at once; A stands in L2 -> the shown
+    steps are ① "Talk to N now." (done) and the current ② "Go to Front in {brackets}." (old name). The step
+    notice for A ends in ": Talk to N now." (the prefix is in A's language; a text no earlier notice had: notices are deduplicated by
+    text while unread) and A's run announcement event text starts with
+    "Errand for N".
+ 16. Time limit on signals (review R8): RL = create_run of [① at_place place] (L1/r1), open, expires_at one game
+    hour in the past. A walks into L1/r1 -> the signal records nothing: RL "open", current_step 0, empty log.
+    tick() -> RL "failed".
+ 17. Prerequisites gate the opening (review R9): hidden template, start_condition at_place place (L1/r2),
+    prerequisites relationship_at_least giver(N) >= 50 (B has 60 since [7], A has none). A walks into L1/r2 ->
+    still "hidden". B walks into L1/r2 -> "open".
+ 18. time_elapsed cannot start a quest (review R1): validate_template with start_condition time_elapsed hours=2 ->
+    one issue (start_condition.type, not_allowed_here); inside {"any": [at_place, time_elapsed]} -> at
+    start_condition.any.1.type; time_elapsed as a STEP condition -> no issue. A ready template stored with it
+    directly (bypassing the route) -> start_run raises QuestRefused naming start_condition.type.
+ 19. One failed fact write (review R3): run Errand with giver Ola (A has spoken with Ola since [4b], B never).
+    add_fact raises for mind A only; Ola says a line addressed to [A, B], both in the room -> B's fact is written
+    (has_fact(B, spoke_with, Ola)), and A is still evaluated: ① done by A (the older fact counts).
+ 20. A failed delete breaks nothing (review R4): run Errand with giver Zed. character.transaction raises once ->
+    delete_character("Zed") False, Zed still listed, the run still "open". The real delete -> True, "broken".
+ 21. Deleted references, tick only (review R10a): L3 (rooms t1, t2), L4 (room u1), NPC Pim. Runs bound to L3/t2,
+    to L4/u1 and to giver Pim. upsert L3 with t1 only, delete_location_row(L4), DELETE the characters row of Pim
+    by raw SQL (no hook) -> tick() -> the three runs "broken" with unknown_room, unknown_location,
+    unknown_character (at bindings.place, bindings.place, bindings.giver).
+ 22. Linked avatar swaps mid-run (review R10b): Kai (avatar of user "demo3") stands in L2/s1, create_linked(Kai,
+    Lio). Run [① at_place place] bound to L5/v1. swap_presence(Kai -> Lio): Lio is the player-controlled body now
+    and stands where Kai stood. Lio walks into L5/v1 -> "done", step_log[-1] avatar Lio, mind Kai.
 """
 import os
 import sys
@@ -356,9 +402,39 @@ def main() -> int:
     y_t = template(title="Y", steps=[{"id": "a", "text": "Be there.", "condition": AT_PLACE}])
     ry = qe.start_run(y_t["id"], errand_bindings())
     qe.tick()
-    got = run(rx["id"])
-    check("RX broken", (got["state"], [i["code"] for i in got["issues"]]), ("broken", ["type_not_registered"]))
+    check("first tick without the type: RX still open (one catalog read is no evidence)",
+          (run(rx["id"])["state"], run(rx["id"])["issues"]), ("open", []))
     check("RY done in the same tick", run(ry["id"])["state"], "done")
+    qe.tick()
+    got = run(rx["id"])
+    check("second tick still without it: RX broken", (got["state"], [i["code"] for i in got["issues"]]),
+          ("broken", ["type_not_registered"]))
+    qc.register("smoke_z", lambda: [qc.QuestType(
+        id="z_flag", kind="condition", label="Z flag", description="never", signals=("character.entered_room",),
+        evaluate=lambda params, ctx: ConditionResult(True, False, "no"))])
+    z_t = template(title="Z", steps=[{"id": "a", "text": "Flag.", "condition": {"type": "z_flag", "params": {}}}])
+    rz = qe.start_run(z_t["id"], errand_bindings())
+    hooks.unregister_owned_providers("smoke_z")
+    qe.tick()
+    qc.register("smoke_z", lambda: [qc.QuestType(
+        id="z_flag", kind="condition", label="Z flag", description="never", signals=("character.entered_room",),
+        evaluate=lambda params, ctx: ConditionResult(True, False, "no"))])
+    qe.tick()
+    check("a type back by the next tick: RZ stays open", run(rz["id"])["state"], "open")
+    hooks.unregister_owned_providers("smoke_z")
+    qe.tick()
+
+    def boom():
+        raise RuntimeError("contributor hiccup")
+
+    qc.register("smoke_boom", boom)
+    qe.tick()
+    qe.tick()
+    check("a raising contributor skips the tick, never breaks", run(rz["id"])["state"], "open")
+    hooks.unregister_owned_providers("smoke_boom")
+    qe.tick()
+    check("RZ broken once the type stays gone over two clean ticks",
+          [i["code"] for i in run(rz["id"])["issues"]], ["type_not_registered"])
 
     # 11 ---------------------------------------------------------------------------------------
     section("[11]", "freeze")
@@ -423,10 +499,175 @@ def main() -> int:
     qe.tick()
     check("next tick evaluates it", run(rv["id"])["state"], "done")
 
+    # 15 ---------------------------------------------------------------------------------------
+    section("[15]", "role placeholders")
+    move("A", "L2")
+    bad = {**ERRAND, "title": "Errand for {giver}", "summary": "Bring {{the}} {thing}.", "gm_notes": "{whatever",
+           "steps": [{**ERRAND["steps"][0], "text": "Talk to {boss}."},
+                     {**ERRAND["steps"][1], "hint": "{place"},
+                     {**ERRAND["steps"][2], "text": "Hold it}"}],
+           "prerequisites": {"condition": {}, "locked_text": "Not you, {nobody}"}}
+    check("issues", sorted((i["path"], i["code"]) for i in qe.validate_template(bad)),
+          [("prerequisites.locked_text", "unknown_role"), ("steps.0.text", "unknown_role"),
+           ("steps.1.hint", "bad_text"), ("steps.2.text", "bad_text")])
+    labelled = template(title="Errand for {giver}", steps=[
+        {**ERRAND["steps"][0], "text": "Talk to {giver} now."},
+        {**ERRAND["steps"][1], "text": "Go to {place} in {{brackets}}."}, ERRAND["steps"][2]])
+    r15 = qe.start_run(labelled["id"], errand_bindings())
+    check("labels", r15["binding_labels"], {"giver": "N", "place": "Front", "thing": "Lamp"})
+    check("render", qe.render_text("Talk to {giver} at {place}, {{ok}}", r15), "Talk to N at Front, {ok}")
+    check("unlabelled key", qe.render_text("{ghost}", r15), "ghost")
+    world.upsert_location({"id": "L1", "name": "Hall", "entry_room": "r1",
+                           "rooms": [{"id": "r1", "name": "Lobby"}, {"id": "r2", "name": "Back"}]},
+                          sync_world=False)
+    check("frozen after the rename", run(r15["id"])["binding_labels"]["place"], "Front")
+    qe.evaluate("A")
+    from app.core.quest_book import build_player_quests
+    entry = next(q for q in build_player_quests("A")["quests"] if q["id"] == r15["id"])
+    check("book title", entry["title"], "Errand for N")
+    check("book steps", [(s["text"], s["state"]) for s in entry["steps"]],
+          [("Talk to N now.", "done"), ("Go to Front in {brackets}.", "current")])
+    notes = [str(n.get("content") or n.get("body") or "") for n in quest_notes("A", r15["id"])]
+    check("step notice renders the label (any language)", [n.endswith(": Talk to N now.") for n in notes], [True])
+    check("announcement", (events.get_event(r15["news_event_id"]) or {}).get("text", "").startswith("Errand for N"),
+          True)
+    cleanup(r15["id"])
+
+    # 16 ---------------------------------------------------------------------------------------
+    section("[16]", "a step after the deadline is not recorded")
+    move("A", "L2")
+    late_t = template(title="Late", steps=[{"id": "a", "text": "Be there.", "condition": AT_PLACE}])
+    rl = quests.create_run(template=quests.get_template(late_t["id"]), bindings=errand_bindings(), state="open",
+                           expires_at=(game_time() - GameDuration.of(hours=1)).canonical())
+    qe._refresh_live()  # created by the store, not start_run: the engine's live count must see it
+    move("A", "L1", "r1")
+    got = run(rl["id"])
+    check("nothing recorded", (got["state"], got["current_step"], got["step_log"]), ("open", 0, []))
+    qe.tick()
+    check("tick fails it", run(rl["id"])["state"], "failed")
+    move("A", "L2")
+
+    # 17 ---------------------------------------------------------------------------------------
+    section("[17]", "a locked avatar does not open a hidden run")
+    gate_t = template(title="Gate", start_condition=AT_PLACE, prerequisites={
+        "condition": {"type": "relationship_at_least", "params": {"character": "giver", "strength": 50}},
+        "locked_text": ""})
+    r17 = qe.start_run(gate_t["id"], errand_bindings(place=("L1", "r2")))
+    move("A", "L1", "r2")
+    check("A (locked) leaves it hidden", run(r17["id"])["state"], "hidden")
+    move("B", "L1", "r2")
+    check("B opens it", run(r17["id"])["state"], "open")
+    cleanup(r17["id"])
+    move("A", "L2")
+    move("B", "L2")
+
+    # 18 ---------------------------------------------------------------------------------------
+    section("[18]", "time_elapsed is no start condition")
+    elapsed = {"type": "time_elapsed", "params": {"hours": 2}}
+    check("as the start condition", [(i["path"], i["code"]) for i in qe.validate_template(
+        {**ERRAND, "start_condition": elapsed})], [("start_condition.type", "not_allowed_here")])
+    check("inside any", [(i["path"], i["code"]) for i in qe.validate_template(
+        {**ERRAND, "start_condition": {"any": [AT_PLACE, elapsed]}})],
+          [("start_condition.any.1.type", "not_allowed_here")])
+    check("as a step condition", qe.validate_template(
+        {**ERRAND, "steps": [{"id": "a", "text": "Wait.", "condition": elapsed}]}), [])
+    stored = template(title="Waiting start", start_condition=elapsed)
+    try:
+        qe.start_run(stored["id"], errand_bindings())
+        check("start refused", "started", "QuestRefused")
+    except qe.QuestRefused as e:
+        check("start refused", "start_condition.type" in {i["path"] for i in e.issues}, True)
+
+    # 19 ---------------------------------------------------------------------------------------
+    section("[19]", "one failed fact write")
+    r19 = qe.start_run(errand["id"], errand_bindings(giver="Ola"))
+    real_add_fact = quests.add_fact
+
+    def flaky_add_fact(mind, kind, subject):
+        if mind == "A":
+            raise RuntimeError("database is locked")
+        return real_add_fact(mind, kind, subject)
+
+    move("B", "L2", "s1")
+    move("A", "L2", "s1")
+    move("Ola", "L2", "s1")
+    quests.add_fact = flaky_add_fact
+    try:
+        record_utterance(speaker="Ola", content="Hello, both.", addressees=["A", "B"], source="loop")
+        check("drain", qe.drain(), True)
+    finally:
+        quests.add_fact = real_add_fact
+    check("B's fact written", quests.has_fact("B", qt.FACT_SPOKE_WITH, "Ola"), True)
+    check("A still evaluated", [s["avatar"] for s in run(r19["id"])["step_log"]], ["A"])
+    cleanup(r19["id"])
+
+    # 20 ---------------------------------------------------------------------------------------
+    section("[20]", "a failed delete breaks nothing")
+    assert chars.save_character_profile("Zed", {"current_location": "L2", "current_room": "s1"}, create_new=True)
+    r20 = qe.start_run(errand["id"], errand_bindings(giver="Zed"))
+    real_tx = chars.transaction
+    calls = [0]
+
+    def failing_tx():
+        calls[0] += 1
+        raise RuntimeError("database is locked")
+
+    chars.transaction = failing_tx
+    try:
+        check("delete refused", chars.delete_character("Zed"), False)
+    finally:
+        chars.transaction = real_tx
+    check("Zed still there", "Zed" in chars.list_available_characters(), True)
+    check("run still open", run(r20["id"])["state"], "open")
+    check("real delete", chars.delete_character("Zed"), True)
+    check("broken now", run(r20["id"])["state"], "broken")
+
+    # 21 ---------------------------------------------------------------------------------------
+    section("[21]", "deleted references, tick only")
+    world.upsert_location({"id": "L3", "name": "Mill", "entry_room": "t1",
+                           "rooms": [{"id": "t1", "name": "Floor"}, {"id": "t2", "name": "Loft"}]}, sync_world=False)
+    world.upsert_location({"id": "L4", "name": "Barn", "entry_room": "u1",
+                           "rooms": [{"id": "u1", "name": "Stall"}]}, sync_world=False)
+    assert chars.save_character_profile("Pim", {"current_location": "L2", "current_room": "s1"}, create_new=True)
+    room_run = qe.start_run(y_t["id"], errand_bindings(place=("L3", "t2")))
+    loc_run = qe.start_run(y_t["id"], errand_bindings(place=("L4", "u1")))
+    char_run = qe.start_run(errand["id"], errand_bindings(giver="Pim"))
+    world.upsert_location({"id": "L3", "name": "Mill", "entry_room": "t1",
+                           "rooms": [{"id": "t1", "name": "Floor"}]}, sync_world=False)
+    check("L4 deleted", world.delete_location_row("L4"), True)
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM characters WHERE name=?", ("Pim",))
+    qe.tick()
+    for label, rid, want in (("room", room_run["id"], ("bindings.place", "unknown_room")),
+                             ("location", loc_run["id"], ("bindings.place", "unknown_location")),
+                             ("character", char_run["id"], ("bindings.giver", "unknown_character"))):
+        got = run(rid)
+        check(f"{label} gone -> broken", (got["state"], [(i["path"], i["code"]) for i in got["issues"]]),
+              ("broken", [want]))
+
+    # 22 ---------------------------------------------------------------------------------------
+    section("[22]", "a linked avatar swaps mid-run")
+    from app.core.linked_characters import create_linked, swap_presence
+    from app.models.account import is_player_controlled
+    assert chars.save_character_profile("Kai", {"current_location": "L2", "current_room": "s1"}, create_new=True)
+    uid3 = create_user("demo3", "smoke-password", allowed_characters=["Kai"])
+    update_user(uid3, settings={"active_character": "Kai"})
+    check("linked", create_linked("Kai", "Lio").get("ok"), True)
+    world.upsert_location({"id": "L5", "name": "Pier", "entry_room": "v1",
+                           "rooms": [{"id": "v1", "name": "Dock"}]}, sync_world=False)
+    r22 = qe.start_run(y_t["id"], errand_bindings(place=("L5", "v1")))
+    check("swap", swap_presence("Kai", "Lio").get("ok"), True)
+    check("Lio is player-controlled", is_player_controlled("Lio"), True)
+    check("Lio stands where Kai stood", chars.get_character_current_location("Lio"), "L2")
+    move("Lio", "L5", "v1")
+    got = run(r22["id"])
+    check("done by the new body", (got["state"], {k: got["step_log"][-1][k] for k in ("avatar", "mind")}),
+          ("done", {"avatar": "Lio", "mind": "Kai"}))
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[14]")
+    print("PASS smoke_quest_engine: [1]-[22]")
     return 0
 
 

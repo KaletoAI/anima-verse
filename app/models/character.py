@@ -1126,12 +1126,7 @@ def delete_character(character_name: str) -> bool:
         from app.core.travel_engine import cancel_journey
         cancel_journey(character_name)
 
-    def _detach_quests() -> None:
-        # A quest run that binds this character can never be fulfilled: broken now, not at the next tick.
-        from app.core.quest_engine import on_character_deleted
-        on_character_deleted(character_name)
-
-    for _step in (_detach_party, _detach_journey, _detach_interaction, _detach_quests):
+    for _step in (_detach_party, _detach_journey, _detach_interaction):
         try:
             _step()
         except Exception as e:  # noqa: BLE001
@@ -1195,7 +1190,7 @@ def delete_character(character_name: str) -> bool:
                 _prune_party_memberships(conn, character_name)
                 stored_tx_1 = True
         except Exception as e:
-            logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
+            logger.error("delete_character: DB error for %s: %s", character_name, e)
             return False
 
         from app.core import sync_topics
@@ -1220,8 +1215,18 @@ def delete_character(character_name: str) -> bool:
             logger.warning("delete_character: directory of %s not removable: %s",
                            character_name, e)
 
-        logger.info("Character '%s' geloescht (DB + Storage)", character_name)
-        return True
+        logger.info("Character '%s' deleted (DB + storage)", character_name)
+
+    # 3) A quest run that binds this character can never be fulfilled: broken now, not at the next tick. Only
+    #    after the DB sweep stored (a failed delete keeps the character AND its runs) and outside the profile and
+    #    publication locks (it writes runs, deletes a news event and pushes notices). Best effort: the tick's
+    #    reference check is the fallback.
+    try:
+        from app.core.quest_engine import on_character_deleted
+        on_character_deleted(character_name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("delete_character: detaching the quest runs of %s failed: %s", character_name, e)
+    return True
 
 
 def get_character_personality(character_name: str) -> str:

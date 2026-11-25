@@ -1141,6 +1141,7 @@ SCHEMA_STATEMENTS = [
                                           'failed', 'cancelled', 'broken')),
         current_step      INTEGER NOT NULL DEFAULT 0,
         bindings          TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(bindings)),
+        binding_labels    TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(binding_labels)),
         template_snapshot TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(template_snapshot)),
         step_log          TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(step_log)),
         issues            TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(issues)),

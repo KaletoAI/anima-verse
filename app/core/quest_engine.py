@@ -10,8 +10,8 @@ nothing but put the event payload on ONE queue; a single daemon worker thread ta
 
 EVALUATION. :func:`evaluate` looks at one avatar: only a player-controlled character fulfils anything (an NPC
 entering the bound room changes nothing). Steps are sequential: per hidden/open run only the CURRENT expression is
-read, and only when it listens to the signal (``""`` = every run). A hidden run whose start condition passes is
-opened (no announcement, D15); an open run whose prerequisites AND current step pass records the step for this
+read, and only when it listens to the signal (``""`` = every run). A hidden run whose start condition passes for an
+avatar that meets the prerequisites is opened (no announcement, D15); an open run whose prerequisites AND current step pass records the step for this
 avatar and goes on with the next step in the same call, whatever the signal was (a cascade of already true steps
 ends in one call). A run reads only its ``template_snapshot`` (D2): editing the template never changes a running
 quest. Evaluation is skipped while no hidden/open run exists; that count is loaded from storage on first use (never
@@ -20,11 +20,18 @@ assumed 0 after a restart) and reloaded after every start, open, end and tick.
 TICK (D10). :func:`tick` is the ``world_tick`` listener body, run on the worker. The periodic runner already gates
 ``world_tick`` on world freeze / queue pause, so the tick has no freeze check of its own, and a signal from a
 player's own action is evaluated while frozen too. Order: expiry, then the reference check (a binding that no longer
-resolves, or a type that is no longer registered, makes the run ``broken``), then a full re-evaluation for every
-avatar. The reference check runs BEFORE the re-evaluation, so no type evaluates a binding the check would reject.
+resolves makes the run ``broken``; so does a type that is not registered at TWO consecutive ticks — one catalog read
+without it, a package reloading, is no evidence), then a full re-evaluation for every avatar. The reference check
+runs BEFORE the re-evaluation, so no type evaluates a binding the check would reject.
 A STORAGE failure during the check is not evidence that an entity is gone: that run is skipped for this tick (not
 checked, not evaluated), never marked broken. The full re-evaluation is also what catches inventory writes that
 emit no signal (an item definition deleted, a character import or reset).
+
+TIME LIMIT. A signal never records a step of an open run past its ``expires_at``: the tick (which does not run while
+the queue is paused) ends it ``failed``.
+
+PLACEHOLDERS. A player text (title, summary, step text/hint, the lock text) may name a role as ``{role}``;
+:func:`render_text` replaces it with the label frozen on the run at start (``binding_labels``).
 
 PUSH (D15). Every state change ends in :func:`_quests_changed`, outside locks and transactions. A step notifies only
 the avatar that fulfilled it; a run that opens at once is announced with a global world event (the author's title
@@ -84,6 +91,103 @@ def _steps(snapshot: dict) -> list:
     return steps if isinstance(steps, list) else []
 
 
+# --- Role placeholders -------------------------------------------------------------------------
+
+def _scan_text(text: str) -> List[Tuple[str, str]]:
+    """The parts of a player text: ("lit", text) and ("role", key) for each ``{key}``. ``{{`` and ``}}`` are
+    literal braces. Raises ValueError on a single ``{`` without its ``}`` (or with a brace or nothing inside), and
+    on a single ``}``."""
+    parts: List[Tuple[str, str]] = []
+    lit: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "{":
+            if text.startswith("{{", i):
+                lit.append("{")
+                i += 2
+                continue
+            end = text.find("}", i + 1)
+            key = text[i + 1:end] if end > 0 else ""
+            if end < 0 or not key or "{" in key:
+                raise ValueError(f"unbalanced '{{' at character {i + 1}")
+            if lit:
+                parts.append(("lit", "".join(lit)))
+                lit = []
+            parts.append(("role", key))
+            i = end + 1
+        elif c == "}":
+            if not text.startswith("}}", i):
+                raise ValueError(f"unbalanced '}}' at character {i + 1}")
+            lit.append("}")
+            i += 2
+        else:
+            lit.append(c)
+            i += 1
+    if lit:
+        parts.append(("lit", "".join(lit)))
+    return parts
+
+
+def _player_texts(template: dict) -> List[Tuple[str, Any]]:
+    """(D7 path, value) of every text a player may read and that may carry role placeholders (``gm_notes`` never)."""
+    out: List[Tuple[str, Any]] = [("title", template.get("title")), ("summary", template.get("summary"))]
+    for i, step in enumerate(_steps(template)):
+        if isinstance(step, dict):
+            out += [(f"steps.{i}.text", step.get("text")), (f"steps.{i}.hint", step.get("hint"))]
+    out.append(("prerequisites.locked_text", _prerequisites(template).get("locked_text")))
+    return out
+
+
+def render_text(text: str, run: dict) -> str:
+    """``text`` with each ``{role}`` replaced by the run's frozen ``binding_labels`` (the role key itself when the
+    run has no label for it) and ``{{``/``}}`` as single braces. A text that does not scan (only a template that
+    never passed validation can hold one) is returned unchanged."""
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else ""
+    labels = (run or {}).get("binding_labels")
+    labels = labels if isinstance(labels, dict) else {}
+    try:
+        parts = _scan_text(text)
+    except ValueError:
+        return text
+    return "".join(value if kind == "lit" else str(labels.get(value) or value) for kind, value in parts)
+
+
+def _binding_labels(template: dict, bindings: dict) -> Dict[str, str]:
+    """One display label per bound role, read once at start (frozen on the run): character -> its name, location ->
+    the location's name, room -> the room's name, item -> the item's name. The strict readers of
+    ``quest_types.check_binding``; a label that cannot be read falls back to the id."""
+    from app.models.inventory import get_item
+    from app.models.world import get_location_by_id, get_room_by_id
+    out: Dict[str, str] = {}
+    roles = template.get("roles") if isinstance(template.get("roles"), list) else []
+    for role in roles:
+        if not isinstance(role, dict) or _blank(role.get("key")):
+            continue
+        key, kind = role["key"], role.get("kind")
+        b = bindings.get(key) if isinstance(bindings.get(key), dict) else {}
+        fallback = str(b.get("name") or b.get("item_id") or b.get("room_id") or b.get("location_id") or key)
+        label = ""
+        try:
+            if kind == "character":
+                label = str(b.get("name") or "")
+            elif kind == "item":
+                item = get_item(str(b.get("item_id") or ""), strict=True) or {}
+                label = str(item.get("name") or "")
+            elif kind in ("location", "room"):
+                location = get_location_by_id(str(b.get("location_id") or ""), strict=True) or {}
+                if kind == "location":
+                    label = str(location.get("name") or "")
+                else:
+                    room = (get_room_by_id(location, str(b.get("room_id") or "")) if location else None) or {}
+                    label = str(room.get("name") or "")
+        except Exception as e:  # noqa: BLE001 - a label is display only, the id stands in
+            logger.warning("quest start: label of role %r unreadable: %s", key, e)
+        out[key] = label.strip() or fallback
+    return out
+
+
 # --- Template and binding checks --------------------------------------------------------------
 
 def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...]]]:
@@ -135,8 +239,25 @@ def validate_template(template: dict) -> list[dict]:
             seen_steps.add(sid)
         if _blank(step.get("text")):
             issues.append(_issue(f"steps.{i}.text", "required", "A step needs a text"))
+    for path, text in _player_texts(template):
+        if not isinstance(text, str):
+            continue
+        try:
+            parts = _scan_text(text)
+        except ValueError as e:
+            issues.append(_issue(path, "bad_text", f"Write a brace as {{{{ or }}}}: {e}"))
+            continue
+        for kind, key in parts:
+            if kind == "role" and key not in seen_roles:
+                issues.append(_issue(path, "unknown_role", f"'{{{key}}}' is not a role of this quest"))
     for path, expr, kinds in _expressions(template):
         issues.extend(_prefixed(path, quest_catalog.check_expression(expr, roles, allowed_kinds=kinds)))
+    known = quest_catalog.types()
+    for leaf_path, leaf in quest_catalog.walk(template.get("start_condition") or {}):
+        t = known.get(leaf["type"])
+        if t is not None and t.needs_open_run:
+            issues.append(_issue(f"start_condition{leaf_path}.type", "not_allowed_here",
+                                 f"'{t.label}' counts from the opening and cannot be a start condition"))
     limit = template.get("time_limit_s")
     limit = 0 if limit is None else limit
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
@@ -186,8 +307,9 @@ def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> l
 
 
 def _unregistered(template: dict) -> List[Dict[str, str]]:
-    """One issue per leaf whose type is not registered now (an unloaded package, Review Focus 5)."""
-    known = quest_catalog.types()
+    """One issue per leaf whose type is not registered now (an unloaded package, Review Focus 5). Reads the catalog
+    strictly: a contributor that raises raises here (the tick skips that run), it is not read as "type gone"."""
+    known = quest_catalog.types(strict=True)
     return [_issue(f"{path}{leaf_path}.type", "type_not_registered",
                    f"Quest type '{leaf['type']}' is not registered")
             for path, expr, _kinds in _expressions(template if isinstance(template, dict) else {})
@@ -198,6 +320,8 @@ def _unregistered(template: dict) -> List[Dict[str, str]]:
 
 _live_lock = threading.Lock()
 _live_count: Optional[int] = None  # None = not loaded yet (a fresh process)
+#: Ids of the live runs that named an unregistered type at the previous tick (only the tick reads and writes it).
+_missing_type_runs: set = set()
 
 
 def _refresh_live() -> int:
@@ -241,8 +365,8 @@ def _announce(run: dict) -> None:
     from app.models.events import add_event
     from app.models.quests import set_run_field
     snap = run.get("template_snapshot") or {}
-    title = str(snap.get("title") or "").strip()
-    summary = str(snap.get("summary") or "").strip()
+    title = render_text(str(snap.get("title") or ""), run).strip()
+    summary = render_text(str(snap.get("summary") or ""), run).strip()
     try:
         event = add_event(f"{title}: {summary}" if summary else title, location_id=None, category="social")
         set_run_field(run["id"], "news_event_id", event["id"])
@@ -270,10 +394,10 @@ def _store_step_notice(avatar: str, run: dict, step_index: int) -> None:
     except Exception:  # noqa: BLE001 - an unreadable profile gets the English text
         lang = ""
     if run.get("state") == "done":
-        text = t("Quest complete: {title}", lang).format(title=snap.get("title") or "")
+        text = t("Quest complete: {title}", lang).replace("{title}", render_text(str(snap.get("title") or ""), run))
     else:
         step = steps[step_index] if 0 <= step_index < len(steps) and isinstance(steps[step_index], dict) else {}
-        text = t("Quest step done: {step}", lang).format(step=step.get("text") or "")
+        text = t("Quest step done: {step}", lang).replace("{step}", render_text(str(step.get("text") or ""), run))
     if not create_notification(avatar, text, notification_type="quest",
                                metadata={"run_id": run.get("id"), "step": step_index}, once_unread=True):
         logger.warning("quest run %s: the step %s notice for %s was not stored", run.get("id"), step_index, avatar)
@@ -309,7 +433,8 @@ def start_run(template_id: str, bindings: dict, *, started_by: str = "") -> dict
     hidden = bool(template.get("start_condition"))
     run = quests.create_run(template=template, bindings=dict(bindings), state="hidden" if hidden else "open",
                             started_by=started_by,
-                            expires_at="" if hidden else _expiry(template, game_time()))
+                            expires_at="" if hidden else _expiry(template, game_time()),
+                            binding_labels=_binding_labels(template, bindings))
     if not hidden:
         _announce(run)
         run = quests.get_run(run["id"]) or run
@@ -369,12 +494,16 @@ def _evaluate_run(run: dict, avatar: str, signal: str) -> bool:
     steps = _steps(snap)
     changed = False
     ctx = None
+    prereq = _prerequisites(snap).get("condition") or {}
+    if run["state"] == "open" and run.get("expires_at") and game_time().canonical() > run["expires_at"]:
+        return False  # past its time limit: nothing is recorded, the tick ends it failed
     if run["state"] == "hidden":
         start = snap.get("start_condition") or {}
         if not _listens(start, signal):
             return False
         ctx = quest_types.build_context(avatar, run)
-        if ctx is None or not _passes(start, ctx):
+        # An avatar that fails the prerequisites does not count — it does not open the run either.
+        if ctx is None or not _passes(start, ctx) or (prereq and not _passes(prereq, ctx)):
             return False
         now = game_time()
         if not quests.open_run(run["id"], started_game_ts=now.canonical(), expires_at=_expiry(snap, now)):
@@ -382,7 +511,6 @@ def _evaluate_run(run: dict, avatar: str, signal: str) -> bool:
         changed = True
         run = quests.get_run(run["id"]) or {}
         signal = ""  # the first step of a run that just opened is read whatever the signal was
-    prereq = _prerequisites(snap).get("condition") or {}
     for _ in range(len(steps)):
         index = int(run.get("current_step") or 0)
         if run.get("state") != "open" or not 0 <= index < len(steps):
@@ -459,18 +587,30 @@ def tick() -> None:
     from app.core.timeutils import game_time
     from app.models.account import get_all_avatars
     from app.models.quests import expire_runs, list_runs, set_run_state
+    global _missing_type_runs
     ended = list(expire_runs(game_time().canonical()))
     skip: set = set()
+    missing_now: set = set()
     for run in list_runs(states=LIVE_STATES):
         snap = run.get("template_snapshot") or {}
         try:
-            issues = check_bindings(snap, run.get("bindings") or {}, strict=True) + _unregistered(snap)
+            issues = check_bindings(snap, run.get("bindings") or {}, strict=True)
+            unregistered = _unregistered(snap)
         except Exception as e:  # noqa: BLE001 - a failed read or a raising validator: skip this run this tick
             logger.warning("quest run %s: reference check failed, skipped this tick: %s", run.get("id"), e)
             skip.add(run["id"])
+            if run["id"] in _missing_type_runs:
+                missing_now.add(run["id"])
             continue
+        if unregistered:
+            # A type missing from ONE catalog read (a package reloading) is no evidence: broken only when the
+            # same run already missed a type at the previous tick.
+            missing_now.add(run["id"])
+            if run["id"] in _missing_type_runs:
+                issues = issues + unregistered
         if issues and set_run_state(run["id"], "broken", issues=issues, from_states=LIVE_STATES):
             ended.append(run["id"])
+    _missing_type_runs = missing_now
     for run_id in ended:
         _withdraw_announcement(run_id)
     _refresh_live()
@@ -500,7 +640,10 @@ def _heard(payload: Dict[str, Any]) -> None:
     heard = set(payload.get("avatars") or [])
     targets = list(dict.fromkeys(a for a in payload.get("addressees") or [] if a in heard and a != speaker))
     for avatar in targets:
-        add_fact(mind_of(avatar), FACT_SPOKE_WITH, mind_of(speaker))
+        try:
+            add_fact(mind_of(avatar), FACT_SPOKE_WITH, mind_of(speaker))
+        except Exception as e:  # noqa: BLE001 - one failed write never costs the other targets their fact
+            logger.warning("quest engine: the spoke_with fact %s -> %s was not written: %s", avatar, speaker, e)
     for avatar in targets:
         evaluate(avatar, "utterance.heard")
 
@@ -567,6 +710,7 @@ def drain(timeout: float = 5.0) -> bool:
 
 def _reset_for_tests() -> None:
     """Forget the in-memory state as a fresh process would (smoke only; the queue is drained by the caller)."""
-    global _live_count
+    global _live_count, _missing_type_runs
     with _live_lock:
         _live_count = None
+    _missing_type_runs = set()

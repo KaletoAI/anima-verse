@@ -29,7 +29,8 @@ WHAT IS CHECKED, and where every expected value comes from
       cache), so the removal is visible at once, without any other call.
 
   (c) ISOLATION. A contributor of owner "BOOM" that raises → `types()` still holds
-      "b_one", and the failure is logged (one ERROR record).
+      "b_one", and the failure is logged (one ERROR record). `types(strict=True)` re-raises the same
+      RuntimeError instead (the tick's reference check reads a hiccup as "skip", never as "type gone").
 
   (d) check_expression TABLE. Roles: giver (character), place (room),
       thing (item). Stub type "at" (condition) has params
@@ -48,6 +49,11 @@ WHAT IS CHECKED, and where every expected value comes from
         {"all": [at(place), {"not": at(place, count=2)}]} → []
         {"any": [at(place), {"not": {"type": "nope"}}]} → unknown_type at ".any.1.not.type"
         {}                                             → []
+      Depth cap (review R5, MAX_DEPTH 16; the root is depth 0, each group level +1):
+        at(place) under 16 nested "not"s (the leaf at depth 16) → []
+        the same under 17 "not"s → ONE issue ("shape", ".not" x 17) — the node at depth 17 is not entered
+        the same under 1200 "not"s → still that one issue, and no RecursionError (one Python frame per level
+        would exceed the default limit of 1000)
       A type's own validate (stub "v", param n: int, default 3):
         validate answers ConditionIssue("too_far", ...) → [("too_far", ".type")]
         validate raises                                → [("bad_param", ".type")]
@@ -143,7 +149,8 @@ except TypeError:
     ok = False
 check("payload is JSON-safe", ok)
 check("descriptor keys", set(qc.public_descriptor(qc.get("a_two"))) ==
-      {"id", "kind", "label", "description", "params", "signals"})
+      {"id", "kind", "label", "description", "params", "signals", "needs_open_run"})
+check("needs_open_run defaults to False", qc.public_descriptor(qc.get("a_two"))["needs_open_run"] is False)
 check("descriptor signals is a list", qc.public_descriptor(qc.get("a_two"))["signals"] == ["s.a"])
 
 # --- (b) owner cleanup ---------------------------------------------------------------
@@ -168,6 +175,12 @@ cap.records.clear()
 ids = set(qc.types())
 check("raising contributor does not hide B", "b_one" in ids, str(ids))
 check("failure logged as one ERROR", len([r for r in cap.records if r.levelno == logging.ERROR]) == 1)
+try:
+    qc.types(strict=True)
+    strict_raised = ""
+except RuntimeError as e:
+    strict_raised = str(e)
+check("types(strict=True) re-raises", strict_raised == "contributor exploded", strict_raised)
 hooks.unregister_owned_providers("BOOM")
 hooks.unregister_owned_providers("B")
 
@@ -209,6 +222,23 @@ TABLE = [
 for label, expr, kinds, want in TABLE:
     got = codes(expr, kinds)
     check(f"{label} → {want}", got == want, str(got))
+
+
+def nested_not(depth):
+    expr = at(place="place")
+    for _ in range(depth):
+        expr = {"not": expr}
+    return expr
+
+
+check("16 nested nots → []", codes(nested_not(16)) == [], str(codes(nested_not(16))))
+check("17 nested nots → one shape issue at the 17th level",
+      codes(nested_not(17)) == [("shape", ".not" * 17)], str(codes(nested_not(17))))
+try:
+    deep = codes(nested_not(1200))
+except RecursionError:
+    deep = "RecursionError"
+check("1200 nested nots → the same one issue, no RecursionError", deep == [("shape", ".not" * 17)], str(deep)[:80])
 for issue in qc.check_expression(at(place="ghost"), ROLES, allowed_kinds=COND):
     check("issue has path/code/message", set(issue) == {"path", "code", "message"} and issue["message"])
 hooks.unregister_owned_providers("C")

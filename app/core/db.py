@@ -8,6 +8,7 @@ Runtime and content data live here, with these exceptions:
 - Image files and diagnostic JSON sidecars remain on disk.
 - The task queue keeps its separate task_queue.db.
 """
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -22,6 +23,29 @@ logger = get_logger("db")
 
 _connections: dict = {}
 _lock = threading.Lock()
+
+
+#: The template variable of the removed story arc engine (the drop one-shot in
+#: init_schema repairs world overrides that still name it).
+_ARC_VAR = "arc_block"
+_ARC_IF_BLOCK = re.compile(
+    r"\{%-?\s*if\s+" + _ARC_VAR + r"\s*-?%\}.*?\{%-?\s*endif\s*-?%\}\n?",
+    re.DOTALL)
+_JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.DOTALL)
+_ARC_COMMENT_LINE = re.compile(
+    r"^[ \t]*" + _ARC_VAR + r"\b[^\n]*(?:\n|$)", re.MULTILINE)
+
+
+def _strip_arc_var(content: str) -> tuple:
+    """(content without the story arc block, True when the arc variable is
+    still read outside `{# … #}` comments afterwards).
+
+    Cut: every `{% if <arc var> %}…{% endif %}` block (any whitespace-control
+    variant, the shortest match) and, inside comments, a variable-list line that
+    starts with the arc variable's name."""
+    out = _ARC_IF_BLOCK.sub("", content)
+    out = _JINJA_COMMENT.sub(lambda m: _ARC_COMMENT_LINE.sub("", m.group(0)), out)
+    return out, _ARC_VAR in _JINJA_COMMENT.sub("", out)
 
 
 def get_db_path() -> Path:
@@ -508,8 +532,11 @@ def init_schema() -> None:
     # (quest system stage 1, D16). Its table goes, and so do the world
     # overrides of its three templates. A world override of a thought template
     # that still reads the removed arc block would raise under StrictUndefined
-    # on every thought turn, so it is deleted too (one warning each) and the
-    # shipped template takes over. Existing arcs are discarded on purpose.
+    # on every thought turn, so it is REPAIRED: the arc block and the arc entry
+    # of a comment's variable list are cut out and the row is updated (the
+    # rest of a hand-tuned prompt stays). Only an override that still reads the
+    # arc variable outside comments after that is deleted, and its full content
+    # is logged first. Existing arcs are discarded on purpose.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='story_arcs_dropped_v1'"
     ).fetchone()
@@ -523,17 +550,28 @@ def init_schema() -> None:
                      "tasks/story_arc_advancement.md",
                      "tasks/story_arc_resolve.md"))
                 stale = conn.execute(
-                    "SELECT path FROM llm_template_overrides "
-                    "WHERE instr(content, 'arc_block') > 0"
+                    "SELECT path, content FROM llm_template_overrides "
+                    "WHERE instr(content, ?) > 0", (_ARC_VAR,)
                 ).fetchall()
-                for row in stale:
+                for path, content in stale:
+                    repaired, still_reads = _strip_arc_var(content)
+                    if not still_reads:
+                        conn.execute(
+                            "UPDATE llm_template_overrides SET content = ? "
+                            "WHERE path = ?", (repaired, path))
+                        logger.warning(
+                            "Template override %s of world %s: the removed "
+                            "story arc block was cut out, the rest is kept",
+                            path, get_db_path().parent)
+                        continue
+                    logger.warning(
+                        "Template override %s of world %s still reads the "
+                        "removed story arc variable outside its block and is "
+                        "deleted; the shipped template takes over. Its full "
+                        "content was:\n%s", path, get_db_path().parent, content)
                     conn.execute(
                         "DELETE FROM llm_template_overrides WHERE path = ?",
-                        (row[0],))
-                    logger.warning(
-                        "Template override %s of world %s read the removed "
-                        "story arc block and was deleted; the shipped "
-                        "template takes over", row[0], get_db_path().parent)
+                        (path,))
             except sqlite3.OperationalError as e:
                 logger.info("story arc removal: no template overrides to "
                             "clean (%s)", e)

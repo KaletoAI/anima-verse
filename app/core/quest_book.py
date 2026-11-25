@@ -13,6 +13,9 @@ Steps: an open run shows its done steps and the current one (``state`` ``done`` 
 only its done steps. A done step carries ``done_by`` (the avatar name stored when it was fulfilled) and
 ``done_label`` (its game stamp as a finished label).
 
+Texts (title, summary, step text, the author's lock text) go through ``quest_engine.render_text``: a ``{role}``
+placeholder becomes the label frozen on the run at start. A label is not a spoiler; ids and hints still are.
+
 Labels are finished server strings in ``lang`` (D14): ``done_label`` / ``ended_label`` through
 ``GameTime.parse(...).display_label(lang)``, ``time_left_label`` through :func:`_time_left_label`. ``locked`` is
 the author's lock text from ``quest_engine.avatar_view`` (D8); the engine's English fallback is translated.
@@ -61,6 +64,7 @@ def _time_left_label(d, lang: str) -> str:
 
 
 def _steps(run: Dict[str, Any], lang: str) -> List[Dict[str, Any]]:
+    from app.core.quest_engine import render_text
     snapshot = run.get("template_snapshot") or {}
     steps = snapshot.get("steps") if isinstance(snapshot.get("steps"), list) else []
     done = {}
@@ -75,7 +79,7 @@ def _steps(run: Dict[str, Any], lang: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for index in range(shown):
         step = steps[index] if isinstance(steps[index], dict) else {}
-        source = {"text": str(step.get("text") or ""),
+        source = {"text": render_text(str(step.get("text") or ""), run),
                   "state": "done" if index in done else "current"}
         row = {key: source[key] for key in STEP_FIELDS}
         if index in done:
@@ -90,8 +94,9 @@ def _entry(run: Dict[str, Any], avatar: str, lang: str, now) -> Dict[str, Any]:
     from app.core.game_time import GameTime
     from app.core.i18n import t
     snapshot = run.get("template_snapshot") or {}
-    source = {"id": run.get("id") or "", "title": str(snapshot.get("title") or ""),
-              "summary": str(snapshot.get("summary") or ""), "state": run.get("state") or ""}
+    source = {"id": run.get("id") or "", "title": quest_engine.render_text(str(snapshot.get("title") or ""), run),
+              "summary": quest_engine.render_text(str(snapshot.get("summary") or ""), run),
+              "state": run.get("state") or ""}
     entry: Dict[str, Any] = {key: source[key] for key in QUEST_FIELDS}
     entry["steps"] = _steps(run, lang)
     if run.get("state") == "open":
@@ -104,7 +109,8 @@ def _entry(run: Dict[str, Any], avatar: str, lang: str, now) -> Dict[str, Any]:
         view = quest_engine.avatar_view(run, avatar)
         if view.get("locked"):
             text = view.get("locked_text") or quest_engine.DEFAULT_LOCKED_TEXT
-            entry["locked"] = t(text, lang) if text == quest_engine.DEFAULT_LOCKED_TEXT else text
+            entry["locked"] = (t(text, lang) if text == quest_engine.DEFAULT_LOCKED_TEXT
+                               else quest_engine.render_text(text, run))
     else:
         label = _label(run.get("ended_game_ts") or "", lang)
         if label:
@@ -122,14 +128,13 @@ def build_player_quests(avatar: str, lang: str = "en") -> dict:
     from app.models import quests
     try:
         open_runs = quests.list_runs(states=("open",))
-        ended = [r for r in quests.list_runs(states=quests.RUN_ENDED_STATES) if r.get("started_game_ts")]
-        ended.sort(key=lambda r: r.get("ended_at") or "", reverse=True)  # stable: ties keep newest-created first
+        ended = quests.list_chronicle(CHRONICLE_SIZE)  # filtered, ordered and cut in SQL
         try:
             now = game_time(strict=True)
         except Exception as e:  # noqa: BLE001 - no clock, no time-left label
             logger.warning("quest book: game clock unavailable: %s", e)
             now = None
-        entries = [_entry(r, avatar, lang, now) for r in open_runs + ended[:CHRONICLE_SIZE]]
+        entries = [_entry(r, avatar, lang, now) for r in open_runs + ended]
     except Exception as e:  # noqa: BLE001 - the panel shows an empty book rather than an error
         logger.warning("quest book for %s failed: %s", avatar, e)
         return {"avatar": avatar, "quests": []}

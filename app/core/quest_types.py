@@ -285,7 +285,7 @@ def _builtin_types() -> list:
             params=({"key": "hours", "type": "int", "label": "Hours",
                      "description": "Game hours since the quest opened", "min": 1, "step": 1,
                      "required": True},),
-            signals=("world_tick",), evaluate=_time_elapsed),
+            signals=("world_tick",), evaluate=_time_elapsed, needs_open_run=True),
         QuestType(
             id="expression", kind="condition", label="Condition expression",
             description="An expression of the activity condition grammar holds for the avatar.",

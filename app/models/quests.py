@@ -41,7 +41,7 @@ _TEMPLATE_JSON_FIELDS = {
     "dependencies": list, "setup_effects": list, "rewards": list, "repeat": dict,
 }
 _RUN_JSON_FIELDS = {
-    "bindings": dict, "template_snapshot": dict, "step_log": list, "issues": list,
+    "bindings": dict, "binding_labels": dict, "template_snapshot": dict, "step_log": list, "issues": list,
 }
 #: The keys ``update_template`` accepts; everything else is a ValueError.
 EDITABLE_TEMPLATE_KEYS = ("title", "summary", "gm_notes", "roles", "steps",
@@ -185,8 +185,10 @@ def delete_template(template_id: str) -> bool:
 # ── Runs ─────────────────────────────────────────────────────────────────
 
 def create_run(*, template: dict, bindings: dict, state: str, started_by: str = "",
-               expires_at: str = "") -> dict:
-    """Insert a run that freezes ``template`` as its snapshot.
+               expires_at: str = "", binding_labels: dict | None = None) -> dict:
+    """Insert a run that freezes ``template`` as its snapshot and
+    ``binding_labels`` (role key -> display label, frozen at start: a rename
+    later never changes what the quest book says).
 
     A run created ``open`` gets ``started_game_ts`` stamped here; a
     ``hidden``/``preparing`` run gets it from ``open_run``. An unknown
@@ -199,10 +201,11 @@ def create_run(*, template: dict, bindings: dict, state: str, started_by: str = 
     with keyed_lock("quest_run", run_id), transaction() as conn:
         conn.execute(
             "INSERT INTO quest_runs (id, template_id, state, bindings, "
-            "template_snapshot, started_by, started_game_ts, expires_at, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "binding_labels, template_snapshot, started_by, started_game_ts, "
+            "expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, str(snapshot.get("id") or ""), state,
-             _dump(_container(bindings, dict)), _dump(snapshot), started_by or "",
+             _dump(_container(bindings, dict)),
+             _dump(_container(binding_labels, dict)), _dump(snapshot), started_by or "",
              started, expires_at or "", now, now))
     return get_run(run_id)
 
@@ -224,6 +227,18 @@ def list_runs(*, states: tuple[str, ...] = (), limit: int = 0) -> list[dict]:
         sql += " LIMIT ?"
         params.append(int(limit))
     return [_run_dict(r) for r in get_connection().execute(sql, params).fetchall()]
+
+
+def list_chronicle(limit: int) -> list[dict]:
+    """The ``limit`` most recently ended runs that ever opened (a non-empty
+    ``started_game_ts``), latest end first, ties newest-created first.
+    Filtered and cut in SQL, so a caller decodes at most ``limit`` snapshots."""
+    states = RUN_ENDED_STATES
+    sql = ("SELECT * FROM quest_runs WHERE state IN (%s) AND started_game_ts<>'' "
+           "ORDER BY COALESCE(ended_at, '') DESC, created_at DESC, rowid DESC LIMIT ?"
+           % ",".join("?" * len(states)))
+    rows = get_connection().execute(sql, (*states, max(0, int(limit)))).fetchall()
+    return [_run_dict(r) for r in rows]
 
 
 def count_runs(states: tuple[str, ...], *, template_id: str = "") -> int:

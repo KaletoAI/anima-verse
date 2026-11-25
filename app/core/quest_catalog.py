@@ -45,6 +45,9 @@ PARAM_TYPES = ("str", "text", "int", "float", "bool", "select", "role")
 #: The payload key of each kind in :func:``catalog_payload``.
 _PAYLOAD_KEYS = {"condition": "conditions", "prerequisite": "prerequisites", "effect": "effects"}
 _GROUPS = ("all", "any")
+#: How deep groups may nest. :func:``check_expression`` reports a deeper node as a ``shape`` issue and goes no
+#: further, so such an expression never becomes ready and the unbounded walkers (walk, evaluate) never see it.
+MAX_DEPTH = 16
 #: Duplicate ids already logged: the catalog is rebuilt on every call, the warning is written once per id.
 _logged_duplicates: set[str] = set()
 
@@ -59,6 +62,9 @@ class QuestType:
     signals: tuple[str, ...] = ()
     validate: Callable[[dict, dict | None], list[ConditionIssue]] | None = None
     evaluate: Callable[[dict, "QuestContext"], ConditionResult] | None = None
+    #: True for a type that can only be read once the run has opened (it counts from ``started_game_ts``): it is
+    #: refused in a start condition, where a hidden run has not opened yet and the type would stay unavailable.
+    needs_open_run: bool = False
 
 
 # --- Registry -------------------------------------------------------------------------
@@ -70,9 +76,10 @@ def register(owner: str, contributor: Callable[[], List[QuestType]]) -> None:
     hooks.register_provider(CAPABILITY, contributor, owner=owner, multiple=True)
 
 
-def types() -> Dict[str, QuestType]:
+def types(*, strict: bool = False) -> Dict[str, QuestType]:
     """id -> type of every type registered now, rebuilt on every call (no cache). A contributor that raises is
-    skipped (logged); an entry that is not a :class:``QuestType`` with an id and a known kind is dropped (logged); of
+    skipped (logged) — with ``strict=True`` it re-raises instead, for a caller that must not read a missing type
+    as "not registered" (the tick's reference check: a hiccup is no evidence that a package is gone); an entry that is not a :class:``QuestType`` with an id and a known kind is dropped (logged); of
     two types with the same id the first registered wins (logged once per id)."""
     from app.core import hooks
     out: Dict[str, QuestType] = {}
@@ -80,6 +87,8 @@ def types() -> Dict[str, QuestType]:
         try:
             answer = fn()
         except Exception:  # noqa: BLE001 — one package never hides the others
+            if strict:
+                raise
             logger.exception("A %s contributor failed", CAPABILITY)
             continue
         for t in (answer if isinstance(answer, (list, tuple)) else [answer]):
@@ -103,7 +112,7 @@ def public_descriptor(t: QuestType) -> Dict[str, Any]:
     """The JSON-safe part of a type (no callable): the admin form and, later, the LLM prompt read it."""
     return {"id": t.id, "kind": t.kind, "label": t.label, "description": t.description,
             "params": [{k: v for k, v in dict(p).items() if not callable(v)} for p in t.params],
-            "signals": list(t.signals)}
+            "signals": list(t.signals), "needs_open_run": bool(t.needs_open_run)}
 
 
 def catalog_payload() -> Dict[str, List[Dict[str, Any]]]:
@@ -262,7 +271,10 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
                   if isinstance(r, dict) and r.get("key")}
     issues: List[Dict[str, str]] = []
 
-    def rec(path: str, node: Any) -> None:
+    def rec(path: str, node: Any, depth: int) -> None:
+        if depth > MAX_DEPTH:
+            issues.append(_issue(path, "shape", f"Expressions nest at most {MAX_DEPTH} levels deep"))
+            return
         err = _shape_error(node)
         if err:
             issues.append(_issue(path, "shape", err))
@@ -273,9 +285,9 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
             issues.extend(_check_leaf(path, node, role_kinds, tuple(allowed_kinds), known))
             return
         for sub, child in _children(node):
-            rec(path + sub, child)
+            rec(path + sub, child, depth + 1)
 
-    rec("", expr)
+    rec("", expr, 0)
     return issues
 
 

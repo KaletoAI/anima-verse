@@ -65,6 +65,13 @@ WHAT IS CHECKED, and where every expected value comes from
       Plain case without injection: record_step_done / set_run_state on a run
       that is already 'failed' → None / False.
 
+  (k) CHRONICLE + LABELS (final fix wave R7, A). `create_run(..., binding_labels={"giver": "Ava"})` →
+      `get_run` decodes the same dict; without the argument it is {}. Twelve runs created "open", ended
+      "done", their ended_at set to "2099-01-01T00:00:00+00:00" ... "+11 s" (later than any real stamp of this
+      smoke), plus one "hidden" run cancelled with ended_at "2099-12-31..." (latest of all, never opened:
+      started_game_ts "") → `list_chronicle(10)` returns exactly ten runs, the twelve's last ten in reverse
+      (ended_at 11 s down to 2 s), the never-opened one not among them.
+
   (i) DELETE. Character "Gone" is the MIND of one fact and the SUBJECT of a
       second; a third fact names neither. A run's bindings name "Gone".
       `delete_character("Gone")` → True; facts 1 and 2 are gone, fact 3
@@ -292,6 +299,24 @@ check("set_run_state: state stays failed", quests.get_run(three["id"])["state"] 
 check("record_step_done on a failed run → None",
       quests.record_step_done(two["id"], 0, avatar="A", mind="A") is None)
 check("set_run_state on a failed run → False", quests.set_run_state(two["id"], "cancelled") is False)
+
+print("(k) chronicle and labels")
+labelled = quests.create_run(template=snap, bindings={}, state="open", binding_labels={"giver": "Ava"})
+check("binding_labels round trip", quests.get_run(labelled["id"])["binding_labels"] == {"giver": "Ava"})
+check("binding_labels default {}", quests.get_run(three["id"])["binding_labels"] == {})
+twelve = []
+for i in range(12):
+    r = quests.create_run(template=snap, bindings={}, state="open")
+    quests.set_run_state(r["id"], "done")
+    with db.transaction() as _c:
+        _c.execute("UPDATE quest_runs SET ended_at=? WHERE id=?", (f"2099-01-01T00:00:{i:02d}+00:00", r["id"]))
+    twelve.append(r["id"])
+never = quests.create_run(template=snap, bindings={}, state="hidden")
+quests.set_run_state(never["id"], "cancelled")
+with db.transaction() as _c:
+    _c.execute("UPDATE quest_runs SET ended_at='2099-12-31T00:00:00+00:00' WHERE id=?", (never["id"],))
+chron = [r["id"] for r in quests.list_chronicle(10)]
+check("list_chronicle(10): the last ten, latest end first", chron == list(reversed(twelve))[:10], str(chron))
 
 print("(i) delete_character")
 from app.models.character import delete_character, save_character_profile  # noqa: E402
