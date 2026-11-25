@@ -2165,6 +2165,10 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
         if record.get("sleeve_print") != "picture":
             # stage "layers": the trims the item text gives a colour of their own (``trim_style``)
             atlas, record["trim_paint"] = paint_trims(atlas, islands, size, ppc, record.get("trim_style"))
+        if ppc > 0:
+            # review round 2026-11-25: a narrow island's overhang is its own cloth (``narrow_overhang``)
+            atlas, record["narrow_overhang"] = cut_texture_post.narrow_overhang(
+                atlas, rasterise_islands(islands, size), ppc, max(1, int(round(cut_texture_post.POCKET_CM * ppc))))
         seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
         cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
         record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
