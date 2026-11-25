@@ -77,6 +77,17 @@ Cases:
         the cancel's stand and its position, place None (never the seat (4, 2)).
   [E17b] the same cancelled at 100.5, inside the 1.2 s exit: 0 m -> the
         polyline's first point (4, 4).
+  [E18] O1 NPC on the way at 102 (walk point (5.00, 4.50): (102 - 100 - 1.2)
+        * 1.4 = 1.12 m along (0.894427, 0.447214)) is moved by its OWN write
+        set_character_pos(2, 8) made under keyed_lock("character_profile"):
+        the interrupt is delivered after the lock, so _finish runs after the
+        write. The run is cancelled "position"; the stored point stays the
+        write's (2, 8), never the walk point, and the cancel's stand is (2, 8).
+  [E18b] the same write without a lock (the interrupt runs before it):
+        position (2, 8) after the write, run cancelled "position".
+  [E19] _walk_point of a run whose _start failed before issued_s: a member
+        with a recorded departure_seat stands at the polyline's first point
+        (4, 4) (its exit's end, the seat was released); one without -> None.
   [E9]  boot (a)/(b): a run without data.order -> cancelled e3_migration; a
         profile journey with an approach_target -> removed.
   [E13] STANDING combined (prepare 5 s, drink 5 s game): only due_only steps:
@@ -408,6 +419,41 @@ class Timer(unittest.TestCase):
         stand, pos, place = self._cancel_o1_at(100.5)
         self.assertEqual(stand, (4.0, 4.0))
         self.assertEqual(pos, (4.0, 4.0))
+
+    def _moved_on_the_way(self, locked):
+        from app.core.keyed_lock import keyed_lock
+        name, target = seated_o1()
+        seen, spy = OR.published()
+        with spy:
+            eid = S.request(name, target)["execution_id"]
+            F.MOTION[0] = 102.0
+            if locked:
+                with keyed_lock("character_profile", name):
+                    F.C.set_character_pos(name, 2.0, 8.0)
+            else:
+                F.C.set_character_pos(name, 2.0, 8.0)
+        run = R.get(eid)
+        self.assertEqual((run["status"], run["reason"]), ("cancelled", "position"))
+        pos = F.C.get_character_pos(name)
+        self.assertEqual((pos["x"], pos["z"]), (2.0, 8.0))
+        return [o for o in seen if o["kind"] == "cancel"]
+
+    def test_e18_own_write_under_lock_wins(self):
+        print("[E18] the member's own write ends the run and stays; the walk point does not overwrite it")
+        cancels = self._moved_on_the_way(locked=True)
+        self.assertEqual(len(cancels), 1, cancels)
+        stand = cancels[0]["actors"][0]["stand"]
+        self.assertEqual((stand["x"], stand["z"]), (2.0, 8.0))
+
+    def test_e18b_own_write_without_lock(self):
+        self._moved_on_the_way(locked=False)
+
+    def test_e19_walk_point_before_issue(self):
+        run = dict(data=dict(arrived=[], plans=dict(
+            a=dict(waypoints=[[4, 4], [6.5, 5.25]], departure_seat=dict(exit_s=1.2, seat=[4, 2])),
+            b=dict(waypoints=[[1, 5], [8, 7]], departure_seat=None))))
+        self.assertEqual(A._walk_point(run, "a", 100.0), (4.0, 4.0))
+        self.assertIsNone(A._walk_point(run, "b", 100.0))
 
     def test_e9_boot_migration(self):
         name, target, eid = standing()

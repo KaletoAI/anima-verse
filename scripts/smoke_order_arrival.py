@@ -165,6 +165,12 @@ class Arrival(unittest.TestCase):
         cancels = [o for o in seen if o["kind"] == "cancel"]
         self.assertEqual(len(cancels), 1, cancels)
         self.assertEqual([a["name"] for a in cancels[0]["actors"]], [self.name])
+        # The report that ended the run is the truth: the stored point stays
+        # the reported one (/play/pos writes under the profile lock, so the
+        # run ends after it), and the cancel's stand names it.
+        self.assertEqual(F.C.get_character_pos(self.name), {"x": 12.5, "z": 5.0})
+        stand = cancels[0]["actors"][0]["stand"]
+        self.assertEqual((stand["x"], stand["z"]), (12.5, 5.0))
 
 
 if __name__ == "__main__":

@@ -4221,8 +4221,10 @@ client sends no `/play/pos` for the whole order (from the click to the loop's
 end, the walk included): the server's position of a walking avatar is the plan's
 (see the cancel `stand` above). For a client that does report while it walks, a
 `/play/pos` report inside the target room is written without interrupting the
-run; one from elsewhere interrupts it as before; once the avatar has arrived
-(and in the entry) it is `server_owned`.
+run; one from elsewhere interrupts it as before and stays written — the cancel's
+`stand` of a member whose OWN position, room or location write ended the run is
+that written point, never its walk point; once the avatar has arrived (and in
+the entry) it is `server_owned`.
 
 **Visibility** (`motion_orders.visible` / `for_observer`, decision 4). A
 participant sees the whole order. Anybody else sees it only when a

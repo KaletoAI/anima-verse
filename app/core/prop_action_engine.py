@@ -1622,10 +1622,13 @@ def _narrate_finish(run, before, status, reason, kept):
 
 
 @_internal_mutation()
-def _finish(run, status, reason, *, keep_seated="", follow=False):
+def _finish(run, status, reason, *, keep_seated="", follow=False, moved_by=""):
     """``follow``: a NORMAL end (a participant stops it, its phases are
     through) — whoever has a follow pose with an action of it on the same
-    piece stays and switches into that (_follow_up) instead of standing up."""
+    piece stays and switches into that (_follow_up) instead of standing up.
+    ``moved_by``: the member whose OWN position/room/location write ended
+    the run (interrupt, _OWN_WRITE_REASONS) — that write is the truth, so
+    an approaching run never puts it on its walk point."""
     # State readers share this lock: terminal status and departure cleanup
     # become visible together, including server-side endings.
     with _lock(run["execution_id"]):
@@ -1667,7 +1670,11 @@ def _finish(run, status, reason, *, keep_seated="", follow=False):
             for _role, name in _members(run):
                 if name in kept or name in stood or (C.get_character_profile(name) or {}).get("place"):
                     continue
-                point = _walk_point(run, name, now_s)
+                # The member that moved itself keeps the point its writer
+                # stored and stands there (when the writer held a lock, the
+                # write is already in; otherwise it follows this cancel and
+                # publishes itself).
+                point = None if name == moved_by else _walk_point(run, name, now_s)
                 if point is not None:
                     C.set_character_pos(name, point[0], point[1])
                 walking[name] = C.get_character_pos(name)
@@ -2108,6 +2115,11 @@ def presence_changed(location_id, room_id):
 #: pose or the walk to a seat in between changes nothing about the question.
 _INVITATION_SURVIVES = frozenset(("position", "pose", "journey"))
 
+#: Interrupt reasons that come from the actor's OWN position/room/location
+#: write (app/models/character.py): _finish must not overwrite that write
+#: with the order's walk point (_finish ``moved_by``).
+_OWN_WRITE_REASONS = frozenset(("position", "room", "location", "pooled", "deleted"))
+
 
 def interrupt(actor, reason, *, execution_id=""):
     """Mutation boundaries call before profile locks; no broad cancellation."""
@@ -2121,7 +2133,8 @@ def interrupt(actor, reason, *, execution_id=""):
         with _lock(run["execution_id"]):
             current = store.get(run["execution_id"])
             if current["status"] not in store.TERMINAL:
-                _finish(current, "completed" if reason == "awake" and current["status"] == "sleeping" else "cancelled", reason)
+                _finish(current, "completed" if reason == "awake" and current["status"] == "sleeping" else "cancelled", reason,
+                        moved_by=actor if reason in _OWN_WRITE_REASONS else "")
 
 
 def _motion_now() -> float:
@@ -2354,16 +2367,21 @@ def _walk_point(run, name, now_s):
     ``(now_s - issued_s - exit_s) * speed_m_s`` metres (the walk the client
     plays from the published order), at the earliest the polyline's first
     point (where the exit ends), at the latest its last (the access). None
-    when it has arrived (it stands on its access) or the run never started
-    (no ``issued_s``: it never left its place)."""
+    when it has arrived (it stands on its access). A run whose _start failed
+    before ``issued_s`` (a later member refused) has its walk not begun:
+    a member whose seat was already released (``departure_seat`` recorded)
+    stands where its exit ends, the polyline's first point; anyone else
+    never left its place (None)."""
     data = run["data"]
-    if name in data.get("arrived", []) or data.get("issued_s") is None:
+    if name in data.get("arrived", []):
         return None
     plan = data["plans"].get(name) or {}
     points = [(float(p[0]), float(p[1])) for p in plan.get("waypoints") or []]
     if not points:
         return None
     departure = plan.get("departure_seat")
+    if data.get("issued_s") is None:
+        return points[0] if isinstance(departure, dict) else None
     exit_s = float(departure["exit_s"]) if isinstance(departure, dict) else 0.0
     left = max(0.0, (float(now_s) - float(data["issued_s"]) - exit_s) * float(data.get("speed_m_s") or 0.0))
     for a, b in zip(points, points[1:]):

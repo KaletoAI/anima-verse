@@ -27,7 +27,9 @@ namespace AnimaNative.Check;
 ///   R6  (plan E3 Task 7) the answer's order reports_arrival: at the access the avatar sends <c>/play/order/arrived</c>
 ///       exactly once and plays the entry at once (answer ok → the loop); R6x the answer <c>arrive_too_far</c> aborts the
 ///       order at the access, lets go of the run and hands the avatar back;
-///   R6b between <c>arrived_access</c> and <c>loop_started</c> no <c>/play/pos</c> goes to the source.
+///   R6b between <c>arrived_access</c> and <c>loop_started</c> no <c>/play/pos</c> goes to the source;
+///   R6c the counter-probe for R6b: a free walk WITHOUT an order does send <c>/play/pos</c> to the same source, so R6b's
+///       unchanged count means "locked", not "the source never counts".
 /// R2–R2c and R6 run on the propactions world (fixture-avatar at (−3, −2), bench-56 access (2, −1), straight walk at 1.4 m/s),
 /// R2d on the orders world (Nia Nav in r-a at (97, −1), stairs 1 foot (101, 0, −3.3) → head (104.5, 3, −3.3)).
 /// </summary>
@@ -41,7 +43,7 @@ public static partial class OrderCheck
         void Near(string what, double got, double want, double tol) { checks++; Expect(what, Math.Abs(got - want) <= tol, $"got {got:0.####}, want {want} ± {tol}"); }
 
         // ---- R2, R2b, R2c: the propactions world through the real offers controller ----
-        foreach (string scenario in new[] { "R2", "R2b", "R2c", "R6", "R6x" })
+        foreach (string scenario in new[] { "R2", "R2b", "R2c", "R6", "R6x", "R6c" })
         {
             var fixture = new FixtureSource(Path.Combine(fixtures, "propactions"), fixtures);
             var source = new PropActionsCheck.MenuSource(fixture) { CancelKeepsWorld = true };
@@ -201,6 +203,16 @@ public static partial class OrderCheck
                         Is("R6x the refusal reaches the HUD by its code", said.SequenceEqual(new[] { "arrive_too_far" }), string.Join(",", said));
                         Is("R6x the avatar is the player's again", !m.HasLiveOrder(m.AvatarName) && !steering.PropActionDriven);
                     }
+                }
+                else if (scenario == "R6c")
+                {
+                    // A free walk from (−3, −2) towards (−1, −2), no order: 1.2 s of frames at the 330 ms cadence.
+                    int before = source.PositionReports;
+                    Is("R6c the free walk is planned", steering.WalkTo(new AnimaNative.Scatter.P2(-1, -2)));
+                    while (m.Clock < t0 + 1.2) Frame();
+                    Is("R6c without an order the avatar's walk reaches /play/pos", source.PositionReports > before,
+                       $"{before} → {source.PositionReports}");
+                    Is("R6c no order was involved", !m.HasLiveOrder(m.AvatarName) && source.Arrivals.Count == 0);
                 }
                 else
                 {
