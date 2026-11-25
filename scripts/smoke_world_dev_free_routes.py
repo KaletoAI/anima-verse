@@ -49,7 +49,9 @@ Start state: world not frozen, no run.
     interrupted), body run_id = run_id.
 10. release the gate; poll GET /world-dev/free/{id} until status
     awaiting_review (turn 1: create + final reply -> awaiting_review), note
-    "Built R1."; the detail carries steps (1 row, tool create_location),
+    "Built R1."; the detail carries steps (1 row, tool create_location,
+    seq 1, turn 1, kind write, a line; its keys exactly seq/turn/tool/kind/
+    line/state/undone_at — no args/before/written/inverse),
     skipped [] and discard_preview naming "Demo R1" (the created location
     still exists). The detail's per-turn summary (finding C): turns ==
     [{turn 1, status "kept" (the manager recorded the final reply), reason
@@ -307,6 +309,14 @@ def main(c):
     steps = detail.get("steps") or []
     check("10 one create_location step",
           [s.get("tool") for s in steps] == ["create_location"], steps)
+    # Expected: exactly the keys of world_dev._STEP_ROW_KEYS — the panel's
+    # seq/tool/kind/line/undone_at plus turn/state; never the journal's
+    # args/before/written/inverse (finding: a recreate inverse is megabytes).
+    check("10 step rows trimmed to seq/turn/tool/kind/line/state/undone_at",
+          all(set(s) == {"seq", "turn", "tool", "kind", "line", "state", "undone_at"}
+              for s in steps) and steps and steps[0].get("seq") == 1
+          and steps[0].get("turn") == 1 and steps[0].get("kind") == "write"
+          and steps[0].get("line"), steps)
     check("10 skipped []", detail.get("skipped") == [], detail.get("skipped"))
     check("10 discard_preview names Demo R1",
           any("Demo R1" in line for line in detail.get("discard_preview") or []),

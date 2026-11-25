@@ -2234,6 +2234,11 @@ async def free_open() -> Dict[str, Any]:
     return {"run": await asyncio.to_thread(wr.open_run)}
 
 
+#: The fields of a journal row the run detail ships (FreeModePanel reads
+#: seq, tool, kind, line, undone_at; turn and state for orientation).
+_STEP_ROW_KEYS = ("seq", "turn", "tool", "kind", "line", "state", "undone_at")
+
+
 @router.get("/free/{run_id}")
 async def free_run_detail(run_id: str) -> Dict[str, Any]:
     from app.core import world_dev_runs as wr
@@ -2246,7 +2251,11 @@ async def free_run_detail(run_id: str) -> Dict[str, Any]:
         if run is None:
             return None
         steps = wr.steps(run_id)
-        return {"run": run, "steps": steps,
+        # The panel shows seq/tool/kind/line/undone per row; the journal's
+        # args/before/written/inverse (a recreate_character inverse carries
+        # the whole character snapshot, megabytes) stay out of the detail.
+        rows = [{k: s.get(k) for k in _STEP_ROW_KEYS} for s in steps]
+        return {"run": run, "steps": rows,
                 "skipped": run.get("skipped") or [],
                 "discard_preview": wu.discard_preview(run_id),
                 # Per turn: kept / cut_by_budget / rolled_back / running,

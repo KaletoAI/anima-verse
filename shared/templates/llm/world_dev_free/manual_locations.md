@@ -28,6 +28,11 @@ moves a place on the map.
 
 Access rules (who may enter) are not set here.
 
+`delete_created{kind: "location", id}` removes a place THIS run created — in this turn or an
+earlier one; a place that existed before the run is never deleted. Refused while a character
+lives there, knows it, has it in the schedule or stands there; in an earlier turn also while the
+place has images or 3D models.
+
 ## Rooms
 
 Each room: `name` (required), `description` (furnishings, atmosphere, function — in the world's

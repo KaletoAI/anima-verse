@@ -26,10 +26,34 @@ A PENDING entry WITH an inverse but without ``written`` (the process ended
 between the write and ``complete``) has nothing to compare against; its
 inverse is applied unconditionally — the write was the run's own and never
 reported back. One exception: such a ``delete_character`` (a crashed
-``create_character``) is ALWAYS skipped as ``may have written, no inverse —
-see backup``: the stored profile carries no marker of who created the row, so
-a character an admin created by hand under that name meanwhile could not be
-told apart, and a row is never deleted on a guess.
+``create_character``) acts only on a DURABLE CLAIM. The tool stores
+``claimed: true`` in the inverse under the profile lock, after the absence
+check and right before the profile save (and every new catalog piece id the
+moment ``add_item`` returns it). With the claim a row under that name is this
+create's (nobody else could store it while the lock was held) and is deleted
+with its pieces; without one nothing was written — skipped as ``not
+written``, which counts as complete, and a row under that name is a foreign
+one that is never touched.
+
+A cross-turn ``delete_created`` journals a write whose inverse RE-CREATES
+the element from a snapshot taken under the writer's lock right before the
+delete (``recreate_*``): a location through ``upsert_location``, an area
+through its saver, a character by storing every row ``delete_character``
+swept (same rowids) and its directory again. The re-created element is read
+back and compared with the snapshot (``re-created, but differs from the
+snapshot`` otherwise). A done re-creation that finds an element under the
+same key skips it (``changed since`` — it is somebody else's), and every
+older entry of that target is skipped as well, so the creating step never
+deletes the foreign element.
+
+Known residual of the durable claim (accepted, no code for it): when the
+process dies between the persisted claim and the profile save (no row was
+stored) and an admin then creates a character of that name by hand before
+the Discard, ``_undo_delete_character`` sees pending + claimed + a row and
+deletes the admin's character. The window is a few statements under the
+profile lock, and the run's backup holds the pre-run state. A later fix
+would put a creation marker (run id) on the profile and compare it before
+deleting on a pending claim.
 
 A character left standing in a place the undo deleted, or in a room a
 ``restore_location`` took away, stays there (nothing moves it). The undo
@@ -47,7 +71,11 @@ Inverse ops (``inverse["op"]``):
   profile:{k: before}, config:{k: before}} · restore_soul{name, file_id,
   before_text} (file_id = path relative to the character directory, as
   ``soul_writer.read_text/write_text`` take it) · restore_home_schedule{name,
-  before:{home_location, home_room, daily_schedule, known_locations}}
+  before:{home_location, home_room, daily_schedule, known_locations}} ·
+  recreate_location{row} · recreate_terrain_area{row} ·
+  recreate_height_area{row} (row = the reader's full record) ·
+  recreate_character{name, snapshot:{rows, files, dirs, has_dir,
+  file_bytes}} (:func:`character_snapshot`)
 
 Written shapes: restore_location / restore_home_schedule — the written map of
 :func:`diff_keys`; restore_position — ``{x, z, yaw}`` (:func:`position_of`);
@@ -81,6 +109,12 @@ REASON_GONE = "already gone"
 REASON_REFUSED = "delete refused"
 REASON_NO_INVERSE = "may have written, no inverse — see backup"
 REASON_ITEM_IN_USE = "item still in use"
+#: A pending create_character that never claimed its name: the claim is stored
+#: in the journal before the profile save, so nothing of it was written.
+#: Counts as complete, like "already gone".
+REASON_NOT_WRITTEN = "not written"
+#: A re-created element that does not read back as its snapshot.
+REASON_INEXACT = "re-created, but differs from the snapshot"
 #: Reason (behind the character's quoted name) of the INFORMATIONAL record of
 #: a character left standing in a place (or room) the undo removed. It carries
 #: the key ``occupant`` and never makes a rollback incomplete: nothing was
@@ -382,14 +416,18 @@ def _undo_delete_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["
     # interaction first and takes the profile lock itself, in its own order.
     from app.models.character import character_row_exists, delete_character
     name = str(inv.get("name") or "")
+    if (entry.get("state") == "pending" and entry.get("written") is None
+            and not inv.get("claimed")):
+        # The process ended inside the create before the name was claimed.
+        # The claim is stored in the journal BEFORE the profile save (under
+        # the profile lock that also covered the absence check), so nothing
+        # of this create was written; a row under that name is a foreign one
+        # and is never touched.
+        raise _Skip(REASON_NOT_WRITTEN)
     if not name or not character_row_exists(name):
         return [_Skip(REASON_GONE)] + _cleanup_items(inv.get("items") or [])
-    if entry.get("state") == "pending" and entry.get("written") is None:
-        # The process ended inside the create: the row may as well be one an
-        # admin created by hand under that name later (during the review of
-        # the interrupted run), and nothing stored tells the two apart. It is
-        # never deleted on a guess — the backup has the pre-run state.
-        raise _Skip(REASON_NO_INVERSE)
+    # Done, or pending WITH a claim: the profile lock was held from the
+    # absence check to the save, so a row with that name is this create's.
     if not delete_character(name) and character_row_exists(name):
         raise _Skip(REASON_REFUSED)
     return _cleanup_items(inv.get("items") or [])
@@ -496,6 +534,316 @@ def _undo_restore_home_schedule(entry: Dict[str, Any], inv: Dict[str, Any]) -> L
         raise _Skip(REASON_CHANGED, keys=changed)
     return []
 
+# ── Cross-turn deletes: exact snapshots and their re-creation ──────────
+#
+# delete_created of something the run created in an EARLIER turn journals a
+# write of its own whose inverse re-creates the element exactly as it was
+# stored right before the delete (the snapshot is taken under the writer's
+# lock, in the same span as the delete). A discard then re-creates it and the
+# creating step's inverse deletes it again — net absent, complete; a rollback
+# of the deleting turn alone re-creates it.
+
+#: Most bytes of a character's directory a cross-turn delete carries in its
+#: journal row (base64 in the inverse). A larger directory (generated images,
+#: models) is refused up front instead of being restored in part.
+MAX_SNAPSHOT_FILE_BYTES = 512 * 1024
+#: Most bytes of the database rows of a character snapshot.
+MAX_SNAPSHOT_ROW_BYTES = 2 * 1024 * 1024
+
+#: delete_character's sweep of the references that are NOT a
+#: `character_name` column, copied literally from
+#: `app.models.character.delete_character` (table, WHERE clause). Every table
+#: with a `character_name` column is swept as well — read off the schema, the
+#: same way delete_character finds them. scripts/smoke_world_dev_undo.py
+#: compares this list with the DELETE statements in delete_character's source,
+#: so a new sweep there cannot silently fall out of the snapshot.
+CHARACTER_SWEEP_SPECIAL: Tuple[Tuple[str, str], ...] = (
+    ("characters", "name=?"),
+    ("relationships", "from_char=? OR to_char=?"),
+    ("llm_call_stats", "agent_name=?"),
+    ("chat_messages", "partner=?"),
+    ("chat_stat_evaluations", "recipient=?"),
+    ("parties", "leader=?"),
+    ("party_invites", "inviter=? OR invitee=?"),
+    ("interaction_invites", "inviter=? OR invitee=?"),
+    ("intents", "owner=?"),
+    ("quest_facts", "mind=? OR subject=?"),
+)
+
+_ROWID = "$rowid"
+
+
+def _cell_out(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        import base64
+        return {"$b64": base64.b64encode(bytes(value)).decode("ascii")}
+    return value
+
+
+def _cell_in(value: Any) -> Any:
+    if isinstance(value, dict) and set(value) == {"$b64"}:
+        import base64
+        return base64.b64decode(value["$b64"])
+    return value
+
+
+def character_rows(name: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Every database row `delete_character(name)` removes, per table, in
+    rowid order: the rows of each table with a `character_name` column plus
+    :data:`CHARACTER_SWEEP_SPECIAL`. A row carries its rowid (key
+    `"$rowid"`) so the re-creation stores it under the same key; BLOB cells
+    are `{"$b64": ...}`. Tables without such a row are left out."""
+    import sqlite3
+    from app.core.db import get_connection
+    conn = get_connection()
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    sweeps: Dict[str, List[str]] = {}
+    for tbl in tables:
+        cols = {c[1] for c in conn.execute(f'PRAGMA table_info("{tbl}")').fetchall()}
+        if "character_name" in cols:
+            sweeps.setdefault(tbl, []).append("character_name=?")
+    present = set(tables)
+    for tbl, where in CHARACTER_SWEEP_SPECIAL:
+        if tbl in present:
+            sweeps.setdefault(tbl, []).append(where)
+    found: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    def grab(tbl: str, where: str, params: tuple) -> List[Dict[str, Any]]:
+        try:
+            cur = conn.execute(f'SELECT rowid AS "{_ROWID}", * FROM "{tbl}" '
+                               f'WHERE {where}', params)
+        except sqlite3.OperationalError:  # a WITHOUT ROWID table
+            cur = conn.execute(f'SELECT * FROM "{tbl}" WHERE {where}', params)
+        names = [d[0] for d in cur.description]
+        new = []
+        for r in cur.fetchall():
+            row = {k: _cell_out(v) for k, v in zip(names, r)}
+            key = json.dumps(row.get(_ROWID, row), sort_keys=True, default=str)
+            if key not in found.setdefault(tbl, {}):
+                found[tbl][key] = row
+                new.append(row)
+        return new
+
+    for tbl in sorted(sweeps):
+        where = " OR ".join(f"({w})" for w in sweeps[tbl])
+        grab(tbl, where, (name,) * where.count("?"))
+    # The rows an ON DELETE CASCADE takes along with a swept row (memory
+    # embeddings with their memory, ...), transitively.
+    cascades = []
+    for tbl in tables:
+        for fk in conn.execute(f'PRAGMA foreign_key_list("{tbl}")').fetchall():
+            # (id, seq, parent table, child column, parent column, on_update, on_delete, match)
+            if str(fk[6]).upper() == "CASCADE":
+                cascades.append((tbl, fk[3], fk[2], fk[4]))
+    pending = {t: list(rows.values()) for t, rows in found.items()}
+    while pending:
+        parents, pending = pending, {}
+        for child, ccol, parent, pcol in cascades:
+            values = sorted({json.dumps(r.get(pcol)) for r in parents.get(parent, [])
+                             if r.get(pcol) is not None})
+            for i in range(0, len(values), 500):
+                chunk = [json.loads(v) for v in values[i:i + 500]]
+                new = grab(child, f'"{ccol}" IN ({", ".join("?" for _ in chunk)})',
+                           tuple(chunk))
+                if new:
+                    pending.setdefault(child, []).extend(new)
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for tbl in sorted(found):
+        rows = list(found[tbl].values())
+        if rows:
+            out[tbl] = sorted(rows, key=lambda r: (
+                (0, int(r[_ROWID]), "") if _ROWID in r
+                else (1, 0, json.dumps(r, sort_keys=True, default=str))))
+    return out
+
+
+def _character_dir(name: str):
+    from app.models.character import get_user_characters_dir
+    base = get_user_characters_dir()
+    path = base / name
+    if path.resolve().parent != base.resolve():
+        raise ValueError(f"character directory of {name!r} is outside the storage")
+    return path
+
+
+def character_files(name: str) -> Tuple[Dict[str, str], List[str], int]:
+    """The character's directory as `({relative path: base64 bytes},
+    [relative directories], total bytes)`; a symlink raises ValueError (it
+    could not be restored as what it was)."""
+    import base64
+    root = _character_dir(name)
+    files: Dict[str, str] = {}
+    dirs: List[str] = []
+    total = 0
+    if not root.exists():
+        return files, dirs, 0
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"{rel} is a symlink")
+        if path.is_dir():
+            dirs.append(rel)
+        elif path.is_file():
+            data = path.read_bytes()
+            total += len(data)
+            files[rel] = base64.b64encode(data).decode("ascii")
+    return files, dirs, total
+
+
+def character_snapshot(name: str) -> Dict[str, Any]:
+    """Everything `delete_character(name)` removes that belongs to the
+    character itself: `{"rows": character_rows, "files", "dirs", "has_dir",
+    "file_bytes"}`. Call under `keyed_lock("character_profile", name)`."""
+    files, dirs, total = character_files(name)
+    return {"rows": character_rows(name), "files": files, "dirs": dirs,
+            "has_dir": _character_dir(name).is_dir(), "file_bytes": total}
+
+
+def _restore_character(name: str, snap: Dict[str, Any]) -> None:
+    """Store a :func:`character_rows` + :func:`character_files` snapshot
+    again: every row under its rowid in ONE transaction, then the files."""
+    import base64
+    from app.core.db import transaction
+    from app.models.character_template import invalidate_source_file
+    rows = snap.get("rows") or {}
+    with transaction() as conn:
+        # Parents before children: a row's foreign key is checked on insert.
+        parents = {tbl: {fk[2] for fk in conn.execute(
+            f'PRAGMA foreign_key_list("{tbl}")').fetchall()} & set(rows) - {tbl}
+            for tbl in rows}
+        order: List[str] = []
+        while len(order) < len(rows):
+            ready = sorted(t for t in rows if t not in order
+                           and parents[t] <= set(order))
+            if not ready:  # a cycle: the rest in name order
+                ready = sorted(t for t in rows if t not in order)
+            order.extend(ready)
+        for tbl in order:
+            for row in rows[tbl]:
+                cols = list(row)
+                if _ROWID in row:
+                    cur = conn.execute(f'SELECT rowid AS "{_ROWID}", * FROM "{tbl}" '
+                                       'WHERE rowid=?', (int(row[_ROWID]),))
+                    have = cur.fetchone()
+                    if have is not None:
+                        names = [d[0] for d in cur.description]
+                        if _norm({k: _cell_out(v) for k, v in zip(names, have)}) == _norm(row):
+                            # A cascade row still there (foreign keys off on
+                            # the deleting connection) is the same row.
+                            continue
+                        # The key went to another row since: nothing is
+                        # stored (the transaction rolls back).
+                        raise _Skip(REASON_CHANGED,
+                                    keys=[f"{tbl} row {row[_ROWID]} is taken"])
+                col_sql = ", ".join("rowid" if c == _ROWID else f'"{c}"' for c in cols)
+                conn.execute(f'INSERT INTO "{tbl}" ({col_sql}) VALUES '
+                             f'({", ".join("?" for _ in cols)})',
+                             tuple(_cell_in(row[c]) for c in cols))
+    if not snap.get("has_dir"):
+        return
+    root = _character_dir(name)
+    root.mkdir(parents=True, exist_ok=True)
+    root_res = root.resolve()
+
+    def inside(rel: str):
+        target = root / rel
+        if root_res not in target.resolve().parents:
+            raise ValueError(f"snapshot path {rel!r} leaves the character directory")
+        return target
+    for rel in snap.get("dirs") or []:
+        inside(rel).mkdir(parents=True, exist_ok=True)
+    for rel, b64 in (snap.get("files") or {}).items():
+        target = inside(rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".wdundo")
+        tmp.write_bytes(base64.b64decode(b64))
+        tmp.replace(target)
+        invalidate_source_file(target)
+
+
+def _recreate_exists(entry: Dict[str, Any]) -> List["_Skip"]:
+    """The element of a re-creation exists. Pending (the process ended
+    between journal begin and complete): the delete never ran — nothing to
+    do. Done: somebody else stored an element under that key since; it is
+    not this run's and is left alone."""
+    if entry.get("state") == "pending":
+        return []
+    raise _Skip(REASON_CHANGED, keys=["exists again"])
+
+
+def _check_recreated(now: Optional[Dict[str, Any]], want: Dict[str, Any]) -> None:
+    if _norm(now) != _norm(want):
+        b, _w = diff_keys(want, now if isinstance(now, dict) else {})
+        raise _Skip(REASON_INEXACT, keys=sorted(b))
+
+
+def _undo_recreate_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.models.world import (get_location_by_id, upsert_location,
+                                  world_write_lock)
+    row = inv.get("row") or {}
+    lid = str(row.get("id") or "")
+    if not lid:
+        raise RuntimeError("recreate_location without an id")
+    with world_write_lock:
+        if get_location_by_id(lid) is not None:
+            return _recreate_exists(entry)
+        if not upsert_location(copy.deepcopy(row), sync_world=True):
+            raise RuntimeError(f"re-creating location {lid} was not stored")
+        _check_recreated(get_location_by_id(lid), row)
+    return []
+
+
+def _undo_recreate_terrain_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.models.terrain import get_area, save_area
+    row = inv.get("row") or {}
+    aid = str(row.get("id") or "")
+    if not aid:
+        raise RuntimeError("recreate_terrain_area without an id")
+    if get_area(aid) is not None:
+        return _recreate_exists(entry)
+    save_area(copy.deepcopy(row))
+    _check_recreated(get_area(aid), row)
+    return []
+
+
+def _undo_recreate_height_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.models.heightfield import save_height_area
+    row = inv.get("row") or {}
+    aid = str(row.get("id") or "")
+    if not aid:
+        raise RuntimeError("recreate_height_area without an id")
+    if _height_area(aid) is not None:
+        return _recreate_exists(entry)
+    save_height_area(copy.deepcopy(row))
+    _check_recreated(_height_area(aid), row)
+    return []
+
+
+def _undo_recreate_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    from app.models.character import (character_row_exists,
+                                      get_character_current_location)
+    name = str(inv.get("name") or "")
+    snap = inv.get("snapshot") or {}
+    if not name or not (snap.get("rows") or {}).get("characters"):
+        raise RuntimeError("recreate_character without a snapshot")
+    with keyed_lock("character_profile", name):
+        if character_row_exists(name):
+            # The DB sweep is one transaction and runs before the files go:
+            # a row still there means the delete removed nothing.
+            return _recreate_exists(entry)
+        _restore_character(name, snap)
+        # Read back through the same reader the snapshot used.
+        if _norm(character_rows(name)) != _norm(snap.get("rows") or {}):
+            raise _Skip(REASON_INEXACT, keys=["database rows"])
+    try:
+        from app.core import linked_characters, sync_topics
+        linked_characters.invalidate()
+        sync_topics.moved(name, "", get_character_current_location(name) or "")
+    except Exception as e:  # noqa: BLE001 — the rows are stored; the signal is cosmetic
+        logger.warning("undo: re-created %s, presence signal failed: %s", name, e)
+    return []
+
 
 _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = {
     "delete_location": _undo_delete_location,
@@ -509,6 +857,10 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "restore_character": _undo_restore_character,
     "restore_soul": _undo_restore_soul,
     "restore_home_schedule": _undo_restore_home_schedule,
+    "recreate_location": _undo_recreate_location,
+    "recreate_terrain_area": _undo_recreate_terrain_area,
+    "recreate_height_area": _undo_recreate_height_area,
+    "recreate_character": _undo_recreate_character,
 }
 
 
@@ -540,7 +892,8 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     """Reverse every not-yet-undone WRITE entry of the run (or of one turn)
     newest-first: ``{"reversed": [seq], "skipped": [{"seq", "line",
     "reason", ...}], "complete": bool}``. ``complete`` is True when no
-    skip other than ``already gone`` or an occupant record happened — the
+    skip other than ``already gone``, ``not written`` or an occupant record
+    happened — the
     target being absent is the desired end state, so it never makes a
     rollback incomplete. An entry counts as reversed when its own target was
     restored or removed; item skips of a deleted character (key ``item``)
@@ -550,8 +903,18 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     characters this undo deleted are dropped at the end."""
     reversed_seqs: List[int] = []
     skipped: List[Dict[str, Any]] = []
+    # Targets whose re-creation found a FOREIGN element under the same key:
+    # every older entry of that target is skipped too — above all the
+    # creating step's delete, which would otherwise remove the foreign one.
+    foreign: set = set()
     for entry in wr.entries(run_id, turn=turn):
         seq = int(entry["seq"])
+        target = _target_of(entry.get("inverse") or {})
+        if target is not None and target in foreign:
+            skipped.append(_skip_dict(entry, _Skip(REASON_CHANGED,
+                                                   keys=["exists again"])))
+            wr.mark_undone(run_id, seq)
+            continue
         if not entry.get("inverse"):
             if entry.get("state") == "pending":
                 skipped.append(_skip_dict(entry, _Skip(REASON_NO_INVERSE)))
@@ -567,6 +930,10 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
             skips = [_skip_dict(entry, _Skip(f"undo failed: {e}"))]
         if not any("item" not in s and "occupant" not in s for s in skips):
             reversed_seqs.append(seq)
+        elif (target is not None
+              and str((entry.get("inverse") or {}).get("op") or "").startswith("recreate_")
+              and any(s.get("reason") == REASON_CHANGED for s in skips)):
+            foreign.add(target)
         skipped.extend(skips)
         wr.mark_undone(run_id, seq)
     if any("occupant" in s for s in skipped):
@@ -581,11 +948,56 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
             "complete": is_complete(skipped)}
 
 
+#: inverse op -> (target kind, key of the inverse naming the target; a
+#: tuple path for a key inside ``row``).
+_TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "delete_location": ("location", ("id",)),
+    "restore_location": ("location", ("id",)),
+    "restore_position": ("location", ("id",)),
+    "recreate_location": ("location", ("row", "id")),
+    "delete_terrain_area": ("terrain", ("id",)),
+    "restore_terrain_area": ("terrain", ("row", "id")),
+    "recreate_terrain_area": ("terrain", ("row", "id")),
+    "delete_height_area": ("height", ("id",)),
+    "restore_height_area": ("height", ("row", "id")),
+    "recreate_height_area": ("height", ("row", "id")),
+    "delete_character": ("character", ("name",)),
+    "restore_character": ("character", ("name",)),
+    "restore_soul": ("character", ("name",)),
+    "restore_home_schedule": ("character", ("name",)),
+    "recreate_character": ("character", ("name",)),
+}
+
+
+def _target_of(inv: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    spec = _TARGET_KEYS.get(str(inv.get("op") or ""))
+    if spec is None:
+        return None
+    value: Any = inv
+    for key in spec[1]:
+        value = value.get(key) if isinstance(value, dict) else None
+    return (spec[0], str(value)) if value else None
+
+
 def is_complete(skipped: List[Dict[str, Any]]) -> bool:
-    """True when every skip is ``already gone`` or an informational
-    occupant record (key ``occupant``), or there is none."""
-    return all(s.get("reason") == REASON_GONE or "occupant" in s
-               for s in skipped or [])
+    """True when every skip is ``already gone`` / ``not written`` or an
+    informational occupant record (key ``occupant``), or there is none."""
+    return all(s.get("reason") in (REASON_GONE, REASON_NOT_WRITTEN)
+               or "occupant" in s for s in skipped or [])
+
+
+def _exists(target: Tuple[str, str]) -> bool:
+    kind, ident = target
+    if kind == "location":
+        from app.models.world import get_location_by_id
+        return get_location_by_id(ident) is not None
+    if kind == "terrain":
+        from app.models.terrain import get_area
+        return get_area(ident) is not None
+    if kind == "height":
+        return _height_area(ident) is not None
+    from app.models.character import character_row_exists
+    return character_row_exists(ident)
 
 
 def discard_preview(run_id: str) -> List[str]:
@@ -595,7 +1007,15 @@ def discard_preview(run_id: str) -> List[str]:
     per character standing in a created place, or in a room a
     ``restore_location`` would take away (simulated with the writer's
     corridor sync): it stays there and has to be placed anew. A character the
-    discard deletes itself (one the run created) gets no such line."""
+    discard deletes itself (one the run created) gets no such line. An
+    element the run deleted in a later turn (cross-turn ``delete_created``)
+    is re-created and deleted again — net absent, no line; one that exists
+    AGAIN is somebody else's: one line, and nothing of that target is
+    listed as going — unless a NEWER not-undone creating entry of this run
+    owns it (deleted and created again by the run): then it goes, decided
+    by the same newest-first walk as :func:`undo`. A created character's
+    line also counts the outfit pieces it brought that are still in the
+    catalog (", N outfit pieces it brought", left out at 0)."""
     from app.core.world_dev_tools import _rooms_removed_by
     from app.models.character import character_row_exists, list_character_places
     from app.models.chat import count_messages_involving
@@ -606,9 +1026,58 @@ def discard_preview(run_id: str) -> List[str]:
     created: Dict[str, str] = {}
     removed_rooms: Dict[str, Dict[str, str]] = {}
     deleted_names: set = set()
-    for entry in reversed(wr.entries(run_id)):
+    entries = wr.entries(run_id)  # newest-first, as undo() walks them
+    # `foreign` is decided the way undo() decides it: newest-first over a
+    # SIMULATED existence per target, starting from the real one. A creating
+    # step (delete_*) the undo reaches first makes the target absent; a done
+    # re-creation (recreate_*) that then still finds the target present is
+    # somebody else's element (undo: ``changed since``) — the discard
+    # leaves it and every older entry of it alone. One that finds it absent
+    # re-creates it (and an older creating step deletes it again: net
+    # absent). So a character deleted in turn 2 and created AGAIN by this run
+    # (a newer creating entry owns the name) is not foreign: it goes.
+    foreign: set = set()
+    alive: Dict[Tuple[str, str], bool] = {}
+    items_of: Dict[str, set] = {}
+    for entry in entries:
+        inv = entry.get("inverse") or {}
+        op = str(inv.get("op") or "")
+        target = _target_of(inv)
+        if target is None or target in foreign:
+            continue
+        if target not in alive:
+            alive[target] = _exists(target)
+        if op.startswith("recreate_"):
+            if not alive[target]:
+                alive[target] = True
+            elif entry.get("state") == "done":
+                foreign.add(target)
+                lines.append(f"{target[0]} {target[1]} was deleted by this run and "
+                             "exists again — the discard leaves it alone")
+            # pending and present: the delete never ran — nothing to do.
+        elif op.startswith("delete_"):
+            if op == "delete_character":
+                if (entry.get("state") == "pending" and entry.get("written") is None
+                        and not inv.get("claimed")):
+                    continue  # nothing written (see _undo_delete_character)
+                items_of.setdefault(target[1], set()).update(
+                    str(i) for i in inv.get("items") or [] if i)
+            alive[target] = False
+    from app.models.inventory import get_item
+    listed: set = set()
+    for entry in reversed(entries):
         inv = entry.get("inverse") or {}
         op = inv.get("op")
+        target = _target_of(inv)
+        if target in foreign:
+            continue
+        if op in ("delete_location", "delete_terrain_area", "delete_height_area",
+                  "delete_character"):
+            # A target created, deleted and created again by this run has
+            # several creating entries: one line.
+            if target in listed:
+                continue
+            listed.add(target)
         if op == "delete_location":
             loc = get_location_by_id(str(inv.get("id") or ""))
             if loc:
@@ -641,14 +1110,18 @@ def discard_preview(run_id: str) -> List[str]:
                 lines.append(f"height area {area['id']} ({area.get('height_m')} m)")
         elif op == "delete_character":
             name = str(inv.get("name") or "")
-            if entry.get("state") == "pending" and entry.get("written") is None:
-                continue  # never deleted by the undo (see _undo_delete_character)
+            if (entry.get("state") == "pending" and entry.get("written") is None
+                    and not inv.get("claimed")):
+                continue  # nothing written (see _undo_delete_character)
             if name and character_row_exists(name):
                 deleted_names.add(name)
                 chats = count_messages_involving(name)
                 mems = count_other_memories_naming(name)
+                pieces = sum(1 for iid in sorted(items_of.get(name) or ())
+                             if get_item(iid) is not None)
                 lines.append(f'character "{name}" — {chats} chat messages, '
-                             f"{mems} memory rows of other characters name it")
+                             f"{mems} memory rows of other characters name it"
+                             + (f", {pieces} outfit pieces it brought" if pieces else ""))
     if created or removed_rooms:
         for name, (lid, room) in sorted(list_character_places().items()):
             if name in deleted_names:

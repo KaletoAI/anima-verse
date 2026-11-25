@@ -69,7 +69,8 @@ def apply_character(char_data: Dict[str, Any],
                     selected_template: str = "",
                     created_by: str = "",
                     must_be_new: bool = False,
-                    on_claim: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
+                    on_claim: Optional[Callable[[], None]] = None,
+                    on_item: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     """Apply character JSON in-process (profile + soul MD + outfits + config).
 
     Used by /apply-character (HTTP), /apply-json (smart import), the temp-NPC
@@ -86,6 +87,9 @@ def apply_character(char_data: Dict[str, Any],
     ``character_profile`` lock, right before the new row is stored; only
     then is ``on_claim()`` called — the caller's proof that a row found after
     a later failure is the one THIS call created, never a foreign one.
+    ``on_item(item_id)`` is called right after ``add_item`` stored a new
+    catalog piece for an outfit, before it is handed to the character — the
+    caller can record the id durably before anything else happens.
 
     Returns {status, character, template, outfits, warnings, created_items};
     ``created_items`` are the catalog item ids the outfits created via
@@ -277,7 +281,7 @@ def apply_character(char_data: Dict[str, Any],
                     "has no outfit system", len(raw_outfits), char_name, template)
         raw_outfits = []
     for outfit in raw_outfits:
-        applied = _apply_one_outfit(char_name, outfit)
+        applied = _apply_one_outfit(char_name, outfit, on_item=on_item)
         created_items.extend(applied.pop("created_items", []))
         apply_warnings.extend(applied.pop("warnings", []))
         outfits_applied.append(applied)
@@ -531,8 +535,11 @@ def _template_has_wardrobe(template_name: str) -> bool:
     return (tmpl.get("features") or {}).get("outfit_system_enabled") is not False
 
 
-def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_one_outfit(char_name: str, outfit: Dict[str, Any],
+                      on_item: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     """Create one outfit using deduplicated pieces or a free-text fallback.
+
+    ``on_item(item_id)``: see :func:`apply_character`.
 
     Returns: {name, pieces_created, pieces_reused, created_items, warnings} —
     ``created_items`` are the ids of the catalog items ``add_item`` created,
@@ -607,6 +614,8 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
                 warnings.append(f"Outfit '{outfit.get('name')}': piece '{name}' "
                                 "could not be created — skipped.")
                 continue
+            if on_item is not None:
+                on_item(str(iid))
             add_to_inventory(character_name=char_name, item_id=iid,
                 obtained_method="generated", obtained_from="world_dev")
             piece_ids.append(iid)

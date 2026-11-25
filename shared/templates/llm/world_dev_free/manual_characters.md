@@ -11,8 +11,14 @@ the field names a character has; `find_characters{query?, location?}` finds them
 - `name` (or `character_name`) — required. Letters of any script, digits, single spaces, `-`,
   `'`, `.` and `_` (not first); no leading/trailing space or period; at most 60 characters.
   A name that exists already is refused — use `update_character`.
-- `template` — one of the offered character templates (the refusal lists them); default
-  `human-default`.
+- `template` — one of the offered character templates; default `human-default`.
+  For a real NPC — one that remembers, has relationships, thoughts, a soul and clothing — use
+  `human-roleplay`. `human-default` is a MINIMAL template: no memory, no relationships, no
+  clothing (no outfit system, no outfit field). Only a template WITH outfits takes `outfits` —
+  on one without, `outfits` are refused:
+{%- for t in character_templates %}
+  - `{{ t.name }}` ({{ t.label }}) — {{ "outfits" if t.outfits else "no outfits" }}
+{%- endfor %}
 - every other key is a field of that template (`get_character` on a similar character shows
   them). Unknown keys are refused.
 - `outfits` — list of outfits (below); `body_slots` — `{"<slot>": {"<attribute>": "<value>"}}`.
@@ -52,6 +58,8 @@ A section shared with a linked character is changed on its owner.
 
 ## Outfits
 
+Only for a template with outfits (see `template` above).
+
 `{"name": "Daily", "pieces": [...], "locations": [], "activities": [], "excluded_locations": []}`
 
 A piece is EITHER an existing catalog piece `{"item_id": "<id>"}` (the id alone) OR a new piece:
@@ -67,8 +75,15 @@ A complete everyday outfit has at least underwear top and bottom, top, bottom an
 new character 2–3 outfits. `locations` / `activities` (empty = everywhere / always) and
 `excluded_locations` name places by name.
 
+## delete_created
+
+`delete_created{kind: "character", id: "<name>"}` removes a character THIS run created — in
+this turn or an earlier one; a character that existed before the run is never deleted. In an
+earlier turn it is refused while the character is in a party, a pair interaction or a furniture
+action, is linked to other characters, has chat messages, or other characters' memories name it.
+
 ## update_character
 
 `patch` keys: template fields (not `character_name` or `template`), `"soul:<field_key>"`,
-and `home` / `home_room` / `schedule` (only these spellings in a patch). Fields of a linked
-character that belong to its leader are changed on the leader.
+and `home` / `home_room` / `schedule` (only these spellings in a patch); `outfits` are not
+changed here. Fields of a linked character that belong to its leader are changed on the leader.

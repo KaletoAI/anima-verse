@@ -39,4 +39,5 @@ relief.
 - Compose, do not tile: a handful of large, well-placed shapes reads better than fifty small ones.
 - Use water, rock or a dense forest belt as the world's edge.
 - A meadow is terrain, not a location — create a place only where the task asks for one.
-- `delete_created{kind: "terrain" | "height", id}` removes an area you created in this turn.
+- `delete_created{kind: "terrain" | "height", id}` removes an area this run created, in this turn
+  or an earlier one; an area that existed before the run is never deleted.

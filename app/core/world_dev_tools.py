@@ -818,7 +818,11 @@ def _read_manual(step: _Step, args: Dict[str, Any]) -> str:
                           + ", ".join(MANUAL_SECTIONS))
     # A manual section is reference text the model asked for by name; it is
     # the one read the 1500-character result cap does not apply to.
-    return prompt_templates.render(path)
+    # The characters section lists the offered templates and which of them
+    # take outfits.
+    extra = ({"character_templates": character_templates()}
+             if section == "characters" else {})
+    return prompt_templates.render(path, **extra)
 
 
 # ── Location writes ──────────────────────────────────────────────────────
@@ -1381,6 +1385,39 @@ _PIECE_KEYS = {"item_id", "slots", "name", "prompt_fragment", "description",
                "covers", "partially_covers"}
 
 
+def character_templates() -> List[Dict[str, Any]]:
+    """The templates create_character offers, by name: ``[{name, label,
+    outfits}]`` — the selectable character templates without the
+    temporary-NPC feature (a temporary NPC comes from the NPC pipeline,
+    npc_ops, which owns its slot, home and rhythm); ``outfits`` says whether
+    the template has the outfit system (``features.outfit_system_enabled``
+    not false), i.e. whether a character of it can be given outfits."""
+    from app.core.world_dev_apply import _template_has_wardrobe
+    from app.models.character_template import get_template, list_templates
+    out = []
+    for t in list_templates("character"):
+        tmpl = get_template(t["name"]) or {}
+        if (tmpl.get("features") or {}).get("temporary_npc"):
+            continue
+        out.append({"name": t["name"], "label": str(t.get("label") or t["name"]),
+                    "outfits": _template_has_wardrobe(t["name"])})
+    return sorted(out, key=lambda t: t["name"])
+
+
+def _templates_line(templates: List[Dict[str, Any]]) -> str:
+    return ", ".join(f"{t['name']} ({'outfits' if t['outfits'] else 'no outfits'})"
+                     for t in templates)
+
+
+def _refuse_outfits(template: str, templates: List[Dict[str, Any]]) -> None:
+    """A template without the outfit system takes no outfits — refused before
+    any write (apply_character would only drop them with a warning)."""
+    with_outfits = [t["name"] for t in templates if t["outfits"]]
+    raise ToolRefusal(f"template {template!r} has no outfit system — a character of "
+                      f"it cannot be given outfits; templates with outfits: "
+                      + (", ".join(with_outfits) or "none"))
+
+
 def _template_fields(template: str) -> Dict[str, Dict[str, Any]]:
     """Every field of the (merged) character template by key; {} when the
     template does not exist."""
@@ -1559,10 +1596,10 @@ def _check_home_targets(data: Dict[str, Any], current_home: Any = None) -> None:
        "new character (character schema fields + outfits); home = a place id or name")
 def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.character_name import validate_character_name
-    from app.core.world_dev_apply import _get_generable_fields, apply_character
+    from app.core.world_dev_apply import (_get_generable_fields,
+                                          _template_has_wardrobe, apply_character)
     from app.models.character import character_row_exists
-    from app.models.character_template import get_template, list_templates
-    from app.models.inventory import get_carried_item_ids, list_items
+    from app.models.character_template import get_template
     _only_keys(args, {"data", "home", "home_room", "schedule"}, "create_character")
     data = args.get("data")
     if not isinstance(data, dict):
@@ -1584,16 +1621,16 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     tmpl = get_template(template)
     if tmpl is None:
         raise ToolRefusal(f"no character template {template!r}")
-    # Only the templates the World Dev character schema offers (the
-    # selectable ones), and no temporary-NPC template: a temporary NPC comes
-    # from the NPC pipeline (npc_ops), which owns its slot, home and rhythm.
-    offered = sorted(t["name"] for t in list_templates("character")
-                     if not ((get_template(t["name"]) or {}).get("features") or {})
-                     .get("temporary_npc"))
-    if template not in offered or (tmpl.get("features") or {}).get("temporary_npc"):
+    # Only the templates the World Dev character schema offers (see
+    # character_templates).
+    templates = character_templates()
+    if (template not in {t["name"] for t in templates}
+            or (tmpl.get("features") or {}).get("temporary_npc")):
         raise ToolRefusal(f"template {template!r} cannot be created here — "
-                          "templates: " + ", ".join(offered))
+                          "templates: " + _templates_line(templates))
     draft["template"] = template
+    if draft.get("outfits") and not _template_has_wardrobe(template):
+        _refuse_outfits(template, templates)
     fields = _template_fields(template)
     profile_keys, config_keys = _get_generable_fields(template)
     soul_keys = {k for k, f in fields.items() if f.get("source_file")}
@@ -1620,7 +1657,6 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     # someone else meanwhile is refused here, before any journal row exists.
     if character_row_exists(name):
         raise ToolRefusal(f"a character {name!r} already exists — use update_character")
-    items_before = {str(i.get("id")) for i in list_items()}
     inverse = {"op": "delete_character", "name": name, "items": []}
     step.begin("character", name, inverse)
     # Set by apply_character once it has confirmed, under the profile lock,
@@ -1628,22 +1664,39 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     # then is a row found after a failure THIS apply's character; without
     # it the row is a foreign one (a race after the re-check above) and must
     # never be claimed — a discard would delete it.
+    # The claim is DURABLE: it is written into the journal row before the
+    # profile save, and every new catalog piece the moment add_item returns
+    # its id — so the undo of a row left pending by a crash knows whether
+    # the character (and which pieces) are this create's
+    # (world_dev_undo._undo_delete_character).
     claimed: List[bool] = []
+    new_items: List[str] = []
+
+    def claimed_inverse() -> Dict[str, Any]:
+        return {**inverse, "claimed": True, "items": list(new_items)}
+
+    def on_claim() -> None:
+        step.attach(name, claimed_inverse())
+        claimed.append(True)
+
+    def on_item(item_id: str) -> None:
+        new_items.append(str(item_id))
+        if claimed:
+            step.attach(name, claimed_inverse())
 
     def reconcile():
         if not claimed or not character_row_exists(name):
             return None
-        # The catalog items the failed apply created and already handed to
-        # the character (a piece add_item stored but never handed over is
-        # left to the backup).
-        items = sorted(get_carried_item_ids(name) - items_before)
-        return (name, {**inverse, "items": items}, {"name": name, "items": items})
+        # The catalog items the failed apply created (recorded as add_item
+        # returned them; the undo deletes only those held nowhere).
+        inv = claimed_inverse()
+        return (name, inv, {"name": name, "items": inv["items"]})
 
     with step.writing(reconcile):
         result = apply_character(draft, created_by="world_dev", must_be_new=True,
-                                 on_claim=lambda: claimed.append(True))
+                                 on_claim=on_claim, on_item=on_item)
         items = [str(i) for i in result.get("created_items") or []]
-        step.attach(name, {**inverse, "items": items})
+        step.attach(name, {**claimed_inverse(), "items": items})
     outfits = result.get("outfits") or []
     reused = sum(int(o.get("pieces_reused") or 0) for o in outfits)
     from app.models.character import get_character_config
@@ -1703,6 +1756,12 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                 raise ToolRefusal(f"{rel} of {name} is shared with {owner} — "
                                   f"change it on {owner}")
             soul_patch[rel] = value
+        elif key == "outfits":
+            from app.core.world_dev_apply import _template_has_wardrobe
+            if not _template_has_wardrobe(template):
+                _refuse_outfits(template, character_templates())
+            raise ToolRefusal("outfits of an existing character are not changed "
+                              "here — only create_character gives outfits")
         elif key in _HOME_PATCH_KEYS:
             home_data[_HOME_PATCH_KEYS[key]] = value
         elif key in _HOME_DRAFT_SPELLINGS:
@@ -1858,8 +1917,16 @@ _CREATE_OPS = {"location": ("delete_location", "id"),
                "character": ("delete_character", "name")}
 
 
+def _creating_entry(run_id: str, kind: str, ident: str,
+                    turn: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    op, key = _CREATE_OPS[kind]
+    return next((e for e in wr.entries(run_id, turn=turn)
+                 if (e.get("inverse") or {}).get("op") == op
+                 and str((e.get("inverse") or {}).get(key) or "") == ident), None)
+
+
 @_tool("delete_created", True, "delete_created{kind, id}",
-       "remove something THIS run created in this turn "
+       "remove something THIS run created, in this or an earlier turn "
        "(kind location|terrain|height|character; id = the name for a character)")
 def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, {"kind", "id"}, "delete_created")
@@ -1867,13 +1934,13 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
     ident = _str(args, "id", required=True)
     if kind not in _CREATE_OPS:
         raise ToolRefusal("kind must be one of " + ", ".join(_CREATE_OPS))
-    op, key = _CREATE_OPS[kind]
-    creating = next((e for e in wr.entries(step.ctx.run_id, turn=step.ctx.turn)
-                     if (e.get("inverse") or {}).get("op") == op
-                     and str((e.get("inverse") or {}).get(key) or "") == ident), None)
+    creating = _creating_entry(step.ctx.run_id, kind, ident, turn=step.ctx.turn)
     if creating is None:
-        raise ToolRefusal(f"{kind} {ident!r} was not created by this run in this turn "
-                          f"— only those can be deleted")
+        earlier = _creating_entry(step.ctx.run_id, kind, ident)
+        if earlier is None:
+            raise ToolRefusal(f"{kind} {ident!r} was not created by this run (or is "
+                              "already removed) — only those can be deleted")
+        return _delete_earlier(step, kind, ident, earlier)
     if kind == "location":
         refs = _references_to_location(ident) + [
             f"{n} (stands there)" for n, _room in wu.standing_in(ident)]
@@ -1895,5 +1962,159 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
     kept = [str(s.get("item")) for s in skips if "item" in s]
     line = (f"deleted {kind} {ident} (created in step #{creating['seq']})"
             + (f"; items kept (still in use): {', '.join(kept)}" if kept else ""))
+    step.complete(None, line)
+    return line
+
+
+def _location_media(loc_id: str) -> List[str]:
+    """The media directories delete_location removes with a place (its
+    gallery and building models) that hold anything."""
+    from app.core.paths import get_storage_dir
+    storage = get_storage_dir()
+    out = []
+    for sub in ("world_gallery", "locations"):
+        d = storage / sub / loc_id
+        if d.is_dir() and any(d.iterdir()):
+            out.append(f"{sub}/{loc_id}")
+    return out
+
+
+def _character_delete_blockers(name: str) -> List[str]:
+    """What an exact re-creation of a deleted character could not bring back
+    — state delete_character changes OUTSIDE the character's own rows and
+    directory (party, pair interaction, prop action, linked family, the
+    traces of a temporary NPC) or that other characters keep after it is
+    gone (chat rows with it, memories naming it)."""
+    from app.core import linked_characters
+    from app.core.interaction_engine import get_interaction
+    from app.core.party_engine import is_in_party
+    from app.models.character import get_character_profile, is_temporary_npc
+    from app.models.chat import count_messages_involving
+    from app.models.memory import count_other_memories_naming
+    out: List[str] = []
+    prof = get_character_profile(name) or {}
+    refusal = linked_characters.delete_refusal(name)
+    if refusal or str(prof.get("linked_to") or "").strip():
+        out.append("linked to other characters")
+    if is_temporary_npc(name):
+        out.append("a temporary NPC")
+    if is_in_party(name):
+        out.append("in a party")
+    if get_interaction(name, profile=prof):
+        out.append("in a pair interaction")
+    try:
+        from app.core import prop_action_store as store
+        if any(name in store.people(r) for r in store.live_runs()):
+            out.append("in a furniture action")
+    except ImportError:
+        pass
+    chats = count_messages_involving(name)
+    if chats:
+        out.append(f"{chats} chat messages")
+    mems = count_other_memories_naming(name)
+    if mems:
+        out.append(f"{mems} memory rows of other characters name it")
+    return out
+
+
+def _delete_earlier(step: _Step, kind: str, ident: str,
+                    creating: Dict[str, Any]) -> str:
+    """delete_created of an element this run created in an EARLIER turn.
+    The creating step stays; this call journals a write of its own whose
+    inverse re-creates the element exactly from a snapshot taken under the
+    writer's lock right before the delete (world_dev_undo recreate_*).
+    Whatever such a snapshot could not restore exactly is refused up front."""
+    seq = creating["seq"]
+    line = f"deleted {kind} {ident} (created in step #{seq}, an earlier turn)"
+    if kind == "location":
+        from app.models.world import (delete_location, get_location_by_id,
+                                      world_write_lock)
+        step.prepare()
+        with world_write_lock:  # re-entrant; delete_location takes it again
+            row = get_location_by_id(ident)
+            if row is None:
+                raise ToolRefusal(f"location {ident} does not exist any more")
+            refs = _references_to_location(ident) + [
+                f"{n} (stands there)" for n, _room in wu.standing_in(ident)]
+            if refs:
+                raise ToolRefusal(f"location {ident} is still named by: " + "; ".join(refs))
+            media = _location_media(ident)
+            if media:
+                raise ToolRefusal(f"location {ident} has images or models ("
+                                  + ", ".join(media) + ") a deletion could not "
+                                  "restore — it stays")
+            inverse = {"op": "recreate_location", "row": copy.deepcopy(row)}
+            step.begin("location", ident, inverse)
+
+            def reconcile():
+                return (None if get_location_by_id(ident) is not None
+                        else (ident, inverse, None))
+
+            with step.writing(reconcile):
+                if not delete_location(ident) and get_location_by_id(ident) is not None:
+                    raise RuntimeError(f"location {ident} was not deleted")
+        step.complete(None, line)
+        return line
+    if kind in ("terrain", "height"):
+        from app.models.heightfield import delete_height_area
+        from app.models.terrain import delete_area, get_area
+        read = get_area if kind == "terrain" else _height_area
+        delete = delete_area if kind == "terrain" else delete_height_area
+        op = "recreate_terrain_area" if kind == "terrain" else "recreate_height_area"
+        step.prepare()
+        # The area writers have no writer lock to share (see world_dev_undo):
+        # read and delete follow each other directly.
+        row = read(ident)
+        if row is None:
+            raise ToolRefusal(f"{kind} area {ident} does not exist any more")
+        inverse = {"op": op, "row": copy.deepcopy(row)}
+        step.begin(kind, ident, inverse)
+
+        def reconcile_area():
+            return None if read(ident) is not None else (ident, inverse, None)
+
+        with step.writing(reconcile_area):
+            if not delete(ident) and read(ident) is not None:
+                raise RuntimeError(f"{kind} area {ident} was not deleted")
+        step.complete(None, line)
+        return line
+    # character
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import character_row_exists, delete_character
+    step.prepare()
+    with keyed_lock("character_profile", ident):
+        if not character_row_exists(ident):
+            raise ToolRefusal(f"character {ident!r} does not exist any more")
+        blockers = _character_delete_blockers(ident)
+        if blockers:
+            raise ToolRefusal(f"character {ident!r} cannot be deleted in a later turn "
+                              "— a re-creation could not restore it exactly: "
+                              + "; ".join(blockers))
+        try:
+            snap = wu.character_snapshot(ident)
+        except ValueError as exc:
+            raise ToolRefusal(f"character {ident!r} cannot be deleted: {exc}")
+        if snap["file_bytes"] > wu.MAX_SNAPSHOT_FILE_BYTES:
+            raise ToolRefusal(f"character {ident!r} has {snap['file_bytes'] // 1024} KB "
+                              "of files (images, models) a deletion could not restore "
+                              "— it stays")
+        if len(json.dumps(snap["rows"], ensure_ascii=False)) > wu.MAX_SNAPSHOT_ROW_BYTES:
+            raise ToolRefusal(f"character {ident!r} has too much stored state to be "
+                              "restored exactly — it stays")
+        inverse = {"op": "recreate_character", "name": ident, "snapshot": snap}
+        step.begin("character", ident, inverse)
+
+    def reconcile_char():
+        return None if character_row_exists(ident) else (ident, inverse, None)
+
+    # delete_character runs OUTSIDE the profile lock, as in the undo: its
+    # detach steps take the party lock before it takes the profile lock
+    # itself, and that order must not be inverted. The run keeps the world
+    # frozen (no agent turns), and the detach steps find nothing to change
+    # in the character's own rows — party, pair interaction and furniture
+    # action were refused above — so the snapshot is the state it deletes.
+    with step.writing(reconcile_char):
+        if not delete_character(ident) and character_row_exists(ident):
+            raise RuntimeError(f"character {ident!r} was not deleted")
     step.complete(None, line)
     return line
