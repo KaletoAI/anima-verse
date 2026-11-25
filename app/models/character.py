@@ -1109,7 +1109,12 @@ def delete_character(character_name: str) -> bool:
         from app.core.travel_engine import cancel_journey
         cancel_journey(character_name)
 
-    for _step in (_detach_party, _detach_journey, _detach_interaction):
+    def _detach_quests() -> None:
+        # A quest run that binds this character can never be fulfilled: broken now, not at the next tick.
+        from app.core.quest_engine import on_character_deleted
+        on_character_deleted(character_name)
+
+    for _step in (_detach_party, _detach_journey, _detach_interaction, _detach_quests):
         try:
             _step()
         except Exception as e:  # noqa: BLE001
