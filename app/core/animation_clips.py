@@ -1510,6 +1510,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # Owner decision 2026-11-20 (§ A8a): the contact pivot [side, forward] cm real figure heights scale about
         # (None = the clip frame's origin; always None for a solo clip).
         "pair_pivot_cm": clip_pair_pivot(meta) if entry["role"] else None,
+        # Owner decision 2026-11-25 (§ A8a): the contact heights per relation the vertical compensation of real figure
+        # heights reads (None = none stored: nothing is computed; always None for a solo clip).
+        "pair_contact_heights": clip_pair_contact_heights(meta) if entry["role"] else None,
         # Saved orientation and renderer calibration. Angles and role
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in
@@ -2646,6 +2649,108 @@ def set_clip_pair_pivot(library: str, rel: str, value: Any) -> List[Dict[str, An
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
+#: Owner decision 2026-11-25 (docs/schnittstellen-3d.md § A8a "Echte Körpergrößen", scene-render `pairHeight.ts`): a
+#: pair/group clip's CONTACT HEIGHTS `pair_contact_heights: {"<part>><receiver>:<target>": {height_cm, roles}}` — per
+#: contact relation the height of its target point above the stage floor at the relation's deepest key frame (cm, 1.70 m)
+#: and, per role of the relation, its pose there: `{support_cm, hips_cm, legs: [[hip, knee, ankle] × left/right]}` (cm;
+#: x/z relative to the role's hips, y above the floor). The renderers close the vertical gap real heights open from it.
+#: Written by Auto-align / "Align all"; absent = nothing is computed (today's placement).
+PAIR_CONTACT_KEY = re.compile(r"^([a-e])>([a-e]):([a-z_]{1,40})$")
+PAIR_CONTACT_BOUND_CM = 300.0
+
+
+def _contact_num(v: Any, lo: float = -PAIR_CONTACT_BOUND_CM, hi: float = PAIR_CONTACT_BOUND_CM) -> bool:
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v) and lo <= v <= hi
+
+
+def validate_pair_contact_entry(key: Any, value: Any) -> Dict[str, Any]:
+    """One relation of ``pair_contact_heights``: the key ``<part>><receiver>:<target>`` (roles a..e, different),
+    ``height_cm`` 0..300 and a role entry for at least the part and the receiver; floats out, rounded to 0.1 cm."""
+    m = PAIR_CONTACT_KEY.match(key) if isinstance(key, str) else None
+    if not m or m.group(1) == m.group(2):
+        raise ClipLibraryError(f"pair_contact_heights key '{key}' must be <part>><receiver>:<target> (roles a..e)")
+    if not isinstance(value, dict) or set(value) - {"height_cm", "roles"}:
+        raise ClipLibraryError(f"pair_contact_heights.{key} must be {{height_cm, roles}}")
+    if not _contact_num(value.get("height_cm"), 0.0):
+        raise ClipLibraryError(f"pair_contact_heights.{key}.height_cm must be a number from 0 to 300")
+    roles = value.get("roles")
+    if not isinstance(roles, dict) or not {m.group(1), m.group(2)} <= set(roles):
+        raise ClipLibraryError(f"pair_contact_heights.{key}.roles must name at least roles {m.group(1)} and {m.group(2)}")
+    r1 = lambda v: round(float(v), 1) + 0.0  # noqa: E731
+    out_roles: Dict[str, Any] = {}
+    for role, pose in roles.items():
+        if role not in CLIP_ROLES or not isinstance(pose, dict) or set(pose) != {"support_cm", "hips_cm", "legs"}:
+            raise ClipLibraryError(f"pair_contact_heights.{key}.roles.{role} must be {{support_cm, hips_cm, legs}}")
+        legs = pose.get("legs")
+        if (not _contact_num(pose.get("support_cm"), -50.0) or not _contact_num(pose.get("hips_cm"))
+                or not isinstance(legs, list) or len(legs) > 2
+                or not all(isinstance(leg, list) and len(leg) == 3 and all(
+                    isinstance(p, list) and len(p) == 3 and all(_contact_num(x) for x in p) for p in leg) for leg in legs)):
+            raise ClipLibraryError(f"pair_contact_heights.{key}.roles.{role}: support_cm -50..300, hips_cm and up to "
+                                   "two legs of three [x, y, z] joints, each within ±300 cm")
+        out_roles[role] = {"support_cm": r1(pose["support_cm"]), "hips_cm": r1(pose["hips_cm"]),
+                           "legs": [[[r1(x) for x in p] for p in leg] for leg in legs]}
+    return {"height_cm": r1(value["height_cm"]), "roles": out_roles}
+
+
+def clip_pair_contact_heights(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The clip's stored contact heights, the valid relations only; None when none is stored or valid."""
+    own = (meta or {}).get("pair_contact_heights") if isinstance(meta, dict) else None
+    if not isinstance(own, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for key, value in own.items():
+        try:
+            out[key] = validate_pair_contact_entry(key, value)
+        except ClipLibraryError:
+            continue
+    return out or None
+
+
+@_library_writer
+def set_clip_pair_contact_heights(library: str, rel: str, value: Any) -> List[Dict[str, Any]]:
+    """Writes a pair/group clip's contact heights in its shared ``<kind>.json``: ``None`` clears them all, an object
+    replaces the relations it names (a relation set to ``None`` is removed) and keeps the others. Refused for a solo
+    clip, an invalid value and a kind without a sidecar."""
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(f"'{kind}' is a solo clip — only a pair clip has contact heights")
+    if value is not None and not isinstance(value, dict):
+        raise ClipLibraryError("pair_contact_heights must be an object {relation: {height_cm, roles} | null} or null")
+    fresh = {k: (None if v is None else validate_pair_contact_entry(k, v)) for k, v in (value or {}).items()}
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(f"'{kind}' has no sidecar {sidecar.name} — re-import the clip first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    cur = clip_pair_contact_heights(data) or {}
+    if value is None:
+        cur = {}
+    for k, v in fresh.items():
+        if v is None:
+            cur.pop(k, None)
+        else:
+            cur[k] = v
+    if cur:
+        data["pair_contact_heights"] = cur
+    else:
+        data.pop("pair_contact_heights", None)
+    _write_json_atomic(sidecar, data)
+    reload_clip_caches()
+    logger.info("clip contact heights: %s%s (%s) -> %s", f"{cset}/" if cset else "", kind, library,
+                ", ".join(f"{k} {v['height_cm']} cm" for k, v in cur.items()) or "none")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
 #: Ruling A212: how far Auto-align may move the part's role around the user's base arrangement, forward/back and
 #: up/down (cm; sideways stays at most 3 cm, tilt/roll at most 10°). The clip's own value wins over the default.
 ALIGN_RANGE_DEFAULT_CM = 8.0
@@ -3374,6 +3479,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
             meta.pop("pair_pivot_cm", None)
         else:
             meta["pair_pivot_cm"] = turned
+    if baked and siblings and "pair_contact_heights" in meta and (
+            any(abs(v) > 1e-9 for v in (tilt, roll, height)) or any(abs(v[1]) > 1e-9 for v in per_role.values())):
+        # The contact heights are heights above the floor: a tilt, a roll, a height shift or a role's vertical shift
+        # changes them, so they go (the next Auto-align measures them again). A yaw or a horizontal role shift keeps
+        # them — the stored legs are relative to their hips and the rule reads only their geometry and heights.
+        meta.pop("pair_contact_heights", None)
     if baked:
         record_orient_bake(meta, {"yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
                                   "height_cm": height, "role_shift_cm": dict(per_role)})

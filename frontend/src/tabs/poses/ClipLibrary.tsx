@@ -52,7 +52,8 @@ import { ConfirmDialog } from '@anima/player-ui'
 import { bendLimitsOf, clipHeightGroup, ALIGN_RANGE_CM_DEFAULT, ALIGN_TURN_DEG_DEFAULT, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { targetWordOf } from './contactWords'
 import { BendLimitsEditor, ContactRelations, RootAngleEditor } from './ContactRelations'
-import { PlacePreview, type AlignMoverChoice, type AutoAlignOptions, type AutoAlignResult, type AutoAlignRun, type AlignCast, type PlaceReadout } from './PlacePreview'
+import { PlacePreview, type AlignMoverChoice, type AutoAlignOptions, type AutoAlignResult, type AutoAlignRun, type AlignCast, type PlaceReadout,
+  type PairContactWire } from './PlacePreview'
 import { AlignResultBlock } from './AlignResult'
 import { AlignAllTable, type AlignAllRow } from './AlignAllTable'
 import { kindStatusOf, relationStatus, unmeasuredStatus, stateWord, reasonText, STATE_COLOR, UNMEASURED_KEY,
@@ -345,6 +346,13 @@ export function ClipLibrary({
   // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot an Auto-align run measured ([side,
   // forward] cm, null = none pending) — stored with Save.
   const [pivotDraft, setPivotDraft] = useState<[number, number] | null>(null)
+  // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights the last Auto-align measured (Save
+  // stores them), and the Places view's "Real heights" switch — while it is on, Auto-align and Save are off: both
+  // measure and store data of 1.70 m figures, which the real-height preview no longer shows.
+  const [contactHeightsDraft, setContactHeightsDraft] = useState<Record<string, PairContactWire> | null>(null)
+  const [realHeights, setRealHeights] = useState(false)
+  // "Align all" → "Store contact heights": progress of the run over every pair/group clip.
+  const [heightsRun, setHeightsRun] = useState<{ running: boolean; done: number; total: number; stored: number; missed: string[] } | null>(null)
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
   const [footprint, setFootprint] = useState('')
@@ -574,9 +582,43 @@ export function ClipLibrary({
       waitS: openWait.current.s }))
   }, [t])
   /** Stage 1: measure every pair and group clip listed, relation by relation (mover 'auto'); nothing is written. */
+  /** Owner decision 2026-11-25: "Store contact heights" — every pair and group clip of the list (the same choice as
+   *  stage 1) is opened with its cast, the contact heights of the arrangement it HAS (the stored dials, nothing
+   *  aligned) are measured at 1.70 m and stored (`pair_contact_heights`); a clip without a contact or a pair on a
+   *  place is named. The way to fill the clips no Auto-align has touched since contact heights exist. */
+  const storeAllHeights = useCallback(async () => {
+    const targets = shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing && (includeDone || kindStatus(r.clips).key !== 'done'))
+    const back = selected
+    setRealHeights(false)
+    alignAllStop.current = false
+    stageCast.current = autoAlignRef.current?.cast ?? null
+    castRef.current = stageCast.current
+    let done = 0, stored = 0
+    const missed: string[] = []
+    setHeightsRun({ running: true, done, total: targets.length, stored, missed: [] })
+    for (const r of targets) {
+      if (alignAllStop.current) break
+      const set = orderSets(Array.from(new Set(r.clips.map((c) => c.set || ''))))[0] || ''
+      const file = clips.find((c) => c.kind === r.kind && (c.set || '') === set && (c.role || '') === 'a')
+      const run = file ? await openRun(r.kind, set) : null
+      const heights = run && !run.noPlace ? run.contactHeights?.() ?? null : null
+      if (heights && file) {
+        try { await apiPatch(clipPath(file), { pair_contact_heights: heights }); stored += 1 } catch { missed.push(r.kind) }
+      } else missed.push(r.kind)
+      done += 1
+      setHeightsRun({ running: true, done, total: targets.length, stored, missed: [...missed] })
+    }
+    invalidateAnimationPreviewClips()
+    try { await onReload() } catch { /* the counts above already say what was stored */ }
+    setSeq((n) => n + 1)
+    setHeightsRun({ running: false, done, total: targets.length, stored, missed })
+    castRef.current = null
+    if (back) pick(back)
+  }, [clips, includeDone, onReload, openRun, pick, selected, shown])
   const runAlignAll = useCallback(async () => {
     const targets = shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing && (includeDone || kindStatus(r.clips).key !== 'done'))
     const back = selected
+    setRealHeights(false)
     alignAllStop.current = false
     stageCast.current = autoAlignRef.current?.cast ?? null
     castRef.current = stageCast.current
@@ -631,6 +673,7 @@ export function ClipLibrary({
     const byClip = new Map<string, AlignAllRow[]>()
     for (const r of cur.rows) byClip.set(`${r.kind}|${r.set}`, [...(byClip.get(`${r.kind}|${r.set}`) ?? []), r])
     let rows = cur.rows.map((r) => ({ ...r, outcome: '' }))
+    setRealHeights(false)
     alignAllStop.current = false
     castRef.current = stageCast.current
     setAlignAll({ ...cur, running: 'apply', done: 0, total: byClip.size, rows })
@@ -674,6 +717,8 @@ export function ClipLibrary({
               await apiPatch(clipPath(file), { root_angle: { pitch_deg: root.pitchDeg, yaw_deg: root.yawDeg } })
             }
             if (res.pivotCm) await apiPatch(clipPath(file), { pair_pivot_cm: res.pivotCm })
+            // Owner decision 2026-11-25: the contact heights of the arrangement just stored (after the orient write).
+            if (res.contactHeights) await apiPatch(clipPath(file), { pair_contact_heights: res.contactHeights })
             for (const x of res.relations) status[x.key] = relationStatus(x)
             outcome = t('saved')
           } catch (e) { outcome = (e as Error).message }
@@ -745,10 +790,14 @@ export function ClipLibrary({
   const [rootDraft, setRootDraft] = useState<RootAngleWire>({ pitch_deg: 0, yaw_deg: 0 })
   useEffect(() => { setRootDraft(JSON.parse(savedRootKey) as RootAngleWire) }, [savedRootKey, selected, previewSet])
   // The contact pivot: every clip or set starts without a pending one.
-  useEffect(() => { setPivotDraft(null) }, [selected, previewSet])
+  useEffect(() => { setPivotDraft(null); setContactHeightsDraft(null) }, [selected, previewSet])
   const savedPivot = orientTarget?.pair_pivot_cm ?? null
   const pivotDirty = !!pivotDraft && !!orientTarget?.role
     && (!savedPivot || pivotDraft[0] !== savedPivot[0] || pivotDraft[1] !== savedPivot[1])
+  // Owner decision 2026-11-25: the measured contact heights differ from the stored ones (per relation it measured).
+  const savedContactHeights = orientTarget?.pair_contact_heights ?? null
+  const contactHeightsDirty = !!contactHeightsDraft && !!orientTarget?.role && Object.entries(contactHeightsDraft)
+    .some(([k, v]) => JSON.stringify(savedContactHeights?.[k] ?? null) !== JSON.stringify(v))
   // The dials act on the A half; how many roles it has decides pair or group.
   const isPairTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) === 2
   const isGroupTarget = orientTarget?.role === 'a' && (row?.roles ?? 0) > 2
@@ -909,6 +958,8 @@ export function ClipLibrary({
             await apiPatch(clipPath(file), { pair_pivot_cm: result.pivotCm })
             if (nothing && !rootChanged) note = t('contact pivot stored')
           }
+          // Owner decision 2026-11-25: the end clip's own contact heights, measured on what it now stores.
+          if (result.contactHeights) await apiPatch(clipPath(file), { pair_contact_heights: result.contactHeights })
           // The base's relations only where the end clip has none in force.
           if (!file.contact_target?.relations?.length && relations.length) await apiPatch(clipPath(file), { contact_target: relations })
           saved = true
@@ -927,11 +978,12 @@ export function ClipLibrary({
   const checkStored = !!(placeCheck && savedCheck && savedCheck.prop === placeCheck.prop
     && savedCheck.place === placeCheck.place)
   const checkOnly = !orientDirty && !heightDirty && !!placeCheck && !checkStored
-  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly || rootDirty || pivotDirty) && !heightLocked
-    && !(orientDirty && orientLocked)
+  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly || rootDirty || pivotDirty || contactHeightsDirty)
+    && !heightLocked && !(orientDirty && orientLocked) && !realHeights
   /** The consequence of Save, shown BEFORE the click (checklist point 2). */
   const saveConsequence = useMemo(() => saveSteps({
     bake: bakeDirty, shift: clipShiftDirty || turnDirty, heights: heightDirty, root: rootDirty, pivot: pivotDirty,
+    contact: contactHeightsDirty,
     finales: finaleKinds.length,
     greenCheck: !!placeCheck && (orientDirty || heightDirty || !checkStored), savedCheck: !!savedCheck,
   }).map((step) => ({
@@ -943,8 +995,9 @@ export function ClipLibrary({
     'clear-check': t('the stored place check is cleared'),
     root: t('the root angle goes to the sidecar'),
     pivot: t('the contact pivot goes to the sidecar (figures of other heights are scaled about it in the game)'),
-  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, pivotDirty, placeCheck, rootDirty,
-    savedCheck, t, turnDirty])
+    contact: t('the contact heights go to the sidecar (the game closes the vertical gap of figures of other heights from them)'),
+  })[step]), [bakeDirty, checkStored, clipShiftDirty, contactHeightsDirty, finaleKinds, heightDirty, orientDirty, pivotDirty,
+    placeCheck, rootDirty, savedCheck, t, turnDirty])
   /** THE one save path: bake/shift (orient), heights, root angle and contact pivot (PATCH) and the place check, in that
    *  order — the pivot after the orient write, which turns or drops a stored one. */
   const save = useCallback(async () => {
@@ -975,6 +1028,8 @@ export function ClipLibrary({
     }
     if (rootDirty) writes.push(['root', () => apiPatch(clipPath(orientTarget), { root_angle: rootDraft })])
     if (pivotDirty) writes.push(['pivot', () => apiPatch(clipPath(orientTarget), { pair_pivot_cm: pivotDraft })])
+    // After the orient write, which drops stored heights on a tilt, roll or height bake.
+    if (contactHeightsDirty) writes.push(['contact', () => apiPatch(clipPath(orientTarget), { pair_contact_heights: contactHeightsDraft })])
     // A STATUS PER CLIP: what this save leaves on the clip's relations — the statuses of the Auto-align result it
     // stores when the dials are still the ones that result wrote, "manual: adjusted" when a hand moved the roles.
     const moves = (roleShiftDirty || turnDirty || rootDirty) && (isPairTarget || isGroupTarget)
@@ -1016,6 +1071,7 @@ export function ClipLibrary({
         }
         if (applied.includes('heights')) setHeightDraft({})
         if (applied.includes('pivot')) setPivotDraft(null)
+        if (applied.includes('contact')) setContactHeightsDraft(null)
         // The file keeps its URL, so the preview has to be rebuilt AND the
         // clip re-fetched — `seq` does both (component key + cache buster).
         if (applied.includes('orient') || applied.includes('heights')) setSeq((n) => n + 1)
@@ -1609,6 +1665,7 @@ export function ClipLibrary({
                     draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={previewH}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
                     onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef} castRef={castRef}
+                    realHeights={realHeights} onRealHeights={setRealHeights}
                     />
                 ) : null}
                 {innerTab === 'clip' && !row.missing ? (
@@ -1761,8 +1818,9 @@ export function ClipLibrary({
                           ? t('move {r} (receiving)').replace('{r}', alignChoice.rel.at.toUpperCase()) : t('move the receiving role')}</option>
                       </select>
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
-                        disabled={orientLocked || innerTab !== 'places'}
-                        title={innerTab !== 'places'
+                        disabled={orientLocked || innerTab !== 'places' || realHeights}
+                        title={realHeights ? t('Switch “Real heights” off: Auto-align measures and stores the arrangement of 1.70 m figures.')
+                          : innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
                           : t('Aligns the chosen contact by moving the chosen role (at most the alignment range in every direction and the rotation range in tilt, roll and yaw, around the arrangement you set, staying on its seat or bed) and the part’s root angle: at the deepest frame the part goes in as far as it can — its root just outside the opening, or less when the bottom stops the tip — and at both the deepest and the shallowest frame the shaft runs along the axis through the opening. The moved role may not go deeper into any other person than the clip already does (at least 5 mm allowed); a result that would, or that ends worse than it started, is not applied. Every other role stays. Writes the role and root-angle dials and measures the contact pivot; Save stores them.')}
                         onClick={() => {
@@ -1770,6 +1828,9 @@ export function ClipLibrary({
                           const res: AutoAlignResult = run ? run({ rangeCm: alignRangeCm, turnDeg: alignTurnDeg, base: alignBase,
                             only: alignChoice?.rel ?? 'detected', mover: alignMover }) : { ok: false, reason: t('The place preview is still loading.') }
                           setAutoAlign(res)
+                          // Owner decision 2026-11-25: the contact heights of the arrangement the dials will hold — applied or
+                          // not (an unchanged result measured the arrangement as it is); Save stores them.
+                          if (res.ok) setContactHeightsDraft(res.contactHeights)
                           // A STATUS PER CLIP: what the click measured. A discarded result changes no dial, so its status
                           // (blocked, mismatch, not measurable) is stored at once; an applied one when Save stores it.
                           const statusNow: Record<string, AlignStatusEntry | null> = {}
@@ -1857,6 +1918,19 @@ export function ClipLibrary({
                           : t('Measure all pair and group clips ({n})').replace('{n}', String(shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing
                             && (includeDone || kindStatus(r.clips).key !== 'done')).length))}
                       </button>
+                      <button type="button" className="ga-btn ga-btn-sm" data-testid="align-all-store-heights"
+                        disabled={innerTab !== 'places' || orientBusy || heightBusy || !!alignAll?.running}
+                        title={t('Measures and stores the contact heights of every pair and group clip in the list, as it is stored now (nothing is aligned or moved): per contact the height of its target at the deepest frame and both roles’ legs there, at 1.70 m. The game closes the vertical gap of figures of other heights from them; a clip without them is not compensated.')}
+                        onClick={() => { if (heightsRun?.running) alignAllStop.current = true; else guardSwitch(() => { void storeAllHeights() }) }}>
+                        {heightsRun?.running ? t('Stop ({n} of {m} clips)').replace('{n}', String(heightsRun.done)).replace('{m}', String(heightsRun.total))
+                          : t('Store contact heights')}
+                      </button>
+                      {heightsRun && !heightsRun.running ? (
+                        <span className="ga-hint" data-testid="align-all-heights-result" data-result={JSON.stringify(heightsRun)} style={{ fontSize: 11 }}>
+                          {t('Contact heights stored for {n} of {m} clips.').replace('{n}', String(heightsRun.stored)).replace('{m}', String(heightsRun.total))}
+                          {heightsRun.missed.length ? ` ${t('Nothing measured: {kinds}').replace('{kinds}', heightsRun.missed.join(', '))}` : ''}
+                        </span>
+                      ) : null}
                       <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11 }}
                         title={t('Align all skips clips ticked “manual: done” unless this is ticked.')}>
                         <input type="checkbox" data-testid="align-all-include-done" checked={includeDone} disabled={!!alignAll?.running}
@@ -1956,6 +2030,7 @@ export function ClipLibrary({
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button type="button" data-testid="align-save"
                         className="ga-btn ga-btn-sm ga-btn-primary" disabled={!canSave}
+                        title={realHeights ? t('Switch “Real heights” off to save: the dials and the measured values belong to 1.70 m figures.') : undefined}
                         onClick={() => void save()}>
                         {orientBusy || heightBusy ? t('Saving…')
                           : bakeDirty ? t('Save (Blender run)')

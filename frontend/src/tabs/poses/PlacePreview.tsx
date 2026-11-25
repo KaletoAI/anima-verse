@@ -48,7 +48,9 @@ import {
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
   keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
   lampOf, solveLinear, ALIGN_ROOT_MARGIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM, ALIGN_GAIN_MM, ALIGN_OVERLAP_TOL_MM,
-  overlapExcessMm,
+  overlapExcessMm, keyFrames,
+  pairFigureScale, pairPivotOf, pairContactHeightsOf, pairHeightOffsets, pairHeightRigOf, pairHeightPoser, pairRolePoseCm,
+  type PairHeightSolve,
   type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket, type AlignNote,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
@@ -78,6 +80,8 @@ interface ModelAnswer {
     foot_pose?: FootPose | null
   }
   motion?: SecondaryMotionPayload
+  /** The character's profile height (cm; null = unset, the 1.70 m figure) — "Real heights". */
+  height_cm?: number | null
 }
 interface PropRow {
   id: string; name?: string; marker_count?: number; marker_groups?: string[]; marker_capacities?: Record<string, number>; has_model?: boolean
@@ -95,7 +99,14 @@ export interface PlaceClip {
   /** Ruling A212: the clip's alignment range (cm). */
   align_range?: { cm: number } | null
   align_turn?: { deg: number } | null
+  /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot [side, forward] cm. */
+  pair_pivot_cm?: [number, number] | null
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights per relation. */
+  pair_contact_heights?: Record<string, unknown> | null
 }
+/** One relation of `pair_contact_heights` as stored (cm): the target's height and each role's pose at the deepest frame. */
+export interface PairContactWire { height_cm: number
+  roles: Record<string, { support_cm: number; hips_cm: number; legs: [number, number, number][][] }> }
 /** Pair scene: per channel id (from the collision records) the largest share of the entering chain's length inside
  *  over one clip cycle and how many times the part reached the channel's bottom in that cycle — the clip sidecar's
  *  `channel_profile` (PATCH /assets/animation-clips/{library}/{rel}). */
@@ -401,6 +412,10 @@ export type AutoAlignResult =
        *  frame — the contact target's point at the deepest key frame after the run, the mean over the relations; real
        *  figure heights are scaled about it in the game (null = not measured). */
       pivotCm: [number, number] | null
+      /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): every contact relation's height and the roles' poses
+       *  at its deepest frame in the arrangement the run leaves (the dials it writes, or the base when nothing applied),
+       *  measured at 1.70 m — what Save / "Align all" store as `pair_contact_heights` (null = not measured). */
+      contactHeights: Record<string, PairContactWire> | null
       /** Whether any group of the run was applied (THE VERDICT); none = the dials stay as they were. */
       applied: boolean }
 
@@ -430,11 +445,14 @@ export type AutoAlignRun = ((opts?: AutoAlignOptions) => AutoAlignResult) & { ki
   endPose?: () => EndPose | null
   /** The persons of this scene by role (what "Align all" carries to every clip it opens). */
   cast?: AlignCast
+  /** Owner decision 2026-11-25: the contact heights of the arrangement the dials set now (every relation of the
+   *  scene, 1.70 m) — "Align all"'s "Store contact heights"; null = no pair or no contact. */
+  contactHeights?: () => Record<string, PairContactWire> | null
   /** No prop has a place this clip fits on: the run only says so (the scene never starts). */
   noPlace?: boolean }
 
 export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq, bust = 0, poses, onOpenPose,
-  onReadout, autoAlignRef, castRef, height = 360 }: {
+  onReadout, autoAlignRef, castRef, height = 360, realHeights = false, onRealHeights }: {
   kind: string; set?: string
   /** 0/1 = solo, 2 = pair, 3+ = group */
   roles: number
@@ -453,6 +471,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
    *  alone drifted to other persons whenever a clip used other places — two persons without a fitting part). */
   castRef?: MutableRefObject<AlignCast | null>
   height?: number
+  /** Owner decision 2026-11-25: the cast at its profile heights with the game's size compensation (scene-render
+   *  `pairScale.ts` horizontally, `pairHeight.ts` vertically) instead of every figure at 1.70 m. Preview only. */
+  realHeights?: boolean
+  onRealHeights?: (on: boolean) => void
 }) {
   const { t } = useI18n()
   const chars = useBuiltCharacters()
@@ -516,6 +538,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
   const [info, setInfo] = useState<{ ms: number; swingMm: number; strands: number; chains: number; figures: FigureReadout[]
     partners: PartnerInfo | null } | null>(null)
   const [show, setShow] = useState<PartnerShow>(loadShow)
+  /** "Real heights": what the compensation does (offsets, remaining gaps) — or why it does nothing. */
+  const [heightNote, setHeightNote] = useState('')
   const showRef = useRef(show); showRef.current = show
   const toggleShow = (k: keyof PartnerShow) => setShow((cur) => {
     const next = { ...cur, [k]: !cur[k] }
@@ -799,6 +823,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const modelKey = (a: Assignment) => a.character === MANNEQUIN ? MANNEQUIN
           : a.body === 'base' ? `${a.character}|base|${posesOf(a)}` : a.character
         const models = new Map<string, { template: Object3D; answer: ModelAnswer | null; record: HairStrandRecord | null; owned: boolean }>()
+        // Owner decision 2026-11-25 ("Real heights"): the profile heights of the cast (metres; absent = 1.70 m).
+        const realOn = realHeights && !solo
+        const heightOf = new Map<string, number>()
         for (const a of assigned.map((p) => assign[p.letter])) {
           const name = a.character
           const mk = modelKey(a)
@@ -811,6 +838,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           if (a.body === 'base') {
             const base = plain[name]
             if (!base) continue
+            if (realOn) {
+              const hc = (await apiGet<ModelAnswer>(`/characters/${encodeURIComponent(name)}/model3d`).catch(() => null))?.height_cm
+              if (typeof hc === 'number' && hc > 0) heightOf.set(name, hc / 100)
+            }
             const poses = posesOf(a)
             const motion = (poses ? poseMotions[`${name}|${poses}`] : null) ?? base.motion
             const gltf = await gltfLoader.loadAsync(base.url).catch(() => null)
@@ -819,6 +850,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             continue
           }
           const answer = await apiGet<ModelAnswer>(`/characters/${encodeURIComponent(name)}/model3d`).catch(() => null)
+          if (typeof answer?.height_cm === 'number' && answer.height_cm > 0) heightOf.set(name, answer.height_cm / 100)
           if (!answer?.model?.url) continue
           const gltf = await gltfLoader.loadAsync(answer.model.url)
           let record: HairStrandRecord | null = null
@@ -944,6 +976,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           head: Object3D | null; tips: Object3D[]; tipRest: Map<Object3D, InstanceType<typeof THREE.Vector3>>
           /** A129.9: the part-only twins of the body's skinned meshes (same attributes and skeleton). */
           partMeshes: Object3D[]
+          /** Owner decision 2026-11-25 ("Real heights"): the figure's height (m) and scale a = h / 1.70 (1 = off), the
+           *  clip's contact pivot (`pairScale.ts`), and its vertical compensation (`pairHeight.ts`): the hips offset (m),
+           *  the legs the IK holds and the poser applying them after the clip pose. */
+          heightM: number; scale: number; pivot: { x: number; z: number }
+          heightOffset: number; planted: boolean[]; poser: ((offsetM: number, planted: readonly boolean[]) => void) | null
           collision: CollisionPayload | null
         }
         const figs: Fig[] = []
@@ -957,8 +994,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           const clip = clipFiles.get(a.role)
           if (!model || !clip) continue
           const answer = model.answer
+          // "Real heights": the figure at its profile height (the game's model), else every figure at 1.70 m.
+          const heightM = realOn ? heightOf.get(a.character) ?? FIGURE_HEIGHT_M : FIGURE_HEIGHT_M
           const { root, inst, runtime } = mountPlaceFigure(THREE, (o) => skclone(o) as Object3D, model.template,
-            { collision: answer?.model?.collision ?? null, motion: () => answer?.motion })
+            { collision: answer?.model?.collision ?? null, motion: () => answer?.motion, ...(realOn ? { figureHeight: heightM } : {}) })
           stage.add(root)
           root.updateMatrixWorld(true)
           const hips = hipsOf(inst)
@@ -1050,7 +1089,8 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               // not disposed: pg shares the template's attribute buffers, disposing it would drop them on the GPU
             }
           }
-          figs.push({ letter: p.letter, partMeshes, collision: answer?.model?.collision ?? null, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
+          figs.push({ letter: p.letter, partMeshes, heightM, scale: realOn ? pairFigureScale(heightM) : 1,
+            pivot: pairPivotOf(clip.file.pair_pivot_cm ?? null), heightOffset: 0, planted: [], poser: null, collision: answer?.model?.collision ?? null, character: a.character, role: a.role, place: p, root, inst, mixer, path: clip.path,
             duration: clip.raw.duration, hips, hipsBind: { x: hb.x, y: hb.y, z: hb.z }, bindInv, runtime, hasRecord,
             saved: { shiftCm: o?.shift_cm ?? null, heightOffsetsCm: clip.file.height_offsets_cm ?? null,
               roleTurnDeg: o?.role_turn_deg ?? {} },
@@ -1061,6 +1101,42 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         if (!figs.length) {
           setStatus(!assigned.length || clipFiles.size ? t('Pick a character for a place.') : t('No clip file for this kind in shared/models/clips.'))
         } else setStatus('')
+        // ── Owner decision 2026-11-25 ("Real heights"): the vertical size compensation of the clip's stored contact
+        // heights for the cast's scales (scene-render `pairHeight.ts`); every figure's offset and held legs. ──
+        let heightSolve: PairHeightSolve | null = null
+        if (realOn && figs.length > 1) {
+          const contacts = pairContactHeightsOf([...clipFiles.values()][0]?.file.pair_contact_heights ?? null)
+          const scaleOfRole = new Map(figs.map((f) => [f.role, f.scale]))
+          if (contacts.length) heightSolve = pairHeightOffsets(contacts, (r) => scaleOfRole.get(r) ?? 1)
+          for (const f of figs) {
+            f.heightOffset = heightSolve?.offsets[f.role] ?? 0
+            f.planted = heightSolve?.planted[f.role] ?? []
+            const rig = f.heightOffset !== 0 ? pairHeightRigOf(f.inst) : null
+            f.poser = rig ? pairHeightPoser(THREE, rig) : null
+          }
+          const mm = (v: number) => Math.round(v * 10000) / 10
+          host.dataset.realHeights = JSON.stringify({ stored: contacts.length,
+            figures: figs.map((f) => ({ letter: f.letter, character: f.character, role: f.role, heightM: f.heightM, scale: f.scale,
+              offsetMm: mm(f.heightOffset), stance: heightSolve?.ranges[f.role]?.stance ?? null,
+              rangeMm: heightSolve?.ranges[f.role] ? [mm(heightSolve.ranges[f.role].down), mm(heightSolve.ranges[f.role].up)] : null })),
+            gapsMm: Object.fromEntries(Object.entries(heightSolve?.gaps ?? {}).map(([k, v]) => [k, mm(v)])),
+            residualsMm: Object.fromEntries(Object.entries(heightSolve?.residuals ?? {}).map(([k, v]) => [k, mm(v)])) })
+          setHeightNote(heightSolve ? figs.filter((f) => f.heightOffset !== 0).map((f) =>
+            `${f.letter} ${f.heightOffset > 0 ? '+' : ''}${(f.heightOffset * 1000).toFixed(0)} mm`).join(' · ')
+            + Object.entries(heightSolve.residuals).filter(([, v]) => Math.abs(v) >= 0.0005).map(([k, v]) =>
+              ` · ${t('{rel} remains {mm} mm').replace('{rel}', k).replace('{mm}', (v * 1000).toFixed(0))}`).join('')
+            : contacts.length ? '' : t('no contact heights stored for this clip — nothing is compensated vertically'))
+        } else {
+          delete host.dataset.realHeights
+          setHeightNote('')
+        }
+        /** "Real heights": the vertical offset of the figure's hips with the planted legs held — after the clip pose and
+         *  the root, before phase B (the game's `Figure.update` order). Nothing when off or 0. */
+        const poseHeight = (f: Fig) => {
+          if (!f.poser) return
+          f.root.updateMatrixWorld(true)
+          f.poser(f.heightOffset, f.planted)
+        }
 
         const camera = new THREE.PerspectiveCamera(35, width / height, 0.05, 100)
         camera.position.set(0.4, 1.7, 3.6)
@@ -1201,8 +1277,16 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const fixQ = new THREE.Quaternion()
         const placeRoot = (f: Fig, time: number, draft: AlignmentDraft) => {
           const cal = clipCalibration(draft, savedRef.current[f.role] ?? f.saved, f.placeYaw, f.place.marker.group)
-          const at = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
+          const at0 = calibratedRoot(cal, { anchor: f.anchor, role: f.role, hips: rootAt(f.path, time), inPlace: solo,
             hipsBind: f.hipsBind, standRefM })
+          // "Real heights" (scene-render `pairScale.ts`): the root path scaled by the figure's own a about the clip's
+          // contact pivot C (stage: x = ax + px·cos + pz·sin, z = az − px·sin + pz·cos), before the role turn — the game's order.
+          let at = at0
+          if (f.scale !== 1) {
+            const c = Math.cos(f.placeYaw), s = Math.sin(f.placeYaw)
+            const cx = f.anchor.x + f.pivot.x * c + f.pivot.z * s, cz = f.anchor.z - f.pivot.x * s + f.pivot.z * c
+            at = { ...at0, x: cx + f.scale * (at0.x - cx), z: cz + f.scale * (at0.z - cz) }
+          }
           f.root.position.set(at.x, at.y, at.z)
           f.root.rotation.set(cal.euler[0], cal.euler[1], cal.euler[2], 'YXZ')
           const pivot = fixPivot([at.x, at.y, at.z], cal.frame, [f.hipsBind.x, f.hipsBind.y, f.hipsBind.z])
@@ -1440,6 +1524,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             // phase A: the pose, then the root by the calibration (draft over saved, the bake's order)
             f.mixer.setTime(time)
             placeRoot(f, time, draft)
+            poseHeight(f)
             f.runtime.poseStep({ realDelta: dt })
           }
           // Ruling A212: the entering figure(s) see-through, the attached part opaque.
@@ -1576,6 +1661,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           for (const f of figs) {
             f.mixer.setTime(time)
             placed.set(f, placeRoot(f, time, draft))
+            poseHeight(f)
             f.runtime.poseStep({ realDelta: step })
           }
           return placePhaseB(entries, frameState, inspect, { isolated, afterSecondary })
@@ -1597,6 +1683,52 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const relLabel = (h: Hit) => `${figs[h.e].letter} → ${figs[h.r].letter} (${targetWordOf(t, h.target)})`
         /** A relation's key in "Align all" (part role > receiving role : target) — the per-row mover choice. */
         const relKey = (h: Hit) => `${figs[h.e].role}>${figs[h.r].role}:${h.target}`
+        // ── Owner decision 2026-11-25 (scene-render `pairHeight.ts`): THE CONTACT HEIGHTS of an arrangement — per relation
+        // its deepest key frame (`keyFrames`, over one loop at 60 fps, isolated like Auto-align's passes), there the
+        // target point's height above the stage floor and both roles' hips and leg joints (`pairRolePoseCm`), all at
+        // 1.70 m. The vertical size compensation of both renderers reads them. ──
+        const heightRigs = new Map<Fig, ReturnType<typeof pairHeightRigOf>>()
+        const stagePoint = (o: Object3D): [number, number, number] => {
+          o.getWorldPosition(scratch).applyMatrix4(stageInv)
+          return [scratch.x, scratch.y, scratch.z]
+        }
+        const rolePoseOf = (f: Fig) => {
+          if (!heightRigs.has(f)) heightRigs.set(f, pairHeightRigOf(f.inst))
+          const rig = heightRigs.get(f)
+          if (!rig) return null
+          const legs = rig.legs.every(Boolean)
+            ? rig.legs.map((l) => ({ hip: stagePoint(l!.upper), knee: stagePoint(l!.lower), ankle: stagePoint(l!.foot) })) : []
+          return pairRolePoseCm(stagePoint(rig.hips), legs, f.place.marker.y_world)
+        }
+        const measureContactHeights = (draft: AlignmentDraft, hitsNow: readonly Hit[]): Record<string, PairContactWire> | null => {
+          if (solo || figs.length < 2 || !hitsNow.length || figs.some((f) => f.scale !== 1)) return null
+          const loop = Math.max(8, Math.ceil(duration / step))
+          const per = hitsNow.map(() => [] as AlignSample[])
+          for (const f of figs) f.runtime.reset()
+          for (let i = 0; i < 2 * loop; i++) {
+            const time = (i % loop) * step % duration
+            const res = runAt(time, draft, i >= loop, true)
+            if (!res || i < loop) continue
+            hitsNow.forEach((hit, j) => {
+              const pl = placed.get(figs[hit.e])
+              const s = pl ? sampleAt(res, hit, pl) : null
+              if (s) per[j].push({ ...s, phase: duration > 0 ? time / duration : 0 })
+            })
+          }
+          const out: Record<string, PairContactWire> = {}
+          hitsNow.forEach((hit, j) => {
+            const k = keyFrames(per[j])
+            if (!k) return
+            const deep = per[j][k.deep]
+            runAt((deep.phase ?? 0) * duration, draft, false)
+            const a = rolePoseOf(figs[hit.e]), b = rolePoseOf(figs[hit.r])
+            if (!a || !b) return
+            out[relKey(hit)] = { height_cm: Math.max(0, Math.min(300, Math.round(deep.o[1] * 1000) / 10)),
+              roles: { [figs[hit.e].role]: a, [figs[hit.r].role]: b } }
+          })
+          for (const f of figs) f.runtime.reset()
+          return Object.keys(out).length ? out : null
+        }
         const stageCaps = (insp: NonNullable<NonNullable<ReturnType<typeof placePhaseB>>['figures'][number]['inspection']>): ClearCapsule[] =>
           contactCapsules(insp).map((c) => ({ id: c.id, a: toStageP(c.now.a), b: toStageP(c.now.b), r: c.now.r }))
         const autoAlign = (opts: AutoAlignOptions = {}): AutoAlignResult => {
@@ -2136,11 +2268,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // The pivot in the clip frame of the receiving figure's place anchor (every role of a clip shares it).
           const recv = figs[hits[0].r]
           const pivotCm = pairPivotCm(pivotRels, recv.anchor, recv.placeYaw)
+          // Owner decision 2026-11-25: every relation's contact height in the arrangement the run leaves.
+          const contactHeights = measureContactHeights(cur0, all)
           const rootAngle = moverRows.find((m) => m.applied && m.rootAngle)?.rootAngle ?? null
           // The other contacts whose part the one root angle turns as well (only a one-relation click can surprise there).
           const rootShared = only && rootAngle ? all.filter((h) => !hits.includes(h) && rootTurns(figs[h.e].role)).map(relLabel) : []
           return { ok: true, ...rows[0], relations: rows, roleShiftCm, roleTurnDeg, movers: moverRows, rootAngle, rootShared, pivotCm,
-            applied: moverRows.some((m) => m.applied) }
+            contactHeights, applied: moverRows.some((m) => m.applied) }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {
@@ -2160,6 +2294,13 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const noPlaceRun = autoAlignOut.current?.current
         if (autoAlignOut.current && scene?.for.startsWith(`${kind}|`) && !(figs.length === 0 && noPlaceRun?.noPlace && noPlaceRun.kind === kind && (noPlaceRun.set ?? '') === (set ?? '')))
           autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose,
+            contactHeights: () => {
+              const probe = solo || figs.length < 2 ? null : runAt(timeRef.current, draftRef.current, true)
+              const found = probe ? findHits(probe, draftRef.current.contactRelations ?? []) : []
+              const out = measureContactHeights(draftRef.current, found)
+              runAt(timeRef.current, draftRef.current, false)
+              return out
+            },
             cast: castOf(assignRef.current) })
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
         tick()
@@ -2174,7 +2315,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
       disposers.forEach((d) => d())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, assignKey, kind, set, bust, height, yawOffset, t])
+  }, [scene, assignKey, kind, set, bust, height, yawOffset, t, realHeights])
 
   const nAssigned = assigned.length
   const typeLabel = (ty: string) => TYPE_LABEL[ty] ? t(TYPE_LABEL[ty]) : ty
@@ -2293,6 +2434,14 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
               <button key={k} type="button" className="ga-btn ga-btn-sm" data-testid={`place-toggle-${k}`} aria-pressed={show[k]}
                 aria-label={label} title={`${label} — ${tip}`} onClick={() => toggleShow(k)}>{glyph}</button>
             ))}
+            {!solo && onRealHeights ? (
+              <button type="button" className="ga-btn ga-btn-sm" data-testid="place-toggle-realHeights" aria-pressed={realHeights}
+                title={t('Shows the cast at their profile heights with the size compensation the game applies: each root path scaled about the contact pivot, and the vertical gap of every stored contact height closed by the hips (knees bent, or a kneeling figure raised). Off: every figure at 1.70 m, the data Auto-align measures and Save stores — both are off while this is on.')}
+                onClick={() => onRealHeights(!realHeights)}>{t('Real heights')}</button>
+            ) : null}
+            {realHeights && !solo && heightNote ? (
+              <span className="ga-hint" data-testid="place-real-heights-note" style={{ fontSize: 11, alignSelf: 'center' }}>{heightNote}</span>
+            ) : null}
           </div>
           <div ref={hostRef} data-testid="place-preview" style={{ position: 'relative', height, background: 'var(--surface-2, #161b22)' }}>
             {status ? <div style={{ position: 'absolute', inset: 8, fontSize: 12, opacity: 0.8 }}>{status}</div> : null}

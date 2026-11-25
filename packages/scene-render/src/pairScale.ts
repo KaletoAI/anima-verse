@@ -32,10 +32,9 @@
  *
  * THE VERTICAL. Figures stand on their ground/surface and their hips height already scales per rig, so only the
  * HORIZONTAL components scale about C. The vertical mismatch of two bodies of different size cannot be removed by
- * placement: a contact at height d above the floor in the 1.70 m clip sits at a_A·d on A and a_B·d on B, a residual of
- * (a_B − a_A)·d. For 1.60 m and 1.85 m (a = 0.941176 / 1.088235, Δa = 0.147059) on a standing clip with the contact at
- * hip height (d ≈ 0.53 × 1.70 m = 0.90 m) that is 0.147059 × 0.90 = 0.132 m — 13.2 cm, left to the root angle and the
- * chain bend (which only reach a few centimetres of it on a short part).
+ * placement: a contact at height d above the floor in the 1.70 m clip sits at a_A·d on A and a_B·d on B, a gap of
+ * (a_B − a_A)·d (1.60 m and 1.85 m at hip height d ≈ 0.90 m: 13.2 cm). `pairHeight.ts` closes it with a constant hips
+ * offset per figure and clip (knees bent, a kneeling figure raised) from the clip's stored contact heights.
  *
  * THE OTHER STORED VALUES. Partner B's tilt/roll/yaw are angles and stay as stored; their pivot (`pairFit.fixPivot`)
  * is B's scaled root plus its own bind hips, a length of B's real body — so the turn follows the rule by itself. The

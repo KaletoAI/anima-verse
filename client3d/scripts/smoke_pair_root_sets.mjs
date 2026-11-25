@@ -71,11 +71,12 @@ const ok = (label) => { n++; console.log('  ok', label); };
 
 // ── B) the game placement by figure size ──
 function place(height) {
-  const lib = {pairRootAt: () => ({x: 0.3, z: 0.1, pivot: {x: 0.12, z: 0.30}})};
+  // no stored contact heights: the vertical compensation (pairHeight.ts) computes nothing here
+  const lib = {pairRootAt: () => ({x: 0.3, z: 0.1, pivot: {x: 0.12, z: 0.30}}), pairContactsOf: () => []};
   const figure = {
     playPair: () => true, holdsTravel: false, takeTravel: () => {},
     faceTowards: () => {}, setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
-    pairHipsBind: [0, 0.9, 0], roleTurnDeg: () => [0, 0, 0],
+    pairHipsBind: [0, 0.9, 0], roleTurnDeg: () => [0, 0, 0], setPairHeight: () => {},
     ...(height === undefined ? {} : {height}),
   };
   const mgr = new m.NpcManager(lib, {

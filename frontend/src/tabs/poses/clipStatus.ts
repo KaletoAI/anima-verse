@@ -45,18 +45,21 @@ export function finaleKinds(poses: FinalePose[], kind: string, target: Pick<ApiC
 }
 
 /** What one Save will do, in order. */
-export type SaveStep = 'bake' | 'shift' | 'heights' | 'root' | 'pivot' | 'finales' | 'check' | 'clear-check'
+export type SaveStep = 'bake' | 'shift' | 'heights' | 'root' | 'pivot' | 'contact' | 'finales' | 'check' | 'clear-check'
 
 export function saveSteps(s: { bake: boolean; shift: boolean; heights: boolean; finales: number;
   greenCheck: boolean; savedCheck: boolean
   /** The clip's root angle and its contact pivot (PATCH, never carried to the finales). */
-  root?: boolean; pivot?: boolean }): SaveStep[] {
+  root?: boolean; pivot?: boolean
+  /** Owner decision 2026-11-25: the contact heights Auto-align measured (PATCH `pair_contact_heights`). */
+  contact?: boolean }): SaveStep[] {
   const out: SaveStep[] = []
   if (s.bake) out.push('bake')
   if (s.shift) out.push('shift')
   if (s.heights) out.push('heights')
   if (s.root) out.push('root')
   if (s.pivot) out.push('pivot')
+  if (s.contact) out.push('contact')
   if ((s.bake || s.shift || s.heights) && s.finales) out.push('finales')
   if (s.greenCheck) out.push('check')
   // The server clears the old check on every orient write that does not carry a new one (D3).
@@ -66,7 +69,7 @@ export function saveSteps(s: { bake: boolean; shift: boolean; heights: boolean; 
 
 /** One request of a Save: the orient write (bake/shift/check), the heights / root-angle / contact-pivot PATCH, or a
  *  check alone. */
-export type SaveWrite = 'orient' | 'heights' | 'root' | 'pivot' | 'check' | 'status'
+export type SaveWrite = 'orient' | 'heights' | 'root' | 'pivot' | 'contact' | 'check' | 'status'
 
 /** Runs a Save's requests in order and stops at the first failure. `applied` names every request that went
  *  through — the caller clears exactly those drafts, whatever failed after them: the orient write is a DELTA

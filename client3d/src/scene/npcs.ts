@@ -18,7 +18,7 @@ import type { PhotoSubject } from '@anima/hud/game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, roleTurnFix, findContact, contactSampleOf,
-  type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot } from '@anima/scene-render';
+  type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot, pairHeightOffsets } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -269,6 +269,11 @@ export interface PairPlay {
   /** every character of the interaction, this figure included (`MapInteraction.members`) —
    *  the partners a figure reads first (two-phase frame, `planPartnerFrame`) */
   members: string[];
+  /** every role → its character (`MapInteraction.members`) — the heights the vertical size compensation reads */
+  roles: Record<string, string>;
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the solved hips offset of this figure for the clip and
+   *  the heights it was solved for (`key`); recomputed only when the clip or a member's height changes. */
+  height?: { key: string; offset: number; planted: boolean[] };
   /** `<kind>__<role>` — the clip half this figure plays; `<kind>__<role>~<alt>`
    *  when the server names an ALT half (G6) */
   clip: string;
@@ -1452,7 +1457,8 @@ export class NpcManager {
         at: performance.now(),
       };
       npc.interaction = {
-        blend, id: it.id, sceneId: it.scene_id || it.id, kind: it.kind, members: Object.values(it.members ?? {}), clip, base,
+        blend, id: it.id, sceneId: it.scene_id || it.id, kind: it.kind, members: Object.values(it.members ?? {}),
+        roles: { ...(it.members ?? {}) }, clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, tempo, stamp,
         clipT: pairClipPhase({ clipS: it.clip_s ?? null, tempo, frozen: rate <= 0, loop, loopCount,
@@ -1470,6 +1476,7 @@ export class NpcManager {
     cur.sceneId = it.scene_id || it.id;
     cur.kind = it.kind;
     cur.members = Object.values(it.members ?? {});
+    cur.roles = { ...(it.members ?? {}) };
     cur.rate = it.rate ?? 0;
     cur.tempo = clipTempo(it.tempo);
     cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null };
@@ -1565,6 +1572,10 @@ export class NpcManager {
     // Apply the eased yaw exactly; the ordinary standing yaw ease would lag behind it.
     npc.figure.faceTowards(new THREE.Vector3(Math.sin(shown.yaw), 0, Math.cos(shown.yaw)), true);
     this.applyPairFix(npc, it.base, shown.yaw, it.id);
+    // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the vertical size compensation — this figure's
+    // constant hips offset for the clip, applied in `figure.update` after the clip pose and before phase B.
+    const height = this.pairHeightOf(npc, clip);
+    npc.figure.setPairHeight(clip, height.offset, height.planted);
     if (age >= BLEND_S) it.blend = undefined;
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;
@@ -1585,6 +1596,30 @@ export class NpcManager {
     const role = base.slice(base.lastIndexOf('__') + 2);
     const [tilt, roll, ownYaw] = fig.roleTurnDeg(role);
     return { fix: roleTurnFix(tilt, roll, frame, ownYaw), pivot };
+  }
+
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the hips offset of `npc` while it plays pair half
+   *  `clip` — solved over the clip's stored contact heights (`pair_contact_heights`) for the members' real heights
+   *  (a = h / 1.70); 0 without stored heights, with a member whose figure (and so its height) is not loaded yet, or
+   *  for equal heights. Cached on the interaction per clip and heights. */
+  private pairHeightOf(npc: Npc, clip: string): { offset: number; planted: boolean[] } {
+    const it = npc.interaction!;
+    const none = { offset: 0, planted: [] as boolean[] };
+    const role = /__([a-e])(?:~|$)/.exec(clip)?.[1];
+    const contacts = role && this.figures ? this.figures.pairContactsOf(clip, npc.name) : [];
+    if (!role || !contacts.length) { it.height = undefined; return none; }
+    const heights: Record<string, number> = {};
+    for (const [r, name] of Object.entries(it.roles)) {
+      const h = name === npc.name ? npc.figure?.height : this.npcs.get(name)?.figure?.height;
+      if (!(typeof h === 'number' && h > 0)) { it.height = undefined; return none; }
+      heights[r] = h;
+    }
+    const key = `${clip}|${Object.entries(heights).sort().map(([r, h]) => `${r}:${h}`).join(',')}`;
+    if (it.height?.key !== key) {
+      const solve = pairHeightOffsets(contacts, (r) => pairFigureScale(heights[r]));
+      it.height = { key, offset: solve.offsets[role] ?? 0, planted: solve.planted[role] ?? [] };
+    }
+    return it.height;
   }
 
   private applyPairFix(npc: Npc, base: string, yaw: number, interactionId: string): void {

@@ -21,11 +21,12 @@ import {
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
   prepareSheerPieces, prepareGlossyPieces, prepareFigureTextures, pairFigureScale, pairPivotOf, scalePairShift,
+  pairContactHeightsOf, pairHeightRigOf, pairHeightPoser,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
   ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle,
-  PairXZ } from '@anima/scene-render';
+  PairXZ, PairContactHeight } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import { getMaxAnisotropy, getModelEnvironment } from './glbMaterials';
@@ -104,6 +105,12 @@ export function setClipRootAngle(clip: THREE.AnimationClip, wire: unknown): void
 const clipPairPivots = new WeakMap<THREE.AnimationClip, PairXZ>();
 export function setClipPairPivot(clip: THREE.AnimationClip, wire: unknown): void {
   clipPairPivots.set(clip, pairPivotOf(Array.isArray(wire) ? wire : null));
+}
+/** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): a pair/group clip's contact heights per relation
+ *  (`pair_contact_heights` of the listing; none = no vertical compensation). */
+const clipPairContacts = new WeakMap<THREE.AnimationClip, PairContactHeight[]>();
+export function setClipPairContactHeights(clip: THREE.AnimationClip, wire: unknown): void {
+  clipPairContacts.set(clip, pairContactHeightsOf(wire));
 }
 /** The bend limits of a played clip (the core default when the listing names none). */
 export function clipBendLimitsOf(clip: THREE.AnimationClip | null | undefined): BendLimits {
@@ -919,9 +926,10 @@ export function extractRootPath(clip: THREE.AnimationClip): RootPath {
 }
 
 /** A pair/group half's root as the library keeps it: its horizontal root path and the clip's contact pivot. */
-export interface PairRoot { path: RootPath; pivot: PairXZ }
+export interface PairRoot { path: RootPath; pivot: PairXZ; contacts: PairContactHeight[] }
 function pairRootOf(clip: THREE.AnimationClip): PairRoot {
-  return { path: extractRootPath(clip), pivot: clipPairPivots.get(clip) ?? pairPivotOf(null) };
+  return { path: extractRootPath(clip), pivot: clipPairPivots.get(clip) ?? pairPivotOf(null),
+    contacts: clipPairContacts.get(clip) ?? [] };
 }
 
 type ClipKind = string;   // open vocabulary — the server decides the kinds
@@ -1132,7 +1140,7 @@ export class FigureLibrary {
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
                              roleTurns?: Record<string, number[]> | null; contacts?: ContactRelation[] | null;
-                             bend?: unknown; rootAngle?: unknown; pivot?: unknown }> =
+                             bend?: unknown; rootAngle?: unknown; pivot?: unknown; contactHeights?: unknown }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1145,6 +1153,7 @@ export class FigureLibrary {
           bend: c.bend_limits?.limits,
           rootAngle: c.root_angle,
           pivot: c.pair_pivot_cm,
+          contactHeights: c.pair_contact_heights,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1205,6 +1214,7 @@ export class FigureLibrary {
           setClipBendLimits(clip, source.bend);
           setClipRootAngle(clip, source.rootAngle);
           setClipPairPivot(clip, source.pivot);
+          setClipPairContactHeights(clip, source.contactHeights);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1286,6 +1296,7 @@ export class FigureLibrary {
               setClipBendLimits(clip, source.bend_limits?.limits);
               setClipRootAngle(clip, source.root_angle);
               setClipPairPivot(clip, source.pair_pivot_cm);
+              setClipPairContactHeights(clip, source.pair_contact_heights);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1463,6 +1474,13 @@ export class FigureLibrary {
     const chain = [...((charName && this.charSets.get(charName)) || []), ''];
     const root = pairRootFor(this.pairRoots, clipName, chain);
     return root ? { ...rootPathAt(root.path, t), pivot: root.pivot } : null;
+  }
+
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights of pair half `clipName` in the file
+   *  `charName`'s set chain picks (the sidecar is shared by every half of the kind); [] = none stored. */
+  pairContactsOf(clipName: string, charName?: string): PairContactHeight[] {
+    const chain = [...((charName && this.charSets.get(charName)) || []), ''];
+    return pairRootFor(this.pairRoots, clipName, chain)?.contacts ?? [];
   }
 
   /** Remember a character's set fallback chain (from /play/worldmap). */
@@ -2288,6 +2306,12 @@ export class Figure {
   /** What `clipShift` is multiplied by: the figure's scale a = height / 1.70 while a pair/group half plays (its shift is
    *  a length of the 1.70 m arrangement, scene-render `pairScale.ts`), 1 otherwise (a solo shift is absolute). */
   private clipShiftScale = 1;
+  /** Owner decision 2026-11-25: the pair half's vertical size compensation (`setPairHeight`); null = none. */
+  private pairHeight: { action: THREE.AnimationAction; offset: number; planted: boolean[] } | null = null;
+  /** The poser of the bones it moves (`pairHeightRigOf` / `pairHeightPoser`), made once; null = no hips. */
+  private pairHeightPose: ((offsetM: number, planted: readonly boolean[]) => void) | null | undefined = undefined;
+  /** The offset applied this frame (metres). */
+  private pairHeightNow = 0;
   /** The model's foot pose (`LoadedModel.footPose`): its root lift rides the
    *  clip height term of the ground group (`setClipHeight`), so it fades with
    *  the group like the listing's offsets do; seat and lie get 0. */
@@ -3056,6 +3080,41 @@ export class Figure {
    *  PAIR_RESYNC_S from `t`, so a poll never makes the figure stutter.
    *  Returns false when the half is not bound on this rig — the caller then
    *  falls back to a solo clip. */
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the constant vertical offset (metres, + = up) this
+   *  figure's hips take while pair half `clipName` plays, with the legs the IK holds ([left, right]); 0 = none. Set by
+   *  the interaction every frame; applied in `update` by the half's weight, so it fades with the clip transition. */
+  setPairHeight(clipName: string, offsetM: number, planted: readonly boolean[]): void {
+    const action = this.actions.get(clipName) ?? null;
+    if (!action || !(offsetM !== 0 && Number.isFinite(offsetM))) {
+      if (this.pairHeight && this.pairHeight.action === action) this.pairHeight = null;
+      return;
+    }
+    this.pairHeight = { action, offset: offsetM, planted: [...planted] };
+  }
+
+  /** The offset of the pair half as shown this frame (offset × the action's weight; 0 = none) — the check reads it. */
+  get pairHeightShown(): number { return this.pairHeightNow; }
+
+  private applyPairHeightStep(): void {
+    this.pairHeightNow = 0;
+    const ph = this.pairHeight;
+    const w = ph && ph.action.enabled ? ph.action.getEffectiveWeight() : 0;
+    if (ph && !(w > 1e-4) && this.current !== ph.action) this.pairHeight = null;
+    if (!ph || !(w > 1e-4)) {
+      // puts back hips a former offset left where no clip writes them (nothing when none was applied)
+      this.pairHeightPose?.(0, []);
+      return;
+    }
+    if (this.pairHeightPose === undefined) {
+      const rig = pairHeightRigOf(this.root);
+      this.pairHeightPose = rig ? pairHeightPoser(THREE, rig) : null;
+    }
+    if (!this.pairHeightPose) return;
+    this.root.updateMatrixWorld(true);
+    this.pairHeightNow = ph.offset * w;
+    this.pairHeightPose(this.pairHeightNow, ph.planted);
+  }
+
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
@@ -3339,6 +3398,10 @@ export class Figure {
     if (this.heightGroup === 'seat' && this.footPose && this.floorY !== null) {
       seatFootLift(THREE, this.root, this.footPose, this.floorY);
     }
+    // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the pair clip's vertical size compensation — the hips
+    // by the constant offset, the planted legs held by the leg IK — after the whole clip pose and before phase B, by
+    // the pair action's own weight (its fade in/out is the transition). Nothing at all for an offset of 0.
+    this.applyPairHeightStep();
     // Final anchors now include mixer pose, bridge travel, turn and lift. The engine clamps its animation
     // delta; secondary motion uses real time. Phase B's share is recorded by the runtime: the strands and the
     // secondary motion step in `updateSecondary`, once every figure has posed.

@@ -915,10 +915,42 @@ public partial class FigureManager : Node3D
         fig.Position = new Vector3((float)shown.X, (float)shown.Y, (float)shown.Z);
         fig.FaceTowards(new Vector3((float)Math.Sin(shown.Yaw), 0, (float)Math.Cos(shown.Yaw)), snap: true);
         ApplyRoleTurn(fig, clip, shown.Yaw);
+        // Owner decision 2026-11-25 (scene-render pairHeight.ts): the vertical size compensation of the half.
+        var height = PairHeightOf(fig, it, clip);
+        fig.SetPairHeight(clip, height.Offset, height.Planted);
         if (age >= PairBlend.BlendS) it.Blend = null;
         fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
         fig.UpdateFigure(restart ? 0 : dt);
         return true;
+    }
+
+    /// <summary>
+    /// npcs.ts <c>pairHeightOf</c>: the hips offset of <paramref name="fig"/> while it plays pair half <paramref name="clip"/> —
+    /// solved over the clip's stored contact heights for the members' real heights (a = h / 1.70); 0 without stored
+    /// heights, with a member whose figure (and so its height) is not here yet, or for equal heights. Cached on the play.
+    /// </summary>
+    private (double Offset, bool[] Planted) PairHeightOf(Figure fig, PairPlay it, string clip)
+    {
+        var none = (0.0, Array.Empty<bool>());
+        var m = System.Text.RegularExpressions.Regex.Match(clip, "__([a-e])(?:~|$)");
+        var contacts = m.Success ? Clips.ContactHeightsFor(clip, fig.Sets) : Array.Empty<PairContactHeight>();
+        if (!m.Success || contacts.Count == 0) { it.Height = null; return none; }
+        var heights = new SortedDictionary<string, double>(StringComparer.Ordinal);
+        foreach (var (role, name) in it.Roles)
+        {
+            double h = name == fig.CharacterName ? fig.BodyHeight : _figures.TryGetValue(name, out var other) ? other.BodyHeight : 0;
+            if (!(h > 0 && double.IsFinite(h))) { it.Height = null; return none; }
+            heights[role] = h;
+        }
+        var key = clip + "|" + string.Join(",", heights.Select(kv => $"{kv.Key}:{kv.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
+        if (it.Height is not { } cached || cached.Key != key)
+        {
+            var solve = PairHeight.Offsets(contacts, r => PairScale.FigureScale(heights.TryGetValue(r, out var h) ? h : null));
+            string own = m.Groups[1].Value;
+            it.Height = (key, solve.Offsets.TryGetValue(own, out var o) ? o : 0,
+                         solve.Planted.TryGetValue(own, out var p) ? p : Array.Empty<bool>());
+        }
+        return (it.Height.Value.Offset, it.Height.Value.Planted);
     }
 
     /// <summary>

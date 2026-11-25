@@ -13,6 +13,8 @@ export interface ClipSource {
   rootAngle?: unknown;
   /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the pair clip's contact pivot as listed (`pair_pivot_cm`). */
   pivot?: unknown;
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the pair clip's contact heights as listed (`pair_contact_heights`). */
+  contactHeights?: unknown;
 }
 export interface ClipResult<C> { clip: C | null }
 export interface CommitOps<C> {
