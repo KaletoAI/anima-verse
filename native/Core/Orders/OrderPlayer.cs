@@ -112,6 +112,12 @@ public sealed class OrderPlayer
     /// </summary>
     public int WalkFailures => _walk is { } w ? w.StuckCount + w.Blockades : 0;
 
+    /// <summary>
+    /// The current walk stands at a link whose ride is requested (the answer is still out) or running
+    /// (<see cref="OrderWalk.Riding"/>); the avatar's click walk holds input and position corrections meanwhile.
+    /// </summary>
+    public bool WalkRiding => _walk is { Riding: true };
+
     /// <summary>The reason of the last refusal.</summary>
     public string? RefusalReason { get; private set; }
 

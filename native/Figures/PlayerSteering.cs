@@ -21,8 +21,9 @@ namespace AnimaNative.Embody;
 /// (<see cref="FigureManager.StartClickWalk"/>) the avatar's order player walks over the click planner's path
 /// (<see cref="ClickWalkPath"/>; stairs and lift links ride through <see cref="FigureManager.AvatarLinkRide"/>); every
 /// key step there is clamped to the mesh (<see cref="NavClamp"/>). Outside every navigation the straight walk of today
-/// stays (<see cref="ClickMove"/>, its gates and its 20-frame stall). A walk key ends the click's order
-/// (<c>Refuse("input")</c>, no turn-away). Checks: --check nav A0–A8.
+/// stays (<see cref="ClickMove"/>, its gates and its 20-frame stall), and it takes the rest of a click out of the building
+/// at the outside door's point. A walk key ends the click's order (<c>Refuse("input")</c>, no turn-away) — except during
+/// a link ride of the order (<see cref="LinkRiding"/>), which holds keys and clicks. Checks: --check nav A0–A8.
 /// </summary>
 public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
 {
@@ -44,11 +45,27 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// The click walk's end goal, in both modes (the straight target, or the planned goal of the click's walk order while
     /// that order is played).
     /// </summary>
-    public P2? Route => _walkOrder is not null ? WalkOrderId is not null ? _orderGoal : null : _straightGoal;
+    public P2? Route => _walkOrder is not null ? WalkOrderId is not null ? _handoff ?? _orderGoal : null : _straightGoal;
     /// <summary>The click's local walk order while the avatar plays it (plan E3 Task 10); null on a straight walk.</summary>
     public string? WalkOrderId => _walkOrder is { } id && figures.ClickWalkLive(id) ? id : null;
-    /// <summary>The planned goal of the click's walk order (3D) while it is played.</summary>
+    /// <summary>
+    /// The planned goal of the click's walk order (3D) while it is played; for a click out of the building the outside
+    /// door's point where the order hands over to the straight walk (<see cref="Route"/> stays the click).
+    /// </summary>
     public Vec3? WalkGoal => WalkOrderId is not null ? _orderGoal3 : null;
+    /// <summary>
+    /// The click's walk order stands at a stair or lift link whose ride is requested or running
+    /// (<see cref="FigureManager.ClickWalkRiding"/>): keys and clicks are held like during <see cref="VerticalRide"/>.
+    /// </summary>
+    public bool LinkRiding => WalkOrderId is { } id && figures.ClickWalkRiding(id);
+    /// <summary>A vertical move owns the avatar: the E2 offer ride (<see cref="VerticalRide"/>) or a click walk's link ride.</summary>
+    public bool Riding => VerticalRide is not null || LinkRiding;
+    /// <summary>
+    /// How close to the outside door's point the click's walk order must have ended for the straight walk to take the rest
+    /// of a click out of the building: the order's arrival tolerance (<see cref="OrderPlayer.ArriveTolM"/>, 0.15 m) plus the
+    /// straight walk's goal radius (<see cref="ClickMove.GoalArriveM"/>, 0.2 m).
+    /// </summary>
+    public const double HandoffM = OrderPlayer.ArriveTolM + ClickMove.GoalArriveM;
     public int StalledFrames { get; private set; }
     public sealed record OwnedMove(Vector3 Goal, double Until);
     public OwnedMove? VerticalRide { get; set; }
@@ -71,6 +88,9 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     private P2 _orderGoal;
     private Vec3 _orderGoal3;
     private P2? _straightGoal;
+    /// <summary>The click outside the footprint the straight walk takes over at the outside door (null inside).</summary>
+    private P2? _handoff;
+    private Vector3 _handoffMarker;
     private bool _clipOverride, _bridgeHeld, _stoodUp;
     private double _clock, _nextLoadingToast;
     private Figure? Avatar => figures.Figures.GetValueOrDefault(figures.AvatarName);
@@ -97,7 +117,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     public void CancelRoute(string reason = "cancel")
     {
         if (_walkOrder is { } id) figures.EndClickWalk(id,reason);
-        _walkOrder=null; _walkPath=null;
+        _walkOrder=null; _walkPath=null; _handoff=null;
         _straightGoal=null; StalledFrames=0; figures.SetWalkTarget(null);
     }
 
@@ -123,11 +143,15 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// click aimed at (the ground click passes the location's storey view; null = the avatar's own storey). Order: the
     /// locks of today, the refusal discs and gates (<c>Blocked</c>), then — with the footprint's navigation ready — a
     /// navmesh plan; no plan with start AND goal inside the footprint refuses (false), else the straight walk of today.
+    /// A click out of the building (planner case 2) is the walk order to the outside door's point only; from there the
+    /// straight walk takes the rest with its gates (<c>Blocked</c>, the walls, the loading hold, the terrain pace and its
+    /// 20-frame stall), as every E2 route step had them — out in the open the order has no map to hold it.
+    /// No click while a link ride of the click walk runs (<see cref="LinkRiding"/>).
     /// </summary>
     public bool WalkTo(P2 hit, int? level = null)
     {
         if (Active && !MovementLocked && PropActionDriven) { ReleasePropAction?.Invoke(); return false; }
-        if (!Active || MovementLocked || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
+        if (!Active || MovementLocked || Riding || WalkIn is not null || PendingSnap || Avatar is not { } f)
         { if (PendingSnap) ToastLoading(); return false; }
         var pos=new P2(f.Position.X,f.Position.Z);
         var mine=world.FootprintAt(pos.X,pos.Z);
@@ -139,8 +163,14 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             if (PlanNav(nav,mine,from,to) is { } plan)
             {
                 CancelRoute();
-                if (!StartWalkOrder(f,mine,plan.Goal,level)) return false;
-                figures.SetWalkTarget(new((float)plan.Goal.X,(float)plan.Goal.Y,(float)plan.Goal.Z));
+                bool outside=world.FootprintAt(plan.Goal.X,plan.Goal.Z)!=mine;
+                var door=outside ? DoorOf(plan,world.NavOutsideDoors(mine)) : null;
+                var orderGoal=door is { } d ? new Vec3(d.X,world.FigureGroundY(d.X,d.Z),d.Z) : plan.Goal;
+                if (!StartWalkOrder(f,mine,orderGoal,level,door))
+                { GD.Print($"[steer] click walk to ({goal.X:0.##}, {goal.Z:0.##}) not taken by the avatar's order player"); return false; }
+                var marker=new Vector3((float)plan.Goal.X,(float)plan.Goal.Y,(float)plan.Goal.Z);
+                if (door is not null) { _handoff=new P2(plan.Goal.X,plan.Goal.Z); _handoffMarker=marker; }
+                figures.SetWalkTarget(marker);
                 FirstStep.Arm("click_walk",_clock,pos.X,pos.Z);
                 return true;
             }
@@ -174,11 +204,13 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// planned goal, on the click planner's path over the slot's navigation (<see cref="ClickWalkPath"/>, read live: a
     /// rebake swaps the map). True when the avatar took it.
     /// </summary>
-    private bool StartWalkOrder(Figure f, LocationSlot slot, Vec3 goal, int? level)
+    private bool StartWalkOrder(Figure f, LocationSlot slot, Vec3 goal, int? level, P2? door = null)
     {
         double yaw=f.Yaw*180/Math.PI;
         var start=new OrderPoint(f.Position.X,f.Position.Y,f.Position.Z,yaw);
-        var path=new ClickWalkPath(()=>world.NavFor(slot),(x,z)=>world.FootprintAt(x,z)==slot,world.NavOutsideDoors(slot),world.FigureGroundY);
+        // A walk to an outside door's point goes out through that door only (also on a replan): no other door's way.
+        var doors=door is { } only ? new[] { only } : world.NavOutsideDoors(slot);
+        var path=new ClickWalkPath(()=>world.NavFor(slot),(x,z)=>world.FootprintAt(x,z)==slot,doors,world.FigureGroundY);
         int here=slot.Stands.RoomLevels.TryGetValue(RoomId,out var l) ? l : 0;
         var order=LocalOrders.Walk(++_clickWalks,figures.MotionNow,NpcWalk.WalkSpeed,f.CharacterName,start,RoomId,here,
                                    new OrderPoint(goal.X,goal.Y,goal.Z,yaw),slot.Loc.Id,"",level ?? here);
@@ -186,6 +218,25 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         _walkOrder=order.Id; _walkPath=path;
         _orderGoal=new P2(goal.X,goal.Z); _orderGoal3=goal;
         return true;
+    }
+
+    /// <summary>
+    /// The outside door a plan out of the building leaves through (planner case 2: the navmesh path to the door's outer
+    /// point, then straight to the click): the outer point (<see cref="WorldBuilder.NavOutsideDoors"/>) nearest to the
+    /// path's corner before the click, within <see cref="NavRoutePlanner.UnreachableM"/> of it like the planner's own
+    /// reach rule. Null when the plan does not end in a walk of at least two corners or no door is that close.
+    /// </summary>
+    private static P2? DoorOf(NavPlan plan, IReadOnlyList<P2> doors)
+    {
+        if (plan.Steps.Count == 0 || plan.Steps[^1] is not NavWalk { Points.Count: >= 2 } last) return null;
+        var end=last.Points[^2];
+        P2? best=null; double bestD=NavRoutePlanner.UnreachableM;
+        foreach (var d in doors)
+        {
+            double dist=double.Hypot(d.X-end.X,d.Z-end.Z);
+            if (dist<=bestD) { best=d; bestD=dist; }
+        }
+        return best;
     }
 
     /// <summary>The planner over the slot's navigation: inside = the slot's own footprint, its outside doors, the ground.</summary>
@@ -267,6 +318,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             if (!Arrived(correction,PositionChannel.CorrectArriveM,false) && _clock<=correction.Until) return;
             Correction=null;
         }
+        // A click walk's link ride (requested or running) owns the avatar like the E2 ride did: keys wait for its end.
+        if (LinkRiding) return;
         var keyDir=Walk.WalkDir(keys,yaw);
         // SHIFT RUNS — only while the keys walk the figure; a click order walks (walk.ts sprintHeld).
         bool sprint=Walk.SprintHeld(keys,keyDir);
@@ -278,14 +331,21 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         double reach=double.PositiveInfinity;
         var from=new P2(pos.X,pos.Z);
         // The click's walk order draws the figure (FigureManager.TickOrder); it is over at its goal, at a refused link
-        // ride or stuck, and when its navigation went away.
+        // ride or stuck, and when its navigation went away. Ended at the outside door's point of a click out of the
+        // building, the straight walk takes the rest (WalkTo).
         bool orderWalking=false;
         if (_walkOrder is not null)
         {
-            if (WalkOrderId is null || _walkPath is not { Ready: true }) CancelRoute();
+            if (WalkOrderId is null || _walkPath is not { Ready: true })
+            {
+                var handoff=WalkOrderId is null && _handoff is { } h && double.Hypot(from.X-_orderGoal.X,from.Z-_orderGoal.Z)<=HandoffM ? h : (P2?)null;
+                var marker=_handoffMarker;
+                CancelRoute();
+                if (handoff is { } rest) { _straightGoal=rest; figures.SetWalkTarget(marker); }
+            }
             else orderWalking=true;
         }
-        else if (dir is null && _straightGoal is { } goal)
+        if (!orderWalking && dir is null && _straightGoal is { } goal)
         {
             if (ClickMove.ReachedGoal(from,goal)) CancelRoute();
             else if (ClickMove.GoalDir(from,goal) is { } to) { dir=new(to.X,to.Z); reach=to.Dist; }

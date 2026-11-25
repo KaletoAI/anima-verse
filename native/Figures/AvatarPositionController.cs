@@ -222,7 +222,7 @@ public sealed class AvatarPositionController : IDisposable
             || FigureGround.PollIsStale(polledAt,OwnStateChangedAt) || _row is not { } row) return;
         if (row.TryGetProperty("travel",out var tr) && tr.ValueKind == JsonValueKind.Object && Channel.Suppressed(Text(tr,"journey_id"))) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
-        if (Seated || InPair || Channel.InFlight || _steering.WalkIn is not null || _steering.VerticalRide is not null
+        if (Seated || InPair || Channel.InFlight || _steering.WalkIn is not null || _steering.Riding
             || _steering.Correction is not null || CurrentPoint() is not { } at || Point(row) is not { } p) return;
         AvatarRoomCorrection? roomCorrection = null;
         if (Avatar is {} body && _world.Slots.TryGetValue(LocationId,out var slot))
@@ -250,7 +250,7 @@ public sealed class AvatarPositionController : IDisposable
     {
         if (Suspended) return;
         using var hitch = AnimaNative.Ui.HitchLog.Time("AvatarPosition.before steering");
-        if (!_active || _figures.HasLiveOrder(_figures.AvatarName) || _steering.VerticalRide is not null || Seated || InPair || _steering.PropActionDriven
+        if (!_active || _figures.HasLiveOrder(_figures.AvatarName) || _steering.Riding || Seated || InPair || _steering.PropActionDriven
             || Channel.Driver.Kind == DriverKind.SERVER || Channel.InFlight
             || _readiness.PendingSnap is not { } snap || !Readiness.TrySnap(_world,snap)) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;

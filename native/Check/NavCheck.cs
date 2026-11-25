@@ -48,8 +48,9 @@ namespace AnimaNative.Check;
 ///
 /// Task 6 lets the avatar walk on it (<see cref="AvatarAsync"/>): A0 the ground click, A1 a click walk through the door T0,
 /// A2/A2b the furniture clamp, A3 a click into furniture, A4 a lock refuses the click, A5/A5b the stair link ride (accepted /
-/// refused), A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge, A8 a click behind the
-/// building ends after its second failure to make progress, across replans (final review E2, I-2). Since plan E3 Task 10
+/// refused), A5c/A5d keys and clicks held during the ride / a walk ended during the request adopts no room, A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge, A8 a click behind the
+/// building: the walk order to T1's outer point, then the straight walk with its gates, which stalls at the armchair (review
+/// E3 Task 10, I-2; the second-failure end of an order walk is covered by OrderWalkTests). Since plan E3 Task 10
 /// every click walk on the navigation is the avatar's local walk order (P1 and P2 are its plans, with the same lengths).
 /// </summary>
 public static class NavCheck
@@ -480,6 +481,7 @@ public static class NavCheck
             hud.SetState("mode", "embodied");
             manager.AvatarLinkRide = rooms.OrderLinkRide;
             const double ClickDt = 1.0 / 60;
+            const double Stairs5Arrive = AnimaNative.Orders.OrderWalk.LinkArriveM;
             var none = new HashSet<string>();
             var w = new HashSet<string> { "w" };
             var s = new HashSet<string> { "s" };
@@ -610,6 +612,60 @@ public static class NavCheck
                    $"{a5} frames, at {Fmt(Pos())}, floor {loftY:0.###}");
             Expect("A5 the room is r-up", steering.RoomId == "r-up", steering.RoomId);
 
+            // ---- A5c the link ride holds keys and clicks (review Task 10, I-1) ----
+            // The order of A5 again; from the frame its ride is requested (OrderWalk.Riding, the answer still out) until the
+            // ride is over, PlayerSteering.LinkRiding holds a walk key and a click like the E2 VerticalRide did: the order
+            // goes on, rides the flight and ends in the loft exactly as in A5. Frames without a yield cannot see the
+            // answer: the fixture's room gate holds the request open for the ten key frames, then lets the answer in.
+            source.SelectRoomScenario("nav-up");
+            source.RoomGate = new TaskCompletionSource();
+            At(97, -1);
+            builder.SetLevel("loc-nav", 0);
+            rooms.Tick();
+            Expect("A5c WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
+            int a5c = 0;
+            for (; a5c < 2400 && steering.WalkOrderId is not null && !steering.LinkRiding; a5c++) Frame(none, ClickDt);
+            var foot5c = Pos();
+            Expect("A5c the order stands at the stair foot with its ride requested", steering.LinkRiding && steering.RoomId == "r-a" && source.RoomRequests.Count == 1
+                   && Horizontal(foot5c, new Vec3(101, 0, -3.3)) <= Stairs5Arrive, $"{a5c} frames, at {Fmt(foot5c)}, room {steering.RoomId}");
+            for (int i = 0; i < 10; i++) Frame(w, ClickDt);
+            Expect("A5c a walk key during the request: the order goes on, the figure holds", steering.WalkOrderId is not null && steering.LinkRiding
+                   && Dist(Pos(), foot5c) <= 1e-4, $"at {Fmt(Pos())} from {Fmt(foot5c)}, order {steering.WalkOrderId}, riding {steering.LinkRiding}, room {steering.RoomId}");
+            Expect("A5c a click during the request is refused", !steering.WalkTo(new P2(97, -1)) && steering.WalkOrderId is not null, "");
+            source.RoomGate.SetResult();
+            source.RoomGate = null;
+            bool keyOnFlight = false;
+            for (; a5c < 4800 && steering.WalkOrderId is not null; a5c++)
+            {
+                // The key held only while the ride runs: after it the order walks on to its goal and a key would end it.
+                bool riding = steering.LinkRiding;
+                Frame(riding ? w : none, ClickDt);
+                if (riding && steering.WalkOrderId is not null && Pos().Y is > 0.2 and < 2.8) keyOnFlight = true;
+                await Task.Yield();
+            }
+            Expect("A5c a walk key on the flight changes nothing", keyOnFlight, "");
+            Expect("A5c stands in the loft at (104, 2), room r-up, one enter-room", steering.WalkOrderId is null && Horizontal(Pos(), Loft) <= Tol
+                   && steering.RoomId == "r-up" && source.RoomRequests.SequenceEqual(new[] { "r-up" }), $"{a5c} frames, at {Fmt(Pos())}, room {steering.RoomId}");
+
+            // ---- A5d a walk ended during the request keeps the room (review Task 10, I-1) ----
+            // The answer that comes after the walk ended (a correction, the end of embodiment) adopts nothing: the figure
+            // stands at the stair foot of storey 0, so the room stays r-a (EnterLinkRoomAsync's liveness check).
+            source.SelectRoomScenario("nav-up");
+            var gate5d = source.RoomGate = new TaskCompletionSource();
+            At(97, -1);
+            builder.SetLevel("loc-nav", 0);
+            rooms.Tick();
+            Expect("A5d WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
+            for (int i = 0; i < 2400 && steering.WalkOrderId is not null && !steering.LinkRiding; i++) Frame(none, ClickDt);
+            Expect("A5d the ride is requested", steering.LinkRiding && steering.RoomId == "r-a", steering.RoomId);
+            steering.CancelRoute();
+            gate5d.SetResult();
+            source.RoomGate = null;
+            for (int i = 0; i < 30; i++) { Frame(none, ClickDt); await Task.Yield(); }
+            Expect("A5d one enter-room r-up answered, the room stays r-a, storey 0", source.RoomRequests.SequenceEqual(new[] { "r-up" })
+                   && steering.RoomId == "r-a" && Pos().Y < 0.1 && steering.WalkOrderId is null, $"room {steering.RoomId}, at {Fmt(Pos())}, requests {string.Join(",", source.RoomRequests)}");
+            builder.SetLevel("loc-nav", 0);
+
             // ---- A5b the ride refused: the walk order ends at the stair foot ----
             source.SelectRoomScenario("nav-up-rejected");
             At(97, -1);
@@ -657,29 +713,40 @@ public static class NavCheck
             Expect("A7 reaches the yard and the plot edge", yard && beyond && builder.FootprintAt(Pos().X, Pos().Z) is null, $"{a7} frames, at {Fmt(Pos())}");
             Expect("A7 never stands while the key is held", !stood, $"{a7} frames, at {Fmt(Pos())}");
 
-            // ---- A8 a click behind the building ends after its second failure to make progress (final review E2, I-2) ----
-            // (97, 6) lies north of W2, outside the footprint (z ≤ 4): planner case 2 walks to T1's outer point
-            // (97, −4.35) and then straight north to (97, 6) — back through T1 into r-a, where the armchair (eroded z
-            // −2.65…−1.35 at x 97) holds the clamped walk. Held 1 s → a blockade replans (from r-a: out through T1 again),
-            // held again → the second failure (OrderPlayer.WalkFailures: blockades + stuck, kept over replans) ends the
-            // click walk where it stands. One cycle at 3.4 m/s: ≤ 8 m (≤ 2.4 s) + 1 s held, so two cycles end well within
-            // the old budget of 30 s (1800 frames at 1/60); a walk that replanned without counting would never end
-            // (README "Nav world", A8).
+            // ---- A8 a click behind the building: the walk order to T1's outer point, then the straight walk (review Task 10) ----
+            // (97, 6) lies north of W2, outside the footprint (z ≤ 4): planner case 2 walks the navmesh to T1's outer point
+            // (97, −4.35) and then straight north to (97, 6). The walk order takes only the navmesh part (its goal = the
+            // plan's corner before the click, the door point); there it hands the rest to the straight walk with its gates
+            // (PlayerSteering.HandoffM = 0.15 + 0.2). Straight north from (97, −4.35) leads back through T1 into r-a, where
+            // the armchair (eroded z −2.65…−1.35 at x 97) holds the navmesh clamp of every key-like step: zero progress,
+            // and the 20-frame stall ends the walk where it stands, south of the armchair (README "Nav world", A8).
             At(97, -1);
             Expect("A8 WalkTo (97, 6) behind the building", steering.WalkTo(new P2(97, 6)), "");
             Expect("A8 a walk order on the navigation", steering.WalkOrderId is not null, "");
+            NearP("A8 Route = the click", steering.Route, 97, 6, 0.01);
+            var door8 = steering.WalkGoal;
+            Expect("A8 the order's goal is T1's outer point (97, −4.35)", door8 is { } d8 && Horizontal(d8, new Vec3(97, 0, -4.35)) <= 0.5,
+                   door8 is { } g8 ? Fmt(g8) : "null");
             int a8 = 0, failures = 0;
             for (; a8 < 1800 && steering.WalkOrderId is not null; a8++)
             {
                 failures = Math.Max(failures, Walker()?.WalkFailures ?? 0);
                 Frame(none, ClickDt);
             }
-            Expect("A8 the walk ends within 30 s", steering.WalkOrderId is null && steering.Route is null && Walker() is null, $"{a8} frames, at {Fmt(Pos())}");
-            Expect("A8 it failed once and walked on before it ended", failures == 1, $"failures seen {failures}");
+            Expect("A8 the order ends at the door point without a failure", steering.WalkOrderId is null && Walker() is null && failures == 0
+                   && door8 is { } e8 && Horizontal(Pos(), e8) <= PlayerSteering.HandoffM, $"{a8} frames, at {Fmt(Pos())}, failures {failures}");
+            Frame(none, ClickDt);   // the steering's next step sees the order over and hands the rest on
+            NearP("A8 the straight walk took the rest (Route = the click)", steering.Route, 97, 6, 0.01);
+            Expect("A8 the walk marker stays on", manager.WalkTarget is { Visible: true }, "");
+            int a8s = 0;
+            for (; a8s < 1800 && steering.Route is not null; a8s++) Frame(none, ClickDt);
+            Expect("A8 the straight walk ends at its stall", steering.Route is null && steering.StalledFrames == 0 && manager.WalkTarget is not { Visible: true },
+                   $"{a8s} frames, at {Fmt(Pos())}");
             Expect("A8 it never reached (97, 6)", Math.Abs(Pos().Z - 6) > 1, Fmt(Pos()));
             Expect("A8 it stands held south of the armchair (97, −2.65)", Horizontal(Pos(), new Vec3(97, 0, -2.65)) <= Tol, Fmt(Pos()));
+            GD.Print($"[check-nav] A8 order {a8} frames to {Fmt(Pos())}, straight {a8s} frames");
 
-            return $"avatar O1=ok o1_tris={o1} A0-A8=ok a1={a1} a5={a5} a5b={a5b} a7={a7} a8={a8}";
+            return $"avatar O1=ok o1_tris={o1} A0-A8=ok a1={a1} a5={a5} a5b={a5b} a5c={a5c} a7={a7} a8={a8}+{a8s}";
         }
         finally
         {

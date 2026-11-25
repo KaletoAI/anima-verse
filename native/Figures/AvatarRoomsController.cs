@@ -150,14 +150,14 @@ public sealed class AvatarRoomsController : IDisposable
                 lv=>FloorRoomIds.TryGetValue(lv,out string? id) && tile.Stands.RoomLevels.ContainsKey(id) ? Unlocked(id) : "");
             Channel.Walk(room,p,rooms,ownLevel ?? tile.LevelFilter);
         }
-        if(!CanUse || _steering.VerticalRide is not null) { ClearOffers(); Picking.Clear(); }
+        if(!CanUse || _steering.Riding) { ClearOffers(); Picking.Clear(); }
         else if(_clock()>=_nextOffers) { _nextOffers=_clock()+1000; UpdateOffers(); }
     }
 
     public void UpdateOffers()
     {
         var tile=Tile;
-        if(!CanUse || tile?.Open!=true || Avatar is not { } f || _steering.VerticalRide is not null || Room(tile) is not { } room)
+        if(!CanUse || tile?.Open!=true || Avatar is not { } f || _steering.Riding || Room(tile) is not { } room)
         { ClearOffers(); return; }
         var p=new P2(f.Position.X,f.Position.Z); int level=Level(tile,room) ?? 0;
         var rooms=Rooms(tile);
@@ -236,13 +236,19 @@ public sealed class AvatarRoomsController : IDisposable
         _ => null,
     };
 
-    /// <summary>The room entry of an order's link ride: true once the server took the avatar into the room behind it.</summary>
-    private async Task<bool> EnterLinkRoomAsync(ulong owner)
+    /// <summary>
+    /// The room entry of an order's link ride: true once the server took the avatar into the room behind it. The room is
+    /// adopted only while the ride still waits for this answer (<paramref name="alive"/>): a ride stopped meanwhile (a
+    /// correction, the end of embodiment, a new order) leaves the figure at the link foot, so the client keeps its room
+    /// and the next position poll reconciles the server's.
+    /// </summary>
+    private async Task<bool> EnterLinkRoomAsync(ulong owner,Func<bool> alive)
     {
         if(Suspended || !_active || _disposed || Tile is not { } tile || LinkTarget(tile,owner) is not { } link
            || link.Room is not { } target || Channel.Rejected(target)) return false;
         int generation=_generation;
         if(!await Channel.EnterAsync(target,true) || generation!=_generation || _disposed) return false;
+        if(!alive()) { Log?.Invoke($"[pos] order link ride to room={target} ended before the answer; room not adopted"); return false; }
         _steering.RoomId=target; AdoptRoom?.Invoke(target);
         _world.SetLevel(tile.Loc.Id,link.Level); _followedLevel=link.Level;
         Channel.Idle(); ClearOffers(); Picking.Clear();
@@ -259,13 +265,16 @@ public sealed class AvatarRoomsController : IDisposable
     {
         private Task<bool>? _entry;
         private NavLink? _link;
+        /// <summary>The request of the ride now waiting; <see cref="Abort"/> and a new <see cref="Begin"/> retire it.</summary>
+        private object? _request;
         private string _actor="";
         public string Kind=>inner.Kind;
         public LinkRideState Begin(string actor,NavLink link)
         {
             inner.Abort();
             _actor=actor; _link=link;
-            _entry=rooms.EnterLinkRoomAsync(link.Owner);
+            var request=new object(); _request=request;
+            _entry=rooms.EnterLinkRoomAsync(link.Owner,()=>ReferenceEquals(_request,request));
             return LinkRideState.Requested;
         }
         public LinkRideState Poll(ref Vec3 pos,double dt,double speedMS)
@@ -273,14 +282,14 @@ public sealed class AvatarRoomsController : IDisposable
             if(_entry is { } entry)
             {
                 if(!entry.IsCompleted) return LinkRideState.Requested;
-                _entry=null;
+                _entry=null; _request=null;
                 if(!entry.IsCompletedSuccessfully || !entry.Result || _link is not { } link) { _link=null; return LinkRideState.Refused; }
                 var started=inner.Begin(_actor,link);
                 if(started!=LinkRideState.Riding) return started;
             }
             return inner.Poll(ref pos,dt,speedMS);
         }
-        public void Abort() { _entry=null; _link=null; inner.Abort(); }
+        public void Abort() { _entry=null; _link=null; _request=null; inner.Abort(); }
     }
 
     /// <summary>
@@ -289,7 +298,7 @@ public sealed class AvatarRoomsController : IDisposable
     /// </summary>
     private async Task<bool> RideAsync(LocationSlot tile,string? target,int level,Vec3 goal,StairRide? stair)
     {
-        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.VerticalRide is not null) return false;
+        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.Riding) return false;
         int generation=_generation;
         _steering.CancelRoute();
         if(!await Channel.EnterAsync(target,true) || generation!=_generation || !CanUse || Avatar!=f || Tile!=tile
@@ -316,7 +325,7 @@ public sealed class AvatarRoomsController : IDisposable
     }
     private IEnumerable<VerticalTarget> UsableTargets(LocationSlot tile)
     {
-        if(!CanUse || tile!=Tile || !tile.Open || _steering.VerticalRide is not null || Room(tile) is not { } room) return Array.Empty<VerticalTarget>();
+        if(!CanUse || tile!=Tile || !tile.Open || _steering.Riding || Room(tile) is not { } room) return Array.Empty<VerticalTarget>();
         return tile.Places.VerticalTargets.Where(t=>Stand(tile,Level(tile,room) ?? 0,t) is not null);
     }
 

@@ -146,6 +146,14 @@ public partial class FigureManager
            && p.State is not (OrderState.Idle or OrderState.Abort);
 
     /// <summary>
+    /// The avatar's click walk <paramref name="id"/> stands at a link whose ride is requested or running
+    /// (<see cref="OrderPlayer.WalkRiding"/>): steering holds keys and clicks, the position channel its corrections and
+    /// the rooms controller its offers until the ride is over (what <c>VerticalRide</c> held for the E2 ride).
+    /// </summary>
+    public bool ClickWalkRiding(string id)
+        => ClickWalkLive(id) && _orderPlayers[AvatarName].WalkRiding;
+
+    /// <summary>
     /// Ends the avatar's click walk <paramref name="id"/> where it stands: <paramref name="reason"/> (e.g. <c>input</c>,
     /// a walk key) refuses the order first (<see cref="OrderPlayer.Refuse"/>), then the avatar's order is let go at once —
     /// no aborted frame, no turn-away, no <see cref="OrderEnded"/>; the player's input owns the figure from here.
@@ -155,7 +163,7 @@ public partial class FigureManager
         if (_orderPlayers.TryGetValue(AvatarName, out var player) && player.Current?.Id == id)
         {
             if (reason.Length > 0) player.Refuse(reason);
-            ForgetOrders(AvatarName);
+            DropClickWalkPlayer(AvatarName);
             if (_figures.TryGetValue(AvatarName, out var fig)) { fig.Target = fig.Position; fig.Waypoints.Clear(); }
         }
         _clickWalkIds.Remove(id);
@@ -263,10 +271,11 @@ public partial class FigureManager
         bool local = player.Current is { IsLocal: true };
         double issuedBefore = player.IssuedLocal;
         if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return false;
+        // A new order replaced a click walk (a furniture click, a server order), or adopted a local order in place: the
+        // old id's path and click bookkeeping go with it.
+        if (before is { } replaced && replaced != order.Id) { _clickWalkIds.Remove(replaced); _orderPaths.Remove(replaced); }
         // A revision, or the adoption of a local order in place (same target, the local clock kept): the figure keeps going.
         if (before == order.Id || (local && !order.IsLocal && player.IssuedLocal == issuedBefore)) return true;
-        // A new order replaced a click walk (a furniture click, a server order): its path and id go with it.
-        if (before is { } replaced) { _clickWalkIds.Remove(replaced); _orderPaths.Remove(replaced); }
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
         _orderExitY[name] = fig.Position.Y;
@@ -392,6 +401,25 @@ public partial class FigureManager
         if (!_parkedOrders.TryGetValue(name, out var parked) || !Mounted(parked.Order.LocationId)) return;
         _parkedOrders.Remove(name);
         AcceptOrder(fig, parked.Order, parked.MotionNow + (_clock - parked.At));
+    }
+
+    /// <summary>
+    /// Lets go of the avatar's click walk only: its player and the shown state of that order. A server order parked
+    /// for its mount meanwhile and the arrival bookkeeping stay (unlike <see cref="ForgetOrders"/>).
+    /// </summary>
+    private void DropClickWalkPlayer(string name)
+    {
+        if (_orderPlayers.TryGetValue(name, out var player) && player.Current is { } current)
+        {
+            _clickWalkIds.Remove(current.Id);
+            _orderPaths.Remove(current.Id);
+        }
+        _orderPlayers.Remove(name);
+        _orderBlends.Remove(name);
+        _orderLoopShown.Remove(name);
+        _orderShownState.Remove(name);
+        _orderExitY.Remove(name);
+        _orderEntrySpecs.Remove(name);
     }
 
     private void ForgetOrders(string name)

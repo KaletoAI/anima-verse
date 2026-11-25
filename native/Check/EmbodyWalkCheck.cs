@@ -109,6 +109,23 @@ public static class EmbodyWalkCheck
             // Task 10: that walk is the avatar's local walk order.
             Is("W6 nav: a click behind the wall starts a walk order on the navmesh", steering.WalkTo(new(-3,-8)) && steering.WalkOrderId is not null);
             Is("W6 nav: Route is the end goal", steering.Route is { X: -3, Z: -8 });
+            // Review Task 10 (I-2): the order walks the navmesh to the outside door's outer point only; the straight walk
+            // with its gates (Blocked, walls, navmesh clamp, loading hold, terrain pace, 20-frame stall) takes the rest.
+            var w6Door = steering.WalkGoal;
+            var w6Doors = builder.FootprintAt(-3, -3.75) is { } w6Hall ? builder.NavOutsideDoors(w6Hall) : Array.Empty<P2>();
+            Is($"W6 nav: the order's goal ({w6Door?.X:0.###}, {w6Door?.Z:0.###}) is an outside door's outer point",
+               w6Door is { } wd && System.Linq.Enumerable.Any(w6Doors, o => double.Hypot(o.X - wd.X, o.Z - wd.Z) <= 1e-6));
+            int w6 = 0;
+            for (; w6 < 600 && steering.WalkOrderId is not null; w6++) Frame(none);
+            Frame(none);
+            Is("W6 nav: at the door the straight walk takes the rest", steering.WalkOrderId is null && steering.Route is { X: -3, Z: -8 }
+               && manager.OrderPlayerOf(fig.CharacterName) is null);
+            for (; w6 < 1200 && steering.Route is not null; w6++) Frame(none);
+            // The hall's only outside door is the south one (outer point (3, 3.65)); planner case 2 then goes straight to
+            // (-3, -8), back across the hall. The straight walk's gates hold it at the north wall (z -3.65 on the eroded
+            // mesh, the wall at z -4) and its 20-frame stall ends it there — it never passes the wall.
+            Is($"W6 nav: the straight walk is held inside by the north wall and stalls ({fig.Position.X:0.###}, {fig.Position.Z:0.###}) after {w6} frames",
+               steering.Route is null && manager.WalkTarget is not { Visible: true } && fig.Position.Z > -3.7 && fig.Position.Z < -3.5);
             steering.CancelRoute();
             // The straight walk keeps its 20-frame stall: outside every footprint (no navigation) behind the hall, the click
             // on its far side (-3, 8) walks into the hall's footprint, which is foreign with an authored opening → blocked;

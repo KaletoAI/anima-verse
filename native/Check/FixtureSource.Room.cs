@@ -14,6 +14,11 @@ public sealed partial class FixtureSource
     private JsonElement _roomSteps;
     private int _roomStep;
     public List<string> RoomRequests { get; }=new();
+    /// <summary>
+    /// While set, an enter-room answer waits for this gate (recorded at once, answered when the gate completes): a check
+    /// holds the request open across frames (nav A5c/A5d, review E3 Task 10). Null = answered at once.
+    /// </summary>
+    public TaskCompletionSource? RoomGate { get; set; }
 
     /// <summary>Task 51: independent strict enter-room queue from Task 46's table; no implicit map mutation.</summary>
     public void SelectRoomScenario(string name)
@@ -32,6 +37,9 @@ public sealed partial class FixtureSource
             || !JsonNode.DeepEquals(JsonSerializer.SerializeToNode(new { room_id=roomId }),JsonNode.Parse(step.GetProperty("request").GetRawText())))
             throw new InvalidOperationException("Room fixture request does not match step "+_roomStep);
         _roomStep++; RoomRequests.Add(roomId);
-        return Task.FromResult(new PositionAnswer(step.GetProperty("status").GetInt32(),step.GetProperty("body").Clone()));
+        var answer=new PositionAnswer(step.GetProperty("status").GetInt32(),step.GetProperty("body").Clone());
+        return RoomGate is { } gate ? Gated(gate.Task,answer) : Task.FromResult(answer);
     }
+
+    private static async Task<PositionAnswer> Gated(Task gate,PositionAnswer answer) { await gate; return answer; }
 }

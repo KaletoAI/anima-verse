@@ -1974,19 +1974,29 @@ and on its goal (no 0.2 m early arrival). `At(x, z)` snaps the avatar onto `Play
   the ride is refused (`Refused` → `link_refused`, the order aborted) → the click walk ends where it stands: `WalkOrderId`,
   `Route` and `VerticalRide` null, no order player left, y < 0.1, within 0.05 of the foot (101, 0, −3.3), room r-a; exactly one
   request.
+- **A5c** (review E3 Task 10, I-1) scenario `nav-up` with the fixture's `RoomGate` set (the enter-room answer waits): the A5
+  click walks to the stair foot (within `LinkArriveM` 0.4 of (101, 0, −3.3)), where the order's ride is requested
+  (`PlayerSteering.LinkRiding`, room still r-a, one request). Ten frames of key `w`: the order goes on, the figure holds
+  (≤ 1e-4), and `WalkTo((97, −1))` is refused. The gate opens; with `w` held while `LinkRiding` (released after the ride)
+  the walk rides the flight and ends in the loft like A5: within 0.05 of (104, 2), room r-up, one request (measured 328 frames,
+  as A5 — the held key changes nothing).
+- **A5d** the same with the walk ended during the request (`CancelRoute()`, as a correction or the end of embodiment would):
+  the answer (200) arrives after the ride was aborted → `EnterLinkRoomAsync` adopts nothing; room r-a, y < 0.1, no walk.
 - **A6** `PropActionDriven` → `WalkTo((97, −2))` false and four frames move nothing (the prop action's own motion path, decision 12).
 - **A7** keys `w` at 1/60 from (97, −3): the step lead max(3.4/60, `MinLead` 0.15) = 0.15 m < the erosion 0.25 m. The avatar passes
   T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
   `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
-- **A8** (final review E2, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the footprint → planner case 2
-  (`ClickWalkPath` answers the order player's query with it): the path to T1's outer point (97, −4.35), then straight north to
-  (97, 6) — back through T1 into `r-a`, where the eroded armchair (x 96.35…97.65, z −2.65…−1.35) holds the clamped walk at
-  (97, −2.65). Held > 1 s (`OrderPlayer.ReplanBlockedS`) → a blockade replans from `r-a` (out through T1 again) → held again →
-  the second failure to make progress (`OrderPlayer.WalkFailures` = blockades + stuck, both kept over replans) ends the click
-  walk where it stands. Cycle 1: around the armchair to T1's outer point and back north to z −2.65, about 3.4 + 1.7 m
-  = 1.5 s, + 1 s held; cycle 2: 1.7 m out and back = 1 s, + 1 s held → ≈ 4.5 s ≈ 270 frames; budget 30 s (1800 frames, the old
-  120 frames of 0.25 s). End: `WalkOrderId` and `Route` null, one failure seen while it still walked, at (97, −2.65) ± 0.05,
-  never near z 6 (measured 280 frames). A walk that replanned without counting would loop for ever.
+- **A8** (final review E2, I-2; review E3 Task 10, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the
+  footprint → planner case 2: the navmesh path to T1's outer point (97, −4.35), then straight north to (97, 6). The click's walk
+  order takes the navmesh part only: `DoorOf` picks the outer point nearest to the plan's corner before the click (within
+  `UnreachableM` 0.5) → order goal (97, ground, −4.35), its `ClickWalkPath` restricted to that door; `Route` stays (97, 6),
+  `WalkGoal` the door point. At the door (within `HandoffM` = 0.15 + 0.2 of the order goal, no failure) the order is let go
+  and the next step hands the rest to the straight walk (`Route` (97, 6), marker on, no order player). Straight north from
+  (97, −4.35) leads back through T1 into `r-a`, where the eroded armchair (x 96.35…97.65, z −2.65…−1.35) makes the navmesh
+  clamp of every step hold → zero progress → the 20-frame stall ends the walk at (97, −2.65) ± 0.05, never near z 6. Frames:
+  the order's navmesh path around the armchair to the door is not derived by hand (≥ the straight 3.35 m → ≥ 59 frames;
+  measured 69, the check bounds it only by its 1800-frame budget); the straight walk 1.7 m at
+  3.4/60 m per frame = 30 frames + 20 stall frames = 50 (measured 49, the first frame counted with the handoff).
 
 **O1 the F9 overlay (Task 7, `NavCheck.OverlayAsync`, run in the avatar world right after the first navigation is swapped in;
 `loc-nav` is the open location).** `NavOverlayVisible = true` → one `NavOverlay` node, visible, one `ArrayMesh` of three
@@ -2012,7 +2022,11 @@ eroded edges 0.35 from a wall line):
   x ≤ 5.75) and north. The clamp holds a step that goes deeper, then tries its axis parts (larger first, like `SlideBlocked`):
   the z part keeps x and is not deeper → the avatar slides north as before (z < −0.5 after 1 s, x ≤ 5.75).
 - **W6** a click behind the hall from (−3, −3.75) is now a walk order on the navmesh (plan E3 Task 10: the avatar's local walk
-  order, `WalkOrderId` set) out through the outside door (planner case 2), `Route` (−3, −8). The straight walk's 20-frame stall is checked where no navigation applies: from (−3, −4.1), outside every footprint,
+  order, `WalkOrderId` set) out through the outside door (planner case 2), `Route` (−3, −8). The hall's only outside door is
+  the south one, outer point (3, 3.65) (`NavOutsideDoors`): the order's goal is exactly that point (review E3 Task 10, I-2);
+  there the straight walk takes the rest (`Route` (−3, −8), no order player), straight back across the hall, where its gates
+  hold it at the north wall's eroded edge (z −3.65, wall line −4, edge 0.35) until the 20-frame stall ends it (route and marker
+  gone, z within −3.7…−3.5; it never passes the wall). The straight walk's 20-frame stall is also checked where no navigation applies: from (−3, −4.1), outside every footprint,
   the click (−3, 8) on the far side walks into the hall's footprint (foreign, with an authored opening → `PlayerBlocked`); the
   first lead (−3, −3.95) is already inside it, so every target is the start: frame 19 keeps the route, frame 20 drops it and the marker.
 - **W "upper-floor object approach"** (−2.01, 0) at y 3.01 in r-up: on the loft mesh → case 1 → `Route` = the click, X −2.01 unchanged.

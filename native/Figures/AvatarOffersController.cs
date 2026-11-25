@@ -43,7 +43,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
     private bool CanEnter => CanUse && !RoomRequestInFlight() && !_steering.PendingSnap && !_steering.SeatWritePending
-        && !_steering.AvatarSeated && _steering.VerticalRide is null && _steering.WalkIn is null && _steering.Correction is null;
+        && !_steering.AvatarSeated && !_steering.Riding && _steering.WalkIn is null && _steering.Correction is null;
     public Func<bool> RoomRequestInFlight { get; set; }=()=>false;
     public IReadOnlyDictionary<string,string> LockedLocations { get; set; }=new Dictionary<string,string>();
     public Action<string>? Toast { get; set; }
