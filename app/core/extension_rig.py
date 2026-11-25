@@ -661,7 +661,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     the largest (0 without a pose). A pose id the group does not declare (any more) is ignored.
 
     ``preview_poses`` (``{group id: pose id}``, the Places preview's pose pickers) applies like one more state whose
-    ``bone_pose`` it is; an unknown group or pose is ignored the same way."""
+    ``bone_pose`` it is; an unknown group or pose is ignored the same way.
+
+    Cover (``cover_state_for`` over the worn pieces; ``exposed`` without ``apply_clothing``): a pose the group
+    declares ``requires: exposed`` is skipped while the group is covered or hidden and is reported in ``held``
+    (``{group: {pose, state, by: [the covering pieces]}}``, only when not empty); a COVERED group with a
+    ``drape_collider`` rests in its bind pose (gain, swing, sag, spill, gravity and rest angle 0) — the drape laid
+    the cloth over it there."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -723,9 +729,12 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     if picked:
         states = [*states, {"id": "", "bone_pose": picked}]
     groups = {}
+    held = {}
+    cover_items = items if equipment else {}
     for group in declarations:
         if not group["chains"]:
             continue
+        worn = cover_state_for(group, profile, pieces=equipment, items=cover_items) if apply_clothing else EXPOSED
         values = {key: group[key] for key in MOTION_FIELDS}
         values.update({key: value for key, value in world.get(group["id"], {}).items()
                        if key in MOTION_FIELDS and control_allowed(group, key)})
@@ -800,10 +809,15 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         rest = None
         rigid = 0.0
         declared_poses = group.get("poses") or {}
+        requires = group.get("pose_requires") or {}
         for state in states:
             pose_id = state["bone_pose"].get(group["id"])
             pose = declared_poses.get(pose_id) if isinstance(pose_id, str) else None
             if not isinstance(pose, dict):
+                continue
+            if requires.get(pose_id) == EXPOSED and worn != EXPOSED:
+                held.setdefault(group["id"], {"pose": pose_id, "state": worn,
+                                              "by": _covering_items(group, profile, equipment, cover_items)})
                 continue
             for field, multiplier in pose.items():
                 if field == POSE_RIGID:
@@ -827,6 +841,11 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         for field in ("length", "girth"):
             values[field] = max(.25, min(4., values[field]))
         values["gravity_scale"] = scale
+        if worn == COVERED and group.get("drape_collider"):
+            # Under cloth the drape shaped the fabric over the bind pose: the invisible part stays exactly there.
+            for key in ("gain", "max_deg", "translate", "spill", "gravity", "sag_max_deg", "spill_max_deg"):
+                values[key] = 0.0
+            rest, rest_lift = 0.0, 0.0
         groups[group["id"]] = {
             # The effective op (``rig_groups_for``: attached_part where the
             # mesh part turns the chain into one) — what a channel accepts.
@@ -849,7 +868,19 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
               "gravity_scale": scale, "states": states, "groups": groups}
     if hair:
         inputs["hair"] = hair
-    return {"rev": _revision(inputs), "groups": groups}
+    if held:
+        inputs["held"] = held
+    return {"rev": _revision(inputs), "groups": groups, **({"held": held} if held else {})}
+
+
+def _covering_items(group, profile, equipment, items):
+    """The worn pieces that cover ``group`` (each alone not ``exposed`` by ``cover_state_for``), sorted."""
+    out = []
+    for item_id in sorted({str(i) for i in (equipment or {}).values() if i}):
+        own = {slot: iid for slot, iid in equipment.items() if str(iid) == item_id}
+        if cover_state_for(group, profile, pieces=own, items=items) != EXPOSED:
+            out.append(item_id)
+    return out
 
 
 def extension_metadata(character_name, profile=None, signature=None, mesh_variant=None):
