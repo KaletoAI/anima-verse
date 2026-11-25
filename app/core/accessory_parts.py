@@ -19,11 +19,16 @@ from app.core.log import get_logger
 
 logger = get_logger("accessory_parts")
 
-#: The words a part's image prompt is built from (``part_image_prompt``): the subject per role, the tail that keeps
-#: the host out of the picture, and the material / colour words one of which may be taken over from the host text.
-PART_IMAGE_SUBJECT: Dict[str, str] = {"buckle": "a single belt buckle", "pendant": "a single necklace pendant",
-                                      "charm": "a single small charm"}
-PART_IMAGE_TAIL = "on its own, no strap, no chain, front view, isolated product photo, plain white background"
+#: The words a part's image prompt is built from (``part_image_prompt``): the subject per role (``{m}`` = the material
+#: word taken over from the host text, with its space, or nothing), the tail, and the material / colour words one of
+#: which may be taken over. Only POSITIVE words: a negation ("no chain") is moved to the negative prompt
+#: (``prompt_compose.split_negations``), which an engine without a negative input drops — the 2026-11-25 acceptance
+#: got pendants hanging on a chain and buckles on a strap piece, and the mesher modelled the chain with them.
+PART_IMAGE_SUBJECT: Dict[str, str] = {
+    "buckle": "a single {m}belt buckle, the bare metal buckle frame with its prong",
+    "pendant": "a single {m}pendant, the pendant alone with its small top loop",
+    "charm": "a single small {m}charm, the charm alone with its small top loop"}
+PART_IMAGE_TAIL = "front view, isolated product photo, plain white background"
 PART_MATERIAL_WORDS = ("gold", "golden", "silver", "copper", "brass", "bronze", "iron", "steel", "pewter", "bone",
                        "wooden", "jade", "amber", "pearl")
 #: A new part's own defaults per role (``make_part``): its size (longest side, mm) and how it is fastened.
@@ -253,12 +258,12 @@ def host_text(item: Dict[str, Any], base: str) -> str:
 # --- the image prompt and a new part ----------------------------------------------------------------------------------
 
 def part_image_prompt(role: str, host_text: str) -> str:
-    """The image prompt of a new part: its subject, at most ONE material word taken over from the host text (the
-    first token in ``PART_MATERIAL_WORDS``), and the tail. The host text itself never goes in — "copper belt" would
+    """The image prompt of a new part: its subject with at most ONE material word taken over from the host text (the
+    first token in ``PART_MATERIAL_WORDS``) and the tail. The host text itself never goes in — "copper belt" would
     draw the whole belt."""
     subject = PART_IMAGE_SUBJECT.get(role, PART_IMAGE_SUBJECT["charm"])
     word = next((w for w in _words(host_text) if w in PART_MATERIAL_WORDS), "")
-    return f"{subject} made of {word}, {PART_IMAGE_TAIL}" if word else f"{subject}, {PART_IMAGE_TAIL}"
+    return f"{subject.format(m=word + ' ' if word else '')}, {PART_IMAGE_TAIL}"
 
 
 def make_part(host_id: str, role: str, at: str = "front") -> str:

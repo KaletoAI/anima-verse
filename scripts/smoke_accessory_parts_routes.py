@@ -21,13 +21,16 @@ Expected, derived by hand:
     with an image and no mesh → ``started`` (1 call). Earrings with a drop make their drop from their OWN image through
     the same route → ``started``.
 [4] the old ``POST /characters/demo/figure/accessory/item_belt/pendant`` → 404 or 405.
-[6] ``part_image_prompt``, strings by hand:
-    ("buckle", "copper belt") → "a single belt buckle made of copper, on its own, no strap, no chain, front view,
-    isolated product photo, plain white background" (no "copper belt");
-    ("pendant", "gold necklace with gemstone") → "a single necklace pendant made of gold, on its own, …" (no
-    "necklace with", no "gemstone");
-    ("charm", "black leather belt") → "a single small charm, on its own, …";
-    ("buckle", "") → without "made of".
+[6] ``part_image_prompt``, strings by hand (tail T = "front view, isolated product photo, plain white background"):
+    ("buckle", "copper belt") → "a single copper belt buckle, the bare metal buckle frame with its prong, T" (no
+    "copper belt," — "copper belt buckle" is the material word before the subject);
+    ("pendant", "gold necklace with gemstone") → "a single gold pendant, the pendant alone with its small top loop, T"
+    (no "necklace", no "gemstone");
+    ("charm", "black leather belt") → "a single small charm, the charm alone with its small top loop, T";
+    ("buckle", "") → "a single belt buckle, the bare metal buckle frame with its prong, T".
+    Read at the consumer: ``prompt_compose.split_negations`` of each moves nothing and keeps the text (an engine without
+    a negative input drops what is moved). The prompt of a769da9e8 ("…, on its own, no strap, no chain, …") had
+    "strap" and "chain" moved — the acceptance's pendants came back hanging on a chain.
 [7] ``GET /characters/demo/figure/accessory/item_neck`` (necklace "gold necklace with gemstone" linking the part
     "a gemstone pendant"): ``parts[0].host_mentions`` True ("gemstone" in both); ``part_options`` names every part of
     the world (ids sorted) with ``{id, name, image_url, state}``.
@@ -100,13 +103,20 @@ save_character_profile("demo", {"name": "demo"}, create_new=True)
 inv._save_inventory("demo", {"inventory": [{"item_id": "item_belt", "quantity": 1}]})
 
 print("[6] part_image_prompt")
-TAIL = "on its own, no strap, no chain, front view, isolated product photo, plain white background"
-check("[6] buckle", parts.part_image_prompt("buckle", "copper belt"), f"a single belt buckle made of copper, {TAIL}")
+TAIL = "front view, isolated product photo, plain white background"
+BUCKLE = "the bare metal buckle frame with its prong"
+check("[6] buckle", parts.part_image_prompt("buckle", "copper belt"), f"a single copper belt buckle, {BUCKLE}, {TAIL}")
 p = parts.part_image_prompt("pendant", "gold necklace with gemstone")
-check("[6] pendant", p, f"a single necklace pendant made of gold, {TAIL}")
-check("[6] pendant: no host words", ("necklace with" in p, "gemstone" in p), (False, False))
-check("[6] charm", parts.part_image_prompt("charm", "black leather belt"), f"a single small charm, {TAIL}")
-check("[6] empty", parts.part_image_prompt("buckle", ""), f"a single belt buckle, {TAIL}")
+check("[6] pendant", p, f"a single gold pendant, the pendant alone with its small top loop, {TAIL}")
+check("[6] pendant: no host words", ("necklace" in p, "gemstone" in p), (False, False))
+check("[6] charm", parts.part_image_prompt("charm", "black leather belt"),
+      f"a single small charm, the charm alone with its small top loop, {TAIL}")
+check("[6] empty", parts.part_image_prompt("buckle", ""), f"a single belt buckle, {BUCKLE}, {TAIL}")
+from app.core.prompt_compose import split_negations  # noqa: E402
+for role, host in (("buckle", "copper belt"), ("pendant", "gold necklace"), ("charm", "")):
+    text = parts.part_image_prompt(role, host)
+    kept, moved, _inline = split_negations(text)
+    check(f"[6] {role}: nothing moved to the negative prompt", (moved, kept), ([], text))
 
 print("[1] make-part")
 r = client.post("/inventory/items/item_belt/make-part", json={"role": "buckle"})
