@@ -4012,7 +4012,6 @@ def play_worldmap(user=Depends(get_current_user),
     return response
 
 
-
 @router.get("/play/orders")
 def play_orders(user=Depends(get_current_user), since: int = Query(0)):
     """Motion orders published after ``since`` (plan E3, contract § "Order").
@@ -4031,6 +4030,7 @@ def play_orders(user=Depends(get_current_user), since: int = Query(0)):
     released = bool((user.get("settings") or {}).get("avatar_released"))
     lens = avatar or (_spectator_lens(user) if released else "")
     return _json_off_loop(motion_orders.orders_since(lens, int(since)))
+
 
 @router.get("/play/terrain")
 def get_terrain_route(user=Depends(get_current_user)):

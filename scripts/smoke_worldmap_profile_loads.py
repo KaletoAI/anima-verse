@@ -112,6 +112,22 @@ Hand-derived expectations
               null — target_id MARKET and gait "walk" stay, and journey_id is
               null (not the avatar's journey).
 
+[4] Orders on the rows cost no profile load (plan E3 decision 3, review of
+    task 4). Two orders are published by hand after [3]: one for npc_seated
+    alone, one for npc_still + npc_sleeper together; each with
+    target {location_id: H, room_id: "lounge", execution_id: "exec-smoke"}.
+    The avatar npc_lead stands in H/lounge, and so do all three participants,
+    whose rows pass the fogged gates (they are on the fogged payload of [1]).
+    So in the fogged build:
+      npc_seated, npc_still, npc_sleeper carry ``order`` — the public view
+      (no participant is the avatar): its order_id, no target.execution_id;
+      npc_lead and npc_walker carry none.
+    The row already holds the figure's profile, place and gate result; the
+    avatar's place comes from the profile read at the top. Hence the bound of
+    [1] holds unchanged: fogged total <= 9. (Before the fix every visible
+    order re-read the avatar's location and room — two loads — and its
+    participant once: measured 8 + 3 * 3 = 17 > 9, so this case fails there.)
+
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_profile_loads.py
 """
 import hashlib
@@ -565,6 +581,35 @@ def main() -> int:
               f"now {secs * 1000:.1f} ms)")
         check("the new build loads strictly fewer profiles",
               calls < old_calls, True)
+
+    print("\n[4] orders on the rows load no profile")
+    from app.core import motion_orders
+    orders = {}
+    for names in (["npc_seated"], ["npc_still", "npc_sleeper"]):
+        order = motion_orders.new_order(
+            "prop_action", issued_s=MOTION_NOW, eta_s=MOTION_NOW + 1, flip_s=MOTION_NOW + 2,
+            deadline_s=MOTION_NOW + 12, speed_m_s=1.0, gait="walk", status="active",
+            target={"location_id": HOUSE, "room_id": "lounge", "execution_id": "exec-smoke"},
+            actors=[motion_orders.actor_row(n, "actor", "", 170, {
+                "x": -3.5, "y": 0, "z": -3.5, "yaw": 0, "room_id": "lounge", "level": 0})
+                for n in names])
+        published = motion_orders.publish(order, names=names, locations=[HOUSE])
+        for n in names:
+            orders[n] = published["order_id"]
+    try:
+        fog_o, fog_o_calls, _ = build_counted(
+            world_ops.build_worldmap_payload, "npc_lead", False)
+        for name in NAMES:
+            got = row(fog_o, name).get("order")
+            check(f"{name} order_id on its row", (got or {}).get("order_id"), orders.get(name))
+            if got:
+                check(f"{name} order is the public view",
+                      "execution_id" in (got.get("target") or {}), False)
+        check_bound("get_character_profile calls per fogged build with orders",
+                    fog_o_calls, 9)
+    finally:
+        with motion_orders._INDEX_LOCK:
+            motion_orders._INDEX.clear()
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

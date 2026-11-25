@@ -25,6 +25,7 @@ and scripts/smoke_orders_route.py (publication, index, visibility).
 """
 from __future__ import annotations
 
+import copy
 import math
 import threading
 import uuid
@@ -277,7 +278,10 @@ def new_order(kind: str, *, issued_s: float, eta_s: float, flip_s: float | None,
 #: world_kv key of the global publication counter (decision 3).
 SEQ_KEY = "motion_order_seq"
 
-_SEQ_LOCK = threading.Lock()
+#: ONE lock for the counter AND the index: ``publish`` hands out the seq and
+#: files the order under it in one step, and ``current_seq`` reads under it,
+#: so a reader never sees a seq that covers an order not yet in the index
+#: (decision 6). An RLock, because ``next_seq`` reads ``current_seq``.
 _INDEX_LOCK = threading.RLock()
 #: name -> (order, until_s): the order a figure carries right now. ``until_s``
 #: is None while the order is live (its run runs), else the motion second
@@ -301,21 +305,24 @@ def _now_s() -> float:
 
 def next_seq() -> int:
     """The next global publication number, persisted in world_kv
-    (``motion_order_seq``) under a module lock (decision 3)."""
+    (``motion_order_seq``) under the module lock (decision 3)."""
     from app.models.world import set_world_setting
-    with _SEQ_LOCK:
+    with _INDEX_LOCK:
         value = current_seq() + 1
         set_world_setting(SEQ_KEY, str(value))
     return value
 
 
 def current_seq() -> int:
-    """The highest publication number handed out so far (0 = none yet)."""
+    """The highest publication number handed out so far (0 = none yet).
+    Read under the module lock: a publication between its seq and its index
+    entry is never half visible."""
     from app.models.world import get_world_setting
-    try:
-        return int(get_world_setting(SEQ_KEY, "0") or 0)
-    except (TypeError, ValueError):
-        return 0
+    with _INDEX_LOCK:
+        try:
+            return int(get_world_setting(SEQ_KEY, "0") or 0)
+        except (TypeError, ValueError):
+            return 0
 
 
 def actor_names(order: dict) -> list[str]:
@@ -341,11 +348,13 @@ def publish(order: dict, *, names: list[str], locations: list[str]) -> dict:
     locks, send the topic ``orders`` to whoever sees the change
     (``sync_topics.order_changed``: the locations, the participants). The
     push carries no data; a client fetches ``GET /play/orders``. Returns the
-    published order (a copy with its ``seq``)."""
-    published = dict(order)
-    published["seq"] = next_seq()
+    published order as a deep copy with its ``seq`` — the caller (the run's
+    ``data.order``) never shares nested dicts with the index."""
+    published = copy.deepcopy(order)
     until = _until(published)
     with _INDEX_LOCK:
+        # seq and index entry in one step under the same lock (decision 6).
+        published["seq"] = next_seq()
         for name in names:
             if name:
                 _INDEX[name] = (published, until)
@@ -353,7 +362,7 @@ def publish(order: dict, *, names: list[str], locations: list[str]) -> dict:
     from app.core.keyed_lock import _after_locks
     who, where = list(names), list(locations)
     _after_locks(lambda: sync_topics.order_changed(who, where))
-    return published
+    return copy.deepcopy(published)
 
 
 def retire(order_id: str, *, at_s: float | None = None) -> None:
@@ -392,7 +401,16 @@ def _snapshot() -> list[tuple[str, dict]]:
     return out
 
 
-def visible(observer: str, order: dict, ctx: tuple) -> bool:
+def observer_place(observer: str, *, profile: dict | None = None) -> tuple[str, str]:
+    """``(location_id, room_id)`` of the observer — read ONCE per request and
+    handed to :func:`visible` / :func:`for_observer` as ``here``."""
+    from app.core import places
+    return places.where(observer, profile=profile) if observer else ("", "")
+
+
+def visible(observer: str, order: dict, ctx: tuple, *,
+            here: tuple[str, str] | None = None,
+            seen: dict[str, bool] | None = None) -> bool:
     """Whether ``observer`` may see ``order`` (decision 4): a participant
     always; anybody else only when at least one participant stands in the
     observer's own room (outside a location: the open, ``("", "")``) AND that
@@ -400,29 +418,48 @@ def visible(observer: str, order: dict, ctx: tuple) -> bool:
     (``world_ops._visible_row``: fog, sight, veil) — out in the open a mere
     location equality would hand the order to every avatar outdoors.
     ``ctx`` comes from ``world_ops.row_visibility_ctx(observer)``, built once
-    per request."""
+    per request.
+
+    No profile is read per call when the caller already knows: ``here`` is
+    the observer's place (:func:`observer_place`, once per request), and
+    ``seen`` maps a participant to "stands in ``here`` and its row passes
+    the gates" — the worldmap fills it from the row it has just built (that
+    row's profile, position and journey), and it doubles as a per-request
+    memo: a participant not in it is looked up once and added."""
     names = actor_names(order)
     if observer and observer in names:
         return True
     if not observer:
         return False
+    if here is None:
+        here = observer_place(observer)
+    if seen is None:
+        seen = {}
+    # Known participants first: they cost nothing.
+    for name in sorted(names, key=lambda n: n not in seen):
+        if name not in seen:
+            seen[name] = _seen_by(name, here, ctx)
+        if seen[name]:
+            return True
+    return False
+
+
+def _seen_by(name: str, here: tuple[str, str], ctx: tuple) -> bool:
+    """Whether ``name`` stands in the observer's place ``here`` and its
+    worldmap row passes the observer's row gates (one profile load)."""
     from app.core import places
     from app.core.travel_engine import get_journey
     from app.core.world_ops import _visible_row
     from app.models.character import get_character_pos, get_character_profile
-    here = places.where(observer)
-    for name in names:
-        profile = get_character_profile(name) or {}
-        loc_id, room_id = places.where(name, profile=profile)
-        if (loc_id, room_id) != here:
-            continue
-        try:
-            journey = get_journey(name, profile=profile)
-        except Exception:
-            journey = None
-        if _visible_row(name, loc_id, get_character_pos(name), journey, ctx):
-            return True
-    return False
+    profile = get_character_profile(name) or {}
+    loc_id, room_id = places.where(name, profile=profile)
+    if (loc_id, room_id) != tuple(here):
+        return False
+    try:
+        journey = get_journey(name, profile=profile)
+    except Exception:
+        journey = None
+    return _visible_row(name, loc_id, get_character_pos(name), journey, ctx)
 
 
 def _public_view(order: dict) -> dict:
@@ -436,14 +473,18 @@ def _public_view(order: dict) -> dict:
     return view
 
 
-def for_observer(observer: str, order: dict, ctx: tuple) -> dict | None:
+def for_observer(observer: str, order: dict, ctx: tuple, *,
+                 here: tuple[str, str] | None = None,
+                 seen: dict[str, bool] | None = None) -> dict | None:
     """``order`` as ``observer`` may see it: whole for a participant, the
-    movement fields for anybody else who sees it, None otherwise."""
-    if not order or not visible(observer, order, ctx):
+    movement fields for anybody else who sees it, None otherwise. Always a
+    deep copy — nothing handed out shares a nested dict with the index.
+    ``here``/``seen``: see :func:`visible`."""
+    if not order or not visible(observer, order, ctx, here=here, seen=seen):
         return None
     if observer in actor_names(order):
-        return dict(order)
-    return _public_view(order)
+        return copy.deepcopy(order)
+    return copy.deepcopy(_public_view(order))
 
 
 def orders_since(observer: str, since: int) -> dict:
@@ -457,6 +498,8 @@ def orders_since(observer: str, since: int) -> dict:
     if not observer:   # no lens (no avatar, nothing released): nothing to see
         return {"orders": [], "seq": seq, "motion_now": round(now, _DECIMALS)}
     ctx = row_visibility_ctx(observer)
+    here = observer_place(observer)
+    seen: dict[str, bool] = {}    # per-request memo: one profile load per participant
     newest: dict[str, dict] = {}
     for _name, order in _snapshot():
         if int(order.get("seq", 0)) <= since:
@@ -466,7 +509,7 @@ def orders_since(observer: str, since: int) -> dict:
             newest[order["order_id"]] = order
     rows = []
     for order in sorted(newest.values(), key=lambda o: o["seq"]):
-        view = for_observer(observer, order, ctx)
+        view = for_observer(observer, order, ctx, here=here, seen=seen)
         if view is not None:
             rows.append(view)
     return {"orders": rows, "seq": seq, "motion_now": round(now, _DECIMALS)}

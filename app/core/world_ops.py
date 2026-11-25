@@ -991,6 +991,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # covered by ``order_seq`` without being on it.
     from app.core import motion_orders as _motion_orders
     _order_seq = _motion_orders.current_seq()
+    # The avatar's place, read once from the profile already held, and the
+    # per-build memo "this participant stands in that place and its row
+    # passed the gates" — filled from each row as it is built, so an order on
+    # a row costs no profile load (decision 3: the index serves the rows
+    # without per-row profile parsing).
+    _order_here = _motion_orders.observer_place(avatar, profile=_observer_profile)
+    _order_seen: Dict[str, bool] = {}
     # Icons behind the name tag (``name_badges``), titled in the avatar's
     # language — the same badges the chat's address chips show.
     from app.core.name_badges import badges_for as _badges_for
@@ -1016,6 +1023,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 _j = None
                 logger.debug("journey read failed for %s: %s", name, e)
             if not _visible_row(name, loc_id, pos, _j, _row_ctx):
+                _order_seen[name] = False
                 continue
         try:
             from app.models.character import get_character_profile as _gcp
@@ -1033,7 +1041,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             _j = None
             logger.debug("journey read failed for %s: %s", name, e)
         if not _visible_row(name, loc_id, pos, _j, _row_ctx):
+            _order_seen[name] = False
             continue
+        # The row passes the gates: whether it stands in the avatar's place
+        # decides the visibility of its order (``motion_orders.visible``).
+        _order_seen[name] = (_motion_orders.observer_place(name, profile=_prof)
+                              == _order_here)
         config = get_character_config(name, profile=_prof)
         mt = get_movement_target(name, profile=_prof) or ""
         prof = get_character_profile_image(name, profile=_prof) or ""
@@ -1250,7 +1263,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # avatar may see it (``motion_orders.for_observer``); absent when it
             # carries none or the avatar may not see it.
             **({"order": _row_order} if (_row_order := _motion_orders.for_observer(
-                avatar, _o, _row_ctx) if (_o := _motion_orders.index_get(name)) else None) else {}),
+                avatar, _o, _row_ctx, here=_order_here, seen=_order_seen)
+                if (_o := _motion_orders.index_get(name)) else None) else {}),
             "motion": _timed_motion(motion_payload, name, _prof),
             # The `travel_speed` rule factor the AVATAR moves with
             # (`travel_engine.travel_pace_factor`, a party leader's is its

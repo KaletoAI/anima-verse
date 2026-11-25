@@ -4207,6 +4207,11 @@ non-participant gets the movement fields only: `order_id`, `revision`,
 without `execution_id` and `slot`, `hint_route`, `snap`, `phase`, and per
 actor `name`, `start`, `access`, `anchor`, `entry_mode`, `sequence`,
 `stand` — never `awaits`, roles or the execution id.
+An order needs an observer: the admin overview (`show_all`, no avatar)
+carries no `order` on any row, and `GET /play/orders` without a lens lists
+none. The worldmap reads no extra profile for a row's order — the observer's
+place is read once per build and a participant's place and gate result come
+from the row just built (`for_observer(..., here=, seen=)`).
 
 **Rows without `order`** (decision 6). An order stands in row and route while
 its run lives, then until its end + `ORDER_TAIL_S` (a `cancel`/`ended` order:

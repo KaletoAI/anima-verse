@@ -83,6 +83,26 @@ Expectations, by hand from the plan's decisions (E3 decisions 2-6, 18, 19):
      ``order_seq`` (read before the rows).
 [R11] The avatar's own request answer carries ``order`` (the avatar is a
      participant: the whole order, with ``execution_id``) beside ``motion``.
+[R12] A pair requested with consent "react" (fixture ``S.authored_pair``,
+     a recording ``pair_reaction`` provider): revision 1 has awaits
+     "reaction" and NO flip_motion_s (decision 2: no flip while awaiting).
+     The partner reacts BEFORE the arrival: revision 2, awaits "", flip =
+     eta + the entry step's nominal_s (unchanged eta).
+[R13] The same pair, both arrive (30 game seconds) with no reaction yet
+     (``_enter_or_wait``): revision 2, status "waiting", awaits "reaction",
+     no flip. The accept then begins the entry: revision 3, "entering".
+[R14] ``POST /play/prop-actions/respond`` over HTTP: the invited partner's
+     "yes" starts the ask-pair run; the answer carries the whole order (the
+     partner is a participant: ``target.execution_id`` = the run) and both
+     names as actors.
+[R15] The tail (decision 6): a live order retired at motion second t is
+     still published at t + 9.9 and gone at t + 10.1 (ORDER_TAIL_S = 10);
+     ``index_get`` answers None then.
+[R16] ``boot()`` after a restart (the in-process index emptied by hand):
+     the live run's order stands in the index again under its participant,
+     same order_id and seq (no new publication).
+[R17] Isolation: the order a row hands out is a deep copy — changing a
+     nested field of the answer leaves the index untouched.
 """
 import json
 import math
@@ -472,6 +492,114 @@ class Orders(unittest.TestCase):
         self.assertIn("motion", answer)
         self.assertEqual(answer["order"]["target"]["execution_id"], result["execution_id"])
         self.assertEqual([a["name"] for a in answer["order"]["actors"]], [self.name])
+
+
+class Reactions(unittest.TestCase):
+    def setUp(self):
+        self.asked = []
+        hooks.register_provider("pair_reaction", lambda **kw: self.asked.append(kw), owner="smoke.orders")
+        self.addCleanup(hooks._providers.pop, "pair_reaction", None)
+
+    def tearDown(self):
+        F.W.set_world_frozen(False)
+        F.set_game_factor(0)
+        for run in R.live_runs():
+            A.cancel(run["actor"], run["execution_id"])
+        F.assert_no_external_work()
+
+    def start(self):
+        name, partner, target, _pid = S.authored_pair()
+        MO.boot()
+        result = S.request(name, target, members=[partner], consent="react")
+        self.assertEqual(result["status"], "approaching", result)
+        return name, partner, result["execution_id"]
+
+    def test_r12_reaction_before_the_arrival(self):
+        name, partner, eid = self.start()
+        first = MO.index_get(name)
+        print("[R12] awaiting the reaction: no flip")
+        self.assertEqual((first["revision"], first["awaits"]), (1, "reaction"))
+        self.assertNotIn("flip_motion_s", first)
+        A.react(partner, eid, True)
+        after = MO.index_get(name)
+        print("[R12] the reaction before the arrival: flip = eta + entry")
+        entry = next(s for s in after["actors"][0]["sequence"] if s["step"] == "entry")
+        self.assertEqual((after["revision"], after["awaits"]), (2, ""))
+        self.assertEqual(after["eta_motion_s"], first["eta_motion_s"])
+        self.assertAlmostEqual(after["flip_motion_s"], first["eta_motion_s"] + entry["nominal_s"], places=3)
+
+    def test_r13_waiting_then_entering(self):
+        name, partner, eid = self.start()
+        F.set_game_time(F.game_time() + GameDuration.of(seconds=30))
+        F.E.advance_all_journeys()
+        A.advance(F.game_time())
+        print("[R13] both arrived, no reaction: waiting")
+        waiting = MO.index_get(name)
+        self.assertEqual((waiting["revision"], waiting["status"], waiting["awaits"]),
+                         (2, "waiting", "reaction"))
+        self.assertNotIn("flip_motion_s", waiting)
+        A.react(partner, eid, True)
+        self.assertEqual(R.get(eid)["phase"], "entry")
+        entering = MO.index_get(name)
+        self.assertEqual((entering["revision"], entering["status"], entering["awaits"]),
+                         (3, "entering", ""))
+
+    def test_r14_respond_over_http(self):
+        name, partner, target, _pid = S.authored_pair()
+        MO.boot()
+        asked = S.request(name, target, members=[partner])
+        self.assertEqual(asked["status"], "awaiting_consent", asked)
+        answer = client(partner).post("/play/prop-actions/respond",
+                                      json=dict(execution_id=asked["execution_id"], accept=True))
+        self.assertEqual(answer.status_code, 200, answer.text)
+        body = answer.json()
+        print("[R14] the respond answer carries the whole order")
+        self.assertEqual(body["order"]["target"]["execution_id"], asked["execution_id"])
+        self.assertEqual(sorted(a["name"] for a in body["order"]["actors"]), sorted([name, partner]))
+
+    def test_r15_tail_runs_out(self):
+        name, target, _pid = S.setup_run()
+        MO.boot()
+        S.request(name, target)
+        order = MO.index_get(name)
+        t = F.MOTION[0]
+        MO.retire(order["order_id"], at_s=t)
+        saved = F.MOTION[0]
+        try:
+            F.MOTION[0] = t + 9.9
+            print("[R15] retired: still published inside the 10 s tail")
+            self.assertEqual(MO.index_get(name)["order_id"], order["order_id"])
+            F.MOTION[0] = t + 10.1
+            print("[R15] gone after the tail")
+            self.assertIsNone(MO.index_get(name))
+        finally:
+            F.MOTION[0] = saved
+
+    def test_r16_boot_rebuilds_the_index(self):
+        name, target, _pid = S.setup_run()
+        MO.boot()
+        eid = S.request(name, target)["execution_id"]
+        before = MO.index_get(name)
+        with MO._INDEX_LOCK:
+            MO._INDEX.clear()
+        self.assertIsNone(MO.index_get(name))
+        MO.boot()
+        print("[R16] boot: the live run's order is back, same id and seq")
+        again = MO.index_get(name)
+        self.assertEqual((again["order_id"], again["seq"]), (before["order_id"], before["seq"]))
+        self.assertEqual(again["target"]["execution_id"], eid)
+
+    def test_r17_answers_are_deep_copies(self):
+        name, target, _pid = S.setup_run()
+        MO.boot()
+        S.request(name, target)
+        order = MO.index_get(name)
+        view = MO.for_observer(name, order, (name, False, set(), lambda p: False, lambda l, p: False))
+        view["actors"][0]["start"]["x"] = -999.0
+        view["target"]["location_id"] = "elsewhere"
+        print("[R17] a changed answer leaves the index alone")
+        self.assertNotEqual(MO.index_get(name)["actors"][0]["start"]["x"], -999.0)
+        self.assertEqual(MO.index_get(name)["target"]["location_id"], target["location_id"])
 
 
 if __name__ == "__main__":
