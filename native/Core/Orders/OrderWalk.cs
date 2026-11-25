@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AnimaNative.Nav;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
 
 namespace AnimaNative.Orders;
 
@@ -30,6 +31,10 @@ public sealed record WalkStep(Vec3 Pos, double YawDeg, bool Arrived, bool Stuck,
 /// A figure held within <see cref="OrderPlayer.ArriveTolM"/> of the access counts as arrived. Links are ridden through
 /// the <see cref="ILinkRide"/> of their kind; while a ride runs neither stuck time nor deviation counts.
 /// A step with <c>dt ≤ 0</c> is neutral.
+/// Avoidance (plan E3 Task 11, spec 5d): every step reports the velocity of its path step (<see cref="DesiredVelocity"/>);
+/// the RVO answer to an earlier report (<see cref="Avoidance"/>: that desired velocity and its safe velocity) adds its
+/// change of velocity to the next path step, clamped by <see cref="AvoidanceClamp.Step"/> (the final piece unclamped).
+/// Without an answer, or with one equal to its desire (no neighbour), the walk is exactly the path walk above.
 /// </summary>
 public sealed class OrderWalk
 {
@@ -98,6 +103,21 @@ public sealed class OrderWalk
     /// <summary>A link ride is requested or running.</summary>
     public bool Riding => _ride is not null;
 
+    /// <summary>
+    /// The avoidance's answer for the next step: the desired velocity the agent reported and the safe velocity it got
+    /// back (m/s, horizontal). Consumed by the next <see cref="Step"/>; null = none (the path step as it is).
+    /// </summary>
+    public (P2 Desired, P2 Safe)? Avoidance { get; set; }
+
+    /// <summary>The wall clamp of an avoided step, (from, to) → to; null = no walls (out in the open).</summary>
+    public Func<P2, P2, P2>? Walls { get; set; }
+
+    /// <summary>The storey height of the navmesh clamp of an avoided step (<see cref="NavClamp.Step"/>).</summary>
+    public double StoreyHeightM { get; set; } = 3;
+
+    /// <summary>The velocity of the last step's path step, before the avoidance (m/s, horizontal; 0 standing, riding, arrived).</summary>
+    public P2 DesiredVelocity { get; private set; }
+
     /// <summary>A new plan from where the figure stands (stuck count and clock are kept); not during a ride.</summary>
     public void Replan(NavPlan plan, Vec3? access = null)
     {
@@ -136,6 +156,9 @@ public sealed class OrderWalk
     public WalkStep Step(Vec3 pos, double dt, IPathProvider nav)
     {
         LeftoverS = 0;
+        var avoid = Avoidance;
+        Avoidance = null;
+        DesiredVelocity = default;
         if (_refused)
             return Make(pos, linkRefused: true);
         if (_arrived)
@@ -194,6 +217,9 @@ public sealed class OrderWalk
             _stuckTime = 0;
             return Make(q, atLink: true);
         }
+        DesiredVelocity = new P2((q.X - pos.X) / dt, (q.Z - pos.Z) / dt);
+        if (avoid is { } a)
+            q = Avoided(pos, q, a, dt, nav);
 
         bool slow = _last is { } before && NavRoutePlanner.Horizontal(q, before) / dt < OrderPlayer.StuckSpeedMS;
         _last = q;
@@ -343,6 +369,36 @@ public sealed class OrderWalk
         if (mx * mx + mz * mz > 1e-12)
             _yaw = Math.Atan2(mx, mz) * 180 / Math.PI;
     }
+
+    /// <summary>
+    /// The path step <paramref name="q"/> plus the avoidance's change of velocity (safe − desired) · dt, clamped
+    /// (<see cref="AvoidanceClamp.Step"/>; the final piece unclamped); the facing follows the avoided step.
+    /// </summary>
+    private Vec3 Avoided(Vec3 pos, Vec3 q, (P2 Desired, P2 Safe) a, double dt, IPathProvider nav)
+    {
+        double dx = (a.Safe.X - a.Desired.X) * dt, dz = (a.Safe.Z - a.Desired.Z) * dt;
+        if (dx * dx + dz * dz <= 1e-12)
+            return q;
+        var c = AvoidanceClamp.Step(new P2(pos.X, pos.Z), new P2(q.X + dx, q.Z + dz), pos.Y, StoreyHeightM, nav,
+                                    Walls ?? NoWalls, _final);
+        double mx = c.X - pos.X, mz = c.Z - pos.Z;
+        if (mx * mx + mz * mz > 1e-12)
+            _yaw = Math.Atan2(mx, mz) * 180 / Math.PI;
+        return new Vec3(c.X, q.Y, c.Z);
+    }
+
+    private static readonly Func<P2, P2, P2> NoWalls = (_, to) => to;
+
+    /// <summary>The slowest and fastest rate of the gait clip on an order walk.</summary>
+    public const double MinClipRate = 0.25, MaxClipRate = 3.0;
+
+    /// <summary>
+    /// The rate of the walking clip of a figure moving at <paramref name="speedMS"/> on an order (spec 5d: the gait clip is
+    /// scaled to the order's tempo): the clip at its own pace walks <see cref="LocalOrders.DefaultSpeedMS"/> (1.4 m/s, the
+    /// orders' walking speed), so the rate is speed / 1.4, held within [<see cref="MinClipRate"/>, <see cref="MaxClipRate"/>].
+    /// </summary>
+    public static double ClipRate(double speedMS)
+        => double.IsFinite(speedMS) ? Math.Clamp(speedMS / LocalOrders.DefaultSpeedMS, MinClipRate, MaxClipRate) : 1;
 
     private void BeginRide(NavLink link)
     {

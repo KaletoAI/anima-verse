@@ -2136,6 +2136,16 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
   of it) and one with `game_rate` 1 at t = 3.0: the figure stands still from 2.0 to 3.0 (≤ 0.1 mm); states Exit → Walk →
   Frozen → Walk → Entry → Loop; the frozen 1.0 s delays the chain end to 5.679678 + 1.0 = **6.679678 s** (± 0.1); on the
   bed slot.
+- **R8** (plan E3 Task 11, avoidance) two server `walk` orders head-on through r-a, both issued 100 at `motion_now` 100:
+  `ord-r8u` Uli (95, 0) → (99, 0) and `ord-r8o` Ona (99, 0) → (95, 0), 1.4 m/s; the line z = 0 lies inside the eroded r-a
+  (x 94.35…99.65) and clear of the armchair (z ≤ −1.35) and the rug (no obstacle), so each path is the straight 4 m:
+  4 / 1.4 = 2.857 s, flip = issued + 2.857143 + 0.5 = **103.357143** (relative 3.357). The ticks wait for a real physics
+  frame each (the navigation server answers the agents' velocities there; RVO is not deterministic). Expected: the
+  smallest centre distance during the meeting **≥ 0.3 m** (ideal 0.25 + 0.25 = 0.5; 0.3 separates "avoided" from "walked
+  through" — without avoidance the two meet at x 97 with a gap of one frame step, measured 0.013), both on the loop before
+  flip + 5 = **8.357 s** and on their goals (± 0.05), both agents of the location's map while walking and in the loop
+  (static, velocity 0). The earlier runs' figures leave the map first (`ReleaseAvoidance`), else R13c's Uli would stand
+  as an agent on (99, 0). Measured on the reference machine: gap 0.5, both arrivals 3.033 s.
 
 **The avatar's orders (plan E3 Task 6, `Check/OrderCheck.Avatar.cs`).** R2–R2c run on the propactions world through the
 real offers controller (`fixture-avatar` at (−3, −2); bench-56: slot (2, 0.129, 0), the actor's access (2, −1); no

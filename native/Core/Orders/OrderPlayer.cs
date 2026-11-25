@@ -121,6 +121,21 @@ public sealed class OrderPlayer
     /// <summary>The reason of the last refusal.</summary>
     public string? RefusalReason { get; private set; }
 
+    /// <summary>
+    /// The avoidance's answer handed to the walk's next step (<see cref="OrderWalk.Avoidance"/>, plan E3 Task 11): the
+    /// desired velocity the agent reported and its safe velocity. Consumed by the next walk step; null = none.
+    /// </summary>
+    public (P2 Desired, P2 Safe)? Avoidance { get; set; }
+
+    /// <summary>The wall clamp of an avoided step (<see cref="OrderWalk.Walls"/>); null = none.</summary>
+    public Func<P2, P2, P2>? Walls { get; set; }
+
+    /// <summary>The storey height of the navmesh clamp of an avoided step (<see cref="OrderWalk.StoreyHeightM"/>).</summary>
+    public double StoreyHeightM { get; set; } = 3;
+
+    /// <summary>The walk's velocity of the last tick before the avoidance (m/s, horizontal); 0 outside a walking step.</summary>
+    public P2 DesiredVelocity { get; private set; }
+
     public bool Accept(Order order, double clientNow, double motionNow, Vec3 shownPos, double shownYawDeg)
     {
         var actor = order.ActorNamed(_name);
@@ -188,9 +203,11 @@ public sealed class OrderPlayer
     public OrderFrame Tick(double clientNow, IPathProvider? nav)
     {
         double c = ChainTime(clientNow);
+        DesiredVelocity = default;
         if (Current is not null && _state is not (OrderState.Idle or OrderState.Abort))
             Advance(c, nav);
         double phaseTime = _state is OrderState.Idle or OrderState.Abort ? 0 : Math.Max(0, c - _phaseStart);
+        Avoidance = null; // an answer no walk step took is stale by the next tick
         var frame = new OrderFrame(State, _pos, _yaw, _phaseStep, _poseKey, phaseTime, _pending.ToArray());
         _pending.Clear();
         if (_state == OrderState.Abort)
@@ -528,7 +545,12 @@ public sealed class OrderPlayer
             }
         }
         _walk.SpeedMS = speed; // a revision may change speed_m_s / gait mid-walk
+        _walk.Avoidance = Avoidance;
+        Avoidance = null;
+        _walk.Walls = Walls;
+        _walk.StoreyHeightM = StoreyHeightM;
         var s = _walk.Step(_pos, c - _walkC, map);
+        DesiredVelocity = _walk.DesiredVelocity;
         _walkC = c;
         WalkedM += NavRoutePlanner.Horizontal(_pos, s.Pos);
         _pos = s.Pos;

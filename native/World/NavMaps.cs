@@ -34,6 +34,9 @@ public sealed class LocationNav : IPathProvider
     // The written state is what the server holds after its sync — the comparison of decision 3 / review N-B1.
     private readonly Dictionary<Rid, bool> _enabled = new();
 
+    /// <summary>The avoidance agents on this map by figure name (plan E3 Task 11).</summary>
+    private readonly Dictionary<string, Rid> _agents = new(System.StringComparer.Ordinal);
+
     /// <summary>The map answers with its current state (decision 4: iterated since the last effective change).</summary>
     public bool Ready => NavigationServer3D.MapGetIterationId(Map) > ChangedAtIteration;
 
@@ -53,6 +56,21 @@ public sealed class LocationNav : IPathProvider
     /// A new active map for the baked storeys (parallel to <c>src.Storeys</c>), the thresholds and the links. Every
     /// threshold starts enabled; the caller applies the current locks.
     /// </summary>
+    /// <summary>
+    /// The world map out in the open (spec 5d "Außenwelt"): no region, no link — only the avoidance of the figures walking
+    /// outside every location (an active map without regions still runs RVO). Paths out there are the order's own.
+    /// </summary>
+    public static LocationNav CreateOutdoor()
+    {
+        var map = NavigationServer3D.MapCreate();
+        NavigationServer3D.MapSetUseAsyncIterations(map, false);
+        NavigationServer3D.MapSetActive(map, true);
+        var empty = new NavSourceData(System.Array.Empty<NavStoreySource>(), System.Array.Empty<NavThreshold>(),
+                                      System.Array.Empty<NavLinkSpec>(), System.Array.Empty<NavProblem>(), "outdoor");
+        return new LocationNav(map, System.Array.Empty<Rid>(), System.Array.Empty<NavigationMesh>(),
+                               new Dictionary<int, Rid>(), new Dictionary<ulong, Rid>(), empty);
+    }
+
     public static LocationNav Create(NavSourceData src, NavigationMesh[] storeys, NavBakeParams p)
     {
         var map = NavigationServer3D.MapCreate();
@@ -130,9 +148,79 @@ public sealed class LocationNav : IPathProvider
     public bool ThresholdEnabled(int doorway)
         => Thresholds.TryGetValue(doorway, out var rid) && EnabledOf(rid, NavigationServer3D.RegionGetEnabled);
 
-    /// <summary>Releases links, regions and the map; the server drops the map at its next sync.</summary>
+    // ---- avoidance agents (plan E3 Task 11, spec 5d) --------------------------------------------------------------
+
+    /// <summary>Neighbours an agent looks at, and how far (m): a room full of figures, never the whole map.</summary>
+    public const int AgentMaxNeighbours = 10;
+    public const double AgentNeighbourDistanceM = 6;
+    /// <summary>How far ahead (s) an agent avoids other agents.</summary>
+    public const double AgentTimeHorizonS = 1.0;
+    /// <summary>One avoidance layer and mask for every figure (different ones would let them ignore each other silently).</summary>
+    public const uint AgentAvoidanceLayers = 1;
+
+    /// <summary>The agents on this map (the check counts them).</summary>
+    public int AgentCount => _agents.Count;
+
+    /// <summary>The figure has an agent on this map (a freed map has none).</summary>
+    public bool HasAgent(string name) => _agents.ContainsKey(name);
+
+    /// <summary>
+    /// The figure's avoidance agent on this map, created at the first call: 2D avoidance directly on the navigation
+    /// server (no NavigationAgent3D node — the order player owns time and path), the same layer and mask for all,
+    /// <paramref name="radius"/> (set again on every call), avoidance on. <paramref name="safeVelocity"/> becomes the
+    /// agent's avoidance callback when it is created (it moves with the agent to another map).
+    /// </summary>
+    public Rid AgentFor(string name, double radius, System.Action<Vector3>? safeVelocity = null)
+    {
+        if (!_agents.TryGetValue(name, out var rid))
+        {
+            rid = NavigationServer3D.AgentCreate();
+            NavigationServer3D.AgentSetUse3DAvoidance(rid, false);
+            NavigationServer3D.AgentSetAvoidanceLayers(rid, AgentAvoidanceLayers);
+            NavigationServer3D.AgentSetAvoidanceMask(rid, AgentAvoidanceLayers);
+            NavigationServer3D.AgentSetMaxNeighbors(rid, AgentMaxNeighbours);
+            NavigationServer3D.AgentSetNeighborDistance(rid, (float)AgentNeighbourDistanceM);
+            NavigationServer3D.AgentSetTimeHorizonAgents(rid, (float)AgentTimeHorizonS);
+            NavigationServer3D.AgentSetTimeHorizonObstacles(rid, 0);
+            NavigationServer3D.AgentSetAvoidanceEnabled(rid, true);
+            if (safeVelocity is not null) NavigationServer3D.AgentSetAvoidanceCallback(rid, Callable.From(safeVelocity));
+            NavigationServer3D.AgentSetMap(rid, Map);
+            _agents[name] = rid;
+        }
+        NavigationServer3D.AgentSetRadius(rid, (float)radius);
+        return rid;
+    }
+
+    /// <summary>
+    /// The figure's agent goes over to <paramref name="to"/> (<c>AgentSetMap</c>: the figure entered another location, or
+    /// a rebake swapped the map); without an agent here, or onto itself, nothing happens. An agent already waiting on the
+    /// other map is freed first.
+    /// </summary>
+    public void MoveAgentTo(string name, LocationNav to)
+    {
+        if (ReferenceEquals(to, this) || !_agents.Remove(name, out var rid)) return;
+        if (to._agents.Remove(name, out var stale)) NavigationServer3D.FreeRid(stale);
+        NavigationServer3D.AgentSetMap(rid, to.Map);
+        to._agents[name] = rid;
+    }
+
+    /// <summary>Every agent of this map goes over to <paramref name="to"/> (a rebake swaps the map in).</summary>
+    public void MoveAgentsTo(LocationNav to)
+    {
+        foreach (var name in _agents.Keys.ToList()) MoveAgentTo(name, to);
+    }
+
+    /// <summary>Frees the figure's agent on this map (none: nothing).</summary>
+    public void FreeAgent(string name)
+    {
+        if (_agents.Remove(name, out var rid)) NavigationServer3D.FreeRid(rid);
+    }
+
+    /// <summary>Releases agents, links, regions and the map; the server drops the map at its next sync.</summary>
     public void Free()
     {
+        foreach (var rid in _agents.Values) NavigationServer3D.FreeRid(rid);
+        _agents.Clear();
         foreach (var rid in Links.Values) NavigationServer3D.FreeRid(rid);
         foreach (var rid in Thresholds.Values) NavigationServer3D.FreeRid(rid);
         foreach (var rid in Storeys) NavigationServer3D.FreeRid(rid);

@@ -161,6 +161,9 @@ public partial class Main : Node3D
                 Slots = () => builder.Slots,
                 // Plan E3 Task 5: an NPC order walks on its location's navigation mesh.
                 NavOf = loc => builder.Slots.TryGetValue(loc, out var navSlot) ? builder.NavFor(navSlot) : null,
+                // Plan E3 Task 11: the avoidance agents out in the open, and the walls an avoided step is clamped against.
+                OutdoorNav = () => builder.OutdoorNav,
+                OrderWallsAt = builder.OrderWalls,
                 PrepareAvatarPlacement = map => builder.PrepareAvatarArrival(map),
                 CamDist = () => _camera is { } c && IsInstanceValid(c) ? c.Distance : FigureManager.DefaultCamDist,
             };

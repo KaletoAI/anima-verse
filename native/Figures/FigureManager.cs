@@ -689,6 +689,9 @@ public partial class FigureManager : Node3D
         foreach (var fig in all)
             if (!PhotoMode || fig.CharacterName != AvatarName)
                 StepFigure(fig, dt, faceTo.TryGetValue(fig, out var n) ? n : null, camDist);
+        // Plan E3 Task 11: every agent reports where its figure stands and where it wants to go; the navigation server
+        // answers the safe velocities at its next step, the walks take them in the next tick.
+        SyncAvoidance(dt);
         AfterTick?.Invoke();
     }
 
@@ -1180,6 +1183,7 @@ public partial class FigureManager : Node3D
     public override void _ExitTree()
     {
         _clipsStopped = true;
+        ReleaseAvoidance();
         foreach (var task in _templates.Values)
         {
             if (!task.IsCompletedSuccessfully) continue;
@@ -2062,6 +2066,10 @@ public partial class FigureManager : Node3D
         // the box itself (scaled, before that shift — `findLegChains(inst, box)`) and `model.height` feed the gait.
         V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
+        // Plan E3 Task 11: an animal's avoidance radius is half the larger side of its scaled footprint.
+        fig.AvoidanceRadiusM = t.BindBox is { } fb
+            ? AnimaNative.Orders.AvoidanceClamp.RadiusOf(info.Rig, (fb.Max.X - fb.Min.X) * scale, (fb.Max.Z - fb.Min.Z) * scale)
+            : AnimaNative.Orders.AvoidanceClamp.HumanRadiusM;
         fig.CollidePrimitives = t.Collide;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
                     box, t.RawHeight * scale, fitClip: fitClip, refreshClipKinds: () => t.Kinds);

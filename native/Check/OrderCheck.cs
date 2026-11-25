@@ -36,7 +36,8 @@ namespace AnimaNative.Check;
 ///       healing; R7b the same room change as a row without order → a client-local walk of the same path, on the mesh;
 ///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
-///       for 1 s stands still and ends its chain 1 s later.
+///       for 1 s stands still and ends its chain 1 s later;
+///   R8  avoidance: two walks head-on through r-a keep ≥ 0.3 m between their centres and both arrive before flip + 5.
 /// </summary>
 public static partial class OrderCheck
 {
@@ -95,6 +96,7 @@ public static partial class OrderCheck
                 {
                     AutoTick = false, Slots = () => builder.Slots, GroundYAt = builder.FigureGroundY,
                     NavOf = loc => builder.Slots.TryGetValue(loc, out var s) ? builder.NavFor(s) : null,
+                    OutdoorNav = () => builder.OutdoorNav, OrderWallsAt = builder.OrderWalls,
                 };
                 world.AddChild(m);
                 runs.Add(m);
@@ -448,6 +450,51 @@ public static partial class OrderCheck
             // The 1.0 s frozen span (2.0 → 3.0) delays the chain end by exactly that much.
             Near("R15b chain end 5.68 + 1.0", r15b.At(Ona, OrderState.Loop), ChainEndS + 1.0, TolS);
             NearXZ("R15b on the bed slot", r15b.F(Ona).Position, BedSlot);
+
+            // ---- R8 avoidance (plan E3 Task 11): two walks head-on through r-a pass each other ----
+            // README "Orders world" R8: Uli (95, 0) → (99, 0) and Ona (99, 0) → (95, 0), 1.4 m/s, flip = issued + 4 / 1.4 + 0.5.
+            // Real physics frames between the ticks: the navigation server answers the agents' velocities there.
+            const double R8FlipRel = 3.357143;
+            JsonNode WalkOrder(string id, long seq, string name, double fromX, double toX) => JsonNode.Parse($$"""
+                {"order_id":"{{id}}","revision":1,"seq":{{seq}},"kind":"walk","issued_motion_s":100,"eta_motion_s":103.357143,"flip_motion_s":103.357143,
+                 "deadline_motion_s":113.357143,"status":"approaching","awaits":"","gait":"walk","speed_m_s":1.4,
+                 "target":{"location_id":"loc-nav","room_id":"r-a","level":0,"x":{{toX}},"y":0,"z":0},"hint_route":[],"snap":false,
+                 "actors":[{"name":"{{name}}","role":"actor","clip_role":"","height_cm":180,"start":{"x":{{fromX}},"y":0,"z":0,"yaw":0,"room_id":"r-a","level":0},
+                            "access":null,"anchor":null,"entry_mode":"","sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}],"reports_arrival":false}]}
+                """)!;
+            // The earlier runs' figures still stand on this map as agents (R13c's Uli on (99, 0)): they leave it first.
+            foreach (var earlier in runs) earlier.ReleaseAvoidance();
+            var r8 = await Start(Map(m =>
+            {
+                foreach (var (n, x, to, id, seq) in new[] { (Uli, 95.0, 99.0, "ord-r8u", 6L), (Ona, 99.0, 95.0, "ord-r8o", 7L) })
+                {
+                    var row = Row(m, n);
+                    row["room_id"] = "r-a";
+                    row["pos"] = new JsonObject { ["x"] = x, ["z"] = 0 };
+                    row["activity_animation"] = "standing";
+                    row["order"] = WalkOrder(id, seq, n, x, to);
+                }
+                m["order_seq"] = 7;
+            }));
+            double minGap = double.PositiveInfinity;
+            bool agentsSeen = false;
+            while (r8.M.Clock < R8FlipRel + 5 + 0.5 - 1e-9)
+            {
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
+                r8.M.Tick(Dt);
+                var (u8, o8) = (r8.F(Uli).Position, r8.F(Ona).Position);
+                minGap = Math.Min(minGap, Math.Sqrt((u8.X - o8.X) * (u8.X - o8.X) + (u8.Z - o8.Z) * (u8.Z - o8.Z)));
+                agentsSeen |= r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav);
+            }
+            Is("R8 both walkers are agents of the location's map", agentsSeen);
+            GD.Print($"[orders] R8 min gap {minGap:0.###} m, arrivals {r8.At(Uli, OrderState.Loop):0.###} / {r8.At(Ona, OrderState.Loop):0.###} s");
+            Is("R8 they kept ≥ 0.3 m between their centres", minGap >= 0.3, $"min {minGap:0.###} m");
+            foreach (var (n, goal) in new[] { (Uli, new Vec3(99, 0, 0)), (Ona, new Vec3(95, 0, 0)) })
+            {
+                Is($"R8 {n} arrived before flip + 5", r8.At(n, OrderState.Loop) is { } at8 && at8 <= R8FlipRel + 5, Seq(r8, n));
+                NearXZ($"R8 {n} on the goal", r8.F(n).Position, goal);
+            }
+            Is("R8 in the loop both stay agents (static, velocity 0)", r8.M.HasAgentOn(Uli, nav) && r8.M.HasAgentOn(Ona, nav));
 
             checks += await AvatarAsync(host, fixtures, builder, world, runs);
             return $"orders {checks} checks (chain end {r1.At(Ona, OrderState.Loop):0.###} s, walked {r1.M.OrderPlayerOf(Ona)?.WalkedM:0.###} m)";

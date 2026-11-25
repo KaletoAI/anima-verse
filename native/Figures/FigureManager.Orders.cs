@@ -8,6 +8,8 @@ using AnimaNative.Api;
 using AnimaNative.Nav;
 using AnimaNative.Orders;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
+using AnimaNative.World;
 using Godot;
 
 namespace AnimaNative.Figures;
@@ -47,6 +49,18 @@ public partial class FigureManager
 
     /// <summary>The navigation of a location (id → map; null = none yet: the player walks straight).</summary>
     public Func<string, IPathProvider?>? NavOf { get; set; }
+
+    /// <summary>
+    /// The world map out in the open (<see cref="World.WorldBuilder.OutdoorNav"/>): the avoidance agents of figures whose
+    /// order walks outside every location (plan E3 Task 11); null = no avoidance out there.
+    /// </summary>
+    public Func<LocationNav?>? OutdoorNav { get; set; }
+
+    /// <summary>
+    /// The walls of a location's storey at a height, in world xz with the body radius
+    /// (<see cref="World.WorldBuilder.OrderWalls"/>): the wall clamp of an avoided order step; null = none.
+    /// </summary>
+    public Func<string, double, (IReadOnlyList<AnimaNative.Embody.WallSegment> Segments, double Radius)?>? OrderWallsAt { get; set; }
 
     /// <summary>A figure's order reached its access (event <c>arrived_access</c>; the avatar's also reports it, Task 7).</summary>
     public event Action<string, Order>? OrderArrivedAtAccess;
@@ -424,6 +438,7 @@ public partial class FigureManager
 
     private void ForgetOrders(string name)
     {
+        ReleaseAgent(name);
         if (_orderPlayers.TryGetValue(name, out var player) && player.Current is { } current)
         {
             _clickWalkIds.Remove(current.Id);
@@ -495,6 +510,7 @@ public partial class FigureManager
         if (_orderBlends.TryGetValue(name, out var blend)) return TickOrderBlend(fig, blend, dt, camDist);
         if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is not { } order) return false;
         player.SetFrozen(FrozenFor(player), _clock);
+        PrepareAvoidedStep(fig, player, order);
         var frame = player.Tick(_clock, _orderPaths.TryGetValue(order.Id, out var own) ? own : NavOf?.Invoke(order.LocationId));
         bool shownBefore = _orderShownState.TryGetValue(name, out var wasState);
         if (frame.Events.Count > 0 || frame.State != OrderState.Idle || (shownBefore && wasState != OrderState.Idle))
@@ -607,11 +623,14 @@ public partial class FigureManager
                     fig.Position = new Vector3((float)p.X, (float)EaseRootY(fig, before.Y, open.RootY, dt), (float)p.Z);
                     fig.SetMotion(moving, false, open.Movement);
                     PlayLifting(fig, open.Clip, open.TerrainClip, open.Sink, before.Y, open.RootY, "ground");
+                    if (moving && dt > 0) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
                     break;
                 }
                 fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
                 fig.SetMotion(moving, false, FigureClips.WalkRun);
                 fig.Play(FigureClips.PoseKind(moving ? "walking" : "standing", fig.Poses));
+                // Spec 5d: the gait clip runs at the order's tempo (the step's own speed: RVO may slow it).
+                if (moving && dt > 0) fig.ScaleClip(OrderWalk.ClipRate(Math.Sqrt(dx * dx + dz * dz) / dt));
                 break;
             }
             case OrderState.Entry:
@@ -757,5 +776,144 @@ public partial class FigureManager
             };
             return clip is { Length: > 0 } && fig.HasClip(clip) ? fig.ClipSeconds(clip) : null;
         }
+    }
+
+    // ---- avoidance (plan E3 Task 11, spec 5d) -----------------------------------------------------------------------
+
+    /// <summary>The avoidance priority of the avatar: an NPC (<see cref="NpcAvoidancePriority"/>) gives way to it, never back.</summary>
+    public const float AvatarAvoidancePriority = 1f, NpcAvoidancePriority = 0.5f;
+
+    /// <summary>The height band an agent covers: figures on another storey never avoid each other.</summary>
+    public const float AgentHeightM = 1.8f;
+
+    /// <summary>One figure's avoidance agent: the map it lives on, what it last reported and the answer that came back.</summary>
+    private sealed class AvoidAgent
+    {
+        public required LocationNav Nav;
+        public P2 Sent;
+        public (P2 Desired, P2 Safe)? Answer;
+        public Vector3? LastPos;
+        public AvoidanceMode Mode = AvoidanceMode.None;
+        public float Priority = -1;
+        /// <summary>The agent's key on the map: unique per manager (a check runs several managers on one map).</summary>
+        public required string Key;
+        /// <summary>The avoidance callback: the safe velocity paired with the velocity it answers.</summary>
+        public Action<Vector3>? Callback;
+    }
+
+    private readonly Dictionary<string, AvoidAgent> _agents = new(StringComparer.Ordinal);
+
+    /// <summary>The figure has an avoidance agent on <paramref name="nav"/> (check R8).</summary>
+    public bool HasAgentOn(string name, LocationNav nav)
+        => _agents.TryGetValue(name, out var a) && ReferenceEquals(a.Nav, nav) && nav.HasAgent(a.Key);
+
+    /// <summary>
+    /// Before an NPC's order tick: the avoidance's answer (taken only by a walk step), the wall clamp of the order's
+    /// location at the figure's height and its storey height. The avatar never takes an answer — input and its click walk
+    /// own it; it is only an agent so that NPCs give way.
+    /// </summary>
+    private void PrepareAvoidedStep(Figure fig, OrderPlayer player, Order order)
+    {
+        string name = fig.CharacterName;
+        player.Avoidance = null;
+        player.Walls = null;
+        if (player.RunState != OrderState.Walk || name == AvatarName) return;
+        if (_agents.TryGetValue(name, out var agent))
+        {
+            player.Avoidance = agent.Answer;
+            agent.Answer = null;
+        }
+        if (order.LocationId.Length == 0) return;
+        if (OrderWallsAt?.Invoke(order.LocationId, fig.Position.Y) is { } walls)
+            player.Walls = (from, to) => AnimaNative.Embody.Collide.ClampAgainstWalls(from, to, walls.Segments, walls.Radius);
+        player.StoreyHeightM = Slots?.Invoke().GetValueOrDefault(order.LocationId)?.Scene is { StoreyM: > 0 } scene ? scene.StoreyM : 3;
+    }
+
+    /// <summary>
+    /// After every figure stepped: each figure's agent on the map of where it is (spec 5d). An NPC with a live order is an
+    /// agent on its order's location map (out in the open: <see cref="OutdoorNav"/>) — moving with the walk's desired
+    /// velocity and <c>max_speed</c> = the order's speed, standing (velocity 0) at the access, in the loop and frozen, out
+    /// of the avoidance in exit and entry (<see cref="AvoidanceClamp.ModeOf"/>). The avatar is an agent with its measured
+    /// velocity on the map of its row's location, at a priority the NPCs give way to. Everyone else has no agent. A
+    /// change of map moves the agent (<see cref="LocationNav.MoveAgentTo"/>, <c>AgentSetMap</c>).
+    /// </summary>
+    private void SyncAvoidance(double dt)
+    {
+        foreach (var fig in _figures.Values)
+        {
+            string name = fig.CharacterName;
+            LocationNav? map = null;
+            var mode = AvoidanceMode.None;
+            P2 velocity = default;
+            double maxSpeed = 0;
+            bool avatar = name == AvatarName && name.Length > 0;
+            if (avatar)
+            {
+                var loc = _rowByName.TryGetValue(name, out var row) ? row.LocationId : "";
+                map = MapOf(loc);
+                mode = AvoidanceMode.Moving;
+                if (_agents.TryGetValue(name, out var known) && known.LastPos is { } last && dt > 0)
+                    velocity = new P2((fig.Position.X - last.X) / dt, (fig.Position.Z - last.Z) / dt);
+                maxSpeed = Math.Max(Math.Sqrt(velocity.X * velocity.X + velocity.Z * velocity.Z), 0.01);
+            }
+            else if (PlaysOrder(name) && _orderPlayers[name] is { Current: { } order } player)
+            {
+                map = MapOf(order.LocationId);
+                mode = AvoidanceClamp.ModeOf(player.RunState, player.State == OrderState.Frozen);
+                if (mode == AvoidanceMode.Moving) velocity = player.DesiredVelocity;
+                maxSpeed = order.SpeedMS > 0 ? order.SpeedMS : LocalOrders.DefaultSpeedMS;
+            }
+            if (mode == AvoidanceMode.None || map is null)
+            {
+                ReleaseAgent(name);
+                continue;
+            }
+            if (!_agents.TryGetValue(name, out var agent))
+                agent = _agents[name] = new AvoidAgent { Nav = map, Key = $"{GetInstanceId()}/{name}" };
+            else if (!ReferenceEquals(agent.Nav, map))
+            {
+                // The figure entered another location (or a released map left it without one): AgentSetMap, never a new agent.
+                if (agent.Nav.HasAgent(agent.Key)) agent.Nav.MoveAgentTo(agent.Key, map);
+                agent.Nav = map;
+                agent.Answer = null;
+            }
+            var a = agent;
+            a.Callback ??= v => a.Answer = (a.Sent, new P2(v.X, v.Z));
+            var rid = map.AgentFor(agent.Key, fig.AvoidanceRadiusM, a.Callback);
+            if (agent.Mode != mode)
+            {
+                NavigationServer3D.AgentSetAvoidanceEnabled(rid, mode != AvoidanceMode.Off);
+                NavigationServer3D.AgentSetHeight(rid, AgentHeightM);
+                agent.Mode = mode;
+            }
+            float priority = avatar ? AvatarAvoidancePriority : NpcAvoidancePriority;
+            if (agent.Priority != priority)
+            {
+                NavigationServer3D.AgentSetAvoidancePriority(rid, priority);
+                agent.Priority = priority;
+            }
+            NavigationServer3D.AgentSetPosition(rid, fig.Position);
+            NavigationServer3D.AgentSetMaxSpeed(rid, (float)maxSpeed);
+            NavigationServer3D.AgentSetVelocity(rid, new Vector3((float)velocity.X, 0, (float)velocity.Z));
+            agent.Sent = velocity;
+            agent.LastPos = fig.Position;
+        }
+        foreach (var gone in _agents.Keys.Where(n => !_figures.ContainsKey(n)).ToList()) ReleaseAgent(gone);
+    }
+
+    /// <summary>The avoidance map of a location: its navigation (none yet: none), out in the open the world map.</summary>
+    private LocationNav? MapOf(string locationId)
+        => locationId.Length == 0 ? OutdoorNav?.Invoke() : NavOf?.Invoke(locationId) as LocationNav;
+
+    /// <summary>Frees the figure's agent (on a map already released there is nothing left to free).</summary>
+    private void ReleaseAgent(string name)
+    {
+        if (_agents.Remove(name, out var agent)) agent.Nav.FreeAgent(agent.Key);
+    }
+
+    /// <summary>Frees every agent of this manager (its exit from the tree; a check before it reuses the maps).</summary>
+    public void ReleaseAvoidance()
+    {
+        foreach (var name in _agents.Keys.ToList()) ReleaseAgent(name);
     }
 }

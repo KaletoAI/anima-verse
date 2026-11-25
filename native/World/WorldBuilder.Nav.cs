@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using AnimaNative.Embody;
 using AnimaNative.Nav;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
@@ -104,6 +105,45 @@ public sealed partial class WorldBuilder
     internal int NavBakesDropped { get; private set; }
     /// <summary>A bake of the slot is running.</summary>
     internal bool NavBaking(LocationSlot slot) => _navJobs.ContainsKey(slot);
+
+    private LocationNav? _outdoorNav;
+
+    /// <summary>
+    /// Plan E3 Task 11 (spec 5d "Außenwelt"): the world map out in the open — no region, only the avoidance of the figures
+    /// walking outside every location. Created at the first use, released with the residency (<see cref="StopNav"/>);
+    /// a figure's agent changes between it and a location's map with <see cref="LocationNav.MoveAgentTo"/>.
+    /// </summary>
+    public LocationNav OutdoorNav => _outdoorNav ??= LocationNav.CreateOutdoor();
+
+    private readonly Dictionary<(string Loc, int Level), (LocationSlot Slot, ScenePayload Scene, TileFrame Frame, List<WallSegment> Segments)>
+        _orderWalls = new();
+
+    /// <summary>
+    /// Plan E3 Task 11: the walls of the location's storey nearest to the height <paramref name="y"/> (the storeys of its
+    /// navigation) in world xz, with the body radius — the wall clamp of an avoided order step. Unlike
+    /// <see cref="PlayerWalls"/> it does not depend on the interior being shown: NPCs walk the same walls either way.
+    /// Null without a navigation, a scene or walls.
+    /// </summary>
+    public (IReadOnlyList<WallSegment> Segments, double Radius)? OrderWalls(string locationId, double y)
+    {
+        if (!_slots.TryGetValue(locationId, out var tile) || tile.Nav is not { } nav || tile.Scene is not { } scene
+            || nav.Source.Storeys.Count == 0) return null;
+        int level = nav.Source.Storeys.OrderBy(s => Math.Abs(s.FloorY - y)).First().Level;
+        var key = (tile.Loc.Id, level);
+        var frame = tile.Stands.Frame;
+        if (!_orderWalls.TryGetValue(key, out var cache) || cache.Slot != tile || cache.Scene != scene || cache.Frame != frame)
+        {
+            var segments = Collide.WallSegments(scene, level).Select(s =>
+            {
+                var a = SceneView.TileToWorld(frame, s.Ax, s.Az);
+                var b = SceneView.TileToWorld(frame, s.Bx, s.Bz);
+                return new WallSegment(a.X, a.Z, b.X, b.Z);
+            }).ToList();
+            cache = (tile, scene, frame, segments);
+            _orderWalls[key] = cache;
+        }
+        return cache.Segments.Count == 0 ? null : (cache.Segments, Collide.BodyRadius(scene.K));
+    }
 
     /// <summary>
     /// The swapped navigation of the slot (never a pending one). It stays the same through <see cref="SetLocks"/>, even
@@ -245,6 +285,8 @@ public sealed partial class WorldBuilder
         _navPending.Remove(slot);
         var old = slot.Nav;
         slot.Nav = entry.Nav;
+        // Plan E3 Task 11: the figures' avoidance agents go over to the new map (AgentSetMap) before the old one is freed.
+        old?.MoveAgentsTo(entry.Nav);
         old?.Free();
         OnNavChanged(slot);
         SyncNavSubscription();
@@ -267,6 +309,9 @@ public sealed partial class WorldBuilder
         SyncNavSubscription();
         _navCache.Clear();
         _navCacheOrder.Clear();
+        _orderWalls.Clear();
+        _outdoorNav?.Free();
+        _outdoorNav = null;
     }
 
     /// <summary>
