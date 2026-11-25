@@ -330,6 +330,7 @@ _ADMIN_PREFIXES = (
     "/story",          # storyteller files (raw read/write/delete)
     "/story-dev",
     "/scheduler",
+    "/quests",         # quest templates carry GM notes: reads too
 )
 # Readable for a player, writable only for an admin — segment-wise prefixes,
 # write methods only (GET/HEAD stay open everywhere).

@@ -230,6 +230,7 @@ from app.routes import prop_actions as prop_actions_route
 from app.routes import improvements as improvements_route
 from app.routes import npc as npc_route
 from app.routes import extension_motion as extension_motion_route
+from app.routes import quests as quests_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -1248,6 +1249,7 @@ app.include_router(game_admin_route.router)
 app.include_router(world_setup_route.router)
 app.include_router(world_settings_route.router)
 app.include_router(storyteller_route.router)
+app.include_router(quests_route.router)
 app.include_router(observer_route.router)
 app.include_router(play_route.router)
 app.include_router(api_images_route.router)

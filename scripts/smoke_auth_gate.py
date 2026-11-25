@@ -126,6 +126,12 @@ E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
         TaskPanel cancels and retries its own jobs). /queue/tasks/clear and
         /queue/tasks/{task_id} share a shape, so these two are EXACT matches,
         never a prefix.
+     5. /quests (quest system stage 1, D12): on _ADMIN_PREFIXES, so EVERY
+        method is True — reads included, because a quest template carries GM
+        notes a player must not read. GET /quests/templates, POST
+        /quests/templates and DELETE /quests/runs/r1 are True; the segment
+        neighbour /questsx is False; the player's quest book GET /play/quests
+        lies under /play and stays False.
 
    Task 8 of plan 2026-11-12-unified-worn-pieces: POST
    /inventory/items/{id}/build-wearers is True by rule 3; GET
@@ -650,6 +656,12 @@ WRITE_RULE_CASES = [
     ("GET", "/queue/status", False),
     ("GET", "/queue/tasks/status", False),
     ("GET", "/queue/force-resume", False),
+    # Rule 5 — /quests: admin-only for every method (GM notes), the quest book stays open
+    ("GET", "/quests/templates", True),
+    ("POST", "/quests/templates", True),
+    ("DELETE", "/quests/runs/r1", True),
+    ("POST", "/questsx", False),
+    ("GET", "/play/quests", False),
     # Segment-wise prefixes: the neighbours are NOT matched
     ("POST", "/worldly", False),
     ("POST", "/worldly/locations", False),
@@ -668,7 +680,9 @@ for _m, _p, _exp in WRITE_RULE_CASES:
 for _m, _p in [("POST", "/world/locations"), ("DELETE", "/world/locations/x"),
                ("POST", "/rules"), ("POST", "/intents"), ("POST", "/events"),
                ("POST", "/inventory/items"), ("POST", "/inventory/rooms/a/b"),
-               ("POST", "/queue/force-resume"), ("DELETE", "/queue/tasks/clear")]:
+               ("POST", "/queue/force-resume"), ("DELETE", "/queue/tasks/clear"),
+               ("GET", "/quests/templates"), ("POST", "/quests/templates"),
+               ("DELETE", "/quests/runs/r1")]:
     check(f"user {_m} {_p}", status(_m, _p, "user"), 403)
     check(f"admin {_m} {_p}", status(_m, _p, "admin"), 200)
 for _m, _p in [("POST", "/world/imagegen-enhance-prompt"),
@@ -676,7 +690,8 @@ for _m, _p in [("POST", "/world/imagegen-enhance-prompt"),
                ("DELETE", "/queue/tasks/abc"),
                ("POST", "/queue/tasks/item/abc/retry"),
                ("GET", "/world/locations"), ("GET", "/rules"),
-               ("GET", "/events"), ("GET", "/inventory/items")]:
+               ("GET", "/events"), ("GET", "/inventory/items"),
+               ("GET", "/play/quests")]:
     check(f"user {_m} {_p}", status(_m, _p, "user"), 200)
 
 # The figure routes of Task 8 through the REAL routers: the wearers read is refused for a player by its
