@@ -1155,9 +1155,15 @@ def _boot_walks(shift: float, alive: float | None) -> None:
     for name in list_profile_orders(out_of_world=True):
         # A walk of a body that left the world (dormant, review minor): nobody
         # settles it and no roster shows it — drop the field.
+        # Same test as the live loop below: only a field that carries a walk is dropped.
         with keyed_lock("character_profile", name):
             profile = get_character_profile(name) or {}
-            if profile.pop(PROFILE_KEY, None) is not None and not save_character_profile(name, profile):
+            record = profile.get(PROFILE_KEY)
+            order = record.get("order") if isinstance(record, dict) else None
+            if not isinstance(order, dict) or order.get("kind") != "walk":
+                continue
+            profile.pop(PROFILE_KEY, None)
+            if not save_character_profile(name, profile):
                 logger.warning("walk of out-of-world %s: field not dropped", name)
     for name in list_profile_orders():
         with keyed_lock("character_profile", name):
