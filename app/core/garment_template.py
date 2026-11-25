@@ -2527,6 +2527,20 @@ def refused_only_by_time(failed: Dict[str, Any]) -> bool:
 
 def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``_drape_state`` memoised per read scope (read_scope), a copy per call: keyed by
+    ``(character_name, item_id, base_sha, lower, obj_sig(item))``; the profile, items and sidecars it reads below its
+    arguments count as constant for one scope (their writers clear it — plan 2026-11-24-figure-poll-caches, Task 5)."""
+    if not read_scope.active():
+        return _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    isig = read_scope.obj_sig(item)
+    if item is not None and isig is None:
+        return _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    return read_scope.memo("drape_state", (character_name, item_id, base_sha, tuple(lower or ()), isig),
+                           lambda: _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item))
+
+
+def _drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
+                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{state, reason, tsig, path, record}`` — ``ready`` (the drape GLB of the current key exists
     and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``, plus ``failure`` =
     ``failure_info`` of the record),

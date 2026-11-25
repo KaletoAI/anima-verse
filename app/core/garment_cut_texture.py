@@ -1365,10 +1365,15 @@ def _upsampler_on(b) -> bool:
 
 
 def _write_record(path: Path, record: dict) -> None:
+    from app.core import read_scope
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        # a cut-texture record moves no figure generation: a read scope of this context must not serve the old state
+        read_scope.clear()
 
 
 def _write_bytes(path: Path, data: bytes) -> None:

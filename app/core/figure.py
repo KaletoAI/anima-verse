@@ -876,6 +876,8 @@ def invalidate() -> None:
     with _memo_lock:
         _generation[0] += 1
         _memo.clear()
+    from app.core import read_scope
+    read_scope.clear()   # the reads of this context's scope may predate the write
 
 
 def delivered_figure_cached(character_name: str, *, profile: Optional[Dict[str, Any]] = None,

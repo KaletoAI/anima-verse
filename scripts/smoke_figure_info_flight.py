@@ -17,7 +17,7 @@ Runs without a server, LLM or HTTP on a throwaway world: ``STORAGE_DIR`` / ``INS
   runs a per-section hook, sleeps 0.2 s and returns ``{"build": build, "n": n, "big": [...]}`` (``big`` = 3000 small
   dicts, so a deepcopy takes a few milliseconds).
 
-Precondition (checked on the REAL ``_figure_info`` source before patching): it reads ``build`` only as
+Precondition (checked on the REAL ``_figure_info_body`` source — the body behind the read-scope wrapper — before patching): it reads ``build`` only as
 ``build["failed"]``, ``build["running"]``, ``build.get("step")`` (and of the step only ``.get("name")``), never
 mentions "live", and hands it on unchanged as ``"build": build``. So a key without ``step.live`` stands for the
 whole answer except ``build``, which figure_info sets fresh.
@@ -106,7 +106,8 @@ def main() -> None:
     from app.core import figure, figure_build
     from app.models.character import save_character_profile
     check("create demo", save_character_profile("demo", {"gender": "female", "age": 30}, create_new=True), True)
-    precondition(inspect.getsource(figure_build._figure_info))
+    # the body behind the read-scope wrapper (read_scope, plan Task 5)
+    precondition(inspect.getsource(figure_build._figure_info_body))
 
     def fake_state(name):
         with _lock:

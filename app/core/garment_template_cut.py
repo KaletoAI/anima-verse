@@ -215,6 +215,23 @@ def sheet_file(character_name: str, item_id: str, sig: str) -> Path:
 
 def cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
             item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``_cut_key`` memoised per read scope (read_scope), a copy per call: keyed by every argument, ``profile`` /
+    ``item`` by ``read_scope.obj_sig``; ``item`` None is read (``get_item``) before the key is built, so a call with
+    and one without the item meet in one entry (plan 2026-11-24-figure-poll-caches, Task 5)."""
+    if not read_scope.active():
+        return _cut_key(character_name, item_id, profile=profile, item=item)
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(item_id)
+    isig, psig = read_scope.obj_sig(item), read_scope.obj_sig(profile)
+    if (item is not None and isig is None) or (profile is not None and psig is None):
+        return _cut_key(character_name, item_id, profile=profile, item=item)
+    return read_scope.memo("cut_key", (character_name, item_id, psig, isig),
+                           lambda: _cut_key(character_name, item_id, profile=profile, item=item))
+
+
+def _cut_key(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
+             item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the piece's cut is made of now: ``{sig, reason, params, base, base_sha, lower, under, item}`` — ``sig``
     None with the plain ``reason`` when it cannot be cut (no parameters, not a pattern kind or a strapless top, no
     plain body, a lower layer still to be draped — ``sig_of``). ``lower``
@@ -340,8 +357,12 @@ def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir
 def _write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    tmp.replace(path)
+    try:
+        tmp.write_bytes(data)
+        tmp.replace(path)
+    finally:
+        # a cut file moves no figure generation: a read scope of this context must not serve the old state
+        read_scope.clear()
 
 
 def run(character_name: str, item_id: str) -> Dict[str, Any]:

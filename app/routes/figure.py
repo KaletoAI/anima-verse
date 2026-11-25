@@ -1092,6 +1092,14 @@ def template_view_image(character_name: str, item_id: str, view: str, attempt: i
 # --- texture from cut (plan 2026-11-20-template-cut-uv-texture, Task 10) -----------------------------------------
 
 def _template_cut_payload(character_name: str, item_id: str) -> Dict[str, Any]:
+    """``_template_cut_body`` inside one read scope (``read_scope``, plan 2026-11-24-figure-poll-caches, Task 5): the
+    cut key the schedule, the pattern state and the dialog ask for is computed once per request."""
+    from app.core import read_scope
+    with read_scope.scope():
+        return _template_cut_body(character_name, item_id)
+
+
+def _template_cut_body(character_name: str, item_id: str) -> Dict[str, Any]:
     """``garment_cut_texture.dialog_state`` plus the picture URLs (``urls``: template / raw / atlas of the current
     csig, "" for a missing file; the query names the csig, so a new attempt is a new URL) and ``pattern_url`` (the
     debug sheet of the current islands, "" without islands)."""

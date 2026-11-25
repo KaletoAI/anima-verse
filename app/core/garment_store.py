@@ -748,6 +748,21 @@ def _md5(payload: Dict[str, Any]) -> str:
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
+    """``_garment_fsig`` memoised per read scope (read_scope), a copy per call: keyed by every argument, ``profile``
+    by ``read_scope.obj_sig`` (plan 2026-11-24-figure-poll-caches, Task 5)."""
+    if not read_scope.active():
+        return _garment_fsig(character_name, item_id, profile=profile, state=state, method=method, swing=swing)
+    psig = read_scope.obj_sig(profile)
+    if profile is not None and psig is None:
+        return _garment_fsig(character_name, item_id, profile=profile, state=state, method=method, swing=swing)
+    return read_scope.memo("garment_fsig", (character_name, item_id, psig, state, method, swing),
+                           lambda: _garment_fsig(character_name, item_id, profile=profile, state=state,
+                                                 method=method, swing=swing))
+
+
+def _garment_fsig(character_name: str, item_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
+                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HAAR adds ``{method, ssig, seed, colour}`` (the served
     seed, ``haar_served_seed``; the colour override), ``cut`` only when the hairstyle has one

@@ -3216,7 +3216,8 @@ def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str,
     with read_scope.measure() as calls:
         try:
             try:
-                steps = plan(character_name, profile=profile)
+                with read_scope.scope():   # one read request (read_scope): repeated sub-reads computed once
+                    steps = plan(character_name, profile=profile)
                 error = ""
             except Exception as e:  # noqa: BLE001
                 logger.warning("open steps of %s not computable: %s", character_name, e)
@@ -3238,6 +3239,15 @@ def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str,
 
 
 def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
+    """``_figure_info_body`` inside one read scope (``read_scope``, plan 2026-11-24-figure-poll-caches, Task 5): the
+    profile, drape states, cut keys and fit signatures its sub-reads ask for again and again are computed once per
+    call. Never on a build path: the Build calls ``figure._delivered`` / ``plan`` itself, without a scope."""
+    from app.core import read_scope
+    with read_scope.scope():
+        return _figure_info_body(character_name, profile=profile, build=build)
+
+
+def _figure_info_body(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, served_built_at
     (when the served model was built — Ruling UI3 a), served_state (what that model is against the outfit worn
