@@ -3070,6 +3070,11 @@ def open_steps(character_name: str) -> Dict[str, Any]:
     steps: [{label, jobs, hold, why}]}``; ``hold`` a step only a manual Build runs (``Step.manual``) or one that
     failed for its inputs (``Step.failed``). Plus ``building`` (a run goes). Off the pipeline both are empty.
     Read-only, no hub / LLM / Blender work; memoised like ``figure_info`` (``_info_key``, ``figure.MEMO_TTL_S``).
+    An entry past the TTL with the same key is served once more and its character queued for a background
+    re-plan (``_queue_refresh``: at most two daemon workers ``open-steps-refresh-0/1`` share one queue, so a
+    hanging plan blocks no more than one of them). The route ``GET /characters/open-steps`` calls this through
+    ``open_steps_roster`` under its serial flight (one roster run at a time plus one follower,
+    ``app/core/single_flight.py``); ``figure_batch`` calls it directly.
     Never raises: an unreadable plan answers ``error`` with empty groups. Statistics: ``figure_memo`` counts
     ``open_hit`` (same key within the TTL), ``open_stale`` (same key past the TTL, served while a background
     re-plan refreshes it) or ``open_miss`` (computed now); ``_compute_open`` records ``figure_compute``."""
@@ -3092,9 +3097,7 @@ def open_steps(character_name: str) -> Dict[str, Any]:
             if stale and character_name not in _open_refreshing:
                 # Past the TTL with the same key: served once more while ONE background re-plan refreshes it
                 # (the list polls every character; a cold plan of ~30 characters takes about a second).
-                _open_refreshing.add(character_name)
-                threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
-                                 name=f"open-steps-{character_name}").start()
+                _queue_refresh(character_name)
             served = copy.deepcopy(hit[2])
     if served is not None:
         _memo_stat("open_stale" if stale else "open_hit")
@@ -3103,7 +3106,60 @@ def open_steps(character_name: str) -> Dict[str, Any]:
     return _compute_open(character_name, profile, build, key, now)
 
 
+def open_steps_roster(names: List[str]) -> Dict[str, Any]:
+    """The badges of a roster: ``{name: open_steps(name)}`` for every name with an open step or a running
+    Build (the loop of ``GET /characters/open-steps``, which runs it under its serial flight)."""
+    out: Dict[str, Any] = {}
+    for name in names:
+        info = open_steps(name)
+        if info["building"] or info["base"]["count"] or info["outfit"]["count"]:
+            out[name] = info
+    return out
+
+
+#: Characters queued or being re-planned in the background (no name is queued twice); guarded by ``_info_lock``.
 _open_refreshing: set = set()
+#: The names waiting for a background re-plan, in order; guarded by ``_info_lock``.
+_open_queue: Deque[str] = deque()
+#: The live refresh workers by index (0 or 1); guarded by ``_info_lock``. A worker removes itself under the
+#: lock when it finds the queue empty, so a later ``_queue_refresh`` starts a new one.
+_open_workers: Dict[int, threading.Thread] = {}
+_OPEN_WORKERS = 2
+
+
+def _queue_refresh(character_name: str) -> None:
+    """Queue a background re-plan of ``character_name`` and start a worker when fewer than two run. Called
+    under ``_info_lock``."""
+    _open_refreshing.add(character_name)
+    _open_queue.append(character_name)
+    if len(_open_workers) >= _OPEN_WORKERS:
+        return
+    index = next(i for i in range(_OPEN_WORKERS) if i not in _open_workers)
+    worker = threading.Thread(target=_open_worker, args=(index,), daemon=True,
+                              name=f"open-steps-refresh-{index}")
+    _open_workers[index] = worker
+    try:
+        worker.start()
+    except RuntimeError:  # no thread available: the next stale read queues again and retries the start
+        del _open_workers[index]
+        logger.debug("open steps refresh worker not started", exc_info=True)
+
+
+def _open_worker(index: int) -> None:
+    """Re-plan queued characters one after the other; end (and deregister) when the queue is empty."""
+    try:
+        while True:
+            with _info_lock:
+                if not _open_queue:
+                    return
+                name = _open_queue.popleft()
+            _refresh_open(name)
+    finally:
+        # Deregistered under the lock right where the empty queue was seen (or on an unexpected exit), so a
+        # later _queue_refresh always finds a free index and starts a new worker.
+        with _info_lock:
+            if _open_workers.get(index) is threading.current_thread():
+                del _open_workers[index]
 
 
 def _refresh_open(character_name: str) -> None:

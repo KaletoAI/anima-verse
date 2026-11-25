@@ -174,11 +174,15 @@ from pydantic import BaseModel
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 from app.core.route_limits import FIGURE_POLLS, FIGURE_POLLS_LIMIT, limited
+from app.core.single_flight import SerialFlight
 from app.models.character import get_character_dir
 
 logger = get_logger("figure_routes")
 
 router = APIRouter(prefix="/characters", tags=["figure"])
+
+#: ``GET /characters/open-steps``: one roster computation at a time plus one follower (slot = the roster).
+_ROSTER_FLIGHT = SerialFlight()
 
 
 def _require_character(character_name: str) -> None:
@@ -190,14 +194,17 @@ def _require_character(character_name: str) -> None:
 @limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
 def get_open_steps(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The character list's badges (Ruling A112): ``{"characters": {name: figure_build.open_steps(name)}}`` for
-    every character of the roster (dormant included) — only those with an open step or a running Build."""
-    from app.core import figure_build
+    every character of the roster (dormant included) — only those with an open step or a running Build.
+    Concurrent polls share one computation (``_ROSTER_FLIGHT``, slot = the roster, key = the figure
+    generation): a poll that finds a run with the same key waits for it, one with a newer key waits for the
+    slot's single follower. Every caller gets its own copy. Stale badges are re-planned by
+    ``figure_build``'s two background workers. The wait happens in this sync handler's worker thread, never on
+    the event loop."""
+    from app.core import figure, figure_build
     from app.models.character import list_available_characters
-    out: Dict[str, Any] = {}
-    for name in list_available_characters(include_dormant=True):
-        info = figure_build.open_steps(name)
-        if info["building"] or info["base"]["count"] or info["outfit"]["count"]:
-            out[name] = info
+    names = list(list_available_characters(include_dormant=True))
+    out = _ROSTER_FLIGHT.run(tuple(names), lambda: figure._generation[0],
+                             lambda: figure_build.open_steps_roster(names))
     return {"characters": out}
 
 
