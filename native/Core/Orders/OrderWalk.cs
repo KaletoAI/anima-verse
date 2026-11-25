@@ -38,7 +38,7 @@ public sealed class OrderWalk
     private const double Eps = 1e-6;
 
     private readonly IReadOnlyDictionary<string, ILinkRide> _rides;
-    private readonly double _speed;
+    private double _speed;
     private readonly string _actor;
     private NavPlan _plan;
     private int _step, _corner = 1;
@@ -59,6 +59,18 @@ public sealed class OrderWalk
         Access = access;
         Reset();
         _yaw = InitialYaw();
+    }
+
+    /// <summary>The walking speed; a revision of the order may change it between steps.</summary>
+    public double SpeedMS
+    {
+        get => _speed;
+        set
+        {
+            if (!(value > 0))
+                throw new ArgumentOutOfRangeException(nameof(value), "an order walk needs a positive speed");
+            _speed = value;
+        }
     }
 
     /// <summary>Where the final piece ends.</summary>
@@ -101,7 +113,7 @@ public sealed class OrderWalk
     {
         double budget = Math.Max(0, meters);
         var p = pos;
-        Advance(ref p, ref budget, clamp: null, out _, out bool atLink);
+        Advance(ref p, ref budget, clamp: null, out _, out _);
         arrived = _arrived;
         restM = budget;
         _last = p;
@@ -291,6 +303,9 @@ public sealed class OrderWalk
             budget = 0;
             if (clamp is not null)
             {
+                // Assumes a frame's step (speed · dt) stays well below OnMeshM: every corner of a navmesh path lies on
+                // the mesh, so only a short step can leave it, and a push up to OnMeshM is a correction. A step longer
+                // than that (a frame hitch) could be clamped into a gap or onto the far side of a thin hole.
                 var on = clamp.ClosestOnVertical(next, ClampHalfHeightM);
                 double push = NavRoutePlanner.Horizontal(on, next);
                 if (push > Eps && push <= NavRoutePlanner.OnMeshM)

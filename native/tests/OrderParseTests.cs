@@ -178,4 +178,19 @@ public class OrderParseTests
         using var doc = JsonDocument.Parse("[1, 2]");
         Assert.Null(OrderParse.From(doc.RootElement));
     }
+
+    [Fact]
+    public void SpeedFollowsTheServerRule()
+    {
+        // motion_orders.new_order: a moving order needs speed > 0, a cancel may carry 0, never a negative speed.
+        var w = Wire();
+        w["speed_m_s"] = 0;
+        Assert.Null(Parse(w));
+        w["kind"] = "walk";
+        Assert.Null(Parse(w));
+        w["kind"] = "cancel";
+        Assert.NotNull(Parse(w));
+        w["speed_m_s"] = -1;
+        Assert.Null(Parse(w));
+    }
 }

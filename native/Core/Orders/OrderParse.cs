@@ -52,10 +52,14 @@ public static class OrderParse
                 if (OptNum(target, "x") is { } gx && OptNum(target, "z") is { } gz)
                     goal = new OrderPoint(gx, OptNum(target, "y") ?? 0, gz, OptNum(target, "yaw") ?? 0);
             }
+            double speed = Num(e, "speed_m_s");
+            // As motion_orders.new_order: a moving order needs a positive speed, a cancel may carry 0, never below.
+            if (speed < 0 || (kind != "cancel" && speed == 0))
+                return null;
             return new Order(
                 id, (int)Num(e, "revision"), (long)(OptNum(e, "seq") ?? 0), kind,
                 Num(e, "issued_motion_s"), Num(e, "eta_motion_s"), OptNum(e, "flip_motion_s"), Num(e, "deadline_motion_s"),
-                Str(e, "status"), Str(e, "awaits"), Str(e, "gait"), Num(e, "speed_m_s"),
+                Str(e, "status"), Str(e, "awaits"), Str(e, "gait"), speed,
                 actors, location, room, level, goal, Route(e), Bool(e, "snap"));
         }
         catch (BadOrder)

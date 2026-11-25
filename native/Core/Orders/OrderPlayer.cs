@@ -113,7 +113,9 @@ public sealed class OrderPlayer
             Revise(order, actor, clientNow);
             return true;
         }
-        if (cur is not null && cur.IsLocal && _state != OrderState.Idle && SameTarget(cur, _actor!, order, actor))
+        // Only a running local order is adopted; an ended or aborted one (Abort lasts one frame) is replaced (case 1).
+        if (cur is not null && cur.IsLocal && _state is not (OrderState.Idle or OrderState.Abort)
+            && SameTarget(cur, _actor!, order, actor))
         {
             Revise(order, actor, clientNow);
             return true;
@@ -387,6 +389,11 @@ public sealed class OrderPlayer
         _pending.Add("loop_started");
     }
 
+    /// <summary>
+    /// The pose of the LAST loop/phase/finale step of the sequence. Assumes the server writes only the phases that have
+    /// begun into <c>sequence</c> (a follow run replaces the order); a sequence carrying future phases in advance would
+    /// show the last of them too early.
+    /// </summary>
     private void SetLoopPose()
     {
         var loop = _actor!.Sequence.LastOrDefault(s => LoopSteps.Contains(s.Step));
@@ -458,6 +465,16 @@ public sealed class OrderPlayer
         }
         var map = nav is { Ready: true } ? nav : StraightPath.Instance;
         double speed = Current!.SpeedMS;
+        if (!(speed > 0))
+        {
+            // A walk without a positive speed (only a malformed local order; the parser refuses such server orders).
+            if (!_noPath)
+            {
+                _noPath = true;
+                _pending.Add("no_path");
+            }
+            return false;
+        }
         if (_walk is null)
         {
             if (_noPath)
@@ -486,6 +503,7 @@ public sealed class OrderPlayer
                 }
             }
         }
+        _walk.SpeedMS = speed; // a revision may change speed_m_s / gait mid-walk
         var s = _walk.Step(_pos, c - _walkC, map);
         _walkC = c;
         WalkedM += NavRoutePlanner.Horizontal(_pos, s.Pos);
@@ -523,9 +541,17 @@ public sealed class OrderPlayer
     /// The navmesh path to the map's closest point of <paramref name="target"/> (the final piece to the target itself is
     /// the walk's). A start already at that point gets a one-segment plan; no path → null.
     /// </summary>
+    /// <summary>The storey tolerance of <see cref="NavRoutePlanner"/> (its private OtherStoreyM; NavRoute.cs stays unchanged until Task 10).</summary>
+    private const double OtherStoreyM = 1.5;
+
     private static NavPlan? PlanTo(IPathProvider map, Vec3 from, Vec3 target)
     {
         var goal = map.Closest(target);
+        // The map's closest point on another storey (no mesh on the target's own storey): no path, instead of a walk on
+        // the wrong storey plus a final piece through the ceiling (case 3 of NavRoutePlanner.Plan, which the pre-closed
+        // goal would otherwise skip).
+        if (!(Math.Abs(goal.Y - target.Y) < OtherStoreyM))
+            return null;
         var plan = NavRoutePlanner.Plan(map, from, goal, static (_, _) => true, Array.Empty<P2>(), 0);
         if (plan is null && NavRoutePlanner.Horizontal(from, goal) <= NavRoutePlanner.OnMeshM)
             plan = new NavPlan(new NavStep[] { new NavWalk(new[] { from, goal }) }, goal, NavRoutePlanner.Horizontal(from, goal));

@@ -690,4 +690,52 @@ public class OrderPlayerTests
         Assert.Equal(0, h.Frames[600].Position.X, 6);
         AssertStates(h, (OrderState.Exit, 0), (OrderState.Walk, 1.2), (OrderState.Entry, 10.6), (OrderState.Loop, 13.0));
     }
+
+    [Fact]
+    public void local_aborted_then_server_order_is_a_new_order()
+    {
+        // Review minor 1: an aborted local order is not running; the matching server order is case 1 and plays.
+        var h = new OrderHarness(OrderHarness.Floor());
+        Assert.True(h.Accept(Local(), lag: 0));
+        h.RunBefore(0.6);
+        h.Player.Refuse("slot_taken");
+        Assert.Equal(OrderState.Abort, h.Player.State);
+        Assert.True(h.Accept(Server("run-1", 0.3)));
+        Assert.Equal("run-1", h.Player.Current!.Id);
+        Assert.Equal(0.6, h.Player.IssuedLocal, 9); // a new clock: issued 100.6 = motion now, lag 0 at t 0.6
+        Assert.Equal(OrderState.Walk, h.Tick().State);
+        h.RunThrough(5);
+        Assert.Contains(h.Events, e => e.Event == "entry_started");
+    }
+
+    [Fact]
+    public void access_on_another_storey_is_no_path()
+    {
+        // Review minor 3: the floor mesh has only height 0; an access at y 3 has no mesh on its storey, the closest
+        // map point (2.8, 0, 0) is 3 m below it (>= 1.5) -> no_path at 1.2, no walk onto the wrong storey.
+        var h = new OrderHarness(OrderHarness.Floor());
+        var up = Bed(w => w["actors"]![0]!["access"] = new JsonObject { ["x"] = 2.8, ["y"] = 3, ["z"] = 0, ["yaw"] = 90 });
+        Assert.True(h.Accept(up, lag: 0));
+        h.RunThrough(3);
+        Assert.Equal(1.2, EventTime(h, "no_path"), 6);
+        Assert.Equal(0, h.Last!.Position.X, 6);
+    }
+
+    [Fact]
+    public void revision_changes_the_walking_speed()
+    {
+        // Review minor 4: revision 2 at t 2.0 doubles the speed to 2.8 m/s. Before the frame at 2.0 the figure has
+        // walked (119/60 - 1.2) * 1.4 = 1.09667 m; the remaining 1.70333 m take 1.70333 / 2.8 = 0.60833 s from
+        // 119/60 -> arrival 2.59167 (frame 2.6), Loop 2.59167 + 2.4 = 4.99167 (frame 5.0).
+        var h = new OrderHarness(OrderHarness.Floor());
+        Assert.True(h.Accept(Bed(), lag: 0));
+        h.RunBefore(2.0);
+        Assert.True(h.Accept(Bed(w =>
+        {
+            w["revision"] = 2;
+            w["speed_m_s"] = 2.8;
+        })));
+        h.RunThrough(6);
+        AssertStates(h, (OrderState.Exit, 0), (OrderState.Walk, 1.2), (OrderState.Entry, 2.6), (OrderState.Loop, 5.0));
+    }
 }
