@@ -294,6 +294,14 @@ def _character_row_exists(conn, character_name: str) -> bool:
     return bool(row)
 
 
+def character_row_exists(character_name: str) -> bool:
+    """Whether a ``characters`` row with exactly this name exists. Read-only;
+    a read error propagates (it is NOT reported as "absent")."""
+    if not character_name:
+        return False
+    return _character_row_exists(get_connection(), character_name)
+
+
 def _read_config_json_row(conn, character_name: str):
     """Raw config_json row for a character (or None)."""
     return conn.execute(

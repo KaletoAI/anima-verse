@@ -217,6 +217,22 @@ wins; nothing declared = the A126 auto-detection. Core:
 `app.core.animation_clips.clip_contact_target(meta, kind)`,
 `validate_contact_relations(value, roles)`.
 
+## Contact clips without relations — capability `contact.default_requirement` ✅
+
+Owner decisions 2026-11-25 (`app/core/contact_clothing.py`). A contact clip may start only once the clothes in the
+way are off (`contact_free` of the anatomy package's part groups and channel regions, docs/plugins.md). Which roles
+need what comes from the clip's effective contact relations (above). A clip WITHOUT any is checked by a default when a
+package declares it a contact clip: `register_provider("contact.default_requirement", fn, owner="<package id>",
+multiple=True)`, `fn(pose_key="", kind="") -> bool` (`True` = contact clip; the pose key is given wherever the
+caller knows it, else only the kind; a raising contributor counts as `False`). The default checks every participant
+by its OWN anatomy — a body with an attached part needs the part free, a body without a part but with a channel the
+channel — which is deliberately a little strict for a third person in a group who only watches or uses hands or
+mouth; an authored relation on the clip is exact and wins. No contributor = no default: nothing without relations is
+gated. Core: `app.core.contact_clothing.refusal(pose_key, names, *, kind, roles, profiles)` (the one gate, `{}` or
+`{reason: "clothing", message, blockers}`), `app.core.contact_clothing.default_applies(pose_key, kind)`,
+`app.core.contact_clothing.default_needs(name, profile)`. `intimacy`: every intimate pair/group
+pose (`intimate_pair_poses`); solo poses never (no channel engages outside a pair interaction).
+
 ## Clip bend limits — capability `clip_bend_limit_defaults` ✅
 
 Ruling A145 (owner decision 2026-11-20). Every frame in both renderers the attached part bends

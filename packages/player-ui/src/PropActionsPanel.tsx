@@ -8,7 +8,7 @@ import { usePropActions } from './usePropActions'
 import { cancelPropAction, checkPropAction, holdPropActionMeter, notifyLocalPropActionChange, requestPropAction, respondPropAction, setPropActionAlt,
   type PropActionChoice, type PropActionConsent, type PropActionAlt, type PropActionExecution, type PropActionMeter, type PropActionOffer } from './propActions'
 
-export interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string }
+export interface OfferChoice { offer: PropActionOffer; partner?: string; enabled: boolean; reason: string; reason_text?: string }
 export interface OfferGroup { key: string; label: string; partner?: string; entries: OfferChoice[]; usable: boolean }
 
 
@@ -18,13 +18,15 @@ function offerGroups(offers: PropActionOffer[], partner?: string): OfferGroup[] 
   for (const offer of offers) {
     if (offer.participants > 2) continue
     if (partner && !offer.required_partner) continue
-    const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
+    const choices: PropActionChoice[] = !offer.required_partner
+      ? [{ enabled: offer.enabled, reason: offer.reason, reason_text: offer.reason_text, partner: undefined }]
       : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
-        : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
+        : partner ? [] : [{ enabled: false, reason: offer.reason, reason_text: offer.reason_text, partner: undefined }]
     for (const choice of choices) {
       const key = JSON.stringify([offer.label, choice.partner ?? ''])
       const group = groups.get(key) ?? { key, label: offer.label, partner: choice.partner, entries: [], usable: false }
-      group.entries.push({ offer, partner: choice.partner, enabled: choice.enabled, reason: choice.reason })
+      group.entries.push({ offer, partner: choice.partner, enabled: choice.enabled, reason: choice.reason,
+        reason_text: choice.reason_text })
       group.usable ||= choice.enabled
       groups.set(key, group)
     }
@@ -43,7 +45,7 @@ function groupActions(offers: PropActionOffer[], partner?: string): OfferGroup[]
     if (!(offer.participants > 2)) continue
     const key = JSON.stringify(['group', offer.label])
     const group = groups.get(key) ?? { key, label: offer.label, entries: [], usable: false }
-    group.entries.push({ offer, enabled: offer.enabled, reason: offer.reason })
+    group.entries.push({ offer, enabled: offer.enabled, reason: offer.reason, reason_text: offer.reason_text })
     group.usable ||= offer.enabled
     groups.set(key, group)
   }
@@ -118,8 +120,10 @@ export function GroupPicker({ group, busy, nameProps, onPick, onClose }: {
       const enabled = entry.enabled && !tooMany && fits && !!verdict?.enabled
       const reason = tooMany ? '' : !entry.enabled ? entry.reason : !fits ? 'participant_unavailable'
         : verdict && !verdict.enabled ? verdict.reason : ''
+      const reasonText = tooMany ? '' : !entry.enabled ? entry.reason_text : !fits ? ''
+        : verdict && !verdict.enabled ? verdict.reason_text : ''
       const hint = tooMany ? t('Takes at most {n} others').replace('{n}', String(groupMostOthers(entry.offer)))
-        : reason ? propActionReason(reason, t) : t('Ask {name} first').replace('{name}', chosen.join(', '))
+        : reason ? propActionReason(reason, t, reasonText) : t('Ask {name} first').replace('{name}', chosen.join(', '))
       const action = actions ? `${entry.offer.label} · ` : ''
       const piece = (group.entries.length > 1 && !actions) || nameProps ? `${pieceText(entry.offer)} · ` : ''
       return <HoverHint key={`ask:${entryKey(entry.offer)}`} text={hint}>
@@ -175,7 +179,7 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
     // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
     // the native client shows it too); a single piece names itself there.
     const finale = group.entries.some(entry => entry.offer.finale)
-    const plain = !group.usable ? propActionReason(first.reason, t)
+    const plain = !group.usable ? propActionReason(first.reason, t, first.reason_text)
       : !several && nameProps ? pieceText(first.offer) : undefined
     const hint = finale ? [plain, t('With finale')].filter(Boolean).join(' · ') : plain
     return <HoverHint key={group.key} text={hint}>
@@ -199,7 +203,7 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
       {solo.map(chip)}
       {[...partners].map(([name, pairs]) => {
         const usable = pairs.some(group => group.usable)
-        const hint = usable ? undefined : propActionReason(pairs[0].entries[0].reason, t)
+        const hint = usable ? undefined : propActionReason(pairs[0].entries[0].reason, t, pairs[0].entries[0].reason_text)
         return <HoverHint key={`partner:${name}`} text={hint}>
           <button type="button" className={`player-chip${shownPartner === name ? ' on' : ''}`}
             disabled={busy || !usable} aria-expanded={shownPartner === name}
@@ -223,7 +227,7 @@ export function PropActionOffers({ offers, partner, busy = false, nameProps = tr
         const disabled = busy || !entry.enabled
         const key = JSON.stringify([entry.offer.target, entry.offer.action_id])
         const button = (label: string, hint: string | undefined, consent?: PropActionConsent) =>
-          <HoverHint key={`${key}:${consent ?? ''}`} text={entry.enabled ? hint : propActionReason(entry.reason, t)}>
+          <HoverHint key={`${key}:${consent ?? ''}`} text={entry.enabled ? hint : propActionReason(entry.reason, t, entry.reason_text)}>
             <button type="button" className="player-chip" disabled={disabled}
               aria-disabled={disabled ? true : undefined}
               style={{ pointerEvents: !entry.enabled ? 'none' : undefined }}

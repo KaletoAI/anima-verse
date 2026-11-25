@@ -13,8 +13,9 @@
  * (ActionsTree.tsx) renders the same poses under each person as rows with
  * Ask / Just do it, like the furniture pair actions.
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { ApiError, apiGet, apiPost } from './api'
+import { usePoll } from './usePolling'
 import { HoverHint } from './HoverHint'
 import { invitePair } from './pairInteractions'
 import type { PropActionConsent } from './propActions'
@@ -22,7 +23,14 @@ import type { PropActionConsent } from './propActions'
 export interface PairPose { key: string; kind: string; label: string }
 /** `blocked`: why the avatar may not propose any of them (a block rule or a
  *  cost on the pair verb) — "" = free to ask. */
-export interface PairOptions { poses: PairPose[]; blocked: string }
+export interface PairOptions {
+  poses: PairPose[]
+  blocked: string
+  /** Per present character and pose: the clothes still in the way of the clip's contact, already in words
+   *  (`{partner: {pose key: text}}`; only blocked pairs are listed). Read when the options are fetched — the
+   *  start re-checks, and its refusal names the same clothes. */
+  clothing?: Record<string, Record<string, string>>
+}
 /** A character the avatar may propose to; `busy` = already in a pair with
  *  someone else (the chips stay visible, but disabled). */
 export interface PairTarget { name: string; busy?: boolean }
@@ -35,28 +43,27 @@ let inflight: Promise<PairOptions> | null = null
 
 function fetchPairOptions(): Promise<PairOptions> {
   if (!inflight) {
-    inflight = apiGet<{ poses?: PairPose[]; blocked?: string }>('/play/interact/options')
-      .then((d) => { last = { poses: d.poses || [], blocked: d.blocked || '' }; return last })
+    inflight = apiGet<{ poses?: PairPose[]; blocked?: string; clothing?: Record<string, Record<string, string>> }>(
+      '/play/interact/options')
+      .then((d) => { last = { poses: d.poses || [], blocked: d.blocked || '', clothing: d.clothing || {} }; return last })
       .finally(() => { inflight = null })
   }
   return inflight
 }
 
-/** The world's two-person actions — fetched once per mount (and again when
- *  `refreshKey` changes, e.g. another avatar); the clip library does not
- *  change while a scene is being played. The list does not depend on the
- *  target: who may be asked is decided per proposal by the server. */
+/** The world's two-person actions, with the clothes in the way per partner and pose (`clothing`) — one shared
+ *  live read per `refreshKey` (e.g. the avatar). It follows the sync signals the client already receives (`self`,
+ *  `presence`, `scene`: an undress of the avatar or of someone in the room), so a "still wears" goes once the
+ *  piece is off; the poll between pushes is slow, the list is not cheap. Who may be asked is decided per proposal
+ *  by the server either way. */
 export function usePairOptions(refreshKey = ''): PairOptions {
-  const [options, setOptions] = useState<PairOptions>(last)
-  useEffect(() => {
-    let cancelled = false
-    fetchPairOptions()
-      .then((o) => { if (!cancelled) setOptions(o) })
-      .catch(() => { last = EMPTY; if (!cancelled) setOptions(EMPTY) })
-    return () => { cancelled = true }
-  }, [refreshKey])
-  return options
+  const { data, error } = usePoll<PairOptions>(`play-interact-options:${refreshKey}`, fetchPairOptions, OPTIONS_SPEC)
+  if (error && !data) return EMPTY
+  return data ?? last
 }
+
+const OPTIONS_SPEC = { intervalMs: 15000, pushedIntervalMs: 60000, minSpacingMs: 3000,
+  topics: ['presence', 'scene', 'self'] as ('presence' | 'scene' | 'self')[] }
 
 /** Whether the picker would render anything — the caller hands it to
  *  `PropActionsPanel` as `leading` only then, because a `leading` turns an
@@ -107,18 +114,21 @@ export function pairActionChips({ target, options, stoppable = false, actions, t
   actions: PairPropose
   t: (s: string) => string
 }): ReactNode[] {
-  const hint = target.busy ? t('Busy with someone else') : (options.blocked || undefined)
-  const off = actions.pending || !!hint
+  const common = target.busy ? t('Busy with someone else') : (options.blocked || undefined)
   return [
     ...(stoppable ? [<button key="pair:stop" type="button" onClick={actions.stop}
       className="player-chip">{t('Stop')}</button>] : []),
-    ...options.poses.map((pose) => <HoverHint key={`pair:${target.name}:${pose.key}`} text={hint}>
-      <button type="button" className="player-chip" disabled={off}
-        aria-disabled={off ? true : undefined}
-        style={{ pointerEvents: hint ? 'none' : undefined }}
-        onClick={() => actions.propose(target.name, pose.key)}>
-        {pose.label || pose.key}
-      </button>
-    </HoverHint>),
+    ...options.poses.map((pose) => {
+      const hint = common || options.clothing?.[target.name]?.[pose.key] || undefined
+      const off = actions.pending || !!hint
+      return <HoverHint key={`pair:${target.name}:${pose.key}`} text={hint}>
+        <button type="button" className="player-chip" disabled={off}
+          aria-disabled={off ? true : undefined}
+          style={{ pointerEvents: hint ? 'none' : undefined }}
+          onClick={() => actions.propose(target.name, pose.key)}>
+          {pose.label || pose.key}
+        </button>
+      </HoverHint>
+    }),
   ]
 }

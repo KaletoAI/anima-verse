@@ -36,8 +36,10 @@ interface BodyUnderPiece {
   exposed_detail_slots: string[]
   lift_defaults: Record<string, number>
   motion_damping_slots: string[]
+  /** Slots a package's part or channel needs free for a contact clip → `outfit_piece.open_below`. */
+  contact_free_slots: string[]
 }
-const NO_BODY_UNDER_PIECE: BodyUnderPiece = { exposed_detail_slots: [], lift_defaults: {}, motion_damping_slots: [] }
+const NO_BODY_UNDER_PIECE: BodyUnderPiece = { exposed_detail_slots: [], lift_defaults: {}, motion_damping_slots: [], contact_free_slots: [] }
 let bodyUnderPiece: Promise<BodyUnderPiece> | null = null
 function loadBodyUnderPiece(): Promise<BodyUnderPiece> {
   bodyUnderPiece ??= apiGet<Partial<BodyUnderPiece>>('/inventory/body-under-piece')
@@ -45,6 +47,7 @@ function loadBodyUnderPiece(): Promise<BodyUnderPiece> {
       exposed_detail_slots: r.exposed_detail_slots ?? [],
       lift_defaults: r.lift_defaults ?? {},
       motion_damping_slots: r.motion_damping_slots ?? [],
+      contact_free_slots: r.contact_free_slots ?? [],
     }))
     .catch(() => { bodyUnderPiece = null; return NO_BODY_UNDER_PIECE })
   return bodyUnderPiece
@@ -95,8 +98,10 @@ function BodyUnderPieceFields({ draft, onUpdate }: {
   const covering = new Set([...draft.slots, ...draft.covers, ...draft.partially_covers])
   const showsDetail = info.exposed_detail_slots.some(slot => covering.has(slot))
   const showsDamping = info.motion_damping_slots.some(slot => covering.has(slot))
+  // Open below: only a piece that sits on or covers a slot a contact clip needs free.
+  const showsOpenBelow = info.contact_free_slots.some(slot => draft.slots.includes(slot) || draft.covers.includes(slot))
   const liftDefault = defaultLift(draft, info.lift_defaults)
-  if (!showsDetail && !showsDamping && liftDefault == null) return null
+  if (!showsDetail && !showsDamping && !showsOpenBelow && liftDefault == null) return null
   return (
     <div className="ga-fieldset">
       <div className="ga-fieldset-title">{t('Body shape under this piece')}</div>
@@ -106,6 +111,14 @@ function BodyUnderPieceFields({ draft, onUpdate }: {
           <input type="checkbox" checked={draft.exposed_detail}
             onChange={(e) => onUpdate('exposed_detail', e.target.checked)} />
           {t('Shows detail through (sheer)')}
+        </label>
+      </Field>}
+      {showsOpenBelow && <Field label={t('Open below')}
+        hint={t('A skirt, a dress or a kilt: the piece leaves the body free below, so it does not block a two-person contact action. A closed piece (trousers, shorts, underwear) blocks it until it is taken off. No model rebuild.')}>
+        <label className="ga-form-check" style={{ marginTop: 6 }}>
+          <input type="checkbox" checked={draft.open_below}
+            onChange={(e) => onUpdate('open_below', e.target.checked)} />
+          {t('Open below (skirt, dress)')}
         </label>
       </Field>}
       {showsDamping && <Field label={t('Motion damping')}

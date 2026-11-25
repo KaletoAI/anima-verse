@@ -24,6 +24,8 @@ export interface OutfitPieceMeta {
   // Can be worn open (spec 2026-11-12 Addendum A): its wearers get a Closed / Open toggle.
   closable?: boolean
   exposed_detail?: boolean
+  // Leaves the body free below (skirt, dress, kilt): never blocks a contact clip (contact_clothing).
+  open_below?: boolean
   // How much the piece carries the body under it in 3D (0..1); absent = the
   // slot default a package declares.
   lift?: number
@@ -119,6 +121,8 @@ export interface DraftItem {
    *  Wardrobe, a form opened before that change cannot overwrite it. */
   closable: boolean
   exposed_detail: boolean
+  /** "Open below": a skirt, a dress or a kilt — never blocks a contact clip (`outfit_piece.open_below`). */
+  open_below: boolean
   lift: number | null
   effects: string
   apply_condition: string
@@ -262,6 +266,7 @@ export const EMPTY_DRAFT: DraftItem = {
   mesh_mode: '',
   closable: false,
   exposed_detail: false,
+  open_below: false,
   lift: null,
   effects: '',
   apply_condition: '',
@@ -305,6 +310,7 @@ export function itemToDraft(it: Item): DraftItem {
     mesh_mode: typeof op.mesh_mode === 'string' ? op.mesh_mode : '',
     closable: op.closable === true,
     exposed_detail: op.exposed_detail === true,
+    open_below: op.open_below === true,
     lift: typeof op.lift === 'number' ? op.lift : null,
     effects: effectsToText(it.effects),
     ...extractConditionFromEffects(it.effects),
@@ -348,6 +354,7 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       motion_damping: d.motion_damping,
       partially_covers: d.partially_covers,
       exposed_detail: d.exposed_detail,
+      open_below: d.open_below,
       // null resets the piece to the slot default.
       lift: d.lift,
     }

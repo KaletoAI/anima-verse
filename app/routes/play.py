@@ -2134,9 +2134,49 @@ def play_interact_options(user=Depends(get_current_user)):
     from app.models.account import get_active_character
     avatar = get_active_character() or ""
     lang = get_character_language(avatar)
+    poses = partner_poses()
     return {"poses": [{"key": k, "kind": kind, "label": pose_label(k, lang)}
-                      for k, kind in partner_poses()],
-            "blocked": _interact_blocked(avatar) if avatar else ""}
+                      for k, kind in poses],
+            "blocked": _interact_blocked(avatar) if avatar else "",
+            # Per present character and pose: the clothes still in the way of the clip's contact, worded for
+            # the player ({partner: {pose key: text}}; only blocked pairs are listed).
+            "clothing": _pair_clothing(avatar, poses, lang) if avatar else {}}
+
+
+def _pair_clothing(avatar: str, poses, lang: str) -> Dict[str, Dict[str, str]]:
+    """``{partner: {pose key: reason}}`` of the free pair poses the clothes in the way of their contact clip
+    block (``contact_clothing.refusal``, roles as the start assigns them) for every character in the avatar's
+    room. Read only."""
+    from app.core import contact_clothing
+    from app.models.character import (get_character_current_location, get_character_current_room,
+                                      get_character_profile, list_available_characters)
+    loc = get_character_current_location(avatar) or ""
+    if not loc:
+        return {}
+    room = get_character_current_room(avatar) or ""
+    out: Dict[str, Dict[str, str]] = {}
+    profiles = {avatar: get_character_profile(avatar) or {}}
+    for name in list_available_characters():
+        if name == avatar or get_character_current_location(name) != loc \
+                or (get_character_current_room(name) or "") != room:
+            continue
+        profiles[name] = get_character_profile(name) or {}
+        for key, kind in poses:
+            refused = contact_clothing.refusal(key, kind=kind, names=[avatar, name], profiles=profiles)
+            if refused:
+                out.setdefault(name, {})[key] = contact_clothing.player_text(refused["blockers"], lang)
+    return out
+
+
+def _pair_refusal_text(first: str, second: str, pose: str, fallback: str, lang_of: str) -> str:
+    """A free pair's refusal for the player: the clothes in the way worded in ``lang_of``'s language when that
+    is the reason (``first`` = the initiator, whose clip role assignment the start uses), else ``fallback``."""
+    from app.core import contact_clothing
+    from app.models.character import get_character_language
+    refused = contact_clothing.refusal(pose, [first, second])
+    if not refused or refused["message"] != fallback:
+        return fallback
+    return contact_clothing.player_text(refused["blockers"], get_character_language(lang_of))
 
 
 def _interact_blocked(avatar: str) -> str:
@@ -2213,21 +2253,22 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     if open_ask:
         res = IE.resolve_invite(open_ask["invite_id"], True)
         if res.get("status") not in ("started", "approaching"):
-            raise HTTPException(status_code=409,
-                                detail=res.get("reason") or res.get("status"))
+            raise HTTPException(status_code=409, detail=_pair_refusal_text(
+                partner, avatar, pose, res.get("reason") or res.get("status"), avatar))
         _interact_charge(avatar)
         return {"ok": True, "status": res["status"], "partner": partner,
                 "pose": pose}
     if consent == "react":
         res = IE.start_without_asking(avatar, partner, pose)
         if res["status"] not in ("reacting", "started", "approaching"):
-            raise HTTPException(status_code=409, detail=res.get("reason") or res["status"])
+            raise HTTPException(status_code=409, detail=_pair_refusal_text(
+                avatar, partner, pose, res.get("reason") or res["status"], avatar))
         _interact_charge(avatar)
         return {"ok": True, "status": res["status"], "partner": partner, "pose": pose,
                 "invite_id": res.get("invite_id", "")}
     blocked = IE.check_can_pair(avatar, partner, pose)
     if blocked:
-        raise HTTPException(status_code=409, detail=blocked)
+        raise HTTPException(status_code=409, detail=_pair_refusal_text(avatar, partner, pose, blocked, avatar))
     # Another pose for the free pair the two already play with consent: the
     # consent carries and it switches in place without a question — the
     # free-pose twin of the furniture switch (switch_consent_carries).
@@ -2288,7 +2329,8 @@ def _play_interact_respond_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     if res["status"] == "not_found":
         raise HTTPException(status_code=404, detail="invite not found")
     if res["status"] == "cannot":
-        raise HTTPException(status_code=409, detail=res.get("reason") or "cannot")
+        raise HTTPException(status_code=409, detail=_pair_refusal_text(
+            inv["inviter"], avatar, inv["pose_key"], res.get("reason") or "cannot", avatar))
     if accept and res["status"] in ("started", "approaching"):
         _interact_charge(avatar)
     if res["status"] == "approaching":
@@ -2376,7 +2418,13 @@ async def play_interact_alt(request: Request, user=Depends(get_current_user)):
     if not isinstance(scene_id, str) or not scene_id or not isinstance(alt, str):
         raise HTTPException(status_code=400, detail="scene_id and alt (strings) required")
     avatar = _require_avatar()
-    return _scene_answer(await asyncio.to_thread(pose_scene.set_alt, scene_id, avatar, alt))
+    result = await asyncio.to_thread(pose_scene.set_alt, scene_id, avatar, alt)
+    if result.get("blockers"):
+        # The clothes in the way of the alt half's contact, worded for the player.
+        from app.core.contact_clothing import player_text
+        from app.models.character import get_character_language
+        result = dict(result, reason_text=player_text(result["blockers"], get_character_language(avatar)))
+    return _scene_answer(result)
 
 
 @router.post("/play/scene/readouts")
@@ -3866,6 +3914,38 @@ def _json_off_loop(payload: Any) -> JSONResponse:
     return JSONResponse(jsonable_encoder(payload))
 
 
+def _encode_default(obj: Any) -> Any:
+    """``json.dumps`` hook for a value that is not a JSON type (set, Path,
+    Enum, datetime, ...): FastAPI's own conversion of that one value."""
+    return jsonable_encoder(obj)
+
+
+def _json_fast(payload: Any) -> Response:
+    """Encode a payload of mostly native values in ONE C pass.
+
+    The same bytes as ``_json_off_loop`` (the options are those of
+    starlette's ``JSONResponse.render``), without the Python walk of
+    ``jsonable_encoder`` over the whole tree: only a value json cannot
+    write itself goes through ``_encode_default``. A ``TypeError`` from
+    the dump (e.g. a non-string dict key) falls back to ``_json_off_loop``,
+    which raises the same error type as before when the payload is really
+    unencodable; NaN stays a ``ValueError`` like the old path.
+
+    One deliberate difference: ``jsonable_encoder`` drops dict keys with the
+    SQLAlchemy prefix ``_sa``, this path keeps them. The worldmap payload
+    carries no SQLAlchemy objects, so such a key could only come from author
+    data and is now delivered instead of silently dropped
+    (``scripts/smoke_worldmap_encode.py`` [J7]).
+    """
+    try:
+        body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"),
+                          default=_encode_default).encode("utf-8")
+    except TypeError:
+        return _json_off_loop(payload)
+    return Response(content=body, media_type="application/json")
+
+
 @router.get("/play/worldmap")
 def play_worldmap(user=Depends(get_current_user),
                   show_all: int = Query(0, alias="all")):
@@ -3878,16 +3958,19 @@ def play_worldmap(user=Depends(get_current_user),
     A PLAIN ``def`` for the same reason as ``/play/scene``: the payload is
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
-    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
+    ``_json_fast`` encodes the payload in the worker thread, in one C pass
+    (the shared world-prop rows are serialized, never copied).
 
-    Hot-path statistics: every poll is recorded under ``worldmap``
-    (``build_ms``, ``encode_ms``, ``bytes`` of the response body and the build
-    phases of ``build_worldmap_payload(timings=…)``); once a minute
-    ``hot_path_stats`` logs it as one line
-    ``hot_path worldmap n=<n> <key>_p50=<x> <key>_p95=<y> …``.
+    Every call feeds the hot-path statistics (``core/hot_path_stats``): one
+    log line per minute, ``hot_path worldmap n=<n> <key>_p50=… <key>_p95=…``
+    over ``build_ms`` (whole build), ``encode_ms`` (JSON encoding),
+    ``bytes`` (response body) and the build phases ``characters``,
+    ``locations``, ``locations_read``, ``model_sig``, ``motion``,
+    ``world_props`` (see ``build_worldmap_payload``).
     """
     t0 = time.monotonic()
     from app.models.account import get_active_character
+    from app.core import hot_path_stats
     from app.core.world_ops import build_worldmap_payload
 
     is_admin = (user.get("role") == users.ROLE_ADMIN)
@@ -3908,16 +3991,14 @@ def play_worldmap(user=Depends(get_current_user),
     payload["avatar_released"] = released
     build_ms = (time.monotonic() - t0) * 1000
     payload["sync"]["build_ms"] = round(build_ms, 1)
-    t_enc = time.monotonic()
-    response = _json_off_loop(payload)
-    try:
-        from app.core import hot_path_stats
-        hot_path_stats.record("worldmap", {
-            "build_ms": build_ms,
-            "encode_ms": (time.monotonic() - t_enc) * 1000,
-            "bytes": len(response.body), **timings})
-    except Exception:
-        pass  # statistics never disturb the poll
+    t_enc = time.perf_counter()
+    response = _json_fast(payload)
+    hot_path_stats.record("worldmap", {
+        "build_ms": build_ms,
+        "encode_ms": (time.perf_counter() - t_enc) * 1000,
+        "bytes": len(response.body),
+        **timings,
+    })
     return response
 
 

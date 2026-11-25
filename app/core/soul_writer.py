@@ -9,7 +9,7 @@ or category is empty, are written in the character's language.
 import os
 import stat
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.keyed_lock import keyed_lock
@@ -283,3 +283,51 @@ def mark_retrospect_done(character_name: str) -> None:
                  utc_now_iso()))
     except Exception as e:
         logger.debug("mark_retrospect_done failed for %s: %s", character_name, e)
+
+
+# ── Whole-file text access (World Dev free mode) ─────────────────────────
+
+def soul_text_path(character_name: str, rel_path: str) -> Path:
+    """The file ``rel_path`` (relative to the character's directory, e.g.
+    ``soul/personality.md``) — refused when it would leave that directory.
+
+    Containment is checked on the RESOLVED path, but the UNRESOLVED path is
+    returned (normalised with ``os.path.abspath``), so the ``soul_file`` lock
+    key and the source-file cache key are the same ones the other soul
+    readers and writers derive from ``get_character_dir`` — also when the
+    character directory is a symlink."""
+    from app.models.character import get_character_dir
+    base_unresolved = get_character_dir(character_name)
+    base = base_unresolved.resolve()
+    rel = str(rel_path or "").strip()
+    if not rel:
+        raise ValueError("empty soul file path")
+    if base not in (base / rel).resolve().parents:
+        raise ValueError(f"soul file path outside the character directory: {rel!r}")
+    return Path(os.path.abspath(base_unresolved / rel))
+
+
+def read_text(character_name: str, rel_path: str) -> Optional[str]:
+    """The stored text of one character text file, or None when it is absent."""
+    path = soul_text_path(character_name, rel_path)
+    with keyed_lock("soul_file", str(path)):
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+
+
+def write_text(character_name: str, rel_path: str, text: Optional[str]) -> None:
+    """Replace one character text file atomically; ``None`` removes it.
+    Stored text is ``text.rstrip() + "\\n"``. The source-file cache is
+    invalidated in every case."""
+    from app.models.character_template import invalidate_source_file
+    path = soul_text_path(character_name, rel_path)
+    with keyed_lock("soul_file", str(path)):
+        if text is None:
+            try:
+                path.unlink(missing_ok=True)
+            finally:
+                invalidate_source_file(path)
+            return
+        _atomic_write(path, str(text).rstrip() + "\n")

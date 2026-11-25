@@ -11,6 +11,9 @@ export interface PropActionChoice {
   partner?: string
   enabled: boolean
   reason: string
+  /** The server's own words for this refusal (the clothes in the way of a contact clip), already in the
+   *  player's language — shown instead of the code's generic sentence (`propActionReason`). */
+  reason_text?: string
 }
 export interface PropActionEffect {
   id: string
@@ -37,6 +40,8 @@ export interface PropActionOffer {
   description: string
   enabled: boolean
   reason: string
+  /** See `PropActionChoice.reason_text`. */
+  reason_text?: string
   required_partner: boolean
   available_targets: Array<PropActionChoice & { partner: string }>
   /** How many people the action takes, the actor included (1 solo, 2 pair, 3..5 group). */
@@ -145,9 +150,9 @@ export interface PropActionState {
 
 /** Presentation only: preserve Core's exact partner verdict, never auto-pick one. */
 export function propActionChoices(offer: PropActionOffer): PropActionChoice[] {
-  if (!offer.required_partner) return [{ enabled: offer.enabled, reason: offer.reason }]
+  if (!offer.required_partner) return [{ enabled: offer.enabled, reason: offer.reason, reason_text: offer.reason_text }]
   return offer.available_targets.length ? offer.available_targets
-    : [{ enabled: false, reason: offer.reason }]
+    : [{ enabled: false, reason: offer.reason, reason_text: offer.reason_text }]
 }
 
 export interface PropActionSnapshot { offers: PropActionOffer[]; state: PropActionState }

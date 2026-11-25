@@ -161,8 +161,8 @@ def _call(fn, what: str) -> None:
 
 
 def _caller() -> str:
-    """``<module-last-part>.<function>`` of the first frame outside this module
-    — who sent the signal (hot-path statistics)."""
+    """``<last module part>.<function>`` of the first frame outside this
+    module — who sent the signal (hot-path statistics)."""
     f = sys._getframe(1)
     while f is not None and f.f_globals.get("__name__") == __name__:
         f = f.f_back
@@ -175,9 +175,8 @@ def _caller() -> str:
 def notify(topics, *, to) -> None:
     """Send topic(s) to the connections the recipient(s) match. Never raises.
 
-    Hot-path statistics: every topic is counted as ``notify <topic>:<caller>``
-    and, per connection it reached, as ``notify_woke <topic>`` (one log line
-    each per minute, ``hot_path_stats``)."""
+    Feeds the hot-path statistics: ``notify`` counts ``<topic>:<caller>``,
+    ``notify_woke`` counts ``<topic>`` once per connection that took it."""
     try:
         tops = (topics,) if isinstance(topics, str) else tuple(topics)
         tops = tuple(t for t in tops if t in TOPICS)

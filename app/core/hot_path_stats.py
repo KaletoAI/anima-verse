@@ -1,24 +1,26 @@
-"""Hot-path statistics: one log line per minute and measured path.
+"""Hot-path statistics: one log line per measured name and minute.
 
-Request handlers and writers call ``record`` (a measurement: one sample with
-named values, e.g. the phases of a worldmap build in milliseconds) or ``count``
-(an event counter, e.g. which caller sent which sync topic). Nothing runs on a
-thread of its own: every ``record``/``count`` checks the monotonic clock and,
-at most once per ``FLUSH_INTERVAL_S``, turns the collected data into lines and
-writes them through ``get_logger("hot_path")`` at INFO.
+``record(name, values)`` takes one measurement (several values, e.g. the
+phases of one ``GET /play/worldmap``), ``count(name, key)`` counts one event.
+``flush`` turns everything collected into finished lines and writes them
+through ``get_logger("hot_path")`` at INFO — at most once per 60 s of
+monotonic time. There is no thread of its own: ``record``/``count`` call
+``flush`` after collecting.
 
-Line formats (parsed by the baseline evaluation, keep them stable):
+Line formats::
 
-    hot_path <name> n=<n> <key>_p50=<x> <key>_p95=<y> ...
-        keys sorted, values rounded to 0.1, p95 = nearest-rank percentile
-        (the same rule as ``request_timing.route_stats``)
-    hot_path <name> <key>=<n> ...
-        descending by n, alphabetical on equal n; at most ``MAX_COUNT_KEYS``
-        keys, the rest summed as ``other=<n>``
+    hot_path <name> n=<n> <key>_p50=<x> <key>_p95=<y> ...   (keys sorted)
+    hot_path <name> <key>=<n> ...                            (by n desc, ties
+                                                              alphabetical,
+                                                              at most 40 keys,
+                                                              rest as other=)
 
-Statistics must never disturb the measured path: ``record``/``count`` never
-raise, only the data swap happens under the lock, formatting and logging run
-after it.
+p95 is the nearest-rank percentile, like ``request_timing.route_stats``;
+values are rounded to 0.1.
+
+Statistics must never disturb the measured path: every entry point swallows
+its own errors, the lock only guards swapping data, and formatting and
+logging run after the lock is released.
 """
 import math
 import threading
@@ -30,54 +32,40 @@ from app.core.log import get_logger
 
 logger = get_logger("hot_path")
 
-FLUSH_INTERVAL_S = 60.0
+FLUSH_S = 60.0
 MAX_COUNT_KEYS = 40
-# Bound per key and minute: a runaway caller costs memory, never more than this.
-MAX_SAMPLES = 20000
+MAX_SAMPLES = 10_000   # per name and key and minute; bounds memory, not accuracy
 
-_clock = time.monotonic
 _lock = threading.Lock()
-_measures: Dict[str, Dict[str, object]] = {}   # name -> {"n": int, "vals": {key: [float]}}
-_counts: Dict[str, Dict[str, int]] = {}        # name -> {key: n}
-_last_flush = _clock()
-
-
-def _maybe_flush() -> None:
-    # Racy read on purpose: the lock is only taken once the minute is over.
-    if _clock() - _last_flush >= FLUSH_INTERVAL_S:
-        flush()
+_samples: Dict[str, Dict[str, List[float]]] = {}
+_n: Dict[str, int] = {}
+_counts: Dict[str, Dict[str, int]] = {}
+_last_flush = time.monotonic()
 
 
 def record(name: str, values: Dict[str, float]) -> None:
-    """Take one measurement of ``name`` with its named values. Thread-safe."""
+    """Take one measurement of ``name`` (one value per key). Thread-safe,
+    never raises."""
     try:
-        clean = {str(k): float(v) for k, v in (values or {}).items()}
         with _lock:
-            slot = _measures.get(name)
-            if slot is None:
-                slot = _measures[name] = {"n": 0, "vals": {}}
-            slot["n"] += 1
-            vals = slot["vals"]
-            for k, v in clean.items():
-                lst = vals.get(k)
-                if lst is None:
-                    lst = vals[k] = []
+            _n[name] = _n.get(name, 0) + 1
+            per = _samples.setdefault(name, {})
+            for key, value in values.items():
+                lst = per.setdefault(key, [])
                 if len(lst) < MAX_SAMPLES:
-                    lst.append(v)
-        _maybe_flush()
+                    lst.append(float(value))
+        flush()
     except Exception:
         pass
 
 
 def count(name: str, key: str) -> None:
-    """Count one event ``key`` under ``name``. Thread-safe."""
+    """Count one event ``key`` under ``name``. Thread-safe, never raises."""
     try:
         with _lock:
-            slot = _counts.get(name)
-            if slot is None:
-                slot = _counts[name] = {}
-            slot[key] = slot.get(key, 0) + 1
-        _maybe_flush()
+            per = _counts.setdefault(name, {})
+            per[key] = per.get(key, 0) + 1
+        flush()
     except Exception:
         pass
 
@@ -86,47 +74,49 @@ def _fmt(x: float) -> str:
     return f"{round(x, 1):.1f}"
 
 
-def _measure_line(name: str, n: int, vals: Dict[str, List[float]]) -> str:
+def _measure_line(name: str, n: int, per: Dict[str, List[float]]) -> str:
     parts = [f"hot_path {name} n={n}"]
-    for key in sorted(vals):
-        times = sorted(vals[key])
-        if not times:
+    for key in sorted(per):
+        vals = sorted(per[key])
+        if not vals:
             continue
-        p95 = times[math.ceil(.95 * len(times)) - 1]
-        parts.append(f"{key}_p50={_fmt(median(times))} {key}_p95={_fmt(p95)}")
+        p95 = vals[math.ceil(.95 * len(vals)) - 1]
+        parts.append(f"{key}_p50={_fmt(median(vals))} {key}_p95={_fmt(p95)}")
     return " ".join(parts)
 
 
-def _count_line(name: str, counts: Dict[str, int]) -> str:
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    shown, rest = ranked[:MAX_COUNT_KEYS], ranked[MAX_COUNT_KEYS:]
-    parts = [f"hot_path {name}"] + [f"{k}={n}" for k, n in shown]
+def _count_line(name: str, per: Dict[str, int]) -> str:
+    ranked = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))
+    parts = [f"hot_path {name}"]
+    parts += [f"{k}={n}" for k, n in ranked[:MAX_COUNT_KEYS]]
+    rest = sum(n for _, n in ranked[MAX_COUNT_KEYS:])
     if rest:
-        parts.append(f"other={sum(n for _, n in rest)}")
+        parts.append(f"other={rest}")
     return " ".join(parts)
 
 
 def flush(now: Optional[float] = None) -> List[str]:
-    """Return the finished lines and empty the store — at most once per
-    ``FLUSH_INTERVAL_S`` of monotonic time (earlier calls return ``[]`` and
-    keep the data). The lines are also logged at INFO. Never raises."""
-    global _measures, _counts, _last_flush
+    """Return the finished lines and empty the collector — but only once
+    ``FLUSH_S`` have passed since the last flush (``[]`` before that, the
+    data stays). The lines are logged at INFO as well. Never raises."""
+    global _samples, _n, _counts, _last_flush
     try:
-        t = _clock() if now is None else float(now)
+        now = time.monotonic() if now is None else now
         with _lock:
-            if t - _last_flush < FLUSH_INTERVAL_S:
+            if now - _last_flush < FLUSH_S:
                 return []
-            measures, counts = _measures, _counts
-            _measures, _counts = {}, {}
-            _last_flush = t
-        lines = [_measure_line(name, int(slot["n"]), slot["vals"])
-                 for name, slot in sorted(measures.items())]
-        lines += [_count_line(name, c) for name, c in sorted(counts.items()) if c]
+            _last_flush = now
+            samples, ns, counts = _samples, _n, _counts
+            _samples, _n, _counts = {}, {}, {}
+        lines = [_measure_line(name, ns.get(name, 0), samples[name])
+                 for name in sorted(samples)]
+        lines += [_count_line(name, counts[name]) for name in sorted(counts)
+                  if counts[name]]
+        for line in lines:
+            try:
+                logger.info(line)
+            except Exception:
+                pass
+        return lines
     except Exception:
         return []
-    for line in lines:
-        try:
-            logger.info(line)
-        except Exception:
-            pass
-    return lines

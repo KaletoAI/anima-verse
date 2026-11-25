@@ -140,8 +140,8 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
    *  `own`: a pose of the avatar's own, which a failed furniture read does
    *  not stop. */
   const leaf = (key: string, label: ReactNode, enabled: boolean, reason: string, onClick: () => void,
-    hint?: string, finale = false, own = false) =>
-    <HoverHint key={key} text={enabled ? hint : propActionReason(reason, t)}>
+    hint?: string, finale = false, own = false, reasonText?: string) =>
+    <HoverHint key={key} text={enabled ? hint : propActionReason(reason, t, reasonText)}>
       <button type="button" className={`player-chip${finale ? ' player-chip-finale' : ''}`}
         disabled={(own ? busy : off) || !enabled} aria-disabled={!enabled ? true : undefined}
         style={{ pointerEvents: !enabled ? 'none' : undefined }} onClick={onClick}>
@@ -150,11 +150,12 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
     </HoverHint>
 
   /** "Ask" and "Just do it" for one pair offer with one partner. */
-  const consentButtons = (offer: PropActionOffer, partner: string, enabled: boolean, reason: string) => <>
+  const consentButtons = (offer: PropActionOffer, partner: string, enabled: boolean, reason: string,
+    reasonText?: string) => <>
     {leaf(`ask:${offerKey(offer)}:${partner}`, t('Ask'), enabled, reason, () => request(offer, [partner], 'ask'),
-      t('Ask {name} first').replace('{name}', partner))}
+      t('Ask {name} first').replace('{name}', partner), false, false, reasonText)}
     {leaf(`react:${offerKey(offer)}:${partner}`, t('Just do it'), enabled, reason, () => request(offer, [partner], 'react'),
-      t('Start at once; {name} reacts and may push you away').replace('{name}', partner))}
+      t('Start at once; {name} reacts and may push you away').replace('{name}', partner), false, false, reasonText)}
   </>
 
   /** The same "Ask" / "Just do it" for one free pair pose (no furniture) —
@@ -181,7 +182,7 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
     if (kind === 'solo') {
       return <div key={offerKey(offer)} className="player-actions-tree-leaf">
         {leaf(offerKey(offer), offer.label, offer.enabled, offer.reason, () => request(offer),
-          offer.finale ? t('With finale') : undefined, !!offer.finale)}
+          offer.finale ? t('With finale') : undefined, !!offer.finale, false, offer.reason_text)}
       </div>
     }
     const id = `act:${piece}:${offer.action_id}`
@@ -189,13 +190,14 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
     const usable = offer.available_targets.some(choice => choice.enabled)
     return <Branch key={id} id={id} open={open} toggle={toggle} label={offer.label}
       count={offer.available_targets.length} disabled={!usable}
-      reason={offer.available_targets[0]?.reason || offer.reason}>
+      reason={offer.available_targets[0]?.reason || offer.reason}
+      reasonText={offer.available_targets[0] ? offer.available_targets[0].reason_text : offer.reason_text}>
       {offer.available_targets.map(choice => <div key={choice.partner}
         className={`player-actions-tree-leaf${choice.enabled ? '' : ' off'}`}>
-        <HoverHint text={choice.enabled ? undefined : propActionReason(choice.reason, t)}>
+        <HoverHint text={choice.enabled ? undefined : propActionReason(choice.reason, t, choice.reason_text)}>
           <span className="player-actions-tree-name">{choice.partner}</span>
         </HoverHint>
-        {consentButtons(offer, choice.partner, choice.enabled, choice.reason)}
+        {consentButtons(offer, choice.partner, choice.enabled, choice.reason, choice.reason_text)}
       </div>)}
     </Branch>
   }
@@ -271,21 +273,23 @@ export function ActionsTree({ avatar, present, busy: busyPeople, interaction, pa
               </button>
             </HoverHint>
           </div>}
-          {pairOptions.poses.map(pose => <div key={`pose:${pose.key}`}
-            className={`player-actions-tree-leaf${poseHint ? ' off' : ''}`}>
-            <HoverHint text={poseHint || undefined}>
-              <span className="player-actions-tree-name">{pose.label || pose.key}</span>
-            </HoverHint>
-            {poseButtons(pose.key, person.name, poseHint)}
-          </div>)}
+          {pairOptions.poses.map(pose => {
+            const hint = poseHint || pairOptions.clothing?.[person.name]?.[pose.key] || ''
+            return <div key={`pose:${pose.key}`} className={`player-actions-tree-leaf${hint ? ' off' : ''}`}>
+              <HoverHint text={hint || undefined}>
+                <span className="player-actions-tree-name">{pose.label || pose.key}</span>
+              </HoverHint>
+              {poseButtons(pose.key, person.name, hint)}
+            </div>
+          })}
           {person.entries.map(entry => <div key={offerKey(entry.offer)}
             className={`player-actions-tree-leaf${entry.enabled ? '' : ' off'}`}>
-            <HoverHint text={entry.enabled ? pieceText(entry.offer) : propActionReason(entry.reason, t)}>
+            <HoverHint text={entry.enabled ? pieceText(entry.offer) : propActionReason(entry.reason, t, entry.reason_text)}>
               <span className="player-actions-tree-name">
                 {entry.offer.label} <span className="player-actions-tree-piece">· {pieceText(entry.offer)}</span>
               </span>
             </HoverHint>
-            {consentButtons(entry.offer, person.name, entry.enabled, entry.reason)}
+            {consentButtons(entry.offer, person.name, entry.enabled, entry.reason, entry.reason_text)}
           </div>)}
         </Branch>
       }) : <div className="player-actions-tree-empty">{t('Nobody else is here.')}</div>}
@@ -305,7 +309,7 @@ function refusalText(e: unknown, t: (s: string) => string): string {
 /** One level of the tree: a ▸/▾ row that opens its children. A disabled
  *  branch (nothing under it is usable) is greyed but still opens, so the
  *  reasons below stay readable. */
-function Branch({ id, open, toggle, label, count, disabled = false, reason, root = false, children }: {
+function Branch({ id, open, toggle, label, count, disabled = false, reason, reasonText, root = false, children }: {
   id: string
   open: Set<string>
   toggle: (id: string) => void
@@ -313,13 +317,15 @@ function Branch({ id, open, toggle, label, count, disabled = false, reason, root
   count?: number
   disabled?: boolean
   reason?: string
+  /** The server's own words for `reason` (`reason_text`), shown instead of the code's sentence. */
+  reasonText?: string
   root?: boolean
   children: ReactNode
 }) {
   const { t } = useI18n()
   const expanded = open.has(id)
   return <div className={`player-actions-tree-node${root ? ' root' : ''}${disabled ? ' off' : ''}`}>
-    <HoverHint text={disabled && reason ? propActionReason(reason, t) : undefined}>
+    <HoverHint text={disabled && reason ? propActionReason(reason, t, reasonText) : undefined}>
       <button type="button" className="player-actions-tree-toggle" aria-expanded={expanded}
         onClick={() => toggle(id)}>
         <span className="player-actions-tree-caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>

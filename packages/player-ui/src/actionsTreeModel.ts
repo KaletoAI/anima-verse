@@ -89,7 +89,7 @@ export function pieceGroups(piece: PieceNode): { single: PropActionOffer[]; grou
 
 /** One furniture action possible with one partner — Core's verdict for
  *  exactly that partner. */
-export interface PartnerEntry { offer: PropActionOffer; enabled: boolean; reason: string }
+export interface PartnerEntry { offer: PropActionOffer; enabled: boolean; reason: string; reason_text?: string }
 export interface PartnerNode { name: string; entries: PartnerEntry[] }
 
 /** One node per person the avatar could act with: everyone present in the
@@ -109,7 +109,8 @@ export function partnerNodes(offers: PropActionOffer[], present: string[], avata
     if (offerKind(offer) !== 'pair') continue
     for (const choice of offer.available_targets) {
       if (!choice.partner || choice.partner === avatar) continue
-      node(choice.partner).entries.push({ offer, enabled: choice.enabled, reason: choice.reason })
+      node(choice.partner).entries.push({ offer, enabled: choice.enabled, reason: choice.reason,
+        reason_text: choice.reason_text })
     }
   }
   for (const found of nodes.values()) {

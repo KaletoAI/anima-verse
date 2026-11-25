@@ -30,6 +30,7 @@ without a word in the log, so junk must never reach the DB in the first
 place.
 """
 
+import copy
 import hashlib
 import json
 import math
@@ -1325,6 +1326,15 @@ def _terrain_sig_key():
             prop_lib_token(), types_json_stat(), season_token())
 
 
+def areas_key():
+    """The painted areas' dependency key, read WITHOUT reading any area.
+
+    The very key ``terrain_sig`` caches under: a caller that captures it
+    BEFORE its own ``list_areas()`` read may hand those areas to
+    ``terrain_sig(areas=…, areas_key=…)``."""
+    return _terrain_sig_key()
+
+
 def areas_snapshot():
     """Return the pre-read dependency key together with the selected areas."""
     key = _terrain_sig_key()
@@ -1339,7 +1349,10 @@ def terrain_sig(*, areas=None, areas_key=None) -> str:
         if _sig_cache[0] == key:
             return _sig_cache[1]
         # Unversioned or stale caller snapshots cannot populate this key.
-        value = _terrain_sig(areas=areas if areas_key == key else None)
+        # with_scatter_props enriches IN PLACE: a caller's areas (possibly a
+        # shared cached block) are copied before they are hashed.
+        value = _terrain_sig(areas=copy.deepcopy(areas)
+                             if areas is not None and areas_key == key else None)
         _sig_cache = (key, value)
         return value
 

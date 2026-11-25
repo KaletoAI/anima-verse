@@ -852,6 +852,16 @@ async def lifespan(app: FastAPI):
     except Exception as _fgd:
         logger.warning("Removed fit globs clean-up failed (retried at the next start): %s", _fgd)
 
+    # Prefill (contact clips and clothes, owner decisions 2026-11-25): every outfit piece on a slot a package's
+    # part or channel needs free gets ``outfit_piece.open_below`` once from its words (skirt, dress, kilt, …) —
+    # the world's items once per world, the shared library once per installation; after the packages loaded
+    # (their contact_free slots decide which pieces count). One log line per flagged item.
+    try:
+        from app.core.open_below_migration import prefill_once
+        prefill_once()
+    except Exception as _obp:
+        logger.warning("Open-below prefill failed (retried at the next start): %s", _obp)
+
     # Migration (A168): "Shell from the body" is its own mode — every own-mesh piece whose fits were shells under
     # the removed per-character mesh-shape setting becomes mode "shell", and the setting leaves the profiles. Item
     # and profile writes only (no Build, no hub job); after the mode migrations above, before the refit sweep.

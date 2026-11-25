@@ -457,8 +457,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                            else dict(enabled=False, reason="partners_missing"))
             elif pair:
                 for partner in present:
-                    checked = engine.check(actor, target, action["id"], revision, [partner], _query=query,
-                                           offer=True)
+                    checked = _worded(engine.check(actor, target, action["id"], revision, [partner],
+                                                   _query=query, offer=True), lang)
                     # A partner who cannot do this at all is no partner for it.
                     if checked["reason"] != participation.NOT_OFFERED:
                         targets.append(dict(partner=partner, **checked))
@@ -466,7 +466,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
             else:
-                checked = engine.check(actor, target, action["id"], revision, _query=query, offer=True)
+                checked = _worded(engine.check(actor, target, action["id"], revision, _query=query, offer=True),
+                                  lang)
                 if checked["reason"] == participation.NOT_OFFERED:
                     continue
             result.append(dict(action_id=action["id"], definition_revision=revision,
@@ -477,6 +478,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                target=target, label=localized(action, "name", lang) or action["name"],
                                description=localized(action, "description", lang) or action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"],
+                               # The clothes in the way, worded for the player (contact_clothing).
+                               **({"reason_text": checked["reason_text"]} if checked.get("reason_text") else {}),
                                required_partner=pair or group, available_targets=targets,
                                participants=action.get("participants") or 1,
                                **({"candidates": candidates} if group else {}),
@@ -501,6 +504,15 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 while len(_offers_cache) > 128:
                     _offers_cache.popitem(last=False)
     return result
+
+
+def _worded(checked: dict, lang: str) -> dict:
+    """A preflight verdict with the clothes in the way (``blockers``, contact_clothing) also worded for the
+    player in ``lang`` (``reason_text``); any other verdict as it is."""
+    if not checked.get("blockers"):
+        return checked
+    from app.core.contact_clothing import player_text
+    return dict(checked, reason_text=player_text(checked["blockers"], lang))
 
 
 def _group_candidate(name: str, pose_key, location_id: str, room_id: str, query) -> bool:
@@ -590,7 +602,8 @@ def _requestable(actor: str) -> list:
         elif not offer["enabled"]:
             continue
         row = {k: v for k, v in offer.items()
-               if k not in ("enabled", "reason", "available_targets", "placement_id", "variant_uid", "pose_key")
+               if k not in ("enabled", "reason", "reason_text", "available_targets", "placement_id", "variant_uid",
+                            "pose_key")
                and v not in ("", [], None)}
         if offer["required_partner"]:
             row["partners"] = partners
@@ -630,6 +643,22 @@ def _piece_lines(rows: list) -> list:
             for prop, labels in pieces.items()]
 
 
+def _clothing_lines(actor: str) -> list:
+    """The pair actions here that wait only for clothes to come off (``contact_clothing``): one line each, with
+    the reason text the character can act on — left out of the requestable list, but not out of sight."""
+    lines = []
+    for offer in offers(actor):
+        if offer.get("participants", 1) > 2 or not offer["required_partner"]:
+            continue
+        for choice in offer["available_targets"]:
+            if not choice["enabled"] and choice.get("message"):
+                line = (f"- {offer.get('prop_label') or 'Furniture'}: {offer.get('label') or ''} "
+                        f"(with {choice['partner']}) — {choice['message']}")
+                if line not in lines:
+                    lines.append(line)
+    return lines
+
+
 def _own_lines(actor: str) -> list:
     """The actor's own running or waiting furniture actions, in words."""
     from app.core.prop_action_engine import state_for
@@ -658,7 +687,7 @@ def narrative_block(actor: str) -> str:
         - Bed: Cuddle (with Mia)
 
     ``""`` when nothing can be requested and nothing is running."""
-    lines = _piece_lines(_requestable(actor)) + _own_lines(actor)
+    lines = _piece_lines(_requestable(actor)) + _clothing_lines(actor) + _own_lines(actor)
     if not lines:
         return ""
     return "\n".join(["Furniture here (just describe what you do with it):", *lines])
@@ -676,7 +705,7 @@ def prompt_block(actor: str) -> str:
         'Furniture actions here. Use one: PropAction {"furniture": "<name>", "action": "<action>", '
         '"partner": "<name, only for an action with partners>"}; stop your own: PropAction {"stop": true}. '
         "A request starts walking there; a pair starts when the partner agrees.",
-        *lines, *_own_lines(actor),
+        *lines, *_clothing_lines(actor), *_own_lines(actor),
         "</prop_actions_contract>"])
 
 
@@ -724,10 +753,17 @@ def _named_request(actor: str, payload: dict) -> dict:
             return False, "partner_required" if not partner else "partner_not_available"
         return choice["enabled"], choice["reason"]
 
+    def message(row):
+        """The reason text a refused choice carries (the clothes in the way of a contact clip)."""
+        choice = next((t for t in row.get("available_targets") or [] if t["partner"].lower() == partner.lower()),
+                      None) if row["required_partner"] else row
+        return (choice or {}).get("message") or ""
+
     rows.sort(key=lambda row: row["distance_m"] if row["distance_m"] is not None else float("inf"))
     usable = [row for row in rows if verdict(row)[0]]
     if not usable:
-        return refused(verdict(rows[0])[1])
+        text = message(rows[0])
+        return refused(verdict(rows[0])[1], **({"message": text} if text else {}))
     row = usable[0]
     exact = dict(operation="request", action_id=row["action_id"], revision=row["definition_revision"],
                  target=row["target"])
@@ -740,7 +776,8 @@ def _named_request(actor: str, payload: dict) -> dict:
                 **({"partner": exact["members"][0]} if "members" in exact else {}),
                 # Already part of that very run (agreed to it a moment ago).
                 **({"already": True} if result.get("already") else {}),
-                **({"reason": result["reason"]} if result.get("reason") else {}))
+                **({"reason": result["reason"]} if result.get("reason") else {}),
+                **({"message": result["message"]} if result.get("message") else {}))
 
 
 def _stop_own(actor: str) -> dict:
