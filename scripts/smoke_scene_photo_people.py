@@ -46,6 +46,18 @@ EXPECTED VALUES, derived by hand from the sources
     frame." — no digit at all; height_m 0.6 -> "Camera at eye level, close view, low camera close to the floor.";
     exactly 1.0 -> not low (the rule is "< 1.0").
     Proof on ec9479219: the old line holds "4.5576 m above ground".
+[7] Regenerate of a broken scene photo: ``character_ops.regenerate_image_worker`` with ``regenerate_image``
+    stubbed (it records ``original_prompt``) and ``scene_render._appearance_text`` stubbed to "look". Gallery
+    owner Kai; sidecar STORED_META = {scene_photo: True, photo_subjects: [Mira, Kai], prompt: STORED} where
+    STORED = "A minimalist modern interior in a clean architectural photography style." names no one (the shape
+    of the 2026-11-25 sidecar). ``with_photo_subjects`` calls ``with_subjects`` with no pairs, an empty hint and
+    an appearance-only describe (a re-render keeps the references of its own moment, so no current outfit):
+    a) dialog sends no selection (None) -> the recorded subjects; the stub receives
+         "In the picture: Mira; Kai.\n" + STORED + "\nPeople in the frame: Mira (look); Kai (look)"
+    b) dialog selection ["Kai"] -> "In the picture: Kai.\n" + STORED + "\nPeople in the frame: Kai (look)"
+    c) the same prompt on an image whose sidecar has no ``scene_photo`` -> STORED, byte-identical.
+    d) a scene photo whose prompt names both -> byte-identical.
+    Proof on ec9479219 (pinned): the old worker hands STORED through unchanged, naming neither.
 """
 import os
 import subprocess
@@ -203,6 +215,52 @@ def main() -> int:
     check(f"proof: {OLD_COMMIT[:9]} prints the raw metres",
           "4.5576 m above ground" in old_sp._view_framing(old_sp.PhotoView.model_validate(
               {"visible": [], "camera": {"pitch_deg": 0, "height_m": 4.5576, "fov_deg": 50}}), []), True)
+
+    print("[7] regenerate of a scene photo")
+    from app.core import character_ops
+    from app.core import scene_render
+    from app.models.character import add_character_image_metadata, get_character_dir, get_character_images_dir
+    stored = "A minimalist modern interior in a clean architectural photography style."
+    get_character_dir("Kai", create=True)
+    images = get_character_images_dir("Kai")
+    for fn, meta in (("Kai_photo_vbroken.png", {"scene_photo": True, "photo_subjects": ["Mira", "Kai"]}),
+                     ("Kai_plain.png", {})):
+        (images / fn).write_bytes(b"\x89PNG\r\n\x1a\n")
+        add_character_image_metadata("Kai", fn, {"prompt": stored, **meta})
+
+    received = []
+
+    def fake_regenerate(character_name, output_path, original_prompt, **kw):
+        received.append(original_prompt)
+        return True, original_prompt, output_path
+
+    class _Tq:
+        def track_finish(self, *a, **k):
+            pass
+
+    def run_worker(worker, fn, prompt, names):
+        received.clear()
+        worker("Kai", images / fn, prompt, "", "", {}, None, "", names, "", "", "", "", "t", True, True,
+               False, _Tq())
+        return received[0] if received else None
+
+    real_regen, real_look = ir.regenerate_image, scene_render._appearance_text
+    try:
+        ir.regenerate_image = fake_regenerate
+        scene_render._appearance_text = lambda n: "look"
+        w = character_ops.regenerate_image_worker
+        check("a) recorded subjects", run_worker(w, "Kai_photo_vbroken.png", stored, None),
+              "In the picture: Mira; Kai.\n" + stored + "\nPeople in the frame: Mira (look); Kai (look)")
+        check("b) dialog selection", run_worker(w, "Kai_photo_vbroken.png", stored, ["Kai"]),
+              "In the picture: Kai.\n" + stored + "\nPeople in the frame: Kai (look)")
+        check("c) no scene photo", run_worker(w, "Kai_plain.png", stored, None), stored)
+        named = "Mira and Kai sit on the bed."
+        check("d) both named", run_worker(w, "Kai_photo_vbroken.png", named, None), named)
+        old_ops = _old_module("app/core/character_ops.py", "old_character_ops")
+        check(f"proof: {OLD_COMMIT[:9]} passes the prompt without the people",
+              run_worker(old_ops.regenerate_image_worker, "Kai_photo_vbroken.png", stored, None), stored)
+    finally:
+        ir.regenerate_image, scene_render._appearance_text = real_regen, real_look
 
     print("FAIL: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

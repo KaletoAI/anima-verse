@@ -3318,9 +3318,14 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
 
 def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, original_room_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq, pose_check=None):
     from app.skills.image_regenerate import regenerate_image
-    from app.models.character import add_character_image_prompt
+    from app.models.character import add_character_image_prompt, get_single_image_meta
+    from app.core.scene_photo import with_photo_subjects
     from pathlib import Path
     try:
+        # A scene photo keeps its people whatever the stored or dialog prompt lost on the way (2026-11-25: an
+        # LLM refusal rewritten into an interior description named no one) — the same net as take_scene_photo.
+        prompt = with_photo_subjects(
+            prompt, get_single_image_meta(character_name, Path(image_path).name) or {}, character_names)
         _success, final_prompt, actual_path = regenerate_image(
             character_name, str(image_path), prompt,
             improvement_request=improvement_request, backend_name=backend_name,

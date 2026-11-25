@@ -120,12 +120,14 @@ def _room_transcript(avatar: str, loc: str, room: str) -> str:
     return "\n".join(lines[-_TRANSCRIPT_LINES:])
 
 
-def _person_descriptions(subjects: List[str]) -> str:
+def _person_descriptions(subjects: List[str], *, outfit: bool = True) -> str:
     """Text block with appearance + worn outfit per person in the frame.
 
     The reference image alone is often not enough (identity only) — the
     prompt must carry the description too, same semantics as everywhere
-    else: reference = appearance aid, outfit/pose live in the text."""
+    else: reference = appearance aid, outfit/pose live in the text.
+    ``outfit=False`` leaves the CURRENT outfit out — for a re-render of an
+    older photo, whose people keep the references of that moment."""
     from app.core.scene_render import _appearance_text
     from app.core.outfit_renderer import render_outfit
     parts = []
@@ -137,12 +139,13 @@ def _person_descriptions(subjects: List[str]) -> str:
                 bits.append(a)
         except Exception:
             pass
-        try:
-            outfit = (render_outfit(character_name=n) or {}).get("full") or ""
-            if outfit:
-                bits.append(outfit)
-        except Exception:
-            pass
+        if outfit:
+            try:
+                worn = (render_outfit(character_name=n) or {}).get("full") or ""
+                if worn:
+                    bits.append(worn)
+            except Exception:
+                pass
         parts.append(f"{n}" + (f" ({'; '.join(bits)})" if bits else ""))
     return "People in the frame: " + "; ".join(parts)
 
@@ -217,6 +220,32 @@ def with_subjects(prompt: str, subjects: List[str], pairs: List[tuple], *,
     lead = "In the picture: " + _people_line(back, pairs_back, hint_of) + "."
     desc = describe(missing)
     return "\n".join(p for p in (lead, (prompt or "").strip(), desc) if p)
+
+
+def with_photo_subjects(prompt: str, meta: Dict[str, Any], character_names: Any = None) -> str:
+    """The regenerate side of the safety net in ``take_scene_photo``: a stored or dialog prompt of a SCENE PHOTO
+    (``meta["scene_photo"]``) gets every subject back that it does not name (``with_subjects``). The subjects are
+    the dialog's character selection when it sent one, otherwise the ``photo_subjects`` the photo recorded at the
+    shutter (``take_scene_photo`` writes them; a ``create_new`` variant inherits the source's meta). Anything else
+    — no scene photo, no recorded subjects — comes back byte-identical.
+
+    Unlike the shutter, a re-render belongs to an EARLIER moment: its people keep the reference images of that
+    moment (the gallery regenerate passes its source references on), so the current pose, pair interaction and
+    outfit are not put in — only the names and their appearance."""
+    meta = meta or {}
+    if not meta.get("scene_photo"):
+        return prompt
+    recorded = meta.get("photo_subjects")
+    if character_names is not None:
+        subjects = [str(n) for n in character_names if n]
+    elif isinstance(recorded, list):
+        subjects = [str(n) for n in recorded if n]
+    else:
+        return prompt
+    if not subjects:
+        return prompt
+    return with_subjects(prompt, subjects, [], hint_of=lambda _n: "",
+                         describe=lambda names: _person_descriptions(names, outfit=False))
 
 
 def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
