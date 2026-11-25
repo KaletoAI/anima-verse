@@ -13,14 +13,17 @@ using Godot;
 namespace AnimaNative.Figures;
 
 /// <summary>
-/// Plan E3 Task 5: the bridge between the motion orders (§ A11b) and the NPC figures. Every NPC that appears in an
+/// Plan E3 Tasks 5/6: the bridge between the motion orders (§ A11b) and the figures. Every figure that appears in an
 /// order's <c>actors</c> gets one <see cref="OrderPlayer"/>; the worldmap rows (field <c>order</c>, root
 /// <c>motion_now</c>/<c>order_seq</c>) and the push topic <c>orders</c> (<see cref="PullOrdersAsync"/>) feed it through
 /// <see cref="AdoptOrders"/>. The player owns the figure from <c>exit</c> through <c>walk</c> and <c>entry</c> up to the
 /// loop's start pose (<see cref="TickOrder"/>, the first branch of <c>StepFigure</c>); from <c>loop_started</c> on the
 /// order only means "no re-placement" (decision 18): pose, pair clip, solo scene clock, finale and phase pose come from
 /// the row as before. A row without <c>order</c> ends a server order covered by the root <c>order_seq</c> with a
-/// <see cref="OrderEndBlendS"/> blend into the rest placement (decision 6). The avatar is skipped (Task 6).
+/// <see cref="OrderEndBlendS"/> blend into the rest placement (decision 6). The avatar plays its orders too (Task 6):
+/// a click starts a local order (<see cref="StartLocalOrder"/>) that the answer's order adopts in place; its link rides
+/// ask the server for the room (<see cref="AvatarLinkRide"/>), and a server order that still waits for the journey
+/// server's arrival is held at the access (<see cref="LocalOrders.HoldForArrival"/>).
 /// </summary>
 public partial class FigureManager
 {
@@ -35,6 +38,7 @@ public partial class FigureManager
     private readonly Dictionary<string, double> _orderExitY = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Key, JsonObject Spec)> _orderEntrySpecs = new(StringComparer.Ordinal);
     private long _orderSeqSeen;
+    private (double Motion, double At)? _motionSeen;
     private Task? _ordersPull;
     private bool _ordersPullAgain;
 
@@ -47,6 +51,24 @@ public partial class FigureManager
     /// <summary>Every frame the bridge shows of a live order (the check records the states with it).</summary>
     public event Action<string, OrderFrame>? OrderFrameShown;
 
+    /// <summary>An order of this figure ended (event <c>aborted</c> or <c>ended</c>): the controller hands the avatar back.</summary>
+    public event Action<string>? OrderEnded;
+
+    /// <summary>
+    /// The avatar's ride over a link of its order walk, per kind (<c>stairs</c>, <c>lift</c>): the room-entry ride of
+    /// <c>AvatarRoomsController</c>. Read at the ride's start; null (no rooms controller) rides like an NPC.
+    /// </summary>
+    public Func<string, ILinkRide?>? AvatarLinkRide { get; set; }
+
+    /// <summary>A server order the avatar must not play (the order of a run its click already gave up, review W3.4).</summary>
+    public Func<Order, bool>? IgnoresAvatarOrder { get; set; }
+
+    /// <summary>
+    /// The server's motion clock now, as last seen (root <c>motion_now</c> of a worldmap poll or of <c>/play/orders</c>)
+    /// plus the client seconds since; before any, the client clock.
+    /// </summary>
+    public double MotionNow => _motionSeen is { } seen ? seen.Motion + (_clock - seen.At) : _clock;
+
     /// <summary>The highest order <c>seq</c> seen (adopted, <c>/play/orders</c> or the worldmap's <c>order_seq</c>).</summary>
     public long OrderSeqSeen => _orderSeqSeen;
 
@@ -58,9 +80,36 @@ public partial class FigureManager
 
     /// <summary>The order (or its end blend) owns the figure's place: <see cref="ApplyPlan"/> never re-places it (spec 2).</summary>
     private bool HoldsOrderPlacement(Figure fig)
-        => !SkipsOrders(fig.CharacterName) && (HasLiveOrder(fig.CharacterName) || _orderBlends.ContainsKey(fig.CharacterName));
+        => HasLiveOrder(fig.CharacterName) || _orderBlends.ContainsKey(fig.CharacterName);
 
-    private bool SkipsOrders(string name) => name == AvatarName || IsPlayerDriven(name);
+    /// <summary>
+    /// A client-made order (<see cref="Order.IsLocal"/>, <see cref="LocalOrders"/>) for its drawn actors, accepted at once
+    /// on the motion clock it was issued at (lag 0). True when a figure took it.
+    /// </summary>
+    public bool StartLocalOrder(Order local)
+    {
+        bool any = false;
+        foreach (var actor in local.Actors)
+            if (_figures.TryGetValue(actor.Name, out var fig))
+            {
+                _parkedOrders.Remove(actor.Name);
+                any |= AcceptOrder(fig, local, local.IssuedS);
+            }
+        return any;
+    }
+
+    /// <summary>The server refused the figure's order (a reservation, a room): it stops where it stands (event <c>aborted</c>).</summary>
+    public void RefuseOrder(string name, string reason)
+    {
+        if (_orderPlayers.TryGetValue(name, out var player)) player.Refuse(reason);
+    }
+
+    /// <summary>Lets go of the figure's order at once, without an end blend (the hand-back of the avatar).</summary>
+    public void DropOrder(string name)
+    {
+        if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is null) return;
+        ForgetOrders(name);
+    }
 
     /// <summary>
     /// Hands the orders to the players of their NPC actors. <paramref name="motionNow"/> is the server's motion clock the
@@ -75,7 +124,7 @@ public partial class FigureManager
             foreach (var actor in order.Actors)
             {
                 string name = actor.Name;
-                if (name.Length == 0 || SkipsOrders(name)) continue;
+                if (name.Length == 0 || (name == AvatarName && IgnoresAvatarOrder?.Invoke(order) == true)) continue;
                 if (!_figures.TryGetValue(name, out var fig) || !Mounted(order.LocationId))
                 {
                     if (!_parkedOrders.TryGetValue(name, out var parked) || Newer(order, parked.Order))
@@ -98,20 +147,25 @@ public partial class FigureManager
     private bool Mounted(string locationId)
         => locationId.Length == 0 || Slots is null || Slots.Invoke().ContainsKey(locationId);
 
-    private void AcceptOrder(Figure fig, Order order, double motionNow)
+    private bool AcceptOrder(Figure fig, Order order, double motionNow)
     {
         string name = fig.CharacterName;
         var player = PlayerFor(name);
         string? before = player.Current?.Id;
-        if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return;
-        if (before == order.Id) return;   // a revision (or the adoption of a local order): the figure keeps going
+        bool local = player.Current is { IsLocal: true };
+        double issuedBefore = player.IssuedLocal;
+        if (name == AvatarName) order = LocalOrders.HoldForArrival(order, name);
+        if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return false;
+        // A revision, or the adoption of a local order in place (same target, the local clock kept): the figure keeps going.
+        if (before == order.Id || (local && !order.IsLocal && player.IssuedLocal == issuedBefore)) return true;
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
         _orderExitY[name] = fig.Position.Y;
         fig.Route = null; fig.Reckon = null; fig.Settle = null; fig.Ride = null;
         fig.Waypoints.Clear(); fig.DropTravelLine();
-        fig.PropEntry = null; fig.PropEntryBlocked = false; fig.PropCommitPending = false; fig.PropCommitKey = "";
+        fig.PropEntryBlocked = false; fig.PropCommitPending = false; fig.PropCommitKey = "";
         fig.Travelling = false;
+        return true;
     }
 
     private OrderPlayer PlayerFor(string name)
@@ -123,6 +177,10 @@ public partial class FigureManager
                 && Slots?.Invoke().GetValueOrDefault(o.LocationId) is { } tile ? tile.Places.Stairs : Array.Empty<AnimaNative.Scene.StairLink>()),
             ["lift"] = new NpcLiftRide(),
         };
+        // The avatar's link rides ask the server for the room first (plan E3 Task 6, R2d).
+        if (name == AvatarName && AvatarLinkRide is { } avatarRide)
+            foreach (var kind in new[] { "stairs", "lift" })
+                if (avatarRide(kind) is { } ride) rides[kind] = ride;
         var created = new OrderPlayer(name, new OrderClipDurations(this, name), rides);
         // A player born between two polls (a pull, a mount) starts in the world's freeze state, not unfrozen.
         created.SetFrozen(WorldFrozen, _clock);
@@ -139,13 +197,13 @@ public partial class FigureManager
         double? motionNow = root.TryGetProperty("motion_now", out var mn) && mn.ValueKind == JsonValueKind.Number ? mn.GetDouble() : null;
         long orderSeq = root.TryGetProperty("order_seq", out var os) && os.ValueKind == JsonValueKind.Number && os.TryGetInt64(out var sv) ? sv : 0;
         var orders = _rows.Where(r => r.Order is not null).Select(r => r.Order!).ToList();
-        if (motionNow is { } now) AdoptOrders(orders, now);
+        if (motionNow is { } now) { _motionSeen = (now, _clock); AdoptOrders(orders, now); }
         _orderSeqSeen = Math.Max(_orderSeqSeen, orderSeq);
         var named = orders.SelectMany(o => o.Actors.Select(a => a.Name)).ToHashSet(StringComparer.Ordinal);
         foreach (var row in _rows)
         {
             // A row whose order did not parse is no "row without order": it must not end the running one.
-            if (row.Order is not null || row.OrderUnreadable || named.Contains(row.Name) || SkipsOrders(row.Name)) continue;
+            if (row.Order is not null || row.OrderUnreadable || named.Contains(row.Name)) continue;
             if (_orderPlayers.TryGetValue(row.Name, out var player)) player.RowWithoutOrder(orderSeq, _clock);
             if (_parkedOrders.TryGetValue(row.Name, out var parked) && !parked.Order.IsLocal && orderSeq >= parked.Order.Seq)
                 _parkedOrders.Remove(row.Name);
@@ -177,7 +235,7 @@ public partial class FigureManager
             {
                 using var doc = await _source.GetOrdersAsync(_orderSeqSeen);
                 var payload = OrdersPayload.Parse(doc.RootElement);
-                if (payload.MotionNow is { } now) AdoptOrders(payload.Orders, now);
+                if (payload.MotionNow is { } now) { _motionSeen = (now, _clock); AdoptOrders(payload.Orders, now); }
                 _orderSeqSeen = Math.Max(_orderSeqSeen, payload.Seq);
             }
             catch (ApiException e) when (e.Status == 404)
@@ -220,7 +278,6 @@ public partial class FigureManager
     private bool TickOrder(Figure fig, double dt, double camDist)
     {
         string name = fig.CharacterName;
-        if (SkipsOrders(name)) return false;
         AcceptParked(fig);
         if (_orderBlends.TryGetValue(name, out var blend)) return TickOrderBlend(fig, blend, dt, camDist);
         if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is not { } order) return false;
@@ -235,12 +292,13 @@ public partial class FigureManager
         foreach (var e in frame.Events)
         {
             if (e == "arrived_access") OrderArrivedAtAccess?.Invoke(name, order);
-            else if (e == "ended") _orderBlends[name] = (fig.Position, _clock);
+            else if (e == "ended") { _orderBlends[name] = (fig.Position, _clock); OrderEnded?.Invoke(name); }
             else if (e == "aborted")
             {
                 fig.FinishPropEntry(FigureClips.PoseKind("standing", fig.Poses));
                 fig.Position = new Vector3((float)frame.Position.X, (float)OrderFloorY(fig, frame.Position), (float)frame.Position.Z);
                 fig.Target = fig.Position;
+                OrderEnded?.Invoke(name);
             }
         }
         if (_orderBlends.TryGetValue(name, out var ended)) return TickOrderBlend(fig, ended, dt, camDist);

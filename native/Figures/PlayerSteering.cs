@@ -28,8 +28,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     public bool MovementLocked { get; set; }
     /// <summary>Task 50 / Task 57 hook: authoritative prop entry/approach forbids steering and position writes.</summary>
     public bool PropActionDriven { get; set; }
-    /// <summary>Task 57: preparation blocks input; owned prop movement requests an awaited explicit cancellation.</summary>
-    public bool PropPreparationPending { get; set; }
+    /// <summary>Task 57 / plan E3 Task 6: input while the avatar plays its furniture order or run asks to let go of it.</summary>
     public Action? ReleasePropAction { get; set; }
     public Action<P2>? SteeringInput { get; set; }
     public double Clock => _clock;
@@ -115,8 +114,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// </summary>
     public bool WalkTo(P2 hit, int? level = null)
     {
-        if (Active && !MovementLocked && !PropPreparationPending && PropActionDriven) { ReleasePropAction?.Invoke(); return false; }
-        if (!Active || MovementLocked || PropPreparationPending || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
+        if (Active && !MovementLocked && PropActionDriven) { ReleasePropAction?.Invoke(); return false; }
+        if (!Active || MovementLocked || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
         { if (PendingSnap) ToastLoading(); return false; }
         var pos=new P2(f.Position.X,f.Position.Z);
         var mine=world.FootprintAt(pos.X,pos.Z);
@@ -262,7 +261,6 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         SampleFirstStep();
         if (!Active) { CancelRoute(); VerticalRide=WalkIn=Correction=null; return; }
         if (PendingSnap) { ToastLoading(); return; }
-        if (PropPreparationPending) { CancelRoute(); return; }
         if (PropActionDriven) { CancelRoute(); if (!MovementLocked && Walk.WalkDir(keys,yaw) is not null) ReleasePropAction?.Invoke(); return; }
         if (SeatTakingPending) return;
         if (!figures.ServerDriven) figures.TakePlayerTravel(figures.AvatarName);

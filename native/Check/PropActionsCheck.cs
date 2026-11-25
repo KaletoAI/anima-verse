@@ -27,7 +27,7 @@ public static partial class PropActionsCheck
     public static async Task<string> RunAsync(Node3D host,string fixtures)
     {
         int checks=await CheckBedEntry(host,fixtures);
-        checks+=await CheckMotionPlayback(host,fixtures);
+        checks+=await CheckOwnOrders(host,fixtures);
         checks+=await CheckUpperMotion(host,fixtures);
         checks+=await CheckMenus(host,fixtures);
         checks+=await CheckPolling(host,fixtures);
@@ -109,7 +109,8 @@ public static partial class PropActionsCheck
             await offers.PendingPropAction!;
             Is("HUD dispatch exact body",source.Request?["action_id"]?.GetValue<string>()=="pose-56" && source.Request?["revision"]?.GetValue<string>()=="revision-56"
                 && source.Request?["target"]?["placement_id"]?.GetValue<string>()=="bench-56" && !source.Request!.AsObject().ContainsKey("members"));
-            Is("refusal resumes preparation",!steering.PropPreparationPending && !position.Channel.ReportsPaused);
+            for(int frame=0;frame<3;frame++) { manager.Tick(1.0/60); offers.Tick(); }
+            Is("refusal aborts the local order and hands the avatar back",!manager.HasLiveOrder(manager.AvatarName) && !steering.PropActionDriven && !manager.ServerDriven);
             foreach(var row in source.Offers) row!["target"]!["variant_uid"]="wrong";
             await offers.RefreshSemanticOffersAsync();
             Is("stale variant is unpickable",!offers.Pick(origin,direction,new Vector2(100,120)));
@@ -124,12 +125,20 @@ public static partial class PropActionsCheck
             return n;
         } finally { offers?.Dispose(); position?.Dispose(); hud?.Free(); builder.StopResidency(); builder.Models?.FreeAll(); world.QueueFree(); }
     }
-    /// <summary>Check-only snapshot server: real fixture geometry plus controlled blocked/verdict changes, without sockets.</summary>
-    private sealed class MenuSource : IWorldSource
+    /// <summary>
+    /// Check-only snapshot server: real fixture geometry plus controlled blocked/verdict changes, without sockets. Plan E3
+    /// Task 6 (OrderCheck R2–R2c): <see cref="Calls"/> logs every mutation in order, <see cref="OnRequest"/> answers a
+    /// request per call, <see cref="Reserved"/> holds the runs an approaching answer reserved until their cancel.
+    /// </summary>
+    internal sealed class MenuSource : IWorldSource
     {
         private readonly FixtureSource _fixture;
         public JsonArray Offers { get; }
         public JsonNode? Request;
+        public readonly List<string> Calls=new();
+        public readonly HashSet<string> Reserved=new(StringComparer.Ordinal);
+        public Func<JsonNode,Task<JsonDocument>>? OnRequest;
+        public bool CancelKeepsWorld;
         public JsonObject? MapOverride,StateOverride,CancelAnswer,RespondAnswer,SceneOverride;
         public Exception? CancelError;
         public int CancelRequests,OfferRequests,WorldRequests,StateRequests;
@@ -137,7 +146,10 @@ public static partial class PropActionsCheck
         public TaskCompletionSource<JsonDocument>? PendingOffers,PendingRequest;
         public Task<JsonDocument> CancelPropActionAsync(string executionId,System.Threading.CancellationToken ct=default)
         {
-            CancelRequests++; if(CancelError is { } error) return Task.FromException<JsonDocument>(error); MapOverride=JsonNode.Parse(File.ReadAllText(Path.Combine(_fixture.Dir,"worldmap_cancelled.json")))!.AsObject();
+            CancelRequests++; Calls.Add("cancel:"+executionId); Reserved.Remove(executionId);
+            if(CancelError is { } error) return Task.FromException<JsonDocument>(error);
+            if(CancelKeepsWorld) return Task.FromResult(JsonDocument.Parse(CancelAnswer?.ToJsonString() ?? "{\"execution_id\":\""+executionId+"\",\"status\":\"cancelled\"}"));
+            MapOverride=JsonNode.Parse(File.ReadAllText(Path.Combine(_fixture.Dir,"worldmap_cancelled.json")))!.AsObject();
             StateOverride=new JsonObject { ["current"]=new JsonArray(),["outgoing"]=new JsonArray() };
             return Task.FromResult(JsonDocument.Parse(CancelAnswer?.ToJsonString() ?? "{\"status\":\"cancelled\"}"));
         }
@@ -147,7 +159,17 @@ public static partial class PropActionsCheck
         public Task<JsonDocument> GetPropActionStateAsync() { StateRequests++; return PendingState?.Task ?? Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}")); }
         public Task<JsonDocument> GetPlacesAsync()=>Task.FromResult(JsonDocument.Parse("{\"room_id\":\"r-props\",\"places\":[]}"));
         public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,IReadOnlyList<string>? members=null,string? consent=null,System.Threading.CancellationToken ct=default)
-        { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,members,consent).GetRawText()); return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
+        {
+            Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,members,consent).GetRawText());
+            Calls.Add("request:"+PropActionMotion.Text(Request["target"]?["placement_id"]));
+            if(OnRequest is { } answer) return Reserve(answer(Request!));
+            return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
+        private async Task<JsonDocument> Reserve(Task<JsonDocument> answer)
+        {
+            var doc=await answer;
+            if(doc.RootElement.TryGetProperty("status",out var s) && s.GetString()=="approaching") Reserved.Add(doc.RootElement.GetProperty("execution_id").GetString()!);
+            return doc;
+        }
         public Task<JsonDocument> RespondPropActionAsync(string id,bool accept,System.Threading.CancellationToken ct=default)=>Task.FromResult(JsonDocument.Parse(RespondAnswer?.ToJsonString() ?? "{\"status\":\"refused\"}"));
         public Task<JsonDocument> GetWorldMapAsync() { WorldRequests++; return MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json"); }
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();

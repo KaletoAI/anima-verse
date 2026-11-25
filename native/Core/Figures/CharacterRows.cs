@@ -23,8 +23,6 @@ public sealed record CharacterRow(
     /// <summary><c>badges</c>: ordered name icons; absent or malformed input clears them on the next poll.</summary>
     public IReadOnlyList<CharacterBadge> Badges { get; init; } = Array.Empty<CharacterBadge>();
 
-    /// <summary>Task 57: public geometry only; absent projections clear on the next poll.</summary>
-    public JsonObject? PropActionEntry { get; init; }
     /// <summary>
     /// <c>order</c> (§ A11b): the order this figure plays (plan E3); null when the row carries none or it does not parse
     /// (<see cref="AnimaNative.Orders.OrderParse.From"/>). A row without one ends a server order only through the root
@@ -135,7 +133,6 @@ public sealed record CharacterRow(
         {
             Yaw = Json.NumOrNull(c, "yaw"),
             Badges = ParseBadges(c),
-            PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
             Order = order,
             OrderUnreadable = order is null && c.TryGetProperty("order", out var od) && od.ValueKind != JsonValueKind.Null,
             ActivityAnimation = Json.Str(c, "activity_animation"),

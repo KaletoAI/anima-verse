@@ -111,3 +111,14 @@ always has `incoming`, `outgoing`, `current`, `recent_results`; each execution
 carries the immutable action/target/revision, participants, semantic and
 physical roles, phase label, reason and permission flags. Terminal rows
 include empty effect receipts because these fixture definitions have no effects.
+
+## The own run on orders (plan E3 Task 6, `PropActionsCheck.CheckOwnOrders`)
+
+The avatar no longer plays the answer's `motion` plan: a click starts the local order `local:<n>` from (-3,-2) to the
+marker's actor access (2,-1) at 1.4 m/s on the straight line (no navigation in this world), length √(5² + 1²) =
+√26 = 5.099020 m, reached after √26 / 1.4 = 3.642157 s. After 0.25 s the avatar stands 0.35 m along (5,1)/√26:
+(-2.656796, -1.931359). The server's order (`OwnOrder` in the check: access (2,-1) yaw 180, anchor (2,0.129,0),
+entry nominal 2 s, seq above every map's `order_seq`) adopts the local order in place (same kind, location and anchor),
+so the local clock keeps running. Under the journey server the avatar waits at the access until the revision
+`entering`; the entry of 2 s ends on the slot (2, 0.129, 0). The run's end hands the avatar back once the order lets go
+or at the latest after `OwnPairEndHoldS` = 3 s.

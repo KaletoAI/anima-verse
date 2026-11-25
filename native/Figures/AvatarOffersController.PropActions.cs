@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Props;
+using AnimaNative.Orders;
 using AnimaNative.Overview;
 using AnimaNative.Scene;
 using AnimaNative.World;
@@ -31,46 +32,54 @@ public sealed partial class AvatarOffersController
     private double _nextPropPoll,_lastSemanticPoll=double.NegativeInfinity,_lastStatePoll=double.NegativeInfinity;
     private Task? _semanticRefresh,_stateRefresh;
     private bool _propPollBusy,_propMutationBusy,_manualPropRelease;
+    /// <summary>One click on a furniture action: the request it sends and the local order the avatar walks meanwhile.</summary>
+    private sealed class PropClick(string action,JsonObject target,string revision,IReadOnlyList<string>? members,string? consent)
+    {
+        public readonly string Action=action,Revision=revision;
+        public readonly JsonObject Target=target;
+        public readonly IReadOnlyList<string>? Members=members;
+        public readonly string? Consent=consent;
+        public Order? Local;
+        public string ExecutionId="";
+        public bool NoPath;
+    }
+    private PropClick? _currentClick,_queuedClick;
+    private bool _clickInFlight;
+    private int _localOrders;
+    private Task _abandoning=Task.CompletedTask;
+    /// <summary>Runs this avatar's clicks gave up: their (late) orders are not played, their reservation is cancelled.</summary>
+    private readonly HashSet<string> _abandonedRuns=new(StringComparer.Ordinal);
+    private Vector3? _turnAwayFrom;
+    private double? _handBackAt;
+    private bool _handBackPending;
+
     private void AttachProps()
     {
         if(!_source.SupportsPropActions) return;
         var props=PropActions=new(_source,_clock) { RefreshOffers=()=>RefreshSemanticOffersAsync(),Log=LogProp };
-        props.PrepareWrites=async ()=> {
-            _propPrepared=true;
-            _steering.CancelRoute();
-            if(Avatar is { } f && !_figures.ServerDriven) _figures.SetPlayerTarget(f.CharacterName,f.Position);
-            var point=Avatar is { } a ? new AnimaNative.Scatter.P2(a.Position.X,a.Position.Z) : (AnimaNative.Scatter.P2?)null;
-            bool serverOwned=_figures.ServerDriven || props.OwnedRun is not null || _steering.PropActionDriven || _steering.AvatarSeated;
-            bool sent=!serverOwned && point is not null && _position.Channel.Dirty;
-            var timer=System.Diagnostics.Stopwatch.StartNew();
-            await _position.Channel.PreparePropActionAsync(point,serverOwned);
-            LogProp(serverOwned ? "position pre-flush skipped (server-owned)" : sent
-                ? $"position pre-flush point=({point!.Value.X:F2},{point.Value.Z:F2}) ms={timer.ElapsedMilliseconds}"
-                : $"position pre-flush skipped (clean) ms={timer.ElapsedMilliseconds}");
-        };
         props.RefreshWorld=async ()=> {
             if(RefreshPropWorld is { } refresh) await refresh();
             else { using var doc=await _source.GetWorldMapAsync(); if(!_disposed) _figures.ApplyPolled(doc.RootElement.Clone()); }
         };
         _figures.SuppressAvatarPropEntry=()=>_manualPropRelease;
-        _figures.PropEntryError=message=>Toast?.Invoke(message);
-        props.PauseChanged+=PropPauseChanged;
+        props.Changed+=PropStateChanged;
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
         props.RunEnded+=PropRunEnded;
         props.RunSuperseded+=PropRunSuperseded;
         props.MutationRejected+=PropMutationRejected;
-        props.MotionReceived+=PropMotionReceived;
-        _figures.OwnPropMotionReleased+=ReleaseLocalProp;
         _figures.OwnPropRunLive=()=>props.OwnedRun is not null;
         _figures.OwnPairEnding+=PropPairEnding;
+        _figures.OrderEnded+=AvatarOrderEnded;
+        _figures.OrderFrameShown+=AvatarOrderFrame;
+        _figures.IgnoresAvatarOrder=order=>order.ExecutionId.Length>0 && _abandonedRuns.Contains(order.ExecutionId);
         _hud.PropActionResult=(result,source)=> {
             string ownId=props.OwnExecutionId;
-            props.ConsumeMotion(result,source);
+            props.ConsumeAnswer(result,source);
+            AdoptAnswerOrder(result);
             string status=PropActionMotion.Text(result["status"]),id=PropActionMotion.Text(result["execution_id"]);
             // Only cancelling the own run hands the avatar back; a withdrawn invitation leaves it seated.
-            if(source=="cancel" && status is not ("refused" or "failed") && id.Length>0 && id==ownId
-                && _figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
+            if(source=="cancel" && status is not ("refused" or "failed") && id.Length>0 && id==ownId) RequestHandBack();
         };
         _hud.PropActionTarget=PreviewPropTarget;
         _hud.PropActionPrepare=id=>props.PrepareAsync(id);
@@ -83,9 +92,7 @@ public sealed partial class AvatarOffersController
             if(args.Count<3 || args[1] is not JsonObject target) return;
             // The action starts here, not when the menu opens: reading time in the menu is not measured.
             if(Avatar is { } avatar) _steering.FirstStep.Arm("prop_offer",_steering.Clock,avatar.Position.X,avatar.Position.Z);
-            PreviewPropTarget(target);
-            PendingPropAction=MutatePropAsync(()=>RequestLoggedAsync(PropActionMotion.Text(args[0]),target,
-                PropActionMotion.Text(args[2]),
+            StartClick(new PropClick(PropActionMotion.Text(args[0]),(JsonObject)target.DeepClone(),PropActionMotion.Text(args[2]),
                 AnimaNative.Api.PropActionRequest.BridgeMembers(args),
                 args.Count>4 && args[4] is JsonValue c && c.TryGetValue<string>(out var consent) ? consent : null));
         };
@@ -99,11 +106,15 @@ public sealed partial class AvatarOffersController
             PendingPropAction=PropActionMotion.Text(props.OwnedRun?["execution_id"])==id ? ReleaseOwnedPropAsync()
                 : MutatePropAsync(()=>_source.CancelPropActionAsync(id,_lifetime.Token),"cancel");
         };
-        _position.PropMotionOwned=()=>_figures.OwnPropMotion is not null || props.OwnedRun is not null || (_propPrepared && props.Paused);
+        _position.PropMotionOwned=()=>_figures.HasLiveOrder(_figures.AvatarName) || props.OwnedRun is not null;
         _position.ManualPropWithdrawn=props.ManualGate.Withdrawn;
-        _steering.ReleasePropAction=()=> { if(!props.Paused && !props.ManualGate.Pending) PendingPropAction=ReleaseOwnedPropAsync(); };
+        _steering.ReleasePropAction=()=> {
+            if(props.ManualGate.Pending) return;
+            if(props.OwnedRun is null && _currentClick is { } click && click.ExecutionId.Length==0) AbandonClick(click);
+            else PendingPropAction=ReleaseOwnedPropAsync();
+        };
         PickPropAction=PickSemanticProp;
-        PropPauseChanged();
+        PropStateChanged();
         PendingPropAction=ObservePropAsync(async ()=> { await RefreshPropStateAsync(); await RefreshSemanticOffersAsync(false); PublishPropSnapshot(); });
     }
     private void PreviewPropTarget(JsonObject target)
@@ -115,23 +126,171 @@ public sealed partial class AvatarOffersController
         _propPreviewYaw=avatar.Yaw;
         avatar.FaceTowards(node.GlobalPosition-avatar.Position,snap:true);
     }
-    private void PropMotionReceived(JsonObject motion,string source,string executionId)
+
+    /// <summary>
+    /// Plan E3 Task 6: the local order of a click (<see cref="LocalOrders.PropAction"/>) from the mounted scene: the
+    /// furniture's prop marker (<c>placement_id</c>) in the target's room, its slot nearest to the avatar as the anchor,
+    /// the marker's access of the role <c>actor</c> — else <see cref="AccessAuto.Compute"/> on the floor under the slot.
+    /// Null when the scene does not hold the furniture (the request alone then decides).
+    /// </summary>
+    private Order? LocalOrderFor(JsonObject target)
     {
+        if(Avatar is not { } avatar) return null;
+        string placement=PropActionMotion.Text(target["placement_id"]),room=PropActionMotion.Text(target["room_id"]),loc=PropActionMotion.Text(target["location_id"]);
+        if(placement.Length==0 || _world.Slots.GetValueOrDefault(loc) is not { Ready:true } tile) return null;
+        var at=new Vec3(avatar.Position.X,avatar.Position.Y,avatar.Position.Z);
+        PlaceEntry? best=null; Vec3 slot=default; double bestD=double.PositiveInfinity;
+        foreach(var entry in tile.Places.Markers.Values.SelectMany(m=>m.Values).Distinct())
+        {
+            if(entry.PlacementId!=placement || entry.RoomId!=room) continue;
+            foreach(var s in entry.Slots)
+            {
+                double d=double.Hypot(s.X-at.X,s.Z-at.Z);
+                if(d<bestD) { bestD=d; best=entry; slot=s; }
+            }
+        }
+        if(best is null) return null;
+        double facing=(best.Rotation ?? 0)+best.FrameYawDeg;
+        var anchor=new OrderPoint(slot.X,slot.Y,slot.Z,facing);
+        var access=best.Access.TryGetValue("actor",out var marked) ? marked
+            : AccessAuto.Compute(new OrderPoint(slot.X,at.Y,slot.Z,facing),0,0,null,null);
+        OrderStep? exit=_steering.AvatarSeated ? new OrderStep("exit","seat","",0) : null;
+        return LocalOrders.PropAction(++_localOrders,_figures.MotionNow,LocalOrders.DefaultSpeedMS,
+            new LocalPropAction(_figures.AvatarName,null,new OrderPoint(at.X,at.Y,at.Z,avatar.Yaw*180/Math.PI),_position.RoomId,best.Level,
+                access,anchor,best.Drop,"bridge",exit,"","",loc,room,best.Level));
+    }
+
+    /// <summary>
+    /// A click: the avatar walks its local order at once (before the reservation is answered) and the request goes out —
+    /// at once, or after the request still running (its answer is then superseded and cancelled before this one goes).
+    /// </summary>
+    private void StartClick(PropClick click)
+    {
+        _turnAwayFrom=null; _handBackAt=null; _handBackPending=false;
+        click.Local=LocalOrderFor(click.Target);
+        _currentClick=click;
+        if(click.Local is { } local && _figures.StartLocalOrder(local)) { TakeAvatar(); LogProp($"local order {local.Id} started"); }
+        else PreviewPropTarget(click.Target);
+        if(_clickInFlight) { _queuedClick=click; return; }
+        PendingPropAction=RunClicksAsync(click);
+    }
+    private async Task RunClicksAsync(PropClick first)
+    {
+        _clickInFlight=true;
+        try {
+            for(PropClick? click=first;click is not null && !_disposed;click=_queuedClick) {
+                _queuedClick=null;
+                await RequestClickAsync(click,retried:false);
+            }
+        }
+        catch(Exception e) { if(!_disposed) Toast?.Invoke(e.Message); }
+        finally { _clickInFlight=false; }
+    }
+    private async Task RequestClickAsync(PropClick click,bool retried)
+    {
+        if(PropActions is not { } props) return;
+        JsonObject answer;
+        try {
+            using var doc=await props.MutateAsync(()=>RequestLoggedAsync(click.Action,click.Target,click.Revision,click.Members,click.Consent));
+            answer=JsonNode.Parse(doc.RootElement.GetRawText())!.AsObject();
+        }
+        catch(AnimaNative.Api.ApiException e) when(e.Status==409 && (e.Detail ?? "").Contains("request_in_progress",StringComparison.Ordinal) && !retried) {
+            // The superseded run is still ending on the server: once after its end, never shown as a refusal.
+            LogProp("request_in_progress: retry after the superseded run's end");
+            await _abandoning;
+            if(!_disposed && click==_currentClick) await RequestClickAsync(click,retried:true);
+            return;
+        }
+        catch(Exception e) {
+            if(!_disposed && click==_currentClick) RefuseClick(click,e is AnimaNative.Api.ApiException api && api.Detail is { Length:>0 } d ? d : e.Message);
+            return;
+        }
         if(_disposed) return;
-        if(motion["departure"] is not null && _propPreviewYaw is { } previous && Avatar is { } avatar) avatar.FaceTowards(new((float)Math.Sin(previous),0,(float)Math.Cos(previous)),snap:true);
-        _manualPropRelease=false; _propPrepared=false; _propPreviewYaw=null;
+        string status=PropActionMotion.Text(answer["status"]),exec=PropActionMotion.Text(answer["execution_id"]);
+        if(status is "refused" or "failed") {
+            if(click==_currentClick) RefuseClick(click,PropActionMotion.Text(answer["reason"]));
+            return;
+        }
+        if(exec.Length==0 || status=="cancelled") return;
+        if(click!=_currentClick || click.NoPath) {
+            // The click was replaced (or found no path) while its request ran: let go of the reservation before the next.
+            await AbandonRunAsync(exec);
+            return;
+        }
+        click.ExecutionId=exec;
+        AdoptAnswerOrder(answer);
+        await RefreshSemanticOffersAsync(false);
+    }
+    /// <summary>The order of a mutation answer (field <c>order</c>, the actor's own run): taken over by the avatar's player.</summary>
+    private void AdoptAnswerOrder(JsonObject answer)
+    {
+        if(answer["order"] is not JsonObject wire) return;
+        Order? order;
+        try { using var doc=JsonDocument.Parse(wire.ToJsonString()); order=OrderParse.From(doc.RootElement); }
+        catch(Exception e) { LogProp("answer order unreadable: "+e.Message); return; }
+        if(order is null || order.ActorNamed(_figures.AvatarName) is null) return;
+        if(order.ExecutionId.Length>0 && _abandonedRuns.Contains(order.ExecutionId)) return;
+        _figures.AdoptOrders(new[] { order },_figures.MotionNow);
+        if(_figures.HasLiveOrder(_figures.AvatarName)) TakeAvatar();
+    }
+    private Task AbandonRunAsync(string executionId)
+    {
+        if(!_abandonedRuns.Add(executionId)) return _abandoning;
+        LogProp($"superseded run {executionId}: cancel");
+        return _abandoning=MutatePropAsync(()=>_source.CancelPropActionAsync(executionId,_lifetime.Token),"cancel");
+    }
+    /// <summary>Input let go of a click whose answer has not come: the avatar is handed back, a late answer is cancelled.</summary>
+    private void AbandonClick(PropClick click)
+    {
+        if(_currentClick==click) _currentClick=null;
+        _handBackPending=true;
+    }
+    /// <summary>A refusal of the click (or a failed request): stand, turn away from the furniture, say why.</summary>
+    private void RefuseClick(PropClick click,string reason)
+    {
+        _currentClick=null;
+        if(click.Local?.Actors[0].Anchor is { } anchor) _turnAwayFrom=new((float)anchor.X,(float)anchor.Y,(float)anchor.Z);
+        LogProp($"click refused: {reason}");
+        Toast?.Invoke(reason.Length>0 ? reason : "refused");
+        if(_figures.HasLiveOrder(_figures.AvatarName)) _figures.RefuseOrder(_figures.AvatarName,reason);
+        else _handBackPending=true;
+    }
+    private void AvatarOrderFrame(string name,OrderFrame frame)
+    {
+        if(_disposed || name!=_figures.AvatarName || !frame.Events.Contains("no_path") || _currentClick is not { } click) return;
+        // No way to the furniture: say so, let go of the reservation (now, or when its answer comes) and of the avatar.
+        click.NoPath=true; _currentClick=null;
+        Toast?.Invoke("no_path");
+        LogProp("local order: no_path");
+        if(click.ExecutionId.Length>0) PendingPropAction=AbandonRunAsync(click.ExecutionId);
+        _handBackPending=true;
+    }
+    private void AvatarOrderEnded(string name)
+    {
+        if(_disposed || name!=_figures.AvatarName) return;
+        // A refused or given-up order, or the exit of an ended run: the avatar is the player's again.
+        if(_currentClick is null || PropActions?.OwnedRun is null && _currentClick.ExecutionId.Length==0 && !_figures.HasLiveOrder(name))
+            _handBackPending=true;
+    }
+    /// <summary>The run ended or is being let go: the avatar goes back once its order's exit has played, at the latest after the hold.</summary>
+    private void RequestHandBack()
+    {
+        _currentClick=null;
+        if(_figures.HasLiveOrder(_figures.AvatarName)) _handBackAt=_clock()+AnimaNative.Figures.FigureManager.OwnPairEndHoldS*1000;
+        else _handBackPending=true;
+    }
+    private void TakeAvatar()
+    {
+        _manualPropRelease=false; _propPrepared=false; _propPreviewYaw=null; _handBackAt=null; _handBackPending=false;
         _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
         _steering.CancelRoute(); _steering.PropActionDriven=true; _steering.SetSeated(false); _seatKey="";
-        _figures.PlayOwnPropMotion(motion,source,executionId);
-        if(_figures.OwnPropMotion is not null) _figures.SetServerDriven(true);
+        _figures.SetServerDriven(true);
     }
-    private void PropPauseChanged()
+    private void PropStateChanged()
     {
         if(_disposed || PropActions is not { } props) return;
         PublishPropSnapshot();
         if(props.OwnedRun is not null && !props.ManualGate.Pending) _manualPropRelease=false;
-        _position.Channel.ReportsPaused=props.Paused;
-        _steering.PropPreparationPending=props.Paused;
     }
     private void PropRefreshFailed(string message) { if(!_disposed) Toast?.Invoke(message); }
     private void PropNotifyChanged(string? id) { if(id is not null) { InvalidatePropOffers(); } _hud.NotifyPropActionsChanged(id); }
@@ -156,51 +315,46 @@ public sealed partial class AvatarOffersController
     }
     private async Task MutatePropAsync(Func<Task<JsonDocument>> operation,string source="request")
     {
-        if(_propMutationBusy || _disposed || PropActions is not { } props) return;
-        _propMutationBusy=true;
+        if(_disposed || PropActions is not { } props) return;
+        if(source!="cancel") { if(_propMutationBusy) return; _propMutationBusy=true; }
         try {
             using var answer=await props.MutateAsync(operation,source);
+            var node=JsonNode.Parse(answer.RootElement.GetRawText())!.AsObject();
+            if(source!="cancel") AdoptAnswerOrder(node);
             if(answer.RootElement.TryGetProperty("status",out var s) && s.GetString() is "refused" or "failed")
                 throw new InvalidOperationException(answer.RootElement.GetProperty("reason").GetString());
             await RefreshSemanticOffersAsync(false);
         } catch(Exception e) { if(!_disposed) Toast?.Invoke(e.Message); }
-        finally { _propMutationBusy=false; }
+        finally { if(source!="cancel") _propMutationBusy=false; }
     }
     private async Task ReleaseOwnedPropAsync()
     {
         if(_disposed || PropActions is not { OwnedRun: { } run } props) return;
         string? journey=Self(Map!.Value) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : _position.OwnedPropJourney;
         await ObservePropAsync(async ()=> {
-            try { await props.ReleaseAsync(PropActionMotion.Text(run["execution_id"]),journey,()=> {
-                if(_figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
-            });
+            try { await props.ReleaseAsync(PropActionMotion.Text(run["execution_id"]),journey,RequestHandBack);
                 await RefreshSemanticOffersAsync(false);
             }
-            finally { PropPauseChanged(); }
+            finally { PropStateChanged(); }
         });
     }
     private void PropRunEnded(string status,string reason)
     {
-        if(_disposed || _figures.OwnPropMotion?.Cancel==true) return;
+        if(_disposed) return;
         _nextPropPoll=_clock()+PropPollPeriod();
         if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
-        ReleaseLocalProp();
+        RequestHandBack();
     }
     /// <summary>
     /// A new own run replaced the tracked one in place (another action on the same piece, an accepted invitation): no
-    /// hand-back and no position report in between. The played plan of the old run is let go; the server keeps the
-    /// figure, and the worldmap row's seat or pair places it as for any running action.
+    /// hand-back and no position report in between; the server's order of the new run places the avatar.
     /// </summary>
     private void PropRunSuperseded(string previous,string next)
     {
         if(_disposed) return;
-        if(_figures.OwnPropMotion is { } played && PropActionMotion.Text(played.Plan["execution_id"])!=next) _figures.ClearOwnPropMotion();
-        _figures.SetServerDriven(true);
-        _manualPropRelease=false; _propPrepared=false; _propPreviewYaw=null;
-        _position.Channel.DiscardPendingAnswers();
-        _steering.CancelRoute(); _steering.PropActionDriven=true;
+        TakeAvatar();
         LogProp($"run superseded in place: {previous} -> {next}");
-        PropPauseChanged();
+        PropStateChanged();
     }
     /// <summary>The own pair left the rows: its run has ended or is ending — read the state now, not a poll later, so the
     /// avatar's end (and with it the NPC half the figures hold) follows within one round trip.</summary>
@@ -216,24 +370,30 @@ public sealed partial class AvatarOffersController
         if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
         _propPrepared=false;
         LogProp($"mutation rejected: status={status} reason={reason}; own run kept until state says otherwise");
-        PropPauseChanged();
+        PropStateChanged();
     }
-    private void ReleaseLocalProp()
+    /// <summary>The avatar goes back to the player: its order (if any) is let go where the figure stands.</summary>
+    private void HandBack()
     {
-        if(_figures.OwnPropMotion?.Cancel==true) return;
+        _handBackAt=null; _handBackPending=false;
         PropActions?.ManualGate.Withdraw(_position.OwnedPropJourney);
-        PropActions?.ManualGate.Withdraw(PropActionMotion.Text(_figures.OwnPropMotion?.Plan["journey_id"]) is { Length:>0 } playedJourney ? playedJourney : _position.OwnedPropJourney);
         _figures.WithdrawOwnPropInteraction();
+        _figures.DropOrder(_figures.AvatarName);
         _position.ReleasePropDriver();
-        _manualPropRelease=true; _propPrepared=false;
+        _manualPropRelease=PropActions?.OwnedRun is not null; _propPrepared=false;
         Avatar?.ReleasePropAtRenderedPoint();
-        _figures.ClearOwnPropMotion();
-        LogProp("motion ended: handed back");
+        LogProp("order ended: handed back");
         _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
         _figures.ClearPropEntry(_figures.AvatarName); _figures.SetServerDriven(false);
         _steering.PropActionDriven=false; _steering.SetSeated(false); _seatKey="";
-        if(Avatar is { } f) { f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation(); _figures.SetPlayerAnimation(f.CharacterName,null); }
-        PropPauseChanged();
+        if(Avatar is { } f) {
+            f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation(); _figures.SetPlayerAnimation(f.CharacterName,null);
+            f.Target=f.Position;
+            if(_turnAwayFrom is { } furniture && LocalOrders.TurnAwayYawDeg(new(f.Position.X,f.Position.Y,f.Position.Z),new(furniture.X,furniture.Y,furniture.Z)) is { } yaw)
+                f.FaceTowards(new((float)Math.Sin(yaw*Math.PI/180),0,(float)Math.Cos(yaw*Math.PI/180)));
+        }
+        _turnAwayFrom=null;
+        PropStateChanged();
     }
     // Startup, mode changes and the timer share one normal read budget.
     private Task RefreshPropStateAsync()
@@ -297,11 +457,13 @@ public sealed partial class AvatarOffersController
         ["free_slots"]=new JsonArray(),["poses"]=new JsonArray(),["prop_actions"]=new JsonArray(actions.Select(a=>(JsonNode?)a.DeepClone()).ToArray()) };
     private IEnumerable<(PlacedModel Placement,JsonObject[] Actions)> SemanticMeshes()
     {
-        if(!_active || _disposed || _steering.MovementLocked || PropActions?.Paused==true
-            || Map is not { } map || Self(map) is not { } me || _world.Slots.GetValueOrDefault(Text(me,"location_id")) is not { Ready:true,Ring:Ring.Near } tile) yield break;
+        // Plan E3 Task 6: offers only in the own room — the one the server confirmed (enter-room / position answers).
+        if(!_active || _disposed || _steering.MovementLocked
+            || _world.Slots.GetValueOrDefault(_position.LocationId) is not { Ready:true,Ring:Ring.Near } tile) yield break;
+        string ownRoom=_position.RoomId;
         foreach(var rec in tile.Placements) {
             var spec=rec.Spec;
-            if(spec.Role!="prop" || spec.RoomId!=Text(me,"room_id") || spec.PlacementId.Length==0 || rec.Node is not { } node
+            if(spec.Role!="prop" || spec.RoomId!=ownRoom || spec.PlacementId.Length==0 || rec.Node is not { } node
                 || !GodotObject.IsInstanceValid(node) || !node.IsVisibleInTree()) continue;
             var actions=_semanticOffers.OfType<JsonObject>().Where(a=>PropActionMotion.Text(a["target"]?["placement_id"])==spec.PlacementId
                 && PropActionMotion.Text(a["target"]?["variant_uid"])==spec.VariantUid
@@ -322,13 +484,35 @@ public sealed partial class AvatarOffersController
     }
     private bool PickSemanticProp(Vec3 origin,Vec3 direction,Vector2 viewport)
     {
-        if(HitSemanticProp(origin,direction) is not { } hit) return false;
+        if(HitSemanticProp(origin,direction) is not { } hit) return HitForeignProp(origin,direction);
         var css=_hud.ViewportToCss(viewport);
         _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=hit.Offer }); ClearHover(); return true;
     }
+    /// <summary>
+    /// A click on furniture of a neighbour room (no offers there): a click walk to the spot under the hit, as a floor
+    /// click would be — the furniture is offered once the avatar is in that room.
+    /// </summary>
+    private bool HitForeignProp(Vec3 origin,Vec3 direction)
+    {
+        if(!_active || _disposed || _world.Slots.GetValueOrDefault(_position.LocationId) is not { Ready:true,Ring:Ring.Near } tile) return false;
+        var o=new Vector3((float)origin.X,(float)origin.Y,(float)origin.Z); var d=new Vector3((float)direction.X,(float)direction.Y,(float)direction.Z).Normalized();
+        double best=double.PositiveInfinity; Vector3? point=null;
+        foreach(var rec in tile.Placements) {
+            if(rec.Spec.Role!="prop" || rec.Spec.RoomId==_position.RoomId || rec.Spec.PlacementId.Length==0 || rec.Node is not { } node
+               || !GodotObject.IsInstanceValid(node) || !node.IsVisibleInTree()) continue;
+            foreach(var mesh in PropMeshes(node))
+                if(mesh.IsVisibleInTree() && MeshRay.Static(mesh,o,d) is double t && t<best) { best=t; point=o+d*(float)t; }
+        }
+        if(point is not { } hit) return false;
+        CloseMenu(new());
+        _steering.WalkTo(new AnimaNative.Scatter.P2(hit.X,hit.Z));
+        return true;
+    }
     private void TickProps()
     {
-        if(_disposed || PropActions is not { } props || _propPollBusy || _clock()<_nextPropPoll) return;
+        if(_disposed || PropActions is not { } props) return;
+        if(_handBackPending || _handBackAt is { } at && _clock()>=at) HandBack();
+        if(_propPollBusy || _clock()<_nextPropPoll) return;
         _nextPropPoll=_clock()+PropPollInterval;
         _propPollBusy=true;
         PendingPropAction=ObservePropAsync(async ()=> { try {
@@ -340,12 +524,13 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp;
-        _figures.OwnPairEnding-=PropPairEnding; _figures.OwnPropRunLive=null; props.Dispose();
+        props.Changed-=PropStateChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected;
+        _figures.OwnPairEnding-=PropPairEnding; _figures.OrderEnded-=AvatarOrderEnded; _figures.OrderFrameShown-=AvatarOrderFrame;
+        _figures.OwnPropRunLive=null; _figures.IgnoresAvatarOrder=null; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
-        _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;
-        _steering.ReleasePropAction=null; _steering.PropPreparationPending=false; _position.Channel.ReportsPaused=false;
+        _figures.SuppressAvatarPropEntry=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;
+        _steering.ReleasePropAction=null;
         PickPropAction=null;
     }
 }

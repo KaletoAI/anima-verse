@@ -41,13 +41,14 @@ public static class OrderParse
                 foreach (var a in list.EnumerateArray())
                     actors.Add(Actor(a));
             }
-            string location = "", room = "";
+            string location = "", room = "", execution = "";
             int level = 0;
             OrderPoint? goal = null;
             if (e.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.Object)
             {
                 location = Str(target, "location_id");
                 room = Str(target, "room_id");
+                execution = Str(target, "execution_id");
                 level = (int)(OptNum(target, "level") ?? 0);
                 if (OptNum(target, "x") is { } gx && OptNum(target, "z") is { } gz)
                     goal = new OrderPoint(gx, OptNum(target, "y") ?? 0, gz, OptNum(target, "yaw") ?? 0);
@@ -60,7 +61,7 @@ public static class OrderParse
                 id, (int)Num(e, "revision"), (long)(OptNum(e, "seq") ?? 0), kind,
                 Num(e, "issued_motion_s"), Num(e, "eta_motion_s"), OptNum(e, "flip_motion_s"), Num(e, "deadline_motion_s"),
                 Str(e, "status"), Str(e, "awaits"), Str(e, "gait"), speed,
-                actors, location, room, level, goal, Route(e), Bool(e, "snap"));
+                actors, location, room, level, goal, Route(e), Bool(e, "snap")) { ExecutionId = execution };
         }
         catch (BadOrder)
         {

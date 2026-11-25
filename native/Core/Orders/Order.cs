@@ -41,6 +41,9 @@ public sealed record Order(string Id, int Revision, long Seq, string Kind, doubl
 {
     public bool IsLocal => Id.StartsWith("local:", StringComparison.Ordinal);
 
+    /// <summary>The run a furniture order plays (`target.execution_id`); "" for any other order and a local one.</summary>
+    public string ExecutionId { get; init; } = "";
+
     /// <summary>The participant with this name, or null when the order does not move that figure.</summary>
     public OrderActor? ActorNamed(string name)
     {

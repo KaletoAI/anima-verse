@@ -2103,3 +2103,23 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
   of it) and one with `game_rate` 1 at t = 3.0: the figure stands still from 2.0 to 3.0 (≤ 0.1 mm); states Exit → Walk →
   Frozen → Walk → Entry → Loop; the frozen 1.0 s delays the chain end to 5.679678 + 1.0 = **6.679678 s** (± 0.1); on the
   bed slot.
+
+**The avatar's orders (plan E3 Task 6, `Check/OrderCheck.Avatar.cs`).** R2–R2c run on the propactions world through the
+real offers controller (`fixture-avatar` at (−3, −2); bench-56: slot (2, 0.129, 0), the actor's access (2, −1); no
+navigation → the straight walk; the local order's speed 1.4 m/s; frames of 1/60 s):
+
+- **R2** a click, the refusal `no_free_slot` at t = 0.8 s: 0.8 × 1.4 = 1.12 m along (5, 1)/√26 →
+  (−3 + 1.12·0.980581, −2 + 1.12·0.196116) = **(−1.901750, −1.780350)**; states Walk → Abort (the hand-back lets go of the
+  aborted order, so no Idle frame and no further phase); the avatar is the player's again and faces away from the slot:
+  atan2(−1.901750 − 2, −1.780350 − 0) = **−114.527°** (± 1°).
+- **R2b** the answer held back 30 frames: the first frame moves 1.4/60 = **0.023333 m**; after 30 frames 0.7 m →
+  **(−2.313594, −1.862719)**; after the answer the access (2, −1) at √26/1.4 = **3.642157 s**, waiting there (WaitAccess).
+- **R2c** a second bench B (`bench-57`: slot (−1, 2), access (−1, 1)) clicked after 10 frames while A's request runs. A's
+  answer (approaching `run-a`) comes after the switch to `local:2`: the calls are exactly request A, cancel run-a,
+  request B (409 `request_in_progress`), request B (retry, approaching `run-b`); no toast; reserved = {run-b}; by 8 s the
+  avatar waits at **(−1, 1)**.
+- **R2d** on the orders world: Nia Nav walks a local walk order from (97, −1) to the loft point (100.35, 3, 0.8) (NavCheck
+  A0) over stairs 1 (foot (101, 0, −3.3), head (104.5, 3, −3.3)). The ride asks `/play/enter-room` r-up
+  (`pos_answers.json`, copied from the nav world): `nav-up-rejected` (409) → `link_refused`, the figure at the stair
+  foot **(101, −3.3)** on storey 0, the room stays r-a, one request; `nav-up` (200) → the room is r-up while the figure is
+  still below y 3 − 0.05 (before the ride ends), the walk ends on **(100.35, 3, 0.8)**.

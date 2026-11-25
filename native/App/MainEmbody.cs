@@ -300,6 +300,8 @@ public partial class Main
                 };
             // Plan E2 Task 6: a navmesh route rides its stairs and lift links through the rooms controller.
             _playerSteering.RideLink = owner => _avatarRooms?.RideLinkAsync(owner) ?? Task.FromResult(false);
+            // Plan E3 Task 6: the avatar's order walk asks the server for the room behind a link before it rides it.
+            _figures.AvatarLinkRide = kind => _avatarRooms?.OrderLinkRide(kind);
             if (_hud is { } offerHud)
                 _avatarOffers = new AvatarOffersController(_figures, _builder, _playerSteering, _source!, offerHud, _avatarPosition)
                 {

@@ -1,0 +1,35 @@
+{
+  "format": "anima-pos-answers/1",
+  "selection": "Choose a named scenario; consume its steps in order. Match method, path and exact request JSON; unknown or exhausted scenarios fail. No implicit server mutation or replay.",
+  "scenarios": {
+    "nav-up": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-up"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-nav",
+          "room_id": "r-up"
+        }
+      }
+    ],
+    "nav-up-rejected": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-up"
+        },
+        "status": 409,
+        "body": {
+          "error": "Fixture loft refuses entry.",
+          "reason": "room_full"
+        }
+      }
+    ]
+  }
+}

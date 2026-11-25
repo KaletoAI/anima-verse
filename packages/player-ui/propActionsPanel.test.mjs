@@ -92,7 +92,10 @@ const finale = render(PropActionOffers, { offers: [{ ...offer, finale: true }], 
 assert.match(finale, /class="player-chip player-chip-finale"/);
 assert.match(finale, /data-hint="This place is occupied · With finale"/);
 assert.equal(textNodes(finale), 'Rest ▸', 'finale and refusal remain hints, not chip text');
-const solo = render(PropActionOffers, { offers: [{ ...offer, required_partner: false, enabled: false, reason: 'no_path', available_targets: [] }], onPick() {} });
+const solo = render(PropActionOffers, { offers: [{ ...offer, required_partner: false, enabled: false, reason: 'fixture_unknown_reason', available_targets: [] }], onPick() {} });
+// Plan E3 Task 6: the client's own walk reasons are known sentences.
+const noPath = render(PropActionOffers, { offers: [{ ...offer, required_partner: false, enabled: false, reason: 'no_path', available_targets: [] }], onPick() {} });
+assert.match(noPath, /data-hint="There is no way to this furniture from here"/);
 assert.doesNotMatch(solo, /1 person/);
 assert.match(solo, /data-hint="Not possible right now"/);
 assert.doesNotMatch(textNodes(solo), /Not possible right now/);
@@ -164,6 +167,7 @@ for (const code of ['privacy', 'sated', 'no_capability']) {
 }
 
 // Collect literal runtime reasons, excluding author-validation issue codes.
+const ORDER_STATUSES = new Set(['active', 'entering', 'approaching'])
 for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_action_access.py']) {
   const source = readFileSync(new URL(`../../app/core/${file}`, import.meta.url), 'utf8');
   // A literal followed by a comma is the route MODE of a (route, mode, reason)
@@ -175,6 +179,8 @@ for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_actio
     // attribute (RequestInProgress.reason), which adapters hand to the player as the refusal code.
     /^\s+reason = ["']([a-z_]+)["']\s*$/gm];
   for (const pattern of patterns) for (const [, code] of source.matchAll(pattern)) {
+    // prop_action_engine._order_status returns the ORDER status (§ A11b), not a refusal code.
+    if (file === 'prop_action_engine.py' && ORDER_STATUSES.has(code)) continue
     assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
     assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
   }

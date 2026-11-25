@@ -36,7 +36,7 @@ namespace AnimaNative.Check;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
 ///       for 1 s stands still and ends its chain 1 s later.
 /// </summary>
-public static class OrderCheck
+public static partial class OrderCheck
 {
     private const double Dt = 1.0 / 60, TolM = 0.05, TolS = 0.1;
     private const string Ona = "Ona Order", Uli = "Uli Up";
@@ -381,6 +381,7 @@ public static class OrderCheck
             Near("R15b chain end 5.68 + 1.0", r15b.At(Ona, OrderState.Loop), ChainEndS + 1.0, TolS);
             NearXZ("R15b on the bed slot", r15b.F(Ona).Position, BedSlot);
 
+            checks += await AvatarAsync(host, fixtures, builder, world, runs);
             return $"orders {checks} checks (chain end {r1.At(Ona, OrderState.Loop):0.###} s, walked {r1.M.OrderPlayerOf(Ona)?.WalkedM:0.###} m)";
         }
         finally

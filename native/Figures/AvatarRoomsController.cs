@@ -8,6 +8,7 @@ using AnimaNative.Api;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
 using AnimaNative.Nav;
+using AnimaNative.Orders;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
@@ -202,31 +203,96 @@ public sealed class AvatarRoomsController : IDisposable
     /// </summary>
     public Task<bool> RideLinkAsync(ulong owner)
     {
-        if(!CanUse || Tile is not { } tile) return Task.FromResult(false);
+        if(!CanUse || Tile is not { } tile || LinkTarget(tile,owner) is not { } link) return Task.FromResult(false);
+        if(link.Stair is null && NavLinkOwner.TryElevator(owner,out _)) _hud.SetState("elevatorOpen",false);
+        return RideAsync(tile,link.Room,link.Level,link.Goal,link.Stair,keepNavRoute:true);
+    }
+
+    /// <summary>The room, storey and landing one link of the avatar's route leads to (stairs or a lift hop); null when none.</summary>
+    private (string? Room,int Level,Vec3 Goal,StairRide? Stair)? LinkTarget(LocationSlot tile,ulong owner)
+    {
         int level=Level(tile,Room(tile)) ?? 0;
         if(NavLinkOwner.TryStairs(owner,out int flight))
         {
-            if(flight<0 || flight>=tile.Places.Stairs.Count) return Task.FromResult(false);
+            if(flight<0 || flight>=tile.Places.Stairs.Count) return null;
             var s=tile.Places.Stairs[flight];
             var dest=s.Foot.Level!=level ? s.Foot : s.Head;
-            if(dest.Level==level) return Task.FromResult(false);
-            string? target=Elevator.NearestRoomAt(dest.Level,new(dest.Pos.X,dest.Pos.Z),Rooms(tile));
+            if(dest.Level==level) return null;
             var leg=Stairs.LegTo(new[]{s},dest);
-            return RideAsync(tile,target,dest.Level,dest.Pos,leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true },keepNavRoute:true);
+            return (Elevator.NearestRoomAt(dest.Level,new(dest.Pos.X,dest.Pos.Z),Rooms(tile)),dest.Level,dest.Pos,
+                    leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true });
         }
         if(NavLinkOwner.TryElevator(owner,out int lower))
         {
             // The hop runs between the stop of its lower storey and the next stop of the same list (NavSource.Build).
             var stops=tile.Places.ElevatorStops.ToList();
             int i=stops.FindIndex(p=>p.Key==lower);
-            if(i<0 || i+1>=stops.Count) return Task.FromResult(false);
+            if(i<0 || i+1>=stops.Count) return null;
             int upper=stops[i+1].Key;
             int to=level==lower ? upper : level==upper ? lower : int.MinValue;
-            if(to==int.MinValue || !tile.Places.ElevatorStops.TryGetValue(to,out var stop)) return Task.FromResult(false);
-            _hud.SetState("elevatorOpen",false);
-            return RideAsync(tile,Elevator.TargetRoom(to,Stops(tile),Rooms(tile)),to,stop,null,keepNavRoute:true);
+            if(to==int.MinValue || !tile.Places.ElevatorStops.TryGetValue(to,out var stop)) return null;
+            return (Elevator.TargetRoom(to,Stops(tile),Rooms(tile)),to,stop,null);
         }
-        return Task.FromResult(false);
+        return null;
+    }
+
+    /// <summary>
+    /// Plan E3 Task 6: the avatar's ride over a link of its ORDER walk (<see cref="FigureManager.AvatarLinkRide"/>). The
+    /// order owns the motion; this asks the server for the room behind the link first (the unchanged enter-room request
+    /// of <see cref="RideLinkAsync"/>) and adopts it on the answer, before the ride moves the figure. Null for another kind.
+    /// </summary>
+    public ILinkRide? OrderLinkRide(string kind) => kind switch
+    {
+        "stairs" => new AvatarLinkRide(this,new NpcStairsRide(()=>Tile?.Places.Stairs ?? (IReadOnlyList<StairLink>)Array.Empty<StairLink>())),
+        "lift" => new AvatarLinkRide(this,new NpcLiftRide()),
+        _ => null,
+    };
+
+    /// <summary>The room entry of an order's link ride: true once the server took the avatar into the room behind it.</summary>
+    private async Task<bool> EnterLinkRoomAsync(ulong owner)
+    {
+        if(Suspended || !_active || _disposed || Tile is not { } tile || LinkTarget(tile,owner) is not { } link
+           || link.Room is not { } target || Channel.Rejected(target)) return false;
+        int generation=_generation;
+        if(!await Channel.EnterAsync(target,true) || generation!=_generation || _disposed) return false;
+        _steering.RoomId=target; AdoptRoom?.Invoke(target);
+        _world.SetLevel(tile.Loc.Id,link.Level); _followedLevel=link.Level;
+        Channel.Idle(); ClearOffers(); Picking.Clear();
+        Log?.Invoke($"[pos] order link ride entered room={target} level={link.Level}");
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="ILinkRide"/> of the avatar: <see cref="Begin"/> asks for the room (<see cref="LinkRideState.Requested"/>);
+    /// <see cref="Poll"/> holds at the link foot until the answer, then <see cref="LinkRideState.Refused"/> (event
+    /// <c>link_refused</c>, no room change) or the ride of <paramref name="inner"/>. One instance per kind of the avatar.
+    /// </summary>
+    private sealed class AvatarLinkRide(AvatarRoomsController rooms,ILinkRide inner) : ILinkRide
+    {
+        private Task<bool>? _entry;
+        private NavLink? _link;
+        private string _actor="";
+        public string Kind=>inner.Kind;
+        public LinkRideState Begin(string actor,NavLink link)
+        {
+            inner.Abort();
+            _actor=actor; _link=link;
+            _entry=rooms.EnterLinkRoomAsync(link.Owner);
+            return LinkRideState.Requested;
+        }
+        public LinkRideState Poll(ref Vec3 pos,double dt,double speedMS)
+        {
+            if(_entry is { } entry)
+            {
+                if(!entry.IsCompleted) return LinkRideState.Requested;
+                _entry=null;
+                if(!entry.IsCompletedSuccessfully || !entry.Result || _link is not { } link) { _link=null; return LinkRideState.Refused; }
+                var started=inner.Begin(_actor,link);
+                if(started!=LinkRideState.Riding) return started;
+            }
+            return inner.Poll(ref pos,dt,speedMS);
+        }
+        public void Abort() { _entry=null; _link=null; inner.Abort(); }
     }
 
     /// <summary>

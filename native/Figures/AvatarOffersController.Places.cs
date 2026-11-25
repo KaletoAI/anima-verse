@@ -163,7 +163,7 @@ public sealed partial class AvatarOffersController
     public void ReconcilePlace(JsonElement map,double polledAt)
     {
         if(!_active || _disposed || FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)
-            || _manualPropRelease || _figures.OwnPropMotion is not null || _steering.PropActionDriven || _figures.ServerDriven || Avatar is not { } f || Self(map) is not { } me) return;
+            || _manualPropRelease || _figures.HasLiveOrder(_figures.AvatarName) || _steering.PropActionDriven || _figures.ServerDriven || Avatar is not { } f || Self(map) is not { } me) return;
         if(!me.TryGetProperty("place",out var p) || p.ValueKind!=JsonValueKind.Object)
         {
             if(_steering.AvatarSeated || _seatKey.Length>0)

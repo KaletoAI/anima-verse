@@ -13,7 +13,11 @@ using Xunit;
 
 namespace AnimaNative.Tests;
 
-/// <summary>Task 57: production preparation/mutation lifecycle; refuses writes and stale reads without releasing input.</summary>
+/// <summary>
+/// Task 57: the reservation lifecycle — HUD preparation/correlation, state and world reads, refusals and the manual
+/// release. Plan E3 Task 6: nothing here pauses input any more (the avatar walks on its own order), and an answer's
+/// motion plan is not read.
+/// </summary>
 public class PropActionControlTests
 {
     private sealed class Transport : HttpMessageHandler
@@ -23,15 +27,14 @@ public class PropActionControlTests
             =>new(HttpStatusCode.OK) { Content=new StringContent(await Reply(req),Encoding.UTF8,"application/json") };
     }
     [Fact]
-    public async Task StartupWaitsForStateAndWorldBeforeManualReports()
+    public async Task RefreshEndsOnlyAfterStateAndWorld()
     {
         var transport=new Transport(); var state=new TaskCompletionSource<string>(); var world=new TaskCompletionSource();
         transport.Reply=_=>state.Task; using var api=new AnimaApi("http://fixture/",transport);
         using var control=new PropActionControl(api,()=>0) { RefreshWorld=()=>world.Task };
-        Assert.True(control.Paused);
-        var refresh=control.RefreshAsync(); Assert.True(control.Paused);
-        state.SetResult("{\"current\":[],\"outgoing\":[]}"); await Task.Yield(); Assert.True(control.Paused);
-        world.SetResult(); await refresh; Assert.False(control.Paused);
+        var refresh=control.RefreshAsync(); Assert.False(refresh.IsCompleted);
+        state.SetResult("{\"current\":[],\"outgoing\":[]}"); await Task.Yield(); Assert.False(refresh.IsCompleted);
+        world.SetResult(); await refresh; Assert.True(refresh.IsCompletedSuccessfully);
     }
     [Fact]
     public async Task PreparationAwaitsRealAndFinalWritesAndAllowsHttpRefusal()
@@ -59,17 +62,18 @@ public class PropActionControlTests
     public async Task CorrelatedCompletionNeedsFreshStateAndWorldBeforeResumeEvenOnRefusal()
     {
         var transport=new Transport(); using var api=new AnimaApi("http://fixture/",transport);
-        var writes=new TaskCompletionSource(); var world=new TaskCompletionSource();
-        using var control=new PropActionControl(api,()=>0) { PrepareWrites=()=>writes.Task, RefreshWorld=()=>world.Task };
-        var prepare=control.PrepareAsync("hud:1"); Assert.True(control.Paused); Assert.False(prepare.IsCompleted);
-        writes.SetResult(); await prepare; Assert.True(control.Paused);
-        world.SetResult(); await control.ChangedAsync("unrelated"); Assert.True(control.Paused);
+        var world=new TaskCompletionSource();
+        using var control=new PropActionControl(api,()=>0) { RefreshWorld=()=>world.Task };
+        // The HUD's preparation completes at once (no position pre-flush any more) and stays pending until its own
+        // changed notification and a fresh state.
+        var prepare=control.PrepareAsync("hud:1"); Assert.True(prepare.IsCompleted); Assert.True(control.Preparation.Pending);
+        world.SetResult(); await control.ChangedAsync("unrelated"); Assert.True(control.Preparation.Pending);
         world=new TaskCompletionSource();
-        var changed=control.ChangedAsync("hud:1"); Assert.True(control.Paused);
-        world.SetResult(); await changed; Assert.False(control.Paused);
+        var changed=control.ChangedAsync("hud:1"); Assert.True(control.Preparation.Pending);
+        world.SetResult(); await changed; Assert.False(control.Preparation.Pending);
         var notifications=new List<string?>(); control.NotifyChanged+=notifications.Add;
         var error=await Assert.ThrowsAsync<InvalidOperationException>(()=>control.MutateAsync(()=>throw new InvalidOperationException("refused")));
-        Assert.Equal("refused",error.Message); Assert.Single(notifications); Assert.False(control.Paused);
+        Assert.Equal("refused",error.Message); Assert.Single(notifications); Assert.False(control.Preparation.Pending);
     }
     [Fact]
     public async Task EarlierStateCannotReleaseNewPreparation()
@@ -78,8 +82,8 @@ public class PropActionControlTests
         transport.Reply=_=>state.Task; using var api=new AnimaApi("http://fixture/",transport);
         using var control=new PropActionControl(api,()=>0);
         await control.PrepareAsync("a"); var changed=control.ChangedAsync("a"); await control.PrepareAsync("b");
-        state.SetResult("{\"current\":[],\"outgoing\":[]}"); await changed; Assert.True(control.Paused);
-        await control.ChangedAsync("b"); Assert.False(control.Paused);
+        state.SetResult("{\"current\":[],\"outgoing\":[]}"); await changed; Assert.True(control.Preparation.Pending);
+        await control.ChangedAsync("b"); Assert.False(control.Preparation.Pending);
     }
     /// <summary>B1: an accepted cancel is final without a state or world read; the answer owns the release.</summary>
     [Theory]
@@ -100,11 +104,12 @@ public class PropActionControlTests
         Assert.Equal(1, resets);
         Assert.Empty(errors);
         Assert.True(control.ManualGate.Withdrawn("journey"));
-        Assert.False(control.Paused);
+        Assert.False(control.Preparation.Pending);
+        Assert.Null(control.OwnedRun);
         transport.Reply = _ => Task.FromResult("{\"current\":[],\"outgoing\":[]}");
         control.RefreshWorld = () => Task.CompletedTask;
         await control.RefreshAsync();
-        Assert.False(control.Paused);
+        Assert.False(control.Preparation.Pending);
     }
 
     [Fact]
@@ -116,46 +121,48 @@ public class PropActionControlTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => control.MutateAsync(
             () => Task.FromException<System.Text.Json.JsonDocument>(new InvalidOperationException("mutation failed"))));
         Assert.Equal("mutation failed", error.Message);
-        Assert.False(control.Paused);
+        Assert.False(control.Preparation.Pending);
     }
+    /// <summary>
+    /// A run's terminal state read ends it exactly once (RunEnded), whatever else the answer carries; a HUD cancel answer
+    /// before the read releases the own run without a second end.
+    /// </summary>
     [Theory]
-    [InlineData(false,true,"completed")]
-    [InlineData(false,true,"failed")]
-    [InlineData(false,true,"cancelled")]
-    [InlineData(true,true,"completed")]
-    [InlineData(false,false,"completed")]
-    public async Task TerminalDepartureOnce(bool hudFirst,bool motion,string status)
+    [InlineData(false,"completed")]
+    [InlineData(false,"failed")]
+    [InlineData(false,"cancelled")]
+    [InlineData(true,"completed")]
+    public async Task TerminalStateEndsTheRunOnce(bool hudFirst,string status)
     {
         var transport=new Transport(); using var api=new AnimaApi("http://fixture/",transport);
         using var control=new PropActionControl(api,()=>0);
         transport.Reply=_=>Task.FromResult("""{"current":[{"execution_id":"run","status":"active"}]}""");
         await control.RefreshAsync();
-        var answer=System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"completed","motion":{"seat":[8,5],"stand":[8,7],"exit_clip":"rise","exit_s":1}}""")!.AsObject();
+        Assert.Equal("run",control.OwnExecutionId);
+        var answer=System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"cancelled","motion":{"seat":[8,5],"stand":[8,7]}}""")!.AsObject();
         answer["status"]=status;
-        if(!motion) answer["motion"]=null;
-        int plays=0,ends=0;
-        control.MotionReceived+=(_,source,id)=>{ Assert.Equal("cancel",source); Assert.Equal("run",id); plays++; };
-        control.RunEnded+=(_,_)=>ends++;
-        if(hudFirst) control.ConsumeMotion(answer,"cancel");
+        int ends=0; control.RunEnded+=(_,_)=>ends++;
+        if(hudFirst) control.ConsumeAnswer(answer,"cancel");
         transport.Reply=_=>Task.FromResult("""{"current":[],"recent_results":["""+answer.ToJsonString()+"]}");
         await control.RefreshAsync();
-        Assert.Equal(motion ? 1 : 0,plays); Assert.Equal(motion ? 0 : 1,ends);
-        control.ConsumeMotion(answer,"cancel"); Assert.Equal(motion ? 1 : 0,plays);
+        Assert.Equal(hudFirst ? 0 : 1,ends);
+        Assert.Null(control.OwnedRun);
+        control.ConsumeAnswer(answer,"cancel"); await control.RefreshAsync();
+        Assert.Equal(hudFirst ? 0 : 1,ends);
     }
 
+    /// <summary>An approaching answer is the tracked own run at once; a refusal of it ends it, a foreign refusal does not.</summary>
     [Fact]
-    public async Task LateHudDepartureAfterMotionlessEndStillPlays()
+    public void AnswersTrackAndRefuseTheOwnRun()
     {
         var transport=new Transport(); using var api=new AnimaApi("http://fixture/",transport);
         using var control=new PropActionControl(api,()=>0);
-        transport.Reply=_=>Task.FromResult("""{"current":[{"execution_id":"run","status":"active"}]}""");
-        await control.RefreshAsync();
-        transport.Reply=_=>Task.FromResult("""{"current":[],"recent_results":[{"execution_id":"run","status":"completed"}]}""");
-        int plays=0,ends=0; control.MotionReceived+=(_,_,_)=>plays++; control.RunEnded+=(_,_)=>ends++;
-        await control.RefreshAsync(); Assert.Equal(1,ends);
-        var answer=System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"completed","motion":{"seat":[8,5],"stand":[8,7]}}""")!.AsObject();
-        control.ConsumeMotion(answer,"cancel"); control.ConsumeMotion(answer,"cancel");
-        Assert.Equal(1,plays);
+        int ends=0,rejects=0; control.RunEnded+=(_,_)=>ends++; control.MutationRejected+=(_,_)=>rejects++;
+        control.ConsumeAnswer(System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"approaching"}""")!.AsObject(),"request");
+        Assert.Equal("run",control.OwnExecutionId);
+        control.ConsumeAnswer(System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"","status":"refused","reason":"claimed"}""")!.AsObject(),"request");
+        Assert.Equal((0,1),(ends,rejects)); Assert.Equal("run",control.OwnExecutionId);
+        control.ConsumeAnswer(System.Text.Json.Nodes.JsonNode.Parse("""{"execution_id":"run","status":"failed","reason":"approach_timeout"}""")!.AsObject(),"request");
+        Assert.Equal((1,1),(ends,rejects)); Assert.Equal("",control.OwnExecutionId);
     }
-
 }

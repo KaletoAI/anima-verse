@@ -50,6 +50,10 @@ public sealed class PlaceEntry
     public P2 LiftAt { get; init; }
     /// <summary>A prop marker's placement anchor as the payload states it (tile-local); null for a room marker.</summary>
     public P2? Anchor { get; init; }
+    /// <summary>A prop marker's `placement_id` (the furniture a click on its mesh names); "" for a room marker.</summary>
+    public string PlacementId { get; init; } = "";
+    /// <summary>The frame's yaw in compass degrees: <see cref="Rotation"/> + this = the slot facing in the world.</summary>
+    public double FrameYawDeg { get; init; }
 
     /// <summary>What the glyph rule reads of this entry (<see cref="PlaceSlots.GlyphRows"/>).</summary>
     public PlaceEntryView View() => new(Slots, RoomId, Fixed, Anchor is not null, Diorama);
@@ -230,6 +234,7 @@ public sealed class PlaceInventory
                 Slots = m.Slots.Select(s => SceneView.TileToWorld(frame, s.X, s.Z, m.YWorld - drop + markerLift)).ToArray(),
                 Rotation = m.Facing, Tilt = m.Tilt, Roll = m.Roll, Drop = drop, OffsetY = offsetY, Fixed = isFixed,
                 Diorama = m.Diorama, Level = level, Lift = markerLift, LiftAt = new P2(liftAt.X, liftAt.Z), Anchor = m.Anchor,
+                PlacementId = m.PlacementId, FrameYawDeg = frame.Yaw * 180.0 / Math.PI,
                 AccessPoints = m.Access.ToDictionary(kv => kv.Key, kv =>
                 {
                     var w = SceneView.TileToWorld(frame, kv.Value.X, kv.Value.Z, kv.Value.Y + markerLift);

@@ -357,7 +357,7 @@ public partial class FigureManager : Node3D
             ApplyPlan(fig, plan, fresh);
             // The order of a figure this poll created was parked by AdoptRowOrders above: accepted now, from the point
             // the first placement put it on, on this poll's clock.
-            if (fresh && !SkipsOrders(row.Name)) AcceptParked(fig);
+            if (fresh) AcceptParked(fig);
             if (fresh && fig.IsAvatar)
             {
                 if (row.Place is null && row.Interaction is null && row.Yaw is { } yaw && double.IsFinite(yaw))
@@ -447,7 +447,6 @@ public partial class FigureManager : Node3D
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         if (PhotoMode && fig.CharacterName == AvatarName && !fresh) return;
-        if (fig.CharacterName == AvatarName && OwnPropMotion is not null) return;
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
@@ -763,8 +762,7 @@ public partial class FigureManager : Node3D
         fig.ClearPairFix();
         // A solo scene's clip clock runs whatever path draws the figure (npcs.ts tick: stepHeldClock).
         if (fig.Held is { } heldClip) fig.Held = heldClip.Step(dt, WorldFrozen);
-        if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
-        // Plan E3 Task 5: an NPC's order draws it from exit up to the loop's start pose (FigureManager.Orders.cs).
+        // Plan E3 Tasks 5/6: a figure's order draws it from exit up to the loop's start pose (FigureManager.Orders.cs).
         if (TickOrder(fig, dt, camDist)) return;
         if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
         {
@@ -774,7 +772,6 @@ public partial class FigureManager : Node3D
             return;
         }
         if (fig.PropEntryBlocked) return;
-        if (fig.PropEntry is not null) { TickPropEntry(fig); return; }
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
         if (fig.Pair is not null && TickPair(fig, dt)) return;
         if (fig.Route is { } route) { StepRoute(fig, route, dt, camDist); return; }
