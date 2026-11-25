@@ -184,6 +184,10 @@ public sealed class PairPlay
     /// <summary><c>&lt;kind&gt;__&lt;role&gt;</c>, optionally followed by <c>~&lt;alt&gt;</c>.</summary>
     public required string Clip { get; init; }
     public string Base { get; init; } = "";
+    /// <summary>role → member name (the interaction's <c>members</c>, this figure included) — the pair height's cast.</summary>
+    public IReadOnlyDictionary<string, string> Roles { get; set; } = new Dictionary<string, string>();
+    /// <summary>The pair height solved for this half (<see cref="PairHeight"/>), cached by clip and member heights.</summary>
+    public (string Key, double Offset, bool[] Planted)? Height { get; set; }
 
     public string? ResolveClip(Func<string, bool> usable)
         => ClipLibraryRules.SelectClip(Clip, Base.Length > 0 ? Base : Clip, usable);
@@ -220,9 +224,10 @@ public sealed class PairPlay
                 Id = it.Id, Clip = clip, Base = it.Base, Anchor = it.Anchor, Elapsed = it.ElapsedS, Rate = it.Rate, Stamp = stamp,
                 Tempo = PairClip.ClipTempo(it.Tempo),
                 ClipT = PairClip.Phase(new PairClipInput(it.ClipS, it.Tempo, it.Rate <= 0, it.Loop, it.ClipDurationS)).ClipT,
-                ClipDuration = it.ClipDurationS, Loop = it.Loop,
+                ClipDuration = it.ClipDurationS, Loop = it.Loop, Roles = it.Members,
             };
         }
+        cur.Roles = it.Members;
         cur.Rate = it.Rate;
         cur.Tempo = PairClip.ClipTempo(it.Tempo);
         cur.Anchor = it.Anchor;

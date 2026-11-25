@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 
 namespace AnimaNative.Figures;
@@ -11,6 +12,8 @@ public sealed record PairRoot(RootPath Path, PairXZ Pivot)
 {
     /// <summary>The renderer-only turn of the half's own role (<c>orientation.role_turn_deg</c>, <see cref="RoleTurn"/>); none when absent.</summary>
     public RoleTurnDeg Turn { get; init; }
+    /// <summary>The clip's contact heights (<c>pair_contact_heights</c>, <see cref="PairHeight"/>); empty when absent.</summary>
+    public IReadOnlyList<PairContactHeight> Contacts { get; init; } = Array.Empty<PairContactHeight>();
 }
 
 /// <summary>

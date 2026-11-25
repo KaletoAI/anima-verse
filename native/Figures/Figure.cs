@@ -254,6 +254,60 @@ public partial class Figure : Node3D
     /// </summary>
     public double PairHipsBindY { get; private set; }
 
+    // ---- pair height (scene-render pairHeight.ts / pairHeightPose.ts, owner decision 2026-11-25) -----------------------
+
+    private (string Clip, double Offset, bool[] Planted)? _pairHeight;
+    private double _pairHeightWeight;
+    private PairHeightModifier? _pairHeightMod;
+    private Skeleton3D? _pairHeightSkel;
+
+    /// <summary>
+    /// figures.ts <c>setPairHeight</c>: the constant vertical offset (metres, + = up) this figure's hips take while pair half
+    /// <paramref name="clipName"/> plays, with the legs the IK holds ([left, right]); 0 = none. Set by the pair tick every
+    /// frame; applied in <see cref="UpdateFigure"/> with the half's crossfade weight, so it fades with the clip transition.
+    /// </summary>
+    public void SetPairHeight(string clipName, double offsetM, bool[] planted)
+    {
+        if (!(offsetM != 0 && double.IsFinite(offsetM)))
+        {
+            if (_pairHeight is { } cur && cur.Clip == clipName) _pairHeight = null;
+            return;
+        }
+        if (_pairHeight is not { } was || was.Clip != clipName) _pairHeightWeight = 0;
+        _pairHeight = (clipName, offsetM, planted);
+    }
+
+    /// <summary>The offset as applied this frame (offset × weight; 0 = none) — the check reads it.</summary>
+    public double PairHeightShown { get; private set; }
+
+    /// <summary>The weight follows the half's crossfade (<see cref="ClipLibraryRules.CrossfadeS"/>, linear like three's):
+    /// in while it is the current clip, out after; the modifier gets offset × weight.</summary>
+    private void TickPairHeight(double dt)
+    {
+        PairHeightShown = 0;
+        if (_pairHeight is { } ph)
+        {
+            double step = ClipLibraryRules.CrossfadeS > 0 ? dt / ClipLibraryRules.CrossfadeS : 1;
+            _pairHeightWeight = CurrentClip == ph.Clip ? Math.Min(1, _pairHeightWeight + step) : Math.Max(0, _pairHeightWeight - step);
+            if (_pairHeightWeight <= 1e-4 && CurrentClip != ph.Clip) _pairHeight = null;
+        }
+        if (_pairHeight is not { } on || !(_pairHeightWeight > 1e-4))
+        {
+            if (_pairHeightMod is { } idle && IsInstanceValid(idle)) idle.OffsetM = 0;
+            return;
+        }
+        if (Skeleton is not { } skel) return;
+        if (_pairHeightMod is null || !IsInstanceValid(_pairHeightMod) || _pairHeightSkel != skel)
+        {
+            _pairHeightSkel = skel;
+            _pairHeightMod = PairHeightModifier.TryCreate(skel);
+        }
+        if (_pairHeightMod is not { } mod) return;
+        PairHeightShown = on.Offset * _pairHeightWeight;
+        mod.OffsetM = PairHeightShown;
+        mod.Planted = on.Planted;
+    }
+
     /// <summary>
     /// npcs.ts <c>applyPairFix</c>: the root moves by <paramref name="delta"/> (<c>fixRoot(...).position − root</c>) and turns by
     /// <paramref name="turn"/> on top of its yaw, until <see cref="ClearPairFix"/>.
@@ -1292,6 +1346,8 @@ public partial class Figure : Node3D
                              && WeightOf(r) <= 0);
         ApplyRotation();
         ApplyBody();
+        // after the clip pose, before phase B (the modifier stays first among the skeleton's modifiers)
+        TickPairHeight(dt);
         TickSecondary();
     }
 }

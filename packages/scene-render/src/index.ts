@@ -294,4 +294,9 @@ export type { FitSample, PairFix, ClearLamp } from './pairFit'
 export { pairFigureScale, pairPivotOf, scalePairRoot, scalePairShift, clipFramePivot, pairPivotCm, PAIR_PIVOT_BOUND_CM,
   PAIR_PIVOT_ORIGIN } from './pairScale'
 export type { PairXZ } from './pairScale'
+export { PAIR_HEIGHT, pairHeightGap, scaleRolePose, ikKnee, legBendDeg, pairOffsetAllowed, pairRoleRange, pairHeightOffsets,
+  pairContactHeightsOf, pairRolePoseCm } from './pairHeight'
+export type { PairLeg, PairRolePose, PairContactHeight, PairStance, PairHeightRange, PairHeightSolve } from './pairHeight'
+export { pairHeightRigOf, applyPairHeight, pairHeightPoser } from './pairHeightPose'
+export type { PairHeightRig } from './pairHeightPose'
 export { attachedPartIndex, partBoneNames, PART_WEIGHT_SHARE } from './attachedPart'
