@@ -1146,7 +1146,10 @@ def _boot_walks(shift: float, alive: float | None) -> None:
                 order = publish(moved, names=[name],
                                 locations=[(moved.get("target") or {}).get("location_id") or ""])
                 record["order"] = order
-                save_character_profile(name, profile)
+                if not save_character_profile(name, profile):
+                    # The index holds the shifted order (publish); the profile
+                    # keeps the old one and the next boot shifts that again.
+                    logger.warning("walk %s of %s: shifted order not saved", order.get("order_id"), name)
             else:
                 with _INDEX_LOCK:
                     _INDEX[name] = (order, None)
