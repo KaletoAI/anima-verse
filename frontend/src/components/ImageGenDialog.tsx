@@ -297,6 +297,9 @@ export function ImageGenDialog({
   const [frontRef, setFrontRef] = useState('')
   const [useFrontRef, setUseFrontRef] = useState(true)
   const [improvement, setImprovement] = useState('')
+  // Why the last "Improve prompt"/"Check pose" left the prompt as it was (e.g. the 422 reason of a rejected
+  // LLM rewrite) — shown under the buttons, cleared by the next attempt.
+  const [enhanceError, setEnhanceError] = useState('')
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
@@ -328,12 +331,14 @@ export function ImageGenDialog({
   // (empty request) just optimised for the image model — and writes the
   // result into the prompt field (visible/editable before generating). The
   // improvement field is empty afterwards -> the generation takes the prompt
-  // literally.
+  // literally. A rejected rewrite (422: refusal, most of the prompt lost, a
+  // person dropped) leaves both fields as they were and shows the reason.
   const applyImprovement = useCallback(async () => {
     const base = prompt.trim()
     const wish = improvement.trim()
     if (!base || enhancing) return
     setEnhancing(true)
+    setEnhanceError('')
     try {
       const res = await apiPost<{ prompt?: string }>(enhanceEndpoint, {
         prompt: base, improvement_request: wish,
@@ -342,12 +347,12 @@ export function ImageGenDialog({
         setPrompt(res.prompt)
         setImprovement('')
       }
-    } catch {
-      /* Fail silently — the user can still adjust the prompt by hand. */
+    } catch (err) {
+      setEnhanceError(err instanceof Error && err.message ? err.message : t('Prompt improvement failed.'))
     } finally {
       setEnhancing(false)
     }
-  }, [prompt, improvement, enhancing, enhanceEndpoint])
+  }, [prompt, improvement, enhancing, enhanceEndpoint, t])
 
   // "Check pose": the LLM pose check right now, result into the prompt field.
   // The automatic check before generating is then switched off — the prompt
@@ -356,6 +361,7 @@ export function ImageGenDialog({
     const base = prompt.trim()
     if (!base || enhancing) return
     setEnhancing(true)
+    setEnhanceError('')
     try {
       const res = await apiPost<{ prompt?: string }>(enhanceEndpoint, { prompt: base, mode: 'pose' })
       if (res?.prompt) {
@@ -363,12 +369,12 @@ export function ImageGenDialog({
         poseTouched.current = true
         setPoseCheck(false)
       }
-    } catch {
-      /* Fail silently — the prompt stays as it was. */
+    } catch (err) {
+      setEnhanceError(err instanceof Error && err.message ? err.message : t('Prompt improvement failed.'))
     } finally {
       setEnhancing(false)
     }
-  }, [prompt, enhancing, enhanceEndpoint])
+  }, [prompt, enhancing, enhanceEndpoint, t])
 
   // Resync prompt + independent config parts when the caller changes them
   // (e.g. day → night, with a different suffix).
@@ -408,6 +414,7 @@ export function ImageGenDialog({
     if (!open) return
     setCreateNew(!!defaultCreateNew)
     setImprovement('')
+    setEnhanceError('')
     setNegative('')
     setSelectedChars(detNames)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1067,6 +1074,11 @@ export function ImageGenDialog({
                       </button>
                     ) : null}
                   </div>
+                  {enhanceError ? (
+                    <div className="ga-form-hint" role="alert" style={{ color: 'var(--danger, #f85149)' }}>
+                      {enhanceError}
+                    </div>
+                  ) : null}
                   {poseSupported ? (
                     <label className="ga-check-row"
                       title={t('An LLM repairs arms, legs and poses in the prompt right before the image is generated. Preset from the image routing of this occasion.')}>
