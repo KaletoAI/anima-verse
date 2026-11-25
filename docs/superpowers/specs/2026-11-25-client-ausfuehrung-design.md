@@ -838,3 +838,30 @@ eingearbeitet. Abweichungen:
 - Klein, „Physik-Backend“: übernommen als „gegenstandslos bis zum ersten Physik-Körper“ (Abschnitt 3).
 - W1, `travel_pace_factor`: nicht eingeführt. Der Server-Anlauf kennt heute keinen Pace-Faktor; die eine Zahl
   `speed_m_s` genügt für Schätzung und Bild.
+
+- **E1 umgesetzt (2026-11-25, Plan `docs/superpowers/plans/2026-11-25-client-ausfuehrung-e0-e1.md`, Tasks 6–13).**
+  Endgültige Zuordnung der Vektor-Herleitungen (Wächter `scripts/smoke_vector_sources.py`: 0 Verletzungen;
+  `--verify-move`: 70 `MOVED`-Einträge, 0 Abweichungen):
+  - **Klasse A** (getesteter Code nur in `packages/*` oder `hud/src`; Smoke per `git mv` nach `scripts/`):
+    `ground_polygons` (`smoke_ground_math.mjs`), `hillshade`, `role_turn` (`smoke_role_turn_vectors.mjs`),
+    `scene_place` (`smoke_place_rotation.mjs`), `scene_primitives`, `scene_verify`; mitgezogene Helfer ohne
+    eigenen Vektor: `smoke_plate_hole.mjs` und `smoke_wall_uv.mjs` (von `smoke_scene_primitives.mjs` per Pfad
+    gebündelt, im Plan nicht gelistet). Dazu `graphics_prefs` (`smoke_graphics_prefs.mjs`), die mit den reinen
+    HUD-Smokes in Task 8 nach `scripts/` zog. Keine A-Smoke musste zurück nach Klasse B.
+  - **Klasse C** (Herleitung im Docstring der Python-Zwillings-Smoke): `group_role_points`
+    (`scripts/smoke_group_role_points.py`), `prop_water` (`scripts/smoke_prop_water.py`); die JS-Smokes tragen den Zeiger.
+  - **Klasse B** (Herleitung wortgetreu nach `native/tests/Derivations/<basis>.md`, JS-Smoke mit Zeiger bis E3):
+    61 Vektoren aus 51 Smokes (Task 10: 22/18, Task 11: 20/15, Task 12: 19/18); dazu `clip_shift`, dessen
+    Quelle vorher eine Formel war (`native/tests/Derivations/clip_shift.md`, ohne `MOVED`-Eintrag).
+  - **E3-Punkt `undergrowth.json`:** hat keinen C#-Verbraucher (`native/tests/Derivations/undergrowth.md`
+    nennt bis E3 nur `client3d/scripts/smoke_undergrowth.mjs`). `UndergrowthMath.Shade` ist trotzdem geprüft —
+    über `fixtures/scatter_reference.json` in `ScatterCheck`; E3 entscheidet, ob der Vektor einen C#-Test bekommt
+    oder entfällt.
+  - **HUD-Workspace `hud/`** (`@anima/hud`), baut nach `static/hud/`, Dev-Port 5184; der CEF-HUD lädt
+    `/static/hud/hud.html` (`HudOverlay.HudPath`).
+  - **Typkanten (Plan-Entscheidung 6) gekappt:** `FinaleBlock` liegt in `hud/src/types.ts` (`finaleClip.ts`
+    importiert ihn aus `@anima/hud/types`); `game/soundtrack.ts` deklariert `interface Point` lokal;
+    `game/photoMode.ts` exportiert `interface PhotoEngine` statt `Pick<Engine, …>`.
+  - Bekannt rot schon vor E1, unverändert: `client3d/scripts/smoke_stand_settle.mjs` und
+    `smoke_prop_action_motion.mjs` (Test-Figur ohne `setRootAngle`), `smoke_secondary_motion.mjs`
+    („drag tilt before solver“); deren Vektoren laufen grün in den Vektor-Smokes und in C#.
