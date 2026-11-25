@@ -115,6 +115,143 @@ def _write_item_files(
     return written
 
 
+# --- part items (design G): a host brings its parts and their accepted meshes ------------------------------------
+
+#: The files of an accepted part mesh that travel (``accessory_pendant``'s store); record.json is written last.
+_PART_MESH_FILES = ("raw.glb", "cutout.png", "record.json")
+
+
+def _linked_part_ids(items: Iterable[Dict[str, Any]]) -> List[str]:
+    """Every part id the given items link, in item then link order, without repeats."""
+    from app.core.accessory_parts import part_ids_of
+    out: List[str] = []
+    for it in items:
+        for pid in part_ids_of(it):
+            if pid not in out:
+                out.append(pid)
+    return out
+
+
+def _world_part_rows(host_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The world-local part items the hosts link and do not list themselves (shared parts ship with the game)."""
+    from app.models.inventory import get_item
+    have = {it.get("id") for it in host_items}
+    rows = []
+    for pid in _linked_part_ids(host_items):
+        part = get_item(pid)
+        if part and not part.get("_shared") and pid not in have:
+            rows.append(part)
+    return rows
+
+
+def _write_part_meshes(zf: zipfile.ZipFile, part_ids: Iterable[str]) -> List[str]:
+    """``jewellery_files/<part>/<psig>/…`` of every part whose mesh is accepted for its current image."""
+    from app.core import accessory_pendant as ap
+    written: List[str] = []
+    for pid in part_ids:
+        try:
+            st = ap.pendant_state(pid)
+        except ValueError:
+            continue
+        if st["state"] != "ready":
+            continue
+        d = ap.pendant_dir(pid, st["psig"])
+        for name in _PART_MESH_FILES:
+            fp = d / name
+            if fp.is_file():
+                arc = f"jewellery_files/{pid}/{st['psig']}/{name}"
+                zf.write(fp, arc)
+                written.append(arc)
+    return written
+
+
+def _restore_part_meshes(zf: zipfile.ZipFile, mapping: Dict[str, str]) -> int:
+    """Store the pack's part meshes under the parts' FINAL ids — only when the psig in the path is the one of the
+    part's image as imported (``current_psig``) and no accepted mesh is there yet. The path goes through
+    ``pendant_dir`` (``safe_item_id`` + the psig pattern). That saves the hub job."""
+    from app.core import accessory_pendant as ap
+    found: Dict[Tuple[str, str], Dict[str, bytes]] = {}
+    for member in zf.namelist():
+        parts = member.split("/")
+        if len(parts) != 4 or parts[0] != "jewellery_files" or parts[3] not in _PART_MESH_FILES:
+            continue
+        found.setdefault((parts[1], parts[2]), {})[parts[3]] = zf.read(member)
+    count = 0
+    for (orig, psig), files in sorted(found.items()):
+        final = mapping.get(orig)
+        if not final or "raw.glb" not in files or "record.json" not in files:
+            continue
+        try:
+            if ap.current_psig(final) != psig or ap.pendant_state(final)["state"] == "ready":
+                continue
+            d = ap.pendant_dir(final, psig)
+        except ValueError:
+            continue
+        for name in _PART_MESH_FILES:
+            if name in files:
+                ap._write(d / name, files[name])
+        count += 1
+    return count
+
+
+def _sha256(data: Optional[bytes]) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest() if data else ""
+
+
+def _zip_image_sha(zf: zipfile.ZipFile, prefix: str, row: Dict[str, Any]) -> str:
+    member = f"{prefix}{row.get('id')}/{(row.get('image') or '').strip() or 'image.png'}"
+    return _sha256(zf.read(member)) if member in zf.namelist() else ""
+
+
+def _same_part_exists(row: Dict[str, Any], zip_sha: str) -> bool:
+    """An item with the row's id is a part with byte-identical image — it is reused, nothing is written."""
+    from app.core.accessory_parts import is_part
+    from app.models.inventory import get_item, get_item_image_path
+    existing = get_item(row.get("id") or "")
+    if not existing or not is_part(existing) or not zip_sha:
+        return False
+    path = get_item_image_path(existing["id"])
+    return bool(path) and _sha256(Path(path).read_bytes()) == zip_sha
+
+
+def _remap_row(row: Dict[str, Any], mapping: Dict[str, str]) -> Dict[str, Any]:
+    """The host row with its link ids renamed (``accessory_parts.remap_links``); unchanged without a rename."""
+    from app.core.accessory_parts import remap_links
+    renames = {k: v for k, v in mapping.items() if k != v}
+    piece = row.get("outfit_piece")
+    if not renames or not isinstance(piece, dict) or not isinstance(piece.get("jewellery"), dict):
+        return row
+    return {**row, "outfit_piece": {**piece, "jewellery": remap_links(piece["jewellery"], renames)}}
+
+
+def _check_part_rows(rows: List[Dict[str, Any]], named: Iterable[str]) -> None:
+    """Every row past the host must be named in ``manifest.parts`` and be a part item — else ValueError (400)."""
+    from app.core.accessory_parts import is_part
+    named = set(named or [])
+    for row in rows:
+        rid = (row.get("id") or "") if isinstance(row, dict) else ""
+        if rid not in named:
+            raise ValueError(f"db/items.json: {rid!r} is not one of the pack's parts")
+        if not is_part(row):
+            raise ValueError(f"db/items.json: {rid!r} is not a part item")
+
+
+def _extract_item_files(zf: zipfile.ZipFile, prefix: str, dest: Path) -> int:
+    count = 0
+    for member in zf.namelist():
+        if not member.startswith(prefix):
+            continue
+        safe = _safe_relpath(member[len(prefix):])
+        if not safe:
+            continue
+        fp = dest / safe
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_bytes(zf.read(member))
+        count += 1
+    return count
+
+
 def embed_world_items(
     zf: zipfile.ZipFile, item_ids: Iterable[str]
 ) -> List[str]:
@@ -123,9 +260,11 @@ def embed_world_items(
     Shared-library items are skipped (they ship with every world). Returns
     the embedded ids. Inverse: restore_embedded_items().
     """
+    from app.core.accessory_parts import expand_with_parts
     from app.models.inventory import get_item
 
-    wanted = sorted({(iid or "").strip() for iid in item_ids} - {""})
+    # A host brings its parts (design G) — every caller (character, outfit, location) goes through here.
+    wanted = expand_with_parts({(iid or "").strip() for iid in item_ids} - {""})
     item_rows: List[Dict[str, Any]] = []
     for iid in wanted:
         it = get_item(iid)
@@ -142,6 +281,7 @@ def embed_world_items(
             "db/items.json",
             json.dumps(item_rows, ensure_ascii=False, indent=2),
         )
+    _write_part_meshes(zf, _linked_part_ids(get_item(i) or {} for i in wanted))
     return [it["id"] for it in item_rows]
 
 
@@ -172,7 +312,28 @@ def restore_embedded_items(zf: zipfile.ZipFile) -> List[str]:
         if isinstance(row, dict) and (row.get("id") or "").strip():
             require_item_id(row.get("id"))
 
+    from app.core.accessory_parts import is_part
     existing = _existing_item_ids()
+    # Part items first (design G): a part whose id is taken by the SAME part (byte-identical image) is reused; a
+    # different item under that id makes the part arrive under a suffixed id, and the new hosts link that one.
+    mapping: Dict[str, str] = {}
+    new_ids: List[str] = []
+    for row in item_rows:
+        rid = (row.get("id") or "").strip() if isinstance(row, dict) else ""
+        if not rid or not is_part(row):
+            continue
+        if rid in existing and _same_part_exists(row, _zip_image_sha(zf, "item_files/", row)):
+            mapping[rid] = rid
+            continue
+        if rid in existing:
+            final, _renamed = _persist_imported_item(row, target="world", overwrite=False)
+        else:
+            _save_items([row])
+            final = rid
+        _extract_item_files(zf, f"item_files/{rid}/", _item_dir_for(final, shared=False, create=True))
+        new_ids.append(final)
+        existing.add(final)
+        mapping[rid] = final
     # items.json holds the flattened get_item() shape (meta spread to top
     # level, pieces -> outfit_piece, no updated_at). _save_items is the
     # inverse writer that rebuilds the meta/pieces/slots columns and stamps
@@ -180,27 +341,18 @@ def restore_embedded_items(zf: zipfile.ZipFile) -> List[str]:
     # columns and fail the updated_at NOT NULL constraint.
     # Keep original ids so outfit/inventory/room references stay valid.
     new_items = [
-        it for it in item_rows
+        _remap_row(it, mapping) for it in item_rows
         if (it.get("id") or "").strip()
         and (it.get("id") or "").strip() not in existing
+        and not is_part(it)
     ]
-    if not new_items:
-        return []
-    _save_items(new_items)
-
-    new_ids: List[str] = [(it.get("id") or "").strip() for it in new_items]
-    for iid in new_ids:
-        dest = _item_dir_for(iid, shared=False, create=True)
-        prefix = f"item_files/{iid}/"
-        for member in zf.namelist():
-            if not member.startswith(prefix):
-                continue
-            safe = _safe_relpath(member[len(prefix):])
-            if not safe:
-                continue
-            fp = dest / safe
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_bytes(zf.read(member))
+    if new_items:
+        _save_items(new_items)
+    for it in new_items:
+        iid = (it.get("id") or "").strip()
+        _extract_item_files(zf, f"item_files/{iid}/", _item_dir_for(iid, shared=False, create=True))
+        new_ids.append(iid)
+    _restore_part_meshes(zf, mapping)
     return new_ids
 
 
@@ -224,18 +376,25 @@ def export_item_to_zip(item_id: str) -> bytes:
 
     item_clean = _strip_runtime_keys(item)
     scope = "world"
+    # A chain or belt brings its world-local part items and their accepted meshes (design G): the rows follow the
+    # host, ``manifest.parts`` names them, the importer accepts no other extra row.
+    part_rows = _world_part_rows([item])
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         files = _write_item_files(zf, item)
+        for part in part_rows:
+            files.extend(_write_item_files(zf, part))
+        files.extend(_write_part_meshes(zf, _linked_part_ids([item])))
         zf.writestr(
             "db/items.json",
-            json.dumps([item_clean], ensure_ascii=False, indent=2),
+            json.dumps([item_clean] + [_strip_runtime_keys(p) for p in part_rows], ensure_ascii=False, indent=2),
         )
         manifest = {
             "version": MANIFEST_VERSION,
             "type": "item",
             "item_id": item_id,
+            "parts": [p["id"] for p in part_rows],
             "exported_at": utc_now_iso(),
             "scope": scope,
             "files": sorted(files),
@@ -266,12 +425,20 @@ def export_items_to_bundle_zip(item_ids: List[str]) -> bytes:
             )
         items.append(it)
         scopes[iid] = "world"
+    # The hosts' world-local part items come along (design G).
+    part_rows = _world_part_rows(items)
+    for part in part_rows:
+        scopes[part["id"]] = "world"
+    linked = _linked_part_ids(items)
+    items.extend(part_rows)
+    from app.core.accessory_parts import is_part
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         all_files: List[str] = []
         for it in items:
             all_files.extend(_write_item_files(zf, it))
+        all_files.extend(_write_part_meshes(zf, linked))
         cleaned = [_strip_runtime_keys(it) for it in items]
         zf.writestr(
             "db/items.json",
@@ -281,6 +448,7 @@ def export_items_to_bundle_zip(item_ids: List[str]) -> bytes:
             "version": MANIFEST_VERSION,
             "type": "item_bundle",
             "items": [it["id"] for it in items],
+            "parts": [it["id"] for it in items if is_part(it)],
             "scopes": scopes,
             "exported_at": utc_now_iso(),
             "files": sorted(all_files),
@@ -411,11 +579,18 @@ def import_item_from_zip(
 
     manifest = _read_manifest(zf, "item")
     rows = json.loads(zf.read("db/items.json"))
-    if not isinstance(rows, list) or len(rows) != 1:
-        raise ValueError("db/items.json must contain exactly one item")
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+        raise ValueError("db/items.json must contain the item (and its part items)")
     item = rows[0]
     from app.models.inventory import require_item_id
     original_id = require_item_id(item.get("id") or manifest.get("item_id") or "")
+    if manifest.get("item_id") and original_id != manifest.get("item_id"):
+        raise ValueError("db/items.json: the first row must be the manifest's item")
+    # Rows past the host: only the part items the manifest names (design G) — checked before anything is written.
+    part_rows = rows[1:]
+    _check_part_rows(part_rows, manifest.get("parts") or [])
+    for row in part_rows:
+        require_item_id(row.get("id") or "")
 
     if overwrite is False and original_id in _existing_item_ids():
         raise FileExistsError(
@@ -430,12 +605,24 @@ def import_item_from_zip(
     if effective_target not in ("world", "shared"):
         effective_target = "world"
 
+    # Parts first: a part whose id is taken by the same part (byte-identical image) is reused; otherwise it arrives
+    # under a suffixed id and the host links that one. A part is never overwritten — other hosts may use it.
+    mapping: Dict[str, str] = {}
+    for row in part_rows:
+        rid = row["id"]
+        if _same_part_exists(row, _zip_image_sha(zf, "files/", row)):
+            mapping[rid] = rid
+            continue
+        part_final, _renamed = _persist_imported_item(row, target=effective_target, overwrite=False)
+        _restore_item_files(zf, rid, part_final, shared=(effective_target == "shared"))
+        mapping[rid] = part_final
     final_id, renamed = _persist_imported_item(
-        item, target=effective_target, overwrite=overwrite,
+        _remap_row(item, mapping), target=effective_target, overwrite=overwrite,
     )
     file_count = _restore_item_files(
         zf, original_id, final_id, shared=(effective_target == "shared"),
     )
+    meshes = _restore_part_meshes(zf, mapping)
     zf.close()
     logger.info(
         "Item import: %s → %s (%s, files=%d, renamed=%s)",
@@ -448,6 +635,8 @@ def import_item_from_zip(
         "scope": effective_target,
         "renamed": renamed,
         "files_imported": file_count,
+        "parts": mapping,
+        "part_meshes_imported": meshes,
     }
 
 
@@ -1759,10 +1948,16 @@ def import_bundle_from_zip(
 
     scopes = manifest.get("scopes") or {}
     results: List[Dict[str, Any]] = []
+    # Part items first, so a renamed part is linked by its new id (design G).
+    from app.core.accessory_parts import is_part
+    rows = sorted(rows, key=lambda r: 0 if is_part(r) else 1)
+    mapping: Dict[str, str] = {}
     for item in rows:
         original_id = item.get("id") or ""
         if not original_id:
             continue
+        if not is_part(item):
+            item = _remap_row(item, mapping)
         effective_target = target
         if effective_target == "auto":
             effective_target = scopes.get(original_id) or "world"
@@ -1774,6 +1969,8 @@ def import_bundle_from_zip(
         files = _restore_item_files(
             zf, original_id, final_id, shared=(effective_target == "shared"),
         )
+        if is_part(item):
+            mapping[original_id] = final_id
         results.append({
             "item_id": final_id,
             "original_id": original_id,
@@ -1781,6 +1978,7 @@ def import_bundle_from_zip(
             "renamed": renamed,
             "files_imported": files,
         })
+    _restore_part_meshes(zf, mapping)
     zf.close()
     logger.info("Bundle import: %d item(s)", len(results))
     return {
@@ -1968,8 +2166,10 @@ def _item_preview(entity_id: str) -> Dict[str, Any]:
     from app.models.inventory import get_item, get_item_image_path
     item = get_item(entity_id) or {}
     path = get_item_image_path(entity_id) if item else ""
+    from app.core.accessory_parts import part_ids_of
     facts = {"category": item.get("category") or "",
-             "wearable": bool(item.get("outfit_piece")) if item else None}
+             "wearable": bool(item.get("outfit_piece")) if item else None,
+             "parts": len(part_ids_of(item)) or None}
     return {"image": Path(path) if path else None, "facts": _drop_empty(facts),
             "labels": {}}
 

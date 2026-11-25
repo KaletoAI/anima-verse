@@ -1228,7 +1228,7 @@ def _move_item_to_shared_locked(item_id: str) -> Dict[str, Any]:
             conn.execute("DELETE FROM items WHERE id=?", (item_id,))
     except Exception as e:
         logger.error("move_item_to_shared DB-DELETE Fehler fuer %s: %s", item_id, e)
-    logger.info("Item %s -> shared library verschoben", item_id)
+    logger.info("Item %s moved to the shared library", item_id)
     return {"status": "ok", "item_id": item_id}
 
 
@@ -1268,7 +1268,7 @@ def _move_item_to_world_locked(item_id: str) -> Dict[str, Any]:
 
     # 3) Remove from shared storage.
     _save_shared_items([s for s in _load_shared_items() if s.get("id") != item_id])
-    logger.info("Item %s -> world (%s) verschoben", item_id)
+    logger.info("Item %s moved to the world", item_id)
     return {"status": "ok", "item_id": item_id}
 
 

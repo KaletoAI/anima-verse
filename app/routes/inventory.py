@@ -134,8 +134,17 @@ async def move_item_to_shared_route(item_id: str, request: Request) -> Dict[str,
 def _move_item_to_shared_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     """The blocking body of ``move_item_to_shared_route`` — runs in the
     threadpool."""
-    from app.models.inventory import move_item_to_shared
+    from app.core import accessory_parts
+    from app.models.inventory import get_item, is_shared_item, move_item_to_shared
     user_id = (body.get("user_id") or "").strip()
+    # A chain or belt takes its world-local part items along, before itself (design G): a library item never links
+    # a part only one world has. Each move runs under that item's own locks.
+    for pid in accessory_parts.part_ids_of(get_item(item_id)):
+        if get_item(pid) and not is_shared_item(pid):
+            moved = move_item_to_shared(pid)
+            if moved.get("status") != "ok":
+                raise HTTPException(status_code=400,
+                                    detail=f"part {pid}: {moved.get('reason', 'move failed')}")
     result = move_item_to_shared(item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "move failed"))
@@ -153,9 +162,20 @@ async def move_item_to_world_route(item_id: str, request: Request) -> Dict[str, 
 def _move_item_to_world_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     """The blocking body of ``move_item_to_world_route`` — runs in the
     threadpool."""
+    from fastapi.responses import JSONResponse
+    from app.core import accessory_parts
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import move_item_to_world
     user_id = (body.get("user_id") or "").strip()
-    result = move_item_to_world(item_id)
+    with keyed_lock("accessory_part", item_id):
+        # A part a library chain or belt still links stays in the library (design G) — 409 naming them.
+        shared_users = [u for u in accessory_parts.used_by(item_id) if u["shared"]] \
+            if accessory_parts.is_part_id(item_id) else []
+        if shared_users:
+            names = ", ".join(u["name"] for u in shared_users)
+            return JSONResponse(status_code=409, content={
+                "detail": f"The part is used by library items: {names}", "used_by": shared_users})
+        result = move_item_to_world(item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "move failed"))
     return result

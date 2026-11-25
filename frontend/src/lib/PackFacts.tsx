@@ -31,6 +31,7 @@ function useFactLabels(): Record<string, string> {
     items: t('Items'),
     has_3d: t('3D model'),
     wearable: t('Wearable'),
+    parts: t('Parts'),
     outfits: t('Outfits'),
   }
 }
