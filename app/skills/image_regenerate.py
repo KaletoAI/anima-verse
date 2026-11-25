@@ -22,12 +22,66 @@ class ExplicitBackendUnavailable(RuntimeError):
 
 
 
+class PromptRewriteRejected(ValueError):
+    """The LLM's rewrite of a prompt was not taken: a refusal, a text that lost
+    most of the prompt, or one that dropped a person the prompt names. The
+    caller keeps the prompt it had (the dialog route answers 422)."""
+
+
+#: Shortest share of the original a rewrite may keep. Without a change wish the
+#: content must stay (the optimiser only rephrases), so half — the rule the pose
+#: check uses. A wish may legitimately shorten the prompt, so it gets more room.
+_KEEP_RATIO_OPTIMISE = 0.5
+_KEEP_RATIO_WISH = 0.25
+
+
+def _mentions(text: str, name: str) -> bool:
+    import re
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text or "") is not None
+
+
+def _known_names() -> list:
+    """Every character name of the world, longest first; [] without a world."""
+    try:
+        from app.models.character import list_available_characters
+        return sorted(list_available_characters(include_dormant=True), key=len, reverse=True)
+    except Exception as e:
+        logger.debug("character names for the rewrite check unavailable: %s", e)
+        return []
+
+
+def rewrite_rejection(improved: str, original: str, improvement_request: str = "",
+                      names: Optional[list] = None) -> str:
+    """Why an LLM rewrite of ``original`` must not replace it, or "" when it may.
+
+    Rejected are a refusal or a text that kept too little of the original
+    (``prompt_guard.is_prompt_refusal``; the share depends on whether there is a
+    change wish), and a rewrite that drops a person: every name of ``names``
+    the original mentions has to be in the rewrite, unless the wish itself
+    names that person (the wish may be to take them out). ``names`` defaults
+    to the world's characters."""
+    from app.imagegen.prompt_guard import is_prompt_refusal
+    request = (improvement_request or "").strip()
+    ratio = _KEEP_RATIO_WISH if request else _KEEP_RATIO_OPTIMISE
+    if is_prompt_refusal(improved, original, min_length_ratio=ratio):
+        return "The LLM refused the rewrite or dropped most of the prompt."
+    if names is None:
+        names = _known_names()
+    dropped = [n for n in names
+               if _mentions(original, n) and not _mentions(improved, n)
+               and not _mentions(request, n)]
+    if dropped:
+        return "The LLM rewrite dropped " + ", ".join(dropped) + " from the prompt."
+    return ""
+
+
 def enhance_prompt(
     original_prompt: str,
     improvement_request: str,
     agent_config: Optional[dict] = None,
     allow_general: bool = False,
-    media: str = "image") -> str:
+    media: str = "image",
+    strict: bool = False) -> str:
     """Improve an image prompt from user feedback via the LLM.
 
     ``allow_general`` lets an EMPTY request through: the LLM then tidies the
@@ -39,6 +93,12 @@ def enhance_prompt(
     (template ``video_prompt_improver``: keeps subject motion, camera
     movement and pacing, which the image template would strip). Both run
     on the ``image_prompt`` LLM task.
+
+    Every answer passes ``rewrite_rejection`` first: a refusal, a text that
+    lost most of the prompt or one that dropped a named person never becomes
+    the prompt. ``strict`` (the dialogs' button) raises
+    ``PromptRewriteRejected`` then, so the user sees why nothing changed;
+    otherwise the original comes back.
 
     Returns:
         The improved prompt, or original_prompt on an error / empty request.
@@ -62,16 +122,23 @@ def enhance_prompt(
             task="image_prompt",
             system_prompt=system_prompt,
             user_prompt=human_msg,
-            agent_name=character_name)
-        improved = response.content.strip()
-        if improved:
-            logger.info(f"Improved prompt: {improved[:120]}...")
-            return improved
-        logger.warning("LLM returned an empty answer, keeping the original prompt")
-        return original_prompt
+            agent_name=character_name,
+            label=("video prompt improver" if media == "video" else "image prompt improver"))
+        improved = (getattr(response, "content", "") or "").strip()
     except Exception as e:
         logger.error(f"LLM error: {e}")
+        if strict:
+            raise PromptRewriteRejected("The LLM call failed — the prompt is unchanged.") from e
         return original_prompt
+    reason = rewrite_rejection(improved, original_prompt, improvement_request)
+    if reason:
+        logger.warning("Prompt rewrite rejected (%s), keeping the original. Answer: %s",
+                       reason, improved[:120])
+        if strict:
+            raise PromptRewriteRejected(f"{reason} The prompt is unchanged.")
+        return original_prompt
+    logger.info(f"Improved prompt: {improved[:120]}...")
+    return improved
 
 
 def _save_analysis(output_path: str, analysis: str, character_name: str) -> None:

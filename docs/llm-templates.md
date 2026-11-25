@@ -85,7 +85,7 @@ can add a template, not override one. That is where
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `image_prompt_scene.md` | `image_prompt` | `routes/chat._generate_image_prompt` | Extract a visual scene from chat narrative |
-| `image_prompt_improver.md` | `image_prompt` | `skills/image_regenerate.py` | Modify an existing image prompt based on user feedback; with an empty request only optimise it for the image model (dialogs' "Improve prompt") |
+| `image_prompt_improver.md` | `image_prompt` | `skills/image_regenerate.py` | Modify an existing image prompt based on user feedback; with an empty request only optimise it for the image model (dialogs' "Improve prompt"). An answer that refuses, keeps too little of the prompt or drops a person it names is not taken (`rewrite_rejection`; the dialog route answers 422 and the field keeps its prompt) |
 | `video_prompt_improver.md` | `image_prompt` | `skills/image_regenerate.py` (`enhance_prompt(media="video")`) | The same for an image-to-video motion prompt (animate dialog's "Improve prompt"): keeps subject motion, camera movement and pacing, stays faithful to the still |
 | `image_pose_check.md` | `image_pose_check` | `imagegen/pose_check.check_pose` | Make the body logic of an image prompt physically possible (limbs, framing, arrangement) without changing what it shows |
 | `image_prompt_shorten.md` | `image_prompt_shorten` | `imagegen/prompt_limit.shorten` | Condense a prompt over the backend's prompt character limit: keep reference wording, appearance and clothing, condense style prefix and filler first, add nothing |

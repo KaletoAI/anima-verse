@@ -3232,6 +3232,10 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     camera and pacing, which the image rewrite would strip. Same
     enhance_prompt function as the character/Instagram regenerate, so the
     dialogs' "Improve prompt" button uses one mechanism everywhere.
+
+    422 when the LLM refused, lost most of the prompt or dropped a person it
+    names (``image_regenerate.rewrite_rejection``) — the dialog shows the
+    reason and keeps its prompt field as it was.
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
@@ -3241,10 +3245,13 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
     if body.get("mode") == "pose":
         from app.imagegen.pose_check import check_pose
         return {"prompt": await asyncio.to_thread(check_pose, prompt)}
-    from app.skills.image_regenerate import enhance_prompt
+    from app.skills.image_regenerate import PromptRewriteRejected, enhance_prompt
     media = "video" if body.get("mode") == "video" else "image"
-    enhanced = await asyncio.to_thread(
-        enhance_prompt, prompt, improvement_request, None, True, media)
+    try:
+        enhanced = await asyncio.to_thread(
+            enhance_prompt, prompt, improvement_request, None, True, media, True)
+    except PromptRewriteRejected as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"prompt": enhanced}
 
 
