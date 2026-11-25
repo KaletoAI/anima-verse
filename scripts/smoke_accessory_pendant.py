@@ -29,13 +29,18 @@ Expected values, derived by hand:
     (0, 2, 0) on the root: relative (0, 1, 0) → R_x(90°) → (0, 0, 1) → (0, 1, 1). A point (0, 3, 0) on the child
     follows its parent: (0, 1, 2).
 [6] ``pendant_state``: no item image → no_image; an image, nothing stored → missing (REASON_MISSING); a record
-    accepted False failure "gate" error "x" → refused "Pendant mesh refused — x; …"; failure "backend" → failed;
+    accepted False failure "gate" error "x" → refused "Part mesh refused — x; …" (role-neutral: no "chain", no
+    "pendant" in any state's reason); failure "backend" → failed;
     failure "load" → missing with the load reason; accepted with raw.glb → ready.
     ``drop_other_pendants(item, A)`` with folders A, B (12 hex) and "notes" deletes exactly B.
 [7] ``run`` with the backend mocked: ONE ``generate_mesh`` call with occasion "jewellery_mesh"; the delivered slab
     passes → ready, record hub_jobs 1, backend + routing + fallback_from kept; a second ``run`` makes no call.
     A new item image → a new psig → missing again; a ``BackendBusyError`` → missing (load, hub_jobs 0); a
     ``BackendFailedError`` → failed; a two-piece delivery → refused (not retried by a further ``pendant_state``).
+[7b] the outline gate: the mocked cut-out shows 24 × 44 px (``fake_rembg``) → width : height 24/44 = 0.545 (the square
+    crop and the resize keep it within a pixel). A 40 × 40 × 40 cube delivered for a new image: every turn's front is
+    1.0, |ln(1.0/0.545)| = 0.606 > ln 1.35 = 0.300 → refused, the reason names the outline. The slab of [7] (20 × 40,
+    front 0.5: |ln(0.5/0.545)| = 0.087) passed there.
 [8] ``accessory_build.asig`` of the earrings' drop: a ready drop psig changes the asig; with a psig the size changes it
     (18 → 30); without a psig the size does not (a drop that is not built is not part of the geometry).
 [G3a] ``orient_thin_to_depth`` (plan-anhaenger Task 3), box extents (x, y, z) → after: (0.030, 0.040, 0.005) stays;
@@ -50,6 +55,17 @@ Expected values, derived by hand:
 [G3b] the measured extent of Lirien's old whole-belt buckle mesh (0.459, 0.115, 0.999) as a box: y is thinnest → after
     turning (0.459, 0.999, 0.115); ``normalise(…, 65)`` → 65 · 0.459/0.999 = 29.86 mm wide, 65.0 mm high,
     65 · 0.115/0.999 = 7.48 mm deep (before part items the 65 mm stood in z, the depth).
+[G3c] ``orient`` by the image (review finding: a long prong made a front axis the thinnest). Frame + prong: a frame box
+    50 (x) × 40 (y) × 6 (z) mm centred on the origin and a prong box 4 × 4 × 60 mm behind it (z −3 … −63) → extents
+    (50, 40, 66). ``orient_thin_to_depth`` turns y (40, the thinnest) into the depth → (50, 66, 40): twisted. With the
+    image's 50 : 40 = 1.25 the three turns' fronts are z-depth 50/40 = 1.25 (score 0), x-depth 66/40 = 1.65
+    (|ln 1.32| = 0.278), y-depth 50/66 = 0.758 (|ln 0.606| = 0.500) → z stays → (50, 40, 66). ``normalise(…, 50,
+    front_ratio=1.25)`` scales by the longer FRONT side (50 mm → factor 1) → (50.0, 40.0, 66.0) mm, not by the 66 mm
+    depth. ``front_reason`` at 1.25 → ''; at 3.0 the best turn is x-depth (|ln(1.65/3)| = 0.598 > 0.300) → the
+    reason names 1.65 on the mesh and 3.00 in the image. A 20 mm cube with ratio 1.0 → all three turns score 0 with
+    equal depth → z stays (an exact copy of the input).
+[G3d] ``image_front_ratio`` of a 100 × 60 transparent PNG with an opaque block x 10..60, y 5..45 → 50 / 40 = 1.25; a
+    fully transparent one → None. ``load_mesh`` carries it from the stored ``cutout.png``.
 """
 import io
 import json
@@ -189,10 +205,16 @@ def rec(**kw):
 
 
 st = rec(accepted=False, failure="gate", error="x")
-check("[6] refused", (st["state"], st["reason"].startswith("Pendant mesh refused — x;")), ("refused", True))
-check("[6] failed", rec(accepted=False, failure="backend", error="y")["state"], "failed")
+check("[6] refused", (st["state"], st["reason"].startswith("Part mesh refused — x;")), ("refused", True))
+NEUTRAL = [st["reason"]]
+st = rec(accepted=False, failure="backend", error="y")
+check("[6] failed", st["state"], "failed")
+NEUTRAL.append(st["reason"])
 st = rec(accepted=False, failure="load", error="busy")
 check("[6] load", (st["state"], "try again later" in st["reason"]), ("missing", True))
+NEUTRAL += [st["reason"], ap.REASON_MISSING, ap.REASON_RUNNING, ap.REASON_NO_IMAGE, ap.REASON_LEFT_OFF]
+check("[6] no reason names a chain or a pendant",
+      [r for r in NEUTRAL if "chain" in r.lower() or "pendant" in r.lower()], [])
 (d / "raw.glb").write_bytes(b"x")
 check("[6] ready", rec(accepted=True)["state"], "ready")
 A, B = "a" * 12, "b" * 12
@@ -255,6 +277,13 @@ DELIVERY["raise"] = None
 DELIVERY["mesh"] = (V2, F2)
 check("[7] two pieces refused", ap.run("item_p")["state"], "refused")
 check("[7] refused stays refused", ap.pendant_state("item_p")["state"], "refused")
+# [7b] the outline gate
+img.write_bytes(b"image-55555")
+DELIVERY["mesh"] = slab(40, 40, 40, 4, 4, 4)
+st = ap.run("item_p")
+check("[7b] a cube for a 24 x 44 image refused", (st["state"], "outline does not match the image" in st["reason"]),
+      ("refused", True))
+print("       " + st["reason"])
 
 # [8] asig
 pend18 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant": {"size_mm": 18}})
@@ -288,6 +317,34 @@ L = ap.orient_thin_to_depth(box(0.459, 0.115, 0.999))
 check("[G3b] turned", ext(L), (0.459, 0.999, 0.115))
 Ln = ap.normalise(box(0.459, 0.115, 0.999), 65)
 check("[G3b] normalised mm", tuple(round(float(x) * 1000, 2) for x in (Ln.max(0) - Ln.min(0))), (29.86, 65.0, 7.48))
+
+# [G3c] orient by the image's outline
+FP = np.vstack([box(0.050, 0.040, 0.006), box(0.004, 0.004, 0.060) + [0.0, 0.0, -0.033]])
+check("[G3c] extents", ext(FP), (0.05, 0.04, 0.066))
+check("[G3c] thinnest rule twists it", ext(ap.orient_thin_to_depth(FP)), (0.05, 0.066, 0.04))
+check("[G3c] by the image: z stays", ext(ap.orient(FP, 1.25)), (0.05, 0.04, 0.066))
+FPn = ap.normalise(FP, 50, front_ratio=1.25)
+check("[G3c] normalised by the front", tuple(round(float(x) * 1000, 2) for x in (FPn.max(0) - FPn.min(0))),
+      (50.0, 40.0, 66.0))
+check("[G3c] front_reason at 1.25", ap.front_reason(FP, 1.25), "")
+why = ap.front_reason(FP, 3.0)
+check("[G3c] front_reason at 3.0", ("1.65 on the mesh" in why, "3.00 in the image" in why), (True, True))
+C20 = box(0.020, 0.020, 0.020)
+check("[G3c] a cube stays as it is", bool(np.array_equal(ap.orient(C20, 1.0), C20)), True)
+# [G3d] the cut-out's ratio
+im = Image.new("RGBA", (100, 60), (0, 0, 0, 0))
+im.paste((10, 10, 10, 255), (10, 5, 60, 45))
+buf = io.BytesIO()
+im.save(buf, format="PNG")
+check("[G3d] 50 / 40", ap.image_front_ratio(buf.getvalue()), 1.25)
+buf = io.BytesIO()
+Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(buf, format="PNG")
+check("[G3d] empty", ap.image_front_ratio(buf.getvalue()), None)
+psig_b = ap.current_psig("item_p")
+dd = ap.pendant_dir("item_p", psig_b)
+check("[G3d] load_mesh carries the cut-out's ratio",
+      round(ap.load_mesh("item_p", psig_b)["front_ratio"], 3) if (dd / "raw.glb").is_file() else "no mesh",
+      round(ap.image_front_ratio((dd / "cutout.png").read_bytes()), 3) if (dd / "raw.glb").is_file() else "no mesh")
 
 if FAIL:
     print(f"FAILED: {FAIL}")

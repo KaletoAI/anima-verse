@@ -4,12 +4,13 @@
 The item image is cut out (the footwear cut-out step: BiRefNet-DIS, square crop), then meshed through the routed
 occasion ``MESH_OCCASION`` (``get_image_service().generate_mesh`` — the routed, queued channel path, never a backend
 directly). The delivered mesh is gated (``mesh_gates``: one connected piece, a plausible shape) and kept as it came;
-the size (``size_mm``, the longest side) and the placement are applied per character on the CPU
+the size (``size_mm``, the longer front side) and the placement are applied per character on the CPU
 (``accessory_build``), so a size change never spends a job.
 
-The job is spent ONLY by an explicit user action: "Build pendant (1 hub job)" in the Wardrobe or a manual Build of the
-character when the pendant is switched on (``figure_build``'s ``pendant`` step is ``manual``). A refused or failed
-mesh is never meshed again automatically (one paid try; the Wardrobe offers "Build pendant again").
+The job is spent ONLY by an explicit user action: "Build mesh (1 hub job)" in Items or the Wardrobe, or a manual Build
+of the character (``figure_build``'s ``pendant`` step is ``manual``). A refused or failed mesh is never meshed again
+automatically (one try per image). Besides ``mesh_gates`` the delivery must show its image: some turn of it has the
+cut-out's width : height (``front_reason``) — else it would hang twisted on every wearer.
 
 Store (world-wide, per item)::
 
@@ -20,8 +21,8 @@ Store (world-wide, per item)::
 ``psig`` = md5[:12] over ``{image sha256, PENDANT_VERSION}`` — a new item image is a new pendant. Accepting a psig
 removes the other psig folders of THAT item (exact 12-hex names only, A216 review L1).
 
-Placement (``place``): the mesh is read with +Y up and its front (the image) toward +Z, centred, scaled so its longest
-side is ``size_mm`` and hung with its top centre at the chain's lowest point, its back on the chain's centre line;
+Placement (``place``): the mesh is read with +Y up and its front (the image) toward +Z (``orient``: the depth axis is
+the one whose two others match the image's outline), centred, scaled so its longer front side is ``size_mm`` and hung with its top centre at the chain's lowest point, its back on the chain's centre line;
 then tilted about that point in the sagittal plane (``TILT_DEG``) and pushed out along the skin normal so the whole
 mesh is at least ``GAP_M`` off the body — the least push first (it stays on its cord), then the flattest tilt. It is rigid: every vertex takes the chain's skin at that point.
 ``pose_check`` then poses body and pendant through ``TEST_POSES`` (rest / walk / sit / run, linear blend skinning on
@@ -66,13 +67,17 @@ PUSH_PASSES = 8
 INSIDE_M = 0.0005
 
 #: Words shown in the Wardrobe and the Figure row.
-REASON_NO_IMAGE = "The item has no image to make the pendant from"
-REASON_MISSING = "Pendant not built yet — Build pendant spends 1 hub job"
-REASON_RUNNING = "Pendant is being built (1 hub job)"
-REASON_REFUSED = "Pendant mesh refused — {error}; the chain is shown without it"
-REASON_FAILED = "Pendant job failed — {error}; the chain is shown without it"
-REASON_LOAD = "Pendant job could not start ({error}) — try again later"
-REASON_LEFT_OFF = "Pendant left off — {error}"
+#: Role-neutral: the same mesh store serves a necklace's pendant, a belt's buckle and charms and the earrings' drop, so
+#: no text names a chain or a pendant (the hosts add their own role words, ``accessory_parts.part_states``).
+REASON_NO_IMAGE = "The item has no image to make the part mesh from"
+REASON_MISSING = "Part mesh not built yet — Build mesh spends 1 hub job"
+REASON_RUNNING = "Part mesh is being built (1 hub job)"
+REASON_REFUSED = "Part mesh refused — {error}; shown without it"
+REASON_FAILED = "Part mesh job failed — {error}; shown without it"
+REASON_LOAD = "Part mesh job could not start ({error}) — try again later"
+REASON_LEFT_OFF = "Part left off — {error}"
+#: ``front_reason``: no turn of the mesh shows the outline of its image.
+REASON_FRONT = "its outline does not match the image (width : height {mesh:.2f} on the mesh, {image:.2f} in the image)"
 
 _PSIG_RE = re.compile(r"^[0-9a-f]{12}$")
 _RUNNING: set = set()
@@ -308,7 +313,14 @@ def _run(item_id: str) -> None:
             from app.core import glb_mesh
             P, F = glb_mesh.static_arrays(raw.read_bytes())[:2]
             ok, reasons, numbers = mesh_gates(P, F)
-        except Exception as e:  # noqa: BLE001 — recorded; the chain is shown without the pendant
+            # The front must show the image: a mesh no turn of which has the cut-out's outline would hang twisted.
+            ratio = image_front_ratio((d / "cutout.png").read_bytes())
+            numbers["image_ratio"] = round(ratio, 3) if ratio else None
+            outline = front_reason(P, ratio)
+            if outline:
+                ok = False
+                reasons.append(outline)
+        except Exception as e:  # noqa: BLE001 — recorded; the host is shown without the part
             failure, error = _failure_of(e)
             if failure == "load":
                 record["hub_jobs"] = 0
@@ -347,15 +359,84 @@ def start(item_id: str) -> bool:
 # --- geometry (pure, CPU) ---------------------------------------------------------------------------------------------
 
 def load_mesh(item_id: str, psig: str) -> Dict[str, Any]:
-    """The ready pendant's delivered mesh: ``{V, F, UV, image, mime, material}`` (positions as delivered)."""
+    """The ready pendant's delivered mesh: ``{V, F, UV, image, mime, material, front_ratio}`` (positions as delivered;
+    ``front_ratio`` = ``image_front_ratio`` of the cut-out the mesher got, None without one)."""
     from app.core import glb_mesh
-    P, F, U, image, mime, material = glb_mesh.static_arrays((pendant_dir(item_id, psig) / "raw.glb").read_bytes())
-    return {"V": P, "F": F, "UV": U, "image": image, "mime": mime, "material": material}
+    d = pendant_dir(item_id, psig)
+    P, F, U, image, mime, material = glb_mesh.static_arrays((d / "raw.glb").read_bytes())
+    cut = d / "cutout.png"
+    ratio = image_front_ratio(cut.read_bytes()) if cut.is_file() else None
+    return {"V": P, "F": F, "UV": U, "image": image, "mime": mime, "material": material, "front_ratio": ratio}
+
+
+def image_front_ratio(png: bytes) -> Optional[float]:
+    """Width : height of what the cut-out shows (the box of its alpha above ``CUTOUT_ALPHA_MIN``); None when it shows
+    nothing or cannot be read."""
+    from PIL import Image
+    try:
+        with Image.open(io.BytesIO(png)) as im:
+            box = im.convert("RGBA").getchannel("A").point(lambda v: 255 if v > CUTOUT_ALPHA_MIN else 0).getbbox()
+    except Exception:  # noqa: BLE001 — an unreadable cut-out has no outline to compare
+        return None
+    if box is None or box[3] <= box[1] or box[2] <= box[0]:
+        return None
+    return (box[2] - box[0]) / (box[3] - box[1])
 
 
 #: ``orient_thin_to_depth``: z stays the depth while its extent is within this share of the thinnest side (a nearly
 #: as thin x or y never tips the part over).
 THIN_TIE = 0.10
+#: ``orient``: the turned box's front (width : height) may differ from the image's by at most this factor
+#: (``front_reason``). A mesher keeps the outline it was shown; what it invents (a loop, a prong, a bail) sits behind.
+FRONT_RATIO_TOLERANCE = 1.35
+#: ``orient``: turns whose front is within this (natural log of the ratio) of the best one count as equal — the
+#: thinnest depth of them wins (a square image cannot tell the turns of a cube apart).
+FRONT_RATIO_TIE = 0.05
+
+
+def _depth_turns(V: np.ndarray) -> List[np.ndarray]:
+    """The three turns that put one box axis into depth (z): z stays; x by −90° about +Y (+X → +Z); y by +90° about +X
+    (+Y → +Z, the old z → −Y) — the turns of ``orient_thin_to_depth``."""
+    return [V, V @ _rot_y(-np.pi / 2).T, V @ _rot_x(np.pi / 2).T]
+
+
+def _front_score(V: np.ndarray, front_ratio: float) -> float:
+    e = V.max(0) - V.min(0)
+    if float(e[1]) <= 0 or float(e[0]) <= 0:
+        return float("inf")
+    return abs(float(np.log((float(e[0]) / float(e[1])) / float(front_ratio))))
+
+
+def orient(V: np.ndarray, front_ratio: Optional[float] = None, flip: bool = False) -> np.ndarray:
+    """``V`` turned so its depth is z (+Y up, front +Z). With the image's ``front_ratio`` (width : height,
+    ``image_front_ratio``) the depth is the axis whose two others match it best (``_depth_turns``; within
+    ``FRONT_RATIO_TIE`` of the best the thinner depth, then z, x, y) — a loop or a prong the mesher put behind the
+    part makes the depth long, never the front. Without one: ``orient_thin_to_depth``. ``flip`` then turns it 180°
+    about +Y."""
+    V = np.asarray(V, np.float64)
+    if not front_ratio or not len(V):
+        return orient_thin_to_depth(V, flip)
+    scored = []
+    for i, T in enumerate(_depth_turns(V)):
+        scored.append((_front_score(T, front_ratio), float(T[:, 2].max() - T[:, 2].min()), i, T))
+    best = min(s[0] for s in scored)
+    V = min((s for s in scored if s[0] <= best + FRONT_RATIO_TIE), key=lambda s: (s[1], s[2]))[3]
+    if flip:
+        V = V @ _rot_y(np.pi).T
+    return V
+
+
+def front_reason(V: np.ndarray, front_ratio: Optional[float]) -> str:
+    """Why the mesh ``V`` does not show its image (``REASON_FRONT``): even the best turn's front differs from
+    ``front_ratio`` by more than ``FRONT_RATIO_TOLERANCE``. '' when it matches or no ratio is known."""
+    V = np.asarray(V, np.float64)
+    if not front_ratio or not len(V):
+        return ""
+    T = orient(V, front_ratio)
+    if _front_score(T, front_ratio) <= float(np.log(FRONT_RATIO_TOLERANCE)) + 1e-9:
+        return ""
+    e = T.max(0) - T.min(0)
+    return REASON_FRONT.format(mesh=float(e[0]) / max(float(e[1]), 1e-12), image=float(front_ratio))
 
 
 def orient_thin_to_depth(V: np.ndarray, flip: bool = False) -> np.ndarray:
@@ -377,12 +458,14 @@ def orient_thin_to_depth(V: np.ndarray, flip: bool = False) -> np.ndarray:
     return V
 
 
-def normalise(V: np.ndarray, size_mm: float, flip: bool = False) -> np.ndarray:
-    """``V`` turned thinnest side to depth (``orient_thin_to_depth``; +Y up, front +Z), centred in x and z, its top at
-    y = 0, its back at z = 0 and scaled so the longest side of its box is ``size_mm`` (module docstring)."""
-    V = orient_thin_to_depth(V, flip)
+def normalise(V: np.ndarray, size_mm: float, flip: bool = False,
+              front_ratio: Optional[float] = None) -> np.ndarray:
+    """``V`` turned depth to z (``orient``; +Y up, front +Z), centred in x and z, its top at y = 0, its back at z = 0
+    and scaled so the longer FRONT side of its box (width or height — what the image shows) is ``size_mm``; a depth
+    the mesher made longer never shrinks the part (module docstring)."""
+    V = orient(V, front_ratio, flip)
     lo, hi = V.min(0), V.max(0)
-    scale = (float(size_mm) / 1000.0) / max(float((hi - lo).max()), 1e-12)
+    scale = (float(size_mm) / 1000.0) / max(float((hi - lo)[:2].max()), 1e-12)
     out = (V - np.array([(lo[0] + hi[0]) / 2, hi[1], lo[2]])) * scale
     return out
 

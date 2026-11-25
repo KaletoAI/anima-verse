@@ -44,8 +44,10 @@ logger = logging.getLogger(__name__)
 #: Bumped when an accessory is built differently for the same inputs. 3: the test poses judge a side by the body's
 #: outer wall only (``outer_wall_faces``) — a belt over a bent hip no longer fails on the inner wall, a piece pushed
 #: through the skin is caught at its true depth. 4: linked part items (plan-anhaenger, design G) — a part is placed by
-#: its link with its thinnest side as the depth.
-ACCESSORY_VERSION = 4
+#: its link with its thinnest side as the depth. 5: a part's depth is the axis whose two others match its image's
+#: outline (``accessory_pendant.orient``), its size the longer front side, and a flat part is cut to
+#: ``FLAT_DEPTH_SHARE`` of its size behind its front (a mesher's invented loop or prong no longer stands off the band).
+ACCESSORY_VERSION = 5
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -530,7 +532,7 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]
     return out
 
 
-#: A225 — the pendant's gates on the body: its longest side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
+#: A225 — the pendant's gates on the body: its longer front side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
 #: ``PENDANT_MAX_PUSH_MM`` off its cord and nothing inside the body in any ``accessory_pendant.TEST_POSES`` pose.
 SIZE_TOLERANCE = 0.05
 #: How far the pendant may be pushed off its cord to clear the body (a pendant too long for the drop meets the
@@ -557,7 +559,10 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     from app.core.garment_shell import top4_weights
     from app.core.rig_contract import norm_bone_name
     a = anchor_index(curve)
-    Vn = accessory_pendant.normalise(pendant["V"], size_mm, flip)
+    outline = accessory_pendant.front_reason(pendant["V"], pendant.get("front_ratio"))
+    if outline:
+        raise ValueError(outline)
+    Vn = accessory_pendant.normalise(pendant["V"], size_mm, flip, pendant.get("front_ratio"))
     Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
     # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
     n = np.asarray(outward[a], np.float64)
@@ -569,9 +574,9 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     sides = len(J) // len(curve)
     Jp = np.repeat(J[a * sides][None], len(V), 0)
     Wp = np.repeat(W[a * sides][None], len(V), 0)
-    # The longest side in the pendant's own frame (its box turned back): the size the user set.
+    # The longer front side in the pendant's own frame (its box turned back): the size the user set.
     local = (V - hang) @ R
-    measured = float((local.max(0) - local.min(0)).max()) * 1000.0
+    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
     if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
         raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
     # The body posed with its own skin: dense weights reduced to four per vertex.
@@ -1336,6 +1341,10 @@ def curve_point_at(curve: np.ndarray, deg: float) -> int:
 
 #: ``attach_part``: the AABB overlap (m, on every axis) at which two parts count as one on top of the other.
 PART_OVERLAP_M = 0.001
+#: ``attach_part``: a FLAT part keeps at most this share of its size as depth behind its front — it lies on the band
+#: like a buckle frame; what a mesher invented behind it (the strap loop, the prong, a bail) is pressed into that
+#: depth (50 mm buckle → 10 mm). A hanging part keeps its depth (it hangs free, ``place`` clears the body).
+FLAT_DEPTH_SHARE = 0.20
 #: How a part's role reads in its overlap reason.
 PART_WORDS = {"buckle": "buckle", "pendant": "pendant", "charm": "charm"}
 
@@ -1346,7 +1355,8 @@ def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray
     """A linked part (plan-anhaenger, design G) placed by its link on the band whose centre line is ``curve``: at the
     curve point ``curve_point_at(link.at_deg)``, turned to face the horizontal outward direction there.
 
-    ``flat``: centred on that point, its back ``thickness / 2 + 0.5 mm`` out (on the band), no push. ``hang``: its top
+    ``flat``: centred on that point, its back ``thickness / 2 + 0.5 mm`` out (on the band), no push; deeper than
+    ``FLAT_DEPTH_SHARE`` of its size, what lies further behind its front is pressed onto that depth. ``hang``: its top
     centre at the same distance out and ``drop_cm`` lower, hung through ``accessory_pendant.place`` against ``Fw`` (the
     whole welded body — the rest pose, as the necklace's pendant), at most ``PENDANT_MAX_PUSH_MM`` off its point.
     Rigid with the band's skin at the nearest band vertex; the test poses judge it against the outer wall ``Fo``
@@ -1360,11 +1370,20 @@ def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray
     c = C.mean(0)
     h = np.array([at[0] - c[0], 0.0, at[2] - c[2]])
     h = h / np.linalg.norm(h) if np.linalg.norm(h) > 1e-9 else np.array([0.0, 0.0, 1.0])
-    Vn = accessory_pendant.normalise(mesh["V"], size_mm, flip)
-    local = Vn.copy()
+    outline = accessory_pendant.front_reason(mesh["V"], mesh.get("front_ratio"))
+    if outline:
+        raise ValueError(outline)
+    Vn = accessory_pendant.normalise(mesh["V"], size_mm, flip, mesh.get("front_ratio"))
     off = float(thickness) / 2 + 0.0005
     mount = link.get("mount") or "flat"
     how: Dict[str, Any] = {}
+    raw_depth = float(Vn[:, 2].max())         # back at z 0 after ``normalise``, front at the top
+    if mount != "hang":
+        cap = FLAT_DEPTH_SHARE * float(size_mm) / 1000.0
+        if raw_depth > cap:
+            Vn[:, 2] = np.maximum(Vn[:, 2], raw_depth - cap) - (raw_depth - cap)
+            how["depth_cut_from_mm"] = round(raw_depth * 1000.0, 2)
+    local = Vn.copy()
     if mount == "hang":
         anchor = at + h * off - np.array([0.0, float(link.get("drop_cm") or 0.0) / 100.0, 0.0])
         Vp, how = accessory_pendant.place(Vn, anchor, h, Pw, Fw)
@@ -1384,7 +1403,7 @@ def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray
     kv = int(np.argmin(np.linalg.norm(np.asarray(V, np.float64) - anchor, axis=1)))
     hung = _rigid_part(Vp, mesh, J[kv], W[kv], rigged, body, dense, Pw, Fo, first, None,
                        PART_WORDS.get(link.get("role"), "part"))
-    measured = float((local.max(0) - local.min(0)).max()) * 1000.0
+    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
     if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
         raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
     hung["metrics"].update({"size_mm": round(measured, 2), "anchor": [round(float(x), 5) for x in anchor],
@@ -1448,7 +1467,8 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             V, F, _N = ab.torus(top - up * major, axis, major, wire)
         elif style == "drop" and part is not None:
             from app.core.accessory_spec import image_part_mm
-            Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0))
+            Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0),
+                                             front_ratio=part.get("front_ratio"))
             # front (+Z) turned to face out to the side; top centre just under the lobe
             R = accessory_pendant._rot_y(np.pi / 2 if side == "left" else -np.pi / 2)
             # its back (z 0 after ``normalise``) turned to face the head, beside the skin it hangs past

@@ -37,6 +37,16 @@ Expected values, derived by hand:
     (0.15, 0.98, 0), outward (1, 0, 0).
 [6] two parts at the front (30 × 40 mm boxes): the second has ``part_errors[1]`` "it overlaps the buckle" (after a
     buckle) and "it overlaps the charm" (after a charm); the first is placed; nothing raises.
+[8] a flat buckle whose mesher put a long prong behind it (review finding, run 1 / run 2): frame 50 × 40 × 6 mm + prong
+    4 × 4 × 60 mm behind (extents 50 × 40 × 66), image 50 : 40 → ``front_ratio`` 1.25, size 50, at the front of [1]'s
+    circle, band thickness 0.004. ``orient`` keeps z as the depth (smoke_accessory_pendant [G3c]); the size is the front
+    (50 mm, factor 1). ``FLAT_DEPTH_SHARE`` 0.20 · 50 = 10 mm: everything deeper than 10 mm behind the front (z 66 in
+    the normalised part) is pressed onto it → depth 10 mm, ``depth_cut_from_mm`` 66.0. On the band: back at
+    0.15 + 0.002 + 0.0005 = 0.1525, front at 0.1625; width (x) 0.050, height (y) 0.040 — the frame faces out, not
+    turned on its side. Metrics: ``size_mm`` 50.0, ``depth_mm`` 10.0.
+[8b] the same as a HANGING charm keeps its depth (no cut; ``depth_cut_from_mm`` absent): ``depth_mm`` 66.0.
+[8c] the same mesh with an image of 3 : 1 → no turn shows it (best |ln(1.65/3)| = 0.598 > ln 1.35) → ValueError naming
+    the outline, before any placement.
 """
 import sys
 from pathlib import Path
@@ -202,6 +212,46 @@ check("[7] buckle at the front", anchors[0] == {"index": 0, "role": "buckle", "a
                                                 "out": [0.0, 0.0, 1.0]}, str(anchors[0]))
 check("[7] charm at the left hip, 2 cm down", anchors[1] == {"index": 1, "role": "charm", "at": [0.15, 0.98, 0.0],
                                                              "out": [1.0, 0.0, 0.0]}, str(anchors[1]))
+
+print("[8] a flat buckle with a prong behind it")
+
+
+def frame_prong(ratio):
+    a, b = box(0.050, 0.040, 0.006), box(0.004, 0.004, 0.060)
+    V = np.vstack([a["V"], b["V"] + [0.0, 0.0, -0.033]])
+    F = np.vstack([a["F"], b["F"] + len(a["V"])])
+    return {"V": V, "F": F, "UV": np.zeros((len(V), 2)), "image": b"", "mime": "", "material": {},
+            "front_ratio": ratio}
+
+
+def attach_fp(lk, ratio=1.25):
+    J = np.zeros((len(C), 4), np.int64)
+    W = np.zeros((len(C), 4))
+    W[:, 0] = 1.0
+    return ab.attach_part(b"", BODY, None, PW, FW, FO, None, C, C, J, W, lk, frame_prong(ratio), 50.0, False, 0.004,
+                          [])
+
+
+h = attach_fp({**link(role="buckle"), "size_mm": 50.0})
+V = h["V"]
+e = V.max(0) - V.min(0)
+check("[8] back at z 0.1525", abs(float(V[:, 2].min()) - 0.1525) < 1e-6, f"{V[:, 2].min():.6f}")
+check("[8] front at z 0.1625 (10 mm deep)", abs(float(V[:, 2].max()) - 0.1625) < 1e-6, f"{V[:, 2].max():.6f}")
+check("[8] faces out: 50 wide, 40 high", abs(float(e[0]) - 0.050) < 1e-6 and abs(float(e[1]) - 0.040) < 1e-6,
+      str(np.round(e, 5)))
+m = h["metrics"]
+check("[8] metrics", (m["size_mm"], m["depth_mm"], m.get("depth_cut_from_mm")) == (50.0, 10.0, 66.0),
+      str((m["size_mm"], m["depth_mm"], m.get("depth_cut_from_mm"))))
+print("[8b] hanging keeps its depth")
+h = attach_fp({**link(role="charm", mount="hang"), "size_mm": 50.0})
+check("[8b] depth 66, no cut", (h["metrics"]["depth_mm"], "depth_cut_from_mm" in h["metrics"]) == (66.0, False),
+      str((h["metrics"]["depth_mm"], h["metrics"].get("depth_cut_from_mm"))))
+print("[8c] an outline no turn shows")
+try:
+    attach_fp({**link(role="buckle"), "size_mm": 50.0}, ratio=3.0)
+    check("[8c] refused", False, "no error")
+except ValueError as err:
+    check("[8c] refused", "outline does not match the image" in str(err), str(err))
 
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 sys.exit(1 if FAILS else 0)
