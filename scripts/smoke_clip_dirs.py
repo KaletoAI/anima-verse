@@ -192,7 +192,7 @@ def test_listing() -> None:
     check("the payload shape",
           set(data) == {"clips", "alt_clips", "kinds", "pair_kinds", "pairs", "groups", "clip_sets",
                         "sets", "movement_poses", "transitions", "transition_clips",
-                        "revision"},
+                        "pose_groups", "revision"},
           str(sorted(data)))
     check("per-clip fields",
           set(data["clips"][0]) == {"kind", "role", "set", "source", "library",

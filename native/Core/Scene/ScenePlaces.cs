@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AnimaNative.Orders;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.World;
@@ -38,6 +39,13 @@ public sealed class PlaceEntry
     public int Level { get; init; }
     /// <summary>The storey-0 terrain lift baked into the slot heights (moved by the re-lift).</summary>
     public double Lift { get; set; }
+    /// <summary>
+    /// The marker's access points (`markers[].access`, role → point) in WORLD metres: tile-local x/z through the frame,
+    /// the composed floor y plus the same terrain lift as the slots, the compass yaw turned by the frame's yaw. Moved
+    /// with the slots by <see cref="PlaceInventory.Relift"/>. Empty when the payload names none.
+    /// </summary>
+    public IReadOnlyDictionary<string, OrderPoint> Access => AccessPoints;
+    internal Dictionary<string, OrderPoint> AccessPoints { get; init; } = new(StringComparer.Ordinal);
     /// <summary>Where that lift is sampled, world xz (<c>markerLiftPoint</c> through the tile frame at the mount).</summary>
     public P2 LiftAt { get; init; }
     /// <summary>A prop marker's placement anchor as the payload states it (tile-local); null for a room marker.</summary>
@@ -222,6 +230,11 @@ public sealed class PlaceInventory
                 Slots = m.Slots.Select(s => SceneView.TileToWorld(frame, s.X, s.Z, m.YWorld - drop + markerLift)).ToArray(),
                 Rotation = m.Facing, Tilt = m.Tilt, Roll = m.Roll, Drop = drop, OffsetY = offsetY, Fixed = isFixed,
                 Diorama = m.Diorama, Level = level, Lift = markerLift, LiftAt = new P2(liftAt.X, liftAt.Z), Anchor = m.Anchor,
+                AccessPoints = m.Access.ToDictionary(kv => kv.Key, kv =>
+                {
+                    var w = SceneView.TileToWorld(frame, kv.Value.X, kv.Value.Z, kv.Value.Y + markerLift);
+                    return new OrderPoint(w.X, w.Y, w.Z, WrapDeg(kv.Value.Yaw + frame.Yaw * 180.0 / Math.PI));
+                }, StringComparer.Ordinal),
             };
         }
         return inv;
@@ -276,6 +289,7 @@ public sealed class PlaceInventory
             {
                 if (!e.Fixed) continue;
                 for (int i = 0; i < e.Slots.Length; i++) e.Slots[i] = e.Slots[i] with { Y = e.Slots[i].Y + datumDelta };
+                ShiftAccess(e, datumDelta);
             }
         }
         bool seatsMoved = false;
@@ -286,6 +300,7 @@ public sealed class PlaceInventory
             if (step.Delta != 0)
             {
                 for (int i = 0; i < e.Slots.Length; i++) e.Slots[i] = e.Slots[i] with { Y = e.Slots[i].Y + step.Delta };
+                ShiftAccess(e, step.Delta);
                 seatsMoved = true;
             }
             e.Lift = step.Lift;
@@ -312,6 +327,23 @@ public sealed class PlaceInventory
     }
 
     private static double At(double[] v, int i) => i < v.Length ? v[i] : 0;
+
+    /// <summary>Raises every access point of <paramref name="e"/> by <paramref name="dy"/> (the slots' re-lift).</summary>
+    private static void ShiftAccess(PlaceEntry e, double dy)
+    {
+        foreach (var role in e.AccessPoints.Keys.ToList())
+        {
+            var p = e.AccessPoints[role];
+            e.AccessPoints[role] = p with { Y = p.Y + dy };
+        }
+    }
+
+    /// <summary>Degrees into (−180, 180].</summary>
+    private static double WrapDeg(double degrees)
+    {
+        double v = ((degrees + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+        return v == -180.0 ? 180.0 : v;
+    }
 
     /// <summary>three's <c>Vector2.normalize</c>: divide by the length, a zero vector stays zero (<c>/ (length || 1)</c>).</summary>
     private static P2 Normalize(double x, double z)

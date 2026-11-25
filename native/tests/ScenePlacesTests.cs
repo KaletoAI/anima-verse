@@ -299,4 +299,32 @@ public class ScenePlacesTests
         Assert.Empty(SceneProblems.Announce("loc-3", null, spent));
         Assert.Equal(4, spent.Count);
     }
+
+    /// <summary>
+    /// The marker's `access` (plan E3 task 3): a copy of the nav scene (native/fixtures/nav/scene_loc-nav.json, frame
+    /// (100, 0, 0), yaw 0, flat ground 0 → TileToWorld(lx, lz, ly) = (100 + lx, ly, lz), no lift) with an armchair seat
+    /// whose `access.actor` is local (−3, 0, −1.45), yaw 0, and a bed without access. → world (97, 0, −1.45), yaw 0 + 0;
+    /// the bed's map is empty.
+    /// </summary>
+    [Fact]
+    public void MarkerAccessParsed()
+    {
+        string? path = null;
+        for (var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory); dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = System.IO.Path.Combine(dir.FullName, "native", "tests", "Vectors", "scene_marker_access.json");
+            if (System.IO.File.Exists(candidate)) path = candidate;
+        }
+        Assert.NotNull(path);
+        var scene = ScenePayload.Parse(JsonDocument.Parse(System.IO.File.ReadAllText(path!)).RootElement);
+        var inv = PlaceInventory.Compose(scene, new TileFrame(new Vec3(100, 0, 0), 0), null, (_, _) => 0);
+        var seat = inv.Markers["r-a"]["armchair-seat"];
+        Assert.Equal(new[] { "actor" }, seat.Access.Keys.ToArray());
+        var a = seat.Access["actor"];
+        Assert.Equal(97, a.X, 9);
+        Assert.Equal(0, a.Y, 9);
+        Assert.Equal(-1.45, a.Z, 9);
+        Assert.Equal(0, a.YawDeg, 9);
+        Assert.Empty(inv.Markers["r-b"]["bed-body"].Access);
+    }
 }

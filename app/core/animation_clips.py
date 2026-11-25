@@ -832,6 +832,17 @@ def resolve_pose_transition(from_pose: Any, to_pose: Any) -> Optional[Dict[str, 
     return rule
 
 
+def pose_rule_groups() -> Dict[str, str]:
+    """``{pose key: group}`` for every catalog pose whose group a rule may name
+    (``@stand`` · ``@seat`` · ``@ground`` · ``@lie``) — the group step of
+    :func:`resolve_pose_transition`, handed to the clients in the listing so the
+    native client resolves entry and exit bridges by the same rule
+    (``PoseTransitions``)."""
+    from app.core.pose_catalog import get_catalog
+    return {key: entry["group"] for key, entry in get_catalog("pose").items()
+            if entry.get("group") in _RULE_GROUPS}
+
+
 def save_transitions(entries: Any,
                      path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Validate both stores before writing the shared seed and whole world layer."""

@@ -2550,7 +2550,13 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   Every server exit lookup goes through it — `exit_clip` of a departure, of a
   prop-action cancel, and the stand point of `room_stand`. The client resolver
   is unchanged: pose keys never equal `@seat` etc., and these server entry
-  targets do not expand into client clip rules.
+  targets do not expand into client clip rules. For prop-action phases the
+  native client resolves the POSE rules itself (plan E3 decision 14,
+  `AnimaNative.Orders.PoseTransitions`, vector
+  `shared/test-vectors/pose_transition.json`): the listing's `transitions`
+  plus `pose_groups` (`{pose: stand|seat|ground|lie}`,
+  `animation_clips.pose_rule_groups`) in the order of
+  `resolve_pose_transition` — entry `walking -> pose`, exit `pose -> standing`.
 - **Brücke aus einer Paar-Pose** (2026-11-02, Folge-Pose F2,
   plan-folge-pose.md): Nach einem Paar hält ein Renderer die gespielte
   Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (client3d
@@ -8669,7 +8675,16 @@ no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `d
 without an actor position — the player panel lists an action once and lets the player
 pick among the pieces offering it, nearest first), `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
 (per-partner `{partner,enabled,reason}`), `ability` (`pose`/`combined`/`pair`/`sleep`/…), `participants`
-(the head count, actor included) and declared `effects`. A GROUP action (`participants` 3..5, G4 of
+(the head count, actor included) and declared `effects`. For the client that starts walking before the
+server answers (plan E3, spec 5e) each row also carries only values the preflight already computed
+(`prop_actions._entry_fields`): `entry_pose_key` (the pose the entry bridge plays into — a combined action's
+first phase; the client resolves the clip with its `PoseTransitions`), `entry_mode` (`bridge`/`direct` of the
+actor's successful plan, `""` without one), `pair_yaw_deg` (a pair: `places.pair_yaw` of the planned place in
+degrees, else `null`) and `role_point` (`{x, z}`, a pair sharing ONE place: the actor's clip role point =
+its entry anchor, else `null`). Without a marker `access` override the client computes the automatic access
+itself — the body slot minus the entry travel turned by the facing and scaled by `bridge_scale`
+(`AnimaNative.Orders.AccessAuto`, vector `shared/test-vectors/access_auto.json`); a marker's `access` is
+parsed per role into world metres (`PlaceEntry.Access`). A GROUP action (`participants` 3..5, G4 of
 plan-gruppen-animationen.md) is offered once per piece with `required_partner` true, no
 `available_targets` and `candidates` — the people in the room the player may pick (awake persons, minus
 those a package rules out for a "policy" action; busy ones stay pickable). `participants` is the MOST

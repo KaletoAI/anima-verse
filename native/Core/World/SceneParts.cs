@@ -40,7 +40,15 @@ public sealed record SceneMarker(
     /// <summary>The prop anchor a prop marker lifts with (<c>markerLiftPoint</c>); null for a room marker.</summary>
     public P2? Anchor { get; init; }
     public bool Diorama { get; init; }
+    /// <summary>
+    /// The marker's access points (scene_recipe: `access`, role → {x, y, z, yaw}): tile-local x/z, the composed floor y,
+    /// compass yaw in degrees, tile-local like every payload angle. Empty when the payload names none.
+    /// </summary>
+    public IReadOnlyDictionary<string, SceneMarkerAccess> Access { get; init; } = new Dictionary<string, SceneMarkerAccess>();
 }
+
+/// <summary>One role's access point of a marker, as the payload states it (tile-local, floor height, compass yaw).</summary>
+public sealed record SceneMarkerAccess(double X, double Y, double Z, double Yaw);
 
 /// <summary>§ B1 <c>doorways[]</c>: one threshold (door or passage) between rooms or to the outside.</summary>
 public sealed record SceneDoorway(
@@ -168,8 +176,26 @@ public static class SceneJson
     {
         RootOffset = Json.NumOrNull(m, "root_offset"), Facing = Json.NumOrNull(m, "facing"),
         Tilt = Json.NumOrNull(m, "tilt"), Roll = Json.NumOrNull(m, "roll"),
-        Anchor = PtOrNull(m, "anchor"), Diorama = Json.Bool(m, "diorama"),
+        Anchor = PtOrNull(m, "anchor"), Diorama = Json.Bool(m, "diorama"), Access = MarkerAccess(m),
     };
+
+    /// <summary>
+    /// `markers[].access`: role → point. A role whose x, y or z is not a finite number is dropped; a missing yaw is 0.
+    /// </summary>
+    private static Dictionary<string, SceneMarkerAccess> MarkerAccess(JsonElement m)
+    {
+        var access = new Dictionary<string, SceneMarkerAccess>(StringComparer.Ordinal);
+        if (!m.TryGetProperty("access", out var a) || a.ValueKind != JsonValueKind.Object) return access;
+        foreach (var role in a.EnumerateObject())
+        {
+            var p = role.Value;
+            if (p.ValueKind != JsonValueKind.Object) continue;
+            if (Json.NumOrNull(p, "x") is not double x || Json.NumOrNull(p, "y") is not double y
+                || Json.NumOrNull(p, "z") is not double z) continue;
+            access[role.Name] = new SceneMarkerAccess(x, y, z, Json.NumOrNull(p, "yaw") ?? 0);
+        }
+        return access;
+    }
 
     public static SceneDoorway Doorway(JsonElement d) => new(
         (int)Json.Num(d, "level"), Pt(d, "at_world"), Pt(d, "along"), Json.Str(d, "type", "door"),
