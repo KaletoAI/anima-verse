@@ -339,7 +339,9 @@ explicit tools/movement/stop remain authoritative. Controller coverage uses
 The free-mode agent (`app/core/world_dev_agent.py`) renders `system.md` once per run
 (`world_setup_block` first, then role, task loop, token rules, compass, call format,
 `tool_list` and `manual_sections`). The model reads the field rules on demand through
-the `read_manual` tool (`world_dev_tools`), which renders one section without variables:
+the `read_manual` tool (`world_dev_tools`), which renders one section — without variables,
+except `manual_characters.md`, which gets `character_templates` (`[{name, label, outfits}]`
+of the templates `create_character` offers):
 
 | Template | Purpose |
 |---|---|
