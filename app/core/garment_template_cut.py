@@ -25,6 +25,9 @@ The CUT SIGNATURE (``cut_sig``) is exactly what the cut reads (derived from ``ga
   (the fitted kinds' parts, rows, ring strips, direct solves) leave a top's islands byte-identical, and keying the top
   on the whole file re-draped every top once for nothing (decision D7 b).
 
+Of the drape key's ``body:`` token only the attached parts (``garment_template.cut_body_colliders``; the cut run is
+handed them) — a tip's sphere joins the drape's collider after the pattern UVs.
+
 NOT in it: the views / item picture (the drape key's texture part), ``fabric``, ``opacity``, ``texture``,
 ``sleeve_print``, ``fly``, the drape's frames / quality / poses / shape groups.
 
@@ -181,7 +184,13 @@ def sig_of(character_name: str, item_id: str, params: Dict[str, Any], *, base_sh
         return None, WAITING_LOWER, []
     under = gt.under_tokens(character_name, item_id, params, base_sha=base_sha, lower=lower, item=item,
                             states=states)
-    tokens = under + [f"collider:{other}" for other, _it, sub in states if sub["state"] == "ready"]
+    # plan anatomy (H3): of the drape's ``body:`` token the cut reads only the attached parts
+    # (``garment_template.cut_body_colliders``); a tip joins the drape's collider after the pattern UVs
+    tokens = [t for t in under if not t.startswith(gt.BODY_TOKEN_PREFIX)]
+    part_token = gt.body_token(gt.cut_body_colliders(character_name, item_id, lower, base_sha=base_sha))
+    if part_token:
+        tokens.append(part_token)
+    tokens += [f"collider:{other}" for other, _it, sub in states if sub["state"] == "ready"]
     if own_mode is None:
         own_mode = gt.own_fallback_mode(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
     if own_mode in gt.OWN_FALLBACK_MODES and any(":fit:" in t for t in under):
@@ -324,7 +333,8 @@ def marks_due(params: Optional[Dict[str, Any]], record: Dict[str, Any], marks: P
 def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir: Path,
                 colliders: Optional[List[Tuple[Path, Any]]] = None, own: Optional[List[Tuple[Path, Any]]] = None,
                 over_sleeves: bool = False, timeout_s: int = CUT_TIMEOUT_S,
-                own_offset: float = 0.0, tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
+                own_offset: float = 0.0, tuck: Tuple[str, ...] = (),
+                body_colliders: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """ONE cut-only run of ``garment_template_build`` with the inputs a drape's attempt gets
     (``garment_template._run_drape_once`` / ``drape_with_fallback``: the template drapes under it, then the
     own-mesh fits at ``own_offset`` — 0 "full", ``INNER_SHRINK_M`` "shrunk"; "dropped" hands no ``own``; ``tuck`` the
@@ -341,6 +351,9 @@ def run_blender(body_glb: Path, params: Dict[str, Any], *, item_id: str, out_dir
     args = gt.build_args(params, spec, item_id=item_id, lower_shapes=[payload for _p, payload in cols],
                          lower_offsets=offsets)
     args["cut_only"] = True
+    if body_colliders:
+        # plan anatomy (H3): the attached parts the panels are laid round (``garment_template.cut_body_colliders``)
+        args["body_colliders"] = list(body_colliders)
     inputs = {"body": Path(body_glb)}
     for i, (path, _payload) in enumerate(cols):
         inputs[f"lower_{i}"] = Path(path)
@@ -410,7 +423,9 @@ def run(character_name: str, item_id: str) -> Dict[str, Any]:
         res = run_blender(shaped, params, item_id=item_id, out_dir=scratch / "run", colliders=colliders, own=own,
                           over_sleeves=gt.over_sleeved_layer(params["kind"], ready),
                           own_offset=gt.INNER_SHRINK_M if own_mode == "shrunk" else 0.0,
-                          tuck=gt.tuck_lines(params, lower))
+                          tuck=gt.tuck_lines(params, lower),
+                          body_colliders=gt.cut_body_colliders(character_name, item_id, lower,
+                                                               base_sha=key["base_sha"]))
         record: Dict[str, Any] = {"item_id": item_id, "cut_sig": sig, "params": params,
                                   "version": gt.TEMPLATE_VERSION, "uv_pattern": uv_pattern_key(params),
                                   "base_signature": base[0], "base_model_sha256": key["base_sha"], "lower": lower,

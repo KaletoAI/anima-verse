@@ -2589,17 +2589,33 @@ def body_colliders(character_name: str, item_id: str, lower: List[str], *, base_
     return sorted(out, key=lambda entry: entry["group"])
 
 
+def cut_body_colliders(character_name: str, item_id: str, lower: List[str], *, base_sha: str,
+                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The ``body_colliders`` the CUT of the piece reads (``garment_template_cut``): the attached parts only
+    (``radius`` None) — a part reaches centimetres out and the panels are laid round it. A tip's sphere joins the
+    drape's collider only after the pattern UVs (``garment_template_build._join_body_collider_late``), so it never
+    changes the islands. [] when no package declares a ``drape_collider``."""
+    if not any_drape_collider():
+        return []
+    return [c for c in body_colliders(character_name, item_id, lower, base_meta=base_meta_for(character_name, base_sha),
+                                      profile=profile) if c.get("radius") is None]
+
+
 def any_drape_collider() -> bool:
     """Whether any loaded package declares a ``drape_collider`` (else the key path reads no base sidecar)."""
     from app.plugins.registry import packages
     return any(rig.drape_collider for package in packages() for slot in package.body_slots for rig in slot.rigs)
 
 
+#: The prefix of the ``body:`` token (``body_token``); the cut sig leaves it out (``garment_template_cut.sig_of``).
+BODY_TOKEN_PREFIX = "body:"
+
+
 def body_token(colliders: List[Dict[str, Any]]) -> Optional[str]:
     """The ``body:`` token of ``under_tokens`` for ``body_colliders``; None for none."""
     if not colliders:
         return None
-    return "body:" + ",".join(f"{c['group']}:{c['inflate']}:{c['radius'] if c['radius'] is not None else '-'}"
+    return BODY_TOKEN_PREFIX + ",".join(f"{c['group']}:{c['inflate']}:{c['radius'] if c['radius'] is not None else '-'}"
                               for c in colliders) + f":v{BODY_COLLIDER_VERSION}"
 
 

@@ -39,8 +39,11 @@ COVERED, and the piece itself touches the group's ``covered_by``; token
   K6 the group set follows the stored base variant: base_meta mesh_variant "|mesh:pkgd.lower=on" -> groups G and
      Y apply, only G has a collider -> token G only; mesh_variant "" -> Y gone, G still (G does not hang on the
      switch) -> token G; Y never.
-  K7 ``garment_template_cut.sig_of`` keys the cut by the same tokens: TR's cut sig differs with and without the
-     ``drape_collider`` declaration.
+  K7 ``garment_template_cut.sig_of`` keeps of the ``body:`` token only the attached parts
+     (``garment_template.cut_body_colliders``): TR (the part G, radius None) -> its cut sig DIFFERS with and without
+     the declaration (the panels are laid round the part, the cut run is handed it); TL (only the tip T, a sphere,
+     joined after the pattern UVs by ``garment_template_build._join_body_collider_late``) -> its cut sig is the SAME
+     with and without (a texture from cut is reused), while its drape key differs (K5).
 """
 import json
 import os
@@ -164,10 +167,16 @@ def main():
               and [e["group"] for e in gt.body_colliders("Smoke", "TR", [], base_meta=meta_off)] == ["G"],
               f"K6 groups on {on} / off {off}: token G both times, Y never")
         from app.core import garment_template_cut as cut
-        with_sig = cut.sig_of("Smoke", "TR", gt.params_of(items["TR"]), base_sha="b1", lower=[], item=items["TR"])[0]
+
+        def cut_sig(iid):
+            return cut.sig_of("Smoke", iid, gt.params_of(items[iid]), base_sha="b1", lower=[], item=items[iid])[0]
+        with_tr, with_tl = cut_sig("TR"), cut_sig("TL")
+        parts_tl = gt.cut_body_colliders("Smoke", "TL", [], base_sha="b1")
         load(False)
-        without_sig = cut.sig_of("Smoke", "TR", gt.params_of(items["TR"]), base_sha="b1", lower=[], item=items["TR"])[0]
-        check(with_sig and without_sig and with_sig != without_sig, f"K7 cut sig follows the token ({with_sig} vs {without_sig})")
+        without_tr, without_tl = cut_sig("TR"), cut_sig("TL")
+        check(with_tr and without_tr and with_tr != without_tr, f"K7 TR cut sig follows the part ({with_tr} vs {without_tr})")
+        check(with_tl and without_tl and with_tl == without_tl and parts_tl == [],
+              f"K7 TL cut sig ignores the tip sphere ({with_tl} vs {without_tl}, cut colliders {parts_tl})")
     if FAILS:
         print(f"FAILED: {len(FAILS)}")
         sys.exit(1)
