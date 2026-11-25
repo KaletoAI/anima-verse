@@ -1,0 +1,10 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "scripts/smoke_access_auto.py",
+  "cases": [
+    {"label":"[1] yaw 90, 170 cm figure on a 1.70 m clip: scale 1, access 0.6 m west of the slot","fn":"accessAuto","args":[{"x":2,"y":0,"z":3,"yaw":90},0,0.6,170,1.7],"expect":{"x":1.4,"y":0,"z":3,"yaw":90}},
+    {"label":"[2] yaw 90, 153 cm figure: scale 0.9, access 0.54 m west of the slot","fn":"accessAuto","args":[{"x":2,"y":0,"z":3,"yaw":90},0,0.6,153,1.7],"expect":{"x":1.46,"y":0,"z":3,"yaw":90}},
+    {"label":"[3] yaw 0, 170 cm figure: access 0.6 m north of the slot","fn":"accessAuto","args":[{"x":2,"y":0,"z":3,"yaw":0},0,0.6,170,1.7],"expect":{"x":2,"y":0,"z":2.4,"yaw":0}},
+    {"label":"[4] unknown height: scale 1, as [1]","fn":"accessAuto","args":[{"x":2,"y":0,"z":3,"yaw":90},0,0.6,null,1.7],"expect":{"x":1.4,"y":0,"z":3,"yaw":90}}
+  ]
+}

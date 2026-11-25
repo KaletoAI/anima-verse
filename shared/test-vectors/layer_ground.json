@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_layer_cut.mjs",
+  "source": "native/tests/Derivations/layer_cut.md",
   "fixtures": {
     "INPUT_1": {
       "tile_m": 1,

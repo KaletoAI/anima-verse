@@ -3,7 +3,7 @@
  * scene, composer, attachments, scene-photo flow, party invites). Extracted
  * from the former 2D player (plan-3d-game stage 2, task 3).
  *
- * Contract of the cut: the host (today the 3D HUD, `client3d/src/hud/Hud.tsx`)
+ * Contract of the cut: the host (today the 3D HUD, `hud/src/hud/Hud.tsx`)
  * keeps the ONE `/play/scene` poll, the capability derivation and the outer
  * panel chrome. This component owns the inner body: data and
  * refresh come in via props, actions (say, photo, gift, follow, party

@@ -562,6 +562,38 @@ def bleed_streaks(atlas, islands, bleed_px: int) -> dict:
     return {"ring": n, "light": light, "dark": dark, "share": share, "limit": STREAK_SHARE, "ok": share <= STREAK_SHARE}
 
 
+#: ``narrow_overhang`` (review round 2026-11-25): an island narrower than this (twice its largest inner distance to
+#: the background) has its overhang filled from itself. Lirien's cupped top, live: the two upper cup parts (15 x 4 cm)
+#: carried a light rim from the image model into the ring round them — 25-30 % of their ring were streaks, the atlas
+#: 2.07 % (``STREAK_SHARE`` 1 %); every wider island stayed at 3 % or less.
+NARROW_ISLAND_CM = 5.0
+
+
+def narrow_overhang(atlas, labels, px_per_cm: float, reach_px: int) -> tuple[np.ndarray, dict]:
+    """The composed atlas with the ring round every NARROW island (``NARROW_ISLAND_CM``; ``labels``: the island raster,
+    0 = background) taken from the island itself: each ring pixel within ``reach_px`` whose nearest island pixel
+    belongs to a narrow island gets that pixel's colour (exact Euclidean distance transform) — what a bilinear sample or
+    a mip level at its border mixes in is then the island's own cloth. Texture post-processing only: no key changes.
+    Returns ``(atlas, {"islands": [ids], "px": n})``."""
+    from scipy import ndimage
+
+    out = np.asarray(atlas).copy()
+    labels = np.asarray(labels)
+    isl = labels > 0
+    if not isl.any() or px_per_cm <= 0 or reach_px <= 0:
+        return out, {"islands": [], "px": 0}
+    inner = ndimage.distance_transform_edt(isl)
+    ids = [int(i) for i in np.unique(labels[isl])]
+    widest = ndimage.maximum(inner, labels, ids)
+    narrow = [i for i, w in zip(ids, np.atleast_1d(widest)) if 2.0 * float(w) < NARROW_ISLAND_CM * px_per_cm]
+    if not narrow:
+        return out, {"islands": [], "px": 0}
+    dist, (iy, ix) = ndimage.distance_transform_edt(~isl, return_indices=True)
+    sel = ~isl & (dist <= float(reach_px)) & np.isin(labels[iy, ix], narrow)
+    out[sel] = out[iy[sel], ix[sel]]
+    return out, {"islands": narrow, "px": int(sel.sum())}
+
+
 def fill_pockets(img, filled, reach_px: int) -> tuple[np.ndarray, np.ndarray]:
     """The composed atlas with its background pockets filled: every pixel outside ``filled`` (islands + bleed) that
     lies within ``reach_px`` of it, or in a hole ``filled`` encloses, takes the colour of its nearest ``filled`` pixel

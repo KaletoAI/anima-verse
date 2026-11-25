@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_embody_vectors.mjs",
+  "source": "native/tests/Derivations/embody_vectors.md",
   "cases": [
     {"label": "[31] a hit at the bench end -> the bench", "fn": "pickablePlaceFor",
       "args": [{"x": 0.2, "z": 0}, [{"id": "b1/seat1", "free": [{"x": 0, "z": 0}, {"x": 0.6, "z": 0}]}, {"id": "b1/seat2", "free": [{"x": 2, "z": 0}]}]], "expect": "b1/seat1", "eps": 1e-09},

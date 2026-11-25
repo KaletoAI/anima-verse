@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_bench_math.mjs",
+  "source": "native/tests/Derivations/bench_math.md",
   "fixtures": {
     "S": [
       { "dt": 0.01, "cpuMs": 2, "gpuMs": null, "calls": 100, "tris": 1000 },

@@ -225,6 +225,9 @@ export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gr
 export interface SecondaryMotionPayload {
   rev: string
   groups: Record<string, MotionGroup>
+  /** Poses a state names that do not apply because clothing covers the group (`requires: exposed`); `by` = the
+   *  covering pieces ([] = a free-text outfit). Display only — `groups` already carries the effect. */
+  held?: Record<string, { pose: string; state: 'covered' | 'hidden'; by: string[] }>
 }
 export interface SecondaryMotion {
   configure(payload?: SecondaryMotionPayload): void

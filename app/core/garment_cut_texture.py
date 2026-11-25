@@ -1130,12 +1130,15 @@ def _islands_of(pattern: dict) -> dict:
 def prompt_kind(params: dict | None) -> str:
     """The prompt kind of template ``params``: the template kind, "strapless" for a corset top (strapless or, round
     2026-11-25, with straps: cut by ``wrap`` into a front and a back panel, group B, the straps their own small
-    pieces) — "" without parameters. Every csig of a piece is keyed by it (``prompt_sha_of``): the record's and the
-    one ``garment_template.cut_info`` looks the atlas up with."""
+    pieces) — "" without parameters; round 2026-11-25: "bra" for a top with cups (``garment_template.build_kind``: cut
+    as a bra, cups, gore, band and straps). Every csig of a piece is keyed by it (``prompt_sha_of``): the record's and
+    the one ``garment_template.cut_info`` looks the atlas up with."""
+    from app.core import garment_template as gt
     params = params or {}
-    if params.get("kind") == "top" and params.get("shoulders") in ("strapless", "straps"):
+    kind = gt.build_kind(params)
+    if kind == "top" and params.get("shoulders") in ("strapless", "straps"):
         return "strapless"
-    return str(params.get("kind") or "")
+    return kind
 
 
 def item_kind(item_id: str) -> str:
@@ -1276,6 +1279,17 @@ def piece_name(item_id: str) -> str:
     return piece_name_of(gt.params_of(get_item(item_id)) or {})
 
 
+#: Round 2026-11-25: a top with cups is named a "bustier top" from this length on, else a "crop top". On the 1.70 m
+#: reference body the natural waist lies 0.33-0.35 m under the shoulder line (``garment_template.TOP_HIP_REACH_M``);
+#: the length counts from the shoulder line + ``SHOULDER_TOP_M`` 0.045 -> 0.375-0.395 reaches the waist, where the
+#: band's hem is held (``garment_template.fitted_spec``); the low end is taken. By the length alone, never the body,
+#: so the name (and a prompt with it) does not move with the body.
+CUPPED_BUSTIER_LENGTH_M = 0.375
+#: The word of a cupped top's cup style in its name.
+CUPPED_STYLE_WORDS = {"balconette": "balconette", "triangle": "triangle-cup", "molded": "molded-cup",
+                      "bandeau": "bandeau"}
+
+
 def piece_name_of(params: dict) -> str:
     """The English name of a piece from its template params: a top by its sleeve length (a strapless one: "corset top" /
     "strapless top"), a skirt by its flare and length (group B), a jacket by its collar, fabric and front, a dress by
@@ -1283,6 +1297,11 @@ def piece_name_of(params: dict) -> str:
     tights by style and foot; trousers by length and leg)."""
     p = params or {}
     kind = str(p.get("kind") or "garment")
+    if kind == "top" and p.get("cups") == "bra":
+        # round 2026-11-25: a top with cups, by its cup style and its length (``CUPPED_BUSTIER_LENGTH_M``)
+        style = CUPPED_STYLE_WORDS.get(str(p.get("cup_style") or ""), "molded-cup")
+        long_ = float(p.get("length_m", 0.5)) >= CUPPED_BUSTIER_LENGTH_M
+        return f"{style} {'bustier' if long_ else 'crop'} top"
     if kind == "top" and p.get("shoulders") == "straps":
         # round 2026-11-25: a top with straps is a corset top's shell with two straps
         return "corset top with shoulder straps"
@@ -2146,6 +2165,10 @@ def _finish(character_name: str, item_id: str, record: dict, parts: dict, result
         if record.get("sleeve_print") != "picture":
             # stage "layers": the trims the item text gives a colour of their own (``trim_style``)
             atlas, record["trim_paint"] = paint_trims(atlas, islands, size, ppc, record.get("trim_style"))
+        if ppc > 0:
+            # review round 2026-11-25: a narrow island's overhang is its own cloth (``narrow_overhang``)
+            atlas, record["narrow_overhang"] = cut_texture_post.narrow_overhang(
+                atlas, rasterise_islands(islands, size), ppc, max(1, int(round(cut_texture_post.POCKET_CM * ppc))))
         seam = cut_texture_post.seam_continuity(atlas, islands.get("seams") or [])
         cross = cut_texture_post.seam_continuity(atlas, cross_seams(islands))
         record.update({"state": "ready", "reason": "", "metrics": _summary_metrics(record["jobs"], seam, cross)})
@@ -2474,7 +2497,8 @@ def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None)
     changed = str(params.get("sleeve_print") or "plain") != value
     if changed:
         source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
-        gt.set_params(item_id, {**params, "sleeve_print": value}, source=source)
+        # plan E6: write onto the STORED params — a top with cups keeps its parked top fields
+        gt.set_params(item_id, {**(gt.stored_of(item) or params), "sleeve_print": value}, source=source)
     usable = usable_answers(character_name, item_id)
     again = any(u["state"] == "ready" and u["raw"] for u in usable.values())
     started = bool(again and start_recompose(character_name, item_id, run=run))
@@ -2505,7 +2529,7 @@ def select_cut(item_id: str) -> bool:
     if not params or params.get("texture") == "cut":
         return False
     source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
-    gt.set_params(item_id, {**params, "texture": "cut"}, source=source)
+    gt.set_params(item_id, {**(gt.stored_of(item) or params), "texture": "cut"}, source=source)  # plan E6
     return True
 
 
@@ -2621,8 +2645,9 @@ def kind_has_back(params: dict | None) -> bool:
     always has a back panel), trousers and boxers (back leg panels), briefs (the back panel), gloves (the palms), a
     bandeau (front / back); NOT tights (one island per leg, decision D2) nor a cupped bra (cups, gore, bands, straps —
     D4)."""
+    from app.core import garment_template as gt
     p = params or {}
-    kind = str(p.get("kind") or "")
+    kind = gt.build_kind(p)                 # a top with cups has a bra's pieces
     if kind == "tights":
         return False
     if kind == "bra":

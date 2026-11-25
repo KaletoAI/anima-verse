@@ -28,12 +28,15 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 @router.get("/items")
 def list_items_route(include_shared: int = Query(0, description="Include shared items (1)")) -> Dict[str, Any]:
     """List all item definitions."""
+    from app.core.accessory_parts import is_part
     items = list_items()
     if include_shared:
         from app.models.inventory import list_shared_items
         for s in list_shared_items():
             items.append({**s, "_shared": True})
-    return {"items": items}
+    # design G: a part item (buckle / pendant / charm) is marked, so pickers that put items in an inventory or on a
+    # slot can leave it out
+    return {"items": [{**i, "part": True} if is_part(i) else i for i in items]}
 
 
 @router.get("/items-shared")
@@ -131,8 +134,17 @@ async def move_item_to_shared_route(item_id: str, request: Request) -> Dict[str,
 def _move_item_to_shared_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     """The blocking body of ``move_item_to_shared_route`` — runs in the
     threadpool."""
-    from app.models.inventory import move_item_to_shared
+    from app.core import accessory_parts
+    from app.models.inventory import get_item, is_shared_item, move_item_to_shared
     user_id = (body.get("user_id") or "").strip()
+    # A chain or belt takes its world-local part items along, before itself (design G): a library item never links
+    # a part only one world has. Each move runs under that item's own locks.
+    for pid in accessory_parts.part_ids_of(get_item(item_id)):
+        if get_item(pid) and not is_shared_item(pid):
+            moved = move_item_to_shared(pid)
+            if moved.get("status") != "ok":
+                raise HTTPException(status_code=400,
+                                    detail=f"part {pid}: {moved.get('reason', 'move failed')}")
     result = move_item_to_shared(item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "move failed"))
@@ -150,9 +162,20 @@ async def move_item_to_world_route(item_id: str, request: Request) -> Dict[str, 
 def _move_item_to_world_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     """The blocking body of ``move_item_to_world_route`` — runs in the
     threadpool."""
+    from fastapi.responses import JSONResponse
+    from app.core import accessory_parts
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import move_item_to_world
     user_id = (body.get("user_id") or "").strip()
-    result = move_item_to_world(item_id)
+    with keyed_lock("accessory_part", item_id):
+        # A part a library chain or belt still links stays in the library (design G) — 409 naming them.
+        shared_users = [u for u in accessory_parts.used_by(item_id) if u["shared"]] \
+            if accessory_parts.is_part_id(item_id) else []
+        if shared_users:
+            names = ", ".join(u["name"] for u in shared_users)
+            return JSONResponse(status_code=409, content={
+                "detail": f"The part is used by library items: {names}", "used_by": shared_users})
+        result = move_item_to_world(item_id)
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "move failed"))
     return result
@@ -281,7 +304,37 @@ def delete_item_route(
     item_id: str) -> Dict[str, Any]:
     """Delete an item — and, through the artefact GC, every derived file of
     it in every character that held it (fits on every body, its outfit
-    bodies and textures, its outfit renders)."""
+    bodies and textures, its outfit renders), and its jewellery mesh store
+    (``<world>/jewellery/<item>/``). A part item still linked by a chain or a
+    belt is a 409 naming them (design G) — unlink it there first."""
+    from fastapi.responses import JSONResponse
+    from app.core import accessory_parts
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("accessory_part", item_id):
+        users_of = accessory_parts.used_by(item_id) if accessory_parts.is_part_id(item_id) else []
+        if users_of:
+            names = ", ".join(u["name"] for u in users_of)
+            return JSONResponse(status_code=409, content={"detail": f"The part is used by {names}",
+                                                          "used_by": users_of})
+        result = _delete_item(item_id)
+    _drop_jewellery_store(item_id)
+    return result
+
+
+def _drop_jewellery_store(item_id: str) -> None:
+    """Remove ``<world>/jewellery/<item>/`` (the item's part / drop meshes) — contained in the store, never followed
+    outside it."""
+    import shutil
+    from app.core import accessory_pendant, media_cleanup
+    try:
+        d = accessory_pendant.item_dir(item_id)
+    except ValueError:
+        return
+    if d.is_dir() and media_cleanup.contained(accessory_pendant.root(), d):
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _delete_item(item_id: str) -> Dict[str, Any]:
     from app.core import artefact_graph
     # Invalidate variants while the item can still be found in inventories.
     try:
@@ -750,6 +803,82 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
 
 
 # ============================================================
+# PART ITEMS (design G: buckle / pendant / charm of a belt or chain)
+# ============================================================
+
+@router.post("/items/{host_id}/make-part")
+async def make_part_route(host_id: str, request: Request) -> Any:
+    """A new part item for the chain / belt ``host_id`` — ``{role: buckle|pendant|charm, at?}`` — linked on the host
+    (``accessory_parts.make_part``), never put in an inventory; then its image in the background (ONE image job,
+    ``generate_item_image_sync`` with the part's own ``image_prompt``, which never carries the host text). 202
+    ``{part_id, image: "queued"}``; 400 for a role the host has no place for or a full charm list."""
+    import asyncio
+    import threading
+    from fastapi.responses import JSONResponse
+    from app.core import accessory_parts
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    role = str(body.get("role") or "")
+    at = str(body.get("at") or "front")
+    if not get_item(host_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    try:
+        part_id = await asyncio.to_thread(accessory_parts.make_part, host_id, role, at)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    threading.Thread(target=generate_item_image_sync, args=(part_id, {}), daemon=True,
+                     name=f"item-img-{part_id[:8]}").start()
+    return JSONResponse(status_code=202, content={"part_id": part_id, "image": "queued"})
+
+
+@router.post("/items/{item_id}/part-mesh")
+def part_mesh_route(item_id: str) -> Dict[str, Any]:
+    """The part's mesh — ONE routed ``jewellery_mesh`` hub job in the background (``accessory_pendant.start``) — for a
+    part item, or for earrings with a drop (their drop is meshed from their own image). ``{status: ready}`` (nothing
+    spent) when the mesh of the current image exists, ``running`` while a job runs, else ``started``. 400 for any other
+    item or without an image."""
+    from app.core import accessory_parts, accessory_pendant, accessory_spec
+    item = get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not (accessory_parts.is_part(item) or accessory_spec.pendant_on(accessory_spec.of_item(item))):
+        raise HTTPException(status_code=400, detail="Only a part item (or earrings with a drop) has a part mesh")
+    state = accessory_pendant.pendant_state(item_id)
+    if state["state"] == "no_image":
+        raise HTTPException(status_code=400, detail=accessory_pendant.REASON_NO_IMAGE)
+    if state["state"] == "ready":
+        return {"status": "ready"}
+    if state["state"] == "running" or not accessory_pendant.start(item_id):
+        return {"status": "running"}
+    return {"status": "started"}
+
+
+@router.get("/items/{item_id}/part-mesh")
+def part_mesh_state_route(item_id: str) -> Dict[str, Any]:
+    """The part's mesh state (read-only, ``accessory_pendant.pendant_state``): ``{state, reason}``."""
+    from app.core import accessory_pendant
+    if not get_item(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    try:
+        st = accessory_pendant.pendant_state(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"state": st["state"], "reason": st["reason"]}
+
+
+@router.get("/items/{item_id}/used-by")
+def part_used_by_route(item_id: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The chains / belts that link the part ``item_id``: ``{used_by: [{item_id, name, role, shared}]}``."""
+    from app.core import accessory_parts
+    if not get_item(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"used_by": accessory_parts.used_by(item_id)}
+
+
+# ============================================================
 # ROOM ITEMS
 # ============================================================
 
@@ -785,6 +914,14 @@ def list_room_items_route(
     return {"items": enriched}
 
 
+def _refuse_part(item_id: str) -> None:
+    """400 for a part item (plan-anhaenger Task 2): it is worn through its chain or belt — never carried, placed in a
+    room or put on a slot."""
+    from app.core import accessory_parts
+    if accessory_parts.is_part_id(item_id):
+        raise HTTPException(status_code=400, detail=accessory_parts.REFUSED_WEAR)
+
+
 @router.post("/rooms/{location_id}/{room_id}")
 async def add_room_item_route(
     location_id: str,
@@ -805,6 +942,7 @@ def _add_room_item_route_sync(location_id: str, room_id: str,
     item_id = body.get("item_id", "")
     if not item_id:
         raise HTTPException(status_code=400, detail="user_id and item_id required")
+    _refuse_part(item_id)
 
     success = add_item_to_room(
         location_id=location_id,
@@ -912,6 +1050,7 @@ def _add_inventory_item_route_sync(character_name: str,
     item_id = body.get("item_id", "")
     if not item_id:
         raise HTTPException(status_code=400, detail="user_id and item_id required")
+    _refuse_part(item_id)
 
     success = add_to_inventory(
         character_name=character_name,
@@ -1047,6 +1186,7 @@ def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
+    _refuse_part(item_id)
     with keyed_lock("character_profile", character_name):
         if item.get("category") == "outfit_piece":
             result = equip_piece(character_name, item_id, source="wardrobe_ui")

@@ -3,7 +3,7 @@ function escapeHtml(s) {
 }
 
 const filters = ['character', 'tool', 'status', 'source'];
-const nonOk = ['error', 'blocked', 'unknown_tool', 'suppressed', 'exception', 'discarded'];
+const nonOk = ['error', 'blocked', 'refused', 'unknown_tool', 'suppressed', 'exception', 'discarded'];
 const byId = id => document.getElementById(id);
 const initial = new URLSearchParams(location.search);
 for (const key of filters) {

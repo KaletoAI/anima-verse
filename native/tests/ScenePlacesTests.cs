@@ -54,7 +54,8 @@ public class ScenePlacesTests
       ],
       "markers": [
         {"room_id": "r-a", "id": "m1", "group": "seat", "label": "Bench", "capacity": 2, "at_world": [4, 0],
-         "slots": [[4, 0.5], [4, -0.5]], "y_world": 0.45, "root_offset": 0.42, "facing": 90, "anchor": [2, -3], "source": "prop"},
+         "slots": [[4, 0.5], [4, -0.5]], "y_world": 0.45, "root_offset": 0.42, "facing": 90, "anchor": [2, -3], "source": "prop",
+         "access": {"actor": {"x": 3, "y": 0, "z": 1, "yaw": 135}}},
         {"room_id": "r-b", "id": "m2", "group": "lie", "label": "Bed", "capacity": 1, "at_world": [1, 1],
          "slots": [[1, 1]], "y_world": 3.5, "source": "room"},
         {"room_id": "r-b", "id": "", "group": "seat", "label": "", "capacity": 1, "at_world": [0, 0],
@@ -162,6 +163,29 @@ public class ScenePlacesTests
         Assert.Equal(90, e.Rotation);
         Near(new Vec3(100.5, 9.73, 46), e.Slots[0]);
         Near(new Vec3(99.5, 9.73, 46), e.Slots[1]);
+    }
+
+    [Fact]
+    public void MarkerAccessIsTurnedIntoTheWorldAndReliftedWithTheSlots()
+    {
+        // m1's access.actor: tile-local (3, 0, 1), compass yaw 135. Frame yaw 90: tileToWorld(3, 1, 0 + lift −0.3) =
+        // (100 + 1, 10 + 0 − 0.3, 50 − 3) = (101, 9.7, 47); yaw 135 + 90 = 225 → wrapped into (−180, 180] = −135.
+        // (Compass 0 = local +z maps to world +x = compass 90 under this frame, so the frame adds +90.)
+        var inv = Compose();
+        var a = inv.Markers["r-a"]["m1"].Access["actor"];
+        Near(new Vec3(101, 9.7, 47), new Vec3(a.X, a.Y, a.Z));
+        Assert.Equal(-135, a.YawDeg, 9);
+        Assert.Empty(inv.Markers["r-b"]["m2"].Access);
+        // Datum step +0.5 (as ADatumStepCarries…): m1 is fixed → carried +0.5 → 10.2; the re-lift then finds no delta.
+        var frame = Frame with { Center = new Vec3(100, 10.5, 50) };
+        inv.Relift(frame, 0.5, (x, z) => Ground(x, z) + 0.5, (x, z) => Ground(x, z) + 0.5);
+        var carried = inv.Markers["r-a"]["m1"].Access["actor"];
+        Near(new Vec3(101, 10.2, 47), new Vec3(carried.X, carried.Y, carried.Z));
+        Assert.Equal(-135, carried.YawDeg, 9);
+        // Terrain change under the seat (as ATerrainChange…): datum stays, field +0.2 → delta +0.2 → 9.7 → 9.9.
+        var moved = Compose();
+        Assert.True(moved.Relift(Frame, 0, (x, z) => Ground(x, z) + 0.2));
+        Assert.Equal(9.9, moved.Markers["r-a"]["m1"].Access["actor"].Y, 9);
     }
 
     [Fact]
@@ -298,5 +322,33 @@ public class ScenePlacesTests
         Assert.Empty(SceneProblems.Announce(null, problems, spent));
         Assert.Empty(SceneProblems.Announce("loc-3", null, spent));
         Assert.Equal(4, spent.Count);
+    }
+
+    /// <summary>
+    /// The marker's `access` (plan E3 task 3): a copy of the nav scene (native/fixtures/nav/scene_loc-nav.json, frame
+    /// (100, 0, 0), yaw 0, flat ground 0 → TileToWorld(lx, lz, ly) = (100 + lx, ly, lz), no lift) with an armchair seat
+    /// whose `access.actor` is local (−3, 0, −1.45), yaw 0, and a bed without access. → world (97, 0, −1.45), yaw 0 + 0;
+    /// the bed's map is empty.
+    /// </summary>
+    [Fact]
+    public void MarkerAccessParsed()
+    {
+        string? path = null;
+        for (var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory); dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = System.IO.Path.Combine(dir.FullName, "native", "tests", "Vectors", "scene_marker_access.json");
+            if (System.IO.File.Exists(candidate)) path = candidate;
+        }
+        Assert.NotNull(path);
+        var scene = ScenePayload.Parse(JsonDocument.Parse(System.IO.File.ReadAllText(path!)).RootElement);
+        var inv = PlaceInventory.Compose(scene, new TileFrame(new Vec3(100, 0, 0), 0), null, (_, _) => 0);
+        var seat = inv.Markers["r-a"]["armchair-seat"];
+        Assert.Equal(new[] { "actor" }, seat.Access.Keys.ToArray());
+        var a = seat.Access["actor"];
+        Assert.Equal(97, a.X, 9);
+        Assert.Equal(0, a.Y, 9);
+        Assert.Equal(-1.45, a.Z, 9);
+        Assert.Equal(0, a.YawDeg, 9);
+        Assert.Empty(inv.Markers["r-b"]["bed-body"].Access);
     }
 }

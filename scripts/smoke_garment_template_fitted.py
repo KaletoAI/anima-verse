@@ -34,6 +34,23 @@ Hand-derived expectations (the synthetic measure ``M``: waist_y 1.05, hip_y 0.90
      drape shape is unchanged), high_leg 0.6; gusset_m 0.03 -> 0.015.
 [B10] The drawing of a leg_cut 1.5 brief on M: the front fill reaches the side's height at x = reach short of the hip's
      side and then runs along it to the side (one point more on each leg than at leg_cut 1.0: 10 instead of 9).
+[C1]-[C6] Round 2026-11-25, a top with cups (``cups`` "bra", built as a bra): its band runs from the underbust line to
+     its hem, hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M), band = max(BACK_STRAP_M, under -
+     hem_y) (plan E4). On ``MC`` = M with waist_y 0.95 (M's own waist 1.05 lies OVER its underbust line 1.04, where
+     every hem is held at the thin band, [C5b]); ``_bust_lines(MC)``: window [0.95 + 0.05, 1.275] = [1.00, 1.275],
+     the widest slice first at 1.18 (0.90), the underbust the narrowest in [1.04, 1.14] (all 0.80), the first: 1.04 —
+     as on M. origin = shoulder_y 1.40 + 0.045 = 1.445; under - BACK_STRAP_M = 1.028:
+     [C1] length 0.455 -> 1.445 - 0.455 = 0.990 (>= 0.95, <= 1.028): hem 0.990, band 1.04 - 0.99 = 0.050, rows
+          [1.40, 0.99], hem_clamped 0.0, ``top`` True;
+     [C2] length 0.49 -> hem 0.955, band 0.085 (over the bra's 0.08 limit of ``underband_m``: it does not apply);
+     [C3] length 0.35 -> 1.095, over the underbust line -> held at 1.028, band 0.012, hem_clamped 1.028 - 1.095 =
+          -0.067;
+     [C4] length 0.60 -> 0.845 under the waist 0.95 -> hem 0.950, band 0.090, hem_clamped 0.95 - 0.845 = +0.105;
+     [C5b] on M itself: length 0.455 -> min(max(0.99, 1.05), 1.028) = 1.028, band 0.012 (never a negative band);
+     [C5] a bra's fitted spec on M is the dict it was at d0bae1f34 (``git archive``, a subprocess; no hem_y, no top);
+     [C6] the drawing of [C1] (``garment_preview._bra``) on MC with a breast fold at 1.06 (``bra_fold``: the
+          drawing raises the underbust line to it, as the builder does): the band's fill still reaches down to the
+          ABSOLUTE hem_y 0.99 (px y (2 - 0.99) x 1000 = 1010), not fold - band = 1.01 — the lowest point of the band.
 """
 import math
 import sys
@@ -241,6 +258,73 @@ check("[B9] gusset_m 0.03 -> 0.015", gt.fitted_spec(briefs(gusset_m=0.03), M)["f
 n10 = {lc: [len(s["points"]) for s in gp.shapes(briefs(leg_cut=lc), M, Reg())["shapes"] if s["kind"] == "fill"]
        for lc in (1.0, 1.5)}
 check("[B10] high-leg front: 2 points more (one per leg)", n10[1.5][0] == n10[1.0][0] + 2, n10)
+
+# [C1]-[C6] a top with cups: the band down to the hem
+MC = {**M, "waist_y": 0.95}
+check("[C0] bust lines of MC (1.04, 1.18)", gt._bust_lines(MC) == (1.04, 1.18), gt._bust_lines(MC))
+
+
+def cupped(length):
+    return gt.validate_params({"kind": "top", "cups": "bra", "cup_style": "balconette", "length_m": length})[0]
+
+
+for label, meas, length, hem, band, clamped in (("[C1]", MC, 0.455, 0.990, 0.050, 0.0),
+                                                 ("[C2]", MC, 0.49, 0.955, 0.085, 0.0),
+                                                 ("[C3]", MC, 0.35, 1.028, 0.012, -0.067),
+                                                 ("[C4]", MC, 0.60, 0.950, 0.090, 0.105),
+                                                 ("[C5b]", M, 0.455, 1.028, 0.012, None)):
+    sp = gt.fitted_spec(cupped(length), meas)
+    f = sp["fitted"]
+    ok = (f.get("kind") == "bra" and f.get("top") is True and close(f.get("hem_y", -1), hem)
+          and close(f.get("band_m", -1), band) and close(sp["row_y"][1], hem) and close(sp["row_y"][0], 1.40)
+          and (clamped is None or close(f.get("hem_clamped", 99), clamped)))
+    check(f"{label} length {length}: hem {hem}, band {band}, clamped {clamped}", ok,
+          {k: f.get(k) for k in ("kind", "top", "hem_y", "band_m", "hem_clamped")} | {"rows": sp["row_y"]})
+check("[C5] a bra's spec has no hem_y / top", "hem_y" not in gt.fitted_spec(bra(), M)["fitted"]
+      and "top" not in gt.fitted_spec(bra(), M)["fitted"])
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+import subprocess as _sp  # noqa: E402
+import tarfile as _tf  # noqa: E402
+import tempfile as _tmp  # noqa: E402
+_OLD = "d0bae1f34"
+_PROBE = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from app.core import garment_template as gt
+M = json.loads(sys.argv[2])
+out = []
+for raw in json.loads(sys.argv[3]):
+    out.append(gt.fitted_spec(gt.validate_params(raw)[0], M))
+print(json.dumps(out, sort_keys=True))
+"""
+_BRAS = [{"kind": "bra"}, {"kind": "bra", "cup_style": "balconette", "underband_m": 0.05, "center_gore": "wide",
+                           "straps": "wide", "push_up": 0.8, "cup_coverage": 0.6, "closure": "none"},
+         {"kind": "bra", "cup_style": "bandeau", "straps": "none", "underband_m": 0.0}]
+_arc = _sp.run(["git", "-C", str(Path(__file__).resolve().parent.parent), "archive", "--format=tar", _OLD, "app",
+                "shared/templates", "shared/languages"], capture_output=True)
+if _arc.returncode != 0:
+    print(f"SKIP [C5] {_OLD} not in this checkout")
+else:
+    _d = Path(_tmp.mkdtemp(prefix="smoke-fitted-old-"))
+    (_d / "old.tar").write_bytes(_arc.stdout)
+    with _tf.open(_d / "old.tar") as _t:
+        _t.extractall(_d / "old", filter="data")
+
+    def _specs(repo):
+        r = _sp.run([sys.executable, "-c", _PROBE, str(repo), _json.dumps(M), _json.dumps(_BRAS)], capture_output=True,
+                    text=True, env={**_os.environ, "PYTHONPATH": str(repo)})
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr[-1500:])
+        return r.stdout.strip().splitlines()[-1]
+    check(f"[C5] three bras' fitted specs on M as at {_OLD}",
+          _specs(Path(__file__).resolve().parent.parent) == _specs(_d / "old"))
+# [C6] the drawing reaches the hem
+MC6 = {**MC, "bra_fold": [1.06]}
+fills6 = [s for s in gp.shapes(cupped(0.455), MC6, Reg())["shapes"] if s["kind"] == "fill" and s["role"] == "band"]
+low6 = max((q[1] for s in fills6 for q in s["points"]), default=None)
+check("[C6] the band fill's lowest point is hem_y 0.99 (px 1010)", low6 is not None and close(low6, 1010.0, 0.5),
+      low6)
 
 print()
 print("all checks passed" if not FAILED else f"{len(FAILED)} FAILED: {FAILED}")

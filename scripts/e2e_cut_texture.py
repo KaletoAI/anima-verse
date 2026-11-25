@@ -445,7 +445,8 @@ def set_param(spec: str) -> str:
     params = gt.params_of(item)
     if not item_id or not key or params is None:
         raise SystemExit(f"--set-param {spec!r}: no template piece {item_id!r} or no key")
-    gt.set_params(item_id, {**params, key: json.loads(raw)},
+    # plan E6: onto the STORED params (a top with cups keeps its parked top fields)
+    gt.set_params(item_id, {**(gt.stored_of(item) or params), key: json.loads(raw)},
                   source=((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user")
     return f"{item_id}.{key} = {(gt.params_of(get_item(item_id)) or {}).get(key)!r}"
 
@@ -480,7 +481,7 @@ def prepare(character: str, item_id: str, *, redrape: bool, fresh_back: bool) ->
     params = gt.params_of(item) or {}
     switched = params.get("texture") != "cut"
     if switched:
-        gt.set_params(item_id, {**params, "texture": "cut"},
+        gt.set_params(item_id, {**(gt.stored_of(item) or params), "texture": "cut"},
                       source=((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user")
     tdir = gt.templates_dir(character)
     removed = {"cut": 0, "drape": 0, "back_view": 0}

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_scene_view.mjs",
+  "source": "native/tests/Derivations/scene_view.md",
   "fixtures": {
     "empty": {"plates":[],"floor_plan":[],"walls":[],"extras":[],"markers":[],"models":[]},
     "frame": {"center":{"x":10,"y":4,"z":-5},"yaw":1.5707963267948966},

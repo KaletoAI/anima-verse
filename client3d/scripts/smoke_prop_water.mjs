@@ -1,34 +1,8 @@
 #!/usr/bin/env node
-/** Prop water, spec §§8–9. Usage: node client3d/scripts/smoke_prop_water.mjs
- * Hand derivations (all vector expectations written by hand):
- * [1] SPECS: pool outline [0..4]², hole [1..2]², y=1.5, bed=0,
- * threshold 1; tub [3..5]², y=2, bed=1.5, threshold 1.
- * (0.5,0.5) is pool only; (1.5,1.5) is in the hole -> null;
- * (3.5,3.5) overlaps and 2>1.5 selects tub; (6,6) is outside -> null.
- * (0,0) belongs to outline -> pool; (1,1.5) belongs to hole ring -> null.
- * Hits retain y, bed_y and swim_from_m from the winning region.
- * [2] Lift 3: pool y=1.5+3=4.5, bed=0+3=3; tub y=2+3=5,
- * bed=1.5+3=4.5. Depth remains 1.5 or 0.5 and threshold stays 1.
- * The original five points still give pool, null, tub, null, pool.
- * [3] Pool point containment: (0.5,0.5) true; hole (1.5,1.5)
- * false; outside (6,6) false, independent of heights.
- * [4] DRY is the built-scope word: walk_run, sinks {move:0,idle:0},
- * water null, written out because groundWaterLevel(10,'built')=null.
- * Prop water starts with swim, sinks {move:0.35,idle:1.3}, water=y.
- * wadeGate compares y-groundY >= threshold: with groundY=0,
- * 1.5-0=1.5>=1 swims (water 1.5); 0.5-0=0.5<1 wades
- * (walk_run, sinks 0/0, water null); 1-0=1>=1 swims (water 1).
- * Null region leaves DRY unchanged: no mirror means no gate.
- * Region groundY=0 overrides argument 0.01: depth 1-0=1>=1,
- * hence swim, sinks 0.35/1.3, water 1 (not depth 0.99).
- * [5] Built suppresses level 10 -> null; wilderness (a walk.ts scope)
- * retains 10; absent level null stays null in wilderness.
- * [6] Carry max(bed,mirror): max(0,1.5)=1.5; max(2,1.5)=2;
- * no region leaves bed 0.7 unchanged.
- * JSON adapter: waterRegionAt(specs,x,z,lift=0) wraps numeric lift
- * as () => lift; the C# consumer mirrors this adapter.
- * Local geometry: triangle (0,0),(2,0),(0,3) maps identically to XZ
- * with +Y normals, area 2*3/2=3 m²; pool area 4*4-1*1=15 m².
+/**
+ * Derivation moved to scripts/smoke_prop_water.py (E1, 2026-11-25).
+ * Usage: node client3d/scripts/smoke_prop_water.mjs
+ * Runs until E3 deletes the browser scene; the C# vector tests keep executing the cases.
  */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_places_client.mjs",
+  "source": "native/tests/Derivations/places_client.md",
   "cases": [
     {"label": "[9] poll before correction (100 < 150) is stale", "fn": "pollIsStale",
      "args": [100, 150], "expect": true},

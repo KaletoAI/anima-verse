@@ -1,0 +1,58 @@
+{
+ "avatar": "Nia Nav",
+ "current_location_id": "loc-nav",
+ "locations": [
+  {
+   "id": "loc-nav",
+   "name": "Navhaus",
+   "pos_x": 100,
+   "pos_z": 0,
+   "yaw_deg": 0,
+   "plan_width_m": 12,
+   "boundary": [
+    [
+     -6,
+     -7
+    ],
+    [
+     6,
+     -7
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "world_props": [],
+ "world_props_sig": "nav",
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": -100,
+  "min_z": -40,
+  "max_x": 120,
+  "max_z": 80
+ },
+ "height_sig": "walk-flat",
+ "fogged": false,
+ "characters": [
+  {
+   "name": "Nia Nav",
+   "location_id": "loc-nav",
+   "room_id": "r-a",
+   "pos": {
+    "x": 97,
+    "z": -1
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  }
+ ]
+}

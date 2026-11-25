@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
+import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, type CharacterRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
@@ -14,12 +15,14 @@ import { FilterChipRow } from '../../components/FilterChipRow'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { useEnlarge } from '../../components/ZoomButton'
 import { ItemForm } from './ItemForm'
+import { takeItemsSelection } from './itemsModel'
 import {
   CATEGORIES,
   EMPTY_DRAFT,
   RARITIES,
   VALID_PIECE_SLOTS,
   draftToBody,
+  isPartItem,
   itemToDraft,
   type Category,
   type ConditionOption,
@@ -47,6 +50,7 @@ const ItemRow = memo(function ItemRow({ item, isActive, onSelect }: ItemRowProps
         <span className="ga-list-row-main">
           <strong>{item.name || item.id}</strong>
           <span className="ga-list-row-sub">— {item.category || 'tool'}</span>
+          {isPartItem(item) ? <PartBadge /> : null}
         </span>
         <span className="ga-source ga-source-shared" style={{ visibility: item._shared ? 'visible' : 'hidden' }}>
           shared
@@ -55,6 +59,14 @@ const ItemRow = memo(function ItemRow({ item, isActive, onSelect }: ItemRowProps
     </li>
   )
 })
+
+function PartBadge() {
+  const { t } = useI18n()
+  return <span className="ga-chip" style={{ marginLeft: 6, fontSize: '0.72em' }}
+    title={t('A part item: worn through its chain or belt, no slot')}>{t('Part')}</span>
+}
+
+interface UsedByEntry { item_id: string; name: string; role: string; shared: boolean }
 
 export function ItemsTab() {
   const { t } = useI18n()
@@ -80,6 +92,10 @@ export function ItemsTab() {
   }, [])
   // '' = all, '__none__' = owned by nobody, otherwise a character name.
   const [filterOwner, setFilterOwner] = useState('')
+  // design G: only the part items (buckles, pendants, charms)
+  const [onlyParts, setOnlyParts] = useState(false)
+  // A delete refused because chains / belts still link the part (409): who uses it.
+  const [usedBy, setUsedBy] = useState<UsedByEntry[] | null>(null)
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [owners, setOwners] = useState<Owner[]>([])
   const [ownership, setOwnership] = useState<Record<string, string[]>>({})
@@ -138,6 +154,7 @@ export function ItemsTab() {
       .filter((it) => {
         if (filterCategory && it.category !== filterCategory) return false
         if (filterRarity && it.rarity !== filterRarity) return false
+        if (onlyParts && !isPartItem(it)) return false
         if (filterScope === 'shared' && !it._shared) return false
         if (filterScope === 'world' && it._shared) return false
         if (filterCategory === 'outfit_piece' && filterSlot && !(it.outfit_piece?.slots || []).includes(filterSlot)) return false
@@ -163,7 +180,7 @@ export function ItemsTab() {
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   }, [items, search, filterCategory, filterRarity, filterScope, filterSlot,
-    filterType, filterOwner, ownership])
+    filterType, filterOwner, ownership, onlyParts])
 
   // Derive the used slots from the existing outfit pieces, in canonical
   // order (head→feet) — like the slot filter in the player inventory.
@@ -300,9 +317,39 @@ export function ItemsTab() {
       loadDraft(null)
       setOwners([])
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // a part still linked by chains / belts: say who, with links — unlink it there first
+        try {
+          const r = await apiGet<{ used_by: UsedByEntry[] }>(`/inventory/items/${encodeURIComponent(draft.id)}/used-by`)
+          setUsedBy(r.used_by)
+          return
+        } catch { /* fall through to the plain message */ }
+      }
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [draft, loadDraft, reload, t, toast])
+
+  // After the server changed the open item (a part made for this host): the list and the form re-read it.
+  const reloadOpen = useCallback(async () => {
+    try {
+      const data = await apiGet<{ items?: Item[] }>('/inventory/items?include_shared=1')
+      const list = data.items || []
+      setItems(list)
+      const it = draft ? list.find((x) => x.id === draft.id) : undefined
+      if (it) loadDraft(itemToDraft(it))
+    } catch (e) {
+      toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
+    }
+  }, [draft, loadDraft, t, toast])
+
+  // "Open in Items" from a part link: select that item once the list is there.
+  useEffect(() => {
+    if (!items) return
+    const want = takeItemsSelection()
+    if (!want) return
+    const it = items.find((x) => x.id === want)
+    if (it) editItem(it)
+  }, [items]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const move = useCallback(
     async (target: 'world' | 'shared') => {
@@ -479,6 +526,13 @@ export function ItemsTab() {
             ))}
           </select>
         </div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+          <button type="button" className={`ga-btn ga-btn-sm${onlyParts ? ' is-active' : ''}`} aria-pressed={onlyParts}
+            title={t('Only part items: buckles, pendants and charms, worn through a chain or belt')}
+            onClick={() => setOnlyParts((v) => !v)}>
+            {t('Parts')}
+          </button>
+        </div>
         {/* Outfit pieces filter exactly like the character wardrobe does:
             two chip rows, slots and outfit types — same component, so the
             same job does not look different depending on where you stand. */}
@@ -557,6 +611,8 @@ export function ItemsTab() {
             onUpdate={update}
             onUpdateExtra={updateExtra}
             onToggleListItem={toggleListItem}
+            dirty={dirty}
+            onReload={() => { void reloadOpen() }}
           />
         ) : (
           <div className="ga-placeholder">{t('Click an item or create a new one.')}</div>
@@ -617,7 +673,8 @@ export function ItemsTab() {
             ) : null}
             <div className="ga-items-owners-panel">
               <div className="ga-form-section-label">{t('Owners of this item')}</div>
-              <OwnerAdder characters={characters} onAdd={addOwner} />
+              {draft.is_part ? <span className="ga-hint">{t("A part item is worn through its chain or belt")}</span>
+                : <OwnerAdder characters={characters} onAdd={addOwner} />}
               {owners.length === 0 ? (
                 <div className="ga-form-hint">{t('Nobody')}</div>
               ) : (
@@ -656,6 +713,29 @@ export function ItemsTab() {
         onConfirm={() => { void doRemove() }}
         onClose={() => setConfirmRemove(false)}
       />
+      {usedBy ? createPortal(
+        <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setUsedBy(null) }}>
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Delete item')} style={{ maxWidth: 520 }}>
+            <div className="ga-modal-header"><h3>{t('Delete item')}</h3></div>
+            <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span>{t('Used by: … — unlink it there first').replace('…', usedBy.map((u) => u.name).join(', '))}</span>
+              <ul style={{ margin: '0 0 0 16px', padding: 0 }}>
+                {usedBy.map((u) => {
+                  const host = items?.find((x) => x.id === u.item_id)
+                  return (
+                    <li key={`${u.item_id}-${u.role}`}>
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={!host}
+                        onClick={() => { setUsedBy(null); if (host) editItem(host) }}>{u.name}</button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" onClick={() => setUsedBy(null)}>{t('Close')}</button>
+            </div>
+          </div>
+        </div>, document.body) : null}
       {discardDialog}
     </div>
   )

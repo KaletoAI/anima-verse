@@ -39,6 +39,10 @@ public static class EmbodyRoomsCheck
         {
             await builder.BuildAsync(world,"Fixture Hall");
             var hall=builder.Slots["loc-hall"]; builder.SetOpen("loc-hall",true); hall.Fade.Snap(1);
+            // Plan E2 Task 6 (review N-W3): the hall's navigation is swapped in before the first step, so every section
+            // below walks on the navmesh (clamp, click routes) whatever the bake timing.
+            for (int i=0; i<240 && builder.NavFor(hall) is null; i++) await host.ToSignal(host.GetTree(),SceneTree.SignalName.PhysicsFrame);
+            Is("navigation swapped in within 240 physics frames",builder.NavFor(hall) is not null);
             var manager=new FigureManager(source,builder.Height!,_=>{},strict:true)
             { AutoTick=false, ClipFit=ClipFitMode.OnDemandSync, Slots=()=>builder.Slots, GroundMoveAt=builder.FigureGroundMove, GroundYAt=builder.FigureGroundY };
             world.AddChild(manager); await manager.InitAsync(); manager.SetProcess(false);
@@ -107,7 +111,11 @@ public static class EmbodyRoomsCheck
             Is("R5 hover clones material",mesh.GetActiveMaterial(0)!=original);
             if(original is ShaderMaterial shader) Is("R5 shares shader",(mesh.GetActiveMaterial(0) as ShaderMaterial)?.Shader==shader.Shader);
             rooms.Picking.Hover(null); Is("R5 restores material",mesh.GetActiveMaterial(0)==original);
-            rooms.UseVertical(hit.Target); Is("R5 walks to foot only",steering.Route is { X:0,Z:-2 } && steering.VerticalRide is null);
+            // Plan E2 Task 6: Route = the navmesh goal, the mesh point nearest the foot (0, -2). The foot lies in the party
+            // wall (x -0.1..0.1); the eroded edges are x -0.35 (r-a) and 0.35 (r-b), both 0.35 away (a tie the map decides),
+            // so the goal is (±0.35, -2) (README embody section "R5 on the navmesh").
+            rooms.UseVertical(hit.Target);
+            Is("R5 walks to foot only",steering.Route is { } footGoal && Math.Abs(Math.Abs(footGoal.X)-.35)<=.02 && Math.Abs(footGoal.Z+2)<=.02 && steering.VerticalRide is null);
             Is("R5 marker mounted",manager.WalkTarget?.Visible==true);
 
             var doorNode=new Node3D(); hall.Group.AddChild(doorNode);

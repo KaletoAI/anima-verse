@@ -398,9 +398,16 @@ class ApiContracts(unittest.TestCase):
             row = next(o for o in P.offers(name) if o['action_id'] == target['action_id'])
         self.assertEqual(row['reason'], 'missing_entry_transition')
         self.assertFalse(row['enabled'])
+        # Entry fields of a refused row: the pose is known, no plan -> no mode.
+        self.assertEqual((row['entry_pose_key'], row['entry_mode'], row['role_point'], row['pair_yaw_deg']),
+                         ('sitting', '', None, None))
         self.assertEqual(snapshot(), before)
         S.measured_entry()
-        self.assertTrue(P.offers(name)[0]['enabled'])
+        row = P.offers(name)[0]
+        self.assertTrue(row['enabled'])
+        # A solo pose on its own slot: the plan's bridge entry, no role point, no pair yaw.
+        self.assertEqual((row['entry_pose_key'], row['entry_mode'], row['role_point'], row['pair_yaw_deg']),
+                         ('sitting', 'bridge', None, None))
         meta = F.ROOT / 'clips/run-enter.json'
         document = json.loads(meta.read_text())
         document['pair'] = True
@@ -414,6 +421,32 @@ class ApiContracts(unittest.TestCase):
         (F.ROOT / 'clips/run-enter__b.fbx').write_bytes(b'pair-only-fixture')
         S.clips._clear_entries_cache()
         self.assertEqual(P.offers(name)[0]['reason'], 'missing_entry_transition')
+        self.assertFalse(R.claims())
+
+    def test_offer_row_entry_fields_of_a_shared_place_pair(self):
+        """Hand-derived (plan E3 task 3): the pair fixture on ONE seat (pose
+        ``places`` 1), its ``yaw_offset`` set to 180. pair_yaw = facing - 90 +
+        yaw_offset = 0 - 90 + 180 = 90 deg. The initiator plays clip role A,
+        whose ``anchor_xz_m`` is (0.094, 0); turned by 90 deg
+        (x*cos + z*sin, -x*sin + z*cos) = (0, -0.094), so the role point is
+        the place centre (slot 0) + (0, -0.094)."""
+        name, partner, target, pid = S.authored_shared_pair()
+        entries = S.pose_catalog.world_entries('pose')
+        entries['run-pair']['yaw_offset'] = 180
+        S.pose_catalog.replace_world_entries('pose', entries)
+        S.pose_catalog.reload_catalogs()
+        row = next(o for o in P.offers(name) if o['action_id'] == target['action_id'])
+        self.assertTrue(row['enabled'], row)
+        self.assertNotIn('plans', json.dumps(row))
+        from app.core import places
+        place = next(p for p in places._GeometryQuery().room_places(target['location_id'], target['room_id'])
+                     if p.get('placement_id') == target['placement_id'])
+        cx, cz = place['slots'][0]
+        self.assertEqual((row['entry_pose_key'], row['entry_mode']), ('run-pair', 'bridge'))
+        self.assertAlmostEqual(row['pair_yaw_deg'], 90.0, places=6)
+        self.assertEqual(set(row['role_point']), {'x', 'z'})
+        self.assertAlmostEqual(row['role_point']['x'], cx + 0.0, places=3)
+        self.assertAlmostEqual(row['role_point']['z'], cz - 0.094, places=3)
         self.assertFalse(R.claims())
 
     def test_real_http_auth_actor_nonce_revision_and_private_state(self):

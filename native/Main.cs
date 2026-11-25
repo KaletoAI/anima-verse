@@ -226,10 +226,20 @@ public partial class Main : Node3D
     /// <c>ExclusiveFullscreen</c>: the same on Wayland, keeps the compositor on X11 (screen
     /// recorders keep working) and takes the window to the monitor size like the other.
     /// Handled in <c>_Input</c>, before the login fields and the HUD (which lets F11 through).
+    /// F9 (plan E2 Task 7) toggles the navigation overlay of the open location (<see cref="WorldBuilder.NavOverlayVisible"/>),
+    /// the same way: before the login and the HUD, which lets F9 through.
     /// </summary>
     public override void _Input(InputEvent e)
     {
         if (HandlePhotoInput(e)) return;
+        if (e is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F9 })
+        {
+            GetViewport().SetInputAsHandled();
+            if (_builder is null) return;
+            _builder.NavOverlayVisible = !_builder.NavOverlayVisible;
+            Log($"nav overlay {(_builder.NavOverlayVisible ? "on" : "off")} (F9)");
+            return;
+        }
         if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F11 }) return;
         GetViewport().SetInputAsHandled();
         if (DisplayServer.GetName() == "headless") return;

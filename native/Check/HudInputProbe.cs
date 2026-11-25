@@ -82,6 +82,8 @@ public partial class HudInputProbe : HudOverlay
             Is("AltGr text and release bypass CEF", browser.Keys.Count == 26 && browser.Messages.Count == 3);
             KeyEvent(Key.F11, 0, true);
             Is("F11 stays with window", browser.Keys.Count == 26);
+            KeyEvent(Key.F9, 0, true); KeyEvent(Key.F9, 0, false);
+            Is("F9 stays with the scene (nav overlay) even while typing", browser.Keys.Count == 26);
             hud.Ui.Apply(new JsonObject { ["textInput"] = false });
             KeyEvent(Key.Space, ' ', true); KeyEvent(Key.Space, 0, false);
             Is("typing in a checkbox or select keeps CEF keys", browser.Keys.Count == 28 && browser.Messages.Count == 3);

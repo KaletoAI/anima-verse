@@ -9,7 +9,7 @@ run sheet (``~/claude-out/a138/``), not here.
 
 Expected numbers, derived by hand from ``app/core/garment_template.py``:
 
-[1] validate_params: an empty dict gives the PARAM_SPEC defaults (skirt, 0.5 m, flare 0.3, natural, no slit,
+[1] validate_params: an empty dict gives the PARAM_SPEC defaults (skirt, cups none (a top's field, round 2026-11-25), 0.5 m, flare 0.3, natural, no slit,
     0 m, strapless, no sleeves, sleeve fit 0.3, fit 0.3, crew, depth 0, closed, no collar, medium) and NO error. ``length_m`` 2.0 is clamped to the range top 1.2 and reported;
     ``kind`` "cape" is reported and becomes the default "skirt"; ``slit`` "left" with ``slit_m`` 0 takes
     min(0.25, 0.4 * length) — for length 0.5: min(0.25, 0.2) = 0.2; ``slit_m`` 0.6 on a 0.5 m piece is capped at
@@ -131,7 +131,8 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      released (group A, one re-drape of every fitted drape): a fitted kind's ``tsig`` is md5 of the payload
      ``{params: keyed_params, version: TEMPLATE_VERSION, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
      it differs from the pre-release key (the same payload without ``fitted``) in exactly that one component, for
-     briefs, bra, gloves, tights and trousers alike. A top carries no ``fitted`` component: its ``tsig`` still equals
+     briefs, bra, gloves, tights and trousers alike — a bra's payload carries ``"bra_edges": 4`` besides
+     (``BRA_EDGE_VERSION``, round 2026-11-25: its band top is cut straight), no other fitted kind's does. A top carries no ``fitted`` component: its ``tsig`` still equals
      the one ``garment_template.py`` of the base commit c926b67f0 gives (read with ``git show``; skipped with a note
      without git) — no top re-drapes.
 [17] Step 3b (plan group B, Phase A — skirts and strapless tops cut into pattern pieces):
@@ -204,7 +205,7 @@ def close(a, b, tol=1e-4):
 
 # [1]
 p, e = gt.validate_params({})
-check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "length_m": 0.5, "flare": 0.3,
+check("[1] defaults, no error", e == [] and p == {"kind": "skirt", "cups": "none", "length_m": 0.5, "flare": 0.3,
                                                   "waist_height": "natural", "slit": "none", "slit_m": 0.0,
                                                   "shoulders": "strapless", "sleeves": "none", "sleeve_fit": 0.3,
                                                   "fit": 0.3, "neckline": "crew", "neck_depth_m": 0.0,
@@ -690,7 +691,9 @@ for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _pre16 = {"params": gt.keyed_params(_pp16), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got16 = gt.tsig(_pp16, **_kw16)
-    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1", _got16 == gt._md5({**_pre16, "fitted": 1}))
+    _edge16 = {"bra_edges": 4} if _k16 == "bra" else {}
+    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{' + bra_edges 4' if _edge16 else ''}",
+          _got16 == gt._md5({**_pre16, "fitted": 1, **_edge16}))
     check(f"[16] ... and differs from the pre-release key", _got16 != gt._md5(_pre16))
 import importlib.util  # noqa: E402
 import subprocess  # noqa: E402

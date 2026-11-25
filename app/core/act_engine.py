@@ -118,11 +118,14 @@ async def perform_act(actor: str, text: str, scope: str, *,
     if busy:
         logger.warning("Act refused for %s: an earlier action of %s is still "
                        "being narrated (no nested acts)", actor, actor)
+        # The tool log calls this "refused" (it read "ok"); the text itself,
+        # and so what every caller does with it, stays as it was.
+        from app.core.tool_call_log import LoggedAs
         return {"narration": "", "resolved": False, "event_id": None,
                 "tools_fired": [], "busy": True,
-                "summary": (f"Action not performed: {actor}'s previous action "
-                            f"is still being narrated — an action cannot "
-                            f"trigger another action.")}
+                "summary": LoggedAs(f"Action not performed: {actor}'s previous action "
+                                    f"is still being narrated — an action cannot "
+                                    f"trigger another action.", "refused")}
     try:
         return await _perform_act(actor, text, scope, overflow)
     finally:

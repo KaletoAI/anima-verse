@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_camera_math.mjs",
+  "source": "native/tests/Derivations/camera_math.md",
   "fixtures": {
     "WIDE": { "min_x": -100, "max_x": 100, "min_z": -50, "max_z": 50 },
     "TEN": { "min_x": 10, "max_x": 22, "min_z": -20, "max_z": -4 }

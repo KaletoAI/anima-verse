@@ -142,6 +142,19 @@ STRAP_VERSION = 1
 #: laid along the body (``corset_straps`` / ``corset_strap_spec``; ``garment_template_build.shell_straps``). Part of
 #: its drape and cut keys only — a strapless corset's keys stay byte for byte.
 CORSET_STRAPS_VERSION = 1
+#: Round 2026-11-25 (review of the top with cups): a bra's edges (``build_kind`` "bra": a bra and a top with cups) —
+#: the collider is cut along the underbust line before the faces are kept, so the band's top edge round the back is a
+#: straight line instead of the collider's sawtooth, and the free edges are smoothed along themselves
+#: (``garment_template_fitted._relax_edges``). Part of the drape AND the cut key of such a piece only (0 = the keys
+#: before it). 2 (owner rulings 1 and 6): each strap is its own regular strip along its path
+#: (``garment_template_fitted.strap_strip``), a cup covers only body facing forward and its push-up fades out toward
+#: its side edge (no cup side past the torso outline in the back view). 3 (review of 2): a cup covers the breast's side
+#: again, round to a back edge cut straight into the collider (``CUP_BACK_M``), its push-up 0 behind the side contour;
+#: the cloth is cleared at its 4 mm after a tip's sphere joined the collider (5.5 mm before). 4 (round 2026-11-25b, "the
+#: straps are not attached"): each strap strip is sewn onto the cup's top edge and the band's top edge
+#: (``garment_template_fitted.stitch_strip_end``) — one piece with the cups and the band — and moves with the cup's
+#: push-up, the draw toward the middle included, fading out along it.
+BRA_EDGE_VERSION = 4
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -285,6 +298,9 @@ CLOSURES = ("back_hook", "front", "none")
 #: shoulders, down the back to the band) · halter (round the back of the neck) · cross (over the shoulders, crossing
 #: on the back to the other side of the band).
 STRAPS = ("none", "thin", "wide", "halter", "cross")
+#: Round 2026-11-25 (plan "cups in a top"): a top's own cups — "bra" = the top is cut as a bra whose band runs down to
+#: the top's hem (``cupped_top`` / ``build_kind``), "none" = a top as before.
+CUPS = ("none", "bra")
 STRAP_WIDTH_M = {"none": 0.0, "thin": 0.012, "wide": 0.022, "halter": 0.016, "cross": 0.014}
 #: Gloves.
 FINGERS = ("full", "fingerless", "none")
@@ -432,6 +448,7 @@ MATERIAL_ONLY = ("opacity",)
 #: the dialog and ``validate_params``).
 PARAM_SPEC: Dict[str, Tuple[str, Any, Any]] = {
     "kind": ("choice", KINDS, "skirt"),
+    "cups": ("choice", CUPS, "none"),               # a top only: "bra" = cut as a bra with a long band (``cupped_top``)
     "length_m": ("number", (0.15, 1.2), 0.5),       # skirt / dress: from the waist down; top / jacket: from the shoulder line down
     "flare": ("number", (0.0, 1.0), 0.3),           # 0 pencil .. 1 near-circle hem (skirt part)
     "waist_height": ("choice", WAIST_HEIGHTS, "natural"),
@@ -507,7 +524,7 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "dress": ("kind", "fabric", "opacity", "length_m", "flare", "waist_height", "slit", "slit_m", "shoulders", "sleeves",
               "sleeve_fit", "fit", "neckline", "neck_depth_m", *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons",
               "texture", "sleeve_print"),
-    "top": ("kind", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
+    "top": ("kind", "cups", "fabric", "opacity", "length_m", "shoulders", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m",
             *OFF_SHOULDER_FIELDS, "collar", "placket", "buttons", "texture", "sleeve_print"),
     "jacket": ("kind", "fabric", "opacity", "length_m", "fit", "sleeves", "sleeve_fit", "neckline", "neck_depth_m", "front",
                "collar", "placket", "buttons", "texture", "sleeve_print"),
@@ -518,6 +535,32 @@ KIND_FIELDS: Dict[str, Tuple[str, ...]] = {
     "gloves": ("kind", "fabric", "opacity", "fingers", "length", "cuff", "fit", "texture", "sleeve_print"),
     "tights": ("kind", "fabric", "opacity", "tights_style", "feet", "waistband", "garters", "texture", "sleeve_print"),
 }
+
+#: The fields of a top with cups (``cupped_top``): a bra's cup fields and the top's length (the band's hem) — no bodice,
+#: so no shoulders, neckline or sleeves. A top STORES these and its own ``KIND_FIELDS`` both (``stored_params``); only
+#: the set of ``fields_of`` is active (``validate_params``).
+TOP_CUPS_FIELDS = ("kind", "cups", "fabric", "opacity", "length_m", "cup_style", "cup_coverage", "push_up",
+                   "center_gore", "closure", "straps", "texture", "sleeve_print")
+
+
+def cupped_top(params: Optional[Dict[str, Any]]) -> bool:
+    """Round 2026-11-25: a top with its own cups (``cups`` "bra") — built as a bra whose band reaches the top's hem."""
+    return bool(params) and params.get("kind") == "top" and params.get("cups") == "bra"
+
+
+def build_kind(params: Dict[str, Any]) -> str:
+    """THE one switch between what a piece IS and how it is BUILT: "bra" for a top with cups (``cupped_top``), else its
+    kind. Every build decision (fitted or bodice / corset / panel, poses, shape groups, keys, the cut's family, the
+    preview) reads this; the piece's layer rank (``LAYER_RANK``), body regions and name stay its kind's."""
+    return "bra" if cupped_top(params) else str(params.get("kind") or "")
+
+
+def fields_of(params: Dict[str, Any]) -> Tuple[str, ...]:
+    """The ACTIVE fields of a piece: ``TOP_CUPS_FIELDS`` for a top with cups, else its kind's ``KIND_FIELDS``."""
+    if cupped_top(params):
+        return TOP_CUPS_FIELDS
+    return KIND_FIELDS.get(params.get("kind"), tuple(PARAM_SPEC))
+
 
 #: Spec section 8 pass marks (hand-derived in ``scripts/smoke_garment_template_spike.py``).
 THRESHOLDS = {
@@ -600,7 +643,7 @@ ARM_GROUPS = [{"name": "arm_" + side[0].lower(), "side": side[0].lower(), "frame
 def has_bodice(params: Dict[str, Any]) -> bool:
     """A jacket, a covered or off-shoulder top (A221; a corset top — strapless or with straps — is a shell,
     ``corset_top``), or a dress with straps or a covered bodice (Ruling A142)."""
-    kind = params["kind"]
+    kind = build_kind(params)
     if kind == "top":
         return not corset_top(params)
     return kind == "jacket" or (kind == "dress" and params["shoulders"] != "strapless")
@@ -610,25 +653,25 @@ def panel_piece(params: Dict[str, Any]) -> bool:
     """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a corset
     top (``corset_top``). Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live
     ``uv_pattern.py``."""
-    return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
-                                                 and params.get("shoulders") in ("strapless", "straps"))
+    kind = build_kind(params)
+    return kind in PANEL_KINDS or (kind == "top" and params.get("shoulders") in ("strapless", "straps"))
 
 
 def corset_straps(params: Dict[str, Any]) -> bool:
     """Round 2026-11-25 (Lirien): a corset top with straps — the shell of a strapless one (``corset_top``) plus two
     straps over the shoulders (``corset_strap_spec``). Its drape and cut keys carry ``CORSET_STRAPS_VERSION``."""
-    return params.get("kind") == "top" and params.get("shoulders") == "straps"
+    return build_kind(params) == "top" and params.get("shoulders") == "straps"
 
 
 def leg_piece(params: Dict[str, Any]) -> bool:
     """Stage "geometry": a piece whose rows below the crotch may follow the legs (``LEG_VERSION``) — a skirt, a dress."""
-    return params.get("kind") in ("skirt", "dress")
+    return build_kind(params) in ("skirt", "dress")
 
 
 def strap_piece(params: Dict[str, Any]) -> bool:
     """Stage "geometry": a strapped dress or top built with a crew-like yoke (not a corset with a strapless neckline,
     whose straps A221 draws in already) — its straps and top edge are drawn straight (``STRAP_VERSION``)."""
-    return (params.get("kind") in ("dress", "top") and params.get("shoulders") == "straps"
+    return (build_kind(params) in ("dress", "top") and params.get("shoulders") == "straps"
             and params.get("neckline") not in STRAPLESS_NECKLINES)
 
 
@@ -637,7 +680,7 @@ def neck_rules(params: Dict[str, Any]) -> bool:
     the B8 neckband, the relaxed band and stand-collar strips, the placket's lines) — every jacket and dress, and a top
     only with a ``collar`` or a ``placket`` set. A top with neither keeps the cut it had before the phases, byte for
     byte (its band and all: ``scripts/smoke_template_cut_tops_main.py``)."""
-    kind = params.get("kind")
+    kind = build_kind(params)
     if kind in ("jacket", "dress"):
         return True
     return kind == "top" and (str(params.get("collar") or "none") != "none"
@@ -648,7 +691,7 @@ def neck_piece(params: Dict[str, Any]) -> bool:
     """Phases E + F: a piece whose CUT key carries ``NECK_VERSION`` — a jacket, a dress, and a covered top cut by the
     phase rules (``neck_rules``: a collar or a placket). An off-shoulder / strapped top with a placket keeps its key:
     its islands are the same bytes either way, only its placket line is written (B11)."""
-    if params.get("kind") in ("jacket", "dress"):
+    if build_kind(params) in ("jacket", "dress"):
         return True
     return neck_rules(params) and params.get("shoulders") == "covered"
 
@@ -658,7 +701,7 @@ def corset_top(params: Dict[str, Any]) -> bool:
     sweetheart), the straps (if any) run from it over the shoulders. Corset v2..v9: laid on the body as a shell
     (``garment_template_build.corset_shell``), never draped; round 2026-11-25: with straps too (they were a bodice's
     yoke cut down to the band: stepped edges, flaps under the arms, a gap at the back)."""
-    return params["kind"] == "top" and params["shoulders"] in ("strapless", "straps")
+    return build_kind(params) == "top" and params["shoulders"] in ("strapless", "straps")
 
 
 def has_sleeves(params: Dict[str, Any]) -> bool:
@@ -712,7 +755,7 @@ def shape_groups(params: Dict[str, Any], long_top: bool = False) -> List[Dict[st
     piece with a bodice gets the two arm groups (``ARM_SHAPE_POSES``; a dress only ``DRESS_ARM_SHAPE_POSES``); a top
     or jacket whose hem reaches below the hip joints (``long_top``) also the sit shape (its hem lies on the lap)."""
     groups: List[Dict[str, Any]] = []
-    if params["kind"] in FITTED_KINDS:
+    if build_kind(params) in FITTED_KINDS:
         # A223: a fitted piece follows the skin by its weights alone (a sit shape drape of briefs was tried on Glut's
         # body: the pinned cloth folded through the chest, stretch 648 — left out)
         return []
@@ -737,8 +780,8 @@ FITTED_POSES = {"briefs": MEASURED_POSES, "bra": ("rest", "walk", "arms_down", "
 
 
 def measured_poses(params: Dict[str, Any]) -> Tuple[str, ...]:
-    if params["kind"] in FITTED_POSES:
-        return FITTED_POSES[params["kind"]]
+    if build_kind(params) in FITTED_POSES:
+        return FITTED_POSES[build_kind(params)]
     if has_bodice(params):
         return MEASURED_UPPER_POSES if params["kind"] != "dress" else (*MEASURED_POSES, "arms_down", "arms_up")
     return MEASURED_POSES
@@ -893,7 +936,7 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
     z = _number(((metrics.get("drape") or {}).get("stretch_at") or {}).get("z"))
     top_y, length, asked = (_number(outline_.get("top_y")), _number(outline_.get("length")),
                             _number(params.get("length_m") if isinstance(params, dict) else None))
-    if (not isinstance(params, dict) or params.get("kind") not in ("top", "jacket") or None in (z, top_y, length, asked)
+    if (not isinstance(params, dict) or build_kind(params) not in ("top", "jacket") or None in (z, top_y, length, asked)
             or "band_y" not in meas or "waist_y" not in meas):
         return None
     try:
@@ -952,10 +995,28 @@ def _number(value: Any) -> Optional[float]:
 
 
 def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
-    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC``: every field present
-    (a missing one takes its default and is NOT an error), choices lower-cased, numbers
-    clamped into their range (a clamp is reported). Unknown keys are dropped. ``errors``
-    lists what was wrong; a non-dict is one error and all defaults."""
+    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC`` — the ACTIVE set every build, key, region and
+    prompt path reads (``params_of``): ``stored_params``, then every field outside ``fields_of`` at its default, so a
+    stale or parked field never changes a key. A top without cups gives exactly what it gave before ``cups``; a top
+    with cups has its top fields (shoulders, neckline, sleeves, ...) at the schema defaults."""
+    params, errors = stored_params(raw)
+    if isinstance(raw, dict) and params["kind"] == "top":
+        # only a top stores more than its active fields (plan E6): the parked set goes to its defaults — the cup
+        # fields of a top without cups (as before ``cups``), the top's own fields of a top with cups
+        active = fields_of(params)
+        for key in set(KIND_FIELDS["top"]) | set(TOP_CUPS_FIELDS):
+            if key not in active:
+                params[key] = PARAM_SPEC[key][2]
+    return params, errors
+
+
+def stored_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """``(params, errors)`` of a parameter dict against ``PARAM_SPEC`` as it is STORED (``set_params``) and edited (the
+    template dialog): every field present (a missing one takes its default and is NOT an error), choices lower-cased,
+    numbers clamped into their range (a clamp is reported). Unknown keys are dropped. ``errors`` lists what was wrong;
+    a non-dict is one error and all defaults. The fields of the piece's kind are kept, the others reset to their
+    defaults — a top keeps both its own fields and the cup fields (``TOP_CUPS_FIELDS``) whichever set is active, each
+    normalised by its own rules, so switching ``cups`` back and forth loses nothing (plan E6)."""
     params: Dict[str, Any] = {}
     errors: List[str] = []
     if not isinstance(raw, dict):
@@ -986,8 +1047,11 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     # stored top without the field keeps its bodice
     if kind == "top" and raw.get("shoulders") in (None, ""):
         params["shoulders"] = "covered"
+    keep = KIND_FIELDS.get(kind, tuple(PARAM_SPEC))
+    if kind == "top":
+        keep = keep + TOP_CUPS_FIELDS
     for key in PARAM_SPEC:
-        if key not in KIND_FIELDS.get(kind, tuple(PARAM_SPEC)):
+        if key not in keep:
             params[key] = PARAM_SPEC[key][2]
     if kind == "jacket":
         params["shoulders"] = "covered"
@@ -996,7 +1060,8 @@ def validate_params(raw: Any) -> Tuple[Dict[str, Any], List[str]]:
     if kind in ("dress", "top") and params["shoulders"] != "covered":
         params["collar"] = "none"      # a collar needs a neck ring (no straps, not strapless, not off-shoulder)
     params["buttons"] = int(round(params["buttons"]))
-    if corset_top(params):
+    # the top's own fields are normalised as a top's, parked or not (a corset top's edge, A221)
+    if kind == "top" and params["shoulders"] in ("strapless", "straps"):
         params["sleeves"] = "none"
         if params["neckline"] not in STRAPLESS_NECKLINES:
             params["neckline"] = "straight"
@@ -1164,6 +1229,15 @@ def params_of(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return validate_params(stored)[0]
 
 
+def stored_of(item: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The item's template parameters as stored and edited (``stored_params``: a top's parked field set included),
+    None when it has none stored. Only the template dialog reads this; every build path reads ``params_of``."""
+    stored = template_of(item).get("params")
+    if not isinstance(stored, dict):
+        return None
+    return stored_params(stored)[0]
+
+
 def suggest_params(item_id: str, *, character_name: str = "") -> Dict[str, Any]:
     """``{params, errors, raw}`` — the template parameters the vision task ``TASK`` reads off the item's picture
     and text (ONE queued ``llm_router.llm_call``; saves nothing). ValueError for an item that is no outfit piece
@@ -1188,7 +1262,7 @@ def suggest_params(item_id: str, *, character_name: str = "") -> Dict[str, Any]:
         raw = parse_answer(text)
     except ValueError as e:
         raise RuntimeError(str(e)) from e
-    params, errors = validate_params(raw)
+    params, errors = stored_params(raw)             # what the dialog edits (plan E6)
     return {"params": params, "errors": errors, "raw": raw}
 
 
@@ -1203,7 +1277,7 @@ def set_params(item_id: str, params: Dict[str, Any], *, source: str = "user") ->
         item = get_item(item_id)
         if not item or item.get("category") != "outfit_piece":
             raise ValueError(f"{item_id} is no outfit piece")
-        clean, errors = validate_params(params)
+        clean, errors = stored_params(params)       # plan E6: both field sets of a top are kept
         if errors:
             raise ValueError("; ".join(errors))
         piece = dict(item.get("outfit_piece") or {})
@@ -1558,7 +1632,7 @@ def _clear_underbust(params: Dict[str, Any], meas: Dict[str, Any], hem_y: float,
     record and the UI (``{under_y, from_y, hem_y, length_m (asked), draped_length_m}``, lengths counted from
     ``length_from``, the line ``length_m`` counts from); any other hem stays (``moved`` None), and so does every hem
     on a body without a fold (``_underbust_fold``)."""
-    fold = _underbust_fold(meas) if params.get("kind") in ("top", "jacket") else None
+    fold = _underbust_fold(meas) if build_kind(params) in ("top", "jacket") else None
     if fold is None:
         return hem_y, None
     under_y = fold[0]
@@ -1774,7 +1848,7 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
     from app.third_party.pygarment.garmentcode.panel import Panel
     if params["kind"] not in BUILT_KINDS:
         raise ValueError(KIND_NOT_BUILT.format(kind=params["kind"]))
-    if params["kind"] in FITTED_KINDS:
+    if build_kind(params) in FITTED_KINDS:
         return fitted_spec(params, meas)
     shape = outline(params, meas, over_sleeves=over_sleeves, tuck=tuck)
     knots = shape["knots"]
@@ -2014,10 +2088,13 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
       ``MIN_PIN_BAND_M``); ``leg_cut`` / ``back_coverage`` / ``side_width_m`` shape the leg openings (builder);
     * bra: ``under_y`` / ``bust_y`` (``_bust_lines``), the band ``band_m`` under the underbust line (``BACK_STRAP_M``
       round the back without one), the gore (``GORE``), ``push`` and the straps (``strap_spec``);
+      a top with cups (``cupped_top``, built as a bra) adds ``hem_y`` (its band runs down to it: the hem of
+      ``length_m``, held between the waist and ``BACK_STRAP_M`` under the underbust line), ``hem_clamped`` (hem - asked
+      hem, 0 when nothing was held) and ``top``; a bra's dict is the one it always was;
     * trousers (A233): ``trouser_spec`` — the waistband, the hem rule, the leg shape's radii, the gap, the pins;
     * gloves: ``reach_m`` = how far the cuff reaches from the wrist up the arm (``GLOVE_REACH`` of the measured
       forearm / upper arm), the gap ``offset_m`` (``FITTED_OFFSET_M`` + ``GLOVE_FIT_M`` x fit), the cuff."""
-    kind = params["kind"]
+    kind = build_kind(params)
     fit: Dict[str, Any] = {"kind": kind, "offset_m": FITTED_OFFSET_M, "frames": FITTED_FRAMES}
     if kind == "briefs":
         top = meas["hip_y"] + RISE_SHARE[params["rise"]] * (meas["waist_y"] - meas["hip_y"])
@@ -2050,6 +2127,18 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "rigid_cups": params["cup_style"] == "molded",
                     "push_m": [PUSH_LIFT_M, PUSH_IN_M, PUSH_OUT_M], "straps": strap_spec(params, meas)})
         rows = [round(meas.get("shoulder_y", bust + 0.15), 4), round(under - max(band, BACK_STRAP_M), 4)]
+        if cupped_top(params):
+            # round 2026-11-25 (plan E4): a top with cups is a bra whose band runs from the underbust line down to the
+            # top's hem (``length_m`` from the shoulder line, ``_length_origin``) — never below the waist (under it the
+            # body widens again to the hip: the band, pinned whole and flattened as one ring, would be an hourglass),
+            # and at least ``BACK_STRAP_M`` (``min`` last: a waist over the underbust line gives the thin band). The hem
+            # is written ABSOLUTE: the builder measures the band from the fold it finds (``bra_region``).
+            want = _length_origin(meas, None) - float(params["length_m"])
+            hem_y = min(max(want, float(meas["waist_y"])), under - BACK_STRAP_M)
+            band = max(BACK_STRAP_M, under - hem_y)
+            fit.update({"band_m": round(band, 4), "hem_y": round(hem_y, 4), "top": True,
+                        "hem_clamped": round(hem_y - want, 4) if abs(hem_y - want) > 1e-6 else 0.0})
+            rows = [rows[0], round(hem_y, 4)]
     elif kind == "tights":
         style = params["tights_style"]
         top = meas["waist_y"] if style == "tights" else None      # the others: per leg, read off the bones (builder)
@@ -2138,6 +2227,8 @@ def keyed_params(params: Dict[str, Any]) -> Dict[str, Any]:
     that mean nothing for the piece's kind; the leather finishes share one drape fabric. ``garment_template_cut``
     keys the cut by the same set less the drape-only fields."""
     params = {k: v for k, v in params.items() if k not in MATERIAL_ONLY and k not in TEXTURE_ONLY}
+    if params.get("cups") != "bra":                     # round 2026-11-25: only a top with cups keys ``cups``
+        params.pop("cups", None)
     if params.get("kind") != "trousers":                # A233: the trouser fields key only trousers
         params = {k: v for k, v in params.items() if k not in TROUSER_FIELDS}
     if params.get("shoulders") != "off_shoulder":      # A229: the off-shoulder fields key only an off-shoulder piece
@@ -2162,7 +2253,7 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if params.get("kind") == "dress" and not has_bodice(params):
         # A223: a strapless dress's top edge moved under the chest band — only these drapes are due again
         payload["strapless_top_m"] = STRAPLESS_UNDERARM_M
-    if params.get("kind") in FITTED_KINDS and FITTED_VERSION:
+    if build_kind(params) in FITTED_KINDS and FITTED_VERSION:
         # step 3a (D7 b): the fitted kinds' own version — only their drapes are due again (0 = the keys before it)
         payload["fitted"] = FITTED_VERSION
     if panel_piece(params):
@@ -2178,6 +2269,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if corset_straps(params):
         # round 2026-11-25: a strapped corset top is that shell plus its straps
         payload["corset_straps"] = CORSET_STRAPS_VERSION
+    if build_kind(params) == "bra" and BRA_EDGE_VERSION:
+        # round 2026-11-25: straight band top, smoothed free edges (``BRA_EDGE_VERSION``; 0 = the keys before it)
+        payload["bra_edges"] = BRA_EDGE_VERSION
     return _md5(payload)
 
 
@@ -2338,7 +2432,9 @@ def body_regions(params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]
             out = {"chest", "waist", "hip", "leg"}
         else:   # top, jacket
             out = {"chest", "waist"}
-            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M:
+            # owner ruling 3 (round 2026-11-25): a top with cups never reaches the hip — its hem is held at the waist
+            # at the lowest (``fitted_spec``), whatever its length says
+            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M and not cupped_top(params):
                 out.add("hip")
         if has_sleeves(params):
             out.add("arm")
@@ -2396,6 +2492,29 @@ def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[
         elif other in below and garment_set.garment_kind_of(it) == garment_set.CLOTHING:
             own.append((other, it))
     return templates, own
+
+
+#: Owner ruling 2 (round 2026-11-25): what ``figure.worn_sets`` says of a bra worn under a top with cups — it is left
+#: out of both figures (the top's cups replace it), as underwear goes unseen under a dress.
+HIDDEN_BY_CUPS = "Hidden: the top's cups replace it"
+
+
+def hidden_by_cups(item_ids: Any) -> Dict[str, str]:
+    """Owner ruling 2 (round 2026-11-25): ``{bra id: top id}`` of the worn template bras a worn top with cups
+    (``cupped_top``) lies over — by the layer rules every outer piece uses (``inner_pieces``: ``layer_order`` /
+    ``LAYER_RANK``, and only when the two can touch, ``regions_overlap``). Such a bra is hidden: the top is built as a
+    bra on the skin and its cups replace the bra's (built both, the top's cups lay under the bra's and its straps
+    were lost). Empty when no top with cups is worn."""
+    from app.models.inventory import get_item
+    ids = sorted({str(i) for i in item_ids or () if i})
+    out: Dict[str, str] = {}
+    for top in ids:
+        if not cupped_top(params_of(get_item(top))):
+            continue
+        for other, it in inner_pieces(top, "top", ids)[0]:
+            if (params_of(it) or {}).get("kind") == "bra" and other not in out:
+                out[other] = top
+    return out
 
 
 def collider_pieces(item_id: str, kind: str, lower: List[str]) -> List[Tuple[str, Dict[str, Any]]]:
@@ -2535,6 +2654,90 @@ def own_fallback_mode(character_name: str, item_id: str, *, base_sha: str, lower
     return mode if mode in OWN_FALLBACK_MODES else "full"
 
 
+#: Version of the drape's extension-part colliders (``body_colliders``; the ``body:`` token of ``under_tokens``).
+BODY_COLLIDER_VERSION = 1
+
+
+def base_meta_for(character_name: str, base_sha: str) -> Dict[str, Any]:
+    """The sidecar of the base model the drape runs on (``model3d/<bsig>.json``) while the current base is the one
+    of ``base_sha``; {} otherwise (no stored variant: ``stored_mesh_variant`` gives "")."""
+    from app.core import base_body
+    from app.models.character import get_character_dir
+    base = base_body.current_base(character_name)
+    if not base or base[1] != base_sha:
+        return {}
+    path = get_character_dir(character_name) / "model3d" / f"{base[0]}.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def body_colliders(character_name: str, item_id: str, lower: List[str], *, base_meta: Dict[str, Any],
+                   profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The extension groups the drape of ``item_id`` over ``lower`` lays its cloth over (plan anatomy, H3): every
+    group of the base model (``rig_groups_for`` at the base's stored mesh variant — the group set follows the
+    model the drape loads, not the clothing) that declares ``drape_collider``, is COVERED (``cover_state`` over
+    ``lower`` + the piece; hidden = the part is not on the model) and whose ``covered_by`` the piece itself touches.
+    ``[{group, inflate, radius (None = the attached part itself), bones (the last bone of each chain)}]``, sorted
+    by group."""
+    from app.core import model3d
+    from app.core.extension_rig import COVERED, _slot_names, cover_state, pieces_of, rig_groups_for
+    from app.models.inventory import get_item
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    ids = sorted({str(i) for i in (lower or [])} | {str(item_id)})
+    items = {i: get_item(i) or {} for i in ids}
+    pieces = pieces_of(ids, items)
+    piece = (items.get(str(item_id)) or {}).get("outfit_piece") or {}
+    touched = _slot_names(list(piece.get("slots") or []) + list(piece.get("covers") or [])
+                          + list(piece.get("partially_covers") or []))
+    out = []
+    for group in rig_groups_for(character_name, profile, mesh_variant=model3d.stored_mesh_variant(character_name,
+                                                                                                    base_meta)):
+        spec = group.get("drape_collider")
+        if not spec or not touched & _slot_names(group.get("covered_by") or []):
+            continue
+        if cover_state(group, pieces, items) != COVERED:
+            continue
+        out.append({"group": group["id"], "inflate": float(spec["inflate"]),
+                    "radius": None if spec.get("radius") is None else float(spec["radius"]),
+                    "bones": [chain[-1]["bone"] for chain in group.get("chains") or [] if chain]})
+    return sorted(out, key=lambda entry: entry["group"])
+
+
+def cut_body_colliders(character_name: str, item_id: str, lower: List[str], *, base_sha: str,
+                       profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The ``body_colliders`` the CUT of the piece reads (``garment_template_cut``): the attached parts only
+    (``radius`` None) — a part reaches centimetres out and the panels are laid round it. A tip's sphere joins the
+    drape's collider only after the pattern UVs (``garment_template_build._join_body_collider_late``), so it never
+    changes the islands. [] when no package declares a ``drape_collider``."""
+    if not any_drape_collider():
+        return []
+    return [c for c in body_colliders(character_name, item_id, lower, base_meta=base_meta_for(character_name, base_sha),
+                                      profile=profile) if c.get("radius") is None]
+
+
+def any_drape_collider() -> bool:
+    """Whether any loaded package declares a ``drape_collider`` (else the key path reads no base sidecar)."""
+    from app.plugins.registry import packages
+    return any(rig.drape_collider for package in packages() for slot in package.body_slots for rig in slot.rigs)
+
+
+#: The prefix of the ``body:`` token (``body_token``); the cut sig leaves it out (``garment_template_cut.sig_of``).
+BODY_TOKEN_PREFIX = "body:"
+
+
+def body_token(colliders: List[Dict[str, Any]]) -> Optional[str]:
+    """The ``body:`` token of ``under_tokens`` for ``body_colliders``; None for none."""
+    if not colliders:
+        return None
+    return BODY_TOKEN_PREFIX + ",".join(f"{c['group']}:{c['inflate']}:{c['radius'] if c['radius'] is not None else '-'}"
+                              for c in colliders) + f":v{BODY_COLLIDER_VERSION}"
+
+
 def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, base_sha: str, lower: List[str],
                  item: Optional[Dict[str, Any]] = None,
                  states: Optional[List[Tuple[str, Dict[str, Any], Dict[str, Any]]]] = None) -> List[str]:
@@ -2558,13 +2761,19 @@ def under_tokens(character_name: str, item_id: str, params: Dict[str, Any], *, b
         # bug round 2026-11-20: a jacket over a draped sleeved layer is cut wider (``layer_ease``) — only these
         # re-drape, and again when that layer's drape becomes ready or goes, or the allowance changes
         under.append(f"ease:over_sleeves:{JACKET_SLEEVE_EASE}:outer{OUTER_SLEEVE_VERSION}")
-    if under and params["kind"] in FITTED_KINDS:
+    if under and build_kind(params) in FITTED_KINDS:
         # A237: a fitted piece over lower layers (a loose one clipped, a boot left out of the cut) — only these re-drape
         under.append("cut:body")
     # corset v3: a strapless top reaches under the waistband of the skirt / trousers worn with it (``tuck_lines``)
     tucks = tuck_lines(params, lower)
     if tucks:
         under.append("tuck:" + ",".join(tucks) + f":{STRAPLESS_TUCK_M}")
+    # plan anatomy (H3): a covered extension part the piece lies over is a drape collider — only these re-drape
+    if any_drape_collider():
+        token = body_token(body_colliders(character_name, item_id, lower,
+                                          base_meta=base_meta_for(character_name, base_sha)))
+        if token:
+            under.append(token)
     # A228: a piece that shapes the chest under it re-drapes when its lift changes (``bust_shaping``)
     from app.core import bust_shaping
     under += bust_shaping.key_tokens(item_id, item, lower, character_name=character_name)
@@ -2882,7 +3091,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
     groups = shape_groups(params, long_top=long_top) if corrective else []
     return {"spec": spec, "fabric": fabric, "torso_half_m": round(torso, 4), "slit": {"side": params["slit"], "depth_m": params["slit_m"]},
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
-            "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
+            "pin": "top", "kind": build_kind(params), "item_id": item_id, "node": f"garment_template_{item_id}",
             # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
             **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if corset_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
@@ -2896,7 +3105,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             **({"waistband_m": WAISTBAND_M[params["waistband"]]} if params["kind"] == "skirt" else {}),
             # phases E + F: a top with a collar or a placket is cut by the neck-ring rules (``neck_rules``); without
             # them the arguments are the ones before the phases
-            **({"neck_rules": True} if params["kind"] == "top" and neck_rules(params) else {}),
+            **({"neck_rules": True} if build_kind(params) == "top" and neck_rules(params) else {}),
             # stage "geometry": rows below the crotch round the legs (``LEG_VERSION``), straight straps (``STRAP_VERSION``)
             **({"leg_centres": True} if leg_piece(params) else {}),
             **({"straight_straps": True} if strap_piece(params) else {})}
@@ -3293,7 +3502,8 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
               lower: Optional[List[Tuple[Path, Any]]] = None,
               live: Optional[Tuple[str, str]] = None,
               lower_offsets: Optional[List[float]] = None, over_sleeves: bool = False,
-              tuck: Tuple[str, ...] = ()) -> Dict[str, Any]:
+              tuck: Tuple[str, ...] = (),
+              body_colliders: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Measure, make the panels and drape on ``body_glb`` (one Blender run; one retry with doubled
     quality when the stretch is above ``RETRY_STRETCH`` or a narrow miss, ``retry_due``; the retry's result is
     judged and carries ``data.retry``). ``lower`` = [(drape GLB, its pose-shape payload)] of the
@@ -3329,6 +3539,9 @@ def _run_drape_once(body_glb: Path, params: Dict[str, Any], sources: Dict[str, s
         args = build_args(params, spec, item_id=item_id, render=render, poses=poses, quality_scale=scale,
                           corrective=corrective, lower_shapes=[payload for _p, payload in lower or []],
                           lower_offsets=lower_offsets)
+        if body_colliders:
+            # plan anatomy (H3): the covered extension parts / tips the cloth lies over (``body_colliders``)
+            args["body_colliders"] = body_colliders
         if live is not None:
             progress_file.unlink(missing_ok=True)
             args["progress_file"] = str(progress_file)
@@ -3483,10 +3696,12 @@ def _build_drape(character_name: str, item_id: str, *, key: Tuple[str, str], pro
         from app.core import bust_shaping
         body, shaping, shaping_note = bust_shaping.prepare(body, item_id, item, lower, scratch / "shaping",
                                                            character_name=character_name)
+        parts = body_colliders(character_name, item_id, lower, profile=profile,
+                               base_meta=base_meta_for(character_name, base_sha))
         result, inner = drape_with_fallback(
             lambda cols, offsets, sub: run_drape(body, params, sources, item_id=item_id, out_dir=scratch / sub,
                                                  lower=cols, live=key, lower_offsets=offsets, over_sleeves=over,
-                                                 tuck=tuck_lines(params, lower)),
+                                                 tuck=tuck_lines(params, lower), body_colliders=parts),
             colliders, own)
         colliders = colliders + (own if inner["mode"] != "dropped" else [])
         # cut-first (2026-11-21): the cut this drape was laid out of (``garment_template_cut.cut_sig``); stage

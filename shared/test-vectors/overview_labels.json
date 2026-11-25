@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_overview_labels.mjs",
+  "source": "native/tests/Derivations/overview_labels.md",
   "cases": [
     { "label": "[V1] 40 m, shown, not first person -> visible", "fn": "tagVisible", "args": [40, false, false], "expect": true },
     { "label": "[V2] 54.999 m -> still visible", "fn": "tagVisible", "args": [54.999, false, false], "expect": true },

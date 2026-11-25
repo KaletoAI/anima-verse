@@ -48,6 +48,11 @@ keeps less than all of its volume. The positions are the flow of v over unit tim
 steps). Behind the wall by more than ``BACK_M`` (the back, the arms' undersides), farther than
 ``off + SIDE_PAST_M[1]`` from the middle and above ``cap_y`` nothing moves.
 ``scripts/smoke_bust_shaping.py`` derives the numbers by hand.
+
+A top with cups (round 2026-11-25, ``garment_template.cupped_top``) is a bra with a long band: it never shapes the body
+(``applies`` reads the build kind, "bra", which is no ``SHAPING_KINDS`` kind); its cups' push-up lifts the cloth, as a
+bra's does. It still drapes on the shaped body when ANOTHER piece of the worn set shapes it (it is a ``CHEST_KINDS``
+top), and its lift slider then only moves the extension bones (``extension_rig``), as a bra's.
 """
 from __future__ import annotations
 
@@ -149,8 +154,10 @@ def lift_of(item: Optional[Dict[str, Any]]) -> float:
 
 
 def applies(params: Optional[Dict[str, Any]], lift: float) -> bool:
-    """Whether a template piece with ``params`` and ``lift`` shapes the chest under it."""
-    return bool(params) and params.get("kind") in SHAPING_KINDS and lift > 0.0
+    """Whether a template piece with ``params`` and ``lift`` shapes the chest under it — by how it is BUILT
+    (``garment_template.build_kind``): a top with cups is a bra with a long band and never shapes (module docstring)."""
+    from app.core.garment_template import build_kind
+    return bool(params) and build_kind(params) in SHAPING_KINDS and lift > 0.0
 
 
 def _column(P, x: float, y0: float, y1: float):
@@ -695,7 +702,7 @@ def previous_drape(character_name: str, item_id: str, item: Optional[Dict[str, A
     figure in between. Only a drape whose shaping differs from the set's now (its lift, or none) stands in — any
     other change of the key leaves the piece off as before. ``{tsig, path, record}`` or None."""
     from app.core.garment_store import read_record
-    from app.core.garment_template import drape_metas
+    from app.core.garment_template import drape_metas, validate_params
     lift_now = round(set_lift(list(lower or []) + [item_id], {item_id: item} if item else None,
                               character_name=character_name), 4) \
         if key_tokens(item_id, item, lower, character_name=character_name) else 0.0
@@ -704,7 +711,7 @@ def previous_drape(character_name: str, item_id: str, item: Optional[Dict[str, A
         rec = read_record(meta)
         glb = meta.with_suffix(".glb")
         if (rec.get("accepted") is not True or not glb.is_file() or rec.get("base_model_sha256") != base_sha
-                or rec.get("params") != params or sorted(rec.get("lower") or []) != sorted(lower or [])
+                or validate_params(rec.get("params") or {})[0] != params or sorted(rec.get("lower") or []) != sorted(lower or [])
                 or round(float((rec.get("shaping") or {}).get("lift") or 0.0), 4) == lift_now):
             continue
         stamp = str(rec.get("created_at") or "")

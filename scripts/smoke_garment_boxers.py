@@ -8,6 +8,8 @@ Expected numbers derived by hand from the spec:
 * boxers (leg 0.14, fit 0.1): ``leg_cut`` reset to 0.5 (ignored); offset = 0.004 + 0.02 x 0.1 = 0.006 m; fit 0.1
   <= 0.3 -> hems pinned; loose fit 0.8 -> offset 0.004 + 0.016 = 0.020, hems not pinned.
 * rows bottom = hip_y - 0.2 - leg: hip 0.95 -> 0.95 - 0.2 - 0.14 = 0.61.
+* ``cups`` is ``"none"`` on every kind's params but leaves every key unless it is ``"bra"`` (E5), so a brief's key
+  stays the one before the cup fields.
 * preview: crotch = leftupleg y - 0.06 = 0.90 - 0.06 = 0.84; hem = 0.84 - 0.14 = 0.70 (the "hem" dash line's y).
 """
 import os
@@ -42,6 +44,7 @@ old.pop("string_width_m")
 for _k in gt.TROUSER_FIELDS:  # A233: the trouser fields key only trousers
     old.pop(_k)
 old.pop("gusset_m")         # step 3a: the default crotch width leaves the key as well
+old.pop("cups")             # E5: cups leaves every key unless it is "bra"
 check("brief key unchanged", gt.tsig(brief, base_sha="b", texture_sha="t", lower=[]),
       gt._md5({"params": {k: v for k, v in old.items() if k not in gt.MATERIAL_ONLY
                           and k not in gt.TEXTURE_ONLY and k not in gt.OFF_SHOULDER_FIELDS},

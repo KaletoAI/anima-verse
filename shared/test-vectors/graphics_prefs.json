@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_graphics_prefs.mjs",
+  "source": "scripts/smoke_graphics_prefs.mjs",
   "comment": "Auto: budget=1920*1080. 1920x1080 and 1600x900 <= budget -> 1; 2560x1440 sqrt(.5625)=.75; 3840x1080 sqrt(.5)=.7071 -> floor .70; 3840x2160 sqrt(.25)=.5; 5120x1440 sqrt(.28125)=.5303 -> floor .5; 7680x2160 sqrt(.125)=.3536 -> floor .35 -> clamp .5. Steps use floor(sqrt(budget/pixels)*20)/20. Task 110: all three added switches default true independently. Only JSON booleans survive; strings, numbers, null, arrays and objects fall back to true without resetting other valid fields. Old values keep AA/shadows/scale and enable the new features.",
   "cases": [
     {"label": "[110] older stored value keeps existing settings", "fn": "loadGraphicsPrefs", "args": ["{\"antiAliasing\":\"4x\",\"shadows\":false,\"renderScale\":0.66}"], "expect": {"antiAliasing": "4x", "shadows": false, "renderScale": 0.66, "waterMirrors": true, "lampLights": true, "fogHorizon": true}},

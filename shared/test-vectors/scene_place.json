@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_place_rotation.mjs",
+  "source": "scripts/smoke_place_rotation.mjs",
   "fixtures": {
     "UNIT": [{"min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}],
     "BASE": {"role":"building","id":"x","url":"","level":0,"measure":"xyz","max_m":4,"anchor":[0,0],"bottom_y":0},

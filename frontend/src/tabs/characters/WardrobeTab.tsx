@@ -303,8 +303,9 @@ export function WardrobeTab({ character, onOpenFigure }: {
   const [pickId, setPickId] = useState('')
   const [pickQty, setPickQty] = useState(1)
   useEffect(() => {
-    apiGet<{ items?: Array<{ item_id: string; name: string; category?: string }> }>('/inventory/items')
-      .then((d) => setAllItems(d.items || []))
+    apiGet<{ items?: Array<{ item_id: string; name: string; category?: string; part?: boolean }> }>('/inventory/items')
+      // design G: a part item (buckle / pendant / charm) is worn through its chain or belt, never carried
+      .then((d) => setAllItems((d.items || []).filter((i) => !i.part)))
       .catch(() => setAllItems([]))
   }, [])
   const figRef = useRef<HTMLDivElement>(null)

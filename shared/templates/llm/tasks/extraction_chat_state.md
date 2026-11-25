@@ -82,5 +82,6 @@ Stat sources (only the required pairs above may be evaluated):
 {% for source in stat_sources %}
 {{ source.id }} — actor: {{ source.actor or "self / unattributed" }}; medium: {{ source.medium }}
 {% if rp_first | default(false) and (source.text == source_text or (source.medium == "self" and source_text == "Character: " ~ source.text)) %}See {{ source_label }} above.{% else %}{{ source.text }}{% endif %}
+
 {% endfor %}
 {% endif %}

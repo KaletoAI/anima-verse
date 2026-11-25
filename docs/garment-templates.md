@@ -695,6 +695,74 @@ time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back cent
   OK, plan empty; the gore between the cups shows a gold rim round a black core.
 - Smoke: `scripts/smoke_cut_texture_trims.py` [1.8] and the narrow strap in [2].
 
+## 1h. A top with cups (round 2026-11-25)
+
+A top can be cut like a bra with a long band: the field `cups` (top only, `CUPS`: `none` / `bra`, default `none`).
+With `cups` `bra` the top is built as a bra everywhere: drape, cut, texture prompt and preview all read the one
+switch `build_kind` in `garment_template` ("bra" for a cupped top, else the kind; `cupped_top`). It gets the bra's cups,
+centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_l/r`, `cup_top_l/r`, `gore`,
+`band_l/r`, `strap_l/r`). What stays a top's: its slot, its layer rank and its body regions (chest, waist — never
+the hip, whatever the length: the hem is held at the waist at the lowest, `body_regions`).
+
+- **Fields.** A cupped top shows the fields of `TOP_CUPS_FIELDS`: `kind`, `cups`, `fabric`, `opacity`, `length_m`,
+  `cup_style`, `cup_coverage`, `push_up`, `center_gore`, `closure`, `straps`, `texture`, `sleeve_print` (the dialog
+  reads `kind_fields["top:cups"]`). There is no `underband_m`; the length sets the band.
+- **Band to the hem.** `fitted_spec` measures the hem from the shoulder line like any top and holds it between the
+  waist and the thin back band under the underbust line:
+  `hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M)`, `band = max(BACK_STRAP_M, under - hem_y)`.
+  The hem is never lower than the waist, because below it the body widens to the hip and the pinned band would turn
+  into an hourglass. `hem_clamped` records the hold: > 0 at the waist, < 0 under the cups. The dialog says
+  "Hem held at the waist". The builder (`bra_region`) measures the band from the breast fold it finds down to that
+  absolute `hem_y`; a bra has no `hem_y` and keeps its own band.
+- **Keys (E5/E6).** `cups` enters the drape and cut keys only when it is `bra`, so a top with `cups` `none` keeps
+  every key it had. A top stores both field sets; only the active set is keyed. The parked top fields (shoulders,
+  neckline, sleeves …) are kept in the stored params (`stored_params`), reset to their defaults in the validated params
+  (`validate_params`), and come back unchanged when `cups` goes back to `none`.
+- **Chest shaping (E3).** A cupped top never shapes the chest: `bust_shaping.applies` reads the build kind, and "bra"
+  is not in `SHAPING_KINDS`. The push-up of its cups lifts the cloth, as a bra's does. It still drapes on the shaped
+  body when another piece of the worn set shapes it.
+- **Texture.** The prompt family is the bra's (fitted, front only for cups; a bandeau has a back job). The piece is
+  named "<style> crop top" below `CUPPED_BUSTIER_LENGTH_M` 0.375 m, else "<style> bustier top".
+- **Clean edges (`BRA_EDGE_VERSION` 1, every bra and every cupped top).** The bra region keeps the collider's faces
+  by their centre, so the band's top edge round the back and the free edges followed the collider's triangles in a
+  sawtooth (a light fringe along the back band, the hem and the strap roots from every view; review of this round).
+  `build_fitted` now cuts the collider along the underbust line before it keeps the faces — the back band ends on a
+  straight line — and, after the pattern parts are taken, moves every free-edge vertex halfway to the mean of its two
+  edge neighbours `EDGE_RELAX_STEPS` 6 times, back onto the collider after each step (`_relax_edges`; a straight run
+  stays on its line, the band's ends round off). The version is in the drape AND the cut key of a bra and a cupped
+  top only, so each of them drapes and cuts once more; no other kind's key moves.
+- **Straps as strips, cups inside the back outline (`BRA_EDGE_VERSION` 2, owner rulings 1 and 6).** A strap is no
+  longer a band of collider faces: `strap_strip` builds it as its own regular strip along the `strap_spec` path — the
+  path's loops cut out (the over-shoulder section ran past the back section's start), resampled every 5 mm, evened,
+  4 quads across, its front end 1.5 cm inside the cup and its back end 1.2 cm into the band, laid 2.5 mm over the
+  cloth there and pinned whole; it lifts with its cup's push-up, fading out along it, but is never drawn in. Its
+  surface and edges are smooth, and its pattern piece is a clean strip. The push-up fades out next to the gore, and
+  the gore is laid on the breastbone after the evening.
+- **Cups round the breast's side, 4 mm gap (`BRA_EDGE_VERSION` 3, review of 2).** Version 2 kept the cup inside the
+  back outline by cutting it to the front of the breast (16 instead of 26 cm wide: the breast's side lay bare in the
+  side view, and the band's top edge was ragged where the side part had gone). Now a cup covers the breast's side and
+  round it, up to a vertical plane `CUP_BACK_M` (15 mm) in front of the body's middle; that plane is cut into the
+  collider before the faces are kept, so the cup's back edge is a straight line down to the band (no sawtooth, no
+  loose part under the arm). `_side_contour` finds the breast's side contour per height (its widest point seen from
+  behind); the push-up fades out over the outer `CUP_PUSH_FADE` of the way from the apex to it and is 0 behind it, so
+  the cup's side lies on the body where it crosses the outline — what stands past the outline in the back view is the
+  cloth's 4.5 mm distance plus its 1.5 mm thickness over the breast's widest point, the same rim the band shows at the
+  torso's side, no lifted crescent. A hole of up to `HOLE_FILL_EDGES` edges in the cut region (the collider can miss a
+  face in the crease under the arm) is filled. And the cloth keeps its 4 mm: after a tip's sphere joined the
+  collider, `_join_body_collider_late` cleared the built cloth to the drape thickness + 4 mm = 5.5 mm (every gap of
+  a bra measured 1.5 mm too wide); a bra is now cleared to its own `offset_m` (the drape's pre-inflate leaves 4.5 mm).
+- **A narrow island's overhang is its own cloth.** `cut_texture_post.narrow_overhang`: round an island narrower than
+  `NARROW_ISLAND_CM` (5 cm; a cup's upper part, the gore, a strap) the ring within `POCKET_CM` takes the colour of its
+  nearest island pixel. Lirien's upper cup parts carried a light and dark rim from the image model into the ring (the
+  stripe check 2.07 % against 1 %; on that atlas 0.44 % after). Texture post-processing only: no key changes.
+- **A bra under a cupped top is hidden (owner ruling 2).** `garment_template.hidden_by_cups` names the worn template
+  bras a worn cupped top lies over by the usual layer rules (`inner_pieces`); `figure.worn_sets` leaves them out of
+  both figures with the reason `HIDDEN_BY_CUPS` ("Hidden: the top's cups replace it"), as underwear goes unseen under
+  a dress — never draped, never a lower layer, a collider or a shaping piece; the accessories ignore it too. The
+  dialog says so under the `cups` field.
+- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_narrow_overhang.py`, `scripts/smoke_top_cups_cover.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
+  `scripts/smoke_garment_template_fitted.py`, [S-C1]-[S-C5] in `scripts/smoke_bust_shaping.py`.
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`

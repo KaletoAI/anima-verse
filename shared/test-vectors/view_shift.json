@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_view_shift.mjs",
+  "source": "native/tests/Derivations/view_shift.md",
   "cases": [
     { "label": "[1] the default chat window: dx (right)", "fn": "viewShiftFor",
       "args": [1920, 1080, { "x": 12, "y": 388, "w": 840, "h": 680 }], "expect": { "dx": 247.6228 }, "eps": 1e-3 },

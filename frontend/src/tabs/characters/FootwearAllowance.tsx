@@ -6,7 +6,8 @@
  * …/garments/{item}/footwear/allowance) — the fit becomes due and Re-fit / Run all / the Figure tab's Build applies it
  * on the CPU, 0 hub jobs. Auto: Width +0 (the fit widens the shoe to the foot already), Length +0 or, when the fit
  * at +0 is refused because the foot pokes out, the smallest step the checks accept — what Auto took on the shown fit
- * is named. Server: `garment_footwear.allowance_view`.
+ * is named. Server: `garment_footwear.allowance_view`. While the shoe itself is refused at a source step (`blocked`:
+ * no fit exists, so nothing can apply an allowance) the box names that step and its refusal instead of sliders.
  */
 import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -14,6 +15,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { StepLight } from './StepRows'
+import { FOOTWEAR_STEP_LABELS, WARN_STYLE } from './garmentStyle'
 import { resolved, stepText } from './footwearAllowanceModel'
 import type { AllowanceName, AllowanceSetting, FootwearAllowanceView } from './footwearAllowanceModel'
 
@@ -94,6 +96,23 @@ export function FootwearAllowance({ character, itemId, view, draft, onDraft, bus
         </div>
         <span className="ga-hint" style={{ paddingLeft: 54 }}>
           {s === 'auto' ? autoTook(name) : t(WHAT[name])}
+        </span>
+      </div>
+    )
+  }
+  if (view.blocked) {
+    const step = t(FOOTWEAR_STEP_LABELS[view.blocked.step] || view.blocked.step)
+    return (
+      <div role="group" aria-label={t('Shoe allowance')} style={BOX} data-footwear-allowance-box=""
+        data-footwear-allowance-blocked={view.blocked.step}>
+        <strong>{t('Shoe allowance')}</strong>
+        <span style={WARN_STYLE}>
+          {t('Nothing to adjust yet: the shoe itself was refused at its “{step}” step, so it has no fit.')
+            .replace('{step}', step)}
+        </span>
+        {view.blocked.error ? <span className="ga-hint">{view.blocked.error}</span> : null}
+        <span className="ga-hint">
+          {t('Regenerate that step in the steps beside (the mesh: 1 mesh job). Width and Length apply to the first fit.')}
         </span>
       </div>
     )

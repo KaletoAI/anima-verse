@@ -1760,3 +1760,277 @@ poses standing → idle, walking → walk, running → run.
 - **N6** the second poll moves Spot 2 m and Dot 10 m along +x; one 0.1 s NPC frame: Spot walks 3.4 · 0.1 = 0.34 m
   (≤ 6 m: no run), gait walk, phase 0.7, Hip_FL 19.720°; Dot runs 3.4 · 1.8 · 0.1 = 0.612 m, gait run, phase 1.1,
   Hip_FL 22.978°.
+
+## Nav world (`nav/`, E2, `Check/NavCheck.cs`, `--check nav`)
+
+The client navmesh of plan E2 (docs/superpowers/plans/2026-11-25-client-ausfuehrung-e2.md). Task 1 ships the scene
+`nav/scene_loc-nav.json` (signature `"nav-house"`) and the Godot-free source `AnimaNative.Nav.NavSource`
+(`tests/NavSourceTests.cs`). Task 3 adds the world around it — `worldmap.json` (only `loc-nav` at (100, 0), yaw 0, and
+the avatar "Nia Nav" in `r-a` at (97, −1)), `locations.json`, `model3d.json` (`{"Nia Nav": null}`) and copies of
+`walk/`'s `heightfield.json` (flat 0), `terrain.json` and `urls.json`; Task 6 adds `pos_answers.json` (scenarios `nav-up`,
+`nav-up-rejected`, see the table).
+The derivations below hold for all tasks.
+
+Location `loc-nav` "Navhaus" at world (100, 0), yaw 0, flat height field 0 → datum 0,
+`TileToWorld(lx, lz, ly) = (100 + lx, ly, lz)`. `storey_m` 3, `levels` 0 / 1 at `floor_y` 0 / 3, `boundary` x −6…6,
+z −7…4 (a 3 m deep yard south of W1). Avatar "Nia Nav" in `r-a` at world (97, −1).
+
+| Part | Tile data | World |
+|---|---|---|
+| Rooms | `r-a` (0, x −6…0), `r-b` (0, x 0…6), `r-up` (1, x 0…6); `floor_plan` for `r-a`, `r-b` | |
+| Walls storey 0 (t 0.2, h 3) | W1a (−6,−4)→(−3.45,−4), W1b (−2.55,−4)→(6,−4), W2 (−6,4)→(6,4), W3 (−6,−4)→(−6,4), W4 (6,−4)→(6,4), W5 (0,−4)→(0,1.55), W6 (0,2.45)→(0,4) | |
+| Door D0 (index 0) | `at_world` (0, 2), `along` (0, 1), width 0.9, rooms [r-a, r-b], inside | |
+| Door D1 (index 1) | `at_world` (−3, −4), `along` (1, 0), width 0.9, rooms [r-a], outside (`OutwardNormal` (0, −1)) | centre (97, −4) |
+| Room entry | `pos_answers.json` scenarios `nav-up` (`POST /play/enter-room` `{room_id: r-up}` → 200, response body after the pattern of `fixtures/embody/pos_answers.json` "enter-room") and `nav-up-rejected` (the same request → 409) | |
+| Plate storey 1 | `r-up`, outline x 0…6, z −4…4, `top_y` 3.0, hole x 1.5…4.0, z −3.8…−2.8 | |
+| Walls storey 1 (t 0.2, `base_y` 3, h 2.8) | (0,−4)→(6,−4), (6,−4)→(6,4), (0,4)→(6,4), (0,−4)→(0,4) | |
+| Stairs id 1 | `at` (1.5, −3.3), `dir_deg` 90, run 2.5, rise 3, 10 steps, width 1, `foot` (1.0, 0.0, −3.3), `head` (4.5, 3.0, −3.3), footprint x 1.5…4.0, z −3.8…−2.8; a `stair_tread` extra with `stair: 1` | foot (101, 0, −3.3), head (104.5, 3, −3.3) |
+| Lift | `elevator_pad` storey 0 centre (5.2, 0.0, 3.2) size (1, 0.1, 1); storey 1 centre (5.2, 3.0, 3.2); `elevator_shaft` | stops (105.2, 0.05, 3.2), (105.2, 3.05, 3.2) |
+| Armchair (placeholder) | `r-a`, anchor (−3, −2), w 0.8 d 0.8 h 0.9, `bottom_y` 0 | box x 96.6…97.4, y 0…0.9, z −2.4…−1.6 |
+| Bed (placeholder) | `r-b`, anchor (4, 1.5), w 1.4 d 2.0 h 0.5 | box x 103.3…104.7, y 0…0.5, z 0.5…2.5 |
+| Rug (placeholder) | `r-a`, anchor (−3, 2), w 2 d 1.5 h 0.02 | box x 96…98, y 0…0.02, z 1.25…2.75 |
+
+Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc-tower.json` (`role "prop"`, `placeholder_dims`,
+`fix_euler` 0, `yaw_deg` 0, `measure "xyz"`, `max_m` = the largest side, `anchor`, `bottom_y`, `level`, `room_id`).
+
+**Derived values (r = 0.25; the polygon bake is exact, the 0.05 cell grid hits every number):**
+
+- Eroded rooms: `r-a` x 94.35…99.65 (W3 face −5.9 + r → −5.65; W5 face −0.1 − r → −0.35), z −3.65…3.65; `r-b` x
+  100.35…105.65; loft x 100.35…105.65, z −3.65…3.65 without the hole zone x 101.25…104.25, z ≤ −2.55.
+- Walkable area storey 0 (decision 7): `boundary` + 0.30 outwards = world x 93.7…106.3, z −7.3…4.3. Yard eroded:
+  x 93.95…106.05 (−6.3 + r = −6.05, 6.3 − r = 6.05; review measurement 93.953…106.047), z −7.05 (−7.3 + r) … −4.35 (W1
+  outer face −4.1 − r). The strips outside W2/W3/W4 (0.2 m between the wall face and the pushed-out edge) vanish in the
+  erosion. Yard height: terrain 0 (`FollowGround`, flat).
+- Seal D1: x 96.55…97.45, z −4.1…−3.9. Threshold T1: x 96.8…97.2 (± (0.45 − 0.25)), z −4.35…−3.65 (± (0.1 + 0.25)),
+  outside, `OuterPoint` (97, −4.35) = centre + (0, −1)·0.35; welded to `r-a` (edge z −3.65) and the yard (edge z −4.35).
+- Seal D0: x 99.9…100.1, z 1.55…2.45. Threshold T0: x 99.65…100.35 (± (0.1 + 0.25)), z 1.8…2.2 (± (0.45 − 0.25)), y 0.
+- Armchair eroded: x 96.35…97.65, z −2.65…−1.35 (corners rounded depending on the join — no path assumption touches
+  them). Bed eroded: x 103.05…104.95, z 0.25…2.75. Rug: no obstacle (0.02 ≤ 0.25).
+- Links: stairs owner 65536 = `(1 << 16) | 0`, start (101, 0, −3.3), end (104.5, 3, −3.3), both on the mesh (distance 0),
+  costs enter 0 / travel 1. Lift owner 131200 = `(2 << 16) | 128`, start (105.2, 0.05, 3.2), end (105.2, 3.05, 3.2),
+  `enter_cost` 20, `travel_cost` 10. In a path only the **entry point** carries the owner; path points lie on the mesh
+  (lift bottom (105.2, 0.0, 3.2), top (105.2, 3.0, 3.2)).
+- **P1** (97, 0, −1) → (103, 0, −1): through T0 over the lower corners (99.65, 0, 1.8) and (100.35, 0, 1.8); length
+  2·√(2.65² + 2.8²) + 0.7 = 2·3.855191 + 0.7 = **8.410382**.
+- **P2** (97, 0, −1) → loft (104, 3, 2): (99.65, 1.8) → (100.35, 1.8) → stair foot (101, −3.3) [√(0.65² + 5.1²) =
+  5.141255] → link [√(3.5² + 3²) = 4.609772] → (104, 2) [√(0.5² + 5.3²) = 5.323533; does not cross the hole zone: at
+  z −2.55, x = 104.5 − 0.5·0.75/5.3 = 104.4292 > 104.25]; length 3.855191 + 0.7 + 5.141255 + 4.609772 + 5.323533 =
+  **19.629751** (review measured 19.6307), exactly one point with owner ≠ 0, owner 65536. The way back (104, 3, 2) →
+  (97, 0, −1) has the same length over the stairs.
+- **P3** = P2 with the stairs disabled, over the lift: (97, −1) → (99.65, 1.8) [3.855191] → bed corner (103.05, 2.75)
+  [√(3.4² + 0.95²) = 3.530227; at x 100.35, z = 1.8 + 0.7·0.95/3.4 = 1.9956 ∈ T0 1.8…2.2, the corner (100.35, 1.8)
+  drops out] → lift bottom (105.2, 0, 3.2) [√(2.15² + 0.45²) = 2.196588; at x 104.95, z = 3.148 > 2.75, clear of the
+  bed] → link [3] → (104, 3, 2) [√(1.2² + 1.2²) = 1.697056]; length **14.279062** (review measured 14.279). **Why P2
+  still takes the stairs:** the cost over the lift ≥ (14.279062 − 3) + 3·10 = 41.28 (without `enter_cost`, which 4.7.2
+  does not reliably count in the choice) > 19.63 over the stairs (travel 1). With only `enter_cost` 20, P2 forwards
+  took the lift when measured (14.279).
+- **Probes `MapGetClosestPoint`**: (100.05, 0, 0) in W5 → (100.35, 0, 0) (0.30 to `r-b` against 0.40 to `r-a`);
+  (97, 0, −1.5) at the armchair's edge → (97, 0, −1.35); (97, 0, 2) on the rug → unchanged; (100, 0, 2) in the door →
+  unchanged; (97, 0, −5.5) in the yard → unchanged; (97, 0, −7.2) beyond the yard → (97, 0, −7.05).
+- **Armchair access** (server rule: box edge + `ACCESS_BODY_R_M` 0.15): (97, 0, −1.45) → gap to the mesh 0.10 ≤ 0.4; the
+  straight last piece (97, −1.35)→(97, −1.45) crosses no wall.
+
+**What `NavSource.Build` makes of it (Task 1, `tests/NavSourceTests.cs`, frame (100, 0, 0) yaw 0, the three boxes above):**
+
+- Storey 0: 3 floors — the pushed-out boundary (bounds x 93.7…106.3, z −7.3…4.3), the two `floor_plan` rooms (also the
+  two hulls) — at y 0, `FollowGround`. Storey 1: one floor (the plate) with its one hole x 101.5…104.0, z −3.8…−2.8 (no
+  other plate covers it) at y 3.0 (the highest plate top), flat.
+- Obstacles storey 0: 7 walls (W1a, W1b, W2–W6) + 2 seals + 2 props (armchair, bed; the rug's top 0.02 ≤ 0.25) = 11;
+  storey 1: 4 walls. W5 = x 99.9…100.1, z −4…1.55, y 0…3 (half thickness 0.1, no end caps).
+- A narrow door (D0 at 0.45 m, W5/W6 ending at z 1.775 / 2.225): w/2 − r = −0.025 ≤ 0 → seal x 99.9…100.1,
+  z 1.775…2.225, no threshold, problem `door_too_narrow` 0. Without W5/W6, D0 has no adjacent wall → open floor.
+- Turned by yaw π/2 (`TileToWorld(lx, lz) = (100 + lz, ·, −lx)`): T0 local x −0.35…0.35, z 1.8…2.2 → world x 101.8…102.2,
+  z −0.35…0.35.
+- Boundary offset rule on the L (0,0)(6,0)(6,3)(3,3)(3,6)(0,6) by 0.3: (−0.3,−0.3)(6.3,−0.3)(6.3,3.3)(3.3,3.3)(3.3,6.3)
+  (−0.3,6.3); the concave corner (3,3) → (3.3,3.3) is where z = 3.3 meets x = 3.3. A notch 0.4 wide (< 2·0.3): the
+  moved notch walls x = 2.9 and x = 3.1 swap sides, the moved top edges overlap on x 2.9…3.1 → refused, the ring stays
+  unshifted and `boundary_offset` is reported.
+
+**`--check nav` (Task 3, `Check/NavCheck.cs`):** the source is built straight from `scene_loc-nav.json`, frame (100, 0, 0)
+yaw 0, the three boxes of the table, `NavBakeParams.Current` (r 0.25, cells 0.05 / 0.05, edge connection margin 0.1,
+link connection radius 0.6, `Version` 2), terrain `groundAt` = 0; baked by `World/NavBake.cs`, mapped by `LocationNav`
+(`World/NavMaps.cs`). "Ready" = the map iteration has risen past the last effective change; the check waits for it physics
+frame by physics frame, at most 120 (`AwaitReady`), after the creation and after every change in N6/N7. Tolerance 0.05 m
+for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
+
+- **N0** regions: 2 storeys (levels 0, 1), 2 thresholds (doorways 0, 1), 2 links (owners 65536, 131200); the active map
+  count one above its value before the bake; `MapGetLinkConnectionRadius` 0.6; on the first Ready map
+  `Closest((97, 0, −1))` = (97, 0, −1) (inside eroded `r-a`, x 94.35…99.65, z −3.65…3.65, clear of the armchair's
+  z ≤ −1.35 — an empty map would answer (0, 0, 0)).
+- **N1** T0 x 99.65…100.35 meets eroded `r-a` at x 99.65 and `r-b` at x 100.35 → 2 edge connections; T1 z −4.35…−3.65 meets
+  `r-a` at z −3.65 and the yard at z −4.35 → 2.
+- **N2** the six probes of "Probes `MapGetClosestPoint`" above. Wall probes, each 0.05 m inside a wall face (in the wall
+  body, on the room side, away from doors, corners, the armchair, the bed and the stair hole), land on the eroded edge
+  0.25 m off that face, the other coordinate unchanged: W1a (95, 0, −3.95) and W1b (98.5, 0, −3.95) → z −3.65 (face −3.9;
+  the yard edge −4.35 is 0.40 away against 0.30); W2 (95, 0, 3.95) → z 3.65 (face 3.9; the outer strip vanished); W3
+  (94.05, 0, 0) → x 94.35 (face 94.1); W4 (105.95, 0, 0) → x 105.65 (face 105.9); W5 (99.95, 0, −1) → x 99.65 (face 99.9;
+  `r-b` at 100.35 is 0.40 away); W6 (100.05, 0, 3.2) → x 100.35 (face 100.1); storey 1 at y 3: south (105, 3, −3.95) →
+  z −3.65, east (105.95, 3, 0) → x 105.65, north (103, 3, 3.95) → z 3.65, west (100.05, 3, 0) → x 100.35. The largest
+  |offset − 0.25| is logged as `[check-nav] edge_error max=<m>` and must stay ≤ 0.05.
+- **N3** both ends of each link within 0.6 of their closest mesh point (stairs (101, 0, −3.3) / (104.5, 3, −3.3) lie on the
+  mesh, distance 0; the lift stops (105.2, 0.05 | 3.05, 3.2) are 0.05 above their floors); a link farther off would be
+  silently dead. Armchair access (97, 0, −1.45) → closest (97, 0, −1.35), gap 0.10 ≤ 0.4; the piece between them crosses no
+  `Collide.WallSegments(scene, 0, (100, 0))` segment.
+- **N4** P1 length 8.410382 ± 0.05 with the points (99.65, 0, 1.8) and (100.35, 0, 1.8), no link point.
+- **N5** P2 length 19.629751 ± 0.05, exactly one point with owner ≠ 0, owner 65536, last point (104, 3, 2); the way back
+  (104, 3, 2) → (97, 0, −1) is 19.629751 ± 0.05 over owner 65536 as well (the link choice holds in both directions).
+- **N6** `SetLinkEnabled(65536, false)` (returns true) → Ready → P2's query takes the lift: length 14.279062 ± 0.05 (P3 above,
+  path length, not cost), exactly one link point, owner 131200, at the entry (105.2, 0.0, 3.2); the stairs are switched on again.
+- **N7** `ApplyLocks({r-b: ""}, "r-a")` → `Locks.DoorwayLock([r-a, r-b], …, "r-a")` = "" → T0 off; T1 ([r-a], the avatar's own
+  room) stays on → Ready → P1 can no longer reach `r-b` (no other way in: W1b/W4 have no opening, the stair foot is in
+  `r-b`) and ends ≥ 0.5 m before (103, 0, −1) (it stops at the closest reachable point, x ≤ 99.65). `ApplyLocks(null, "r-a")` →
+  P1 again 8.410382. `ApplyLocks({r-b: ""}, "r-b")` → the avatar's own room is left out → T0 stays on, returns false. Lock and
+  unlock in one frame → both return true, T0 ends on and P1 is 8.410382 (the server's getters still answer the old state
+  within that frame — measured; `LocationNav` compares with the state it last wrote).
+- **N7b** `ApplyLocks(null, "r-a")` twice → the second returns false, `ChangedAtIteration` unchanged, `Ready` stays true (no
+  wait); `SetLinkEnabled(65536, true)` on the enabled stairs → false.
+- **N8** `Free()` → after two physics frames (measured: in the same frame the server still counts the old map)
+  `GetProcessInfo(ActiveMaps)` is back to its value before the bake.
+- **N14** (final review E2, I-1; `NavCheck.SlopeAsync`, a map of its own, not the nav world) one quad x 0…10, z 0…10 with
+  y = 0.1·x (corners y 0 at x 0, y 1 at x 10) — the shape a follow-ground storey gets when the 2D bake leaves few large
+  polygons over uneven terrain. Avatar at (5, 1.0, 5), f = 0.5 above the plane: `ClosestOnVertical(p, 1.5)` =
+  `MapGetClosestPointToSegment((5, 2.5, 5), (5, −0.5, 5))` pierces the quad at (5, 0.5, 5) (± 0.01); `MapGetClosestPoint`
+  is the 3D foot point, x shifted by g·f/(1 + g²) = 0.1·0.5/1.01 = 0.0495 > `OnMeshTolM` 0.02 (measured 0.0495 — the old 3D
+  rule saw the avatar off the mesh). `NavClamp.Step` (storey 3) passes the steps to (4.9, 5), (5.1, 5), (5, 4.9), (5, 5.1)
+  unchanged; at y 3.0 (2.5 above the plane, outside the band ± 1.5) neither point is on the storey's mesh and the step to
+  (4.9, 5) passes too (the clamp never holds an avatar that is off its storey's mesh).
+
+**`--check nav`, world part (Task 4, `World/WorldBuilder.Nav.cs`):** the same scene as a world — `new FixtureSource(nav/)`,
+`BuildAsync(world, "Navhaus")` — so the slot turns near on the real residency path (`UpResident`, right after
+`slot.Ring = Ring.Near`), which is where the bake is requested; the check never requests a bake itself. After the bake
+the map is PENDING; the navigation server's `MapChanged` arms it (the current locks applied) and swaps it in once it is
+ready; `MapChanged` is subscribed only while a map is pending. Physics frames run until `NavFor(slot)` is set, at most 240.
+The source fingerprint is the cache key (16 entries, memory only); every bake logs
+`[nav] bake loc=<id> storeys=<n> thresholds=<t> links=<l> ms=<x> cache=<hit|miss>`.
+
+- **N9** `NavFor(slot)` set; `NavPropBoxes(slot)` = exactly the three boxes of the table (armchair, bed, rug — the rug is
+  dropped only by `NavSource`), each within 0.01 m (the placeholders are measured as `placeholder_dims` boxes standing on
+  `bottom_y` 0 at their anchor + (100, 0, 0)); the fingerprint equals `NavSource.Build(scene, frame (100, 0, 0) yaw 0,
+  PlaceInventory.Compose(scene, frame), the same measured boxes, building)` — the exact boxes, since the fingerprint hashes
+  the numbers in "R" form and a float measurement is not the decimal of the table; P1 over `NavFor(slot)` = 8.410382 ± 0.05.
+- **N10** a second `DeriveStands(slot)` without a change → same fingerprint → nothing baked, nothing pending, the same
+  `Map` rid three physics frames later. The armchair node moved +0.5 m in x → box x 97.1…97.9 → a new fingerprint → a
+  new map once synced; two physics frames after the swap `ActiveMaps` equals its value before the move (the old map freed).
+- **N12** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → in the same frame `NavFor(slot)` is the same object
+  (review N-W4); once ready T0 is off. The armchair moved back (−0.5 m) + `DeriveStands` → the first fingerprint again
+  (cache hit) → the pending map is armed with the lock (T0 off: a real change, so it waits for its next `MapChanged`) and
+  swapped once ready: T0 of the NEW map off, T1 on, P1 ends ≥ 0.5 m before (103, 0, −1) (as N7). `SetLocks(None)` → T0 on,
+  P1 8.410382 again.
+- **N11** the way down is queued first (`SetOpen(false)`, a stream view without the avatar at (400, 0): 300 m from the
+  location, beyond the 180 m near hysteresis and within 560 m → far; no pin holds it), then — still near in that frame —
+  the armchair moves +0.25 m and `DeriveStands` starts a bake (cache miss). The driver's down step unmounts the detail
+  before that bake's result arrives: the result is dropped (`NavBakesDropped` +1). After 60 physics frames
+  `slot.Nav == null`, no bake running, `NavMapChangedSubscribed == false`, `ActiveMaps` = its value before the world.
+- **N13** before the build `NavMapChangedSubscribed == false`; the first map (no lock) is swapped on its FIRST
+  `MapChanged` (`ApplyLocks` changes nothing → ready at iteration 1 > 0; the handler's counter is 1 when `NavFor` is
+  first set), and nothing is subscribed afterwards. Back near (the full map, stream point (97, −1)) the remount is a cache
+  hit (pending); the armchair moved +0.35 m starts a bake; `StopResidency` in the same frame → unsubscribed, no
+  navigation; 60 physics frames later the stopped bake's result is dropped (+1 again) and `ActiveMaps` is back to its
+  value before the world.
+- The Task 3 part takes its `ActiveMaps` baseline two physics frames after it starts: an earlier check's world frees its
+  location maps when it leaves the tree, and the server counts a freed map until its next sync.
+
+**`--check nav`, avatar part (Task 6, `NavCheck.AvatarAsync`):** the nav world again, built and opened (`SetOpen`, fade 1),
+physics frames until `NavFor(slot)` is set; then a real `FigureManager` (`GroundYAt = FigureGroundY`), `PlayerSteering` in
+`r-a`, a real `AvatarRoomsController` whose clock stays 0 (the walk-in hold of 1500 ms never falls due, so the only enter-room
+request is the link ride's) and `steering.RideLink = rooms.RideLinkAsync`. One frame = `Step(dt, keys, yaw 0)` +
+`manager.Tick(dt)` + `rooms.Tick()`, dt 0.25 (A7: 1/60); at dt 0.25 a walking step is 3.4·0.25 = 0.85 m. `At(x, z)` snaps
+the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks (−sin 0, −cos 0) = (0, −1), `s` walks (0, +1).
+
+- **A0** the ground click through `Main.TryGroundWalk(builder, steering, avatar, o, d)` (the code `MainHud.PickAt` runs), ray
+  o (98, 10, 5), d (0, −10, −6) of `tests/NavClickTests.cs`, avatar (97, −1). Storey view 0: plane y = datum 0 + `FloorY(0)` 0 →
+  t 1 → (98, −1), inside the footprint → `WalkTo((98, −1), 0)` → on the mesh (planner case 1) → `Route` (98, −1) ± 0.01. Storey
+  view 1: plane y 3 → t 0.7 → (98, 0.8), inside → `WalkTo(…, 1)`, target y 3 (storey 1 of the source): the nearest mesh point is
+  the loft's eroded edge (100.35, 3, 0.8) (horizontal 2.35 < 3 to the floor below) → planner case 3 → `NavRoute.Final`
+  (100.35, 3, 0.8) ± 0.05.
+- **A1** `WalkTo((103, −1))` → P1: the route's corners include (99.65, 1.8) and (100.35, 1.8) (± 0.05; the polygon path also has
+  edge points between them), `Route` = (103, −1) (the end goal, review W5); arrival within 0.2 of (103, 0, −1) in ≤ 40 frames
+  (8.41 m / 0.85 ≈ 10, measured 12). Crossing x 100: the door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45). A
+  corner counts as reached 0.2 m before it (`NavRoute.CornerArriveM` = `ClickMove.GoalArriveM`), so the step to (100.35, 1.8) may
+  start up to 0.2 m short of (99.65, 1.8): the lowest crossing is 1.8 − 0.2·0.35/0.7 = **1.70** (the plan's 1.75 assumed exact
+  corners; measured 1.748). Bound z ∈ [1.70, 2.25] — through the door, 0.15 m clear of W5's end.
+- **A2** keys `w` from (97, −1), 8 frames: frame 1 asks (97, −1.85), inside the eroded armchair; the clamp slides to its nearest
+  mesh point (97, −1.35) (0.50 away against 0.65 / 0.80). Frame 2 asks (97, −2.2), whose nearest mesh point is the FAR edge
+  (97, −2.65) (0.45 against 0.85): a slide longer than the 0.85 m step is the far side of the obstacle, so the avatar stays
+  (`PlayerSteering.ClampToNav`; at 60 Hz a 0.15 m step never gets there). z never < −1.36, end z −1.35 ± 0.02. **A2b** from
+  (97, −1.8) (in the eroded chair, off the mesh by 0.45) keys `s`: (97, −0.95) is on the mesh → passes → z > −1.35.
+- **A3** `WalkTo((97, −1.9))` from (97, −0.5): inside the box, off the mesh → planner case 3 → goal = the nearest edge point
+  (97, −1.35) (0.55 away; x 96.35 / 97.65 are 0.65, z −2.65 is 0.75) ± 0.02, arrival within 0.2. The plan's (97, −2) is the box
+  centre, 0.65 from all four eroded edges — a tie the map decides (measured (97.65, −2)), so the click moved 0.1 m north.
+- **A4** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → after Ready `WalkTo((103, −1))` → the path ends ≥ 0.5 short
+  → no plan, start and goal inside the footprint → false; four frames later the avatar has not moved (≤ 1e-4). `LockState.None`
+  → after Ready → true.
+- **A5** scenario `nav-up`; `WalkTo((104, 2), level: 1)` (target y 3) → P2 over the stairs: exactly one link section, owner 65536.
+  At the foot (within 0.4 of (101, 0, −3.3)) the route asks `RideLink(65536)` → `RideLinkAsync`: flight 0, current storey 0 (room
+  r-a) → the head (104.5, 3, −3.3) on storey 1, target room `NearestRoomAt(1, …)` = r-up, leg foot → head, ride like
+  `RideStairsAsync` with `keepNavRoute` (only the straight state is cleared) → one `POST /play/enter-room {room_id: r-up}`
+  (200) → `VerticalRide` set, `RoomId` r-up; the route stays alive through the ride, `LinkFinished` once `VerticalRide` is null
+  again, then walks (104.5, −3.3) → (104, 2). End: `NavRoute` null, within 0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up.
+- **A5b** scenario `nav-up-rejected` (same request → 409): back to (97, −1), room r-a, view 0; the same click walks to the foot,
+  the ride is refused (`RideAsync` → false) → `LinkResult(false)` → `Abort` → `CancelRoute`: `NavRoute` and `Route` null,
+  `VerticalRide` null, y < 0.1, within 0.5 of (101, 0, −3.3) (`LinkArriveM` 0.4); exactly one request.
+- **A6** `PropActionDriven` → `WalkTo((97, −2))` false and four frames move nothing (the prop action's own motion path, decision 12).
+- **A7** keys `w` at 1/60 from (97, −3): the step lead max(3.4/60, `MinLead` 0.15) = 0.15 m < the erosion 0.25 m. The avatar passes
+  T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
+  `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
+- **A8** (final review E2, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the footprint → planner case 2:
+  the path to T1's outer point (97, −4.35), then straight north to (97, 6) — back through T1 into `r-a`, where the eroded
+  armchair (x 96.35…97.65, z −2.65…−1.35) and behind it W2 (eroded z 3.65) hold the clamped avatar. Held 2 s
+  (`NavRoute.StuckSeconds`) → Replan from `r-a` (out through T1 again) → held again → Abort, because the replanned route
+  takes the stuck count over (`NavRoute(plan, StuckCount)`). One cycle at dt 0.25: ≤ 8 m at 3.4 m/s (≤ 10 frames) + 8 stuck
+  frames → the walk ends within 120 frames with `NavRoute` and `Route` null, at least two route instances seen, the avatar
+  never near z 6 (measured 29 frames, 2 routes). Before the fix every replan started at count 0 and the walk never ended.
+
+**O1 the F9 overlay (Task 7, `NavCheck.OverlayAsync`, run in the avatar world right after the first navigation is swapped in;
+`loc-nav` is the open location).** `NavOverlayVisible = true` → one `NavOverlay` node, visible, one `ArrayMesh` of three
+surfaces, every vertex 0.03 m above its source:
+
+- surface 0 (triangles, #3a7bd5 α 0.35): every polygon of the two storey region meshes as a fan, a polygon with n corners gives
+  n − 2 triangles → vertex count = 3 · Σ(n − 2), Σ counted from `LocationNav.StoreyMeshes` (the baker's polygon split is not
+  derived by hand; the check requires Σ > 0; measured 24);
+- surface 1 (triangles): T0 and T1 are one quad each (`NavBake.ThresholdMesh`, 4 corners) → 2 + 2 = 4 triangles, 12 vertices,
+  T0 (doorway 0) first; T0's floor y 0 → vertex y 0.03; colour #3ad57b on, #d53a3a off;
+- surface 2 (lines, #e0c040): two links (stairs, lift) → 2 lines, 4 vertices; the first starts at its link's start y + 0.03.
+
+No lock → both thresholds green. `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → T0 red, T1 green in the frame of
+`SetLocks` (the overlay reads the state last written, `LocationNav.ThresholdEnabled`, not the server's getter, which answers the
+old state until the next sync); `LockState.None` → both green; `NavOverlayVisible = false` → the node is invisible.
+
+**Embody checks on the navmesh (Task 6, review N-W3).** `EmbodyWalkCheck`, `EmbodyPositionCheck`, `EmbodyOffersCheck` and
+`EmbodyRoomsCheck` now wait (physics frames, ≤ 240) until the hall's navigation is swapped in, right after the build, so every
+section walks on the navmesh whatever the bake timing. Re-derived (fixture `embody/scene_loc-hall.json`: walls t 0.2, r 0.25 →
+eroded edges 0.35 from a wall line):
+
+- **W2** (5.7, 1) in r-b is off the mesh (east wall face 5.9 → edge 5.65); keys `d` at yaw π/4 push east (wall collision keeps
+  x ≤ 5.75) and north. The clamp holds a step that goes deeper, then tries its axis parts (larger first, like `SlideBlocked`):
+  the z part keeps x and is not deeper → the avatar slides north as before (z < −0.5 after 1 s, x ≤ 5.75).
+- **W6** a click behind the hall from (−3, −3.75) is now a navmesh route out through the outside door (planner case 2), `Route`
+  (−3, −8). The straight walk's 20-frame stall is checked where no navigation applies: from (−3, −4.1), outside every footprint,
+  the click (−3, 8) on the far side walks into the hall's footprint (foreign, with an authored opening → `PlayerBlocked`); the
+  first lead (−3, −3.95) is already inside it, so every target is the start: frame 19 keeps the route, frame 20 drops it and the marker.
+- **W "upper-floor object approach"** (−2.01, 0) at y 3.01 in r-up: on the loft mesh → case 1 → `Route` = the click, X −2.01 unchanged.
+- **R5** `UseVertical` on the stairs → `WalkTo` the foot (0, −2), which lies in the party wall (x −0.1…0.1): eroded edges
+  x −0.35 (r-a) and 0.35 (r-b), both 0.35 away — case 3 goal (±0.35, −2) ± 0.02 (measured (−0.352, −2), the tie's r-a side).
+- **P2** (`EmbodyPositionCheck`) and **O8** (`EmbodyOffersCheck` (−2, 2)): unchanged — the refusal disc runs in `Blocked` before
+  any navmesh plan, and (−2, 2) lies on the r-a mesh (case 1, goal = the click).
+
+**`--check navcompare` (Task 5, `NavCheck.RunCompareAsync`; never part of the full `--check`):** the measurement of
+decision 9. Task 5 ran it with both bake modes (docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md):
+the polygon bake passed N4–N7b with a largest N2 wall-probe edge error of 0.0016 m; the voxel (Recast) bake failed N4
+(its door corners at (99.625, 0.1, 1.8) / (100.375, 0.1, 1.8): one cell height above the floor and 0.025 off) with an edge
+error of 0.05 m. Polygon won on rule (a) alone, and on (b) by 0.048 m (≫ the 0.01 tie band); the voxel bake, its
+parameters (cells 0.1 / 0.1, margin 0.25) and `NavBakeMode` are gone, `NavBakeParams.Version` is 2. The tolerances
+above (N2/N4/N5/N9: 0.05) stay, since the winner's measured edge deviation (0.0016) is far inside them. What stays is the
+measurement of the winner, one line per fixture:
+`[navcompare] fixture=<f> mode=polygon ms=<median of 5 synchronous bakes> polys=<n> edge_err=<m|-> paths=<ok|fail|-> thresholds_welded=<n>`.
+
+- Fixtures: `nav` (frame (100, 0, 0), the three boxes; edge error and N4–N7b), `walk` and `embody`
+  (`scene_loc-hall.json`) and `storeys` (`scene_loc-tower.json`), each at (0, 0, 0), yaw 0, no boxes, no terrain —
+  time and polygon probes only.
+- `thresholds_welded` = `RegionGetConnectionsCount` of the lowest-index threshold: nav 2 (N1); embody 2 (its D0 sits in
+  the wall x 0 like nav's); walk 0 — its only wall is the south wall, so D0 has no adjacent wall and the rooms are open
+  floor, no threshold; storeys 0 — the tower's doors sit in continuous walls without a gap, decision 2 finds no adjacent
+  gap, no threshold.
+- No expected times: the check only requires every fixture to bake and its map to become ready; the times are recorded
+  in the measurement document (all four below 0.1 ms on the reference machine, against the 300 ms disk-cache threshold
+  of spec 8).

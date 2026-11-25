@@ -250,7 +250,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                 return None
             for entry in entries:
                 try:
-                    region = RegionSpec.parse(entry, bdef.get("attributes") or {}, [rig.id for rig in rigs])
+                    region = RegionSpec.parse(entry, bdef.get("attributes") or {}, [rig.id for rig in rigs],
+                                              covered_by=[str(x).strip() for x in (bdef.get("covered_by") or [])])
                 except (ValueError, TypeError, OverflowError) as exc:
                     logger.error("Package %s slot %s: invalid region: %s", pkg.id, bdef["id"], exc)
                     return None

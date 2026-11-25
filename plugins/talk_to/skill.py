@@ -236,6 +236,14 @@ class TalkToSkill(PluginSkill):
 
         return f"Spoke to {target_name}. They will reply when they get to it."
 
+    def speech_call_input(self, listener, words: str) -> str:
+        """One line said to one listener, in the JSON shape the brief names.
+        TalkTo always has an addressee, so it cannot speak to the whole room."""
+        if not (listener and words):
+            return ""
+        import json
+        return json.dumps({"name": listener, "message": words}, ensure_ascii=False)
+
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
         fmt = format_name or "tag"

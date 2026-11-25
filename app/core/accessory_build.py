@@ -43,8 +43,15 @@ logger = logging.getLogger(__name__)
 
 #: Bumped when an accessory is built differently for the same inputs. 3: the test poses judge a side by the body's
 #: outer wall only (``outer_wall_faces``) — a belt over a bent hip no longer fails on the inner wall, a piece pushed
-#: through the skin is caught at its true depth.
-ACCESSORY_VERSION = 3
+#: through the skin is caught at its true depth. 4: linked part items (plan-anhaenger, design G) — a part is placed by
+#: its link with its thinnest side as the depth. 5: a part's depth is the axis whose two others match its image's
+#: outline (``accessory_pendant.orient``), its size the longer front side, and a flat part is cut to
+#: ``FLAT_DEPTH_SHARE`` of its size behind its front (a mesher's invented loop or prong no longer stands off the band).
+#: 6: that depth is squeezed, never pressed flat — the front ``FLAT_KEEP_SHARE`` of it as delivered, everything behind
+#: scaled into the rest (a pressed buckle frame lay on the band as one flat sheet that showed through it when sitting).
+#: 7: a necklace's pendant hangs with the cord through its eyelet (``accessory_pendant.threaded_place``) — it hung
+#: in front of the cord, the eyelet 3 mm off the chain.
+ACCESSORY_VERSION = 7
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -66,8 +73,11 @@ REASON_NO_KIND = "Choose the accessory kind in the Wardrobe"
 REASON_KIND_LATER = "{kind}: not built yet in this version — shown on the figure once its phase lands"
 REASON_NO_BODY = "No plain body yet"
 REASON_FAILED = "Build failed — {error}"
-REASON_PENDANT_LEFT_OFF = "Pendant left off — {error}"
-REASON_PENDANT = "Pendant ready — Build puts it on the chain on the CPU (0 hub jobs)"
+REASON_PENDANT_LEFT_OFF = "Drop left off — {error}"
+REASON_PENDANT = "Drop ready — Build puts it on on the CPU (0 hub jobs)"
+#: Design G: a linked part's mesh became ready since the host was built.
+REASON_PART = "A linked part was built since — rebuild (CPU)"
+REASON_PART_LEFT_OFF = "{role} left off — {error}"
 #: A224: the figure's note of an accessory shown with its previously delivered build (``previous_record``).
 REASON_OUTDATED = "Outdated — Build makes it again (0 hub jobs)"
 
@@ -112,12 +122,13 @@ def shape_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "",
-                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """What an accessory's GEOMETRY is made of (the metal is not). A225: a READY pendant mesh (``pendant_psig``) and
-    its size are part of it — a pendant switched on but not built yet is not (the chain alone is built and shown).
-    A234: the other kinds' shape fields (``shape_inputs``), the READY item-image part (buckle / drop) the same way,
-    and the worn context (``worn_context``): the garments under a band (``[item, fsig]``) and the chest shaping."""
+def geometry_inputs(spec: Dict[str, Any], parts_ready: Optional[List[list]] = None,
+                    context: Optional[Dict[str, Any]] = None, drop_psig: str = "") -> Dict[str, Any]:
+    """What an accessory's GEOMETRY is made of (the metal is not). Design G: the READY linked parts
+    (``parts_ready`` = ``accessory_parts.ready_inputs``: ``[role, index, item, psig, size_mm, at_deg, mount, drop_cm,
+    flip]``) — a part not built yet is not (the host alone is built and shown). A234: the other kinds' shape fields
+    (``shape_inputs``), the earrings' READY own drop (``drop_psig``) and its size, and the worn context
+    (``worn_context``): the garments under a band (``[item, fsig]``) and the chest shaping."""
     from app.core.accessory_spec import image_part_mm
     inputs: Dict[str, Any] = {"version": ACCESSORY_VERSION, "kind": spec["kind"]}
     if spec["kind"] == "necklace":
@@ -125,8 +136,10 @@ def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "",
     else:
         inputs["around"] = AROUND_VERSION
         inputs["shape"] = shape_inputs(spec)
-    if pendant_psig and image_part_mm(spec) is not None:
-        inputs["pendant"] = {"psig": pendant_psig, "size_mm": float(image_part_mm(spec))}
+    if drop_psig and image_part_mm(spec) is not None:
+        inputs["pendant"] = {"psig": drop_psig, "size_mm": float(image_part_mm(spec))}
+    if parts_ready:
+        inputs["parts"] = [list(p) for p in parts_ready]
     context = context or {}
     if context.get("under"):
         inputs["under"] = [[str(u["item_id"]), str(u["fsig"])] for u in context["under"]]
@@ -140,9 +153,10 @@ def shaping_key(rec: Dict[str, Any]) -> str:
     return hashlib.md5(json.dumps(rec, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
-def asig(spec: Dict[str, Any], pendant_psig: str = "", context: Optional[Dict[str, Any]] = None) -> str:
+def asig(spec: Dict[str, Any], parts_ready: Optional[List[list]] = None, context: Optional[Dict[str, Any]] = None,
+         drop_psig: str = "") -> str:
     """md5[:12] of ``geometry_inputs`` (canonical JSON)."""
-    raw = json.dumps(geometry_inputs(spec, pendant_psig, context), sort_keys=True,
+    raw = json.dumps(geometry_inputs(spec, parts_ready, context, drop_psig), sort_keys=True,
                      separators=(",", ":")).encode("utf-8")
     return hashlib.md5(raw).hexdigest()[:12]
 
@@ -179,6 +193,10 @@ def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
     items = {i: (get_item(i) or {}) for i in ids}
     mesh_ids = [i for i in ids if garment_set.mesh_mode_of(items[i]) in (*garment_set.OWN_MESH_MODES,
                                                                          garment_set.TEMPLATE)]
+    # owner ruling 2: a bra hidden under a top with cups is in neither figure — nothing is fitted over it
+    hidden = garment_template.hidden_by_cups([i for i in mesh_ids
+                                              if garment_set.mesh_mode_of(items[i]) == garment_set.TEMPLATE])
+    mesh_ids = [i for i in mesh_ids if i not in hidden]
     region = set(accessory_band.UNDER_SLOTS.get(accessory_band.region_key(spec), ()))
     drapes = []
     for item_id in mesh_ids:
@@ -211,7 +229,8 @@ def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
 
 
 def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """A225: ``accessory_pendant.pendant_state`` of the item when ``spec`` switches a pendant on, else None."""
+    """``accessory_pendant.pendant_state`` of the item's OWN drop (the earrings' ``drop`` style — the only item-image
+    part left since part items, D1), else None."""
     from app.core import accessory_pendant, accessory_spec
     if not accessory_spec.pendant_on(spec):
         return None
@@ -223,9 +242,9 @@ def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[
 
 def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: Optional[Dict[str, Any]]
                 ) -> Optional[Dict[str, Any]]:
-    """A225: the pendant line of a Wardrobe / Figure row — ``{state, reason, size_mm, on_figure, metrics, cost}``, None
-    without a pendant switched on. ``state`` is the mesh's (``accessory_pendant.pendant_state``); ``on_figure`` whether
-    the CURRENT build carries it; ``reason`` says why the chain is shown without it."""
+    """The earrings' own drop line of a Wardrobe / Figure row — ``{state, reason, size_mm, on_figure, metrics, cost}``,
+    None without a drop. ``state`` is the mesh's (``accessory_pendant.pendant_state``); ``on_figure`` whether the
+    CURRENT build carries it; ``reason`` says why the earrings are shown without it."""
     pendant = state.get("pendant")
     if not pendant or not spec:
         return None
@@ -237,6 +256,35 @@ def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: O
     return {"state": pendant["state"], "reason": reason, "size_mm": float(accessory_spec_size(spec)),
             "on_figure": on, "metrics": (record.get("pendant") or {}).get("metrics") if on else None,
             "cost": {"hub_jobs": 0 if pendant["state"] == "ready" else 1}}
+
+
+def part_rows(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: Optional[Dict[str, Any]]
+              ) -> List[Dict[str, Any]]:
+    """Design G: one line per part link of a Wardrobe / Figure / Items row — ``{role, index, item, part_name, state,
+    reason, size_mm, mount, at_deg, drop_cm, flip, on_figure, metrics, cost, image_url}``. ``state`` is the part
+    mesh's (or ``gone``); ``on_figure`` whether the CURRENT build carries it; ``reason`` why it is not shown."""
+    from app.core import accessory_spec
+    record = record or {}
+    current = state.get("state") == "current"
+    built = {(p.get("role"), int(p.get("index", 0)), p.get("item")): p for p in record.get("parts") or []}
+    errors = record.get("part_errors") or {}
+    rows = []
+    for ps in state.get("parts") or []:
+        key = (ps["role"], int(ps["index"]), ps["item"])
+        on = current and key in built and built[key].get("psig") == ps["psig"]
+        reason = ps["reason"]
+        if ps["state"] == "ready" and not on:
+            err = errors.get(f"{ps['role']}:{ps['index']}")
+            reason = (REASON_PART_LEFT_OFF.format(role=accessory_spec.ROLE_NAMES.get(ps["role"], "Part"), error=err)
+                      if err and current else ("" if current else REASON_PART))
+        rows.append({"role": ps["role"], "index": int(ps["index"]), "item": ps["item"], "part_name": ps["part_name"],
+                     "state": ps["state"], "reason": reason, "size_mm": ps.get("size_mm"), "mount": ps.get("mount"),
+                     "at_deg": ps.get("at_deg"), "drop_cm": ps.get("drop_cm"), "flip": bool(ps.get("flip")),
+                     "on_figure": bool(on), "metrics": (built[key].get("metrics") if on else None),
+                     "cost": {"hub_jobs": 0 if ps["state"] in ("ready", "gone", "no_image") else 1},
+                     "image_url": (f"/inventory/items/{ps['item']}/image" if ps["state"] not in ("gone", "no_image")
+                                   else "")})
+    return rows
 
 
 def accessory_spec_size(spec: Dict[str, Any]) -> float:
@@ -364,9 +412,10 @@ def base_sha(character_name: str, profile: Optional[Dict[str, Any]] = None) -> s
 def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
                     item: Optional[Dict[str, Any]] = None,
                     context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``{state, reason, asig, record, pendant, context}`` of a worn accessory (module docstring; ``pendant`` =
-    ``pendant_info``; ``context`` = ``worn_context``, read from the profile when not given). Read-only."""
-    from app.core import accessory_spec, model_geometry
+    """``{state, reason, asig, record, pendant, parts, context}`` of a worn accessory (module docstring; ``pendant`` =
+    ``pendant_info`` — the earrings' own drop; ``parts`` = ``accessory_parts.part_states`` — the linked parts;
+    ``context`` = ``worn_context``, read from the profile when not given). Read-only."""
+    from app.core import accessory_parts, accessory_spec, model_geometry
     profile = _profile_of(character_name, profile)
     if item is None:
         from app.models.inventory import get_item
@@ -378,15 +427,17 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
         return {"state": "blocked", "reason": REASON_KIND_LATER.format(kind=spec["kind"].capitalize()),
                 "asig": "", "record": None}
     base = _current_base(character_name, profile)
-    if base is None:
-        return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None}
+    parts = accessory_parts.part_states(spec)
+    if base is None:   # the links are listed without a body too (they are picked before anything is built)
+        return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None, "parts": parts}
     pendant = pendant_info(item_id, spec)
+    ready = accessory_parts.ready_inputs(parts)
     if context is None:
         context = worn_context(character_name, profile, str(base[1]), spec)
-    sig = asig(spec, _ready_psig(pendant), context)
+    sig = asig(spec, ready, context, _ready_psig(pendant))
     records = _records(character_name, item_id)
     rec = records.get(sig)
-    out = {"asig": sig, "pendant": pendant, "context": context}
+    out = {"asig": sig, "pendant": pendant, "parts": parts, "context": context}
     if rec is not None and model_geometry.record_matches(rec, base[1]):
         return {"state": "current", "reason": "", "record": rec, **out}
     failed = _read(record_path(character_name, item_id, sig, ".failed.json"))
@@ -398,12 +449,20 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     if rec is not None:
         return {"state": "due", "reason": REASON_BODY, "record": None, **out}
     if records:
-        want = geometry_inputs(spec, _ready_psig(pendant), context)
+        want = geometry_inputs(spec, ready, context, _ready_psig(pendant))
         shape_keys = ("version", "kind", "chain", "around", "shape")
         same_shape = [r for r in records.values()
                       if all((r.get("inputs") or {}).get(k) == want.get(k) for k in shape_keys)]
+        lost = [p for p in parts if p["state"] != "ready"
+                and any([p["role"], p["index"], p["item"]] == q[:3]
+                        for r in same_shape for q in (r.get("inputs") or {}).get("parts") or [])]
         if _ready_psig(pendant) and any("pendant" not in (r.get("inputs") or {}) for r in same_shape):
             reason = REASON_PENDANT
+        elif lost:
+            # a part the last build carried is no longer ready (a new image, deleted): its own words
+            reason = lost[0]["reason"]
+        elif ready and any((r.get("inputs") or {}).get("parts") != want.get("parts") for r in same_shape):
+            reason = REASON_PART
         elif same_shape:
             reason = REASON_UNDER
         else:
@@ -437,10 +496,12 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def make_necklace(rigged: bytes, spec: Dict[str, Any], pendant: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def make_necklace(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """The necklace geometry on the rigged plain body ``rigged`` (GLB bytes): ``{V, F, N, J, W, joint_names, curve,
-    landmarks, metrics}`` (+ ``pendant`` — ``attach_pendant`` — when ``pendant`` (``accessory_pendant.load_mesh``)
-    is given). Pure CPU, no I/O beyond the bytes given."""
+    landmarks, metrics, parts, part_errors}``. ``parts``: ``[(link, mesh)]`` — the linked pendant (``link`` with its
+    effective ``size_mm`` / ``flip``; ``mesh`` = ``accessory_pendant.load_mesh``), hung at the chain's lowest point
+    (``attach_pendant``); ``out["parts"]`` = ``[hung | None]``, ``out["part_errors"]`` = ``{index: reason}``. Pure CPU,
+    no I/O beyond the bytes given."""
     from app.core import accessory_curve, accessory_mesh, glb_mesh
     from app.core.garment_fit import dense_weights
     started = time.monotonic()
@@ -467,17 +528,59 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any], pendant: Optional[Dict[st
     plausible(metrics, float(spec["chain"]["drop_cm"]) / 100.0)
     out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
            "landmarks": detail["landmarks"], "metrics": metrics}
-    if pendant is not None:
+    out["parts"], out["part_errors"] = [], {}
+    for i, (link, mesh) in enumerate(parts or []):
         try:
-            out["pendant"] = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius,
-                                            pendant, float(spec["pendant"]["size_mm"]))
+            args = (mesh, float(link.get("size_mm") or 18.0), bool(link.get("flip")))
+            hung = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius, *args)
+            lift = float(hung["metrics"].get("cord_lift_mm") or 0.0) / 1000.0
+            if lift > 0:
+                # The eyelet holds the cord off the skin: the cord is lifted there (``lift_cord``), rebuilt, and the
+                # pendant hung again at the same point (the cord now runs through the eyelet without a push past it).
+                a = int(hung["metrics"]["cord_index"])
+                n = np.asarray(detail["outward"][a], np.float64)
+                curve = lift_cord(curve, a, lift * n / max(float(np.linalg.norm(n)), 1e-12))
+                V, F, N = accessory_mesh.tube(curve, radius, outward=curve - surface)
+                J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense_weights(body))
+                J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
+                out.update({"V": V, "F": F, "N": N, "J": J, "W": W, "curve": curve})
+                hung = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius, *args, a=a)
+                hung["metrics"]["cord_lifted_mm"] = round(lift * 1000.0, 3)
+            out["parts"].append(hung)
         except ValueError as e:
             # The chain stays; the pendant is left off with its reason (A225).
-            out["pendant_error"] = str(e)
+            out["parts"].append(None)
+            out["part_errors"][i] = str(e)
     return out
 
 
-#: A225 — the pendant's gates on the body: its longest side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
+#: ``lift_cord``: the stretch of the cord, each way along it from the pendant, the eyelet's lift fades over (m).
+CORD_LIFT_SPAN_M = 0.015
+
+
+def lift_cord(curve: np.ndarray, a: int, lift: np.ndarray) -> np.ndarray:
+    """The closed ``curve`` with its point ``a`` moved by ``lift`` and the points within ``CORD_LIFT_SPAN_M`` of it
+    (arc length, both ways) by ``lift · cos²(π/2 · s / span)`` — the cord bends smoothly over the eyelet."""
+    C = np.asarray(curve, np.float64)
+    seg = np.linalg.norm(np.diff(np.vstack([C, C[:1]]), axis=0), axis=1)     # seg[i]: point i -> i + 1
+    n = len(C)
+    s = np.full(n, np.inf)
+    s[a] = 0.0
+    run = 0.0
+    for k in range(1, n):                       # forward
+        i = (a + k) % n
+        run += seg[(i - 1) % n]
+        s[i] = min(s[i], run)
+    run = 0.0
+    for k in range(1, n):                       # backward
+        i = (a - k) % n
+        run += seg[i]
+        s[i] = min(s[i], run)
+    w = np.where(s < CORD_LIFT_SPAN_M, np.cos(np.pi / 2 * s / CORD_LIFT_SPAN_M) ** 2, 0.0)
+    return C + w[:, None] * np.asarray(lift, np.float64)[None]
+
+
+#: A225 — the pendant's gates on the body: its longer front side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
 #: ``PENDANT_MAX_PUSH_MM`` off its cord and nothing inside the body in any ``accessory_pendant.TEST_POSES`` pose.
 SIZE_TOLERANCE = 0.05
 #: How far the pendant may be pushed off its cord to clear the body (a pendant too long for the drop meets the
@@ -494,33 +597,29 @@ def anchor_index(curve: np.ndarray) -> int:
 
 
 def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, J: np.ndarray, W: np.ndarray,
-                   radius: float, pendant: Dict[str, Any], size_mm: float) -> Dict[str, Any]:
-    """The pendant hung at the chain's lowest point (``accessory_pendant.place``), rigid with the chain's skin there
+                   radius: float, pendant: Dict[str, Any], size_mm: float, flip: bool = False,
+                   a: Optional[int] = None) -> Dict[str, Any]:
+    """The pendant hung at the chain's lowest point — the cord through its eyelet (``accessory_pendant.threaded_place``)
+    when it has one the cord fits through and no test pose puts it into the body, else in front of the cord
+    (``accessory_pendant.place``; logged) —, rigid with the chain's skin there
     (the first tube vertex of that ring — the tube's weights are already folded onto the base skeleton), checked
     through the test poses against the body's outer wall (``outer_wall_faces``). ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
-    left off."""
+    left off. ``a``: the curve index it hangs at (default the lowest point, ``anchor_index``). Threaded, its metrics
+    carry ``cord_index`` and ``cord_lift_mm`` (``make_necklace`` lifts the cord there and hangs it again)."""
     from app.core import accessory_curve, accessory_pendant, glb_mesh
     from app.core.garment_fit import dense_weights
     from app.core.garment_shell import top4_weights
     from app.core.rig_contract import norm_bone_name
-    a = anchor_index(curve)
-    Vn = accessory_pendant.normalise(pendant["V"], size_mm)
+    if a is None:
+        a = anchor_index(curve)
+    outline = accessory_pendant.front_reason(pendant["V"], pendant.get("front_ratio"))
+    if outline:
+        raise ValueError(outline)
+    Vn = accessory_pendant.normalise(pendant["V"], size_mm, flip, pendant.get("front_ratio"))
     Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
-    # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
-    n = np.asarray(outward[a], np.float64)
-    hang = curve[a] + radius * n / max(float(np.linalg.norm(n)), 1e-12)
-    V, how = accessory_pendant.place(Vn, hang, outward[a], Pw, Fw)
-    R = how.pop("rotation")
-    if how["push_mm"] > PENDANT_MAX_PUSH_MM:
-        raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
     sides = len(J) // len(curve)
-    Jp = np.repeat(J[a * sides][None], len(V), 0)
-    Wp = np.repeat(W[a * sides][None], len(V), 0)
-    # The longest side in the pendant's own frame (its box turned back): the size the user set.
-    local = (V - hang) @ R
-    measured = float((local.max(0) - local.min(0)).max()) * 1000.0
-    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
-        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    Jp = np.repeat(J[a * sides][None], len(Vn), 0)
+    Wp = np.repeat(W[a * sides][None], len(Vn), 0)
     # The body posed with its own skin: dense weights reduced to four per vertex.
     Jb, Wb, used = top4_weights(dense_weights(body))
     Jb = used[Jb]
@@ -530,8 +629,48 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     from scipy.spatial import cKDTree
     _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
     Fo = Fw[outer_wall_faces(Pw, Fw, body.joint_positions, parents)]
-    poses = accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names), parents,
-                                         heads)
+
+    def judged(V):
+        return accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names),
+                                            parents, heads)
+    # The cord through the eyelet (``accessory_pendant.threaded_place``): the eyelet centre on the chain's lowest
+    # point. Kept only when no test pose puts it into the body; else the old placement below, logged.
+    threaded = accessory_pendant.threaded_place(Vn, pendant["F"], curve[a], outward[a], Pw, Fw, radius)
+    V = None
+    if threaded is not None and threaded[1]["push_mm"] > PENDANT_MAX_PUSH_MM:
+        logger.info("Pendant: threaded on its cord it would stand %.1f mm off it — hung in front of the cord instead",
+                    threaded[1]["push_mm"])
+        threaded = None
+        V = None
+    elif threaded is not None:
+        V, how = threaded
+        how["cord_index"] = int(a)
+        poses = judged(V)
+        inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
+        if inside:
+            logger.info("Pendant: threaded on its cord it would sink into the body in the %s pose — hung in front "
+                        "of the cord instead", ", ".join(inside))
+            V = None
+        else:
+            hang = np.asarray(curve[a], np.float64)
+            how.pop("centre")
+    else:
+        logger.info("Pendant: no eyelet the cord fits through — hung in front of the cord")
+    if V is None:
+        # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
+        n = np.asarray(outward[a], np.float64)
+        hang = curve[a] + radius * n / max(float(np.linalg.norm(n)), 1e-12)
+        V, how = accessory_pendant.place(Vn, hang, outward[a], Pw, Fw)
+        how["threaded"] = False
+        if how["push_mm"] > PENDANT_MAX_PUSH_MM:
+            raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
+        poses = judged(V)
+    R = how.pop("rotation")
+    # The longer front side in the pendant's own frame (its box turned back): the size the user set.
+    local = (V - hang) @ R
+    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
+    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
     inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
     if inside:
         raise ValueError(PENDANT_INSIDE.format(poses=", ".join(inside)))
@@ -658,12 +797,14 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     state = accessory_state(character_name, item_id, profile=profile, item=item)
     if state["state"] == "blocked":
         return state
-    from app.core import accessory_pendant, accessory_spec
+    from app.core import accessory_parts, accessory_pendant, accessory_spec
     spec = accessory_spec.of_item(item)
     bsig, sha = _current_base(character_name, profile)
     psig = _ready_psig(state.get("pendant"))
     context = state.get("context") or {}
-    sig = asig(spec, psig, context)
+    ready_states = [p for p in state.get("parts") or [] if p["state"] == "ready"]
+    ready = accessory_parts.ready_inputs(ready_states)
+    sig = asig(spec, ready, context, psig)
     folder = store_dir(character_name)
     with keyed_lock("accessory_build", f"{character_name}/{item_id}"):
         folder.mkdir(parents=True, exist_ok=True)
@@ -672,7 +813,9 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
             from app.models.character import get_character_dir
             blob = (get_character_dir(character_name) / "model3d" / f"{bsig}.glb").read_bytes()
             mesh = accessory_pendant.load_mesh(item_id, psig) if psig else None
-            made = make_any(blob, spec, mesh, context)
+            parts = [({k: p[k] for k in ("role", "index", "item", "size_mm", "at_deg", "mount", "drop_cm", "flip")},
+                      accessory_pendant.load_mesh(p["item"], p["psig"])) for p in ready_states]
+            made = make_any(blob, spec, mesh, context, parts)
         except Exception as e:  # noqa: BLE001 — recorded as the step's failure, the figure leaves it off
             logger.exception("Accessory %s of %s failed", item_id, character_name)
             _write_atomic(failed_path, json.dumps({"error": failure_text(e)[:300], "base_model_sha256": sha,
@@ -690,6 +833,12 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
                            "PN": hung["N"].astype(np.float32), "PUV": hung["UV"].astype(np.float32),
                            "PJ": hung["J"].astype(np.int32), "PW": hung["W"].astype(np.float32),
                            "Pimage": np.frombuffer(hung["image"], np.uint8)})
+        placed = [(i, ps, h) for i, (ps, h) in enumerate(zip(ready_states, made.get("parts") or [])) if h is not None]
+        for slot, (_i, _ps, h) in enumerate(placed):
+            arrays.update({f"P{slot}V": h["V"].astype(np.float32), f"P{slot}F": h["F"].astype(np.int32),
+                           f"P{slot}N": h["N"].astype(np.float32), f"P{slot}UV": h["UV"].astype(np.float32),
+                           f"P{slot}J": h["J"].astype(np.int32), f"P{slot}W": h["W"].astype(np.float32),
+                           f"P{slot}image": np.frombuffer(h["image"] or b"", np.uint8)})
         lens = made.get("lens")
         if lens is not None:
             # the glasses: the lenses (their own node) and which frame faces are the temples (the distance tier)
@@ -699,7 +848,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         np.savez_compressed(buf, **arrays)
         _write_atomic(record_path(character_name, item_id, sig, ".npz"), buf.getvalue())
         record = {"version": ACCESSORY_VERSION, "item_id": item_id, "asig": sig, "kind": spec["kind"],
-                  "inputs": geometry_inputs(spec, psig, context), "bsig": bsig, "base_model_sha256": sha,
+                  "inputs": geometry_inputs(spec, ready, context, psig), "bsig": bsig, "base_model_sha256": sha,
                   **model_geometry.stamp_on(character_name, bsig, sha),
                   "joint_names": made["joint_names"], "landmarks": made["landmarks"], "metrics": made["metrics"],
                   "hub_jobs": 0, "built_at": utc_now_iso()}
@@ -713,6 +862,18 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
                                     if pend_rec.get("fallback_from") else {})}
         elif made.get("pendant_error"):
             record["pendant_error"] = REASON_PENDANT_LEFT_OFF.format(error=made["pendant_error"])
+        if ready_states:
+            record["parts"] = []
+            for slot, (_i, ps, h) in enumerate(placed):
+                prec = accessory_pendant.pendant_state(ps["item"]).get("record") or {}
+                record["parts"].append({
+                    "slot": slot, "role": ps["role"], "index": int(ps["index"]), "item": ps["item"],
+                    "psig": ps["psig"], "size_mm": float(ps["size_mm"]), "mime": h["mime"], "material": h["material"],
+                    "metrics": h["metrics"], "backend": prec.get("backend", ""), "routing": prec.get("routing") or {},
+                    **({"fallback_from": prec["fallback_from"]} if prec.get("fallback_from") else {})})
+            errors = made.get("part_errors") or {}
+            record["part_errors"] = {f"{ready_states[i]['role']}:{ready_states[i]['index']}": str(e)
+                                     for i, e in errors.items()}
         _write_atomic(record_path(character_name, item_id, sig), json.dumps(record, indent=1).encode("utf-8"))
         failed_path.unlink(missing_ok=True)
         # One build per item is kept: the other settings' builds go (a switch back rebuilds on the CPU).
@@ -795,6 +956,34 @@ def pendant_mesh(character_name: str, item_id: str, record: Dict[str, Any]):
                            mime=str(meta.get("mime") or ("image/png" if image else "")), material=material)
 
 
+def part_meshes(character_name: str, item_id: str, record: Dict[str, Any]) -> List[Any]:
+    """Design G: the stored linked parts of ``record`` as ``[(meta, glb_mesh.GarmentMesh)]`` (each with its own
+    texture and material from the mesher), in slot order; [] when the build carries none."""
+    metas = [m for m in record.get("parts") or [] if isinstance(m, dict)]
+    if not metas:
+        return []
+    from app.core.glb_mesh import GarmentMesh
+    out = []
+    with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
+        for meta in metas:
+            k = f"P{int(meta.get('slot', 0))}"
+            if f"{k}V" not in z.files:
+                continue
+            image = z[f"{k}image"].tobytes()
+            material = dict(meta.get("material") or {})
+            material.setdefault("name", str(meta.get("role") or "part"))
+            if not image:
+                material.setdefault("pbrMetallicRoughness", {"baseColorFactor": [0.8, 0.78, 0.7, 1.0],
+                                                             "metallicFactor": 0.0, "roughnessFactor": 0.6})
+            out.append((meta, GarmentMesh(
+                positions=z[f"{k}V"].astype(np.float64), normals=z[f"{k}N"].astype(np.float64),
+                uvs=z[f"{k}UV"].astype(np.float64), indices=z[f"{k}F"].astype(np.int64),
+                joints=z[f"{k}J"].astype(np.int64), weights=z[f"{k}W"].astype(np.float64),
+                joint_names=list(record["joint_names"]), image=image,
+                mime=str(meta.get("mime") or ("image/png" if image else "")), material=material)))
+    return out
+
+
 #: A225 LOD: the distance tier carries the pendant only up to this many triangles (a 2 cm pendant is a few pixels
 #: there; a heavier delivery is left off at distance, never decimated through Blender for it).
 PENDANT_LOW_MAX_TRIS = 3000
@@ -828,6 +1017,13 @@ def graft_accessory(blob: bytes, character_name: str, item_id: str, record: Dict
     if pend is not None:
         blob = glb_mesh.graft(blob, pend, name=accessory_mesh.node_name(item_id, "p"),
                               extras={**extras, "part": "pendant"})
+    # design G: one node per linked part (on the distance tier each only up to ``PENDANT_LOW_MAX_TRIS``)
+    for meta, mesh in part_meshes(character_name, item_id, record):
+        if low and len(mesh.indices) > PENDANT_LOW_MAX_TRIS:
+            continue
+        blob = glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(item_id, f"p{int(meta.get('slot', 0))}"),
+                              extras={**extras, "part": str(meta.get("role") or "part"),
+                                      "part_item": str(meta.get("item") or "")})
     return blob
 
 
@@ -876,23 +1072,24 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
 # --- A234: the kinds around the body and on a bone -------------------------------------------------------------------
 
 def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
-             context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+             context: Optional[Dict[str, Any]] = None, parts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """The geometry of any kind on the rigged plain body ``rigged``: the necklace (``make_necklace``), the earrings
     (``make_earrings``), the ring (``make_ring``), the glasses (``make_glasses``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
-    shapes the body first, so a piece near the chest sits on the shaped skin the figure shows."""
+    shapes the body first, so a piece near the chest sits on the shaped skin the figure shows. ``part``: the earrings'
+    own drop mesh; ``parts``: the linked parts ``[(link, mesh)]`` of a necklace or a belt."""
     context = context or {}
     if context.get("shaping") and _keyed_by_shaping(spec):
         from app.core import bust_shaping
         rigged = bust_shaping.shape_glb(rigged, context["shaping"])
     if spec["kind"] == "necklace":
-        return make_necklace(rigged, spec, part)
+        return make_necklace(rigged, spec, parts)
     if spec["kind"] == "earrings":
         return make_earrings(rigged, spec, part)
     if spec["kind"] == "ring":
         return make_ring(rigged, spec)
     if spec["kind"] == "glasses":
         return make_glasses(rigged, spec)
-    return make_around(rigged, spec, part, load_under(context.get("under") or []))
+    return make_around(rigged, spec, parts, load_under(context.get("under") or []))
 
 
 def load_under(under: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1070,14 +1267,14 @@ def _joint_maxima(joint_names, J: np.ndarray, W: np.ndarray) -> Dict[str, float]
 AROUND_GAP_M = {"strap:chest": 0.0035}
 
 
-def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
+def make_around(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]] = None,
                 under: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """A belt / choker / strap (a flat band) or an anklet / bracelet (a round tube) around its body part
     (``accessory_band``), on the outermost layer under it (``under``: ``load_under``; the body alone for
     ``band.layer: body``), skinned with the nearest body vertices' weights folded onto the base skeleton, gated by
-    ``around_plausible``. A belt's buckle (``part``: the item-image mesh) is hung at the front centre
-    (``attach_buckle``; left off with its reason when it does not fit). ``{V, F, N, J, W, joint_names, curve,
-    landmarks, metrics}`` (+ ``pendant`` / ``pendant_error``). Pure CPU."""
+    ``around_plausible``. A belt's linked parts (``parts``: ``[(link, mesh)]`` — the buckle and the side charms) are
+    placed by their links (``attach_parts``; one that does not fit is left off with its reason). ``{V, F, N, J, W,
+    joint_names, curve, landmarks, metrics, parts, part_errors}``. Pure CPU."""
     from app.core import accessory_band as ab, accessory_mesh, glb_mesh
     from app.core.accessory_spec import BAND_KINDS
     started = time.monotonic()
@@ -1164,12 +1361,10 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     around_plausible(key, metrics)
     out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names),
            "curve": np.vstack(curves), "landmarks": landmarks, "metrics": metrics}
-    if part is not None and spec["kind"] == "belt":
-        try:
-            out["pendant"] = attach_buckle(rigged, body, dense, Pw, Fo, first, curves[0], V, J, W, part,
-                                           float(spec["buckle"]["size_mm"]), thickness)
-        except ValueError as e:
-            out["pendant_error"] = str(e)
+    out["parts"], out["part_errors"] = [], {}
+    if parts and spec["kind"] == "belt":
+        out["parts"], out["part_errors"] = attach_parts(rigged, body, dense, Pw, Fw, Fo, first, curves[0], V, J, W,
+                                                        parts, thickness)
     metrics["cpu_s"] = round(time.monotonic() - started, 2)
     return out
 
@@ -1215,20 +1410,116 @@ def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np
             "metrics": {"size_mm": round(measured, 2), "triangles": int(len(F)), "joints": weights, "poses": poses}}
 
 
-def attach_buckle(rigged: bytes, body, dense, Pw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
-                  W: np.ndarray, part: Dict[str, Any], size_mm: float, thickness: float) -> Dict[str, Any]:
-    """The belt's buckle (the item-image mesh, ``accessory_pendant.normalise``: front +Z, back at z 0) centred on the
-    band's front (the centre-line point at angle 0, half the band's depth farther out), rigid with the band's skin
-    there."""
+def curve_point_at(curve: np.ndarray, deg: float) -> int:
+    """The index of the point of ``curve`` whose azimuth about the curve's mean, ``atan2(x − cx, z − cz)`` (0 = the
+    front, +90 = the body's left), is nearest ``deg``."""
+    C = np.asarray(curve, np.float64)
+    c = C.mean(0)
+    az = np.degrees(np.arctan2(C[:, 0] - c[0], C[:, 2] - c[2]))
+    diff = np.abs(((az - float(deg)) + 180.0) % 360.0 - 180.0)
+    return int(np.argmin(diff))
+
+
+#: ``attach_part``: the AABB overlap (m, on every axis) at which two parts count as one on top of the other.
+PART_OVERLAP_M = 0.001
+#: ``attach_part``: a FLAT part keeps at most this share of its size as depth behind its front — it lies on the band
+#: like a buckle frame; what a mesher invented behind it (the strap loop, the prong, a bail) is squeezed into that
+#: depth (50 mm buckle → 10 mm). A hanging part keeps its depth (it hangs free, ``place`` clears the body).
+FLAT_DEPTH_SHARE = 0.20
+#: ``attach_part``: of a squeezed flat part, this share of ``FLAT_DEPTH_SHARE``'s depth at the front keeps its relief as
+#: delivered; everything behind it is scaled linearly into the rest. Never pressed onto one plane: the real buckle
+#: of the 2026-11-25 acceptance had its 19 mm deep keeper in front, so a press from the front flattened 74 % of its
+#: faces — the frame itself — into one sheet on the band.
+FLAT_KEEP_SHARE = 0.5
+#: How a part's role reads in its overlap reason.
+PART_WORDS = {"buckle": "buckle", "pendant": "pendant", "charm": "charm"}
+
+
+def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+                W: np.ndarray, link: Dict[str, Any], mesh: Dict[str, Any], size_mm: float, flip: bool,
+                thickness: float, placed: List[Any]) -> Dict[str, Any]:
+    """A linked part (plan-anhaenger, design G) placed by its link on the band whose centre line is ``curve``: at the
+    curve point ``curve_point_at(link.at_deg)``, turned to face the horizontal outward direction there.
+
+    ``flat``: centred on that point, its back ``thickness / 2 + 0.5 mm`` out (on the band), no push; deeper than
+    ``FLAT_DEPTH_SHARE`` of its size, it is squeezed to that depth — the front ``FLAT_KEEP_SHARE`` of it as delivered,
+    what lies behind scaled linearly into the rest (no two depths become one). ``hang``: its top
+    centre at the same distance out and ``drop_cm`` lower, hung through ``accessory_pendant.place`` against ``Fw`` (the
+    whole welded body — the rest pose, as the necklace's pendant), at most ``PENDANT_MAX_PUSH_MM`` off its point.
+    Rigid with the band's skin at the nearest band vertex; the test poses judge it against the outer wall ``Fo``
+    (``_rigid_part``). ``placed``: ``(lo, hi, role)`` boxes of the parts already on the band — an overlap of
+    ``PART_OVERLAP_M`` or more on every axis leaves this one off ("it overlaps the …"). ``ValueError`` naming why it
+    is left off; else ``_rigid_part``'s dict (+ ``metrics.anchor / mount / at_deg``)."""
     from app.core import accessory_pendant
-    Vn = accessory_pendant.normalise(part["V"], size_mm)
-    Vn = Vn - np.array([0.0, (Vn[:, 1].min() + Vn[:, 1].max()) / 2, 0.0])     # centred in height too
-    at = np.asarray(curve[0], np.float64)
-    Vp = Vn + at + np.array([0.0, 0.0, thickness / 2 + 0.0005])
-    k = int(np.argmin(np.linalg.norm(V - at, axis=1)))
-    hung = _rigid_part(Vp, part, J[k], W[k], rigged, body, dense, Pw, Fo, first, size_mm, "buckle")
-    hung["metrics"]["anchor"] = [round(float(x), 5) for x in at]
+    C = np.asarray(curve, np.float64)
+    k = curve_point_at(C, float(link.get("at_deg") or 0.0))
+    at = C[k]
+    c = C.mean(0)
+    h = np.array([at[0] - c[0], 0.0, at[2] - c[2]])
+    h = h / np.linalg.norm(h) if np.linalg.norm(h) > 1e-9 else np.array([0.0, 0.0, 1.0])
+    outline = accessory_pendant.front_reason(mesh["V"], mesh.get("front_ratio"))
+    if outline:
+        raise ValueError(outline)
+    Vn = accessory_pendant.normalise(mesh["V"], size_mm, flip, mesh.get("front_ratio"))
+    off = float(thickness) / 2 + 0.0005
+    mount = link.get("mount") or "flat"
+    how: Dict[str, Any] = {}
+    raw_depth = float(Vn[:, 2].max())         # back at z 0 after ``normalise``, front at the top
+    if mount != "hang":
+        cap = FLAT_DEPTH_SHARE * float(size_mm) / 1000.0
+        if raw_depth > cap:
+            keep = FLAT_KEEP_SHARE * cap
+            z = Vn[:, 2]
+            Vn[:, 2] = np.where(z >= raw_depth - keep, z - (raw_depth - cap), z * (cap - keep) / (raw_depth - keep))
+            how["depth_cut_from_mm"] = round(raw_depth * 1000.0, 2)
+    local = Vn.copy()
+    if mount == "hang":
+        anchor = at + h * off - np.array([0.0, float(link.get("drop_cm") or 0.0) / 100.0, 0.0])
+        Vp, how = accessory_pendant.place(Vn, anchor, h, Pw, Fw)
+        how.pop("rotation", None)
+        if how["push_mm"] > PENDANT_MAX_PUSH_MM:
+            raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
+    else:
+        Vn = Vn - np.array([0.0, (Vn[:, 1].min() + Vn[:, 1].max()) / 2, 0.0])     # centred in height too
+        R = accessory_pendant._rot_y(float(np.arctan2(h[0], h[2])))
+        anchor = at + h * off
+        Vp = Vn @ R.T + anchor
+    lo, hi = Vp.min(0), Vp.max(0)
+    for plo, phi, other in placed:
+        overlap = np.minimum(hi, phi) - np.maximum(lo, plo)
+        if bool((overlap >= PART_OVERLAP_M).all()):
+            raise ValueError(f"it overlaps the {PART_WORDS.get(other, other)}")
+    kv = int(np.argmin(np.linalg.norm(np.asarray(V, np.float64) - anchor, axis=1)))
+    hung = _rigid_part(Vp, mesh, J[kv], W[kv], rigged, body, dense, Pw, Fo, first, None,
+                       PART_WORDS.get(link.get("role"), "part"))
+    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
+    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    hung["metrics"].update({"size_mm": round(measured, 2), "anchor": [round(float(x), 5) for x in anchor],
+                            "mount": mount, "at_deg": float(link.get("at_deg") or 0.0),
+                            "depth_mm": round(float((local.max(0) - local.min(0))[2]) * 1000.0, 2), **how})
     return hung
+
+
+def attach_parts(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+                 W: np.ndarray, parts: List[Any], thickness: float):
+    """Every linked part of a band (``parts``: ``[(link, mesh)]``, link with the effective ``size_mm`` / ``mount`` /
+    ``flip``) through ``attach_part`` in order: ``([hung | None], {index: reason})`` — a part that does not fit is left
+    off with its reason, the band and the other parts stay."""
+    hung: List[Optional[Dict[str, Any]]] = []
+    errors: Dict[int, str] = {}
+    placed: List[Any] = []
+    for i, (link, mesh) in enumerate(parts):
+        try:
+            got = attach_part(rigged, body, dense, Pw, Fw, Fo, first, curve, V, J, W, link, mesh,
+                              float(link.get("size_mm") or 30.0), bool(link.get("flip")), thickness, placed)
+        except ValueError as e:
+            hung.append(None)
+            errors[i] = str(e)
+            continue
+        hung.append(got)
+        placed.append((got["V"].min(0), got["V"].max(0), link.get("role") or "part"))
+    return hung, errors
 
 
 def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1265,7 +1556,8 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
             V, F, _N = ab.torus(top - up * major, axis, major, wire)
         elif style == "drop" and part is not None:
             from app.core.accessory_spec import image_part_mm
-            Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0))
+            Vn = accessory_pendant.normalise(part["V"], float(image_part_mm(spec) or 18.0),
+                                             front_ratio=part.get("front_ratio"))
             # front (+Z) turned to face out to the side; top centre just under the lobe
             R = accessory_pendant._rot_y(np.pi / 2 if side == "left" else -np.pi / 2)
             # its back (z 0 after ``normalise``) turned to face the head, beside the skin it hangs past
@@ -1482,4 +1774,31 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
         marks[side or "centre"] = {"centre": np.round(fr["centre"], 5).tolist()}
     radius = (float(spec["band"]["width_cm"]) / 200.0 if spec["kind"] in SPEC_BAND_KINDS
               else float(spec["chain"]["thickness_mm"]) / 2000.0)
-    return {"rings": rings, "landmarks": marks, "radius_m": radius}
+    out = {"rings": rings, "landmarks": marks, "radius_m": radius}
+    if spec["kind"] == "belt" and rings:
+        out["anchors"] = link_anchors(np.asarray(rings[0], np.float64), spec)
+    return out
+
+
+def link_anchors(curve: np.ndarray, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Design G: where each part link of a belt sits on its centre line ``curve`` — the Wardrobe's blue placeholder
+    box: ``[{index, role, at: [x, y, z], out: [x, y, z]}]`` in link order (``accessory_spec.links``), ``at`` the curve
+    point at the link's angle (``curve_point_at``) moved down by a hanging charm's drop, ``out`` the horizontal outward
+    direction there. A preview only: the Build places the part against the band and the body (``attach_part``)."""
+    from app.core import accessory_spec
+    C = np.asarray(curve, np.float64)
+    if len(C) == 0:
+        return []
+    c = C.mean(0)
+    out = []
+    for i, link in enumerate(accessory_spec.links(spec)):
+        k = curve_point_at(C, link["at_deg"])
+        p = C[k].copy()
+        h = p - c
+        h[1] = 0.0
+        n = float(np.linalg.norm(h))
+        h = h / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+        if link.get("mount") == "hang":
+            p[1] -= float(link.get("drop_cm") or 0.0) / 100.0
+        out.append({"index": i, "role": link["role"], "at": np.round(p, 5).tolist(), "out": np.round(h, 5).tolist()})
+    return out

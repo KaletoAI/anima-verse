@@ -444,6 +444,7 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 if not actor_offered[key]:
                     continue
             targets, candidates = [], []
+            plans = {}
             if group:
                 # A group (plan-gruppen-animationen.md G4): the player picks
                 # the people from ``candidates`` — from the fewest a group
@@ -456,18 +457,25 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                            if len(candidates) >= engine.GROUP_MIN_PEOPLE - 1
                            else dict(enabled=False, reason="partners_missing"))
             elif pair:
+                partner_plans = {}
                 for partner in present:
-                    checked = _worded(engine.check(actor, target, action["id"], revision, [partner],
-                                                   _query=query, offer=True), lang)
+                    raw = engine.check(actor, target, action["id"], revision, [partner],
+                                       _query=query, offer=True, include_plans=True)
+                    partner_plans[partner] = raw.pop("plans", {})
+                    checked = _worded(raw, lang)
                     # A partner who cannot do this at all is no partner for it.
                     if checked["reason"] != participation.NOT_OFFERED:
                         targets.append(dict(partner=partner, **checked))
                 checked = next((t for t in targets if t["enabled"]), None)
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
+                else:
+                    plans = partner_plans[checked["partner"]]
             else:
-                checked = _worded(engine.check(actor, target, action["id"], revision, _query=query, offer=True),
-                                  lang)
+                raw = engine.check(actor, target, action["id"], revision, _query=query, offer=True,
+                                   include_plans=True)
+                plans = raw.pop("plans", {})
+                checked = _worded(raw, lang)
                 if checked["reason"] == participation.NOT_OFFERED:
                     continue
             result.append(dict(action_id=action["id"], definition_revision=revision,
@@ -491,7 +499,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                finale=any(pose_scene.finale_kind(key) for key in
                                           ([ph.get("pose_key") for ph in action.get("phases") or []]
                                            if action.get("ability") == "combined"
-                                           else [action.get("pose_key")]) if isinstance(key, str))))
+                                           else [action.get("pose_key")]) if isinstance(key, str)),
+                               **_entry_fields(action, plans.get(actor), query, location_id, room_id)))
     # Capture the entire key before reading; a concurrent mutation must never
     # publish an older snapshot under a newer version. Lazy readers can write,
     # so recheck before publishing as well.
@@ -504,6 +513,37 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                 while len(_offers_cache) > 128:
                     _offers_cache.popitem(last=False)
     return result
+
+
+def _entry_fields(action: dict, plan, query, location_id: str, room_id: str) -> dict:
+    """What the client needs to start walking before the server answers
+    (plan E3, spec 5e): only values the preflight already computed.
+
+    ``entry_pose_key`` is the pose the entry bridge plays into (a combined
+    action's FIRST phase, as ``prop_action_engine._plan``); ``entry_mode``
+    (``bridge``/``direct``) comes from the actor's successful plan, "" without
+    one. A pair names ``pair_yaw_deg`` (``places.pair_yaw`` of the planned
+    place, degrees) and — sharing ONE place, ``places`` 1 — the actor's clip
+    role point ``role_point`` ``{x, z}`` (its entry anchor,
+    ``prop_action_engine._entry_point``); otherwise both are None."""
+    from app.core import places
+    from app.core.pose_catalog import pose_places
+    phases = action.get("phases") or []
+    pose = str((phases[0].get("pose_key") if action.get("ability") == "combined" and phases
+                else action.get("pose_key")) or "")
+    fields = dict(entry_pose_key=pose, entry_mode="", role_point=None, pair_yaw_deg=None)
+    if not plan:
+        return fields
+    fields["entry_mode"] = plan.get("entry_mode") or ""
+    anchor = plan.get("entry_anchor") or {}
+    if action.get("ability") == "pair" and pose:
+        place = next((p for p in query.room_places(location_id, room_id)
+                      if p.get("id") == anchor.get("place_id")), None)
+        if place is not None:
+            fields["pair_yaw_deg"] = round(math.degrees(places.pair_yaw(place, pose)), 4)
+        if pose_places(pose) == 1 and "x" in anchor and "z" in anchor:
+            fields["role_point"] = dict(x=round(float(anchor["x"]), 4), z=round(float(anchor["z"]), 4))
+    return fields
 
 
 def _worded(checked: dict, lang: str) -> dict:
@@ -816,21 +856,25 @@ def execute(actor: str, payload: dict) -> dict:
         return refused
     from app.core.skill_gate import blocked_reason, charge
     request_id = payload.get("request_id", "")
-    with engine.request_guard(actor, request_id):
-        # The engine resolves replay identity/conflicts before current-world
-        # eligibility. Exhaustion must not hide an already admitted request.
-        previous = (engine.store.by_request(actor, request_id)
-                    if isinstance(actor, str) and isinstance(request_id, str) else None)
-        if not previous:
-            reason = blocked_reason(actor, "prop_action")
-            if reason:
-                return dict(status="refused", execution_id="", reason=reason)
-        result, created = engine.request_with_creation(
-            actor, payload.get("target"), payload.get("action_id"),
-            payload.get("revision"), payload.get("members", []), request_id,
-            payload.get("consent", "ask"))
-        if created and result["status"] not in ("failed", "cancelled"):
-            charge(actor, "prop_action")
+    try:
+        with engine.request_guard(actor, request_id):
+            # The engine resolves replay identity/conflicts before current-world
+            # eligibility. Exhaustion must not hide an already admitted request.
+            previous = (engine.store.by_request(actor, request_id)
+                        if isinstance(actor, str) and isinstance(request_id, str) else None)
+            if not previous:
+                reason = blocked_reason(actor, "prop_action")
+                if reason:
+                    return dict(status="refused", execution_id="", reason=reason)
+            result, created = engine.request_with_creation(
+                actor, payload.get("target"), payload.get("action_id"),
+                payload.get("revision"), payload.get("members", []), request_id,
+                payload.get("consent", "ask"))
+            if created and result["status"] not in ("failed", "cancelled"):
+                charge(actor, "prop_action")
+    except engine.RequestInProgress:
+        # Another request of this actor is still being admitted.
+        return dict(status="refused", execution_id="", reason=engine.RequestInProgress.reason)
     if created:
         # Invitation callbacks deferred by the outer guard may have advanced
         # the run. Return the same current projection as the HTTP adapter.

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_bridge_lift.mjs",
+  "source": "native/tests/Derivations/bridge_lift.md",
   "cases": [
     {
       "label": "[L1] L1 t=0",

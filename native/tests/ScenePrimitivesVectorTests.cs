@@ -15,7 +15,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scene_primitives.json against <see cref="PrimitiveMath"/> and the native mesh
-/// builders of <see cref="RecipeGeometry"/> (hand derivations: client3d/scripts/smoke_scene_primitives.mjs;
+/// builders of <see cref="RecipeGeometry"/> (hand derivations: scripts/smoke_scene_primitives.mjs;
 /// TS sources: packages/scene-render/src/primitiveMath.ts + primitives.ts).
 ///
 /// <code>

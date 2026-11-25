@@ -1,5 +1,6 @@
 """Fit the collision capsules of humanoid models that have none or an outdated set, and apply changed channels
-(declarations, per-character overrides — ``collision.channels_current``).
+(declarations, per-character overrides — ``collision.channels_current``; a changed exposure —
+``collision.exposure_current``).
 
 A candidate is one stored model, key ``character:<name>:<signature>:<token>``. The token (``wanted_token``) is the
 fingerprint of what ``is_done`` compares the stored record against: the record version, the model identity
@@ -24,14 +25,21 @@ def split_key(key: str) -> Tuple[str, str]:
 
 def wanted_token(name: str, path: Path, meta: Dict[str, Any]) -> str:
     """12 hex over the inputs a current record must match (``collision.record_state``): the record version, the
-    model identity, the character's scales, the extension groups and the wanted channels' signature."""
+    model identity, the character's scales, the extension groups, the wanted channels' signature and, when any, the
+    channels the worn pieces cover now."""
     from app.core import collision, collision_channels
     from app.models.character import get_character_profile
     profile = get_character_profile(name) or {}
-    _wanted, channels_sig = collision_channels.wanted_channels(name, path, meta, profile=profile)
+    wanted, channels_sig = collision_channels.wanted_channels(name, path, meta, profile=profile)
     inputs = [collision.VERSION, list(collision.identity(path, meta)),
               collision.character_scales(name, profile=profile),
               [entry['group'] for entry in collision.extension_chains(meta)], channels_sig]
+    # The channels the worn pieces cover now (``collision.exposure_current``) — only when there are any, so the
+    # token of a model without covered channels stays the one it always had.
+    exposed = collision_channels.exposure(meta)
+    covered = sorted(str(entry['id']) for entry in wanted if not exposed(entry))
+    if covered:
+        inputs.append(covered)
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode('utf-8')).hexdigest()[:12]
 
 
@@ -78,7 +86,7 @@ class CollisionCapsules(ImprovementType):
         if not collision.applies(path, meta):
             return True
         state = collision.record_state(name, path, meta)
-        return state['current'] and state['channels_current']
+        return state['current'] and state['channels_current'] and state['exposure_current']
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
         from app.core import collision, model3d

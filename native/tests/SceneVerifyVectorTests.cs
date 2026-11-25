@@ -12,7 +12,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scene_verify.json against <see cref="SceneVerify"/> (hand derivations:
-/// client3d/scripts/smoke_scene_verify.mjs; TS source: packages/scene-render/src/verify.ts + primitives.ts).
+/// scripts/smoke_scene_verify.mjs; TS source: packages/scene-render/src/verify.ts + primitives.ts).
 ///
 /// <code>
 ///   TS fn            C#                           shape translation

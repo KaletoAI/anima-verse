@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_foot_lock_measure.mjs",
+  "source": "native/tests/Derivations/foot_lock_measure.md",
   "fixtures": {
     "a": {
       "bones": [

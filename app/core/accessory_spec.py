@@ -16,16 +16,24 @@ The glasses (bug round 2026-11-20) carry their own block ``glasses: {shape, size
 opacity, mirror, color?}}`` (``normalize_glasses``); the frame colour is the existing ``metal`` (a metal frame) or
 ``color`` (an acetate frame). Their size is computed per body from the face (``accessory_glasses``).
 
+Part links (plan-anhaenger, design G): a buckle, a pendant or a side charm is an item of its own — a PART: an
+outfit piece in mode accessory without a slot whose ``jewellery.kind`` is ``charm`` and whose ``charm: {size_mm, mount,
+flip}`` holds its defaults. A host refers to its parts by link: the necklace ``pendant: {item, size_mm?, gem_color?}``,
+the belt ``buckle: {item, size_mm?}`` and ``charms: [{item, at, mount?, drop_cm?}]`` (at most ``MAX_CHARMS``).
+``links`` lists them in one shape. The earrings' drop is no part: its own item image is the drop, its size stays in
+``pendant: {size_mm}`` (``image_part_mm``).
+
 Every shape value is item-wide; only what is measured from a body (the neck curve) is per character
 (``accessory_build``). ``normalize`` fills the defaults and clamps; ``suggest_kind`` proposes a kind from the slots and
 the item's words — a suggestion the Wardrobe shows, never stored silently. Pure: no I/O.
 """
 import copy
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 #: The kinds of spec § 5 (generic accessory words).
-KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap", "glasses")
+KINDS: Tuple[str, ...] = ("necklace", "choker", "earrings", "bracelet", "ring", "anklet", "belt", "strap", "glasses",
+                          "charm")
 #: The kinds built (A216 the necklace, A234 every other kind, the glasses in the bug round 2026-11-20).
 BUILT_KINDS: Tuple[str, ...] = ("necklace", "belt", "choker", "anklet", "bracelet", "earrings", "strap", "ring",
                                 "glasses")
@@ -75,15 +83,27 @@ MIRROR_SURFACE: Tuple[float, float] = (1.0, 0.1)
 DEFAULTS: Dict[str, Any] = {
     "band": {"height_cm": 0.0, "width_cm": 4.0, "layer": "auto", "material": "from_image", "at": "thigh"},
     "earring": {"style": "stud", "size_mm": 6.0},
-    "buckle": {"from_image": True, "size_mm": 50.0},
+    "buckle": None,
     "chain": {"drop_cm": 4.0, "thickness_mm": 1.5, "style": "cable"},
     "metal": "gold",
     "pendant": None,
     "side": "both",
     "sway": "off",
 }
-#: The pendant's defaults when one is switched on (spec § 5; built in phase P2).
-PENDANT_DEFAULTS: Dict[str, Any] = {"from_image": True, "size_mm": 18.0}
+#: The earrings' drop size when none is stored (its own item image is the drop).
+PENDANT_DEFAULTS: Dict[str, Any] = {"size_mm": 18.0}
+
+#: Part items (design G): where a side charm sits on a belt, in degrees about the body's vertical axis from the front
+#: (+X is the body's left, as in ``accessory_pendant.TEST_POSES``), how it is fastened, and the most per belt.
+CHARM_AT: Tuple[str, ...] = ("front", "left_hip", "right_hip")
+AT_DEG: Dict[str, float] = {"front": 0.0, "left_hip": 90.0, "right_hip": -90.0}
+CHARM_MOUNTS: Tuple[str, ...] = ("flat", "hang")
+MAX_CHARMS = 6
+#: A part's own defaults (``charm`` block): its size (longest side), how it is fastened, and whether the mesh's back
+#: is its front.
+CHARM_DEFAULTS: Dict[str, Any] = {"size_mm": 30.0, "mount": "flat", "flip": False}
+#: The roles of a link.
+LINK_ROLES: Tuple[str, ...] = ("pendant", "buckle", "charm")
 #: A cord is thicker than a chain (A225): its thickness when none is stored.
 CORD_THICKNESS_MM = 2.5
 
@@ -144,6 +164,85 @@ def _choice(value: Any, allowed: Tuple[str, ...], default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
 
 
+def _link_item(value: Any) -> str:
+    """The linked part's item id, '' when it is not a safe one."""
+    if not isinstance(value, str):
+        return ""
+    from app.models.inventory import safe_item_id
+    return safe_item_id(value)
+
+
+def _link(raw: Any) -> Optional[Dict[str, Any]]:
+    """A pendant / buckle link ``{item, size_mm?}``; None without a valid item (D1: ``from_image`` is gone)."""
+    if not isinstance(raw, dict):
+        return None
+    item = _link_item(raw.get("item"))
+    if not item:
+        return None
+    out: Dict[str, Any] = {"item": item}
+    if raw.get("size_mm") is not None:
+        out["size_mm"] = _num(raw["size_mm"], "size_mm", CHARM_DEFAULTS["size_mm"])
+    return out
+
+
+def _at(value: Any) -> Any:
+    """A charm's place on the belt: a ``CHARM_AT`` name or an angle in degrees wrapped to [−180, 180)."""
+    if isinstance(value, str):
+        return value if value in CHARM_AT else "front"
+    try:
+        d = float(value)
+    except (TypeError, ValueError):
+        return "front"
+    if d != d or d in (float("inf"), float("-inf")):
+        return "front"
+    return round(((d + 180.0) % 360.0) - 180.0, 3)
+
+
+def _charms(raw: Any) -> List[Dict[str, Any]]:
+    """A belt's side charms ``[{item, at, mount?, drop_cm}]`` — the first ``MAX_CHARMS`` valid ones."""
+    out: List[Dict[str, Any]] = []
+    for c in raw if isinstance(raw, list) else []:
+        if len(out) >= MAX_CHARMS:
+            break
+        if not isinstance(c, dict):
+            continue
+        item = _link_item(c.get("item"))
+        if not item:
+            continue
+        entry: Dict[str, Any] = {"item": item, "at": _at(c.get("at", "front")),
+                                 "drop_cm": _num(c.get("drop_cm", 0.0), "drop_cm", 0.0)}
+        if c.get("mount") in CHARM_MOUNTS:
+            entry["mount"] = c["mount"]
+        if c.get("size_mm") is not None:
+            entry["size_mm"] = _num(c["size_mm"], "size_mm", CHARM_DEFAULTS["size_mm"])
+        out.append(entry)
+    return out
+
+
+def at_deg(at: Any) -> float:
+    """The angle (degrees, +90 the body's left) of a charm's ``at``."""
+    return float(AT_DEG[at]) if isinstance(at, str) else float(at)
+
+
+def links(spec: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every part link of a normalized ``spec``: ``{role, index, item, size_mm, at_deg, mount, drop_cm}`` — the buckle
+    or the pendant first, then the charms in their order. ``size_mm`` / ``mount`` None: the part's own."""
+    if not spec:
+        return []
+    out: List[Dict[str, Any]] = []
+    kind = spec.get("kind")
+    head = "buckle" if kind == "belt" else "pendant" if kind == "necklace" else ""
+    if head and isinstance(spec.get(head), dict) and spec[head].get("item"):
+        out.append({"role": head, "index": 0, "item": spec[head]["item"], "size_mm": spec[head].get("size_mm"),
+                    "at_deg": 0.0, "mount": None, "drop_cm": 0.0})
+    if kind == "belt":
+        for i, c in enumerate(spec.get("charms") or []):
+            out.append({"role": "charm", "index": i, "item": c["item"], "size_mm": c.get("size_mm"),
+                        "at_deg": at_deg(c.get("at", "front")), "mount": c.get("mount"),
+                        "drop_cm": float(c.get("drop_cm") or 0.0)})
+    return out
+
+
 def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The full description of ``raw`` (a stored ``jewellery`` dict): defaults filled in, numbers clamped to
     ``RANGES``, unknown choices replaced by the default. ``ValueError`` for a missing or unknown ``kind``."""
@@ -181,22 +280,26 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out["earring"] = {"style": _choice(ear_raw.get("style"), EARRING_STYLES, d["earring"]["style"]),
                       "size_mm": _num(ear_raw.get("size_mm", d["earring"]["size_mm"]), "earring_mm",
                                       d["earring"]["size_mm"])}
-    buckle = raw.get("buckle", d["buckle"])
-    if buckle is None:
-        out["buckle"] = None
-    elif isinstance(buckle, dict):
-        out["buckle"] = {"from_image": bool(buckle.get("from_image", True)),
-                         "size_mm": _num(buckle.get("size_mm", 50.0), "size_mm", 50.0)}
-    else:
-        out["buckle"] = copy.deepcopy(d["buckle"])
-    pendant = raw.get("pendant")
-    if isinstance(pendant, dict):
-        out["pendant"] = {"from_image": bool(pendant.get("from_image", True)),
-                          "size_mm": _num(pendant.get("size_mm", PENDANT_DEFAULTS["size_mm"]), "size_mm", 18.0)}
-        if isinstance(pendant.get("gem_color"), str) and _HEX.match(pendant["gem_color"]):
-            out["pendant"]["gem_color"] = pendant["gem_color"].lower()
-    else:
-        out["pendant"] = None
+    if kind == "belt":
+        out["buckle"] = _link(raw.get("buckle"))
+        out["charms"] = _charms(raw.get("charms"))
+    if kind == "necklace":
+        pendant = _link(raw.get("pendant"))
+        if pendant is not None and isinstance((raw.get("pendant") or {}).get("gem_color"), str) \
+                and _HEX.match(raw["pendant"]["gem_color"]):
+            pendant["gem_color"] = raw["pendant"]["gem_color"].lower()
+        out["pendant"] = pendant
+    if kind == "earrings":
+        # the drop's size (its own item image is the drop — no link, no ``from_image``)
+        ear_p = raw.get("pendant") if isinstance(raw.get("pendant"), dict) else {}
+        out["pendant"] = {"size_mm": _num(ear_p.get("size_mm", PENDANT_DEFAULTS["size_mm"]), "size_mm",
+                                          PENDANT_DEFAULTS["size_mm"])}
+    if kind == "charm":
+        c_raw = raw.get("charm") if isinstance(raw.get("charm"), dict) else {}
+        out["charm"] = {"size_mm": _num(c_raw.get("size_mm", CHARM_DEFAULTS["size_mm"]), "size_mm",
+                                        CHARM_DEFAULTS["size_mm"]),
+                        "mount": _choice(c_raw.get("mount"), CHARM_MOUNTS, CHARM_DEFAULTS["mount"]),
+                        "flip": bool(c_raw.get("flip", CHARM_DEFAULTS["flip"]))}
     if isinstance(raw.get("color"), str) and _HEX.match(raw["color"]):
         out["color"] = raw["color"].lower()
     if raw.get("finger") in FINGERS:
@@ -326,32 +429,25 @@ def lens_seen_far(spec: Dict[str, Any]) -> bool:
 
 
 def pendant_on(spec: Optional[Dict[str, Any]]) -> bool:
-    """Whether ``spec`` (normalized) asks for a part made from the item image (one ``jewellery_mesh`` job per item):
-    the necklace's pendant (A225), the belt's buckle and the earrings' drop (A234)."""
+    """Whether ``spec`` (normalized) asks for a part made from its OWN item image (one ``jewellery_mesh`` job per
+    item): only the earrings' drop since part items (D1) — a necklace's pendant and a belt's buckle are linked parts
+    (``links``)."""
     return image_part_mm(spec) is not None
 
 
 def image_part_mm(spec: Optional[Dict[str, Any]]) -> Optional[float]:
-    """The size (longest side, mm) of the item-image part ``spec`` asks for, None without one (``pendant_on``)."""
-    if not spec:
+    """The size (longest side, mm) of the earrings' drop (``earring.style == "drop"``), None otherwise."""
+    if not spec or spec.get("kind") != "earrings":
         return None
-    kind = spec.get("kind")
-    if kind == "belt":
-        buckle = spec.get("buckle")
-        return float(buckle["size_mm"]) if isinstance(buckle, dict) and buckle.get("from_image", True) else None
-    if kind == "earrings":
-        if (spec.get("earring") or {}).get("style") != "drop":
-            return None
-        pendant = spec.get("pendant") if isinstance(spec.get("pendant"), dict) else PENDANT_DEFAULTS
-        return float(pendant["size_mm"])
-    if kind in ("necklace", "earrings") and isinstance(spec.get("pendant"), dict) \
-            and bool(spec["pendant"].get("from_image", True)):
-        return float(spec["pendant"]["size_mm"])
-    return None
+    if (spec.get("earring") or {}).get("style") != "drop":
+        return None
+    pendant = spec.get("pendant") if isinstance(spec.get("pendant"), dict) else PENDANT_DEFAULTS
+    return float(pendant["size_mm"])
 
 
-#: A234: what the item-image part of a kind is called (the dialog's and the Build plan's words).
-PART_NAMES: Dict[str, str] = {"necklace": "Pendant", "belt": "Buckle", "earrings": "Earring drop"}
+#: What a part is called in the dialog and the Build plan: the earrings' own drop, and the link roles.
+PART_NAMES: Dict[str, str] = {"necklace": "Pendant", "belt": "Buckle", "earrings": "Earring drop", "charm": "Charm"}
+ROLE_NAMES: Dict[str, str] = {"pendant": "Pendant", "buckle": "Buckle", "charm": "Charm"}
 
 
 def part_name(spec: Optional[Dict[str, Any]]) -> str:

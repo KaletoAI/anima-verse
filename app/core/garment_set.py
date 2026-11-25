@@ -62,6 +62,10 @@ SHELL = "shell"
 #: never worn/ghost/fit, never in the body shape or the texture once chosen.
 ACCESSORY = "accessory"
 MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL, IN_BODY, TEMPLATE, ACCESSORY)
+#: The modes whose piece lies over a body that carries a covered extension group: a template is draped onto the
+#: plain body with the group as its collider (``garment_template.body_colliders``), a piece in the body is the body
+#: itself. Every other mode is a mesh of its own built without that collider (``extension_rig.cover_state``).
+BODY_COLLIDER_MODES: Tuple[str, ...] = (TEMPLATE, IN_BODY)
 #: The modes whose piece is a fitted mesh of its own (the own-mesh chain, ``garment_kind_of``).
 OWN_MESH_MODES: Tuple[str, ...] = (OWN_MESH, SHELL)
 
@@ -92,7 +96,13 @@ def mesh_mode_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     a stored mode is a choice (module docstring)."""
     if not isinstance(item, dict) or item.get("category") != "outfit_piece":
         return None
-    piece = _piece_of(item)
+    return piece_mesh_mode(_piece_of(item))
+
+
+def piece_mesh_mode(piece: Optional[Dict[str, Any]]) -> str:
+    """The mode of an ``outfit_piece`` block (``mesh_mode_of`` without the category check): its stored
+    ``mesh_mode``, else the default for its slots."""
+    piece = piece if isinstance(piece, dict) else {}
     mode = piece.get("mesh_mode")
     return mode if mode in MESH_MODES else default_mesh_mode(_slots_of(piece))
 

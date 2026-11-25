@@ -234,13 +234,16 @@ def extract_memories_from_exchange(character_name: str,
         if not content:
             return []
 
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            parsed = json.loads(json_match.group(0))
-        else:
-            parsed = json.loads(content)
-
-        raw_memories = parsed.get("memories", [])
+        # The tolerant decoder: a missing outer brace, a code fence, prose
+        # after the object or a list cut after a complete element no longer
+        # throw a valid answer away (17 % of a local model's answers did).
+        from app.core.llm_json import parse_json
+        parsed = parse_json(content)
+        if parsed is None:
+            logger.error("[%s] Memory extraction: unparsable answer, dropped: %r",
+                         character_name, content[:200])
+            return []
+        raw_memories = parsed.get("memories", parsed.get("_list", []))
         if not isinstance(raw_memories, list):
             return []
 
@@ -312,7 +315,7 @@ def extract_memories_from_exchange(character_name: str,
         return valid
 
     except Exception as e:
-        logger.error("Memory extraction error: %s", e)
+        logger.error("[%s] Memory extraction error: %s", character_name, e)
         return []
 
 

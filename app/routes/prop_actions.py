@@ -126,26 +126,31 @@ def _request_route(body: ActionRequest, user):
     actor = _avatar(user)
     from app.core import prop_action_store as store
     from app.routes.play import _player_action_gate
-    with engine.request_guard(actor, body.request_id):
-        if store.by_request(actor, body.request_id):
-            # Core verifies the full fingerprint; a mismatched nonce is never
-            # a gate bypass and never pays a cost.
-            return _with_motion(actor, _answer(_request(actor, body), actor))
-        try:
-            skill = _player_action_gate(actor, "prop_action")
-        except HTTPException:
-            # Another Core caller/process may have committed this nonce while
-            # the gate read the newly depleted profile. Recheck before refusing.
+    try:
+        with engine.request_guard(actor, body.request_id):
             if store.by_request(actor, body.request_id):
+                # Core verifies the full fingerprint; a mismatched nonce is never
+                # a gate bypass and never pays a cost.
                 return _with_motion(actor, _answer(_request(actor, body), actor))
-            raise
-        result, created = engine.request_with_creation(
-            actor, body.target.model_dump(), body.action_id, body.revision,
-            body.members, body.request_id, body.consent)
-        result = _answer(result, actor)
-        if created and skill is not None and result["status"] not in ("failed", "cancelled"):
-            from app.core.skill_gate import charge
-            charge(actor, skill.SKILL_ID)
+            try:
+                skill = _player_action_gate(actor, "prop_action")
+            except HTTPException:
+                # Another Core caller/process may have committed this nonce while
+                # the gate read the newly depleted profile. Recheck before refusing.
+                if store.by_request(actor, body.request_id):
+                    return _with_motion(actor, _answer(_request(actor, body), actor))
+                raise
+            result, created = engine.request_with_creation(
+                actor, body.target.model_dump(), body.action_id, body.revision,
+                body.members, body.request_id, body.consent)
+            result = _answer(result, actor)
+            if created and skill is not None and result["status"] not in ("failed", "cancelled"):
+                from app.core.skill_gate import charge
+                charge(actor, skill.SKILL_ID)
+    except engine.RequestInProgress:
+        # A second click while this actor's previous request is still being
+        # admitted: refused like any other refusal (409), never run beside it.
+        raise HTTPException(409, detail=engine._refused(engine.RequestInProgress.reason))
     if created:
         # Deferred consent listeners run after the charge/outer guard. Project
         # their real current outcome just as an ordinary Core request does.

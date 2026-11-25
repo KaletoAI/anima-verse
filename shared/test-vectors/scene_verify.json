@@ -1,6 +1,6 @@
 {
   "format":"anima-test-vectors/1",
-  "source":"client3d/scripts/smoke_scene_verify.mjs",
+  "source":"scripts/smoke_scene_verify.mjs",
   "fixtures": {
     "ZERO":{"x":0,"y":0,"z":0},
     "BOX":{"min":{"x":1,"y":2,"z":3},"max":{"x":5,"y":8,"z":7}},

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_scatter_math.mjs",
+  "source": "native/tests/Derivations/scatter_math.md",
   "fixtures": {
     "SQUARE": [[0, 0], [20, 0], [20, 20], [0, 20]],
     "TRIANGLE": [[0, 0], [20, 0], [0, 20]],

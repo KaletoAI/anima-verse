@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_bridge_heading.mjs",
+  "source": "native/tests/Derivations/bridge_heading.md",
   "cases": [
     {
       "label": "[H1] H1 horizontal share",

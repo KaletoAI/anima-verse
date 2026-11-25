@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_terrain_lod.mjs",
+  "source": "native/tests/Derivations/terrain_lod.md",
   "fixtures": {
     "INPUT_1": {
       "$select": {

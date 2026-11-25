@@ -21,6 +21,9 @@ public sealed record ClipListingDiff(bool RevisionChanged, IReadOnlyList<string>
             next.Keys.Intersect(old.Keys).Where(k => !JsonNode.DeepEquals(
                 new JsonArray(old[k].Select(n => n.DeepClone()).ToArray()),
                 new JsonArray(next[k].Select(n => n.DeepClone()).ToArray()))).ToArray(),
-            !JsonNode.DeepEquals(oldListing["transition_clips"], newListing["transition_clips"]));
+            // The clip rules AND the pose rules + groups PoseTransitions resolves on (plan E3 decision 14).
+            !JsonNode.DeepEquals(oldListing["transition_clips"], newListing["transition_clips"])
+            || !JsonNode.DeepEquals(oldListing["pose_rules"], newListing["pose_rules"])
+            || !JsonNode.DeepEquals(oldListing["pose_groups"], newListing["pose_groups"]));
     }
 }

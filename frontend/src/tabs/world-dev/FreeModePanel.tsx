@@ -58,21 +58,47 @@ interface SkipEntry {
   occupant?: string
 }
 
+/** One turn of the run (GET /free/{id} `turns`): how it ended and how many
+ *  of its write rows are undone. */
+interface TurnSummary {
+  turn: number
+  status: 'running' | 'kept' | 'cut_by_budget' | 'rolled_back' | string
+  reason: string
+  writes: number
+  undone: number
+}
+
+interface TurnUsage {
+  turn: number
+  steps: number
+  tokens: number
+}
+
 interface FreeDetail {
   run: FreeRun
   steps: Array<{ seq: number; tool: string; kind: string; line?: string | null;
                  undone_at?: string | null }>
   skipped: SkipEntry[]
   discard_preview: string[]
+  /** per-turn outcome; absent from an older server */
+  turns?: TurnSummary[]
+  /** write rows of the run not undone — what Accept keeps */
+  remaining_writes?: number
+  /** the newest turn's counters (null when this server process ran no turn) */
+  turn_usage?: TurnUsage | null
   busy: boolean
 }
 
+/** Budgets are PER TURN; the run totals are shown beside them. */
 interface Counters {
   steps: number
   max_steps: number
   tokens: number
   max_tokens_total: number
   cost: number
+  /** this turn's counters, null when unknown (a run from before a restart) */
+  turn_steps: number | null
+  turn_tokens: number | null
 }
 
 interface FreeEvent {
@@ -93,16 +119,22 @@ interface FreeEvent {
   steps?: number
   max_steps?: number
   max_tokens_total?: number
+  turn?: number
+  turn_steps?: number
+  turn_tokens?: number
   error?: string
 }
 
-function countersOf(run: FreeRun): Counters {
+function countersOf(run: FreeRun, usage?: TurnUsage | null): Counters {
+  const current = usage && usage.turn === (run.turn || 0) ? usage : null
   return {
     steps: run.steps || 0,
     max_steps: run.max_steps || 0,
     tokens: (run.tokens_in || 0) + (run.tokens_out || 0),
     max_tokens_total: run.max_tokens_total || 0,
     cost: run.cost_total || 0,
+    turn_steps: current ? current.steps : null,
+    turn_tokens: current ? current.tokens : null,
   }
 }
 
@@ -152,6 +184,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
   const [followSteps, setFollowSteps] = useState('')
   const [followTotal, setFollowTotal] = useState('')
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [confirmEmptyAccept, setConfirmEmptyAccept] = useState(false)
   const [discardSkipped, setDiscardSkipped] = useState<SkipEntry[] | null>(null)
 
   const streamRef = useRef<AbortController | null>(null)
@@ -186,7 +219,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       if (!mounted.current || runIdRef.current !== id) return d
       setDetail(d)
       setLiveStatus(d.run.status)
-      setCounters(countersOf(d.run))
+      setCounters(countersOf(d.run, d.turn_usage))
       // Rows the journal now holds come from the journal from here on.
       const known = new Set(d.steps.map((s) => s.seq))
       setLiveSteps((prev) => prev.filter((r) => r.seq !== null && !known.has(r.seq)))
@@ -242,6 +275,8 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           tokens: (ev.tokens_in || 0) + (ev.tokens_out || 0),
           max_tokens_total: ev.max_tokens_total || 0,
           cost: ev.cost || 0,
+          turn_steps: typeof ev.turn_steps === 'number' ? ev.turn_steps : null,
+          turn_tokens: typeof ev.turn_tokens === 'number' ? ev.turn_tokens : null,
         })
         break
       case 'status':
@@ -379,6 +414,15 @@ export function FreeModePanel({ model, provider, maxTokens }: {
   const occupants = skipped.filter((s) => s.occupant !== undefined)
   const hardSkips = skipped.filter((s) => s.occupant === undefined)
 
+  // Turns that did not end normally. A discarded run's turns are all undone
+  // by the discard itself — its status says so, no per-turn banner.
+  const discarded = run?.status === 'rolled_back' || run?.status === 'rollback_incomplete'
+  const turnNotices: TurnSummary[] = detail && detail.run.id === runId && !discarded
+    ? (detail.turns || []).filter((tr) => tr.status === 'rolled_back' || tr.status === 'cut_by_budget')
+    : []
+  const remainingWrites = detail && detail.run.id === runId
+    ? detail.remaining_writes : undefined
+
   const start = useCallback(async () => {
     if (!model) { toast(t('Pick a model first'), 'error'); return }
     if (!task.trim()) { toast(t('Describe the task first'), 'error'); return }
@@ -431,6 +475,23 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       setBusy(false)
     }
   }, [loadDetail, loadRuns, runId, t, toast])
+
+  /** Accept: a run of which nothing remains in the world (every write of
+   *  it rolled back) asks first — accepting it keeps nothing. */
+  const requestAccept = useCallback(async () => {
+    if (!runId) return
+    setBusy(true)
+    let d: FreeDetail | null = null
+    try {
+      d = await loadDetail(runId)
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+    if (!d || !mounted.current || runIdRef.current !== runId
+        || !REVIEW_STATUSES.includes(d.run.status)) return
+    if (d.remaining_writes === 0) setConfirmEmptyAccept(true)
+    else void action('accept')
+  }, [action, loadDetail, runId])
 
   const sendFollowUp = useCallback(async () => {
     if (!runId || !followUp.trim()) return
@@ -504,6 +565,9 @@ export function FreeModePanel({ model, provider, maxTokens }: {
             {status === 'interrupted'
               ? ' · ' + t('the server stopped during a turn')
               : ''}
+            {inReview && remainingWrites === 0
+              ? ' · ' + t('nothing of this run remains in the world')
+              : ''}
           </span>
           {running ? (
             <button className="ga-btn ga-btn-sm" disabled={busy}
@@ -513,7 +577,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           ) : null}
           <button className="ga-btn ga-btn-primary ga-btn-sm" disabled={busy || !inReview}
             title={t('Keep everything the run built and resume the world')}
-            onClick={() => { void action('accept') }}>
+            onClick={() => { void requestAccept() }}>
             {t('Accept')}
           </button>
           <button className="ga-btn ga-btn-sm ga-wd-free-danger" disabled={busy || !inReview}
@@ -548,12 +612,12 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           />
           <div className="ga-wd-free-row">
             <label className="ga-wd-free-field">
-              <span>{t('Step budget')}</span>
+              <span>{t('Step budget (per turn)')}</span>
               <input className="ga-input" inputMode="numeric" value={maxSteps}
                 onChange={(e) => setMaxSteps(e.target.value)} />
             </label>
             <label className="ga-wd-free-field">
-              <span>{t('Token budget (run)')}</span>
+              <span>{t('Token budget (per turn)')}</span>
               <input className="ga-input" inputMode="numeric" value={maxTotal}
                 onChange={(e) => setMaxTotal(e.target.value)} />
             </label>
@@ -575,8 +639,16 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           </div>
           {c ? (
             <div className="ga-wd-free-counters">
-              <span><strong>{t('Steps')}</strong> {c.steps} / {c.max_steps}</span>
-              <span><strong>{t('Tokens')}</strong> {c.tokens.toLocaleString()} / {c.max_tokens_total.toLocaleString()}</span>
+              <span title={t('The budgets apply to each turn; the run total counts every turn')}>
+                <strong>{t('Steps this turn')}</strong>{' '}
+                {c.turn_steps !== null ? c.turn_steps : '–'} / {c.max_steps}
+                <span className="ga-form-hint"> · {t('run total')} {c.steps}</span>
+              </span>
+              <span title={t('The budgets apply to each turn; the run total counts every turn')}>
+                <strong>{t('Tokens this turn')}</strong>{' '}
+                {c.turn_tokens !== null ? c.turn_tokens.toLocaleString() : '–'} / {c.max_tokens_total.toLocaleString()}
+                <span className="ga-form-hint"> · {t('run total')} {c.tokens.toLocaleString()}</span>
+              </span>
               <span><strong>{t('Cost')}</strong> {formatUsd(c.cost)}</span>
             </div>
           ) : null}
@@ -599,6 +671,19 @@ export function FreeModePanel({ model, provider, maxTokens }: {
             ))}
             {liveText ? <pre className="ga-wd-free-live">{liveText}</pre> : null}
           </div>
+
+          {turnNotices.map((tr) => (
+            <div key={tr.turn}
+              className={`ga-wd-free-turn ga-wd-free-turn-${tr.status === 'rolled_back' ? 'rolled' : 'cut'}`}>
+              {tr.status === 'rolled_back'
+                ? t('Turn {n} rolled back').replace('{n}', String(tr.turn))
+                  + (tr.reason ? ': ' + tr.reason : '')
+                  + ' — ' + t('{k} change(s) removed').replace('{k}', String(tr.undone))
+                : t('Turn {n} stopped by budget — work kept, send a follow-up to continue')
+                  .replace('{n}', String(tr.turn))
+                  + (tr.writes ? ' (' + t('{k} change(s) kept').replace('{k}', String(tr.writes - tr.undone)) + ')' : '')}
+            </div>
+          ))}
 
           {run.note && !running ? (
             <pre className="ga-wd-free-note">{run.note}</pre>
@@ -650,17 +735,17 @@ export function FreeModePanel({ model, provider, maxTokens }: {
                 placeholder={t('Follow-up for the model (a new turn of this run)…')}
               />
               <label className="ga-wd-free-field">
-                <span>{t('Step budget')}</span>
+                <span>{t('Step budget (per turn)')}</span>
                 <input className="ga-input" inputMode="numeric" value={followSteps}
                   placeholder={String(run.max_steps ?? '')}
-                  title={t('Raise the budget of this run; empty = keep it')}
+                  title={t('Raise the budget for this and every later turn; empty = keep it')}
                   onChange={(e) => setFollowSteps(e.target.value)} />
               </label>
               <label className="ga-wd-free-field">
-                <span>{t('Token budget (run)')}</span>
+                <span>{t('Token budget (per turn)')}</span>
                 <input className="ga-input" inputMode="numeric" value={followTotal}
                   placeholder={String(run.max_tokens_total ?? '')}
-                  title={t('Raise the budget of this run; empty = keep it')}
+                  title={t('Raise the budget for this and every later turn; empty = keep it')}
                   onChange={(e) => setFollowTotal(e.target.value)} />
               </label>
               <button className="ga-btn ga-btn-primary" disabled={busy || !followUp.trim()}
@@ -712,7 +797,50 @@ export function FreeModePanel({ model, provider, maxTokens }: {
           onConfirm={() => { setConfirmDiscard(false); void action('discard') }}
         />
       ) : null}
+
+      {confirmEmptyAccept && run ? (
+        <ConfirmEmptyAccept
+          onCancel={() => setConfirmEmptyAccept(false)}
+          onConfirm={() => { setConfirmEmptyAccept(false); void action('accept') }}
+        />
+      ) : null}
     </div>
+  )
+}
+
+/** Accept on a run with no remaining write — an in-app dialog (no native
+ *  box): accepting keeps nothing, which is easy to miss after a rollback. */
+function ConfirmEmptyAccept({ onCancel, onConfirm }: {
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const { t } = useI18n()
+  const title = t('Accept this run?')
+  return createPortal(
+    <div className="ga-modal-backdrop" onClick={onCancel}>
+      <div
+        className="ga-modal"
+        role="dialog"
+        aria-label={title}
+        style={{ maxWidth: 480, width: 'min(480px, 92vw)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ga-modal-header">
+          <span>{title}</span>
+          <button type="button" className="ga-modal-close" onClick={onCancel}>×</button>
+        </div>
+        <div className="ga-modal-body">
+          {t('Nothing of this run remains in the world — accept anyway?')}
+        </div>
+        <div className="ga-modal-footer" style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onCancel}>{t('Cancel')}</button>
+          <button type="button" className="ga-btn ga-btn-primary ga-btn-sm" onClick={onConfirm}>
+            {t('Accept')}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 

@@ -29,6 +29,8 @@ export interface TemplatePreview {
   colour?: string
   shapes?: Shape[]
   marks?: Mark[]
+  /** Round 2026-11-25: a top with cups — the hem's hold (m; > 0 at the waist, < 0 under the cups). */
+  hem_clamped?: number
 }
 
 /** Fills drawn above the openings (a collar / lapel lies over the neckline). */
@@ -96,7 +98,9 @@ function OverlaySvg({ data, height, sheer }: { data: TemplatePreview; height: nu
 const RENDER_POLL_MS = 1500
 
 /** The picture with the draft on it; re-asks the server 120 ms after the last change. */
-export function TemplateOverlay({ path, draft }: { path: string; draft: TemplateParams }) {
+export function TemplateOverlay({ path, draft, onPreview }: { path: string; draft: TemplateParams
+  /** Each preview answer, for the dialog's lines that depend on the body (the hem's hold). */
+  onPreview?: (r: TemplatePreview) => void }) {
   const sheer = draft.fabric === 'sheer' ? Number(draft.opacity ?? 0.4) : undefined
   const { t } = useI18n()
   const [data, setData] = useState<TemplatePreview | null>(null)
@@ -104,11 +108,13 @@ export function TemplateOverlay({ path, draft }: { path: string; draft: Template
   const [big, setBig] = useState(false)
   const [tick, setTick] = useState(0)
   const key = JSON.stringify(draft)
+  const previewed = useRef(onPreview)
+  useEffect(() => { previewed.current = onPreview }, [onPreview])
   useEffect(() => {
     let gone = false
     const id = window.setTimeout(() => {
       apiPost<TemplatePreview>(`${path}/preview`, { params: JSON.parse(key) })
-        .then((r) => { if (!gone) { setData(r); setError('') } })
+        .then((r) => { if (!gone) { setData(r); setError(''); previewed.current?.(r) } })
         .catch((e) => { if (!gone) setError((e as Error).message) })
     }, 120)
     return () => { gone = true; window.clearTimeout(id) }

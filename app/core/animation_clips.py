@@ -191,7 +191,9 @@ def parse_clip_alt(filename: str) -> str:
 # test is a different key) plus ``st_mtime_ns`` of each root and each set
 # subdirectory. Adding, removing or renaming a file changes the mtime of the
 # directory it lives in; that is the whole invalidation rule, plus
-# ``reload_clip_caches()`` for everything an edit of this module does.
+# ``reload_clip_caches()`` for everything an edit of this module does. The
+# fingerprint itself is reused for _FINGERPRINT_TTL_S (see there), so a change
+# made outside this process is seen after at most that long.
 #
 # The fingerprint is taken BEFORE the scan, so a file that appears during the
 # scan makes the next fingerprint differ instead of being lost. A directory
@@ -204,9 +206,54 @@ _ENTRIES_CACHE: Optional[Tuple[Any, List[Dict[str, Any]]]] = None
 _MTIME_SETTLE_NS = 1_000_000_000
 
 
+#: How long one library's fingerprint is reused (monotonic seconds) before
+#: its directories are stat'ed again — like ``scene_recipe.prop_lib_token``.
+#: ``clip_entries()`` is asked many times per prop-action offer; the scandir
+#: per call showed up in the thread dumps of a slow server. Every in-process
+#: library writer calls ``reload_clip_caches()``, which drops the memo
+#: (``invalidate_library_fingerprint``); a change from outside the process
+#: is seen after at most this long.
+_FINGERPRINT_TTL_S = 5.0
+_fingerprint_memo: Dict[str, Tuple[float, Tuple[Any, ...]]] = {}
+_fingerprint_lock = threading.Lock()
+_fingerprint_epoch = 0
+_monotonic = time.monotonic
+
+
+def invalidate_library_fingerprint() -> None:
+    """Forget every memoised library fingerprint (``reload_clip_caches``)."""
+    global _fingerprint_epoch
+    with _fingerprint_lock:
+        _fingerprint_epoch += 1
+        _fingerprint_memo.clear()
+
+
 def _library_fingerprint(root: Path) -> Tuple[Any, ...]:
     """``(root mtime, ((set dir, mtime), …))`` of one library, ``("absent",)``
-    when the root does not exist."""
+    when the root does not exist. Memoised per existing root for
+    _FINGERPRINT_TTL_S; a fingerprint with a directory mtime younger than one
+    second is not memoised (``_fingerprint_is_settled``), and one read while an
+    invalidation ran is not stored under the newer epoch."""
+    key = str(root)
+    now = _monotonic()
+    with _fingerprint_lock:
+        hit = _fingerprint_memo.get(key)
+        epoch = _fingerprint_epoch
+    if hit is not None and now < hit[0]:
+        return hit[1]
+    fingerprint = _scan_library_fingerprint(root)
+    # A missing root is not memoised: its stat is one failing call, and a
+    # library that appears is seen at once.
+    if (_FINGERPRINT_TTL_S > 0 and fingerprint != ("absent",)
+            and _fingerprint_is_settled(((key, fingerprint),))):
+        with _fingerprint_lock:
+            if epoch == _fingerprint_epoch:
+                _fingerprint_memo[key] = (now + _FINGERPRINT_TTL_S, fingerprint)
+    return fingerprint
+
+
+def _scan_library_fingerprint(root: Path) -> Tuple[Any, ...]:
+    """The stat walk behind ``_library_fingerprint``."""
     try:
         root_mtime = os.stat(root).st_mtime_ns
     except FileNotFoundError:
@@ -361,6 +408,7 @@ def _all_entries() -> List[Dict[str, Any]]:
 
 def _clear_entries_cache() -> None:
     global _ENTRIES_CACHE, _REVISION_CACHE, _REVISION_EPOCH
+    invalidate_library_fingerprint()
     _REVISION_EPOCH = object()
     _REVISION_CACHE = None
     with _ENTRIES_LOCK:
@@ -782,6 +830,29 @@ def resolve_pose_transition(from_pose: Any, to_pose: Any) -> Optional[Dict[str, 
     if not rule and from_group:
         rule = resolve_transition(from_group, to_pose)
     return rule
+
+
+def pose_rule_groups() -> Dict[str, str]:
+    """``{pose key: group}`` for every catalog pose whose group a rule may name
+    (``@stand`` · ``@seat`` · ``@ground`` · ``@lie``) — the group step of
+    :func:`resolve_pose_transition`, handed to the clients in the listing so the
+    native client resolves entry and exit bridges by the same rule
+    (``PoseTransitions``)."""
+    from app.core.pose_catalog import get_catalog
+    return {key: entry["group"] for key, entry in get_catalog("pose").items()
+            if entry.get("group") in _RULE_GROUPS}
+
+
+def client_pose_rules() -> List[Dict[str, Any]]:
+    """The RUNTIME pose rules ``[{from, to, kind, accel}]`` — the table
+    :func:`resolve_transition` resolves on (:func:`effective_transitions`: a
+    world rule whose bridge clip is unavailable falls back to the shared rule,
+    a world-only one is dropped). Handed to the clients in the listing as
+    ``pose_rules`` so the native client's ``PoseTransitions`` answers exactly
+    what :func:`resolve_pose_transition` answers; the listing's
+    ``transitions`` stay the editor's full table."""
+    return [{"from": r["from"], "to": r["to"], "kind": r["kind"], "accel": _accel(r.get("accel"))}
+            for r in effective_transitions()]
 
 
 def save_transitions(entries: Any,

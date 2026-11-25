@@ -158,7 +158,8 @@ class _GeometryQuery:
     Deliberately explicit, not a thread/context-local or the TTL cache: an
     offer/check may share its measured geometry, but execution, consent and
     arrival create their own query. Profile snapshots are opt-in for offers only;
-    occupancy and claims always stay fresh.
+    occupancy and claims always stay fresh. An admission's claim re-check and
+    its room line reuse the admission's own query (``with_fresh_profiles``).
     The owner does not share this object with another thread or a write path.
     """
 
@@ -169,6 +170,26 @@ class _GeometryQuery:
         self._locations = {}
         self._rooms = {}
         self._documents = {}
+        self._world = None
+
+    def with_fresh_profiles(self):
+        """A query that shares this one's world data (composed rooms, room
+        geometry, prop documents, routes, the location list) but reads every
+        profile anew: a re-check of an admission compares today's profiles
+        against the plan without composing the room a second time."""
+        other = _GeometryQuery()
+        other._route_graphs, other._routes = self._route_graphs, self._routes
+        other._locations, other._rooms, other._documents = self._locations, self._rooms, self._documents
+        other._world = self._world
+        return other
+
+    def locations(self):
+        """Every location of the world (``list_locations``), parsed once per
+        query — ``inside`` asks it for each planned entry point."""
+        if self._world is None:
+            from app.models.world import list_locations
+            self._world = list_locations()
+        return self._world
 
     def profile(self, name):
         from app.models.character import get_character_profile
@@ -435,14 +456,18 @@ def pair_yaw(place: Place, pose_key: str) -> float:
     return math.radians(facing - 90.0 + pose_yaw_offset(pose_key))
 
 
-def inside(location_id: str, x: float, z: float) -> bool:
+def inside(location_id: str, x: float, z: float, *, _locations=None) -> bool:
     """Does the point derive ``location_id`` — the same question
     ``set_character_pos`` asks (``location_at_point``: the smallest drawn
     boundary containing the point)? A slot that answers No must never be
-    walked to: the write would evict the character from its location."""
+    walked to: the write would evict the character from its location.
+    ``_locations``: the world's locations already read by the caller
+    (``_GeometryQuery.locations``), else they are read here."""
     from app.core.world_geometry import location_at_point
-    from app.models.world import list_locations
-    loc = location_at_point(float(x), float(z), list_locations())
+    if _locations is None:
+        from app.models.world import list_locations
+        _locations = list_locations()
+    loc = location_at_point(float(x), float(z), _locations)
     return ((loc.get("id") or "") if loc else "") == (location_id or "")
 
 

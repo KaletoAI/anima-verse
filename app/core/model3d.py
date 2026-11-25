@@ -1412,6 +1412,12 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile, preview_states=preview_states)
+    # The names of the pieces a held pose names (``motion.held[*].by``), for the preview's note.
+    held_ids = sorted({iid for row in (out["motion"].get("held") or {}).values() for iid in row.get("by") or []})
+    if held_ids:
+        from app.core.motion_item_cache import item_snapshot
+        snapshot = item_snapshot()
+        out["held_item_names"] = {iid: str((snapshot.get(iid) or {}).get("name") or iid) for iid in held_ids}
     draft_profile = {**profile, "model3d_opts": {**(profile.get("model3d_opts") or {}), "extension_motion": {}}}
     out["motion_defaults"] = motion_payload(character_name, profile=draft_profile, apply_clothing=False, apply_states=False)["groups"]
     from app.core.extension_rig import inherited_extension_switches, rig_groups_for

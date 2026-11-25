@@ -95,37 +95,51 @@ ARMS_DOWN = [("LeftArm", "Y", 30), ("RightArm", "Y", -30), ("LeftForeArm", "X", 
 
 
 # ---------------------------------------------------------------- scene helpers
-def load_fit(path, plain_body=None):
+def _attached_parts(objects, keep_parts):
+    """The mesh objects of ``objects`` whose glTF extras name an attached part (custom property ``attached_part``,
+    written by the extension rig's part node) listed in ``keep_parts`` (plan anatomy, H3)."""
+    wanted = {str(k) for k in keep_parts or ()}
+    return [o for o in objects if o.type == "MESH" and str(o.get("attached_part") or "") in wanted] if wanted else []
+
+
+def load_fit(path, plain_body=None, keep_parts=()):
     """The fit GLB (armature + body + fitted piece). Its body is the COVERED variant
     (skin under the piece pulled in), so measurements and the collider use the PLAIN
-    rigged base body (plain_body), re-targeted onto the fit's armature by bone name."""
+    rigged base body (plain_body), re-targeted onto the fit's armature by bone name.
+    ``keep_parts`` (plan anatomy, H3): the attached-part meshes of the body GLB (``_attached_parts``) to keep as drape
+    colliders, rigged to ``arm`` like the body. Returns ``(arm, body, garment, parts)``."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=str(path))
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     body = next(o for o in bpy.data.objects if o.type == "MESH" and o.name == "mesh")
     garment = next((o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("garment_")), None)
+    parts = [] if plain_body else _attached_parts(list(bpy.data.objects), keep_parts)
     for o in list(bpy.data.objects):
-        if o.type == "MESH" and o not in (body, garment):
+        if o.type == "MESH" and o not in (body, garment) and o not in parts:
             bpy.data.objects.remove(o)
     if plain_body:
         before = set(bpy.data.objects)
         bpy.ops.import_scene.gltf(filepath=str(plain_body))
         new = [o for o in bpy.data.objects if o not in before]
         nbody = max((o for o in new if o.type == "MESH"), key=lambda o: len(o.data.vertices))
-        mw = nbody.matrix_world.copy()
-        nbody.parent = arm
-        nbody.matrix_world = mw
-        for m in nbody.modifiers:
-            if m.type == "ARMATURE":
-                m.object = arm
+        parts = _attached_parts(new, keep_parts)
+        for o in [nbody] + parts:
+            mw = o.matrix_world.copy()
+            o.parent = arm
+            o.matrix_world = mw
+            for m in o.modifiers:
+                if m.type == "ARMATURE":
+                    m.object = arm
         for o in new:
-            if o is not nbody:
+            if o is not nbody and o not in parts:
                 bpy.data.objects.remove(o)
         bpy.data.objects.remove(body)
         body = nbody
         body.name = "plain_body"
+    for part in parts:
+        part.hide_render = True        # a collider under the cloth, never part of a render or an export
     arm.data.pose_position = "POSE"
-    return arm, body, garment
+    return arm, body, garment, parts
 
 
 def world_coords(obj, evaluated=True):
@@ -687,6 +701,85 @@ HEM_RAMPED = []
 COLLIDER_INNER = []
 
 
+#: Plan anatomy (H3): the covered extension parts and tips of this run (``set_body_collider``) — every collider the
+#: run builds (``rest_collider``, the fresh posed one in ``drape``) takes them in before its remesh.
+BODY_COLLIDER = {"parts": [], "spheres": [], "arm": None}
+#: Plan anatomy (H3): per collider build, the faces ``drop_outer_shells`` kept for the parts / tips, for the record.
+BODY_COLLIDER_KEPT = []
+#: Plan anatomy (H3): UV sphere resolution of a tip collider (segments x rings).
+SPHERE_SEGMENTS, SPHERE_RINGS = 16, 8
+
+
+def set_body_collider(arm, parts=(), spheres=()):
+    """Plan anatomy (H3): ``parts`` = [(part object, inflate m)], ``spheres`` = [{bone, radius, inflate}] — what the
+    job's ``body_colliders`` named (``garment_template.body_colliders``)."""
+    BODY_COLLIDER.update(parts=list(parts), spheres=list(spheres), arm=arm)
+
+
+def _sphere_centres(arm, spheres):
+    """World ``(centre, radius)`` of each tip sphere: the named bone's head moved ``radius`` along the bone, outward
+    (head to tail), radius ``radius + inflate``; a bone the rig lacks is skipped."""
+    out = []
+    for sp in spheres or ():
+        pb = arm.pose.bones.get(sp["bone"]) if arm is not None else None
+        if pb is None:
+            continue
+        head = arm.matrix_world @ pb.head
+        tail = arm.matrix_world @ pb.tail
+        d = tail - head
+        d = d.normalized() if d.length > 1e-9 else Vector((0.0, 0.0, 1.0))
+        out.append((head + d * float(sp["radius"]), float(sp["radius"]) + float(sp["inflate"])))
+    return out
+
+
+def _body_collider_geometry(parts, spheres, dg, arm):
+    """World vertices + faces of the inflated parts (each vertex moved ``inflate`` out along its normal, no
+    Solidify) and the tip spheres, as the pose stands now."""
+    verts, faces = [], []
+    for obj, inflate in parts or ():
+        me = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
+        me.transform(obj.matrix_world)
+        me.update()
+        off = len(verts)
+        verts += [tuple(v.co + v.normal * float(inflate)) for v in me.vertices]
+        faces += [tuple(off + i for i in p.vertices) for p in me.polygons]
+        bpy.data.meshes.remove(me)
+    for centre, radius in _sphere_centres(arm, spheres):
+        bm = bmesh.new()
+        bmesh.ops.create_uvsphere(bm, u_segments=SPHERE_SEGMENTS, v_segments=SPHERE_RINGS, radius=radius)
+        off = len(verts)
+        verts += [tuple(v.co + centre) for v in bm.verts]
+        faces += [tuple(off + v.index for v in f.verts) for f in bm.faces]
+        bm.free()
+    return verts, faces
+
+
+def _join_body_collider(col, parts, spheres, dg, arm=None):
+    """Plan anatomy (H3): join the covered extension parts (inflated) and the tip spheres into the collider object
+    ``col`` before its remesh. Returns the BVH of what was joined (world space; ``drop_outer_shells`` keeps the faces
+    near it) or None when nothing was."""
+    verts, faces = _body_collider_geometry(parts, spheres, dg, arm)
+    if not faces:
+        return None
+    me = bpy.data.meshes.new("body_collider")
+    me.from_pydata(verts, [], faces)
+    me.transform(col.matrix_world.inverted())
+    bm = bmesh.new()
+    bm.from_mesh(col.data)
+    bm.from_mesh(me)
+    bm.to_mesh(col.data)
+    bm.free()
+    bpy.data.meshes.remove(me)
+    return BVHTree.FromPolygons([Vector(v) for v in verts], faces)
+
+
+def _body_collider_margin(parts, spheres):
+    """How close (m) a remeshed face must lie to the joined parts / tips to be kept: the largest inflate plus one
+    voxel."""
+    inflates = [float(i) for _o, i in parts or ()] + [float(sp["inflate"]) for sp in spheres or ()]
+    return (max(inflates) if inflates else 0.0) + COLLIDER_VOXEL_M
+
+
 def armature_of(body):
     """The armature deforming ``body`` (its Armature modifier's object), None without one."""
     return next((m.object for m in body.modifiers if m.type == "ARMATURE" and m.object is not None), None)
@@ -932,12 +1025,14 @@ def _delete_faces(col, idx):
     col.data.update()
 
 
-def drop_outer_shells(col, body, *, layered, faces=80000, rest=False, record=False):
+def drop_outer_shells(col, body, *, layered, faces=80000, rest=False, record=False, keep=None):
     """A236 — remove the outer shells (``outer_shell_points`` of the face centres) from the remeshed collider ``col``
     of ``body``. With ``layered`` (lower garment layers joined into ``col``: a layer stands off the skin too) the
     shells are judged on a body-only remesh and every face of ``col`` whose nearest body-only face within OUTER_MATCH_M is a shell goes.
     ``rest``: ``col`` was taken in the bind pose (the skeleton is read there). With ``record`` the body's vertices on a
     shell (as the body stands now) are recorded in ``OUTER_BODY`` for ``measure_pose``.
+    ``keep`` = ``(BVH, margin)`` (plan anatomy, H3): a face whose centre lies within ``margin`` of the joined parts /
+    tips is never removed — an extension part stands off the skin like an outer shell, but the cloth must lie over it.
     Returns how many faces went."""
     arm = armature_of(body)
     if arm is None:
@@ -988,6 +1083,12 @@ def drop_outer_shells(col, body, *, layered, faces=80000, rest=False, record=Fal
                 if hit[0] is not None:     # outside and off the surface, or on a shell
                     mask[i] = bool(shell[hit[2]]) or (hit[3] > OUTER_GAP_M and (p - hit[0]).dot(hit[1]) > 0)
         OUTER_BODY[body.name] = mask
+    if keep is not None and len(drop):
+        ktree, margin = keep
+        _co, _p, cen, _n = _mesh_arrays(col)
+        kept = np.array([ktree.find_nearest(Vector(cen[i]), margin)[0] is not None for i in drop], bool)
+        BODY_COLLIDER_KEPT.append(int(kept.sum()))
+        drop = drop[~kept]
     _delete_faces(col, drop)
     COLLIDER_OUTER.append(int(len(drop)))
     return int(len(drop))
@@ -1126,20 +1227,26 @@ BUILD_CLEAR_PASSES = 80
 BUILD_CLEAR_RINGS = 4
 
 
-def rest_collider(body, extra=(), faces=80000, hem_ramp=False):
+def rest_collider(body, extra=(), faces=80000, hem_ramp=False, body_parts=None, spheres=None):
     """A179 — the drape's collider in the rest pose, built ONCE per piece: the body (+ the ``extra`` lower layers,
     thickened) voxel-remeshed, so it is closed and wound outward. The bodice builder reads its sections from it, the
     clearance pass projects onto it and ``drape`` collides with it (``collider=``): what is built outside it starts
-    outside the collider the cloth meets. Returns ``(object, BVH tree)``; ``drape`` takes the object over."""
+    outside the collider the cloth meets. Returns ``(object, BVH tree)``; ``drape`` takes the object over.
+    ``body_parts`` / ``spheres`` (plan anatomy, H3; default the run's ``BODY_COLLIDER``) are joined before the remesh
+    and kept by ``drop_outer_shells``."""
     t0 = time.time()
+    parts = BODY_COLLIDER["parts"] if body_parts is None else body_parts
+    tips = BODY_COLLIDER["spheres"] if spheres is None else spheres
     dg = bpy.context.evaluated_depsgraph_get()
     col = bpy.data.objects.new("collider", bpy.data.meshes.new_from_object(body.evaluated_get(dg)))
     col.matrix_world = body.matrix_world.copy()
     bpy.context.scene.collection.objects.link(col)
     for ex in extra:
         _join_extra(col, ex, dg, arm=armature_of(body), hem_ramp=hem_ramp)
+    ktree = _join_body_collider(col, parts, tips, dg, armature_of(body))
     _remesh(col, faces, core_segments(armature_of(body)))
-    drop_outer_shells(col, body, layered=bool(extra), faces=faces, record=True)
+    drop_outer_shells(col, body, layered=bool(extra), faces=faces, record=True,
+                      keep=(ktree, _body_collider_margin(parts, tips)) if ktree is not None else None)
     tree = collider_tree(col)
     COLLIDER_S.append(round(time.time() - t0, 2))
     return col, tree
@@ -1259,8 +1366,11 @@ def drape(obj, body, pin_idx, frames, *, quality, bending, shrink, self_collisio
         sc.collection.objects.link(col)
         for ex in extra:
             _join_extra(col, ex, dg)
+        parts, tips = BODY_COLLIDER["parts"], BODY_COLLIDER["spheres"]
+        ktree = _join_body_collider(col, parts, tips, dg, armature_of(body))
         _remesh(col, collider_faces, core_segments(armature_of(body)))
-        drop_outer_shells(col, body, layered=bool(extra), faces=collider_faces)
+        drop_outer_shells(col, body, layered=bool(extra), faces=collider_faces,
+                          keep=(ktree, _body_collider_margin(parts, tips)) if ktree is not None else None)
     if crop_m is not None:
         gco = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
         lo, hi = gco.min(0) - crop_m, gco.max(0) + crop_m
@@ -1605,7 +1715,7 @@ def export(path, objs):
 
 
 def run_mesh(a):
-    arm, body, fit = load_fit(a["fit_glb"], a.get("plain_body"))
+    arm, body, fit, _parts = load_fit(a["fit_glb"], a.get("plain_body"))
     out = Path(a["out_dir"])
     out.mkdir(parents=True, exist_ok=True)
     fit_edges = edges_of(fit)
@@ -1666,7 +1776,7 @@ def body_radius(tree, centre, ang, z):
 
 def run_panels(a):
     import json
-    arm, body, _g = load_fit(a["fit_glb"], a.get("plain_body"))
+    arm, body, _g, _parts = load_fit(a["fit_glb"], a.get("plain_body"))
     out = Path(a["out_dir"])
     out.mkdir(parents=True, exist_ok=True)
     spec = json.loads(Path(a["panels_json"]).read_text())
@@ -1969,7 +2079,7 @@ def project_bake(obj, a, out_png, size=1024, co=None, nr=None, polys=None, paire
 
 
 def run_from_body(a):
-    arm, body, _g = load_fit(a["fit_glb"], a.get("plain_body"))
+    arm, body, _g, _parts = load_fit(a["fit_glb"], a.get("plain_body"))
     out = Path(a["out_dir"])
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.process_time()
@@ -2035,7 +2145,7 @@ def run_from_body(a):
 
 
 def run_necklace(a):
-    arm, body, g = load_fit(a["fit_glb"], a.get("plain_body"))
+    arm, body, g, _parts = load_fit(a["fit_glb"], a.get("plain_body"))
     if g is not None:
         bpy.data.objects.remove(g)
     out = Path(a["out_dir"])

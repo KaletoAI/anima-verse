@@ -349,21 +349,27 @@ async def preload_models() -> None:
 
 def _resolve_character_override(task: str, agent_name: str, *, reserve: bool = True,
                                 uncensored_only: bool = False, exclude: frozenset = frozenset(),
-                                consult_quota: bool = True) -> Optional[LLMInstance]:
+                                consult_quota: bool = True,
+                                character_config: Optional[dict] = None) -> Optional[LLMInstance]:
     """Reads `llm_routing_overrides[task]` from character_config.
 
     Supported value formats:
     - "Provider::Model"   — a concrete provider + model
     - "Model"             — the model alone; the provider is found automatically
 
+    `character_config` is the character's config when the caller already
+    holds it (read off the event loop); None reads it here.
+
     Returns an LLMInstance when an override exists AND the provider is
     available, otherwise None (falls back to the global routing).
     """
-    try:
-        from app.models.character import get_character_config
-        cfg = get_character_config(agent_name) or {}
-    except Exception:
-        return None
+    cfg = character_config
+    if cfg is None:
+        try:
+            from app.models.character import get_character_config
+            cfg = get_character_config(agent_name) or {}
+        except Exception:
+            return None
 
     overrides = cfg.get("llm_routing_overrides") or {}
     if not isinstance(overrides, dict):
@@ -614,7 +620,8 @@ def overflow_target(task: str, agent_name: str = "", *,
 def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
                 reserve: bool = True, uncensored_only: bool = False,
                 exclude: frozenset = frozenset(),
-                consult_quota: bool = True) -> Optional[LLMInstance]:
+                consult_quota: bool = True,
+                character_config: Optional[dict] = None) -> Optional[LLMInstance]:
     """Determines the LLM for a task from the llm_routing config.
 
     Order:
@@ -638,6 +645,10 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
     models are not comparable) and that wait for a slot themselves before
     they send. Such a lookup books nothing, so it requires ``reserve=False``.
 
+    ``character_config`` hands in the character's config for the override
+    when the caller already read it (an async caller reads it off the event
+    loop, see ``resolve_llm_async``); None reads it here.
+
     The task disable (llm_task_state) is always the first check.
     """
     if reserve and not consult_quota:
@@ -651,7 +662,8 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
     # 1. Character override
     if agent_name:
         override_inst = _resolve_character_override(task, agent_name, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude,
-                                                    consult_quota=consult_quota)
+                                                    consult_quota=consult_quota,
+                                                    character_config=character_config)
         if override_inst is not None:
             return override_inst
 
@@ -666,7 +678,7 @@ def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False,
         if parent:
             logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
             return resolve_llm(parent, agent_name=agent_name, overflow=overflow, reserve=reserve, uncensored_only=uncensored_only, exclude=exclude,
-                               consult_quota=consult_quota)
+                               consult_quota=consult_quota, character_config=character_config)
         return None
 
     candidates.sort(key=lambda x: x[0])
@@ -761,8 +773,22 @@ def resolve_llm_wait(task: str, agent_name: str = "", **kwargs):
 
 
 async def resolve_llm_async(task: str, agent_name: str = "", **kwargs):
-    """Async routing wait without parking the event loop or a queue worker."""
+    """Async routing wait without parking the event loop or a queue worker.
+
+    The character config (the override) is the one storage read of the
+    routing: it is read in a worker thread, once, unless the caller hands it
+    in as ``character_config``. The routing itself, with its quota
+    reservation, stays on the loop — without a suspension point between the
+    choice and the booking, a cancelled caller cannot orphan a reservation."""
     import asyncio
+    if agent_name and kwargs.get("character_config") is None:
+        def _read_config() -> dict:
+            try:
+                from app.models.character import get_character_config
+                return get_character_config(agent_name) or {}
+            except Exception:
+                return {}
+        kwargs["character_config"] = await asyncio.to_thread(_read_config)
     while True:
         instance = resolve_llm(task, agent_name, **kwargs)
         if instance is not None:

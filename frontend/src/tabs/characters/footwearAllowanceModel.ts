@@ -38,6 +38,8 @@ export interface FootwearAllowanceView {
   frame: ShoeFrame | null
   /** The shown shoe was made with other settings than the saved ones (the fit is due). */
   due: boolean
+  /** No fit at all because the shoe itself was refused at this source step: nothing can apply an allowance yet. */
+  blocked?: { step: string; error: string } | null
 }
 
 export type AllowanceSetting = 'auto' | number

@@ -6,7 +6,7 @@ placeholders:
   quotes: List of the spoken lines (strings, verbatim from the RP prose)
   present: List of names of the other characters in the room right now
   tools: List of {name, description} — the DELIVERS_SPEECH verbs this character has, description straight from the skill
-  example: Syntax shell of one tool call in this model's tool format (the JSON input stays a placeholder — the tool description states the fields)
+  example: One complete, real tool call in this model's tool format — the first line, said to the first person present, in the verb's own input shape ("" when no verb can phrase one; then the descriptions state the fields)
 ---
 ## system
 You turn spoken lines of {{ character }} into speech tool calls. That is the whole task.
@@ -16,8 +16,12 @@ SPEECH VERBS AVAILABLE:
 - {{ t.name }}: {{ t.description }}
 {% endfor %}
 
-FORMAT — one call per line that qualifies, exactly this shape:
+FORMAT — one call per line that qualifies, in this model's tool format.
+{% if example %}
+Example, the first line said to {{ present[0] }}:
 {{ example }}
+For every other line write the same kind of call with that line's own words and the person it is spoken to.
+{% endif %}
 
 RULES:
 - Take the spoken words VERBATIM, in the language they are written in. Do not rewrite, translate or summarise them.

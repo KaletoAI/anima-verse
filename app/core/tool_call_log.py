@@ -10,7 +10,8 @@ from app.core.timeutils import utc_now_iso
 
 LIVE_LOG_FILE = Path('./logs/tool_calls.jsonl')
 LOG_FILE: Path | None = None
-STATUSES = ('ok', 'error', 'blocked', 'unknown_tool', 'suppressed', 'exception', 'discarded')
+STATUSES = ('ok', 'error', 'blocked', 'unknown_tool', 'suppressed', 'exception', 'discarded',
+            'refused')
 logger = get_logger('tool_call_log')
 _lock = threading.Lock()
 
@@ -22,8 +23,22 @@ def configure(path: Path | None) -> None:
         LOG_FILE = path
 
 
+class LoggedAs(str):
+    """A result text that names its own log status — for an outcome the
+    text rules below cannot tell apart, which must still not read as an
+    error to the caller (the text keeps its exact wording)."""
+
+    def __new__(cls, text: str, status: str):
+        result = super().__new__(cls, text)
+        result.log_status = status
+        return result
+
+
 def classify(result: Any) -> str:
     """Classify without changing the execution boundary's error policy."""
+    declared = getattr(result, 'log_status', '')
+    if declared in STATUSES:
+        return declared
     if isinstance(result, str):
         first_line = result[:300].split('\n', 1)[0]
         if re.search(r'\bnot found\b|^cannot\b|^you cannot\b|\bstill on\b.*\bcooldown\b|'

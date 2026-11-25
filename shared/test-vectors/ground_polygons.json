@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_ground_math.mjs",
+  "source": "scripts/smoke_ground_math.mjs",
   "fixtures": {
     "TRIANGLE": [[0, 0], [10, 0], [0, 6]],
     "TRIANGLE_CW": [[0, 0], [0, 6], [10, 0]],

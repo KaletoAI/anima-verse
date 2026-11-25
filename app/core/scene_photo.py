@@ -75,14 +75,24 @@ def with_screenshot_sentence(prompt: str) -> str:
     return f"{_SCREENSHOT_ANY.sub('', prompt or '').strip()}\n{_SCREENSHOT_SENTENCE}".strip()
 
 
+#: Below this lens height (metres over the floor) the camera is called low. Only a LOW value is put into words: the
+#: clients measure from the floor under the lens, and where they cannot find it they fall back to the terrain — on an
+#: upper storey that turns eye height into several metres (4.56 m on storey 1 of a 2.67 m storey, 2026-11-25). A
+#: wrong fallback only ever makes the number larger, so "low" stays true; "high" is left to the pitch, which the
+#: client measures without a floor.
+_LOW_CAMERA_M = 1.0
+
+
 def _view_framing(view: PhotoView, visible: List[PhotoVisible]) -> str:
-    """Translate client geometry into framing, never into world facts."""
+    """Translate client geometry into framing words, never into world facts or raw numbers — an LLM copies a
+    number like "4.5576 m above ground" verbatim into the image prompt, where it means nothing to the image model."""
     camera = view.camera
     angle = ("from above" if camera.pitch_deg < -20 else
              "from below" if camera.pitch_deg > 15 else "at eye level")
     shot = "wide view" if camera.fov_deg >= 60 else "close view"
+    low = ", low camera close to the floor" if camera.height_m < _LOW_CAMERA_M else ""
     parts = ["Photograph from an unseen photographer at the given angle.",
-             f"Camera {angle}, {shot}, {camera.height_m:g} m above ground."]
+             f"Camera {angle}, {shot}{low}."]
     depths = [person.depth_m for person in visible]
     nearest, farthest = (min(depths), max(depths)) if depths else (0, 0)
     midpoint = (nearest + farthest) / 2
@@ -110,12 +120,14 @@ def _room_transcript(avatar: str, loc: str, room: str) -> str:
     return "\n".join(lines[-_TRANSCRIPT_LINES:])
 
 
-def _person_descriptions(subjects: List[str]) -> str:
+def _person_descriptions(subjects: List[str], *, outfit: bool = True) -> str:
     """Text block with appearance + worn outfit per person in the frame.
 
     The reference image alone is often not enough (identity only) — the
     prompt must carry the description too, same semantics as everywhere
-    else: reference = appearance aid, outfit/pose live in the text."""
+    else: reference = appearance aid, outfit/pose live in the text.
+    ``outfit=False`` leaves the CURRENT outfit out — for a re-render of an
+    older photo, whose people keep the references of that moment."""
     from app.core.scene_render import _appearance_text
     from app.core.outfit_renderer import render_outfit
     parts = []
@@ -127,12 +139,13 @@ def _person_descriptions(subjects: List[str]) -> str:
                 bits.append(a)
         except Exception:
             pass
-        try:
-            outfit = (render_outfit(character_name=n) or {}).get("full") or ""
-            if outfit:
-                bits.append(outfit)
-        except Exception:
-            pass
+        if outfit:
+            try:
+                worn = (render_outfit(character_name=n) or {}).get("full") or ""
+                if worn:
+                    bits.append(worn)
+            except Exception:
+                pass
         parts.append(f"{n}" + (f" ({'; '.join(bits)})" if bits else ""))
     return "People in the frame: " + "; ".join(parts)
 
@@ -163,6 +176,76 @@ def _pairs_among(names: List[str]) -> List[tuple]:
         seen.add(pair)
         out.append((name, partner, str(inter.get("pose_key") or "")))
     return out
+
+
+def _people_line(names: List[str], pairs: List[tuple], hint_of: Callable[[str], str], *,
+                 free_camera: bool = False) -> str:
+    """The people of the frame and what they do, from the state poses: a running pair as ONE shared action
+    ("A and B (pose together)"), everyone else with their own pose hint ("C (hint)", or just the name)."""
+    parts = []
+    paired = {n for a, b, _ in pairs for n in (a, b)}
+    for a, b, pose in pairs:
+        parts.append(f"{a} and {b} ({pose} together)" if pose else f"{a} and {b} together")
+    for n in names:
+        if n in paired:
+            continue
+        hint = hint_of(n) or ""
+        if free_camera and _CAMERA_HOLDER.search(hint):
+            hint = ""
+        parts.append(f"{n} ({hint})" if hint else n)
+    return "; ".join(parts)
+
+
+def _mentions(text: str, name: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text or "") is not None
+
+
+def with_subjects(prompt: str, subjects: List[str], pairs: List[tuple], *,
+                  hint_of: Callable[[str], str], describe: Callable[[List[str]], str]) -> str:
+    """``prompt`` with every person of the frame in it. A prompt from the dialog may have lost people (an LLM
+    rewrite, a hand edit): each subject it does not name comes back with what they do (``_people_line``) IN FRONT —
+    the people lead the prompt, the room stays the setting that ``regenerate_image`` appends — and their
+    appearance/outfit (``describe``) at the end, the place ``prepare_scene_photo`` puts it. A pair in which one
+    partner is still named comes back whole, so the shared action is not split. Names already in the prompt are
+    left alone; a prompt naming everyone comes back byte-identical."""
+    missing = [n for n in subjects if not _mentions(prompt, n)]
+    if not missing:
+        return prompt
+    gone = set(missing)
+    pairs_back = [p for p in pairs if p[0] in gone or p[1] in gone]
+    back = list(dict.fromkeys([n for n in missing]
+                              + [n for p in pairs_back for n in p[:2]]))
+    back = [n for n in subjects if n in back]
+    logger.warning("scene photo: the prompt does not name %s — they are put back", ", ".join(missing))
+    lead = "In the picture: " + _people_line(back, pairs_back, hint_of) + "."
+    desc = describe(missing)
+    return "\n".join(p for p in (lead, (prompt or "").strip(), desc) if p)
+
+
+def with_photo_subjects(prompt: str, meta: Dict[str, Any], character_names: Any = None) -> str:
+    """The regenerate side of the safety net in ``take_scene_photo``: a stored or dialog prompt of a SCENE PHOTO
+    (``meta["scene_photo"]``) gets every subject back that it does not name (``with_subjects``). The subjects are
+    the dialog's character selection when it sent one, otherwise the ``photo_subjects`` the photo recorded at the
+    shutter (``take_scene_photo`` writes them; a ``create_new`` variant inherits the source's meta). Anything else
+    — no scene photo, no recorded subjects — comes back byte-identical.
+
+    Unlike the shutter, a re-render belongs to an EARLIER moment: its people keep the reference images of that
+    moment (the gallery regenerate passes its source references on), so the current pose, pair interaction and
+    outfit are not put in — only the names and their appearance."""
+    meta = meta or {}
+    if not meta.get("scene_photo"):
+        return prompt
+    recorded = meta.get("photo_subjects")
+    if character_names is not None:
+        subjects = [str(n) for n in character_names if n]
+    elif isinstance(recorded, list):
+        subjects = [str(n) for n in recorded if n]
+    else:
+        return prompt
+    if not subjects:
+        return prompt
+    return with_subjects(prompt, subjects, [], hint_of=lambda _n: "",
+                         describe=lambda names: _person_descriptions(names, outfit=False))
 
 
 def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
@@ -245,19 +328,8 @@ def prepare_scene_photo(avatar: str, view: Optional[dict] = None, *,
             logger.warning("scene photo prompt distillation failed: %s", e)
     if not prompt:
         from app.core.scene_render import _pose_hint
-        parts = []
-        paired = {n for a, b, _ in pairs for n in (a, b)}
-        for a, b, pose in pairs:
-            parts.append(f"{a} and {b} ({pose} together)")
-        for n in subjects:
-            if n in paired:
-                continue
-            hint = _pose_hint(n)
-            if framing and _CAMERA_HOLDER.search(hint or ""):
-                hint = ""
-            parts.append(f"{n} ({hint})" if hint else n)
         prompt = ("Candid photograph of the current moment: "
-                  + "; ".join(parts))
+                  + _people_line(subjects, pairs, _pose_hint, free_camera=bool(framing)))
 
     if framing:
         prompt = f"{prompt}\n{framing}"
@@ -321,6 +393,12 @@ def take_scene_photo(avatar: str,
                    if n != avatar] if secret and room else []
         if not prompt:
             prompt = prep["prompt"]
+
+    # Everyone in the frame must reach the image prompt with what they do, whatever happened to the dialog's
+    # text on the way (2026-11-25: an LLM refusal, then a rewrite of it, left only the room).
+    from app.core.scene_render import _pose_hint
+    prompt = with_subjects(prompt, subjects, _pairs_among(subjects),
+                           hint_of=_pose_hint, describe=_person_descriptions)
 
     # The screenshot sentence is added by regenerate_image, per backend, only when slot 1 holds the screenshot.
 

@@ -187,6 +187,10 @@ public sealed class LocationSlot
     /// centres, sit / lie surfaces, corridor stands; derived by <see cref="WorldBuilder.DeriveStands"/>.
     /// </summary>
     public Figures.FigureStands Stands { get; } = new();
+    /// <summary>The swapped (active) navigation of the near mount (plan E2 Task 4); null outside the near ring.</summary>
+    public LocationNav? Nav { get; internal set; }
+    /// <summary>The world boxes of every placed prop, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
+    internal IReadOnlyList<MeasuredPropBox> PropBoxes { get; set; } = Array.Empty<MeasuredPropBox>();
 
     /// <summary>
     /// The tile as the figure placement reads it right now (view state + inventory, npcPlacement.ts <c>PlacementTile</c>).
@@ -966,6 +970,7 @@ public sealed partial class WorldBuilder
         if (slot.Open == open) return true;
         slot.Open = open;
         _log($"location {id} ({slot.Loc.Name}) {(open ? "opens" : "closes")} (crossfade)");
+        RefreshNavOverlay();
         return true;
     }
 
@@ -1039,13 +1044,18 @@ public sealed partial class WorldBuilder
     /// <summary>
     /// The avatar's lock verdicts changed (the HUD's <c>lockedRooms</c> / <c>lockedLoc</c> / <c>lockedLocations</c>, or
     /// the room it stands in): every location repaints its door marks and shows or hides its boundary marks
-    /// (main.ts: repainted only on a real change; the caller compares).
+    /// (main.ts: repainted only on a real change; the caller compares); the navigation takes the locks and the F9 overlay
+    /// shows them.
     /// </summary>
     public void SetLocks(LockState locks)
     {
         _locks = locks;
         foreach (var slot in _slots.Values)
+        {
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Storeys.ApplyLocks(locks, slot.Loc.Id);
+            ApplyNavLocks(slot);
+        }
+        RefreshNavOverlay();
     }
 
     /// <summary>

@@ -2238,20 +2238,31 @@ async def free_open() -> Dict[str, Any]:
 async def free_run_detail(run_id: str) -> Dict[str, Any]:
     from app.core import world_dev_runs as wr
     from app.core import world_dev_undo as wu
-    from app.core.world_dev_agent import get_run_manager
+    from app.core.world_dev_agent import get_run_manager, turn_summaries
+    manager = get_run_manager()
 
     def _detail() -> Optional[Dict[str, Any]]:
         run = wr.get_run(run_id)
         if run is None:
             return None
-        return {"run": run, "steps": wr.steps(run_id),
+        steps = wr.steps(run_id)
+        return {"run": run, "steps": steps,
                 "skipped": run.get("skipped") or [],
-                "discard_preview": wu.discard_preview(run_id)}
+                "discard_preview": wu.discard_preview(run_id),
+                # Per turn: kept / cut_by_budget / rolled_back / running,
+                # with its write rows and how many of them are undone.
+                "turns": turn_summaries(run, steps, manager.turn_outcomes(run_id)),
+                # Write rows of the run not undone: what Accept would keep.
+                "remaining_writes": sum(1 for s in steps if s.get("kind") == "write"
+                                        and not s.get("undone_at")),
+                # This turn's counters against the per-turn budgets (None
+                # when this process ran no turn of the run).
+                "turn_usage": manager.turn_usage(run_id)}
 
     detail = await asyncio.to_thread(_detail)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
-    detail["busy"] = get_run_manager().is_busy(run_id)
+    detail["busy"] = manager.is_busy(run_id)
     return detail
 
 

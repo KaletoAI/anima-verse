@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_enter_math.mjs",
+  "source": "native/tests/Derivations/enter_math.md",
   "cases": [
     {"label": "[20] yaw 0 is a plain translation (N edge of a 10 m square)", "fn": "localToWorld",
       "args": [0, -5, 50, 50, 0], "expect": {"x": 50, "z": 45}, "eps": 1e-09},

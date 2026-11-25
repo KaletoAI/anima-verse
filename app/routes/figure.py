@@ -62,9 +62,8 @@ body actions):
 * ``POST /characters/{c}/figure/accessory/{item_id}/curve {drop_cm, thickness_mm}`` — the chain's centre line for
   those settings on the plain body (``accessory_build.preview_curve``, with the pendant's ``anchor`` and the skin's
   ``anchor_outward`` there — A225), nothing stored; 400 without a plain body.
-* ``POST /characters/{c}/figure/accessory/{item_id}/pendant`` — A225: the explicit pendant job (ONE routed
-  ``jewellery_mesh`` hub job per item, in the background): ``{status: started | running | ready}``; 400 without a
-  pendant switched on or without an item image.
+* The explicit part / drop mesh job is ``POST /inventory/items/{item}/part-mesh`` since design G (plan-anhaenger
+  Task 6; a necklace's pendant and a belt's buckle / charms are linked part items, earrings mesh their drop there).
 * ``GET  /characters/{c}/figure/accessory/{item_id}/preview.glb`` — the plain body with the current build grafted (the
   plain body alone while not built); 404 without a plain body.
 * ``GET  /characters/{c}/figure/template/{item_id}`` — a template piece's parameter dialog (Ruling A138,
@@ -177,7 +176,7 @@ body actions):
   the character's Build, a click — ``{status: started | queued | current}``);
   400 off the pipeline.
 """
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -476,6 +475,9 @@ def get_accessory(character_name: str, item_id: str,
             "cords": list(accessory_spec.CORDS), "cord_thickness_mm": accessory_spec.CORD_THICKNESS_MM,
             "pendant_defaults": dict(accessory_spec.PENDANT_DEFAULTS),
             "pendant": accessory_build.pendant_row(state, accessory_spec.of_item(item), record),
+            # design G: the linked parts (buckle / pendant / charms), one row per link
+            "parts": _part_rows_with_mentions(item, state, record),
+            "part_options": _part_options(),
             "ranges": {k: list(v) for k, v in accessory_spec.RANGES.items()},
             "strap_at": list(accessory_spec.STRAP_AT), "earring_styles": list(accessory_spec.EARRING_STYLES),
             "band_materials": list(accessory_spec.BAND_MATERIALS), "fingers": list(accessory_spec.FINGERS),
@@ -493,6 +495,38 @@ def get_accessory(character_name: str, item_id: str,
             "built_at": record.get("built_at") or "", "cost": {"hub_jobs": 0}, "glb_url": glb_url}
 
 
+def _part_rows_with_mentions(item: Dict[str, Any], state: Dict[str, Any],
+                             record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """``accessory_build.part_rows`` plus ``host_mentions`` per link: the host's own text already describes the part
+    (``accessory_parts.host_mentions_part``) — the Wardrobe says so; nothing is changed automatically."""
+    from app.core import accessory_build, accessory_parts, accessory_spec
+    from app.models.inventory import get_item
+    host_frag = str(item.get("prompt_fragment") or "")
+    rows = accessory_build.part_rows(state, accessory_spec.of_item(item), record)
+    for row in rows:
+        part = get_item(row["item"]) or {}
+        row["host_mentions"] = accessory_parts.host_mentions_part(host_frag, str(part.get("prompt_fragment") or ""))
+    return rows
+
+
+def _part_options() -> List[Dict[str, Any]]:
+    """Every part item of the world and the shared library, for the link pickers: ``{id, name, image_url, state}``
+    (``state`` the part mesh's, ``accessory_pendant.pendant_state``), sorted by id."""
+    from app.core import accessory_parts, accessory_pendant
+    out = []
+    for item in accessory_parts.all_items():
+        if not accessory_parts.is_part(item):
+            continue
+        iid = str(item.get("id") or "")
+        try:
+            st = accessory_pendant.pendant_state(iid)["state"]
+        except ValueError:
+            continue
+        out.append({"id": iid, "name": str(item.get("name") or iid), "state": st,
+                    "image_url": f"/inventory/items/{iid}/image" if item.get("image") else ""})
+    return sorted(out, key=lambda o: o["id"])
+
+
 @router.put("/{character_name}/figure/accessory/{item_id}")
 def put_accessory(character_name: str, item_id: str, body: AccessoryRequest,
                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -506,7 +540,11 @@ def put_accessory(character_name: str, item_id: str, body: AccessoryRequest,
     with outfit_piece_lock(item_id):   # A216 review L5: the read and the write of the shared piece together
         piece = dict((get_item(item_id) or {}).get("outfit_piece") or {})
         piece["jewellery"] = spec
-        if update_item(item_id, {"outfit_piece": piece}) is None:
+        try:
+            saved = update_item(item_id, {"outfit_piece": piece})
+        except ValueError as e:     # a link to a missing item or to an item that is no part (design G)
+            raise HTTPException(status_code=400, detail=str(e))
+        if saved is None:
             raise HTTPException(status_code=500, detail="The item could not be saved")
     return {"item_id": item_id, "jewellery": spec}
 
@@ -538,27 +576,6 @@ def switch_piece_mode(character_name: str, item_id: str, body: ModeSwitchRequest
         if update_item(item_id, {"outfit_piece": piece}) is None:
             raise HTTPException(status_code=500, detail="The item could not be saved")
     return {"item_id": item_id, "mode": body.mode, "jewellery": piece.get("jewellery")}
-
-
-@router.post("/{character_name}/figure/accessory/{item_id}/pendant")
-def build_pendant(character_name: str, item_id: str,
-                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """A225: the explicit "Build pendant (1 hub job)" — the item's ONE routed ``jewellery_mesh`` job in the background
-    (``accessory_pendant.start``). 400 when the stored description has no pendant switched on or the item no image;
-    ``{status: "ready"}`` (nothing spent) when the mesh exists, ``"running"`` when a job runs, else ``"started"``."""
-    from app.core import accessory_build, accessory_pendant, accessory_spec
-    item = _template_item(character_name, item_id)
-    spec = accessory_spec.of_item(item)
-    if not accessory_spec.pendant_on(spec):
-        raise HTTPException(status_code=400, detail="Switch the pendant on and save first")
-    pendant = accessory_build.pendant_info(item_id, spec) or {}
-    if pendant.get("state") == "no_image":
-        raise HTTPException(status_code=400, detail=accessory_pendant.REASON_NO_IMAGE)
-    if pendant.get("state") == "ready":
-        return {"status": "ready"}
-    if not accessory_pendant.start(item_id):
-        return {"status": "running"}
-    return {"status": "started"}
 
 
 @router.post("/{character_name}/figure/accessory/{item_id}/curve")
@@ -603,9 +620,11 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
     for key, (kind, rule, default) in gt.PARAM_SPEC.items():
         spec[key] = ({"type": "choice", "choices": list(rule), "default": default} if kind == "choice"
                      else {"type": "number", "min": rule[0], "max": rule[1], "default": default})
-    return {"item_id": item_id, "name": str(item.get("name") or item_id), "params": gt.params_of(item),
+    return {"item_id": item_id, "name": str(item.get("name") or item_id),
+            # plan E6: the stored dict (a top's parked field set included) — the dialog shows ``fields_of`` of it
+            "params": gt.stored_of(item),
             "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
-            "built": list(gt.BUILT_KINDS), "kind_fields": {k: list(v) for k, v in gt.KIND_FIELDS.items()},
+            "built": list(gt.BUILT_KINDS), "kind_fields": {**{k: list(v) for k, v in gt.KIND_FIELDS.items()}, "top:cups": list(gt.TOP_CUPS_FIELDS)},
             # A172: with nothing stored the dialog starts from the kind the item most likely is (slots / name),
             # and a kind change starts from that kind's values
             "default_kind": gt.default_kind(item),

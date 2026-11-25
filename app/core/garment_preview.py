@@ -567,7 +567,7 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
     from app.core import garment_template as gt
     p = params
     m = meas
-    kind = p["kind"]
+    kind = gt.build_kind(p)             # a top with cups is drawn as the bra it is built as
     out: List[Dict[str, Any]] = []
     marks: List[Dict[str, Any]] = []
     x0 = reg.x0
@@ -872,7 +872,7 @@ def _fitted(p, m, reg: Registration, cap_m: float, add, mark) -> None:
     from app.core import garment_template as gt
     x0 = reg.x0
     spec = gt.fitted_spec(p, m)["fitted"]
-    kind = p["kind"]
+    kind = spec["kind"]
     if kind == "briefs" and spec.get("leg_length_m"):
         _boxers(p, m, reg, spec, cap_m, add, mark)
         return
@@ -1008,6 +1008,7 @@ def bra_geometry(p: Dict[str, Any], m: Dict[str, Any], spec: Dict[str, Any], x0:
     """A bra seen from the front (metres), as ``garment_template_fitted.bra_region`` cuts it — no picture involved:
 
     * ``under`` = the spec's underbust line, raised to the lowest breast fold the body shows (``bra_fold``);
+    * the band's bottom = ``under`` - band, or a top with cups' ``hem_y`` (its band runs down to its hem);
     * per side the apex (``bra_apex``, else ``APEX_FALLBACK_X_M`` out on the bust line), H = max(3 cm, apex - under),
       zc = apex + (coverage - 0.5) x 2H; the cup runs from the gore (centre ± ``gore_half``, at most ``r_in`` = |apex
       - centre| - gore_half (>= 2 cm) inside the apex) to ``CUP_R_OUT_M`` outside it; its top over u = |x - apex| / r:
@@ -1034,7 +1035,9 @@ def bra_geometry(p: Dict[str, Any], m: Dict[str, Any], spec: Dict[str, Any], x0:
     push = float(spec["push"])
     lift, pull = gt.PUSH_LIFT_M, gt.PUSH_IN_M
     apexes = m.get("bra_apex") or {}
-    out: Dict[str, Any] = {"under": under, "band_bottom": under - band, "cups": {}, "tops": {}, "plain_tops": {},
+    # a top with cups: the band runs to the top's hem, an absolute height (``garment_template.fitted_spec``, plan E4)
+    bottom = float(spec["hem_y"]) if spec.get("hem_y") is not None else under - band
+    out: Dict[str, Any] = {"under": under, "band_bottom": bottom, "cups": {}, "tops": {}, "plain_tops": {},
                            "apex": {}, "zc": {}, "straps": {}, "gore": None}
     tops = {}
     for sgn in (1, -1):
@@ -1142,6 +1145,12 @@ def _bra(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, mark)
         mark(x0, bottom - 0.02, "hook at the back", "middle")
     gore = {"none": "no gore", "narrow": "narrow gore", "wide": "wide gore"}[p["center_gore"]]
     mark(x0 + br + 0.03, under, f"{p['cup_style']} · cover {p['cup_coverage']:.2f} · {gore}")
+    if spec.get("hem_y") is not None:
+        # a top with cups: the band's height to the hem, and whether the hem was held (at the waist / the underbust)
+        held = float(spec.get("hem_clamped") or 0.0)
+        note = " · hem held at the waist" if held > 0 else (" · hem held under the cups" if held < 0 else "")
+        # on the left of the piece: the cup line's label sits on the right at the underbust line
+        mark(x0 - br - 0.03, bottom, f"band {round((under - bottom) * 100)} cm{note}", "end")
     if p["push_up"] > 0:
         mark(x0 + br + 0.03, under - 0.04, f"push-up {p['push_up']:.2f} (dashed: without)")
 
@@ -1461,6 +1470,9 @@ def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[s
         return out
     reg = register(frame, meas)
     drawn = shapes(params, meas, reg, over_sleeves=drapes_over_sleeves(character_name, item_id, params, base))
+    if gt.cupped_top(params):
+        # a top with cups: whether its hem is held at the waist (> 0) or under the cups (< 0) — the dialog says so
+        out["hem_clamped"] = gt.fitted_spec(params, meas)["fitted"].get("hem_clamped", 0.0)
     out.update(ok=True, px_per_m=round(reg.scale, 3), landmarks=reg.landmarks(), colour=fabric_colour(item_id),
                **drawn)
     return out

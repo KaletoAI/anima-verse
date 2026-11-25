@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_light_pool.mjs",
+  "source": "native/tests/Derivations/light_pool.md",
   "fixtures": {
     "SEVEN": [
       { "id": "1", "pos": { "x": 1, "y": 0, "z": 0 }, "range_m": 10, "when": "always" },

@@ -271,10 +271,11 @@ def covered_part_groups(character_name: str, item_id: str, *,
     """The extension groups whose attached part a preview of ``item_id`` must not show, sorted: every rig group of a
     body slot with a separate mesh part (``mesh_part``) that the worn outfit covers — ``item_id`` counted as worn in
     its own slots when it is not worn now (it is the piece the preview shows). Covered is
-    ``body_slots.is_slot_exposed`` False, the one exposure rule of every image and model path: a closed piece on, or
-    ``covers``-ing, a clothing slot of the body slot's ``covered_by``; a piece worn open covers nothing,
-    ``partially_covers`` does not count. [] when nothing is covered or on any failure (the preview then shows the
-    stored file)."""
+    ``extension_rig.cover_state_for`` other than ``exposed``, the cover rule of every model path
+    (``body_slots.is_slot_exposed`` stays the rule of the image paths): a closed piece on, ``covers``-ing or
+    partially covering a clothing slot of the body slot's ``covered_by``; a piece worn open covers nothing; a
+    partial cover keeps the part as covered (hidden in the assembly). [] when nothing is covered or on any failure
+    (the preview then shows the stored file)."""
     try:
         from app.models.inventory import get_item
         profile = _profile(character_name, profile)
@@ -290,16 +291,25 @@ def covered_part_groups(character_name: str, item_id: str, *,
 
 def covered_part_groups_of(pieces: Dict[str, str], profile: Dict[str, Any]) -> List[str]:
     """The rig groups of every body slot with a separate mesh part (``mesh_part``) that the outfit ``pieces``
-    (``{clothing slot: item id}``) cover, sorted — ``body_slots.is_slot_exposed`` False under ``profile`` with
-    ``pieces`` as its worn pieces. Every worn piece counts in whatever mesh mode it is built (own mesh, template,
-    shell, painted, in the body): the rule reads slots and ``covers`` only. Raises on a broken package registry."""
-    from app.core.body_slots import is_slot_exposed
+    (``{clothing slot: item id}``) cover, sorted — ``extension_rig.cover_state_for`` other than ``exposed`` under
+    ``profile`` with ``pieces`` as its worn pieces; stage 1 hides the part node whether the group is covered or
+    hidden. Every worn piece counts in whatever mesh mode it is built (own mesh, template, shell, painted, in the
+    body): the rule reads slots, ``covers`` and ``partially_covers`` only. Raises on a broken package registry."""
+    from app.core.extension_rig import EXPOSED, cover_state_for
     from app.plugins.registry import packages
-    view = {**(profile or {}), "equipped_pieces": {str(k): str(v) for k, v in (pieces or {}).items() if v}}
+    worn = {str(k): str(v) for k, v in (pieces or {}).items() if v}
+    view = {**(profile or {}), "equipped_pieces": worn}
+    items = None
+    if worn:
+        from app.core.motion_item_cache import item_snapshot
+        items = item_snapshot()
     out = set()
     for package in packages():
         for slot in package.body_slots:
-            if slot.mesh_part and not is_slot_exposed(slot, view):
+            if not slot.mesh_part:
+                continue
+            # Covered vs exposed reads ``covered_by`` only, so one group per slot decides for all its rigs.
+            if cover_state_for({"covered_by": list(slot.covered_by)}, view, items=items or {}) != EXPOSED:
                 out.update(rig.id for rig in slot.rigs)
     return sorted(out)
 
@@ -1447,7 +1457,10 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
         same = current_attempt and strip_prefix(attempt.get("error") or "") == strip_prefix(error)
         words(error, attempt.get("gates") if same else None)
     elif status.get("source_failure") is not None:
-        entry["reason"] = SHOE_STEP_REFUSED
+        # the refused step and its words: "see its steps above" alone sent the reader to a row of green steps
+        source = status["source_failure"]
+        step, error = str(source.get("step") or ""), str(source.get("error") or "")
+        entry.update(reason=SHOE_STEP_REFUSED, reason_detail=f"{step} — {error}" if step and error else error)
     elif status["state"] in ("stale", "outdated") or (current_attempt and attempt):
         entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm, or with other fit "
                                              "settings — Re-fit with this body selected, or the next Build, fits "

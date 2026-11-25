@@ -143,6 +143,11 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     pipeline = bool(own) or base_body.is_base_pipeline(character_name, profile=profile)
     template = sorted(i for i in ids - set(own)
                       if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.TEMPLATE)
+    # owner ruling 2 (round 2026-11-25): a bra under a worn top with cups is hidden — left out of both figures with
+    # the reason, never draped, never a lower layer or a collider of anything (``garment_template.hidden_by_cups``)
+    from app.core import garment_template
+    hidden = garment_template.hidden_by_cups(template)
+    template = [i for i in template if i not in hidden]
     own.update({item_id: garment_set.CLOTHING for item_id in template})
     # Spec § 6 (A216 review M2, A224): an accessory that can never be built as it stands — no kind chosen, or a kind
     # of a later phase — is left out with the reason; one that is merely not built yet is left off until its Build.
@@ -151,7 +156,8 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     in_body: List[str] = []
     off: List[str] = []
     unformed: Dict[str, str] = {}
-    for item_id in sorted(ids - set(own)):
+    unformed.update({item_id: garment_template.HIDDEN_BY_CUPS for item_id in hidden})
+    for item_id in sorted(ids - set(own) - set(hidden)):
         item = get_item(item_id)
         mode = garment_set.mesh_mode_of(item)
         if not pipeline:
@@ -794,11 +800,15 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             state = accessory_build.accessory_state(character_name, item_id, profile=profile)
             if state["state"] == "current":
                 accessory.append(item_id)
-                # A225: a pendant switched on but not on this build — the chain is shown alone, the row says why.
+                # A225: the earrings' drop not on this build — shown without it, the row says why.
                 pend = state.get("pendant")
                 if pend and not isinstance((state.get("record") or {}).get("pendant"), dict):
                     notes[item_id] = ((state.get("record") or {}).get("pendant_error") or pend["reason"]
                                       or accessory_build.REASON_PENDANT)
+                # Design G: a linked part not on this build — the note goes on the HOST (a part is never worn).
+                missing = [r for r in accessory_build.part_rows(state, None, state.get("record")) if not r["on_figure"]]
+                if missing and item_id not in notes:
+                    notes[item_id] = missing[0]["reason"] or accessory_build.REASON_PART
             elif state.get("previous"):
                 accessory.append(item_id)
                 notes[item_id] = accessory_build.REASON_OUTDATED

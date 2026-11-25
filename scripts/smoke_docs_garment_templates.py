@@ -51,6 +51,12 @@ N) Plan group B, phases E / F / G (section 1d): ``NECK_VERSION`` and ``CORSET_VE
    ``corset_darts.py`` and that file exists.
 O) Round D, final step: ``TRIM_VERSION`` (``garment_cut_texture.py``) — the document says "`TRIM_VERSION` <n>" with the
    code's n, and names ``GARMENT_NOUNS``.
+P) A top with cups (section 1h, round 2026-11-25): every field of ``TOP_CUPS_FIELDS`` (``garment_template.py``)
+   appears in the section as "`<field>`"; the band formula is stated exactly as
+   "hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M)" and ``garment_template.py`` computes it
+   (``min(max(want, float(meas["waist_y"])), under - BACK_STRAP_M)``); the section names ``build_kind`` and
+   ``SHAPING_KINDS`` and the code's ``CUPS`` choices; ``CUPPED_BUSTIER_LENGTH_M`` (``garment_cut_texture.py``) appears
+   with its value.
 """
 import ast
 import re
@@ -218,6 +224,21 @@ def main() -> int:
     # O
     tv = const(GCT, "TRIM_VERSION")
     check(f"O  doc: TRIM_VERSION {tv}, GARMENT_NOUNS", f"`TRIM_VERSION` {tv}" in doc and "`GARMENT_NOUNS`" in doc)
+
+    # P
+    head = "## 1h. A top with cups"
+    sec = doc.split(head, 1)[1].split("\n## ", 1)[0] if head in doc else ""
+    fields = const(GT, "TOP_CUPS_FIELDS")
+    check("P  doc section 1h names every TOP_CUPS_FIELDS field", bool(sec) and all(f"`{f}`" in sec for f in fields),
+          [f for f in fields if f"`{f}`" not in sec])
+    check("P  band formula in doc and code",
+          "hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M)" in sec
+          and 'min(max(want, float(meas["waist_y"])), under - BACK_STRAP_M)' in gt)
+    cups = const(GT, "CUPS")
+    check(f"P  doc names build_kind, SHAPING_KINDS and the CUPS choices {cups}",
+          "`build_kind`" in sec and "`SHAPING_KINDS`" in sec and all(f"`{c}`" in sec for c in cups))
+    cb = const(GCT, "CUPPED_BUSTIER_LENGTH_M")
+    check(f"P  doc: CUPPED_BUSTIER_LENGTH_M {cb} m", f"`CUPPED_BUSTIER_LENGTH_M` {cb} m" in sec)
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     if _failures:

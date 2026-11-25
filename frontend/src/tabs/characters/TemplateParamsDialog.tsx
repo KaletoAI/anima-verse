@@ -35,7 +35,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { guardedInterval } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_HINTS, TEMPLATE_FIELD_LABELS, TEMPLATE_MATERIAL_HINT, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_HINTS, TEMPLATE_FIELD_LABELS, TEMPLATE_MATERIAL_HINT, cm, choiceAllowed, corsetTop, cuppedTop, defaultSeat, fieldsKey, hasBodice, isFitted, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -146,7 +146,7 @@ function FrontPicture({ picture }: { picture?: TemplatePayload['front_picture'] 
 
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '6px 12px' }
 const WARN: CSSProperties = { color: 'var(--warning, #d29922)' }
-const ORDER: (keyof TemplateParams)[] = ['kind', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
+const ORDER: (keyof TemplateParams)[] = ['kind', 'cups', 'fabric', 'opacity', 'length_m', 'flare', 'waist_height', 'slit', 'slit_m',
   'shoulders', 'band_m', 'band_drop_m', 'lacing', 'lace_depth_m', 'fit', 'neckline', 'neck_depth_m', 'sleeves',
   'sleeve_fit', 'front', 'collar',
   'rise', 'waistband', 'sides', 'string_width_m', 'leg_length_m', 'leg_cut', 'back_coverage', 'side_width_m',
@@ -170,7 +170,8 @@ function lapelNeck(p: TemplateParams): boolean {
 }
 
 function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<string, (keyof TemplateParams)[]>): boolean {
-  if (!(fields[p.kind] || ORDER).includes(key)) return false
+  // round 2026-11-25: a top with cups shows the bra's fields (`kind_fields["top:cups"]`)
+  if (!(fields[fieldsKey(p)] || ORDER).includes(key)) return false
   if (key === 'slit_m' && p.slit === 'none') return false
   if (key === 'opacity' && p.fabric !== 'sheer') return false
   const bodice = hasBodice(p)
@@ -200,7 +201,7 @@ function shown(key: keyof TemplateParams, p: TemplateParams, fields: Record<stri
   if (key === 'sides' && legs) return false
   if (key === 'sleeve_fit' && (!bodice || p.sleeves === 'none')) return false
   // A223: a bandeau is one band round the chest — no gore, no push-up
-  if ((key === 'center_gore' || key === 'push_up') && p.kind === 'bra' && p.cup_style === 'bandeau') return false
+  if ((key === 'center_gore' || key === 'push_up') && (p.kind === 'bra' || cuppedTop(p)) && p.cup_style === 'bandeau') return false
   // A223: garter tabs only on thigh-high stockings, a waistband only on full tights
   if (key === 'garters' && p.kind === 'tights' && p.tights_style !== 'thigh_high') return false
   if (key === 'waistband' && p.kind === 'tights' && p.tights_style !== 'tights') return false
@@ -237,6 +238,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const [busy, setBusy] = useState<'' | 'suggest' | 'save'>('')
   const [saved, setSaved] = useState('')
   const [tab, setTab] = useState<'cut' | 'texture' | 'views'>('cut')
+  /** Round 2026-11-25: a top with cups' hem hold from the preview (`hem_clamped`: > 0 at the waist, < 0 under the
+   *  cups, 0 free). */
+  const [hemHeld, setHemHeld] = useState(0)
   const [cutTab, setCutTab] = useState<{ light: string; tip: string }>({ light: 'grey', tip: '' })
   const onCutLight = useCallback((light: string, tip: string) => setCutTab({ light, tip }), [])
   useEffect(() => {
@@ -274,12 +278,15 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
     if (!draft || !data) return
     // A172: a kind change starts from that kind's values (a top's length and sleeves are no skirt's); the fabric stays
     const next = key === 'kind' ? { ...defaults(data, String(value)), fabric: draft.fabric, opacity: draft.opacity } : { ...draft, [key]: value }
-    // A221: a shoulders change can leave a neckline the piece cannot have (a strapless top: straight / sweetheart)
-    if (data.spec.neckline?.type === 'choice' && !choiceAllowed('neckline', next.neckline, next)) {
+    // A221: a shoulders change can leave a neckline the piece cannot have (a strapless top: straight / sweetheart);
+    // round 2026-11-25: a top with cups parks its neckline, shoulders and sleeves untouched (E6) — "None" brings them
+    // back as they were
+    const parked = cuppedTop(next)
+    if (!parked && data.spec.neckline?.type === 'choice' && !choiceAllowed('neckline', next.neckline, next)) {
       next.neckline = data.spec.neckline.choices.find((c) => choiceAllowed('neckline', c, next)) || next.neckline
     }
     // A229: off the shoulders a piece keeps at least short sleeves
-    if (data.spec.sleeves?.type === 'choice' && !choiceAllowed('sleeves', next.sleeves, next)) next.sleeves = 'short'
+    if (!parked && data.spec.sleeves?.type === 'choice' && !choiceAllowed('sleeves', next.sleeves, next)) next.sleeves = 'short'
     // bug round 2026-11-20: a leg shape change carries the seat along unless one was chosen (skinny: fitted)
     if (key === 'leg_shape' && (draft.seat || 'regular') === defaultSeat(draft)) next.seat = defaultSeat(next)
     if (!choiceAllowed('seat', next.seat || 'regular', next)) next.seat = 'fitted'
@@ -339,7 +346,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   }
   const title = t('Template parameters — {name}').replace('{name}', data?.name || itemId)
   const kindBuilt = !draft || !data || data.built.includes(draft.kind)
-  const hasTexture = !!(data && draft && (data.kind_fields?.[draft.kind] || []).includes('texture'))
+  const hasTexture = !!(data && draft && (data.kind_fields?.[fieldsKey(draft)] || []).includes('texture'))
   const textureNote = t(draft?.texture === 'cut'
     ? 'The pattern pieces filled from pictures (Texture tab). Until it is made, the projection is shown.'
     : 'Projected from the piece-only views or the item picture during the drape.')
@@ -379,7 +386,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
           {!data && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
           {data && draft && tab === 'cut' ? (
             <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }} data-template-panel="cut">
-              <TemplateOverlay path={path} draft={draft} />
+              <TemplateOverlay path={path} draft={draft} onPreview={(r) => setHemHeld(Number(r.hem_clamped || 0))} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 0', minWidth: 0 }}>
                 {presets.length ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} data-template-presets="">
@@ -399,7 +406,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                       <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
                         title={key === 'texture' ? textureNote : undefined}>
                         <span className="ga-form-hint">
-                          {t(key === 'length_m' ? lengthLabel(draft.kind) : TEMPLATE_FIELD_LABELS[key])}
+                          {t(key === 'length_m' ? lengthLabel(draft.kind, draft.cups) : TEMPLATE_FIELD_LABELS[key])}
                         </span>
                         {f.type === 'choice' ? (
                           <select className="ga-input" value={String(draft[key])}
@@ -464,6 +471,16 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             {t('A switch only re-assembles the figure (no new drape, 0 hub jobs).')}
                           </span>
                         ) : null}
+                        {key === 'cups' && cuppedTop(draft) ? (
+                          <span className="ga-form-hint" data-cups-hides-bra="">
+                            {t('A bra worn under this top is hidden: the top\'s cups replace it.')}
+                          </span>
+                        ) : null}
+                        {key === 'length_m' && cuppedTop(draft) && hemHeld ? (
+                          <span className="ga-form-hint" style={WARN} data-hem-held={hemHeld > 0 ? 'waist' : 'cups'}>
+                            {t(hemHeld > 0 ? 'Hem held at the waist' : 'Hem held under the cups')}
+                          </span>
+                        ) : null}
                         {key === 'opacity' ? (
                           <span className="ga-form-hint">
                             {t('Only the material: a change re-assembles the figure, no new drape.')}
@@ -478,7 +495,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                     {t('This kind is not draped yet — the piece stays left off until it is supported.')}
                   </div>
                 ) : null}
-                {FITTED_KINDS.includes(draft.kind) ? (
+                {isFitted(draft) && !cuppedTop(draft) ? (
                   <div className="ga-hint">{t('A close-fitting piece is cut from the body itself and pinned at its bands — it has no length of its own.')}</div>
                 ) : null}
                 {draft.kind === 'trousers' ? (

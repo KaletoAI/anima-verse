@@ -566,7 +566,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >    aber auch dort gerundet drin** (Nachtrag 2026-07-28): gemessen wird der
 >    YAW mit auf 90° gerundetem Fix, gezeichnet mit dem echten. Vorher
 >    schrumpfte auch ein Location-Modell, sobald man seinen Fix fein
->    einstellte. Geprüft in `client3d/scripts/smoke_place_rotation.mjs` — und zwar am
+>    einstellte. Geprüft in `scripts/smoke_place_rotation.mjs` — und zwar am
 >    SKALIERUNGSFAKTOR, nicht an der achsparallelen Hülle: die Hülle eines
 >    gekippten 4-m-Würfels ist bis zu 4·√3 groß, und das ist richtig.
 > 5. **Eine `ground`-Location bringt ihren Boden mit.** Kein Renderer legt
@@ -2551,7 +2551,20 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   Every server exit lookup goes through it — `exit_clip` of a departure, of a
   prop-action cancel, and the stand point of `room_stand`. The client resolver
   is unchanged: pose keys never equal `@seat` etc., and these server entry
-  targets do not expand into client clip rules.
+  targets do not expand into client clip rules. For prop-action phases the
+  native client resolves the POSE rules itself (plan E3 decision 14,
+  `AnimaNative.Orders.PoseTransitions`, vector
+  `shared/test-vectors/pose_transition.json`): the listing's `pose_rules`
+  (the RUNTIME table `effective_transitions` the server resolves on — a world
+  rule whose bridge clip is unavailable falls back to the shared rule, a
+  world-only one is dropped; `animation_clips.client_pose_rules`) plus
+  `pose_groups` (`{pose: stand|seat|ground|lie}`,
+  `animation_clips.pose_rule_groups`) in the order of
+  `resolve_pose_transition` — entry `walking -> pose`, exit `pose -> standing`.
+  The listing's `transitions` are the editor table (`load_transitions`,
+  unavailable world bridges included) and are never resolved on by a client.
+  A change of `pose_rules` or `pose_groups` counts as a transition change of
+  the listing (native `ClipListingDiff.TransitionsChanged`).
 - **Brücke aus einer Paar-Pose** (2026-11-02, Folge-Pose F2,
   plan-folge-pose.md): Nach einem Paar hält ein Renderer die gespielte
   Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (client3d
@@ -3041,7 +3054,7 @@ the two collision records — `insertion_of_depth = share_max · L / D`, the par
 surface radius, the channel's rest radius and depth, `reaches =
 reaches_per_cycle · cycles` since the previous beat (clip clock) when
 `share_max · L ≥ D`, else 0; no profile or record = no entry.
-Hand-computed: `client3d/scripts/smoke_readout_reports.mjs`,
+Hand-computed: `scripts/smoke_readout_reports.mjs`,
 `scripts/smoke_scene_readouts.py`, `scripts/smoke_scene_readout_estimate.py`.
 
 **Der Clip läuft in ECHTZEIT, im Tempo der Szene** — unabhängig vom
@@ -6197,7 +6210,7 @@ sie produziert.
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
 | `client3d/scripts/smoke_pair_clip_tempo.mjs` | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge), [7] die Uhr eines Solo-Möbellaufs am `place`-Block |
-| `client3d/scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
+| `scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
 | `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
 | `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
 | `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
@@ -6205,7 +6218,7 @@ sie produziert.
 | `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
-| `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
+| `scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
 
 
 ## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload
@@ -7610,7 +7623,7 @@ jedem Neuaufbau).
 | ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
 | Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
 | Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
-| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |
+| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `scripts/smoke_place_rotation.mjs` **[7]** |
 | Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
 | `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
 | Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
@@ -8460,6 +8473,12 @@ receipts exist; each targeted numeric result contains its actual clamped
 `delta`, never the requested amount. Refusals have an empty execution ID and
 `status: refused`. Same actor/request ID with identical parameters returns its
 original execution; changed parameters return `request_id_conflict`.
+One request per actor is admitted at a time: a request with another request ID
+while the actor's previous one is still being admitted (validated, planned,
+started) is refused at once with `request_in_progress` (HTTP 409 with that
+`detail.reason`; the NPC tool adapter returns the same refusal). It is not
+queued; the client retries once the first request has answered. Cancel and
+respond do not wait for it.
 HTTP and installed tool adapters are described below; clients consume these
 same execution IDs instead of interpreting a successful request as seating.
 
@@ -8664,7 +8683,22 @@ no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `d
 without an actor position — the player panel lists an action once and lets the player
 pick among the pieces offering it, nearest first), `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
 (per-partner `{partner,enabled,reason}`), `ability` (`pose`/`combined`/`pair`/`sleep`/…), `participants`
-(the head count, actor included) and declared `effects`. A GROUP action (`participants` 3..5, G4 of
+(the head count, actor included) and declared `effects`. For the client that starts walking before the
+server answers (plan E3, spec 5e) each row also carries only values the preflight already computed
+(`prop_actions._entry_fields`): `entry_pose_key` (the pose the entry bridge plays into — a combined action's
+first phase; the client resolves the clip with its `PoseTransitions`), `entry_mode` (`bridge`/`direct` of the
+actor's successful plan, `""` without one), `pair_yaw_deg` (a pair: `places.pair_yaw` of the planned place in
+degrees, else `null`) and `role_point` (`{x, z}`, a pair sharing ONE place: the actor's clip role point =
+its entry anchor, else `null`). Both are in the WORLD frame of `places.room_places` — the location's local plan
+turned by its `yaw_deg` and moved to `(pos_x, pos_z)`, i.e. the frame of slots and `facing` there (a compass
+yaw: 0 = south +z, 90 = east +x) — never tile-local like the scene payload's `markers[].access`. Without a
+marker `access` override the client computes the automatic access itself — the body slot minus the entry
+travel turned by the facing and scaled by `bridge_scale` (`AnimaNative.Orders.AccessAuto`, vector
+`shared/test-vectors/access_auto.json`); it assumes an entry clip WITHOUT a turn (`bridge_start_point` with
+`turn` 0) — an entry bridge that turns the figure is open until the client consumes the clip's turn (plan E3,
+task 5). A scene marker's `access` (tile-local x/z, floor y, compass yaw) is parsed per role into world metres
+(`PlaceEntry.Access`: through the tile frame, plus the slots' terrain lift, yaw plus the frame's yaw, moved with
+the slots by the re-lift). A GROUP action (`participants` 3..5, G4 of
 plan-gruppen-animationen.md) is offered once per piece with `required_partner` true, no
 `available_targets` and `candidates` — the people in the room the player may pick (awake persons, minus
 those a package rules out for a "policy" action; busy ones stay pickable). `participants` is the MOST

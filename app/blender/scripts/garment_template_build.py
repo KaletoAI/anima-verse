@@ -3617,13 +3617,37 @@ def _wrap_twin(cid):
     return -1
 
 
+def _join_body_collider_late(obj, body, col, lower, binfo, *, thickness, hem_ramp=False):
+    """Plan anatomy (H3): the covered tips of the run (``gd.BODY_COLLIDER["spheres"]``, a few millimetres each) join
+    the piece's rest collider only AFTER its pattern UVs: the panels are cut, laid out and flattened without them —
+    exactly what a ``cut_only`` run sees (``garment_template_cut``, which is never handed a sphere), so the islands
+    and with them a texture from cut stay the same bytes. The collider is rebuilt with them and the built cloth is
+    laid out of it once more (``clear_of_body``: it moves vertices only, the UVs stay), so the drape starts outside
+    them. An attached part (centimetres) stays in the collider the panels are laid round — the cut run is handed it
+    too (``garment_template.cut_body_colliders``); pushing a built pair of trouser legs out of it afterwards tore them
+    (stretch 5.5 on a copy). Returns the collider the drape takes over (``col`` itself without spheres)."""
+    if not gd.BODY_COLLIDER["spheres"]:
+        return col
+    bpy.data.objects.remove(col)
+    col, ctree = gd.rest_collider(body, extra=lower, hem_ramp=hem_ramp)
+    binfo["clear_body_colliders"] = gd.clear_of_body(obj, ctree, thickness=thickness)
+    return col
+
+
 def run(a):
     t_all, c_all = time.time(), time.process_time()
     inp, prm = a["inputs"], a["params"]
     out = Path(a["out_dir"])
     gd.PROGRESS["file"] = prm.get("progress_file") or None
     gd.progress(stage="setup", frame=None, frames=None, index=None, count=None, pose=None)
-    arm, body, _g = gd.load_fit(inp["body"])
+    # plan anatomy (H3): the covered extension parts (their own part node) and tips (a sphere on the bone) the cloth
+    # lies over — ``garment_template.body_colliders``
+    body_cols = list(prm.get("body_colliders") or [])
+    arm, body, _g, parts = gd.load_fit(inp["body"], keep_parts=[c["group"] for c in body_cols if c.get("radius") is None])
+    inflate = {c["group"]: float(c["inflate"]) for c in body_cols}
+    gd.set_body_collider(arm, [(o, inflate[str(o.get("attached_part"))]) for o in parts],
+                         [{"bone": b, "radius": float(c["radius"]), "inflate": float(c["inflate"])}
+                          for c in body_cols if c.get("radius") is not None for b in c.get("bones") or []])
     spec = prm["spec"]
     bod = spec.get("bodice")
     lower = []
@@ -3673,17 +3697,20 @@ def run(a):
             centre = (tz[:, :2].min(0) + tz[:, :2].max(0)) / 2.0
     fitted = spec.get("fitted")
     uv_info = None
+    hem_ramp = False
     cut_only = bool(prm.get("cut_only"))
     if fitted:
         # A223: a close-fitting piece cut from the body's surface (``garment_template_fitted``)
-        col, ctree = gd.rest_collider(body, extra=lower)
+        # plan anatomy (H3): the tips' spheres join only after the pattern UVs (``_join_body_collider_late``)
+        col, ctree = gd.rest_collider(body, extra=lower, spheres=())
         # A237: the cut keeps collider faces by the body's bone weights and planes, so a layer in the collider gave
         # the piece its faces (a top under trousers: stretch 3307). A loose layer is clipped at the piece's top edge
         # (``_squeeze_under``); a boot is never cut into the leg — the piece is cut without it and only laid out over
         # it (``ctree``, body + every layer); the drape still meets them all. A close layer (briefs under tights)
         # stays in the cut: the piece is cut from its outside as before (cut from the body alone: stretch 1.42 vs 1.24)
         boots = [lo for lo in lower if lo.get("footwear")]
-        cut = gd.rest_collider(body, extra=[lo for lo in lower if not lo.get("footwear")])[0] if boots else None
+        cut = gd.rest_collider(body, extra=[lo for lo in lower if not lo.get("footwear")],
+                               spheres=())[0] if boots else None
         obj, fit_pin, binfo = gf.build_fitted(prm, spec, arm, body, ctree, col=col, cut=cut,
                                                boots=boots)
         if squeezed:
@@ -3712,7 +3739,9 @@ def run(a):
         centre = np.array([sp[0], (_bone_world(arm, "LeftArm")[1] + _bone_world(arm, "RightArm")[1]) / 2])
         thickness = float(prm.get("thickness", 0.004))
         # stage "geometry": an outer layer over a sleeved one (``layer_ease``) meets the lower sleeves' hems ramped
-        col, ctree = gd.rest_collider(body, extra=lower, hem_ramp=bool(spec.get("layer_ease")) and OUTER_SLEEVE_CLEAR)
+        hem_ramp = bool(spec.get("layer_ease")) and OUTER_SLEEVE_CLEAR
+        # plan anatomy (H3): the tips' spheres join only after the pattern UVs (``_join_body_collider_late``)
+        col, ctree = gd.rest_collider(body, extra=lower, hem_ramp=hem_ramp, spheres=())
         # phases E + F: a top is cut by the neck-ring rules only with a collar or a placket (``neck_rules``); without
         # them it takes the path from before the phases (kind None), its islands the same bytes
         bodice_kind = prm.get("kind") if prm.get("kind") != "top" or prm.get("neck_rules") else None
@@ -3882,6 +3911,14 @@ def run(a):
                               "lower_layers": len(lower), "verts": len(obj.data.vertices),
                               "script_wall_s": round(time.time() - t_all, 2),
                               "script_cpu_s": round(time.process_time() - c_all, 2)}), files
+    if col is not None:
+        late = float(prm.get("thickness", 0.004))
+        if fitted and fitted.get("kind") == "bra":
+            # review round 2026-11-25 (gore / back gap): a bra is laid ``offset_m`` over the collider
+            # (``build_fitted``); cleared again at the cloth's thickness + BUILD_CLEAR_EXTRA_M it went to 5.5 mm, not
+            # its 4 mm, wherever a tip's sphere joined the collider (``BRA_EDGE_VERSION`` 3)
+            late = float(fitted["offset_m"]) - gd.BUILD_CLEAR_EXTRA_M
+        col = _join_body_collider_late(obj, body, col, lower, binfo, thickness=late, hem_ramp=hem_ramp)
     me = obj.data
     co0 = np.array([v.co for v in me.vertices])
     # outward normals (Solidify and the projection side test read them)
@@ -4151,6 +4188,8 @@ def run(a):
                       "stretch_p99": round(float(np.percentile(st_all, 99)), 3),
                       "quality": int(prm.get("drape_quality") or fab["quality"])},
             "weights": weights, "shapes": {"wall_s": shape_wall, **shape_info}, "collider_s": list(gd.COLLIDER_S),
+            "body_colliders": {"parts": len(gd.BODY_COLLIDER["parts"]), "spheres": len(gd.BODY_COLLIDER["spheres"]),
+                               "kept_faces": list(gd.BODY_COLLIDER_KEPT)},
             "collider_inner": list(gd.COLLIDER_INNER), "collider_outer": list(gd.COLLIDER_OUTER),
             "outer_body_verts": {k: int(v.sum()) for k, v in gd.OUTER_BODY.items()}, "pose_shapes": pose_shapes,
             "hem_verts": int(len(hem)), **({"uv": uv_info} if uv_info else {}),

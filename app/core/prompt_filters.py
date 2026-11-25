@@ -293,6 +293,7 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None,
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     atoms = {}
+    cover = {}
     from app.plugins.registry import flag_specs
     flags = {"is_sleeping", *(spec.flag for spec in flag_specs())}
 
@@ -317,6 +318,20 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None,
                     result = {">": value > threshold, "<": value < threshold, "=": int(value) == threshold}[match[2]]
             elif raw in flags:
                 result = bool(profile.get(raw))
+            elif raw.startswith(("exposed:", "covered:")):
+                # An extension group under the worn pieces (``extension_rig.cover_state_for``): ``exposed:`` only
+                # uncovered, ``covered:`` covered or hidden. A group the character does not have even unclothed
+                # (``rig_groups_unclothed``) is false for both, like a stat it does not have.
+                from app.core.extension_rig import EXPOSED, cover_state_for, rig_groups_unclothed
+                kind, group_id = raw.split(":", 1)
+                if "groups" not in cover:
+                    cover["groups"] = {g["id"].lower(): g for g in rig_groups_unclothed(character_name, profile)}
+                group = cover["groups"].get(group_id.strip())
+                if group is None:
+                    result = False
+                else:
+                    covered = cover_state_for(group, profile) != EXPOSED
+                    result = covered if kind == "covered" else not covered
             elif raw.startswith("mood:"):
                 current = (profile.get("current_feeling") or "").lower()
                 target = raw.split(":", 1)[1].strip()

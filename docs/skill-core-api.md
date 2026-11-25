@@ -165,7 +165,10 @@ empty or null baseline values keep the resolved default. Settings use the shared
 | `is_state_active(name, state_id, *, profile=None) -> bool` | Enabled state active through its profile tag OR expression, using the same evaluator as triggered filters. A ContextVar guard returns false for a state already being evaluated, including indirect cycles. |
 
 Condition expressions also accept `at_home`, `offmap`, `travelling`,
-`location_danger>N` (also `<` and `=`), and `state:<id>`. Location atoms read the
+`location_danger>N` (also `<` and `=`), `state:<id>`, and `exposed:<group id>` /
+`covered:<group id>` (an extension group under the worn pieces, `extension_rig.cover_state_for`: `exposed:` only
+uncovered, `covered:` covered or hidden; a group the character does not have even unclothed —
+`rig_groups_unclothed` — is false for both). Location atoms read the
 character's own current location/position, even during target access checks.
 
 A state never fires on a stat the character does not have (inside
@@ -458,6 +461,18 @@ Deklaration ausschließlich über das Manifest (`body_slots`/`piece_slots`/
 `GET/POST /characters/<c>/body-slots[/<slot>]` (generischer Editor im
 WardrobeTab), `GET /characters/<c>/silhouette` (Paket-Asset); Belongings
 liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getrieben.
+
+## Extension groups under clothing — `app.core.extension_rig` ✅
+
+| Function | Semantics |
+|---|---|
+| `cover_state(group, pieces, items, *, open_ids=()) -> str` | `EXPOSED` / `COVERED` / `HIDDEN` of a group or region (`covered_by`, optional `hide_under`) under `pieces` (`{clothing slot: item id}`). No piece touches `covered_by` → exposed; without `outfit_piece.exposed_detail`, a piece on a declared `hide_under` slot (without the key: on or `covers`-ing any `covered_by` slot) → hidden, and for a group with `drape_collider` also a piece fully covering a `covered_by` slot in a mode outside `garment_set.BODY_COLLIDER_MODES`; else covered (a `covers` of a declared `hide_under` slot or a partial cover is never hidden). Slot names compared after `strip().lower()`. |
+| `cover_state_for(group, profile, *, pieces=None, items=None) -> str` | The same on a character: its worn pieces (or `pieces`), open pieces skipped, a free-text wardrobe covered while dressed (never hidden). Every caller with a profile uses this. |
+| `pieces_of(item_ids, items) -> Dict[str, str]` | `{slot: item id}` from the pieces' `outfit_piece.slots`. |
+| `rig_groups_unclothed(character_name, profile=None)` | The groups the character has unclothed (every active mesh part on). |
+
+The model paths (outfit variant, assembly part nodes, channels, drape colliders, motion) read only this; the image
+paths keep `body_slots.is_slot_exposed`.
 
 ## Outfit / Decency — `app.core.outfit_compliance` ✅
 
@@ -1366,6 +1381,7 @@ Capabilities, die der Core heute abfragt:
 | `defer_for_attachment(raw_input) -> bool` | Call muss NACH den deferred Image-Tools desselben Turns laufen (Input referenziert ein erst dann existierendes Attachment) |
 | `thought_context_block(character_name) -> str` | Selbst-enthaltene Prompt-Sektion (s.u.) |
 | `decision_menu(character_name) -> List[str]` | Input entries this verb takes for the character (ChangeOutfit: the clothes with slot and "worn"). `streaming.tool_state_note` lists them per offered verb in every tool-decision prompt (default heading "<Tool> takes these names — copy one exactly"; overridable with `decision_menu_heading`), because a separate tool LLM sees the roleplay prose, not the character's prompt. Default `[]` |
+| `speech_call_input(listener, words) -> str` | Only for `DELIVERS_SPEECH` verbs: the tool input that says `words` to `listener` (`None` = the whole room), e.g. TalkTo's `{"name": …, "message": …}`; `''` when the verb cannot phrase it. The B-lite speech net (`streaming._ensure_speech_mapped`) uses it for the FILLED example of its retry prompt and to deliver dropped lines itself when the retry yields no speech verb and exactly one person is in the room. Default `''` |
 | `handle_intent(intent_type, payload) -> Dict` | Ausführung eines deklarierten Intents |
 | `tool_intent_payload(raw_input) -> str` | Vergleichs-Inhalt für den Redundanz-Skip |
 | `get_usage_instructions(format_name='', character_name='') -> str` | Eigenes Tool-Beispiel; baut man mit `app.core.tool_formats.format_example(format_name, tool_name, example_input)`, damit es zum aktiven Tool-Format passt |

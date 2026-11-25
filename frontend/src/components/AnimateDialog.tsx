@@ -95,6 +95,8 @@ export function AnimateDialog({
   const [submitting, setSubmitting] = useState(false)
   const [improvement, setImprovement] = useState('')
   const [enhancing, setEnhancing] = useState(false)
+  // Why the last "Improve prompt" left the prompt as it was (e.g. the 422 reason of a rejected LLM rewrite).
+  const [enhanceError, setEnhanceError] = useState('')
   // Three optional LoRA slots (gateway maximum) — offered when the selected
   // video backend discovered LoRAs via its lora_url.
   const [loraSlots, setLoraSlots] = useState<Array<{ name: string; strength: string }>>(
@@ -105,7 +107,7 @@ export function AnimateDialog({
   // Video length in seconds — empty = backend default (shown greyed).
   const [seconds, setSeconds] = useState('')
 
-  useEffect(() => { if (open) setPrompt(defaultPrompt) }, [open, defaultPrompt])
+  useEffect(() => { if (open) { setPrompt(defaultPrompt); setEnhanceError('') } }, [open, defaultPrompt])
 
   // LoRAs of the picked (or auto-resolved) backend — none when it takes none.
   const svcLoras = useMemo(() => {
@@ -157,11 +159,13 @@ export function AnimateDialog({
 
   // "Improve": the LLM rewrites the motion prompt — from the change request,
   // or (empty request) just optimised for the video model — into the prompt
-  // field (visible/editable before animating), like the image dialogs.
+  // field (visible/editable before animating), like the image dialogs. A
+  // rejected rewrite (422) leaves both fields as they were and shows the reason.
   const applyImprovement = useCallback(async () => {
     const base = prompt.trim()
     if (!base || enhancing) return
     setEnhancing(true)
+    setEnhanceError('')
     try {
       const res = await apiPost<{ prompt?: string }>('/world/imagegen-enhance-prompt', {
         prompt: base, improvement_request: improvement.trim(), mode: 'video',
@@ -170,12 +174,12 @@ export function AnimateDialog({
         setPrompt(res.prompt)
         setImprovement('')
       }
-    } catch {
-      /* Fail silently — the user can still adjust the prompt by hand. */
+    } catch (err) {
+      setEnhanceError(err instanceof Error && err.message ? err.message : t('Prompt improvement failed.'))
     } finally {
       setEnhancing(false)
     }
-  }, [prompt, improvement, enhancing])
+  }, [prompt, improvement, enhancing, t])
 
   const handleSubmit = useCallback(async () => {
     if (!effectiveService) return
@@ -294,6 +298,11 @@ export function AnimateDialog({
                   {showAdvanced ? '▾' : '▸'} {t('Advanced')}
                 </button>
               </div>
+              {enhanceError ? (
+                <div className="ga-form-hint" role="alert" style={{ color: 'var(--danger, #f85149)' }}>
+                  {enhanceError}
+                </div>
+              ) : null}
               {showAdvanced ? (
                 <>
                   <label className="ga-imagegen-label">{t('Suggest system prompt (optional)')}</label>

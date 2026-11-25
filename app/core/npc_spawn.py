@@ -960,8 +960,15 @@ def wanderer_count() -> int:
 def wanderer_tick() -> Dict[str, Any]:
     """Keep the road populated: settle arrivals, then top the quota up.
 
-    The tick itself never generates: a spawn is a queue job, so a slow LLM
-    turn cannot hold up the world-admin tick that calls this.
+    The tick itself never GENERATES an NPC: a spawn is a queue job, so a slow
+    LLM turn cannot hold up the world-admin tick that calls this. It does BAKE
+    ROUTES, though: settling an arrival may send the wanderer off again
+    (``_send_wanderer`` -> ``travel_engine.start_journey`` -> the nav-grid
+    A*), right here in the tick — and the spawn job bakes one the same way.
+    A route across a large world can take up to a minute
+    (``nav_grid.NAV_MAX_EXPANSIONS`` / ``NAV_MAX_SECONDS`` bound it), which is
+    why the world-admin tick runs this sub-task beside its loop
+    (``periodic_jobs._DETACHED``) rather than in it.
     """
     if not spawn_enabled():
         return {"skipped": "disabled"}
@@ -1022,6 +1029,13 @@ def _settle_wanderer(name: str) -> bool:
         # below, because the retry clears the target when it cannot start.
         if _send_wanderer(name, target):
             return False
+        # The retry builds a route, which can take minutes on a large world;
+        # an avatar may have started talking to the wanderer meanwhile, and
+        # turning it around or pooling it now would end that conversation.
+        if _in_chat(name):
+            logger.info("Wanderer '%s' stays: an avatar started talking to it",
+                        name)
+            return False
 
     from app.core.npc_pool import pool_npc
     origin = str(profile.get("wander_origin") or "").strip()
@@ -1043,7 +1057,13 @@ def _settle_wanderer(name: str) -> bool:
         # takes this lock itself.
         from app.core.keyed_lock import keyed_lock
         with keyed_lock("character_profile", name):
-            profile = get_character_profile(name) or {}
+            profile = get_character_profile(name)
+            if not profile:
+                # Gone meanwhile (the TTL sweep runs beside this tick):
+                # writing the two keys would resurrect an empty sheet.
+                logger.info("Wanderer '%s' vanished before it could turn "
+                            "around", name)
+                return False
             profile["wander_target"] = origin
             profile["wander_origin"] = here
             save_character_profile(name, profile)

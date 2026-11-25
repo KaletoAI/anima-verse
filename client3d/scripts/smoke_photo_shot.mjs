@@ -1,7 +1,7 @@
 // Usage: node client3d/scripts/smoke_photo_shot.mjs
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { loadHudRealm } from './load_hud_realm.mjs';
+import { loadHudRealm } from '../../scripts/load_hud_realm.mjs';
 assert.ok(existsSync('client3d/src/game/photoShot.ts'), 'browser photo upload helper exists');
 const realm = loadHudRealm();
 const { uploadPhotoShot } = realm.load('client3d/src/game/photoShot.ts');

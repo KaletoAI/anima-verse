@@ -636,8 +636,9 @@ public partial class HudOverlay : CanvasLayer
             }
             case InputEventKey k:
             {
-                // F11 is the window's (Main toggles full screen), never the page's — not even while it types.
-                if (k.Keycode is Key.F11 or Key.F2) break;
+                // F11 is the window's (Main toggles full screen), F9 the scene's (Main toggles the nav overlay), never
+                // the page's — not even while it types.
+                if (k.Keycode is Key.F11 or Key.F9 or Key.F2) break;
                 // Releases can lose Unicode/modifiers or arrive after the input blurred.
                 var textKey = k.PhysicalKeycode != Key.None ? k.PhysicalKeycode : k.Keycode;
                 if (!k.Pressed && _textKeys.Remove(textKey)) { Handled(); break; }

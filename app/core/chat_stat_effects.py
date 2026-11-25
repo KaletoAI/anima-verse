@@ -144,7 +144,15 @@ def _validated_deltas(deltas: object, keys: set[str]) -> dict[str, int]:
 
 
 def parse_stat_results(data: dict, targets: dict) -> list[dict]:
-    """Reject the entire stat section unless every required pair occurs once."""
+    """The delivered pairs, each validated; a malformed section is refused whole.
+
+    Unknown tokens, a repeated pair, foreign keys and invalid deltas reject the
+    entire stat section. An OMITTED required pair is not an error: a small
+    model that found nothing for a source tends to leave its pair out instead
+    of writing ``"deltas": {}``. It is "no effect" — the delivered pairs
+    apply, the omitted one is NOT recorded as evaluated (no receipt is
+    invented for it) and one WARNING names it.
+    """
     if not isinstance(data, dict) or not isinstance(data.get("stat_results"), list):
         raise ValueError("Chat stat contract requires stat_results: [{event,target,deltas}]; legacy flat stats are unsupported")
     pair_map = targets["pair_map"]
@@ -162,8 +170,12 @@ def parse_stat_results(data: dict, targets: dict) -> list[dict]:
         deltas = _validated_deltas(item["deltas"], authority["keys"])
         seen.add(pair)
         results.append({"source": authority["source"], "recipient": authority["recipient"], "deltas": deltas})
-    if seen != set(pair_map):
-        raise ValueError("Stat results omit required event/target pairs; return an explicit empty deltas object for no effect")
+    missing = [pair for pair in pair_map if pair not in seen]
+    if missing:
+        logger.warning("Stat results omit required pair(s) %s; treated as no effect, "
+                       "%d delivered pair(s) applied",
+                       ", ".join(f"{event}/{target}" for event, target in missing),
+                       len(results))
     return results
 
 

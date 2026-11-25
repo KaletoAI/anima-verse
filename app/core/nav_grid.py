@@ -56,10 +56,12 @@ import heapq
 import itertools
 import json
 import math
+import time
 from dataclasses import dataclass, field
 from typing import (Any, Dict, List, NamedTuple, Optional, Sequence, Set,
                     Tuple)
 
+from app.core.log import get_logger
 from app.core.terrain_query import (MIN_SPEED_FACTOR, effective_speed_factor,
                                     ground_scope)
 from app.core.world_geometry import (boundary_world_points, is_area_location,
@@ -69,6 +71,8 @@ from app.core.world_geometry import (boundary_world_points, is_area_location,
 
 Point = Tuple[float, float]
 Cell = Tuple[int, int]
+
+logger = get_logger(__name__)
 
 
 class Region(NamedTuple):
@@ -144,6 +148,37 @@ SLOPE_COST_S_PER_M = 4.0
 # an avatar walks through it (§ A15 no. 9, the ramp-end exemption).
 OPENING_EXEMPT_M = 1.5 + NAV_CELL_M
 
+# THE SEARCH BUDGET (2026-11-25), measured on a copy of the largest world
+# (Anima Divide: box 4470 m x 4110 m = 2235 x 2055 cells, 88 painted areas,
+# 32 placed locations). All 91 routes between 14 locations spread over the
+# whole map were searched without a budget; the longest valid one
+# (Silberquelle -> Relaisturm, 4.6 km walked) closed 1 340 667 cells in 64 s
+# of A* (cold caches, the machine shared with 11 other searches; 46 s alone,
+# 27-39 s with warm caches). The next
+# ones closed 1.11 M and 1.06 M. The budget is that maximum times a safety
+# factor of about 2.2 for routes between places not sampled, rounded up —
+# an unreachable goal used to walk all ~4.6 M cells of the box instead, and
+# with the old per-cell cost one valid route ran 2076 s.
+NAV_MAX_EXPANSIONS = 3_000_000
+# The same longest route (64 s, see above) times two, counted in CPU time of
+# the searching thread (``time.thread_time``), NOT wall time: a search that
+# waits for the GIL while another thread computes does no work, and with a
+# wall-clock budget one busy neighbour thread was enough to turn that very
+# route into "no route" (1.2 M of its 1.34 M expansions at 120 s wall). Only a
+# backstop for a slow machine: the expansion count decides first on an
+# ordinary day. The warning still reports the wall seconds.
+NAV_MAX_SECONDS = 120.0
+# How often the search yields the GIL (``time.sleep(0)``), in closed cells.
+# 64 cells are 2-3 ms of search. Measured on the route above, run in a thread
+# while a second thread timed 200 ``os.stat`` calls: without the yield the
+# p95 of one stat was 5.1 ms (the interpreter's 5 ms switch interval, paid
+# on every GIL re-acquisition), with it 0.018 ms — the unloaded figure is
+# 0.012 ms — and the route itself did not get slower. Those stat calls were
+# spaced 10 ms apart; a BURST is not free: 2000 back-to-back stat calls take
+# 2.8 ms unloaded, about 100 ms beside a yielding search and up to 9.7 s
+# beside one that never yields — the waiting thread's wake-up dominates.
+NAV_YIELD_EVERY = 64
+
 _SQRT2 = math.sqrt(2.0)
 _NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1),
                (1, 1), (1, -1), (-1, 1), (-1, -1))
@@ -196,12 +231,19 @@ class NavContext:
     # placed boundaries are per route (their exemption depends on the ends).
     _terrain_cache: Dict[Cell, Tuple[bool, float]] = field(
         default_factory=dict, repr=False)
+    # The painted areas prepared for point queries (parsed polygons, boxes,
+    # buckets — ``terrain_query.AreaIndex``), built on the first sample. Same
+    # answers as the raw list, without walking every polygon per point.
+    _area_index: Optional[Any] = field(default=None, repr=False)
 
     def terrain_at(self, x: float, z: float) -> Tuple[bool, float]:
         """(passable, speed_factor) of a POINT, from prefetched data."""
-        from app.core.terrain_query import passability_at
-        return passability_at(x, z, areas=self.areas, catalog=self.catalog,
-                              default_kind=self.default_kind)
+        from app.core.terrain_query import AreaIndex, passability_at
+        index = self._area_index
+        if index is None:
+            index = self._area_index = AreaIndex(self.areas)
+        return passability_at(x, z, catalog=self.catalog,
+                              default_kind=self.default_kind, index=index)
 
     def cell_terrain(self, cell: Cell) -> Tuple[bool, float]:
         """Terrain of a CELL, sampled once at its centre and memoized."""
@@ -432,6 +474,18 @@ def _data_bounds(areas: List[Dict[str, Any]], regions: Sequence[Region]
     return (min(xs), min(zs), max(xs), max(zs))
 
 
+def _in_region_polygon(x: float, z: float, region: Region) -> bool:
+    """``point_in_polygon`` against a placed outline, its box rejecting first.
+
+    Exact, not an approximation: the ray cast never counts a point outside the
+    polygon's own box as inside (``terrain_query.AreaIndex`` spells out why),
+    and the box is derived from the very points tested."""
+    b = region.bounds
+    if x < b[0] or x > b[2] or z < b[1] or z > b[3]:
+        return False
+    return point_in_polygon(x, z, region.points)
+
+
 def _region_scope(x: float, z: float, regions: Sequence[Region]) -> str:
     """How far the terrain rule reaches at a point, judged by the placed
     BOUNDARIES only.
@@ -450,7 +504,9 @@ def _region_scope(x: float, z: float, regions: Sequence[Region]) -> str:
     best_area_m2: Optional[float] = None
     best_open = False
     for region in regions:
-        if not point_in_polygon(x, z, region.points):
+        # This runs per cost sample over EVERY placed boundary: the box
+        # rejects first.
+        if not _in_region_polygon(x, z, region):
             continue
         if best_area_m2 is None or region.area_m2 < best_area_m2:
             best_area_m2, best_open = region.area_m2, region.is_area
@@ -529,6 +585,14 @@ class _Search:
         self.max_i, self.max_j = cell_of(max_x, max_z)
         self._blocked: Dict[Cell, bool] = {}
         self._steep: Dict[Cell, bool] = {}
+        # Per-search memos of the two per-cell numbers A* asks for on every
+        # relaxation: the ground height at the cell centre and the pace. Both
+        # are pure functions of the cell for the life of this search, so a
+        # memo changes no answer — it only stops the second, third, … asking.
+        self._height: Dict[Cell, float] = {}
+        self._factor: Dict[Cell, float] = {}
+        # Cells A* closed — set by :func:`_astar`, read by its callers' logs.
+        self.expansions = 0
 
     def in_bounds(self, cell: Cell) -> bool:
         return (self.min_i <= cell[0] <= self.max_i
@@ -551,8 +615,7 @@ class _Search:
         blocking boundary could never survive. Testing all of them would
         answer the same and cost the foreign ones per sample.
         """
-        return any(point_in_polygon(x, z, r.points)
-                   for r in self.exempt_regions)
+        return any(_in_region_polygon(x, z, r) for r in self.exempt_regions)
 
     def in_level_region(self, x: float, z: float) -> bool:
         """Does that point lie inside an exempt boundary that STAMPS a
@@ -570,8 +633,7 @@ class _Search:
         The same invariant :meth:`in_region` documents applies: the foreign
         boundaries are already gone by the time anybody asks.
         """
-        return any(point_in_polygon(x, z, r.points)
-                   for r in self.level_regions)
+        return any(_in_region_polygon(x, z, r) for r in self.level_regions)
 
     def scope_at(self, x: float, z: float) -> str:
         """How far the terrain rule reaches at that point — over this route's
@@ -689,6 +751,19 @@ class _Search:
         self._steep[cell] = hit = self._measure_steep(cell)
         return hit
 
+    def cell_height(self, cell: Cell) -> float:
+        """Ground height at the CENTRE of a cell, memoized for this search.
+
+        The one height reading of the hot loop: A*'s climb term and the
+        steepness test both ask for cell centres (the steepness test's four
+        samples one cell away ARE the centres of the four neighbours), so each
+        centre is read from the tiles once per search instead of up to six
+        times."""
+        hit = self._height.get(cell)
+        if hit is None:
+            hit = self._height[cell] = self.ctx.height_at(*cell_centre(cell))
+        return hit
+
     def _measure_steep(self, cell: Cell) -> bool:
         """:meth:`too_steep` without the memo — the arithmetic itself."""
         ctx = self.ctx
@@ -697,8 +772,11 @@ class _Search:
             return False
         from app.core.relief import slope_blocks
         run = 2.0 * NAV_CELL_M
-        d_x = ctx.height_at(cx + NAV_CELL_M, cz) - ctx.height_at(cx - NAV_CELL_M, cz)
-        d_z = ctx.height_at(cx, cz + NAV_CELL_M) - ctx.height_at(cx, cz - NAV_CELL_M)
+        # The samples one cell to either side are the neighbours' centres
+        # ((i ± 1 + 0.5)·c == (i + 0.5)·c ± c exactly — integers and halves).
+        i, j = cell
+        d_x = self.cell_height((i + 1, j)) - self.cell_height((i - 1, j))
+        d_z = self.cell_height((i, j + 1)) - self.cell_height((i, j - 1))
         return slope_blocks(math.hypot(d_x, d_z), run, ctx.max_step_m,
                             ctx.max_slope_deg)
 
@@ -718,8 +796,12 @@ class _Search:
         ``terrain_query.effective_speed_factor`` — this method supplies the
         lookup and the cached cell reading, nothing else.
         """
-        return effective_speed_factor(self.ctx.cell_terrain(cell)[1],
-                                      self.scope_at(*cell_centre(cell)))
+        hit = self._factor.get(cell)
+        if hit is None:
+            hit = self._factor[cell] = effective_speed_factor(
+                self.ctx.cell_terrain(cell)[1],
+                self.scope_at(*cell_centre(cell)))
+        return hit
 
     def nearest_free(self, cell: Cell) -> Optional[Cell]:
         """The cell itself, or the closest passable cell within
@@ -782,8 +864,9 @@ class _Search:
 
 # ── routing ─────────────────────────────────────────────────────────────
 
-def _astar(search: _Search, start_cell: Cell,
-           goal_cell: Cell) -> Optional[List[Cell]]:
+def _astar(search: _Search, start_cell: Cell, goal_cell: Cell,
+           max_expansions: Optional[int] = None,
+           max_seconds: Optional[float] = None) -> Optional[List[Cell]]:
     """8-neighbour A*; cost per step = metres / speed_factor of the entered
     cell PLUS the climb between the two cell centres, heuristic = octile
     distance / best catalog factor (admissible).
@@ -794,10 +877,32 @@ def _astar(search: _Search, start_cell: Cell,
     discount would make it overestimate, and A* would return the first route it
     stumbled over instead of the cheapest one. That is also why the penalty is
     the absolute rise: a route that saved time going down a mountain would not
-    be the same route coming back up."""
+    be the same route coming back up.
+
+    THE SEARCH HAS A BUDGET (2026-11-25): at most ``max_expansions`` closed
+    cells (default :data:`NAV_MAX_EXPANSIONS`) and ``max_seconds`` of CPU
+    time of the searching thread (``time.thread_time``, default
+    :data:`NAV_MAX_SECONDS`) — time spent waiting for the GIL behind another
+    thread does not count, so a busy process does not turn a valid long route
+    into no route. Past either it gives up with
+    None — the "no route" every caller already handles — and ONE warning line.
+    Without it an unreachable goal walks the whole world box (millions of
+    cells) and a single route held a thread for over half an hour.
+
+    It YIELDS THE GIL every :data:`NAV_YIELD_EVERY` expansions
+    (``time.sleep(0)``): a pure-Python search that never blocks starves every
+    other thread of the process, which pays up to the interpreter's switch
+    interval for each GIL re-acquisition. The count of closed cells is left on
+    the search as ``search.expansions``."""
+    search.expansions = 0
     if start_cell == goal_cell:
         return [start_cell]
+    limit = NAV_MAX_EXPANSIONS if max_expansions is None else max_expansions
+    budget_s = NAV_MAX_SECONDS if max_seconds is None else max_seconds
+    started = time.monotonic()
+    started_cpu = time.thread_time()
     inv_best = 1.0 / max(search.ctx.best_factor, MIN_SPEED_FACTOR)
+    relief = search.ctx.has_relief
 
     def heuristic(cell: Cell) -> float:
         dx = abs(cell[0] - goal_cell[0])
@@ -810,20 +915,35 @@ def _astar(search: _Search, start_cell: Cell,
     came: Dict[Cell, Cell] = {}
     g_score: Dict[Cell, float] = {start_cell: 0.0}
     closed: Set[Cell] = set()
+    expansions = 0
 
     while open_heap:
         _f, _n, cell = heapq.heappop(open_heap)
         if cell in closed:
             continue
         if cell == goal_cell:
+            search.expansions = expansions
             path = [cell]
             while cell in came:
                 cell = came[cell]
                 path.append(cell)
             path.reverse()
             return path
+        if expansions >= limit:
+            _give_up(search, start_cell, goal_cell, expansions, started,
+                     f"expansion budget {limit}")
+            return None
+        expansions += 1
+        if expansions % NAV_YIELD_EVERY == 0:
+            search.expansions = expansions
+            if time.thread_time() - started_cpu > budget_s:
+                _give_up(search, start_cell, goal_cell, expansions, started,
+                         f"time budget {budget_s:g} s")
+                return None
+            time.sleep(0)
         closed.add(cell)
         base_g = g_score[cell]
+        here_h = search.cell_height(cell) if relief else 0.0
         for di, dj in _NEIGHBOURS:
             nxt = (cell[0] + di, cell[1] + dj)
             if nxt in closed or search.blocked(nxt):
@@ -838,10 +958,9 @@ def _astar(search: _Search, start_cell: Cell,
             else:
                 step = NAV_CELL_M
             climb = 0.0
-            if search.ctx.has_relief:
+            if relief:
                 climb = SLOPE_COST_S_PER_M * abs(
-                    search.ctx.height_at(*cell_centre(nxt))
-                    - search.ctx.height_at(*cell_centre(cell)))
+                    search.cell_height(nxt) - here_h)
             tentative = base_g + step / search.factor(nxt) + climb
             if tentative < g_score.get(nxt, math.inf):
                 g_score[nxt] = tentative
@@ -849,7 +968,19 @@ def _astar(search: _Search, start_cell: Cell,
                 heapq.heappush(open_heap,
                                (tentative + heuristic(nxt), next(counter),
                                 nxt))
+    search.expansions = expansions
     return None
+
+
+def _give_up(search: _Search, start_cell: Cell, goal_cell: Cell,
+             expansions: int, started: float, which: str) -> None:
+    """The ONE warning line of a search that ran out of budget."""
+    search.expansions = expansions
+    logger.warning(
+        "Route search gave up (%s): start %s -> goal %s, %d expansions, "
+        "%.1f s — answering no route",
+        which, cell_centre(start_cell), cell_centre(goal_cell), expansions,
+        time.monotonic() - started)
 
 
 def _segment_cost(ctx: NavContext, a: Point, b: Point) -> float:
@@ -941,7 +1072,9 @@ def _smooth(search: _Search, points: List[Point]) -> List[Point]:
 
 
 def route(start_xz: Any, goal_xz: Any,
-          ctx: Optional[NavContext] = None) -> Optional[List[Point]]:
+          ctx: Optional[NavContext] = None, *,
+          max_expansions: Optional[int] = None,
+          max_seconds: Optional[float] = None) -> Optional[List[Point]]:
     """Walkable polyline from start to goal in world metres, or None.
 
     The first waypoint is always the real start point and the last the real
@@ -967,7 +1100,8 @@ def route(start_xz: Any, goal_xz: Any,
     if start_cell is None or goal_cell is None:
         return None
 
-    cells = _astar(search, start_cell, goal_cell)
+    cells = _astar(search, start_cell, goal_cell,
+                   max_expansions=max_expansions, max_seconds=max_seconds)
     if cells is None:
         return None
 

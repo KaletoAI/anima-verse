@@ -44,6 +44,7 @@ import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 import fitted_pattern as fpat
 import garment_template_drape as gd
@@ -61,6 +62,47 @@ TIP_PIN_M = 0.03
 TIGHT_GLOVE_FIT = 0.3
 #: A strap path is sampled this densely.
 STRAP_STEP_M = 0.01
+#: Round 2026-11-25 (owner ruling 1): a bra's strap is its own regular strip along its path (``strap_strip``) — the
+#: path's loops cut out (a point back within STRIP_LOOP_M of an earlier one), resampled every STRIP_STEP_M, evened
+#: STRIP_SMOOTH times, STRIP_ACROSS quads across its width; it reaches STRIP_END_M past the path's back end into the
+#: band and lies STRIP_LIFT_M over the cloth it overlaps there (a cross-back strap's second strip once more over the
+#: first); the cup's push-up lifts it along, fading out over STRIP_PUSH_FADE_M from the cup.
+STRIP_STEP_M = 0.005
+STRIP_SMOOTH = 40
+STRIP_LOOP_M = 0.004
+STRIP_ACROSS = 4
+STRIP_END_M = 0.012
+STRIP_LIFT_M = 0.0025
+STRIP_PUSH_FADE_M = 0.12
+#: ... and its front end starts this far under the cup's top edge (sewn onto the cup).
+STRIP_INTO_CUP_M = 0.015
+#: Round 2026-11-25b ("the straps are not attached": each strip ended as a loose piece 14 mm off the cup's top edge,
+#: pushed up past it): a strip is sewn onto the cloth at each end (``stitch_strip_end``) — its rows over the cloth go;
+#: the first row whose every vertex lies at least STITCH_CLEAR_M off the cloth is bridged to the run of the cloth's free
+#: edge between where its two outer vertices meet it (one row of triangles using every vertex of both). An end whose
+#: nearest free edge lies farther than STITCH_MAX_M, or whose run is not between STITCH_RUN of the strip's width, stays
+#: loose (``strap_stitch`` says why). An edge vertex within STITCH_SNAP_M of a meeting point is taken instead of a new
+#: one. The strip's lift fades to 0 over STRIP_LIFT_RAMP_M toward a sewn end.
+STITCH_CLEAR_M = 0.003
+STITCH_MAX_M = 0.025
+STITCH_RUN = (0.5, 2.5)
+STITCH_SNAP_M = 0.001
+STRIP_LIFT_RAMP_M = 0.03
+#: Round 2026-11-25 (owner ruling 6, review): a cup covers the breast to its side and round it — up to a vertical
+#: plane CUP_BACK_M in front of the body's middle (``cy``), cut into the collider before the faces are kept
+#: (``build_fitted``: a straight back edge instead of a sawtooth, and no loose lobe under the arm behind it). Per height
+#: (CUP_REACH_ROWS heights from the fold to over the cup's top) ``_side_contour`` finds the breast's side contour: the
+#: widest body point nearer the middle than CUP_ARM_X_M (the outline seen from behind) and how far forward it lies. The
+#: push-up fades out over the outer CUP_PUSH_FADE share of the way from the apex to that contour and is 0 behind it, so
+#: the cup's side lies on the body where it crosses the outline (lifted off it, the cup's side stood past the torso
+#: outline in the back view — a dark crescent each side).
+CUP_BACK_M = 0.015
+CUP_REACH_ROWS = 9
+CUP_ARM_X_M = 0.21
+CUP_MIN_REACH_M = 0.02
+CUP_PUSH_FADE = 0.35
+#: The push-up's draw toward the middle fades in over this distance from the gore's edge.
+GORE_PUSH_FADE_M = 0.025
 
 
 def _gltf_y(v):
@@ -293,6 +335,23 @@ def _fold(tree, apex, cy):
     return None
 
 
+def _side_contour(co, apex, s, cx, zs):
+    """Owner ruling 6 (review): per height of ``zs`` the breast's side contour on side ``s`` — the widest body vertex
+    (within 5 mm of the height, nearer the middle than CUP_ARM_X_M: the torso without the arm) as ``(reach, y)``: its
+    distance out from ``apex`` (at least CUP_MIN_REACH_M) and how far forward it lies."""
+    reach, ys = [], []
+    for z in zs:
+        band = co[(np.abs(co[:, 2] - z) < 0.005) & (s * (co[:, 0] - cx) > 0) & (s * (co[:, 0] - cx) < CUP_ARM_X_M)]
+        if not len(band):
+            reach.append(CUP_MIN_REACH_M)
+            ys.append(float(apex[1]))
+            continue
+        k = int(np.argmax(s * (band[:, 0] - cx)))
+        reach.append(max(CUP_MIN_REACH_M, float(s * (band[k, 0] - apex[0]))))
+        ys.append(float(band[k, 1]))
+    return np.array(reach), np.array(ys)
+
+
 def strap_path(tree, st, start, cx, cy, s, under):
     """A223 — one strap as a polyline on the body surface (``strap_spec``): from ``start`` (the cup top) up the
     front to the shoulder at ``shoulder_x`` (rays from the front), over the shoulder (rays from above), down the back
@@ -352,6 +411,10 @@ def bra_region(f, co, tree, cx, cy):
     info_fold = {"folds": [round(z, 4) for z in folds]}
     if folds:
         under = max(under, min(folds))
+    if f.get("hem_y") is not None:
+        # round 2026-11-25: a top with cups — its band runs from the fold found here down to the top's hem (an
+        # absolute height, ``garment_template.fitted_spec``); a bra has no ``hem_y`` and keeps the band above
+        band = max(under - _gltf_y(f["hem_y"]), float(f["back_strap_m"]))
     info = {"apex": {("l" if s > 0 else "r"): [round(float(x), 4) for x in a] for s, a in apex.items()},
             "under_z": round(under, 4), **info_fold}
     tops = {}
@@ -359,13 +422,25 @@ def bra_region(f, co, tree, cx, cy):
         H = max(0.03, float(a[2]) - under)
         zc = float(a[2]) + (cov - 0.5) * 2.0 * H
         r_in = max(0.02, abs(float(a[0]) - cx) - gore_half)
-        r_out = 0.075
+        zs = np.linspace(under, max(zc, float(a[2])), CUP_REACH_ROWS)
+        r_out = (zs, *_side_contour(co, a, s, cx, zs))
         tops[s] = (a, H, zc, r_in, r_out)
+    info["cup_reach_m"] = {("l" if s > 0 else "r"): [round(float(r), 3) for r in t[4][1]] for s, t in tops.items()}
+    back_y = cy - CUP_BACK_M
+    info["cup_back_y"] = round(back_y, 4)
+
+    def reach_at(s, z):
+        zs, rs, _ys = tops[s][4]
+        return np.interp(z, zs, rs)
+
+    def contour_y_at(s, z):
+        zs, _rs, ys = tops[s][4]
+        return np.interp(z, zs, ys)
 
     def cup_top(c, s):
         a, H, zc, r_in, r_out = tops[s]
         dx = c[:, 0] - a[0]
-        r = np.where(s * dx < 0, r_in, r_out)
+        r = np.where(s * dx < 0, r_in, reach_at(s, c[:, 2]))
         u = np.clip(np.abs(dx) / r, 0.0, 1.0)
         if style == "molded":
             z = zc - 0.5 * H * u ** 2
@@ -381,11 +456,12 @@ def bra_region(f, co, tree, cx, cy):
         if style == "bandeau":
             zc = max(t[2] for t in tops.values())
             return (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zc)
-        front = c[:, 1] < cy
+        # owner ruling 6 (review): round the breast's side up to the plane ``back_y`` (cut into the collider first)
+        front = c[:, 1] < back_y
         for s in (1, -1):
             side = s * (c[:, 0] - cx) >= gore_half
-            zt, inside = cup_top(c, s)
-            out |= front & side & inside & (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zt)
+            zt, _inside = cup_top(c, s)
+            out |= front & side & (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zt)
         return out
 
     def gore(c):
@@ -399,7 +475,7 @@ def bra_region(f, co, tree, cx, cy):
     if st:
         for s, a in apex.items():
             zt, _ins = cup_top(a[None, :], s) if style != "bandeau" else (np.array([tops[s][2]]), None)
-            start = np.array([a[0] + s * 0.005, a[1], float(zt[0]) - 0.01])
+            start = np.array([a[0] + s * 0.005, a[1], float(zt[0]) - STRIP_INTO_CUP_M])
             h = _ray(tree, (start[0], cy - 0.5, start[2]), (0, 1, 0))
             paths.append(strap_path(tree, st, h if h is not None else start, cx, cy, s, under))
         info["strap_points"] = [len(p) for p in paths]
@@ -419,21 +495,30 @@ def bra_region(f, co, tree, cx, cy):
         return (c[:, 2] <= under + 1e-4) & (np.abs(c[:, 0] - cx) < arm_x + 0.05)
 
     def keep(c):
-        return (band_ring(c) & (c[:, 2] >= under - band - 0.01)) | cups(c) | gore(c) | straps(c)
+        # owner ruling 1: the straps are no body faces any more — each is its own strip (``strap_strip``)
+        return (band_ring(c) & (c[:, 2] >= under - band - 0.01)) | cups(c) | gore(c)
 
     planes = [(np.array([0.0, 0.0, under - band]), np.array([0.0, 0.0, -1.0]))]
 
     def pins(v):
-        p = (v[:, 2] <= under + 0.003) | straps(v) | gore(v)
+        p = (v[:, 2] <= under + 0.003) | gore(v)
         if f.get("rigid_cups") or style == "bandeau":
             p |= cups(v)
         return p
 
     def push(v):
-        """Per vertex (dz, dx toward the centre, out) of the push-up, 1 inside a cup and 0 outside."""
+        """Per vertex the weight of the push-up (dz, dx toward the centre, out): 1 inside a cup, fading to 0 over the
+        outer ``CUP_PUSH_FADE`` share of the way from the apex to the breast's side contour, 0 behind the contour
+        (owner ruling 6: the cup's side lies on the body where it crosses the outline seen from behind), 0 outside."""
         if style == "bandeau":
             return np.zeros(len(v))
-        return cups(v).astype(float)
+        w = cups(v).astype(float)
+        for s, (a, _H, _zc, _ri, _r) in tops.items():
+            m = s * (v[:, 0] - a[0]) > 0
+            u = np.clip((np.abs(v[m, 0] - a[0]) / reach_at(s, v[m, 2]) - (1.0 - CUP_PUSH_FADE)) / CUP_PUSH_FADE,
+                        0.0, 1.0)
+            w[m] *= (1.0 - u * u * (3.0 - 2.0 * u)) * (v[m, 1] <= contour_y_at(s, v[m, 2]))
+        return w
 
     def closure(v):
         if f["closure"] == "back_hook":
@@ -444,11 +529,246 @@ def bra_region(f, co, tree, cx, cy):
 
     info["band_m"] = round(band, 4)
     # step 3a: the predicates the pattern parts are taken by (``fitted_pattern.pre_parts``); popped by build_fitted
-    info["_pattern"] = {"pred": {"cups": cups, "gore": gore, "straps": straps,
+    info["_pattern"] = {"pred": {"cups": cups, "gore": gore, "straps": lambda c: np.zeros(len(c), bool),
                                  "band": lambda c: band_ring(c) & (c[:, 2] >= under - band - 0.01)},
                         "strap_paths": [p for p in paths if len(p) > 1],
                         "strap_sides": [s for (s, _a), p in zip(apex.items(), paths) if len(p) > 1]}
+    info["_tack"] = gore   # laid on the breastbone after the evening (``build_fitted``)
+    info["_strips"] = {"paths": [p for p in paths if len(p) > 1],
+                       "sides": [s for (s, _a), p in zip(apex.items(), paths) if len(p) > 1],
+                       "width_m": float(st["width_m"]) if st else 0.0, "cross": bool(st and st["style"] == "cross"),
+                       "extend_end": bool(st and st["style"] != "halter")}
     return keep, planes, pins, push, closure, cups, info
+
+
+def _strip_path(path, tree, extend_end):
+    """A strap path made even for its strip: extended ``STRIP_END_M`` past its back end (into the band), its loops cut
+    out (``STRIP_LOOP_M``), resampled
+    every ``STRIP_STEP_M`` by arc length, evened ``STRIP_SMOOTH`` times (the ends stay) and put back on the body."""
+    P = np.asarray(path, float)
+    if extend_end and len(P) > 1:
+        d = P[-1] - P[-2]
+        d = d / max(1e-9, float(np.linalg.norm(d)))
+        loc, _n, _i, _d = tree.find_nearest(Vector(P[-1] + d * STRIP_END_M))
+        if loc is not None:
+            P = np.vstack([P, np.array(loc)])
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    keep = np.concatenate([[True], seg > 1e-6])
+    P = P[keep]
+    # a loop is cut out: the path's sections meet with an overlap (over the shoulder it ran down the back past where
+    # the back section starts, which then went up again — a fold in the strip), so where a later point comes back
+    # within STRIP_LOOP_M of an earlier one, every point between them goes
+    out, i = [], 0
+    while i < len(P):
+        out.append(P[i])
+        d = np.linalg.norm(P[i + 2:] - P[i], axis=1)
+        back = np.where(d < STRIP_LOOP_M)[0]
+        i = i + 2 + int(back[-1]) + 1 if len(back) else i + 1
+    P = np.array(out)
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))])
+    n = max(2, int(round(cum[-1] / STRIP_STEP_M)) + 1)
+    t = np.linspace(0.0, cum[-1], n)
+    Q = np.stack([np.interp(t, cum, P[:, k]) for k in range(3)], axis=1)
+    for _ in range(STRIP_SMOOTH):
+        Q[1:-1] = 0.25 * Q[:-2] + 0.5 * Q[1:-1] + 0.25 * Q[2:]
+        for k in range(1, len(Q) - 1):
+            loc, _n, _i, _d = tree.find_nearest(Vector(Q[k]))
+            if loc is not None:
+                Q[k] = np.array(loc)
+    return Q
+
+
+def strap_strip(bm, path, width, tree, extend_end):
+    """Owner ruling 1 (round 2026-11-25): one strap as its own regular strip in ``bm`` — rows across the evened path
+    (``_strip_path``), ``STRIP_ACROSS`` + 1 vertices across its ``width`` along the body (each put back on the body),
+    two triangles per cell wound outward (the body normal of ``tree``, outward). Returns the new faces and vertices: a
+    straight edge and an even surface in the cloth, so in the pattern too (the straps cut from the body's faces
+    followed its triangles: a wavy surface and a sawtooth edge)."""
+    Q = _strip_path(path, tree, extend_end)
+    rows = []
+    for i, p in enumerate(Q):
+        t = Q[min(i + 1, len(Q) - 1)] - Q[max(i - 1, 0)]
+        t = t / max(1e-9, float(np.linalg.norm(t)))
+        _loc, nrm, _f, _d = tree.find_nearest(Vector(p))
+        nv = np.array(nrm) if nrm is not None else np.array([0.0, -1.0, 0.0])
+        b = np.cross(t, nv)
+        b = b / max(1e-9, float(np.linalg.norm(b)))
+        row = []
+        for k in range(STRIP_ACROSS + 1):
+            q = p + b * width * (k / STRIP_ACROSS - 0.5)
+            loc, _n, _f2, _d2 = tree.find_nearest(Vector(q))
+            row.append(bm.verts.new(Vector(loc) if loc is not None else Vector(q)))
+        rows.append((row, nv))
+    faces = []
+    for i in range(len(rows) - 1):
+        (a, na), b_ = rows[i], rows[i + 1][0]
+        for k in range(STRIP_ACROSS):
+            for tri in ((a[k], b_[k], b_[k + 1]), (a[k], b_[k + 1], a[k + 1])):
+                e1, e2 = tri[1].co - tri[0].co, tri[2].co - tri[0].co
+                if e1.cross(e2).dot(Vector(na)) < 0:
+                    tri = (tri[0], tri[2], tri[1])
+                faces.append(bm.faces.new(tri))
+    return faces, [row for row, _n in rows]
+
+
+def _free_edges(bm, sew_on):
+    """The free edges a strip may be sewn onto: boundary edges whose one face passes ``sew_on`` (not a strip's).
+    ``(edges, A, B)`` with their end points as arrays."""
+    edges = [e for e in bm.edges if e.is_boundary and sew_on(e.link_faces[0])]
+    A = np.array([e.verts[0].co for e in edges]) if edges else np.zeros((0, 3))
+    B = np.array([e.verts[1].co for e in edges]) if edges else np.zeros((0, 3))
+    return edges, A, B
+
+
+def _nearest_on_edges(p, A, B):
+    """Index, fraction (from A) and distance of the point on the segments ``A``-``B`` nearest to ``p``."""
+    d = B - A
+    t = np.clip(np.einsum("ij,ij->i", p - A, d) / np.maximum(np.einsum("ij,ij->i", d, d), 1e-18), 0.0, 1.0)
+    q = A + d * t[:, None]
+    dist = np.linalg.norm(q - p, axis=1)
+    i = int(np.argmin(dist))
+    return i, float(t[i]), float(dist[i])
+
+
+def _sew_point(bm, p, sew_on):
+    """A vertex on a free edge (``_free_edges``) at the point nearest to ``p``: an edge end within ``STITCH_SNAP_M``,
+    else a new vertex splitting that edge."""
+    edges, A, B = _free_edges(bm, sew_on)
+    i, t, _dist = _nearest_on_edges(np.asarray(p, float), A, B)
+    e = edges[i]
+    a, b = e.verts
+    L = (b.co - a.co).length
+    if t * L <= STITCH_SNAP_M:
+        return a
+    if (1.0 - t) * L <= STITCH_SNAP_M:
+        return b
+    q = a.co.lerp(b.co, t)
+    _ne, nv = bmesh.utils.edge_split(e, a, t)
+    nv.co = q
+    return nv
+
+
+def _free_path(bm, va, vb, sew_on):
+    """The shortest run of free edges (``_free_edges``) from ``va`` to ``vb`` (vertex list, Dijkstra by length), or
+    None."""
+    import heapq
+    nb = {}
+    for e in _free_edges(bm, sew_on)[0]:
+        a, b = e.verts
+        nb.setdefault(a, []).append(b)
+        nb.setdefault(b, []).append(a)
+    if va not in nb or vb not in nb:
+        return None
+    best = {va: 0.0}
+    prev = {}
+    heap = [(0.0, id(va), va)]
+    while heap:
+        d, _k, v = heapq.heappop(heap)
+        if v is vb:
+            break
+        if d > best.get(v, 1e9):
+            continue
+        for w in nb[v]:
+            nd = d + (w.co - v.co).length
+            if nd < best.get(w, 1e9):
+                best[w] = nd
+                prev[w] = v
+                heapq.heappush(heap, (nd, id(w), w))
+    if vb not in best:
+        return None
+    path = [vb]
+    while path[-1] is not va:
+        path.append(prev[path[-1]])
+    return path[::-1]
+
+
+def _arc(vs):
+    """Arc length along the vertices ``vs``, 0 .. 1."""
+    s = np.concatenate([[0.0], np.cumsum([(vs[i + 1].co - vs[i].co).length for i in range(len(vs) - 1)])])
+    return s / max(float(s[-1]), 1e-12)
+
+
+def zipper(edge_a, edge_b):
+    """Triangles bridging two vertex runs that face each other (both in the same direction): walk both by their arc
+    length and step on along the run whose next vertex comes first — every vertex of both runs is used, no run edge
+    is left out. Returns vertex triples."""
+    ua, ub = _arc(edge_a), _arc(edge_b)
+    i = j = 0
+    tris = []
+    while i < len(edge_a) - 1 or j < len(edge_b) - 1:
+        if j == len(edge_b) - 1 or (i < len(edge_a) - 1 and ua[i + 1] <= ub[j + 1]):
+            tris.append((edge_a[i], edge_a[i + 1], edge_b[j]))
+            i += 1
+        else:
+            tris.append((edge_a[i], edge_b[j + 1], edge_b[j]))
+            j += 1
+    return tris
+
+
+def stitch_strip_end(bm, rows, end, skip_faces, lay_part, pid):
+    """Round 2026-11-25b: sew one end of a strap strip (``strap_strip``) onto the cloth's free edge — ``end`` "front"
+    is the strip's first row (it starts ``STRIP_INTO_CUP_M`` inside the cup), "back" its last (``STRIP_END_M`` into the
+    band). The rows over the cloth go: the first row (from that end) whose every vertex lies at least
+    ``STITCH_CLEAR_M`` off the cloth's surface stays as the strip's end. Its two outer vertices meet the cloth's free
+    edge at their nearest points (an edge end within ``STITCH_SNAP_M`` is taken,
+    else the edge is split); the run of free edges between them and that end row are bridged by one row of
+    triangles (``zipper``: every vertex of both, so the cloth's edge and the strip share each edge of the run).
+    ``skip_faces`` = every strip's faces (never cloth); ``lay_part`` / ``pid`` = the face layer and the strip's part
+    (the new faces take it). Returns ``(rows, record)`` — the rows with the run as the end row; the record names the
+    trimmed rows, the bridge's widest gap and the run, or why the end stays loose."""
+    rows = list(rows) if end == "front" else list(rows)[::-1]
+
+    def loose(why, **kw):
+        return (rows if end == "front" else rows[::-1]), {"stitched": False, "why": why, **kw}
+    cloth = [fa for fa in bm.faces if fa not in skip_faces]
+    if not cloth or len(rows) < 3:
+        return loose("no cloth")
+    vix = {}
+    for fa in cloth:
+        for v in fa.verts:
+            vix.setdefault(v, len(vix))
+    tree = BVHTree.FromPolygons([tuple(v.co) for v in vix], [[vix[v] for v in fa.verts] for fa in cloth])
+    k = None
+    for i, row in enumerate(rows):
+        dist = [tree.find_nearest(v.co)[3] for v in row]
+        if min(d if d is not None else 9.0 for d in dist) >= STITCH_CLEAR_M:
+            k = i
+            break
+    if k is None or k > len(rows) - 3:
+        return loose("the strip never leaves the cloth")
+    ok = (lambda fa: fa not in skip_faces)
+    end_row = rows[k]
+    width = (end_row[-1].co - end_row[0].co).length
+    _edges, A, B = _free_edges(bm, ok)
+    if not len(A):
+        return loose("no free edge")
+    gaps = [_nearest_on_edges(np.array(v.co), A, B)[2] for v in (end_row[0], end_row[-1])]
+    if max(gaps) > STITCH_MAX_M:
+        return loose("no free edge near", gap_mm=round(max(gaps) * 1000, 1))
+    va = _sew_point(bm, end_row[0].co, ok)
+    vb = _sew_point(bm, end_row[-1].co, ok)
+    path = _free_path(bm, va, vb, ok) if va is not vb else None
+    if not path:
+        return loose("no run of free edge")
+    run = float(sum((path[i + 1].co - path[i].co).length for i in range(len(path) - 1)))
+    if not (STITCH_RUN[0] * width <= run <= STITCH_RUN[1] * width):
+        return loose("the edge run does not fit", run_mm=round(run * 1000, 1), width_mm=round(width * 1000, 1))
+    # the rows over the cloth go, with their faces
+    gone = {v for row in rows[:k] for v in row}
+    bmesh.ops.delete(bm, geom=list({fa for v in gone for fa in v.link_faces}), context="FACES_ONLY")
+    bmesh.ops.delete(bm, geom=[v for v in gone if v.is_valid], context="VERTS")
+    made = []
+    for tri in zipper(path, end_row):
+        if len({id(v) for v in tri}) < 3:
+            continue
+        fa = bm.faces.new(tri)
+        fa[lay_part] = pid
+        made.append(fa)
+    bridge = max(min((v.co - w.co).length for w in path) for v in end_row)
+    rows = [path] + rows[k:]
+    rec = {"stitched": True, "trimmed_rows": k, "bridge_mm": round(bridge * 1000, 1), "run_mm": round(run * 1000, 1),
+           "width_mm": round(width * 1000, 1), "run_verts": len(path), "bridge_faces": len(made)}
+    return (rows if end == "front" else rows[::-1]), rec
 
 
 def _arm_chain(arm, side):
@@ -1000,6 +1320,40 @@ def _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, dist):
             "opened": opened, "slivers": slv, "faces_per_part": counts}
 
 
+EDGE_RELAX_STEPS = 6
+#: Review round 2026-11-25: a hole in a bra region with at most this many boundary edges is filled (``build_fitted``).
+HOLE_FILL_EDGES = 16
+
+
+def _relax_edges(bm, tree, skip=()):
+    """The free edges of a bra region smoothed: faces are kept by their centroids, so an edge the region predicate
+    draws across the collider (a strap's side, a cup's top) follows the triangles in a sawtooth. Each boundary vertex
+    moves halfway to the mean of its two boundary neighbours, ``EDGE_RELAX_STEPS`` times, and back onto the collider
+    surface (``tree``) after every step. A straight cut edge (the band top, already bisected) stays on its line.
+    Returns the largest move in mm."""
+    nb = {}
+    for e in bm.edges:
+        if e.is_boundary:
+            a, b = e.verts
+            nb.setdefault(a, []).append(b)
+            nb.setdefault(b, []).append(a)
+    ids = [v for v, n in nb.items() if len(n) == 2 and v not in skip]
+    if not ids:
+        return 0.0
+    start = {v: v.co.copy() for v in ids}
+    for _ in range(EDGE_RELAX_STEPS):
+        new = {}
+        for v in ids:
+            a, b = nb[v]
+            p = v.co * 0.5 + (a.co + b.co) * 0.25
+            loc, _n, _f, _d = tree.find_nearest(p)
+            new[v] = loc if loc is not None else p
+        for v, p in new.items():
+            v.co = p
+    bm.normal_update()
+    return round(max((v.co - start[v]).length for v in ids) * 1000.0, 2)
+
+
 def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     """The fitted piece as a new mesh object (``prm["node"]``) with its sewing-pattern parts (``_cut_pattern``: int
     layers ``uv_part`` / ``uv_seam``, an empty ``UVMap``); returns ``(obj, pin indices, info)`` — ``info["pattern"]``
@@ -1024,6 +1378,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
     bm.normal_update()
+    # bra edges: the collider surface the smoothed edge vertices are put back onto
+    src_tree = BVHTree.FromBMesh(bm) if kind == "bra" else None
     cent = np.array([fa.calc_center_median() for fa in bm.faces])
     keep_layer = bm.faces.layers.int.new("keep")
     push = closure = cups = None
@@ -1066,6 +1422,26 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     elif kind == "bra":
         keep, planes, pins, push, closure, cups, extra = bra_region(f, co, stree, cx, cy)
         info.update(extra)
+        # bra edges (BRA_EDGE_VERSION): the collider is cut along the underbust line first — faces are kept by their
+        # centroids, so without the cut the band's top edge round the back followed the collider's triangles in a
+        # sawtooth (a light fringe along it, round 2026-11-25); the cut's own seam plane lies on the same line
+        z = float(extra["under_z"])
+        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+        bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector((0.0, 0.0, z)), plane_no=Vector((0.0, 0.0, 1.0)),
+                               clear_outer=False, clear_inner=False, dist=1e-5)
+        bm.verts.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
+        # owner ruling 6 (review): the cups' back edge is cut along its plane over the underbust line (a straight edge
+        # down the side of the torso, no sawtooth where the cup meets the band's top)
+        if f["style"] != "bandeau":
+            upper = [fa for fa in bm.faces if fa.calc_center_median().z > z]
+            geom = list({v for fa in upper for v in fa.verts}) + list({e for fa in upper for e in fa.edges}) + upper
+            bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector((0.0, float(extra["cup_back_y"]), 0.0)),
+                                   plane_no=Vector((0.0, 1.0, 0.0)), clear_outer=False, clear_inner=False, dist=1e-5)
+            bm.verts.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
+        bm.normal_update()
+        cent = np.array([fa.calc_center_median() for fa in bm.faces])
         mask = keep(cent)
     elif kind == "tights":
         keep_v, planes, tband, legs_w, foot_w, extra = tights_region(f, co, w, arm, cx, stree)
@@ -1098,6 +1474,13 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         fa[keep_layer] = int(bool(k))
     bmesh.ops.delete(bm, geom=[fa for fa in bm.faces if not fa[keep_layer]], context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    if kind == "bra":
+        # review round 2026-11-25: a cup round the breast's side lies over the crease under the arm, where the collider
+        # can miss a face or two — a hole in the cloth (and a slit in the pattern, ``open_islands``); a boundary loop of
+        # at most HOLE_FILL_EDGES edges is filled
+        filled = bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=HOLE_FILL_EDGES)
+        bmesh.ops.triangulate(bm, faces=filled["faces"])
+        info["holes_filled"] = len(filled["faces"])
     # vertex attributes the planes / passes need, read before the cuts (new vertices take their edge's)
     for plane in planes:
         p, n = plane[0], plane[1]
@@ -1136,7 +1519,79 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     bmesh.ops.delete(bm, geom=drop, context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     # step 3a: the pattern pieces are cut here, on the rest geometry, before anything moves a vertex
+    strips = extra.pop("_strips", None) if kind == "bra" else None
+    tack_of = extra.pop("_tack", None) if kind == "bra" else None
+    info.pop("_strips", None)
+    info.pop("_tack", None)
     pattern = _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, locals().get("dist"))
+    strip_rows = []
+    strip_faces = []
+    strip_lifts = []
+    strip_pids = []
+    if strips and strips["paths"]:
+        # owner ruling 1: each strap its own regular strip, a part of its own (its own island in the pattern)
+        lay_part = bm.faces.layers.int.get("uv_part")
+        for path, sd in zip(strips["paths"], strips["sides"]):
+            faces_s, rows_s = strap_strip(bm, path, strips["width_m"], src_tree, strips["extend_end"])
+            strip_rows.append(rows_s)
+            strip_faces.append(faces_s)
+            pid = fpat.P["strap_l" if sd > 0 else "strap_r"]
+            for fa in faces_s:
+                fa[lay_part] = int(pid)
+            strip_lifts.append(STRIP_LIFT_M * (2 if strips["cross"] and sd < 0 else 1))
+            strip_pids.append(int(pid))
+        bm.verts.index_update()
+        bm.faces.index_update()
+    if kind == "bra":
+        # bra edges (BRA_EDGE_VERSION): the free edges smoothed AFTER the parts are taken — a moved edge face must not
+        # leave its region predicate and fall to the band (the band split into islands when this ran before the cut)
+        info["edge_relax_moved_mm"] = _relax_edges(bm, src_tree, skip={v for rows_s in strip_rows for row in rows_s
+                                                                         for v in row})
+    strip_ends = []
+    if strip_rows:
+        # round 2026-11-25b ("the straps are not attached"): each strip is sewn onto the cloth — its front end onto the
+        # cup's top edge, its back end onto the band's top edge (``stitch_strip_end``): the rows over the cloth go, the
+        # first row past its edge becomes a run of that edge. One piece: one surface for the drape, one weight field
+        # for the skinning (``even_weights``), a seam between the strap's and the cup's islands in the pattern
+        all_strip = {fa for fs in strip_faces for fa in fs}
+        info["strap_stitch"] = {}
+        for k, sd in enumerate(strips["sides"]):
+            ends = {}
+            for end in (("front", "back") if strips["extend_end"] else ("front",)):
+                strip_rows[k], rec = stitch_strip_end(bm, strip_rows[k], end, all_strip, lay_part, strip_pids[k])
+                strip_faces = [[fa for fa in bm.faces if fa[lay_part] == q] for q in strip_pids]
+                all_strip = {fa for fs in strip_faces for fa in fs}
+                ends[end] = rec
+            info["strap_stitch"]["strap_l" if sd > 0 else "strap_r"] = ends
+            strip_ends.append({e: bool(r.get("stitched")) for e, r in ends.items()})
+        n_strip = {("strap_l" if sd > 0 else "strap_r"): len(fs) for fs, sd in zip(strip_faces, strips["sides"])}
+        # recounted: a sewn edge's faces were triangulated
+        counts = {}
+        for fa in bm.faces:
+            nm = fpat.uvp.PARTS.get(int(fa[lay_part]))
+            if nm is not None:
+                counts[nm] = counts.get(nm, 0) + 1
+        pattern["faces_per_part"] = {nm: counts.get(nm, 0) for nm in {**pattern["faces_per_part"], **n_strip}}
+        info["strap_strips"] = n_strip
+        bm.verts.index_update()
+        bm.faces.index_update()
+    # a strip's lift over the body, per vertex: ``STRIP_LIFT_M`` (twice for a cross-back strap's second strip, which
+    # crosses over the first), ramped down to 0 over ``STRIP_LIFT_RAMP_M`` toward a sewn end (the cloth's own offset
+    # there: no step at the seam); the sewn rows themselves are the cloth's vertices
+    strip_lift = {}
+    for rows_s, lift, ends in zip(strip_rows, strip_lifts, strip_ends or [{}] * len(strip_rows)):
+        cen = np.array([np.mean([np.array(v.co) for v in row], axis=0) for row in rows_s])
+        s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(cen, axis=0), axis=1))])
+        ramp = np.ones(len(rows_s))
+        if ends.get("front"):
+            ramp = np.minimum(ramp, s / STRIP_LIFT_RAMP_M)
+        if ends.get("back"):
+            ramp = np.minimum(ramp, (s[-1] - s) / STRIP_LIFT_RAMP_M)
+        for i, row in enumerate(rows_s):
+            if (i == 0 and ends.get("front")) or (i == len(rows_s) - 1 and ends.get("back")):
+                continue
+            for v in row:
+                strip_lift[v] = lift * float(min(1.0, ramp[i]))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.verts.ensure_lookup_table()
     bm.normal_update()
@@ -1149,6 +1604,18 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     if vote < 0:
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
         bm.normal_update()
+    for faces_s, ends in zip(strip_faces, strip_ends or [{}] * len(strip_faces)):
+        if any(ends.values()):
+            continue                        # sewn on: wound with the cloth it is part of
+        # a strip left a piece of its own: wound outward by its own vote
+        sv = 0.0
+        for fa in faces_s:
+            loc, n, _i, _d = stree.find_nearest(fa.calc_center_median())
+            if loc is not None:
+                sv += fa.normal.dot(n)
+        if sv < 0:
+            bmesh.ops.reverse_faces(bm, faces=faces_s)
+            bm.normal_update()
     V = np.array([v.co for v in bm.verts])
     out = np.zeros((len(V), 3))
     for i, v in enumerate(bm.verts):
@@ -1156,6 +1623,11 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         out[i] = np.array(n) if loc is not None else np.array(v.normal)
     off = np.full(len(V), float(f["offset_m"]))
     movable = np.ones(len(V), bool)
+    is_strip = np.zeros(len(V), bool)
+    if strip_lift:
+        for v, lift in strip_lift.items():
+            off[v.index] += lift
+            is_strip[v.index] = True
     if kind == "gloves":
         fg = np.zeros(len(V))
         hd = np.zeros(len(V))
@@ -1186,12 +1658,33 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         cl = closure(V)
         off = off + CLOSURE_M * cl
         wcup = push(V)
+        for rows_s, ends in zip(strip_rows, strip_ends or [{}] * len(strip_rows)):
+            # a strip follows the push-up of the cup it starts in, fading out along it over STRIP_PUSH_FADE_M past
+            # the cup (a step of the push at the cup's edge would fold it); a sewn front row IS the cup's edge: its
+            # vertices keep their own push and the strip fades from their mean (a sewn back row keeps the band's)
+            sewn = {0} if ends.get("front") else set()
+            if ends.get("back"):
+                sewn.add(len(rows_s) - 1)
+            w_row = [float(np.mean([wcup[v.index] for v in row])) if i in sewn and i == 0
+                     else float(max(wcup[v.index] for v in row)) for i, row in enumerate(rows_s)]
+            for i in range(1, len(w_row)):
+                w_row[i] = max(w_row[i], w_row[i - 1] - STRIP_STEP_M / STRIP_PUSH_FADE_M)
+            for i, (row, w_) in enumerate(zip(rows_s, w_row)):
+                if i in sewn:
+                    continue
+                for v in row:
+                    wcup[v.index] = w_
         pz, pin_, pout = f["push_m"]
         k = float(f["push"])
         if k > 0:
             sgn = np.where(V[:, 0] > cx, 1.0, -1.0)
             V[:, 2] += k * pz * wcup
-            V[:, 0] -= sgn * k * pin_ * wcup
+            # a strip moves with its cup's push-up, the draw toward the middle included, fading out along it (sewn
+            # onto the cup's edge, a strip that kept its line while the edge was drawn in folded sideways at the seam)
+            # ... and the draw toward the middle fades out over GORE_PUSH_FADE_M next to the gore (the cup's inner edge
+            # slid over the gore, 7.9 mm off the breastbone there)
+            g_ = np.clip((np.abs(V[:, 0] - cx) - float(f["gore_half_m"])) / GORE_PUSH_FADE_M, 0.0, 1.0)
+            V[:, 0] -= sgn * k * pin_ * wcup * g_ * g_ * (3.0 - 2.0 * g_)
             V += out * (k * pout * wcup)[:, None]
         info["closure_verts"] = int(cl.sum())
     V = V + out * off[:, None]
@@ -1202,10 +1695,20 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     for _round in range(ROUNDS):
         _umbrella(bm, SMOOTH_PASSES[kind], movable)
         _lay_out(bm, ctree, off, movable)
+    if tack_of is not None:
+        # round 2026-11-25 (plan acceptance: the gore lies on the breastbone): the gore is tacked to the body — laid at
+        # its ``off`` over its nearest skin point; the evening had bridged it across the cleft like the cups
+        gm = tack_of(np.array([v.co for v in bm.verts])) & movable & ~is_strip
+        for v in bm.verts:
+            if gm[v.index]:
+                loc, o = gd.signed_out(ctree, v.co, 0.1)
+                if loc is not None:
+                    v.co = loc + o * float(off[v.index])
+        info["tacked"] = int(gm.sum())
     if kind == "bra":
         # the cups bridge the breast's tip (cloth spans it; laid on it, the edges round the tip were 2.5 mm and the
         # drape stretched them to 1.33); a molded cup is a shell and gets more
-        cm = cups(np.array([v.co for v in bm.verts])) & movable
+        cm = cups(np.array([v.co for v in bm.verts])) & movable & ~is_strip
         for _round in range(2):
             _umbrella(bm, MOLDED_PASSES if f.get("rigid_cups") else SMOOTH_PASSES["bra"], cm, boundary_only_along=True)
             _lay_out(bm, ctree, off, cm)
@@ -1256,7 +1759,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         tip = np.zeros(len(V), bool)
         for a in info["apex"].values():
             tip |= np.linalg.norm(V - np.array(a), axis=1) < TIP_PIN_M
-        pin_mask = pins(V) | (rim & cups(V)) | (tip & cups(V))
+        cv = cups(V) & ~is_strip
+        pin_mask = pins(V) | (rim & cv) | (tip & cv) | is_strip
     # the UV map is written by ``garment_template_build.pattern_uv_of_fitted`` from the ``uv_part`` / ``uv_seam``
     # layers after ``clear_of_body`` (step 3a: sewing-pattern islands, no planar box UV)
     bm.loops.layers.uv.new("UVMap")

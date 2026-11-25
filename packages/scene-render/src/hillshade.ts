@@ -19,7 +19,7 @@
  * `ImageData`. It answers a plain `Uint8ClampedArray` in RGBA order, and the
  * caller wraps it (`new ImageData(data, cols, rows)`) — which is also what lets
  * the smoke transpile this one file and run it on its own
- * (`client3d/scripts/smoke_hillshade.mjs`).
+ * (`scripts/smoke_hillshade.mjs`).
  *
  * ============================================================================
  * WHERE THE LIGHT STANDS — the one derivation this file rests on

@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_pair_storey.mjs",
+  "source": "native/tests/Derivations/pair_storey.md",
   "fixtures": {
     "tile": {
       "center": [

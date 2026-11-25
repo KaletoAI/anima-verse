@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_event_pins.mjs",
+  "source": "native/tests/Derivations/event_pins.md",
   "cases": [
     { "label": "[G1] no events list -> no pin", "fn": "pinGlyph", "args": [null], "expect": null },
     { "label": "[G2] an empty list -> no pin", "fn": "pinGlyph", "args": [[]], "expect": null },

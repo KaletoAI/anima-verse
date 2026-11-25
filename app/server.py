@@ -888,6 +888,15 @@ async def lifespan(app: FastAPI):
     except Exception as _pme:
         logger.warning("Painted mode migration failed (retried at the next start): %s", _pme)
 
+    # Migration (plan-anhaenger Task 5, D1): a necklace's pendant / a belt's buckle made from the host's image become
+    # part items — the pendant gets its own item (image copied byte-equal, accepted mesh moved: 0 hub jobs), the
+    # image buckle is dropped. Item writes only, once per world and once for the shared library.
+    try:
+        from app.core.accessory_parts_migration import migrate_parts_once
+        migrate_parts_once()
+    except Exception as _apm:
+        logger.warning("Part item migration failed (retried at the next start): %s", _apm)
+
     # Migration (bug round 2026-11-20): template trousers saved before A233 kept the skirt's length_m / waist_height,
     # which no trouser reads — they get rise / trouser_length / leg_shape by an explicit mapping, once per world and
     # once for the shared library. Item writes only (no Build, no hub job); the next Build re-drapes them.

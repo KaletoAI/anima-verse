@@ -380,7 +380,8 @@ def resolve_item_id(token: str, *, strict: bool = False) -> Optional[str]:
     if not token:
         return None
     token = token.strip()
-    items = _load_items(strict=strict)
+    # A part item is worn through its host: a tool naming it finds nothing (plan-anhaenger Task 2).
+    items = [it for it in _load_items(strict=strict) if not _is_part_item(it)]
 
     for item in items:
         if item.get("id") == token:
@@ -442,6 +443,19 @@ def _normalize_outfit_types(raw) -> List[str]:
     a cycle."""
     from app.core.outfit_coherence import normalize_outfit_types
     return normalize_outfit_types(raw)
+
+
+def _is_part_piece(piece: Any) -> bool:
+    """A part item's piece (plan-anhaenger, design G): ``jewellery.kind == "charm"`` — no slot, mode accessory."""
+    jewellery = piece.get("jewellery") if isinstance(piece, dict) else None
+    return isinstance(jewellery, dict) and jewellery.get("kind") == "charm"
+
+
+def _is_part_item(item: Optional[Dict[str, Any]]) -> bool:
+    """``accessory_parts.is_part`` of ``item`` — worn only through its host (never on a slot, in an inventory or a
+    room)."""
+    return (isinstance(item, dict) and item.get("category") == "outfit_piece"
+            and _is_part_piece(item.get("outfit_piece")))
 
 
 def _clean_mesh_mode(raw) -> Optional[str]:
@@ -738,8 +752,9 @@ def add_item(name: str,
     }
     # Set category-specific piece metadata only for matching items.
     if category == "outfit_piece" and outfit_piece:
-        slots = _clean_piece_slots(outfit_piece.get("slots"))
-        if not slots:
+        part = _is_part_piece(outfit_piece)
+        slots = [] if part else _clean_piece_slots(outfit_piece.get("slots"))
+        if not slots and not part:
             raise ValueError(
                 f"outfit_piece needs non-empty 'slots' list (valid: {VALID_PIECE_SLOTS})")
         item["outfit_piece"] = {
@@ -779,6 +794,7 @@ def add_item(name: str,
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
+        _set_jewellery(item, new_id, outfit_piece.get("jewellery"))
     if category == "garment" and garment:
         item["garment"] = _clean_garment(garment)
 
@@ -788,6 +804,31 @@ def add_item(name: str,
     logger.info("Item erstellt: %s '%s' (category=%s, rarity=%s)",
                 item["id"], name, category, rarity)
     return item
+
+
+def _set_jewellery(item: Dict[str, Any], item_id: str, jewellery: Any) -> None:
+    """Store the accessory description (``accessory_spec.normalize``) on ``item``'s piece, its part links checked
+    (``accessory_parts.validate_links``: ValueError → the route's 400). A part item gets no slot and mode accessory."""
+    if not (isinstance(jewellery, dict) and jewellery):
+        return
+    from app.core.accessory_spec import normalize as _normalize_jewellery
+    from app.core.accessory_parts import validate_links
+    spec = _normalize_jewellery(jewellery)
+    validate_links(item_id, spec)
+    item["outfit_piece"]["jewellery"] = spec
+    if spec["kind"] == "charm":
+        from app.core.garment_set import ACCESSORY
+        item["outfit_piece"]["slots"] = []
+        item["outfit_piece"]["mesh_mode"] = ACCESSORY
+
+
+def _part_relevant_fields(item: Optional[Dict[str, Any]]) -> tuple:
+    """What a part item hands its hosts' outfit text and build (its text and its ``charm`` block); () for any other
+    item."""
+    if not _is_part_item(item):
+        return ()
+    return ((item or {}).get("prompt_fragment") or "",
+            repr(((item or {}).get("outfit_piece") or {}).get("jewellery", {}).get("charm")))
 
 
 def _render_relevant_fields(item: Optional[Dict[str, Any]]) -> tuple:
@@ -808,8 +849,11 @@ def _render_relevant_fields(item: Optional[Dict[str, Any]]) -> tuple:
         # through ``equipped_mesh_pieces``): its text changes no 2D render.
         return ("garment",)
     op = (item or {}).get("outfit_piece") or {}
+    from app.core.accessory_parts import part_ids_of
     return ((item or {}).get("prompt_fragment") or "",
-            tuple(str(s) for s in (op.get("partially_covers") or [])))
+            tuple(str(s) for s in (op.get("partially_covers") or [])),
+            # a host's linked parts are named in its outfit text (``accessory_parts.compose_text``)
+            tuple(part_ids_of(item)))
 
 
 def _invalidate_renders_for_item(item_id: str) -> None:
@@ -961,8 +1005,9 @@ def update_item(item_id: str,
             item["rarity"] = "common"
         if item.get("category") == "outfit_piece":
             op = item.get("outfit_piece") or {}
-            slots = _clean_piece_slots(op.get("slots"))
-            if not slots:
+            part = _is_part_piece({"jewellery": op.get("jewellery") if "jewellery" in op else prev_jewellery})
+            slots = [] if part else _clean_piece_slots(op.get("slots"))
+            if not slots and not part:
                 raise ValueError(
                     f"outfit_piece needs non-empty 'slots' list (valid: {VALID_PIECE_SLOTS})")
             item["outfit_piece"] = {
@@ -1007,9 +1052,7 @@ def update_item(item_id: str,
             if isinstance(template, dict) and template:
                 item["outfit_piece"]["template"] = template
             jewellery = op.get("jewellery") if "jewellery" in op else prev_jewellery
-            if isinstance(jewellery, dict) and jewellery:
-                from app.core.accessory_spec import normalize as _normalize_jewellery
-                item["outfit_piece"]["jewellery"] = _normalize_jewellery(jewellery)
+            _set_jewellery(item, item_id, jewellery)
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift
@@ -1047,6 +1090,7 @@ def update_item(item_id: str,
                     # The _shared flag is a runtime marker, not persisted data.
                     item.pop("_shared", None)
                     _before = _render_relevant_fields(item)
+                    _part_before = _part_relevant_fields(item)
                     _detail_before = _exposed_detail_of(item)
                     shared[idx] = _apply_updates(item)
                     _save_shared_items(shared)
@@ -1059,6 +1103,7 @@ def update_item(item_id: str,
             for item in _load_items():
                 if item.get("id") == item_id:
                     _before = _render_relevant_fields(item)
+                    _part_before = _part_relevant_fields(item)
                     _detail_before = _exposed_detail_of(item)
                     _apply_updates(item)
                     _save_items([item])
@@ -1069,6 +1114,11 @@ def update_item(item_id: str,
         return None
     if _render_relevant_fields(found) != _before:
         _invalidate_renders_for_item(item_id)
+    if _part_relevant_fields(found) != _part_before:
+        # a part's text reaches its hosts' outfit text: their renders go too (plan-anhaenger Task 2)
+        from app.core.accessory_parts import used_by
+        for host in used_by(item_id):
+            _invalidate_renders_for_item(host["item_id"])
     if _exposed_detail_of(found) != _detail_before:
         _after_exposed_detail_change(item_id)
     return found
@@ -1178,7 +1228,7 @@ def _move_item_to_shared_locked(item_id: str) -> Dict[str, Any]:
             conn.execute("DELETE FROM items WHERE id=?", (item_id,))
     except Exception as e:
         logger.error("move_item_to_shared DB-DELETE Fehler fuer %s: %s", item_id, e)
-    logger.info("Item %s -> shared library verschoben", item_id)
+    logger.info("Item %s moved to the shared library", item_id)
     return {"status": "ok", "item_id": item_id}
 
 
@@ -1218,7 +1268,7 @@ def _move_item_to_world_locked(item_id: str) -> Dict[str, Any]:
 
     # 3) Remove from shared storage.
     _save_shared_items([s for s in _load_shared_items() if s.get("id") != item_id])
-    logger.info("Item %s -> world (%s) verschoben", item_id)
+    logger.info("Item %s moved to the world", item_id)
     return {"status": "ok", "item_id": item_id}
 
 
@@ -1312,7 +1362,8 @@ def get_room_items(location_id: str, room_id: str, *, strict: bool = False) -> L
         if strict:
             raise LookupError(f"Room not found: {location_id}/{room_id}")
         return []
-    return room.get("items", [])
+    # A part item is worn through its host, never lies in a room (plan-anhaenger Task 2): a stored entry is hidden.
+    return [e for e in room.get("items", []) if not _is_part_item(get_item(str(e.get("item_id") or "")))]
 
 
 def discovery_value(viewer: str, *, profile: dict | None = None) -> int:
@@ -1404,6 +1455,9 @@ def add_item_to_room(location_id: str,
     # Check that the item exists.
     item = get_item(item_id)
     if not item:
+        return False
+    if _is_part_item(item):
+        logger.warning("part item %s is worn through its host, not placed in a room", item_id)
         return False
 
     with world_write_lock:
@@ -1682,6 +1736,9 @@ def get_character_inventory(character_name: str,
             # Hide it from the UI and schedule automatic cleanup.
             phantom_ids.append(iid)
             continue
+        if _is_part_item(item):
+            # worn through its host, never carried (plan-anhaenger Task 2): a stored entry is hidden, not deleted
+            continue
         enriched_entry = {**entry}
         enriched_entry["item_name"] = item.get("name", "?")
         enriched_entry["item_description"] = item.get("description", "")
@@ -1737,6 +1794,9 @@ def add_to_inventory(character_name: str,
     """
     item = get_item(item_id)
     if not item:
+        return False
+    if _is_part_item(item):
+        logger.warning("part item %s is worn through its host, not carried", item_id)
         return False
 
     if obtained_method not in VALID_OBTAIN_METHODS:
@@ -2484,9 +2544,12 @@ def equip_piece(character_name: str, item_id: str,
     """
     from app.models.character import get_character_profile, save_character_profile
 
+    item = get_item(item_id)
+    if _is_part_item(item):
+        logger.warning("part item %s is worn through its host, not put on", item_id)
+        return {"status": "error", "reason": "part_item"}
     if not has_item(character_name, item_id):
         return {"status": "error", "reason": "item_not_in_inventory"}
-    item = get_item(item_id)
     if not item:
         return {"status": "error", "reason": "item_not_found"}
     if item.get("category") != "outfit_piece":
@@ -2810,6 +2873,10 @@ def apply_equipped_pieces(character_name: str, *,
             if not iid or iid in seen_ids:
                 continue
             seen_ids.add(iid)
+            if _is_part_item(get_item(iid)):
+                logger.warning("part item %s is worn through its host, skipped", iid)
+                skipped.append({"item_id": iid, "slot": slot, "reason": "part_item"})
+                continue
             if not has_item(character_name, iid):
                 skipped.append({"item_id": iid, "slot": slot, "reason": "not_in_inventory"})
                 continue

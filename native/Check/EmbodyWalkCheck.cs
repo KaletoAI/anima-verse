@@ -18,8 +18,9 @@ namespace AnimaNative.Check;
 /// W at pi/4 is (-sqrt(.5),-sqrt(.5)); D is (+sqrt(.5),-sqrt(.5)). East wall X=6
 /// keeps the centre at X&lt;=5.75 while northward motion continues. The party door at Z=2 passes.
 /// The rock starts at X=8; its diagonal approach keeps Z motion. Height rises 1 m from X=9 to 10,
-/// so the 45 degree ramp fails the world's .4 m / 40 degree gate. An object approach into the north
-/// wall has zero progress: frame 19 keeps the goal and frame 20 removes both goal and marker.
+/// so the 45 degree ramp fails the world's .4 m / 40 degree gate. Inside the hall a click behind its north wall is a
+/// navmesh route (plan E2 Task 6); outside every footprint a straight walk into the hall's footprint has zero progress:
+/// frame 19 keeps the goal and frame 20 removes both goal and marker (fixtures/README.md "Embody checks on the navmesh").
 /// Poll and cached placement tests deliberately supply the original avatar position after local walking.
 /// </summary>
 public static class EmbodyWalkCheck
@@ -43,6 +44,10 @@ public static class EmbodyWalkCheck
             await builder.BuildAsync(world, "Fixture Hall");
             var hall = builder.Slots["loc-hall"];
             hall.Fade.Snap(1);
+            // Plan E2 Task 6 (review N-W3): the hall's navigation is swapped in before the first step, so every section
+            // below walks on the navmesh (clamp, click routes) whatever the bake timing.
+            for (int i=0; i<240 && builder.NavFor(hall) is null; i++) await host.ToSignal(host.GetTree(),SceneTree.SignalName.PhysicsFrame);
+            Is("navigation swapped in within 240 physics frames",builder.NavFor(hall) is not null);
             manager = new FigureManager(source, builder.Height!, _ => { }, strict: true)
             {
                 AutoTick = false, ClipFit = ClipFitMode.OnDemandSync, Slots = () => builder.Slots,
@@ -99,8 +104,17 @@ public static class EmbodyWalkCheck
             Frame(d);
             Near("W5 metre step blocks", fig.Position.X, 9);
             At(-3,-3.75f); steering.RoomId = "r-a";
+            // Plan E2 Task 6: inside the hall a click behind the north wall no longer walks into it — the navmesh plans the
+            // way out through the outside door (case 2 of NavRoutePlanner); the route's end goal stays the click.
+            Is("W6 nav: a click behind the wall plans a navmesh route", steering.WalkTo(new(-3,-8)) && steering.NavRoute is not null);
+            Is("W6 nav: Route is the end goal", steering.Route is { X: -3, Z: -8 });
+            steering.CancelRoute();
+            // The straight walk keeps its 20-frame stall: outside every footprint (no navigation) behind the hall, the click
+            // on its far side (-3, 8) walks into the hall's footprint, which is foreign with an authored opening → blocked;
+            // the first lead (-3, -3.95) is already inside it, so every frame's target is the start (zero progress).
+            At(-3,-4.1f); steering.RoomId = "";
             // Object actions retain their approach planner, route and marker.
-            Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,-8)));
+            Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,8)) && steering.NavRoute is null);
             Is("W6 marker visible", manager.WalkTarget is { Visible: true });
             for (int i=0; i<19; i++) Frame(none);
             Is("W6 frame19 retains route", steering.Route is not null);

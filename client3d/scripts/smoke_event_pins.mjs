@@ -1,18 +1,8 @@
 #!/usr/bin/env node
 /**
- * Smoke check for the event pins of the world map — client3d/src/game/eventPins.ts.
- *
+ * Derivation moved to native/tests/Derivations/event_pins.md (E1, 2026-11-25).
  * Usage:  node client3d/scripts/smoke_event_pins.mjs
- *
- * Hand derivations (cases in shared/test-vectors/event_pins.json, shared with
- * the native client's C# tests):
- * [G] pinGlyph: no list or an empty list -> null (no pin); any event whose
- *     category is 'danger' -> 🔥; any other event (also one without a
- *     category) -> ❗.
- * [Y] pinY(groundY, placeHeight) = groundY + placeHeight + PIN_LIFT_M 3.5:
- *     0 + 4 + 3.5 = 7.5; 42.25 + 4 + 3.5 = 49.75; -3 + 0.3 + 3.5 = 0.8;
- *     12 + 0 + 3.5 = 15.5. The ground term is the point of the fix: the pin
- *     used to float at placeHeight + 3.5 ABOVE SEA LEVEL, buried in a hill.
+ * Runs until E3 deletes the browser scene; the C# vector tests keep executing the cases.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';

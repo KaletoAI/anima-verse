@@ -332,6 +332,9 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
     mesh?.backend || '',
     when(mesh),
   ].filter(Boolean).join(' · ')
+  // The mesh passed its own checks but the insole step refused it (no insole found, a solid or hollow mesh): the
+  // mesh is what has to be made again — said on the mesh row, whose pill alone reads "Accepted".
+  const insoleRefused = mesh?.status === 'accepted' && steps.insole?.status === 'refused'
   const meshAttempts = (mesh?.attempts || []).map((a, i) => `${t('Attempt')} ${num(a.attempt) ?? i + 1}: ${
     a.error || (a.gates?.reasons || []).join('; ') || (a.ok ? t('Accepted') : '–')}`)
   const overlay = info.insole?.overlay
@@ -373,6 +376,11 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           }} />
         <MeshJobFetch url={meshBlocked ? null : meshFetchUrl} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
+      {insoleRefused ? (
+        <span style={WARN_STYLE} data-footwear-mesh-refused-by="insole">
+          {t('This mesh passed its own checks, but the Insole step refused it — no fit can be made from it. Regenerate the mesh (1 mesh job).')}
+        </span>
+      ) : null}
       {info.mesh_url ? (
         <>
           <Model3DViewer key={info.mesh_url} url={info.mesh_url} format="glb" height={260}

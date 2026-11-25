@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_walk_math.mjs",
+  "source": "native/tests/Derivations/walk_math.md",
   "fixtures": {
     "LOC": {"id": "loc1", "name": "Home", "rooms": [{"id": "r1", "name": "Kitchen"}, {"id": "r2", "name": "Hall"}]},
     "PLACED": {"id": "L1", "name": "Home", "rooms": [{"id": "r1", "name": "Kitchen"}, {"id": "r2", "name": "Hall"}], "pos_x": 0, "pos_z": 0},

@@ -7,8 +7,9 @@ Expected values, derived by hand:
 
 [1] ``normalize``: belt width 4.0 cm, choker 1.5, strap 2.5 (``KIND_WIDTH_CM``), strap place "thigh"; bracelet
     thickness 2.5 mm, anklet 1.5, ring 2.0 (``KIND_THICKNESS_MM``), a bracelet in a cord material 2.5 (the cord
-    default); earring {stud, 6.0}. ``image_part_mm``: a belt with the default buckle 50.0, with buckle None → None;
-    earrings stud → None, drop → 18.0 (``PENDANT_DEFAULTS``), drop with pendant 25 → 25.0; necklace pendant 20 → 20.0.
+    default); earring {stud, 6.0}. ``image_part_mm`` (only the earrings' own drop since part items, D1): a belt → None (no buckle by
+    default), with buckle None → None; earrings stud → None, drop → 18.0 (``PENDANT_DEFAULTS``), drop with pendant 25
+    → 25.0; a necklace pendant of size 20 without a linked item → None.
     ``part_name``: belt → "Buckle", earrings → "Earring drop", necklace → "Pendant".
 [2] ``frame`` on the bones hips (0, 0.9, 0), spine (0, 1.1, 0), spine1 (0, 1.2, 0): belt centre y = 0.9 + 0.5 · 0.2
     = 1.0; with a waistband top at 1.06 and the 4 cm width: 1.06 − 0.004 − 0.02 = 1.036; a top at 1.25 (above spine1)
@@ -79,13 +80,13 @@ check("[1] tube thickness", tuple(n({"kind": k})["chain"]["thickness_mm"] for k 
       (2.5, 1.5, 2.0))
 check("[1] cord bracelet", n({"kind": "bracelet", "metal": "leather"})["chain"]["thickness_mm"], 2.5)
 check("[1] earring default", n({"kind": "earrings"})["earring"], {"style": "stud", "size_mm": 6.0})
-check("[1] image part belt", spec.image_part_mm(n({"kind": "belt"})), 50.0)
+check("[1] image part belt", spec.image_part_mm(n({"kind": "belt"})), None)
 check("[1] image part belt off", spec.image_part_mm(n({"kind": "belt", "buckle": None})), None)
 check("[1] image part stud", spec.image_part_mm(n({"kind": "earrings"})), None)
 check("[1] image part drop", spec.image_part_mm(n({"kind": "earrings", "earring": {"style": "drop"}})), 18.0)
 check("[1] image part drop 25", spec.image_part_mm(n({"kind": "earrings", "earring": {"style": "drop"},
                                                       "pendant": {"size_mm": 25}})), 25.0)
-check("[1] image part necklace", spec.image_part_mm(n({"kind": "necklace", "pendant": {"size_mm": 20}})), 20.0)
+check("[1] image part necklace", spec.image_part_mm(n({"kind": "necklace", "pendant": {"size_mm": 20}})), None)
 check("[1] part names", tuple(spec.part_name({"kind": k}) for k in ("belt", "earrings", "necklace")),
       ("Buckle", "Earring drop", "Pendant"))
 

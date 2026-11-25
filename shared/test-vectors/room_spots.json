@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_room_spots.mjs",
+  "source": "native/tests/Derivations/room_spots.md",
   "fixtures": {
     "SQUARE": [[-1, -1], [1, -1], [1, 1], [-1, 1]],
     "L_ROOM": [[0, 0], [6, 0], [6, 2], [2, 2], [2, 6], [0, 6]],

@@ -17,10 +17,13 @@ renderers read (``collision.py`` "CHANNELS (version 7)"), with
 - the per-character OVERRIDE (``model3d_opts.collision_channels[<channel id>]``, ``validate_overrides``): an offset in
   mm along the frame axes added to the opening, a radius scale, a depth scale, the funnel half-angle and the axis
   tilt ``tilt_deg`` (turned about the frame's side axis, + = toward the back, ±45°; Ruling A193);
-- EXPOSURE: an ``exposed_only`` channel exists only on a model whose worn pieces leave its slot uncovered
-  (``extension_rig.hides_exposed_detail`` over the model's ``pieces`` — the item's ``exposed_detail`` switch shows it
-  through); a base model is exposed. Exposure is identity: it is applied whenever a record is written (fit, relabel,
-  apply) and is NOT part of ``channels_sig``;
+- EXPOSURE: an ``exposed_only`` channel exists on a model unless its worn pieces HIDE it (``extension_rig.
+  cover_state`` over the model's ``pieces`` is ``hidden``: a piece on a declared ``hide_under`` slot, without one
+  a full cover of a ``covered_by`` slot; the item's ``exposed_detail`` switch shows it through); a base model is
+  exposed. Exposure is
+  identity: it is applied whenever a record is written (fit, relabel, apply) and is NOT part of ``channels_sig``
+  (nor is ``hide_under``, which acts only through it); a stored record whose covered set differs is re-filtered on
+  its next refresh, without ``apply_channels`` (``collision.exposure_current``);
 - SUPPRESS: the receiving body's capsules a link tip inside the channel skips — every capsule whose bind-pose segment
   comes within its radius + the channel radius of the channel segment ``a_pos → b_pos``, plus every capsule whose
   start joint is the owning joint, in payload order.
@@ -234,6 +237,7 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
         entry = {key: declaration[key] for key in (
             "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
             "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig", "built")}
+        entry["hide_under"] = list(declaration.get("hide_under") or [])
         entry["override"] = character_overrides(character_name, profile=profile).get(declaration["id"])
         entry["opening"], entry["opening_reason"] = _opening(meta.get("extension_rig"), declaration["from_rig"],
                                                              own_status=True)
@@ -247,22 +251,25 @@ def wanted_channels(character_name: str, path: Optional[Path], meta: Dict[str, A
             entry = {key: declaration[key] for key in (
                 "id", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts", "min_length",
                 "compress_min", "interaction_kinds", "exposed_only", "covered_by", "from_rig")}
+            entry["hide_under"] = list(declaration.get("hide_under") or [])
             entry["override"] = overrides.get(declaration["id"])
             if declaration["from_rig"]:
                 entry["opening"], entry["opening_reason"] = _opening(state, declaration["from_rig"])
             wanted.append(entry)
-    blob = json.dumps(wanted, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    # ``hide_under`` acts only through the exposure, which is not part of the sig either.
+    blob = json.dumps([{key: value for key, value in entry.items() if key != "hide_under"} for entry in wanted],
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return wanted, hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def exposure(meta: Dict[str, Any], *, items: Optional[Dict[str, Any]] = None) -> Callable[[Dict[str, Any]], bool]:
     """Whether a wanted channel exists on the model of ``meta``: a channel that is not ``exposed_only`` always; a
-    base model (``meta.base``) or a model without worn ``pieces`` is exposed; otherwise the channel exists unless a
-    worn piece covers its slot without showing the detail through (``extension_rig.hides_exposed_detail``)."""
+    base model (``meta.base``) or a model without worn ``pieces`` is exposed; otherwise the channel exists unless the
+    worn pieces hide it (``extension_rig.cover_state`` ``hidden`` over its ``covered_by`` / ``hide_under``)."""
     pieces = dict(meta.get("pieces") or {}) if not meta.get("base") else {}
     if not pieces:
         return lambda entry: True
-    from app.core.extension_rig import hides_exposed_detail
+    from app.core.extension_rig import HIDDEN, cover_state
     cache: Dict[str, Any] = {"items": items}
 
     def exposed(entry: Dict[str, Any]) -> bool:
@@ -271,8 +278,9 @@ def exposure(meta: Dict[str, Any], *, items: Optional[Dict[str, Any]] = None) ->
         if cache["items"] is None:
             from app.core.motion_item_cache import item_snapshot
             cache["items"] = item_snapshot()
-        return not hides_exposed_detail([{"exposed_only": True, "covered_by": list(entry.get("covered_by") or [])}],
-                                        pieces, cache["items"])
+        covered_by = list(entry.get("covered_by") or [])
+        return cover_state({"covered_by": covered_by, "hide_under": list(entry.get("hide_under") or [])},
+                           pieces, cache["items"]) != HIDDEN
     return exposed
 
 

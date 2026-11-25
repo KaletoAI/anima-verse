@@ -17,6 +17,7 @@ Fields:
 - "slit" (skirt and dress only): "none", "left", "right", "front", "back", "front_left" or "front_right" — "left"/"right" are the WEARER's sides at the side seams; "front_left"/"front_right" a slit in the front a hand's width beside the centre, and the overlapping edge of a wrap skirt.
 - "slit_m": the slit's height from the hem in metres (0 when there is none).
 - "shoulders" (dress and top): "strapless" (nothing over the shoulders), "straps" (thin or wide shoulder straps), "covered" (a bodice over the shoulders, with or without sleeves) or "off_shoulder" (an off-shoulder, Carmen or Bardot blouse or dress: the shoulders are bare, an elastic band runs across the chest, the back and the upper arms below the shoulders, and the sleeves hang from it). A top is "covered" unless it is a bodice, bustier, corset, tube top or camisole cut straight or sweetheart across the chest: "strapless" when nothing goes over the shoulders, "straps" when thin straps run from its top edge over the shoulders. Such a top starts under the arms; its "length_m" is still measured from the shoulder: to under the bust 0.22-0.28, to the waist 0.45-0.50, to the hips 0.55-0.62.
+- "cups" (top only): "bra" when the top has its own shaped cups with a centre piece between them — a bustier or a bra-like crop top cut skin-tight with a band under the cups; then it takes the cup fields below ("cup_style", "cup_coverage", "push_up", "center_gore", "closure", "straps") and its "length_m" (from the shoulder) sets where the band ends, at most at the waist; "shoulders", "neckline" and "sleeves" do not apply. Else "none" (every other top, also a loose, laced or long corset).
 - "sleeves" (top, jacket, dress with "covered" or "off_shoulder" shoulders): "none" (tank top, sleeveless), "cap" (just over the shoulder), "short" (t-shirt), "elbow" or "long". An "off_shoulder" piece always has "short" (also puff sleeves), "elbow" or "long" (also bell sleeves) sleeves.
 - "band_m" ("off_shoulder" only): the height of the elastic band at its top edge in metres, 0.01-0.05; ordinary 0.025.
 - "band_drop_m" ("off_shoulder" only): how far the band's top edge lies below the top of the shoulders in metres, 0.02 (just off the shoulders) to 0.08 (low on the upper arms); ordinary 0.05.
@@ -48,13 +49,13 @@ Fields:
 - "trouser_waist" (trousers only): "belt" (a waistband with belt loops: jeans, chinos, suit trousers), "elastic" (an elastic or drawstring band: joggers, pyjama, yoga trousers) or "none".
 - "fly" (trousers only): "zip", "buttons" or "none" (pull-on trousers).
 - "hem" (trousers only): "plain", "cuffed" (turned-up hems) or "stirrup" (a strap under the foot — only skinny full-length trousers).
-- "cup_style" (bra only): "molded" (firm shaped cups, push-up, armour plates), "triangle" (soft triangles), "bandeau" (one band round the chest, no separate cups) or "balconette" (cups with a straight top edge).
-- "cup_coverage" (bra only): 0.3 (demi, only the lower half) .. 0.6 (half cup) .. 1.0 (full cup).
-- "push_up" (bra only): 0.0 (none) .. 1.0 (strongly lifted and pushed together).
+- "cup_style" (bra, or a top with "cups" "bra"): "molded" (firm shaped cups, push-up, armour plates), "triangle" (soft triangles), "bandeau" (one band round the chest, no separate cups) or "balconette" (cups with a straight top edge).
+- "cup_coverage" (bra, or a top with "cups" "bra"): 0.3 (demi, only the lower half) .. 0.6 (half cup) .. 1.0 (full cup).
+- "push_up" (bra, or a top with "cups" "bra"): 0.0 (none) .. 1.0 (strongly lifted and pushed together).
 - "underband_m" (bra only): the band under the cups in metres, 0 when the cups end in their edge (no visible band), 0.01-0.03 ordinary, up to 0.08 for a longline band.
-- "center_gore" (bra only): the fabric between the cups — "none", "narrow" or "wide".
-- "closure" (bra only): "back_hook", "front" or "none".
-- "straps" (bra only): "none", "thin", "wide", "halter" (round the neck) or "cross" (crossing on the back).
+- "center_gore" (bra, or a top with "cups" "bra"): the fabric between the cups — "none", "narrow" or "wide".
+- "closure" (bra, or a top with "cups" "bra"): "back_hook", "front" or "none".
+- "straps" (bra, or a top with "cups" "bra"): "none", "thin", "wide", "halter" (round the neck) or "cross" (crossing on the back).
 - "fingers" (gloves only): "full", "fingerless" (the fingers come out) or "none" (no hand part: arm warmers, a wrist cuff that ends at the knuckles).
 - "length" (gloves only): "wrist", "forearm", "elbow" or "opera" (above the elbow).
 - "cuff" (gloves only): "none", "flared" (a gauntlet's wide cuff) or "folded".
@@ -83,6 +84,8 @@ or
 {"kind": "briefs", "rise": "low", "sides": "string", "string_width_m": 0.006, "leg_cut": 0.8, "back_coverage": 0.05, "waistband": "none", "fabric": "flowing"}
 or
 {"kind": "bra", "cup_style": "molded", "cup_coverage": 0.8, "push_up": 0.7, "underband_m": 0, "center_gore": "narrow", "closure": "back_hook", "straps": "thin", "fabric": "stiff"}
+or
+{"kind": "top", "cups": "bra", "length_m": 0.30, "cup_style": "balconette", "cup_coverage": 0.6, "push_up": 0.8, "center_gore": "wide", "closure": "none", "straps": "wide", "fabric": "leather_rough"}
 or
 {"kind": "gloves", "fingers": "full", "length": "forearm", "cuff": "flared", "fit": 0.1, "fabric": "leather_rough"}
 or

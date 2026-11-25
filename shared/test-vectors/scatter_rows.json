@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_scatter_math.mjs",
+  "source": "native/tests/Derivations/scatter_math.md",
   "fixtures": {
     "RECT": [
       [
