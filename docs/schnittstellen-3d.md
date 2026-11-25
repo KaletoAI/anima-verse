@@ -140,6 +140,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
   - [A10. Kamera & Steuerung (Referenz, unverändert)](#a10-kamera-steuerung-referenz-unverändert)
   - [A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline](#a11-reise-payload-server-autoritative-bewegung-als-meter-polyline)
   - [A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll](#a11a-model_sig-die-modell-signatur-reist-im-worldmap-poll)
+  - [A11b. Auftrag (`order`) — Bewegungsaufträge (E3)](#a11b-auftrag-order-bewegungsaufträge-e3)
   - [A12. Fog of War im Worldmap-Payload](#a12-fog-of-war-im-worldmap-payload)
   - [A13. Die Grundfläche ist ein Raum](#a13-die-grundfläche-ist-ein-raum)
   - [A14. Der Sperr-Zustand kommt vom Server](#a14-der-sperr-zustand-kommt-vom-server)
@@ -977,11 +978,12 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 `characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
 `locations_rev` · `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
+`motion_now` · `order_seq` (both § A11b) ·
 `sync` (§ A11, "Required root field `sync`") ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Achtzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Zwanzig feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -999,6 +1001,8 @@ gebautes Payload hält.
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, von dem die `eta_*`-Projektion der Reisen ausgeht (die Reisen selbst laufen seit 2026-11-05 auf der Bewegungsuhr, § A11). Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `label_display`/`time_display` (dasselbe mit der Uhrzeit im **eingestellten Anzeigeformat**, `server.time_format`: `24h` `14:23` · `24h_seconds` · `12h` `2:23 PM` · `12h_seconds` — **Clients zeigen diese beiden**; `label`/`time` bleiben 24h, weil Prompts und Logs sie lesen), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `game_rate` | `float` | Effective game seconds per real second, read from the world clock; clients use this factor for motion timing between polls. |
+| `motion_now` | `float` | The **motion clock** (`timeutils.motion_time()`, real seconds the unfrozen world has run) this payload was built at, 3 decimals — the clock every order's times are on (§ A11b). Never fogged. |
+| `order_seq` | `int` | The highest order `seq` handed out, read **before** the character rows are built (§ A11b, "Rows without `order`"). `0` while no order was ever published. |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
@@ -1081,13 +1085,14 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `h
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
 `interaction` (§ A8a), `finale` (§ A8c), `place` (§ A8a), `avatar_url`,
-**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`, `badges` (nur wenn vorhanden),
+**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `order` (§ A11b, nur wenn vorhanden), `motion`, `badges` (nur wenn vorhanden),
 `travel_speed_factor`, `locomotion` (nur wenn vorhanden).
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
+| `order` | `object` (optional) | The figure's current **motion order** as the avatar may see it (§ A11b): the whole order for a participant, the movement fields for anybody else who sees the row. **Absent** when the figure carries no published order or the avatar may not see it. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
 | `travel_speed_factor` | `float \| null` | The `travel_speed` rule factor the **avatar** moves with (`travel_engine.travel_pace_factor`: the product of every matching `modify` rule, clamped 0.1–5; a party LEADER gets the minimum over itself and its followers, the quantity's "a party uses its slowest member"). The client multiplies its avatar's own walking AND running pace by it (`WALK_SPEED × factor`, the run boost on top), and `POST /play/pos` judges the avatar's reports with the very same number (§ A15 Nr. 5). **Only on the avatar row**; `null` on every other row — a server journey already carries its pace (§ A11), and someone else's speed is fog knowledge (§ A12). Always present. The worldmap is built fresh on every poll (no ETag), and `modifiers.factor` keys its cache on the character's active condition names, so gaining or losing a condition reaches the client with the next poll |
 | `locomotion` | `{walk?: str, run?: str}` (optional) | Move clips the character's active **states** replace (`prompt_filters.collect_locomotion`; edited in Game-Admin → States as "Walk/Run animation override"). Each value is a clip KIND of the shared library. A state applies when it is enabled and triggered (its id as an active condition, or its condition expression); per slot the first such state by ascending id that fills it wins, so two states may contribute one slot each. **Absent** when no state overrides anything. The client plays the override instead of the WALK/RUN pose's clip whenever the figure moves on foot — server journeys (`travel.gait`) and the avatar alike — and falls back to the normal clip when the figure's set has no clip of that kind. The **ground keeps precedence**: swimming and crawling are what the terrain says (`walk.moveClip`), an override never replaces them |
@@ -3758,6 +3763,10 @@ Room preview starts at distance 22, pitch offset +28°, targeting the tile centr
 
 ## A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline
 
+> **Wird in E3 durch „Auftrag“ ersetzt** (§ A11b): für Bewegung innerhalb einer
+> Location (Möbel-Anlauf, Raumwechsel, Gang) tritt der Auftrag an die Stelle von
+> `travel`, `local_approach` und `prop_action_entry`; der Überland-Teil bleibt bis E6.
+
 Ein Charakter wechselt die Location nicht schlagartig, sondern **läuft eine
 Polylinie in Welt-Metern ab**. `GET /play/worldmap` liefert dafür pro
 Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
@@ -4109,6 +4118,113 @@ nie ein verpasstes Modell.
 **Nicht ausgedünnt.** Eine Mesh-Signatur ist ein opaker Cache-Schlüssel: sie
 nennt keinen Ort und keine Route, und die Zeile, an der sie hängt, hat die drei
 Sichtbarkeits-Tore des Fogs (§ A12) bereits passiert.
+
+---
+
+## A11b. Auftrag (`order`) — Bewegungsaufträge (E3)
+
+**Since plan E3 task 4 (2026-11-25).** A motion order tells every client how a
+figure moves from where it stands to where the server wants it. The server
+decides WHAT (action, furniture, slot, partner, consent) and only ESTIMATES
+WHEN, on the motion clock; the client plans the real path on its navmesh and
+picks the concrete clips (spec `docs/superpowers/specs/2026-11-25-client-ausfuehrung-design.md`
+§ 5b, plan E3 decisions 2–6, 18, 19). In task 4 the orders are published IN
+ADDITION to `travel`/`local_approach`/`prop_action_entry`/`motion` — the run
+still walks its journey, and the order's times are read off that journey.
+
+**Fields** (`motion_orders.new_order`; numbers rounded to 3 decimals):
+
+| Field | Meaning |
+|---|---|
+| `order_id` | `ord-<hex>`, new for every new order (a furniture run keeps its id across revisions; a follow pose, a replacement or a `cancel` is a NEW id). Not the execution id — that is private to the participants (`target.execution_id`) |
+| `revision` | 1 for a new order, + 1 for every change of THIS order |
+| `seq` | global publication number (world_kv `motion_order_seq`), new for every publication (start, revision, cancel) |
+| `kind` | `prop_action` · `walk` (task 9) · `cancel` |
+| `issued_motion_s`, `eta_motion_s`, `flip_motion_s`, `deadline_motion_s` | motion-clock seconds: issued, estimated arrival at the access point, estimated state flip (end of the entry), latest second the server waits. `flip_motion_s` is **absent** while `awaits` is set |
+| `status` | `approaching` · `waiting` · `entering` · `active` · `ended` (informative for the client) |
+| `awaits` | `""` or `reaction` (a react pair waits for the partner's reaction) |
+| `gait`, `speed_m_s` | gait and pace (m per real second); a `cancel` carries 0 |
+| `target` | `location_id`, `room_id`, `level`, `floor_y`; a `prop_action` adds `placement_id`, `marker_id`, `place_id`, `slot` (the initiator's) and `execution_id` |
+| `hint_route` | rough server waypoints; empty in task 4 |
+| `snap` | only `cancel` after a teleport |
+| `phase` | only a `combined` action: the id of its running phase |
+| `actors[]` | per participant: `name`, `role` (actor/partner), `clip_role` (a..e or ""), `height_cm`, `start` {x, y, z, yaw, room_id, level}, `access` {x, y, z, yaw} (floor point the path leads to), `anchor` {x, y, z, yaw, root_offset} (body root, as `prop_action_entry`: support height = `y + root_offset`), `entry_mode` (`bridge`/`direct`), `sequence[]`, `reports_arrival` (true exactly for a player-controlled figure), and on a `cancel` `stand` {x, y, z, yaw} |
+
+`sequence[]` names phases, never clips: `{step, pose_kind, pose_key, nominal_s}` with
+`step` `exit` · `walk` · `entry` · `loop` (· `phase` · `finale` later). A
+furniture run: `exit` only when the figure sat or lay when the run started
+(pose kind = the catalog group of the pose it left, `nominal_s` = its exit
+bridge), `walk` when it walks, `entry` (the target pose, `nominal_s` = the
+catalog length of the entry clip, 0 for `direct`), `loop`. A switch in place
+and a follow pose have no `exit` and no `walk`. A `cancel` has one `exit`
+per actor (the pose it left) and the actor's `stand`. Yaws are compass
+degrees.
+
+**Times in task 4** (the run still walks its journey): `issued = started_at_s − exit_s`,
+`eta = started_at_s + the stamp of the last waypoint` (earliest issue and latest
+arrival over the members), `flip = eta + the longest entry`,
+`deadline = eta + max(10, 0.5 · (eta − issued))`. Without a journey (a switch in
+place, a follow pose) issued = eta = the publication second.
+
+**Revisions** (spec 5b, two cases). (1) A NEW `order_id` for the same figure
+replaces the running chain; the client continues from its current picture
+(out of `walk` straight into a new path, out of `entry`/`loop` through an exit
+only when the new order lists the figure and its sequence starts with
+`exit`, or it is a `cancel` for it). (2) The same `order_id` with a higher
+`revision` changes the order in place and never rewinds. A furniture run is
+revised when its entry begins (`status entering`, `awaits ""`, `flip` = entry
+start + the longest entry clip), when it becomes active (`status active`), when
+a `combined` phase changes (`phase`), when all have arrived but the reaction is
+still missing (`status waiting`, `awaits reaction`, no `flip`) and when the
+reaction comes before the arrival (`awaits ""`, `flip = eta + entry`). Its end is
+**never** an `ended` revision: the run's order stays published for
+`ORDER_TAIL_S` = 10 s more, and only the members that really got up get ONE
+`cancel` order (new id) with their own `stand`. Members kept seated (keep for
+a replacing run, a follow pose, a switch in place) are not in it. Pose, pair
+clip, scene clock, finale and the phase pose after `loop` began keep coming
+from the row as before (decision 18).
+
+**Transport.** (1) The row field `order` (§ A1.4) carries the figure's current
+order. (2) Every publication sends the topic `orders`
+(`sync_topics.order_changed`) to `AtLocation` of the order's location and to
+`Avatars` of its participants — no data, never `Everyone`. (3)
+`GET /play/orders?since=<seq>` (default-deny, no admin prefix, read-only)
+answers `{orders: [...], seq, motion_now}`: every visible order with `seq >
+since` (one per `order_id`, oldest first), `seq` = the highest number handed
+out, read before the scan; the client asks again with `since = seq` after the
+next push. (4) The answers of `POST /play/prop-actions/request` and
+`/respond` carry the whole `order` when the avatar is a participant.
+
+**Visibility** (`motion_orders.visible` / `for_observer`, decision 4). A
+participant sees the whole order. Anybody else sees it only when a
+participant stands in the observer's own room (out in the open: the open
+world, location `""`) AND that participant's row passes the worldmap row
+gates for the observer (fog, sight, veil — `world_ops._visible_row` with the
+context `world_ops.row_visibility_ctx(observer)`, built once per request).
+Out in the open that means sight, never "everybody outdoors". A
+non-participant gets the movement fields only: `order_id`, `revision`,
+`seq`, `kind`, the four times, `status`, `gait`, `speed_m_s`, `target`
+without `execution_id` and `slot`, `hint_route`, `snap`, `phase`, and per
+actor `name`, `start`, `access`, `anchor`, `entry_mode`, `sequence`,
+`stand` — never `awaits`, roles or the execution id.
+
+**Rows without `order`** (decision 6). An order stands in row and route while
+its run lives, then until its end + `ORDER_TAIL_S` (a `cancel`/`ended` order:
+`flip` + `ORDER_TAIL_S`). The worldmap root carries `order_seq`, read
+BEFORE the rows: an order published while the rows are built may sit on its
+row, but `order_seq` never covers an order that is missing from its row. A
+client whose figure runs a SERVER order and whose row carries none ends that
+order with a 0.3 s blend into the row's rest placement when `order_seq ≥` the
+order's `seq`, and ignores the missing field when `order_seq` is lower (that
+poll was built before the publication). A client-local order (`local:n`) is
+never ended by a row.
+
+**Server start.** `motion_orders.boot()` runs in the lifespan before the
+AgentLoop, `periodic_jobs` and the TravelTicker and rebuilds the index from
+the live runs (`data.order`); a `cancel` is not persisted and does not
+survive a restart (its tail is 10 s).
+
+Checked by `scripts/smoke_orders_route.py` (R1–R11).
 
 ---
 
@@ -8785,6 +8901,10 @@ Player routes require the authenticated user's current authorized avatar:
   participants' `self`/`scene` topics, not a public invitation payload.
   Each `current` row also carries the caller's own `motion` (below; null
   unless that run is approaching and has started the caller's walk).
+
+> **Wird in E3 durch „Auftrag“ ersetzt** (§ A11b): the answers already carry
+> `order` beside `motion`; `motion`, `local_approach` and `prop_action_entry` go
+> in E3 task 8.
 
 **Own motion — the server decides and plans, the own client plays (B1,
 2026-10-30).** The answers of `request` and `respond` carry `motion`: the

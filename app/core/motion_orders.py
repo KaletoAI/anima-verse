@@ -7,10 +7,12 @@ navmesh and picks the concrete clips; the server only ESTIMATES when the
 figure arrives (``eta``) and when its state flips (``flip``), on the MOTION
 clock (``timeutils.motion_time()``), and gives up at ``deadline``.
 
-This module holds the pure part: constants, the estimate, the room-chain
-length for a room change and the order/actor/step dict builders. It imports
-no world module at module level (publication, index and walk orders that
-need the world import inside their functions).
+This module holds the pure part (constants, the estimate, the room-chain
+length for a room change and the order/actor/step dict builders) and the
+publication: the global ``seq``, the in-process index name -> order that the
+worldmap rows and ``GET /play/orders`` read, and the visibility of an order
+for an observer. It imports no world module at module level (publication,
+index and visibility import inside their functions).
 
 Usage (from code):
     from app.core import motion_orders as mo
@@ -18,11 +20,13 @@ Usage (from code):
     order = mo.new_order("prop_action", issued_s=now, eta_s=eta, flip_s=flip,
                          deadline_s=mo.deadline(now, eta), actors=[...], ...)
 
-Checked by scripts/smoke_order_estimate.py (vector shared/test-vectors/order_estimate.json).
+Checked by scripts/smoke_order_estimate.py (vector shared/test-vectors/order_estimate.json)
+and scripts/smoke_orders_route.py (publication, index, visibility).
 """
 from __future__ import annotations
 
 import math
+import threading
 import uuid
 from collections import deque
 from typing import Any, Iterable
@@ -264,3 +268,228 @@ def new_order(kind: str, *, issued_s: float, eta_s: float, flip_s: float | None,
     if not awaits:
         order["flip_motion_s"] = float(flip_s)
     return _round(order)
+
+
+# ---------------------------------------------------------------------------
+# Publication: sequence, in-process index, visibility (plan E3 decisions 3-6)
+# ---------------------------------------------------------------------------
+
+#: world_kv key of the global publication counter (decision 3).
+SEQ_KEY = "motion_order_seq"
+
+_SEQ_LOCK = threading.Lock()
+_INDEX_LOCK = threading.RLock()
+#: name -> (order, until_s): the order a figure carries right now. ``until_s``
+#: is None while the order is live (its run runs), else the motion second
+#: after which it is no longer published (decision 6: end + ORDER_TAIL_S).
+_INDEX: dict[str, tuple[dict, float | None]] = {}
+
+#: The top-level fields a non-participant sees (decision 4).
+_PUBLIC_FIELDS = ("order_id", "revision", "seq", "kind", "issued_motion_s", "eta_motion_s",
+                  "flip_motion_s", "deadline_motion_s", "status", "gait", "speed_m_s", "target",
+                  "hint_route", "snap", "phase")
+#: The per-actor fields a non-participant sees (decision 4).
+_PUBLIC_ACTOR_FIELDS = ("name", "start", "access", "anchor", "entry_mode", "sequence", "stand")
+#: Target fields that name the execution or the claimed slot: participants only.
+_PRIVATE_TARGET_FIELDS = ("execution_id", "slot")
+
+
+def _now_s() -> float:
+    from app.core import timeutils
+    return float(timeutils.motion_time())
+
+
+def next_seq() -> int:
+    """The next global publication number, persisted in world_kv
+    (``motion_order_seq``) under a module lock (decision 3)."""
+    from app.models.world import set_world_setting
+    with _SEQ_LOCK:
+        value = current_seq() + 1
+        set_world_setting(SEQ_KEY, str(value))
+    return value
+
+
+def current_seq() -> int:
+    """The highest publication number handed out so far (0 = none yet)."""
+    from app.models.world import get_world_setting
+    try:
+        return int(get_world_setting(SEQ_KEY, "0") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def actor_names(order: dict) -> list[str]:
+    """The names of an order's participants, in order."""
+    return [a.get("name", "") for a in order.get("actors") or [] if a.get("name")]
+
+
+def _until(order: dict) -> float | None:
+    """When a published order stops being published: never on its own while
+    it is a live ``prop_action`` (its run retires it, ``retire``); ``flip``
+    (else ``eta``) + ORDER_TAIL_S for a ``cancel`` or an ``ended`` order."""
+    if order.get("kind") == "cancel" or order.get("status") == "ended":
+        end = order.get("flip_motion_s")
+        if end is None:
+            end = order.get("eta_motion_s", 0.0)
+        return float(end) + ORDER_TAIL_S
+    return None
+
+
+def publish(order: dict, *, names: list[str], locations: list[str]) -> dict:
+    """Publish ``order`` (a new one or a revision): give it the next ``seq``,
+    make it the current order of every name in ``names`` and, after all
+    locks, send the topic ``orders`` to whoever sees the change
+    (``sync_topics.order_changed``: the locations, the participants). The
+    push carries no data; a client fetches ``GET /play/orders``. Returns the
+    published order (a copy with its ``seq``)."""
+    published = dict(order)
+    published["seq"] = next_seq()
+    until = _until(published)
+    with _INDEX_LOCK:
+        for name in names:
+            if name:
+                _INDEX[name] = (published, until)
+    from app.core import sync_topics
+    from app.core.keyed_lock import _after_locks
+    who, where = list(names), list(locations)
+    _after_locks(lambda: sync_topics.order_changed(who, where))
+    return published
+
+
+def retire(order_id: str, *, at_s: float | None = None) -> None:
+    """The order ``order_id`` has ended without a revision (its run is over):
+    it stays published ORDER_TAIL_S more seconds for every name that still
+    carries it, then the row's rest placement applies (decision 6)."""
+    end = (_now_s() if at_s is None else float(at_s)) + ORDER_TAIL_S
+    with _INDEX_LOCK:
+        for name, (order, until) in list(_INDEX.items()):
+            if order.get("order_id") == order_id and until is None:
+                _INDEX[name] = (order, end)
+
+
+def index_get(name: str) -> dict | None:
+    """The order ``name`` carries right now, or None (none, or its tail ran out)."""
+    with _INDEX_LOCK:
+        entry = _INDEX.get(name)
+        if entry is None:
+            return None
+        order, until = entry
+        if until is not None and _now_s() > until:
+            _INDEX.pop(name, None)
+            return None
+        return order
+
+
+def _snapshot() -> list[tuple[str, dict]]:
+    """(name, order) of every order still published."""
+    with _INDEX_LOCK:
+        names = list(_INDEX)
+    out = []
+    for name in names:
+        order = index_get(name)
+        if order is not None:
+            out.append((name, order))
+    return out
+
+
+def visible(observer: str, order: dict, ctx: tuple) -> bool:
+    """Whether ``observer`` may see ``order`` (decision 4): a participant
+    always; anybody else only when at least one participant stands in the
+    observer's own room (outside a location: the open, ``("", "")``) AND that
+    participant's worldmap row passes the row gates for the observer
+    (``world_ops._visible_row``: fog, sight, veil) — out in the open a mere
+    location equality would hand the order to every avatar outdoors.
+    ``ctx`` comes from ``world_ops.row_visibility_ctx(observer)``, built once
+    per request."""
+    names = actor_names(order)
+    if observer and observer in names:
+        return True
+    if not observer:
+        return False
+    from app.core import places
+    from app.core.travel_engine import get_journey
+    from app.core.world_ops import _visible_row
+    from app.models.character import get_character_pos, get_character_profile
+    here = places.where(observer)
+    for name in names:
+        profile = get_character_profile(name) or {}
+        loc_id, room_id = places.where(name, profile=profile)
+        if (loc_id, room_id) != here:
+            continue
+        try:
+            journey = get_journey(name, profile=profile)
+        except Exception:
+            journey = None
+        if _visible_row(name, loc_id, get_character_pos(name), journey, ctx):
+            return True
+    return False
+
+
+def _public_view(order: dict) -> dict:
+    """The movement fields of an order, for a non-participant (decision 4):
+    no execution id, no slot, no ``awaits``, no roles."""
+    view = {key: order[key] for key in _PUBLIC_FIELDS if key in order}
+    view["target"] = {k: v for k, v in (order.get("target") or {}).items()
+                      if k not in _PRIVATE_TARGET_FIELDS}
+    view["actors"] = [{key: actor[key] for key in _PUBLIC_ACTOR_FIELDS if key in actor}
+                      for actor in order.get("actors") or []]
+    return view
+
+
+def for_observer(observer: str, order: dict, ctx: tuple) -> dict | None:
+    """``order`` as ``observer`` may see it: whole for a participant, the
+    movement fields for anybody else who sees it, None otherwise."""
+    if not order or not visible(observer, order, ctx):
+        return None
+    if observer in actor_names(order):
+        return dict(order)
+    return _public_view(order)
+
+
+def orders_since(observer: str, since: int) -> dict:
+    """``GET /play/orders?since=``: every order ``observer`` sees whose ``seq``
+    is above ``since``, oldest publication first, with ``seq`` (the highest
+    number handed out, read BEFORE the scan, so an order published meanwhile
+    is never covered by it without being listed) and ``motion_now``."""
+    from app.core.world_ops import row_visibility_ctx
+    seq = current_seq()
+    now = _now_s()
+    if not observer:   # no lens (no avatar, nothing released): nothing to see
+        return {"orders": [], "seq": seq, "motion_now": round(now, _DECIMALS)}
+    ctx = row_visibility_ctx(observer)
+    newest: dict[str, dict] = {}
+    for _name, order in _snapshot():
+        if int(order.get("seq", 0)) <= since:
+            continue
+        known = newest.get(order["order_id"])
+        if known is None or known["seq"] < order["seq"]:
+            newest[order["order_id"]] = order
+    rows = []
+    for order in sorted(newest.values(), key=lambda o: o["seq"]):
+        view = for_observer(observer, order, ctx)
+        if view is not None:
+            rows.append(view)
+    return {"orders": rows, "seq": seq, "motion_now": round(now, _DECIMALS)}
+
+
+def boot() -> None:
+    """Rebuild the index at server start: every live prop-action run that
+    carries an order (``run.data.order``) stands in it again under its
+    participants (no new seq, no push — the clients' first poll reads it).
+    Runs in the lifespan before the AgentLoop, ``periodic_jobs`` and the
+    TravelTicker (decision 7c)."""
+    from app.core import prop_action_store as store
+    with _INDEX_LOCK:
+        _INDEX.clear()
+        for run in store.live_runs():
+            order = (run.get("data") or {}).get("order")
+            if not isinstance(order, dict) or not order.get("order_id"):
+                continue
+            for name in actor_names(order):
+                _INDEX[name] = (order, None)
+
+
+def walking(name: str, *, profile: dict | None = None) -> bool:
+    """Whether ``name`` is on a live ``walk`` order (decision 20). There is no
+    ``walk`` order before plan E3 task 9: always False until then."""
+    return False

@@ -24,7 +24,8 @@ from app.core.log import get_logger
 
 logger = get_logger("sync_topics")
 
-TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world", "clips", "generation")
+TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world", "clips", "generation",
+                          "orders")
 BATCH_S = 0.25  # At most four bundled topic frames per second.
 HEARTBEAT_S = 15.0  # Keep idle proxy connections alive.
 CHECK_S = 60.0  # Bound session and avatar staleness to a minute.
@@ -401,6 +402,19 @@ def travel_changed(character: str) -> None:
                                Avatar(character), party_of(character)])
     except Exception as e:
         logger.warning("travel_changed(%s) failed: %s", character, e)
+
+
+def order_changed(names: Iterable[str], locations: Iterable[str]) -> None:
+    """A motion order was published (start, revision, cancel; plan E3
+    decision 4): topic ``orders`` to every affected location and to the
+    participants — no data; whoever fetches ``GET /play/orders`` gets only
+    what ``motion_orders.visible`` lets it see."""
+    try:
+        recips: List[Recipient] = [AtLocation(loc or "") for loc in dict.fromkeys(locations)]
+        recips.append(Avatars(tuple(n for n in dict.fromkeys(names) if n)))
+        notify("orders", to=recips)
+    except Exception as e:
+        logger.warning("order_changed(%s) failed: %s", list(names), e)
 
 
 def avatars(names: Iterable[str], topics) -> None:

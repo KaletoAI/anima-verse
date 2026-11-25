@@ -90,6 +90,11 @@ Hand-derived expectations
                           stamina<30 -> 0.7) does not fire — neither has a
                           stamina stat, and ``modifiers.factor`` counts a
                           missing stat as not met. Every other row: null.
+    Root fields added after 718322ce (plan E3 task 4): ``motion_now`` = the
+    pinned motion clock MOTION_NOW, rounded to 3 places; ``order_seq`` = 0,
+    because nothing in this seed publishes a motion order (the world_kv
+    counter ``motion_order_seq`` is unset). No row carries ``order``: the field
+    is absent on a row whose figure carries no order.
     And npc_walker's ``travel``: 718322ce reads ``started_at_game``, the
     journey format before 9b920eaa0, so for today's ``started_at_s`` journey
     it reports null. The row it would have to show is derived instead. The
@@ -443,6 +448,9 @@ def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
         rows.append(c)
     old["characters"] = rows
     old["_unreadable_journeys"] = unreadable
+    # Plan E3 task 4: the motion clock and the order counter (none published).
+    old["motion_now"] = round(MOTION_NOW, 3)
+    old["order_seq"] = 0
     # Measured ages depend on execution time, not profile-read behavior.
     # Require both age keys but exclude their values; retain any other
     # sync keys so an unexpected addition still fails strict comparison.

@@ -159,10 +159,16 @@ def _request_route(body: ActionRequest, user):
 
 
 def _with_motion(actor, result):
-    """The caller's own motion plan beside an approaching result (B1)."""
+    """The caller's own motion plan beside an approaching result (B1) and,
+    when the caller takes part in the run, the run's whole motion order
+    (``order``, plan E3 task 4; ``motion`` stays until task 8)."""
     from app.core import prop_action_store as store
     run = store.get(result["execution_id"]) if result.get("execution_id") else None
-    return dict(result, motion=engine.motion_for(actor, run))
+    answer = dict(result, motion=engine.motion_for(actor, run))
+    order = (run or {}).get("data", {}).get("order")
+    if order and actor in store.people(run):
+        answer["order"] = order
+    return answer
 
 
 class CheckRequest(Input):

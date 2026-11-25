@@ -27,7 +27,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import sync_topics as b
 
-ALL = ['presence', 'scene', 'notices', 'self', 'world', 'clips', 'generation']
+ALL = ['presence', 'scene', 'notices', 'self', 'world', 'clips', 'generation', 'orders']
 t = [0.0]
 b._clock = lambda: t[0]
 

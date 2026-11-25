@@ -1038,6 +1038,15 @@ async def lifespan(app: FastAPI):
     except Exception as _hr:
         logger.error("Hub-job resumer failed: %s", _hr, exc_info=True)
 
+    # Motion orders: rebuild the published index from the live runs BEFORE
+    # the AgentLoop, periodic_jobs and the TravelTicker start (plan E3
+    # decision 7c) — none of them may publish into an empty index first.
+    try:
+        from app.core import motion_orders
+        motion_orders.boot()
+    except Exception as _mo:
+        logger.error("Motion order boot failed: %s", _mo, exc_info=True)
+
     # Start the continuous AgentLoop with importance-weighted round robin.
     # Replaces the old periodic tick; pause follows the world pause toggle
     # (task_queue 'default').

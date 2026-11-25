@@ -4012,6 +4012,26 @@ def play_worldmap(user=Depends(get_current_user),
     return response
 
 
+
+@router.get("/play/orders")
+def play_orders(user=Depends(get_current_user), since: int = Query(0)):
+    """Motion orders published after ``since`` (plan E3, contract § "Order").
+
+    Read-only and default-deny like every play route (no admin prefix). The
+    lens is the worldmap's: the active avatar, else a released avatar's
+    character; without one there is nothing to see. Every order passes
+    ``motion_orders.visible`` — the same row gates as the worldmap — and a
+    non-participant gets the movement fields only. Answers
+    ``{orders, seq, motion_now}``; the client asks again with ``since=seq``
+    after the next ``orders`` push.
+    """
+    from app.models.account import get_active_character
+    from app.core import motion_orders
+    avatar = (get_active_character() or "").strip()
+    released = bool((user.get("settings") or {}).get("avatar_released"))
+    lens = avatar or (_spectator_lens(user) if released else "")
+    return _json_off_loop(motion_orders.orders_since(lens, int(since)))
+
 @router.get("/play/terrain")
 def get_terrain_route(user=Depends(get_current_user)):
     """Painted terrain for map clients: areas + effective type catalog.

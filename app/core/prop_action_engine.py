@@ -838,7 +838,7 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
     if reason:
         return _refused(reason, run), False
     direct = _switches_in_place(run, replaces)
-    with _replacing(run, replaces):
+    with _replacing(run, replaces, direct):
         return _admit(run, fingerprint, direct=direct)
 
 
@@ -1077,6 +1077,10 @@ def _start(run):
     register_owner()
     for role, name in _members(run):
         run["data"]["journey_ids"][name] = uuid.uuid4().hex
+        # What the order names as its exit and start, captured BEFORE the
+        # journey write releases the seat (afterwards places.place_of is None).
+        run["data"]["plans"][name]["departure_seat"] = _departure(name)
+        run["data"].setdefault("order_starts", {})[name] = _figure_start(run, name)
     _save(run)  # Persist identity BEFORE the real journey write (crash recovery).
     deadline = 60.0
     for _role, name in _members(run):
@@ -1100,7 +1104,11 @@ def _start(run):
             logger.exception("Prop action motion snapshot failed: %s", run["execution_id"])
             snapshot = None
         run["data"].setdefault("motions", {})[name] = snapshot
+        run["data"].setdefault("order_times", {})[name] = dict(
+            started=float(journey["started_at_s"]), exit_s=float(journey.get("exit_s") or 0.0),
+            walk_s=float(journey["waypoints"][-1][2]), speed=float(journey.get("speed_m_s") or 0.0))
     run["data"].update(deadline=deadline, last_game=game_time().canonical(), last_motion=_motion_now())
+    _publish_order(run)
     _save(run)
 
 
@@ -1176,6 +1184,228 @@ def _own_journey(run, name, journey):
             and journey.get("entry_anchor") == plan["entry_anchor"]
             and target.get("marker_id") == plan["entry_anchor"]["marker_id"]
             and target.get("slot") == plan["entry_anchor"]["slot"])
+
+
+# --- Orders (plan E3 task 4: published beside the journey the run still walks) ---
+
+def _departure(name):
+    """The seat ``name`` leaves at the start of an approach (the order's
+    ``exit`` step): ``{seat, pose_key, pose_kind, exit_s}``, or None when it
+    holds no place. Read BEFORE start_approach_journey releases the place —
+    afterwards places.place_of answers None (review W1)."""
+    if places.place_of(name) is None:
+        return None
+    from app.core.pose_catalog import group_of
+    pose = C.get_effective_pose_key(name) or ""
+    _kind, seconds = travel.exit_bridge_for_pose(pose)
+    pos = C.get_character_pos(name) or {}
+    return dict(seat=[pos.get("x"), pos.get("z")], pose_key=pose, pose_kind=group_of(pose),
+                exit_s=round(float(seconds), 3))
+
+
+def _room_level(location_id, room_id) -> int:
+    """The storey of a room (its layout ``level``, 0 when unset)."""
+    try:
+        from app.models.world import get_location_by_id
+        location = get_location_by_id(location_id) or {}
+        room = next((r for r in location.get("rooms") or [] if r.get("id") == room_id), None) or {}
+        return int((room.get("layout") or {}).get("level") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _yaw_deg(snapshot):
+    """A stored facing (radians) as the order's compass degrees, None when unset."""
+    yaw = (snapshot or {}).get("yaw")
+    return None if yaw is None else round(math.degrees(float(yaw)), 3)
+
+
+def _figure_start(run, name):
+    """Where ``name`` stands when its order is issued: ``{x, y, z, yaw, room_id,
+    level}`` on the floor of the run's room (the planned access height)."""
+    target = run["target"]
+    pos = C.get_character_pos(name) or {}
+    plan = run["data"]["plans"].get(name) or {}
+    return dict(x=float(pos.get("x") or 0.0), y=float((plan.get("access") or {}).get("y") or 0.0),
+                z=float(pos.get("z") or 0.0), yaw=_yaw_deg(C.get_avatar_sync_snapshot(name)),
+                room_id=target["room_id"], level=_room_level(target["location_id"], target["room_id"]))
+
+
+def _order_status(run):
+    if run["status"] in ("active", "sleeping"):
+        return "active"
+    return "entering" if run["phase"] == "entry" else "approaching"
+
+
+def _order(run) -> dict:
+    """The motion order of ``run`` (revision 1): one actor per member with its
+    access, anchor (body root, ``y`` = support height - ``root_offset``) and
+    steps — ``exit`` when ``_start`` found it seated (plan ``departure_seat``),
+    ``walk`` when it walks a journey, ``entry`` (catalog length of the entry
+    clip, 0 for a ``direct`` entry) and ``loop``. In task 4 the times come
+    from the journeys: issued = started_at_s - exit_s, eta = started_at_s +
+    the last waypoint's stamp (earliest issue, latest arrival over the
+    members); flip = eta + the longest entry; without a journey (a switch in
+    place) issued = eta = now."""
+    from app.core import motion_orders as mo
+    from app.core.height import height_cm
+    from app.core.pose_catalog import group_of
+    from app.models.account import is_player_controlled
+    data, definition, target = run["data"], run["definition"], run["target"]
+    pose = definition["phases"][0]["pose_key"] if definition["ability"] == "combined" else definition["pose_key"]
+    kind = group_of(pose)
+    capability, _reason = _entry_capability(pose)
+    catalog_s = float(capability[1]["duration_s"]) if capability else 0.0
+    times, starts = data.get("order_times") or {}, data.get("order_starts") or {}
+    roles = data.get("clip_roles") or {}
+    issued, etas, speeds, actors, entry_s = [], [], [], [], 0.0
+    for role, name in _members(run):
+        plan = data["plans"][name]
+        direct = plan.get("entry_mode") == "direct"
+        entry = 0.0 if direct else catalog_s
+        entry_s = max(entry_s, entry)
+        sequence = []
+        seat = plan.get("departure_seat")
+        if isinstance(seat, dict):
+            sequence.append(mo.step("exit", seat.get("pose_kind") or "", seat.get("pose_key") or "",
+                                    float(seat.get("exit_s") or 0.0)))
+        timing = times.get(name)
+        if timing:
+            sequence.append(mo.step("walk"))
+            issued.append(timing["started"] - timing["exit_s"])
+            etas.append(timing["started"] + timing["walk_s"])
+            speeds.append(timing.get("speed") or 0.0)
+        sequence += [mo.step("entry", kind, pose, entry), mo.step("loop", kind, pose)]
+        anchor = plan["entry_anchor"]
+        root = float(anchor.get("root_offset") or 0.0)
+        actors.append(mo.actor_row(
+            name, role, next((r for r, member in roles.items() if member == name), ""),
+            height_cm(C.get_character_profile(name) or {}),
+            starts.get(name) or _figure_start(run, name),
+            access={k: float(plan["access"][k]) for k in ("x", "y", "z", "yaw")},
+            anchor=dict(x=float(anchor["x"]), y=float(anchor["y"]) - root, z=float(anchor["z"]),
+                        yaw=float(anchor.get("yaw") or 0.0), root_offset=root),
+            entry_mode=plan.get("entry_mode", "bridge"), sequence=sequence,
+            reports_arrival=is_player_controlled(name)))
+    now = _motion_now()
+    issued_s = min(issued) if issued else now
+    eta_s = max(etas) if etas else issued_s
+    speed = max(speeds) if speeds and max(speeds) > 0 else travel.get_travel_speed_m_s()
+    awaits = "reaction" if (data.get("reaction") or {}).get("state") == "pending" else ""
+    first = data["plans"][run["actor"]]["entry_anchor"]
+    order = mo.new_order(
+        "prop_action", issued_s=issued_s, eta_s=eta_s, flip_s=None if awaits else eta_s + entry_s,
+        deadline_s=mo.deadline(issued_s, eta_s), actors=actors, speed_m_s=speed, gait="walk",
+        status=_order_status(run), awaits=awaits,
+        target=dict(location_id=target["location_id"], room_id=target["room_id"],
+                    level=_room_level(target["location_id"], target["room_id"]),
+                    floor_y=float(data["plans"][run["actor"]]["access"]["y"]),
+                    placement_id=target["placement_id"], marker_id=first["marker_id"],
+                    place_id=first["place_id"], slot=first["slot"], execution_id=run["execution_id"]))
+    if definition["ability"] == "combined":
+        ids = [p["id"] for p in definition["phases"]]
+        order["phase"] = run["phase"] if run["phase"] in ids else ids[0]
+    return order
+
+
+def _entry_nominal_s(order) -> float:
+    """The longest ``entry`` step of an order (its flip after the arrival)."""
+    return max((float(s.get("nominal_s") or 0.0) for actor in order.get("actors") or []
+                for s in actor.get("sequence") or [] if s.get("step") == "entry"), default=0.0)
+
+
+def _publish_order(run):
+    """Publish ``run``'s first order and keep it on the run (``data.order``);
+    the caller persists the run. A failure costs the order, never the run."""
+    from app.core import motion_orders as mo
+    try:
+        run["data"]["order"] = mo.publish(_order(run), names=store.people(run),
+                                          locations=[run["target"]["location_id"]])
+    except Exception:
+        logger.exception("Prop action order failed: %s", run["execution_id"])
+
+
+def _revise(run, **changes) -> None:
+    """A change of ``run``'s order in place (spec 5b case 2): the fields in
+    ``changes``, revision + 1, published, and the run saved. A set
+    ``awaits`` drops ``flip_motion_s``. A run without an order (older than
+    its publication) is only saved."""
+    from app.core import motion_orders as mo
+    order = run["data"].get("order")
+    if order:
+        try:
+            revised = dict(order, **{k: round(v, 3) if isinstance(v, float) else v
+                                     for k, v in changes.items()})
+            if revised.get("awaits"):
+                revised.pop("flip_motion_s", None)
+            revised["revision"] = int(order.get("revision", 1)) + 1
+            run["data"]["order"] = mo.publish(revised, names=store.people(run),
+                                              locations=[run["target"]["location_id"]])
+        except Exception:
+            logger.exception("Prop action order revision failed: %s", run["execution_id"])
+    _save(run)
+
+
+def _enter_or_wait(run) -> bool:
+    """Everyone has arrived: into the entry (True), or — a react run whose
+    partner has not reacted yet — wait at the furniture (False), revising the
+    order once to ``status waiting``, ``awaits reaction``, without flip."""
+    if not _awaits_reaction(run):
+        _begin_entry(run)
+        return True
+    order = run["data"].get("order") or {}
+    if order and order.get("status") != "waiting":
+        _revise(run, status="waiting", awaits="reaction")
+    return False
+
+
+def _order_ended(run, stood):
+    """The run is over (decision 19): its order stays published for the tail
+    (decision 6) and is never revised to ``ended``; whoever really got up
+    (``stood``, from _stand_up) gets ONE cancel order with a new id, each
+    actor with its own ``stand``. Members kept seated (keep_seated, a follow
+    pose) are not in it. A failure costs the order, never the end."""
+    from app.core import motion_orders as mo
+    try:
+        order = run["data"].get("order")
+        if order:
+            mo.retire(order["order_id"])
+        stood = {name: d for name, d in stood.items() if name not in _SWITCH_HELD.get()}
+        if not stood:
+            return
+        from app.core.height import height_cm
+        from app.core.pose_catalog import group_of
+        from app.models.account import is_player_controlled
+        target = run["target"]
+        level = _room_level(target["location_id"], target["room_id"])
+        roles = run["data"].get("clip_roles") or {}
+        now = _motion_now()
+        flip, actors, floor_y = now, [], 0.0
+        for role, name in _members(run):
+            if name not in stood:
+                continue
+            pose, before, after = stood[name]["pose"], stood[name]["before"], stood[name]["after"]
+            _kind, exit_s = travel.exit_bridge_for_pose(pose)
+            floor_y = float(((run["data"]["plans"].get(name) or {}).get("access") or {}).get("y") or 0.0)
+            row = mo.actor_row(
+                name, role, next((r for r, member in roles.items() if member == name), ""),
+                height_cm(C.get_character_profile(name) or {}),
+                dict(x=float(before["x"]), y=floor_y, z=float(before["z"]), yaw=None,
+                     room_id=target["room_id"], level=level),
+                sequence=[mo.step("exit", group_of(pose), pose, float(exit_s))],
+                reports_arrival=is_player_controlled(name))
+            row["stand"] = dict(x=round(float(after["x"]), 3), y=round(floor_y, 3),
+                                z=round(float(after["z"]), 3), yaw=_yaw_deg(after))
+            actors.append(row)
+            flip = max(flip, now + float(exit_s))
+        cancel = mo.new_order(
+            "cancel", issued_s=now, eta_s=now, flip_s=flip, deadline_s=mo.deadline(now, now),
+            actors=actors, speed_m_s=0.0, gait="walk", status="ended",
+            target=dict(location_id=target["location_id"], room_id=target["room_id"],
+                        level=level, floor_y=floor_y))
+        mo.publish(cancel, names=[a["name"] for a in actors], locations=[target["location_id"]])
+    except Exception:
+        logger.exception("Prop action cancel order failed: %s", run["execution_id"])
 
 
 #: Narrator lines per pose group of the place: taking it, and leaving it.
@@ -1355,9 +1585,10 @@ def _finish(run, status, reason, *, keep_seated="", follow=False):
         _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
         if before == "active":
             _emit_lifecycle("prop_action.ended", run, status=status, reason=reason)
-        _cleanup(run, keep=kept)
+        stood = _cleanup(run, keep=kept)
         if follows:
-            _follow_up(run, follows)
+            stood.update(_follow_up(run, follows))
+        _order_ended(run, stood)
         _narrate_finish(run, before, status, reason, kept)
         return _result(run)
 
@@ -1366,14 +1597,18 @@ def _finish(run, status, reason, *, keep_seated="", follow=False):
 def _cleanup(run, keep=()):
     """``keep``: members whose place stays — for the departure of the run
     replacing this one (_replace) or for their follow pose (_follow_up);
-    everyone else stands up here."""
+    everyone else stands up here. Returns ``{name: departure}`` of whoever
+    really got up (_stand_up), for the cancel order of _order_ended."""
     reason = run["reason"]
+    stood = {}
     for role, name in _members(run):
         jid = run["data"]["journey_ids"].get(name)
         if jid:
             travel.cancel_journey(name, journey_id=jid, execution_kind="prop_action", execution_ref=run["execution_id"], reason=reason)
         if name not in keep:
-            _stand_up(run, name)
+            departure = _stand_up(run, name)
+            if departure:
+                stood[name] = departure
     # Pair interaction cleanup can release both members itself. Capture and
     # release every owned place first, while its original pose still exists.
     for _role, name in _members(run):
@@ -1383,11 +1618,14 @@ def _cleanup(run, keep=()):
             from app.core.interaction_engine import end_interaction
             end_interaction(name, reason=reason, interaction_id=inter["id"], keep_places=keep)
     store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+    return stood
 
 
 def _stand_up(run, name):
     """Release ``name``'s place of ``run``, recording the departure the
-    client plays (``exit_motions``) when it really got up from it."""
+    client plays (``exit_motions``) when it really got up from it. Returns
+    that departure (``{pose, before, after}``: the pose it left, its point
+    before and after) when it got up, else None."""
     pose = C.get_effective_pose_key(name)
     before = C.get_character_pos(name)
     place = (C.get_character_profile(name) or {}).get("place") or {}
@@ -1397,6 +1635,8 @@ def _stand_up(run, name):
     if released and held and before and after:
         after["yaw"] = C.get_avatar_sync_snapshot(name)["yaw"]
         run["data"].setdefault("exit_motions", {})[name] = _exit_motion(pose, before, after)
+        return dict(pose=pose, before=before, after=after)
+    return None
 
 
 #: How long an NPC stays in its follow pose (game seconds) before it gets up
@@ -1465,10 +1705,12 @@ def _follow_up(run, follows):
     """Switch every member of the ended ``run`` named in ``follows`` into its
     follow action on the same piece, without walking (_settle_in_place) and
     claiming the nearest free slot of its place type. Whoever gets none (the
-    piece is full, the action refuses) stands up as everyone else did."""
+    piece is full, the action refuses) stands up as everyone else did.
+    Returns ``{name: departure}`` of those (_stand_up)."""
     from app.models.account import get_all_avatars
     avatars = set(get_all_avatars())
     revision = None
+    stood = {}
     for name in _follow_order(run, follows):
         action = follows[name]
         try:
@@ -1498,8 +1740,11 @@ def _follow_up(run, follows):
             result = _refused("follow_error")
         if result.get("status") in ("refused", "failed", "cancelled"):
             logger.info("%s gets no follow pose after %s: %s", name, run["execution_id"], result.get("reason"))
-            _stand_up(run, name)
+            departure = _stand_up(run, name)
+            if departure:
+                stood[name] = departure
     store.cleanup_finished(run["execution_id"], run["data"].get("exit_motions", {}))
+    return stood
 
 
 def _left_behind(run):
@@ -1689,18 +1934,31 @@ def _consent_carries(run, replaces) -> bool:
     return True
 
 
+#: Who a switch in place (_settle_in_place) takes over while the runs it
+#: replaces end: the cleanup of a replaced pair stands its members up for a
+#: moment, but the new run seats them again at once — for the order they are
+#: held, so the replaced run's end publishes no cancel for them (plan E3
+#: decision 19; the new order begins without exit).
+_SWITCH_HELD = ContextVar("prop_action_switch_held", default=frozenset())
+
+
 @contextmanager
-def _replacing(run, replaces):
+def _replacing(run, replaces, direct=False):
     """End ``replaces`` for ``run`` (_replace); afterwards whoever kept a seat
-    for the departure stands up, unless the new run has taken it over."""
+    for the departure stands up, unless the new run has taken it over.
+    ``direct``: ``run`` switches in place (_SWITCH_HELD)."""
     owners = []
-    for ref in replaces:
-        old = store.get(ref)
-        if not old:
-            continue
-        name = next((n for _, n in _members(run) if n in store.people(old)), run["actor"])
-        _replace(name, ref)
-        owners.append((name, ref))
+    held = _SWITCH_HELD.set(frozenset(store.people(run)) if direct else frozenset())
+    try:
+        for ref in replaces:
+            old = store.get(ref)
+            if not old:
+                continue
+            name = next((n for _, n in _members(run) if n in store.people(old)), run["actor"])
+            _replace(name, ref)
+            owners.append((name, ref))
+    finally:
+        _SWITCH_HELD.reset(held)
     try:
         yield
     finally:
@@ -1727,6 +1985,8 @@ def _settle_in_place(run):
         for plan in data["plans"].values():
             plan["entry_mode"] = "direct"
         data["arrived"] = [name for _, name in _members(run)]
+        data["order_starts"] = {name: _figure_start(run, name) for _, name in _members(run)}
+        _publish_order(run)   # persisted by the commit below
         _commit(run, runtime={name: dict(pos_x=data["plans"][name]["access"]["x"],
                                          pos_z=data["plans"][name]["access"]["z"],
                                          pos_session=None, pos_seq=None)
@@ -1882,8 +2142,8 @@ def _arrived(actor, journey):
         if actor not in run["data"]["arrived"]:
             run["data"]["arrived"].append(actor)
             _save(run)
-        if len(run["data"]["arrived"]) == len(_members(run)) and not _awaits_reaction(run):
-            _begin_entry(run)
+        if len(run["data"]["arrived"]) == len(_members(run)):
+            _enter_or_wait(run)
 
 
 def _arrived_callback(actor, journey):
@@ -1967,7 +2227,8 @@ def _begin_entry(run):
     started = _motion_now()
     run["data"].update(entries=entries, entry_elapsed=0.0, last_game=now.canonical(),
                        last_motion=started, entry_started_s=started)
-    _save(run)
+    _revise(run, status="entering", awaits="",
+            flip_motion_s=started + max(float(e["duration_s"]) for e in entries.values()))
     # Display actual bridge at exact access; no place/body anchor until it ends.
     from app.core.keyed_lock import keyed_lock
     for _role, name in _members(run):
@@ -2033,6 +2294,7 @@ def _activate(run):
             entered({name: dict(pose_key=pose, pose_flavor="", place=place, prop_action_entry=None,
                                 pos_x=anchor["x"], pos_z=anchor["z"], pos_session=None, pos_seq=None)})
     if run["status"] == "active":
+        _revise(run, status="active")
         _emit_lifecycle("prop_action.started", run, ability=ability)
     if ability != "pair":
         C._publish_activity_changed(run["actor"], pose, "", pose, place, None)
@@ -2229,6 +2491,7 @@ def _advance_run(execution_id, now, beats) -> int:
             _finish(run, "failed", reason)
             return 0
         data = run["data"]
+        phase_before = run["phase"]
         if run["status"] == "awaiting_consent":
             # The invitation waits on the motion clock (real seconds the
             # world ran), never on game time: see CONSENT_WINDOW_S.
@@ -2246,8 +2509,7 @@ def _advance_run(execution_id, now, beats) -> int:
             elif len(data["arrived"]) == len(_members(run)):
                 # Both are there: a react run waits for the partner's
                 # reaction (no approach deadline), the others go in.
-                if not _awaits_reaction(run):
-                    _begin_entry(run)
+                if _enter_or_wait(run):
                     return 1
             else:
                 data["elapsed"] += motion_delta
@@ -2271,8 +2533,7 @@ def _advance_run(execution_id, now, beats) -> int:
                     _finish(run, "failed", "approach_journey_lost")
                     break
                 if (run["status"] not in store.TERMINAL and len(data["arrived"]) == len(_members(run))
-                        and not _awaits_reaction(run)):
-                    _begin_entry(run)
+                        and _enter_or_wait(run)):
                     return 1
         elif run["status"] == "sleeping":
             if not C.is_character_sleeping(run["actor"]):
@@ -2302,6 +2563,8 @@ def _advance_run(execution_id, now, beats) -> int:
                 phase = next(p for p in run["definition"]["phases"] if p["id"] == run["phase"])
                 runtime = {run["actor"]: {"pose_key": phase["pose_key"]}}
             _commit(run, ("active",), runtime=runtime, now=now)
+            if run["phase"] != phase_before and run["definition"]["ability"] == "combined":
+                _revise(run, phase=run["phase"])   # decision 18: a late client shows the right phase
             if delta > 0:
                 beats.append(dict(scene_id=run["execution_id"], kind="prop_action",
                                   members=[name for _, name in _members(run)],
@@ -2579,6 +2842,10 @@ def react(partner: str, execution_id: str, accept: bool, *, line: str = "",
         if (run["status"] == "approaching" and run["phase"] != "entry"
                 and len(run["data"]["arrived"]) == len(_members(run))):
             _begin_entry(run)
+        elif (run["data"].get("order") or {}).get("awaits"):
+            # The reaction came before the arrival: the order stops waiting.
+            order = run["data"]["order"]
+            _revise(run, awaits="", flip_motion_s=float(order["eta_motion_s"]) + _entry_nominal_s(order))
         else:
             _save(run)
         return _result(store.get(execution_id))
@@ -2597,7 +2864,7 @@ def respond(actor: str, execution_id: str, accept: bool) -> dict:
         if replaces and _validate(run, replaces=replaces):
             replaces = ()   # refused anyway: _respond says why, nothing ends
     direct = bool(replaces) and _switches_in_place(run, replaces)
-    with _replacing(run, replaces):
+    with _replacing(run, replaces, direct):
         result = _respond(actor, execution_id, accept, direct=direct)
     if result["status"] != "refused":
         run = store.get(execution_id)
