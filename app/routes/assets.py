@@ -74,6 +74,15 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 
+@router.get("/contact-anchors")
+def get_contact_anchors(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The declared contact anchors of the loaded packages (``collision_channels.declared_contact_anchors``): the
+    Pose library computes a clip's contact height from them on the skeleton when no figure of the world has the
+    attached part or the channel built. Admin-only (the Pose library is)."""
+    from app.core.collision_channels import declared_contact_anchors
+    return declared_contact_anchors()
+
+
 @router.get("/animation-clips")
 def list_animation_clips() -> Dict[str, Any]:
     """Lists the shared animation clips.

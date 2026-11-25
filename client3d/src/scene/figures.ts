@@ -3107,12 +3107,35 @@ export class Figure {
     }
     if (this.pairHeightPose === undefined) {
       const rig = pairHeightRigOf(this.root);
+      this.pairHeightRig = rig;
       this.pairHeightPose = rig ? pairHeightPoser(THREE, rig) : null;
     }
     if (!this.pairHeightPose) return;
     this.root.updateMatrixWorld(true);
+    const before = Figure.probePairHeight ? this.legPoints() : null;
     this.pairHeightNow = ph.offset * w;
     this.pairHeightPose(this.pairHeightNow, ph.planted);
+    if (before) {
+      this.root.updateMatrixWorld(true);
+      const after = this.legPoints();
+      this.pairHeightProbe = { offset: this.pairHeightNow, planted: [...ph.planted], legs: after.map((l, i) => {
+        if (!l) return null;
+        const u = l.hip.clone().sub(l.knee), v = l.ankle.clone().sub(l.knee);
+        return { ankleBefore: before[i]?.ankle.toArray() ?? null, ankle: l.ankle.toArray(), hip: l.hip.toArray(),
+          knee: l.knee.toArray(), kneeDeg: THREE.MathUtils.radToDeg(u.angleTo(v)) };
+      }) };
+    }
+  }
+
+  /** Debug probe (`debug3d.ts`, only with ?debug3d=1): when on, every frame with a pair height records each leg's
+   *  ankle before and after the pose (world) and the knee's interior angle after it — read-only, it moves nothing. */
+  static probePairHeight = false;
+  pairHeightProbe: { offset: number; planted: boolean[]; legs: ({ ankleBefore: number[] | null; ankle: number[]
+    hip: number[]; knee: number[]; kneeDeg: number } | null)[] } | null = null;
+  private pairHeightRig: ReturnType<typeof pairHeightRigOf> = null;
+  private legPoints(): ({ hip: THREE.Vector3; knee: THREE.Vector3; ankle: THREE.Vector3 } | null)[] {
+    return (this.pairHeightRig?.legs ?? []).map((l) => l ? { hip: l.upper.getWorldPosition(new THREE.Vector3()),
+      knee: l.lower.getWorldPosition(new THREE.Vector3()), ankle: l.foot.getWorldPosition(new THREE.Vector3()) } : null);
   }
 
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {

@@ -13,6 +13,10 @@
  *   &dist=<m>             camera distance for goto (default 15)
  *   &sweep=1              oscillate the distance 30 ↔ 8 every 5 s — the
  *                         "trees vanish while zooming" reproduction loop
+ *   window.__pairHeight3d() every figure playing a pair half: the vertical
+ *                         size compensation's solve and offset, the legs
+ *                         before / after it (`Figure.probePairHeight`), the
+ *                         part tips and channel openings — read-only
  *
  * [B] `initIsolation` — the ISOLATION panel, opened with **Shift + I**. Where
  * [A] READS the picture, this one takes it apart: twenty numbered switches,
@@ -34,6 +38,7 @@ import { isTypingTarget } from '@anima/hud/hud/dom';
 import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
 import type { Resident } from './scene/places';
+import { Figure } from './scene/figures';
 import { setLayerCompositorFlat, setLayerSurfaceFiltering } from './scene/layerGround';
 import { setFogVeilDebugOff, setFogVeilSky } from './scene/fogVeil';
 import { IMPOSTOR_MESH_NAME } from './scene/impostors';
@@ -59,8 +64,12 @@ interface MeshRow {
 
 const params = new URLSearchParams(location.search);
 
-export function initDebug3d(engine: Engine, residency: Map<string, Resident>): void {
+export function initDebug3d(engine: Engine, residency: Map<string, Resident>,
+  npcs?: { pairHeightDebug(): Record<string, unknown>[] }): void {
   if (params.get('debug3d') !== '1') return;
+  // Owner 2026-11-25: the vertical size compensation in the real game, as numbers (see the header).
+  Figure.probePairHeight = true;
+  (window as unknown as { __pairHeight3d?: unknown }).__pairHeight3d = () => npcs?.pairHeightDebug() ?? [];
   const el = document.createElement('pre');
   el.id = 'debug3d';
   el.style.cssText = 'position:fixed;left:4px;top:4px;z-index:9999;'

@@ -8,7 +8,8 @@ Expected, by hand:
 [1] validate_pair_contact_entry("b>a:mouth", {height_cm: 85.24, roles: {a: A, b: B}}) -> height 85.2 (0.1 cm), every
     joint rounded to 0.1 cm, floats; refused: key "a>a:mouth" (same role), "b-a:mouth", "f>a:mouth", height 301 or -1,
     a role entry missing the part (only a), an extra key, three legs, a joint of two numbers, a joint 301 cm out,
-    a support of -51 cm, True as a number.
+    a support of -51 cm, True as a number. `method` "anchor" / "measured" is kept as given, absent stays absent;
+    "guess" is refused.
 [2] clip_pair_contact_heights: None / {} / {"pair_contact_heights": []} -> None; a stored map with one valid and one
     broken relation -> only the valid one.
 [3] set_clip_pair_contact_heights on hug__a/hug__b + hug.json and a solo walk: {"b>a:mouth": E} writes it and leaves
@@ -73,6 +74,10 @@ for key, value in (("a>a:mouth", E), ("b-a:mouth", E), ("f>a:mouth", E),
                    ("b>a:mouth", {**E, "roles": {"a": {**A, "support_cm": -51}, "b": B}}),
                    ("b>a:mouth", {**E, "height_cm": True})):
     assert refused(ac.validate_pair_contact_entry, key, value), (key, value)
+assert "method" not in got
+assert ac.validate_pair_contact_entry("b>a:mouth", {**E, "method": "anchor"})["method"] == "anchor"
+assert ac.validate_pair_contact_entry("b>a:mouth", {**E, "method": "measured"})["method"] == "measured"
+assert refused(ac.validate_pair_contact_entry, "b>a:mouth", {**E, "method": "guess"})
 ok("[1] validate_pair_contact_entry rounds to 0.1 cm and refuses the malformed")
 
 # [2]

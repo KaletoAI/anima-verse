@@ -273,7 +273,8 @@ export interface PairPlay {
   roles: Record<string, string>;
   /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the solved hips offset of this figure for the clip and
    *  the heights it was solved for (`key`); recomputed only when the clip or a member's height changes. */
-  height?: { key: string; offset: number; planted: boolean[] };
+  height?: { key: string; offset: number; planted: boolean[]; gaps: Record<string, number>; residuals: Record<string, number>
+    offsets: Record<string, number> };
   /** `<kind>__<role>` — the clip half this figure plays; `<kind>__<role>~<alt>`
    *  when the server names an ALT half (G6) */
   clip: string;
@@ -1602,6 +1603,23 @@ export class NpcManager {
    *  `clip` — solved over the clip's stored contact heights (`pair_contact_heights`) for the members' real heights
    *  (a = h / 1.70); 0 without stored heights, with a member whose figure (and so its height) is not loaded yet, or
    *  for equal heights. Cached on the interaction per clip and heights. */
+  /** Debug read (`debug3d.ts` `window.__pairHeight3d`, only with ?debug3d=1): every figure playing a pair half —
+   *  its clip, roles, height, the solve (offsets, gaps, residuals), the offset shown now, the leg probe
+   *  (`Figure.probePairHeight`), and its attached-part tips and channel openings (world) to measure the contact by. */
+  pairHeightDebug(): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [];
+    for (const npc of this.npcs.values()) {
+      const it = npc.interaction, fig = npc.figure;
+      if (!it || !fig) continue;
+      const insp = fig.inspect();
+      out.push({ name: npc.name, clip: it.clip, roles: it.roles, height: fig.height, solve: it.height ?? null,
+        shown: fig.pairHeightShown, probe: fig.pairHeightProbe,
+        tips: (insp?.chains ?? []).filter((c) => c.segments.length).map((c) => ({ op: c.op, tip: c.segments[c.segments.length - 1].b })),
+        openings: (insp?.channels ?? []).map((c) => ({ id: c.id, o: c.o })) });
+    }
+    return out;
+  }
+
   private pairHeightOf(npc: Npc, clip: string): { offset: number; planted: boolean[] } {
     const it = npc.interaction!;
     const none = { offset: 0, planted: [] as boolean[] };
@@ -1617,7 +1635,8 @@ export class NpcManager {
     const key = `${clip}|${Object.entries(heights).sort().map(([r, h]) => `${r}:${h}`).join(',')}`;
     if (it.height?.key !== key) {
       const solve = pairHeightOffsets(contacts, (r) => pairFigureScale(heights[r]));
-      it.height = { key, offset: solve.offsets[role] ?? 0, planted: solve.planted[role] ?? [] };
+      it.height = { key, offset: solve.offsets[role] ?? 0, planted: solve.planted[role] ?? [], gaps: solve.gaps,
+        residuals: solve.residuals, offsets: solve.offsets };
     }
     return it.height;
   }

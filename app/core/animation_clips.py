@@ -2654,7 +2654,12 @@ def set_clip_pair_pivot(library: str, rel: str, value: Any) -> List[Dict[str, An
 #: contact relation the height of its target point above the stage floor at the relation's deepest key frame (cm, 1.70 m)
 #: and, per role of the relation, its pose there: `{support_cm, hips_cm, legs: [[hip, knee, ankle] × left/right]}` (cm;
 #: x/z relative to the role's hips, y above the floor). The renderers close the vertical gap real heights open from it.
-#: Written by Auto-align / "Align all"; absent = nothing is computed (today's placement).
+#: Written by Auto-align / "Align all"; absent = nothing is computed (today's placement). An entry may carry how it was
+#: obtained, `method`: "measured" = on built figures (the attached part's chain against the built channel / mouth /
+#: hand), "anchor" = from the declared anchors on the skeleton (`collision_channels.declared_contact_anchors`, no
+#: figure of the world had the part or the channel built) — a later pass upgrades "anchor" entries. Entries written
+#: before the marker existed have none; they were all measured on built figures.
+PAIR_CONTACT_METHODS = ("measured", "anchor")
 PAIR_CONTACT_KEY = re.compile(r"^([a-e])>([a-e]):([a-z_]{1,40})$")
 PAIR_CONTACT_BOUND_CM = 300.0
 
@@ -2669,8 +2674,10 @@ def validate_pair_contact_entry(key: Any, value: Any) -> Dict[str, Any]:
     m = PAIR_CONTACT_KEY.match(key) if isinstance(key, str) else None
     if not m or m.group(1) == m.group(2):
         raise ClipLibraryError(f"pair_contact_heights key '{key}' must be <part>><receiver>:<target> (roles a..e)")
-    if not isinstance(value, dict) or set(value) - {"height_cm", "roles"}:
-        raise ClipLibraryError(f"pair_contact_heights.{key} must be {{height_cm, roles}}")
+    if not isinstance(value, dict) or set(value) - {"height_cm", "roles", "method"}:
+        raise ClipLibraryError(f"pair_contact_heights.{key} must be {{height_cm, roles, method?}}")
+    if "method" in value and value["method"] not in PAIR_CONTACT_METHODS:
+        raise ClipLibraryError(f"pair_contact_heights.{key}.method must be one of {', '.join(PAIR_CONTACT_METHODS)}")
     if not _contact_num(value.get("height_cm"), 0.0):
         raise ClipLibraryError(f"pair_contact_heights.{key}.height_cm must be a number from 0 to 300")
     roles = value.get("roles")
@@ -2690,7 +2697,10 @@ def validate_pair_contact_entry(key: Any, value: Any) -> Dict[str, Any]:
                                    "two legs of three [x, y, z] joints, each within ±300 cm")
         out_roles[role] = {"support_cm": r1(pose["support_cm"]), "hips_cm": r1(pose["hips_cm"]),
                            "legs": [[[r1(x) for x in p] for p in leg] for leg in legs]}
-    return {"height_cm": r1(value["height_cm"]), "roles": out_roles}
+    out = {"height_cm": r1(value["height_cm"]), "roles": out_roles}
+    if "method" in value:
+        out["method"] = value["method"]
+    return out
 
 
 def clip_pair_contact_heights(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
