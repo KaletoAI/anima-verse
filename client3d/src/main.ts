@@ -4304,6 +4304,10 @@ async function startApp(username: string, role: string) {
     // `postActivity({activity: ''})` in the steering hook, and the first
     // report follows the first step.
     if (avatarSeated) return;
+    // Every caller, the standing-still branch of the steering hook included:
+    // in a pair interaction the clip turns and holds the figure, and a report
+    // (a facing change is one) would end the interaction on the server.
+    if (npcs.inInteraction(avatarName)) return;
     const yaw = positionYaw(npcs.yawOf(avatarName));
     reportedYaw ??= yaw;
     if (positionYawChanged(reportedYaw, yaw)) posDirty = true;
