@@ -208,6 +208,12 @@ a.ga-btn {
   min-width: 0;
 }
 
+select.ga-input option,
+select.ga-input optgroup {
+  background: var(--bg, #0d1117);
+  color: var(--text, #c9d1d9);
+}
+
 .ga-textarea {
   background: var(--bg, #0d1117);
   color: var(--text, #c9d1d9);
