@@ -312,11 +312,6 @@ def list_items() -> List[Dict[str, Any]]:
 
 def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     """Return an item, looking in world items before the global shared library."""
-    try:
-        from app.core import read_scope
-        read_scope.tally("get_item")
-    except Exception:  # noqa: BLE001 — statistics never disturb the read
-        pass
     db_read = False
     try:
         conn = get_connection()

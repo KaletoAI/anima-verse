@@ -771,11 +771,6 @@ def garment_fsig(character_name: str, item_id: str, *,
     before Ruling H-R1 was made under, ``garment_refit.swing_default_fits``).
     ValueError when ``item_id`` is no garment of a known kind (or for a bad
     ``state``)."""
-    try:
-        from app.core import read_scope
-        read_scope.tally("garment_fsig")
-    except Exception:  # noqa: BLE001 — statistics never disturb the read
-        pass
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
     if kind == "footwear":
@@ -834,11 +829,6 @@ def finite_json(value: Any) -> Any:
 def read_record(path: Path) -> Dict[str, Any]:
     """A sidecar's JSON object, {} when missing, unreadable or not an object; non-finite numbers (a NaN already
     on disk) read as None (``finite_json``)."""
-    try:
-        from app.core import read_scope
-        read_scope.tally("read_record")
-    except Exception:  # noqa: BLE001 — statistics never disturb the read
-        pass
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):

@@ -2994,61 +2994,17 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     build = state(character_name)
     key = _info_key(character_name, profile, build)
     now = time.monotonic()
-    served = None
     with _info_lock:
         hit = _info_memo.get(character_name)
         if hit is not None and hit[0] == key and now - hit[1] < figure.MEMO_TTL_S:
-            served = copy.deepcopy(hit[2])
-    if served is not None:
-        _memo_stat("info_hit")
-        return served
-    calls, info_ms, info = _measured(lambda: _figure_info(character_name, profile=profile, build=build))
+            return copy.deepcopy(hit[2])
+    info = _figure_info(character_name, profile=profile, build=build)
     with _info_lock:
-        stored = key[0] == figure._generation[0]
-        if stored:
+        if key[0] == figure._generation[0]:
             if len(_info_memo) >= 256:
                 _info_memo.clear()
             _info_memo[character_name] = (key, now, copy.deepcopy(info))
-    _memo_stat("info_miss")
-    if not stored:
-        _memo_stat("info_unstored")
-    _compute_stat("info_ms", info_ms, calls)
     return info
-
-
-#: The sub-calls ``read_scope.tally`` counts per cold figure / open-steps computation (plan
-#: 2026-11-24-figure-poll-caches, Task 0) — the keys of the ``figure_compute`` record besides the time.
-_TALLIED = ("drape_state", "cut_key", "read_record", "garment_fsig", "get_item", "profile")
-
-
-def _measured(compute: Callable[[], Any]) -> Tuple[Dict[str, int], float, Any]:
-    """Run ``compute`` in a ``read_scope.measure``: (the sub-call counts, its milliseconds, its result)."""
-    import time
-    from app.core import read_scope
-    with read_scope.measure() as calls:
-        t0 = time.perf_counter()
-        result = compute()
-        ms = (time.perf_counter() - t0) * 1000.0
-    return calls, ms, result
-
-
-def _memo_stat(key: str) -> None:
-    """``hot_path figure_memo``: one memo outcome (info_hit / info_miss / info_unstored / open_hit /
-    open_stale / open_miss). Statistics never disturb the answer."""
-    try:
-        from app.core import hot_path_stats
-        hot_path_stats.count("figure_memo", key)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _compute_stat(ms_key: str, ms: float, calls: Dict[str, int]) -> None:
-    """``hot_path figure_compute``: one cold computation — its time under ``ms_key`` and the sub-call counts."""
-    try:
-        from app.core import hot_path_stats
-        hot_path_stats.record("figure_compute", {ms_key: ms, **{n: int(calls.get(n, 0)) for n in _TALLIED}})
-    except Exception:  # noqa: BLE001
-        pass
 
 
 #: The plan steps the character list counts as the BASE (plain) body (Ruling A112); every other step is the
@@ -3084,23 +3040,16 @@ def open_steps(character_name: str) -> Dict[str, Any]:
         logger.debug("open steps of %s: key not read", character_name, exc_info=True)
         return {"building": False, "base": _open_group([]), "outfit": _open_group([]), "error": str(e)}
     now = time.monotonic()
-    served, outcome = None, "open_miss"
     with _info_lock:
         hit = _open_memo.get(character_name)
         if hit is not None and hit[0] == key:
-            outcome = "open_hit"
-            if now - hit[1] >= figure.MEMO_TTL_S:
-                outcome = "open_stale"
-                if character_name not in _open_refreshing:
-                    # Past the TTL with the same key: served once more while ONE background re-plan refreshes
-                    # it (the list polls every character; a cold plan of ~30 characters takes about a second).
-                    _open_refreshing.add(character_name)
-                    threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
-                                     name=f"open-steps-{character_name}").start()
-            served = copy.deepcopy(hit[2])
-    _memo_stat(outcome)
-    if served is not None:
-        return served
+            if now - hit[1] >= figure.MEMO_TTL_S and character_name not in _open_refreshing:
+                # Past the TTL with the same key: served once more while ONE background re-plan refreshes it
+                # (the list polls every character; a cold plan of ~30 characters takes about a second).
+                _open_refreshing.add(character_name)
+                threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
+                                 name=f"open-steps-{character_name}").start()
+            return copy.deepcopy(hit[2])
     return _compute_open(character_name, profile, build, key, now)
 
 
@@ -3124,28 +3073,23 @@ def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str,
                   key: Tuple[Any, ...], now: float) -> Dict[str, Any]:
     import copy
     from app.core import figure
-
-    def _plan() -> Tuple[List[Step], str]:
-        try:
-            return plan(character_name, profile=profile), ""
-        except Exception as e:  # noqa: BLE001
-            logger.warning("open steps of %s not computable: %s", character_name, e)
-            return [], str(e)
-
-    calls, open_ms, (steps, error) = _measured(_plan)
+    try:
+        steps = plan(character_name, profile=profile)
+        error = ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning("open steps of %s not computable: %s", character_name, e)
+        steps, error = [], str(e)
     out: Dict[str, Any] = {"building": bool(build.get("running")),
                            "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
                            "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
     if error:
         out["error"] = error
-        _compute_stat("open_ms", open_ms, calls)
         return out
     with _info_lock:
         if key[0] == figure._generation[0]:
             if len(_open_memo) >= 256:
                 _open_memo.clear()
             _open_memo[character_name] = (key, now, copy.deepcopy(out))
-    _compute_stat("open_ms", open_ms, calls)
     return out
 
 
