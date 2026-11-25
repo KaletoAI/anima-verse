@@ -25,6 +25,7 @@ import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { guardedInterval } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
 
 interface CutMetrics {
@@ -294,7 +295,7 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   const [confirm, setConfirm] = useState<'' | 'front' | 'back'>('')
   const wasRunning = useRef(false)
   const reload = useCallback(() => {
-    apiGet<TemplateCutState>(`${path}/cut`).then(setState).catch((e) => setError((e as Error).message))
+    return apiGet<TemplateCutState>(`${path}/cut`).then(setState).catch((e) => setError((e as Error).message))
   }, [path])
   useEffect(() => { reload() }, [reload, refreshKey])
   const running = !!state?.running
@@ -318,8 +319,8 @@ export function TemplateCutTextureBox({ path, refreshKey, onChanged, onLight }: 
   }, [running, onChanged])
   useEffect(() => {
     // poll while the flow or the cut runs; slowly otherwise, so a Build started elsewhere or a second tab shows up
-    const id = window.setInterval(reload, running || cutting ? 2000 : 8000)
-    return () => window.clearInterval(id)
+    // (a tick is skipped while the last read is still pending)
+    return guardedInterval(reload, running || cutting ? 2000 : 8000)
   }, [running, cutting, reload])
   const make = async (only: '' | 'front' | 'back') => {
     setBusy(true)

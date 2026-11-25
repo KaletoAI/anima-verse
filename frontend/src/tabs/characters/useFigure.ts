@@ -7,16 +7,18 @@
  * switch. `startPoll(delay)` after an own action (a Build, a single action of
  * the Body details) re-reads and keeps ticking while the Build runs. The push
  * topic `generation` (Ruling A42: the character's pause or its waiting jobs
- * changed — admins only) re-reads once.
+ * changed — admins only) re-reads once, 300 ms after the last push of a burst.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { syncHub } from '@anima/player-ui'
 import { apiGet } from '../../lib/api'
+import { debounced } from '../../lib/guardedPoll'
 import type { FigurePayload } from './figureModel'
 
 const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
 const POLL_SLOW_AFTER = 40
+const PUSH_DEBOUNCE_MS = 300
 
 export function useFigure(character: string) {
   const enc = encodeURIComponent(character)
@@ -63,8 +65,9 @@ export function useFigure(character: string) {
     setError('')
     if (!character) return stopPoll
     startPoll()
-    const off = syncHub().onTopics(['generation'], () => startPoll(0))
-    return () => { off(); stopPoll() }
+    const onPush = debounced(() => startPoll(0), PUSH_DEBOUNCE_MS)
+    const off = syncHub().onTopics(['generation'], onPush)
+    return () => { off(); onPush.cancel(); stopPoll() }
   }, [character, startPoll, stopPoll])
 
   return { data, error, startPoll }
