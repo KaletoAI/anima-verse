@@ -14,8 +14,6 @@ Stats stay fully template-driven (store=status_effects incl. per-value
 hint; packages contribute stats via character-template fragments) — this
 code knows NO stat name.
 """
-import json
-import re
 import threading
 from typing import Dict, Tuple
 
@@ -100,13 +98,8 @@ def _evaluate_deltas(character_name: str, situation_text: str, *,
     except Exception as e:
         logger.debug("stat evaluation failed for %s: %s", character_name, e)
         return {}
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not m:
-        return {}
-    try:
-        data = json.loads(m.group(0))
-    except Exception:
-        return {}
+    from app.core.llm_json import loads_object
+    data = loads_object(raw)
     stats = data.get("stats") if isinstance(data, dict) else None
     if not isinstance(stats, dict) or not stats:
         return {}

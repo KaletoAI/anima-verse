@@ -1,5 +1,4 @@
 """Shared colour, JSON, geometry and Blender timeout helpers for the hull."""
-import json
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -124,19 +123,8 @@ def oriented_bbox(points: Sequence[Vec2]) -> Dict[str, Any]:
 
 def parse_json(raw: str) -> Optional[Dict[str, Any]]:
     """The first JSON object in a model answer, fences and prose tolerated."""
-    text = str(raw or "").strip()
-    if text.startswith("```"):
-        text = text.split("```")[1] if "```" in text[3:] else text[3:]
-        if text.lstrip().lower().startswith("json"):
-            text = text.lstrip()[4:]
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        obj = json.loads(text[start:end + 1])
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    from app.core.llm_json import loads_object
+    return loads_object(raw)
 
 
 def timeout_s() -> int:

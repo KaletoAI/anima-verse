@@ -2370,14 +2370,14 @@ class ImageService:
                     ],
                     agent_name=vcfg.get("_target_name", character_name))
                 raw = response.content.strip()
-                match = re.search(r'\{.*\}', raw, re.DOTALL)
-                if not match:
-                    logger.debug("RP-Scene: Kein JSON: %s", raw[:100])
+                from app.core.llm_json import loads_object
+                parsed = loads_object(raw)
+                if parsed is None:
+                    logger.debug("RP scene: no JSON object: %s", raw[:100])
                     return {}
-                import json as _json
-                return _json.loads(match.group())
+                return parsed
             except Exception as e:
-                logger.warning("RP-Scene LLM-Call Fehler: %s", e)
+                logger.warning("RP-scene LLM call failed: %s", e)
                 return {}
 
         pose = ""

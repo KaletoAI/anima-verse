@@ -1515,18 +1515,25 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "room_id": get_character_current_room(avatar) or ""}
 
 
+def _scene_photo_avatar_gate():
+    """(avatar, skill) of the scene-photo routes: both read the world DB, so
+    the async routes call this in ONE ``asyncio.to_thread`` hop; the 409/403
+    HTTPException raised here reaches the caller unchanged."""
+    from app.models.account import get_active_character
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
+    return avatar, _player_action_gate(avatar, "scene_photo")
+
+
 @router.post("/play/scene-photo/prepare")
 async def play_scene_photo_prepare(request: Request, user=Depends(get_current_user)):
     """📷 step 1: distills the photo prompt from the recent room
     conversation (+ person descriptions) WITHOUT generating — feeds the
     image-gen dialog (model/LoRA/prompt selection)."""
     import asyncio
-    from app.models.account import get_active_character
     from app.core.scene_photo import prepare_scene_photo
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
-    skill = _player_action_gate(avatar, "scene_photo")
+    avatar, _skill = await asyncio.to_thread(_scene_photo_avatar_gate)
     from pydantic import ValidationError
     try:
         body = await request.json()
@@ -1548,12 +1555,8 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     """Validate and take the photo now; render and notify in the background."""
     import asyncio
     from fastapi.responses import JSONResponse
-    from app.models.account import get_active_character
     from app.core.scene_photo_jobs import validate_request, accept_photo
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
-    skill = _player_action_gate(avatar, "scene_photo")
+    avatar, skill = await asyncio.to_thread(_scene_photo_avatar_gate)
     try:
         body = await request.json()
     except Exception as exc:

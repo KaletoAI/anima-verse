@@ -6,6 +6,7 @@ StreamingResponse). HTTPExceptions embedded mid-logic moved along unchanged.
 Shared helpers that stay in app/routes/chat.py (external importers rely on them)
 are pulled in via function-scope lazy imports to avoid a module-level cycle.
 """
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -55,25 +56,32 @@ async def save_chat_upload(request) -> Dict[str, Any]:
     content = await read_upload_capped(file, what="chat image")
     ensure_image(content, filename=file.filename, what="chat image")
 
-    image_id = f"{uuid.uuid4().hex[:12]}{ext}"
-    dest = _get_chat_upload_dir() / image_id
     from app.core.auth_dependency import get_current_user_from_ctx
-    from app.core import db
     user = get_current_user_from_ctx()
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    from app.core.timeutils import utc_now
     purpose = "scene_photo" if request.query_params.get("purpose") == "scene_photo" else "chat"
+    # The file write and the owner row are blocking I/O: off the event loop.
+    image_id = await asyncio.to_thread(_store_chat_upload, content, ext, user["id"], purpose)
+    return {"image_id": image_id, "filename": file.filename}
+
+
+def _store_chat_upload(content: bytes, ext: str, user_id: str, purpose: str) -> str:
+    """Write an accepted chat upload and its owner row; returns the image id.
+    The file is removed again when the row cannot be written."""
+    from app.core import db
+    from app.core.timeutils import utc_now
+    image_id = f"{uuid.uuid4().hex[:12]}{ext}"
+    dest = _get_chat_upload_dir() / image_id
     dest.write_bytes(content)
     try:
         with db.transaction() as conn:
             conn.execute("INSERT INTO chat_upload_owners (image_id, user_id, purpose, created_at) VALUES (?, ?, ?, ?)",
-                         (image_id, user["id"], purpose, utc_now().isoformat()))
+                         (image_id, user_id, purpose, utc_now().isoformat()))
     except Exception:
         dest.unlink(missing_ok=True)
         raise
-
-    return {"image_id": image_id, "filename": file.filename}
+    return image_id
 
 
 def build_chat_image_library(character: str = None) -> Dict[str, Any]:

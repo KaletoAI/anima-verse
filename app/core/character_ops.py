@@ -3061,14 +3061,21 @@ async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[
 
 
 async def detect_characters_core(character_name: str, image_name: str, request) -> Dict[str, Any]:
-    """Detect characters in an image from reference_images metadata."""
+    """Detect characters in an image from reference_images metadata.
+
+    Everything after reading the body is world-DB and file work, so it runs
+    in ONE ``asyncio.to_thread`` hop, never on the event loop."""
+    import asyncio
+    await request.json()
+    return await asyncio.to_thread(_detect_characters_sync, character_name, image_name)
+
+
+def _detect_characters_sync(character_name: str, image_name: str) -> Dict[str, Any]:
+    """The blocking part of :func:`detect_characters_core`."""
     from app.models.character import (list_available_characters, get_character_images_dir,
         get_character_outfits_dir, get_character_image_prompts, get_character_current_location)
     from app.models.account import get_user_profile, get_active_character
     from app.models.character import get_single_image_meta
-
-    body = await request.json()
-    user_id = body.get("user_id", "")
 
     all_chars = list_available_characters()
     user_profile = get_user_profile()
