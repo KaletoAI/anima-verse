@@ -18,11 +18,18 @@ WHAT FOLLOWS BY HAND
          "chat/agent_thought.md" = REPAIRED (a header comment whose variable list names arc_block on its own line,
          then "before\n", a whitespace-control block {%- if arc_block -%}…{{ arc_block }}…{%- endif -%} and
          "\nafter"), "chat/thought_extra.md" = DELETED (reads {{ arc_block }} outside any block), and
-         "chat/agent_thought_in_chat.md" with plain content (the control: no arc reference).
+         "chat/agent_thought_in_chat.md" with plain content (the control: no arc reference), and two rows whose
+         repair would not parse: "chat/nested_if.md" = "a\n{% if arc_block %}{% if x %}y{% endif %}z{% endif %}\nb"
+         (the shortest match ends at the INNER endif, leaving "z{% endif %}" dangling) and "chat/comment_tail.md" =
+         "{# vars:\n     arc_block — x #}\nbody" (the comment line that names arc_block carries the #}, so the
+         repair leaves "{# vars:\n" unterminated). Neither still reads arc_block after the repair, so only the
+         parse check (jinja2 parse, the loader's options) sends them down the delete path.
      After db.init_schema():
        - sqlite_master has no table "story_arcs" (DROP ran, and no CREATE statement brings it back),
        - the overrides left are exactly {"chat/agent_thought.md", "chat/agent_thought_in_chat.md"} (the arc
-         template row goes by its path, thought_extra by its content; the control row stays),
+         template row goes by its path, thought_extra by its content, nested_if and comment_tail because their
+         repair does not parse; the control row stays),
+       - for each of nested_if and comment_tail exactly ONE warning names it and carries its FULL original content,
        - agent_thought.md is stored as REPAIRED_THOUGHT: the comment line that starts with arc_block is gone, the
          block plus the one newline after it is gone -> "{# vars:\n     other — x\n#}\nbefore\nafter",
        - the control row's content is unchanged ("a plain override"),
@@ -137,10 +144,14 @@ THOUGHT_OVERRIDE = ("{# vars:\n     arc_block   — Low: arc\n     other — x\n
                     "{%- if arc_block -%}\n=== Story ===\n{{ arc_block }}\n{%- endif -%}\nafter")
 REPAIRED_THOUGHT = "{# vars:\n     other — x\n#}\nbefore\nafter"
 EXTRA_OVERRIDE = "Plain line.\n{{ arc_block }} is read here without a block."
+NESTED_IF_OVERRIDE = "a\n{% if arc_block %}{% if x %}y{% endif %}z{% endif %}\nb"
+COMMENT_TAIL_OVERRIDE = "{# vars:\n     arc_block — x #}\nbody"
 for path, content in (("tasks/story_arc_generation.md", "an old arc prompt"),
                       ("chat/agent_thought.md", THOUGHT_OVERRIDE),
                       ("chat/thought_extra.md", EXTRA_OVERRIDE),
-                      ("chat/agent_thought_in_chat.md", "a plain override")):
+                      ("chat/agent_thought_in_chat.md", "a plain override"),
+                      ("chat/nested_if.md", NESTED_IF_OVERRIDE),
+                      ("chat/comment_tail.md", COMMENT_TAIL_OVERRIDE)):
     seed.execute("INSERT INTO llm_template_overrides (path, content, base_hash, updated_at) VALUES (?, ?, 'h', 'x')",
                  (path, content))
 seed.commit()
@@ -208,6 +219,10 @@ check("one warning names the agent_thought override and the world path", len(nam
 extra = [w for w in warnings if "chat/thought_extra.md" in w]
 check("one warning for the deleted override, with its full content",
       (len(extra), all(EXTRA_OVERRIDE in w for w in extra)), (1, True))
+for name, original in (("chat/nested_if.md", NESTED_IF_OVERRIDE), ("chat/comment_tail.md", COMMENT_TAIL_OVERRIDE)):
+    got = [w for w in warnings if name in w]
+    check(f"{name}: repair does not parse -> deleted, one warning with its full content",
+          (name in overrides(), len(got), all(original in w for w in got)), (False, 1, True))
 before = len(warnings)
 db.init_schema()
 check("second init_schema: table still absent", table_present(), False)

@@ -150,7 +150,7 @@ A type is a `QuestType` (`app.core.quest_catalog`):
 | `signals` | The hook events after which the type may have changed its answer. A step is re-read on those signals and on every tick |
 | `evaluate(params, ctx)` | Returns `ConditionResult`; `ctx` is a `QuestContext` (`avatar`, `mind`, `profile`, `location_id`, `room_id`, `now`, `bindings`, `run`). Return unavailable (never false) when a read fails |
 | `validate(params, bindings)` | Optional; returns `list[ConditionIssue]`. `bindings` is `None` at template time (check only what needs no world entity) and the run's bindings at start and at every tick |
-| `needs_open_run` | Default `False`. `True` for a type that can only be read once the run has opened (it counts from `started_game_ts`, like `time_elapsed`): `validate_template` refuses it under `start_condition` (code `not_allowed_here`), where a hidden run has not opened and the type would stay unavailable forever |
+| `needs_open_run` | Default `False`. `True` for a type that can only be read once the run has opened (it counts from `started_game_ts`, like `time_elapsed`): `validate_template` refuses it under `start_condition` (code `not_allowed_here`), where a hidden run has not opened and the type would stay unavailable forever. It is refused under `prerequisites.condition` too when the start condition is non-empty, because such a run opens only once its prerequisites pass; with an empty start condition the run is open from the start and the type is allowed there |
 
 What the catalog guarantees a type:
 

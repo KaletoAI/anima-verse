@@ -113,6 +113,10 @@ WHAT FOLLOWS BY HAND
     one issue (start_condition.type, not_allowed_here); inside {"any": [at_place, time_elapsed]} -> at
     start_condition.any.1.type; time_elapsed as a STEP condition -> no issue. A ready template stored with it
     directly (bypassing the route) -> start_run raises QuestRefused naming start_condition.type.
+    Under prerequisites.condition it depends on the start condition: with start_condition AT_PLACE (a hidden run,
+    which opens only once its prerequisites pass, and time_elapsed is unavailable until the run has opened) ->
+    one issue (prerequisites.condition.type, not_allowed_here); with an empty start condition (the run is open
+    from the start, so time_elapsed can be read) -> no issue.
  19. One failed fact write (review R3): run Errand with giver Ola (A has spoken with Ola since [4b], B never).
     add_fact raises for mind A only; Ola says a line addressed to [A, B], both in the room -> B's fact is written
     (has_fact(B, spoke_with, Ola)), and A is still evaluated: ① done by A (the older fact counts).
@@ -571,6 +575,11 @@ def main() -> int:
           [("start_condition.any.1.type", "not_allowed_here")])
     check("as a step condition", qe.validate_template(
         {**ERRAND, "steps": [{"id": "a", "text": "Wait.", "condition": elapsed}]}), [])
+    check("as a prerequisite of a hidden run", [(i["path"], i["code"]) for i in qe.validate_template(
+        {**ERRAND, "start_condition": AT_PLACE, "prerequisites": {"condition": elapsed}})],
+          [("prerequisites.condition.type", "not_allowed_here")])
+    check("as a prerequisite with an empty start condition", qe.validate_template(
+        {**ERRAND, "start_condition": {}, "prerequisites": {"condition": elapsed}}), [])
     stored = template(title="Waiting start", start_condition=elapsed)
     try:
         qe.start_run(stored["id"], errand_bindings())

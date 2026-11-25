@@ -48,6 +48,24 @@ def _strip_arc_var(content: str) -> tuple:
     return out, _ARC_VAR in _JINJA_COMMENT.sub("", out)
 
 
+def _parses(content: str) -> bool:
+    """True when Jinja can parse `content` with the options of the prompt
+    template loader (`prompt_templates._build_env`): parse only, no render.
+    A repair can leave text that no longer parses (a nested `{% if %}` inside
+    the arc block leaves a dangling endif; a comment whose last line named the
+    arc variable loses its `#}`)."""
+    from jinja2 import StrictUndefined, TemplateSyntaxError
+    from jinja2.sandbox import SandboxedEnvironment
+    env = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined,
+                               trim_blocks=True, lstrip_blocks=True,
+                               keep_trailing_newline=False)
+    try:
+        env.parse(content)
+    except TemplateSyntaxError:
+        return False
+    return True
+
+
 def get_db_path() -> Path:
     return get_storage_dir() / "world.db"
 
@@ -535,8 +553,8 @@ def init_schema() -> None:
     # on every thought turn, so it is REPAIRED: the arc block and the arc entry
     # of a comment's variable list are cut out and the row is updated (the
     # rest of a hand-tuned prompt stays). Only an override that still reads the
-    # arc variable outside comments after that is deleted, and its full content
-    # is logged first. Existing arcs are discarded on purpose.
+    # arc variable outside comments after that, or whose repair Jinja can no
+    # longer parse, is deleted, and its full content is logged first. Existing arcs are discarded on purpose.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='story_arcs_dropped_v1'"
     ).fetchone()
@@ -555,7 +573,7 @@ def init_schema() -> None:
                 ).fetchall()
                 for path, content in stale:
                     repaired, still_reads = _strip_arc_var(content)
-                    if not still_reads:
+                    if not still_reads and _parses(repaired):
                         conn.execute(
                             "UPDATE llm_template_overrides SET content = ? "
                             "WHERE path = ?", (repaired, path))
@@ -566,9 +584,10 @@ def init_schema() -> None:
                         continue
                     logger.warning(
                         "Template override %s of world %s still reads the "
-                        "removed story arc variable outside its block and is "
-                        "deleted; the shipped template takes over. Its full "
-                        "content was:\n%s", path, get_db_path().parent, content)
+                        "removed story arc variable outside its block, or its "
+                        "repair no longer parses, and is deleted; the shipped "
+                        "template takes over. Its full content was:\n%s",
+                        path, get_db_path().parent, content)
                     conn.execute(
                         "DELETE FROM llm_template_overrides WHERE path = ?",
                         (path,))

@@ -253,11 +253,24 @@ def validate_template(template: dict) -> list[dict]:
     for path, expr, kinds in _expressions(template):
         issues.extend(_prefixed(path, quest_catalog.check_expression(expr, roles, allowed_kinds=kinds)))
     known = quest_catalog.types()
-    for leaf_path, leaf in quest_catalog.walk(template.get("start_condition") or {}):
+    start = template.get("start_condition") or {}
+    for leaf_path, leaf in quest_catalog.walk(start):
         t = known.get(leaf["type"])
         if t is not None and t.needs_open_run:
             issues.append(_issue(f"start_condition{leaf_path}.type", "not_allowed_here",
                                  f"'{t.label}' counts from the opening and cannot be a start condition"))
+    # A hidden run (non-empty start condition) opens only once its prerequisites pass, so a type that is
+    # unavailable until the run has opened would keep it hidden forever there; with an empty start condition the
+    # run is open from the start and the type is fine.
+    prereq_expr = _prerequisites(template).get("condition") or {}
+    if start and prereq_expr:
+        for leaf_path, leaf in quest_catalog.walk(prereq_expr):
+            t = known.get(leaf["type"])
+            if t is not None and t.needs_open_run:
+                issues.append(_issue(
+                    f"prerequisites.condition{leaf_path}.type", "not_allowed_here",
+                    f"'{t.label}' counts from the opening; with a start condition the run opens only once the "
+                    f"prerequisites pass, so it would stay hidden forever"))
     limit = template.get("time_limit_s")
     limit = 0 if limit is None else limit
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
