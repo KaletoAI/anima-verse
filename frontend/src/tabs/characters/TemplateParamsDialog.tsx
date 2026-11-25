@@ -35,7 +35,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
 import { guardedInterval } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_HINTS, TEMPLATE_FIELD_LABELS, TEMPLATE_MATERIAL_HINT, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -424,6 +424,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             </span>
                           </span>
                         )}
+                        {TEMPLATE_FIELD_HINTS[key] ? (
+                          <span className="ga-form-hint" data-field-hint={key}>{t(TEMPLATE_FIELD_HINTS[key] as string)}</span>
+                        ) : null}
                         {key === 'fabric' && TEMPLATE_FABRIC_NOTES[draft.fabric] ? (
                           <span className="ga-form-hint" data-fabric-note={draft.fabric}>
                             {t(TEMPLATE_FABRIC_NOTES[draft.fabric])}
@@ -436,6 +439,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         {key === 'fabric' && data.material ? (
                           <span data-material-select="" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <MaterialSelect itemId={itemId} material={data.material} onChanged={reloadProgress} />
+                            <span className="ga-form-hint" data-material-hint="">{t(TEMPLATE_MATERIAL_HINT)}</span>
                             {draft.fabric.startsWith('leather_') ? (
                               <span className="ga-form-hint">
                                 {t('A leather finish sets its own surface: the material preset\'s metal and sheen do not apply.')}

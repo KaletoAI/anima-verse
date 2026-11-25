@@ -276,15 +276,30 @@ export function prepareSheerPieces(root: Object3D, doubleSide: number): number {
 
 /** A214: the fabric whose surface asks for an environment reflection (`garment_template.LEATHER_SURFACES`). */
 export const GLOSSY_FABRICS = ['leather_glossy']
-/** A214: how strongly a glossy piece reflects the environment (1.0 washed the leather colour out: median luminance 40 -> 97 on a brown skirt). */
-export const GLOSSY_ENV_INTENSITY = 0.5
+/**
+ * A214: how strongly a glossy piece reflects the environment (1.0 washed the leather colour out: median luminance
+ * 40 -> 97 on a brown skirt). Round 2026-11-25: 0.5 -> 0.3 with the softer leather coat ("looks like glass").
+ */
+export const GLOSSY_ENV_INTENSITY = 0.3
+/**
+ * Round 2026-11-25 (Glut's scale pieces): a metal surface (`piece_material.PRESETS["metal"]`, marked
+ * `extras.explicit_metallic`) has no diffuse colour — without an environment it shows black between the light's
+ * highlights. It reflects the same neutral environment at full strength: what a metal shows IS its reflection.
+ */
+export const METAL_ENV_INTENSITY = 1.0
+
+/** Whether a figure material is a metal surface (`extras.explicit_metallic`, kept metallic by the viewers). */
+export function isMetalPiece(userData: Record<string, unknown> | undefined): boolean {
+  return userData?.explicit_metallic === true
+}
 
 /**
- * A214: a glossy leather piece (clear coat over a low base roughness, `app/core/garment_template
- * .material_overrides`, `extras.anima_material` = the fabric). Under direct lights alone a clear coat is a few
- * pixel-sized highlights; with an environment map the whole surface reflects, which is what reads as patent
- * leather. `env` is the renderer's neutral environment (null: nothing changes). Only these pieces get it — the
- * body and every other piece keep their look. Returns how many materials it set.
+ * A214: a glossy leather piece (clear coat over a mid base roughness, `app/core/garment_template
+ * .material_overrides`, `extras.anima_material` = the fabric) and — round 2026-11-25 — a metal piece
+ * (`isMetalPiece`). Under direct lights alone a clear coat is a few pixel-sized highlights and a metal is dark;
+ * with an environment map the whole surface reflects. `env` is the renderer's neutral environment (null: nothing
+ * changes). Only these pieces get it — the body and every other piece keep their look. `intensity` is the glossy
+ * leather's; a metal takes `METAL_ENV_INTENSITY`. Returns how many materials it set.
  */
 export function prepareGlossyPieces(root: Object3D, env: unknown, intensity = GLOSSY_ENV_INTENSITY): number {
   if (!env) return 0
@@ -295,9 +310,10 @@ export function prepareGlossyPieces(root: Object3D, env: unknown, intensity = GL
     const mats = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as Array<{
       userData?: Record<string, unknown>; envMap?: unknown; envMapIntensity?: number; needsUpdate: boolean }>
     for (const m of mats) {
-      if (!GLOSSY_FABRICS.includes(String(m.userData?.anima_material ?? ''))) continue
+      const metal = isMetalPiece(m.userData)
+      if (!metal && !GLOSSY_FABRICS.includes(String(m.userData?.anima_material ?? ''))) continue
       m.envMap = env
-      m.envMapIntensity = intensity
+      m.envMapIntensity = metal ? METAL_ENV_INTENSITY : intensity
       m.needsUpdate = true
       marked += 1
     }

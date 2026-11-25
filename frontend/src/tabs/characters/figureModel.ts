@@ -612,13 +612,24 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   placket: 'Placket (painted)', buttons: 'Buttons (0 = automatic)',
 }
 
+/**
+ * Round 2026-11-25: one line under a field of the parameter dialog that says what the field controls (rendered for
+ * any key that has one). "Fabric" is the cloth simulation, "Material" (the select under it) the surface only.
+ */
+export const TEMPLATE_FIELD_HINTS: Partial<Record<keyof TemplateParams, string>> = {
+  fabric: 'Fabric = how the cloth falls (the cloth simulation: weight, stiffness, folds). Metal scales or chain: Stiff.',
+}
+
+/** Round 2026-11-25: the line under the material select of a template piece — the surface, never the drape. */
+export const TEMPLATE_MATERIAL_HINT = 'Material = the surface only (shine, roughness, metal); it never changes the drape. Metal scales or chain: Metal.'
+
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
 export const TEMPLATE_FABRIC_NOTES: Record<string, string> = {
   stiff: 'Holds its shape: few, wide folds.',
   medium: 'Ordinary cotton: the usual drape.',
   flowing: 'Soft folds that follow the body.',
   sheer: 'Very light, fine folds that flutter; see-through — the body and what is worn under it show.',
-  leather_glossy: 'Heavy and stiff: barely stretches, few wide folds; a shiny clear-coated surface.',
+  leather_glossy: 'Heavy and stiff: barely stretches, few wide folds; a smooth, glossy finished surface.',
   leather_rough: 'Heavy and stiff: barely stretches, few wide folds; a matte suede surface.',
 }
 

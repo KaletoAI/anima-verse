@@ -405,14 +405,19 @@ FABRICS: Dict[str, Dict[str, float]] = {
 #: A214: fabrics that share one drape — ``tsig`` keys them by the shared name, so a switch between them only
 #: re-assembles (the material changes, the cloth run does not).
 DRAPE_FABRIC = {"leather_glossy": "leather", "leather_rough": "leather"}
-#: A214: the surface of each leather finish (``material_overrides``). Glossy = low roughness under a full clear
-#: coat (KHR_materials_clearcoat); rough = matte suede / nubuck with a faint velvety sheen, no clear coat. Never metal.
+#: A214: the surface of each leather finish (``material_overrides``). Glossy = smooth finished leather: a mid base
+#: roughness under a light, soft clear coat (KHR_materials_clearcoat); rough = matte suede / nubuck with a faint
+#: velvety sheen, no clear coat. Never metal.
+#: Round 2026-11-25 (Lirien, "looks like glass"): glossy was roughness 0.2 under a full mirror coat (1.0, 0.08) —
+#: patent leather / car paint: the room's light boxes as sharp spots and a bright Fresnel rim on every silhouette.
+#: Now 0.38 under (0.35, 0.30), close to ``piece_material.PRESETS["leather"]`` (0.45 under 0.3 / 0.4).
 LEATHER_SURFACES: Dict[str, Dict[str, Any]] = {
-    "leather_glossy": {"roughness": 0.2, "clearcoat": (1.0, 0.08), "sheen": None},
+    "leather_glossy": {"roughness": 0.38, "clearcoat": (0.35, 0.30), "sheen": None},
     "leather_rough": {"roughness": 0.85, "clearcoat": None, "sheen": (0.25, 0.7)},
 }
-#: Bumped when a ``LEATHER_SURFACES`` value changes (part of ``material_key``, so the assembly is redone).
-LEATHER_SURFACE_VERSION = 1
+#: Bumped when a ``LEATHER_SURFACES`` value changes (part of ``material_key``, so the assembly is redone; the drape
+#: is not — the material is no part of ``tsig``). 2: round 2026-11-25, glossy no longer a mirror coat.
+LEATHER_SURFACE_VERSION = 2
 #: A204: the fabric drawn see-through. Its piece is grafted with alphaMode BLEND at ``opacity``, double-sided, and
 #: hides nothing: neither the body faces under it (``body_cover``, A133) nor an inner piece's faces (A192).
 SHEER = "sheer"
