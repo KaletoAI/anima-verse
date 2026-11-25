@@ -1,5 +1,6 @@
 export * from './api';
 export * from './propActions';
+export { propActionReason } from './propActionReasons';
 export * from './PropActionsPanel';
 export * from './ActionsTree';
 export { GROUP_MIN_OTHERS } from './actionsTreeModel';

@@ -202,13 +202,13 @@ public sealed partial class AvatarOffersController
             return;
         }
         catch(Exception e) {
-            if(!_disposed && click==_currentClick) RefuseClick(click,e is AnimaNative.Api.ApiException api && api.Detail is { Length:>0 } d ? d : e.Message);
+            if(!_disposed && click==_currentClick) { var (code,text)=RefusalOf(e); RefuseClick(click,code,text); }
             return;
         }
         if(_disposed) return;
         string status=PropActionMotion.Text(answer["status"]),exec=PropActionMotion.Text(answer["execution_id"]);
         if(status is "refused" or "failed") {
-            if(click==_currentClick) RefuseClick(click,PropActionMotion.Text(answer["reason"]));
+            if(click==_currentClick) RefuseClick(click,PropActionMotion.Text(answer["reason"]),PropActionMotion.Text(answer["reason_text"]));
             return;
         }
         if(exec.Length==0 || status=="cancelled") return;
@@ -245,25 +245,66 @@ public sealed partial class AvatarOffersController
         if(_currentClick==click) _currentClick=null;
         _handBackPending=true;
     }
-    /// <summary>A refusal of the click (or a failed request): stand, turn away from the furniture, say why.</summary>
-    private void RefuseClick(PropClick click,string reason)
+    /// <summary>
+    /// The refusal code and the server's own words of a failed request: the <c>detail</c> of an API error is either the
+    /// bare code or an object with <c>reason</c> / <c>reason_text</c>; anything else has no code, only its message.
+    /// </summary>
+    private static (string Code,string Text) RefusalOf(Exception e)
+    {
+        if(e is not AnimaNative.Api.ApiException { Detail: { Length:>0 } detail }) return ("",e.Message);
+        if(!detail.TrimStart().StartsWith('{')) return (detail,"");
+        try {
+            var obj=JsonNode.Parse(detail) as JsonObject;
+            string code=PropActionMotion.Text(obj?["reason"]);
+            return code.Length>0 ? (code,PropActionMotion.Text(obj?["reason_text"])) : ("",e.Message);
+        } catch(JsonException) { return ("",e.Message); }
+    }
+    /// <summary>
+    /// Says why a click failed: a refusal code goes to the HUD's reason table (<see cref="ReasonToast"/>, the player's
+    /// sentence of propActionReasons.ts), a message without code as it is.
+    /// </summary>
+    private void SayRefusal(string code,string text)
+    {
+        if(code.Length>0 && ReasonToast is { } reason) reason(code,text);
+        else Toast?.Invoke(text.Length>0 ? text : code.Length>0 ? code : "refused");
+    }
+    /// <summary>
+    /// A refusal of the click (or a failed request): say why; then stand, turn away from the furniture and hand back —
+    /// unless the server still holds an own run the click left (it keeps it on a refusal, prop_action_engine
+    /// "Refusals that need no route keep the current action"): the local order is let go and the avatar stays the
+    /// server's, back on that run's place (review Task 6 I2).
+    /// </summary>
+    private void RefuseClick(PropClick click,string reason,string text="")
     {
         _currentClick=null;
+        LogProp($"click refused: {reason} {text}".TrimEnd());
+        SayRefusal(reason,text);
+        if(KeepHeldRun()) return;
         if(click.Local?.Actors[0].Anchor is { } anchor) _turnAwayFrom=new((float)anchor.X,(float)anchor.Y,(float)anchor.Z);
-        LogProp($"click refused: {reason}");
-        Toast?.Invoke(reason.Length>0 ? reason : "refused");
         if(_figures.HasLiveOrder(_figures.AvatarName)) _figures.RefuseOrder(_figures.AvatarName,reason);
         else _handBackPending=true;
+    }
+    /// <summary>
+    /// The click is given up while an own run the server still holds is live: the local order goes, the run's own order
+    /// (if its row carries one) comes back, and the avatar stays server-driven — the row's place seats it again.
+    /// </summary>
+    private bool KeepHeldRun()
+    {
+        if(PropActions?.OwnedRun is null) return false;
+        _figures.ResumeRowOrder(_figures.AvatarName);
+        _handBackPending=false; _handBackAt=null; _turnAwayFrom=null;
+        LogProp("click given up: the held run stays");
+        return true;
     }
     private void AvatarOrderFrame(string name,OrderFrame frame)
     {
         if(_disposed || name!=_figures.AvatarName || !frame.Events.Contains("no_path") || _currentClick is not { } click) return;
         // No way to the furniture: say so, let go of the reservation (now, or when its answer comes) and of the avatar.
         click.NoPath=true; _currentClick=null;
-        Toast?.Invoke("no_path");
+        SayRefusal("no_path","");
         LogProp("local order: no_path");
-        if(click.ExecutionId.Length>0) PendingPropAction=AbandonRunAsync(click.ExecutionId);
-        _handBackPending=true;
+        if(click.ExecutionId.Length>0) { PendingPropAction=AbandonRunAsync(click.ExecutionId); _handBackPending=true; }
+        else if(!KeepHeldRun()) _handBackPending=true;
     }
     private void AvatarOrderEnded(string name)
     {

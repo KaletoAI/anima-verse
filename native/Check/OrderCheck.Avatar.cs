@@ -97,6 +97,8 @@ public static partial class OrderCheck
 
                 if (scenario == "R2")
                 {
+                    var said = new List<string>();
+                    offers.ReasonToast = (code, _) => said.Add(code);
                     Click("bench-56");
                     while (m.Clock < t0 + 0.8 - 1e-9) Frame();
                     answers.Dequeue().SetResult(Doc("""{"execution_id":"","status":"refused","reason":"no_free_slot"}"""));
@@ -112,9 +114,12 @@ public static partial class OrderCheck
                     Is("R2 the avatar is the player's again", !m.HasLiveOrder(m.AvatarName) && !m.ServerDriven && !steering.PropActionDriven);
                     // Away from the bench's slot (2, 0.129, 0): atan2(−1.901750 − 2, −1.780350 − 0) = −114.527°.
                     Near("R2 turned away from the furniture", Math.IEEERemainder(avatar.Yaw * 180 / Math.PI + 114.527, 360), 0, 1.0);
+                    // The HUD gets the CODE and shows the sentence of propActionReasons.ts (review Task 6 I1), never the raw code.
+                    Is("R2 the refusal reaches the HUD by its code", said.SequenceEqual(new[] { "no_free_slot" }), string.Join(",", said));
                 }
                 else if (scenario == "R2b")
                 {
+                    // The answer here carries no order; its adoption in place is checked in PropActionsCheck (CheckOwnOrders).
                     Click("bench-56");
                     var before = avatar.Position;
                     Frame();
@@ -151,6 +156,7 @@ public static partial class OrderCheck
                     source.StateOverride = new JsonObject { ["current"] = new JsonArray(new JsonObject { ["execution_id"] = "run-b", ["status"] = "approaching" }), ["outgoing"] = new JsonArray() };
                     var toasts = new List<string>();
                     offers.Toast = toasts.Add;
+                    offers.ReasonToast = (code, _) => toasts.Add(code);
                     a.SetResult(Doc("""{"execution_id":"run-a","status":"approaching"}"""));
                     await offers.PendingPropAction!;
                     for (int i = 0; i < 5 && source.Calls.Count < 4; i++) { await Task.Yield(); await offers.PendingPropAction!; }
@@ -197,7 +203,6 @@ public static partial class OrderCheck
                 double now = 0;
                 rooms = new AvatarRoomsController(m, ordersBuilder, steering, src, hud, () => now);
                 rooms.SetActive(true);
-                m.AvatarLinkRide = rooms.OrderLinkRide;
                 var events = new List<string>();
                 m.OrderFrameShown += (name, frame) => { if (name == m.AvatarName) events.AddRange(frame.Events); };
                 var start = new OrderPoint(f.Position.X, f.Position.Y, f.Position.Z, 0);
@@ -205,6 +210,10 @@ public static partial class OrderCheck
                 var walk = LocalOrders.Walk(1, m.MotionNow, LocalOrders.DefaultSpeedMS, m.AvatarName, start, "r-a", 0,
                                             new OrderPoint(100.35, 3, 0.8, 0), "loc-nav", "r-up", 1);
                 Is($"R2d {(accept ? "accept" : "refuse")}: the walk starts", m.StartLocalOrder(walk));
+                // The hook is wired AFTER the avatar's player exists (review Task 6 I4: MainWorld applies the first map before
+                // MainEmbody sets it): the ride is chosen at the stair foot, so the room is still asked for. On 09af630c6 the
+                // player kept the NPC rides built at its birth — no room request, no link_refused.
+                m.AvatarLinkRide = rooms.OrderLinkRide;
                 double? roomAtY = null;
                 for (int i = 0; i < 60 * 25; i++)
                 {

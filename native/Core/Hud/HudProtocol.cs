@@ -98,7 +98,7 @@ public static class HudProtocol
     };
 
     /// <summary><c>uiNames</c> of bridge.ts — actions scene → HUD.</summary>
-    public static readonly string[] UiActions = { "openChat", "openScreenshotPhoto", "toast", "toggleMenu", "closeMenu" };
+    public static readonly string[] UiActions = { "openChat", "openScreenshotPhoto", "toast", "propReason", "toggleMenu", "closeMenu" };
 
     /// <summary><c>HUD_OWNED_FIELDS</c> of bus.ts — the HUD writes these game-state fields, the scene only reads them.</summary>
     public static readonly string[] HudOwnedFields =

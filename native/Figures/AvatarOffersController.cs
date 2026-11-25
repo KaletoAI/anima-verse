@@ -47,6 +47,11 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public Func<bool> RoomRequestInFlight { get; set; }=()=>false;
     public IReadOnlyDictionary<string,string> LockedLocations { get; set; }=new Dictionary<string,string>();
     public Action<string>? Toast { get; set; }
+    /// <summary>
+    /// A furniture refusal by its code (and the server's own words, when it sent any): the HUD turns the code into the
+    /// player's sentence (propActionReasons.ts). Unset, the code goes to <see cref="Toast"/> as it is.
+    /// </summary>
+    public Action<string,string>? ReasonToast { get; set; }
     public Action<string>? OpenLocation { get; set; }
     public Action? RefreshMap { get; set; }
     public Task? PendingEntry { get; private set; }

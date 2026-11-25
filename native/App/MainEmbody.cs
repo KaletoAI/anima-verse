@@ -306,6 +306,7 @@ public partial class Main
                 _avatarOffers = new AvatarOffersController(_figures, _builder, _playerSteering, _source!, offerHud, _avatarPosition)
                 {
                     Toast = EmbodyToast,
+                    ReasonToast = (code, text) => _hud?.SendUi("propReason", code, text),
                     OpenLocation = OpenLocation,
                     RefreshMap = RefreshOffersMap,
                     RefreshPropWorld = RefreshPropWorldAsync,

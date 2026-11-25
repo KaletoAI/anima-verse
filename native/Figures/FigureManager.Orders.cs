@@ -56,7 +56,8 @@ public partial class FigureManager
 
     /// <summary>
     /// The avatar's ride over a link of its order walk, per kind (<c>stairs</c>, <c>lift</c>): the room-entry ride of
-    /// <c>AvatarRoomsController</c>. Read at the ride's start; null (no rooms controller) rides like an NPC.
+    /// <c>AvatarRoomsController</c>. Read at each ride's start (<c>ResolvedLinkRide.Begin</c>); null (no rooms controller, or the
+    /// hook returns null) rides like an NPC.
     /// </summary>
     public Func<string, ILinkRide?>? AvatarLinkRide { get; set; }
 
@@ -109,6 +110,21 @@ public partial class FigureManager
     {
         if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is null) return;
         ForgetOrders(name);
+    }
+
+    /// <summary>
+    /// Lets go of the figure's (local) order and goes back to what its row says (review Task 6 I2: a refused click while
+    /// the server still holds the own run): the row's order when it carries one, else the row's placement at once — the
+    /// held place seats the figure again (no end blend, no event).
+    /// </summary>
+    public void ResumeRowOrder(string name)
+    {
+        DropOrder(name);
+        if (!_figures.TryGetValue(name, out var fig)) return;
+        if (_rowByName.TryGetValue(name, out var row) && row.Order is { } order
+            && !(name == AvatarName && IgnoresAvatarOrder?.Invoke(order) == true) && Mounted(order.LocationId))
+            AcceptOrder(fig, order, MotionNow);
+        if (!HasLiveOrder(name) && _lastPlans.TryGetValue(name, out var plan)) ApplyPlan(fig, plan, false);
     }
 
     /// <summary>
@@ -171,20 +187,39 @@ public partial class FigureManager
     private OrderPlayer PlayerFor(string name)
     {
         if (_orderPlayers.TryGetValue(name, out var player)) return player;
+        // The avatar's link rides ask the server for the room first (plan E3 Task 6, R2d). Which ride applies is decided
+        // at each ride's start, not here: the player may be born before the hook is wired, or outlive an avatar change.
         var rides = new Dictionary<string, ILinkRide>(StringComparer.Ordinal)
         {
-            ["stairs"] = new NpcStairsRide(() => _orderPlayers.TryGetValue(name, out var p) && p.Current is { } o
-                && Slots?.Invoke().GetValueOrDefault(o.LocationId) is { } tile ? tile.Places.Stairs : Array.Empty<AnimaNative.Scene.StairLink>()),
-            ["lift"] = new NpcLiftRide(),
+            ["stairs"] = new ResolvedLinkRide("stairs", () => AvatarRideOf(name, "stairs"), new NpcStairsRide(() => _orderPlayers.TryGetValue(name, out var p) && p.Current is { } o
+                && Slots?.Invoke().GetValueOrDefault(o.LocationId) is { } tile ? tile.Places.Stairs : Array.Empty<AnimaNative.Scene.StairLink>())),
+            ["lift"] = new ResolvedLinkRide("lift", () => AvatarRideOf(name, "lift"), new NpcLiftRide()),
         };
-        // The avatar's link rides ask the server for the room first (plan E3 Task 6, R2d).
-        if (name == AvatarName && AvatarLinkRide is { } avatarRide)
-            foreach (var kind in new[] { "stairs", "lift" })
-                if (avatarRide(kind) is { } ride) rides[kind] = ride;
         var created = new OrderPlayer(name, new OrderClipDurations(this, name), rides);
         // A player born between two polls (a pull, a mount) starts in the world's freeze state, not unfrozen.
         created.SetFrozen(WorldFrozen, _clock);
         return _orderPlayers[name] = created;
+    }
+
+    /// <summary>The avatar's ride of a kind when <paramref name="name"/> is the avatar NOW and the hook is wired, else null.</summary>
+    private ILinkRide? AvatarRideOf(string name, string kind)
+        => name == AvatarName && AvatarLinkRide is { } hook ? hook(kind) : null;
+
+    /// <summary>
+    /// One figure's ride of one kind, resolved at <see cref="Begin"/> (review Task 6 I4): the avatar's room-entry ride when
+    /// the figure is the avatar at that moment, else the NPC ride. Poll/Abort go to the ride the last Begin chose.
+    /// </summary>
+    private sealed class ResolvedLinkRide(string kind, Func<ILinkRide?> avatar, ILinkRide npc) : ILinkRide
+    {
+        private ILinkRide _active = npc;
+        public string Kind => kind;
+        public LinkRideState Begin(string actor, NavLink link)
+        {
+            _active = avatar() ?? npc;
+            return _active.Begin(actor, link);
+        }
+        public LinkRideState Poll(ref Vec3 pos, double dt, double speedMS) => _active.Poll(ref pos, dt, speedMS);
+        public void Abort() => _active.Abort();
     }
 
     /// <summary>

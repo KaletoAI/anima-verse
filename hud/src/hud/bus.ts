@@ -208,6 +208,10 @@ export interface HudUiActions {
    *  the scene composer, § 4.3); a server text is already localized and goes
    *  out as it is. */
   toast?: (msg: string, translate?: boolean) => void;
+  /** a furniture refusal by its CODE (no_path, no_free_slot, ...): shown as the
+   *  player's sentence of propActionReasons.ts; `text` is the server's own
+   *  words for it (reason_text, already localized), shown as they are. */
+  propReason?: (code: string, text?: string) => void;
   /** M opens and closes the game menu (E4-T4) */
   toggleMenu?: () => void;
   /** Esc closes the menu; the UI state decides whether it owns the key. */

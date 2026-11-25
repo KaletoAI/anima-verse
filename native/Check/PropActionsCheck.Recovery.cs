@@ -42,7 +42,10 @@ public static partial class PropActionsCheck
     /// Plan E3 Task 6: the own run on orders (fixtures/propactions/README.md numbers): the click walks a local order, the
     /// answer's order adopts it without a restart, a poll never moves the avatar, the revision <c>entering</c> plays the
     /// entry onto the slot; the run's end hands the avatar back (at the latest after the hold); in-place switches,
-    /// detached HUD answers and a pair stop keep their Task 57 contracts; the shared B1 vectors stay checked.
+    /// detached HUD answers and a pair stop keep their Task 57 contracts; the shared B1 vectors stay checked. The living
+    /// paths of the removed motion-plan checks, now on orders (review Task 6 I3): the row's finale and pair finale on the
+    /// order's held place, a refused click (answer or exception, failed state read) keeping the server's run (I2), a failed
+    /// cancellation keeping the order, a released pair never reclaimed, and the pair-end hold while only the order lives.
     /// </summary>
     private static async Task<int> CheckOwnOrders(Node3D host,string fixtures)
     {
@@ -168,6 +171,134 @@ public static partial class PropActionsCheck
                 Step(Dt);
                 Is("pair stop hands back "+tag,HandedBack());
             }
+
+            // ==== review Task 6 I2/I3: the living paths of the own run on orders ====
+            // A run seated through its order: the HUD answer's order walks from wherever the avatar stands (the journey
+            // server's order waits at the access), the revision "entering" (same issued clock) plays the 2 s entry; at most
+            // √((2+3)² + (−1+2)²) = 5.10 m from any point of this room → < 3.7 s at 1.4 m/s, 4 s is enough.
+            async Task SeatRun(string id) {
+                source.StateOverride=RunState(id); double issuedAt=mgr.MotionNow;
+                hud.hud_bridge(new JsonObject { ["v"]=4,["kind"]="prop-actions-changed",["request_id"]="hud:"+id,["source"]="request",
+                    ["result"]=new JsonObject { ["execution_id"]=id,["status"]="approaching",["order"]=OwnOrder(id,issuedAt) } }.ToJsonString());
+                await offers.PendingPropAction!; Step(4);
+                mgr.AdoptOrders(new[]{ AnimaNative.Orders.OrderParse.From(JsonSerializer.SerializeToElement(OwnOrder(id,issuedAt,2,"entering")))! },mgr.MotionNow);
+                Step(2.6);
+                Is($"{id}: seated through its order (state={mgr.OrderPlayerOf(mgr.AvatarName)?.RunState})",
+                    mgr.OrderPlayerOf(mgr.AvatarName)?.RunState==AnimaNative.Orders.OrderState.Loop && offers.PropActions!.OwnExecutionId==id);
+            }
+            var reasons=new List<string>(); offers.ReasonToast=(code,_)=>reasons.Add(code);
+            var library=avatar.Player!.GetAnimationLibrary("");
+            library.AddAnimation("author-held",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
+            library.AddAnimation("pair-pose__b",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
+            avatar.FitClip=kind=>kind is "author-held" or "pair-pose__b";
+
+            // ---- the row's finale plays on the order's held place (decision 18: from the loop on the row poses) ----
+            await SeatRun("run-f");
+            var seat=Read("worldmap_active.json"); var seatRow=seat["characters"]![0]!; seatRow["activity_animation"]="author-held";
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is($"the held place plays the row's activity (clip={avatar.CurrentClip})",avatar.CurrentClip=="author-held");
+            seatRow["finale"]=JsonNode.Parse("""{"id":"own-finale-t6","kind":"walk","role":null,"elapsed_s":0.9,"duration_s":1.033}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is($"own finale replaces held pose (clip={avatar.CurrentClip})",avatar.CurrentClip=="walk");
+            Near("own finale starts at frame zero",avatar.ClipTime,0); Near("own finale keeps the slot height",avatar.Position.Y,.129);
+            Step(1.1);   // 1.033 s of finale → back to the held pose
+            Is($"own finale returns to the held pose (clip={avatar.CurrentClip})",avatar.CurrentClip=="author-held" && mgr.HasLiveOrder(mgr.AvatarName));
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is("own same-id poll never restarts finale",avatar.CurrentClip=="author-held");
+            seatRow["finale"]!["id"]="own-finale-t6b"; mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is("own new id starts finale",avatar.CurrentClip=="walk");
+            seatRow["finale"]=null; mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(1.1);
+
+            // ---- the row's pair on the order's place: its finale plays once, the end hold keeps no finale ----
+            mgr.Clips.Index.PairRoots["pair-pose__b"]=new(){[""]=new PairRoot(new RootPath(new float[]{0},new float[]{.25f,.5f}),PairScale.Origin)};
+            seatRow["interaction"]=JsonNode.Parse("""{"id":"own-pair-t6","kind":"pair-pose","role":"b","members":{"a":"fixture-npc","b":"fixture-avatar"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+            seat["characters"]![0]!["place"]!["slot"]=1;
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is($"the row's pair is played on the order's place (pair={avatar.Pair?.Id ?? "none"})",avatar.Pair?.Id=="own-pair-t6");
+            seatRow["finale"]=JsonNode.Parse("""{"id":"own-pair-finale-t6","kind":"pair-pose","role":"b","elapsed_s":0.9,"duration_s":1.033}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is("own pair finale plays once",avatar.Player.GetAnimation(avatar.Player.AssignedAnimation).LoopMode==Animation.LoopModeEnum.None);
+            Step(1.1);
+            Is("own pair finale returns same clip to looping",avatar.Player.GetAnimation(avatar.Player.AssignedAnimation).LoopMode==Animation.LoopModeEnum.Linear);
+            seatRow["finale"]!["id"]="own-pair-ended-t6"; mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            seatRow["interaction"]=null; seatRow["place"]=null; mgr.ApplyPolled(JsonSerializer.SerializeToElement(seat)); Step(Dt);
+            Is($"own pair end is held for the run's end (pair={avatar.Pair?.Id ?? "none"})",avatar.Pair?.Id=="own-pair-t6");
+            Is("own pair end hold does not retain finale",avatar.Finale is null);
+            mgr.Clips.Index.PairRoots.Remove("pair-pose__b");
+            source.MapOverride=Read("worldmap_cancelled.json"); await End("run-f"); Step(3.1);
+            Is("the finale run's end hands back",HandedBack() && avatar.Pair is null);
+
+            // ---- a click refused while the server holds the own run: the run stays, the avatar back on its place (I2) ----
+            // The server keeps the current run on a refusal (prop_action_engine.request_with_creation: "Refusals that need
+            // no route keep the current action"); fails on 09af630c6, where the refusal handed the avatar back.
+            foreach(bool exception in new[]{false,true}) {
+                string id="run-r-"+exception;
+                await SeatRun(id);
+                var held2=Read("worldmap_active.json"); source.MapOverride=held2; mgr.ApplyPolled(JsonSerializer.SerializeToElement(held2)); Step(Dt);
+                source.PendingState=exception ? new() : null;
+                source.OnRequest=_=>exception
+                    ? Task.FromException<JsonDocument>(new ApiException(409,"/play/prop-actions/request","{\"reason\":\"stale_definition\",\"reason_text\":\"\"}"))
+                    : Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}"));
+                Click();
+                // A state read that fails after the refusal keeps the server's last known run.
+                source.PendingState?.SetException(new InvalidOperationException("state offline"));
+                await offers.PendingPropAction!; source.PendingState=null; source.OnRequest=null; Step(.1);
+                Is($"refusal keeps the run the server still holds {exception}",offers.PropActions!.OwnedRun is not null && offers.PropActions.OwnExecutionId==id
+                    && mgr.ServerDriven && steering.PropActionDriven && !position.Channel.CanReport());
+                Is($"refusal lets go of the click's local order {exception} (order={mgr.OrderPlayerOf(mgr.AvatarName)?.Current?.Id ?? "none"})",
+                    mgr.OrderPlayerOf(mgr.AvatarName)?.Current is not { IsLocal:true });
+                Near("refusal: back on the run's place x "+exception,avatar.Position.X,2); Near("refusal: back on the run's place z "+exception,avatar.Position.Z,0);
+                Is($"refusal is said by its code {exception} ({string.Join(",",reasons)})",reasons.LastOrDefault()==(exception ? "stale_definition" : "claimed"));
+                source.MapOverride=Read("worldmap_cancelled.json"); await End(id); Step(3.1);
+                Is("the held run's own end hands back "+exception,HandedBack() && offers.PropActions!.OwnedRun is null);
+            }
+
+            // ---- a failed cancellation keeps the order; a retry goes out; a released pair is never reclaimed ----
+            source.MapOverride=null; await SeatRun("run-c");
+            var stalePair=Read("worldmap_active.json");
+            stalePair["characters"]![0]!["interaction"]=JsonNode.Parse("""{"id":"old-pair-t6","kind":"pair-pose","role":"b","members":{"a":"fixture-npc","b":"fixture-avatar"},"anchor":{"x":2,"z":0,"yaw":0,"place_id":"prop-bench-56-seat56"},"elapsed_s":0,"clip_duration_s":1,"loop":true,"rate":1}""");
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(stalePair)); Step(Dt);
+            Is("cancel starts with authoritative pair present",avatar.Pair is not null);
+            int cancels=source.CancelRequests;
+            source.CancelError=new ApiException(409,"/play/prop-actions/cancel","claimed");
+            hud.Handlers["cancelPropAction"](new JsonArray("run-c")); await offers.PendingPropAction!; Step(.1);
+            Is("failed cancellation keeps the order and the avatar",mgr.HasLiveOrder(mgr.AvatarName) && mgr.ServerDriven && steering.PropActionDriven && offers.PropActions!.OwnedRun is not null);
+            source.CancelError=null;
+            hud.Handlers["cancelPropAction"](new JsonArray("run-c")); await offers.PendingPropAction!;
+            Is($"failed cancellation permits retry (cancels={source.CancelRequests-cancels})",source.CancelRequests==cancels+2);
+            source.MapOverride=Read("worldmap_cancelled.json"); await End("run-c"); Step(3.1);
+            Is("the cancelled run hands back",HandedBack());
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(stalePair)); Step(Dt);
+            Is("stale paired poll cannot reclaim released figure",avatar.Pair is null);
+            stalePair["characters"]![0]!["interaction"]!["id"]="fresh-pair-t6";
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(stalePair)); Step(Dt);
+            Is("new interaction remains adoptable after release",avatar.Pair is not null);
+            mgr.ApplyPolled(JsonSerializer.SerializeToElement(Read("worldmap_cancelled.json"))); Step(Dt);
+
+            // ---- the own pair's end is held while only the ORDER lives (no run known yet): OwnPairEndingHeld's live test ----
+            // With the order part removed from that test (OwnPropRunLive alone) this check run fails (at the released-pair
+            // section above, which leans on the same test).
+            {
+                string pairId="pair-order-only"; var npcFigure=mgr.Figures["fixture-npc"];
+                JsonNode Half(string role)=>JsonNode.Parse("{\"id\":\""+pairId+"\",\"kind\":\"pair-pose\",\"role\":\""+role
+                    +"\",\"members\":{\"a\":\"fixture-npc\",\"b\":\"fixture-avatar\"},\"anchor\":{\"x\":2,\"z\":0,\"yaw\":0,\"place_id\":\"prop-bench-56-seat56\"},\"elapsed_s\":0,\"clip_duration_s\":1,\"loop\":true,\"rate\":1}")!;
+                var pending=new TaskCompletionSource<JsonDocument>(); source.OnRequest=_=>pending.Task;
+                source.StateOverride=new JsonObject { ["current"]=new JsonArray(),["outgoing"]=new JsonArray() };
+                Click(); Step(.1);
+                var both=Read("worldmap_cancelled.json");
+                both["characters"]![0]!["interaction"]=Half("b");
+                both["characters"]!.AsArray().First(c=>c!["name"]!.GetValue<string>()=="fixture-npc")!["interaction"]=Half("a");
+                mgr.ApplyPolled(JsonSerializer.SerializeToElement(both)); Step(.1);
+                Is($"order only: both halves run (npc={npcFigure.Pair?.Id ?? "none"} avatar={avatar.Pair?.Id ?? "none"} run={offers.PropActions!.OwnedRun is not null})",
+                    avatar.Pair?.Id==pairId && npcFigure.Pair?.Id==pairId && offers.PropActions!.OwnedRun is null && mgr.HasLiveOrder(mgr.AvatarName));
+                foreach(var c in both["characters"]!.AsArray()) c!["interaction"]=null;
+                mgr.ApplyPolled(JsonSerializer.SerializeToElement(both)); Step(.1);
+                Is($"order only: the NPC half waits for the avatar's end (npc={npcFigure.Pair?.Id ?? "none"})",npcFigure.Pair?.Id==pairId && avatar.Pair?.Id==pairId);
+                pending.SetResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}"));
+                await offers.PendingPropAction!; source.OnRequest=null; Step(FigureManager.OwnPairEndHoldS+.1);
+                Is("order only: the refusal hands back and lets both halves go",HandedBack() && npcFigure.Pair is null && avatar.Pair is null);
+            }
+            source.MapOverride=null;
             var prepareWrite=new TaskCompletionSource(); int notices=0; hud.PropActionPrepare=_=>prepareWrite.Task; hud.PropActionsChanged=_=>notices++;
             hud.hud_bridge("{\"v\":4,\"kind\":\"prop-action-prepare\",\"request_id\":\"hud:prepare\"}");
             Is("HUD waits for outstanding write",hud.PendingPropPreparation is { IsCompleted:false }); prepareWrite.SetResult(); await hud.PendingPropPreparation!;
