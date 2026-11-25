@@ -94,7 +94,6 @@ _MAX_LINE_CHARS = 300
 _RECENT_LINES = 6
 _RECENT_FETCH = 24
 
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
 
 # Pronouns a director sentence may open with — German and English, the two
 # languages the standing tasks are written in. Whole words only.
@@ -677,14 +676,8 @@ def prompt_vars(name: str) -> Dict[str, Any]:
 def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
     """The one JSON object in the answer; code fences and stray prose around
     it are tolerated, anything else is a parse failure."""
-    match = _JSON_OBJ_RE.search((raw or "").strip())
-    if not match:
-        return None
-    try:
-        obj = json.loads(match.group(0))
-    except ValueError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    from app.core.llm_json import loads_object
+    return loads_object(raw)
 
 
 def _ask(llm: Callable[..., Any], name: str, system_prompt: str,

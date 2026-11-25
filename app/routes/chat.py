@@ -6,7 +6,6 @@ What stays here are the live upload routes and the prompt/marker helpers that
 ``routes/play.py`` import.
 """
 import base64
-import json
 import os
 import re
 from pathlib import Path
@@ -876,14 +875,11 @@ def _extract_context_from_last_chat(agent_name: str,
             return
 
         raw = (response.content or "").strip()
-        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if not json_match:
-            logger.debug("Chat-Kontext [%s]: kein JSON in Antwort", target_name)
-            return
-        try:
-            data = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            logger.debug("Chat context [%s]: JSON parse error: %s", target_name, raw[:100])
+        from app.core.llm_json import loads_object
+        data = loads_object(raw)
+        if data is None:
+            logger.warning("Chat context [%s]: unparsable answer, dropped: %r",
+                           target_name, raw[:200])
             return
 
         feeling = data.get("feeling")

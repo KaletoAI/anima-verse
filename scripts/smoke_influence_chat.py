@@ -362,7 +362,7 @@ def main():
                 bad["stat_results"][0].update(changes)
                 invalid.append(bad)
             invalid += [
-                {"stat_results": []}, {"stat_results": {}}, {"stats": {STAT: 10}},
+                {"stat_results": {}}, {"stats": {STAT: 10}},
                 {"stat_results": valid["stat_results"] * 2},
                 {"stat_results": [{"event": "S0", "deltas": {STAT: 1}}]},
                 {"stat_results": [None]},
@@ -376,6 +376,11 @@ def main():
                 else:
                     raise AssertionError(f"Accepted invalid structured stats: {bad!r}")
             assert state_snapshot() == before
+            # An OMITTED required pair is "no effect" (2026-11-25): the parser
+            # returns the delivered pairs (here none) and invents no receipt.
+            assert parse_stat_results({"stat_results": []}, build_stat_targets(malformed_ctx)) == []
+            extract(AGENT, malformed_ctx, {"stat_results": []})
+            assert state_snapshot() == before and not has_evaluation(malformed_source.event_id, AGENT)
             # A valid pair cannot make a sibling invalid pair partially commit.
             partial = copy.deepcopy(valid)
             partial["stat_results"].append({"event": "S0", "target": "invented", "deltas": {STAT: 40}})

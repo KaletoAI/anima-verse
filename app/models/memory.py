@@ -127,12 +127,20 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # field therefore survived exactly until the character's first retrieval.
 # Their producers: scene_manager.py (scene_id, location_id, room_id,
 # participants), day_consolidation.py (date_key), memory_service.py and
-# intent_engine.py (source, event_id).
+# intent_engine.py (source, event_id), interaction_engine.py
+# _remember_together (interaction_id, pose_key, location_id, room_id,
+# started_at_game, ended_at_game, reason) and item_reading.py (item_id,
+# owner, secret_id, ref).
+# A NEW extra_meta producer adds its keys here in the same change —
+# scripts/smoke_memory_meta_keys.py finds every add_memory(extra_meta=...)
+# caller and fails on a key that is missing from this list.
 # ``body`` is the linked body that formed the memory (see the module header).
 META_KEYS = ("context", "importance", "access_count", "last_accessed",
              "decay_factor", "related_character", "delay_minutes",
              "source", "event_id", "scene_id", "location_id", "room_id",
-             "participants", "date_key", "body")
+             "participants", "date_key", "body",
+             "interaction_id", "pose_key", "started_at_game", "ended_at_game",
+             "reason", "item_id", "owner", "secret_id", "ref")
 
 # Entry fields that are stored in their own columns, not in `meta` — knowing
 # them is what lets the builder below tell "belongs elsewhere" from "typo".

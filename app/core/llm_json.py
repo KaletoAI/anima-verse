@@ -14,15 +14,17 @@ answer is the caller's business — this module ends at "a dict".
 """
 
 import json
-import re
 from typing import Any, Callable, Dict, Optional
 
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
-_JSON_ARR_RE = re.compile(r"\[.*\]", re.S)
+_DECODER = json.JSONDecoder()
+_CLOSER = {"{": "}", "[": "]"}
+#: How many candidate start positions are tried before giving up — prose in
+#: front of the answer may contain a stray bracket or two, never dozens.
+_MAX_STARTS = 8
 
 
 class LlmJsonError(RuntimeError):
@@ -31,31 +33,114 @@ class LlmJsonError(RuntimeError):
     carries an HTTP status on its) passes that one in instead."""
 
 
+def _close_open(text: str, start: int) -> Optional[str]:
+    """The JSON value starting at ``start`` with its missing closers added.
+
+    Walks the text outside strings with a stack of open ``{``/``[``. A
+    model that forgets the outermost brace or stops after a complete list
+    element leaves exactly that stack behind; the closers are appended in
+    stack order. A closing code fence ends the walk. Refused (``None``):
+    a string still open at the end (a value cut in half is never invented),
+    a closer that does not match, or a stack that empties before the end (the
+    value was complete — raw_decode already said it is not valid JSON).
+    """
+    stack = []
+    in_string = escaped = False
+    end = text.find("```", start)
+    end = len(text) if end < 0 else end
+    for i in range(start, end):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in _CLOSER:
+            stack.append(ch)
+        elif ch in "}]":
+            if not stack or _CLOSER[stack.pop()] != ch:
+                return None
+            if not stack:
+                return None
+    if in_string or not stack:
+        return None
+    body = text[start:end].rstrip().rstrip(",").rstrip()
+    return body + "".join(_CLOSER[ch] for ch in reversed(stack))
+
+
+def _decode_at(text: str, start: int):
+    """(value, end) of the JSON value at ``start`` — read as it stands
+    (anything behind it ignored), else with its open brackets closed. ``None``
+    when neither works."""
+    try:
+        return _DECODER.raw_decode(text, start)
+    except ValueError:
+        pass
+    closed = _close_open(text, start)
+    if closed is None:
+        return None
+    try:
+        return json.loads(closed), len(text)
+    except ValueError:
+        return None
+
+
+def _first_value(text: str, opener: str, kind: type):
+    """(value, start, end) of the first ``opener``-started value of type
+    ``kind`` in ``text``, or ``None``."""
+    start = text.find(opener)
+    tries = 0
+    while start >= 0 and tries < _MAX_STARTS:
+        tries += 1
+        hit = _decode_at(text, start)
+        if hit is not None and isinstance(hit[0], kind):
+            return hit[0], start, hit[1]
+        start = text.find(opener, start + 1)
+    return None
+
+
+def loads_object(raw: Any) -> Optional[Dict[str, Any]]:
+    """The one tolerant JSON-OBJECT decoder for model answers.
+
+    From the first ``{`` on: the first complete object is taken as it
+    stands (code fences, prose before it and anything behind it — including
+    one brace too many — are ignored); failing that, the brackets the model
+    left open are closed in stack order and the text is loaded again (the
+    "forgot the outermost brace" and "stopped after a list element" slips).
+    A later ``{`` is tried when an earlier one starts no object (prose with a
+    stray brace). ``None`` when nothing decodes to a dict.
+    """
+    text = str(raw or "")
+    hit = _first_value(text, "{", dict)
+    return hit[0] if hit is not None else None
+
+
 def parse_json(raw: str) -> Optional[Dict[str, Any]]:
-    """Strict-ish JSON extraction: the answer must contain ONE object; code
-    fences and stray prose around it are tolerated, everything else is a
-    parse failure (the caller retries once). A bare top-level ARRAY — the
-    common "forgot the wrapper" slip — is accepted as ``{"_list": [...]}``."""
+    """Strict-ish JSON extraction: the answer must contain ONE object, read by
+    :func:`loads_object` (fences, stray prose and missing closers tolerated);
+    everything else is a parse failure (the caller retries once). A bare
+    top-level ARRAY — the common "forgot the wrapper" slip — is accepted as
+    ``{"_list": [...]}``: an array that starts before the first object and
+    encloses it wins over that object."""
     text = (raw or "").strip()
     if not text:
         return None
-    match = _JSON_OBJ_RE.search(text)
-    if match:
-        try:
-            obj = json.loads(match.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except ValueError:
-            pass
-    match = _JSON_ARR_RE.search(text)
-    if match:
-        try:
-            arr = json.loads(match.group(0))
-            if isinstance(arr, list):
-                return {"_list": arr}
-        except ValueError:
-            pass
-    return None
+    obj_at = text.find("{")
+    arr_at = text.find("[")
+    if arr_at >= 0 and (obj_at < 0 or arr_at < obj_at):
+        arr = _first_value(text, "[", list)
+        if arr is not None and (obj_at < 0 or arr[1] < obj_at < arr[2]):
+            return {"_list": arr[0]}
+    obj = loads_object(text)
+    if obj is not None:
+        return obj
+    arr = _first_value(text, "[", list)
+    return {"_list": arr[0]} if arr is not None else None
 
 
 def llm_json(task: str, system_prompt: str, user_prompt: str, label: str,
