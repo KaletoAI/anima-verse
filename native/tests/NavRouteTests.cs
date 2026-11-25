@@ -71,6 +71,16 @@ public class NavRouteTests
         => Same(new P2(5.1, 4.3), NavClamp.Step(new P2(5, 4.3), new P2(5.1, 4.3), 0, 3, Room().Hole(4, 4, 6, 6)));
 
     [Fact]
+    public void DeeperWithinEpsilonPasses()
+        // dFrom = 0.3, dTo = 0.30005 ≤ 0.3 + 1e-4 → to
+        => Same(new P2(5.1, 4.30005), NavClamp.Step(new P2(5, 4.3), new P2(5.1, 4.30005), 0, 3, Room().Hole(4, 4, 6, 6)));
+
+    [Fact]
+    public void DeeperBeyondEpsilonStays()
+        // dFrom = 0.3, dTo = 0.3002 > 0.3 + 1e-4, dFrom > tol → from
+        => Same(new P2(5, 4.3), NavClamp.Step(new P2(5, 4.3), new P2(5.1, 4.3002), 0, 3, Room().Hole(4, 4, 6, 6)));
+
+    [Fact]
     public void OtherStoreyIsNotOnMesh()
     {
         // The mesh lies directly above (Closest.Y = y + 3, storey height 3 → |dy| = 3 ≥ 1.5): neither point counts.
@@ -153,6 +163,36 @@ public class NavRouteTests
         => Assert.Null(NavRoutePlanner.Plan(Room(), new Vec3(-3, 0, 5), new Vec3(2, 0, 5), InsideRoom, new[] { new P2(0, 5) }, 0));
 
     [Fact]
+    public void SinglePointPathIsNoPlan()
+    {
+        // Query answers one point (start = goal): no section to follow → null, never a plan NavRoute rejects.
+        var p = new Vec3(3, 0, 3);
+        var nav = Room().Answer(p, p, new[] { p }, new ulong[] { 0 }, 0);
+        Assert.Null(NavRoutePlanner.Plan(nav, p, p, AllInside, Array.Empty<P2>(), 0));
+    }
+
+    [Fact]
+    public void StandingAtFurnitureEdgeIsNoPlan()
+    {
+        // Already at the edge (6, 4): Query(from, edge) answers the one point → null.
+        var edge = new Vec3(6, 0, 4);
+        var nav = Room().Hole(4, 4, 8, 5.5).Answer(edge, edge, new[] { edge }, new ulong[] { 0 }, 0);
+        Assert.Null(NavRoutePlanner.Plan(nav, edge, new Vec3(6, 0, 4.6), AllInside, Array.Empty<P2>(), 0));
+    }
+
+    [Fact]
+    public void OffMeshStartToMeshTargetQueriesFromStart()
+    {
+        // Start (5, 5) inside hole x 4…6, z 4…6 (1 m from the mesh), target (9, 9) on it → case 1 from the real start.
+        var nav = Room().Hole(4, 4, 6, 6);
+        var from = new Vec3(5, 0, 5);
+        var plan = NavRoutePlanner.Plan(nav, from, C, AllInside, Array.Empty<P2>(), 0);
+        Assert.NotNull(plan);
+        Same(from, nav.Queries[^1].From);
+        Same(C, plan!.Goal);
+    }
+
+    [Fact]
     public void BothOffMeshFallsBack()
     {
         var nav = Room().Hole(4, 4, 8, 8);
@@ -233,6 +273,59 @@ public class NavRouteTests
         Assert.Equal(NavRouteEvent.None, route.Tick(L2, 1));
         Assert.Equal(NavRouteEvent.Arrived, route.Tick(C, 1));
         Assert.True(route.Done);
+    }
+
+    [Fact]
+    public void ZeroFrameIsNeutralForStuck()
+    {
+        // 3 still ticks of 0.5 s (1.5 s), a dt 0 frame, then one more 0.5 s → 2.0 s → Replan.
+        var route = Straight();
+        var still = new Vec3(0, 0, 0);
+        for (int i = 0; i < 3; i++)
+            Assert.Equal(NavRouteEvent.None, route.Tick(still, 0.5));
+        Assert.Equal(NavRouteEvent.None, route.Tick(still, 0));
+        Assert.Equal(NavRouteEvent.Replan, route.Tick(still, 0.5));
+    }
+
+    [Fact]
+    public void RidingIgnoresDeviationAndStuck()
+    {
+        // While riding, the avatar may be far from every walk segment (stairs go up/sideways) and slow.
+        var route = new NavRoute(LinkPlan());
+        route.Tick(B, 1);
+        Assert.Equal(NavRouteEvent.AtLink, route.Tick(new Vec3(4.7, 0, 1), 1));
+        route.LinkResult(true);
+        Assert.Equal(NavRouteEvent.None, route.Tick(new Vec3(5, 2, 3), 1)); // 2 m off the A–L1 line
+        for (int i = 0; i < 6; i++)
+            Assert.Equal(NavRouteEvent.None, route.Tick(new Vec3(5, 2, 3), 1));
+    }
+
+    [Fact]
+    public void LinkFirstRouteThatNeverReachesTheLinkAborts()
+    {
+        // Path [L1, L2, C] with the link on its first point: the leading one-point walk is dropped, the route starts
+        // with Link(L1, L2). Standing still 4 m from L1 with dt 0.5: tick 1 sets the baseline, ticks 2–5 count
+        // 0.5 s each → Replan at tick 5 (2 s), ticks 6–9 → Abort at tick 9.
+        var nav = Room().Answer(A, C, new[] { L1, L2, C }, new ulong[] { 65536, 0, 0 }, 16);
+        var route = new NavRoute(NavRoutePlanner.Plan(nav, A, C, AllInside, Array.Empty<P2>(), 0)!);
+        Assert.IsType<NavLink>(route.Current);
+        var events = new List<NavRouteEvent>();
+        for (int i = 0; i < 9; i++)
+            events.Add(route.Tick(A, 0.5));
+        Assert.Equal(new[]
+        {
+            NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.Replan,
+            NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.None, NavRouteEvent.Abort,
+        }, events);
+    }
+
+    [Fact]
+    public void LinkFirstRouteRequestsRideWhenClose()
+    {
+        var nav = Room().Answer(A, C, new[] { L1, L2, C }, new ulong[] { 65536, 0, 0 }, 16);
+        var route = new NavRoute(NavRoutePlanner.Plan(nav, A, C, AllInside, Array.Empty<P2>(), 0)!);
+        Assert.Equal(NavRouteEvent.AtLink, route.Tick(new Vec3(4.8, 0, 1), 1)); // 0.2 from L1
+        Assert.True(route.RideRequested);
     }
 
     [Fact]

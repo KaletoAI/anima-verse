@@ -44,6 +44,10 @@ public static class NavRoutePlanner
     /// (3) start on the mesh, target inside the footprint but off the mesh (furniture) → walk to <c>Closest(to)</c>,
     /// which becomes the goal; (4) start outside the footprint → <c>null</c>; (5) both off the mesh → <c>null</c>.
     /// A start inside the footprint but off the mesh with a target on the mesh is case 1 (the map snaps the start).
+    /// A path without a single section (one point: start = goal, or already standing at the furniture edge) is
+    /// <c>null</c> too, so the planner never hands <see cref="NavRoute"/> a plan it rejects; the caller's straight
+    /// walk arrives at once. In case 1 the goal stays the clicked point even when the path ends up to
+    /// <see cref="UnreachableM"/> short of it: the route reports <c>Arrived</c> at its last corner.
     /// </summary>
     public static NavPlan? Plan(IPathProvider nav, Vec3 from, Vec3 to, Func<double, double, bool> insideFootprint,
                                 IReadOnlyList<P2> outsideDoors, double outsideY)
@@ -54,15 +58,17 @@ public static class NavRoutePlanner
         if (toOn)
         {
             var path = nav.Query(from, to);
-            return Reaches(path, to) ? new NavPlan(Split(path.Points, path.Owners), to, path.Length) : null;
+            return Reaches(path, to) ? Make(path.Points, path.Owners, to, path.Length) : null;
         }
         if (!fromOn)
             return null;
         if (!insideFootprint(to.X, to.Z))
             return ViaOutsideDoor(nav, from, to, outsideDoors, outsideY);
         var edge = nav.Closest(to);
+        if (!(Math.Abs(edge.Y - to.Y) < OtherStoreyM))
+            return null; // the nearest mesh point lies on another storey
         var toEdge = nav.Query(from, edge);
-        return Reaches(toEdge, edge) ? new NavPlan(Split(toEdge.Points, toEdge.Owners), edge, toEdge.Length) : null;
+        return Reaches(toEdge, edge) ? Make(toEdge.Points, toEdge.Owners, edge, toEdge.Length) : null;
     }
 
     private static NavPlan? ViaOutsideDoor(IPathProvider nav, Vec3 from, Vec3 to, IReadOnlyList<P2> doors, double outsideY)
@@ -79,9 +85,16 @@ public static class NavRoutePlanner
                 continue;
             var points = new List<Vec3>(path.Points) { to };
             var owners = new List<ulong>(path.Owners) { 0 };
-            best = new NavPlan(Split(points, owners), to, length);
+            best = Make(points, owners, to, length) ?? best;
         }
         return best;
+    }
+
+    /// <summary>A plan of the path's sections, or null when the path has none (a route needs at least one).</summary>
+    private static NavPlan? Make(IReadOnlyList<Vec3> points, IReadOnlyList<ulong> owners, Vec3 goal, double length)
+    {
+        var steps = Split(points, owners);
+        return steps.Count == 0 ? null : new NavPlan(steps, goal, length);
     }
 
     private static bool OnMesh(IPathProvider nav, Vec3 p)
@@ -128,7 +141,9 @@ public enum NavRouteEvent { None, AtLink, Replan, Abort, Arrived }
 /// Follows a <see cref="NavPlan"/> frame by frame: advances corners, hands links to the caller's ride and watches
 /// for getting stuck (horizontal speed below <see cref="StuckSpeedMS"/> for <see cref="StuckSeconds"/> → Replan, the
 /// second time Abort) and for drifting off the current segment (more than <see cref="DeviationM"/> → Replan). While a
-/// link section runs, neither stuck time nor deviation counts.
+/// link section runs, neither stuck time nor deviation counts. A route that begins with a link and is not yet at its
+/// start counts stuck time while it approaches (so a start that never reaches the link ends in Replan/Abort instead
+/// of waiting forever). A frame with <c>dt ≤ 0</c> is neutral for the stuck clock.
 /// </summary>
 public sealed class NavRoute
 {
@@ -150,8 +165,8 @@ public sealed class NavRoute
         if (plan.Steps.Count == 0)
             throw new ArgumentException("a route needs at least one step", nameof(plan));
         _plan = plan;
-        if (plan.Steps[0] is NavWalk w)
-            _last = w.Points[0];
+        // A route that begins with a link gets its stuck baseline from its first tick.
+        _last = plan.Steps[0] is NavWalk w ? w.Points[0] : null;
     }
 
     public NavStep Current => _plan.Steps[Math.Min(_step, _plan.Steps.Count - 1)];
@@ -181,8 +196,12 @@ public sealed class NavRoute
             if (_link == LinkState.None && Distance3(pos, link.Start) < LinkArriveM)
             {
                 _link = LinkState.Requested;
+                _stuckTime = 0;
+                _last = pos;
                 return NavRouteEvent.AtLink;
             }
+            if (_link == LinkState.None)
+                return CountStuck(pos, dt); // approaching the link start: an avatar that does not move gets out
             _last = pos;
             return NavRouteEvent.None;
         }
@@ -226,9 +245,16 @@ public sealed class NavRoute
             return NavRouteEvent.Replan;
         }
 
+        return CountStuck(pos, dt);
+    }
+
+    private NavRouteEvent CountStuck(Vec3 pos, double dt)
+    {
+        if (!(dt > 0))
+            return NavRouteEvent.None; // a zero frame neither counts nor resets
         var before = _last;
         _last = pos;
-        if (before is { } b && dt > 0 && NavRoutePlanner.Horizontal(pos, b) / dt < StuckSpeedMS)
+        if (before is { } b && NavRoutePlanner.Horizontal(pos, b) / dt < StuckSpeedMS)
         {
             _stuckTime += dt;
             if (_stuckTime >= StuckSeconds - 1e-9)
