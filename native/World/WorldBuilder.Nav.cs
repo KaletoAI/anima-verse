@@ -46,6 +46,55 @@ public sealed partial class WorldBuilder
     private readonly Dictionary<string, NavigationMesh[]> _navCache = new();
     private readonly LinkedList<string> _navCacheOrder = new();
     private bool _navSubscribed;
+    private NavOverlay? _navOverlay;
+    private bool _navOverlayVisible;
+
+    /// <summary>
+    /// F9 (Task 7): the <see cref="NavOverlay"/> of the open location is shown. It is rebuilt whenever a navigation is
+    /// swapped in or released (<see cref="NavChanged"/>), the locks change (<see cref="SetLocks"/>) or another location
+    /// opens (<see cref="SetOpen"/>); hidden, it holds no mesh.
+    /// </summary>
+    public bool NavOverlayVisible
+    {
+        get => _navOverlayVisible;
+        set
+        {
+            _navOverlayVisible = value;
+            RefreshNavOverlay();
+        }
+    }
+
+    /// <summary>The overlay node (null until first shown; check O1).</summary>
+    internal NavOverlay? NavOverlayNode => _navOverlay is { } n && GodotObject.IsInstanceValid(n) ? n : null;
+
+    /// <summary>Rebuilds the overlay from the open location's navigation, or hides it; created under the locations root on first show.</summary>
+    private void RefreshNavOverlay()
+    {
+        var node = NavOverlayNode;
+        if (!_navOverlayVisible)
+        {
+            if (node is null) return;
+            node.Visible = false;
+            node.Rebuild(null);
+            return;
+        }
+        if (node is null)
+        {
+            if (_places is null || !GodotObject.IsInstanceValid(_places)) return;
+            node = _navOverlay = new NavOverlay();
+            _places.AddChild(node);
+        }
+        var open = _openPin is { } id && _slots.TryGetValue(id, out var slot) && slot.Open ? slot.Nav : null;
+        node.Rebuild(open);
+        node.Visible = true;
+    }
+
+    /// <summary>A navigation was swapped in or released: the event and the overlay.</summary>
+    private void OnNavChanged(LocationSlot slot)
+    {
+        NavChanged?.Invoke(slot);
+        RefreshNavOverlay();
+    }
 
     /// <summary>The MapChanged handler is subscribed (exactly while a map is pending; checks N11/N13).</summary>
     internal bool NavMapChangedSubscribed => _navSubscribed;
@@ -169,7 +218,7 @@ public sealed partial class WorldBuilder
         {
             slot.Nav = null;
             nav.Free();
-            NavChanged?.Invoke(slot);
+            OnNavChanged(slot);
         }
     }
 
@@ -194,7 +243,7 @@ public sealed partial class WorldBuilder
         var old = slot.Nav;
         slot.Nav = entry.Nav;
         old?.Free();
-        NavChanged?.Invoke(slot);
+        OnNavChanged(slot);
         SyncNavSubscription();
     }
 

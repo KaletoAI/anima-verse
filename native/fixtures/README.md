@@ -1966,6 +1966,21 @@ the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks (−sin 0, −cos 0) 
   T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
   `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
 
+**O1 the F9 overlay (Task 7, `NavCheck.OverlayAsync`, run in the avatar world right after the first navigation is swapped in;
+`loc-nav` is the open location).** `NavOverlayVisible = true` → one `NavOverlay` node, visible, one `ArrayMesh` of three
+surfaces, every vertex 0.03 m above its source:
+
+- surface 0 (triangles, #3a7bd5 α 0.35): every polygon of the two storey region meshes as a fan, a polygon with n corners gives
+  n − 2 triangles → vertex count = 3 · Σ(n − 2), Σ counted from `LocationNav.StoreyMeshes` (the baker's polygon split is not
+  derived by hand; the check requires Σ > 0; measured 24);
+- surface 1 (triangles): T0 and T1 are one quad each (`NavBake.ThresholdMesh`, 4 corners) → 2 + 2 = 4 triangles, 12 vertices,
+  T0 (doorway 0) first; T0's floor y 0 → vertex y 0.03; colour #3ad57b on, #d53a3a off;
+- surface 2 (lines, #e0c040): two links (stairs, lift) → 2 lines, 4 vertices; the first starts at its link's start y + 0.03.
+
+No lock → both thresholds green. `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → T0 red, T1 green in the frame of
+`SetLocks` (the overlay reads the state last written, `LocationNav.ThresholdEnabled`, not the server's getter, which answers the
+old state until the next sync); `LockState.None` → both green; `NavOverlayVisible = false` → the node is invisible.
+
 **Embody checks on the navmesh (Task 6, review N-W3).** `EmbodyWalkCheck`, `EmbodyPositionCheck`, `EmbodyOffersCheck` and
 `EmbodyRoomsCheck` now wait (physics frames, ≤ 240) until the hall's navigation is swapped in, right after the build, so every
 section walks on the navmesh whatever the bake timing. Re-derived (fixture `embody/scene_loc-hall.json`: walls t 0.2, r 0.25 →

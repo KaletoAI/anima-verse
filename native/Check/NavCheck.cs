@@ -453,6 +453,7 @@ public static class NavCheck
             builder.SetOpen("loc-nav", true);
             slot.Fade.Snap(1);
             var nav = await AwaitNav(host, builder, slot, null, "A");
+            int o1 = await OverlayAsync(host, builder, nav);
             var manager = new FigureManager(source, builder.Height!, _ => { }, strict: true)
             {
                 AutoTick = false, ClipFit = ClipFitMode.OnDemandSync, Slots = () => builder.Slots,
@@ -640,7 +641,7 @@ public static class NavCheck
             Expect("A7 reaches the yard and the plot edge", yard && beyond && builder.FootprintAt(Pos().X, Pos().Z) is null, $"{a7} frames, at {Fmt(Pos())}");
             Expect("A7 never stands while the key is held", !stood, $"{a7} frames, at {Fmt(Pos())}");
 
-            return $"avatar A0-A7=ok a1={a1} a5={a5} a5b={a5b} a7={a7}";
+            return $"avatar O1=ok o1_tris={o1} A0-A7=ok a1={a1} a5={a5} a5b={a5b} a7={a7}";
         }
         finally
         {
@@ -652,6 +653,62 @@ public static class NavCheck
             await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
             await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
         }
+    }
+
+    /// <summary>
+    /// O1 the F9 overlay (plan E2 Task 7) on the open location's swapped navigation; hand derivation in native/fixtures/README.md,
+    /// section "Nav world" (O1): one mesh of three surfaces — the storeys as triangle fans (Σ(corners − 2) over every polygon
+    /// of the region meshes), the two thresholds T0/T1 as 2 + 2 triangles, the two links as 2 lines (4 vertices); everything
+    /// 0.03 m above its source (T0's floor y 0 → 0.03). A lock on r-b from r-a turns T0 red (#d53a3a) in the frame of
+    /// SetLocks, T1 stays green (#3ad57b); no lock → both green; hidden → the node is invisible. Returns the storey triangles.
+    /// </summary>
+    private static async Task<int> OverlayAsync(Node host, WorldBuilder builder, LocationNav nav)
+    {
+        var red = new Color("#d53a3a");
+        var green = new Color("#3ad57b");
+        builder.NavOverlayVisible = true;
+        var node = builder.NavOverlayNode;
+        Expect("O1 the overlay node is shown", node is not null && node.Visible && node.Mesh is ArrayMesh, $"{node?.Visible} {node?.Mesh}");
+        var mesh = (ArrayMesh)node!.Mesh;
+        Eq("O1 three surfaces", mesh.GetSurfaceCount(), 3);
+        int want = 0;
+        foreach (var m in nav.StoreyMeshes)
+            for (int i = 0; i < m.GetPolygonCount(); i++) want += m.GetPolygon(i).Length - 2;
+        Expect("O1 the storey meshes have polygons", want > 0, $"{want}");
+        Expect("O1 surface kinds triangles / triangles / lines",
+               mesh.SurfaceGetPrimitiveType(0) == Mesh.PrimitiveType.Triangles && mesh.SurfaceGetPrimitiveType(1) == Mesh.PrimitiveType.Triangles
+               && mesh.SurfaceGetPrimitiveType(2) == Mesh.PrimitiveType.Lines, "");
+        Eq("O1 storey triangles = Σ(corners − 2)", mesh.SurfaceGetArrayLen(0), 3 * want);
+        Eq("O1 threshold triangles (T0, T1: 2 + 2)", mesh.SurfaceGetArrayLen(1), 3 * 4);
+        Eq("O1 link line vertices (2 lines)", mesh.SurfaceGetArrayLen(2), 4);
+        var tv = mesh.SurfaceGetArrays(1)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+        Near("O1 T0 drawn 0.03 above its floor y 0", tv[0].Y, 0.03, 1e-4);
+        var lv = mesh.SurfaceGetArrays(2)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+        var link0 = nav.Source.Links[0];
+        Near("O1 link start drawn 0.03 above it", lv[0].Y, link0.Start.Y + 0.03, 1e-4);
+        ThresholdColors("O1 no lock", builder, green, green);
+
+        builder.SetLocks(new LockState(new Dictionary<string, string> { ["r-b"] = "" }, "loc-nav", new Dictionary<string, string>(), "r-a"));
+        ThresholdColors("O1 r-b locked from r-a", builder, red, green);
+        await AwaitReady(host, nav, "O1 locked");
+        builder.SetLocks(LockState.None);
+        ThresholdColors("O1 unlocked", builder, green, green);
+        await AwaitReady(host, nav, "O1 unlocked");
+
+        builder.NavOverlayVisible = false;
+        Expect("O1 hidden → the node is invisible", builder.NavOverlayNode is { } n && !n.Visible, "");
+        return want;
+    }
+
+    /// <summary>The threshold surface's vertex colours: the first six are T0's (doorway 0), the next six T1's (RGB within 0.01).</summary>
+    private static void ThresholdColors(string what, WorldBuilder builder, Color t0, Color t1)
+    {
+        var mesh = (ArrayMesh)builder.NavOverlayNode!.Mesh;
+        var colors = mesh.SurfaceGetArrays(1)[(int)Mesh.ArrayType.Color].AsColorArray();
+        static bool Rgb(Color a, Color b) => Math.Abs(a.R - b.R) <= 0.01 && Math.Abs(a.G - b.G) <= 0.01 && Math.Abs(a.B - b.B) <= 0.01;
+        Expect($"{what}: T0 {t0.ToHtml(false)}, T1 {t1.ToHtml(false)}",
+               colors.Length == 12 && colors.Take(6).All(c => Rgb(c, t0)) && colors.Skip(6).All(c => Rgb(c, t1)),
+               string.Join(" ", colors.Select(c => c.ToHtml(false))));
     }
 
     /// <summary>Physics frames until <c>NavFor(slot)</c> is a map other than <paramref name="old"/>, at most 240.</summary>

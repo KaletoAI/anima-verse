@@ -17,6 +17,8 @@ public sealed class LocationNav : IPathProvider
 {
     public Rid Map { get; }
     public IReadOnlyList<Rid> Storeys { get; }
+    /// <summary>The baked storey meshes, parallel to <see cref="Storeys"/> (the server has no getter; the F9 overlay draws them).</summary>
+    public IReadOnlyList<NavigationMesh> StoreyMeshes { get; }
     /// <summary>Threshold regions keyed by doorway index.</summary>
     public IReadOnlyDictionary<int, Rid> Thresholds { get; }
     /// <summary>Link rids keyed by owner id (decision 13).</summary>
@@ -35,11 +37,12 @@ public sealed class LocationNav : IPathProvider
     /// <summary>The map answers with its current state (decision 4: iterated since the last effective change).</summary>
     public bool Ready => NavigationServer3D.MapGetIterationId(Map) > ChangedAtIteration;
 
-    private LocationNav(Rid map, IReadOnlyList<Rid> storeys, IReadOnlyDictionary<int, Rid> thresholds,
-                        IReadOnlyDictionary<ulong, Rid> links, NavSourceData src)
+    private LocationNav(Rid map, IReadOnlyList<Rid> storeys, IReadOnlyList<NavigationMesh> storeyMeshes,
+                        IReadOnlyDictionary<int, Rid> thresholds, IReadOnlyDictionary<ulong, Rid> links, NavSourceData src)
     {
         Map = map;
         Storeys = storeys;
+        StoreyMeshes = storeyMeshes;
         Thresholds = thresholds;
         Links = links;
         Source = src;
@@ -62,8 +65,12 @@ public sealed class LocationNav : IPathProvider
         NavigationServer3D.MapSetActive(map, true);
 
         var storeyRids = new List<Rid>();
+        var storeyMeshes = new List<NavigationMesh>();
         for (int i = 0; i < src.Storeys.Count && i < storeys.Length; i++)
+        {
             storeyRids.Add(Region(map, storeys[i], NavLayers.ForLevel(src.Storeys[i].Level)));
+            storeyMeshes.Add(storeys[i]);
+        }
 
         var thresholds = new Dictionary<int, Rid>();
         foreach (var t in src.Thresholds)
@@ -83,7 +90,7 @@ public sealed class LocationNav : IPathProvider
             NavigationServer3D.LinkSetOwnerId(rid, l.Owner);
             links[l.Owner] = rid;
         }
-        return new LocationNav(map, storeyRids, thresholds, links, src);
+        return new LocationNav(map, storeyRids, storeyMeshes, thresholds, links, src);
     }
 
     /// <summary>
@@ -115,6 +122,13 @@ public sealed class LocationNav : IPathProvider
         ChangedAtIteration = NavigationServer3D.MapGetIterationId(Map);
         return true;
     }
+
+    /// <summary>
+    /// The threshold region of the doorway is on — the state last written (what the server holds after its next sync),
+    /// so the F9 overlay shows a lock in the frame of <see cref="ApplyLocks"/>, not one sync later. Unknown doorway: false.
+    /// </summary>
+    public bool ThresholdEnabled(int doorway)
+        => Thresholds.TryGetValue(doorway, out var rid) && EnabledOf(rid, NavigationServer3D.RegionGetEnabled);
 
     /// <summary>Releases links, regions and the map; the server drops the map at its next sync.</summary>
     public void Free()

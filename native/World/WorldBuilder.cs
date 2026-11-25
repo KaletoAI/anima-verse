@@ -970,6 +970,7 @@ public sealed partial class WorldBuilder
         if (slot.Open == open) return true;
         slot.Open = open;
         _log($"location {id} ({slot.Loc.Name}) {(open ? "opens" : "closes")} (crossfade)");
+        RefreshNavOverlay();
         return true;
     }
 
@@ -1043,7 +1044,8 @@ public sealed partial class WorldBuilder
     /// <summary>
     /// The avatar's lock verdicts changed (the HUD's <c>lockedRooms</c> / <c>lockedLoc</c> / <c>lockedLocations</c>, or
     /// the room it stands in): every location repaints its door marks and shows or hides its boundary marks
-    /// (main.ts: repainted only on a real change; the caller compares).
+    /// (main.ts: repainted only on a real change; the caller compares); the navigation takes the locks and the F9 overlay
+    /// shows them.
     /// </summary>
     public void SetLocks(LockState locks)
     {
@@ -1053,6 +1055,7 @@ public sealed partial class WorldBuilder
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Storeys.ApplyLocks(locks, slot.Loc.Id);
             ApplyNavLocks(slot);
         }
+        RefreshNavOverlay();
     }
 
     /// <summary>
