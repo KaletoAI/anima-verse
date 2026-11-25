@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_npc_walk.mjs",
+  "source": "native/tests/Derivations/npc_walk.md",
   "fixtures": {
     "ORIGIN": {
       "x": 0,

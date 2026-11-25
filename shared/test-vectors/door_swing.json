@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_door_swing.mjs",
+  "source": "native/tests/Derivations/door_swing.md",
   "cases": [
     { "label": "[K] range 2.0 m, 85°, 3.0 rad/s", "fn": "doorConstants", "args": [],
       "expect": { "range": 2, "openDeg": 85, "rate": 3 } },

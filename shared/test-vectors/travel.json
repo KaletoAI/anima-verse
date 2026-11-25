@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_travel_math.mjs",
+  "source": "native/tests/Derivations/travel_math.md",
   "cases": [
     {
       "label": "[1] adv cross",

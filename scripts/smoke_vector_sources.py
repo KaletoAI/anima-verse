@@ -67,8 +67,8 @@ start.
                   gets native/tests/Derivations/clip_shift.md:
                   [V2] 69 - 6 - 2 = 61, [V1] 0 -> 61 violations, all of them
                   class B. Tasks 10-12 move those 61 derivations to
-                  native/tests/Derivations/ (Task 10: 22, leaving 39; Tasks
-                  11 and 12 the rest).
+                  native/tests/Derivations/ (Task 10: 22, leaving 39;
+                  Task 11: 20, leaving 19; Task 12 the rest).
   After Task 12:  0 violations - the guard passes.
 
 The guard is therefore deliberately RED between Task 9 and Task 12.
@@ -123,6 +123,27 @@ MOVED: dict[str, tuple[str, str]] = {
     "secondary_particle": ("client3d/scripts/smoke_secondary_motion.mjs", "native/tests/Derivations/secondary_motion.md"),
     "animal_gait": ("client3d/scripts/smoke_animal_vectors.mjs", "native/tests/Derivations/animal_vectors.md"),
     "animal_legs": ("client3d/scripts/smoke_animal_vectors.mjs", "native/tests/Derivations/animal_vectors.md"),
+    # Task 11, class B: walking, embody, travel, placement, overview -> native/tests/Derivations/.
+    "collide": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "figure_ground": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "npc_ground": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "overview_hud": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "stairs": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "walk_control": ("client3d/scripts/smoke_walk_math.mjs", "native/tests/Derivations/walk_math.md"),
+    "embody": ("client3d/scripts/smoke_embody_vectors.mjs", "native/tests/Derivations/embody_vectors.md"),
+    "enter": ("client3d/scripts/smoke_enter_math.mjs", "native/tests/Derivations/enter_math.md"),
+    "npc_placement": ("client3d/scripts/smoke_npc_placement.mjs", "native/tests/Derivations/npc_placement.md"),
+    "npc_walk": ("client3d/scripts/smoke_npc_walk.mjs", "native/tests/Derivations/npc_walk.md"),
+    "place_poll": ("client3d/scripts/smoke_places_client.mjs", "native/tests/Derivations/places_client.md"),
+    "room_spots": ("client3d/scripts/smoke_room_spots.mjs", "native/tests/Derivations/room_spots.md"),
+    "travel": ("client3d/scripts/smoke_travel_math.mjs", "native/tests/Derivations/travel_math.md"),
+    "prop_action_motion": ("client3d/scripts/smoke_prop_action_motion.mjs", "native/tests/Derivations/prop_action_motion.md"),
+    "door_swing": ("client3d/scripts/smoke_door_swing.mjs", "native/tests/Derivations/door_swing.md"),
+    "event_pins": ("client3d/scripts/smoke_event_pins.mjs", "native/tests/Derivations/event_pins.md"),
+    "overview_labels": ("client3d/scripts/smoke_overview_labels.mjs", "native/tests/Derivations/overview_labels.md"),
+    "camera": ("client3d/scripts/smoke_camera_math.mjs", "native/tests/Derivations/camera_math.md"),
+    "view_shift": ("client3d/scripts/smoke_view_shift.mjs", "native/tests/Derivations/view_shift.md"),
+    "bench_math": ("client3d/scripts/smoke_bench_math.mjs", "native/tests/Derivations/bench_math.md"),
     # clip_shift has no entry: at PIN its source was a formula, not a file; the
     # formula is native/tests/Derivations/clip_shift.md word for word.
 }

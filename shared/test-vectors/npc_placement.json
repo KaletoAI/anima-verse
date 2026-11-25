@@ -1,6 +1,6 @@
 {
   "format": "anima-test-vectors/1",
-  "source": "client3d/scripts/smoke_npc_placement.mjs",
+  "source": "native/tests/Derivations/npc_placement.md",
   "fixtures": {
     "HOUSE": {
       "center": {"x": 100, "y": 2, "z": 50},
