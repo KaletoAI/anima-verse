@@ -7,9 +7,10 @@ namespace AnimaNative.Orders;
 /// <summary>
 /// The server's POSE transition rules, resolved the way app/core/animation_clips.py <c>resolve_pose_transition</c>
 /// resolves them (plan E3 decision 14): the client picks its own entry and exit clips from the phase's pose. Read from
-/// the listing <c>GET /assets/animation-clips</c>: <c>transitions</c> (rules <c>{from, to, kind}</c> with pose keys,
-/// <c>*</c> or a place group <c>@stand</c> · <c>@seat</c> · <c>@ground</c> · <c>@lie</c>) and <c>pose_groups</c>
-/// (pose key → group). Vector shared/test-vectors/pose_transition.json, derived in scripts/smoke_access_auto.py.
+/// the listing <c>GET /assets/animation-clips</c>: <c>pose_rules</c> (the RUNTIME rules <c>{from, to, kind}</c> the server
+/// resolves on — <c>effective_transitions</c>, where a world rule whose bridge clip is unavailable falls back to the
+/// shared rule; NOT the editor table <c>transitions</c> — with pose keys, <c>*</c> or a place group <c>@stand</c> ·
+/// <c>@seat</c> · <c>@ground</c> · <c>@lie</c>) and <c>pose_groups</c> (pose key → group). Vector shared/test-vectors/pose_transition.json, derived in scripts/smoke_access_auto.py.
 /// </summary>
 public sealed class PoseTransitions
 {
@@ -31,8 +32,9 @@ public sealed class PoseTransitions
     }
 
     /// <summary>
-    /// The table of a listing. A row that is no object or lacks <c>from</c>, <c>to</c> or <c>kind</c> is dropped; names
-    /// are trimmed and lower-cased. A group outside <see cref="RuleGroups"/> is no group. Missing fields: an empty table.
+    /// The table of a listing. A row that is no object or lacks <c>from</c>, <c>to</c> or <c>kind</c> is dropped, and so
+    /// is a row whose kind is blank or a per-role map without one non-blank string (<c>normalize_rule_kind</c> → "");
+    /// names are trimmed and lower-cased. A group outside <see cref="RuleGroups"/> is no group. Missing fields: an empty table.
     /// </summary>
     public static PoseTransitions Parse(JsonElement listing)
     {
@@ -40,7 +42,7 @@ public sealed class PoseTransitions
         var groups = new Dictionary<string, string>(StringComparer.Ordinal);
         if (listing.ValueKind == JsonValueKind.Object)
         {
-            if (listing.TryGetProperty("transitions", out var list) && list.ValueKind == JsonValueKind.Array)
+            if (listing.TryGetProperty("pose_rules", out var list) && list.ValueKind == JsonValueKind.Array)
                 foreach (var r in list.EnumerateArray())
                 {
                     if (r.ValueKind != JsonValueKind.Object) continue;
@@ -50,7 +52,7 @@ public sealed class PoseTransitions
                     bool hasKind = kind.ValueKind switch
                     {
                         JsonValueKind.String => kind.GetString()!.Trim().Length > 0,
-                        JsonValueKind.Object => true,
+                        JsonValueKind.Object => HasRoleKind(kind),
                         _ => false,
                     };
                     if (hasKind) rules.Add(new Rule(from, to, kind.Clone()));
@@ -114,6 +116,14 @@ public sealed class PoseTransitions
     /// <summary><c>rule_kind(rule)</c> without a role: a per-role map names no clip (<c>""</c>).</summary>
     private static string? KindOf(Rule? rule)
         => rule is null ? null : rule.Kind.ValueKind == JsonValueKind.String ? rule.Kind.GetString()!.Trim().ToLowerInvariant() : "";
+
+    /// <summary><c>normalize_rule_kind</c> of a per-role map is a kind only when one role names a non-blank clip.</summary>
+    private static bool HasRoleKind(JsonElement map)
+    {
+        foreach (var role in map.EnumerateObject())
+            if (role.Value.ValueKind == JsonValueKind.String && role.Value.GetString()!.Trim().Length > 0) return true;
+        return false;
+    }
 
     private static string Key(JsonElement row, string name)
         => row.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim().ToLowerInvariant() : "";

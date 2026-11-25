@@ -467,10 +467,10 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                     if checked["reason"] != participation.NOT_OFFERED:
                         targets.append(dict(partner=partner, **checked))
                 checked = next((t for t in targets if t["enabled"]), None)
-                if checked is not None:
-                    plans = partner_plans[checked["partner"]]
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
+                else:
+                    plans = partner_plans[checked["partner"]]
             else:
                 raw = engine.check(actor, target, action["id"], revision, _query=query, offer=True,
                                    include_plans=True)

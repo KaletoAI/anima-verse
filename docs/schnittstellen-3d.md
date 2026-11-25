@@ -2553,10 +2553,17 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   targets do not expand into client clip rules. For prop-action phases the
   native client resolves the POSE rules itself (plan E3 decision 14,
   `AnimaNative.Orders.PoseTransitions`, vector
-  `shared/test-vectors/pose_transition.json`): the listing's `transitions`
-  plus `pose_groups` (`{pose: stand|seat|ground|lie}`,
+  `shared/test-vectors/pose_transition.json`): the listing's `pose_rules`
+  (the RUNTIME table `effective_transitions` the server resolves on — a world
+  rule whose bridge clip is unavailable falls back to the shared rule, a
+  world-only one is dropped; `animation_clips.client_pose_rules`) plus
+  `pose_groups` (`{pose: stand|seat|ground|lie}`,
   `animation_clips.pose_rule_groups`) in the order of
   `resolve_pose_transition` — entry `walking -> pose`, exit `pose -> standing`.
+  The listing's `transitions` are the editor table (`load_transitions`,
+  unavailable world bridges included) and are never resolved on by a client.
+  A change of `pose_rules` or `pose_groups` counts as a transition change of
+  the listing (native `ClipListingDiff.TransitionsChanged`).
 - **Brücke aus einer Paar-Pose** (2026-11-02, Folge-Pose F2,
   plan-folge-pose.md): Nach einem Paar hält ein Renderer die gespielte
   Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (client3d
@@ -8681,10 +8688,16 @@ server answers (plan E3, spec 5e) each row also carries only values the prefligh
 first phase; the client resolves the clip with its `PoseTransitions`), `entry_mode` (`bridge`/`direct` of the
 actor's successful plan, `""` without one), `pair_yaw_deg` (a pair: `places.pair_yaw` of the planned place in
 degrees, else `null`) and `role_point` (`{x, z}`, a pair sharing ONE place: the actor's clip role point =
-its entry anchor, else `null`). Without a marker `access` override the client computes the automatic access
-itself — the body slot minus the entry travel turned by the facing and scaled by `bridge_scale`
-(`AnimaNative.Orders.AccessAuto`, vector `shared/test-vectors/access_auto.json`); a marker's `access` is
-parsed per role into world metres (`PlaceEntry.Access`). A GROUP action (`participants` 3..5, G4 of
+its entry anchor, else `null`). Both are in the WORLD frame of `places.room_places` — the location's local plan
+turned by its `yaw_deg` and moved to `(pos_x, pos_z)`, i.e. the frame of slots and `facing` there (a compass
+yaw: 0 = south +z, 90 = east +x) — never tile-local like the scene payload's `markers[].access`. Without a
+marker `access` override the client computes the automatic access itself — the body slot minus the entry
+travel turned by the facing and scaled by `bridge_scale` (`AnimaNative.Orders.AccessAuto`, vector
+`shared/test-vectors/access_auto.json`); it assumes an entry clip WITHOUT a turn (`bridge_start_point` with
+`turn` 0) — an entry bridge that turns the figure is open until the client consumes the clip's turn (plan E3,
+task 5). A scene marker's `access` (tile-local x/z, floor y, compass yaw) is parsed per role into world metres
+(`PlaceEntry.Access`: through the tile frame, plus the slots' terrain lift, yaw plus the frame's yaw, moved with
+the slots by the re-lift). A GROUP action (`participants` 3..5, G4 of
 plan-gruppen-animationen.md) is offered once per piece with `required_partner` true, no
 `available_targets` and `candidates` — the people in the room the player may pick (awake persons, minus
 those a package rules out for a "policy" action; busy ones stay pickable). `participants` is the MOST

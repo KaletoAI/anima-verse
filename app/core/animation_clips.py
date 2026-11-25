@@ -843,6 +843,18 @@ def pose_rule_groups() -> Dict[str, str]:
             if entry.get("group") in _RULE_GROUPS}
 
 
+def client_pose_rules() -> List[Dict[str, Any]]:
+    """The RUNTIME pose rules ``[{from, to, kind, accel}]`` — the table
+    :func:`resolve_transition` resolves on (:func:`effective_transitions`: a
+    world rule whose bridge clip is unavailable falls back to the shared rule,
+    a world-only one is dropped). Handed to the clients in the listing as
+    ``pose_rules`` so the native client's ``PoseTransitions`` answers exactly
+    what :func:`resolve_pose_transition` answers; the listing's
+    ``transitions`` stay the editor's full table."""
+    return [{"from": r["from"], "to": r["to"], "kind": r["kind"], "accel": _accel(r.get("accel"))}
+            for r in effective_transitions()]
+
+
 def save_transitions(entries: Any,
                      path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Validate both stores before writing the shared seed and whole world layer."""

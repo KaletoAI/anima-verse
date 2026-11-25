@@ -17,10 +17,14 @@ replays every case through the server's own functions:
                    the table the vector's listing names
 
 It also checks that the vector's LISTING fixture is the shipped data — its
-`transitions` are `shared/config/clip_transitions.json` rule for rule and every
+`pose_rules` are `shared/config/clip_transitions.json` rule for rule and every
 `pose_groups` entry is the shipped pose catalog's `group` — and that the
 listing `GET /assets/animation-clips` (`list_animation_clips`) carries
-`pose_groups` with those same values, which is where the client reads them.
+`pose_groups` with those same values and `pose_rules` = the RUNTIME table
+`effective_transitions`, which is where the client reads them. The listing's
+`transitions` are the editor table (`load_transitions`, unavailable world
+bridges included) and are NOT what the client resolves on; the WORLD_MISSING
+fixture pins the difference against a real world layer (cases [10], [11]).
 
 Hand derivation — access_auto.json
 ----------------------------------
@@ -93,6 +97,21 @@ ground, lying lie.
       walking's group @stand -> R8 step-in. Exit (walking, standing): no
       direct rule, then (walking, @stand) -> R8 step-in. The server's order,
       quirk included — the client must answer the same.
+ [10] WORLD_MISSING: the shipped rules plus two WORLD rules whose bridge
+      clips do not exist (the clip directory is empty): W1 sitting at table
+      -> * "missing-rise" (replaces R4 in the editor table) and W2 walking ->
+      meditating "missing-kneel" (world-only, appended). effective_transitions,
+      quoted: "unavailable world bridges leave shared rules in place ...
+      World-only rules with unavailable kinds are dropped" -> pose_rules = the
+      shipped R1..R12. sitting at table: entry R7 sit-down, exit R4
+      get-up-chair (NOT missing-rise, which the editor table `transitions`
+      would give).
+ [11] WORLD_MISSING, meditating: W2 is dropped, so entry falls to the group
+      rule R9 sit-down-floor (NOT missing-kneel); exit null as [4].
+The smoke writes W1, W2 into `clip_transitions_world` of its temp world and
+checks the real listing: `transitions` (from, to, kind) == the fixture's
+editor table, `pose_rules` == the fixture's `pose_rules`, and the unpatched
+`resolve_pose_transition` answers [10] and [11].
 """
 import json
 import math
@@ -153,7 +172,10 @@ def access_cases():
 
 
 def _rules(listing):
-    return [dict(r, kind=clips.normalize_rule_kind(r.get("kind"))) for r in listing["transitions"]]
+    """The listing's runtime rules as the server holds them: kinds normalised,
+    a rule without a kind dropped (`load_shared_transitions`)."""
+    rules = [dict(r, kind=clips.normalize_rule_kind(r.get("kind"))) for r in listing["pose_rules"]]
+    return [r for r in rules if r["kind"]]
 
 
 def pose_cases():
@@ -161,9 +183,9 @@ def pose_cases():
     fixtures = data["fixtures"]
     # The LISTING fixture is the shipped data, not a copy that may drift.
     shipped = [dict(r) for r in clips.load_shared_transitions()]
-    check([(r["from"], r["to"], r["kind"], r["accel"]) for r in fixtures["LISTING"]["transitions"]]
+    check([(r["from"], r["to"], r["kind"], r["accel"]) for r in fixtures["LISTING"]["pose_rules"]]
           == [(r["from"], r["to"], r["kind"], r["accel"]) for r in shipped],
-          "LISTING.transitions == shared/config/clip_transitions.json")
+          "LISTING.pose_rules == shared/config/clip_transitions.json")
     catalog = get_catalog("pose")
     for key, group in fixtures["LISTING"]["pose_groups"].items():
         check((catalog.get(key) or {}).get("group") == group, f"LISTING.pose_groups[{key!r}] == catalog group {group}")
@@ -195,7 +217,38 @@ def listing_groups():
           "listing pose_groups names only rule groups")
     rows = [(r["from"], r["to"], r["kind"]) for r in listing.get("transitions", [])]
     check(rows == [(r["from"], r["to"], r["kind"]) for r in clips.load_transitions()],
-          "listing transitions are the pose rules (from, to, kind)")
+          "listing transitions are the editor table (from, to, kind)")
+    runtime = [(r["from"], r["to"], r["kind"], r["accel"]) for r in listing.get("pose_rules", [])]
+    check(runtime == [(r["from"], r["to"], r["kind"], r["accel"]) for r in clips.effective_transitions()],
+          "listing pose_rules are the runtime table effective_transitions (from, to, kind, accel)")
+
+
+def world_fallback():
+    """[10], [11] against a real world layer: W1, W2 of the docstring."""
+    from app.core.db import transaction
+    from app.routes.assets import list_animation_clips
+    data = json.loads((VECTORS / "pose_transition.json").read_text())
+    fixture = data["fixtures"]["WORLD_MISSING"]
+    with transaction() as conn:
+        conn.executemany(
+            "INSERT INTO clip_transitions_world (from_pose, to_pose, kind, accel, updated_at) VALUES (?, ?, ?, 0, '')",
+            [("sitting at table", "*", "missing-rise"), ("walking", "meditating", "missing-kneel")])
+    listing = list_animation_clips()
+    check([(r["from"], r["to"], r["kind"]) for r in listing["transitions"]]
+          == [(r["from"], r["to"], r["kind"]) for r in fixture["transitions"]],
+          "listing transitions == WORLD_MISSING editor table (world rules in it)")
+    check([(r["from"], r["to"], r["kind"], r["accel"]) for r in listing["pose_rules"]]
+          == [(r["from"], r["to"], r["kind"], r["accel"]) for r in fixture["pose_rules"]],
+          "listing pose_rules == WORLD_MISSING pose_rules (unavailable world bridges fall back)")
+    for case in data["cases"]:
+        if case["args"][0] != {"$fixture": "WORLD_MISSING"}:
+            continue
+        pose = case["args"][1]
+        entry = clips.resolve_pose_transition("walking", pose)
+        exit_ = clips.resolve_pose_transition(pose, "standing")
+        got = dict(entry=clips.rule_kind(entry) if entry else None,
+                   exit=clips.rule_kind(exit_) if exit_ else None)
+        check(got == case["expect"], "unpatched server " + case["label"] + f" -> {got}")
 
 
 if __name__ == "__main__":
@@ -205,5 +258,7 @@ if __name__ == "__main__":
     pose_cases()
     print("[listing]")
     listing_groups()
+    print("[world layer]")
+    world_fallback()
     print(f"\n{'FAIL' if FAILS else 'OK'}: {len(FAILS)} failure(s)")
     sys.exit(1 if FAILS else 0)

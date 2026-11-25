@@ -54,7 +54,8 @@ public class ScenePlacesTests
       ],
       "markers": [
         {"room_id": "r-a", "id": "m1", "group": "seat", "label": "Bench", "capacity": 2, "at_world": [4, 0],
-         "slots": [[4, 0.5], [4, -0.5]], "y_world": 0.45, "root_offset": 0.42, "facing": 90, "anchor": [2, -3], "source": "prop"},
+         "slots": [[4, 0.5], [4, -0.5]], "y_world": 0.45, "root_offset": 0.42, "facing": 90, "anchor": [2, -3], "source": "prop",
+         "access": {"actor": {"x": 3, "y": 0, "z": 1, "yaw": 135}}},
         {"room_id": "r-b", "id": "m2", "group": "lie", "label": "Bed", "capacity": 1, "at_world": [1, 1],
          "slots": [[1, 1]], "y_world": 3.5, "source": "room"},
         {"room_id": "r-b", "id": "", "group": "seat", "label": "", "capacity": 1, "at_world": [0, 0],
@@ -162,6 +163,29 @@ public class ScenePlacesTests
         Assert.Equal(90, e.Rotation);
         Near(new Vec3(100.5, 9.73, 46), e.Slots[0]);
         Near(new Vec3(99.5, 9.73, 46), e.Slots[1]);
+    }
+
+    [Fact]
+    public void MarkerAccessIsTurnedIntoTheWorldAndReliftedWithTheSlots()
+    {
+        // m1's access.actor: tile-local (3, 0, 1), compass yaw 135. Frame yaw 90: tileToWorld(3, 1, 0 + lift −0.3) =
+        // (100 + 1, 10 + 0 − 0.3, 50 − 3) = (101, 9.7, 47); yaw 135 + 90 = 225 → wrapped into (−180, 180] = −135.
+        // (Compass 0 = local +z maps to world +x = compass 90 under this frame, so the frame adds +90.)
+        var inv = Compose();
+        var a = inv.Markers["r-a"]["m1"].Access["actor"];
+        Near(new Vec3(101, 9.7, 47), new Vec3(a.X, a.Y, a.Z));
+        Assert.Equal(-135, a.YawDeg, 9);
+        Assert.Empty(inv.Markers["r-b"]["m2"].Access);
+        // Datum step +0.5 (as ADatumStepCarries…): m1 is fixed → carried +0.5 → 10.2; the re-lift then finds no delta.
+        var frame = Frame with { Center = new Vec3(100, 10.5, 50) };
+        inv.Relift(frame, 0.5, (x, z) => Ground(x, z) + 0.5, (x, z) => Ground(x, z) + 0.5);
+        var carried = inv.Markers["r-a"]["m1"].Access["actor"];
+        Near(new Vec3(101, 10.2, 47), new Vec3(carried.X, carried.Y, carried.Z));
+        Assert.Equal(-135, carried.YawDeg, 9);
+        // Terrain change under the seat (as ATerrainChange…): datum stays, field +0.2 → delta +0.2 → 9.7 → 9.9.
+        var moved = Compose();
+        Assert.True(moved.Relift(Frame, 0, (x, z) => Ground(x, z) + 0.2));
+        Assert.Equal(9.9, moved.Markers["r-a"]["m1"].Access["actor"].Y, 9);
     }
 
     [Fact]

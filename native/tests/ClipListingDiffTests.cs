@@ -19,6 +19,21 @@ public class ClipListingDiffTests
             Listing("b", """[{"kind":"walk","url":"/walk?v=2"}]""")).ChangedUrls);
     [Fact] public void TransitionsChangedFlag()
         => Assert.True(ClipListingDiff.Compare(Listing("a"), Listing("b", transitions: """[{"from":"idle","to":"walk","kind":"step"}]""")).TransitionsChanged);
+    [Fact]
+    public void PoseRulesOrGroupsChangedFlag()
+    {
+        // Same transition_clips: a changed pose rule or pose group alone is a transition change (PoseTransitions reads them).
+        var old = Listing("a");
+        old["pose_rules"] = JsonNode.Parse("""[{"from":"walking","to":"@seat","kind":"sit-down"}]""");
+        old["pose_groups"] = JsonNode.Parse("""{"sitting":"seat"}""");
+        Assert.False(ClipListingDiff.Compare(old, (JsonObject)old.DeepClone()).TransitionsChanged);
+        var rules = (JsonObject)old.DeepClone();
+        rules["pose_rules"]![0]!["kind"] = "perch";
+        Assert.True(ClipListingDiff.Compare(old, rules).TransitionsChanged);
+        var groups = (JsonObject)old.DeepClone();
+        groups["pose_groups"]!["sitting"] = "ground";
+        Assert.True(ClipListingDiff.Compare(old, groups).TransitionsChanged);
+    }
     [Fact] public void PairRolesAndSetsAreDistinct()
         => Assert.Equal(new[] { "pair__a" }, ClipListingDiff.Compare(
             Listing("a", """[{"kind":"pair","role":"a","set":"x","url":"/a?v=1"},{"kind":"pair","role":"b","url":"/b"}]"""),

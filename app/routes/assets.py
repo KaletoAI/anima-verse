@@ -54,7 +54,8 @@ from app.core.animation_clips import (CLIP_EXTS, CLIP_ROLES, ClipExists,
                                       alt_entries, clip_alts, clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
                                       annotated_transitions, client_transition_rules,
-                                      orient_clip, pair_kinds, pose_rule_groups, rename_clip, role_counts,
+                                      orient_clip, pair_kinds, pose_rule_groups, client_pose_rules,
+                                      rename_clip, role_counts,
                                       library_revision, save_transitions,
                                       set_clip_height_offsets, set_clip_loop,
                                       set_clip_loop_count, valid_loop_count,
@@ -102,8 +103,10 @@ def list_animation_clips() -> Dict[str, Any]:
 
     ``movement_poses`` maps fixed poses to played and shipped clip kinds;
     ``pose_groups`` maps every pose key to its place group (stand/seat/ground/
-    lie), which with the pose rules in ``transitions`` lets a client resolve
-    entry and exit bridges like ``resolve_pose_transition``.
+    lie), which with the RUNTIME pose rules in ``pose_rules``
+    (``effective_transitions``; ``transitions`` is the editor's full table,
+    unavailable world bridges included) lets a client resolve entry and exit
+    bridges exactly like ``resolve_pose_transition``.
     """
     clips = [clip_view(entry) for entry in clip_entries()]
     from app.core.animation_sets import available_sets
@@ -152,9 +155,12 @@ def list_animation_clips() -> Dict[str, Any]:
             # The clip that has to play BETWEEN two clips — an exit ("stand up
             # before walking"), an enter, or the pair of exactly two states.
             "transitions": annotated_transitions(),
-            # Pose key -> its place group (stand/seat/ground/lie): with the
-            # pose rules in ``transitions`` the whole input of
-            # ``resolve_pose_transition`` (the native client's PoseTransitions).
+            # The pose rules the server resolves on (effective_transitions:
+            # an unavailable world bridge falls back to the shared rule) and
+            # pose key -> its place group (stand/seat/ground/lie): together the
+            # whole input of ``resolve_pose_transition`` (the native client's
+            # PoseTransitions).
+            "pose_rules": client_pose_rules(),
             "pose_groups": pose_rule_groups(),
             "transition_clips": client_transition_rules()}
 
