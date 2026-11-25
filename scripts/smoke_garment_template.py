@@ -131,7 +131,7 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      released (group A, one re-drape of every fitted drape): a fitted kind's ``tsig`` is md5 of the payload
      ``{params: keyed_params, version: TEMPLATE_VERSION, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
      it differs from the pre-release key (the same payload without ``fitted``) in exactly that one component, for
-     briefs, bra, gloves, tights and trousers alike — a bra's payload carries ``"bra_edges": 3`` besides
+     briefs, bra, gloves, tights and trousers alike — a bra's payload carries ``"bra_edges": 4`` besides
      (``BRA_EDGE_VERSION``, round 2026-11-25: its band top is cut straight), no other fitted kind's does. A top carries no ``fitted`` component: its ``tsig`` still equals
      the one ``garment_template.py`` of the base commit c926b67f0 gives (read with ``git show``; skipped with a note
      without git) — no top re-drapes.
@@ -691,8 +691,8 @@ for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _pre16 = {"params": gt.keyed_params(_pp16), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got16 = gt.tsig(_pp16, **_kw16)
-    _edge16 = {"bra_edges": 3} if _k16 == "bra" else {}
-    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{' + bra_edges 3' if _edge16 else ''}",
+    _edge16 = {"bra_edges": 4} if _k16 == "bra" else {}
+    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{' + bra_edges 4' if _edge16 else ''}",
           _got16 == gt._md5({**_pre16, "fitted": 1, **_edge16}))
     check(f"[16] ... and differs from the pre-release key", _got16 != gt._md5(_pre16))
 import importlib.util  # noqa: E402

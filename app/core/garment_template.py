@@ -150,8 +150,11 @@ CORSET_STRAPS_VERSION = 1
 #: (``garment_template_fitted.strap_strip``), a cup covers only body facing forward and its push-up fades out toward
 #: its side edge (no cup side past the torso outline in the back view). 3 (review of 2): a cup covers the breast's side
 #: again, round to a back edge cut straight into the collider (``CUP_BACK_M``), its push-up 0 behind the side contour;
-#: the cloth is cleared at its 4 mm after a tip's sphere joined the collider (5.5 mm before).
-BRA_EDGE_VERSION = 3
+#: the cloth is cleared at its 4 mm after a tip's sphere joined the collider (5.5 mm before). 4 (round 2026-11-25b, "the
+#: straps are not attached"): each strap strip is sewn onto the cup's top edge and the band's top edge
+#: (``garment_template_fitted.stitch_strip_end``) — one piece with the cups and the band — and moves with the cup's
+#: push-up, the draw toward the middle included, fading out along it.
+BRA_EDGE_VERSION = 4
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
