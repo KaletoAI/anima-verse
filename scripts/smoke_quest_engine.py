@@ -73,6 +73,12 @@ WHAT FOLLOWS BY HAND
  13. Restart: one open run [① at_place place] (A in L2). _reset_for_tests() forgets the live-run count as a fresh
     process; the count is loaded on first use, so A walking into L1/r1 still finishes the run. app/server.py contains
     "quest_types.register()" and "quest_engine.register()".
+ 14. A raising validator is no broken reference (fix round 1): owner "smoke_v" registers condition "v_flag" (always
+    passes, no signals; its validate raises once when armed and called WITH bindings). Run RV = [① v_flag] starts
+    unarmed. Armed, tick(): check_bindings(strict=True) re-raises -> RV is skipped for this tick: still "open",
+    current_step 0 (not evaluated either), the arm used up. The one WARNING "reference check failed, skipped this
+    tick: validator hiccup" in the output is expected. Next tick(): the validator passes, RV is evaluated ->
+    "done".
 """
 import os
 import sys
@@ -395,10 +401,32 @@ def main() -> int:
     check("server registers the types", "quest_types.register()" in server_src, True)
     check("server registers the engine", "quest_engine.register()" in server_src, True)
 
+    # 14 ---------------------------------------------------------------------------------------
+    section("[14]", "a raising validator skips the tick, never breaks the run")
+    armed = [False]
+
+    def v_validate(params, bindings):
+        if armed[0] and bindings is not None:
+            armed[0] = False
+            raise RuntimeError("validator hiccup")
+        return []
+
+    qc.register("smoke_v", lambda: [qc.QuestType(
+        id="v_flag", kind="condition", label="V flag", description="always", validate=v_validate,
+        evaluate=lambda params, ctx: ConditionResult(True, True, ""))])
+    v_t = template(title="V", steps=[{"id": "a", "text": "Flag.", "condition": {"type": "v_flag", "params": {}}}])
+    rv = qe.start_run(v_t["id"], errand_bindings())
+    armed[0] = True
+    qe.tick()
+    got = run(rv["id"])
+    check("after the raising tick", (got["state"], got["current_step"], armed[0]), ("open", 0, False))
+    qe.tick()
+    check("next tick evaluates it", run(rv["id"])["state"], "done")
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[13]")
+    print("PASS smoke_quest_engine: [1]-[14]")
     return 0
 
 

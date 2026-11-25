@@ -144,13 +144,15 @@ def validate_template(template: dict) -> list[dict]:
     return issues
 
 
-def check_bindings(template: dict, bindings: dict) -> list[dict]:
+def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> list[dict]:
     """The issues of ``bindings`` for ``template``: every role bound in its D6 shape to an entity that exists
     (``quest_types.check_binding``, path ``bindings.<role key>``), and each leaf type's ``validate(params,
     bindings)`` (path of the leaf, ending in ``.type``). A type that is not registered adds nothing here
     (:func:`validate_template` and the tick report it).
 
-    RAISES on a storage error: a failed read is not a missing entity, so the caller must not turn it into an issue."""
+    RAISES on a storage error: a failed read is not a missing entity, so the caller must not turn it into an issue.
+    A type validator that raises becomes a ``bad_param`` issue (the start refuses); with ``strict=True`` (the tick) it
+    re-raises instead, because a raising validator is no evidence that a reference is gone and ``broken`` is final."""
     from app.core import quest_types
     template = template if isinstance(template, dict) else {}
     bindings = bindings if isinstance(bindings, dict) else {}
@@ -176,6 +178,8 @@ def check_bindings(template: dict, bindings: dict) -> list[dict]:
                 own = t.validate(quest_catalog._with_defaults(t, leaf.get("params") or {}), bindings) or []
                 issues.extend(_issue(where, str(i.code), str(i.message)) for i in own)
             except Exception as e:  # noqa: BLE001 - a package's validator never breaks the check
+                if strict:
+                    raise
                 logger.exception("validate of quest type %r failed", t.id)
                 issues.append(_issue(where, "bad_param", f"'{t.label}' could not check its parameters: {e}"))
     return issues
@@ -197,12 +201,12 @@ _live_count: Optional[int] = None  # None = not loaded yet (a fresh process)
 
 
 def _refresh_live() -> int:
+    """Read AND store the count under one lock, so an older read never overwrites a newer one."""
     from app.models.quests import count_runs
     global _live_count
-    n = count_runs(LIVE_STATES)
     with _live_lock:
-        _live_count = n
-    return n
+        _live_count = count_runs(LIVE_STATES)
+        return _live_count
 
 
 def _has_live_runs() -> bool:
@@ -247,7 +251,15 @@ def _announce(run: dict) -> None:
 
 
 def _notify_step(avatar: str, run: dict, step_index: int) -> None:
-    """Tell the avatar that fulfilled the step, and nobody else (D15)."""
+    """Tell the avatar that fulfilled the step, and nobody else (D15). Never raises: the step is recorded already,
+    and a failed notice must not keep the run's push from happening."""
+    try:
+        _store_step_notice(avatar, run, step_index)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest run %s: the step %s notice for %s failed: %s", run.get("id"), step_index, avatar, e)
+
+
+def _store_step_notice(avatar: str, run: dict, step_index: int) -> None:
     from app.core.i18n import t
     from app.models.character import get_character_language
     from app.models.notifications import create_notification
@@ -398,6 +410,7 @@ def _evaluate(avatar: str, signal: str, skip: frozenset = frozenset()) -> List[s
     if not avatar or not is_player_controlled(avatar) or not _has_live_runs():
         return []
     changed: List[str] = []
+    failed = False
     for run in reversed(list_runs(states=LIVE_STATES)):  # oldest first
         if run["id"] in skip:
             continue
@@ -405,10 +418,14 @@ def _evaluate(avatar: str, signal: str, skip: frozenset = frozenset()) -> List[s
             if _evaluate_run(run, avatar, signal):
                 changed.append(run["id"])
         except Exception:  # noqa: BLE001 - one run never stops the others
+            # It may have failed AFTER a state change (open_run, record_step_done): push as if it changed.
+            failed = True
             logger.exception("quest run %s: evaluation for %s failed", run.get("id"), avatar)
-    if changed:
-        _refresh_live()
-        _quests_changed()
+    if changed or failed:
+        try:
+            _refresh_live()
+        finally:
+            _quests_changed()
     return changed
 
 
@@ -447,8 +464,8 @@ def tick() -> None:
     for run in list_runs(states=LIVE_STATES):
         snap = run.get("template_snapshot") or {}
         try:
-            issues = check_bindings(snap, run.get("bindings") or {}) + _unregistered(snap)
-        except Exception as e:  # noqa: BLE001 - a failed read is no missing entity: skip this run this tick
+            issues = check_bindings(snap, run.get("bindings") or {}, strict=True) + _unregistered(snap)
+        except Exception as e:  # noqa: BLE001 - a failed read or a raising validator: skip this run this tick
             logger.warning("quest run %s: reference check failed, skipped this tick: %s", run.get("id"), e)
             skip.add(run["id"])
             continue
