@@ -417,10 +417,10 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
         return {"state": "blocked", "reason": REASON_KIND_LATER.format(kind=spec["kind"].capitalize()),
                 "asig": "", "record": None}
     base = _current_base(character_name, profile)
-    if base is None:
-        return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None}
-    pendant = pendant_info(item_id, spec)
     parts = accessory_parts.part_states(spec)
+    if base is None:   # the links are listed without a body too (they are picked before anything is built)
+        return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None, "parts": parts}
+    pendant = pendant_info(item_id, spec)
     ready = accessory_parts.ready_inputs(parts)
     if context is None:
         context = worn_context(character_name, profile, str(base[1]), spec)

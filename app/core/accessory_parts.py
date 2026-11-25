@@ -104,7 +104,7 @@ def validate_links(host_id: str, spec: Optional[Dict[str, Any]]) -> None:
                 raise ValueError(f"{pid} is not a part item")
 
 
-def _all_items() -> List[Dict[str, Any]]:
+def all_items() -> List[Dict[str, Any]]:
     from app.models.inventory import list_items, list_shared_items
     seen, out = set(), []
     for item in list(list_items()) + [{**i, "_shared": True} for i in list_shared_items()]:
@@ -120,7 +120,7 @@ def used_by(part_id: str) -> List[Dict[str, Any]]:
     cache (admin and save paths only)."""
     from app.core import accessory_spec
     out = []
-    for item in _all_items():
+    for item in all_items():
         spec = _spec(item)
         if not spec or spec.get("kind") == "charm":
             continue
