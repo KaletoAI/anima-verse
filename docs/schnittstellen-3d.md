@@ -103,6 +103,7 @@ Intervals and minimum request spacing from `SYNC_ENDPOINTS` (seconds):
 | `self` | self | 5 | 30 | 5 |
 | `belongings` | self | 5 | 30 | 5 |
 | `mind` | self | 10 | 30 | 10 |
+| `quests` | notices | 15 | 30 | 15 |
 | `worldmapPlayer` | presence, world | 10 | 20 | 10 |
 | `worldmap3d` | presence, world | 3 | 6 | 3 |
 

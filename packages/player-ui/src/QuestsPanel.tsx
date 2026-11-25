@@ -1,148 +1,141 @@
 /**
- * QuestsPanel — the avatar's quest book (stage 6, "Spielsysteme-UI Rest").
+ * QuestsPanel — the avatar's quest book (quest system stage 1).
  *
- * Source: GET /play/story-arcs. That endpoint is spoiler-free by construction
- * (whitelist, never GM fields), so this panel simply shows what it gets:
- * running arcs first as expandable cards, then the last finished ones as a
- * short chronicle under a divider.
+ * Source: GET /play/quests (app/core/quest_book.py). That payload is spoiler-free
+ * by construction (built up from a whitelist: no GM notes, no hints, no
+ * conditions, no step after the current one), and every *_label is a finished
+ * server string in the player's language — this panel only lays it out.
  *
- * A card collapsed says what the arc is about (title + how tense it is + the
- * current state). Expanded it adds who is in it and the beats so far, oldest
- * first — the order the server appends them in, so the list reads like a
- * story and not like a changelog.
+ * Open quests come first, then the last ended ones under a "Completed" divider
+ * (the server's order). A card shows title, summary, the done steps (who
+ * fulfilled each and when) and the current one, the time left, and — when the
+ * avatar does not meet the quest's requirements — a lock with the author's reason.
+ *
+ * `QuestBook` is the pure rendering (tests render it with fixtures);
+ * `QuestsPanel` polls the endpoint. The quest engine pushes `notices` to the
+ * bound avatars when a step is done or a run opens/ends, so the poll listens there.
  */
-import { useCallback, useState } from 'react'
 import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
-import { formatDate, formatTime } from './clockFormat'
-import { clockSettings, useClockSettings } from './clockSettings'
+import { Icon } from './icons'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 
-interface ArcBeat {
-  /** Running number of the beat inside the arc, 1-based — the server sends an int. */
-  beat: number
-  timestamp: string
-  summary: string
+export interface QuestBookStep {
+  text: string
+  state: 'done' | 'current'
+  /** Present on a done step: the avatar that fulfilled it. */
+  done_by?: string
+  /** Present on a done step: when, as a finished game-time label. */
+  done_label?: string
 }
 
-interface StoryArc {
+export interface QuestBookEntry {
   id: string
   title: string
-  status: string
-  current_state: string
-  tension: number
-  beats: ArcBeat[]
-  participants: string[]
-  updated_at: string
-  resolution?: string
+  summary: string
+  state: 'open' | 'done' | 'failed' | 'cancelled' | 'broken'
+  steps: QuestBookStep[]
+  /** Open quest with a time limit: the remaining time, a finished label. */
+  time_left_label?: string
+  /** Present only when the avatar is locked out: the reason text to show. */
+  locked?: string
+  /** Ended quest: when it ended, a finished game-time label. */
+  ended_label?: string
 }
 
-interface StoryArcsResp {
-  arcs: StoryArc[]
+export interface QuestBookResp {
+  avatar: string
+  quests: QuestBookEntry[]
 }
 
-/** How tense an arc can get — the server's scale, mirrored as bar segments. */
-const TENSION_MAX = 5
-
-/** Same compact stamp the phone and the scene recap use: day/month + clock,
- *  in the configured world timezone and clock format. */
-function fmtTime(ts: string): string {
-  if (!ts) return ''
-  const clock = clockSettings()
-  const day = formatDate(ts, clock, { day: '2-digit', month: '2-digit' })
-  return day ? `${day} ${formatTime(ts, clock)}` : ''
+/** The word for an ended quest's state (the t() literals stay visible to the i18n guard). */
+function endedStateLabel(state: QuestBookEntry['state'], t: (s: string) => string): string {
+  switch (state) {
+    case 'done': return t('Done')
+    case 'failed': return t('Failed')
+    case 'cancelled': return t('Cancelled')
+    case 'broken': return t('Broken')
+    default: return state
+  }
 }
 
-function TensionBar({ value, label }: { value: number; label: string }) {
-  const filled = Math.max(0, Math.min(TENSION_MAX, Math.round(value || 0)))
-  return (
-    <span className="player-quest-tension" title={label} aria-label={label}>
-      {Array.from({ length: TENSION_MAX }, (_, i) => (
-        <i key={i} className={i < filled ? 'on' : ''} />
-      ))}
-    </span>
-  )
-}
-
-export function QuestsPanel({ pollIntervalMs = 15000 }: { pollIntervalMs?: number } = {}) {
-  // Subscribe to the shared clock settings so the stamp helpers above
-  // re-render once the server-configured format and timezone arrive.
-  useClockSettings()
+function QuestCard({ quest }: { quest: QuestBookEntry }) {
   const { t } = useI18n()
-  const { data } = usePoll<StoryArcsResp>(
-    'play-story-arcs', () => apiGet<StoryArcsResp>('/play/story-arcs'),
-    { intervalMs: pollIntervalMs })
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-
-  const toggle = useCallback((id: string) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
-  }, [])
-
-  // No answer yet (first open, or the poll is backing off after failures) is
-  // NOT "no quests" — a player with running arcs would be told the opposite of
-  // the truth. Same distinction the Others panel makes.
-  if (!data) return <EmptyState small title={t('Loading…')} />
-  const arcs = data.arcs || []
-  if (arcs.length === 0) {
-    return (
-      <EmptyState icon="scroll" title={t('No quests yet')}
-        hint={t('Stories you take part in show up here.')} />
-    )
-  }
-
-  const active = arcs.filter((a) => a.status === 'active')
-  const resolved = arcs.filter((a) => a.status !== 'active')
-
-  const card = (arc: StoryArc) => {
-    const open = !!expanded[arc.id]
-    const done = arc.status !== 'active'
-    return (
-      <div key={arc.id} className={`player-quest${done ? ' player-quest-done' : ''}`}>
-        <button type="button" className="player-quest-head"
-          onClick={() => toggle(arc.id)} aria-expanded={open}>
-          <span className="player-quest-caret">{open ? '▾' : '▸'}</span>
-          <span className="player-quest-title">{arc.title || arc.id}</span>
-          {!done && (
-            <TensionBar value={arc.tension}
-              label={`${t('Tension')}: ${arc.tension}/${TENSION_MAX}`} />
-          )}
-        </button>
-        {!done && arc.current_state ? (
-          <div className="player-quest-state">{arc.current_state}</div>
-        ) : null}
-        {open && (
-          <div className="player-quest-body">
-            {arc.participants.length > 0 ? (
-              <div className="player-quest-people">{arc.participants.join(', ')}</div>
-            ) : null}
-            {done && arc.resolution ? (
-              <div className="player-quest-resolution">{arc.resolution}</div>
-            ) : null}
-            {!done && arc.beats.length === 0 ? (
-              <div className="player-quest-people">{t('Nothing has happened yet.')}</div>
-            ) : null}
-            {!done && arc.beats.map((b, i) => (
-              <div key={`${arc.id}-${i}`} className="player-quest-beat">
-                <div className="player-quest-beat-time">{fmtTime(b.timestamp)}</div>
-                <div className="player-quest-beat-text">
-                  {b.summary || `${t('Beat')} ${b.beat}`}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
-
+  const ended = quest.state !== 'open'
+  const endedLine = ended
+    ? [endedStateLabel(quest.state, t), quest.ended_label].filter(Boolean).join(' · ')
+    : ''
   return (
-    <div className="player-quests">
-      {active.map(card)}
-      {resolved.length > 0 ? (
-        <div className="player-quest-divider">{t('Completed')}</div>
+    <div className={`player-quest${ended ? ' player-quest-done' : ''}`}>
+      <div className="player-quest-head">
+        <span className="player-quest-title">{quest.title || quest.id}</span>
+      </div>
+      {quest.summary ? <div className="player-quest-summary">{quest.summary}</div> : null}
+      {quest.locked ? (
+        <div className="player-quest-locked">
+          <Icon name="lock" size={12} />
+          <span>{quest.locked}</span>
+        </div>
       ) : null}
-      {resolved.map(card)}
+      {quest.steps.length > 0 ? (
+        <ol className="player-quest-steps">
+          {quest.steps.map((step, i) => {
+            const done = step.state === 'done'
+            const by = done ? [step.done_by, step.done_label].filter(Boolean).join(' · ') : ''
+            return (
+              <li key={`${quest.id}-${i}`}
+                className={`player-quest-step ${done ? 'is-done' : 'is-current'}`}>
+                <span className="player-quest-step-mark" aria-hidden="true">{done ? '✓' : '▸'}</span>
+                <span className="player-quest-step-text">
+                  {step.text}
+                  {by ? <small>{by}</small> : null}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      ) : null}
+      {!ended && quest.time_left_label ? (
+        <div className="player-quest-time">{`${t('Time left')}: ${quest.time_left_label}`}</div>
+      ) : null}
+      {endedLine ? <div className="player-quest-time">{endedLine}</div> : null}
     </div>
   )
+}
+
+/** The quest book itself, pure: what the server sent, laid out. */
+export function QuestBook({ data }: { data: QuestBookResp }) {
+  const { t } = useI18n()
+  const quests = data.quests || []
+  if (quests.length === 0) {
+    return (
+      <EmptyState icon="scroll" title={t('No quests yet')}
+        hint={t('Quests open in the world show up here.')} />
+    )
+  }
+  const open = quests.filter((q) => q.state === 'open')
+  const ended = quests.filter((q) => q.state !== 'open')
+  return (
+    <div className="player-quests">
+      {open.map((q) => <QuestCard key={q.id} quest={q} />)}
+      {ended.length > 0 ? (
+        <div className="player-quest-divider">{t('Completed')}</div>
+      ) : null}
+      {ended.map((q) => <QuestCard key={q.id} quest={q} />)}
+    </div>
+  )
+}
+
+export function QuestsPanel({ pollIntervalMs = SYNC_ENDPOINTS.quests.intervalMs }: { pollIntervalMs?: number } = {}) {
+  const { t } = useI18n()
+  const { data } = usePoll<QuestBookResp>(
+    'play-quests', () => apiGet<QuestBookResp>('/play/quests'),
+    { ...SYNC_ENDPOINTS.quests, intervalMs: pollIntervalMs })
+  // No answer yet (first open, or the poll is backing off after failures) is
+  // NOT "no quests" — a player with open quests would be told the opposite of
+  // the truth. Same distinction the Others panel makes.
+  if (!data) return <EmptyState small title={t('Loading…')} />
+  return <QuestBook data={data} />
 }

@@ -699,19 +699,19 @@ def relationship_mixed_decay():
 def review_endpoint_gaps():
     """NEU: hand-derived endpoint keys from actual received writer topics.
 
-    Rule/event => scene, both maps, notices, badges; own movement => notices;
+    Rule/event => scene, both maps, notices, badges, quests; own movement => notices;
     relationship => others for the pair only; image => self for the owner.
     """
     source = (ROOT / "packages/player-ui/src/syncEndpoints.ts").read_text()
     endpoints = {key: set(re.findall(r"'([^']+)'", topics))
                  for key, topics in re.findall(r"(\w+): \{[^\n]*topics: \[([^\]]+)\]", source)}
-    assert len(endpoints) == 9
+    assert len(endpoints) == 10
     def keys(conn):
         topics = drain([conn])[0]
         return {key for key, wanted in endpoints.items() if topics & wanted}
     loc, conns = fixture("review_endpoint_gaps")
     from app.models import rules, events, relationship, account
-    expected = {"scene", "worldmapPlayer", "worldmap3d", "notices", "badges"}
+    expected = {"scene", "worldmapPlayer", "worldmap3d", "notices", "badges", "quests"}
     rules.save_rules([{"id": "demo", "character": "a"}])
     assert keys(conns[0]) == expected
     assert keys(conns[1]) == keys(conns[2]) == set()

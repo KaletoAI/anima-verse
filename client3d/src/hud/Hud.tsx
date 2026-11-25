@@ -124,8 +124,8 @@ const CONTENT_PANELS = new Set<PanelId>([
 /** Panels that need more than the default 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
  *  a navigation column NEXT to its content and folds that column down to bare
- *  icons below 340px. The quest book joins them: a beat row is a timestamp
- *  column NEXT to its text. The gallery fills 72px thumbnail columns, so 320px
+ *  icons below 340px. The quest book joins them: a done step carries who
+ *  fulfilled it and when under its text. The gallery fills 72px thumbnail columns, so 320px
  *  is three pictures per row and 480px is five. Instagram for the plainest
  *  reason of all: a post is a full-width picture, so the panel width IS the
  *  picture width. A width the player dragged wins over this (dropdowns.ts). */
