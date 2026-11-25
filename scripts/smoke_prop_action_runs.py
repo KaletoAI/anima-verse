@@ -403,40 +403,6 @@ class Runs(unittest.TestCase):
         self.assertEqual(F.E.get_journey(name)["journey_id"], journey["journey_id"])
         self.assertFalse(R.claims())
 
-    def test_reentrant_cancellation_under_guard_releases_claims(self):
-        name, target, _ = setup_run()
-        result = request(name, target)
-        journey = F.E.get_journey(name)
-        with A.owner_guard(name, journey) as allowed:
-            self.assertTrue(allowed)
-            F.E.cancel_journey(name, journey_id=journey["journey_id"], execution_kind="prop_action",
-                               execution_ref=result["execution_id"])
-        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
-        self.assertFalse(R.claims())
-
-    def test_actual_arrival_receipt_recovers_callback_loss(self):
-        name, target, _ = setup_run()
-        result = request(name, target)
-        # Crash window: the actual core arrival persists its receipt, but its
-        # registered callback raises before the executor records that arrival.
-        with patch.object(A, "_arrived", side_effect=RuntimeError("process stopped")):
-            tick(30)
-        A.advance(F.game_time())
-        row = R.get(result["execution_id"])
-        self.assertEqual((row["status"], row["phase"]), ("approaching", "entry"), row)
-        self.assertEqual(F.C.get_character_profile(name)["last_journey_result"]["status"], "arrived")
-        self.assertIn(name, row["data"]["arrived"])
-        access = row["data"]["plans"][name]["access"]
-        self.assertEqual(F.C.get_character_pos(name), {"x": access["x"], "z": access["z"]})
-        self.assertFalse(F.C.get_character_profile(name).get("place"))
-        self.assertEqual(row["data"]["entry_elapsed"], 0)
-        tick(row["data"]["entries"][name]["duration_s"])
-        activated = R.get(result["execution_id"])
-        self.assertEqual(activated["status"], "active", activated)
-        anchor = activated["data"]["plans"][name]["entry_anchor"]
-        self.assertEqual(F.C.get_character_pos(name), {"x": anchor["x"], "z": anchor["z"]})
-        self.assertEqual(F.C.get_character_profile(name)["place"]["execution_id"], result["execution_id"])
-
     def test_deleted_target_during_approach_releases_only_own_claims(self):
         name, target, pid = setup_run()
         result = request(name, target)
@@ -531,15 +497,17 @@ class Runs(unittest.TestCase):
         accepted = A.respond(partner, result["execution_id"], True)
         self.assertEqual(accepted["status"], "approaching", accepted)
         self.assertEqual(len(R.claims()), 4)
-        first = F.E.get_journey(name)
-        F.set_game_time(F.game_time() + GameDuration.of(seconds=30))
-        # Real single-journey core step, while the partner is still on its path.
-        with A.owner_guard(name, first) as allowed:
-            self.assertTrue(allowed)
-            F.E._advance_approach(name, first, F.timeutils.motion_time())
-        self.assertFalse(F.C.get_character_profile(name).get("interaction"))
-        self.assertEqual(R.get(result["execution_id"])["data"]["arrived"], [name])
-        F.E.advance_all_journeys()
+        # Each arrives at its own eta (plan E3 Task 7): the partner walks
+        # (2, 5) -> (8.3, 7), sqrt(6.3^2 + 2^2) / 1.4 + .5 = 5.221315 s, the
+        # actor (1, 5) -> (7.7, 7), sqrt(6.7^2 + 2^2) / 1.4 + .5 = 5.494384 s.
+        data = R.get(result["execution_id"])["data"]
+        self.assertAlmostEqual(data["eta_s"][partner] - data["issued_s"], 5.221315, places=3)
+        self.assertAlmostEqual(data["eta_s"][name] - data["issued_s"], 5.494384, places=3)
+        F.elapse(5.3)    # between the two: only the partner is there
+        A.advance(F.game_time())
+        self.assertFalse(F.C.get_character_profile(partner).get("interaction"))
+        self.assertEqual(R.get(result["execution_id"])["data"]["arrived"], [partner])
+        F.elapse(1)      # 6.3: the actor too, the entry flips at 5.494 + 2
         A.advance(F.game_time())
         tick(2)
         row = R.get(result["execution_id"])
@@ -622,7 +590,8 @@ class Runs(unittest.TestCase):
         result = request(name, target)
         F.W.set_world_frozen(True)
         A.advance(F.game_time())
-        self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 0)
+        self.assertEqual((R.get(result["execution_id"])["phase"], R.get(result["execution_id"])["data"]["arrived"]),
+                         ("", []))
         F.W.set_world_frozen(False)
         tick(30)
         tick(2)
@@ -645,9 +614,12 @@ class Runs(unittest.TestCase):
         other = F.actor(target["location_id"])
         self.assertEqual(request(name, target)["reason"], "presence_not_met")
         F.C.set_character_status(other, "pooled")
-        result = request(name, target)
+        # A player-controlled actor arrives only by its own report (plan E3
+        # Task 7); without one the approach deadline (eta + 10, MOTION
+        # seconds) runs out: 120 s pass on both clocks.
+        with patch("app.models.account.is_player_controlled", lambda who: True):
+            result = request(name, target)
         self.assertEqual(result["status"], "approaching", result)
-        # The approach deadline counts MOTION seconds: 120 s pass on both clocks.
         F.set_game_time(F.game_time() + GameDuration.of(seconds=120))
         A.advance(F.game_time())
         self.assertEqual(R.get(result["execution_id"])["reason"], "approach_timeout")
@@ -830,14 +802,17 @@ class Runs(unittest.TestCase):
             clock[0] += F.timedelta(hours=5)
             F.E.advance_all_journeys()
             A.advance(F.game_time())
-            self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 0)
+            # Frozen, the motion clock stands: no arrival, no entry, no deadline.
+            self.assertEqual((R.get(result["execution_id"])["phase"], R.get(result["execution_id"])["data"]["arrived"]),
+                             ("", []))
             self.assertEqual(F.C.get_character_pos(name), before)
             F.W.set_world_frozen(False)
             clock[0] += F.timedelta(seconds=1)
             F.E.advance_all_journeys()
             A.advance(F.game_time())
-            self.assertEqual(R.get(result["execution_id"])["status"], "approaching")
-            self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 1)
+            # One thawed second: still walking (its eta lies 5.7 s after the request).
+            self.assertEqual((R.get(result["execution_id"])["status"], R.get(result["execution_id"])["phase"]),
+                             ("approaching", ""))
             F.set_game_factor(0)
 
 
@@ -1055,8 +1030,7 @@ class Runs(unittest.TestCase):
         self.assertEqual(run["data"]["clip_roles"], {"a": partner, "b": name})
         self.assertEqual(run["data"]["plans"][name]["entry_anchor"]["slot"], 1)
         self.assertEqual(run["data"]["plans"][partner]["entry_anchor"]["slot"], 0)
-        self.assertEqual(F.E.get_journey(name)["approach_role"], "partner")
-        self.assertEqual(F.E.get_journey(partner)["approach_role"], "actor")
+        self.assertEqual(run["data"]["access_roles"], {name: "partner", partner: "actor"})
         tick(30)
         tick(2)
         run = R.get(result["execution_id"])
@@ -1064,47 +1038,6 @@ class Runs(unittest.TestCase):
         self.assertEqual((F.C.get_character_profile(name)["interaction"]["role"],
                           F.C.get_character_profile(partner)["interaction"]["role"]), ("b", "a"))
         self.assertEqual((run["actor"], run["members"]), (name, [partner]))
-
-    def test_restart_preserves_travel_checkpoint_ahead_of_run_tick_and_reanchor_crash(self):
-        name, target, _ = setup_run()
-        # A genuinely longer timed route makes t10 and t15 interior points.
-        previous = F.WORLD_CONFIG.read_text()
-        settings = json.loads(previous)
-        settings["game"] = {"travel_speed_m_s": .2}
-        F.WORLD_CONFIG.write_text(json.dumps(settings))
-        F.config.load(F.WORLD_CONFIG)
-        try:
-            result = request(name, target)
-        finally:
-            F.WORLD_CONFIG.write_text(previous)
-            F.config.load(F.WORLD_CONFIG)
-        stamp = F.game_time()
-        F.set_game_time(stamp + GameDuration.of(seconds=10))
-        F.E.advance_all_journeys()
-        at_ten = F.C.get_character_pos(name)
-        journey = F.E.get_journey(name)
-        self.assertEqual(journey["position_checkpoint_s"], round(F.timeutils.motion_time(), 3))
-        self.assertEqual(R.get(result["execution_id"])["data"]["last_game"], stamp.canonical())
-        class ProcessStop(BaseException):
-            pass
-        F.set_game_time(stamp + GameDuration.of(seconds=100))
-        with patch.object(A, "_PROCESS", "checkpoint-restart-1"), patch.object(A, "_save", side_effect=ProcessStop):
-            with self.assertRaises(ProcessStop):
-                A.advance(F.game_time())
-        F.set_game_time(stamp + GameDuration.of(seconds=110))
-        with patch.object(A, "_PROCESS", "checkpoint-restart-2"):
-            A.advance(F.game_time())
-            self.assertEqual(F.C.get_character_pos(name), at_ten)
-            F.set_game_time(stamp + GameDuration.of(seconds=115))
-            F.E.advance_all_journeys()
-            after = F.C.get_character_pos(name)
-            self.assertGreater(after["x"], at_ten["x"], "resumed way went backwards over its t10 checkpoint")
-            stored = F.E.get_journey(name)
-            self.assertEqual(stored["position_checkpoint_s"], round(F.timeutils.motion_time(), 3))
-            expected = F.E.journey_state(stored["waypoints"], stored["started_at_s"],
-                                         F.timeutils.motion_time())["pos"]
-            self.assertAlmostEqual(after["x"], expected[0], places=2)
-            self.assertAlmostEqual(after["z"], expected[1], places=2)
 
     def test_acceptance_enforces_consent_expiry_without_periodic_tick(self):
         name, partner, target, _ = authored_pair()
@@ -1204,7 +1137,8 @@ class Runs(unittest.TestCase):
         target["definition_revision"] = saved["revision"]
         restarted = request(name, target)
         self.assertEqual(restarted["status"], "approaching", restarted)
-        self.assertEqual(F.E.get_journey(name)["approach_target"]["marker_id"], "replacement")
+        self.assertEqual(R.get(restarted["execution_id"])["data"]["plans"][name]["entry_anchor"]["marker_id"],
+                         "replacement")
 
 
 def execution_scenario(stage):
@@ -1298,14 +1232,15 @@ def execution_scenario(stage):
             raise RuntimeError(result)
         path.write_text(json.dumps(dict(actor=name, target=target, execution_id=result["execution_id"],
                                         snapshots=[R.get(result["execution_id"])]), indent=2))
-        # The real travel engine commits position + last_journey_result before
-        # invoking this boundary. No receipt is authored by this scenario.
-        def crash_after_actual_receipt(*args):
+        # Since plan E3 Task 7 the run's own timer records the arrival (the
+        # position on the access, then the name in "arrived") before the entry
+        # begins; the process stops at that boundary. No arrival is authored here.
+        def crash_after_actual_arrival(*args, **kwargs):
             F.assert_no_external_work()
             os._exit(0)
-        A._arrived = crash_after_actual_receipt
+        A._begin_entry = crash_after_actual_arrival
         tick(30)
-        raise RuntimeError("real arrival never reached its callback")
+        raise RuntimeError("real arrival never reached the entry")
     data = json.loads(path.read_text())
     run = R.get(data["execution_id"])
     A.register_owner()
@@ -1315,10 +1250,9 @@ def execution_scenario(stage):
         A.advance(F.game_time() + GameDuration.of(hours=12))
         data["terminal_restart"] = R.get(run["execution_id"])
     else:
-        profile = F.C.get_character_profile(data["actor"])
-        receipt = profile.get("last_journey_result") or {}
-        if receipt.get("execution_ref") != run["execution_id"] or receipt.get("status") != "arrived":
-            raise RuntimeError("missing real persisted Core arrival receipt")
+        receipt = dict(arrived=list(run["data"].get("arrived") or ()), position=F.C.get_character_pos(data["actor"]))
+        if data["actor"] not in receipt["arrived"]:
+            raise RuntimeError("missing real persisted arrival")
         # World time was stopped by process termination; an explicit large
         # game-clock jump models server downtime and must earn no active time.
         F.set_game_time(F.game_time() + GameDuration.of(hours=12))

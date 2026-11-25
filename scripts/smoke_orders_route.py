@@ -22,20 +22,23 @@ Expectations, by hand from the plan's decisions (E3 decisions 2-6, 18, 19):
 
 [R1] A request of the standing NPC publishes ONE order on its row:
      kind "prop_action", revision 1, status "approaching", steps
-     walk -> entry -> loop (no exit: it holds no place). Its times follow the
-     journey the run still walks (task 4): issued = started_at_s - exit_s
-     (exit_s 0 when standing), eta = started_at_s + the stamp of the last
-     waypoint, flip = eta + 2.0 (the catalog length of "run-enter"),
-     deadline = eta + max(10, 0.5 * (eta - issued)). entry and loop name the
-     pose "sitting" of kind "seat"; the entry's nominal_s is 2.0.
+     walk -> entry -> loop (no exit: it holds no place). Its times are the
+     run's own estimate (task 7, no journey any more): issued = the motion
+     clock at the request; the plan's polyline is [[1, 5], [8, 7]] (the
+     access 2 m in front of the piece), L = sqrt(7^2 + 2^2) = 7.280110, so
+     eta = issued + 7.280110 / 1.4 + 0.5 = issued + 5.700078, flip = eta + 2.0
+     (the catalog length of "run-enter"), deadline = eta + max(10, 0.5 *
+     5.700078) = eta + 10. entry and loop name the pose "sitting" of kind
+     "seat"; the entry's nominal_s is 2.0.
 [R4c] O is no participant: the row's order has no ``awaits``, its target
      neither ``execution_id`` nor ``slot``, its actor no ``role``; the
      movement fields (order_id, times, sequence, access, anchor) are there.
 [R2] ``GET /play/orders?since=0`` lists that order (same order_id, seq >= 1)
      with ``motion_now`` = the fixture clock; ``since=<its seq>`` lists none.
 [R3] Ticking until the run's phase is "entry" (``_begin_entry``): revision 2,
-     status "entering", flip = entry_started_s + 2.0, seq above the R2 seq.
-     Two seconds more: revision 3, status "active".
+     status "entering", flip = entry_started_s + 2.0 where entry_started_s is
+     the NPC's own eta (its logical arrival), so the flip is the published
+     one; seq above the R2 seq. Two seconds more: revision 3, status "active".
 [R4] O in another location (it knows the NPC's location, so the NPC's ROW is
      still not the question): no order in the route; O in the adjacent room
      of the same location: the NPC's row is there, without ``order``, and the
@@ -198,9 +201,6 @@ class Orders(unittest.TestCase):
             A.cancel(run["actor"], run["execution_id"])
         F.assert_no_external_work()
 
-    def journey(self, name):
-        return F.C.get_character_profile(name)["journey"]
-
     def test_r1_r2_r3_r4c_r5_npc_approach(self):
         obs = observer(self.target["location_id"])
         http = client(obs)
@@ -214,7 +214,9 @@ class Orders(unittest.TestCase):
             answer = S.request(self.name, self.target)
         self.assertEqual(answer["status"], "approaching", answer)
         eid = answer["execution_id"]
-        journey = self.journey(self.name)
+        issued = R.get(eid)["data"]["issued_s"]
+        self.assertEqual(R.get(eid)["data"]["plans"][self.name]["waypoints"], [[1, 5], [8, 7]])
+        self.assertNotIn("journey", F.C.get_character_profile(self.name))
 
         print("[R1] the row carries the order")
         payload, by_name = rows(http)
@@ -222,14 +224,11 @@ class Orders(unittest.TestCase):
         self.assertEqual((order["kind"], order["revision"], order["status"]),
                          ("prop_action", 1, "approaching"))
         self.assertEqual(steps(order), ["walk", "entry", "loop"])
-        started = float(journey["started_at_s"])
-        exit_s = float(journey.get("exit_s", 0.0))
-        eta = started + float(journey["waypoints"][-1][2])
-        issued = started - exit_s
+        eta = issued + 5.700078
         self.assertAlmostEqual(order["issued_motion_s"], issued, places=3)
         self.assertAlmostEqual(order["eta_motion_s"], eta, places=3)
         self.assertAlmostEqual(order["flip_motion_s"], eta + 2.0, places=3)
-        self.assertAlmostEqual(order["deadline_motion_s"], eta + max(10.0, .5 * (eta - issued)), places=3)
+        self.assertAlmostEqual(order["deadline_motion_s"], round(eta, 3) + 10.0, places=3)
         entry, loop = order["actors"][0]["sequence"][1:]
         self.assertEqual((entry["pose_kind"], entry["pose_key"], entry["nominal_s"]), ("seat", "sitting", 2.0))
         self.assertEqual((loop["pose_kind"], loop["pose_key"]), ("seat", "sitting"))
@@ -275,6 +274,7 @@ class Orders(unittest.TestCase):
         now = MO.index_get(self.name)
         self.assertEqual((now["revision"], now["status"]), (2, "entering"))
         self.assertAlmostEqual(now["flip_motion_s"], float(run["data"]["entry_started_s"]) + 2.0, places=3)
+        self.assertAlmostEqual(float(run["data"]["entry_started_s"]), eta, places=3)
         self.assertGreater(now["seq"], seq)
         S.tick(2)
         S.tick(1)

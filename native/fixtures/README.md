@@ -2123,3 +2123,12 @@ navigation → the straight walk; the local order's speed 1.4 m/s; frames of 1/6
   (`pos_answers.json`, copied from the nav world): `nav-up-rejected` (409) → `link_refused`, the figure at the stair
   foot **(101, −3.3)** on storey 0, the room stays r-a, one request; `nav-up` (200) → the room is r-up while the figure is
   still below y 3 − 0.05 (before the ride ends), the walk ends on **(100.35, 3, 0.8)**.
+- **R6 / R6x / R6b** (plan E3 Task 7) on the propactions world: the request's answer carries the run's order `run-r6`
+  (`PropActionsCheck.OwnOrder`: fixture-avatar `reports_arrival`, access (2, −1), entry `seat` nominal 2 s), adopted
+  in place of the local order. The avatar reaches the access at √26/1.4 = **3.642157 s** and sends
+  `/play/order/arrived` **once** (`run-r6`, r-props, at (2, −1) ± 0.05) while its entry starts in the same frame —
+  no WaitAccess. R6: the answer `{"ok": true}` → states Walk → Entry (**3.642 s**) → Loop by 7 s. R6b: the count of
+  `/play/pos` attempts at `arrived_access` equals the one at `loop_started` (none in between). R6x: the answer is a
+  409 `arrive_too_far` → states Walk → Entry → Abort at **3.642 s** (the faulted answer is read in the same frame),
+  the avatar stands at the access (2, −1), the run is cancelled (`cancel:run-r6`), the HUD gets the code
+  `arrive_too_far` and the avatar is the player's again.

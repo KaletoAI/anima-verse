@@ -24,7 +24,11 @@ namespace AnimaNative.Check;
 ///       <c>request_in_progress</c> is retried once and never shown; only B stays reserved, the avatar stands at B's access;
 ///   R2d a walk over the stairs: the ride asks for the room; refused → <c>link_refused</c> at the stair foot, no room
 ///       change; accepted → the server room changes before the ride ends.
-/// R2–R2c run on the propactions world (fixture-avatar at (−3, −2), bench-56 access (2, −1), straight walk at 1.4 m/s),
+///   R6  (plan E3 Task 7) the answer's order reports_arrival: at the access the avatar sends <c>/play/order/arrived</c>
+///       exactly once and plays the entry at once (answer ok → the loop); R6x the answer <c>arrive_too_far</c> aborts the
+///       order at the access, lets go of the run and hands the avatar back;
+///   R6b between <c>arrived_access</c> and <c>loop_started</c> no <c>/play/pos</c> goes to the source.
+/// R2–R2c and R6 run on the propactions world (fixture-avatar at (−3, −2), bench-56 access (2, −1), straight walk at 1.4 m/s),
 /// R2d on the orders world (Nia Nav in r-a at (97, −1), stairs 1 foot (101, 0, −3.3) → head (104.5, 3, −3.3)).
 /// </summary>
 public static partial class OrderCheck
@@ -37,7 +41,7 @@ public static partial class OrderCheck
         void Near(string what, double got, double want, double tol) { checks++; Expect(what, Math.Abs(got - want) <= tol, $"got {got:0.####}, want {want} ± {tol}"); }
 
         // ---- R2, R2b, R2c: the propactions world through the real offers controller ----
-        foreach (string scenario in new[] { "R2", "R2b", "R2c" })
+        foreach (string scenario in new[] { "R2", "R2b", "R2c", "R6", "R6x" })
         {
             var fixture = new FixtureSource(Path.Combine(fixtures, "propactions"), fixtures);
             var source = new PropActionsCheck.MenuSource(fixture) { CancelKeepsWorld = true };
@@ -139,6 +143,60 @@ public static partial class OrderCheck
                     NearXZ("R2b at the access after the answer", avatar.Position, 2, -1);
                     Is("R2b Walk → WaitAccess", states.Select(s => s.State).SequenceEqual(new[] { OrderState.Walk, OrderState.WaitAccess }), States());
                     Near("R2b at the access at 3.642 s", states[1].T - t0, 3.642157, TolS);
+                }
+                else if (scenario is "R6" or "R6x")
+                {
+                    // The answer carries the run's order (fixture-avatar reports_arrival; eta = issued + √26 / 1.4).
+                    bool refuse = scenario == "R6x";
+                    var said = new List<string>();
+                    offers.ReasonToast = (code, _) => said.Add(code);
+                    source.StateOverride = PropActionsCheck.RunState("run-r6");
+                    source.OnRequest = _ => Task.FromResult(Doc(new JsonObject
+                    {
+                        ["execution_id"] = "run-r6", ["status"] = "approaching", ["order"] = PropActionsCheck.OwnOrder("run-r6", m.MotionNow),
+                    }.ToJsonString()));
+                    if (refuse)
+                        source.OnArrived = _ => Task.FromException<JsonDocument>(new ApiException(409, "/play/order/arrived",
+                            """{"execution_id":"","status":"refused","reason":"arrive_too_far"}"""));
+                    var answered = new List<string>();
+                    m.OrderArrivalAnswered += (name, order, reason) => answered.Add($"{name}:{order.Id}:{reason}");
+                    var reportsAt = new Dictionary<string, int>();
+                    m.OrderFrameShown += (name, frame) =>
+                    {
+                        if (name != m.AvatarName) return;
+                        foreach (var e in frame.Events) reportsAt.TryAdd(e, source.PositionReports);
+                    };
+                    Click("bench-56");
+                    await offers.PendingPropAction!;
+                    while (m.Clock < t0 + 7.0) Frame();
+                    await offers.PendingPropAction!;
+                    // √26 / 1.4 = 3.642157 s to the access (2, −1): ONE report there, for the run's order, in its room.
+                    Is($"{scenario} arrived is sent exactly once", source.Arrivals.Count == 1, $"{source.Arrivals.Count}");
+                    Is($"{scenario} for run-r6 in r-props", source.Arrivals.All(a => a.OrderId == "run-r6" && a.RoomId == "r-props"));
+                    if (source.Arrivals.Count > 0) NearXZ($"{scenario} reported at the access", new Vector3((float)source.Arrivals[0].X, 0, (float)source.Arrivals[0].Z), 2, -1);
+                    if (!refuse)
+                    {
+                        Is("R6 the answer is ok", answered.SequenceEqual(new[] { "fixture-avatar:run-r6:" }), string.Join(",", answered));
+                        // No wait at the access: the entry starts on the arrival, the loop follows (entry ≤ 2.5 s).
+                        Is("R6 Walk → Entry → Loop", states.Select(s => s.State).SequenceEqual(new[] { OrderState.Walk, OrderState.Entry, OrderState.Loop }), States());
+                        Near("R6 the entry starts at the arrival, 3.642 s", states.Count > 1 ? states[1].T - t0 : -1, 3.642157, TolS);
+                        // R6b: from arrived_access to loop_started no /play/pos went out.
+                        Is("R6b arrived_access and loop_started seen", reportsAt.ContainsKey("arrived_access") && reportsAt.ContainsKey("loop_started"),
+                           string.Join(",", reportsAt.Keys));
+                        Is("R6b no /play/pos between arrived_access and loop_started",
+                           reportsAt.GetValueOrDefault("arrived_access", -1) == reportsAt.GetValueOrDefault("loop_started", -2),
+                           $"{reportsAt.GetValueOrDefault("arrived_access", -1)} → {reportsAt.GetValueOrDefault("loop_started", -2)}");
+                    }
+                    else
+                    {
+                        Is("R6x the refusal is read", answered.SequenceEqual(new[] { "fixture-avatar:run-r6:arrive_too_far" }), string.Join(",", answered));
+                        Is("R6x Walk → Entry → Abort", states.Select(s => s.State).Take(3).SequenceEqual(new[] { OrderState.Walk, OrderState.Entry, OrderState.Abort }), States());
+                        Near("R6x aborted at the arrival, 3.642 s", states.Count > 2 ? states[2].T - t0 : -1, 3.642157, TolS);
+                        NearXZ("R6x stands at the access", avatar.Position, 2, -1);
+                        Is("R6x the run is let go", source.Calls.Contains("cancel:run-r6"), string.Join(",", source.Calls));
+                        Is("R6x the refusal reaches the HUD by its code", said.SequenceEqual(new[] { "arrive_too_far" }), string.Join(",", said));
+                        Is("R6x the avatar is the player's again", !m.HasLiveOrder(m.AvatarName) && !steering.PropActionDriven);
+                    }
                 }
                 else
                 {

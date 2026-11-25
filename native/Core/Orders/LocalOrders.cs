@@ -24,12 +24,6 @@ public static class LocalOrders
     /// <summary>A local furniture order waits at the access for the server's answer.</summary>
     public const string AwaitsAnswer = "answer";
 
-    /// <summary>
-    /// A server order of a figure that reports its own arrival, held at the access until the server's revision
-    /// <c>entering</c> (<see cref="HoldForArrival"/>).
-    /// </summary>
-    public const string AwaitsArrival = "arrival";
-
     /// <summary>The walking speed until the answer names one (app/core/travel_engine.py <c>DEFAULT_SPEED_M_S</c>).</summary>
     public const double DefaultSpeedMS = 1.4;
 
@@ -66,19 +60,6 @@ public static class LocalOrders
                                    true, null);
         return new Order("local:" + n, 1, 0, "walk", motionNow, motionNow, null, motionNow + DeadlineS, "approaching", "", "walk",
                          speedMS, new[] { actor }, locationId, roomId, level, goal, Array.Empty<P2>(), false);
-    }
-
-    /// <summary>
-    /// Under the server that still drives the avatar's approach as a journey (until plan E3 Task 7), a server order of a
-    /// figure that reports its arrival and is still <c>approaching</c> without <c>awaits</c> waits at the access until
-    /// the revision <c>entering</c>: <c>awaits</c> <see cref="AwaitsArrival"/>, no flip (as the server drops it for a set
-    /// <c>awaits</c>). Every other order comes back unchanged (the same instance).
-    /// </summary>
-    public static Order HoldForArrival(Order order, string name)
-    {
-        if (order.IsLocal || order.Status != "approaching" || order.Awaits.Length > 0) return order;
-        if (order.ActorNamed(name) is not { ReportsArrival: true }) return order;
-        return order with { Awaits = AwaitsArrival, FlipS = null };
     }
 
     /// <summary>

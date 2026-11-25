@@ -17,11 +17,14 @@ public class OrderApiTests
     private sealed class Transport : HttpMessageHandler
     {
         public readonly List<string> Requests = new();
+        public readonly List<string> Bodies = new();
         public string Body = "{}";
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        public HttpStatusCode Status = HttpStatusCode.OK;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Requests.Add(request.Method.Method + " " + request.RequestUri!.PathAndQuery);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Body, Encoding.UTF8, "application/json") });
+            Bodies.Add(request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct));
+            return new HttpResponseMessage(Status) { Content = new StringContent(Body, Encoding.UTF8, "application/json") };
         }
     }
 
@@ -45,6 +48,37 @@ public class OrderApiTests
         Assert.Equal(new[] { "ord-1" }, p.Orders.Select(o => o.Id));
         Assert.Equal(9, p.Seq);
         Assert.Equal(123.5, p.MotionNow);
+    }
+
+    [Fact]
+    public async Task ArrivedBodyShape()
+    {
+        // Plan E3 Task 7: POST /play/order/arrived with exactly {order_id, x, z, yaw, room_id} (yaw in radians).
+        var transport = new Transport { Body = """{"ok":true}""" };
+        using var api = new AnimaApi("http://fixture/", transport);
+        using (var doc = await api.PostOrderArrivedAsync("ord-7", 2.5, -1.25, 1.5, "r-props"))
+            Assert.Equal("", OrderArrived.RefusalOf(doc.RootElement));
+        Assert.Equal(new[] { "POST /play/order/arrived" }, transport.Requests);
+        using (var body = JsonDocument.Parse(transport.Bodies[0]))
+        {
+            Assert.Equal(new[] { "order_id", "x", "z", "yaw", "room_id" }, body.RootElement.EnumerateObject().Select(p => p.Name));
+            Assert.Equal("ord-7", body.RootElement.GetProperty("order_id").GetString());
+            Assert.Equal(2.5, body.RootElement.GetProperty("x").GetDouble());
+            Assert.Equal(-1.25, body.RootElement.GetProperty("z").GetDouble());
+            Assert.Equal(1.5, body.RootElement.GetProperty("yaw").GetDouble());
+            Assert.Equal("r-props", body.RootElement.GetProperty("room_id").GetString());
+        }
+        // A refusal is a 409 whose detail is the server's refusal object: its reason is read out.
+        transport.Status = HttpStatusCode.Conflict;
+        transport.Body = """{"detail":{"execution_id":"","status":"refused","reason":"arrive_too_far"}}""";
+        var e = await Assert.ThrowsAsync<ApiException>(() => api.PostOrderArrivedAsync("ord-7", 0, 0, 0, "r-props"));
+        Assert.Equal(409, e.Status);
+        Assert.Equal("arrive_too_far", OrderArrived.RefusalOf(e));
+        Assert.Equal("room_mismatch", OrderArrived.RefusalOf(new ApiException(409, "/play/order/arrived", "room_mismatch")));
+        using var refused = JsonDocument.Parse("""{"ok":false,"reason":"order_unknown"}""");
+        Assert.Equal("order_unknown", OrderArrived.RefusalOf(refused.RootElement));
+        using var bare = JsonDocument.Parse("{}");
+        Assert.Equal("refused", OrderArrived.RefusalOf(bare.RootElement));
     }
 
     [Fact]

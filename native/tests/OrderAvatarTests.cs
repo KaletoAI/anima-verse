@@ -142,34 +142,6 @@ public class OrderAvatarTests
     }
 
     [Fact]
-    public void ArrivalHoldWaitsForEntering()
-    {
-        // A server order for a figure that reports its arrival, still approaching: under the journey server (until
-        // plan E3 Task 7) the avatar waits at the access until the revision "entering" comes.
-        var server = Server(Local(), P(2, 0, 0, 90));
-        var held = LocalOrders.HoldForArrival(server, "Ona");
-        Assert.Equal(LocalOrders.AwaitsArrival, held.Awaits);
-        Assert.Null(held.FlipS);
-        Assert.Same(server, LocalOrders.HoldForArrival(server, "Uli"));
-        var active = server with { Status = "active" };
-        Assert.Same(active, LocalOrders.HoldForArrival(active, "Ona"));
-        var npc = server with { Actors = new[] { server.Actors[0] with { ReportsArrival = false } } };
-        Assert.Same(npc, LocalOrders.HoldForArrival(npc, "Ona"));
-
-        var h = new OrderHarness(OrderHarness.Floor());
-        h.Accept(held);
-        var f = h.RunThrough(3.0);
-        Assert.Equal(OrderState.WaitAccess, f.State);
-        var entering = Server(Local(), P(2, 0, 0, 90), revision: 2, status: "entering");
-        Assert.Same(entering, LocalOrders.HoldForArrival(entering, "Ona"));
-        Assert.True(h.Accept(entering));
-        h.RunThrough(3.5);
-        Assert.Equal(new[] { OrderState.Walk, OrderState.WaitAccess, OrderState.Entry },
-                     h.States.Select(s => s.State));
-        Assert.True(Math.Abs(h.States[2].T - 3.0) <= 2 * Frame, $"entry at {h.States[2].T}");
-    }
-
-    [Fact]
     public void LocalWalkStandsAtItsGoal()
     {
         // (0, 0) → (3, 4): 5 m at 1 m/s → the loop on the goal from 5.0 s on, no answer awaited.

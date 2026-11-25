@@ -2280,6 +2280,13 @@ class TravelTicker:
             except Exception:
                 logger.exception("prop action advance failed")
             try:
+                # The motion orders' liveness stamp (plan E3 decision 7b): a
+                # restart shifts every order by the downtime after it.
+                from app.core import motion_orders
+                await asyncio.to_thread(motion_orders.heartbeat)
+            except Exception:
+                logger.exception("motion order heartbeat failed")
+            try:
                 delay = await asyncio.to_thread(_next_beat_s)
             except Exception:
                 logger.exception("travel tick planning failed")
@@ -2291,12 +2298,8 @@ class TravelTicker:
             self._wake.clear()
 
 
-#: Earliest re-check after a due arrival; one tick may land a hair early.
+#: Earliest re-check after a due step; one tick may land a hair early.
 _MIN_BEAT_S = 0.1
-#: Approaches already given their early arrival beat. An arrival the tick
-#: could not settle (an owner refusing it) falls back to the fixed beat
-#: instead of spinning the whole ticker every 0.1 s.
-_early_beats: Set[str] = set()
 
 
 def _count_ticker(key: str) -> None:
@@ -2310,37 +2313,17 @@ def _count_ticker(key: str) -> None:
 
 
 def _next_beat_s() -> float:
-    """Real seconds until the next beat: the fixed tick, or sooner when an
-    in-room approach (a walk to a seat, about a second long) arrives first.
-
-    Its arrival is what starts the sit; waiting for the fixed 5 s tick left the
-    figure walking on the spot at the seat. The end of the entry clip that
-    follows (and of a combined action's phase) gets a beat as well. Overland
-    journeys keep the fixed beat — their arrival is minutes away and a few
-    seconds do not show.
+    """Real seconds until the next beat: the fixed tick, or sooner when a
+    furniture run's next timed step comes first (``prop_action_engine.due_in_s``:
+    an NPC's eta, the entry's flip, the deadline, a combined phase end, a
+    gauge beat) or a pose scene ends after its finale. Overland journeys keep
+    the fixed beat — their arrival is minutes away and a few seconds do not
+    show.
     """
     _count_ticker("beat")
-    from app.models.character import list_active_journeys
     if timeutils.motion_rate() <= 0:
         return _TICK_SECONDS
-    now_s = timeutils.motion_time()
     soonest = _TICK_SECONDS
-    live = set()
-    for entry in list_active_journeys():
-        j = entry.get("journey") or {}
-        if not isinstance(j, dict) or j.get("approach_target") is None or not j.get("waypoints"):
-            continue
-        jid = str(j.get("journey_id") or entry.get("name"))
-        live.add(jid)
-        if jid in _early_beats:
-            continue
-        st = journey_state(j["waypoints"], j["started_at_s"], now_s)
-        if st["arrived"]:
-            _early_beats.add(jid)
-            soonest = _MIN_BEAT_S
-            continue
-        soonest = min(soonest, st["remaining_s"] + _MIN_BEAT_S)
-    _early_beats.intersection_update(live)
     engine = _prop_action_engine()
     due = engine.due_in_s(game_time()) if engine is not None else None
     if due is not None:
@@ -2351,6 +2334,7 @@ def _next_beat_s() -> float:
         # A scene that ends after its finale (pose_scene.end_after_finale).
         soonest = min(soonest, max(0.0, end) + _MIN_BEAT_S)
     return max(_MIN_BEAT_S, soonest)
+
 
 
 def _prop_action_engine():
@@ -2370,7 +2354,7 @@ def _advance_due_prop_actions() -> None:
     if engine is not None:
         due = engine.due_in_s(now)
         if due is not None and due <= 0:
-            engine.advance(now)
+            engine.advance(now, due_only=True)
     pose_scene.advance(now, due_only=True)
 
 

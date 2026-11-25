@@ -9,20 +9,13 @@ plan at once on its own clock. So the plan must be EXACTLY what the server
 itself runs, and its end must be exactly where the server seats the figure.
 
 Hand-derived expectations (contract docs/schnittstellen-3d.md, "Own motion"):
-- waypoints = the persisted journey polyline (x, z), seat leg included;
-- a walked segment's real pace = the travel speed itself at ANY game factor
-  (factor 2 here: the baked t_cum is length / speed in REAL seconds, so
-  length / t = speed — movement runs on the motion clock,
-  plan-bewegung-echtzeit.md); the zero-time seat leg has no pace (null);
-- access = the plan's floor access; anchor = the plan's entry anchor with
-  y lowered by root_offset (the same convention as prop_action_entry);
-- the entry kind/pose = what the server plays at arrival; duration_s = the
-  clip's own length in real seconds;
-- after activation the profile place is (anchor.place_id, anchor.slot) and
-  the position is anchor (x, z) — one seat point, no second computation;
+- since plan E3 Task 7 an approach walks no journey: the answer's ``motion``
+  is null while it approaches (the order carries the plan), and a player's
+  figure reports its own arrival (``until_active`` does it for the player);
 - a seat switch to another piece (a second placement "other-device" of the
-  prop at (4, 5)) with exit clip run-exit (1 s, 2 m travel): departure =
-  {seat: the held seat, stand: waypoint 2, exit_clip run-exit, exit_s 1.0};
+  prop at (4, 5)) with exit clip run-exit (1 s, 2 m travel): the order's
+  first step is the exit (kind seat, 1.0 s) and the plan's departure_seat
+  names the held seat;
   a switch on the SAME piece ("rest-2") begins in place: status active,
   motion null, no journey, the place on the same piece and the position its
   anchor (fails on a1c5af11: "approaching" with a departure);
@@ -69,68 +62,24 @@ def second_action(pid, target):
 
 
 def until_active(execution_id, limit=12):
+    """Tick until the run left its approach. A player-controlled member
+    reports its own arrival at its access (plan E3 Task 7) — the figure's
+    client would, the server never walks it."""
     for _ in range(limit):
-        if R.get(execution_id)['status'] != 'approaching':
+        run = R.get(execution_id)
+        if run['status'] != 'approaching':
             break
+        if run['phase'] != 'entry':
+            order_id = run['data']['order']['order_id']
+            for name in run['data'].get('reports_arrival') or ():
+                access = run['data']['plans'][name]['access']
+                A.arrived(name, order_id, access['x'], access['z'], 0.0, run['target']['room_id'])
         S.tick(5)
     return R.get(execution_id)
 
 
 class MotionPlan(unittest.TestCase):
     tearDown = S.Runs.tearDown
-
-    def test_request_answer_carries_the_plan_the_server_walks(self):
-        name, target, _ = S.setup_run()
-        F.set_game_factor(2)
-        player = API.client(name)
-        answer = player.post('/play/prop-actions/request', json=API.payload(target))
-        self.assertEqual(answer.status_code, 200, answer.text)
-        result = answer.json()
-        self.assertEqual(result['status'], 'approaching', result)
-        motion = result['motion']
-        run = R.get(result['execution_id'])
-        journey = F.C.get_character_profile(name)['journey']
-        plan = run['data']['plans'][name]
-        self.assertEqual(motion['execution_id'], result['execution_id'])
-        self.assertEqual(motion['journey_id'], journey['journey_id'])
-        self.assertEqual(motion['room_id'], target['room_id'])
-        self.assertEqual(motion['waypoints'], [[round(p[0], 3), round(p[1], 3)] for p in journey['waypoints']])
-        self.assertIsNone(motion['departure'])
-        speed = T.get_travel_speed_m_s()
-        self.assertEqual(len(motion['paces_m_s_real']), len(motion['waypoints']) - 1)
-        for pace, a, b in zip(motion['paces_m_s_real'], journey['waypoints'], journey['waypoints'][1:]):
-            if math.dist(a[:2], b[:2]) > 0:
-                self.assertAlmostEqual(pace, speed, places=3)
-        self.assertEqual(motion['access'], {k: float(plan['access'][k]) for k in ('x', 'y', 'z', 'yaw')})
-        anchor = plan['entry_anchor']
-        offset = float(anchor.get('root_offset', 0))
-        self.assertEqual(motion['anchor'], dict(
-            x=float(anchor['x']), y=float(anchor['y']) - offset, z=float(anchor['z']),
-            yaw=float(anchor.get('yaw') or 0), root_offset=offset,
-            place_id=anchor['place_id'], slot=anchor['slot']))
-        # The own state row repeats it (a pair initiator learns its plan here).
-        state = player.get('/play/prop-actions/state').json()
-        self.assertEqual(state['current'][0]['motion'], motion)
-        # The entry the server plays at arrival is the one announced.
-        S.tick(30)
-        run = R.get(result['execution_id'])
-        self.assertEqual(run['phase'], 'entry', run)
-        spec = run['data']['entries'][name]
-        self.assertEqual((motion['entry']['kind'], motion['entry']['pose_key']), (spec['kind'], spec['pose_key']))
-        self.assertTrue(spec['kind'])
-        meta = S.clips.clip_meta(spec['kind'])
-        self.assertEqual(motion['entry']['duration_s'], round(float(meta['duration_s']), 3))
-        self.assertGreater(motion['entry']['duration_s'], 0)
-        self.assertTrue(any(p is not None for p in motion['paces_m_s_real']))
-        run = until_active(result['execution_id'])
-        self.assertEqual(run['status'], 'active', run)
-        # One seat point: the server seats the figure exactly on the anchor.
-        profile = F.C.get_character_profile(name)
-        self.assertEqual((profile['place']['id'], profile['place']['slot']),
-                         (motion['anchor']['place_id'], motion['anchor']['slot']))
-        pos = F.C.get_character_pos(name)
-        self.assertEqual((pos['x'], pos['z']), (motion['anchor']['x'], motion['anchor']['z']))
-        self.assertIsNone(player.get('/play/prop-actions/state').json()['current'][0]['motion'])
 
     def test_seat_switch_plan_departs_from_the_seat(self):
         name, target, pid = S.setup_run()
@@ -161,23 +110,12 @@ class MotionPlan(unittest.TestCase):
         second = player.post('/play/prop-actions/request',
                              json=API.payload(dict(target, placement_id='other-device'))).json()
         self.assertEqual(second['status'], 'approaching', second)
-        motion = second['motion']
-        journey = F.C.get_character_profile(name)['journey']
-        self.assertEqual(motion['departure'], dict(
-            seat=[seat['x'], seat['z']], stand=list(journey['waypoints'][1][:2]),
-            exit_clip='run-exit', exit_s=1.0))
-        self.assertEqual(motion['waypoints'][0], [round(seat['x'], 3), round(seat['z'], 3)])
-        # An observer in the room sees the same departure: the seat leg and the
-        # escape cross the furniture being left, which the travel engine allows
-        # (fails on 9862d368: withdrawn, the figure stood up on the terrain).
-        from app.core.world_ops import _local_prop_approach
-        observer = F.actor(target['location_id'], at=(2, 5))
-        local = _local_prop_approach(name, observer, F.C.get_character_profile(name),
-                                     F.C.get_character_profile(observer), journey, {name},
-                                     F.timeutils.motion_time(), 1.0)
-        self.assertIsNotNone(local)
-        self.assertEqual(local['waypoints'][0], [seat['x'], seat['z']])
-        self.assertEqual(local['floor_y'], journey['floor_y'])
+        self.assertIsNone(second['motion'])
+        self.assertIsNone(F.C.get_character_profile(name).get('journey'))
+        run = R.get(second['execution_id'])
+        exit_step = run['data']['order']['actors'][0]['sequence'][0]
+        self.assertEqual((exit_step['step'], exit_step['pose_kind'], exit_step['nominal_s']), ('exit', 'seat', 1.0))
+        self.assertEqual(run['data']['plans'][name]['departure_seat']['seat'], [seat['x'], seat['z']])
 
     def test_terminal_motion_is_null_without_a_released_place(self):
         name, target, _ = S.setup_run()

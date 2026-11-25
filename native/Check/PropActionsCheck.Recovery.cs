@@ -21,7 +21,7 @@ public static partial class PropActionsCheck
     /// The server's order of an own run (wire form of app/core/motion_orders.py): bench-56 slot (2, 0.129, 0), access (2, −1);
     /// its seq lies above every fixture map's <c>order_seq</c>, so a row without order does not end it.
     /// </summary>
-    private static JsonObject OwnOrder(string id,double issued,int revision=1,string status="approaching")=>JsonNode.Parse($$"""
+    internal static JsonObject OwnOrder(string id,double issued,int revision=1,string status="approaching")=>JsonNode.Parse($$"""
         {"order_id":"{{id}}","revision":{{revision}},"seq":{{1000+revision}},"kind":"prop_action","issued_motion_s":{{issued}},
          "eta_motion_s":{{issued+3.642157}},"flip_motion_s":{{issued+5.642157}},"deadline_motion_s":{{issued+60}},
          "status":"{{status}}","awaits":"","gait":"walk","speed_m_s":1.4,
@@ -36,7 +36,7 @@ public static partial class PropActionsCheck
                                 {"step":"loop","pose_kind":"seat","pose_key":"sitting","nominal_s":0}],
                     "reports_arrival":true}]}
         """)!.AsObject();
-    private static JsonObject RunState(string id,string status="approaching")=>new() {
+    internal static JsonObject RunState(string id,string status="approaching")=>new() {
         ["current"]=new JsonArray(new JsonObject { ["execution_id"]=id,["status"]=status }),["outgoing"]=new JsonArray() };
     /// <summary>
     /// Plan E3 Task 6: the own run on orders (fixtures/propactions/README.md numbers): the click walks a local order, the
@@ -96,11 +96,13 @@ public static partial class PropActionsCheck
             await offers.PropActions!.RefreshAsync();
             Is("a repeated state keeps the order",player.Current?.Id=="run-x" && player.IssuedLocal==issued);
             Step(4);
-            // √26 / 1.4 = 3.642 s to the access; the journey server's order waits there for "entering".
-            Near("waits at the access x",avatar.Position.X,2); Near("waits at the access z",avatar.Position.Z,-1);
-            Is($"held at the access for the arrival (state={player.RunState})",player.RunState==AnimaNative.Orders.OrderState.WaitAccess);
+            // √26 / 1.4 = 3.642 s to the access; since plan E3 Task 7 the avatar reports its arrival there (once, at the
+            // access) and plays the entry at once, without waiting for the answer or the revision "entering".
+            Is($"the entry runs from the arrival on (state={player.RunState})",player.RunState==AnimaNative.Orders.OrderState.Entry);
+            Is($"the arrival is reported once, at the access ({source.Arrivals.Count})",source.Arrivals.Count==1 && source.Arrivals[0].OrderId=="run-x"
+               && Math.Abs(source.Arrivals[0].X-2)<=.05 && Math.Abs(source.Arrivals[0].Z+1)<=.05 && source.Arrivals[0].RoomId=="r-props");
             mgr.AdoptOrders(new[]{ AnimaNative.Orders.OrderParse.From(JsonSerializer.SerializeToElement(OwnOrder("run-x",mgr.MotionNow-4.25,2,"entering")))! },mgr.MotionNow);
-            Step(.1); Is($"the revision entering starts the entry (state={player.RunState})",player.RunState==AnimaNative.Orders.OrderState.Entry);
+            Step(.1); Is($"the revision entering keeps the entry (state={player.RunState})",player.RunState==AnimaNative.Orders.OrderState.Entry);
             Step(2.5);
             Is($"the loop on the slot (state={player.RunState})",player.RunState==AnimaNative.Orders.OrderState.Loop);
             Near("on the slot x",avatar.Position.X,2); Near("on the slot z",avatar.Position.Z,0); Near("on the slot y",avatar.Position.Y,.129);

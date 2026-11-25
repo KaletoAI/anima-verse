@@ -4160,11 +4160,20 @@ and a follow pose have no `exit` and no `walk`. A `cancel` has one `exit`
 per actor (the pose it left) and the actor's `stand`. Yaws are compass
 degrees.
 
-**Times in task 4** (the run still walks its journey): `issued = started_at_s − exit_s`,
-`eta = started_at_s + the stamp of the last waypoint` (earliest issue and latest
-arrival over the members), `flip = eta + the longest entry`,
-`deadline = eta + max(10, 0.5 · (eta − issued))`. Without a journey (a switch in
-place, a follow pose) issued = eta = the publication second.
+**Times since task 7** (no journey any more: the server estimates and the run
+flips on its own timer). Per member `eta_i = issued + exit_s + L_i / speed + 0.5`
+(`L_i` = the length of the member's planned path to its access, `speed` frozen
+at the start), `eta = max(eta_i)`, `flip = eta + the longest entry`,
+`deadline = eta + max(10, 0.5 · (eta − issued))`. An NPC member counts as
+arrived at its own `eta_i` (its position is written onto the access); a member
+with `reports_arrival` only through `POST /play/order/arrived` (below). Once all
+have arrived the entry begins (`status entering`, `flip` = the latest arrival +
+the longest entry) and the run becomes active at `flip`. The deadline counts only
+while somebody has not arrived (`approach_timeout`). Without a walk (a switch in
+place, a follow pose) issued = eta = the publication second. The runs keep these
+times as absolute motion seconds; a server restart shifts every live order by
+its downtime (world_kv `motion_alive_s`, written at most every 5 s while orders
+live), so nothing flips during the downtime.
 
 **Revisions** (spec 5b, two cases). (1) A NEW `order_id` for the same figure
 replaces the running chain; the client continues from its current picture
@@ -4193,7 +4202,19 @@ answers `{orders: [...], seq, motion_now}`: every visible order with `seq >
 since` (one per `order_id`, oldest first), `seq` = the highest number handed
 out, read before the scan; the client asks again with `since = seq` after the
 next push. (4) The answers of `POST /play/prop-actions/request` and
-`/respond` carry the whole `order` when the avatar is a participant.
+`/respond` carry the whole `order` when the avatar is a participant. (5)
+`POST /play/order/arrived` `{order_id, x, z, yaw, room_id}` (default-deny, the
+session's avatar is the actor; yaw in radians as `/play/pos`): the avatar reached
+its access. Accepted (`{"ok": true}`) when the point is within 0.5 m of the
+member's `access`, the avatar stands in the target room and the run is still
+valid; the position is then written exactly onto the access. Otherwise 409 with
+the refusal object (`reason` `order_unknown` · `arrive_too_far` ·
+`room_mismatch` · the run's own reason, which fails the run). The client plays
+the entry without waiting for the answer and aborts on a refusal; from the
+arrival to the loop's end it sends no `/play/pos`. While the avatar walks, a
+`/play/pos` report inside the target room is written without interrupting the
+run; one from elsewhere interrupts it as before; after the arrival (and in the
+entry) it is `server_owned`.
 
 **Visibility** (`motion_orders.visible` / `for_observer`, decision 4). A
 participant sees the whole order. Anybody else sees it only when a

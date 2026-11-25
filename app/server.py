@@ -1038,9 +1038,11 @@ async def lifespan(app: FastAPI):
     except Exception as _hr:
         logger.error("Hub-job resumer failed: %s", _hr, exc_info=True)
 
-    # Motion orders: rebuild the published index from the live runs BEFORE
-    # the AgentLoop, periodic_jobs and the TravelTicker start (plan E3
-    # decision 7c) — none of them may publish into an empty index first.
+    # Motion orders BEFORE the AgentLoop, periodic_jobs and the TravelTicker
+    # start (plan E3 decision 7c): pre-order approaches cancelled, old approach
+    # journeys dropped, every live order shifted by the downtime since the
+    # last liveness stamp, the published index rebuilt, the stamp written —
+    # nothing may publish into an empty index or flip on unshifted times first.
     try:
         from app.core import motion_orders
         motion_orders.boot()

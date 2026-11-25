@@ -22,8 +22,9 @@ namespace AnimaNative.Figures;
 /// the row as before. A row without <c>order</c> ends a server order covered by the root <c>order_seq</c> with a
 /// <see cref="OrderEndBlendS"/> blend into the rest placement (decision 6). The avatar plays its orders too (Task 6):
 /// a click starts a local order (<see cref="StartLocalOrder"/>) that the answer's order adopts in place; its link rides
-/// ask the server for the room (<see cref="AvatarLinkRide"/>), and a server order that still waits for the journey
-/// server's arrival is held at the access (<see cref="LocalOrders.HoldForArrival"/>).
+/// ask the server for the room (<see cref="AvatarLinkRide"/>). The avatar walks its furniture orders itself (Task 7): at
+/// its access it reports the arrival (<see cref="IWorldSource.PostOrderArrivedAsync"/>) and plays the entry without
+/// waiting for the answer; a refusal aborts the order (<see cref="OrderPlayer.Refuse"/>).
 /// </summary>
 public partial class FigureManager
 {
@@ -37,6 +38,7 @@ public partial class FigureManager
     private readonly Dictionary<string, OrderState> _orderShownState = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _orderExitY = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Key, JsonObject Spec)> _orderEntrySpecs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _arrivalReported = new(StringComparer.Ordinal);
     private long _orderSeqSeen;
     private (double Motion, double At)? _motionSeen;
     private Task? _ordersPull;
@@ -45,8 +47,14 @@ public partial class FigureManager
     /// <summary>The navigation of a location (id → map; null = none yet: the player walks straight).</summary>
     public Func<string, IPathProvider?>? NavOf { get; set; }
 
-    /// <summary>An NPC's order reached its access (event <c>arrived_access</c>).</summary>
+    /// <summary>A figure's order reached its access (event <c>arrived_access</c>; the avatar's also reports it, Task 7).</summary>
     public event Action<string, Order>? OrderArrivedAtAccess;
+
+    /// <summary>
+    /// The server's answer to the avatar's arrival report: name, the order and the refusal's reason ("" = accepted). A
+    /// refusal has already aborted the order when it is still the figure's current one.
+    /// </summary>
+    public event Action<string, Order, string>? OrderArrivalAnswered;
 
     /// <summary>Every frame the bridge shows of a live order (the check records the states with it).</summary>
     public event Action<string, OrderFrame>? OrderFrameShown;
@@ -170,7 +178,6 @@ public partial class FigureManager
         string? before = player.Current?.Id;
         bool local = player.Current is { IsLocal: true };
         double issuedBefore = player.IssuedLocal;
-        if (name == AvatarName) order = LocalOrders.HoldForArrival(order, name);
         if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return false;
         // A revision, or the adoption of a local order in place (same target, the local clock kept): the figure keeps going.
         if (before == order.Id || (local && !order.IsLocal && player.IssuedLocal == issuedBefore)) return true;
@@ -303,6 +310,51 @@ public partial class FigureManager
         _orderShownState.Remove(name);
         _orderExitY.Remove(name);
         _orderEntrySpecs.Remove(name);
+        _arrivalReported.Remove(name);
+    }
+
+    /// <summary>
+    /// The avatar stands at the access of a server order that names it <c>reports_arrival</c> (event
+    /// <c>arrived_access</c>, or <c>entry_started</c> when the answer's order adopted a local one already waiting there):
+    /// report the arrival once per order, without holding the entry back. The answer comes later; a refusal aborts
+    /// the order if it is still the current one. A source without the endpoint (404) and a lost request change
+    /// nothing — the server's deadline ends a run whose arrival never came.
+    /// </summary>
+    private void ReportArrival(string name, Order order, Vec3 at, double yawRad)
+    {
+        if (name != AvatarName || order.IsLocal || order.ActorNamed(name) is not { ReportsArrival: true }) return;
+        if (_arrivalReported.TryGetValue(name, out var sent) && sent == order.Id) return;
+        _arrivalReported[name] = order.Id;
+        _ = ReportArrivalAsync(name, order, at, yawRad);
+    }
+
+    private async Task ReportArrivalAsync(string name, Order order, Vec3 at, double yawRad)
+    {
+        string reason;
+        try
+        {
+            using var doc = await _source.PostOrderArrivedAsync(order.Id, at.X, at.Z, yawRad, order.RoomId);
+            reason = OrderArrived.RefusalOf(doc.RootElement);
+        }
+        catch (ApiException e) when (e.Status == 404)
+        {
+            return;
+        }
+        catch (ApiException e) when (e.Status == 409)
+        {
+            reason = OrderArrived.RefusalOf(e);
+        }
+        catch (Exception e)
+        {
+            _log($"[orders] arrival report for {order.Id} failed: {e.Message}");
+            return;
+        }
+        if (reason.Length > 0)
+        {
+            _log($"[orders] arrival of {name} refused: {reason}");
+            if (_orderPlayers.TryGetValue(name, out var player) && player.Current?.Id == order.Id) player.Refuse(reason);
+        }
+        OrderArrivalAnswered?.Invoke(name, order, reason);
     }
 
     /// <summary>
@@ -326,7 +378,12 @@ public partial class FigureManager
         }
         foreach (var e in frame.Events)
         {
-            if (e == "arrived_access") OrderArrivedAtAccess?.Invoke(name, order);
+            if (e == "arrived_access")
+            {
+                OrderArrivedAtAccess?.Invoke(name, order);
+                ReportArrival(name, order, frame.Position, frame.YawDeg * Math.PI / 180);
+            }
+            else if (e == "entry_started") ReportArrival(name, order, frame.Position, frame.YawDeg * Math.PI / 180);
             else if (e == "ended") { _orderBlends[name] = (fig.Position, _clock); OrderEnded?.Invoke(name); }
             else if (e == "aborted")
             {

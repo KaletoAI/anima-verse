@@ -11,24 +11,27 @@ unfrozen) is pinned; movement runs in REAL time since 2026-11-05
 show that it changes nothing about a walk or an entry clip.
 
 Hand-derived expectations (fixed tick 5 s, early beat +0.1 s, motion now
-M = 1000.0, a 1.4 m leg baked at 1.4 m/s = 1 real second):
+M = 1000.0, a 1.4 m leg baked at 1.4 m/s = 1 real second). Since plan E3
+Task 7 a furniture approach walks no journey: its beats come from the run's
+own times (due_in_s), a journey row gives no early beat any more:
 - no journeys                                   -> 5.0
-- approach, 1 real s to go, factor 1            -> 1 + 0.1 = 1.1
-- the same at factor 4 (real time, unchanged)   -> 1.1
+- an (old) approach journey 1 real s to go      -> 5.0
 - an overland journey 1 s from arrival           -> 5.0 (fixed beat only)
-- an approach already arrived but not settled    -> 0.1 once, then 5.0
 - a frozen world (motion rate 0)                 -> 5.0
-- a run's entry clip ends in 2 real s            -> 2 + 0.1 = 2.1
+- a run's next step in 2 real s                  -> 2 + 0.1 = 2.1
 - the same at factor 4                           -> 2.1 (due_in_s is REAL seconds)
-- an entry already overdue                       -> 0.1
-The ticker advances the runs only when a step is due (due <= 0).
-due_in_s (REAL seconds), motion now = last_motion + 1 s, game now = last
-game stamp + 1 game s:
-- entry clips 2 s and 3 s, 1 s elapsed           -> max(2, 3) - 1 - 1 = 1
-- the same at factor 4                           -> 1 (entry = motion clock)
+- a step already overdue                         -> 0.1
+The ticker advances the runs only when a step is due (due <= 0), and then
+only the due ones (advance(due_only=True)).
+due_in_s (REAL seconds, from the run's absolute motion seconds), motion
+now = M + 1, game now = last game stamp + 1 game s:
+- an entry with flip_s M + 2                     -> 2 - 1 = 1
+- the same at factor 4                           -> 1 (flip = motion clock)
 - combined phase 5 game s, 2 elapsed, factor 1   -> (5 - 2 - 1) / 1 = 2
 - the same at factor 2                           -> (5 - 2 - 1) / 2 = 1
-- the earliest wins (factor 1)                   -> 1; nothing timed -> None
+- an NPC walking, eta_s M + 3, deadline M + 13   -> 3 - 1 = 2
+- the earliest wins (factor 1)                   -> 1; an active plain pose
+  run waits on no clock                          -> None
 An approach starts the exit clip, and at least the 0.3 s lead, after the
 motion now (``_approach_start``, rounded UP to the millisecond; M = 1000.0):
 - no exit clip               -> 1000.3
@@ -84,8 +87,8 @@ class Engine:
     def due_in_s(self, now):
         return self.due
 
-    def advance(self, now):
-        self.advanced.append(now)
+    def advance(self, now, *, due_only=False):
+        self.advanced.append((now, due_only))
 
 
 def clocks(*, factor=1.0, rate=1.0, motion=M, game=NOW):
@@ -105,22 +108,13 @@ def beat(rows, *, factor=1.0, rate=1.0, motion=M, engine=None):
 
 
 def beats():
-    T._early_beats.clear()
     check("no journeys -> fixed 5 s", beat([]) == 5.0, beat([]))
     got = beat([row("a")])
-    check("approach 1 s out, factor 1 -> 1.1 s", abs(got - 1.1) < 1e-9, got)
-    got = beat([row("a")], factor=4.0)
-    check("approach 1 s out, factor 4 -> still 1.1 s (real time)", abs(got - 1.1) < 1e-9, got)
+    check("an approach journey gives no early beat any more", got == 5.0, got)
     got = beat([row("o", approach=False)])
     check("overland journey keeps the fixed beat", got == 5.0, got)
     got = beat([row("a")], rate=0.0)
     check("frozen world keeps the fixed beat", got == 5.0, got)
-    first = beat([row("z")], motion=M + 1)
-    second = beat([row("z")], motion=M + 1)
-    check("arrived approach gets ONE early beat, then the fixed one",
-          (first, second) == (0.1, 5.0), (first, second))
-    beat([], motion=M + 1)
-    check("finished journeys leave the early-beat set", not T._early_beats, T._early_beats)
 
 
 def entry_beats():
@@ -137,26 +131,31 @@ def entry_beats():
                 patch.object(T, "game_time", return_value=NOW):
             T._advance_due_prop_actions()
         check(f"due {due} -> {expected} advance call(s)", len(engine.advanced) == expected, engine.advanced)
+        check(f"due {due}: only the due runs (due_only)", all(only for _now, only in engine.advanced),
+              engine.advanced)
 
 
 def due_steps():
     from app.core import prop_action_engine as A
     stamp = NOW.canonical()
-    base = dict(actor="a", members=[])
+    base = dict(execution_id="run-x", actor="a", members=[])
     entry = dict(base, status="approaching", phase="entry", definition=dict(ability="pose"),
-                 data=dict(last_game=stamp, last_motion=M, entry_elapsed=1.0,
-                           entries={"a": dict(duration_s=2), "b": dict(duration_s=3)}))
+                 data=dict(last_game=stamp, last_motion=M, flip_s=M + 2))
     combined = dict(base, status="active", phase="drink",
                     definition=dict(ability="combined", phases=[dict(id="prepare", duration_game_s=1),
                                                                dict(id="drink", duration_game_s=5)]),
                     data=dict(last_game=stamp, last_motion=M, phase_elapsed=2.0))
     walking = dict(base, status="approaching", phase="", definition=dict(ability="pose"),
-                   data=dict(last_game=stamp, last_motion=M, elapsed=0.0))
+                   data=dict(last_game=stamp, last_motion=M, arrived=[], eta_s={"a": M + 3},
+                             deadline_s=M + 13))
+    sitting = dict(base, status="active", phase="active", definition=dict(ability="pose"),
+                   data=dict(last_game=stamp, last_motion=M))
     for runs, factor, expected in (([entry], 1.0, 1), ([entry], 4.0, 1), ([combined], 1.0, 2),
-                                   ([combined], 2.0, 1), ([combined, entry, walking], 1.0, 1),
-                                   ([walking], 1.0, None)):
+                                   ([combined], 2.0, 1), ([walking], 1.0, 2),
+                                   ([combined, entry, walking], 1.0, 1), ([sitting], 1.0, None)):
         with patch.object(A.store, "live_runs", return_value=runs), \
                 patch.object(timeutils, "motion_time", return_value=M + 1), \
+                patch.object(A, "_meters", return_value=[]), \
                 patch.object(A, "game_speed_factor", return_value=factor):
             got = A.due_in_s(LATER)
         check(f"due_in_s at factor {factor} -> {expected}", got == expected, got)

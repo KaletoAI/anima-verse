@@ -170,6 +170,21 @@ public static partial class PropActionsCheck
             if(doc.RootElement.TryGetProperty("status",out var s) && s.GetString()=="approaching") Reserved.Add(doc.RootElement.GetProperty("execution_id").GetString()!);
             return doc;
         }
+        /// <summary>Plan E3 Task 7: every arrival report, in order; the answer is <see cref="OnArrived"/>'s, else <c>{"ok":true}</c>.</summary>
+        public readonly List<(string OrderId,double X,double Z,double Yaw,string RoomId)> Arrivals=new();
+        public Func<string,Task<JsonDocument>>? OnArrived;
+        public Task<JsonDocument> PostOrderArrivedAsync(string orderId,double x,double z,double yaw,string roomId)
+        {
+            Arrivals.Add((orderId,x,z,yaw,roomId));
+            return OnArrived?.Invoke(orderId) ?? Task.FromResult(JsonDocument.Parse("{\"ok\":true}"));
+        }
+        /// <summary>Every <c>/play/pos</c> attempt (the check counts them); answered as a source without the endpoint.</summary>
+        public int PositionReports;
+        public Task<PositionAnswer> ReportPositionAsync(PositionReport report,System.Threading.CancellationToken ct=default)
+        {
+            PositionReports++;
+            return Task.FromException<PositionAnswer>(new AnimaNative.Api.ApiException(404,"/play/pos","not served by this source"));
+        }
         public Task<JsonDocument> RespondPropActionAsync(string id,bool accept,System.Threading.CancellationToken ct=default)=>Task.FromResult(JsonDocument.Parse(RespondAnswer?.ToJsonString() ?? "{\"status\":\"refused\"}"));
         public Task<JsonDocument> GetWorldMapAsync() { WorldRequests++; return MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json"); }
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();

@@ -353,11 +353,17 @@ def publish(order: dict, *, names: list[str], locations: list[str]) -> dict:
     published = copy.deepcopy(order)
     until = _until(published)
     with _INDEX_LOCK:
+        before = _live_count()
         # seq and index entry in one step under the same lock (decision 6).
         published["seq"] = next_seq()
         for name in names:
             if name:
                 _INDEX[name] = (published, until)
+        first_live = before == 0 and _live_count() > 0
+    if first_live:
+        # 0 -> 1 live orders: stamp the liveness at once, so a restart after a
+        # long idle stretch never shifts this order by that stretch.
+        _write_alive(_now_s())
     from app.core import sync_topics
     from app.core.keyed_lock import _after_locks
     who, where = list(names), list(locations)
@@ -515,13 +521,79 @@ def orders_since(observer: str, since: int) -> dict:
     return {"orders": rows, "seq": seq, "motion_now": round(now, _DECIMALS)}
 
 
+#: world_kv key of the motion second the server last knew live orders
+#: (plan E3 decision 7b): a restart shifts every order by the downtime after it.
+ALIVE_KEY = "motion_alive_s"
+#: At most one liveness write per this many motion seconds.
+HEARTBEAT_S = 5.0
+#: The motion second of this process's last liveness write (None = none yet).
+_last_alive: list = [None]
+
+
+def _live_count() -> int:
+    """How many different orders are live (published, no tail yet)."""
+    with _INDEX_LOCK:
+        return len({order.get("order_id") for order, until in _INDEX.values() if until is None})
+
+
+def _write_alive(now_s: float) -> None:
+    from app.models.world import set_world_setting
+    set_world_setting(ALIVE_KEY, f"{float(now_s):.3f}")
+    _last_alive[0] = float(now_s)
+
+
+def read_alive() -> float | None:
+    """The stored ``motion_alive_s``, None when it is missing or unreadable."""
+    from app.models.world import get_world_setting
+    try:
+        raw = get_world_setting(ALIVE_KEY, "")
+        value = float(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+    return value if value is not None and math.isfinite(value) else None
+
+
+def heartbeat() -> None:
+    """Stamp ``motion_alive_s`` (world_kv) with the motion clock while live
+    orders exist, at most once every HEARTBEAT_S seconds (decision 7b). The
+    travel ticker calls it on every beat; without a live order it writes
+    nothing."""
+    if _live_count() == 0:
+        return
+    now = _now_s()
+    last = _last_alive[0]
+    if last is not None and 0 <= now - last < HEARTBEAT_S:
+        return
+    _write_alive(now)
+
+
 def boot() -> None:
-    """Rebuild the index at server start: every live prop-action run that
-    carries an order (``run.data.order``) stands in it again under its
-    participants (no new seq, no push — the clients' first poll reads it).
-    Runs in the lifespan before the AgentLoop, ``periodic_jobs`` and the
-    TravelTicker (decision 7c)."""
+    """Server start (decision 7c, in the lifespan before the AgentLoop,
+    ``periodic_jobs`` and the TravelTicker):
+
+    (a) an approaching prop-action run without an order (older than plan E3)
+        is cancelled (``e3_migration``), its slot freed;
+    (b) a profile still carrying an approach journey loses it;
+    (c) every live order is shifted by the downtime ``max(0, motion_time() -
+        motion_alive_s)`` (missing stamp → 0; decision 7d): its times and its
+        run's times, revision + 1, republished, marked ``boot_alive_s`` with
+        the stamp it was shifted against — a second boot against the same
+        stamp (a crash before the heartbeat below) shifts nothing again;
+
+    then the index is rebuilt from the live runs and the heartbeat written."""
     from app.core import prop_action_store as store
+    from app.core import prop_action_engine as engine
+    from app.core import travel_engine as travel
+    from app.models.character import list_active_journeys
+    for run in store.live_runs():
+        if run["status"] == "approaching" and not (run.get("data") or {}).get("order"):
+            engine.migrate_cancel(run["execution_id"])
+    for entry in list_active_journeys():
+        journey = entry.get("journey") or {}
+        if isinstance(journey, dict) and journey.get("approach_target") is not None:
+            travel.cancel_journey(entry["name"], journey_id=journey.get("journey_id"), reason="e3_migration")
+    alive = read_alive()
+    shift = max(0.0, _now_s() - alive) if alive is not None else 0.0
     with _INDEX_LOCK:
         _INDEX.clear()
         for run in store.live_runs():
@@ -530,6 +602,10 @@ def boot() -> None:
                 continue
             for name in actor_names(order):
                 _INDEX[name] = (order, None)
+    if shift > 0:
+        for run in store.live_runs():
+            engine.shift_run(run["execution_id"], shift, alive)
+    _write_alive(_now_s())
 
 
 def walking(name: str, *, profile: dict | None = None) -> bool:

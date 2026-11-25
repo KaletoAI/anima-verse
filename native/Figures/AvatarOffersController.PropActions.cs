@@ -72,6 +72,7 @@ public sealed partial class AvatarOffersController
         _figures.OwnPairEnding+=PropPairEnding;
         _figures.OrderEnded+=AvatarOrderEnded;
         _figures.OrderFrameShown+=AvatarOrderFrame;
+        _figures.OrderArrivalAnswered+=AvatarArrivalAnswered;
         _figures.IgnoresAvatarOrder=order=>order.ExecutionId.Length>0 && _abandonedRuns.Contains(order.ExecutionId);
         _hud.PropActionResult=(result,source)=> {
             string ownId=props.OwnExecutionId;
@@ -305,6 +306,19 @@ public sealed partial class AvatarOffersController
         LogProp("local order: no_path");
         if(click.ExecutionId.Length>0) { PendingPropAction=AbandonRunAsync(click.ExecutionId); _handBackPending=true; }
         else if(!KeepHeldRun()) _handBackPending=true;
+    }
+    /// <summary>
+    /// The server refused the avatar's arrival (plan E3 Task 7; the figure's order is already aborted): say why, let go
+    /// of the run (a refusal like <c>arrive_too_far</c> leaves it reserved until its deadline) and hand the avatar back.
+    /// </summary>
+    private void AvatarArrivalAnswered(string name,Order order,string reason)
+    {
+        if(_disposed || name!=_figures.AvatarName || reason.Length==0) return;
+        LogProp($"arrival refused: {reason}");
+        SayRefusal(reason,"");
+        _currentClick=null;
+        if(order.ExecutionId.Length>0) PendingPropAction=AbandonRunAsync(order.ExecutionId);
+        // The hand-back follows the order's "aborted" (AvatarOrderEnded), once the abort has been shown.
     }
     private void AvatarOrderEnded(string name)
     {
@@ -567,6 +581,7 @@ public sealed partial class AvatarOffersController
         if(PropActions is not { } props) return;
         props.Changed-=PropStateChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.RunSuperseded-=PropRunSuperseded; props.MutationRejected-=PropMutationRejected;
         _figures.OwnPairEnding-=PropPairEnding; _figures.OrderEnded-=AvatarOrderEnded; _figures.OrderFrameShown-=AvatarOrderFrame;
+        _figures.OrderArrivalAnswered-=AvatarArrivalAnswered;
         _figures.OwnPropRunLive=null; _figures.IgnoresAvatarOrder=null; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);

@@ -15,13 +15,20 @@ steps them (ORDER BY created_at).
 
 The middle run's step is made to raise by wrapping ``_validate`` (called in
 every live step, after ``_clock``) for P2's execution id. Each ``step`` moves
-both clocks 1 s (the fixture's lockstep) and runs ``advance`` once; no
-journey is advanced, so nobody arrives and the 60 s approach deadline is far.
+both clocks 1 s (the fixture's lockstep) and runs ``advance`` once. A run's
+progress is its ``data.last_motion``, the motion second its last committed
+step ran at ("elapsed" below = last_motion - the request's second t0; a
+rolled-back step leaves it). The slots are (7.4, 5), (8, 5), (8.6, 5) with
+their access 2 m in front, z = 7; P1, P2, P3 take them in that order, so
+their estimated arrivals (plan E3 Task 7: L / 1.4 + 0.5) are
+sqrt(6.4^2 + 2^2) / 1.4 + .5 = 5.289, sqrt(6^2 + 2^2) / 1.4 + .5 = 5.018 and
+sqrt(5.6^2 + 2^2) / 1.4 + .5 = 4.747 s after t0: nobody arrives before
+step 5, and the deadlines (eta + 10) are far.
 Hand-derived from ``prop_action_engine`` (STEP_FAIL_LIMIT 3, STEP_RETRY_S 5,
 the SYSTEM monotonic clock held still by hand unless moved):
 
   [1] P2 raises in every step. Steps 1 and 2: P1 and P3 "approaching" with
-      ``data.elapsed`` 1 then 2 (motion_delta 1 s each); P2 still
+      elapsed 1 then 2 (one second each); P2 still
       "approaching", elapsed 0 (its step rolled back), 6 claims, failure
       record count 1 then 2; ``advance`` returns 2 (P1, P3). ``due_in_s``
       over P2 alone is None while its last failure is < 5 s old. Step 3:
@@ -31,9 +38,8 @@ the SYSTEM monotonic clock held still by hand unless moved):
       Old code: the exception left ``advance`` at P2 in step 1, so P3 kept
       elapsed 0 — and ``advance`` raised.
   [2] A passing fault: P2 raises in step 1 only. Step 2 steps it normally:
-      the record is cleared and P2's elapsed is 2 — the rolled-back step
-      never moved ``last_motion``, so step 2's motion_delta covers both
-      seconds. All three keep their claims (6).
+      the record is cleared and P2's elapsed is 2 (step 2's own second).
+      All three keep their claims (6).
   [3] Its regular end raises too (``_finish`` for P2): after step 3 P2 is
       still ended "failed"/"engine_error" by the plain terminal save, 0 claims
       of its own, journey gone, 4 claims in total.
@@ -72,7 +78,7 @@ def three_runs():
         assert answer["status"] == "approaching", answer
         eids.append(answer["execution_id"])
     assert len(R.claims()) == 6
-    assert all(R.get(e)["data"]["elapsed"] == 0 for e in eids)
+    assert len({R.get(e)["data"]["last_motion"] for e in eids}) == 1   # one t0 for all three
     return people, eids
 
 
@@ -110,7 +116,8 @@ class StepIsolation(unittest.TestCase):
         return patch.object(A, "_validate", side_effect=validate), calls
 
     def elapsed(self, eid):
-        return R.get(eid)["data"]["elapsed"]
+        data = R.get(eid)["data"]
+        return round(data["last_motion"] - data["issued_s"], 3)
 
     def assert_ended(self, people, eids):
         middle = R.get(eids[1])

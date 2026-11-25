@@ -33,12 +33,16 @@ change into avg*10):
   [3] react(resist, feeling -2): "cancelled" / "partner_resisted", no
       claims left; partner->actor -0.10, actor->partner -0.03; average
       -0.065 -> strength 10 - 0.65 = 9.35. A second answer changes nothing.
-  [4] no answer: both arrived, the wait is 61 s old -> due_in_s 0, the
-      next advance goes into "entry" with reaction "timeout".
+  [4] no answer: both arrived; the run is due when the wait ends, i.e. in
+      60 s minus the few real seconds the test has run since the provider
+      was asked (59 < due_in_s <= 60); once the wait is 61 s old -> due_in_s
+      0, the next advance goes into "entry" with reaction "timeout".
   [5] a romantic accept (feeling 1, romantic, compatible pair): tension
       0 + 0.02 = 0.02.
   [6] a player-controlled partner: reaction "player", the provider is NOT
-      asked, nothing waits; its cancel is a push: "partner_resisted", the
+      asked, nothing waits; both figures (players here) report their own
+      arrival at their access points (7.7, 7) and (8.3, 7) (plan E3 Task 7)
+      and the entry starts; its cancel is a push: "partner_resisted", the
       room hears "{partner} pushes {actor} away.", partner->actor -0.05,
       actor->partner -0.03.
   [7] no provider registered (the interact package removed): reaction
@@ -166,7 +170,8 @@ class React(unittest.TestCase):
         name, partner, eid = self.start()
         arrive()
         self.assertEqual(R.get(eid)["phase"], "")
-        self.assertIsNone(A.due_in_s(F.game_time()))
+        due = A.due_in_s(F.game_time())
+        self.assertTrue(59 < due <= 60, due)
         later = A.utc_now() + timedelta(seconds=61)
         from app.core import pair_reaction
         with patch.object(A, "utc_now", lambda: later), patch.object(pair_reaction, "utc_now", lambda: later):
@@ -186,7 +191,9 @@ class React(unittest.TestCase):
             name, partner, eid = self.start()
         self.assertEqual(R.get(eid)["data"]["reaction"]["state"], "player")
         self.assertEqual(self.asked, [])
-        arrive()
+        order_id = R.get(eid)["data"]["order"]["order_id"]
+        for who, x in ((name, 7.7), (partner, 8.3)):
+            self.assertEqual(A.arrived(who, order_id, x, 7.0, 0.0, "hall"), {"ok": True})
         self.assertEqual(R.get(eid)["phase"], "entry")
         result = A.cancel(partner, eid)
         self.assertEqual((result["status"], result["reason"]), ("cancelled", "partner_resisted"), result)

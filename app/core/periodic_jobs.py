@@ -599,7 +599,7 @@ def _sub_prop_action_runs():
     from app.core.timeutils import game_time
     engine = sys.modules.get("app.core.prop_action_engine")
     if engine is not None:
-        engine.advance(game_time())
+        engine.advance(game_time(), due_only=False)   # the full round: every live run
     pose_scene.advance(game_time())
 
 
