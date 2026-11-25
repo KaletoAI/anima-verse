@@ -16,7 +16,9 @@ FIXTURE
     Location L1 with rooms r1 (entry) and r2. Avatar A and NPC N both stand in L1/r1, language "en". Item "Lamp",
     nobody holds it. Game clock Y0001-D010T12:00:00, world FROZEN: every stamp of the play-through is that moment
     (a frozen world still evaluates a player's own action, plan D10), so L = GameTime.parse(that).display_label("en")
-    is every done_label and the ended_label.
+    is every done_label and the ended_label. By hand: day 10 of the first season (Spring) of year 1 at 12:00 ->
+    L = "Spring, day 10 · 12:00 · Year 1" (GameTime.display_label, lang "en"); the smoke compares L against that
+    literal once, then every label against L.
     "Errand" = the plan's reference quest: roles giver (character), place (room), thing (item); steps
     ① "Talk to the giver." spoke_with giver  ② "Go to the place." at_place place  ③ "Hold the thing." holds_item thing
     count 1. Bindings: giver {name N}, place {L1, r2}, thing {item_id Lamp}. The place is r2, NOT the room A stands
@@ -37,12 +39,16 @@ WHAT FOLLOWS BY HAND
     utterance.heard with avatars [A] -> the engine stores the fact "A's mind has spoken with N's mind" and evaluates
     A: step ① passes, ② does not (A is in r1). drain(). GET /play/quests (call 2) -> state "open", steps
     [{text "Talk to the giver.", state "done", done_by "A", done_label L}, {text "Go to the place.", state "current"}].
- 4. Action 2 — A walks to r2 through save_character_current_room (what POST /play/enter-room calls) ->
-    character.entered_room -> step ② passes, ③ does not (no Lamp). drain(). GET /play/quests (call 3) -> "open",
+ 4. Action 2 — the player walks A to r2 through the REAL route POST /play/enter-room {"room_id": "r2"} with the
+    player session -> 200 {"ok": true, "room_id": "r2"} (r2 is a room of A's location, no block rule, A is no party
+    follower) -> save_character_current_room -> character.entered_room -> step ② passes, ③ does not (no Lamp). drain(). GET /play/quests (call 3) -> "open",
     steps [① done/A/L, ② done/A/L, {text "Hold the thing.", state "current"}].
  5. Action 3 — add_to_inventory(A, Lamp, 1) -> inventory.changed delta +1 -> step ③ passes, the run ends "done".
     drain(). GET /play/quests (call 4) -> the quest is ended: state "done", ended_label L, steps all three done
-    (① ② ③ each done_by "A", done_label L), no "current" step, no time_left_label, no locked.
+    (① ② ③ each done_by "A", done_label L), no "current" step, no time_left_label, no locked — the whole entry is
+    exactly {id, title, summary, state "done", ended_label L, steps}.
+    Calls 2 and 3 assert the entry's key set exactly {id, title, summary, state, steps} (an open run without a time
+    limit or prerequisites), so a leaked quest-level field fails.
  6. GET /quests/runs as the admin -> exactly one run R: state "done", current_step 3, step_count 3, and a step_log
     of THREE entries, steps 0, 1, 2 in that order, each avatar "A", mind "A" (A is no linked body).
 """
@@ -118,7 +124,7 @@ def main() -> int:
     set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
     world.set_world_frozen(True)
     now = GameTime.parse("Y0001-D010T12:00:00").display_label("en")
-    check("L is a real label", bool(now), True)
+    check("L is the hand-derived label", now, "Spring, day 10 · 12:00 · Year 1")
     bindings = {"giver": {"name": "N"}, "place": {"location_id": "L1", "room_id": "r2"},
                 "thing": {"item_id": lamp}}
 
@@ -174,18 +180,23 @@ def main() -> int:
                          source="loop")
         check("drain after the reply", quest_engine.drain(), True)
         entry = book("call 2")
-        check("call 2: state", entry.get("state"), "open")
+        check("call 2: entry keys", sorted(entry), sorted(["id", "title", "summary", "state", "steps"]))
+        check("call 2: head", (entry.get("id"), entry.get("title"), entry.get("summary"), entry.get("state")),
+              (rid, "Errand", "Run an errand for someone.", "open"))
         steps = entry.get("steps") or []
         check("call 2: step count", len(steps), 2)
         check("call 2: step 1", steps[0] if steps else None, done("Talk to the giver."))
         check("call 2: step 2", steps[1] if len(steps) > 1 else None, {"text": "Go to the place.", "state": "current"})
 
         print("[4] A walks to the place")
-        chars.save_character_current_room("A", "r2")
+        resp = call("POST", "/play/enter-room", {"room_id": "r2"}, role="player")
+        check("POST /play/enter-room", (resp.status_code, resp.json()), (200, {"ok": True, "room_id": "r2"}))
         check("A is in r2", chars.get_character_current_room("A"), "r2")
         check("drain after the walk", quest_engine.drain(), True)
         entry = book("call 3")
-        check("call 3: state", entry.get("state"), "open")
+        check("call 3: entry keys", sorted(entry), sorted(["id", "title", "summary", "state", "steps"]))
+        check("call 3: head", (entry.get("id"), entry.get("title"), entry.get("summary"), entry.get("state")),
+              (rid, "Errand", "Run an errand for someone.", "open"))
         steps = entry.get("steps") or []
         check("call 3: step count", len(steps), 3)
         check("call 3: step 1", steps[0] if steps else None, done("Talk to the giver."))
@@ -196,10 +207,10 @@ def main() -> int:
         check("Lamp added", inventory.add_to_inventory("A", lamp, 1), True)
         check("drain after the item", quest_engine.drain(), True)
         entry = book("call 4")
-        check("call 4: ended done", (entry.get("state"), entry.get("ended_label")), ("done", now))
-        check("call 4: no open-run keys", ("time_left_label" in entry, "locked" in entry), (False, False))
-        check("call 4: steps", entry.get("steps"),
-              [done("Talk to the giver."), done("Go to the place."), done("Hold the thing.")])
+        check("call 4: entry", entry, {
+            "id": rid, "title": "Errand", "summary": "Run an errand for someone.", "state": "done",
+            "ended_label": now,
+            "steps": [done("Talk to the giver."), done("Go to the place."), done("Hold the thing.")]})
 
         print("[6] the admin's run list")
         resp = call("GET", "/quests/runs")
