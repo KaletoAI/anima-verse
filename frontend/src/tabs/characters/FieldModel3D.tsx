@@ -1270,6 +1270,11 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
               {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
             </select>
           </label>
+          </div>
+          ) : null}
+          </div>
+          {/* A pose an active (or previewed) state names that clothing holds back (motion.held) — on and off the
+              base-body pipeline, live or previewed. */}
           {Object.entries(st.motion?.held ?? {}).map(([group, held]) => (
             <div key={group} className="ga-hint" role="status">
               {held.by.length
@@ -1280,9 +1285,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
                   .replace('{pose}', held.pose).replace('{group}', group)}
             </div>
           ))}
-          </div>
-          ) : null}
-          </div>
           {/* Only a Mixamo skeleton can play the shared clips. */}
           {rigless ? (
             <div className="ga-hint" role="status" style={model.rig_error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
