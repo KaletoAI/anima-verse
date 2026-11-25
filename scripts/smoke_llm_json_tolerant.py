@@ -34,6 +34,23 @@ Expected values, derived by hand:
       {"_list":[{"a":1},{"b":2}]} (NOT the first element as an object);
       prose '[3] facts: {"a":1}' -> {"a":1} (the array does not enclose the
       object).
+  [9] truncated outer value -> None, never a nested fragment (the outer
+      value is incomplete, so there is no answer):
+      '{"needs":[{"kind":"bed","count":1},{"kind":"ta' -- the string "ta is
+      open at the end -> None (not the complete inner {"kind":"bed",...});
+      '{"action":"say","args":{"text":"hi"},"note":"cut' -> None (not
+      {"text":"hi"});
+      '{"memories":[{"content":"abc","importance":3},{"content":"def' -> None
+      for loads_object, and memory extraction logs the failure line;
+      '{"a":"text with ``` fence inside","b":[1' -- the fence is inside a
+      string, so it does not end the run; the body ends on the digit 1
+      (maybe a cut 15) -> None (not {"_list":[1]});
+      '{"deltas":{"mood": 1' -> None (cut inside a number), while
+      '{"deltas":{"mood": 1,' -> {"deltas":{"mood":1}} (the comma proves the
+      number complete);
+      truncated bare array '[{"a":1},{"b":' -> parse_json None (not {"a":1}).
+      Prose with a stray complete brace pair still resumes BEHIND it:
+      'Use {x} then {"a":1}' -> {"a":1}.
   [8] memory_service.extract_memories_from_exchange with answer [1] and the
       LLM stubbed: exactly 1 memory, content "Likes tea", importance 4.
       With answer [6a] (broken): [] and the error log line carries the
@@ -105,6 +122,23 @@ with tempfile.TemporaryDirectory() as tmp:
     ok("[7c] parse_json repairs the missing brace too",
        isinstance(r, dict) and len(r.get("memories", [])) == 1, repr(r))
 
+    # [9] truncated outer value -> no nested fragment
+    for label, txt in [
+        ("needs list cut in a string", '{"needs":[{"kind":"bed","count":1},{"kind":"ta'),
+        ("action cut in a note", '{"action":"say","args":{"text":"hi"},"note":"cut'),
+        ("memories cut in a string", '{"memories":[{"content":"abc","importance":3},{"content":"def'),
+        ("fence inside a string, cut number", '{"a":"text with ``` fence inside","b":[1'),
+        ("cut inside a number", '{"deltas":{"mood": 1'),
+        ("truncated bare array", '[{"a":1},{"b":'),
+    ]:
+        r1 = llm_json.parse_json(txt)
+        r2 = loads_object(txt)
+        ok(f"[9] {label} -> None", r1 is None and r2 is None, repr((r1, r2)))
+    r = llm_json.parse_json('{"deltas":{"mood": 1,')
+    ok("[9] number before a comma is complete", r == {"deltas": {"mood": 1}}, repr(r))
+    r = llm_json.parse_json('Use {x} then {"a":1}')
+    ok("[9] stray brace pair -> resume behind it", r == {"a": 1}, repr(r))
+
     # [8] the memory extraction itself
     from app.core import memory_service, llm_router, prompt_templates  # noqa: E402
     answers = []
@@ -134,6 +168,11 @@ with tempfile.TemporaryDirectory() as tmp:
     ok("[8b] broken answer -> []", got == [], repr(got))
     ok("[8c] failure log carries the answer head",
        any("I cannot help" in m for m in records), repr(records))
+
+    records.clear()
+    got = run('{"memories":[{"content":"abc","importance":3},{"content":"def')
+    ok("[9] truncated extraction -> [] and logged",
+       got == [] and any('{"memories"' in m for m in records), repr((got, records)))
 
 print("PASSED" if not failed else f"FAILED: {failed}")
 sys.exit(1 if failed else 0)

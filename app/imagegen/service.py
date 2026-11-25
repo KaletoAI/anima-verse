@@ -2377,7 +2377,7 @@ class ImageService:
                     return {}
                 return parsed
             except Exception as e:
-                logger.warning("RP-Scene LLM-Call Fehler: %s", e)
+                logger.warning("RP-scene LLM call failed: %s", e)
                 return {}
 
         pose = ""

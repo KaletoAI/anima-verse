@@ -110,7 +110,10 @@ def _watchdog_thread(threshold_ms: float, check_interval: float) -> None:
         time.sleep(check_interval)
         if _heartbeat == 0.0:
             continue
-        lag = time.monotonic() - _heartbeat
+        # Read the heartbeat ONCE: the loop may beat between two reads, and the
+        # block start must be the beat this lag was measured from.
+        beat = _heartbeat
+        lag = time.monotonic() - beat
         # Catch-all below the dump threshold: once per stall, name what the
         # loop thread is doing — a lock, a file, a wait for the GIL.
         if lag * 1000.0 >= LAG_NOTE_MS:
@@ -127,7 +130,7 @@ def _watchdog_thread(threshold_ms: float, check_interval: float) -> None:
         loop_guard.report_if_due()
         if lag >= threshold_s:
             if not already_dumped:
-                block_started_at = _heartbeat
+                block_started_at = beat
                 already_dumped = True
                 stacks = _format_all_threads()
                 logger.warning(
