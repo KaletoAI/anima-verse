@@ -3,7 +3,7 @@
 
 The item image is cut out (the footwear cut-out step: BiRefNet-DIS, square crop), then meshed through the routed
 occasion ``MESH_OCCASION`` (``get_image_service().generate_mesh`` — the routed, queued channel path, never a backend
-directly). The delivered mesh is gated (``mesh_gates``: one connected piece, a plausible shape) and kept as it came;
+directly). The delivered mesh is gated (``mesh_gates``: one piece — shells that meet count as one, ``piece_share`` —, a plausible shape) and kept as it came;
 the size (``size_mm``, the longer front side) and the placement are applied per character on the CPU
 (``accessory_build``), so a size change never spends a job.
 
@@ -57,6 +57,10 @@ TILT_DEG = tuple(range(-30, 61, 2))
 #: the longest side at most this many times the shortest (a needle or a sheet is no pendant); at least this many
 #: triangles.
 MIN_COMPONENT_SHARE = 0.9
+#: ``piece_share``: pieces whose vertices come within this share of the mesh's longest side count as one piece. A
+#: mesher delivers jewellery as shells that meet without shared vertices (the disc in its rim, the bail through its
+#: jump ring — 0.2 % of the size apart on the real UniForge pendant of 2026-11-25); a loose piece stands further off.
+JOIN_SHARE = 0.01
 MAX_ASPECT = 20.0
 MIN_TRIANGLES = 12
 #: Tilts whose push is within this of the least push count as equal; the flattest of them wins.
@@ -232,16 +236,55 @@ def cut_out(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+def piece_share(positions: np.ndarray, faces: np.ndarray) -> float:
+    """The area share of the main piece of a mesh: its edge-connected components (after ``garment_fit.weld``) joined
+    when a vertex of one lies within ``JOIN_SHARE`` of the longest side of a vertex of the other; the largest group
+    plus every group whose box lies inside its box (``footwear_gates.component_shares``' rule). 0.0 without faces."""
+    from scipy.spatial import cKDTree
+    from app.core.garment_fit import components, weld
+    Pw, Fw, _ = weld(positions, faces)
+    if len(Fw) == 0:
+        return 0.0
+    labels, share = components(Pw, Fw)
+    n = len(share)
+    parent = np.arange(n)
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = int(parent[i])
+        return i
+    reach = JOIN_SHARE * float(np.ptp(Pw, 0).max())
+    if n > 1 and reach > 0:
+        pairs = cKDTree(Pw).query_pairs(reach, output_type="ndarray")
+        pairs = pairs[labels[pairs[:, 0]] != labels[pairs[:, 1]]]
+        for a, b in np.unique(np.sort(labels[pairs], axis=1), axis=0):
+            ra, rb = find(int(a)), find(int(b))
+            if ra != rb:
+                parent[ra] = rb
+    root_of = np.array([find(i) for i in range(n)])
+    group = root_of[labels]
+    gshare = np.zeros(n)
+    np.add.at(gshare, root_of, share)
+    lo = np.full((n, 3), np.inf)
+    hi = np.full((n, 3), -np.inf)
+    np.minimum.at(lo, group, Pw)
+    np.maximum.at(hi, group, Pw)
+    best = int(np.argmax(gshare))
+    eps = 1e-9 * max(1.0, float(np.linalg.norm(hi[best] - lo[best])))
+    inside = np.all(lo >= lo[best] - eps, axis=1) & np.all(hi <= hi[best] + eps, axis=1)
+    return float(gshare[inside].sum())
+
+
 def mesh_gates(positions: np.ndarray, faces: np.ndarray) -> Tuple[bool, List[str], Dict[str, Any]]:
     """``(ok, reasons, numbers)`` of a delivered pendant mesh (module docstring)."""
-    from app.core.footwear_gates import component_shares
     P = np.asarray(positions, np.float64)
     F = np.asarray(faces, np.int64)
     reasons: List[str] = []
     ext = (P.max(0) - P.min(0)) if len(P) else np.zeros(3)
     longest, shortest = float(ext.max()), float(ext.min())
     aspect = longest / shortest if shortest > 0 else float("inf")
-    _largest, enclosed = component_shares(P, F) if len(F) else (0.0, 0.0)
+    enclosed = piece_share(P, F) if len(F) else 0.0
     if len(F) < MIN_TRIANGLES:
         reasons.append(f"only {len(F)} triangles")
     if enclosed < MIN_COMPONENT_SHARE:

@@ -14,6 +14,11 @@ Expected values, derived by hand:
     2·2·176 = 704; one piece → component share 1.0; aspect 40 / 5 = 8 → passes. Two such slabs side by side 100
     apart → each half of the area, neither inside the other's box → share 0.5 → refused ("pieces"). A 1 × 1 × 40
     bar → aspect 40 > 20 → refused ("needle"). One triangle → refused ("only 1 triangles").
+    Shells that meet (``piece_share``, ``JOIN_SHARE`` 0.01): the two slabs 20.2 apart (a 0.2 gap between their facing
+    sides, whose vertices lie on the same y/z grid, so the nearest cross pair is 0.2 apart): the pair's box is
+    40.2 × 40 × 5, longest 40.2, reach 0.402 ≥ 0.2 → one piece, share 1.0 → passes (``footwear_gates.
+    component_shares``, the measure before: 0.5). 21 apart (gap 1.0): longest 41, reach 0.41 < 1.0 → two pieces,
+    share 0.5 → refused ("pieces").
 [3] ``normalise(slab, 45)``: scale 45 / 40 → extents (22.5, 45, 5.625) mm; top at y = 0, back at z = 0, x centred.
 [4] ``place`` on a flat body: the closed box x ±0.5, y ±1, z −0.5..0 (front face z = 0, outward +z), pendant
     10 × 20 × 2 mm (normalised slab at size 20), hung at (0, 0, 0.004), gap 3 mm. Per tilt θ (positive: bottom
@@ -154,6 +159,12 @@ V2 = np.concatenate([V, V + [100, 0, 0]])
 F2 = np.concatenate([F, F + len(V)])
 ok, reasons, nums = ap.mesh_gates(V2, F2)
 check("[2] two pieces", (ok, nums["component_share"], any("pieces" in r for r in reasons)), (False, 0.5, True))
+for dx, want in ((20.2, (True, 1.0, False)), (21.0, (False, 0.5, True))):
+    V3 = np.concatenate([V, V + [dx, 0, 0]])
+    ok, reasons, nums = ap.mesh_gates(V3, F2)
+    check(f"[2] two slabs {dx} apart", (ok, nums["component_share"], any("pieces" in r for r in reasons)), want)
+from app.core.footwear_gates import component_shares
+check("[2] meeting slabs, the measure before", component_shares(np.concatenate([V, V + [20.2, 0, 0]]), F2)[1], 0.5)
 Vb, Fb = slab(1, 1, 40, 1, 1, 4)
 ok, reasons, _ = ap.mesh_gates(Vb, Fb)
 check("[2] needle", (ok, any("needle" in r for r in reasons)), (False, True))
