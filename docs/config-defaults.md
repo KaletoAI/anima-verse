@@ -251,17 +251,10 @@ schon immer `5`, und das war der wirksame Wert). Abschalten geht über
 
 ---
 
-## Story Engine
+## Story-Player
 
-| Name | Quelle | Default | Leser |
-|---|---|---|---|
-| `STORY_ENGINE_ENABLED` | `story_engine.enabled` → Story Engine | `false` | app/core/story_engine.py |
-| `STORY_ENGINE_MAX_ACTIVE_ARCS` | `story_engine.max_active_arcs` → Story Engine | `2` | app/core/story_engine.py |
-| `STORY_ENGINE_COOLDOWN_HOURS` | `story_engine.cooldown_hours` → Story Engine | `6` | app/core/story_engine.py |
-| `STORY_ENGINE_MAX_BEATS` | `story_engine.max_beats` → Story Engine | `5` | app/core/story_engine.py |
-| `STORY_ENGINE_BEAT_IMAGES` | `story_engine.beat_images` → Story Engine | `true` | app/core/story_engine.py |
-
-Der Story-Player (`app/routes/story.py`, `story_dev.py`) hat heute **keine UI** — er
+Die Story-Arc-Engine und ihr Config-Abschnitt sind entfernt (Quest-System Stufe 1); ein noch
+gespeicherter Abschnitt wird beim Laden still verworfen. Der Story-Player (`app/routes/story.py`, `story_dev.py`) hat heute **keine UI** — er
 bleibt für eine spätere Wiederverwendung im Code.
 
 ---

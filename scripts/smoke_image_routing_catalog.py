@@ -135,7 +135,6 @@ B3. The caller files are exactly the keys of EXPECTED_STRING_CALLERS (a new
       app/core/messaging_frame.py         frame      (set only in the branch
                                                       without an explicit target;
                                                       a target is an explicit pick)
-      app/core/story_engine.py            photo      (story beat image)
       app/routes/story.py                 photo      (visualised scene)
       app/skills/video_generation_skill.py photo     (the video's still)
       app/core/character_ops.py           profile    (portrait, editor route)
@@ -351,7 +350,6 @@ EXPECTED_STRING_CALLERS = {
     "plugins/take_photo/skill.py": "photo",
     "plugins/instagram/skill_post.py": "instagram",
     "app/core/messaging_frame.py": "frame",
-    "app/core/story_engine.py": "photo",
     "app/routes/story.py": "photo",
     "app/skills/video_generation_skill.py": "photo",
     "app/core/character_ops.py": "profile",

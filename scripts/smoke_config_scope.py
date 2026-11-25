@@ -70,7 +70,7 @@ B) The scope table of the plan (spec § 5, E3, E4, E5), written out by hand:
                phrases that send a non-chat call on to the next model marked
                Uncensored in the shared model list, eb1b8ca0f)
      world:    chat, thoughts, intents, relationships, social_reactions,
-               random_events, npc, story_engine, game, messaging_frame,
+               random_events, npc, game, messaging_frame,
                game_calendar, game_seasons, memory (section), base_body
                (the hair method, plan 2026-11-09-hairdeck-hair Task 4 — a
                world decides how its characters' hair is made)
@@ -565,8 +565,9 @@ TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "content_marketplace", "ui", "image_generation", "model_test",
                   "llm_refusal"]   # body_retexture left with the painted mode (A224)
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
-               "random_events", "npc", "story_engine", "game", "messaging_frame",
+               "random_events", "npc", "game", "messaging_frame",
                "game_calendar", "game_seasons", "memory", "packages", "inventory", "base_body"]
+# story_engine left with the story arc engine (quest system stage 1, D16)
 TABLE_MIXED = ["skills"]
 TABLE_VIRTUAL = []
 

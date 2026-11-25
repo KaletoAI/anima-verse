@@ -143,7 +143,6 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "general_task": _build_general_task(profile),
         "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
-        "arc_block": _build_arc_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
         "skill_context_blocks": "",  # joined package contributions
         # Additional context — currently rendered in agent_thought_in_chat.md.
@@ -700,16 +699,6 @@ def _outfit_decision_hint(character_name: str) -> str:
         return ""
     except Exception as e:
         logger.debug("outfit-decision block failed for %s: %s", character_name, e)
-        return ""
-
-
-def _build_arc_block(character_name: str) -> str:
-    """Active story arc context (low priority)."""
-    try:
-        from app.core.story_engine import get_story_engine
-        return (get_story_engine().inject_arc_context(character_name) or "").strip()
-    except Exception as e:
-        logger.debug("arc block failed for %s: %s", character_name, e)
         return ""
 
 

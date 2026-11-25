@@ -181,11 +181,6 @@ ENV_CONSUMERS = {
     "SKILL_KNOWLEDGE_MAX_OUTPUT_TOKENS": [("plugins/knowledge/skill_extract.py", "1500")],
     "SKILL_KNOWLEDGE_SEARCH_MAX_CANDIDATES": [("plugins/knowledge/skill_search.py", "50")],
     "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN": [("plugins/knowledge/skill_search.py", "8")],
-    "STORY_ENGINE_ENABLED": [("app/core/story_engine.py", "false")],
-    "STORY_ENGINE_MAX_ACTIVE_ARCS": [("app/core/story_engine.py", "2")],
-    "STORY_ENGINE_COOLDOWN_HOURS": [("app/core/story_engine.py", "6")],
-    "STORY_ENGINE_MAX_BEATS": [("app/core/story_engine.py", "5")],
-    "STORY_ENGINE_BEAT_IMAGES": [("app/core/story_engine.py", "true")],
     "EVENT_GENERATION_ENABLED": [("app/core/random_events.py", "true"),
                                  ("app/core/random_events.py", "true")],
     "EVENT_BASE_PROBABILITY": [("app/core/random_events.py", "0.05")],
@@ -661,7 +656,9 @@ def part_b():
     print("B) env bridge: _flatten_to_env({}) bridges the schema default")
     from app.core import config as cfg
     leaves = bridge_leaves()
-    check("bridge reader finds at least 50 leaves (lower bound)", len(leaves) >= 50,
+    # 52 leaves before the story arc engine left (quest stage 1, D16) took its
+    # five STORY_ENGINE_* leaves with it: 47 today, the bound sits below that.
+    check("bridge reader finds at least 45 leaves (lower bound)", len(leaves) >= 45,
           f"found {len(leaves)}")
     with_default = []
     for name, path in leaves:

@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import HTMLResponse
@@ -122,7 +121,7 @@ def dashboard_data(hours: int = Query(24, ge=0)):
 
 @router.get("/activity")
 def activity_feed(hours: int = Query(24, ge=0)):
-    """Aggregated activity feed: Instagram, reactions, story arcs and thoughts."""
+    """Aggregated activity feed: Instagram, reactions and thoughts."""
     cutoff = ""
     if hours > 0:
         cutoff = (utc_now() - timedelta(hours=hours)).isoformat(timespec="seconds")
@@ -158,56 +157,7 @@ def activity_feed(hours: int = Query(24, ge=0)):
     except Exception as e:
         logger.debug("Activity: Instagram error: %s", e)
 
-    # 2. Story Arcs + Beats
-    try:
-        from app.models.story_arcs import get_all_arcs
-        for arc in get_all_arcs():
-            ts = arc.get("created_at", "")
-            if not (cutoff and ts < cutoff):
-                events.append({
-                    "type": "story_arc",
-                    "timestamp": ts,
-                    "character": ", ".join(arc.get("participants", [])),
-                    "summary": f"Arc started: {arc.get('title', '')}",
-                    "detail": arc.get("seed", "")[:120],
-                    "meta": {"status": arc.get("status"), "tension": arc.get("tension")},
-                })
-            for beat in arc.get("beats", []):
-                bts = beat.get("timestamp", "")
-                if cutoff and bts < cutoff:
-                    continue
-                beat_meta = {}
-                scene_img = beat.get("scene_image")
-                if scene_img and scene_img.get("filename") and scene_img.get("character"):
-                    # Both segments are DATA (a character name, a stored file
-                    # name): percent-encode them, or a name with a space, a
-                    # "#" or a "?" builds a URL that points somewhere else.
-                    beat_meta["image_url"] = (
-                        f"/characters/{quote(str(scene_img['character']), safe='')}"
-                        f"/images/{quote(str(scene_img['filename']), safe='')}"
-                    )
-                events.append({
-                    "type": "story_beat",
-                    "timestamp": bts,
-                    "character": ", ".join(arc.get("participants", [])),
-                    "summary": f"Beat {beat.get('beat', '?')}: {beat.get('summary', '')[:120]}",
-                    "detail": arc.get("title", ""),
-                    **({"meta": beat_meta} if beat_meta else {}),
-                })
-            if arc.get("status") == "resolved" and arc.get("resolution"):
-                rts = arc.get("updated_at", "")
-                if not (cutoff and rts < cutoff):
-                    events.append({
-                        "type": "story_resolved",
-                        "timestamp": rts,
-                        "character": ", ".join(arc.get("participants", [])),
-                        "summary": f"Arc resolved: {arc.get('title', '')}",
-                        "detail": (arc.get("resolution", "") or "")[:120],
-                    })
-    except Exception as e:
-        logger.debug("Activity: Story Arcs error: %s", e)
-
-    # 3. Thought messages and social dialogs (from notifications)
+    # 2. Thought messages and social dialogs (from notifications)
     try:
         from app.models.notifications import get_notifications
         notifs = get_notifications(limit=200)

@@ -241,7 +241,7 @@ Phases; each one ends with its smokes green.
 | C17 | `app/skills/image_regenerate.py:440-536`, `app/core/scene_photo.py:46-88` | `strip_refs` at the start, the slot manifest + `mark_refs` per backend; `_SCREENSHOT_SENTENCE` → `<ref 1>`, added per backend |
 | C18 | `app/core/scene_render.py:51/59/493`, `config_schema.py:45-50/:942`, `plugins/secret_diary/presentation.py:139` (pack, private repo) | `<ref N>` |
 | C19 | `app/imagegen/pose_check.py` template | keep `<ref N>`; a lost token → the prompt before the check |
-| C20 | `plugins/take_photo/skill.py:99`, `plugins/instagram/skill_post.py:451`, `story_engine.py:401`, `routes/story.py:580`, `video_generation_skill.py:140` | nothing, they inherit C15/C16 (a smoke checks them) |
+| C20 | `plugins/take_photo/skill.py:99`, `plugins/instagram/skill_post.py:451`, `routes/story.py:580`, `video_generation_skill.py:140` | nothing, they inherit C15/C16 (a smoke checks them) |
 
 **Phase 4 — the remaining edit producers say `<ref N>` (wording only)**
 | C21 | `app/core/base_body.py:160-181` (DRAFT/BASE_VIEW_PROMPTS), `:226/:228` "as the reference", `:238-241` "the person in the picture", `:3809/:3815` EDIT_SECOND_PICTURE / EDIT_FROM_SECOND_PICTURE, `:2122/:2126` DRESS_KEEP | `<ref 1>`/`<ref 2>`. `picture_edit_prompt` relies on normaliser step 4 on 1-slot backends |

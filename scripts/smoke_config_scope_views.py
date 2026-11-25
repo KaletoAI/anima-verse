@@ -23,16 +23,16 @@ Part A — schema_for("instance")
   (plugins/searx/plugin.yaml declares url scope: instance); "outfit_change"
   (world) is gone.
   NOT present: chat, relationships, social_reactions, thoughts, intents,
-  random_events, npc, story_engine, game, messaging_frame, game_calendar,
-  game_seasons.
+  random_events, npc, game, messaging_frame, game_calendar, game_seasons.
 
 Part A2 — memory in the instance view: the set of field names whose type is
   not group_header/note is exactly {"chat_retention_days"}.
 
 Part B — schema_for("world")
   present: chat, memory, relationships, social_reactions, thoughts, intents,
-  random_events, npc, story_engine, game, messaging_frame, game_calendar,
-  game_seasons, skills, image_generation.
+  random_events, npc, game, messaging_frame, game_calendar, game_seasons,
+  skills, image_generation.
+  (story_engine left with the story arc engine, quest system stage 1, D16.)
   memory: has every data field of SECTIONS["memory"] except
   chat_retention_days.
   image_generation: only sub_arrays.use_cases; no data fields; pages = the
@@ -174,7 +174,7 @@ for k in ("server", "providers", "llm_retry", "llm_routing", "lanes", "embedding
           "decision", "tts", "knowledge", "ui", "content_marketplace"):
     check(k in inst, f"A: instance view has {k}")
 for k in ("chat", "relationships", "social_reactions", "thoughts", "intents",
-          "random_events", "npc", "story_engine", "game", "messaging_frame",
+          "random_events", "npc", "game", "messaging_frame",
           "game_calendar", "game_seasons"):
     check(k not in inst, f"A: instance view drops {k}")
 ig = inst["image_generation"]
@@ -192,7 +192,7 @@ check("_grp_situational" not in inst["memory"]["fields"], "A2: no situational he
 # Part B
 world = config_scope.schema_for("world")
 for k in ("chat", "memory", "relationships", "social_reactions", "thoughts", "intents",
-          "random_events", "npc", "story_engine", "game", "messaging_frame",
+          "random_events", "npc", "game", "messaging_frame",
           "game_calendar", "game_seasons", "skills", "image_generation"):
     check(k in world, f"B: world view has {k}")
 check(data_fields(world["memory"]) == data_fields(SECTIONS["memory"]) - {"chat_retention_days"},

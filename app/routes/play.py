@@ -2994,15 +2994,6 @@ def play_others(user=Depends(get_current_user)):
     return out
 
 
-@router.get("/play/story-arcs")
-def play_story_arcs(user=Depends(get_current_user)):
-    """The avatar's quest book: running arcs first, then the last finished
-    ones. Spoiler-free by construction — see build_player_story_arcs."""
-    from app.core.world_ops import build_player_story_arcs
-    from app.models.account import get_active_character
-    return build_player_story_arcs(get_active_character() or "")
-
-
 @router.get("/play/quests")
 def play_quests(user=Depends(get_current_user)):
     """The avatar's quest book (quest stage 1, D14): open quests first, then the last ended ones.

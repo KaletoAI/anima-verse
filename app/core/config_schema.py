@@ -1505,19 +1505,6 @@ SECTIONS = {
                 "description": "Participants of one director scene."},
         },
     },
-    "story_engine": {
-        "label": "Story Engine",
-        "icon": "📖",
-        "scope": "world",
-        "world_group": "story",
-        "fields": {
-            "enabled": {"type": "bool", "label": "Enabled", "default": False, "description": "Story arc progression (background process)"},
-            "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximum active arcs per user"},
-            "cooldown_hours": {"type": "int", "label": "Cooldown (hours)", "default": 6, "min": 1, "description": "Minimum cooldown between arc advances per user. SYSTEM time (real hours)."},
-            "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximum beats per arc before resolution"},
-            "beat_images": {"type": "bool", "label": "Beat images", "default": True, "description": "Generate images for each story beat"},
-        },
-    },
     "game": {
         "label": "Game",
         "icon": "🎮",

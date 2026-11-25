@@ -232,7 +232,7 @@ mutations of the UI model.
 | Task id | Label | Category | Gate | Caller | Purpose |
 |---|---|---|---|---|---|
 | `chat_stream` | Chat (Stream) | chat | — | `routes/chat.py`, `core/streaming.py` | The main conversation with the user. Also the fallback parent of every `npc_*` task. |
-| `story_stream` | Story (Stream) | chat | `story_engine.enabled` | `routes/story.py` | Story mode: longer narrative text over the same streaming pipeline. |
+| `story_stream` | Story (Stream) | chat | — | `routes/story.py` | Story mode: longer narrative text over the same streaming pipeline. |
 | `storyteller` | Storyteller (Action) | chat | — | `core/act_engine.py`, `models/storyteller.py` | The storyteller reaction to a player action. |
 
 The story player behind `story_stream` (`routes/story.py`, `routes/story_dev.py`)
@@ -306,7 +306,7 @@ exist as routing tasks — only as template file names.
 
 | Task id | Label | Category | Gate | Caller | Purpose |
 |---|---|---|---|---|---|
-| `consolidation` | Consolidation (3-Tier) | helper | — | `core/memory_service.py`, `utils/history_manager.py`, `core/day_consolidation.py`, `core/story_engine.py`, `core/scene_manager.py`, `routes/diary.py`, `plugins/retrospect/skill.py` | Everything that compresses history: episodic → daily → weekly → monthly memories, chat summaries, the diary entry, story arcs and the retrospect skill. |
+| `consolidation` | Consolidation (3-Tier) | helper | — | `core/memory_service.py`, `utils/history_manager.py`, `core/day_consolidation.py`, `core/scene_manager.py`, `routes/diary.py`, `plugins/retrospect/skill.py` | Everything that compresses history: episodic → daily → weekly → monthly memories, chat summaries, the diary entry and the retrospect skill. |
 | `relationship_summary` | Relationship Summary | helper | `relationships.summary_enabled` | `core/chat_engine.py` | Sentiment and romantic delta of both sides after a chat exchange; the gate is read in the call site, so off means no call and the default deltas. |
 
 ### Image / prompt / vision

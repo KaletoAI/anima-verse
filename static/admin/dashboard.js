@@ -627,12 +627,10 @@ document.querySelectorAll('.detail-table th[data-col]').forEach(th => {
 const ACT_ICONS = {
     instagram_post: '📸', instagram_reaction: '💬',
     thought: '🧠',
-    story_arc: '📚', story_beat: '🎬', story_resolved: '🏁',
 };
 const ACT_LABELS = {
     instagram_post: 'Instagram', instagram_reaction: 'Reaction',
     thought: 'Thought',
-    story_arc: 'Story Arc', story_beat: 'Story Beat', story_resolved: 'Arc end',
 };
 let _activityData = [];
 let _activityFilter = 'all';
@@ -656,11 +654,10 @@ function renderActivityStats() {
     }
     let html = `<span class="activity-stat act-all ${_activityFilter==='all'?'active':''}" onclick="setActivityFilter('all')">All (${_activityData.length})</span>`;
     // Fixed order
-    const order = ['instagram_post','instagram_reaction','thought','story_arc','story_beat','story_resolved'];
+    const order = ['instagram_post','instagram_reaction','thought'];
     for (const t of order) {
         if (!counts[t]) continue;
-        const cls = t.startsWith('story') ? 'act-story_arc' : `act-${t}`;
-        html += `<span class="activity-stat ${cls} ${_activityFilter===t?'active':''}" onclick="setActivityFilter('${t}')">${ACT_LABELS[t] || t} (${counts[t]})</span>`;
+        html += `<span class="activity-stat act-${t} ${_activityFilter===t?'active':''}" onclick="setActivityFilter('${t}')">${ACT_LABELS[t] || t} (${counts[t]})</span>`;
     }
     document.getElementById('activityStats').innerHTML = html;
 }

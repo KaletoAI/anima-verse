@@ -254,8 +254,6 @@ def seed_stores(name):
                   "VALUES (?,?,?,?,?)", ("i2", OTHER, json.dumps(
                       {OTHER: {"role": "", "progress": []},
                        name: {"role": "OTHER promised this to you", "progress": []}}), "t", "t"))
-        c.execute("INSERT OR REPLACE INTO story_arcs (id, title, participants, created_at, updated_at) "
-                  "VALUES (?,?,?,?,?)", ("sa1", "Feud", json.dumps([name, OTHER]), "t", "t"))
         c.execute("INSERT OR REPLACE INTO group_chats (id, participants, messages, created_at, updated_at) "
                   "VALUES (?,?,?,?,?)", ("g1", json.dumps([name, OTHER]), "[]", "t", "t"))
         c.execute("INSERT OR REPLACE INTO parties (party_id, leader, members, created_at) VALUES (?,?,?,?)",
@@ -346,7 +344,7 @@ EXPECTED_MEMORY = {"memories", "summaries", "diary_entries", "thoughts",
 EXPECTED_REINIT = EXPECTED_MEMORY | {
     "chat_messages", "perceptions", "knowledge", "relationships", "assignments",
     "scheduler_jobs", "stories", "events", "party_invites", "explored_cells",
-    "intents", "story_arcs", "group_chats", "parties", "notifications",
+    "intents", "group_chats", "parties", "notifications",
     "item_reading_sessions", "item_reads", "item_caught_today", "item_discoveries",
     "reading_secret_membership", "utterances", "scenes", "quest_facts"}
 for scope, expected in (("memory", EXPECTED_MEMORY), ("reinit", EXPECTED_REINIT)):
@@ -517,9 +515,6 @@ check("[home] a scene without demo is untouched",
       db.get_connection().execute("SELECT COUNT(*) FROM scenes "
                                   "WHERE summary='Only others here.'").fetchone()[0], 1)
 # JSON-participant stores: shared rows are pruned, not deleted.
-check("[home] the shared story arc survived, without demo",
-      json.loads(db.get_connection().execute(
-          "SELECT participants FROM story_arcs WHERE id='sa1'").fetchone()[0]), [OTHER])
 check("[home] OTHER's intent survived, without demo as participant",
       json.loads(db.get_connection().execute(
           "SELECT participants FROM intents WHERE id='i2'").fetchone()[0]),

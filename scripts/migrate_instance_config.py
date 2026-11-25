@@ -41,7 +41,8 @@ THE ORDER IS LOAD-BEARING:
    on top (``config._layer_with_secrets``), then ``_apply_file_migrations``
    on that RAW, UNSPLIT union — ``_migrate_image_routing`` must still see the
    legacy ``*_imagegen_default`` fields of ``image_generation``,
-   ``random_events``, ``story_engine``, ``messaging_frame`` and
+   ``random_events``, ``story_engine`` (a removed section, still read for
+   that one legacy field), ``messaging_frame`` and
    ``skills.instagram``, some of which are world fields that a split would
    separate from the instance-side ``routing`` they seed. Then
    ``split_by_scope`` -> instance part / world part / unknown roots, each

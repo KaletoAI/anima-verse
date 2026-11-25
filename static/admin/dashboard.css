@@ -68,7 +68,6 @@ a:hover { text-decoration: underline; }
 .act-instagram_reaction { background: #f0883e33; color: #f0883e; }
 .act-social_dialog { background: #3fb95033; color: #3fb950; }
 .act-thought { background: #58a6ff33; color: #58a6ff; }
-.act-story_arc, .act-story_beat, .act-story_resolved { background: #bc8cff33; color: #bc8cff; }
 .activity-feed { max-height: 500px; overflow-y: auto; }
 .activity-item { display: flex; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #21262d; align-items: flex-start; }
 .activity-item:hover { background: #161b2299; }

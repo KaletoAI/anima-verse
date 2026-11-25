@@ -4545,56 +4545,7 @@ def wake_world() -> Dict[str, Any]:
     return {"sleeping": False, "woken": woken, "still_asleep": sorted(prior)}
 
 
-# === Player quest book + relationship summary (Others panel) ===
-
-# Fields the player payload of a story arc may EVER carry. Everything the
-# arc knows beyond this stays on the server: seed, next_beat_hint,
-# character_outcomes and sequel_seed are the plot the player is supposed to
-# discover by playing, not to read in a panel.
-_ARC_PUBLIC_FIELDS = ("id", "title", "status", "current_state", "tension",
-                      "participants", "updated_at")
-_ARC_BEAT_FIELDS = ("beat", "timestamp", "summary")
-
-# How many finished arcs the quest book keeps as a chronicle.
-_RESOLVED_LIMIT = 10
-
-
-def _public_arc(arc: Dict[str, Any]) -> Dict[str, Any]:
-    """Whitelist one arc for the player. Building UP from the allowed keys
-    (instead of deleting the forbidden ones) means a new model field can
-    never leak by omission."""
-    out: Dict[str, Any] = {}
-    for key in _ARC_PUBLIC_FIELDS:
-        out[key] = arc.get(key, "")
-    out["tension"] = arc.get("tension", 1)
-    out["participants"] = list(arc.get("participants") or [])
-    out["beats"] = [
-        {field: beat.get(field, "") for field in _ARC_BEAT_FIELDS}
-        for beat in (arc.get("beats") or []) if isinstance(beat, dict)
-    ]
-    if arc.get("status") != "active" and arc.get("resolution"):
-        out["resolution"] = arc.get("resolution")
-    return out
-
-
-def build_player_story_arcs(avatar: str) -> Dict[str, Any]:
-    """The quest book of the avatar: its running arcs first (newest change
-    first), then the last finished ones as a chronicle."""
-    avatar = (avatar or "").strip()
-    if not avatar:
-        return {"arcs": []}
-    from app.models.story_arcs import get_all_arcs
-    try:
-        arcs = get_all_arcs()
-    except Exception as e:
-        logger.warning("build_player_story_arcs: %s", e)
-        return {"arcs": []}
-    mine = [a for a in arcs if avatar in (a.get("participants") or [])]
-    mine.sort(key=lambda a: a.get("updated_at", ""), reverse=True)
-    active = [a for a in mine if a.get("status") == "active"]
-    resolved = [a for a in mine if a.get("status") != "active"]
-    return {"arcs": [_public_arc(a)
-                     for a in active + resolved[:_RESOLVED_LIMIT]]}
+# === Relationship summary (Others panel) ===
 
 
 def build_relation_map(avatar: str) -> Dict[str, Dict[str, Any]]:

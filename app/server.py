@@ -711,8 +711,6 @@ async def lifespan(app: FastAPI):
     # queue handlers + hook subscriptions itself when its skills load.
     from app.core.social_dialog import register_social_dialog_handler
     register_social_dialog_handler()
-    from app.core.story_engine import register_story_engine_handler
-    register_story_engine_handler()
     from app.core import reading_watch
     reading_watch.register()
     from app.core import quest_engine, quest_types

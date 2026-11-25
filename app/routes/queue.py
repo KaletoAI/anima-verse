@@ -155,36 +155,3 @@ def clear_bg_tasks(hours: float = 24.0, status: str = "",
     deleted = get_task_queue().clear_completed(older_than_hours=hours, queue_name=queue_name,
                                                    status=status)
     return {"status": "ok", "deleted": deleted}
-
-
-@router.post("/story-arc/generate", dependencies=[Depends(require_admin)])
-def trigger_story_arc_generate() -> Dict[str, Any]:
-    """Trigger a story arc generation by hand."""
-    from app.core.task_queue import get_task_queue
-    get_task_queue().submit("story_arc_generate", {"user_id": ""})
-    return {"status": "submitted", "user_id": ""}
-
-
-@router.delete("/story-arc/{arc_id}", dependencies=[Depends(require_admin)])
-def delete_story_arc(arc_id: str) -> Dict[str, Any]:
-    """Delete one story arc."""
-    from app.models.story_arcs import remove_arc
-    success = remove_arc(arc_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Arc nicht gefunden")
-    return {"status": "deleted", "arc_id": arc_id}
-
-
-@router.get("/story-arc/status", dependencies=[Depends(require_admin)])
-def story_arc_status() -> Dict[str, Any]:
-    """All story arcs of a user."""
-    from app.models.story_arcs import get_all_arcs
-    arcs = get_all_arcs()
-    active = [a for a in arcs if a.get("status") == "active"]
-    resolved = [a for a in arcs if a.get("status") == "resolved"]
-    return {
-        "total": len(arcs),
-        "active": len(active),
-        "resolved": len(resolved),
-        "arcs": arcs,
-    }

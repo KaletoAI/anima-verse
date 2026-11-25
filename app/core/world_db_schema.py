@@ -211,8 +211,8 @@ SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS characters (
         name         TEXT PRIMARY KEY,
         template     TEXT DEFAULT '',
-        profile_json TEXT DEFAULT '{}',   -- Stamm+Config als Blob (bewusst)
-        config_json  TEXT DEFAULT '{}',   -- Stamm+Config als Blob (bewusst)
+        profile_json TEXT DEFAULT '{}',   -- base data + config as a blob (on purpose)
+        config_json  TEXT DEFAULT '{}',   -- base data + config as a blob (on purpose)
         created_at   TEXT NOT NULL,
         updated_at   TEXT NOT NULL
     )""",
@@ -489,16 +489,6 @@ SCHEMA_STATEMENTS = [
         meta           TEXT DEFAULT '{}',
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL
-    )""",
-    """CREATE TABLE IF NOT EXISTS story_arcs (
-        id           TEXT PRIMARY KEY,
-        title        TEXT NOT NULL,
-        state        TEXT DEFAULT 'active',
-        beats        TEXT DEFAULT '[]',
-        participants TEXT DEFAULT '[]',
-        meta         TEXT DEFAULT '{}',
-        created_at   TEXT NOT NULL,
-        updated_at   TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS outfits_sets (
         id             TEXT PRIMARY KEY,

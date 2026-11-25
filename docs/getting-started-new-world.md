@@ -195,6 +195,6 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
 
 From here you have a working setup: chat in `/play`, watch characters travel across the map, take
 over an avatar, and — with `./start.sh --with-3d` — walk the same world in 3D. The remaining
-features (Instagram feed, story arcs, scheduler, knowledge extraction, automatic NPCs, room
+features (Instagram feed, quests, scheduler, knowledge extraction, automatic NPCs, room
 furnishing, …) are configured in their respective admin sections and skill packages — see the
 [Features](../README.md#features) list.

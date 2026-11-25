@@ -49,7 +49,7 @@ from app.core.llm_queue import Priority
 TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Streaming / RP
     "chat_stream":        {"label": "Chat (Stream)",            "priority": Priority.CHAT,   "category": "chat", "cache_class": "chat"},
-    "story_stream":       {"label": "Story (Stream)",           "priority": Priority.HIGH,   "category": "chat",   "gate": "story_engine.enabled"},
+    "story_stream":       {"label": "Story (Stream)",           "priority": Priority.HIGH,   "category": "chat"},
     "storyteller":        {"label": "Storyteller (Action)",     "priority": Priority.CHAT,   "category": "chat"},
 
     # Tool / Decision LLM
@@ -580,8 +580,8 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # retrospect branch alone has P90 3286). latency_sensitive stays False
         # and is now confirmed: history_manager became fire-and-forget, and the
         # slowest branches (daily/today, P50 55-67 s) are pure background jobs.
-        # json=False holds for the summary branches ONLY — retrospect and
-        # story_arc_* share this routing entry and demand strict JSON (Q3).
+        # json=False holds for the summary branches ONLY — retrospect shares
+        # this routing entry and demands strict JSON (Q3).
         "tools": False, "vision": False, "json": False, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",
         "creative": False, "language_de": True, "latency_sensitive": False,

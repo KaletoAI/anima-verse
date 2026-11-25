@@ -1540,8 +1540,10 @@ DEAD_CONFIG_FIELDS: dict = {
 # image size runs through ui.downscale_item_max_dim instead; "inventory" is no
 # schema section, so a section variant is not swept here. body_retexture is
 # the whole section of the painted-body worker, removed with the painted mode
-# (A224, plan docs/superpowers/plans/2026-11-19-remove-painted-mode.md).
-DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height", "body_retexture")
+# (A224, plan docs/superpowers/plans/2026-11-19-remove-painted-mode.md). The
+# story arc engine section went with the engine itself; quests replace it
+# (quest system stage 1, plan docs/superpowers/plans/2026-11-25-quest-stage1.md).
+DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height", "body_retexture", "story_engine")
 
 # The section names again, this time at the TOP LEVEL of config.json, plus the
 # top-level-only names above. None of the dead names is a living top-level key
@@ -3111,14 +3113,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "EVENT_RESOLUTION_PROACTIVE", re_cfg.get("resolution_proactive", field_default("random_events", "resolution_proactive")))
     _set(env, "EVENT_RESOLUTION_COOLDOWN_MINUTES", re_cfg.get("resolution_cooldown_minutes", field_default("random_events", "resolution_cooldown_minutes")))
     _set(env, "EVENT_RESOLVED_IMAGE_LINGER_MINUTES", re_cfg.get("resolved_image_linger_minutes", field_default("random_events", "resolved_image_linger_minutes")))
-
-    # Story Engine
-    se = config.get("story_engine", {})
-    _set(env, "STORY_ENGINE_ENABLED", se.get("enabled", field_default("story_engine", "enabled")))
-    _set(env, "STORY_ENGINE_MAX_ACTIVE_ARCS", se.get("max_active_arcs", field_default("story_engine", "max_active_arcs")))
-    _set(env, "STORY_ENGINE_COOLDOWN_HOURS", se.get("cooldown_hours", field_default("story_engine", "cooldown_hours")))
-    _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", field_default("story_engine", "max_beats")))
-    _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", field_default("story_engine", "beat_images")))
 
     # Purge stale provider and image/video/mesh backend blocks BEFORE writing: this bridge
     # only ever set keys, never removed them. A deleted backend therefore left

@@ -71,14 +71,6 @@ can add a template, not override one. That is where
 | `random_event_solution_rp.md` | `thought` | `random_events._generate_solution_rp` | Character RP-describes how they resolve the event |
 | `random_event_resolved_image.md` | `random_event` | `event_images` | Rewrite the event's image prompt for the resolved state |
 
-### Story Arcs
-
-| Template | Task | Caller | Purpose |
-|---|---|---|---|
-| `story_arc_generation.md` | `consolidation` | `story_engine.generate_arc` | Generate a multi-character mini-storyline |
-| `story_arc_advancement.md` | `consolidation` | `story_engine.advance_arc` | Advance an arc by one beat after an interaction |
-| `story_arc_resolve.md` | `consolidation` | `story_engine.resolve_arc` | Close an arc with résumé + per-character outcomes |
-
 ### Image / Vision
 
 | Template | Task | Caller | Purpose |
@@ -278,7 +270,7 @@ privacy, see [the public Influence contract](skill-core-api.md#rp-influence--app
 The AgentLoop's slim system prompt. Pre-decision logic in
 [app/core/thought_context.py](../app/core/thought_context.py) builds a
 dict with only the blocks that have content (inbox, events,
-assignments, general task, intents, outfit-decision, story arc,
+assignments, general task, intents, outfit-decision,
 retrospective). The template renders nothing for empty blocks.
 
 `birthday_today` is part of the always-present situation data: True
@@ -301,10 +293,9 @@ attention:
 5. General task (`character_task` from profile)
 6. Open plans from the intents table (with ids)
 7. Outfit-decision (after location change or wake)
-8. Active story arc
-9. Retrospective (existing beliefs/improvements + boost hint when overdue)
-10. Tools hint
-11. Decision instruction
+8. Retrospective (existing beliefs/improvements + boost hint when overdue)
+9. Tools hint
+10. Decision instruction
 
 Room furniture uses mandatory `prop_actions_block`, not a catalog-wide pose
 list. `chat/chat_moment.md`, both thought templates and `tasks/npc_action.md`

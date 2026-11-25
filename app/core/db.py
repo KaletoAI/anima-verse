@@ -502,6 +502,46 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("improvement steps fulfilled migration failed: %s", e)
 
+    # One-shot migration: the story arc engine is gone, quests replace it
+    # (quest system stage 1, D16). Its table goes, and so do the world
+    # overrides of its three templates. A world override of a thought template
+    # that still reads the removed arc block would raise under StrictUndefined
+    # on every thought turn, so it is deleted too (one warning each) and the
+    # shipped template takes over. Existing arcs are discarded on purpose.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='story_arcs_dropped_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            conn.execute("DROP TABLE IF EXISTS story_arcs")
+            try:
+                conn.execute(
+                    "DELETE FROM llm_template_overrides WHERE path IN (?, ?, ?)",
+                    ("tasks/story_arc_generation.md",
+                     "tasks/story_arc_advancement.md",
+                     "tasks/story_arc_resolve.md"))
+                stale = conn.execute(
+                    "SELECT path FROM llm_template_overrides "
+                    "WHERE instr(content, 'arc_block') > 0"
+                ).fetchall()
+                for row in stale:
+                    conn.execute(
+                        "DELETE FROM llm_template_overrides WHERE path = ?",
+                        (row[0],))
+                    logger.warning(
+                        "Template override %s of world %s read the removed "
+                        "story arc block and was deleted; the shipped "
+                        "template takes over", row[0], get_db_path().parent)
+            except sqlite3.OperationalError as e:
+                logger.info("story arc removal: no template overrides to "
+                            "clean (%s)", e)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('story_arcs_dropped_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("story arc removal migration failed: %s", e)
+
     # One-time migration: remove legacy keys from character_state.meta.
     # Plan section 8 (step-8 cleanup, May 2026):
     #   - runtime_outfit_skip -> outfit_intent.forbidden_slots (step 2)

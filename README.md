@@ -405,9 +405,11 @@ stops acting autonomously).
   vision-LLM caption → post, plus comment/reply verbs), `act` (an in-scene action narrated by the
   storyteller engine), `interact` (two present characters play a synchronised pair animation),
   `party`, `retrospect`, `take_photo`, `notify_user`, `set_pose`, `sleep`, `consume_item`.
-- **Story arcs** progress in the background with beats and per-beat scene images; the player reads
-  them spoiler-free in the quest book. The Game-Admin's **Storyteller** tab lists them (title,
-  status, participants, beats) and can **Generate arc** by hand or delete one.
+- **Quests** are hand-made in the Game-Admin's **Quests** tab: a template names its roles (a
+  character, a place, an item), lists sequential steps with a condition each, and is started as a
+  run that binds the roles to this world. Avatars fulfil the steps by acting in the world; the
+  player reads them spoiler-free in the HUD's quest book (`/play/quests`: done steps and the current
+  one, never the hints or the GM notes).
 - **Relationships** with automatic decay over GAME time (a "week" is seven game days;
   a frozen or slow world clock slows the decay with it) and periodic summaries.
   Each pair also carries a **form of address per direction** — free text saying how A
@@ -641,7 +643,7 @@ world**:
 
 - `world.db` — users, characters and their runtime state, locations/rooms, items, inventory,
   outfits, memories, knowledge, relationships, mood/state history, summaries, notifications, events,
-  scheduler jobs/logs, story arcs, parties, perceptions and chat messages, …
+  scheduler jobs/logs, quests, parties, perceptions and chat messages, …
 - `task_queue.db` — the persistent task queue (image/video/mesh generation, LLM jobs, animations).
 
 World data is **DB-only** — there are no JSON mirrors or backups on disk. Everything else under a
