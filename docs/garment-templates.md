@@ -722,7 +722,17 @@ centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_
   body when another piece of the worn set shapes it.
 - **Texture.** The prompt family is the bra's (fitted, front only for cups; a bandeau has a back job). The piece is
   named "<style> crop top" below `CUPPED_BUSTIER_LENGTH_M` 0.375 m, else "<style> bustier top".
-- Smokes: `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
+- **Clean edges (`BRA_EDGE_VERSION` 1, every bra and every cupped top).** The bra region keeps the collider's faces
+  by their centre, so the band's top edge round the back and the free edges followed the collider's triangles in a
+  sawtooth (a light fringe along the back band, the hem and the strap roots from every view; review of this round).
+  `build_fitted` now cuts the collider along the underbust line before it keeps the faces — the back band ends on a
+  straight line — and, after the pattern parts are taken, moves every free-edge vertex halfway to the mean of its two
+  edge neighbours `EDGE_RELAX_STEPS` 6 times, back onto the collider after each step (`_relax_edges`; a straight run
+  stays on its line, the band's ends round off). The version is in the drape AND the cut key of a bra and a cupped
+  top only, so each of them drapes and cuts once more; no other kind's key moves. Still open: the straps' own
+  surface stays lumpy (a strip a few collider faces wide), and the cup / band seams inside the pattern follow the
+  faces (`fitted_pattern.py`, a user decision because of its key).
+- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
   `scripts/smoke_garment_template_fitted.py`, [S-C1]-[S-C5] in `scripts/smoke_bust_shaping.py`.
 
 ## 2. Texture from cut (step 2)

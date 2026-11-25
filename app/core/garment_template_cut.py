@@ -148,6 +148,9 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.strap_piece(params):
         # stage "geometry": straight straps and top edge (``garment_template.STRAP_VERSION``)
         payload["straps"] = gt.STRAP_VERSION
+    if gt.build_kind(params) == "bra" and gt.BRA_EDGE_VERSION:
+        # round 2026-11-25: a bra's straight band top and smoothed edges move its islands (``BRA_EDGE_VERSION``)
+        payload["bra_edges"] = gt.BRA_EDGE_VERSION
     return hashlib.md5(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 

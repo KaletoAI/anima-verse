@@ -142,6 +142,12 @@ STRAP_VERSION = 1
 #: laid along the body (``corset_straps`` / ``corset_strap_spec``; ``garment_template_build.shell_straps``). Part of
 #: its drape and cut keys only — a strapless corset's keys stay byte for byte.
 CORSET_STRAPS_VERSION = 1
+#: Round 2026-11-25 (review of the top with cups): a bra's edges (``build_kind`` "bra": a bra and a top with cups) —
+#: the collider is cut along the underbust line before the faces are kept, so the band's top edge round the back is a
+#: straight line instead of the collider's sawtooth, and the free edges are smoothed along themselves
+#: (``garment_template_fitted._relax_edges``). Part of the drape AND the cut key of such a piece only (0 = the keys
+#: before it).
+BRA_EDGE_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -2256,6 +2262,9 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
     if corset_straps(params):
         # round 2026-11-25: a strapped corset top is that shell plus its straps
         payload["corset_straps"] = CORSET_STRAPS_VERSION
+    if build_kind(params) == "bra" and BRA_EDGE_VERSION:
+        # round 2026-11-25: straight band top, smoothed free edges (``BRA_EDGE_VERSION``; 0 = the keys before it)
+        payload["bra_edges"] = BRA_EDGE_VERSION
     return _md5(payload)
 
 

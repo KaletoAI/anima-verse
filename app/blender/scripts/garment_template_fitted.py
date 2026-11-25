@@ -44,6 +44,7 @@ import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 import fitted_pattern as fpat
 import garment_template_drape as gd
@@ -1004,6 +1005,38 @@ def _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, dist):
             "opened": opened, "slivers": slv, "faces_per_part": counts}
 
 
+EDGE_RELAX_STEPS = 6
+
+
+def _relax_edges(bm, tree):
+    """The free edges of a bra region smoothed: faces are kept by their centroids, so an edge the region predicate
+    draws across the collider (a strap's side, a cup's top) follows the triangles in a sawtooth. Each boundary vertex
+    moves halfway to the mean of its two boundary neighbours, ``EDGE_RELAX_STEPS`` times, and back onto the collider
+    surface (``tree``) after every step. A straight cut edge (the band top, already bisected) stays on its line.
+    Returns the largest move in mm."""
+    nb = {}
+    for e in bm.edges:
+        if e.is_boundary:
+            a, b = e.verts
+            nb.setdefault(a, []).append(b)
+            nb.setdefault(b, []).append(a)
+    ids = [v for v, n in nb.items() if len(n) == 2]
+    if not ids:
+        return 0.0
+    start = {v: v.co.copy() for v in ids}
+    for _ in range(EDGE_RELAX_STEPS):
+        new = {}
+        for v in ids:
+            a, b = nb[v]
+            p = v.co * 0.5 + (a.co + b.co) * 0.25
+            loc, _n, _f, _d = tree.find_nearest(p)
+            new[v] = loc if loc is not None else p
+        for v, p in new.items():
+            v.co = p
+    bm.normal_update()
+    return round(max((v.co - start[v]).length for v in ids) * 1000.0, 2)
+
+
 def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     """The fitted piece as a new mesh object (``prm["node"]``) with its sewing-pattern parts (``_cut_pattern``: int
     layers ``uv_part`` / ``uv_seam``, an empty ``UVMap``); returns ``(obj, pin indices, info)`` — ``info["pattern"]``
@@ -1028,6 +1061,8 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
     bm.normal_update()
+    # bra edges: the collider surface the smoothed edge vertices are put back onto
+    src_tree = BVHTree.FromBMesh(bm) if kind == "bra" else None
     cent = np.array([fa.calc_center_median() for fa in bm.faces])
     keep_layer = bm.faces.layers.int.new("keep")
     push = closure = cups = None
@@ -1070,6 +1105,17 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     elif kind == "bra":
         keep, planes, pins, push, closure, cups, extra = bra_region(f, co, stree, cx, cy)
         info.update(extra)
+        # bra edges (BRA_EDGE_VERSION): the collider is cut along the underbust line first — faces are kept by their
+        # centroids, so without the cut the band's top edge round the back followed the collider's triangles in a
+        # sawtooth (a light fringe along it, round 2026-11-25); the cut's own seam plane lies on the same line
+        z = float(extra["under_z"])
+        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+        bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector((0.0, 0.0, z)), plane_no=Vector((0.0, 0.0, 1.0)),
+                               clear_outer=False, clear_inner=False, dist=1e-5)
+        bm.verts.ensure_lookup_table()
+        bm.faces.ensure_lookup_table()
+        bm.normal_update()
+        cent = np.array([fa.calc_center_median() for fa in bm.faces])
         mask = keep(cent)
     elif kind == "tights":
         keep_v, planes, tband, legs_w, foot_w, extra = tights_region(f, co, w, arm, cx, stree)
@@ -1141,6 +1187,10 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     # step 3a: the pattern pieces are cut here, on the rest geometry, before anything moves a vertex
     pattern = _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, locals().get("dist"))
+    if kind == "bra":
+        # bra edges (BRA_EDGE_VERSION): the free edges smoothed AFTER the parts are taken — a moved edge face must not
+        # leave its region predicate and fall to the band (the band split into islands when this ran before the cut)
+        info["edge_relax_moved_mm"] = _relax_edges(bm, src_tree)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.verts.ensure_lookup_table()
     bm.normal_update()
