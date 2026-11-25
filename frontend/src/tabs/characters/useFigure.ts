@@ -2,7 +2,7 @@
  * useFigure — the Figure tab's state as `GET /characters/{name}/figure`
  * reports it (`app/core/figure_build.py::figure_info`, plan
  * 2026-11-12-unified-worn-pieces Task 10): one load, then a 3 s tick while
- * a Build runs (`build.running`; no give-up — a step may wait minutes in a
+ * a Build or a body shape view's Regenerate runs (`build.running`, `body.shape.regenerate.running`; no give-up — a step may wait minutes in a
  * queue, after ~2 min the tick slows down), stopped on unmount / character
  * switch. `startPoll(delay)` after an own action (a Build, a single action of
  * the Body details) re-reads and keeps ticking while the Build runs. The push
@@ -51,7 +51,8 @@ export function useFigure(character: string) {
         if (pollIdRef.current !== id) return
         if (d) setData(d)
         setError(failure)
-        if (!d?.build?.running) return
+        // A body shape view's Regenerate (round 2026-11-25) keeps the tick too: the thumbnail changes at its end.
+        if (!d?.build?.running && !d?.body?.shape?.regenerate?.running) return
         n += 1
         timerRef.current = setTimeout(tick, n >= POLL_SLOW_AFTER ? POLL_SLOW_MS : POLL_MS)
       }

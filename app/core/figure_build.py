@@ -2928,6 +2928,43 @@ def _start_collision_run_all(character_name: str) -> Dict[str, Any]:
     return {"status": "started", "kind": RUN_ALL_COLLISION}
 
 
+def _ref_bsig(front: Optional[Path]) -> Optional[str]:
+    """The plain body a dressed view was rendered on (its sidecar's ``base_signature``), None when unknown."""
+    from app.core import base_body
+    if front is None:
+        return None
+    sig = base_body._ref_sidecar(front).get("base_signature")
+    return str(sig) if isinstance(sig, str) and sig.startswith("base") else None
+
+
+def _shape_views(character_name: str, shape: str) -> List[Dict[str, Any]]:
+    """The Body sub-tab's thumbnails of the worn body shape (round 2026-11-25): per dressed view ``{view, exists,
+    stamp (the file's mtime in ns — the picture URL's cache key), empty (an EMPTY composite: the base view
+    unchanged), lost_clothing (``base_body.view_lost_clothing``: EMPTY although the dressed front wears clothing, or
+    a band of the front's clothing kept too little — measured on the files, memoised; the base views are those of
+    the front sidecar's ``base_signature``),
+    jobs (``base_body.shape_view_jobs_of``: the image jobs of its Regenerate)}``. Read-only, sidecars only."""
+    from app.core import base_body, view_composite
+    from app.core.model_refs import find_ref_image
+    front = find_ref_image(character_name, "tpose", shape)
+    bsig = str(_ref_bsig(front) or "")
+    base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) if bsig else None
+                  for v in base_body.dressed_views()}
+    out: List[Dict[str, Any]] = []
+    for view in base_body.dressed_views():
+        path = front if view == "front" else find_ref_image(character_name, base_body._kind(view), shape)
+        try:
+            stamp = str(path.stat().st_mtime_ns) if path is not None else ""
+        except OSError:
+            stamp = ""
+        empty = path is not None and view_composite.is_empty(base_body._ref_sidecar(path).get("composite"))
+        out.append({"view": view, "exists": bool(stamp), "stamp": stamp, "empty": empty,
+                    "lost_clothing": bool(path is not None and view != "front" and base_body.view_lost_clothing(
+                        character_name, view, shape, front, base_views.get(view), base_views.get("front"))),
+                    "jobs": base_body.shape_view_jobs_of(view)})
+    return out
+
+
 def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     """The saved outfit whose pieces are exactly the worn ones, else ""."""
     ids = sorted({str(v) for v in (pieces or {}).values() if v})
@@ -3321,6 +3358,10 @@ def _figure_info_body(character_name: str, *, profile: Dict[str, Any], build: Di
             "shape": {"key": wanted.shape if meshed else "",
                       "state": ("ready" if delivered.shape == wanted.shape else "missing") if meshed else "plain"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
+    if meshed:
+        body["shape"]["views"] = _shape_views(character_name, wanted.shape)
+    from app.core import base_body as _bb
+    body["shape"]["regenerate"] = _bb.shape_view_state(character_name)
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
     # Ruling A131: a new body is being built (a base or body-shape step runs) or the newest body has no fits of
     # pieces that were fitted on the earlier one — the tab says so once; those pieces wait for it.

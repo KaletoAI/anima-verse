@@ -137,10 +137,21 @@ body actions):
 * ``POST /characters/{c}/figure/waiting/cancel {id}`` — Cancel ONE waiting
   entry of ``generation_pause.waiting`` through its queue's own cancel
   (``generation_pause.cancel``); 404 when it does not wait any more.
+* ``POST /characters/{c}/figure/shape-view {view}`` — Regenerate ONE view of the body shape the worn figure stands
+  on (round 2026-11-25, ``base_body.start_shape_view``): a forced render in the background — the front 1 image job,
+  a back / side view 2 (the turn and the draft); the new view makes the stored shape outdated, the next Build meshes
+  it again. 202 ``{status: "started", shape, view, jobs}``; 400 for a view that is not dressed, 409 off the
+  pipeline, while a Build, a base step or another shape view runs, with nothing worn in the body or (back / side)
+  without the shape's front, or with media generation switched off. ``body.shape.views`` / ``body.shape.regenerate``
+  of ``GET …/figure`` are its thumbnails and its state.
+* ``GET  /characters/{c}/figure/shape/{key}/views/{view}`` — one stored view picture of the body shape ``key``
+  (``ob…``), ETag; 404 when absent, 400 for a key that is no body shape or an unknown view.
 * ``GET  /characters/{c}/figure/stored`` — the stored body shapes and the
   plain body's texture bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
-  built_for_name, outfits, last_used, reason, unneeded, deletable, running,
-  current}]}``.
+  built_for_name, outfits, last_used, reason, unneeded, deletable, refusal, history, spare, meshed, running,
+  current}]}`` — a shape is kept only for the worn combination and the saved outfit sets
+  (``figure.needed_shapes``, round 2026-11-25); the UI's bulk "Delete all not needed…" runs one DELETE per entry
+  after its confirmation.
 * ``GET /characters/{c}/figure/stored/{key}/preview`` — what that Delete
   would do (``figure.delete_preview``, Ruling A64): the files with their size,
   the outfit models deleted with a shape, whether it is deletable and why
@@ -807,6 +818,43 @@ def cancel_waiting(character_name: str, body: WaitingCancelRequest,
         return generation_pause.cancel(character_name, body.id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+class ShapeViewRequest(BaseModel):
+    view: str
+
+
+@router.post("/{character_name}/figure/shape-view", status_code=202)
+def regenerate_shape_view(character_name: str, body: ShapeViewRequest,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import base_body
+    from app.imagegen.base import MediaGenerationDisabled
+    _require_character(character_name)
+    try:
+        return base_body.start_shape_view(character_name, body.view)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (LookupError, MediaGenerationDisabled) as e:
+        raise HTTPException(status_code=409, detail=str(e.args[0] if e.args else e))
+
+
+@router.get("/{character_name}/figure/shape/{key}/views/{view}")
+def get_shape_view_image(character_name: str, key: str, view: str, request: Request,
+                         _: Dict[str, Any] = Depends(require_admin)):
+    import mimetypes
+    from app.core import base_body
+    from app.core.http_files import etag_file_response
+    from app.core.model_refs import find_ref_image
+    if not base_body.is_outfit_body_signature(key):
+        raise HTTPException(status_code=400, detail="not a body shape key")
+    if view not in base_body.BASE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(base_body.BASE_VIEWS)}")
+    _require_character(character_name)
+    path = find_ref_image(character_name, base_body._kind(view), key)
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _encoding = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "application/octet-stream")
 
 
 @router.get("/{character_name}/figure/stored")
