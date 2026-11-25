@@ -44,6 +44,11 @@ WHAT FOLLOWS BY HAND
      template_preview.py 17, story_arcs.py 9, queue.py 6, ... = 110).
  (f) "/play/story-arcs" is not a route of the real app, and app.core.world_ops has no build_player_story_arcs
      (the player panel reads /play/quests since Task 8).
+ (g) Frontend (Task 12). A text scan of frontend/src, packages/player-ui/src and client3d/src for
+     StoryArcsPanel | story-arc | story_arc finds 0 lines and no such file name (before Task 12 it found the panel
+     file StoryArcsPanel.tsx — 7 lines in it: the doc comment's three endpoint mentions, the export, the three api
+     calls — plus 2 lines in StorytellerTab.tsx: the import and the mount). shared/languages/de.json has 0 keys that
+     contain "story arc" case-insensitively (before: "Story arcs", "No story arcs yet.", "Delete story arc" = 3).
 """
 import importlib
 import os
@@ -253,6 +258,31 @@ old = subprocess.run(["git", "grep", "-c", "-E", WORDS.pattern, OLD_COMMIT, "--"
                      cwd=ROOT, capture_output=True, text=True)
 old_total = sum(int(line.rsplit(":", 1)[1]) for line in old.stdout.splitlines() if line.strip())
 check(f"the scanner's words hit >= {OLD_MIN_LINES} lines at {OLD_COMMIT}", old_total >= OLD_MIN_LINES, True)
+
+# ── (g) frontend ──────────────────────────────────────────────────────────
+print("(g) frontend sources and de.json")
+import json  # noqa: E402
+
+FRONT_WORDS = re.compile(r"StoryArcsPanel|story-arc|story_arc")
+FRONT_DIRS = ("frontend/src", "packages/player-ui/src", "client3d/src")
+front_hits = []
+for top in FRONT_DIRS:
+    for dirpath, dirnames, filenames in os.walk(ROOT / top):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in filenames:
+            full = Path(dirpath) / fn
+            rel = full.relative_to(ROOT).as_posix()
+            if FRONT_WORDS.search(fn):
+                front_hits.append(rel)
+            try:
+                text = full.read_bytes().decode("utf-8", errors="ignore")
+            except OSError:
+                continue
+            front_hits += [f"{rel}: {line.strip()}" for line in text.splitlines() if FRONT_WORDS.search(line)]
+check("frontend sources: no StoryArcsPanel / story-arc / story_arc", front_hits, [])
+de = json.loads((ROOT / "shared/languages/de.json").read_text(encoding="utf-8"))["translations"]
+check("de.json has translations (the scan is not looking at an empty dict)", len(de) > 1000, True)
+check("de.json: no key containing 'story arc'", sorted(k for k in de if "story arc" in k.lower()), [])
 
 print()
 if FAILURES:
