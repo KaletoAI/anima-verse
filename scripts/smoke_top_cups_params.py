@@ -5,6 +5,10 @@ STORED (``stored_params``: a top keeps both field sets, the top's and the cups')
 region and prompt path reads). Pure functions, no server, no world DB, no Blender. Every expectation is derived by
 hand from the schema:
 
+[P10] The one-field writes (``garment_cut_texture.select_cut`` / ``set_sleeve_print``, the e2e script's
+     ``--set-param``) write onto the STORED params: a cupped top stored with shoulders straps, neckline sweetheart,
+     neck_depth 0.08 keeps them through each (they used to read the ACTIVE params and store the defaults strapless /
+     straight / 0 — found in the dialog round trip of phase 2).
 [P1] ``validate_params({"kind": "top"})``: ``cups`` is not given -> its default "none"; ``shoulders`` not given on a
      top -> "covered" (A221, today's rule).
 [P2] A cupped top ``{kind top, cups bra, cup_style balconette, shoulders straps, neckline sweetheart, sleeves short,
@@ -219,6 +223,41 @@ else:
     check("[P9] top -> top", bk(p1) == "top", bk(p1))
     check("[P9] bra -> bra", bk(p3) == "bra", bk(p3))
     check("[P9] raw stored cupped top -> bra", bk({"kind": "top", "cups": "bra", "shoulders": "straps"}) == "bra")
+
+# [P10] the read-modify-writes of one field (the texture switch ``select_cut``, ``set_sleeve_print``, the e2e
+# script's ``--set-param``) read the STORED params: a cupped top keeps its parked top fields through them (E6). An
+# in-memory item store stands in for the inventory.
+import contextlib  # noqa: E402
+import app.models.inventory as inv  # noqa: E402
+from app.core import figure as _figure  # noqa: E402
+from app.core import garment_cut_texture as gct  # noqa: E402
+STORE = {"item_p10": {"id": "item_p10", "category": "outfit_piece", "outfit_piece": {"template": {
+    "params": gt.stored_params({"kind": "top", "cups": "bra", "cup_style": "balconette", "shoulders": "straps",
+                                "neckline": "sweetheart", "neck_depth_m": 0.08, "texture": "projection"})[0],
+    "source": "user"}}}}
+inv.get_item = lambda iid: json.loads(json.dumps(STORE.get(iid))) if iid in STORE else None
+inv.update_item = lambda iid, patch: STORE[iid].update(json.loads(json.dumps(patch))) or STORE[iid]
+inv.outfit_piece_lock = lambda iid: contextlib.nullcontext()
+_figure.invalidate = lambda *a, **k: None
+gct.usable_answers = lambda *a, **k: {}
+
+
+def parked():
+    st = STORE["item_p10"]["outfit_piece"]["template"]["params"]
+    return (st["shoulders"], st["neckline"], st["neck_depth_m"])
+
+
+check("[P10] stored before: straps / sweetheart / 0.08", parked() == ("straps", "sweetheart", 0.08), parked())
+gct.select_cut("item_p10")
+check("[P10] select_cut: texture cut, parked fields kept",
+      STORE["item_p10"]["outfit_piece"]["template"]["params"]["texture"] == "cut"
+      and parked() == ("straps", "sweetheart", 0.08), parked())
+gct.set_sleeve_print("demo", "item_p10", "picture")
+check("[P10] set_sleeve_print: parked fields kept", parked() == ("straps", "sweetheart", 0.08), parked())
+sys.path.insert(0, str(ROOT / "scripts"))
+import e2e_cut_texture as e2e  # noqa: E402
+e2e.set_param("item_p10.push_up=0.5")
+check("[P10] e2e --set-param: parked fields kept", parked() == ("straps", "sweetheart", 0.08), parked())
 
 print()
 print("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")

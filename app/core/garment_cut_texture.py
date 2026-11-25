@@ -2493,7 +2493,8 @@ def set_sleeve_print(character_name: str, item_id: str, value: str, *, run=None)
     changed = str(params.get("sleeve_print") or "plain") != value
     if changed:
         source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
-        gt.set_params(item_id, {**params, "sleeve_print": value}, source=source)
+        # plan E6: write onto the STORED params — a top with cups keeps its parked top fields
+        gt.set_params(item_id, {**(gt.stored_of(item) or params), "sleeve_print": value}, source=source)
     usable = usable_answers(character_name, item_id)
     again = any(u["state"] == "ready" and u["raw"] for u in usable.values())
     started = bool(again and start_recompose(character_name, item_id, run=run))
@@ -2524,7 +2525,7 @@ def select_cut(item_id: str) -> bool:
     if not params or params.get("texture") == "cut":
         return False
     source = ((item or {}).get("outfit_piece") or {}).get("template", {}).get("source") or "user"
-    gt.set_params(item_id, {**params, "texture": "cut"}, source=source)
+    gt.set_params(item_id, {**(gt.stored_of(item) or params), "texture": "cut"}, source=source)  # plan E6
     return True
 
 
