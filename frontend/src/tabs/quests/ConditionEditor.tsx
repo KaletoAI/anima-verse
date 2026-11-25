@@ -31,10 +31,12 @@ function exactly(issues: Issue[], ...paths: string[]): Issue[] {
  * A D7 expression as a recursive editor: "always true", one condition (a catalog type plus its parameters), or an
  * all / any / not group of further expressions. `types` are the catalog types this position accepts (a step and the
  * start condition take conditions, the prerequisites conditions and prerequisites). `path` is the D7 path of this
- * node; server issues are shown at the node they name, parameter issues under their field.
+ * node; server issues are shown at the node they name, parameter issues under their field. `onStructureChange` is
+ * called when an entry of an All/Any group is removed (the later entries' indices shift, so the caller drops the
+ * issues it holds instead of showing them under the wrong entry).
  */
 export function ConditionEditor({
-  expr, types, roles, issues, path, onChange,
+  expr, types, roles, issues, path, onChange, onStructureChange,
 }: {
   expr: Expr
   types: CatalogType[]
@@ -42,6 +44,7 @@ export function ConditionEditor({
   issues: Issue[]
   path: string
   onChange: (next: Expr) => void
+  onStructureChange?: () => void
 }) {
   const { t } = useI18n()
   const mode = modeOf(expr)
@@ -97,10 +100,11 @@ export function ConditionEditor({
         {children.map((child, i) => (
           <div key={i} className="ga-quest-cond-child">
             <ConditionEditor expr={child} types={types} roles={roles} issues={issues}
-              path={`${path}.${mode}.${i}`} onChange={(next) => put(children.map((c, j) => (j === i ? next : c)))} />
+              path={`${path}.${mode}.${i}`} onChange={(next) => put(children.map((c, j) => (j === i ? next : c)))}
+              onStructureChange={onStructureChange} />
             <button type="button" className="ga-btn ga-btn-sm" disabled={children.length <= 1}
               title={children.length <= 1 ? t('A group needs at least one entry') : undefined}
-              onClick={() => put(children.filter((_, j) => j !== i))}>{t('Remove')}</button>
+              onClick={() => { onStructureChange?.(); put(children.filter((_, j) => j !== i)) }}>{t('Remove')}</button>
           </div>
         ))}
         <button type="button" className="ga-btn ga-btn-sm" onClick={() => put([...children, freshLeaf()])}>
@@ -113,7 +117,7 @@ export function ConditionEditor({
     body = (
       <div className="ga-quest-cond-children">
         <ConditionEditor expr={inner} types={types} roles={roles} issues={issues} path={path + '.not'}
-          onChange={(next) => onChange({ not: next })} />
+          onChange={(next) => onChange({ not: next })} onStructureChange={onStructureChange} />
       </div>
     )
   }

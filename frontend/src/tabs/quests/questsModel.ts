@@ -192,3 +192,57 @@ export function stepProgress(current: number, count: number): string {
 export function emptyDraft(): TemplateDraft {
   return rowToDraft({})
 }
+
+/** The `{role}` placeholders a player text may use: one per declared role key, in role order, duplicates and
+ *  blank keys left out (e.g. "{giver} {place} {thing}"); "" without roles. */
+export function placeholderList(roles: Role[]): string {
+  const keys: string[] = []
+  for (const r of roles) if (r.key.trim() && !keys.includes(r.key)) keys.push(r.key)
+  return keys.map((k) => `{${k}}`).join(' ')
+}
+
+/** `list` with the entry at `from` moved to `to` (both clamped to the list); the same array when nothing moves. */
+export function moveItem<T>(list: T[], from: number, to: number): T[] {
+  if (from < 0 || from >= list.length) return list
+  const target = Math.max(0, Math.min(list.length - 1, to))
+  if (target === from) return list
+  const next = list.slice()
+  const [item] = next.splice(from, 1)
+  next.splice(target, 0, item)
+  return next
+}
+
+/** The options whose label contains `query` (case-insensitive, trimmed; an empty query keeps all). The option whose
+ *  value is `selected` always stays, so a select never loses the value it shows. */
+export function filterOptions<T>(options: T[], query: string, label: (o: T) => string, value: (o: T) => string,
+  selected: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return options
+  return options.filter((o) => (selected && value(o) === selected) || label(o).toLowerCase().includes(q))
+}
+
+/** True when the template editor's Save does something: a new template (no id yet) or unsaved edits. */
+export function canSave(draft: TemplateDraft | null, dirty: boolean): boolean {
+  return !!draft && (!draft.id || dirty)
+}
+
+/** The English text of each /quests route refusal `code` (app/routes/quests.py), translated by the caller. */
+export const ERROR_CODE_TEXTS: Record<string, string> = {
+  has_open_runs: 'End the open runs of this template before deleting it.',
+  stale: 'The template changed since it was loaded.',
+  not_found: 'It does not exist (any more).',
+  refused: 'The run was refused.',
+  invalid: 'The template has issues.',
+  bad_json: 'The request was not valid JSON.',
+  bad_request: 'The input was refused.',
+  revision_required: 'Load the template again before saving.',
+  too_large: 'The template is too large to save.',
+}
+
+/** A /quests refusal as one line for the admin: the translated text of its `code` — for `bad_request` followed by
+ *  the server's (English) reason, which names the field — or the server's message for an unknown code. */
+export function questErrorText(err: { code: string; message: string }, t: (s: string) => string): string {
+  const text = ERROR_CODE_TEXTS[err.code]
+  if (!text) return err.message
+  return err.code === 'bad_request' && err.message ? `${t(text)} ${err.message}` : t(text)
+}

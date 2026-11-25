@@ -4,7 +4,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { cancelRun, fetchRuns, questError } from './api'
 import type { RunRow } from './api'
-import { RUN_OPEN_STATES, RUN_STATES, stepProgress } from './questsModel'
+import { RUN_OPEN_STATES, RUN_STATES, questErrorText, stepProgress } from './questsModel'
 
 const POLL_INTERVAL_MS = 15_000
 const FILTER_KEY = 'ga-quests-runs-state'
@@ -25,13 +25,9 @@ function stateClass(state: string): string {
   return 'ga-tag ga-status-paused'
 }
 
-/** A canonical GAME stamp ("Y0002-D109T14:23:45") shortened to "Y0002-D109 14:23" — no Date involved. */
-function shortStamp(stamp: string | undefined): string {
-  return (stamp || '').slice(0, 16).replace('T', ' ')
-}
-
-/** One binding (D6) as a single readable value. */
-function bindingText(b: Record<string, string>): string {
+/** One binding (D6) as a single readable value: the label frozen at start (a name), else the raw ids. */
+function bindingText(b: Record<string, string>, label: string | undefined): string {
+  if (label) return label
   if (b.name) return b.name
   if (b.item_id) return b.item_id
   return [b.location_id, b.room_id].filter(Boolean).join(' / ')
@@ -63,10 +59,10 @@ export function RunsView() {
       setRuns(await fetchRuns(filter, lang))
       setError('')
     } catch (e) {
-      setError(questError(e).message)
+      setError(questErrorText(questError(e), t))
       setRuns((prev) => prev || [])
     }
-  }, [filter, lang])
+  }, [filter, lang, t])
 
   useEffect(() => {
     void reload()
@@ -94,7 +90,7 @@ export function RunsView() {
       const res = await cancelRun(run.id)
       toast(res.ok ? t('Run cancelled') : t('The run had already ended'), res.ok ? 'success' : 'info')
     } catch (e) {
-      toast(t('Error') + ': ' + questError(e).message, 'error')
+      toast(t('Error') + ': ' + questErrorText(questError(e), t), 'error')
     }
     await reload()
   }
@@ -112,7 +108,9 @@ export function RunsView() {
       {runs === null ? (
         <div className="ga-loading">{t('Loading…')}</div>
       ) : runs.length === 0 ? (
-        <div className="ga-placeholder">{t('No quest runs yet. Start one from a ready template.')}</div>
+        <div className="ga-placeholder">
+          {filter ? t('No runs in this state.') : t('No quest runs yet. Start one from a ready template.')}
+        </div>
       ) : (
         <table className="ga-sched-table">
           <thead>
@@ -162,7 +160,7 @@ export function RunsView() {
                         {Object.keys(run.bindings).length ? (
                           <ul>
                             {Object.entries(run.bindings).map(([role, b]) => (
-                              <li key={role}><code>{role}</code> {bindingText(b)}</li>
+                              <li key={role}><code>{role}</code> {bindingText(b, run.binding_labels?.[role])}</li>
                             ))}
                           </ul>
                         ) : <p className="ga-form-hint">—</p>}
@@ -173,7 +171,7 @@ export function RunsView() {
                               <li key={n}>
                                 {t('Step {n}').replace('{n}', String(e.step + 1))}: {e.avatar}
                                 {e.mind && e.mind !== e.avatar ? ` (${e.mind})` : ''}
-                                {e.game_ts ? ` — ${shortStamp(e.game_ts)}` : ''}
+                                {e.game_label ? ` — ${e.game_label}` : ''}
                               </li>
                             ))}
                           </ul>

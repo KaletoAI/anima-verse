@@ -43,8 +43,9 @@ export function deleteTemplate(id: string): Promise<unknown> {
   return apiDelete(`/quests/templates/${encodeURIComponent(id)}`)
 }
 
-/** One entry of a run's step log: who fulfilled which step (0-based) at which game stamp. */
-export interface StepLogEntry { step: number; avatar: string; mind?: string; game_ts?: string }
+/** One entry of a run's step log: who fulfilled which step (0-based) at which game stamp; `game_label` is that
+ *  stamp as a finished server label. */
+export interface StepLogEntry { step: number; avatar: string; mind?: string; game_ts?: string; game_label?: string }
 
 /** A row of `GET /quests/runs` (`_run_row` in app/routes/quests.py); the labels are finished server strings. */
 export interface RunRow {
@@ -55,6 +56,8 @@ export interface RunRow {
   step_count: number
   step_log: StepLogEntry[]
   bindings: Record<string, Record<string, string>>
+  /** role key -> display label, frozen when the run started (a character's, location's, room's or item's name). */
+  binding_labels: Record<string, string>
   issues: Issue[]
   started_game_label: string
   expires_label: string

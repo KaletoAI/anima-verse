@@ -16,6 +16,16 @@
 //   "thing" unpicked -> false, with all three -> true; a quest without roles -> true (nothing to bind);
 // - stepProgress shows the current step 1-based over the step count: current_step 1 of 3 -> "2 / 3"; a done run
 //   has current_step == count (3 of 3) and stays "3 / 3", never "4 / 3"; no steps -> "0 / 0".
+// Final fix wave:
+// - placeholderList of the Errand roles is "{giver} {place} {thing}"; a blank key and a repeated key are left out;
+//   no roles -> "";
+// - moveItem([a,b,c], 0, 2) -> [b,c,a] (to the end, what drag-and-drop could not reach); (2, 0) -> [c,a,b];
+//   to beyond the end clamps (1, 9) -> [a,c,b]; a no-move (1, 1) returns the SAME array; from out of range -> same;
+// - filterOptions over ["Old Key", "Lamp", "Key ring"] with "key" -> Old Key, Key ring (case-insensitive); "  "
+//   keeps all; "lamp" with "Old Key" selected keeps Old Key (the shown value) and Lamp;
+// - canSave: a new template (id "") -> true even when not dirty; a stored one only when dirty; no draft -> false;
+// - questErrorText with an identity t: code "has_open_runs" -> its text; "bad_request" with message "title is
+//   required" -> "The input was refused. title is required"; an unknown code "" -> the message itself.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -39,7 +49,8 @@ function moduleUrl(file) {
   modules.set(key, url);
   return url;
 }
-const { rowToDraft, draftToRow, issuesAt, newStepId, rolesOfKinds, bindingFor, bindingsComplete, stepProgress } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
+const { rowToDraft, draftToRow, issuesAt, newStepId, rolesOfKinds, bindingFor, bindingsComplete, stepProgress,
+  placeholderList, moveItem, filterOptions, canSave, questErrorText, ERROR_CODE_TEXTS } = await import(moduleUrl(new URL('./questsModel.ts', import.meta.url)));
 
 // The reference quest of the plan header, verbatim.
 const errand = {"title": "Errand", "summary": "Run an errand for someone.", "gm_notes": "GM ONLY",
@@ -129,5 +140,41 @@ const errand = {"title": "Errand", "summary": "Run an errand for someone.", "gm_
   assert.equal(stepProgress(1, 3), '2 / 3');
   assert.equal(stepProgress(3, 3), '3 / 3');
   assert.equal(stepProgress(0, 0), '0 / 0');
+}
+{
+  const roles = rowToDraft(errand).roles;
+  assert.equal(placeholderList(roles), '{giver} {place} {thing}');
+  assert.equal(placeholderList([...roles, { key: ' ', kind: 'item', description: '' }, roles[0]]), '{giver} {place} {thing}');
+  assert.equal(placeholderList([]), '');
+}
+{
+  const list = ['a', 'b', 'c'];
+  assert.deepEqual(moveItem(list, 0, 2), ['b', 'c', 'a']);
+  assert.deepEqual(moveItem(list, 2, 0), ['c', 'a', 'b']);
+  assert.deepEqual(moveItem(list, 1, 9), ['a', 'c', 'b']);
+  assert.equal(moveItem(list, 1, 1), list);
+  assert.equal(moveItem(list, 5, 0), list);
+}
+{
+  const items = [{ id: 'k1', name: 'Old Key' }, { id: 'l1', name: 'Lamp' }, { id: 'k2', name: 'Key ring' }];
+  const names = (q, sel = '') => filterOptions(items, q, (o) => o.name, (o) => o.id, sel).map((o) => o.name);
+  assert.deepEqual(names('key'), ['Old Key', 'Key ring']);
+  assert.deepEqual(names('  '), ['Old Key', 'Lamp', 'Key ring']);
+  assert.deepEqual(names('lamp', 'k1'), ['Old Key', 'Lamp']);
+}
+{
+  const fresh = rowToDraft({});
+  const stored = rowToDraft({ ...errand, id: 'qt_1', revision: 2 });
+  assert.equal(canSave(fresh, false), true);
+  assert.equal(canSave(stored, false), false);
+  assert.equal(canSave(stored, true), true);
+  assert.equal(canSave(null, true), false);
+}
+{
+  const t = (s) => s;
+  assert.equal(questErrorText({ code: 'has_open_runs', message: 'x' }, t), ERROR_CODE_TEXTS.has_open_runs);
+  assert.equal(questErrorText({ code: 'bad_request', message: 'title is required' }, t),
+    'The input was refused. title is required');
+  assert.equal(questErrorText({ code: '', message: 'network down' }, t), 'network down');
 }
 console.log('questsModel: all checks passed');

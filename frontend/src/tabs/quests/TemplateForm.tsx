@@ -3,7 +3,7 @@ import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SortableList } from '../../components/SortableList'
 import { ConditionEditor } from './ConditionEditor'
-import { ROLE_KINDS, issuesAt, newStepId } from './questsModel'
+import { ROLE_KINDS, issuesAt, moveItem, newStepId, placeholderList } from './questsModel'
 import type { Catalog, Expr, Issue, Role, RoleKind, Step, TemplateDraft } from './questsModel'
 
 type Section = 'basics' | 'roles' | 'steps' | 'start'
@@ -49,8 +49,9 @@ function Alerts({ issues }: { issues: Issue[] }) {
  * state, time limit in game hours, summary, GM notes), Roles, Steps (ordered; each with its condition) and Start &
  * requirements. Server issues are shown at their D7 path; a sub-tab names how many it holds.
  *
- * `onStructureChange` is called when roles or steps are removed or reordered — the issue paths carry indices, so
- * the caller drops the issues it holds instead of showing them at the wrong row.
+ * `onStructureChange` is called when roles, steps or the entries of an All/Any group are removed or reordered — the
+ * issue paths carry indices, so the caller drops the issues it holds instead of showing them at the wrong row.
+ * Steps move by drag (⋮⋮) or by the ↑ ↓ buttons — the drag lands a step ABOVE its target, so only ↓ reaches the end.
  */
 export function TemplateForm({
   draft, catalog, issues, onChange, onStructureChange,
@@ -73,11 +74,20 @@ export function TemplateForm({
     set('roles', draft.roles.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const setStep = (i: number, patch: Partial<Step>) =>
     set('steps', draft.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+  const moveStep = (from: number, to: number) => {
+    onStructureChange()
+    set('steps', moveItem(draft.steps, from, to))
+  }
+  // One line under each player text: the role placeholders it may use (rendered with the bound names at start).
+  const placeholders = placeholderList(draft.roles)
+  const placeholderHint = placeholders
+    ? <span className="ga-quest-placeholders">{t('Placeholders: {list}').replace('{list}', placeholders)}</span>
+    : null
 
   const basics = (
     <div className="ga-form">
       <div className="ga-form-row">
-        <Field label={t('Title') + ' *'}>
+        <Field label={t('Title') + ' *'} hint={placeholderHint}>
           <input className="ga-input" value={draft.title} onChange={(e) => set('title', e.target.value)} />
           <Alerts issues={issuesAt(issues, 'title')} />
         </Field>
@@ -94,7 +104,8 @@ export function TemplateForm({
           <Alerts issues={issuesAt(issues, 'time_limit_s')} />
         </Field>
       </div>
-      <Field label={t('Summary')} hint={t('Shown to the player in the quest book.')}>
+      <Field label={t('Summary')}
+        hint={<>{t('Shown to the player in the quest book.')}{placeholderHint ? <><br />{placeholderHint}</> : null}</>}>
         <textarea className="ga-textarea" rows={2} value={draft.summary} onChange={(e) => set('summary', e.target.value)} />
       </Field>
       <Field label={t('GM notes')} hint={t('Only for the game master; never shown to a player.')}>
@@ -143,7 +154,7 @@ export function TemplateForm({
   const indexed = draft.steps.map((step, index) => ({ step, index }))
   const steps = (
     <div className="ga-form">
-      <p className="ga-form-hint">{t('Steps are done one after another; drag ⋮⋮ to reorder them.')}</p>
+      <p className="ga-form-hint">{t('Steps are done one after another; drag ⋮⋮ or use ↑ ↓ to reorder them.')}</p>
       <Alerts issues={issues.filter((i) => i.path === 'steps')} />
       <SortableList
         items={indexed}
@@ -156,13 +167,19 @@ export function TemplateForm({
                 <input className="ga-input ga-quest-key" value={step.id} onChange={(e) => setStep(index, { id: e.target.value })} />
                 <Alerts issues={issuesAt(issues, `steps.${index}.id`)} />
               </Field>
-              <Field label={t('Text') + ' *'} tip={t('What the player reads in the quest book.')}>
+              <Field label={t('Text') + ' *'} tip={t('What the player reads in the quest book.')} hint={placeholderHint}>
                 <input className="ga-input" value={step.text} onChange={(e) => setStep(index, { text: e.target.value })} />
                 <Alerts issues={issuesAt(issues, `steps.${index}.text`)} />
               </Field>
               <Field label={t('Hint')}>
                 <input className="ga-input" value={step.hint} onChange={(e) => setStep(index, { hint: e.target.value })} />
               </Field>
+              <div className="ga-quest-move">
+                <button type="button" className="ga-btn ga-btn-sm" disabled={index === 0}
+                  title={t('Move up')} aria-label={t('Move up')} onClick={() => moveStep(index, index - 1)}>↑</button>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={index === draft.steps.length - 1}
+                  title={t('Move down')} aria-label={t('Move down')} onClick={() => moveStep(index, index + 1)}>↓</button>
+              </div>
               <button type="button" className="ga-btn ga-btn-sm ga-btn-danger ga-quest-remove"
                 onClick={() => { onStructureChange(); set('steps', draft.steps.filter((_, j) => j !== index)) }}>
                 {t('Remove')}
@@ -170,7 +187,8 @@ export function TemplateForm({
             </div>
             <Field label={t('Done when')}>
               <ConditionEditor expr={step.condition} types={conditionTypes} roles={draft.roles} issues={issues}
-                path={`steps.${index}.condition`} onChange={(condition: Expr) => setStep(index, { condition })} />
+                path={`steps.${index}.condition`} onChange={(condition: Expr) => setStep(index, { condition })}
+                onStructureChange={onStructureChange} />
             </Field>
           </div>
         )}
@@ -189,16 +207,19 @@ export function TemplateForm({
       <Field label={t('Start condition')}
         hint={t('The quest opens for the player once this holds; until then it stays hidden.')}>
         <ConditionEditor expr={draft.start_condition} types={conditionTypes} roles={draft.roles} issues={issues}
-          path="start_condition" onChange={(start_condition) => set('start_condition', start_condition)} />
+          path="start_condition" onChange={(start_condition) => set('start_condition', start_condition)}
+          onStructureChange={onStructureChange} />
       </Field>
       <Field label={t('Requirements')}
         hint={t('A player who does not meet them sees the quest locked, with the text below as the reason.')}>
         <ConditionEditor expr={draft.prerequisites.condition} types={prerequisiteTypes} roles={draft.roles} issues={issues}
           path="prerequisites.condition"
-          onChange={(condition) => set('prerequisites', { ...draft.prerequisites, condition })} />
+          onChange={(condition) => set('prerequisites', { ...draft.prerequisites, condition })}
+          onStructureChange={onStructureChange} />
       </Field>
-      <Field label={t('Locked text')} hint={t('Empty: "You do not meet the requirements."')}>
-        <input className="ga-input" value={draft.prerequisites.locked_text}
+      <Field label={t('Locked text')}
+        hint={<>{t('Empty: "You do not meet the requirements."')}{placeholderHint ? <><br />{placeholderHint}</> : null}</>}>
+        <input className="ga-input ga-quest-locked" value={draft.prerequisites.locked_text}
           onChange={(e) => set('prerequisites', { ...draft.prerequisites, locked_text: e.target.value })} />
         <Alerts issues={issuesAt(issues, 'prerequisites.locked_text')} />
       </Field>

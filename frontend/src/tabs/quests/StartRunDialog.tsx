@@ -6,14 +6,15 @@ import { loadCharacters, loadItems, loadLocations } from '../../lib/refs'
 import type { CharacterRef, ItemRef, LocationRef } from '../../lib/refs'
 import { roomLabel } from '../world/worldTypes'
 import { questError, startRun } from './api'
-import { bindingFor, bindingsComplete } from './questsModel'
+import { bindingFor, bindingsComplete, filterOptions, questErrorText } from './questsModel'
 import type { Issue, Role, RolePick } from './questsModel'
 
 /**
  * The Start-run dialog: one picker per role of the template, matching the role's kind (D6) — a character
  * standing in the world (no dormant or pooled family member, no temporary NPC), a location, a location plus one of
  * its rooms, or an item. Start stays disabled until every role is bound; a refusal (422 `refused`) lists its
- * issues here and keeps the dialog open. `onStarted` runs after the server accepted the run.
+ * issues here and keeps the dialog open. `onStarted` runs after the server accepted the run. A character or item
+ * picker has a filter field above it (the item library is long).
  */
 export function StartRunDialog({
   open, templateId, title, roles, onClose, onStarted,
@@ -30,6 +31,7 @@ export function StartRunDialog({
   const [locations, setLocations] = useState<LocationRef[]>([])
   const [items, setItems] = useState<ItemRef[]>([])
   const [picks, setPicks] = useState<Record<string, RolePick>>({})
+  const [filters, setFilters] = useState<Record<string, string>>({})
   const [issues, setIssues] = useState<Issue[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -38,6 +40,7 @@ export function StartRunDialog({
   useEffect(() => {
     if (!open) return
     setPicks({})
+    setFilters({})
     setIssues([])
     setError('')
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -82,21 +85,32 @@ export function StartRunDialog({
         setIssues(err.issues)
         setError(t('The run was refused:'))
       } else {
-        setError(err.message)
+        setError(questErrorText(err, t))
       }
     } finally {
       setBusy(false)
     }
   }
 
+  const filterInput = (role: Role) => (
+    <input className="ga-input ga-quest-filter" type="search" value={filters[role.key] || ''}
+      placeholder={t('Filter…')} aria-label={t('Filter…')}
+      onChange={(e) => setFilters((prev) => ({ ...prev, [role.key]: e.target.value }))} />
+  )
+
   const picker = (role: Role) => {
     const p = picks[role.key] || {}
+    const query = filters[role.key] || ''
     if (role.kind === 'character') {
+      const shown = filterOptions(inWorld, query, (c) => c.display_name || c.name, (c) => c.name, p.name || '')
       return (
-        <select className="ga-input" value={p.name || ''} onChange={(e) => pick(role.key, { name: e.target.value })}>
-          <option value="">{t('— pick a character —')}</option>
-          {inWorld.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
-        </select>
+        <div className="ga-quest-picker">
+          {filterInput(role)}
+          <select className="ga-input" value={p.name || ''} onChange={(e) => pick(role.key, { name: e.target.value })}>
+            <option value="">{t('— pick a character —')}</option>
+            {shown.map((c) => <option key={c.name} value={c.name}>{c.display_name || c.name}</option>)}
+          </select>
+        </div>
       )
     }
     if (role.kind === 'location' || role.kind === 'room') {
@@ -119,11 +133,15 @@ export function StartRunDialog({
       )
     }
     if (role.kind === 'item') {
+      const shown = filterOptions(items, query, (i) => i.name || i.id, (i) => i.id, p.item_id || '')
       return (
-        <select className="ga-input" value={p.item_id || ''} onChange={(e) => pick(role.key, { item_id: e.target.value })}>
-          <option value="">{t('— pick an item —')}</option>
-          {items.map((i) => <option key={i.id} value={i.id}>{i.name || i.id}</option>)}
-        </select>
+        <div className="ga-quest-picker">
+          {filterInput(role)}
+          <select className="ga-input" value={p.item_id || ''} onChange={(e) => pick(role.key, { item_id: e.target.value })}>
+            <option value="">{t('— pick an item —')}</option>
+            {shown.map((i) => <option key={i.id} value={i.id}>{i.name || i.id}</option>)}
+          </select>
+        </div>
       )
     }
     return <p className="ga-quest-error">{t('Unknown role kind')}: {role.kind}</p>

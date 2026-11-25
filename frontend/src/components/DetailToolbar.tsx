@@ -9,7 +9,8 @@ import { useI18n } from '../i18n/I18nProvider'
  *
  *   <DetailToolbar onSave={save} onCancel={cancel} onDelete={remove} />
  *
- * Pass `disabled` to gate Save (e.g. while saving). `dirty` says the form
+ * Pass `disabled` to gate every button (e.g. while saving), `saveDisabled` to gate Save alone (e.g. nothing to
+ * save). `dirty` says the form
  * holds edits that were never saved (`lib/useDraft`): Save is highlighted,
  * a marker says so, and Cancel asks before it discards them. `extra` slots in
  * additional context-specific buttons (e.g. "Remove override"). `title`
@@ -34,6 +35,7 @@ export function DetailToolbar({
   onMove,
   storage,
   disabled,
+  saveDisabled,
   dirty,
   extra,
 }: {
@@ -47,6 +49,7 @@ export function DetailToolbar({
   onMove?: (target: 'world' | 'shared') => void
   storage?: Storage
   disabled?: boolean
+  saveDisabled?: boolean
   dirty?: boolean
   extra?: ReactNode
 }) {
@@ -59,7 +62,7 @@ export function DetailToolbar({
     <div className="ga-detail-toolbar">
       {onSave ? (
         <button className={`ga-btn ga-btn-primary ga-btn-sm${dirty ? ' ga-btn-dirty' : ''}`}
-          onClick={onSave} disabled={disabled}>
+          onClick={onSave} disabled={disabled || saveDisabled}>
           {saveLabel ?? t('Save')}
         </button>
       ) : null}

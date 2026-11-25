@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
@@ -12,7 +12,7 @@ import {
   createTemplate, deleteTemplate, fetchCatalog, fetchTemplate, fetchTemplates, questError, updateTemplate,
 } from './api'
 import type { TemplateListRow, TemplateRow } from './api'
-import { draftToRow, emptyDraft, rowToDraft } from './questsModel'
+import { canSave, draftToRow, emptyDraft, questErrorText, rowToDraft } from './questsModel'
 import type { Catalog, Issue, TemplateDraft } from './questsModel'
 
 /** The guard of the open pane: run `fn` now, or after the admin agreed to drop unsaved edits. */
@@ -38,6 +38,9 @@ export function TemplatesView({ onGuard, onStarted }: {
   const [error, setError] = useState('')
   const [stale, setStale] = useState(false)
   const [saving, setSaving] = useState(false)
+  // The list, "+ New" and Copy stay clickable while a save is in flight; they do nothing until it ends, so the
+  // save's answer never replaces a template the admin opened meanwhile (a ref: the callbacks are memoised).
+  const savingRef = useRef(false)
   const [pendingDelete, setPendingDelete] = useState(false)
   const [starting, setStarting] = useState(false)
   const invalidMessage = t('A ready template must have no issues. Fix them, or set the state to Draft and save.')
@@ -75,20 +78,24 @@ export function TemplatesView({ onGuard, onStarted }: {
     try {
       show(await fetchTemplate(id))
     } catch (e) {
-      toast(t('Error') + ': ' + questError(e).message, 'error')
+      toast(t('Error') + ': ' + questErrorText(questError(e), t), 'error')
     }
   }, [show, t, toast])
 
   const newTemplate = useCallback(() => guard(() => {
+    if (savingRef.current) return
     loadDraft(emptyDraft())
     setIssues([])
     setError('')
     setStale(false)
   }), [guard, loadDraft])
 
-  const editTemplate = useCallback((row: TemplateListRow) => guard(() => { void open(row.id) }), [guard, open])
+  const editTemplate = useCallback((row: TemplateListRow) => guard(() => {
+    if (!savingRef.current) void open(row.id)
+  }), [guard, open])
 
   const copyTemplate = useCallback(() => {
+    if (savingRef.current) return
     setDraft((prev) => (prev ? { ...prev, id: '', revision: 0, state: 'draft', title: `${prev.title} (copy)`.trim() } : prev))
     setIssues([])
     setStale(false)
@@ -104,9 +111,9 @@ export function TemplatesView({ onGuard, onStarted }: {
       setIssues(err.issues)
       setError(invalidMessage)
     } else {
-      setError(err.message)
+      setError(questErrorText(err, t))
     }
-    toast(t('Error') + ': ' + (err.code === 'invalid' ? t('the template has issues') : err.message), 'error')
+    toast(t('Error') + ': ' + questErrorText(err, t), 'error')
   }, [invalidMessage, t, toast])
 
   const save = useCallback(async () => {
@@ -116,6 +123,7 @@ export function TemplatesView({ onGuard, onStarted }: {
       return
     }
     setSaving(true)
+    savingRef.current = true
     setError('')
     setStale(false)
     const body = draftToRow(draft)
@@ -131,8 +139,17 @@ export function TemplatesView({ onGuard, onStarted }: {
           try {
             saved = await updateTemplate(saved.id, { state: 'ready' }, saved.revision)
           } catch (e) {
+            // The template IS stored now, as a draft: say so, and keep the admin's "Ready" as an unsaved edit so
+            // the next Save (after fixing the issues) sets it ready.
+            const err = questError(e)
             setDraft((prev) => (prev ? { ...prev, state: 'ready' } : prev))
-            fail(e)
+            const reason = err.code === 'invalid'
+              ? t('{n} issue(s), listed below').replace('{n}', String(err.issues.length))
+              : questErrorText(err, t)
+            if (err.code === 'invalid') setIssues(err.issues)
+            const text = t('Saved as a draft — not ready yet: {reason}').replace('{reason}', reason)
+            setError(text)
+            toast(text, 'error')
             return
           }
         }
@@ -146,6 +163,7 @@ export function TemplatesView({ onGuard, onStarted }: {
       fail(e)
     } finally {
       setSaving(false)
+      savingRef.current = false
     }
   }, [draft, fail, reload, setDraft, show, t, toast])
 
@@ -163,9 +181,9 @@ export function TemplatesView({ onGuard, onStarted }: {
       setIssues([])
       await reload()
     } catch (e) {
-      const err = questError(e)
-      setError(err.message)
-      toast(t('Error') + ': ' + err.message, 'error')
+      const text = questErrorText(questError(e), t)
+      setError(text)
+      toast(t('Error') + ': ' + text, 'error')
     }
   }, [draft, loadDraft, reload, t, toast])
 
@@ -213,6 +231,7 @@ export function TemplatesView({ onGuard, onStarted }: {
               }}
               onDelete={draft.id ? () => setPendingDelete(true) : undefined}
               disabled={saving}
+              saveDisabled={!canSave(draft, dirty)}
               dirty={dirty}
               extra={
                 <button type="button" className="ga-btn ga-btn-sm"

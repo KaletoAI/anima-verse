@@ -3667,6 +3667,15 @@ a.ga-btn {
 .ga-quest-form [role="alert"],
 .ga-quest-error { color: var(--danger, #f85149); margin: 2px 0; font-size: 12px; }
 .ga-quest-error ul { margin: 4px 0 0; padding-left: 18px; }
+/* An inline issue stands UNDER its control, never beside it: the control row of a field wraps, the issue takes a
+   whole line (beside the input it wrapped and squeezed the input). */
+.ga-quest-form .ga-field-control { flex-wrap: wrap; }
+.ga-quest-form .ga-field-control > [role="alert"] { flex-basis: 100%; }
+.ga-quest-locked { max-width: 480px; }
+.ga-quest-move { display: flex; gap: 2px; align-self: flex-end; }
+.ga-quest-placeholders { font-family: var(--font-mono, monospace); }
+.ga-quest-picker { display: flex; flex-direction: column; gap: 4px; }
+.ga-quest-filter { max-width: 240px; }
 /* Quests tab — runs view and start dialog. */
 .ga-quest-runs-bar { margin-bottom: 8px; align-items: center; }
 .ga-quest-runs-bar > select { width: auto; }
