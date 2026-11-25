@@ -1760,3 +1760,85 @@ poses standing → idle, walking → walk, running → run.
 - **N6** the second poll moves Spot 2 m and Dot 10 m along +x; one 0.1 s NPC frame: Spot walks 3.4 · 0.1 = 0.34 m
   (≤ 6 m: no run), gait walk, phase 0.7, Hip_FL 19.720°; Dot runs 3.4 · 1.8 · 0.1 = 0.612 m, gait run, phase 1.1,
   Hip_FL 22.978°.
+
+## Nav world (`nav/`, E2, `Check/NavCheck.cs`, `--check nav`)
+
+The client navmesh of plan E2 (docs/superpowers/plans/2026-11-25-client-ausfuehrung-e2.md). Task 1 ships the scene
+`nav/scene_loc-nav.json` (signature `"nav-house"`) and the Godot-free source `AnimaNative.Nav.NavSource`
+(`tests/NavSourceTests.cs`); the rest of the world (world map, locations, urls, height field, terrain, model3d,
+`pos_answers.json`) follows with the later tasks. The derivations below hold for all tasks.
+
+Location `loc-nav` "Navhaus" at world (100, 0), yaw 0, flat height field 0 → datum 0,
+`TileToWorld(lx, lz, ly) = (100 + lx, ly, lz)`. `storey_m` 3, `levels` 0 / 1 at `floor_y` 0 / 3, `boundary` x −6…6,
+z −7…4 (a 3 m deep yard south of W1). Avatar "Nia Nav" in `r-a` at world (97, −1).
+
+| Part | Tile data | World |
+|---|---|---|
+| Rooms | `r-a` (0, x −6…0), `r-b` (0, x 0…6), `r-up` (1, x 0…6); `floor_plan` for `r-a`, `r-b` | |
+| Walls storey 0 (t 0.2, h 3) | W1a (−6,−4)→(−3.45,−4), W1b (−2.55,−4)→(6,−4), W2 (−6,4)→(6,4), W3 (−6,−4)→(−6,4), W4 (6,−4)→(6,4), W5 (0,−4)→(0,1.55), W6 (0,2.45)→(0,4) | |
+| Door D0 (index 0) | `at_world` (0, 2), `along` (0, 1), width 0.9, rooms [r-a, r-b], inside | |
+| Door D1 (index 1) | `at_world` (−3, −4), `along` (1, 0), width 0.9, rooms [r-a], outside (`OutwardNormal` (0, −1)) | centre (97, −4) |
+| Room entry | `pos_answers.json` scenarios `nav-up` (`POST /play/enter-room` `{room_id: r-up}` → 200, response body after the pattern of `fixtures/embody/pos_answers.json` "enter-room") and `nav-up-rejected` (the same request → 409) | |
+| Plate storey 1 | `r-up`, outline x 0…6, z −4…4, `top_y` 3.0, hole x 1.5…4.0, z −3.8…−2.8 | |
+| Walls storey 1 (t 0.2, `base_y` 3, h 2.8) | (0,−4)→(6,−4), (6,−4)→(6,4), (0,4)→(6,4), (0,−4)→(0,4) | |
+| Stairs id 1 | `at` (1.5, −3.3), `dir_deg` 90, run 2.5, rise 3, 10 steps, width 1, `foot` (1.0, 0.0, −3.3), `head` (4.5, 3.0, −3.3), footprint x 1.5…4.0, z −3.8…−2.8; a `stair_tread` extra with `stair: 1` | foot (101, 0, −3.3), head (104.5, 3, −3.3) |
+| Lift | `elevator_pad` storey 0 centre (5.2, 0.0, 3.2) size (1, 0.1, 1); storey 1 centre (5.2, 3.0, 3.2); `elevator_shaft` | stops (105.2, 0.05, 3.2), (105.2, 3.05, 3.2) |
+| Armchair (placeholder) | `r-a`, anchor (−3, −2), w 0.8 d 0.8 h 0.9, `bottom_y` 0 | box x 96.6…97.4, y 0…0.9, z −2.4…−1.6 |
+| Bed (placeholder) | `r-b`, anchor (4, 1.5), w 1.4 d 2.0 h 0.5 | box x 103.3…104.7, y 0…0.5, z 0.5…2.5 |
+| Rug (placeholder) | `r-a`, anchor (−3, 2), w 2 d 1.5 h 0.02 | box x 96…98, y 0…0.02, z 1.25…2.75 |
+
+Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc-tower.json` (`role "prop"`, `placeholder_dims`,
+`fix_euler` 0, `yaw_deg` 0, `measure "xyz"`, `max_m` = the largest side, `anchor`, `bottom_y`, `level`, `room_id`).
+
+**Derived values (r = 0.25; polygon mode exact, the 0.05 cell grid hits every number):**
+
+- Eroded rooms: `r-a` x 94.35…99.65 (W3 face −5.9 + r → −5.65; W5 face −0.1 − r → −0.35), z −3.65…3.65; `r-b` x
+  100.35…105.65; loft x 100.35…105.65, z −3.65…3.65 without the hole zone x 101.25…104.25, z ≤ −2.55.
+- Walkable area storey 0 (decision 7): `boundary` + 0.30 outwards = world x 93.7…106.3, z −7.3…4.3. Yard eroded:
+  x 93.95…106.05 (−6.3 + r = −6.05, 6.3 − r = 6.05; review measurement 93.953…106.047), z −7.05 (−7.3 + r) … −4.35 (W1
+  outer face −4.1 − r). The strips outside W2/W3/W4 (0.2 m between the wall face and the pushed-out edge) vanish in the
+  erosion. Yard height: terrain 0 (`FollowGround`, flat).
+- Seal D1: x 96.55…97.45, z −4.1…−3.9. Threshold T1: x 96.8…97.2 (± (0.45 − 0.25)), z −4.35…−3.65 (± (0.1 + 0.25)),
+  outside, `OuterPoint` (97, −4.35) = centre + (0, −1)·0.35; welded to `r-a` (edge z −3.65) and the yard (edge z −4.35).
+- Seal D0: x 99.9…100.1, z 1.55…2.45. Threshold T0: x 99.65…100.35 (± (0.1 + 0.25)), z 1.8…2.2 (± (0.45 − 0.25)), y 0.
+- Armchair eroded: x 96.35…97.65, z −2.65…−1.35 (corners rounded depending on the join — no path assumption touches
+  them). Bed eroded: x 103.05…104.95, z 0.25…2.75. Rug: no obstacle (0.02 ≤ 0.25).
+- Links: stairs owner 65536 = `(1 << 16) | 0`, start (101, 0, −3.3), end (104.5, 3, −3.3), both on the mesh (distance 0),
+  costs enter 0 / travel 1. Lift owner 131200 = `(2 << 16) | 128`, start (105.2, 0.05, 3.2), end (105.2, 3.05, 3.2),
+  `enter_cost` 20, `travel_cost` 10. In a path only the **entry point** carries the owner; path points lie on the mesh
+  (lift bottom (105.2, 0.0, 3.2), top (105.2, 3.0, 3.2)).
+- **P1** (97, 0, −1) → (103, 0, −1): through T0 over the lower corners (99.65, 0, 1.8) and (100.35, 0, 1.8); length
+  2·√(2.65² + 2.8²) + 0.7 = 2·3.855191 + 0.7 = **8.410382**.
+- **P2** (97, 0, −1) → loft (104, 3, 2): (99.65, 1.8) → (100.35, 1.8) → stair foot (101, −3.3) [√(0.65² + 5.1²) =
+  5.141255] → link [√(3.5² + 3²) = 4.609772] → (104, 2) [√(0.5² + 5.3²) = 5.323533; does not cross the hole zone: at
+  z −2.55, x = 104.5 − 0.5·0.75/5.3 = 104.4292 > 104.25]; length 3.855191 + 0.7 + 5.141255 + 4.609772 + 5.323533 =
+  **19.629751** (review measured 19.6307), exactly one point with owner ≠ 0, owner 65536. The way back (104, 3, 2) →
+  (97, 0, −1) has the same length over the stairs.
+- **P3** = P2 with the stairs disabled, over the lift: (97, −1) → (99.65, 1.8) [3.855191] → bed corner (103.05, 2.75)
+  [√(3.4² + 0.95²) = 3.530227; at x 100.35, z = 1.8 + 0.7·0.95/3.4 = 1.9956 ∈ T0 1.8…2.2, the corner (100.35, 1.8)
+  drops out] → lift bottom (105.2, 0, 3.2) [√(2.15² + 0.45²) = 2.196588; at x 104.95, z = 3.148 > 2.75, clear of the
+  bed] → link [3] → (104, 3, 2) [√(1.2² + 1.2²) = 1.697056]; length **14.279062** (review measured 14.279). **Why P2
+  still takes the stairs:** the cost over the lift ≥ (14.279062 − 3) + 3·10 = 41.28 (without `enter_cost`, which 4.7.2
+  does not reliably count in the choice) > 19.63 over the stairs (travel 1). With only `enter_cost` 20, P2 forwards
+  took the lift when measured (14.279).
+- **Probes `MapGetClosestPoint`**: (100.05, 0, 0) in W5 → (100.35, 0, 0) (0.30 to `r-b` against 0.40 to `r-a`);
+  (97, 0, −1.5) at the armchair's edge → (97, 0, −1.35); (97, 0, 2) on the rug → unchanged; (100, 0, 2) in the door →
+  unchanged; (97, 0, −5.5) in the yard → unchanged; (97, 0, −7.2) beyond the yard → (97, 0, −7.05).
+- **Armchair access** (server rule: box edge + `ACCESS_BODY_R_M` 0.15): (97, 0, −1.45) → gap to the mesh 0.10 ≤ 0.4; the
+  straight last piece (97, −1.35)→(97, −1.45) crosses no wall.
+
+**What `NavSource.Build` makes of it (Task 1, `tests/NavSourceTests.cs`, frame (100, 0, 0) yaw 0, the three boxes above):**
+
+- Storey 0: 3 floors — the pushed-out boundary (bounds x 93.7…106.3, z −7.3…4.3), the two `floor_plan` rooms (also the
+  two hulls) — at y 0, `FollowGround`. Storey 1: one floor (the plate) with its one hole x 101.5…104.0, z −3.8…−2.8 (no
+  other plate covers it) at y 3.0 (the highest plate top), flat.
+- Obstacles storey 0: 7 walls (W1a, W1b, W2–W6) + 2 seals + 2 props (armchair, bed; the rug's top 0.02 ≤ 0.25) = 11;
+  storey 1: 4 walls. W5 = x 99.9…100.1, z −4…1.55, y 0…3 (half thickness 0.1, no end caps).
+- A narrow door (D0 at 0.45 m, W5/W6 ending at z 1.775 / 2.225): w/2 − r = −0.025 ≤ 0 → seal x 99.9…100.1,
+  z 1.775…2.225, no threshold, problem `door_too_narrow` 0. Without W5/W6, D0 has no adjacent wall → open floor.
+- Turned by yaw π/2 (`TileToWorld(lx, lz) = (100 + lz, ·, −lx)`): T0 local x −0.35…0.35, z 1.8…2.2 → world x 101.8…102.2,
+  z −0.35…0.35.
+- Boundary offset rule on the L (0,0)(6,0)(6,3)(3,3)(3,6)(0,6) by 0.3: (−0.3,−0.3)(6.3,−0.3)(6.3,3.3)(3.3,3.3)(3.3,6.3)
+  (−0.3,6.3); the concave corner (3,3) → (3.3,3.3) is where z = 3.3 meets x = 3.3. A notch 0.4 wide (< 2·0.3): the
+  moved notch walls x = 2.9 and x = 3.1 swap sides, the moved top edges overlap on x 2.9…3.1 → refused, the ring stays
+  unshifted and `boundary_offset` is reported.
