@@ -15,7 +15,8 @@ Expected, derived by hand:
 [2] ``DELETE`` of the buckle part → 409, ``used_by == [{item_id: item_belt, name: Copper Belt, role: buckle, shared:
     False}]``; ``GET …/used-by`` names the same. After unlinking (buckle None) → 200, and ``jewellery/<part>/`` (made
     by hand with a file in it) is gone.
-[3] ``part-mesh`` on the belt (no part) → 400; on a part without an image → 400; on a part whose mesh is accepted →
+[3] ``GET part-mesh`` of a part whose mesh is accepted → ``state: ready``; ``GET /inventory/items`` marks every part
+    ``part: true`` (and nothing else). ``POST part-mesh`` on the belt (no part) → 400; on a part without an image → 400; on a part whose mesh is accepted →
     ``{status: ready}`` (nothing started — ``accessory_pendant.start`` monkeypatched to count, 0 calls); on a part
     with an image and no mesh → ``started`` (1 call). Earrings with a drop make their drop from their OWN image through
     the same route → ``started``.
@@ -154,6 +155,9 @@ d.mkdir(parents=True)
 (d / "raw.glb").write_bytes(b"glb")
 (d / "record.json").write_text(json.dumps({"accepted": True, "psig": psig}))
 START_CALLS.clear()
+check("[3] GET state", client.get(f"/inventory/items/{pid}/part-mesh").json()["state"], "ready")
+check("[3] list marks parts", [i["id"] for i in client.get("/inventory/items").json()["items"] if i.get("part")],
+      sorted(i["id"] for i in inv.list_items() if parts.is_part(i)))
 check("[3] ready", (client.post(f"/inventory/items/{pid}/part-mesh").json(), START_CALLS), ({"status": "ready"}, []))
 image(pid, b"another-buckle-image")
 check("[3] started", (client.post(f"/inventory/items/{pid}/part-mesh").json(), START_CALLS),

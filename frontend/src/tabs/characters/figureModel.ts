@@ -14,6 +14,7 @@ import { cpuProgressText, type CpuProgress } from '../../lib/cpuProgress'
 import type { FootPose } from '@anima/scene-render'
 import type { ModelStep } from './ModelSteps'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
+import type { PartOption, PartRowInfo } from '../items/itemsModel'
 import type { ShoeFrame } from './footwearAllowanceModel'
 import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
@@ -1704,12 +1705,14 @@ export interface Jewellery {
   kind: string
   chain?: { drop_cm?: number; thickness_mm?: number; style?: string }
   metal?: string
-  /** A225: the pendant from the item image, null: none. */
-  pendant?: { from_image?: boolean; size_mm?: number } | null
+  /** Design G: a necklace's linked pendant item (`item`); the earrings' drop keeps only its size. null: none. */
+  pendant?: { item?: string; size_mm?: number; gem_color?: string } | null
   /** A234: a band (belt / choker / strap) and the height of any ring-shaped kind. */
   band?: { height_cm?: number; width_cm?: number; layer?: string; material?: string; at?: string }
-  /** A234: a belt's buckle from the item image, null: none. */
-  buckle?: { from_image?: boolean; size_mm?: number } | null
+  /** Design G: a belt's linked buckle item, null: none. */
+  buckle?: { item?: string; size_mm?: number } | null
+  /** Design G: a belt's charm items (at most 6). */
+  charms?: Array<{ item: string; at: string | number; mount?: 'flat' | 'hang'; drop_cm: number; size_mm?: number }>
   side?: string
   finger?: string
   /** A238: where on the finger's proximal bone the ring sits (share from the knuckle). */
@@ -1786,8 +1789,12 @@ export interface AccessoryInfo {
   metals: string[]
   cords: string[]
   cord_thickness_mm: number
-  pendant_defaults: { from_image: boolean; size_mm: number }
+  pendant_defaults: { size_mm: number }
   pendant: AccessoryPendant | null
+  /** Design G: one line per part link (`accessory_build.part_rows` + `host_mentions`). */
+  parts?: PartRowInfo[]
+  /** Design G: every part item the pickers offer. */
+  part_options?: PartOption[]
   ranges: Record<string, [number, number]>
   /** A234 */
   strap_at: string[]

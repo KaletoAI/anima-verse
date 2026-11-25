@@ -12,17 +12,18 @@
  * jobs). Reads GET /characters/{c}/figure/accessory/{item}.
  *
  * A225: the chain material includes cords (leather, string, fabric; thicker by
- * default) and a pendant from the item image: on/off and its size in mm, a
- * placeholder box at the chain's lowest point until it is built, its state
- * and "Build pendant (1 hub job)" (POST …/pendant — the item's one hub job,
- * shared by every wearer).
+ * default). Design G (plan-anhaenger Task 8): a necklace's pendant and a belt's
+ * buckle and charms are linked PART ITEMS (`PartLinkFields`: pick, make —
+ * 1 image job —, Build mesh — 1 hub job per part, shared by every host and
+ * wearer); a placeholder box stands where a linked part goes until the build
+ * carries it.
  *
  * A234: every other kind. Belt / choker / strap are a flat band (height, width,
- * the layer it sits on, band material; a strap's place and side; a belt's
- * buckle from the item image, 1 hub job per item); anklet / bracelet a round
- * tube (height, thickness, side); A238 a ring (hand, finger, place along the
- * finger, band width and thickness — its size comes from the skeleton); earrings a stud or
- * hoop (CPU) or a drop from the item image. The live dots are the piece's
+ * the layer it sits on, band material; a strap's place and side); anklet /
+ * bracelet a round tube (height, thickness, side); A238 a ring (hand, finger,
+ * place along the finger, band width and thickness — its size comes from the
+ * skeleton); earrings a stud or hoop (CPU) or a drop from the item image (its
+ * mesh: POST /inventory/items/{item}/part-mesh, 1 hub job). The live dots are the piece's
  * centre line(s) on the body (POST …/curve with the unsaved description); a
  * small piece is framed close.
  *
@@ -48,6 +49,8 @@ import {
   GLASSES_TEMPLE_LABELS, LENS_TINT_LABELS, earReason, glassesLine,
 } from './figureModel'
 import type { AccessoryInfo, AccessoryPendant, GlassesNumbers, GlassesSpec, Jewellery } from './figureModel'
+import { PartLinkFields } from '../items/PartLinkFields'
+import type { Jewellery as ItemJewellery } from '../items/itemsModel'
 
 const CHIP: CSSProperties = { fontSize: '0.72em', padding: '1px 6px', borderRadius: 8 }
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 12px' }
@@ -89,7 +92,7 @@ export function AccessoryPieceControls({ character, itemId, version = 0 }: {
         </span>
       ) : null}
       <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog" style={{ marginLeft: 'auto' }}
-        title={t('Kind, drop, material and pendant of this accessory, with a 3D view; the piece is made on the CPU (0 hub jobs), an item-image part is 1 hub job per item')}
+        title={t("Kind, drop, material and linked parts of this accessory, with a 3D view; the piece is made on the CPU (0 hub jobs), a linked part's mesh is 1 hub job per part")}
         onClick={() => setOpen(true)}>
         {t('Accessory settings…')}
       </button>
@@ -124,6 +127,9 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   const [draft, setDraft] = useState<Jewellery | null>(null)
   const [points, setPoints] = useState<Array<[number, number, number]>>([])
   const [anchor, setAnchor] = useState<{ at: [number, number, number]; out: [number, number, number] } | null>(null)
+  // Design G: where each linked part of a belt goes (POST …/curve `anchors`), for the placeholder boxes
+  const [linkAnchors, setLinkAnchors] = useState<Array<{ index: number; role: string;
+    at: [number, number, number]; out: [number, number, number] }>>([])
   // Glasses: the live preview's sizes for the unsaved settings
   const [liveGlasses, setLiveGlasses] = useState<GlassesNumbers | null>(null)
   const [previewError, setPreviewError] = useState('')
@@ -140,20 +146,25 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   // A234: the live rings of the other kinds (the shape fields only — the material does not move them).
   const shapeKey = draft && draft.kind !== 'necklace'
     ? JSON.stringify({ kind: draft.kind, band: draft.band, side: draft.side, finger: draft.finger,
-      earring: draft.earring, chain: draft.chain, ring: draft.ring, glasses: draft.glasses })
+      earring: draft.earring, chain: draft.chain, ring: draft.ring, glasses: draft.glasses,
+      buckle: draft.buckle, charms: draft.charms })
     : ''
   useEffect(() => {
     if (!shapeKey) return
     const mine = ++seq.current
     const id = window.setTimeout(() => {
-      apiPost<{ rings: Array<Array<[number, number, number]>>; glasses?: GlassesNumbers }>(`${path}/curve`,
-        { jewellery: JSON.parse(shapeKey) })
+      apiPost<{ rings: Array<Array<[number, number, number]>>; glasses?: GlassesNumbers;
+        anchors?: Array<{ index: number; role: string; at: [number, number, number]; out: [number, number, number] }> }>(
+        `${path}/curve`, { jewellery: JSON.parse(shapeKey) })
         .then((r) => {
           if (mine !== seq.current) return
           setPoints(r.rings.flat()); setAnchor(null); setLiveGlasses(r.glasses || null); setPreviewError('')
+          setLinkAnchors(r.anchors || [])
         })
         .catch((e) => {
-          if (mine === seq.current) { setPoints([]); setLiveGlasses(null); setPreviewError((e as Error).message) }
+          if (mine === seq.current) {
+            setPoints([]); setLiveGlasses(null); setLinkAnchors([]); setPreviewError((e as Error).message)
+          }
         })
     }, 150)
     return () => window.clearTimeout(id)
@@ -176,11 +187,9 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   }, [path, drop, thick, draft, shapeKey])
   const setChain = (key: 'drop_cm' | 'thickness_mm', v: number) =>
     setDraft((d) => (d ? { ...d, chain: { ...(d.chain || {}), [key]: v } } : d))
-  const pendantOn = !!draft?.pendant
+  // design G: a necklace's pendant is a linked part item
+  const pendantOn = draft?.kind === 'necklace' && !!draft?.pendant?.item
   const pendantSize = draft?.pendant?.size_mm ?? data?.pendant_defaults?.size_mm ?? 18
-  const setPendant = (on: boolean, size?: number) => setDraft((d) => (d ? {
-    ...d, pendant: on ? { from_image: true, size_mm: size ?? d.pendant?.size_mm ?? data?.pendant_defaults?.size_mm ?? 18 } : null,
-  } : d))
   // A225: a cord is thicker — switching to one takes the cord default unless the thickness was moved off the chain's.
   const setMaterial = (m: string) => setDraft((d) => {
     if (!d || !data) return d
@@ -193,10 +202,11 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   })
   // While unsaved, unbuilt or built without the pendant: a placeholder box at the chain's lowest point.
   const pendantRow: AccessoryPendant | null = data?.pendant || null
+  // the earrings' drop is meshed from their own image (1 hub job): POST /inventory/items/{item}/part-mesh
   const buildPendant = async () => {
     setPendantBusy(true)
     try {
-      const r = await apiPost<{ status: string }>(`${path}/pendant`, {})
+      const r = await apiPost<{ status: string }>(`/inventory/items/${encodeURIComponent(itemId)}/part-mesh`, {})
       toast(r.status === 'ready' ? t('The pendant is already built') : r.status === 'running'
         ? t('The pendant is being built') : t('Pendant job started (1 hub job)'), 'info')
       window.setTimeout(() => { void load() }, 2500)
@@ -208,8 +218,22 @@ export function AccessoryDialog({ character, itemId, onClose }: {
   }
   const stored = JSON.stringify(data?.jewellery || null)
   const dirty = !!draft && JSON.stringify({ ...(data?.jewellery || {}), ...draft }) !== stored
-  const showBox = pendantOn && !!anchor && (dirty || !pendantRow?.on_figure)
-  const boxDots = showBox && anchor ? pendantBoxPoints(anchor.at, anchor.out, pendantSize) : []
+  const partRows = data?.parts || []
+  const necklaceRow = partRows.find((r) => r.role === 'pendant')
+  const showBox = pendantOn && !!anchor && (dirty || !necklaceRow?.on_figure)
+  // a belt's links: a box at each link's place until the build carries that part
+  const beltLinks = draft?.kind === 'belt'
+    ? [...(draft.buckle?.item ? [{ role: 'buckle', index: 0, size: draft.buckle.size_mm ?? 50 }] : []),
+      ...(draft.charms || []).map((c, i) => ({ role: 'charm', index: i, size: c.size_mm ?? 25 }))]
+    : []
+  const boxDots = [
+    ...(showBox && anchor ? pendantBoxPoints(anchor.at, anchor.out, pendantSize) : []),
+    ...beltLinks.flatMap((l, k) => {
+      const a = linkAnchors[k]
+      const row = partRows.find((r) => r.role === l.role && r.index === l.index)
+      return a && (dirty || !row?.on_figure) ? pendantBoxPoints(a.at, a.out, l.size) : []
+    }),
+  ]
   const save = async () => {
     if (!draft) return
     setSaving(true)
@@ -273,7 +297,7 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     ? t('Drag rotates the body, Shift+drag moves it. The dots are the chain for the values beside it; the 1.70 m figure gives the scale.')
                     : focus ? t('Drag rotates the body, Shift+drag moves it. The dots are the piece for the values beside it, on the body\'s surface; the view is framed close on it.')
                       : t('Drag rotates the body, Shift+drag moves it. The dots are the piece for the values beside it, on the body\'s surface (the clothing under it is taken by Build); the 1.70 m figure gives the scale.')}
-                  {boxDots.length ? ' ' + t('The blue box is where the pendant hangs, at its size, until it is built.') : ''}
+                  {boxDots.length ? ' ' + t('A blue box is where a linked part goes, at its size, until the build carries it.') : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: '1 1 300px', minWidth: 0 }}>
@@ -343,9 +367,15 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                     {t('Preview')}: {glassesLine(liveGlasses, t)}
                   </div>
                 ) : null}
-                {draft.kind === 'belt' || (draft.kind === 'earrings' && draft.earring?.style === 'drop') ? (
+                {draft.kind === 'earrings' && draft.earring?.style === 'drop' ? (
                   <ImagePartFields data={data} draft={draft} setDraft={setDraft} row={pendantRow} dirty={dirty}
                     busy={pendantBusy} onBuild={() => { void buildPendant() }} />
+                ) : null}
+                {draft.kind === 'belt' ? (
+                  <PartLinkFields hostId={itemId} jewellery={draft as unknown as ItemJewellery} dirty={dirty}
+                    options={data.part_options || []} rows={partRows}
+                    onChange={(next) => setDraft(next as unknown as Jewellery)}
+                    onChanged={() => { setDraft(null); void load() }} />
                 ) : null}
                 {draft.kind === 'necklace' ? (
                   <>
@@ -369,50 +399,10 @@ export function AccessoryDialog({ character, itemId, onClose }: {
                         min={ranges.thickness_mm?.[0] ?? 0.5} max={ranges.thickness_mm?.[1] ?? 6} step={0.1}
                         value={thick} onChange={(e) => setChain('thickness_mm', Number(e.target.value))} />
                     </label>
-                    <fieldset style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
-                      display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <legend className="ga-form-hint">{t('Pendant')}</legend>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <input type="checkbox" checked={pendantOn} onChange={(e) => setPendant(e.target.checked)} />
-                        {t('Pendant from the item image')}
-                      </label>
-                      {pendantOn ? (
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <span className="ga-form-hint">{t('Pendant size (longest side)')}: {pendantSize.toFixed(0)} mm</span>
-                          <input type="range" aria-label={t('Pendant size (longest side)')}
-                            min={ranges.size_mm?.[0] ?? 3} max={Math.min(ranges.size_mm?.[1] ?? 120, 80)} step={1}
-                            value={pendantSize} onChange={(e) => setPendant(true, Number(e.target.value))} />
-                        </label>
-                      ) : null}
-                      {pendantOn && pendantRow ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          <span data-pendant-state={pendantRow.state} title={t(pendantRow.reason)}
-                            style={{ ...CHIP, border: `1px solid ${PENDANT_STATE_COLOR[pendantRow.state] || '#888'}` }}>
-                            {t(PENDANT_STATE_LABELS[pendantRow.state] || pendantRow.state)}
-                          </span>
-                          {pendantRow.on_figure && pendantRow.metrics ? (
-                            <span className="ga-hint" style={{ fontSize: '0.75em' }}
-                              title={t('Smallest distance from the pendant to the body in the rest, walk, sit and run test poses')}>
-                              {pendantRow.metrics.size_mm} mm · {t('gap')} {pendantRow.metrics.gap_mm} mm
-                            </span>
-                          ) : <span className="ga-hint" style={{ fontSize: '0.75em' }}>{t(pendantRow.reason)}</span>}
-                        </div>
-                      ) : null}
-                      {pendantOn ? (
-                        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <button type="button" className="ga-btn ga-btn-sm"
-                            disabled={pendantBusy || dirty || !pendantRow || ['ready', 'running', 'no_image'].includes(pendantRow.state)}
-                            title={dirty ? t('Save first') : t('Makes the pendant mesh from the item image; shared by everyone wearing this item')}
-                            onClick={() => { void buildPendant() }}>
-                            {pendantRow && ['refused', 'failed'].includes(pendantRow.state)
-                              ? t('Build pendant again (1 hub job)') : t('Build pendant (1 hub job)')}
-                          </button>
-                          <span className="ga-hint" style={{ fontSize: '0.72em' }}>
-                            {t('Size and placement are CPU only (0 hub jobs).')}
-                          </span>
-                        </span>
-                      ) : null}
-                    </fieldset>
+                    <PartLinkFields hostId={itemId} jewellery={draft as unknown as ItemJewellery} dirty={dirty}
+                      options={data.part_options || []} rows={partRows}
+                      onChange={(next) => setDraft(next as unknown as Jewellery)}
+                      onChanged={() => { setDraft(null); void load() }} />
                   </>
                 ) : null}
                 {!built ? (
@@ -676,39 +666,25 @@ function GlassesFields({ data, draft, setDraft }: { data: AccessoryInfo; draft: 
   )
 }
 
-/** A234: a belt's buckle / the earrings' drop from the item image — the item's ONE hub job (shared with the necklace
- *  pendant's job, POST …/pendant), its size and its state. */
+/** A234: the earrings' drop from their own item image — the item's ONE hub job
+ *  (POST /inventory/items/{item}/part-mesh), its size and its state. */
 function ImagePartFields({ data, draft, setDraft, row, dirty, busy, onBuild }: {
   data: AccessoryInfo; draft: Jewellery; setDraft: SetDraft; row: AccessoryPendant | null; dirty: boolean
   busy: boolean; onBuild: () => void
 }) {
   const { t } = useI18n()
-  const part = ACCESSORY_PART_NAMES[draft.kind] || 'Pendant'
-  const key: 'buckle' | 'pendant' = draft.kind === 'belt' ? 'buckle' : 'pendant'
-  const value = draft[key] as { from_image?: boolean; size_mm?: number } | null | undefined
-  const fallback = key === 'buckle' ? 50 : data.pendant_defaults?.size_mm ?? 18
-  const on = key === 'pendant' ? true : !!value && value.from_image !== false
-  const size = value?.size_mm ?? fallback
-  const set = (next: boolean, s?: number) => setDraft((d) => (d ? {
-    ...d, [key]: next ? { from_image: true, size_mm: s ?? size } : null,
-  } : d))
+  const part = ACCESSORY_PART_NAMES[draft.kind] || 'Earring drop'
+  const size = draft.pendant?.size_mm ?? data.pendant_defaults?.size_mm ?? 18
+  const set = (s: number) => setDraft((d) => (d ? { ...d, pendant: { size_mm: s } } : d))
   const ranges = data.ranges || {}
   return (
     <fieldset style={{ border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: '6px 8px',
       display: 'flex', flexDirection: 'column', gap: 6 }}>
       <legend className="ga-form-hint">{t(part)}</legend>
-      {key === 'buckle' ? (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
-          {t('Buckle from the item image')}
-        </label>
-      ) : null}
-      {on ? (
-        <Slider label={t('{part} size (longest side)').replace('{part}', t(part))} value={size} unit="mm" digits={0}
-          min={ranges.size_mm?.[0] ?? 3} max={Math.min(ranges.size_mm?.[1] ?? 120, 100)} step={1}
-          onChange={(v) => set(true, v)} />
-      ) : null}
-      {on && row ? (
+      <Slider label={t('Drop size (mm)')} value={size} unit="mm" digits={0}
+        min={ranges.size_mm?.[0] ?? 3} max={Math.min(ranges.size_mm?.[1] ?? 120, 100)} step={1}
+        onChange={(v) => set(v)} />
+      {row ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span data-pendant-state={row.state} title={t(row.reason)}
             style={{ ...CHIP, border: `1px solid ${PENDANT_STATE_COLOR[row.state] || '#888'}` }}>
@@ -719,17 +695,15 @@ function ImagePartFields({ data, draft, setDraft, row, dirty, busy, onBuild }: {
           </span>
         </div>
       ) : null}
-      {on ? (
-        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" className="ga-btn ga-btn-sm"
-            disabled={busy || dirty || !row || ['ready', 'running', 'no_image'].includes(row.state)}
-            title={dirty ? t('Save first') : t('Makes the mesh from the item image; shared by everyone wearing this item')}
-            onClick={onBuild}>
-            {t('Build {part} (1 hub job)').replace('{part}', t(part).toLowerCase())}
-          </button>
-          <span className="ga-hint" style={{ fontSize: '0.72em' }}>{t('Size and placement are CPU only (0 hub jobs).')}</span>
-        </span>
-      ) : null}
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={busy || dirty || !row || ['ready', 'running', 'no_image'].includes(row.state)}
+          title={dirty ? t('Save first') : t('Makes the mesh from the item image; shared by everyone wearing this item')}
+          onClick={onBuild}>
+          {t('Build mesh (1 hub job)')}
+        </button>
+        <span className="ga-hint" style={{ fontSize: '0.72em' }}>{t('Size and placement are CPU only (0 hub jobs).')}</span>
+      </span>
     </fieldset>
   )
 }

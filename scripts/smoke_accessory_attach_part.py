@@ -32,6 +32,9 @@ Expected values, derived by hand:
     outer wall) → passes the rest pose. The same part 20 mm in (centre line r = 0.1295 → back at 0.132, inside the
     cavity between the walls — "outside" for all faces, inside for the outer wall) → ValueError "would sink into the
     body in the rest pose".
+[7] ``link_anchors`` on the circle of [1] for a belt with a buckle (front) and a hanging charm at the left hip, drop 2 cm:
+    the buckle at point 0 = (0, 1, 0.15), outward (0, 0, 1); the charm at point 16 = (0.15, 1, 0) moved down 0.02 →
+    (0.15, 0.98, 0), outward (1, 0, 0).
 [6] two parts at the front (30 × 40 mm boxes): the second has ``part_errors[1]`` "it overlaps the buckle" (after a
     buckle) and "it overlaps the charm" (after a charm); the first is placed; nothing raises.
 """
@@ -189,6 +192,16 @@ for first_role in ("buckle", "charm"):
     check(f"[6] after a {first_role}: the first placed", hung[0] is not None)
     check(f"[6] after a {first_role}: the second overlaps", hung[1] is None
           and errors.get(1) == f"it overlaps the {first_role}", str(errors))
+
+print("[7] link_anchors (the Wardrobe's placeholder boxes)")
+from app.core import accessory_spec  # noqa: E402
+spec = accessory_spec.normalize({"kind": "belt", "buckle": {"item": "item_p"},
+                                 "charms": [{"item": "item_q", "at": "left_hip", "mount": "hang", "drop_cm": 2}]})
+anchors = ab.link_anchors(C, spec)
+check("[7] buckle at the front", anchors[0] == {"index": 0, "role": "buckle", "at": [0.0, 1.0, 0.15],
+                                                "out": [0.0, 0.0, 1.0]}, str(anchors[0]))
+check("[7] charm at the left hip, 2 cm down", anchors[1] == {"index": 1, "role": "charm", "at": [0.15, 0.98, 0.0],
+                                                             "out": [1.0, 0.0, 0.0]}, str(anchors[1]))
 
 print(f"\n{len(FAILS)} failed" if FAILS else "\nall passed")
 sys.exit(1 if FAILS else 0)

@@ -1665,4 +1665,31 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
         marks[side or "centre"] = {"centre": np.round(fr["centre"], 5).tolist()}
     radius = (float(spec["band"]["width_cm"]) / 200.0 if spec["kind"] in SPEC_BAND_KINDS
               else float(spec["chain"]["thickness_mm"]) / 2000.0)
-    return {"rings": rings, "landmarks": marks, "radius_m": radius}
+    out = {"rings": rings, "landmarks": marks, "radius_m": radius}
+    if spec["kind"] == "belt" and rings:
+        out["anchors"] = link_anchors(np.asarray(rings[0], np.float64), spec)
+    return out
+
+
+def link_anchors(curve: np.ndarray, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Design G: where each part link of a belt sits on its centre line ``curve`` — the Wardrobe's blue placeholder
+    box: ``[{index, role, at: [x, y, z], out: [x, y, z]}]`` in link order (``accessory_spec.links``), ``at`` the curve
+    point at the link's angle (``curve_point_at``) moved down by a hanging charm's drop, ``out`` the horizontal outward
+    direction there. A preview only: the Build places the part against the band and the body (``attach_part``)."""
+    from app.core import accessory_spec
+    C = np.asarray(curve, np.float64)
+    if len(C) == 0:
+        return []
+    c = C.mean(0)
+    out = []
+    for i, link in enumerate(accessory_spec.links(spec)):
+        k = curve_point_at(C, link["at_deg"])
+        p = C[k].copy()
+        h = p - c
+        h[1] = 0.0
+        n = float(np.linalg.norm(h))
+        h = h / n if n > 1e-9 else np.array([0.0, 0.0, 1.0])
+        if link.get("mount") == "hang":
+            p[1] -= float(link.get("drop_cm") or 0.0) / 100.0
+        out.append({"index": i, "role": link["role"], "at": np.round(p, 5).tolist(), "out": np.round(h, 5).tolist()})
+    return out

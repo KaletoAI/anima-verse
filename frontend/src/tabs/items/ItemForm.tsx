@@ -14,6 +14,8 @@ import {
   type Item,
   type Rarity,
 } from './itemsModel'
+import { PartFields } from './PartFields'
+import { PartLinkFields } from './PartLinkFields'
 
 function MotionDampingInput({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
   const [text, setText] = useState(String(value))
@@ -532,11 +534,27 @@ interface ItemFormProps {
   onUpdate: <K extends keyof DraftItem>(key: K, value: DraftItem[K]) => void
   onUpdateExtra: (key: string, value: unknown) => void
   onToggleListItem: (key: 'outfit_types' | 'slots' | 'covers' | 'partially_covers', value: string) => void
+  /** Unsaved changes: a part link is made / meshed only after a save (the server writes the host). */
+  dirty?: boolean
+  /** Re-read the item after the server changed it (a part made for this host). */
+  onReload?: () => void
 }
 
-export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate, onUpdateExtra, onToggleListItem }: ItemFormProps) {
+export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, onUpdate, onUpdateExtra, onToggleListItem,
+  dirty = false, onReload }: ItemFormProps) {
   const { t } = useI18n()
   const isOutfit = draft.category === 'outfit_piece'
+  const isPart = isOutfit && draft.is_part
+  const isHost = isOutfit && !draft.is_part && (draft.jewellery?.kind === 'necklace' || draft.jewellery?.kind === 'belt')
+  const setPart = (on: boolean) => {
+    onUpdate('is_part', on)
+    if (on) {
+      onUpdate('jewellery', { kind: 'charm', charm: { size_mm: 30, mount: 'flat', flip: false } })
+      onUpdate('slots', [])
+    } else {
+      onUpdate('jewellery', null)
+    }
+  }
   const isSpell = draft.category === 'spell'
   return (
     <div className="ga-form">
@@ -647,14 +665,14 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         </div>
       </Field>
 
-      <Field label={t('Image prompt')} help="image_prompt" hint={t('Used to generate the item image.')}>
+      {isPart ? null : <Field label={t('Image prompt')} help="image_prompt" hint={t('Used to generate the item image.')}>
         <input
           className="ga-input"
           value={draft.image_prompt}
           placeholder={t("e.g. 'silver house key on wooden table, realistic'")}
           onChange={(e) => onUpdate('image_prompt', e.target.value)}
         />
-      </Field>
+      </Field>}
       <Field label={isOutfit ? t('Description (front)') : t('Prompt fragment')} help="image_prompt" hint={t('Used in the character image when this item is held or worn.')}>
         <input
           className="ga-input"
@@ -676,6 +694,20 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         </span>
       </Field>}
       {isOutfit ? (
+        <label className="ga-form-check" style={{ marginTop: 4 }}>
+          <input type="checkbox" checked={draft.is_part} onChange={(e) => setPart(e.target.checked)} />
+          {t('Part (buckle, pendant, charm) — worn through a chain or belt, no slot')}
+        </label>
+      ) : null}
+      {isPart ? <PartFields draft={draft} onUpdate={onUpdate} /> : null}
+      {isHost && draft.jewellery ? (
+        draft.isNew ? <span className="ga-hint">{t('Save the item first to link parts to it.')}</span> : (
+          <PartLinkFields hostId={draft.id} jewellery={draft.jewellery} dirty={dirty}
+            onChange={(next) => { onUpdate('jewellery', next); onUpdate('jewellery_dirty', true) }}
+            onChanged={() => onReload?.()} />
+        )
+      ) : null}
+      {isOutfit && !isPart ? (
         <OutfitPieceFields
           outfitTypes={draft.outfit_types}
           slots={draft.slots}
@@ -685,7 +717,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           onToggleListItem={onToggleListItem}
         />
       ) : null}
-      {isOutfit && <BodyUnderPieceFields draft={draft} onUpdate={onUpdate} />}
+      {isOutfit && !isPart && <BodyUnderPieceFields draft={draft} onUpdate={onUpdate} />}
 
       <PassiveBonusesEditor rows={draft.bonus_rows} when={draft.bonus_when}
         onRows={rows => onUpdate('bonus_rows', rows)} onWhen={when => onUpdate('bonus_when', when)} />

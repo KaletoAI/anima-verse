@@ -28,12 +28,15 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 @router.get("/items")
 def list_items_route(include_shared: int = Query(0, description="Include shared items (1)")) -> Dict[str, Any]:
     """List all item definitions."""
+    from app.core.accessory_parts import is_part
     items = list_items()
     if include_shared:
         from app.models.inventory import list_shared_items
         for s in list_shared_items():
             items.append({**s, "_shared": True})
-    return {"items": items}
+    # design G: a part item (buckle / pendant / charm) is marked, so pickers that put items in an inventory or on a
+    # slot can leave it out
+    return {"items": [{**i, "part": True} if is_part(i) else i for i in items]}
 
 
 @router.get("/items-shared")
@@ -831,6 +834,19 @@ def part_mesh_route(item_id: str) -> Dict[str, Any]:
     if state["state"] == "running" or not accessory_pendant.start(item_id):
         return {"status": "running"}
     return {"status": "started"}
+
+
+@router.get("/items/{item_id}/part-mesh")
+def part_mesh_state_route(item_id: str) -> Dict[str, Any]:
+    """The part's mesh state (read-only, ``accessory_pendant.pendant_state``): ``{state, reason}``."""
+    from app.core import accessory_pendant
+    if not get_item(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    try:
+        st = accessory_pendant.pendant_state(item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"state": st["state"], "reason": st["reason"]}
 
 
 @router.get("/items/{item_id}/used-by")
