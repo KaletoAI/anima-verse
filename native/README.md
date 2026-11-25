@@ -1067,7 +1067,9 @@ to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core
   server's `walk` order when the row carries one, else a client-local `walk` (`local:<n>`,
   `FigureManager.StartRoomWalk`) over the location's navmesh from where the figure is drawn to the row's new point —
   links (stairs, lift) ridden on the way, at the goal a 0.3 s blend back into the rows. Out in the open a `walk`
-  follows the server's `hint_route` (`HintRoutePath`).
+  follows the server's `hint_route` (`HintRoutePath`) at the order's pace, with the route tick's ground rules per frame
+  (`WalkGround.OrderFrame`: wade/swim/crawl clip, sink, floated root height, underwater ghost); the slope rule is the
+  server route's (its nav grid refuses too-steep cells), and the terrain pace stays out because the flip is `L / speed`.
 - **Every frame**: stations retire at 1.5 m (0.4 m during a ride); the step is 3.4 m/s, ×1.8 beyond 6 m (+10 m while a
   station is left) on a ground that lets one run, never for a travelling character (journeys follow their polled
   point until E6); the yaw eases ×10/s; standing, the marker's facing beats the neighbours' centroid within 4.5 m.

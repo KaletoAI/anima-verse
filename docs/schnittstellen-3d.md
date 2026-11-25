@@ -4274,8 +4274,11 @@ the room chain (rooms + doorways + stairs flights, the horizontal part × 1.3)
 for a room change, the straight visibility path around the room's furniture
 inside one room, and the baked terrain route (`hint_route`) in the open —
 the server runs no path search inside a location; the client walks its own
-navmesh path. `sequence` = `[exit?] + [walk]`, the `exit` of a held
-pose (a stroll first frees a plain seat). At the flip the order is revised to
+navmesh path, and out in the open follows `hint_route` at the order's pace
+with the ground's wade/swim clip, sink, height and underwater ghost (the
+slope rule is the route's; no terrain pace: the flip is `L / speed`).
+`sequence` = `[exit?] + [walk]`, the `exit` of a held pose (a stroll first
+frees a plain seat, or lets go a held pose that needs an exit). At the flip the order is revised to
 `status ended` (same id, revision + 1) and stays published for
 `ORDER_TAIL_S`. A position write, a teleport (`snap: true`), a journey,
 a pair start, a furniture run (quietly, its own order replaces the walk), a

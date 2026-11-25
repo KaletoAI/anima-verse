@@ -176,6 +176,32 @@ public class OrderAvatarTests
     }
 
     [Fact]
+    public void OpenWalkFrameKeepsTheGroundRules()
+    {
+        // Plan E3 Task 9 review I1: an open walk frame gets the route tick's ground rules (WalkGround.OrderFrame).
+        // Painted swim ground: sinks (move 0.35, idle 1.3), mirror 1.5, swim from 1.0, wilderness.
+        var swim = new AnimaNative.Figures.GroundMove(AnimaNative.Figures.FigureClips.Swim, new AnimaNative.Water.GroundSink(0.35, 1.3),
+                                                      1.5, 1.0, 0.85, AnimaNative.Water.GroundScope.Wilderness, null);
+        var poses = AnimaNative.Figures.PoseClips.Default;
+        AnimaNative.Figures.OpenGroundFrame At(AnimaNative.Figures.GroundMove raw, double bed, bool moving)
+            => AnimaNative.Figures.WalkGround.OrderFrame(AnimaNative.Figures.WalkGround.WordOf(raw, bed), moving, poses);
+        // Bed 0: depth 1.5 ≥ 1.0 → swim; moving: sink 0.35, root max(0 + 0.35, 1.5) = 1.5, the swimming pose
+        // (breast-stroke), ghost cut at the mirror (1.5 − 0 ≥ 0.05).
+        var f = At(swim, 0, true);
+        Assert.Equal(("breast-stroke", "swim", true, 0.35, 1.5, (double?)1.5), (f.Clip, f.Movement, f.TerrainClip, f.Sink, f.RootY, f.GhostCutY));
+        // Standing there: the idle sink 1.3 under the treading-water pose, root max(1.3, 1.5) = 1.5.
+        f = At(swim, 0, false);
+        Assert.Equal(("treading-water", 1.3, 1.5), (f.Clip, f.Sink, f.RootY));
+        // Bed 0.8: depth 0.7 < 1.0 → the wade gate: walk_run, no sink, root on the bed 0.8, the walking pose; the legs
+        // stay ghosted under the mirror (1.5 − 0.8 ≥ 0.05).
+        f = At(swim, 0.8, true);
+        Assert.Equal(("walk", "walk_run", true, 0.0, 0.8, (double?)1.5), (f.Clip, f.Movement, f.TerrainClip, f.Sink, f.RootY, f.GhostCutY));
+        // A built place hides the painted water: walk_run, root on the bed 0, no ghost; standing = the standing pose.
+        f = At(swim with { Scope = AnimaNative.Water.GroundScope.Built }, 0, false);
+        Assert.Equal(("idle", "walk_run", false, 0.0, 0.0, (double?)null), (f.Clip, f.Movement, f.TerrainClip, f.Sink, f.RootY, f.GhostCutY));
+    }
+
+    [Fact]
     public void ServerOrderCarriesItsExecutionId()
     {
         var w = OrderParseTests.Wire();

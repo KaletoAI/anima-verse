@@ -47,6 +47,12 @@ builds the walls and the room geometry of r-a the stroll reads.
       sitting -> walking plays "run-exit" of 1.2 s: eta - issued = 1.2 +
       2.258770 + 0.5 = 3.958770, the sequence starts with exit (1.2 s); right
       after the order and after the flip ``place`` is None and pose_key "".
+[W2c] The NPC holds the pose "sitting" WITHOUT a place (fix round 1): the
+      same exit 1.2 s (eta - issued = 3.958770), and right after the order
+      pose_key is "" (the held pose is let go like a plain seat).
+[W2d] The profile write of a stroll fails (save_character_profile -> False,
+      fix round 1): (None, "write_failed"), and the walk already published is
+      taken back by a ``cancel`` order (no client keeps playing it).
 [W3]  A stroll in the open (from (110, 10) to (115, 14), both outside every
       outline): ``hint_route`` has at least 2 points, starts at the start and
       ends at the target, and L = the length of that polyline:
@@ -55,6 +61,9 @@ builds the walls and the room geometry of r-a the stroll reads.
 [W5]  W2 issued at 100 (flip 102.759), motion_alive_s 101, boot at 131:
       shift 30 -> issued 130, eta = flip 132.759, revision 2, boot_alive_s
       101; walk_due_in_s() = 1.759 > 0 (nothing due at once), walking True.
+[W5b] W2, then the walker goes dormant (status "dormant", out of the world)
+      before the boot: the boot drops its walk field (fix round 1) and files
+      nothing in the index.
 [W6]  ``nav_grid.route`` raises AssertionError: W1 and W2 still issue their
       walks (decision 11: no server path search inside a location).
 [W7]  ``interaction_engine._walk_to_partner`` (two NPCs in the open, 4 m
@@ -295,6 +304,31 @@ class Walks(unittest.TestCase):
         finally:
             S.clips._write_world_transitions([])
 
+    def test_w2c_sitting_pose_without_place_is_let_go(self):
+        clips = F.ROOT / "clips"
+        (clips / "run-exit.fbx").write_bytes(b"private deterministic exit fixture")
+        (clips / "run-exit.json").write_text(json.dumps(dict(kind="run-exit", duration_s=1.2, loop=False)))
+        S.clips._write_world_transitions([{"from": "sitting", "to": "walking", "kind": "run-exit", "accel": 0}])
+        try:
+            name = npc((97, -1), self.loc, "r-a")
+            profile = F.C.get_character_profile(name)
+            profile.update(place=None, pose_key="sitting")
+            self.assertTrue(F.C.save_character_profile(name, profile))
+            order = stroll(name)
+            self.assertAlmostEqual(order["eta_motion_s"] - 100.0, 1.2 + W2_ETA, delta=6e-4)
+            self.assertEqual(F.C.get_character_profile(name).get("pose_key"), "")
+        finally:
+            S.clips._write_world_transitions([])
+
+    def test_w2d_failed_profile_write_takes_the_walk_back(self):
+        name = npc((97, -1), self.loc, "r-a")
+        with patch.object(F.C, "save_character_profile", lambda *a, **k: False):
+            order, reason = MO.issue_walk(name, 98, 2, room_id="r-a")
+        self.assertEqual((order, reason), (None, "write_failed"))
+        self.assertEqual(kind_of(name), "cancel")
+        self.assertFalse(MO.walking(name))
+        self.assertEqual(pos(name), (97.0, -1.0))
+
     def test_w3_stroll_in_the_open(self):
         name = npc((110, 10))
         self.assertEqual(F.C.get_character_current_location(name), "")
@@ -340,6 +374,17 @@ class Walks(unittest.TestCase):
         F.MOTION[0] = 131.5
         MO.boot()
         self.assertEqual(MO.index_get(name)["revision"], 2)
+
+    def test_w5b_dormant_walk_is_dropped_at_boot(self):
+        name = npc((97, -1), self.loc, "r-a")
+        stroll(name)
+        self.assertTrue(F.C.set_character_status(name, F.C.DORMANT_STATUS))
+        MO._INDEX.pop(name, None)
+        F.W.set_world_setting(MO.ALIVE_KEY, "101")
+        F.MOTION[0] = 131.0
+        MO.boot()
+        self.assertNotIn("order", F.C.get_character_profile(name))
+        self.assertIsNone(MO.index_get(name))
 
     def test_w6_no_server_path_search_inside_a_location(self):
         def forbidden(*a, **k):

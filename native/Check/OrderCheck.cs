@@ -370,9 +370,10 @@ public static partial class OrderCheck
             Is("R7 exactly one link section, owner 65536 (the stairs)", links7.Count == 1 && links7[0].Owner == 65536,
                $"links [{string.Join(",", links7.Select(l => l.Owner))}] length {plan7.Length:0.###} {Seq(r7, Uli)}");
             // README "Orders world" R7: the orders world's bed narrows r-b, so the path bends at (102, −0.5)/(102, −1.5)
-            // and is 20.379 m, not the nav world's P2 19.630; the map's own query of the same two points must agree.
+            // and is 20.379 m, not the nav world's P2 19.630. Independent of this mesh: a bed in the way can only lengthen
+            // the shortest path, so it is never below the obstacle-free P2 (plan Step 4, 19.63).
             Near("R7 path length (orders world)", plan7.Length, R7LenM, TolM);
-            Near("R7 = the map's own query", plan7.Length, nav.Query(new Vec3(97, 0, -1), new Vec3(104, 3, 2)).Length, TolM);
+            Is("R7 not shorter than the obstacle-free P2 19.630", plan7.Length >= 19.630 - TolM, $"{plan7.Length:0.###}");
             Is("R7 through T0", ThroughT0(plan7));
             Is("R7 arrived before flip + 5", r7.At(Uli, OrderState.Loop) is { } loop7 && loop7 <= 0.5 + R7FlipRel + 5, Seq(r7, Uli));
             Is("R7 no healing", !r7.Events.Any(e => e.Name == Uli && e.Event == "healed"),

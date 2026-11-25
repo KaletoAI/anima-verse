@@ -3973,10 +3973,12 @@ def get_character_place(character_name: str
     return location or "", room or "", pos
 
 
-def list_profile_orders() -> List[str]:
+def list_profile_orders(*, out_of_world: bool = False) -> List[str]:
     """The names whose profile carries a walk order (field ``order``, plan E3
     Task 9) — ONE query, for ``motion_orders.boot``; the roster gate of
-    :func:`list_available_characters` applies as in :func:`list_active_journeys`."""
+    :func:`list_available_characters` applies as in :func:`list_active_journeys`.
+    ``out_of_world=True`` answers the OTHER side of that gate: the real
+    characters out of the world (dormant bodies) whose profile still carries one."""
     try:
         rows = get_connection().execute(
             "SELECT c.name, COALESCE(c.status, '') FROM characters c "
@@ -3985,7 +3987,8 @@ def list_profile_orders() -> List[str]:
     except Exception as e:
         logger.error("list_profile_orders DB error: %s", e, exc_info=True)
         return []
-    return [name for name, status in rows if _is_real_character(name) and not is_out_of_world(status)]
+    return [name for name, status in rows
+            if _is_real_character(name) and is_out_of_world(status) == out_of_world]
 
 
 def list_active_journeys() -> List[Dict[str, Any]]:

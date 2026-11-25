@@ -853,7 +853,11 @@ def _walk_length(name: str, start: dict, x: float, z: float, room_id: str, locat
     begin = (float(start["x"]), float(start.get("y") or 0.0), float(start["z"]))
     try:
         length = room_chain_length(rooms, doorways, stairs, begin, start_room, (x, goal_y, z), room_id)
-    except ValueError:
+    except ValueError as exc:
+        # No chain of doorways/stairs joins the two rooms in the recipe: the
+        # estimate falls back to the empty chain (the straight distance).
+        logger.warning("walk of %s: no room chain %s -> %s in %s (%s); straight estimate",
+                       name, start_room, room_id, location_id, exc)
         length = room_chain_length({}, [], [], begin, start_room, (x, goal_y, z), room_id)
     return length, [], "rooms"
 
@@ -975,21 +979,28 @@ def issue_walk(name: str, x: float, z: float, *, room_id: str = "", level: int =
     with keyed_lock("character_profile", name):
         profile = get_character_profile(name) or {}
         old = profile.get(PROFILE_KEY)
-        if writes and profile.get("place"):
+        if writes and (profile.get("place") or exit_s > 0):
             # The seat release of _start (plan E3 Task 7, third review 3): a
             # plain seat without a run is freed nowhere else, because the flip
-            # writes with preserve_movement_target=True.
+            # writes with preserve_movement_target=True. A held pose that needs
+            # an exit (a sitting pose without a place) is let go the same way.
             profile.update(place=None, pose_key="", pose_flavor="")
         # Published under the profile lock: the profile stores the order with
         # its seq, and a settle of the same order waits for this write.
         published = publish(order, names=[name], locations=[location_id or walker_loc or ""])
         profile[PROFILE_KEY] = {"order": published, "writes_at_flip": writes}
-        if not save_character_profile(name, profile):
-            with _INDEX_LOCK:
-                entry = _INDEX.get(name)
-                if entry is not None and entry[0].get("order_id") == published["order_id"]:
-                    _INDEX.pop(name, None)
-            return None, "write_failed"
+        saved = save_character_profile(name, profile)
+    if not saved:
+        # The walk is already published: take it back with a cancel (stand =
+        # where the figure still is) so no client plays a walk the profile does
+        # not carry, then drop it from the index.
+        logger.warning("walk %s of %s: profile not saved, cancelled", published["order_id"], name)
+        cancel_for(name, reason="write_failed")
+        with _INDEX_LOCK:
+            entry = _INDEX.get(name)
+            if entry is not None and entry[0].get("order_id") == published["order_id"]:
+                _INDEX.pop(name, None)
+        return None, "write_failed"
     if isinstance(old, dict) and isinstance(old.get("order"), dict) \
             and old["order"].get("order_id") != published["order_id"]:
         logger.debug("walk %s of %s replaced by %s", old["order"].get("order_id"), name, published["order_id"])
@@ -1048,7 +1059,12 @@ def cancel_for(name: str, *, reason: str, snap: bool = False, quiet: bool = Fals
         if isinstance(record, dict):
             walk = record.get("order")
             profile.pop(PROFILE_KEY, None)
-            save_character_profile(name, profile)
+            if not save_character_profile(name, profile):
+                # A DB fault: the index lets go below anyway (no settle writes
+                # the old target while the server runs), but the field stays on
+                # the profile — walking(profile=...) sees it until its flip and
+                # a restart would file it again. Logged loudly for that reason.
+                logger.error("cancel of %s's walk (%s): profile not saved, the walk field stays", name, reason)
     indexed = _index_walk(name)
     for old in (walk, indexed):
         if isinstance(old, dict):
@@ -1108,6 +1124,11 @@ def settle_due(now_s: float | None = None) -> int:
                     _INDEX.pop(name, None)
             continue
         target = order.get("target") or {}
+        # The target write runs after the profile lock is released: the places
+        # lock comes before character_profile (lock order), and
+        # set_character_pos takes both. A manual position write landing in this
+        # gap is overwritten by the target — the window is the time between
+        # these two statements, not the walk (that case cancels, review B4).
         if record.get("writes_at_flip"):
             try:
                 set_character_pos(name, float(target["x"]), float(target["z"]), preserve_movement_target=True)
@@ -1131,6 +1152,13 @@ def _boot_walks(shift: float, alive: float | None) -> None:
     filed as they are — a walk whose flip has passed settles on the next beat."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, list_profile_orders, save_character_profile
+    for name in list_profile_orders(out_of_world=True):
+        # A walk of a body that left the world (dormant, review minor): nobody
+        # settles it and no roster shows it — drop the field.
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            if profile.pop(PROFILE_KEY, None) is not None and not save_character_profile(name, profile):
+                logger.warning("walk of out-of-world %s: field not dropped", name)
     for name in list_profile_orders():
         with keyed_lock("character_profile", name):
             profile = get_character_profile(name) or {}
