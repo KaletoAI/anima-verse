@@ -49,6 +49,10 @@ assert.equal(propActionReason('constructor', translate), 'Zurzeit nicht möglich
   assert.equal(propActionErrorText(refused('slot_claim_lost'), translate), 'Der reservierte Platz ist nicht mehr verfügbar');
   assert.equal(propActionErrorText(refused('not_active'), translate), 'Diese Aktion läuft nicht mehr');
   assert.equal(propActionErrorText(refused('unsupported'), translate), 'Diese Aktion unterstützt das nicht');
+  // A second click while the actor's first request is still being admitted: the route answers 409
+  // request_in_progress (app/routes/prop_actions.py); the player reads a sentence, not the raw code.
+  assert.equal(propActionErrorText(refused('request_in_progress'), text => text), 'Your previous action is still being started');
+  assert.equal(propActionErrorText(refused('request_in_progress'), translate), 'Deine vorige Aktion wird noch gestartet');
   assert.equal(propActionErrorText(refused('future_code'), translate), 'future_code');
   assert.equal(propActionErrorText(new Error('offline'), translate), 'offline');
 }
@@ -166,7 +170,10 @@ for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_actio
   // tuple, not a reason; that tuple's reason is the third element.
   const patterns = [/_blocked\(["']([^"']+)["']\)/g, /last_reason = ["']([^"']+)["']/g,
     /return (?:None, )?["']([a-z_]+)["'](?!,)/g, /return None, ["'][a-z_]+["'], ["']([a-z_]+)["']/g,
-    /_refused\(["']([^"']+)["']\)/g];
+    /_refused\(["']([^"']+)["']\)/g,
+    // A plain assignment on its own line: a reason chosen in a branch, or an exception's class
+    // attribute (RequestInProgress.reason), which adapters hand to the player as the refusal code.
+    /^\s+reason = ["']([a-z_]+)["']\s*$/gm];
   for (const pattern of patterns) for (const [, code] of source.matchAll(pattern)) {
     assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
     assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
