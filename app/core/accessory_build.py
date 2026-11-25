@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 #: ``FLAT_DEPTH_SHARE`` of its size behind its front (a mesher's invented loop or prong no longer stands off the band).
 #: 6: that depth is squeezed, never pressed flat — the front ``FLAT_KEEP_SHARE`` of it as delivered, everything behind
 #: scaled into the rest (a pressed buckle frame lay on the band as one flat sheet that showed through it when sitting).
-ACCESSORY_VERSION = 6
+#: 7: a necklace's pendant hangs with the cord through its eyelet (``accessory_pendant.threaded_place``) — it hung
+#: in front of the cord, the eyelet 3 mm off the chain.
+ACCESSORY_VERSION = 7
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -529,13 +531,53 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]
     out["parts"], out["part_errors"] = [], {}
     for i, (link, mesh) in enumerate(parts or []):
         try:
-            out["parts"].append(attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius,
-                                               mesh, float(link.get("size_mm") or 18.0), bool(link.get("flip"))))
+            args = (mesh, float(link.get("size_mm") or 18.0), bool(link.get("flip")))
+            hung = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius, *args)
+            lift = float(hung["metrics"].get("cord_lift_mm") or 0.0) / 1000.0
+            if lift > 0:
+                # The eyelet holds the cord off the skin: the cord is lifted there (``lift_cord``), rebuilt, and the
+                # pendant hung again at the same point (the cord now runs through the eyelet without a push past it).
+                a = int(hung["metrics"]["cord_index"])
+                n = np.asarray(detail["outward"][a], np.float64)
+                curve = lift_cord(curve, a, lift * n / max(float(np.linalg.norm(n)), 1e-12))
+                V, F, N = accessory_mesh.tube(curve, radius, outward=curve - surface)
+                J, W = accessory_mesh.skin_weights(V, np.asarray(body.positions, np.float64), dense_weights(body))
+                J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
+                out.update({"V": V, "F": F, "N": N, "J": J, "W": W, "curve": curve})
+                hung = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius, *args, a=a)
+                hung["metrics"]["cord_lifted_mm"] = round(lift * 1000.0, 3)
+            out["parts"].append(hung)
         except ValueError as e:
             # The chain stays; the pendant is left off with its reason (A225).
             out["parts"].append(None)
             out["part_errors"][i] = str(e)
     return out
+
+
+#: ``lift_cord``: the stretch of the cord, each way along it from the pendant, the eyelet's lift fades over (m).
+CORD_LIFT_SPAN_M = 0.015
+
+
+def lift_cord(curve: np.ndarray, a: int, lift: np.ndarray) -> np.ndarray:
+    """The closed ``curve`` with its point ``a`` moved by ``lift`` and the points within ``CORD_LIFT_SPAN_M`` of it
+    (arc length, both ways) by ``lift · cos²(π/2 · s / span)`` — the cord bends smoothly over the eyelet."""
+    C = np.asarray(curve, np.float64)
+    seg = np.linalg.norm(np.diff(np.vstack([C, C[:1]]), axis=0), axis=1)     # seg[i]: point i -> i + 1
+    n = len(C)
+    s = np.full(n, np.inf)
+    s[a] = 0.0
+    run = 0.0
+    for k in range(1, n):                       # forward
+        i = (a + k) % n
+        run += seg[(i - 1) % n]
+        s[i] = min(s[i], run)
+    run = 0.0
+    for k in range(1, n):                       # backward
+        i = (a - k) % n
+        run += seg[i]
+        s[i] = min(s[i], run)
+    w = np.where(s < CORD_LIFT_SPAN_M, np.cos(np.pi / 2 * s / CORD_LIFT_SPAN_M) ** 2, 0.0)
+    return C + w[:, None] * np.asarray(lift, np.float64)[None]
 
 
 #: A225 — the pendant's gates on the body: its longer front side within ``SIZE_TOLERANCE`` of ``size_mm``, at most
@@ -555,36 +597,29 @@ def anchor_index(curve: np.ndarray) -> int:
 
 
 def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, J: np.ndarray, W: np.ndarray,
-                   radius: float, pendant: Dict[str, Any], size_mm: float, flip: bool = False) -> Dict[str, Any]:
-    """The pendant hung at the chain's lowest point (``accessory_pendant.place``), rigid with the chain's skin there
+                   radius: float, pendant: Dict[str, Any], size_mm: float, flip: bool = False,
+                   a: Optional[int] = None) -> Dict[str, Any]:
+    """The pendant hung at the chain's lowest point — the cord through its eyelet (``accessory_pendant.threaded_place``)
+    when it has one the cord fits through and no test pose puts it into the body, else in front of the cord
+    (``accessory_pendant.place``; logged) —, rigid with the chain's skin there
     (the first tube vertex of that ring — the tube's weights are already folded onto the base skeleton), checked
     through the test poses against the body's outer wall (``outer_wall_faces``). ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
-    left off."""
+    left off. ``a``: the curve index it hangs at (default the lowest point, ``anchor_index``). Threaded, its metrics
+    carry ``cord_index`` and ``cord_lift_mm`` (``make_necklace`` lifts the cord there and hangs it again)."""
     from app.core import accessory_curve, accessory_pendant, glb_mesh
     from app.core.garment_fit import dense_weights
     from app.core.garment_shell import top4_weights
     from app.core.rig_contract import norm_bone_name
-    a = anchor_index(curve)
+    if a is None:
+        a = anchor_index(curve)
     outline = accessory_pendant.front_reason(pendant["V"], pendant.get("front_ratio"))
     if outline:
         raise ValueError(outline)
     Vn = accessory_pendant.normalise(pendant["V"], size_mm, flip, pendant.get("front_ratio"))
     Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
-    # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
-    n = np.asarray(outward[a], np.float64)
-    hang = curve[a] + radius * n / max(float(np.linalg.norm(n)), 1e-12)
-    V, how = accessory_pendant.place(Vn, hang, outward[a], Pw, Fw)
-    R = how.pop("rotation")
-    if how["push_mm"] > PENDANT_MAX_PUSH_MM:
-        raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
     sides = len(J) // len(curve)
-    Jp = np.repeat(J[a * sides][None], len(V), 0)
-    Wp = np.repeat(W[a * sides][None], len(V), 0)
-    # The longer front side in the pendant's own frame (its box turned back): the size the user set.
-    local = (V - hang) @ R
-    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
-    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
-        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    Jp = np.repeat(J[a * sides][None], len(Vn), 0)
+    Wp = np.repeat(W[a * sides][None], len(Vn), 0)
     # The body posed with its own skin: dense weights reduced to four per vertex.
     Jb, Wb, used = top4_weights(dense_weights(body))
     Jb = used[Jb]
@@ -594,8 +629,48 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     from scipy.spatial import cKDTree
     _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
     Fo = Fw[outer_wall_faces(Pw, Fw, body.joint_positions, parents)]
-    poses = accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names), parents,
-                                         heads)
+
+    def judged(V):
+        return accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names),
+                                            parents, heads)
+    # The cord through the eyelet (``accessory_pendant.threaded_place``): the eyelet centre on the chain's lowest
+    # point. Kept only when no test pose puts it into the body; else the old placement below, logged.
+    threaded = accessory_pendant.threaded_place(Vn, pendant["F"], curve[a], outward[a], Pw, Fw, radius)
+    V = None
+    if threaded is not None and threaded[1]["push_mm"] > PENDANT_MAX_PUSH_MM:
+        logger.info("Pendant: threaded on its cord it would stand %.1f mm off it — hung in front of the cord instead",
+                    threaded[1]["push_mm"])
+        threaded = None
+        V = None
+    elif threaded is not None:
+        V, how = threaded
+        how["cord_index"] = int(a)
+        poses = judged(V)
+        inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
+        if inside:
+            logger.info("Pendant: threaded on its cord it would sink into the body in the %s pose — hung in front "
+                        "of the cord instead", ", ".join(inside))
+            V = None
+        else:
+            hang = np.asarray(curve[a], np.float64)
+            how.pop("centre")
+    else:
+        logger.info("Pendant: no eyelet the cord fits through — hung in front of the cord")
+    if V is None:
+        # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
+        n = np.asarray(outward[a], np.float64)
+        hang = curve[a] + radius * n / max(float(np.linalg.norm(n)), 1e-12)
+        V, how = accessory_pendant.place(Vn, hang, outward[a], Pw, Fw)
+        how["threaded"] = False
+        if how["push_mm"] > PENDANT_MAX_PUSH_MM:
+            raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
+        poses = judged(V)
+    R = how.pop("rotation")
+    # The longer front side in the pendant's own frame (its box turned back): the size the user set.
+    local = (V - hang) @ R
+    measured = float((local.max(0) - local.min(0))[:2].max()) * 1000.0
+    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
     inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
     if inside:
         raise ValueError(PENDANT_INSIDE.format(poses=", ".join(inside)))

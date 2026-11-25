@@ -71,6 +71,32 @@ Expected values, derived by hand:
     equal depth → z stays (an exact copy of the input).
 [G3d] ``image_front_ratio`` of a 100 × 60 transparent PNG with an opaque block x 10..60, y 5..45 → 50 / 40 = 1.25; a
     fully transparent one → None. ``load_mesh`` carries it from the stored ``cutout.png``.
+
+[T1] ``eyelet`` (the cord through the eyelet): a frame in the (y, z) plane extruded along x (x ±1 mm) — outer square
+    y 0..−4, z 0..4 mm, the hole y −1..−3, z 1..3 — over a disc box y −4..−20, z 1..3. The side projection shows one
+    enclosed hole, a 2 × 2 mm square: its largest inscribed circle has radius 1 mm and centre (y −2, z 2) mm.
+    Raster 400 px over the 20 mm height → 0.05 mm per px; expected centre (0, −2, 2) and radius 1.0 within 0.06 mm.
+    The same part with a solid bail (the hole filled) → None.
+[T2] ``threaded_place`` with ``place`` replaced by a stub that returns a given push (the eyelet radius 1.0, the cord
+    radius 0.25 → room 0.75 mm): push 0.5 mm → threaded, cord_lift 0; push 1.5 mm → cord_lift 1.5 − 0.75 = 0.75 mm
+    (each within the radius' 0.06 mm); the stub got the part with the eyelet centre at the origin (its vertex y −1,
+    z 1, the hole's upper back corner, at (y 1, z −1) mm). A cord of radius 1.2 mm (thicker than the eyelet) → None;
+    the solid bail → None.
+[T3] ``lift_cord``: a circle of radius 0.1 m with 64 points (each segment 2 · 0.1 · sin(π/64) = 0.0098135 m), point 0
+    lifted by (0, 0, 1 mm): point 0 by 1.000 mm; points 1 and 63 (s 0.0098135 < span 0.015) by
+    cos²(π/2 · 0.0098135 / 0.015) = cos²(1.02768) = 0.51681² = 0.2671 mm; points 2 and 62 (s 0.019627 > 0.015) by 0.
+[T4] ``regate`` (``GATE_VERSION`` 2): a record refused by the gates without a ``gate_version`` whose raw.glb is one
+    closed slab (one piece, aspect 8, 704 triangles — [2]) and no cut-out → the next ``pendant_state`` reads ready, the
+    record carries ``gate_version`` 2, accepted, no error; a second read rewrites nothing (``regate`` → False). The
+    same mesh as two slabs 100 apart refused by gate version 2 → refused stays, no rewrite; refused without a
+    ``gate_version`` → judged again, still refused (share 0.5) and now ``gate_version`` 2. A failure "backend" record
+    with a raw.glb → failed, untouched. A refused record without raw.glb → refused, untouched.
+[T5] ``attach_pendant``'s choice (the body, its weights, the outer wall, ``pose_check``, ``threaded_place`` and
+    ``place`` stubbed; an 8-point curve (sin, cos of k · 45°, 0), its lowest point index 4 at (0, −1, 0)): threaded and no pose inside →
+    ``threaded`` True, the anchor the curve point itself (0, −1, 0), ``cord_index`` 4, ``pose_check`` called once;
+    threaded but the sit pose inside → the old placement (``place`` called, ``threaded`` False, the anchor one cord
+    radius 0.25 mm out along +z: (0, −1, 0.00025)), ``pose_check`` called twice; threaded with a push of 7 mm
+    (> ``PENDANT_MAX_PUSH_MM`` 6) → the old placement, ``pose_check`` once; no eyelet (None) → the old placement.
 """
 import io
 import json
@@ -356,6 +382,172 @@ dd = ap.pendant_dir("item_p", psig_b)
 check("[G3d] load_mesh carries the cut-out's ratio",
       round(ap.load_mesh("item_p", psig_b)["front_ratio"], 3) if (dd / "raw.glb").is_file() else "no mesh",
       round(ap.image_front_ratio((dd / "cutout.png").read_bytes()), 3) if (dd / "raw.glb").is_file() else "no mesh")
+
+
+# [T1] the eyelet
+def boxm(x0, x1, y0, y1, z0, z1):
+    V = np.array([[x, y, z] for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)], np.float64) / 1000.0
+    Fq = [(0, 1, 3), (0, 3, 2), (4, 6, 7), (4, 7, 5), (0, 4, 5), (0, 5, 1), (2, 3, 7), (2, 7, 6), (0, 2, 6), (0, 6, 4),
+          (1, 5, 7), (1, 7, 3)]
+    return V, np.array(Fq, np.int64)
+
+
+def join(*parts):
+    Vs, Fs, k = [], [], 0
+    for V, F in parts:
+        Vs.append(V)
+        Fs.append(F + k)
+        k += len(V)
+    return np.concatenate(Vs), np.concatenate(Fs)
+
+
+FRAME = [boxm(-1, 1, -1, 0, 0, 4), boxm(-1, 1, -4, -3, 0, 4), boxm(-1, 1, -3, -1, 0, 1), boxm(-1, 1, -3, -1, 3, 4)]
+DISC = boxm(-1, 1, -20, -4, 1, 3)
+VE, FE = join(*FRAME, DISC)
+got = ap.eyelet(VE, FE)
+check("[T1] eyelet found", got is not None, True)
+if got is not None:
+    c, r = got
+    check("[T1] centre within 0.06 mm", bool(np.all(np.abs(c * 1000 - [0, -2, 2]) <= 0.06)), True)
+    check("[T1] radius 1.0 within 0.06 mm", abs(r * 1000 - 1.0) <= 0.06, True)
+VS, FS = join(boxm(-1, 1, -4, 0, 0, 4), DISC)
+check("[T1] solid bail", ap.eyelet(VS, FS), None)
+
+# [T2] threaded_place with place stubbed
+real_place = ap.place
+SEEN = {}
+
+
+def stub_place(push_mm):
+    def place(Vn, anchor, outward, Pb, Fb, gap_m=ap.GAP_M):
+        SEEN["Vn"] = np.asarray(Vn)
+        return np.asarray(Vn) + anchor, {"tilt_deg": 0, "push_mm": push_mm, "gap_mm": 1.0, "rotation": np.eye(3)}
+    return place
+
+
+try:
+    ap.place = stub_place(0.5)
+    _V, how = ap.threaded_place(VE, FE, np.zeros(3), np.array([0, 0, 1.0]), None, None, 0.00025)
+    check("[T2] push 0.5: threaded, no lift", (how["threaded"], how["cord_lift_mm"]), (True, 0.0))
+    k = int(np.argmin(np.linalg.norm(VE - np.array([-0.001, -0.001, 0.001]), axis=1)))
+    check("[T2] eyelet centre at the origin (corner y 1, z -1 mm within 0.06)",
+          bool(np.all(np.abs(SEEN["Vn"][k, 1:] * 1000 - [1.0, -1.0]) <= 0.06)), True)
+    ap.place = stub_place(1.5)
+    _V, how = ap.threaded_place(VE, FE, np.zeros(3), np.array([0, 0, 1.0]), None, None, 0.00025)
+    check("[T2] push 1.5: lift 0.75 within 0.06", abs(how["cord_lift_mm"] - 0.75) <= 0.06, True)
+    check("[T2] cord thicker than the eyelet",
+          ap.threaded_place(VE, FE, np.zeros(3), np.array([0, 0, 1.0]), None, None, 0.0012), None)
+    check("[T2] solid bail", ap.threaded_place(VS, FS, np.zeros(3), np.array([0, 0, 1.0]), None, None, 0.00025), None)
+finally:
+    ap.place = real_place
+
+# [T3] lift_cord
+th = np.arange(64) * 2 * np.pi / 64
+CIRC = np.c_[0.1 * np.cos(th), np.zeros(64), 0.1 * np.sin(th)]
+L = ab.lift_cord(CIRC, 0, np.array([0, 0, 0.001]))
+dz = np.round((L - CIRC)[:, 2] * 1000, 4)
+check("[T3] lifts 0, 1, 63, 2, 62 (mm)", [float(dz[i]) for i in (0, 1, 63, 2, 62)], [1.0, 0.2671, 0.2671, 0.0, 0.0])
+
+# [T4] regate
+check("[T4] GATE_VERSION", ap.GATE_VERSION, 2)
+imgr = Path(TMP) / "item_r.png"
+imgr.write_bytes(b"image-r")
+IMAGE["path"] = imgr
+psig_r = ap.current_psig("item_r")
+dr = ap.pendant_dir("item_r", psig_r)
+dr.mkdir(parents=True, exist_ok=True)
+SV, SF = slab()
+
+
+def put(V, F, **kw):
+    (dr / "raw.glb").write_bytes(glb_mesh.static_glb(V, F, np.zeros((len(V), 2))))
+    (dr / "record.json").write_text(json.dumps(kw))
+
+
+put(SV, SF, accepted=False, failure="gate", error="it falls apart into pieces")
+st = ap.pendant_state("item_r")
+r = json.loads((dr / "record.json").read_text())
+check("[T4] healed", (st["state"], r.get("gate_version"), r.get("accepted"), "error" in r), ("ready", 2, True, False))
+check("[T4] second read rewrites nothing", ap.regate("item_r", psig_r), False)
+SV2, SF2 = np.concatenate([SV, SV + [100, 0, 0]]), np.concatenate([SF, SF + len(SV)])
+put(SV2, SF2, accepted=False, failure="gate", error="e", gate_version=2)
+check("[T4] refused by version 2 stays", (ap.pendant_state("item_r")["state"], ap.regate("item_r", psig_r)),
+      ("refused", False))
+put(SV2, SF2, accepted=False, failure="gate", error="e")
+st = ap.pendant_state("item_r")
+r = json.loads((dr / "record.json").read_text())
+check("[T4] old refusal judged again, still refused",
+      (st["state"], r.get("gate_version"), r["gates"]["component_share"]), ("refused", 2, 0.5))
+put(SV, SF, accepted=False, failure="backend", error="y")
+check("[T4] backend failure untouched", (ap.pendant_state("item_r")["state"], ap.regate("item_r", psig_r)),
+      ("failed", False))
+(dr / "raw.glb").unlink()
+(dr / "record.json").write_text(json.dumps({"accepted": False, "failure": "gate", "error": "z"}))
+check("[T4] no raw.glb: untouched", (ap.pendant_state("item_r")["state"],
+                                     json.loads((dr / "record.json").read_text()).get("gate_version")),
+      ("refused", None))
+
+
+# [T5] attach_pendant: threaded or the old placement
+from types import SimpleNamespace  # noqa: E402
+from app.core import garment_fit, garment_shell  # noqa: E402
+BV, BF = boxm(-500, 500, -2000, 0, -500, -100)
+BODY = SimpleNamespace(positions=BV, faces=BF, joint_positions={"Hips": np.zeros(3)}, joint_names=["Hips"])
+ang = np.arange(8) * 2 * np.pi / 8
+CUR = np.c_[np.sin(ang), np.cos(ang), np.zeros(8)]          # index 4: (sin π, cos π) = (0, −1), the lowest
+LOW = int(np.argmin(CUR[:, 1]))
+OUTW = np.tile([0.0, 0.0, 1.0], (8, 1))
+JT = np.zeros((8 * 4, 4), np.int64)
+WT = np.tile([1.0, 0, 0, 0], (8 * 4, 1))
+PEND = {"V": VE, "F": FE, "UV": np.zeros((len(VE), 2)), "image": b"", "mime": "", "material": {}, "front_ratio": None}
+CALLS = {"pose": 0, "place": 0}
+MODE = {}
+saved = (garment_fit.dense_weights, garment_shell.top4_weights, glb_mesh.skin_joint_parents, ab.outer_wall_faces,
+         ap.pose_check, ap.threaded_place, ap.place)
+
+
+def fake_pose_check(Pb, Fb, Jb, Wb, V, Jp, Wp, names, parents, heads):
+    CALLS["pose"] += 1
+    sit_in = MODE.get("inside") and CALLS["pose"] == 1
+    return {"rest": {"gap_min_mm": 1.0, "gap_p50_mm": 2.0, "inside_share": 0.0},
+            "sit": {"gap_min_mm": -1.0 if sit_in else 1.0, "gap_p50_mm": 2.0, "inside_share": 0.1 if sit_in else 0.0}}
+
+
+def fake_threaded(Vn, F, point, outward, Pb, Fb, cord_radius):
+    if MODE.get("none"):
+        return None
+    return np.asarray(Vn) + point, {"tilt_deg": 0, "push_mm": MODE.get("push", 0.5), "gap_mm": 1.0,
+                                    "rotation": np.eye(3), "threaded": True, "centre": np.zeros(3),
+                                    "cord_lift_mm": 0.0}
+
+
+def fake_place(Vn, anchor, outward, Pb, Fb, gap_m=ap.GAP_M):
+    CALLS["place"] += 1
+    return np.asarray(Vn) + anchor, {"tilt_deg": 0, "push_mm": 0.5, "gap_mm": 3.0, "rotation": np.eye(3)}
+
+
+try:
+    garment_fit.dense_weights = lambda body: np.ones((len(body.positions), 1))
+    garment_shell.top4_weights = lambda Wc: (np.zeros((len(Wc), 4), np.int64), np.tile([1.0, 0, 0, 0], (len(Wc), 1)),
+                                             np.array([0]))
+    glb_mesh.skin_joint_parents = lambda rigged: {}
+    ab.outer_wall_faces = lambda P, F, heads, parents: np.ones(len(F), bool)
+    ap.pose_check, ap.threaded_place, ap.place = fake_pose_check, fake_threaded, fake_place
+    for label, mode, want in (
+            ("threaded", {}, (True, [0.0, -1.0, 0.0], 4, 1, 0)),
+            ("sit inside -> old", {"inside": True}, (False, [0.0, -1.0, 0.00025], None, 2, 1)),
+            ("push 7 -> old", {"push": 7.0}, (False, [0.0, -1.0, 0.00025], None, 1, 1)),
+            ("no eyelet -> old", {"none": True}, (False, [0.0, -1.0, 0.00025], None, 1, 1))):
+        MODE.clear(); MODE.update(mode)
+        CALLS.update(pose=0, place=0)
+        hung = ab.attach_pendant(BODY, b"", CUR, OUTW, JT, WT, 0.00025, PEND, 20.0)
+        m = hung["metrics"]
+        check(f"[T5] {label}", (m["threaded"], [round(float(x), 6) for x in m["anchor"]], m.get("cord_index"),
+                                CALLS["pose"], CALLS["place"]), want)
+finally:
+    (garment_fit.dense_weights, garment_shell.top4_weights, glb_mesh.skin_joint_parents, ab.outer_wall_faces,
+     ap.pose_check, ap.threaded_place, ap.place) = saved
+check("[T5] lowest point", LOW, 4)
 
 if FAIL:
     print(f"FAILED: {FAIL}")
