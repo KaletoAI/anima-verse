@@ -12,7 +12,7 @@ namespace AnimaNative.Figures;
 /// Plan E3 Task 5 (decision 13, review W5): an NPC's ride over a stair link of its order walk. No server request — an
 /// NPC answers <see cref="LinkRideState.Riding"/> from <see cref="Begin"/> on. The figure walks the flight's run towards
 /// the link end at the order's speed; the height is the flight's ramp (<see cref="Stairs.RideStep"/> on a one-leg
-/// <see cref="StairRide"/>, armed at the start — as <c>AvatarRoomsController.RideLinkAsync</c> builds it). One instance
+/// <see cref="StairRide"/>, armed at the start — as <c>AvatarRoomsController.LinkTarget</c> builds it). One instance
 /// per figure.
 /// </summary>
 public sealed class NpcStairsRide : ILinkRide
@@ -77,7 +77,7 @@ public sealed class NpcStairsRide : ILinkRide
 }
 
 /// <summary>
-/// Plan E3 Task 5: an NPC's lift hop. Like the avatar's ride (<c>AvatarRoomsController.RideLinkAsync</c> puts the figure
+/// Plan E3 Task 5: an NPC's lift hop. Like the avatar's lift ride (<c>AvatarRoomsController.RideElevatorAsync</c> puts the figure
 /// on the other stop), the figure stands at the stop it arrived at for the hop and is then on the link end; an NPC
 /// needs no room request. One instance per figure.
 /// </summary>

@@ -24,7 +24,8 @@ namespace AnimaNative.Figures;
 /// a click starts a local order (<see cref="StartLocalOrder"/>) that the answer's order adopts in place; its link rides
 /// ask the server for the room (<see cref="AvatarLinkRide"/>). The avatar walks its furniture orders itself (Task 7): at
 /// its access it reports the arrival (<see cref="IWorldSource.PostOrderArrivedAsync"/>) and plays the entry without
-/// waiting for the answer; a refusal aborts the order (<see cref="OrderPlayer.Refuse"/>).
+/// waiting for the answer; a refusal aborts the order (<see cref="OrderPlayer.Refuse"/>). A ground click inside a building
+/// is a local <c>walk</c> order of the avatar on the click planner's path (<see cref="StartClickWalk"/>, Task 10).
 /// </summary>
 public partial class FigureManager
 {
@@ -83,20 +84,29 @@ public partial class FigureManager
 
     public OrderPlayer? OrderPlayerOf(string name) => _orderPlayers.GetValueOrDefault(name);
 
-    /// <summary>The figure plays an order that is not over (Idle/Abort are over).</summary>
+    /// <summary>
+    /// The figure plays an order that is not over (Idle/Abort are over) — not counting the avatar's click walk
+    /// (<see cref="StartClickWalk"/>): the player still owns that walk like any free walk (position reports, corrections,
+    /// offers and the prop guard go on), only the order draws it.
+    /// </summary>
     public bool HasLiveOrder(string name)
+        => PlaysOrder(name) && !_clickWalkIds.Contains(_orderPlayers[name].Current!.Id);
+
+    private bool PlaysOrder(string name)
         => _orderPlayers.TryGetValue(name, out var p) && p.Current is not null && p.State is not (OrderState.Idle or OrderState.Abort);
 
     /// <summary>The order (or its end blend) owns the figure's place: <see cref="ApplyPlan"/> never re-places it (spec 2).</summary>
     private bool HoldsOrderPlacement(Figure fig)
-        => HasLiveOrder(fig.CharacterName) || _orderBlends.ContainsKey(fig.CharacterName);
+        => PlaysOrder(fig.CharacterName) || _orderBlends.ContainsKey(fig.CharacterName);
 
     /// <summary>
     /// A client-made order (<see cref="Order.IsLocal"/>, <see cref="LocalOrders"/>) for its drawn actors, accepted at once
-    /// on the motion clock it was issued at (lag 0). True when a figure took it.
+    /// on the motion clock it was issued at (lag 0). True when a figure took it. <paramref name="path"/> replaces the
+    /// location's navigation (<see cref="NavOf"/>) for this order's walk.
     /// </summary>
-    public bool StartLocalOrder(Order local)
+    public bool StartLocalOrder(Order local, IPathProvider? path = null)
     {
+        if (path is not null) _orderPaths[local.Id] = path;
         bool any = false;
         foreach (var actor in local.Actors)
             if (_figures.TryGetValue(actor.Name, out var fig))
@@ -105,6 +115,51 @@ public partial class FigureManager
                 any |= AcceptOrder(fig, local, local.IssuedS);
             }
         return any;
+    }
+
+    /// <summary>The path a local order walks on instead of its location's navigation (order id → path).</summary>
+    private readonly Dictionary<string, IPathProvider> _orderPaths = new(StringComparer.Ordinal);
+    /// <summary>The ids of the avatar's click walks still played (<see cref="StartClickWalk"/>).</summary>
+    private readonly HashSet<string> _clickWalkIds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Plan E3 Task 10 (decision 12): a ground click of the avatar inside a building is a local <c>walk</c> order
+    /// (<see cref="LocalOrders.Walk"/>, never sent to the server) played by the avatar's <see cref="OrderPlayer"/> on
+    /// <paramref name="path"/> (<see cref="ClickWalkPath"/>): links ridden through <see cref="AvatarLinkRide"/>, stuck and
+    /// replans of <see cref="OrderWalk"/>. It ends — the figure stays where the order drew it, no end blend, no
+    /// <see cref="OrderEnded"/> — at its goal, at a refused link ride (at the link foot), at its second failure to make
+    /// progress (<see cref="OrderPlayer.WalkFailures"/>, final review E2 I-2) and at <see cref="EndClickWalk"/>.
+    /// True when the avatar took it.
+    /// </summary>
+    public bool StartClickWalk(Order walk, IPathProvider path)
+    {
+        _clickWalkIds.Add(walk.Id);
+        if (StartLocalOrder(walk, path) && OrderPlayerOf(AvatarName)?.Current?.Id == walk.Id) return true;
+        _clickWalkIds.Remove(walk.Id);
+        _orderPaths.Remove(walk.Id);
+        return false;
+    }
+
+    /// <summary>The avatar's click walk <paramref name="id"/> is still played.</summary>
+    public bool ClickWalkLive(string id)
+        => _clickWalkIds.Contains(id) && _orderPlayers.TryGetValue(AvatarName, out var p) && p.Current?.Id == id
+           && p.State is not (OrderState.Idle or OrderState.Abort);
+
+    /// <summary>
+    /// Ends the avatar's click walk <paramref name="id"/> where it stands: <paramref name="reason"/> (e.g. <c>input</c>,
+    /// a walk key) refuses the order first (<see cref="OrderPlayer.Refuse"/>), then the avatar's order is let go at once —
+    /// no aborted frame, no turn-away, no <see cref="OrderEnded"/>; the player's input owns the figure from here.
+    /// </summary>
+    public void EndClickWalk(string id, string reason)
+    {
+        if (_orderPlayers.TryGetValue(AvatarName, out var player) && player.Current?.Id == id)
+        {
+            if (reason.Length > 0) player.Refuse(reason);
+            ForgetOrders(AvatarName);
+            if (_figures.TryGetValue(AvatarName, out var fig)) { fig.Target = fig.Position; fig.Waypoints.Clear(); }
+        }
+        _clickWalkIds.Remove(id);
+        _orderPaths.Remove(id);
     }
 
     /// <summary>The ids of the client-local room walks (<c>local:&lt;n&gt;</c>), apart from the avatar's click counter.</summary>
@@ -210,6 +265,8 @@ public partial class FigureManager
         if (!player.Accept(order, _clock, motionNow, V(fig.Position), fig.Yaw * 180 / Math.PI)) return false;
         // A revision, or the adoption of a local order in place (same target, the local clock kept): the figure keeps going.
         if (before == order.Id || (local && !order.IsLocal && player.IssuedLocal == issuedBefore)) return true;
+        // A new order replaced a click walk (a furniture click, a server order): its path and id go with it.
+        if (before is { } replaced) { _clickWalkIds.Remove(replaced); _orderPaths.Remove(replaced); }
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
         _orderExitY[name] = fig.Position.Y;
@@ -279,8 +336,15 @@ public partial class FigureManager
             if (_parkedOrders.TryGetValue(row.Name, out var parked) && !parked.Order.IsLocal && orderSeq >= parked.Order.Seq)
                 _parkedOrders.Remove(row.Name);
         }
-        foreach (var player in _orderPlayers.Values) player.SetFrozen(WorldFrozen, _clock);
+        foreach (var player in _orderPlayers.Values) player.SetFrozen(FrozenFor(player), _clock);
     }
+
+    /// <summary>
+    /// The world freeze of one player: every order stops with the world, except the avatar's click walk — the player's
+    /// own input, which walks on during a freeze like the keys do (plan E3 Task 10).
+    /// </summary>
+    private bool FrozenFor(OrderPlayer player)
+        => WorldFrozen && !(player.Current is { } order && _clickWalkIds.Contains(order.Id));
 
     /// <summary>
     /// The push topic <c>orders</c>: <c>GET /play/orders?since=</c> the highest seq seen, adopted on the answer's
@@ -332,6 +396,11 @@ public partial class FigureManager
 
     private void ForgetOrders(string name)
     {
+        if (_orderPlayers.TryGetValue(name, out var player) && player.Current is { } current)
+        {
+            _clickWalkIds.Remove(current.Id);
+            _orderPaths.Remove(current.Id);
+        }
         _orderPlayers.Remove(name);
         _parkedOrders.Remove(name);
         _orderBlends.Remove(name);
@@ -397,14 +466,15 @@ public partial class FigureManager
         AcceptParked(fig);
         if (_orderBlends.TryGetValue(name, out var blend)) return TickOrderBlend(fig, blend, dt, camDist);
         if (!_orderPlayers.TryGetValue(name, out var player) || player.Current is not { } order) return false;
-        player.SetFrozen(WorldFrozen, _clock);
-        var frame = player.Tick(_clock, NavOf?.Invoke(order.LocationId));
+        player.SetFrozen(FrozenFor(player), _clock);
+        var frame = player.Tick(_clock, _orderPaths.TryGetValue(order.Id, out var own) ? own : NavOf?.Invoke(order.LocationId));
         bool shownBefore = _orderShownState.TryGetValue(name, out var wasState);
         if (frame.Events.Count > 0 || frame.State != OrderState.Idle || (shownBefore && wasState != OrderState.Idle))
         {
             _orderShownState[name] = frame.State;
             OrderFrameShown?.Invoke(name, frame);
         }
+        if (_clickWalkIds.Contains(order.Id) && ClickWalkEnds(fig, player, order, frame)) return false;
         foreach (var e in frame.Events)
         {
             if (e == "arrived_access")
@@ -449,6 +519,24 @@ public partial class FigureManager
             return true;
         }
         DrawOrderFrame(fig, player, frame, dt, camDist);
+        return true;
+    }
+
+    /// <summary>
+    /// The end of the avatar's click walk in this frame (<see cref="StartClickWalk"/>): at its goal (the chain's loop),
+    /// aborted (a refused link ride: at the link foot) or at the second failure to make progress. The figure is put on
+    /// the frame's point (the foot height from the floor) and the order let go. False while it walks on.
+    /// </summary>
+    private bool ClickWalkEnds(Figure fig, OrderPlayer player, Order order, OrderFrame frame)
+    {
+        bool ended = player.RunState is OrderState.Loop or OrderState.Idle or OrderState.Abort || frame.Events.Contains("aborted");
+        bool failed = !ended && player.WalkFailures >= 2;
+        if (!ended && !failed) return false;
+        var p = frame.Position;
+        fig.Position = new Vector3((float)p.X, (float)OrderFloorY(fig, p), (float)p.Z);
+        if (failed) _log($"[orders] click walk {order.Id} gave up after {player.WalkFailures} failures to make progress");
+        else if (frame.Events.Contains("link_refused")) _log($"[orders] click walk {order.Id} ended at a refused link ride");
+        EndClickWalk(order.Id, failed ? "stuck" : "");
         return true;
     }
 

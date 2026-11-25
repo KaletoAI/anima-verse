@@ -28,8 +28,9 @@ namespace AnimaNative.Check;
 ///       exactly once and plays the entry at once (answer ok → the loop); R6x the answer <c>arrive_too_far</c> aborts the
 ///       order at the access, lets go of the run and hands the avatar back;
 ///   R6b between <c>arrived_access</c> and <c>loop_started</c> no <c>/play/pos</c> goes to the source;
-///   R6c the counter-probe for R6b: a free walk WITHOUT an order does send <c>/play/pos</c> to the same source, so R6b's
-///       unchanged count means "locked", not "the source never counts".
+///   R6c the counter-probe for R6b: a free walk WITHOUT a furniture order does send <c>/play/pos</c> to the same source, so
+///       R6b's unchanged count means "locked", not "the source never counts" (a click walk on a navmesh is the avatar's
+///       local walk order since plan E3 Task 10 — it reports like any free walk and is no live order for the guards).
 /// R2–R2c and R6 run on the propactions world (fixture-avatar at (−3, −2), bench-56 access (2, −1), straight walk at 1.4 m/s),
 /// R2d on the orders world (Nia Nav in r-a at (97, −1), stairs 1 foot (101, 0, −3.3) → head (104.5, 3, −3.3)).
 /// </summary>
@@ -212,7 +213,7 @@ public static partial class OrderCheck
                     while (m.Clock < t0 + 1.2) Frame();
                     Is("R6c without an order the avatar's walk reaches /play/pos", source.PositionReports > before,
                        $"{before} → {source.PositionReports}");
-                    Is("R6c no order was involved", !m.HasLiveOrder(m.AvatarName) && source.Arrivals.Count == 0);
+                    Is("R6c no furniture order was involved", !m.HasLiveOrder(m.AvatarName) && source.Arrivals.Count == 0);
                 }
                 else
                 {

@@ -49,7 +49,8 @@ namespace AnimaNative.Check;
 /// Task 6 lets the avatar walk on it (<see cref="AvatarAsync"/>): A0 the ground click, A1 a click walk through the door T0,
 /// A2/A2b the furniture clamp, A3 a click into furniture, A4 a lock refuses the click, A5/A5b the stair link ride (accepted /
 /// refused), A6 a prop action owns the avatar, A7 keys at 60 Hz through T1 over the plot edge, A8 a click behind the
-/// building ends after the second time stuck, across replans (final review E2, I-2).
+/// building ends after its second failure to make progress, across replans (final review E2, I-2). Since plan E3 Task 10
+/// every click walk on the navigation is the avatar's local walk order (P1 and P2 are its plans, with the same lengths).
 /// </summary>
 public static class NavCheck
 {
@@ -436,9 +437,11 @@ public static class NavCheck
     /// The nav world with the avatar "Nia Nav" walking on the swapped navigation (plan E2 Task 6), set up like
     /// <c>EmbodyRoomsCheck</c>: a real <see cref="FigureManager"/>, <see cref="PlayerSteering"/> in r-a, a real
     /// <see cref="AvatarRoomsController"/> whose clock stays at 0 (no walk-in room request ever falls due, so the only
-    /// enter-room call is the link ride's), <c>RideLink = rooms.RideLinkAsync</c>. A frame is
-    /// <c>steering.Step(dt, keys, yaw) + manager.Tick(dt) + rooms.Tick()</c> at dt 0.25 (A7: 1/60). Every number is the hand
-    /// derivation of native/fixtures/README.md, section "Nav world" (A0–A7 there).
+    /// enter-room call is the link ride's), <c>AvatarLinkRide = rooms.OrderLinkRide</c> (plan E3 Task 10: a click walk is
+    /// the avatar's local walk order and rides its links like every order walk). A frame is
+    /// <c>steering.Step(dt, keys, yaw) + manager.Tick(dt) + rooms.Tick()</c> at dt 0.25 for the keys (A2) and 1/60 for the
+    /// click walks and A7 (the order walks 3.4 m/s · dt per frame, and its clamp holds only steps well below 0.3 m). Every
+    /// number is the hand derivation of native/fixtures/README.md, section "Nav world" (A0–A8 there).
     /// </summary>
     private static async Task<string> AvatarAsync(Node3D host, string fixtures)
     {
@@ -475,7 +478,8 @@ public static class NavCheck
             rooms = new AvatarRoomsController(manager, builder, steering, source, hud, () => now);
             rooms.SetActive(true);
             hud.SetState("mode", "embodied");
-            steering.RideLink = rooms.RideLinkAsync;
+            manager.AvatarLinkRide = rooms.OrderLinkRide;
+            const double ClickDt = 1.0 / 60;
             var none = new HashSet<string>();
             var w = new HashSet<string> { "w" };
             var s = new HashSet<string> { "s" };
@@ -492,6 +496,8 @@ public static class NavCheck
                 rooms.Tick();
             }
             Vec3 Pos() => new(f.Position.X, f.Position.Y, f.Position.Z);
+            AnimaNative.Orders.OrderPlayer? Walker() => manager.OrderPlayerOf(manager.AvatarName);
+            double Horizontal(Vec3 a, Vec3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Z - b.Z) * (a.Z - b.Z));
             void NearP(string what, P2? got, double x, double z, double tol)
                 => Expect(what, got is { } g && Math.Abs(g.X - x) <= tol && Math.Abs(g.Z - z) <= tol, got is { } h ? $"got ({h.X:0.###}, {h.Z:0.###})" : "got null");
 
@@ -505,8 +511,8 @@ public static class NavCheck
             steering.CancelRoute();
             builder.SetLevel("loc-nav", 1);
             Expect("A0 a ground click on storey 1 walks", Main.TryGroundWalk(builder, steering, Pos(), rayO, rayD), "");
-            Expect("A0 storey 1 → a navmesh route", steering.NavRoute is not null, "");
-            NearV("A0 storey 1 → the nearest loft point", steering.NavRoute!.Final, new Vec3(100.35, 3, 0.8));
+            Expect("A0 storey 1 → a walk order on the navigation", steering.WalkOrderId is not null, "");
+            NearV("A0 storey 1 → the nearest loft point", steering.WalkGoal ?? default, new Vec3(100.35, 3, 0.8));
             steering.CancelRoute();
             builder.SetLevel("loc-nav", 0);
 
@@ -514,27 +520,31 @@ public static class NavCheck
             At(97, -1);
             Expect("A1 WalkTo (103, −1)", steering.WalkTo(new P2(103, -1)), "");
             NearP("A1 Route = the end goal", steering.Route, 103, -1, 0.01);
-            var corners = new List<Vec3>();
+            Expect("A1 a walk order on the navigation", steering.WalkOrderId is not null, "");
             double? crossZ = null;
+            AnimaNative.Nav.NavPlan? plan1 = null;
             int a1 = 0;
-            for (; a1 < 40 && steering.NavRoute is not null; a1++)
+            for (; a1 < 600 && steering.WalkOrderId is not null; a1++)
             {
-                if (steering.NavRoute.Next is { } next && (corners.Count == 0 || Dist(corners[^1], next) > 1e-6)) corners.Add(next);
                 var before = Pos();
-                Frame(none);
+                Frame(none, ClickDt);
+                plan1 ??= Walker()?.WalkPlan;
                 var after = Pos();
                 if (crossZ is null && before.X < 100 && after.X >= 100)
                     crossZ = before.Z + (after.Z - before.Z) * (100 - before.X) / (after.X - before.X);
             }
+            var corners = plan1?.Steps.OfType<AnimaNative.Nav.NavWalk>().SelectMany(w => w.Points).ToList() ?? new List<Vec3>();
             string cs = string.Join(" ", corners.Select(Fmt));
-            Expect("A1 the route has the corner (99.65, 1.8)", corners.Any(c => Math.Abs(c.X - 99.65) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
-            Expect("A1 the route has the corner (100.35, 1.8)", corners.Any(c => Math.Abs(c.X - 100.35) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
-            Expect("A1 arrives within 40 frames", steering.NavRoute is null && Dist(Pos(), new Vec3(103, Pos().Y, -1)) <= 0.2 && Math.Abs(Pos().Y) <= 0.2,
-                   $"{a1} frames, at {Fmt(Pos())}");
-            // The door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45). A corner counts as reached 0.2 m before it
-            // (NavRoute.CornerArriveM), so the step towards (100.35, 1.8) may start 0.2 m short of (99.65, 1.8): the lowest
-            // crossing of x 100 is 1.8 − 0.2·0.35/0.7 = 1.70 (README "Nav world", A1).
-            Expect("A1 crosses x 100 through the door (z 1.70…2.25)", crossZ is >= 1.70 and <= 2.25, $"z {crossZ}");
+            Expect("A1 the walk's plan has the corner (99.65, 1.8)", corners.Any(c => Math.Abs(c.X - 99.65) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Expect("A1 the walk's plan has the corner (100.35, 1.8)", corners.Any(c => Math.Abs(c.X - 100.35) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Near("A1 the walk's plan is P1 (8.410)", plan1?.Length ?? -1, P1Len, Tol);
+            // 8.410 m at the avatar's 3.4 m/s = 2.474 s → the frame that lands on the goal is frame ⌈2.474 · 60⌉ = 149;
+            // ± 0.1 s = ± 6 frames (README "Nav world", A1).
+            Expect("A1 arrives on the goal at frame 149 ± 6", steering.WalkOrderId is null && Horizontal(Pos(), P1End) <= Tol && Math.Abs(Pos().Y) <= 0.2
+                   && Math.Abs(a1 - 149) <= 6, $"{a1} frames, at {Fmt(Pos())}");
+            // The door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45); the walk lands on every corner, so it
+            // crosses x 100 on the segment (99.65, 1.8) → (100.35, 1.8): at z 1.8 (README "Nav world", A1).
+            Expect("A1 crosses x 100 through the door at z 1.8", crossZ is { } cz && Math.Abs(cz - 1.8) <= Tol, $"z {crossZ}");
 
             // ---- A2 the clamp at the armchair; A2b out of the chair ----
             At(97, -1);
@@ -557,8 +567,8 @@ public static class NavCheck
             At(97, -0.5);
             Expect("A3 WalkTo into the armchair", steering.WalkTo(new P2(97, -1.9)), "");
             NearP("A3 goal = the eroded edge (97, −1.35)", steering.Route, 97, -1.35, 0.02);
-            for (int i = 0; i < 40 && steering.NavRoute is not null; i++) Frame(none);
-            Expect("A3 arrives at the edge", steering.NavRoute is null && Math.Abs(Pos().X - 97) <= 0.2 && Math.Abs(Pos().Z + 1.35) <= 0.2, Fmt(Pos()));
+            for (int i = 0; i < 600 && steering.WalkOrderId is not null; i++) Frame(none, ClickDt);
+            Expect("A3 arrives at the edge", steering.WalkOrderId is null && Math.Abs(Pos().X - 97) <= Tol && Math.Abs(Pos().Z + 1.35) <= Tol, Fmt(Pos()));
 
             // ---- A4 a lock on r-b refuses the click instead of walking through the wall ----
             At(97, -1);
@@ -577,43 +587,46 @@ public static class NavCheck
             At(97, -1);
             source.SelectRoomScenario("nav-up");
             Expect("A5 WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
-            var owners = new HashSet<ulong>();
-            bool rode = false, kept = true;
+            AnimaNative.Nav.NavPlan? plan5 = null;
+            bool rode = false;
+            string? roomOnFlight = null;
             int a5 = 0;
-            for (; a5 < 160 && (steering.NavRoute is not null || steering.VerticalRide is not null); a5++)
+            for (; a5 < 2400 && steering.WalkOrderId is not null; a5++)
             {
-                if (steering.NavRoute?.Current is NavLink link) owners.Add(link.Owner);
-                if (steering.VerticalRide is not null)
-                {
-                    rode = true;
-                    kept &= steering.NavRoute is not null;
-                }
-                Frame(none);
-                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+                Frame(none, ClickDt);
+                plan5 ??= Walker()?.WalkPlan;
+                // On the flight (between the storeys) while the walk order still plays: the link ride of the order walk.
+                if (steering.WalkOrderId is not null && Pos().Y is > 0.2 and < 2.8) { rode = true; roomOnFlight ??= steering.RoomId; }
+                await Task.Yield();
             }
+            var owners = plan5?.Steps.OfType<NavLink>().Select(l => l.Owner).ToHashSet() ?? new HashSet<ulong>();
             Expect("A5 exactly one enter-room r-up", source.RoomRequests.SequenceEqual(new[] { "r-up" }), string.Join(",", source.RoomRequests));
             Expect("A5 one link section, the stairs 65536", owners.SetEquals(new ulong[] { Stairs }), string.Join(",", owners));
-            Expect("A5 the ride ran and kept the route", rode && kept, $"rode {rode} kept {kept}");
+            Near("A5 the walk's plan is P2 (19.630)", plan5?.Length ?? -1, P2Len, Tol);
+            Expect("A5 the walk order rode the flight after the room was entered", rode && roomOnFlight == "r-up" && steering.VerticalRide is null,
+                   $"rode {rode} room on the flight {roomOnFlight}");
             double loftY = builder.PlayerFloorY(slot, "r-up", 104, 2);
-            Expect("A5 stands in the loft at (104, floor, 2)", steering.NavRoute is null && Dist(Pos(), new Vec3(104, loftY, 2)) <= 0.25,
+            Expect("A5 stands in the loft at (104, floor, 2)", steering.WalkOrderId is null && Horizontal(Pos(), Loft) <= Tol && Dist(Pos(), new Vec3(104, loftY, 2)) <= 0.25,
                    $"{a5} frames, at {Fmt(Pos())}, floor {loftY:0.###}");
             Expect("A5 the room is r-up", steering.RoomId == "r-up", steering.RoomId);
 
-            // ---- A5b the ride refused: the route ends at the stair foot ----
+            // ---- A5b the ride refused: the walk order ends at the stair foot ----
             source.SelectRoomScenario("nav-up-rejected");
             At(97, -1);
             builder.SetLevel("loc-nav", 0);
             rooms.Tick();
             Expect("A5b WalkTo the loft (104, 2), storey 1", steering.WalkTo(new P2(104, 2), level: 1), "");
             int a5b = 0;
-            for (; a5b < 160 && steering.NavRoute is not null; a5b++)
+            for (; a5b < 2400 && steering.WalkOrderId is not null; a5b++)
             {
-                Frame(none);
-                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+                Frame(none, ClickDt);
+                await Task.Yield();
             }
             Expect("A5b one enter-room r-up, refused", source.RoomRequests.SequenceEqual(new[] { "r-up" }), string.Join(",", source.RoomRequests));
-            Expect("A5b the route is cancelled", steering.NavRoute is null && steering.Route is null && steering.VerticalRide is null, $"{a5b} frames");
-            Expect("A5b stays on storey 0 at the stair foot", Pos().Y < 0.1 && Dist(Pos(), new Vec3(101, Pos().Y, -3.3)) <= 0.5, Fmt(Pos()));
+            Expect("A5b the walk order is over", steering.WalkOrderId is null && steering.Route is null && steering.VerticalRide is null && Walker() is null,
+                   $"{a5b} frames");
+            Expect("A5b stays on storey 0 at the stair foot (101, −3.3)", Pos().Y < 0.1 && Horizontal(Pos(), new Vec3(101, 0, -3.3)) <= Tol, Fmt(Pos()));
+            Expect("A5b the room stays r-a", steering.RoomId == "r-a", steering.RoomId);
 
             // ---- A6 a prop action owns the avatar ----
             At(97, -1);
@@ -644,28 +657,29 @@ public static class NavCheck
             Expect("A7 reaches the yard and the plot edge", yard && beyond && builder.FootprintAt(Pos().X, Pos().Z) is null, $"{a7} frames, at {Fmt(Pos())}");
             Expect("A7 never stands while the key is held", !stood, $"{a7} frames, at {Fmt(Pos())}");
 
-            // ---- A8 a click behind the building ends after the second time stuck (final review E2, I-2) ----
+            // ---- A8 a click behind the building ends after its second failure to make progress (final review E2, I-2) ----
             // (97, 6) lies north of W2, outside the footprint (z ≤ 4): planner case 2 walks to T1's outer point
             // (97, −4.35) and then straight north to (97, 6) — back through T1 into r-a, where the armchair (eroded z
-            // −2.65…−1.35 at x 97) and then W2 (eroded z 3.65) hold the clamped avatar. Held 2 s → Replan (from r-a: out
-            // through T1 again), held again → Abort, because the replanned route keeps the stuck count. One cycle at
-            // dt 0.25: ≤ 8 m at 3.4 m/s (≤ 10 frames) + 8 stuck frames, so two cycles end well within 120 frames; before the
-            // fix every replan started at count 0 and the walk never ended (README "Nav world", A8).
+            // −2.65…−1.35 at x 97) holds the clamped walk. Held 1 s → a blockade replans (from r-a: out through T1 again),
+            // held again → the second failure (OrderPlayer.WalkFailures: blockades + stuck, kept over replans) ends the
+            // click walk where it stands. One cycle at 3.4 m/s: ≤ 8 m (≤ 2.4 s) + 1 s held, so two cycles end well within
+            // the old budget of 30 s (1800 frames at 1/60); a walk that replanned without counting would never end
+            // (README "Nav world", A8).
             At(97, -1);
             Expect("A8 WalkTo (97, 6) behind the building", steering.WalkTo(new P2(97, 6)), "");
-            Expect("A8 a navmesh route", steering.NavRoute is not null, "");
-            var seen = new HashSet<NavRoute>();
-            int a8 = 0;
-            for (; a8 < 120 && steering.NavRoute is not null; a8++)
+            Expect("A8 a walk order on the navigation", steering.WalkOrderId is not null, "");
+            int a8 = 0, failures = 0;
+            for (; a8 < 1800 && steering.WalkOrderId is not null; a8++)
             {
-                seen.Add(steering.NavRoute);
-                Frame(none);
+                failures = Math.Max(failures, Walker()?.WalkFailures ?? 0);
+                Frame(none, ClickDt);
             }
-            Expect("A8 the walk ends within 120 frames", steering.NavRoute is null && steering.Route is null, $"{a8} frames, at {Fmt(Pos())}, routes {seen.Count}");
-            Expect("A8 it replanned once before it ended", seen.Count >= 2, $"routes {seen.Count}");
+            Expect("A8 the walk ends within 30 s", steering.WalkOrderId is null && steering.Route is null && Walker() is null, $"{a8} frames, at {Fmt(Pos())}");
+            Expect("A8 it failed once and walked on before it ended", failures == 1, $"failures seen {failures}");
             Expect("A8 it never reached (97, 6)", Math.Abs(Pos().Z - 6) > 1, Fmt(Pos()));
+            Expect("A8 it stands held south of the armchair (97, −2.65)", Horizontal(Pos(), new Vec3(97, 0, -2.65)) <= Tol, Fmt(Pos()));
 
-            return $"avatar O1=ok o1_tris={o1} A0-A8=ok a1={a1} a5={a5} a5b={a5b} a7={a7} a8={a8} a8_routes={seen.Count}";
+            return $"avatar O1=ok o1_tris={o1} A0-A8=ok a1={a1} a5={a5} a5b={a5b} a7={a7} a8={a8}";
         }
         finally
         {

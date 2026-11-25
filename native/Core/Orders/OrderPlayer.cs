@@ -106,6 +106,12 @@ public sealed class OrderPlayer
     /// <summary>The pose kind of the running phase; an exit names the kind it leaves.</summary>
     public string? PhasePoseKind => _poseKind;
 
+    /// <summary>
+    /// The current walk's failures to make progress (its stuck count plus its blockades, both kept over replans; 0
+    /// without a walk). The avatar's click walk ends at the second (plan E3 Task 10, final review E2 I-2).
+    /// </summary>
+    public int WalkFailures => _walk is { } w ? w.StuckCount + w.Blockades : 0;
+
     /// <summary>The reason of the last refusal.</summary>
     public string? RefusalReason { get; private set; }
 
@@ -553,7 +559,7 @@ public sealed class OrderPlayer
     /// The navmesh path to the map's closest point of <paramref name="target"/> (the final piece to the target itself is
     /// the walk's). A start already at that point gets a one-segment plan; no path → null.
     /// </summary>
-    /// <summary>The storey tolerance of <see cref="NavRoutePlanner"/> (its private OtherStoreyM; NavRoute.cs stays unchanged until Task 10).</summary>
+    /// <summary>The storey tolerance of <see cref="NavRoutePlanner"/> (its private OtherStoreyM).</summary>
     private const double OtherStoreyM = 1.5;
 
     private static NavPlan? PlanTo(IPathProvider map, Vec3 from, Vec3 target)

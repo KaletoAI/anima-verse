@@ -17,8 +17,8 @@ public sealed record WalkStep(Vec3 Pos, double YawDeg, bool Arrived, bool Stuck,
                               bool LinkRefused);
 
 /// <summary>
-/// Follows a <see cref="NavPlan"/> frame by frame for an order (spec 5c/5d) — the order-side successor of
-/// <see cref="NavRoute"/> (which stays for the click walk until plan E3 Task 10). The figure moves exactly
+/// Follows a <see cref="NavPlan"/> frame by frame for an order (spec 5c/5d) — the successor of the E2 walk player
+/// <c>NavRoute</c>, deleted in plan E3 Task 10 (the click walk is a local <c>walk</c> order too). The figure moves exactly
 /// <c>speed · dt</c> per frame along the corners and lands on a corner without overshoot. Each step on a walk section
 /// is clamped onto the map (<see cref="IPathProvider.ClosestOnVertical"/>) when the clamp is a small correction
 /// (≤ <see cref="NavRoutePlanner.OnMeshM"/>); the clamp pushing the step back is a blockade. After the plan's goal
@@ -37,6 +37,8 @@ public sealed class OrderWalk
     public const double ClampHalfHeightM = 1.0;
     /// <summary>How far a step may lie off the mesh before it counts as pushed back (float noise of the mesh edges).</summary>
     public const double ClampNoiseM = 1e-3;
+    /// <summary>A link's ride begins this close to its start (3D): the stair ride's arrival radius.</summary>
+    public const double LinkArriveM = AnimaNative.Scene.Stairs.RideArriveM;
 
     private const double Eps = 1e-6;
 
@@ -81,6 +83,14 @@ public sealed class OrderWalk
 
     /// <summary>How often the walk failed to make progress so far.</summary>
     public int StuckCount => _stuckCount;
+
+    /// <summary>
+    /// How often a blockade (the clamp holding the figure longer than <see cref="OrderPlayer.ReplanBlockedS"/>) asked for a
+    /// replan so far; like <see cref="StuckCount"/> it survives <see cref="Replan"/>. The walk itself never gives up on
+    /// it (an NPC order keeps replanning until its heal rule); the avatar's click walk ends at its second failure
+    /// (<see cref="OrderPlayer.WalkFailures"/>, plan E3 Task 10).
+    /// </summary>
+    public int Blockades { get; private set; }
 
     /// <summary>The unused part of the last step's dt when it arrived (the arrival lies that far before the frame).</summary>
     public double LeftoverS { get; private set; }
@@ -217,6 +227,7 @@ public sealed class OrderWalk
             if (_blockedTime > OrderPlayer.ReplanBlockedS)
             {
                 _blockedTime = 0;
+                Blockades++;
                 return Make(q, needsReplan: true);
             }
         }
@@ -264,7 +275,7 @@ public sealed class OrderWalk
             }
             if (Current is NavLink link)
             {
-                if (Distance3(p, link.Start) <= NavRoute.LinkArriveM)
+                if (Distance3(p, link.Start) <= LinkArriveM)
                 {
                     if (clamp is null)
                     {
@@ -394,6 +405,74 @@ public sealed class OrderWalk
         double dx = a.X + t * ex - p.X, dz = a.Z + t * ez - p.Z;
         return Math.Sqrt(dx * dx + dz * dz);
     }
+}
+
+/// <summary>
+/// The path of the avatar's click walk inside a building (plan E3 Task 10): the click planner of E2
+/// (<see cref="NavRoutePlanner.Plan"/> with the slot's footprint, its outside doors and the ground height there) as the
+/// <see cref="IPathProvider"/> the <see cref="OrderPlayer"/> plans and clamps the click's local <c>walk</c> order on.
+/// Inside the footprint it is the map (<paramref name="nav"/>, read at every call: a rebake swaps it); outside every point
+/// is on it (no clamp — out in the open the map has no say), and a query to a target outside goes out through the
+/// nearest reachable outside door and then straight (planner case 2). A query between two points outside is the straight
+/// line. A query from inside to outside without a reachable door has no points (the player then has no path).
+/// </summary>
+public sealed class ClickWalkPath(Func<IPathProvider?> nav, Func<double, double, bool> insideFootprint,
+                                  IReadOnlyList<AnimaNative.Scatter.P2> outsideDoors, Func<double, double, double> groundY) : IPathProvider
+{
+    public bool Ready => nav() is { Ready: true };
+
+    public NavPath Query(Vec3 from, Vec3 to)
+    {
+        var map = nav();
+        bool fromInside = insideFootprint(from.X, from.Z), toInside = insideFootprint(to.X, to.Z);
+        if (map is null || (!fromInside && !toInside))
+            return StraightPath.Instance.Query(from, to);
+        if (toInside)
+            return map.Query(from, to);
+        return NavRoutePlanner.Plan(map, from, to, insideFootprint, outsideDoors, groundY(to.X, to.Z)) is { } plan
+            ? Flatten(plan)
+            : new NavPath(Array.Empty<Vec3>(), Array.Empty<ulong>(), 0);
+    }
+
+    public Vec3 Closest(Vec3 p) => insideFootprint(p.X, p.Z) && nav() is { } map ? map.Closest(p) : p;
+
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight)
+        => insideFootprint(p.X, p.Z) && nav() is { } map ? map.ClosestOnVertical(p, halfHeight) : p;
+
+    /// <summary>
+    /// A plan's sections back into one path: the walks' corners in order (a section's first corner is the previous
+    /// one's last and appears once), a link's owner on its start point, its end the next walk's first corner.
+    /// </summary>
+    private static NavPath Flatten(NavPlan plan)
+    {
+        var points = new List<Vec3>();
+        var owners = new List<ulong>();
+        void Add(Vec3 p)
+        {
+            if (points.Count > 0 && Same(points[^1], p))
+                return;
+            points.Add(p);
+            owners.Add(0);
+        }
+        foreach (var step in plan.Steps)
+        {
+            if (step is NavWalk w)
+            {
+                foreach (var p in w.Points) Add(p);
+            }
+            else if (step is NavLink l)
+            {
+                Add(l.Start);
+                owners[^1] = l.Owner;
+                points.Add(l.End);
+                owners.Add(0);
+            }
+        }
+        return new NavPath(points, owners, plan.Length);
+    }
+
+    private static bool Same(Vec3 a, Vec3 b)
+        => Math.Abs(a.X - b.X) < 1e-9 && Math.Abs(a.Y - b.Y) < 1e-9 && Math.Abs(a.Z - b.Z) < 1e-9;
 }
 
 /// <summary>A map without obstacles: the straight line, every point is on it (an order walked with no navmesh).</summary>
