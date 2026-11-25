@@ -129,7 +129,7 @@ function BodyUnderPieceFields({ draft, onUpdate }: {
           onCommit={value => onUpdate('motion_damping', value)} />
       </Field>}
       {liftDefault != null && <Field label={t('Lift')}
-        hint={t('How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild. A garment-template top or dress with a lift above 0 instead shapes the chest under it like a push-up or corset (lifted and gathered, sag reduced, no raised rest angle); every template piece over the chest in the worn set drapes over the shaped chest, and a changed lift re-drapes them with the next Build (the previous drape stays shown until then). A male character never gets the chest shaping.')}>
+        hint={t('How much this piece lifts the body under it in 3D: 0 none, 1 fully (no sag, rest angle raised to its limit). Empty uses the slot default shown; a partial cover counts half; the strongest worn piece wins. Takes effect without a model rebuild. A garment-template top without cups or a dress with a lift above 0 instead shapes the chest under it like a push-up or corset (lifted and gathered, sag reduced, no raised rest angle); every template piece over the chest in the worn set drapes over the shaped chest, and a changed lift re-drapes them with the next Build (the previous drape stays shown until then). A top with cups lifts with the push-up of its cups instead and shapes nothing. A male character never gets the chest shaping.')}>
         <LiftInput value={draft.lift} fallback={liftDefault} onCommit={value => onUpdate('lift', value)} />
       </Field>}
     </div>

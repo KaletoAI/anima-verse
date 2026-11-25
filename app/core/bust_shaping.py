@@ -48,6 +48,11 @@ keeps less than all of its volume. The positions are the flow of v over unit tim
 steps). Behind the wall by more than ``BACK_M`` (the back, the arms' undersides), farther than
 ``off + SIDE_PAST_M[1]`` from the middle and above ``cap_y`` nothing moves.
 ``scripts/smoke_bust_shaping.py`` derives the numbers by hand.
+
+A top with cups (round 2026-11-25, ``garment_template.cupped_top``) is a bra with a long band: it never shapes the body
+(``applies`` reads the build kind, "bra", which is no ``SHAPING_KINDS`` kind); its cups' push-up lifts the cloth, as a
+bra's does. It still drapes on the shaped body when ANOTHER piece of the worn set shapes it (it is a ``CHEST_KINDS``
+top), and its lift slider then only moves the extension bones (``extension_rig``), as a bra's.
 """
 from __future__ import annotations
 
@@ -149,8 +154,10 @@ def lift_of(item: Optional[Dict[str, Any]]) -> float:
 
 
 def applies(params: Optional[Dict[str, Any]], lift: float) -> bool:
-    """Whether a template piece with ``params`` and ``lift`` shapes the chest under it."""
-    return bool(params) and params.get("kind") in SHAPING_KINDS and lift > 0.0
+    """Whether a template piece with ``params`` and ``lift`` shapes the chest under it — by how it is BUILT
+    (``garment_template.build_kind``): a top with cups is a bra with a long band and never shapes (module docstring)."""
+    from app.core.garment_template import build_kind
+    return bool(params) and build_kind(params) in SHAPING_KINDS and lift > 0.0
 
 
 def _column(P, x: float, y0: float, y1: float):

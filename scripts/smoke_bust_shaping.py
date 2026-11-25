@@ -299,6 +299,7 @@ import app.models.inventory as inventory  # noqa: E402
 inventory.get_item = lambda iid: ITEMS.get(iid)
 check("shapes_chest: top lift 1 yes, top default 0 no", bs.shapes_chest(ITEMS["top1"]) and not bs.shapes_chest(ITEMS["top0"]))
 # the wearer's gate (``character_shaped``) has its own smoke (smoke_chest_shaping_male.py); here every wearer is shaped
+_REAL_SHAPED = bs.character_shaped
 bs.character_shaped = lambda name, profile=None: True
 check("set_lift: strongest of the set", bs.set_lift(["top1", "dress5", "skirt"], character_name="demo") == 1.0
       and bs.set_lift(["top0", "skirt"], character_name="demo") == 0.0)
@@ -313,6 +314,58 @@ worn = [{"template": True, "record": {"shaping": r_lo}}, {"template": True, "rec
         {"template": False, "record": {"shaping": bs.record(LM, 1.0)}}, {"template": True, "record": {}}]
 check("worn_record: the strongest lift of the template drapes", bs.worn_record(worn) == r_hi)
 check("worn_record: none", bs.worn_record([{"template": True, "record": {}}]) is None)
+
+
+# --- round 2026-11-25: a top with cups is a bra with a long band (plan E3) — it never shapes; its cups' push-up lifts
+# the cloth. Derived: ``applies`` reads ``garment_template.build_kind`` ("bra" for a cupped top, not in SHAPING_KINDS).
+def tplp(params, lift=None, slots=("top",), covers=()):
+    it = tpl(params["kind"], lift, slots)
+    it["outfit_piece"]["template"]["params"] = dict(params)
+    it["outfit_piece"]["covers"] = list(covers)
+    return it
+
+
+CUP = {"kind": "top", "cups": "bra", "cup_style": "balconette", "push_up": 0.8, "shoulders": "straps"}
+ITEMS.update({"cup7": tplp(CUP, 0.7), "cupd": tplp(CUP, None, covers=("underwear_top",)),
+              "dress_l5": tplp({"kind": "dress"}, 0.5), "dress_l0": tplp({"kind": "dress"}, 0.0),
+              "top_slot": tplp({"kind": "top", "shoulders": "straps"}, None, covers=("underwear_top",)),
+              "trousers": tplp({"kind": "trousers"}, None, ("bottom",)),
+              "necklace": {"outfit_piece": {"mesh_mode": "accessory", "slots": ["neck"]}},
+              "belt": {"outfit_piece": {"mesh_mode": "accessory", "slots": ["outer"]}}})
+# [S-C1] a cupped top with lift 0.7: no shaping, no token of its own
+check("[S-C1] cupped top lift 0.7: shapes_chest False", not bs.shapes_chest(ITEMS["cup7"]))
+check("[S-C1] cupped top alone: key_tokens []", bs.key_tokens("cup7", ITEMS["cup7"], [], character_name="demo") == [])
+# [S-C2] a dress lift 0.5 with a cupped top, a wearer who is shaped: set_lift 0.5; the cupped top drapes on the shaped
+# body (it is a CHEST_KINDS top) -> its token is the set's
+check("[S-C2] set {dress 0.5, cupped top}: set_lift 0.5",
+      bs.set_lift(["dress_l5", "cup7"], character_name="demo") == 0.5)
+tc = bs.key_tokens("cup7", ITEMS["cup7"], ["dress_l5"], character_name="demo")
+check("[S-C2] the cupped top carries the set's token", len(tc) == 1 and tc[0].startswith("shape:"), tc)
+# [S-C3] the same set on a male wearer (``base_skin.is_male`` of the profile's gender): never shaped
+bs.character_shaped = _REAL_SHAPED
+male = {"gender": "male"}
+check("[S-C3] male wearer: set_lift 0",
+      bs.set_lift(["dress_l5", "cup7"], character_name="demo", profile=male) == 0.0)
+bs.character_shaped = lambda name, profile=None: not name.startswith("male")
+check("[S-C3] male wearer: key_tokens []", bs.key_tokens("cup7", ITEMS["cup7"], ["dress_l5"],
+                                                         character_name="male demo") == [])
+bs.character_shaped = lambda name, profile=None: True
+# [S-C4] a top without cups and the slot lift 0.25 (covers underwear_top) shapes as before
+check("[S-C4] top without cups, slot lift 0.25: shapes_chest True", bs.shapes_chest(ITEMS["top_slot"])
+      and bs.effective_lift(ITEMS["top_slot"]) == 0.25)
+# [S-C5] knock-on (E3), Lirien's set as literals: before (top without cups, slot lift 0.25) set_lift 0.25, after (the
+# same top with cups) 0; a dress lift 0 laid with it: token before, none after; drape records without ``shaping``
+# -> worn_record None (the shown body is unshaped)
+before = ["top_slot", "trousers", "necklace", "belt"]
+after = ["cupd", "trousers", "necklace", "belt"]
+check("[S-C5] before: set_lift 0.25", bs.set_lift(before, character_name="demo") == 0.25)
+check("[S-C5] after: set_lift 0", bs.set_lift(after, character_name="demo") == 0.0)
+kb = bs.key_tokens("dress_l0", ITEMS["dress_l0"], before, character_name="demo")
+ka = bs.key_tokens("dress_l0", ITEMS["dress_l0"], after, character_name="demo")
+check("[S-C5] another chest piece of the set is re-keyed: token before, none after",
+      len(kb) == 1 and kb[0].startswith("shape:") and ka == [], (kb, ka))
+check("[S-C5] worn_record of drapes without shaping: None",
+      bs.worn_record([{"template": True, "record": {}}, {"template": True, "record": {"params": CUP}}]) is None)
 
 
 # --- a skinned GLB
