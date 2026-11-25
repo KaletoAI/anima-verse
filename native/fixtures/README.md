@@ -1885,3 +1885,38 @@ for positions (polygon mode), ±0.05 for lengths — a navmesh is never compared
   wait); `SetLinkEnabled(65536, true)` on the enabled stairs → false.
 - **N8** `Free()` → after two physics frames (measured: in the same frame the server still counts the old map)
   `GetProcessInfo(ActiveMaps)` is back to its value before the bake.
+
+**`--check nav`, world part (Task 4, `World/WorldBuilder.Nav.cs`):** the same scene as a world — `new FixtureSource(nav/)`,
+`BuildAsync(world, "Navhaus")` — so the slot turns near on the real residency path (`UpResident`, right after
+`slot.Ring = Ring.Near`), which is where the bake is requested; the check never requests a bake itself. After the bake
+the map is PENDING; the navigation server's `MapChanged` arms it (the current locks applied) and swaps it in once it is
+ready; `MapChanged` is subscribed only while a map is pending. Physics frames run until `NavFor(slot)` is set, at most 240.
+The source fingerprint is the cache key (16 entries, memory only); every bake logs
+`[nav] bake loc=<id> mode=<m> storeys=<n> thresholds=<t> links=<l> ms=<x> cache=<hit|miss>`.
+
+- **N9** `NavFor(slot)` set; `NavPropBoxes(slot)` = exactly the three boxes of the table (armchair, bed, rug — the rug is
+  dropped only by `NavSource`), each within 0.01 m (the placeholders are measured as `placeholder_dims` boxes standing on
+  `bottom_y` 0 at their anchor + (100, 0, 0)); the fingerprint equals `NavSource.Build(scene, frame (100, 0, 0) yaw 0,
+  PlaceInventory.Compose(scene, frame), the same measured boxes, building)` — the exact boxes, since the fingerprint hashes
+  the numbers in "R" form and a float measurement is not the decimal of the table; P1 over `NavFor(slot)` = 8.410382 ± 0.05.
+- **N10** a second `DeriveStands(slot)` without a change → same fingerprint → nothing baked, nothing pending, the same
+  `Map` rid three physics frames later. The armchair node moved +0.5 m in x → box x 97.1…97.9 → a new fingerprint → a
+  new map once synced; two physics frames after the swap `ActiveMaps` equals its value before the move (the old map freed).
+- **N12** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → in the same frame `NavFor(slot)` is the same object
+  (review N-W4); once ready T0 is off. The armchair moved back (−0.5 m) + `DeriveStands` → the first fingerprint again
+  (cache hit) → the pending map is armed with the lock (T0 off: a real change, so it waits for its next `MapChanged`) and
+  swapped once ready: T0 of the NEW map off, T1 on, P1 ends ≥ 0.5 m before (103, 0, −1) (as N7). `SetLocks(None)` → T0 on,
+  P1 8.410382 again.
+- **N11** the way down is queued first (`SetOpen(false)`, a stream view without the avatar at (400, 0): 300 m from the
+  location, beyond the 180 m near hysteresis and within 560 m → far; no pin holds it), then — still near in that frame —
+  the armchair moves +0.25 m and `DeriveStands` starts a bake (cache miss). The driver's down step unmounts the detail
+  before that bake's result arrives: the result is dropped (`NavBakesDropped` +1). After 60 physics frames
+  `slot.Nav == null`, no bake running, `NavMapChangedSubscribed == false`, `ActiveMaps` = its value before the world.
+- **N13** before the build `NavMapChangedSubscribed == false`; the first map (no lock) is swapped on its FIRST
+  `MapChanged` (`ApplyLocks` changes nothing → ready at iteration 1 > 0; the handler's counter is 1 when `NavFor` is
+  first set), and nothing is subscribed afterwards. Back near (the full map, stream point (97, −1)) the remount is a cache
+  hit (pending); the armchair moved +0.35 m starts a bake; `StopResidency` in the same frame → unsubscribed, no
+  navigation; 60 physics frames later the stopped bake's result is dropped (+1 again) and `ActiveMaps` is back to its
+  value before the world.
+- The Task 3 part takes its `ActiveMaps` baseline two physics frames after it starts: an earlier check's world frees its
+  location maps when it leaves the tree, and the server counts a freed map until its next sync.

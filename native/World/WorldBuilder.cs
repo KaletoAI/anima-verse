@@ -187,6 +187,10 @@ public sealed class LocationSlot
     /// centres, sit / lie surfaces, corridor stands; derived by <see cref="WorldBuilder.DeriveStands"/>.
     /// </summary>
     public Figures.FigureStands Stands { get; } = new();
+    /// <summary>The swapped (active) navigation of the near mount (plan E2 Task 4); null outside the near ring.</summary>
+    public LocationNav? Nav { get; internal set; }
+    /// <summary>The world boxes of every placed prop, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
+    internal IReadOnlyList<MeasuredPropBox> PropBoxes { get; set; } = Array.Empty<MeasuredPropBox>();
 
     /// <summary>
     /// The tile as the figure placement reads it right now (view state + inventory, npcPlacement.ts <c>PlacementTile</c>).
@@ -1045,7 +1049,10 @@ public sealed partial class WorldBuilder
     {
         _locks = locks;
         foreach (var slot in _slots.Values)
+        {
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Storeys.ApplyLocks(locks, slot.Loc.Id);
+            ApplyNavLocks(slot);
+        }
     }
 
     /// <summary>

@@ -120,26 +120,37 @@ public sealed partial class WorldBuilder
         st.RoomFloors.Clear();
         st.RoomFloors.AddRange(floors);
 
-        var group = slot.Group;
-        st.DeriveAll(roomId => RoomPropBoxes(group, slot.Placements, roomId), slot.Places);
+        var measured = slot.PropBoxes = MeasurePropBoxes(slot);
+        st.DeriveAll(roomId => RoomPropBoxes(measured, roomId), slot.Places);
+        RequestNavBake(slot);
     }
 
     /// <summary>
-    /// <c>roomProps</c> + the box measure of <c>deriveRoomSpots</c>: the WORLD bounding box of every placed prop of the room
-    /// (a stand-in box too; an object without a mesh has none).
+    /// The box measure of <c>deriveRoomSpots</c>, done once per <see cref="DeriveStands"/>: the WORLD bounding box of every
+    /// placed prop (a stand-in box too; an object without a mesh has none). The room stands
+    /// (<see cref="RoomPropBoxes"/>) and the navigation (<see cref="NavPropBoxes"/>) both read this list.
     /// </summary>
-    private static List<SpotBox> RoomPropBoxes(Node3D group, IReadOnlyList<PlacedModel> placements, string roomId)
+    private static List<MeasuredPropBox> MeasurePropBoxes(LocationSlot slot)
     {
-        var boxes = new List<SpotBox>();
-        foreach (var rec in placements)
+        var group = slot.Group;
+        var boxes = new List<MeasuredPropBox>();
+        foreach (var rec in slot.Placements)
         {
-            if (rec.Spec.Role != "prop" || rec.Spec.RoomId != roomId || rec.Node is not { } node || !GodotObject.IsInstanceValid(node)) continue;
+            if (rec.Spec.Role != "prop" || rec.Node is not { } node || !GodotObject.IsInstanceValid(node)) continue;
             var frame = group.Transform * ChainTo(node.GetParent(), group);
             var box = ModelPlacement.Measure(node, frame);
             if (box.Size == Vector3.Zero && box.Position == Vector3.Zero) continue;   // no mesh measured
             var end = box.End;
-            boxes.Add(new SpotBox(new Overview.Vec3(box.Position.X, box.Position.Y, box.Position.Z), new Overview.Vec3(end.X, end.Y, end.Z)));
+            boxes.Add(new MeasuredPropBox(rec.Spec, new Overview.Vec3(box.Position.X, box.Position.Y, box.Position.Z),
+                                          new Overview.Vec3(end.X, end.Y, end.Z)));
         }
         return boxes;
     }
+
+    /// <summary><c>roomProps</c>: the measured boxes of the room's props.</summary>
+    private static List<SpotBox> RoomPropBoxes(IReadOnlyList<MeasuredPropBox> measured, string roomId)
+        => measured.Where(b => b.Spec.RoomId == roomId).Select(b => new SpotBox(b.Min, b.Max)).ToList();
 }
+
+/// <summary>One placed prop's measured world box (<see cref="WorldBuilder.DeriveStands"/>).</summary>
+internal sealed record MeasuredPropBox(SceneModelSpec Spec, Overview.Vec3 Min, Overview.Vec3 Max);

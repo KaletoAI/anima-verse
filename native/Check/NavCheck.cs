@@ -32,6 +32,16 @@ namespace AnimaNative.Check;
 ///   N6 stairs off → P3 over the lift (14.279, owner 131200, entry (105.2, 0, 3.2)); N7 a lock on r-b closes T0, the
 ///      avatar's own room is never closed; N7b an unchanged lock or link state changes nothing and keeps Ready;
 ///   N8 Free() releases the map (the active map count is back to where it was after two physics frames).
+///
+/// Task 4 then builds the same scene as a world through <see cref="WorldBuilder"/> (<c>fixtures/nav/</c>, goto "Navhaus")
+/// and lets the real residency path bake it (the check never requests a bake itself):
+///
+///   N9  the swapped navigation: three measured furniture boxes (± 0.01), the Task 1 fingerprint, P1 8.410 again;
+///   N10 an unchanged DeriveStands bakes nothing; the armchair moved 0.5 m → a new map, the old one freed;
+///   N11 a bake in flight while the detail unmounts → no navigation, no subscription, active maps back to the start;
+///   N12 a lock on r-b keeps NavFor in its frame, closes T0, survives a rebake (T0 of the new map off), unlock opens it;
+///   N13 no MapChanged subscription before the first bake or once nothing is pending, the first map swapped on its
+///       first MapChanged, StopResidency during a bake unsubscribes and leaves no map.
 /// </summary>
 public static class NavCheck
 {
@@ -59,6 +69,9 @@ public static class NavCheck
         var p = NavBakeParams.For(NavBakeMode.Polygon);
         var src = NavSource.Build(scene, frame, PlaceInventory.Compose(scene, frame, null, null), Boxes, true, p);
 
+        // An earlier check's world may have released its location maps in its last frame; the server counts them until
+        // its next sync, so the baseline is taken two physics frames later.
+        await PhysicsFrames(host, 2);
         int mapsBefore = NavigationServer3D.GetProcessInfo(NavigationServer3D.ProcessInfo.ActiveMaps);
 
         var storeys = await NavBake.BakeStoreysAsync(src, p, (_, _) => 0);
@@ -175,13 +188,177 @@ public static class NavCheck
             int mapsAfter = NavigationServer3D.GetProcessInfo(NavigationServer3D.ProcessInfo.ActiveMaps);
             Eq("N8 active maps back", mapsAfter, mapsBefore);
 
+            var worldPart = await WorldAsync(host, fixtures);
             return $"nav regions={nav.Storeys.Count} thresholds={nav.Thresholds.Count} links={nav.Links.Count} p1={p1.Length:0.###} "
-                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}";
+                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {worldPart}";
         }
         finally
         {
             if (!freed) nav.Free();
         }
+    }
+
+    // ---- N9–N13: the bake on the real mount path (Task 4) ------------------------------------------------------
+
+    /// <summary>
+    /// The nav world built through <see cref="WorldBuilder"/> (as <c>WalkCheck</c> does): the slot turns near on the real
+    /// residency path, which is where the bake is requested — the check never calls <c>RequestNavBake</c> itself. Every
+    /// expected number is the hand derivation of native/fixtures/README.md, section "Nav world" (N9–N13 there).
+    /// </summary>
+    private static async Task<string> WorldAsync(Node3D host, string fixtures)
+    {
+        var dir = Path.Combine(fixtures, "nav");
+        var source = new FixtureSource(dir, fixtures);
+        var world = new Node3D { Name = "NavWorld" };
+        host.AddChild(world);
+        var builder = new WorldBuilder(source, line => GD.Print("[check-nav] " + line), strict: true);
+        int mapsBefore = ActiveMaps();
+        try
+        {
+            // ---- N13 (first half) no subscription before the first bake ----
+            Expect("N13 not subscribed to MapChanged before the first bake", !builder.NavMapChangedSubscribed, "");
+            await builder.BuildAsync(world, "Navhaus");
+            var slot = builder.Slots["loc-nav"];
+            Expect("N9 the slot is near after the build", slot.Ring == Ring.Near, $"{slot.Ring}");
+            slot.Fade.Snap(1);
+            var nav = await AwaitNav(host, builder, slot, null, "N9");
+            Eq("N13 swapped on the first MapChanged of the new map", builder.NavArmCalls, 1);
+            Expect("N13 unsubscribed once no map is pending", !builder.NavMapChangedSubscribed, "");
+
+            // ---- N9 the baked navigation of the mount ----
+            var boxes = builder.NavPropBoxes(slot);
+            Eq("N9 three furniture boxes", boxes.Count, 3);
+            foreach (var want in Boxes)
+                Expect($"N9 box {Fmt(want.Min)}…{Fmt(want.Max)} measured",
+                       boxes.Any(b => b.Level == want.Level && Dist(b.Min, want.Min) <= 0.01 && Dist(b.Max, want.Max) <= 0.01),
+                       string.Join(" ", boxes.Select(b => $"{b.Level}:{Fmt(b.Min)}…{Fmt(b.Max)}")));
+            var scene = slot.Scene!;
+            var frame = new TileFrame(new Vec3(100, 0, 0), 0);
+            var p = NavBakeParams.For(NavBakeMode.Polygon);
+            // The same boxes = the measured ones: they match the table within 0.01 but are float measurements, and the
+            // fingerprint hashes the exact numbers ("R" format).
+            var src = NavSource.Build(scene, frame, PlaceInventory.Compose(scene, frame, null, null), boxes, true, p);
+            Expect("N9 fingerprint = the Task 1 source with the same boxes", nav.Fingerprint == src.Fingerprint && nav.Mode == NavBakeMode.Polygon,
+                   $"{nav.Fingerprint} vs {src.Fingerprint}");
+            Near("N9 P1 over NavFor", nav.Query(Start, P1End).Length, P1Len, Tol);
+
+            // ---- N10 unchanged → same map; the armchair moved → a new map, the old one freed ----
+            var map0 = nav.Map;
+            builder.DeriveStands(slot);
+            Expect("N10 unchanged source → nothing baked, nothing pending", !builder.NavBaking(slot) && !builder.NavMapChangedSubscribed, "");
+            await PhysicsFrames(host, 3);
+            Expect("N10 unchanged source → the same map", builder.NavFor(slot)?.Map == map0, "");
+            var chair = Armchair(slot);
+            int mapsMid = ActiveMaps();
+            chair.Node!.Position += new Vector3(0.5f, 0, 0);
+            builder.DeriveStands(slot);
+            var moved = builder.NavPropBoxes(slot).Where(b => b.Max.Y > 0.8).ToList();
+            Expect("N10 the armchair box moved by 0.5", moved.Count == 1 && Math.Abs(moved[0].Min.X - 97.1) <= 0.01 && Math.Abs(moved[0].Max.X - 97.9) <= 0.01,
+                   string.Join(" ", moved.Select(b => $"{Fmt(b.Min)}…{Fmt(b.Max)}")));
+            var nav2 = await AwaitNav(host, builder, slot, map0, "N10");
+            Expect("N10 a new fingerprint", nav2.Fingerprint != nav.Fingerprint, "");
+            await PhysicsFrames(host, 2);
+            Eq("N10 the old map freed (active maps unchanged)", ActiveMaps(), mapsMid);
+
+            // ---- N12 locks survive a rebake ----
+            var lockB = new LockState(new Dictionary<string, string> { ["r-b"] = "" }, "loc-nav", new Dictionary<string, string>(), "r-a");
+            builder.SetLocks(lockB);
+            Expect("N12 NavFor keeps the same map in the frame of SetLocks", ReferenceEquals(builder.NavFor(slot), nav2), "");
+            await AwaitReady(host, nav2, "N12 locked");
+            Expect("N12 T0 off", !NavigationServer3D.RegionGetEnabled(nav2.Thresholds[0]), "");
+            chair.Node!.Position -= new Vector3(0.5f, 0, 0);
+            builder.DeriveStands(slot);
+            var nav3 = await AwaitNav(host, builder, slot, nav2.Map, "N12 rebake");
+            Expect("N12 the rebake is the first source again (cache)", nav3.Fingerprint == src.Fingerprint, "");
+            Expect("N12 T0 of the new map still off", !NavigationServer3D.RegionGetEnabled(nav3.Thresholds[0])
+                   && NavigationServer3D.RegionGetEnabled(nav3.Thresholds[1]), "");
+            var locked = nav3.Query(Start, P1End);
+            Expect("N12 P1 ends ≥ 0.5 short of the target", locked.Points.Count == 0 || Dist(locked.Points[^1], P1End) >= 0.5, Pts(locked));
+            builder.SetLocks(LockState.None);
+            await AwaitReady(host, nav3, "N12 unlocked");
+            Expect("N12 no lock → T0 on", NavigationServer3D.RegionGetEnabled(nav3.Thresholds[0]), "");
+            Near("N12 P1 again", nav3.Query(Start, P1End).Length, P1Len, Tol);
+
+            // ---- N11 a bake in flight while the detail unmounts (the residency way down) ----
+            // The way down is queued first (the driver steps in a continuation), then the armchair moves and a bake starts
+            // while the slot is still near; the unmount runs before that bake's result arrives.
+            int dropped = builder.NavBakesDropped;
+            builder.SetOpen("loc-nav", false);
+            using (var away = StreamMap(dir, avatar: false))
+            {
+                builder.SetStreamView(away.RootElement, new[] { (400.0, 0.0) });
+                builder.TickStreamRings();
+                Expect("N11 still near in the frame of the request", slot.Ring == Ring.Near, $"{slot.Ring}");
+                chair.Node!.Position += new Vector3(0.25f, 0, 0);
+                builder.DeriveStands(slot);
+                Expect("N11 a bake is running", builder.NavBaking(slot), "");
+                await builder.WhenResidencyIdle();
+            }
+            Expect("N11 the slot went far", slot.Ring == Ring.Far, $"{slot.Ring}");
+            await PhysicsFrames(host, 60);
+            Expect("N11 no navigation after the unmount", slot.Nav is null && builder.NavFor(slot) is null && !builder.NavBaking(slot), "");
+            Expect("N11 unsubscribed", !builder.NavMapChangedSubscribed, "");
+            Eq("N11 the running bake's result was dropped", builder.NavBakesDropped, dropped + 1);
+            Eq("N11 active maps back to the start", ActiveMaps(), mapsBefore);
+
+            // ---- N13 (second half) StopResidency during a running bake ----
+            using (var home = StreamMap(dir, avatar: true))
+            {
+                builder.SetStreamView(home.RootElement, new[] { (97.0, -1.0) });
+                builder.TickStreamRings();
+                await builder.WhenResidencyIdle();
+            }
+            Expect("N13 the slot is near again", slot.Ring == Ring.Near, $"{slot.Ring}");
+            var chair2 = Armchair(slot);
+            chair2.Node!.Position += new Vector3(0.35f, 0, 0);
+            builder.DeriveStands(slot);
+            Expect("N13 a bake is running", builder.NavBaking(slot), "");
+            builder.StopResidency();
+            Expect("N13 StopResidency unsubscribes and drops the navigation", !builder.NavMapChangedSubscribed && slot.Nav is null, "");
+            await PhysicsFrames(host, 60);
+            Expect("N13 the stopped bake left nothing", !builder.NavMapChangedSubscribed && builder.NavFor(slot) is null, "");
+            Eq("N13 the running bake's result was dropped", builder.NavBakesDropped, dropped + 2);
+            Eq("N13 active maps back to the start", ActiveMaps(), mapsBefore);
+
+            return $"world arms={builder.NavArmCalls} maps={ActiveMaps()}";
+        }
+        finally
+        {
+            builder.StopResidency();
+            builder.Models?.FreeAll();
+            world.QueueFree();
+        }
+    }
+
+    /// <summary>Physics frames until <c>NavFor(slot)</c> is a map other than <paramref name="old"/>, at most 240.</summary>
+    private static async Task<LocationNav> AwaitNav(Node host, WorldBuilder builder, LocationSlot slot, Rid? old, string what)
+    {
+        for (int i = 0; i < 240; i++)
+        {
+            if (builder.NavFor(slot) is { } n && (old is null || n.Map != old.Value)) return n;
+            await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
+        }
+        throw new InvalidOperationException($"nav {what}: no (new) navigation within 240 physics frames");
+    }
+
+    private static async Task PhysicsFrames(Node host, int n)
+    {
+        for (int i = 0; i < n; i++) await host.ToSignal(host.GetTree(), SceneTree.SignalName.PhysicsFrame);
+    }
+
+    private static int ActiveMaps() => NavigationServer3D.GetProcessInfo(NavigationServer3D.ProcessInfo.ActiveMaps);
+
+    /// <summary>The armchair placement: room r-a, anchor (−3, −2) (README table).</summary>
+    private static PlacedModel Armchair(LocationSlot slot)
+        => slot.Placements.Single(r => r.Spec.Role == "prop" && r.Spec.RoomId == "r-a" && r.Node is not null
+                                       && Math.Abs(r.Spec.AnchorX + 3) < 1e-6 && Math.Abs(r.Spec.AnchorZ + 2) < 1e-6);
+
+    /// <summary>worldmap.json as the stream view; without the avatar no location is pinned by it.</summary>
+    private static JsonDocument StreamMap(string dir, bool avatar)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "worldmap.json")))!;
+        if (!avatar) node["avatar"] = "";
+        return JsonDocument.Parse(node.ToJsonString());
     }
 
     /// <summary>Waits physics frames until the map answers with its current state (decision 4), at most 120.</summary>
