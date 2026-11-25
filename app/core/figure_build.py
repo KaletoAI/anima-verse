@@ -148,6 +148,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
+from app.core.single_flight import SerialFlight
+
 logger = logging.getLogger(__name__)
 
 STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "cut_texture", "pendant",
@@ -2941,9 +2943,13 @@ def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     return ""
 
 
-#: ``figure_info`` memo: character -> (key, monotonic, answer) (fix round T12-F1, ruling F13 f).
+#: ``figure_info`` memo: character -> (key, monotonic, answer) (fix round T12-F1, ruling F13 f). The answer is
+#: never mutated and never handed out itself (callers get copies).
 _info_memo: Dict[str, Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = {}
 _info_lock = threading.Lock()
+#: One ``figure_info`` computation per character (slot) and key at a time, plus one follower (plan
+#: 2026-11-24-figure-poll-caches, Task 3).
+_INFO_FLIGHT = SerialFlight()
 
 
 def _stat(path) -> Tuple[int, int]:
@@ -2952,6 +2958,14 @@ def _stat(path) -> Tuple[int, int]:
         return st.st_mtime_ns, st.st_size
     except OSError:
         return 0, 0
+
+
+def _key_build(build: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of ``build`` whose ``step`` has no ``live`` progress (the memo key of ``_info_key``)."""
+    step = build.get("step")
+    if not isinstance(step, dict) or "live" not in step:
+        return dict(build)
+    return {**build, "step": {k: v for k, v in step.items() if k != "live"}}
 
 
 def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -2963,7 +2977,8 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
     placement is an item edit, as in ``figure.delivered_figure_cached``),
     the Build's state, and the stat of the character's ``model_refs`` /
     ``model3d`` / ``garments`` directories (an atomic publication renames
-    into them; a deletion too)."""
+    into them; a deletion too). The build's live step progress is not part of
+    the key (``_key_build``); figure_info sets the fresh build after the memo."""
     import hashlib
     from app.core import figure
     from app.core.garment_hair import BASE_HAIRSTYLE_KEY
@@ -2978,7 +2993,7 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
     root = get_character_dir(character_name)
     return (figure._generation[0], hashlib.sha1(figure._canonical(profile)).hexdigest(),
             hashlib.sha1(figure._canonical({i: get_item(i) for i in ids})).hexdigest(),
-            figure._canonical(build),
+            figure._canonical(_key_build(build)),
             tuple(_stat(root / name) for name in ("model_refs", "model3d", "garments")))
 
 
@@ -3012,7 +3027,11 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     """``_figure_info`` memoised (fix round T12-F1, ruling F13 f: the Figure
     tab's GET took 2–5 s): an answer is served again while its ``_info_key``
     holds, for at most ``figure.MEMO_TTL_S``, and stored only when no write
-    moved the figure generation while it was computed. A copy is returned.
+    moved the figure generation while it was computed. The key leaves out the
+    Build's live step progress; every answer gets the fresh ``build`` set after
+    the memo. A miss runs under ``_INFO_FLIGHT`` (plan 2026-11-24-figure-poll-caches, Task 3): one computation
+    per character and key at a time plus one follower (``single_flight.SerialFlight``); a caller with the same
+    key waits for the running one. Every caller gets its own copy; the stored answer is never handed out.
     Statistics: ``figure_memo`` counts ``info_hit`` (served from the memo) or ``info_miss`` (computed), plus
     ``info_unstored`` for a computation not stored because the generation moved; each computation records
     ``figure_compute`` (``info_ms`` and the read calls inside it, ``read_scope``)."""
@@ -3030,23 +3049,36 @@ def figure_info(character_name: str) -> Dict[str, Any]:
             served = copy.deepcopy(hit[2])
     if served is not None:
         _memo_stat("info_hit")
+        served["build"] = build
         return served
     _memo_stat("info_miss")
-    started = time.perf_counter()
-    with read_scope.measure() as calls:
-        try:
-            info = _figure_info(character_name, profile=profile, build=build)
-        finally:
-            _compute_stat("info_ms", started, calls)
-    with _info_lock:
-        stored = key[0] == figure._generation[0]
-        if stored:
-            if len(_info_memo) >= 256:
-                _info_memo.clear()
-            _info_memo[character_name] = (key, now, copy.deepcopy(info))
-    if not stored:
-        _memo_stat("info_unstored")
-    return info
+
+    def compute() -> Dict[str, Any]:
+        # A follower finds the answer of the run before it here when the key stayed the same.
+        with _info_lock:
+            hit = _info_memo.get(character_name)
+            if hit is not None and hit[0] == key and time.monotonic() - hit[1] < figure.MEMO_TTL_S:
+                return hit[2]
+        started = time.perf_counter()
+        with read_scope.measure() as calls:
+            try:
+                info = _figure_info(character_name, profile=profile, build=build)
+            finally:
+                _compute_stat("info_ms", started, calls)
+        with _info_lock:
+            stored = key[0] == figure._generation[0]
+            if stored:
+                if len(_info_memo) >= 256:
+                    _info_memo.clear()
+                # The private result of the flight: nobody mutates it, every caller gets a copy.
+                _info_memo[character_name] = (key, now, info)
+        if not stored:
+            _memo_stat("info_unstored")
+        return info
+
+    out = _INFO_FLIGHT.run(character_name, lambda: key, compute)
+    out["build"] = build
+    return out
 
 
 #: The plan steps the character list counts as the BASE (plain) body (Ruling A112); every other step is the
