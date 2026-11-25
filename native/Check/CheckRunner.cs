@@ -250,6 +250,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "nav")
+            {
+                var alone = await NavCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "storeys")
             {
                 var alone = await StoreysCheck.RunAsync(host, dir);
@@ -363,6 +369,7 @@ public static class CheckRunner
             var storeys = await StoreysCheck.RunAsync(host, dir);
             var placement = await PlacementCheck.RunAsync(host, dir);
             var walk = await WalkCheck.RunAsync(host, dir);
+            var nav = await NavCheck.RunAsync(host, dir);
             var embody = await EmbodyCheck.RunAsync(host, dir);
             var photo = await PhotoCheck.RunAsync(host, dir);
             var audio = await AudioCheck.RunAsync(host, dir);
@@ -390,7 +397,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {resume} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {nav} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
