@@ -11,10 +11,10 @@ namespace AnimaNative.World;
 
 /// <summary>
 /// Bakes the storey meshes of one location's navigation source (plan 2026-11-25-client-ausfuehrung-e2, decision 1)
-/// with Godot's own bakers. Polygon mode: the 2D baker on the storey outlines, its result turned into a 3D mesh and
-/// lifted to the storey height (or the terrain outside the room hulls, decision 7). Voxel mode: the floors as
-/// triangles and the obstacles as projected obstructions through the 3D (Recast) baker. Hand derivations:
-/// native/fixtures/README.md, section "Nav world"; check: <c>--check nav</c>.
+/// with Godot's 2D baker on the storey outlines; the result is turned into a 3D mesh and lifted to the storey height
+/// (or the terrain outside the room hulls, decision 7). The polygon bake won the measurement against the voxel (Recast)
+/// bake (decision 9, docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md). Hand derivations:
+/// native/fixtures/README.md, section "Nav world"; checks: <c>--check nav</c>, <c>--check navcompare</c>.
 /// </summary>
 public static class NavBake
 {
@@ -24,14 +24,33 @@ public static class NavBake
     /// Await it on the main thread: the bake callbacks arrive there, inside the navigation server's sync.
     /// </summary>
     public static async Task<NavigationMesh[]> BakeStoreysAsync(NavSourceData src, NavBakeParams p, Func<double, double, double>? groundAt)
+        => await Task.WhenAll(src.Storeys.Select(s => BakeAsync(s, p, groundAt)));
+
+    /// <summary>
+    /// The same bake as <see cref="BakeStoreysAsync"/>, synchronous on the calling thread (<c>--check navcompare</c>):
+    /// <paramref name="bakeMs"/> is the time spent inside Godot's synchronous bake calls only — not the source
+    /// preparation, not a server sync (review W7: the async callback arrives with the frame).
+    /// </summary>
+    public static NavigationMesh[] BakeStoreys(NavSourceData src, NavBakeParams p, Func<double, double, double>? groundAt, out double bakeMs)
     {
-        var bakes = src.Storeys.Select(s => p.Mode == NavBakeMode.Polygon ? BakePolygonAsync(s, p, groundAt) : BakeVoxelAsync(s, p, groundAt));
-        return await Task.WhenAll(bakes);
+        var watch = new System.Diagnostics.Stopwatch();
+        var meshes = new NavigationMesh[src.Storeys.Count];
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            var s = src.Storeys[i];
+            var (poly, data) = Input(s, p);
+            watch.Start();
+            NavigationServer2D.BakeFromSourceGeometryData(poly, data);
+            watch.Stop();
+            meshes[i] = Lift(poly.GetNavigationMesh(), p, (x, z) => HeightAt(s, groundAt, x, z));
+        }
+        bakeMs = watch.Elapsed.TotalMilliseconds;
+        return meshes;
     }
 
     /// <summary>
     /// The threshold rectangle as its own mesh: the quad as a one-polygon <see cref="NavigationPolygon"/>, turned into 3D
-    /// the same way as a polygon-mode storey (so its winding matches the storey meshes it is welded to), at <c>t.Y</c>.
+    /// the same way as a storey (so its winding matches the storey meshes it is welded to), at <c>t.Y</c>.
     /// </summary>
     public static NavigationMesh ThresholdMesh(NavThreshold t, NavBakeParams p)
     {
@@ -41,7 +60,17 @@ public static class NavBake
         return Lift(poly.GetNavigationMesh(), p, (_, _) => t.Y);
     }
 
-    private static async Task<NavigationMesh> BakePolygonAsync(NavStoreySource s, NavBakeParams p, Func<double, double, double>? groundAt)
+    private static async Task<NavigationMesh> BakeAsync(NavStoreySource s, NavBakeParams p, Func<double, double, double>? groundAt)
+    {
+        var (poly, data) = Input(s, p);
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        NavigationServer2D.BakeFromSourceGeometryDataAsync(poly, data, Callable.From(() => done.TrySetResult(true)));
+        await done.Task;
+        return Lift(poly.GetNavigationMesh(), p, (x, z) => HeightAt(s, groundAt, x, z));
+    }
+
+    /// <summary>The storey outlines as 2D source geometry and the empty polygon the 2D baker fills.</summary>
+    private static (NavigationPolygon, NavigationMeshSourceGeometryData2D) Input(NavStoreySource s, NavBakeParams p)
     {
         var data = new NavigationMeshSourceGeometryData2D();
         foreach (var floor in s.Floors)
@@ -51,39 +80,7 @@ public static class NavBake
         }
         foreach (var ob in s.Obstacles.Where(o => Blocks(s, o, p)))
             data.AddObstructionOutline(Flat(ob.Outline));
-        var poly = new NavigationPolygon { AgentRadius = (float)p.AgentRadius, CellSize = (float)p.CellSize };
-        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        NavigationServer2D.BakeFromSourceGeometryDataAsync(poly, data, Callable.From(() => done.TrySetResult(true)));
-        await done.Task;
-        return Lift(poly.GetNavigationMesh(), p, (x, z) => HeightAt(s, groundAt, x, z));
-    }
-
-    private static async Task<NavigationMesh> BakeVoxelAsync(NavStoreySource s, NavBakeParams p, Func<double, double, double>? groundAt)
-    {
-        var data = new NavigationMeshSourceGeometryData3D();
-        foreach (var floor in s.Floors)
-        {
-            var faces = FloorFaces(floor, (x, z) => HeightAt(s, groundAt, x, z));
-            if (faces.Length > 0) data.AddFaces(faces, Transform3D.Identity);
-        }
-        foreach (var ob in s.Obstacles.Where(o => Blocks(s, o, p)))
-        {
-            var outline = ob.Outline.Select(q => new Vector3((float)q.X, (float)ob.BottomY, (float)q.Z)).ToArray();
-            data.AddProjectedObstruction(outline, (float)ob.BottomY, (float)(ob.TopY - ob.BottomY), false);
-        }
-        var mesh = new NavigationMesh
-        {
-            AgentRadius = (float)p.AgentRadius,
-            AgentHeight = (float)p.AgentHeight,
-            AgentMaxClimb = (float)p.AgentMaxClimb,
-            AgentMaxSlope = (float)p.AgentMaxSlopeDeg,
-            CellSize = (float)p.CellSize,
-            CellHeight = (float)p.CellHeight,
-        };
-        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        NavigationServer3D.BakeFromSourceGeometryDataAsync(mesh, data, Callable.From(() => done.TrySetResult(true)));
-        await done.Task;
-        return mesh;
+        return (new NavigationPolygon { AgentRadius = (float)p.AgentRadius, CellSize = (float)p.CellSize }, data);
     }
 
     /// <summary>An obstacle counts when its height band reaches into the walking space above the storey floor.</summary>
@@ -120,39 +117,6 @@ public static class NavBake
         mesh.SetVertices(verts);
         for (int i = 0; i < flat.GetPolygonCount(); i++) mesh.AddPolygon(flat.GetPolygon(i));
         return mesh;
-    }
-
-    /// <summary>
-    /// A floor with its holes as walkable triangles for the Recast baker: <see cref="Earcut"/> on the outline plus holes,
-    /// every triangle put into Godot's front-face winding seen from above, cross(v1 − v0, v2 − v0).y &lt; 0 (Godot reverses
-    /// it for Recast; measured with 4.7.2: the other winding bakes no polygon at all).
-    /// </summary>
-    private static Vector3[] FloorFaces(NavFloor floor, Func<double, double, double> yAt)
-    {
-        var rings = new List<P2[]> { floor.Outline };
-        rings.AddRange(floor.Holes);
-        var coords = new List<double>();
-        var holeStarts = new List<int>();
-        int count = 0;
-        foreach (var ring in rings)
-        {
-            if (coords.Count > 0) holeStarts.Add(count);
-            foreach (var q in ring) { coords.Add(q.X); coords.Add(q.Z); count++; }
-        }
-        var tris = Earcut.Triangulate(coords, holeStarts);
-        var faces = new Vector3[tris.Count];
-        Vector3 At(int i) => new((float)coords[2 * i], (float)yAt(coords[2 * i], coords[2 * i + 1]), (float)coords[2 * i + 1]);
-        for (int t = 0; t + 2 < tris.Count; t += 3)
-        {
-            var a = At(tris[t]);
-            var b = At(tris[t + 1]);
-            var c = At(tris[t + 2]);
-            if ((b - a).Cross(c - a).Y > 0) (b, c) = (c, b);
-            faces[t] = a;
-            faces[t + 1] = b;
-            faces[t + 2] = c;
-        }
-        return faces;
     }
 
     private static Vector2[] Flat(IEnumerable<P2> ring) => ring.Select(q => new Vector2((float)q.X, (float)q.Z)).ToArray();

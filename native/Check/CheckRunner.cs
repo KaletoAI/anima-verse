@@ -256,6 +256,13 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "navcompare")
+            {
+                // A measurement, not part of the full run (plan E2 Task 5): the nav bake per fixture.
+                var alone = await NavCheck.RunCompareAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "storeys")
             {
                 var alone = await StoreysCheck.RunAsync(host, dir);

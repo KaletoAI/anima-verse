@@ -23,7 +23,6 @@ public sealed class LocationNav : IPathProvider
     public IReadOnlyDictionary<ulong, Rid> Links { get; }
     public string Fingerprint { get; }
     public NavSourceData Source { get; }
-    public NavBakeMode Mode { get; }
     /// <summary>The map iteration at the last effective change; 0 for a fresh map.</summary>
     public ulong ChangedAtIteration { get; private set; }
 
@@ -37,7 +36,7 @@ public sealed class LocationNav : IPathProvider
     public bool Ready => NavigationServer3D.MapGetIterationId(Map) > ChangedAtIteration;
 
     private LocationNav(Rid map, IReadOnlyList<Rid> storeys, IReadOnlyDictionary<int, Rid> thresholds,
-                        IReadOnlyDictionary<ulong, Rid> links, NavSourceData src, NavBakeMode mode)
+                        IReadOnlyDictionary<ulong, Rid> links, NavSourceData src)
     {
         Map = map;
         Storeys = storeys;
@@ -45,7 +44,6 @@ public sealed class LocationNav : IPathProvider
         Links = links;
         Source = src;
         Fingerprint = src.Fingerprint;
-        Mode = mode;
     }
 
     /// <summary>
@@ -85,7 +83,7 @@ public sealed class LocationNav : IPathProvider
             NavigationServer3D.LinkSetOwnerId(rid, l.Owner);
             links[l.Owner] = rid;
         }
-        return new LocationNav(map, storeyRids, thresholds, links, src, p.Mode);
+        return new LocationNav(map, storeyRids, thresholds, links, src);
     }
 
     /// <summary>

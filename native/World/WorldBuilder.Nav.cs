@@ -21,9 +21,6 @@ public sealed partial class WorldBuilder
 {
     private const int NavCacheSize = 16;
 
-    /// <summary>The bake mode (decision 1; Task 5 keeps one mode and removes this property).</summary>
-    public NavBakeMode NavMode { get; set; } = NavBakeMode.Polygon;
-
     /// <summary>A navigation was swapped in or released for the slot.</summary>
     public event Action<LocationSlot>? NavChanged;
 
@@ -84,7 +81,7 @@ public sealed partial class WorldBuilder
             ReleaseNav(slot);
             return;
         }
-        var p = NavBakeParams.For(NavMode);
+        var p = NavBakeParams.Current;
         var src = NavSource.Build(scene, slot.Stands.Frame, slot.Places, NavPropBoxes(slot), slot.IsBuilding, p);
         if (src.IsEmpty)
         {
@@ -255,7 +252,7 @@ public sealed partial class WorldBuilder
     }
 
     private void LogBake(LocationSlot slot, NavSourceData src, Stopwatch watch, bool hit)
-        => _log($"[nav] bake loc={slot.Loc.Id} mode={NavMode.ToString().ToLowerInvariant()} storeys={src.Storeys.Count} "
+        => _log($"[nav] bake loc={slot.Loc.Id} storeys={src.Storeys.Count} "
                 + $"thresholds={src.Thresholds.Count} links={src.Links.Count} ms={watch.Elapsed.TotalMilliseconds:0.#} "
                 + $"cache={(hit ? "hit" : "miss")}");
 }

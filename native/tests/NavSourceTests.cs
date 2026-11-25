@@ -62,11 +62,11 @@ public class NavSourceTests
     private static readonly NavPropBox[] Props = { Armchair, Bed, Rug };
 
     private static NavSourceData Build(JsonNode? scene = null, TileFrame? frame = null, IReadOnlyList<NavPropBox>? props = null,
-                                       NavBakeMode mode = NavBakeMode.Polygon)
+                                       NavBakeParams? p = null)
     {
         var s = Parse(scene ?? SceneJson());
         var f = frame ?? Frame0;
-        return NavSource.Build(s, f, PlaceInventory.Compose(s, f, null, null), props ?? Props, true, NavBakeParams.For(mode));
+        return NavSource.Build(s, f, PlaceInventory.Compose(s, f, null, null), props ?? Props, true, p ?? NavBakeParams.Current);
     }
 
     private static (double MinX, double MaxX, double MinZ, double MaxZ) Bounds(IEnumerable<P2> pts)
@@ -398,7 +398,8 @@ public class NavSourceTests
         Assert.Matches("^[0-9a-f]{64}$", a.Fingerprint);
         var moved = new NavPropBox(0, new Vec3(96.61, 0, -2.4), new Vec3(97.41, 0.9, -1.6));
         Assert.NotEqual(a.Fingerprint, Build(props: new[] { moved, Bed, Rug }).Fingerprint);
-        Assert.NotEqual(a.Fingerprint, Build(mode: NavBakeMode.Voxel).Fingerprint);
+        // The bake parameters are part of the key: other cells, another fingerprint.
+        Assert.NotEqual(a.Fingerprint, Build(p: NavBakeParams.Create(0.1, 0.1)).Fingerprint);
     }
 
     [Fact]
@@ -423,14 +424,17 @@ public class NavSourceTests
     [Fact]
     public void CellSizeFloor()
     {
-        var p = NavBakeParams.Create(NavBakeMode.Voxel, 0.01, 0.01);
+        var p = NavBakeParams.Create(0.01, 0.01);
         AssertEqual(0.05, p.CellSize);
         AssertEqual(0.05, p.CellHeight);
-        Assert.Equal(NavBakeParams.Create(NavBakeMode.Voxel, 0.1, 0.1), NavBakeParams.For(NavBakeMode.Voxel));
-        var poly = NavBakeParams.For(NavBakeMode.Polygon);
+        AssertEqual(0.05, NavBakeParams.Create(double.NaN, double.PositiveInfinity).CellSize);
+        // The one parameter set after Task 5 (the polygon bake won): cells 0.05 / 0.05, edge margin 0.1, version 2.
+        var poly = NavBakeParams.Current;
+        Assert.Equal(NavBakeParams.Create(0.05, 0.05), poly);
         AssertEqual(0.05, poly.CellSize);
+        AssertEqual(0.05, poly.CellHeight);
         AssertEqual(0.1, poly.EdgeConnectionMargin);
-        AssertEqual(0.25, NavBakeParams.For(NavBakeMode.Voxel).EdgeConnectionMargin);
+        Assert.Equal(2, NavBakeParams.Version);
         AssertEqual(0.25, poly.AgentRadius);
         AssertEqual(1.8, poly.AgentHeight);
         AssertEqual(0.25, poly.AgentMaxClimb);

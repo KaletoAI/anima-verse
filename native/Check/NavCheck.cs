@@ -17,7 +17,7 @@ namespace AnimaNative.Check;
 /// <summary>
 /// <c>--check nav</c> (part of every <c>--check</c>, plan 2026-11-25-client-ausfuehrung-e2 Task 3): the Godot bake and
 /// navigation map of the nav world, built straight from its source — <c>fixtures/nav/scene_loc-nav.json</c> at world
-/// (100, 0), yaw 0, plus the three hand boxes (armchair, bed, rug) — in polygon mode. Every number is derived by hand in
+/// (100, 0), yaw 0, plus the three hand boxes (armchair, bed, rug). Every number is derived by hand in
 /// native/fixtures/README.md, section "Nav world" (the derived values and the check sections N0–N8 there); positions
 /// are checked within 0.05 m, path lengths within ±0.05 (a navmesh is never compared bit for bit):
 ///
@@ -66,7 +66,7 @@ public static class NavCheck
         using (var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "scene_loc-nav.json"))))
             scene = ScenePayload.Parse(doc.RootElement);
         var frame = new TileFrame(new Vec3(100, 0, 0), 0);
-        var p = NavBakeParams.For(NavBakeMode.Polygon);
+        var p = NavBakeParams.Current;
         var src = NavSource.Build(scene, frame, PlaceInventory.Compose(scene, frame, null, null), Boxes, true, p);
 
         // An earlier check's world may have released its location maps in its last frame; the server counts them until
@@ -87,7 +87,7 @@ public static class NavCheck
             Eq("N0 thresholds", nav.Thresholds.Count, 2);
             Eq("N0 links", nav.Links.Count, 2);
             Eq("N0 one more active map", NavigationServer3D.GetProcessInfo(NavigationServer3D.ProcessInfo.ActiveMaps), mapsBefore + 1);
-            Expect("N0 fingerprint and mode", nav.Fingerprint == src.Fingerprint && nav.Mode == NavBakeMode.Polygon, nav.Fingerprint);
+            Expect("N0 fingerprint", nav.Fingerprint == src.Fingerprint, nav.Fingerprint);
             Near("N0 link connection radius", NavigationServer3D.MapGetLinkConnectionRadius(nav.Map), 0.6, 1e-6);
             NearV("N0 closest on the first ready map", nav.Closest(Start), Start);
 
@@ -103,12 +103,8 @@ public static class NavCheck
             NearV("N2 in the yard", nav.Closest(new Vec3(97, 0, -5.5)), new Vec3(97, 0, -5.5));
             NearV("N2 beyond the yard", nav.Closest(new Vec3(97, 0, -7.2)), new Vec3(97, 0, -7.05));
             double edgeError = 0;
-            foreach (var w in WallProbes)
+            foreach (var (w, c, off, along, err) in WallErrors(nav))
             {
-                var c = nav.Closest(w.Probe);
-                double off = w.Axis == 'x' ? (c.X - w.Face) * w.Inward : (c.Z - w.Face) * w.Inward;
-                double along = w.Axis == 'x' ? c.Z - w.Probe.Z : c.X - w.Probe.X;
-                double err = Math.Abs(off - 0.25);
                 edgeError = Math.Max(edgeError, err);
                 Expect($"N2 wall {w.Name} probe lands r off the face", err <= Tol && Math.Abs(along) <= Tol && Math.Abs(c.Y - w.Probe.Y) <= Tol,
                        $"closest {Fmt(c)}, off the face {off:0.####}");
@@ -130,56 +126,7 @@ public static class NavCheck
             var walls = Collide.WallSegments(scene, 0, new P2(100, 0));
             Expect("N3 last piece crosses no wall", !walls.Any(s => Crosses(onMesh.X, onMesh.Z, access.X, access.Z, s)), Fmt(onMesh));
 
-            // ---- N4 P1 ----
-            var p1 = nav.Query(Start, P1End);
-            Near("N4 P1 length", p1.Length, P1Len, Tol);
-            Expect("N4 P1 through T0's corners", Has(p1, new Vec3(99.65, 0, 1.8)) && Has(p1, new Vec3(100.35, 0, 1.8)), Pts(p1));
-            Expect("N4 P1 no link", p1.Owners.All(o => o == 0), Pts(p1));
-
-            // ---- N5 P2 and back ----
-            var p2 = nav.Query(Start, Loft);
-            Near("N5 P2 length", p2.Length, P2Len, Tol);
-            Expect("N5 P2 one link point, the stairs", p2.Owners.Count(o => o != 0) == 1 && p2.Owners.Single(o => o != 0) == Stairs, Pts(p2));
-            NearV("N5 P2 ends in the loft", p2.Points[^1], Loft);
-            var back = nav.Query(Loft, Start);
-            Near("N5 way back length", back.Length, P2Len, Tol);
-            Expect("N5 way back over the stairs", back.Owners.Count(o => o != 0) == 1 && back.Owners.Single(o => o != 0) == Stairs, Pts(back));
-
-            // ---- N6 stairs off → the lift ----
-            Expect("N6 stairs off changes the map", nav.SetLinkEnabled(Stairs, false), "");
-            await AwaitReady(host, nav, "N6 off");
-            var p3 = nav.Query(Start, Loft);
-            Near("N6 P3 length", p3.Length, P3Len, Tol);
-            Expect("N6 P3 over the lift", p3.Owners.Count(o => o != 0) == 1 && p3.Owners.Single(o => o != 0) == Lift, Pts(p3));
-            int entry = p3.Owners.ToList().FindIndex(o => o == Lift);
-            NearV("N6 lift entry point", p3.Points[entry], new Vec3(105.2, 0.0, 3.2));
-            Expect("N6 stairs on again", nav.SetLinkEnabled(Stairs, true), "");
-            await AwaitReady(host, nav, "N6 on");
-
-            // ---- N7 locks ----
-            var lockB = new Dictionary<string, string> { ["r-b"] = "" };
-            Expect("N7 lock r-b from r-a closes T0", nav.ApplyLocks(lockB, "r-a"), "");
-            await AwaitReady(host, nav, "N7 locked");
-            Expect("N7 T0 off, T1 on", !NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]) && NavigationServer3D.RegionGetEnabled(nav.Thresholds[1]), $"T0 {NavigationServer3D.RegionGetEnabled(nav.Thresholds[0])} T1 {NavigationServer3D.RegionGetEnabled(nav.Thresholds[1])} ");
-            var locked = nav.Query(Start, P1End);
-            Expect("N7 P1 ends ≥ 0.5 short of the target", locked.Points.Count == 0 || Dist(locked.Points[^1], P1End) >= 0.5, Pts(locked));
-            Expect("N7 unlock opens T0", nav.ApplyLocks(null, "r-a"), "");
-            await AwaitReady(host, nav, "N7 unlocked");
-            Near("N7 P1 length again", nav.Query(Start, P1End).Length, P1Len, Tol);
-            Expect("N7 own room stays open", !nav.ApplyLocks(lockB, "r-b") && NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]), "");
-            // Lock and unlock within one frame (the server's getters still answer the old state): both are changes,
-            // and the region ends up on.
-            Expect("N7 lock + unlock in one frame", nav.ApplyLocks(lockB, "r-a") && nav.ApplyLocks(null, "r-a"), "");
-            await AwaitReady(host, nav, "N7 lock + unlock");
-            Expect("N7 T0 on after lock + unlock", NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]), "");
-            Near("N7 P1 length after lock + unlock", nav.Query(Start, P1End).Length, P1Len, Tol);
-
-            // ---- N7b no change, no wait ----
-            nav.ApplyLocks(null, "r-a");
-            ulong changedAt = nav.ChangedAtIteration;
-            Expect("N7b same locks twice → false", !nav.ApplyLocks(null, "r-a"), "");
-            Expect("N7b ChangedAtIteration kept, Ready stays", nav.ChangedAtIteration == changedAt && nav.Ready, $"{nav.ChangedAtIteration} vs {changedAt}");
-            Expect("N7b enabled link on again → false", !nav.SetLinkEnabled(Stairs, true) && nav.Ready, "");
+            var (p1, p2, p3) = await PathSectionsAsync(host, nav);
 
             // ---- N8 free ----
             nav.Free();
@@ -196,6 +143,149 @@ public static class NavCheck
         {
             if (!freed) nav.Free();
         }
+    }
+
+    /// <summary>
+    /// N4–N7b on a ready map of the nav world (shared by <c>--check nav</c> and <c>--check navcompare</c>); throws at the
+    /// first failed expectation and leaves the map with the stairs on and no lock.
+    /// </summary>
+    private static async Task<(NavPath P1, NavPath P2, NavPath P3)> PathSectionsAsync(Node host, LocationNav nav)
+    {
+        // ---- N4 P1 ----
+        var p1 = nav.Query(Start, P1End);
+        Near("N4 P1 length", p1.Length, P1Len, Tol);
+        Expect("N4 P1 through T0's corners", Has(p1, new Vec3(99.65, 0, 1.8)) && Has(p1, new Vec3(100.35, 0, 1.8)), Pts(p1));
+        Expect("N4 P1 no link", p1.Owners.All(o => o == 0), Pts(p1));
+
+        // ---- N5 P2 and back ----
+        var p2 = nav.Query(Start, Loft);
+        Near("N5 P2 length", p2.Length, P2Len, Tol);
+        Expect("N5 P2 one link point, the stairs", p2.Owners.Count(o => o != 0) == 1 && p2.Owners.Single(o => o != 0) == Stairs, Pts(p2));
+        NearV("N5 P2 ends in the loft", p2.Points[^1], Loft);
+        var back = nav.Query(Loft, Start);
+        Near("N5 way back length", back.Length, P2Len, Tol);
+        Expect("N5 way back over the stairs", back.Owners.Count(o => o != 0) == 1 && back.Owners.Single(o => o != 0) == Stairs, Pts(back));
+
+        // ---- N6 stairs off → the lift ----
+        Expect("N6 stairs off changes the map", nav.SetLinkEnabled(Stairs, false), "");
+        await AwaitReady(host, nav, "N6 off");
+        var p3 = nav.Query(Start, Loft);
+        Near("N6 P3 length", p3.Length, P3Len, Tol);
+        Expect("N6 P3 over the lift", p3.Owners.Count(o => o != 0) == 1 && p3.Owners.Single(o => o != 0) == Lift, Pts(p3));
+        int entry = p3.Owners.ToList().FindIndex(o => o == Lift);
+        NearV("N6 lift entry point", p3.Points[entry], new Vec3(105.2, 0.0, 3.2));
+        Expect("N6 stairs on again", nav.SetLinkEnabled(Stairs, true), "");
+        await AwaitReady(host, nav, "N6 on");
+
+        // ---- N7 locks ----
+        var lockB = new Dictionary<string, string> { ["r-b"] = "" };
+        Expect("N7 lock r-b from r-a closes T0", nav.ApplyLocks(lockB, "r-a"), "");
+        await AwaitReady(host, nav, "N7 locked");
+        Expect("N7 T0 off, T1 on", !NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]) && NavigationServer3D.RegionGetEnabled(nav.Thresholds[1]), $"T0 {NavigationServer3D.RegionGetEnabled(nav.Thresholds[0])} T1 {NavigationServer3D.RegionGetEnabled(nav.Thresholds[1])} ");
+        var locked = nav.Query(Start, P1End);
+        Expect("N7 P1 ends ≥ 0.5 short of the target", locked.Points.Count == 0 || Dist(locked.Points[^1], P1End) >= 0.5, Pts(locked));
+        Expect("N7 unlock opens T0", nav.ApplyLocks(null, "r-a"), "");
+        await AwaitReady(host, nav, "N7 unlocked");
+        Near("N7 P1 length again", nav.Query(Start, P1End).Length, P1Len, Tol);
+        Expect("N7 own room stays open", !nav.ApplyLocks(lockB, "r-b") && NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]), "");
+        // Lock and unlock within one frame (the server's getters still answer the old state): both are changes,
+        // and the region ends up on.
+        Expect("N7 lock + unlock in one frame", nav.ApplyLocks(lockB, "r-a") && nav.ApplyLocks(null, "r-a"), "");
+        await AwaitReady(host, nav, "N7 lock + unlock");
+        Expect("N7 T0 on after lock + unlock", NavigationServer3D.RegionGetEnabled(nav.Thresholds[0]), "");
+        Near("N7 P1 length after lock + unlock", nav.Query(Start, P1End).Length, P1Len, Tol);
+
+        // ---- N7b no change, no wait ----
+        nav.ApplyLocks(null, "r-a");
+        ulong changedAt = nav.ChangedAtIteration;
+        Expect("N7b same locks twice → false", !nav.ApplyLocks(null, "r-a"), "");
+        Expect("N7b ChangedAtIteration kept, Ready stays", nav.ChangedAtIteration == changedAt && nav.Ready, $"{nav.ChangedAtIteration} vs {changedAt}");
+        Expect("N7b enabled link on again → false", !nav.SetLinkEnabled(Stairs, true) && nav.Ready, "");
+        return (p1, p2, p3);
+    }
+
+    /// <summary>N2 wall probes: the closest point, its offset from the face, its drift along it, |offset − r|.</summary>
+    private static IEnumerable<(WallProbe W, Vec3 C, double Off, double Along, double Err)> WallErrors(LocationNav nav)
+    {
+        foreach (var w in WallProbes)
+        {
+            var c = nav.Closest(w.Probe);
+            double off = w.Axis == 'x' ? (c.X - w.Face) * w.Inward : (c.Z - w.Face) * w.Inward;
+            double along = w.Axis == 'x' ? c.Z - w.Probe.Z : c.X - w.Probe.X;
+            yield return (w, c, off, along, Math.Abs(off - 0.25));
+        }
+    }
+
+// ---- navcompare: the bake measured (plan E2 Task 5, decision 9) --------------------------------------------
+
+    /// <summary>
+    /// <c>--check navcompare</c> (never part of the full <c>--check</c>; plan E2 Task 5 measured the polygon bake against the
+    /// voxel bake with it, docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md, and it stays as the
+    /// measurement of the winner for E7): per fixture the median of five SYNCHRONOUS bakes — the time inside Godot's bake
+    /// calls only, never "request to callback" of the async bake, whose callback arrives with the server sync on the main
+    /// thread (review W7) — the polygon count over all storeys, the largest N2 wall-probe edge error and N4–N7 passed (nav
+    /// world only), and the connection count of the first threshold region on the ready map. The other fixtures are
+    /// placed at (0, 0, 0), yaw 0, without furniture boxes: they are time and polygon probes, not path evidence. One line
+    /// per fixture: <c>[navcompare] fixture=… mode=polygon ms=… polys=… edge_err=… paths=ok|fail thresholds_welded=…</c>.
+    /// </summary>
+    public static async Task<string> RunCompareAsync(Node3D host, string fixtures)
+    {
+        var rows = new (string Fixture, string File, TileFrame Frame, NavPropBox[] Boxes)[]
+        {
+            ("nav", "nav/scene_loc-nav.json", new TileFrame(new Vec3(100, 0, 0), 0), Boxes),
+            ("walk", "walk/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
+            ("embody", "embody/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
+            ("storeys", "storeys/scene_loc-tower.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
+        };
+        var p = NavBakeParams.Current;
+        double total = 0;
+        string edgeNav = "-", pathsNav = "-";
+        foreach (var (name, path, frame, boxes) in rows)
+        {
+            ScenePayload scene;
+            using (var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, path))))
+                scene = ScenePayload.Parse(doc.RootElement);
+            var src = NavSource.Build(scene, frame, PlaceInventory.Compose(scene, frame, null, null), boxes, true, p);
+            var times = new double[5];
+            NavigationMesh[] meshes = Array.Empty<NavigationMesh>();
+            for (int i = 0; i < times.Length; i++) meshes = NavBake.BakeStoreys(src, p, null, out times[i]);
+            Array.Sort(times);
+            double ms = times[times.Length / 2];
+            total += ms;
+            int polys = meshes.Sum(m => m.GetPolygonCount());
+
+            var nav = LocationNav.Create(src, meshes, p);
+            try
+            {
+                await AwaitReady(host, nav, $"navcompare {name}");
+                int welded = nav.Thresholds.Count == 0 ? 0
+                    : NavigationServer3D.RegionGetConnectionsCount(nav.Thresholds[nav.Thresholds.Keys.Min()]);
+                string edge = "-", paths = "-";
+                if (name == "nav")
+                {
+                    edge = WallErrors(nav).Max(e => e.Err).ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+                    try
+                    {
+                        await PathSectionsAsync(host, nav);
+                        paths = "ok";
+                    }
+                    catch (InvalidOperationException e)
+                    {
+                        paths = "fail";
+                        GD.Print($"[navcompare] fixture={name} paths failed: {e.Message}");
+                    }
+                    (edgeNav, pathsNav) = (edge, paths);
+                }
+                GD.Print(FormattableString.Invariant(
+                    $"[navcompare] fixture={name} mode=polygon ms={ms:0.###} polys={polys} edge_err={edge} paths={paths} thresholds_welded={welded}"));
+            }
+            finally
+            {
+                nav.Free();
+            }
+        }
+        await PhysicsFrames(host, 2);
+        return FormattableString.Invariant($"navcompare fixtures={rows.Length} ms_total={total:0.###} edge_err={edgeNav} paths={pathsNav}");
     }
 
     // ---- N9–N13: the bake on the real mount path (Task 4) ------------------------------------------------------
@@ -234,11 +324,11 @@ public static class NavCheck
                        string.Join(" ", boxes.Select(b => $"{b.Level}:{Fmt(b.Min)}…{Fmt(b.Max)}")));
             var scene = slot.Scene!;
             var frame = new TileFrame(new Vec3(100, 0, 0), 0);
-            var p = NavBakeParams.For(NavBakeMode.Polygon);
+            var p = NavBakeParams.Current;
             // The same boxes = the measured ones: they match the table within 0.01 but are float measurements, and the
             // fingerprint hashes the exact numbers ("R" format).
             var src = NavSource.Build(scene, frame, PlaceInventory.Compose(scene, frame, null, null), boxes, true, p);
-            Expect("N9 fingerprint = the Task 1 source with the same boxes", nav.Fingerprint == src.Fingerprint && nav.Mode == NavBakeMode.Polygon,
+            Expect("N9 fingerprint = the Task 1 source with the same boxes", nav.Fingerprint == src.Fingerprint,
                    $"{nav.Fingerprint} vs {src.Fingerprint}");
             Near("N9 P1 over NavFor", nav.Query(Start, P1End).Length, P1Len, Tol);
 

@@ -339,7 +339,7 @@ public static class NavSource
 
     /// <summary>
     /// SHA-256 (lowercase hex) over the canonical text of the whole source: every number written with
-    /// <c>ToString("R", InvariantCulture)</c> in a fixed order, plus the bake mode, its parameters and
+    /// <c>ToString("R", InvariantCulture)</c> in a fixed order, plus the bake parameters and
     /// <see cref="NavBakeParams.Version"/> — the cache key of a bake (decision 6).
     /// </summary>
     private static string Fingerprint(IReadOnlyList<NavStoreySource> storeys, IReadOnlyList<NavThreshold> thresholds,
@@ -356,7 +356,7 @@ public static class NavSource
         }
         void V(Vec3 v) { N(v.X); N(v.Y); N(v.Z); }
 
-        sb.Append("nav/v").Append(NavBakeParams.Version).Append('|').Append(p.Mode).Append('|');
+        sb.Append("nav/v").Append(NavBakeParams.Version).Append('|');
         N(p.AgentRadius); N(p.AgentHeight); N(p.AgentMaxClimb); N(p.AgentMaxSlopeDeg); N(p.CellSize); N(p.CellHeight);
         N(p.EdgeConnectionMargin); N(p.LinkConnectionRadius); N(NavBakeParams.ElevatorTravelCost);
         foreach (var s in storeys)

@@ -1792,7 +1792,7 @@ z −7…4 (a 3 m deep yard south of W1). Avatar "Nia Nav" in `r-a` at world (97
 Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc-tower.json` (`role "prop"`, `placeholder_dims`,
 `fix_euler` 0, `yaw_deg` 0, `measure "xyz"`, `max_m` = the largest side, `anchor`, `bottom_y`, `level`, `room_id`).
 
-**Derived values (r = 0.25; polygon mode exact, the 0.05 cell grid hits every number):**
+**Derived values (r = 0.25; the polygon bake is exact, the 0.05 cell grid hits every number):**
 
 - Eroded rooms: `r-a` x 94.35…99.65 (W3 face −5.9 + r → −5.65; W5 face −0.1 − r → −0.35), z −3.65…3.65; `r-b` x
   100.35…105.65; loft x 100.35…105.65, z −3.65…3.65 without the hole zone x 101.25…104.25, z ≤ −2.55.
@@ -1846,11 +1846,11 @@ Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc
   unshifted and `boundary_offset` is reported.
 
 **`--check nav` (Task 3, `Check/NavCheck.cs`):** the source is built straight from `scene_loc-nav.json`, frame (100, 0, 0)
-yaw 0, the three boxes of the table, `NavBakeParams.For(Polygon)` (r 0.25, cells 0.05 / 0.05, edge connection margin 0.1,
-link connection radius 0.6), terrain `groundAt` = 0; baked by `World/NavBake.cs`, mapped by `LocationNav`
+yaw 0, the three boxes of the table, `NavBakeParams.Current` (r 0.25, cells 0.05 / 0.05, edge connection margin 0.1,
+link connection radius 0.6, `Version` 2), terrain `groundAt` = 0; baked by `World/NavBake.cs`, mapped by `LocationNav`
 (`World/NavMaps.cs`). "Ready" = the map iteration has risen past the last effective change; the check waits for it physics
 frame by physics frame, at most 120 (`AwaitReady`), after the creation and after every change in N6/N7. Tolerance 0.05 m
-for positions (polygon mode), ±0.05 for lengths — a navmesh is never compared bit for bit.
+for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
 
 - **N0** regions: 2 storeys (levels 0, 1), 2 thresholds (doorways 0, 1), 2 links (owners 65536, 131200); the active map
   count one above its value before the bake; `MapGetLinkConnectionRadius` 0.6; on the first Ready map
@@ -1892,7 +1892,7 @@ for positions (polygon mode), ±0.05 for lengths — a navmesh is never compared
 the map is PENDING; the navigation server's `MapChanged` arms it (the current locks applied) and swaps it in once it is
 ready; `MapChanged` is subscribed only while a map is pending. Physics frames run until `NavFor(slot)` is set, at most 240.
 The source fingerprint is the cache key (16 entries, memory only); every bake logs
-`[nav] bake loc=<id> mode=<m> storeys=<n> thresholds=<t> links=<l> ms=<x> cache=<hit|miss>`.
+`[nav] bake loc=<id> storeys=<n> thresholds=<t> links=<l> ms=<x> cache=<hit|miss>`.
 
 - **N9** `NavFor(slot)` set; `NavPropBoxes(slot)` = exactly the three boxes of the table (armchair, bed, rug — the rug is
   dropped only by `NavSource`), each within 0.01 m (the placeholders are measured as `placeholder_dims` boxes standing on
@@ -1920,3 +1920,24 @@ The source fingerprint is the cache key (16 entries, memory only); every bake lo
   value before the world.
 - The Task 3 part takes its `ActiveMaps` baseline two physics frames after it starts: an earlier check's world frees its
   location maps when it leaves the tree, and the server counts a freed map until its next sync.
+
+**`--check navcompare` (Task 5, `NavCheck.RunCompareAsync`; never part of the full `--check`):** the measurement of
+decision 9. Task 5 ran it with both bake modes (docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e2-navmesh.md):
+the polygon bake passed N4–N7b with a largest N2 wall-probe edge error of 0.0016 m; the voxel (Recast) bake failed N4
+(its door corners at (99.625, 0.1, 1.8) / (100.375, 0.1, 1.8): one cell height above the floor and 0.025 off) with an edge
+error of 0.05 m. Polygon won on rule (a) alone, and on (b) by 0.048 m (≫ the 0.01 tie band); the voxel bake, its
+parameters (cells 0.1 / 0.1, margin 0.25) and `NavBakeMode` are gone, `NavBakeParams.Version` is 2. The tolerances
+above (N2/N4/N5/N9: 0.05) stay, since the winner's measured edge deviation (0.0016) is far inside them. What stays is the
+measurement of the winner, one line per fixture:
+`[navcompare] fixture=<f> mode=polygon ms=<median of 5 synchronous bakes> polys=<n> edge_err=<m|-> paths=<ok|fail|-> thresholds_welded=<n>`.
+
+- Fixtures: `nav` (frame (100, 0, 0), the three boxes; edge error and N4–N7b), `walk` and `embody`
+  (`scene_loc-hall.json`) and `storeys` (`scene_loc-tower.json`), each at (0, 0, 0), yaw 0, no boxes, no terrain —
+  time and polygon probes only.
+- `thresholds_welded` = `RegionGetConnectionsCount` of the lowest-index threshold: nav 2 (N1); embody 2 (its D0 sits in
+  the wall x 0 like nav's); walk 0 — its only wall is the south wall, so D0 has no adjacent wall and the rooms are open
+  floor, no threshold; storeys 0 — the tower's doors sit in continuous walls without a gap, decision 2 finds no adjacent
+  gap, no threshold.
+- No expected times: the check only requires every fixture to bake and its map to become ready; the times are recorded
+  in the measurement document (all four below 0.1 ms on the reference machine, against the 300 ms disk-cache threshold
+  of spec 8).
