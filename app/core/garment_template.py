@@ -2249,15 +2249,96 @@ def _template_kind(item: Optional[Dict[str, Any]]) -> Optional[str]:
     return params["kind"] if params and params["kind"] in BUILT_KINDS else None
 
 
+#: Round 2026-11-25 (Glut's gloves re-draped by a new bra): the coarse body regions a piece can touch. A piece is under
+#: another only when their regions overlap (``inner_pieces``); without that, the slot stacks and ``LAYER_RANK`` put a
+#: glove worn on ``outer`` over the bra and the briefs, and every change of those re-draped the glove.
+BODY_REGIONS = ("chest", "waist", "hip", "leg", "foot", "arm", "hand", "neck", "head")
+#: A top / jacket hem this far below the shoulder line or further reaches the hip region (``body_regions``): on the
+#: 1.70 m reference body the natural waist is 0.33–0.35 m below the shoulder line (0.6 m ends at the hip,
+#: ``KIND_DEFAULTS``); taken at the low end so a hem near the waist still counts as touching a waistband.
+TOP_HIP_REACH_M = 0.32
+#: The regions an own-mesh / shell piece can touch, per worn or covered slot (``inventory.VALID_PIECE_SLOTS``) —
+#: generous, since such a piece has no shape parameters: ``top`` and ``outer`` may carry sleeves, ``legs`` is hosiery
+#: from the hip to the foot, ``feet`` a boot's shaft.
+SLOT_REGIONS: Dict[str, Tuple[str, ...]] = {
+    "underwear_top": ("chest", "waist"),
+    "underwear_bottom": ("hip",),
+    "legs": ("hip", "leg", "foot"),
+    "top": ("chest", "waist", "arm"),
+    "bottom": ("waist", "hip", "leg"),
+    "outer": ("chest", "waist", "hip", "leg", "arm"),
+    "feet": ("foot", "leg"),
+    "hands": ("hand", "arm"),
+    "neck": ("neck", "chest"),
+    "face": ("head",),
+    "head": ("head", "neck"),
+}
+
+
+def body_regions(params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]] = None) -> frozenset:
+    """The body regions (``BODY_REGIONS``) a piece can touch: a template piece's from its parameters, any other piece's
+    from its worn and covered slots (``SLOT_REGIONS``). A template piece with no parameters, or an unknown slot,
+    counts as touching every region (it is never left out by ``regions_overlap``)."""
+    if params and params.get("kind") in BUILT_KINDS:
+        kind = params["kind"]
+        if kind == "gloves":
+            return frozenset({"hand", "arm"})
+        if kind == "bra":
+            return frozenset({"chest"})
+        if kind == "briefs":
+            out = {"hip"}
+            if params.get("rise") == "high":
+                out.add("waist")
+            if float(params.get("leg_length_m") or 0.0) > 0.0:
+                out.add("leg")
+            return frozenset(out)
+        if kind == "tights":
+            out = {"leg", "foot"}
+            if params.get("tights_style") == "tights" or str(params.get("garters") or "none") != "none":
+                out.add("hip")
+            return frozenset(out)
+        if kind in ("trousers", "skirt"):
+            return frozenset({"waist", "hip", "leg", "foot"} if kind == "trousers" else {"waist", "hip", "leg"})
+        if kind == "dress":
+            out = {"chest", "waist", "hip", "leg"}
+        else:   # top, jacket
+            out = {"chest", "waist"}
+            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M:
+                out.add("hip")
+        if has_sleeves(params):
+            out.add("arm")
+        return frozenset(out)
+    if params is None and item is not None:
+        from app.core import garment_set
+        slots = garment_set._cover_slots(item)
+        if slots and all(s in SLOT_REGIONS for s in slots):
+            return frozenset(r for s in slots for r in SLOT_REGIONS[s])
+    return frozenset(BODY_REGIONS)
+
+
+def _regions_of(item: Optional[Dict[str, Any]]) -> frozenset:
+    """``body_regions`` of an item: by its template parameters when it is a template piece, else by its slots."""
+    from app.core import garment_set
+    if item is not None and garment_set.mesh_mode_of(item) == garment_set.TEMPLATE:
+        return body_regions(params_of(item) or {})
+    return body_regions(None, item)
+
+
+def regions_overlap(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    """Whether the items ``a`` and ``b`` can touch (``body_regions``)."""
+    return bool(_regions_of(a) & _regions_of(b))
+
+
 def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[str, Dict[str, Any]]],
                                                                      List[Tuple[str, Dict[str, Any]]]]:
     """The worn pieces a template piece drapes OVER — ``(templates, own)``, each ``[(item id, item)]`` in id order.
 
     A piece is under ``item_id`` when ``garment_set.layer_order`` over the worn set puts it there (``LAYER_STACKS``
     and ``covers``, A200) or — for a template piece — by ``LAYER_RANK`` (Ruling A142: a jacket over a top or a
-    dress), unless the order puts it over ``item_id``. ``templates``: their drapes are colliders and their keys part
-    of this key; ``own``: own-mesh / shell clothing whose plain-body fit is a collider (A200, a draped jacket over a
-    generated top) and whose fit file's sha256 is part of this key."""
+    dress), unless the order puts it over ``item_id``. Either way only when the two can touch (``regions_overlap``,
+    round 2026-11-25): a glove is never over the bra or the briefs, a skirt never over a bra. ``templates``: their
+    drapes are colliders and their keys part of this key; ``own``: own-mesh / shell clothing whose plain-body fit is a
+    collider (A200, a draped jacket over a generated top) and whose fit file's sha256 is part of this key."""
     from app.core import garment_set
     from app.models.inventory import get_item
     others = sorted({str(i) for i in lower} - {item_id})
@@ -2266,9 +2347,12 @@ def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[
     order = garment_set.layer_order(set(others) | {item_id})
     below = set(order["under"].get(item_id, []))
     rank = LAYER_RANK.get(kind, 1)
+    mine = get_item(item_id)
     templates, own = [], []
     for other in others:
         it = get_item(other)
+        if not regions_overlap(mine, it):
+            continue
         okind = _template_kind(it)
         if okind is not None:
             by_rank = LAYER_RANK.get(okind, 1) < rank and item_id not in order["under"].get(other, [])
