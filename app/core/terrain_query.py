@@ -25,7 +25,8 @@ their own floor and stay neutral. The client mirrors both functions in
 ``client3d/src/game/walk`` (``groundScope`` / ``terrainPace``).
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.log import get_logger
 from app.core.world_geometry import point_in_polygon
@@ -82,9 +83,113 @@ def default_kind() -> str:
     return _config_default_kind()
 
 
+#: Side of one bucket of :class:`AreaIndex`, metres. Big enough that a
+#: painted area spans only a handful of buckets, small enough that a bucket in
+#: a busy part of the world lists a few areas rather than all of them.
+AREA_BUCKET_M = 64.0
+
+
+class AreaIndex:
+    """The painted areas prepared ONCE for many point queries.
+
+    :func:`kind_at` over the raw list parses every polygon and runs the ray
+    cast over every area for every point — about 1.7 ms per point on a world
+    with 88 areas and 7.6k vertices (measured 2026-11-25), which is what made a
+    long route spend minutes inside the terrain lookup. The index answers the
+    SAME question with the same rule:
+
+    * each polygon is parsed once, exactly as :func:`point_in_polygon` parses
+      it (a malformed point makes that area contain nothing, fewer than three
+      points likewise);
+    * its axis-aligned box is kept, and a point outside the box is rejected
+      without the ray cast. That is exact, not an approximation: the ray cast
+      counts an edge only when the point's z lies in the edge's half-open z
+      span, so a point above or below the box meets no edge, and a point left
+      of the box meets every straddling edge — an even number for a closed
+      ring — while a point right of it meets none;
+    * the boxes are bucketed on a :data:`AREA_BUCKET_M` grid, each bucket
+      listing its areas in PAINT ORDER, so "the last containing area wins"
+      reads the same as over the whole list.
+    """
+
+    __slots__ = ("_areas", "_buckets", "_wide")
+
+    def __init__(self, areas: Sequence[Dict[str, Any]]):
+        prepared: List[Tuple[str, Tuple[float, float, float, float],
+                             Tuple[Tuple[float, float], ...]]] = []
+        for area in areas or []:
+            pts: List[Tuple[float, float]] = []
+            ok = True
+            for pt in (area.get("polygon") or []):
+                try:
+                    pts.append((float(pt[0]), float(pt[1])))
+                except (TypeError, ValueError, IndexError):
+                    ok = False
+                    break
+            if not ok or len(pts) < 3:
+                continue
+            xs = [p[0] for p in pts]
+            zs = [p[1] for p in pts]
+            if not all(math.isfinite(v) for v in xs + zs):
+                # A NaN/inf vertex: keep the area but without the box reject —
+                # the ray cast decides, exactly as it does on the raw list.
+                box = (-math.inf, -math.inf, math.inf, math.inf)
+            else:
+                box = (min(xs), min(zs), max(xs), max(zs))
+            prepared.append((str(area.get("kind") or ""), box, tuple(pts)))
+        self._areas = prepared
+        self._buckets = {}
+        self._wide = []
+        for idx, (_kind, box, _pts) in enumerate(prepared):
+            if not all(math.isfinite(v) for v in box):
+                self._wide.append(idx)
+                continue
+            i0, j0 = _bucket_of(box[0], box[1])
+            i1, j1 = _bucket_of(box[2], box[3])
+            for i in range(i0, i1 + 1):
+                for j in range(j0, j1 + 1):
+                    self._buckets.setdefault((i, j), []).append(idx)
+
+    def kind_at(self, x: float, z: float) -> str:
+        """The kind of the topmost area containing (x, z), or "" for none."""
+        cands = self._buckets.get(_bucket_of(x, z), ())
+        if self._wide:
+            cands = sorted(set(cands) | set(self._wide))
+        hit = ""
+        areas = self._areas
+        for idx in cands:
+            kind, box, pts = areas[idx]
+            if x < box[0] or x > box[2] or z < box[1] or z > box[3]:
+                continue
+            if _ray_cast(x, z, pts):
+                hit = kind
+        return hit
+
+
+def _bucket_of(x: float, z: float) -> Tuple[int, int]:
+    return (int(math.floor(x / AREA_BUCKET_M)),
+            int(math.floor(z / AREA_BUCKET_M)))
+
+
+def _ray_cast(x: float, z: float,
+              pts: Tuple[Tuple[float, float], ...]) -> bool:
+    """The loop of :func:`world_geometry.point_in_polygon` on parsed points —
+    the same arithmetic in the same order, so the same answer bit for bit."""
+    inside = False
+    xj, zj = pts[-1]
+    for xi, zi in pts:
+        if (zi > z) != (zj > z):
+            cross_x = (xj - xi) * (z - zi) / (zj - zi) + xi
+            if x < cross_x:
+                inside = not inside
+        xj, zj = xi, zi
+    return inside
+
+
 def kind_at(x: float, z: float,
             areas: Optional[List[Dict[str, Any]]] = None,
-            default_kind: Optional[str] = None) -> str:
+            default_kind: Optional[str] = None,
+            index: Optional[AreaIndex] = None) -> str:
     """Terrain kind at a world point — the topmost containing area wins.
 
     ``list_areas()`` returns ascending z_order/paint order, so the LAST
@@ -92,8 +197,11 @@ def kind_at(x: float, z: float,
 
     ``default_kind`` is the answer for a point no area covers. Hot loops
     (nav grid) prefetch it ONCE and pass it in; ``None`` reads it from the
-    config as before.
+    config as before. Hot loops also pass a prepared :class:`AreaIndex` of the
+    same areas as ``index`` — it then answers and ``areas`` is not read.
     """
+    if index is not None:
+        return index.kind_at(x, z) or default_kind or _config_default_kind()
     if areas is None:
         from app.models.terrain import list_areas
         areas = list_areas()
@@ -107,7 +215,8 @@ def kind_at(x: float, z: float,
 def entry_at(x: float, z: float,
              areas: Optional[List[Dict[str, Any]]] = None,
              catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-             default_kind: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+             default_kind: Optional[str] = None,
+             index: Optional[AreaIndex] = None) -> Tuple[str, Dict[str, Any]]:
     """(kind, effective catalog entry) at a world point — ONE reading.
 
     A kind missing from the catalog (area painted, type deleted later)
@@ -118,7 +227,7 @@ def entry_at(x: float, z: float,
     if catalog is None:
         from app.core.terrain_types import effective_catalog
         catalog = effective_catalog()
-    kind = kind_at(x, z, areas=areas, default_kind=default_kind)
+    kind = kind_at(x, z, areas=areas, default_kind=default_kind, index=index)
     entry = catalog.get(kind)
     if entry is None:
         logger.warning("terrain kind %r has no catalog entry — treating "
@@ -130,7 +239,8 @@ def entry_at(x: float, z: float,
 def passability_at(x: float, z: float,
                    areas: Optional[List[Dict[str, Any]]] = None,
                    catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                   default_kind: Optional[str] = None) -> Tuple[bool, float]:
+                   default_kind: Optional[str] = None,
+                   index: Optional[AreaIndex] = None) -> Tuple[bool, float]:
     """(passable, RAW speed_factor) at a world point.
 
     The factor is the catalog's own, unclamped and without the footprint
@@ -138,7 +248,7 @@ def passability_at(x: float, z: float,
     number to :func:`effective_speed_factor`.
     """
     _kind, entry = entry_at(x, z, areas=areas, catalog=catalog,
-                            default_kind=default_kind)
+                            default_kind=default_kind, index=index)
     return bool(entry.get("passable", True)), float(
         entry.get("speed_factor", 1.0))
 
