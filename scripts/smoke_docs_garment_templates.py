@@ -167,9 +167,9 @@ def main() -> int:
     # G
     gct = GCT.read_text(encoding="utf-8")
     body = re.search(r"def csig\(.*?return", gct, re.S)
-    inputs = ["islands_sha", "item_sha", "back_sha", "PROMPT_SHA", "POST_VERSION"]
+    inputs = ["islands_sha", "item_sha", "back_sha", "PROMPT_KEYS", "POST_VERSION"]
     check("G  csig inputs found in the code", body is not None and all(i in body.group(0) for i in inputs))
-    line = next((ln for ln in doc.splitlines() if "`csig`" in ln and "PROMPT_SHA" in ln), "")
+    line = next((ln for ln in doc.splitlines() if "`csig`" in ln and "PROMPT_KEYS" in ln), "")
     check("G  doc line naming csig's five inputs", all(i in line for i in inputs), line[:120])
     check("G  that line does not put tsig into csig",
           bool(line) and re.search(r"csig[^.]*=\s*[^.]*`tsig`", line) is None)

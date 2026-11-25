@@ -861,7 +861,7 @@ for _extra18 in ({"placket": "buttons"}, {"collar": "stand"}):
 for _sh18 in ("off_shoulder", "straps"):
     _o18 = gt.validate_params({"kind": "top", "shoulders": _sh18, "sleeves": "elbow"})[0]
     # round 2026-11-25: a top with straps is a corset shell — its cut carries the panel / corset / straps parts
-    _x18 = ({"panels": gt.PANEL_VERSION, "corset": gt.CORSET_VERSION, "corset_rules": gtc.CORSET_DARTS_SHA,
+    _x18 = ({"panels": gt.PANEL_VERSION, "corset": gt.CORSET_VERSION, "corset_rules": gtc.CORSET_DARTS_KEYS["straps"],
              "corset_straps": gt.CORSET_STRAPS_VERSION} if _sh18 == "straps" else {})
     check(f"[18.3] a {_sh18} top's cut key carries no neck, with a placket too",
           gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_o18), **_x18})

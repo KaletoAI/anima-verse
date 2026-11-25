@@ -91,13 +91,23 @@ FITTED_PATTERN_REVIEWED = "7c6512ca8e33"
 
 
 def file_sha(path: Path) -> str:
-    """md5[:12] of a file's bytes (the guard of ``UV_PATTERN_KEYS`` / ``FITTED_PATTERN_KEYS``)."""
+    """md5[:12] of a file's bytes (the guard of ``UV_PATTERN_KEYS`` / ``FITTED_PATTERN_KEYS`` /
+    ``CORSET_DARTS_KEYS``)."""
     return hashlib.md5(path.read_bytes()).hexdigest()[:12]
 
 
 CORSET_DARTS_FILE = UV_PATTERN_FILE.parent / "corset_darts.py"
-#: md5[:12] of the corset top's dart rules (phase G; in ``cut_sig`` of a strapless top only).
-CORSET_DARTS_SHA = hashlib.md5(CORSET_DARTS_FILE.read_bytes()).hexdigest()[:12]
+#: The corset top's dart rules (phase G) PER CORSET VARIANT (``corset_variant``: the top's ``shoulders``), in the cut
+#: key of a corset top only: the md5[:12] of the ``corset_darts.py`` that last changed that variant's cut — a comment
+#: or a rule of the other variant re-cuts nothing (key isolation 2026-11-25, review). Same guard as
+#: ``UV_PATTERN_KEYS`` (``CORSET_DARTS_REVIEWED``); both started at the md5 at ac232ef4d (no key moved).
+CORSET_DARTS_KEYS: Dict[str, str] = {"strapless": "80485f8b7823", "straps": "80485f8b7823"}
+CORSET_DARTS_REVIEWED = "80485f8b7823"
+
+
+def corset_variant(params: Dict[str, Any]) -> str:
+    """The corset top's entry of ``CORSET_DARTS_KEYS``: "straps" for a corset top with straps, else "strapless"."""
+    return "straps" if params.get("shoulders") == "straps" else "strapless"
 #: A cut that does not end in this many seconds is left (measured ~10 s; the slot wait comes on top).
 CUT_TIMEOUT_S = 180
 #: After a run that judged nothing (timeout, Blender missing or interrupted) the cut is not started again for so
@@ -161,7 +171,7 @@ def cut_sig(params: Dict[str, Any], *, base_sha: str, lower: List[str]) -> str:
     if gt.build_kind(params) == "top" and gt.panel_piece(params):
         # phase G: a strapless top's darts and back line (``corset_darts.py``)
         payload["corset"] = gt.CORSET_VERSION
-        payload["corset_rules"] = CORSET_DARTS_SHA
+        payload["corset_rules"] = CORSET_DARTS_KEYS[corset_variant(params)]
     if gt.neck_piece(params):
         # phases E + F: a covered top's neck ring (the B8 neckband, the stand-collar strip, the placket line)
         payload["neck"] = gt.NECK_VERSION

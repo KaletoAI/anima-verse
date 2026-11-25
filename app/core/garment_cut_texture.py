@@ -17,8 +17,9 @@ The PROMPT is one of three shipped SECTIONED templates (``PROMPT_FILES``: front 
 section per edit-prompt dialect, ``app/imagegen/edit_prompt.py``, ``docs/edit-prompts.md`` §6) — deliberately not
 world-overridable (``/admin/templates`` stays LLM-only). Code picks the variant (``is_decorated``, the side); the
 backend the render lands on picks the dialect, inside the routed render, so attempt 2 on another backend gets its own
-wording. ``PROMPT_SHA`` (md5 of the three file texts) enters the cut atlas key and the record (``prompt_sha``), so a
-reworded section makes an old atlas stale. The render runs on the occasion ``CUT_OCCASION`` with the use case
+wording. The piece's kind's prompt pin (``PROMPT_KEYS``, ``prompt_sha_of``: the md5 of the family's files that last
+changed what that kind is sent) enters the cut atlas key and the record (``prompt_sha``), so a rewording that changes
+a kind's request makes that kind's old atlases stale — and no other kind's. The render runs on the occasion ``CUT_OCCASION`` with the use case
 ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
 The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready CUT with islands
@@ -27,7 +28,7 @@ renders: a gate rejection of attempt 1 renders attempt 2 on the routing chain's 
 (``routing.gate_attempts``); a failure (busy, media off, no route, a dead backend) never does. It never waits for a drape and may run while the Build drapes the piece. The character's Build runs the same
 flow as its step "cut_texture" for a top whose ``texture`` is "cut" (``build_state`` / ``build_start`` /
 ``build_join``, user test 2026-11-21) — no click on the dialog's button is needed. A cut
-atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, ``PROMPT_SHA``,
+atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, the kind's ``PROMPT_KEYS`` pin,
 ``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
 the state "ready" / "rejected" / "failed". A new ``POST_VERSION`` alone renders nothing: the passed answers of a
 record with the same inputs are re-posted (``predecessors``). A rejected record is rendered again by a manual Build only
@@ -79,12 +80,28 @@ FITTED_PROMPT_FILES = {"front_plain": _PROMPT_DIR / "garment_cut_texture_fitted_
 PROMPT_SETS = {"top": PROMPT_FILES, "fitted": FITTED_PROMPT_FILES}
 PROMPT_TEXTS = {family: {variant: path.read_text(encoding="utf-8") for variant, path in files.items()}
                 for family, files in PROMPT_SETS.items()}
-#: md5 of a family's three shipped files (every section) — part of the cut atlas key, so a reworded section makes an
-#: atlas of that family stale (and only of that family).
+#: md5 of a family's three shipped files as they are now (every section) — the guard of ``PROMPT_KEYS``, never a key.
 PROMPT_SHAS = {family: hashlib.md5("\0".join(texts[v] for v in PROMPT_SETS[family]).encode("utf-8")).hexdigest()
                for family, texts in PROMPT_TEXTS.items()}
-#: A top's prompt sha (unchanged by group A: a top's atlases keep their csig).
+#: The live md5 of a top's files (``PROMPT_SHAS["top"]``).
 PROMPT_SHA = PROMPT_SHAS["top"]
+#: The prompt's part of the cut atlas key PER PROMPT KIND (``prompt_kind``; key isolation 2026-11-25, review): the md5
+#: of the family's files that last changed what a piece of that kind is sent. The md5 of the whole family re-rendered
+#: every atlas of the family on any byte — a skirt-only rewording or one dialect's section re-rendered the gloves'
+#: textures on the hub. A change of a family's files sets the entries of the kinds whose request it changes to the new
+#: md5 and ``PROMPT_REVIEWED[family]`` to it as well; ``scripts/smoke_key_isolation.py`` fails while a family's md5
+#: differs from ``PROMPT_REVIEWED``, so the decision is never skipped. Every entry started at its family's md5 at
+#: ac232ef4d (no csig moved). "" is a piece without template parameters (family "top").
+PROMPT_KEYS: dict[str, str] = {
+    "": "8bbee7343d5f86703e8099d19892ba17", "top": "8bbee7343d5f86703e8099d19892ba17",
+    "skirt": "0b413012b95bb9d07089f86c331f963a", "dress": "0b413012b95bb9d07089f86c331f963a",
+    "jacket": "0b413012b95bb9d07089f86c331f963a", "strapless": "0b413012b95bb9d07089f86c331f963a",
+    "trousers": "0b413012b95bb9d07089f86c331f963a", "briefs": "0b413012b95bb9d07089f86c331f963a",
+    "bra": "0b413012b95bb9d07089f86c331f963a", "gloves": "0b413012b95bb9d07089f86c331f963a",
+    "tights": "0b413012b95bb9d07089f86c331f963a",
+}
+#: The family md5 whose effect on every kind ``PROMPT_KEYS`` reflects (the guard above).
+PROMPT_REVIEWED = {"top": "8bbee7343d5f86703e8099d19892ba17", "fitted": "0b413012b95bb9d07089f86c331f963a"}
 #: Renders per job: a gate rejection of attempt 1 renders attempt 2 on the chain's second entry (docs/edit-prompts.md
 #: §7); a single-entry chain renders it on the same backend with ``ATTEMPT_SEED_STEP`` added to the seed.
 CUT_ATTEMPTS = 2
@@ -145,8 +162,10 @@ def prompt_family(kind) -> str:
 
 
 def prompt_sha_of(kind) -> str:
-    """The prompt sha a piece of ``kind`` is keyed by (``PROMPT_SHAS`` of its ``prompt_family``)."""
-    return PROMPT_SHAS[prompt_family(kind)]
+    """The prompt sha a piece of ``kind`` is keyed by: its ``PROMPT_KEYS`` pin. A kind outside the table (none of the
+    template kinds) is keyed like a piece without parameters — ``prompt_family`` gives it the top's files too."""
+    k = str(kind or "")
+    return PROMPT_KEYS[k] if k in PROMPT_KEYS else PROMPT_KEYS[""]
 
 
 def _fill_triangle(out: np.ndarray, tri: np.ndarray, value: int) -> None:
@@ -946,11 +965,13 @@ def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tupl
     return out, g
 
 
-def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str = PROMPT_SHA) -> str:
+def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str | None = None) -> str:
     """The cut atlas key: the cut's islands, the item image, the back view the back job read ("" for a pattern
-    without a back panel, or before the view exists), the prompt files of the piece's family (``prompt_sha_of``; a
-    top's by default) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
+    without a back panel, or before the view exists), the prompt pin of the piece's kind (``PROMPT_KEYS`` via
+    ``prompt_sha_of``; None = a piece without parameters, a top's files) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
     projection, which the atlas does not depend on)."""
+    if prompt_sha is None:
+        prompt_sha = prompt_sha_of("")
     raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), str(prompt_sha),
                     str(cut_texture_post.POST_VERSION)])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
@@ -1526,7 +1547,9 @@ def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str
     0 image jobs) — else, the same of a PREDECESSOR record (``predecessors``: the same islands, item picture, back view
     and prompt under an older ``cut_texture_post.POST_VERSION``; the entry then carries ``raw_from``, the answer's
     file, and ``reused_from``, its csig): a new post-processing re-posts the answers it has, it never renders them
-    again. Run all (``only`` None) therefore spends only on what did not pass — a rejected back job re-renders the back
+    again — but only for a job whose own entry under ``sig`` is not "rejected" (a re-posted answer the current
+    post-processing rejected is rendered anew, never taken from the predecessor again). Run all (``only`` None)
+    therefore spends only on what did not pass — a rejected back job re-renders the back
     alone (review finding 2026-11-20); Redo ``only`` always renders that job. The ONE rule both ``generate`` and
     ``job_plan`` (the buttons' counts) use. ``{job: record entry}``. Read-only."""
     previous = read_record(character_name, item_id, sig)
@@ -1536,7 +1559,10 @@ def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str
         entry = (previous.get("jobs") or {}).get(job) or {}
         if job != only and entry.get("state") == "ready" and _file(stem, f".raw_{job}.png").is_file():
             out[job] = entry
-    missing = [j for j in parts if j not in out and j != only]
+    # a predecessor's answer fills only a job this csig has not judged yet: once the current post-processing rejected
+    # the re-posted answer (entry "rejected"), taking it again would reject it again on every Build (review 2026-11-25)
+    missing = [j for j in parts if j not in out and j != only
+               and ((previous.get("jobs") or {}).get(j) or {}).get("state") != "rejected"]
     if missing:
         for other, rec in predecessors(character_name, item_id, sig):
             ostem = _stem(character_name, item_id, other)

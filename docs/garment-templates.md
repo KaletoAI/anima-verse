@@ -247,8 +247,8 @@ fitted kinds have their OWN prompt files (`FITTED_PROMPT_FILES`: `garment_cut_te
 `…_fitted_front_decorated.md`, `…_fitted_back.md`, four dialect sections each): the top's tested wording, the main
 pieces named by where they lie (`main_words`: "the two largest shapes are the right front leg panel and the left
 front leg panel", "the top left shape is the front panel"), the article of a pair noun ("a pair of gloves",
-`a_piece`), the small pieces named as plain. Their sha (`prompt_sha_of(kind)`, `PROMPT_SHAS["fitted"]`) keys the
-fitted atlases only; a top's `PROMPT_SHA` and atlases stay as they were. Before the cut, the Build's estimate counts a
+`a_piece`), the small pieces named as plain. Their md5 (`PROMPT_SHAS["fitted"]`) was the pin of every kind of the
+family (`PROMPT_KEYS`, `prompt_sha_of(kind)`); a top's pin and atlases stay as they were. Before the cut, the Build's estimate counts a
 back view and a back job only for a kind with back pieces (`kind_has_back`: not tights, not a cupped bra).
 
 **Keys.** `tsig` of a fitted kind carries its `FITTED_VERSIONS` entry = **1** (group A, 2026-11-21: released together with the
@@ -1046,9 +1046,13 @@ version in them is scoped to what it changes:
   the file that last changed that group's islands. Changing `uv_pattern.py` / `fitted_pattern.py` means deciding which
   groups' islands change, moving those pins to the new md5 and `UV_PATTERN_REVIEWED` / `FITTED_PATTERN_REVIEWED` with
   them; `scripts/smoke_key_isolation.py` fails until that is done.
-- The prompt sha is per prompt family (`PROMPT_SHAS`: "top", "fitted"); the family's files have no kind-specific
-  sections, so a rewording changes what every piece of that family is sent.
-- `POST_VERSION` is in `csig`, but a bump re-posts the stored answers (`predecessors`) and renders nothing.
+- The prompt is pinned per prompt kind (`PROMPT_KEYS`, `prompt_sha_of`): the md5 of the family's files that last
+  changed what that kind is sent. A rewording aimed at one kind, or one dialect's section, moves only the pins of the
+  kinds whose request it changes, and `PROMPT_REVIEWED` with them; the live `PROMPT_SHAS` are only the guard.
+  The corset dart rules are pinned the same way per corset variant (`CORSET_DARTS_KEYS`: "strapless", "straps";
+  `CORSET_DARTS_REVIEWED`). `scripts/smoke_key_isolation.py` fails until such a decision is made.
+- `POST_VERSION` is in `csig`, but a bump re-posts the stored answers (`predecessors`) and renders nothing. A
+  re-posted answer the new post-processing rejects is not taken from the predecessor again: that job renders anew.
 
 A rejected cut texture is not rendered again by a Build while the request would be the same
 (`retry_changes_request`: the same csig, the same seeds, the same routing chain, every attempt judged on its intended
@@ -1057,7 +1061,7 @@ moves by `ROUND_SEED_STEP` per round, so a retry is a new request.
 
 ### The key `csig`
 
-`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of the three prompt files of the piece's family — a top's, or the fitted kinds' own (`prompt_sha_of(kind)`) —, `POST_VERSION`), 12 hex.
+`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), the prompt pin of the piece's kind in `PROMPT_KEYS` (`prompt_sha_of(kind)`: the md5 of its family's three prompt files — a top's, or the fitted kinds' own — that last changed what the kind is sent), `POST_VERSION`), 12 hex.
 
 It deliberately does not contain the drape key `tsig`: `tsig` also carries the piece-only views, and a re-rendered
 FRONT view changes nothing the cut atlas depends on. The back view does: a new back view makes the cut stale (the

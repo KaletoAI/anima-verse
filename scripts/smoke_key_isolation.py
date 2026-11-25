@@ -55,27 +55,33 @@ WHAT IS CHECKED, and where every expected value comes from
       CORSET_STRAPS_VERSION     -> corset_straps = yes
       BRA_EDGE_VERSION          -> bra, top_cups
       STRAPLESS_UNDERARM_M      -> dress_strapless
-      NECK_VERSION, UV_PATTERN_KEYS[*], FITTED_PATTERN_KEYS[*], CORSET_DARTS_SHA -> none (cut-only)
+      NECK_VERSION, UV_PATTERN_KEYS[*], FITTED_PATTERN_KEYS[*], CORSET_DARTS_KEYS[*] -> none (cut-only)
     In particular, for the gloves: only TEMPLATE_VERSIONS["gloves"] and FITTED_VERSIONS["gloves"] move the key.
 [B] The cut key, the same way (lower []):
       TEMPLATE_VERSIONS[k], FITTED_VERSIONS[k] -> as in [A]
       UV_PATTERN_KEYS[g]        -> the cases whose pattern_group is g
       FITTED_PATTERN_KEYS[k]    -> the cases whose build_kind is the fitted kind k
       PANEL_VERSION, LEG_VERSION, STRAP_VERSION, CORSET_STRAPS_VERSION, BRA_EDGE_VERSION -> as in [A]
-      CORSET_VERSION, CORSET_DARTS_SHA -> corset = yes (build kind top and a panel piece)
+      CORSET_VERSION            -> corset = yes (build kind top and a panel piece)
+      CORSET_DARTS_KEYS[v]      -> the corset top of variant v (``corset_variant``: shoulders "straps" -> "straps",
+                                   else "strapless"): [strapless] top_corset only, [straps] top_corset_straps only
       NECK_VERSION              -> neck = yes
       STRAPLESS_UNDERARM_M      -> none (drape-only)
     For the gloves: TEMPLATE_VERSIONS["gloves"], FITTED_VERSIONS["gloves"], UV_PATTERN_KEYS["gloves"],
     FITTED_PATTERN_KEYS["gloves"] and nothing else.
 [C] No key moved when the tables came in: every TEMPLATE_VERSIONS entry is 10 and every FITTED_VERSIONS entry 1 (the
-    shared values before), every UV_PATTERN_KEYS entry but "top" and every FITTED_PATTERN_KEYS entry is the md5[:12] of
-    the file at ac232ef4d (``git show``; the keys before were the live md5 of that file) — "top" stays c926b67f0's
-    9f1a4a8ce3b8 — and the cut key of a default glove equals the hand-built payload
+    shared values before), every UV_PATTERN_KEYS entry but "top", every FITTED_PATTERN_KEYS entry and every
+    CORSET_DARTS_KEYS entry is the md5[:12] of its file at ac232ef4d (``git show``; the keys before were the live md5
+    of that file) — "top" stays c926b67f0's 9f1a4a8ce3b8 —; every PROMPT_KEYS entry is its family's md5 at ac232ef4d
+    (the full md5 of the family's three files joined by NUL in front_plain, front_decorated, back order — what
+    ``PROMPT_SHAS`` was keyed by before): "" and "top" the top files', every other kind the fitted files'; and the cut key of a default glove equals the hand-built payload
     {"params": cut_params, "version": 10, "uv_pattern": <ac232ef4d md5>, "base", "lower": [], "fitted": 1,
     "fitted_pattern": <ac232ef4d md5>} (md5 of the compact sorted json, 12 hex).
-[D] The guard: ``UV_PATTERN_REVIEWED`` / ``FITTED_PATTERN_REVIEWED`` are the md5[:12] of the files as they are now —
-    a change of ``uv_pattern.py`` / ``fitted_pattern.py`` fails here until its author has decided which groups' pins
-    move (``garment_template_cut`` module comment).
+[D] The guard: ``UV_PATTERN_REVIEWED`` / ``FITTED_PATTERN_REVIEWED`` / ``CORSET_DARTS_REVIEWED`` are the md5[:12] of
+    the files as they are now, ``PROMPT_REVIEWED[family]`` the live ``PROMPT_SHAS[family]`` — a change of
+    ``uv_pattern.py`` / ``fitted_pattern.py`` / ``corset_darts.py`` / a family's prompt files fails here until its
+    author has decided which groups' / variants' / kinds' pins move (``garment_template_cut`` and
+    ``garment_cut_texture`` ``PROMPT_KEYS`` comments).
 [E] A related change DOES move the key: a glove's own parameter (length "wrist" -> "elbow") changes tsig and cut_sig;
     another base sha changes both; a lower token changes both (a piece under it); the picture's texture sha changes
     tsig, not cut_sig.
@@ -86,15 +92,25 @@ WHAT IS CHECKED, and where every expected value comes from
     rank puts it under. Changing the bra's parameters therefore cannot reach the gloves' key. The control: template
     trousers (rank 1) worn with the briefs (rank 0, hip overlaps) lie over the briefs, so a change of the briefs'
     drape key moves the trousers' tsig (its token "<briefs id>:<briefs tsig>").
-[G] The cut texture key: ``csig`` takes the family's prompt sha (``prompt_sha_of``). Hand-derived families
-    (``prompt_kind`` -> ``prompt_family``): skirt, dress, jacket ("skirt"/"dress"/"jacket" are HELD_TRIM_KINDS), the
-    corset tops ("strapless"), top_cups ("bra") and the five fitted kinds -> "fitted"; top_covered -> "top". Changing
-    PROMPT_SHAS["top"] moves only top_covered's csig, PROMPT_SHAS["fitted"] every other case's.
+[G] The cut texture key: ``csig`` takes the KIND's prompt pin (``prompt_sha_of`` = ``PROMPT_KEYS[prompt_kind]``).
+    Hand-derived prompt kinds (``prompt_kind``: build_kind, "strapless" for a top with shoulders strapless / straps):
+      skirt -> skirt, dress_straps / dress_strapless -> dress, top_covered -> top, top_corset / top_corset_straps ->
+      strapless, top_cups -> bra, jacket -> jacket, the five fitted cases -> their kind.
+    Families (``prompt_family``, the files the request is built from): top_covered "top", every other case "fitted".
+    Changing PROMPT_KEYS[k] moves exactly the cases of prompt kind k — PROMPT_KEYS["skirt"] only skirt,
+    PROMPT_KEYS["gloves"] only gloves; the gloves' csig moves for PROMPT_KEYS["gloves"] and no other entry. Changing
+    the live PROMPT_SHAS (a reworded file, a dialect section) moves no csig — only the guard [D] notices it. A kind
+    outside the table keys like "" (the top files' pin).
 [H] A post-processing version renders nothing again: a READY record of csig S0 (islands "i", item "m", back "k",
     the fitted prompt sha, POST_VERSION p) with raw_front / raw_back files; under POST_VERSION p + 1 the csig S1
     differs, and ``reused_jobs(S1, ["front", "back"])`` re-uses BOTH answers from S0 (``reused_from`` S0, ``raw_from``
     the S0 file) — 0 image jobs. A predecessor with another item sha ("m2") is not one (a new picture renders).
     Redo ``only="back"`` re-uses the front alone.
+    The negative case (review 2026-11-25): an own record of S1 (POST_VERSION p + 1, state rejected) whose front entry
+    is "ready" with its own raw file and whose back entry is "rejected" with ``reused_from`` S0 (the re-posted answer
+    the new post-processing rejected): ``reused_jobs(S1)`` re-uses the front from S1 itself (no ``reused_from``) and
+    NOT the back — the back renders anew. The same record with the back entry "failed" (no verdict) still re-uses the
+    back from S0.
 [I] The retry rule (``retry_changes_request``) on hand-made records of the current csig:
       Glut's record (state rejected; back rejected after attempts 1 and 2, both judged on their intended entry; no
       "chain" recorded)                                                      -> False (the Build renders nothing)
@@ -232,7 +248,10 @@ KNOBS += [
     ("BRA_EDGE_VERSION", lambda: bump_attr(gt, "BRA_EDGE_VERSION"), BRA_EDGE, BRA_EDGE),
     ("STRAPLESS_UNDERARM_M", lambda: bump_attr(gt, "STRAPLESS_UNDERARM_M"), NO_BODICE_DRESS, set()),
     ("NECK_VERSION", lambda: bump_attr(gt, "NECK_VERSION"), set(), NECK),
-    ("CORSET_DARTS_SHA", lambda: bump_attr(gtc, "CORSET_DARTS_SHA"), set(), CORSET),
+    ("CORSET_DARTS_KEYS[strapless]", lambda: bump_entry(gtc, "CORSET_DARTS_KEYS", "strapless"), set(),
+     {"top_corset"}),
+    ("CORSET_DARTS_KEYS[straps]", lambda: bump_entry(gtc, "CORSET_DARTS_KEYS", "straps"), set(),
+     {"top_corset_straps"}),
 ]
 
 print("smoke_key_isolation")
@@ -268,10 +287,24 @@ try:
     uv_old = md5_at("ac232ef4d", "app/blender/scripts/uv_pattern.py")
     fp_old = md5_at("ac232ef4d", "app/blender/scripts/fitted_pattern.py")
     top_old = md5_at("c926b67f0", "app/blender/scripts/uv_pattern.py")
+    cd_old = md5_at("ac232ef4d", "app/blender/scripts/corset_darts.py")
+    fam_old = {}
+    for _fam, _files in (("top", ("front_plain", "front_decorated", "back")),
+                         ("fitted", ("fitted_front_plain", "fitted_front_decorated", "fitted_back"))):
+        _texts = [subprocess.run(["git", "-C", str(ROOT), "show",
+                                  f"ac232ef4d:shared/templates/image/garment_cut_texture_{f}.md"],
+                                 capture_output=True, check=True).stdout.decode("utf-8") for f in _files]
+        fam_old[_fam] = hashlib.md5("\0".join(_texts).encode("utf-8")).hexdigest()
 except (OSError, subprocess.CalledProcessError) as e:
     print(f"NOTE [C] git show failed ({e}): [C] is skipped")
-    uv_old = fp_old = top_old = None
+    uv_old = fp_old = top_old = cd_old = fam_old = None
 if uv_old:
+    check("[C] CORSET_DARTS_KEYS: both variants at ac232ef4d's md5",
+          gtc.CORSET_DARTS_KEYS == {"strapless": cd_old, "straps": cd_old}, (gtc.CORSET_DARTS_KEYS, cd_old))
+    PKINDS = ("", "top", "skirt", "dress", "jacket", "strapless") + FITTED
+    check("[C] PROMPT_KEYS: \"\" and top at the top files' md5 at ac232ef4d, every other kind at the fitted files'",
+          gct.PROMPT_KEYS == {k: fam_old["top" if k in ("", "top") else "fitted"] for k in PKINDS},
+          (gct.PROMPT_KEYS, fam_old))
     check("[C] UV_PATTERN_KEYS: every group but top at ac232ef4d's md5, top at c926b67f0's",
           gtc.UV_PATTERN_KEYS == {**{g: uv_old for g in GROUPS}, "top": top_old}, (gtc.UV_PATTERN_KEYS, uv_old))
     check("[C] FITTED_PATTERN_KEYS: every fitted kind at ac232ef4d's md5",
@@ -289,6 +322,13 @@ check("[D] uv_pattern.py reviewed (UV_PATTERN_REVIEWED = its md5; else decide wh
 check("[D] fitted_pattern.py reviewed (FITTED_PATTERN_REVIEWED = its md5; else decide which kinds' pins move)",
       gtc.file_sha(gtc.FITTED_PATTERN_FILE) == gtc.FITTED_PATTERN_REVIEWED,
       (gtc.file_sha(gtc.FITTED_PATTERN_FILE), gtc.FITTED_PATTERN_REVIEWED))
+
+check("[D] corset_darts.py reviewed (CORSET_DARTS_REVIEWED = its md5; else decide which variants' pins move)",
+      gtc.file_sha(gtc.CORSET_DARTS_FILE) == gtc.CORSET_DARTS_REVIEWED,
+      (gtc.file_sha(gtc.CORSET_DARTS_FILE), gtc.CORSET_DARTS_REVIEWED))
+for _fam in ("top", "fitted"):
+    check(f"[D] the {_fam} prompt files reviewed (PROMPT_REVIEWED = their md5; else decide which kinds' pins move)",
+          gct.PROMPT_SHAS[_fam] == gct.PROMPT_REVIEWED[_fam], (gct.PROMPT_SHAS[_fam], gct.PROMPT_REVIEWED[_fam]))
 
 # [E]
 g = CASES["gloves"]
@@ -329,20 +369,41 @@ check("[F] control: a change of the briefs' drape moves the trousers' tsig",
       tsig_of(tr, lower=[f"briefs:{b1}"]) != tsig_of(tr, lower=[f"briefs:{b2}"]))
 
 # [G]
+PKIND = {"skirt": "skirt", "dress_straps": "dress", "dress_strapless": "dress", "top_covered": "top",
+         "top_corset": "strapless", "top_corset_straps": "strapless", "top_cups": "bra", "jacket": "jacket",
+         **{k: k for k in FITTED}}
 FAMILY = {c: ("top" if c == "top_covered" else "fitted") for c in CASES}
+check("[G] prompt kinds as derived", {c: gct.prompt_kind(p) for c, p in CASES.items()} == PKIND,
+      {c: gct.prompt_kind(p) for c, p in CASES.items()})
 got_family = {c: gct.prompt_family(gct.prompt_kind(p)) for c, p in CASES.items()}
 check("[G] prompt families as derived", got_family == FAMILY, got_family)
-for fam in ("top", "fitted"):
-    before = {c: gct.csig("i", "m", "k", gct.prompt_sha_of(gct.prompt_kind(p))) for c, p in CASES.items()}
-    with patch.dict(gct.PROMPT_SHAS, {fam: "f" * 32}):
-        moved = {c for c, p in CASES.items() if gct.csig("i", "m", "k", gct.prompt_sha_of(gct.prompt_kind(p))) != before[c]}
-    check(f"[G] PROMPT_SHAS[{fam}] moves exactly the {fam} family's csig", moved == {c for c in CASES
-                                                                                      if FAMILY[c] == fam}, sorted(moved))
+
+
+def csig_of(p):
+    return gct.csig("i", "m", "k", gct.prompt_sha_of(gct.prompt_kind(p)))
+
+
+before = {c: csig_of(p) for c, p in CASES.items()}
+glove_keys = set()
+for k in sorted(gct.PROMPT_KEYS):
+    with patch.dict(gct.PROMPT_KEYS, {k: "f" * 32}):
+        moved = {c for c, p in CASES.items() if csig_of(p) != before[c]}
+    if "gloves" in moved:
+        glove_keys.add(k)
+    check(f"[G] PROMPT_KEYS[{k!r}] moves exactly the csig of prompt kind {k!r}",
+          moved == {c for c in CASES if PKIND[c] == k}, sorted(moved))
+check("[G] the gloves' csig: only PROMPT_KEYS['gloves']", glove_keys == {"gloves"}, sorted(glove_keys))
+with patch.dict(gct.PROMPT_SHAS, {"top": "f" * 32, "fitted": "e" * 32}):
+    moved = {c for c, p in CASES.items() if csig_of(p) != before[c]}
+check("[G] a reworded prompt file (the live PROMPT_SHAS) moves no csig", moved == set(), sorted(moved))
+check("[G] a kind outside the table keys like a piece without parameters",
+      gct.prompt_sha_of("cape") == gct.PROMPT_KEYS[""] and gct.csig("i", "m", "k") == gct.csig("i", "m", "k",
+                                                                                              gct.PROMPT_KEYS[""]))
 
 # [H]
 CUT = _TMP / "cut"
 CUT.mkdir(parents=True, exist_ok=True)
-psha = gct.PROMPT_SHAS["fitted"]
+psha = gct.PROMPT_KEYS["gloves"]
 
 
 def write_record(sig, item_sha, post):
@@ -374,6 +435,27 @@ with patch.object(gct, "cut_dir", lambda _c: CUT):
               [s for s, _r in gct.predecessors("Char", "glove", s1)])
         only = gct.reused_jobs("Char", "glove", s1, ["front", "back"], only="back")
         check("[H] Redo back re-uses the front alone", sorted(only) == ["front"], sorted(only))
+        # the negative case: S1's own record, back re-posted from S0 and rejected by the new post-processing
+        own = {"csig": s1, "state": "rejected", "islands_sha": "i", "item_sha": "m", "back_sha": "k",
+               "prompt_sha": psha, "post_version": p0 + 1, "created_at": "2026-11-25T11:00:00",
+               "jobs": {"front": {"state": "ready", "attempts": [{"attempt": 1, "state": "ready"}]},
+                        "back": {"state": "rejected", "reused_from": s0,
+                                 "attempts": [{"attempt": 1, "state": "ready"}]}}}
+        (CUT / f"glove_{s1}.json").write_text(json.dumps(own), encoding="utf-8")
+        (CUT / f"glove_{s1}.raw_front.png").write_bytes(f"{s1}-front".encode())
+        (CUT / f"glove_{s1}.raw_back.png").write_bytes(f"{s0}-back".encode())
+        again = gct.reused_jobs("Char", "glove", s1, ["front", "back"])
+        check("[H] a re-posted answer the new post-processing rejected is not taken again (the back renders)",
+              sorted(again) == ["front"] and "reused_from" not in again["front"],
+              {k: v.get("reused_from") for k, v in again.items()})
+        own["jobs"]["back"] = {"state": "failed", "reason": "x"}
+        (CUT / f"glove_{s1}.json").write_text(json.dumps(own), encoding="utf-8")
+        again = gct.reused_jobs("Char", "glove", s1, ["front", "back"])
+        check("[H] a back entry without a verdict (failed) still takes the predecessor's answer",
+              sorted(again) == ["back", "front"] and again["back"].get("reused_from") == s0
+              and "reused_from" not in again["front"], {k: v.get("reused_from") for k, v in again.items()})
+        for f in CUT.glob(f"glove_{s1}.*"):
+            f.unlink()          # S1's record is no part of the check below
     check("[H] under the same POST_VERSION a record is no predecessor of its own csig",
           gct.predecessors("Char", "glove", s0) == [])
 
