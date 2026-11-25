@@ -26,6 +26,9 @@ Expected, by hand from the plan's interfaces:
     carries the failure, no row is keyed by the part.
 [4d] earrings E with style drop, current, own drop mesh missing → ``pendant`` (item_id E) then ``accessory`` (E,
     manual) — as before part items.
+[4e] the buckle's mesh refused / failed / load-blocked / running (a record written by hand, ``_RUNNING``) → each
+    part row's reason on the BELT names neither a chain nor a pendant (review finding: a belt row read "the chain is
+    shown without it").
 [5] the part's image replaced → its state ``missing`` (new psig), item_a's state ``due`` with the part's reason
     "Linked buckle not built yet — Build mesh spends 1 hub job", and no job is started.
 [6] the part deleted (``delete_item``) → ``part_states[0].state == "gone"``; the build runs and its record carries no
@@ -143,7 +146,7 @@ print("       " + pend[0].label)
 
 # [4c]
 ap_run = ap.run
-ap.run = lambda _i: {"state": "failed", "reason": "Pendant job failed — x; the chain is shown without it"}
+ap.run = lambda _i: {"state": "failed", "reason": ap.REASON_FAILED.format(error="x")}
 try:
     out = fb._run_pendant("Puppet", pend[0])
 except Exception as e:  # noqa: BLE001
@@ -151,6 +154,26 @@ except Exception as e:  # noqa: BLE001
 check("[4c] the failure is named", "x" in str(out), True)
 ap.run = ap_run
 check("[4c] no piece jobs for the host", fb._item_jobs(steps, "pieces", "item_a"), 0)
+
+# [4e] role-neutral reasons on a belt
+psig0 = ap.current_psig("item_p")
+d0 = ap.pendant_dir("item_p", psig0)
+d0.mkdir(parents=True, exist_ok=True)
+seen = {}
+for failure in ("gate", "backend", "load"):
+    (d0 / "record.json").write_text(json.dumps({"accepted": False, "failure": failure, "error": "x"}))
+    row = parts.part_states(SPEC_A)[0]
+    seen[row["state"] + ":" + failure] = row["reason"]
+(d0 / "record.json").unlink()
+ap._RUNNING.add("item_p")
+row = parts.part_states(SPEC_A)[0]
+seen[row["state"]] = row["reason"]
+ap._RUNNING.discard("item_p")
+check("[4e] states", sorted(seen), ["failed:backend", "missing:load", "refused:gate", "running"])
+check("[4e] no chain / pendant words on a belt row",
+      {k: v for k, v in seen.items() if "chain" in v.lower() or "pendant" in v.lower()}, {})
+for k, v in sorted(seen.items()):
+    print(f"       {k}: {v}")
 
 # [1] / [3] the mesh exists
 psig = store_mesh("item_p")
