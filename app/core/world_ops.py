@@ -830,12 +830,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.core.interaction_engine import payload_for as _interaction_payload
     from app.core.heightfield import current_sig as height_sig
     from app.models.terrain import terrain_sig
-    from app.models.world_props import payload_snapshot
+    from app.models.world_props import payload_shared
 
     # Capture matching rows and signature together: a later write must not
-    # pair an older payload with a newer cache token.
+    # pair an older payload with a newer cache token. The rows are the shared
+    # cache (no copy): this payload is only encoded, never changed in place.
     _t = _pc()
-    _world_props, _world_props_sig = payload_snapshot()
+    _world_props, _world_props_sig = payload_shared()
     _lap("world_props", _t)
 
     avatar = (avatar_name or "").strip()

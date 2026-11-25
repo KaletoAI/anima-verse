@@ -3890,6 +3890,38 @@ def _json_off_loop(payload: Any) -> JSONResponse:
     return JSONResponse(jsonable_encoder(payload))
 
 
+def _encode_default(obj: Any) -> Any:
+    """``json.dumps`` hook for a value that is not a JSON type (set, Path,
+    Enum, datetime, ...): FastAPI's own conversion of that one value."""
+    return jsonable_encoder(obj)
+
+
+def _json_fast(payload: Any) -> Response:
+    """Encode a payload of mostly native values in ONE C pass.
+
+    The same bytes as ``_json_off_loop`` (the options are those of
+    starlette's ``JSONResponse.render``), without the Python walk of
+    ``jsonable_encoder`` over the whole tree: only a value json cannot
+    write itself goes through ``_encode_default``. A ``TypeError`` from
+    the dump (e.g. a non-string dict key) falls back to ``_json_off_loop``,
+    which raises the same error type as before when the payload is really
+    unencodable; NaN stays a ``ValueError`` like the old path.
+
+    One deliberate difference: ``jsonable_encoder`` drops dict keys with the
+    SQLAlchemy prefix ``_sa``, this path keeps them. The worldmap payload
+    carries no SQLAlchemy objects, so such a key could only come from author
+    data and is now delivered instead of silently dropped
+    (``scripts/smoke_worldmap_encode.py`` [J7]).
+    """
+    try:
+        body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"),
+                          default=_encode_default).encode("utf-8")
+    except TypeError:
+        return _json_off_loop(payload)
+    return Response(content=body, media_type="application/json")
+
+
 @router.get("/play/worldmap")
 def play_worldmap(user=Depends(get_current_user),
                   show_all: int = Query(0, alias="all")):
@@ -3902,7 +3934,8 @@ def play_worldmap(user=Depends(get_current_user),
     A PLAIN ``def`` for the same reason as ``/play/scene``: the payload is
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
-    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
+    ``_json_fast`` encodes the payload in the worker thread, in one C pass
+    (the shared world-prop rows are serialized, never copied).
 
     Every call feeds the hot-path statistics (``core/hot_path_stats``): one
     log line per minute, ``hot_path worldmap n=<n> <key>_p50=… <key>_p95=…``
@@ -3935,7 +3968,7 @@ def play_worldmap(user=Depends(get_current_user),
     build_ms = (time.monotonic() - t0) * 1000
     payload["sync"]["build_ms"] = round(build_ms, 1)
     t_enc = time.perf_counter()
-    response = _json_off_loop(payload)
+    response = _json_fast(payload)
     hot_path_stats.record("worldmap", {
         "build_ms": build_ms,
         "encode_ms": (time.perf_counter() - t_enc) * 1000,
