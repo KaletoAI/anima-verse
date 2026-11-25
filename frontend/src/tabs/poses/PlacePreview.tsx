@@ -2295,9 +2295,18 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         if (autoAlignOut.current && scene?.for.startsWith(`${kind}|`) && !(figs.length === 0 && noPlaceRun?.noPlace && noPlaceRun.kind === kind && (noPlaceRun.set ?? '') === (set ?? '')))
           autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose,
             contactHeights: () => {
-              const probe = solo || figs.length < 2 ? null : runAt(timeRef.current, draftRef.current, true)
-              const found = probe ? findHits(probe, draftRef.current.contactRelations ?? []) : []
-              const out = measureContactHeights(draftRef.current, found)
+              // Every relation that makes contact at SOME frame of the loop (scanned in 32 steps from the current
+              // frame): the first frame it is found at names it; measureContactHeights finds its deepest frame itself.
+              const found = new Map<string, Hit>()
+              if (!solo && figs.length > 1) {
+                const steps = 32
+                for (let i = 0; i < steps; i++) {
+                  const probe = runAt((timeRef.current + i * duration / steps) % Math.max(duration, 1e-6), draftRef.current, true)
+                  for (const h of probe ? findHits(probe, draftRef.current.contactRelations ?? []) : [])
+                    if (!found.has(relKey(h))) found.set(relKey(h), h)
+                }
+              }
+              const out = measureContactHeights(draftRef.current, [...found.values()])
               runAt(timeRef.current, draftRef.current, false)
               return out
             },
