@@ -47,8 +47,17 @@ _DECIMALS = 3
 
 
 def _finite(*values: float) -> None:
+    """Raise ValueError unless every value is a finite number. Any numeric type
+    that converts with float() counts (numpy scalars, Decimal); bools and strings
+    do not."""
     for v in values:
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        if isinstance(v, (bool, str, bytes)):
+            raise ValueError(f"not a finite number: {v!r}")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"not a finite number: {v!r}") from None
+        if not math.isfinite(f):
             raise ValueError(f"not a finite number: {v!r}")
 
 
@@ -60,6 +69,8 @@ def estimate(issued_s: float, exit_s: float, length_m: float, speed_m_s: float,
     flip = eta + entry_s
     A non-positive speed or a non-finite input raises ValueError."""
     _finite(issued_s, exit_s, length_m, speed_m_s, entry_s)
+    issued_s, exit_s, length_m, speed_m_s, entry_s = (
+        float(issued_s), float(exit_s), float(length_m), float(speed_m_s), float(entry_s))
     if speed_m_s <= 0:
         raise ValueError(f"speed_m_s must be > 0, got {speed_m_s!r}")
     eta = issued_s + exit_s + length_m / speed_m_s + START_SLACK_S
@@ -69,6 +80,7 @@ def estimate(issued_s: float, exit_s: float, length_m: float, speed_m_s: float,
 def deadline(issued_s: float, eta_s: float) -> float:
     """Latest motion second the server waits: eta + max(DEADLINE_MIN_S, 0.5 * (eta - issued))."""
     _finite(issued_s, eta_s)
+    issued_s, eta_s = float(issued_s), float(eta_s)
     return eta_s + max(DEADLINE_MIN_S, 0.5 * (eta_s - issued_s))
 
 
@@ -95,11 +107,15 @@ def room_chain_length(rooms: dict[str, int], doorways: list[dict], stairs: list[
     ``stairs`` are ``{"foot": (x, y, z), "head": (x, y, z), "from_level": int,
     "to_level": int}`` with an optional ``"rooms": [foot_room, head_room]``. A
     flight without ``rooms`` links every room of ``from_level`` with every room of
-    ``to_level``; with it, only those two rooms. All in world metres.
+    ``to_level``; with it, only those two rooms. A ``rooms`` that is set but
+    unusable (not two distinct known room ids) raises ValueError instead of
+    silently falling back to the level rule, which can underestimate a room
+    change badly. All in world metres.
 
     The chain is a breadth-first search over the rooms (fewest transitions;
-    among chains with the same number of transitions the shorter one), edges in
-    list order: doorways, then flights. Its length is ROOM_DETOUR times the sum
+    among chains with the same number of transitions the one cheapest up to
+    that room, so with several parallel doors it is an estimate, not always the
+    shortest chain). Its length is ROOM_DETOUR times the sum
     of the horizontal legs start -> doorway(s) -> stair foot, stair head ->
     ... -> goal, plus the 3D length of each flight without the factor. Same
     room, unknown rooms or no chain: the straight line start -> goal times
@@ -121,8 +137,12 @@ def room_chain_length(rooms: dict[str, int], doorways: list[dict], stairs: list[
         foot = tuple(float(v) for v in flight["foot"])
         head = tuple(float(v) for v in flight["head"])
         run = math.dist(foot, head)
-        named = [r for r in (flight.get("rooms") or [])]
-        if len(named) == 2 and named[0] in rooms and named[1] in rooms:
+        named = flight.get("rooms")
+        if named is not None:
+            named = list(named)
+            if (len(named) != 2 or named[0] == named[1]
+                    or named[0] not in rooms or named[1] not in rooms):
+                raise ValueError(f"stairs rooms must name two distinct known rooms, got {named!r}")
             lows, highs = [named[0]], [named[1]]
         else:
             lows = [r for r, lv in rooms.items() if lv == int(flight["from_level"])]
@@ -210,6 +230,10 @@ def new_order(kind: str, *, issued_s: float, eta_s: float, flip_s: float | None,
     if status not in STATUSES:
         raise ValueError(f"unknown order status {status!r}")
     _finite(issued_s, eta_s, deadline_s, speed_m_s)
+    # A moving order needs a positive speed (as estimate() does); a cancel
+    # (stand-up, teleport snap) may carry 0, never a negative speed.
+    if float(speed_m_s) < 0 or (kind != "cancel" and float(speed_m_s) == 0):
+        raise ValueError(f"speed_m_s must be > 0 ({kind}), got {speed_m_s!r}")
     if not awaits:
         if flip_s is None:
             raise ValueError("flip_s is required unless awaits is set")

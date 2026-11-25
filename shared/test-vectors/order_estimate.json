@@ -10,7 +10,7 @@
     {"label":"[O1] estimate seated NPC to bed","fn":"estimate","args":[100,1.2,2.795085,1.4,2.4],"expect":[103.696489,106.096489],"eps":0.000001},
     {"label":"[O1] deadline seated NPC to bed","fn":"deadline","args":[100,103.696489],"expect":113.696489,"eps":0.000001},
     {"label":"[O2] room chain r-a to r-up","fn":"room_chain_length","args":[{"$fixture":"NAV_ROOMS"},{"$fixture":"NAV_DOORWAYS"},{"$fixture":"NAV_STAIRS"},[97,0,-1],"r-a",[104,3,2],"r-up"],"expect":24.057367,"eps":0.000001},
-    {"label":"[O2] estimate room change","fn":"estimate","args":[0,0,24.057367,1.4,0],"expect":[17.683833,17.683833],"eps":0.000001},
+    {"label":"[O2] estimate room change","fn":"estimate","args":[0,0,24.0573666,1.4,0],"expect":[17.683833,17.683833],"eps":0.000001},
     {"label":"[O3] no chain","fn":"room_chain_length","args":[{"r-a":0,"r-b":0},[],[],[0,0,0],"r-a",[3,0,4],"r-b"],"expect":6.5,"eps":0.000001}
   ]
 }

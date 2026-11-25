@@ -63,7 +63,15 @@ ROOM_DETOUR 1.3, DEADLINE_MIN_S 10.
 [O4] estimate(..., speed_m_s=0, ...) -> ValueError (also NaN input);
      new_order(..., awaits="reaction", flip_s=5) -> no key flip_motion_s;
      without awaits, flip_motion_s = 5; revision 1, seq 0; issued 1.23456 is
-     published as 1.235 (3 decimals); an unknown kind raises ValueError.
+     published as 1.235 (3 decimals); an unknown kind, an unknown status, a
+     missing flip_s without awaits, speed 0 in a walk / prop_action order
+     (a cancel may carry 0, never a negative speed) and an unknown step
+     raise ValueError; a flight whose "rooms" is set but unusable (one entry,
+     an unknown room id, the same room twice) raises ValueError instead of
+     silently taking the level rule of [O2b]. A numpy-like scalar (any value
+     float() accepts, here Decimal("1.4")) is a valid speed; True is not.
+     The vector feeds the [O2] estimate with the unrounded L 24.0573666:
+       24.0573666 / 1.4 = 17.1838333, + 0.5 = 17.6838333 -> 17.683833.
 """
 from __future__ import annotations
 
@@ -170,11 +178,30 @@ def run_hand() -> None:
                           snap=True, **{**common, "status": "ended"})
     check(cancel["actors"][0].get("stand") == {"x": 1, "y": 0, "z": 2, "yaw": 0} and "stand" not in cancel,
           "stand lands per actor, not on top")
-    try:
-        mo.new_order("pair", flip_s=5, **common)
-        check(False, "unknown kind raises ValueError")
-    except ValueError:
-        check(True, "unknown kind raises ValueError")
+    def raises(label, fn):
+        try:
+            fn()
+            check(False, f"{label} raises ValueError")
+        except ValueError:
+            check(True, f"{label} raises ValueError")
+
+    raises("unknown kind", lambda: mo.new_order("pair", flip_s=5, **common))
+    raises("unknown status", lambda: mo.new_order("walk", flip_s=5, **{**common, "status": "idle"}))
+    raises("flip_s None without awaits", lambda: mo.new_order("walk", flip_s=None, **common))
+    raises("new_order walk speed 0", lambda: mo.new_order("walk", flip_s=5, **{**common, "speed_m_s": 0}))
+    raises("new_order cancel speed -1", lambda: mo.new_order("cancel", flip_s=5, **{**common, "speed_m_s": -1}))
+    still = mo.new_order("cancel", flip_s=5, **{**common, "speed_m_s": 0, "status": "ended"})
+    check(still["speed_m_s"] == 0, "cancel with speed 0 is allowed")
+    raises("unknown step", lambda: mo.step("dance"))
+    raises("estimate speed True", lambda: mo.estimate(0, 0, 1, True, 0))
+    from decimal import Decimal
+    eta_dec, _ = mo.estimate(0, 0, Decimal("2.8"), Decimal("1.4"), 0)
+    check(near(2.5, eta_dec, 1e-9), f"Decimal inputs accepted: 2.8 / 1.4 + 0.5 = 2.5, got {eta_dec}")
+    for bad_rooms in (["r-b"], ["r-b", "r-x"], ["r-b", "r-b"]):
+        flight = {**fx["NAV_STAIRS"][0], "rooms": bad_rooms}
+        raises(f"stairs rooms {bad_rooms}",
+               lambda flight=flight: mo.room_chain_length(fx["NAV_ROOMS"], fx["NAV_DOORWAYS"], [flight],
+                                                          (97, 0, -1), "r-a", (104, 3, 2), "r-up"))
     check((mo.START_SLACK_S, mo.ORDER_TAIL_S, mo.ARRIVE_TOL_M, mo.ROOM_DETOUR, mo.DEADLINE_MIN_S)
           == (0.5, 10.0, 0.5, 1.3, 10.0), "constants")
 
