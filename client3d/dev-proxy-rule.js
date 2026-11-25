@@ -20,7 +20,7 @@
  */
 import { createDevTarget } from '../packages/dev-proxy-rule/index.js'
 
-export const ENTRIES = ['index.html', 'figure-test.html', 'floorplan.html', 'hud.html']
+export const ENTRIES = ['index.html', 'figure-test.html', 'floorplan.html']
 
 /** The path Vite serves for a request, or `null` when it is the backend's. */
 export const viteDevTarget = createDevTarget({

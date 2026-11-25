@@ -5,7 +5,7 @@ using System.Linq;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of <c>bootProgress</c> of client3d/src/game/boot.ts — the data behind the loading
+/// Port of <c>bootProgress</c> of hud/src/game/boot.ts — the data behind the loading
 /// screen: <see cref="Percent"/> counts the finished stages (anything that is not a stage
 /// counts for nothing), <see cref="Label"/> names the first stage of <see cref="Stages"/> still
 /// missing, or <c>"ready"</c>. The HUD's TitleScreen renders both (bus shape

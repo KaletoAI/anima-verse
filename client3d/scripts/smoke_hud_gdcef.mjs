@@ -166,7 +166,7 @@ stopScene();
 // on its own binding method `hud_storage` (not the bridge channel). A fake Storage class stands in:
 // methods on the PROTOTYPE like the real one, two instances (localStorage, sessionStorage), and a
 // quota of 8 characters per value so a refused write can be shown.
-const mirror = scene.load('client3d/src/hud/storageMirror.ts');
+const mirror = scene.load('hud/src/hud/storageMirror.ts');
 class FakeStorage {
   constructor() { this.items = new Map(); }
   setItem(key, value) {

@@ -11,7 +11,7 @@ using Xunit;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// <see cref="BootTracker"/> / <see cref="BootRetry"/> (client3d/src/game/boot.ts, main.ts <c>retryBoot</c>),
+/// <see cref="BootTracker"/> / <see cref="BootRetry"/> (hud/src/game/boot.ts, main.ts <c>retryBoot</c>),
 /// <see cref="LocationsCache"/> / <see cref="LocationsSync"/> (api.ts <c>getLocations3d</c>, main.ts
 /// <c>syncLocations</c>) and <see cref="ConnectionState"/> (main.ts <c>applyWorldMap</c> + the poll's error branch).
 /// </summary>

@@ -4,8 +4,9 @@
  * then back to the action's own clip.
  *
  * Everything here is a function of its arguments: no Three.js, no module
- * state, no DOM, no imports — `client3d/scripts/smoke_finale_clip.mjs`
- * transpiles the file and checks it with hand-derived numbers.
+ * state, no DOM, no runtime imports (the one type import below is erased when
+ * transpiled) — `client3d/scripts/smoke_finale_clip.mjs` transpiles the file
+ * and checks it with hand-derived numbers.
  *
  * THE RULE. The clips last about a second, a bystander's worldmap poll comes
  * every 3 s: a client plays the clip ONCE PER `id`, FROM ITS START, the first
@@ -29,27 +30,11 @@
  * one-shot instead of wrapping to frame 0 for a frame before the finale ends.
  */
 
-/** A clip role of a pair or group (§ A8a): `a`..`e`. */
-export type FinaleRole = 'a' | 'b' | 'c' | 'd' | 'e';
+import type { FinaleBlock, FinaleRole } from '@anima/hud/types';
+
 const FINALE_ROLES: readonly string[] = ['a', 'b', 'c', 'd', 'e'];
 /** An alt name (§ A8a, G6): lowercase letters, digits, `-`. */
 const ALT_RE = /^[a-z0-9][a-z0-9-]*$/;
-
-/** The worldmap row's `finale` block (§ A8c). */
-export interface FinaleBlock {
-  id: string;
-  kind: string;
-  role: FinaleRole | null;
-  /** the ALT half of `role` the finale closes in (G6); "" or missing = none */
-  alt?: string;
-  elapsed_s: number;
-  /** the whole finale, every cycle */
-  duration_s: number;
-  /** cycles of the clip; missing or not a whole number >= 1 = one */
-  loop_count?: number;
-  /** clip seconds per real second, 0.2..1; missing = 1 */
-  tempo?: number;
-}
 
 /** A finale this figure is playing: `t` CLIP seconds into a finale of
  *  `duration` REAL seconds (all `loopCount` cycles) played at `tempo`. */

@@ -13,19 +13,19 @@ import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySn
 import { createFocusQueue } from './game/focusQueue';
 import { createResidencyDriver, type StepResult } from './game/residency';
 import { placeDistance, ringFor } from './game/streamRings';
-import { FOG_FAR_M } from './scene/fogConstants';
+import { FOG_FAR_M } from '@anima/hud/scene/fogConstants';
 import { buildPlace, redatumPlace, type PlaceRecord, type Resident } from './scene/places';
 import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
 installSkinnedNormalCorrection(THREE);
-import * as api from './api';
+import * as api from '@anima/hud/api';
 import { pollCore, syncHub, SYNC_ENDPOINTS, onPropActionChanged, setPropActionPollPeriod } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
-import { createPhotoMode } from './game/photoMode';
-import { photoView } from './game/photoView';
+import { createPhotoMode } from '@anima/hud/game/photoMode';
+import { photoView } from '@anima/hud/game/photoView';
 import { uploadPhotoShot } from './game/photoShot';
-import { mountPhotoHint } from './hud/photoMode';
-import { isTypingTarget } from './hud/dom';
+import { mountPhotoHint } from '@anima/hud/hud/photoMode';
+import { isTypingTarget } from '@anima/hud/hud/dom';
 import { Engine, MIN_DIST } from './scene/engine';
 import { fitDistance, worldCentreXZ } from './scene/cameraMath';
 import { viewHeading } from './scene/cameraFraming';
@@ -38,7 +38,7 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
 import { installSpotHighlight, setSpot } from './scene/spotHighlight';
 import { pinGlyph, pinY } from './game/eventPins';
 import { openViewShouldClose } from './game/openView';
-import { infoPanelData } from './game/infoPanel';
+import { infoPanelData } from '@anima/hud/game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   gateStandY, propWaterCarry, groundScope, groundStoreyFloors, poseClip, slideBlocked,
@@ -48,12 +48,12 @@ import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
-import { nearestOffer, type OfferKind } from './game/offers';
+import { nearestOffer, type OfferKind } from '@anima/hud/game/offers';
 import { idleRoomWalk, nearestRoomSwitch, roomWalkCandidates, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorLevels, elevatorSoleOption, elevatorTargetRoom,
-  type ElevatorStop } from './game/elevator';
+  type ElevatorStop } from '@anima/hud/game/elevator';
 import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
-  type StairLink, type StairPrompt } from './game/stairs';
+  type StairLink, type StairPrompt } from '@anima/hud/game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { polygonArea, pointInPolygon } from './game/polygon';
 import { corridorAtOutline, roomAtRects } from './game/roomAt';
@@ -65,22 +65,22 @@ import {
   emptyScatterCounts, newFpsMeter, pushFrame, pushWorstFrame, scatterCosts, tierCounts,
   visibleVertices,
   type ScatterCounts, type TierCounts, type TierSample, type SyncCounters,
-} from './game/perfstats';
+} from '@anima/hud/game/perfstats';
 import { browserAntialias, checkGraphicsPrefs, GRAPHICS_PREFS_KEY,
   loadGraphicsPrefs, loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
-  SCATTER_PREFS_KEY } from './game/prefs';
-import type { Prefs } from './game/prefs';
-import { SHOW_ALL_KEY } from './game/prefs';
+  SCATTER_PREFS_KEY } from '@anima/hud/game/prefs';
+import type { Prefs } from '@anima/hud/game/prefs';
+import { SHOW_ALL_KEY } from '@anima/hud/game/prefs';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
-import type { MinimapArea, MinimapPlace, MinimapDot, MinimapRelief } from './game/minimap';
+import type { MinimapArea, MinimapPlace, MinimapDot, MinimapRelief } from '@anima/hud/game/minimap';
 import {
   footprintSignature, locationsSignature, minimapAnchor, minimapFollowStepM,
   minimapRadius, terrainColor, MINIMAP_SIZE_PX,
-} from './game/minimap';
+} from '@anima/hud/game/minimap';
 import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
-} from './game/soundtrack';
+} from '@anima/hud/game/soundtrack';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
@@ -96,19 +96,19 @@ import { pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
 import { placeAtLocation, RoomPositionDiagnostics, avatarRoomCorrection } from './game/npcPlacement';
 import { bootStatus } from './ui';
-import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
-import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
-import { subscribeHudUiState } from './hud/bus';
-import { mountHud, mountTitle } from './hud/mount';
-import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
-import type { ModelTier, ScenePayload } from './api';
+import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from '@anima/hud/game/boot';
+import { connectSceneSide, pointInRects, postMessageTransport } from '@anima/hud/hud/bridge';
+import { subscribeHudUiState } from '@anima/hud/hud/bus';
+import { mountHud, mountTitle } from '@anima/hud/hud/mount';
+import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from '@anima/hud/hud/bus';
+import type { ModelTier, ScenePayload } from '@anima/hud/api';
 import { createGround } from './scene/ground';
 import { GraphicsFeatures } from './scene/graphicsFeatures';
 import { createBackdrop } from './scene/backdrop';
 import { createWorldProps } from './scene/worldProps';
 import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import { createManualPropGate, createPositionDrain, createPropPreparationBarrier } from './game/propActionMotion';
-import type { MapCharacter, PlaceOffer, PropActionOffer, PropActionState, PropActionResult, WorldBounds, WorldLocation, WorldMap } from './types';
+import type { MapCharacter, PlaceOffer, PropActionOffer, PropActionState, PropActionResult, WorldBounds, WorldLocation, WorldMap } from '@anima/hud/types';
 
 // Ignore the server's generic login redirect: after login the game always starts.
 const bootUrl = new URL(location.href);
@@ -497,12 +497,15 @@ async function boot() {
 }
 
 /** Debug the native boundary with two independent browser realms. Keys focused
- *  in the iframe stay there; scene listeners continue reading the mirrored bus. */
+ *  in the iframe stay there; scene listeners continue reading the mirrored bus.
+ *  The page is the BUILT HUD bundle of the `hud` workspace (`static/hud/`),
+ *  also under this client's Vite dev server — no HMR there; work on the HUD
+ *  itself with `npm run dev -w hud` (:5184). */
 function mountHudFrame(): void {
   const frame = document.createElement('iframe');
   frame.id = 'hud-frame';
   frame.title = 'Anima Verse HUD';
-  frame.src = import.meta.env.BASE_URL + 'hud.html';
+  frame.src = '/static/hud/hud.html';
   frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:transparent;z-index:20;pointer-events:none';
   let x = -1, y = -1;
   const route = () => {

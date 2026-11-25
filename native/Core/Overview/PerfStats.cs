@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of the frame-rate half of client3d/src/game/perfstats.ts: <c>pushFrame</c>/<c>fpsOf</c> — a sliding
+/// Port of the frame-rate half of hud/src/game/perfstats.ts: <c>pushFrame</c>/<c>fpsOf</c> — a sliding
 /// one-second window of frame times, the rate = frames in the window / their summed time.
 /// <list type="bullet">
 /// <item>A <c>dt</c> that is not a positive finite number is ignored (the reading is kept).</item>
@@ -73,7 +73,7 @@ public readonly record struct PerfSample(
     int TiersFull, int TiersLow, double ScatterLodMs, ScatterCost Mesh = default, ScatterCost Impostor = default, TravelCounters Sync = default);
 
 /// <summary>
-/// The HUD's performance readout (<c>{v:3, kind:'perf', value: PerfStats}</c>, client3d/src/hud/bus.ts /
+/// The HUD's performance readout (<c>{v:3, kind:'perf', value: PerfStats}</c>, hud/src/hud/bus.ts /
 /// game/perfstats.ts) as the native client fills it. main.ts' cadences: the frame rate and the worst frame are
 /// sampled every frame, the heavy count on the 1 s LOD tick, the readout published every
 /// <see cref="PublishMs"/> — and nothing at all while <c>HudUiState.perfOn</c> is off; switching it off throws the

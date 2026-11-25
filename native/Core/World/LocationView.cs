@@ -32,7 +32,7 @@ public static class LocationView
 {
     public const double NearInM = SceneView.NearInM, NearOutM = SceneView.NearOutM, FarPadM = SceneView.FarPadM,
                         FarOutFactor = SceneView.FarOutFactor;
-    /// <summary><c>FOG_FAR_M</c> (client3d/src/scene/fogConstants.ts).</summary>
+    /// <summary><c>FOG_FAR_M</c> (hud/src/scene/fogConstants.ts).</summary>
     public const double FogFarM = 520;
     public const double BuildingTierNearM = 45, BuildingTierFarM = 60;
 

@@ -33,8 +33,10 @@ C) The README does not claim the client has no React while React is a
    dependency: if `client3d/package.json` lists `react`, the phrase
    "kein React" may only appear qualified ("kein React" inside a sentence
    that also names the HUD). Checked concretely: the README must name
-   `@anima/player-ui` and `src/hud/`, and must state the number of `.tsx`
-   files that are really there.
+   `@anima/player-ui` and the HUD's home — the `hud/` workspace
+   (``hud/`-Workspace`, the page moved there out of `client3d/src/hud/`) —
+   and must state the number of `.tsx` files that are really in
+   `hud/src/hud/`.
 
 E) Every HTML entry point of the build is documented and every page the
    README documents exists. Expected value = the `rollupOptions.input` map
@@ -64,7 +66,7 @@ REPO = Path(__file__).resolve().parent.parent
 README = REPO / "client3d" / "README.md"
 VITE = REPO / "client3d" / "vite.config.ts"
 PKG = REPO / "client3d" / "package.json"
-HUD = REPO / "client3d" / "src" / "hud"
+HUD = REPO / "hud" / "src" / "hud"
 
 _failures = []
 _checks = 0
@@ -126,12 +128,12 @@ def main():
     check("the README lists no proxy prefixes", not listed, str(listed))
     check("the README names the rule module", "dev-proxy-rule.js" in readme)
 
-    print("C) the React statement matches package.json and src/hud/")
+    print("C) the React statement matches package.json and hud/src/hud/")
     deps = json.loads(PKG.read_text(encoding="utf-8")).get("dependencies", {})
     has_react = "react" in deps
     tsx = sorted(p.name for p in HUD.glob("*.tsx"))
     check("react is a dependency of client3d (otherwise this check is moot)", has_react)
-    check("the README names the HUD directory", "src/hud/" in readme)
+    check("the README names the HUD's `hud/` workspace", "`hud/`-Workspace" in readme)
     check("the README names the shared player package", "@anima/player-ui" in readme)
     check(f"the README states the number of HUD .tsx files ({len(tsx)})",
           re.search(r"(acht|neun|zehn|sieben|sechs|\b%d\b)" % len(tsx), readme) is not None,

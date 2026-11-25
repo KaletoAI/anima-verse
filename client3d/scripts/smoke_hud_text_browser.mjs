@@ -20,7 +20,7 @@ export function smokeHudText(wire) {
       import React, { useState } from 'react';
       import { createRoot } from 'react-dom/client';
       import { flushSync } from 'react-dom';
-      import { connectHudSide, gdcefTransport, loopbackPair } from './client3d/src/hud/bridge';
+      import { connectHudSide, gdcefTransport, loopbackPair } from './hud/src/hud/bridge';
       const equal = (got, want, why) => { if (got !== want) throw new Error(why + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); };
       try {
         let send;

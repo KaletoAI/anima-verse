@@ -515,7 +515,7 @@ public class FootLockMeasureVectorTests
 
 /// <summary>
 /// shared/test-vectors/stairs.json (hand derivations: client3d/scripts/smoke_walk_math.mjs; TS
-/// client3d/src/game/stairs.ts). A flight is <c>{foot, head, run?: {at, dir, runM, widthM}}</c>, a landing
+/// hud/src/game/stairs.ts). A flight is <c>{foot, head, run?: {at, dir, runM, widthM}}</c>, a landing
 /// <c>{level, x, y, z}</c>; output flights are the input objects (the TS returns the same objects).
 /// <code>
 ///   TS fn                 C#                    shape translation

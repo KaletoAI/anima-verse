@@ -1,0 +1,51 @@
+{
+  "name": "@anima/hud",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The React HUD page (hud.html) of the player: built to static/hud/, loaded by the native client's CEF HUD and imported as a package by the browser 3D scene (client3d).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "exports": {
+    "./api": "./src/api.ts",
+    "./types": "./src/types.ts",
+    "./hud/dom": "./src/hud/dom.ts",
+    "./hud/bus": "./src/hud/bus.ts",
+    "./hud/bridge": "./src/hud/bridge.ts",
+    "./hud/mount": "./src/hud/mount.tsx",
+    "./hud/photoMode": "./src/hud/photoMode.tsx",
+    "./game/boot": "./src/game/boot.ts",
+    "./game/channelReadouts": "./src/game/channelReadouts.ts",
+    "./game/elevator": "./src/game/elevator.ts",
+    "./game/infoPanel": "./src/game/infoPanel.ts",
+    "./game/minimap": "./src/game/minimap.ts",
+    "./game/offers": "./src/game/offers.ts",
+    "./game/perfstats": "./src/game/perfstats.ts",
+    "./game/photoMode": "./src/game/photoMode.ts",
+    "./game/photoView": "./src/game/photoView.ts",
+    "./game/prefs": "./src/game/prefs.ts",
+    "./game/readoutReports": "./src/game/readoutReports.ts",
+    "./game/soundtrack": "./src/game/soundtrack.ts",
+    "./game/stairs": "./src/game/stairs.ts",
+    "./scene/fogConstants": "./src/scene/fogConstants.ts"
+  },
+  "dependencies": {
+    "@anima/player-ui": "*",
+    "@anima/scene-render": "*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.185.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "typescript": "^5.6.0",
+    "vite": "8.1.6"
+  }
+}

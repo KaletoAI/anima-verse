@@ -8,7 +8,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { highestSurfaceAt, tileDatumStep, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, PlacedSurface, SceneModelSpec,
   SurfaceMaterialSpec } from '@anima/scene-render';
-import type { WorldLocation } from '../types';
+import type { WorldLocation } from '@anima/hud/types';
 import { declaredFloorAt, plateCeiling, recipeFloorAt, roomFloorLadder,
   roomStandLadder, standY, tileWalkLadder, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';

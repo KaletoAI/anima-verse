@@ -492,7 +492,7 @@ console.log('PASS avatar_arrival_readiness NEU');
     assert.ok(escapeStart < escapeEnd);
     const escape = main.slice(escapeStart, escapeEnd);
     assertBefore(escape, 'cancelPendingControl(', "getGameState().mode === 'embodied'");
-    const plaque = await readFile('client3d/src/hud/CharacterPlaque.tsx', 'utf8');
+    const plaque = await readFile('hud/src/hud/CharacterPlaque.tsx', 'utf8');
     assert.match(plaque, /gameActions\.enterEmbodied\?\.\(\)/);
     const keyStart = main.indexOf("if (e.key.toLowerCase() !== 'f'");
     assert.ok(keyStart >= 0);

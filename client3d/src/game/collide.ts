@@ -49,7 +49,7 @@
  * openings, never by the rock somebody painted under it.
  */
 
-import type { ScenePayload } from '../api';
+import type { ScenePayload } from '@anima/hud/api';
 
 /** Half width of the walking body, in FIGURE metres — which since E4 are world
  *  metres, because `k` is the constant 1 (§ B). The `k` factor is still

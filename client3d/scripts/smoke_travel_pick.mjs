@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { build } from 'esbuild';
-assert.ok(existsSync('client3d/src/game/travelPick.ts'), 'travel picking is missing');
-const result = await build({ entryPoints: ['client3d/src/game/travelPick.ts'], bundle: true, write: false, format: 'esm' });
+assert.ok(existsSync('hud/src/game/travelPick.ts'), 'travel picking is missing');
+const result = await build({ entryPoints: ['hud/src/game/travelPick.ts'], bundle: true, write: false, format: 'esm' });
 const { pickPlaceAt } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 const places = [{ id: 'A', name: 'A', x: 0, z: 0 }, { id: 'B', name: 'B', x: 5, z: 0 }];
 const layout = { scale: 2, offX: 10, offY: 20 };
@@ -13,7 +13,7 @@ for (const [x, y, expected] of [[12,20,'A'], [16,20,'B'], [15,20,'A'], [10,30,'A
 assert.equal(pickPlaceAt([], layout, 10, 20), null);
 console.log('travel pick: PASS (nearest, ties, inclusive radius, empty)');
 
-const apiBuild = await build({ entryPoints: ['client3d/src/api.ts'], bundle: true, write: false, format: 'esm' });
+const apiBuild = await build({ entryPoints: ['hud/src/api.ts'], bundle: true, write: false, format: 'esm' });
 const api = await import('data:text/javascript;base64,' + Buffer.from(apiBuild.outputFiles[0].text).toString('base64'));
 const originalFetch = globalThis.fetch;
 const requests = [];

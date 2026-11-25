@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke check for the MINIMAP WINDOW — the sight-radius framing of the map in
- * the embodied mode (`client3d/src/game/minimap.ts`).
+ * the embodied mode (`hud/src/game/minimap.ts`).
  *
  * Usage:  node client3d/scripts/smoke_minimap_math.mjs
  *
@@ -161,7 +161,7 @@ import { fileURLToPath } from 'node:url';
 // '../..' = the REPO root (this file lives in client3d/scripts/), the anchor
 // every smoke in this directory uses.
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-const MINIMAP_TS = join(ROOT, 'client3d/src/game/minimap.ts');
+const MINIMAP_TS = join(ROOT, 'hud/src/game/minimap.ts');
 const ENGINE_TS = join(ROOT, 'client3d/src/scene/engine.ts');
 
 /** `minimap.ts` is pure and its only runtime dependency is fogConstants, so an esbuild
@@ -232,7 +232,7 @@ check('engine.ts still builds the scene fog', Boolean(fogCall), true);
 const fogSource = await readFile(resolve(MINIMAP_TS, '../../scene/fogConstants.ts'), 'utf8');
 const fogModule = (await import('esbuild')).transformSync(fogSource, { loader: 'ts', format: 'esm' });
 const { FOG_FAR_M } = await import(`data:text/javascript,${encodeURIComponent(fogModule.code)}`);
-const fogEnd = fogCall?.[1].split(',')[2]?.trim() === 'FOG_FAR_M' && /import \{ FOG_NEAR_M, FOG_FAR_M \} from '\.\/fogConstants'/.test(engineSrc) ? FOG_FAR_M : NaN;
+const fogEnd = fogCall?.[1].split(',')[2]?.trim() === 'FOG_FAR_M' && /import \{ FOG_NEAR_M, FOG_FAR_M \} from '@anima\/hud\/scene\/fogConstants'/.test(engineSrc) ? FOG_FAR_M : NaN;
 if (Number.isFinite(fogEnd)) {
   check('…and its FAR end is what the map shows', fogEnd, MINIMAP_VIEW_RADIUS_M);
 } else {

@@ -2,7 +2,7 @@
  * Usage: node scripts/smoke_hud_notice_hits.mjs
  *
  * A native/iframe host passes a click to the HUD only inside the measured
- * hitRects (client3d/src/hud/Hud.tsx). The notice banner's root is zero-height
+ * hitRects (hud/src/hud/Hud.tsx). The notice banner's root is zero-height
  * by design, so measuring `.hud-notices` found nothing and × on a notification
  * reached the 3D scene (no POST /notifications/{id}/read in the log,
  * 2026-10-31).
@@ -14,7 +14,7 @@
  * b. All three buttons (two ×, one "Mark all as read") sit inside such a row.
  * c. The hitRects selector measures `.hud-notices .player-notice`, never the
  *    bare zero-height `.hud-notices`.
- * d. client3d/src/hud/hud.css gives `#hud option` a background-color — the
+ * d. hud/src/hud/hud.css gives `#hud option` a background-color — the
  *    open list of ANY select, whatever its class (it came back white with
  *    `.player-chip` after `.ga-input` had been fixed on its own).
  */
@@ -57,12 +57,12 @@ console.log('PASS a: every visible notice row is marked player-notice');
 assert.deepEqual(found.buttons, [true, true, true]);
 console.log('PASS b: every notice button lies inside a measured row');
 
-const hud = await read('client3d/src/hud/Hud.tsx');
+const hud = await read('hud/src/hud/Hud.tsx');
 assert.match(hud, /\.hud-notices \.player-notice'/);
 assert.doesNotMatch(hud, /\.hud-notices'/);
 console.log('PASS c: hitRects measure the rows, not the zero-height root');
 
-const css = await read('client3d/src/hud/hud.css');
+const css = await read('hud/src/hud/hud.css');
 const rule = css.match(/#hud option,[^{]*\{([^}]*)\}/);
 assert.ok(rule && /background-color:/.test(rule[1]), 'no #hud option background-color rule');
 console.log('PASS d: every HUD option list has a background colour');

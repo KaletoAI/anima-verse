@@ -5,7 +5,10 @@ Usage: ./.venv/bin/python scripts/smoke_play_shell.py
 
 Expected by hand from Task 7: the public /play shell, each linked asset,
 HUD, manifest and a manifest-relative model return 200. The shell references
-/static/client3d/assets/ and no legacy play- bundle. An anonymous HTML world
+/static/client3d/assets/ and no legacy play- bundle. The HUD page moved to its
+own workspace hud/ and is built to static/hud/ (spec 5k): /static/hud/hud.html
+returns 200, and /static/client3d/hud.html returns 404 because there is no
+alias at the old place — a stale copy there would hide a forgotten native path. An anonymous HTML world
 navigation returns 302 to /play with its original path in the return parameter.
 """
 import os
@@ -35,7 +38,9 @@ def main():
             assert links, "shell has no assets"
             for link in links:
                 assert client.get(link).status_code == 200, link
-            assert client.get("/static/client3d/hud.html").status_code == 200
+            assert client.get("/static/hud/hud.html").status_code == 200, "HUD not at static/hud"
+            old_hud = client.get("/static/client3d/hud.html").status_code
+            assert old_hud == 404, f"stale HUD at static/client3d: {old_hud}"
             manifest_url = "/static/client3d/models/manifest.json"
             manifest = client.get(manifest_url)
             assert manifest.status_code == 200

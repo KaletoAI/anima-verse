@@ -27,7 +27,7 @@ public readonly record struct RideStepResult(int Leg, bool Armed, double? Y, boo
 public sealed record StairPrompt(string Dir, StairLanding Dest, double Dist);
 
 /// <summary>
-/// ROUTING OVER STAIRS — client3d/src/game/stairs.ts (<c>stairChain</c>, <c>stairY</c>, <c>rideStep</c>,
+/// ROUTING OVER STAIRS — hud/src/game/stairs.ts (<c>stairChain</c>, <c>stairY</c>, <c>rideStep</c>,
 /// <c>stairLegs</c>, <c>stairLegTo</c>) on the native world flights (<see cref="PlaceInventory.Stairs"/>, already in world
 /// metres). The NPC storey change walks the chain's landings and the ride owns the height on the run (ruling P3-R9;
 /// the avatar reuses it in E7). Vectors shared/test-vectors/stairs.json (hand derivations: smoke_walk_math.mjs); the

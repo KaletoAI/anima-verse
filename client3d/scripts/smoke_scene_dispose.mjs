@@ -165,8 +165,12 @@ async function loadClient(ref) {
           loader: 'ts',
         }));
         if (oldSource) {
+          // The pinned source still imports the modules that later moved into
+          // the HUD workspace (`@anima/hud`) by their old relative paths.
+          const rehomed = oldSource.replace(
+            /(from\s*['"])\.\.\/(api|types|game\/(?:boot|channelReadouts|elevator|infoPanel|minimap|offers|perfstats|photoMode|photoView|prefs|readoutReports|soundtrack|stairs|travelPick|voiceover))(['"])/g, '$1@anima/hud/$2$3');
           build.onLoad({ filter: /scene[/\\]sceneRecipe\.ts$/ },
-                       () => ({ contents: oldSource, loader: 'ts' }));
+                       () => ({ contents: rehomed, loader: 'ts' }));
         }
       },
     };

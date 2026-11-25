@@ -30,7 +30,9 @@
  * one". The folder is user data — playing something the user did not put
  * there for this situation is worse than playing nothing.
  */
-import type { Point } from './walk';
+
+/** A world point on the ground plane (metres); same shape as the scene's walk point. */
+interface Point { x: number; z: number }
 
 /** What `GET /assets/audio` lists — ready-made URLs, never built from a name
  *  by the client (`app/routes/game_audio.py`). `music` always carries both

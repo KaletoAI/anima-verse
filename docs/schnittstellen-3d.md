@@ -3020,7 +3020,7 @@ running scene reports what its figures measure (`channelReadout.ts`, § the
 scene-render README) as `POST /play/scene/readouts` with
 `{scene_id, readouts: [{receiver, channel, entering, insertion_of_depth,
 part_radius_m, rest_radius_m, depth_m, reaches}]}` → `{accepted: n}`.
-`client3d/src/game/readoutReports.ts` sends at most one row per (scene,
+`hud/src/game/readoutReports.ts` sends at most one row per (scene,
 receiver, channel, entering) and second: the MEANS of `insertionOfDepth` and
 `partRadiusM` over that second, the last `restRadiusM`/`depthM`, and
 `reaches` = how often `insertionOfDepth ≥ 1` started in it. The server
@@ -6121,7 +6121,7 @@ ein Boden Wasser ist, entscheidet die **Material-KLASSE** der Surface-Bibliothek
 ### A16.10 Die 2D-Karten schattieren das Relief
 
 Die ehemalige 2D-Spielerkarte (entfernt in plan-native-client Task 8) und die Minimap des 3D-Clients
-(`client3d/src/hud/Minimap.tsx`) legen dieselbe Schattierung über ihre
+(`hud/src/hud/Minimap.tsx`) legen dieselbe Schattierung über ihre
 Terrain-Farben: `hillshadeImage()` aus `@anima/scene-render` — Normale aus dem
 Höhen-Gradienten, Licht aus Nordwest (Azimut 315°, Höhe 45°), neutrales Grau
 moduliert, Alpha proportional zur Hangneigung (maximal 0,35; **ebener Grund

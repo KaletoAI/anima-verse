@@ -9,7 +9,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The HUD settings kept across starts (<see cref="HudStorage"/>, <c>user://hud_storage.json</c>) — every expected
-/// value written by hand from the rules in the class doc and from client3d/src/game/prefs.ts.
+/// value written by hand from the rules in the class doc and from hud/src/game/prefs.ts.
 /// </summary>
 public class HudStorageTests
 {
@@ -209,7 +209,7 @@ public class HudStorageTests
     public void StartShowAllWithoutAStoredValueIsOff()
         => Assert.False(HudStorage.StartShowAll(new Dictionary<string, string>(), isAdmin: true));
 
-    // loadScatterPrefs (client3d/src/game/prefs.ts), case by case.
+    // loadScatterPrefs (hud/src/game/prefs.ts), case by case.
     [Theory]
     [InlineData(null, 35, 45, 120)]
     [InlineData("", 35, 45, 120)]

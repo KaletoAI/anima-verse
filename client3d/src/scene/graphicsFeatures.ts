@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import { setMirrorsEnabled, setWaterExtrasEnabled } from '@anima/scene-render';
-import type { GraphicsPrefs } from '../game/prefs';
+import type { GraphicsPrefs } from '@anima/hud/game/prefs';
 import type { LightPool } from './lightPool';
 import { setFogVeilGraphicsOff } from './fogVeil';
 import { setWaterGhostGraphicsOff } from './submergedGhost';

@@ -10,7 +10,7 @@ using Godot;
 namespace AnimaNative.Hud;
 
 /// <summary>
-/// The React HUD (<c>client3d/hud.html</c>, served by the Anima server) over the
+/// The React HUD (<c>hud/hud.html</c> of the <c>hud</c> workspace, built to <c>static/hud/</c> and served by the Anima server) over the
 /// Godot world — Task S4 of plan-native-client.md.
 ///
 ///   • VIEW — gdCEF renders the page off-screen into a full-window TextureRect
@@ -47,7 +47,7 @@ public partial class HudOverlay : CanvasLayer
     public const string StorageMethod = "hud_storage";
     /// <summary>A burst of writes (a dragged slider) reaches the file once, this long after the last one.</summary>
     private const ulong StorageWriteDelayMs = 300;
-    public const string HudPath = "static/client3d/hud.html?bridge=gdcef";
+    public const string HudPath = "static/hud/hud.html?bridge=gdcef";
     private const int Fps = 60;
 
     /// <summary>Declared game actions that are background chatter of the HUD (logged once, no toast).</summary>
@@ -338,7 +338,7 @@ public partial class HudOverlay : CanvasLayer
             Log($"hud: session handed to CEF ({stored.Count} stored HUD settings), opening the HUD");
             return;
         }
-        if (_phase == Phase.Hud && url.Contains("/static/client3d/hud.html", StringComparison.Ordinal))
+        if (_phase == Phase.Hud && url.Contains("/static/hud/hud.html", StringComparison.Ordinal))
         {
             _loaded = true;
             _rect.Visible = true;

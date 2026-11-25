@@ -30,7 +30,7 @@
 import * as THREE from 'three';
 import { setSurfaceSky } from '@anima/scene-render';
 import type { Engine } from './scene/engine';
-import { isTypingTarget } from './hud/dom';
+import { isTypingTarget } from '@anima/hud/hud/dom';
 import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
 import type { Resident } from './scene/places';
@@ -40,8 +40,8 @@ import { IMPOSTOR_MESH_NAME } from './scene/impostors';
 import { setWaterGhostOff } from './scene/submergedGhost';
 import { setNaturalGroundDebugOff } from './scene/naturalGround';
 import { setTerrainLodDebug } from './scene/terrainLod';
-import { newFpsMeter, pushFrame, scatterCosts } from './game/perfstats';
-import { yawToCompassDeg } from './game/minimap';
+import { newFpsMeter, pushFrame, scatterCosts } from '@anima/hud/game/perfstats';
+import { yawToCompassDeg } from '@anima/hud/game/minimap';
 import {
   decodeIsolation, encodeIsolation, ISO_STORAGE_KEY, ISOLATION_TOGGLES,
   readIsoHash, writeIsoHash,

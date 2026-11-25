@@ -3,7 +3,7 @@
  * renders; pending beats cooldown, which beats a cached signature. */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-const result = await build({ entryPoints: ['client3d/src/hud/sceneTile.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
+const result = await build({ entryPoints: ['hud/src/hud/sceneTile.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
 const { backgroundUrl, exprUrl, tileFigures, sceneKey, tileHidden, renderOutcome, renderedSig, TILE_COLLAPSE_BELOW_PX } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 const s = { avatar:'Ava', location_id:'loc 1', location_name:'Inn', room_id:'r1', room_name:'Hall', present_detail:[{name:'Kira',avatar_url:'',expr_version:'k1'},{name:'Ava',avatar_url:'',expr_version:'a9'},{name:'Bo',avatar_url:''}], avatar_expr_version:'a1', bg_id:'day 1.png', bg_version:'v7', travel:null };
 assert.equal(backgroundUrl(s), '/world/locations/loc%201/background?room=r1&file=day%201.png&v=v7');

@@ -201,7 +201,7 @@ for (const rendered of [0, Math.PI/2, -Math.PI/2, Math.PI, 7.2]) {
 assert.equal(positionYaw(0), 0);
 assert.equal(positionYaw(Math.PI/2), Math.PI/2);
 let wireBody;
-const postPos = sourceFunction('../src/api.ts', 'postPos', {
+const postPos = sourceFunction('../../hud/src/api.ts', 'postPos', {
   fetch: async (url, options) => { assert.equal(url, '/play/pos'); wireBody = JSON.parse(options.body);
     return { status: 200, ok: true, json: async () => ({ ok: true }) }; },
 });
@@ -209,7 +209,7 @@ await postPos(1, 2, undefined, 3, 330, 'fixture-session', .8);
 assert.deepEqual(wireBody, { x: 1, z: 2, yaw: .8, seq: 3, t_ms: 330, session: 'fixture-session' });
 await postPos(1, 2, undefined, 4, 660, 'fixture-session', null);
 assert.equal(wireBody.yaw ?? null, null, 'no facing leaves stored server yaw unchanged');
-const getWorldMap = sourceFunction('../src/api.ts', 'getWorldMap', {
+const getWorldMap = sourceFunction('../../hud/src/api.ts', 'getWorldMap', {
   performance: { now: () => 0 }, worldMapMeta: new WeakMap(), json: r => r.json(),
   fetch: async () => ({ json: async () => ({ characters: [{ name: 'avatar', yaw: null }] }) }),
 });

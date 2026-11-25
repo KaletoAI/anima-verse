@@ -73,7 +73,7 @@ public readonly record struct InfoView(bool Openable, bool Open);
 public sealed record InfoAvatar(string LocationId, (double X, double Z)? Pos);
 
 /// <summary>
-/// Port of client3d/src/game/infoPanel.ts — the location info panel's data, computed by the
+/// Port of hud/src/game/infoPanel.ts — the location info panel's data, computed by the
 /// scene and rendered by the HUD. <see cref="Build"/> returns a <see cref="JsonObject"/> in exactly
 /// the HUD's <c>InfoPanelData</c> shape (camelCase keys, in the TS order), so it goes over the
 /// bridge unchanged. Vectors: shared/test-vectors/overview_hud.json [I1..I12].

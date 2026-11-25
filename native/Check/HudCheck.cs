@@ -273,11 +273,14 @@ public static class HudCheck
 
     private static void CheckCookieScript()
     {
-        var got = HudOverlay.CookieScript("tok-EN_1", false, "http://h:8000/static/client3d/hud.html?bridge=gdcef");
+        // The HUD page lives in its own workspace hud/ and is built to static/hud/ (spec 5k).
+        Expect("HudPath points at the hud workspace bundle", HudOverlay.HudPath == "static/hud/hud.html?bridge=gdcef",
+               HudOverlay.HudPath);
+        var got = HudOverlay.CookieScript("tok-EN_1", false, "http://h:8000/static/hud/hud.html?bridge=gdcef");
         Expect("cookie script (http)",
                got == "document.cookie = \"av_session=tok-EN_1; path=/; samesite=lax\"; "
-                      + "location.replace(\"http://h:8000/static/client3d/hud.html?bridge=gdcef\");", got);
-        var secure = HudOverlay.CookieScript("t", true, "https://h/static/client3d/hud.html?bridge=gdcef");
+                      + "location.replace(\"http://h:8000/static/hud/hud.html?bridge=gdcef\");", got);
+        var secure = HudOverlay.CookieScript("t", true, "https://h/static/hud/hud.html?bridge=gdcef");
         Expect("cookie script (https) carries Secure", secure.StartsWith("document.cookie = \"av_session=t; path=/; samesite=lax; secure\";"),
                secure);
         // A hostile value cannot leave the string literal (JSON escaping).
@@ -291,7 +294,7 @@ public static class HudCheck
         int logout = end.IndexOf("fetch('/auth/logout', {method: 'POST'", StringComparison.Ordinal);
         Expect("end-session order: status, authenticated guard, logout", status == 0 && guard > status && logout > guard,
                $"{status}/{guard}/{logout}: {end}");
-        var handoff = HudOverlay.HandoffScript("tok-EN_1", false, "http://h:8000/static/client3d/hud.html?bridge=gdcef");
+        var handoff = HudOverlay.HandoffScript("tok-EN_1", false, "http://h:8000/static/hud/hud.html?bridge=gdcef");
         Expect("handoff = end session, then the cookie script",
                handoff.StartsWith(end, StringComparison.Ordinal) && handoff.EndsWith(got + " });", StringComparison.Ordinal), handoff);
         Expect("leave = end session, then a blank page naming the outcome",
@@ -308,7 +311,7 @@ public static class HudCheck
     /// </summary>
     private static int CheckStorageSeed()
     {
-        var hud = "http://h:8000/static/client3d/hud.html?bridge=gdcef";
+        var hud = "http://h:8000/static/hud/hud.html?bridge=gdcef";
         var plain = HudOverlay.HandoffScript("tok-EN_1", false, hud);
         var none = HudOverlay.HandoffScript("tok-EN_1", false, hud, new Dictionary<string, string>());
         Expect("handoff without stored settings is unchanged", none == plain, none);
@@ -345,8 +348,8 @@ public static class HudCheck
     /// <summary>The C# lists equal the TypeScript ones (bridge.ts gameNames/uiNames, bus.ts HUD_OWNED_FIELDS + the state fields).</summary>
     private static void CheckNameLists(FixtureSource source)
     {
-        var bridge = File.ReadAllText(source.Resolve("repo:client3d/src/hud/bridge.ts"));
-        var bus = File.ReadAllText(source.Resolve("repo:client3d/src/hud/bus.ts"));
+        var bridge = File.ReadAllText(source.Resolve("repo:hud/src/hud/bridge.ts"));
+        var bus = File.ReadAllText(source.Resolve("repo:hud/src/hud/bus.ts"));
         // Both hosts must speak the same protocol number (a mismatch silently disconnects the HUD).
         var tsVersion = Regex.Match(bridge, @"export const HUD_BRIDGE_VERSION = (\d+);");
         Expect("HUD_BRIDGE_VERSION of bridge.ts = HudProtocol.Version",

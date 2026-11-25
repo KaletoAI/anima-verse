@@ -1,4 +1,4 @@
-import { FOG_FAR_M } from './fogConstants';
+import { FOG_FAR_M } from '@anima/hud/scene/fogConstants';
 /**
  * WHICH FINE HEIGHT TILES THE CLIENT WANTS — the loading policy of § A16.3,
  * as pure arithmetic.

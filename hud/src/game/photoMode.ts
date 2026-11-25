@@ -1,6 +1,5 @@
 /** Browser photo-mode lifecycle. The engine owns its lens and render-task capture. */
 import type { PhotoView } from '@anima/player-ui';
-import type { Engine } from '../scene/engine';
 import { isTypingTarget } from '../hud/dom';
 import { cropPhotoView, type PhotoRect } from './photoView';
 
@@ -42,8 +41,18 @@ export function encodePhotoCanvas(source: HTMLCanvasElement,
   });
 }
 
+/** What photo mode needs of the scene engine. The scene's `Engine` satisfies it structurally. */
+export interface PhotoEngine {
+  readonly photoMode: boolean;
+  readonly photoSpeed: number;
+  enterPhotoMode(): void;
+  leavePhotoMode(): void;
+  capturePhotoFrame(view: () => PhotoView, capture?: PhotoCapture): Promise<PhotoFrame>;
+  setPhotoSelecting(selecting: boolean): void;
+}
+
 interface PhotoModeDeps {
-  engine: Pick<Engine, 'photoMode' | 'photoSpeed' | 'enterPhotoMode' | 'leavePhotoMode' | 'capturePhotoFrame' | 'setPhotoSelecting'>;
+  engine: PhotoEngine;
   view: () => PhotoView;
   hideHud: () => () => void;
   hint: (state: PhotoHintState) => void;

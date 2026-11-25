@@ -19,7 +19,7 @@ WHAT IS CHECKED, and where every expected value comes from
 A) Every setting name in the tables (`| \\`NAME\\` | … |`, uppercase) occurs
    at least once, as a whole word, in the code: `app/`, `plugins/`,
    `shared/`, `static/`, `docker/`, `queue_cli.py`, `frontend/src`,
-   `client3d/src`. The expected answer is "one or more hits" for every name
+   `client3d/src`, `hud/src`. The expected answer is "one or more hits" for every name
    — a documented knob nobody reads is a dead end for whoever looks it up.
    `scripts/` is deliberately NOT part of the corpus: a check script may
    mention a name precisely because it is forbidden (`smoke_send_message_intent`
@@ -91,7 +91,7 @@ DOC = REPO / "docs" / "config-defaults.md"
 
 # Where a setting name may show up. scripts/ is left out on purpose (see A).
 CORPUS = ["app", "plugins", "shared", "static", "docker", "queue_cli.py",
-          "frontend/src", "client3d/src"]
+          "frontend/src", "client3d/src", "hud/src"]
 
 _failures = []
 _checks = 0

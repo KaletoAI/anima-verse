@@ -61,7 +61,7 @@
  *    world tip = bone.matrixWorld · tip), against the partner's capsules of ITS consumer (hair chains: `hair`,
  *    extension chains: `extension`), split hair / extension; `pushed` = share of tip-frames a partner capsule
  *    pushed (`contactTips().partner`);
- *  - ms per reader per frame (`performance.now`, field names as `client3d/src/game/perfstats.ts`: `secondaryMs` the
+ *  - ms per reader per frame (`performance.now`, field names as `hud/src/game/perfstats.ts`: `secondaryMs` the
  *    secondary motion's `update`, `strandMs` the strand handle's `update`, `snapshotMs` one `snapshotPartner`).
  *
  * JITTER (the spec's Part 3 measure). One reader plays the idle clip (2 s warm-up without a partner); the probe —

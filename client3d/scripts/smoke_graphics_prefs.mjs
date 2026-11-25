@@ -1,5 +1,5 @@
 /**
- * Smoke run for the graphics settings of `client3d/src/game/prefs.ts`
+ * Smoke run for the graphics settings of `hud/src/game/prefs.ts`
  * (Task 26d — the game menu's Graphics tab: anti-aliasing and shadows).
  *
  * Usage:  node client3d/scripts/smoke_graphics_prefs.mjs
@@ -107,7 +107,7 @@ import { fileURLToPath } from 'node:url';
 import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SRC = join(ROOT, 'client3d', 'src', 'game', 'prefs.ts');
+const SRC = join(ROOT, 'hud', 'src', 'game', 'prefs.ts');
 
 /** The module, transformed and imported — it has no imports of its own, so a
  *  single-file transform is enough. */

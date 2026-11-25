@@ -1,4 +1,4 @@
-import type { WorldLocation } from '../types';
+import type { WorldLocation } from '@anima/hud/types';
 /** Pure scene view decisions, shared with native-client test vectors. */
 import type { ScenePayload, SceneModelSpec } from '@anima/scene-render';
 export { storeyPieceOpacity } from './storeyDisplay';

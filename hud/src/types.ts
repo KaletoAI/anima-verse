@@ -1,5 +1,4 @@
 import type { PropActionOffer } from '@anima/player-ui';
-import type { FinaleBlock } from './game/finaleClip';
 export type {
   PropActionTarget, PropActionOffer, PropActionChoice, PropActionState,
   PropActionExecution, PropActionResult,
@@ -942,4 +941,23 @@ export interface PlaceOffer {
   free_slots: number[];
   poses: { key: string; label: string }[];
   prop_actions?: PropActionOffer[];
+}
+
+/** A clip role of a pair or group (§ A8a): `a`..`e`. */
+export type FinaleRole = 'a' | 'b' | 'c' | 'd' | 'e';
+
+/** The worldmap row's `finale` block (§ A8c). */
+export interface FinaleBlock {
+  id: string;
+  kind: string;
+  role: FinaleRole | null;
+  /** the ALT half of `role` the finale closes in (G6); "" or missing = none */
+  alt?: string;
+  elapsed_s: number;
+  /** the whole finale, every cycle */
+  duration_s: number;
+  /** cycles of the clip; missing or not a whole number >= 1 = one */
+  loop_count?: number;
+  /** clip seconds per real second, 0.2..1; missing = 1 */
+  tempo?: number;
 }

@@ -8,7 +8,7 @@ const compiled = await build({
   stdin: { contents: `
     import { createElement as h } from 'react';
     import { renderToStaticMarkup } from 'react-dom/server';
-    import { PlaceMenu } from './client3d/src/hud/PlaceMenu';
+    import { PlaceMenu } from './hud/src/hud/PlaceMenu';
     import { I18nProvider } from './packages/player-ui/src/I18nProvider';
     import { PropActionExecutionRow } from './packages/player-ui/src/PropActionsPanel';
     export function render(menu, run) {

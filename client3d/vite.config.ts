@@ -20,7 +20,6 @@ export default defineConfig(({ command }) => ({
         main: 'index.html',
         figureTest: 'figure-test.html',
         floorplan: 'floorplan.html',
-        hud: 'hud.html',
       },
     },
   },

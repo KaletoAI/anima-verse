@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 
 namespace AnimaNative.Hud;
 
-/// <summary>One HUD surface in the HUD page's CSS pixels (<c>HudRect</c> of client3d/src/hud/bus.ts).</summary>
+/// <summary>One HUD surface in the HUD page's CSS pixels (<c>HudRect</c> of hud/src/hud/bus.ts).</summary>
 public readonly record struct HudRect(double X, double Y, double W, double H);
 
 /// <summary>
@@ -64,7 +64,7 @@ public sealed class HudUi
 public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null, string? Url = null, JsonObject? Result = null, string? Source = null, JsonObject? Target = null);
 
 /// <summary>
-/// Protocol v4 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
+/// Protocol v4 of hud/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
 /// the same validation (<c>valid()</c>: an object, <c>v === 4</c>, a <c>kind</c>),
 /// the same name lists (<c>gameNames</c>, <c>uiNames</c>) and the same field
 /// ownership (<c>HUD_OWNED_FIELDS</c>). On the gdCEF wire each message is ONE

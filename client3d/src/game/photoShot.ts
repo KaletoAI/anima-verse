@@ -1,7 +1,7 @@
 /** Upload an already encoded JPEG and hand its framing to the shared photo dialog. */
 import { apiUpload } from '@anima/player-ui/api';
 import type { PhotoView } from '@anima/player-ui';
-import { uiActions } from '../hud/bus';
+import { uiActions } from '@anima/hud/hud/bus';
 
 export async function uploadPhotoShot(jpeg: Blob, view: PhotoView): Promise<void> {
   const file = new File([jpeg], 'photo.jpg', { type: 'image/jpeg' });

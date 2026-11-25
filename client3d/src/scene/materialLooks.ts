@@ -1,5 +1,5 @@
 /** Pure recipe look decisions; textures and renderer objects remain with the caller. */
-import type { SceneExtra, ScenePayload, ScenePlate, SceneWall } from '../api';
+import type { SceneExtra, ScenePayload, ScenePlate, SceneWall } from '@anima/hud/api';
 type Style = ScenePayload['style'];
 export function recipeHex(value?: string): number {
   const n = parseInt((value || '').replace('#', ''), 16);

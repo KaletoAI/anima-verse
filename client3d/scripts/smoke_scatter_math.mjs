@@ -4,7 +4,7 @@
  * and the map editor (`packages/scene-render/src/scatter.ts`, sections A-E),
  * the client's display LOD on top of it (`client3d/src/scene/scatterLod.ts`,
  * sections F-I) and the three distances the player may set for it
- * (`client3d/src/game/prefs.ts`, section J). Three modules, one subject —
+ * (`hud/src/game/prefs.ts`, section J). Three modules, one subject —
  * where a prop stands and how much of it is drawn are the two halves of the
  * same contract, and splitting them over two files would duplicate this
  * harness and let the halves drift apart.
@@ -1626,7 +1626,7 @@
  *      (5, 2) r 1 -> []. A two-point ring -> [].
  *
  * ============================================================================
- * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
+ * (J) THE DETAIL DISTANCES AS A SETTING — `hud/src/game/prefs.ts`
  * ============================================================================
  * The three distances are a LOCAL view setting (localStorage), so the same
  * contract as the audio prefs applies: never throw, never return half a
@@ -1846,7 +1846,7 @@ const OCCUPANCY_SRC = join(ROOT, 'packages/scene-render/src/occupancy.ts');
 const MAPMATH_SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
-const PREFS_SRC = join(ROOT, 'client3d/src/game/prefs.ts');
+const PREFS_SRC = join(ROOT, 'hud/src/game/prefs.ts');
 
 /** See the header: neither module has a runtime import, so a transpile is all
  *  it takes. Should someone add one, this fails loudly — that is the alarm.

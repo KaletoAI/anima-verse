@@ -38,7 +38,7 @@ import type { Engine } from '../scene/engine';
 import {
   EMBODY_MIN_DIST, EMBODY_NEAR_PITCH_DEG, OVERVIEW_NEAR_PITCH_DEG,
 } from '../scene/cameraFraming';
-import { getGameState, setGameState } from '../hud/bus';
+import { getGameState, setGameState } from '@anima/hud/hud/bus';
 
 export const EMBODY_DIST = 7;    // camera distance right after entering
 export const EMBODY_MAX_DIST = 34;  // the wheel stops here while embodied

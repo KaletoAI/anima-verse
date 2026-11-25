@@ -14,14 +14,14 @@ import * as T from 'three';
 const result = await build({ stdin: { contents: `
  export { applyFogVeil, setFogVeilCameraHeight } from './client3d/src/scene/fogVeil';
  export { SubmergedGhost } from './client3d/src/scene/submergedGhost';
- export { loadGraphicsPrefs } from './client3d/src/game/prefs';
+ export { loadGraphicsPrefs } from './hud/src/game/prefs';
  export { GraphicsFeatures } from './client3d/src/scene/graphicsFeatures';
  export { LightPool } from './client3d/src/scene/lightPool';
  export { attachMirror, disposeMirror } from './packages/scene-render/src/mirrorSurface';
  export { buildPropWater } from './packages/scene-render/src/propWater';
  export { gateWaterExtra, waterExtrasUniform } from './packages/scene-render/src/waterExtras';
  export { buildWaterfall } from './client3d/src/scene/waterfall';
- export { DEFAULT_GRAPHICS_PREFS } from './client3d/src/game/prefs';
+ export { DEFAULT_GRAPHICS_PREFS } from './hud/src/game/prefs';
 `, resolveDir: process.cwd(), loader: 'ts' }, bundle:true, platform:'node', format:'esm', write:false, external:['three'] });
 const dir = await mkdtemp(join(tmpdir(), 'graphics-features-'));
 const modulePath = join(dir, 'features.mjs');

@@ -16,11 +16,11 @@ import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyTileFade, buildTile, setSurfaceTextures, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
-import { getSurfaceTextures } from './api';
+import { getSurfaceTextures } from '@anima/hud/api';
 import { mountShell, mountDetail, detailVerifyReport, SceneLibrary, unmountShell } from './scene/sceneRecipe';
 void getSurfaceTextures().then(setSurfaceTextures);
 import { grassTexture } from './scene/textures';
-import type { WorldLocation } from './types';
+import type { WorldLocation } from '@anima/hud/types';
 
 const POLL_MS = 4000;
 const wanted = new URLSearchParams(location.search).get('location') ?? '';

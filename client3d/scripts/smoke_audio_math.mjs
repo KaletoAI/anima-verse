@@ -108,9 +108,9 @@ function extractFunction(source, name) {
 const scatter = read('packages/scene-render/src/scatter.ts');
 const { seededRandom } = moduleOf(extractFunction(scatter, 'scatterSeedHash')
   + '\n' + extractFunction(scatter, 'seededRandom'));
-const P = moduleOf(read('client3d/src/game/prefs.ts'));
-const S = moduleOf(read('client3d/src/game/soundtrack.ts'));
-const V = moduleOf(read('client3d/src/game/voiceover.ts'));
+const P = moduleOf(read('hud/src/game/prefs.ts'));
+const S = moduleOf(read('hud/src/game/soundtrack.ts'));
+const V = moduleOf(read('hud/src/game/voiceover.ts'));
 
 // AudioParam records Web Audio's set/ramp/cancel boundary. Sampling interprets
 // those events linearly; it contains no audio production formula or constants.

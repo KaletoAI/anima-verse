@@ -66,7 +66,7 @@
  */
 import { movementOf, type MovementType } from '../game/walk';
 import * as THREE from 'three';
-import { markPhase } from '../game/boot';
+import { markPhase } from '@anima/hud/game/boot';
 import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
   propBoxFootprints, propGroundFit,
@@ -84,19 +84,19 @@ import type { CellGrids, Point2, ScatterFootprint, ScatterInstance,
   WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchHeightTileStats, fetchTerrain,
-  fetchTerrainLayers } from '../api';
-import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
+  fetchTerrainLayers } from '@anima/hud/api';
+import type { HeightTileBatch, HeightTileStatsBatch } from '@anima/hud/api';
 import { emptyWaterRaster, rasterLevelAt, rasterSdAt,
   waterTileFrom } from './waterRaster';
 import { localToWorld } from '../game/enterLocation';
-import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
+import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '@anima/hud/game/minimap';
 import { sanitizePolygon } from '../game/polygon';
 // The swim threshold's ONE reader (W4c) — `typeAt` hands the number on, the
 // rule that uses it lives in `walk.wadeGate`.
 import { SWIM_FROM_DEFAULT_M, swimFrom } from '../game/walk';
 import type { MapLocation, TerrainArea, TerrainPayload,
   TerrainAlongEntry, TerrainScatterEntry, TerrainType,
-  WorldBounds } from '../types';
+  WorldBounds } from '@anima/hud/types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
 import { hasSurfaceTexture, setWorldGround, setWorldWater, surfaceFor,
