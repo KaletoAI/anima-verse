@@ -41,8 +41,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#: Bumped when an accessory is built differently for the same inputs.
-ACCESSORY_VERSION = 2
+#: Bumped when an accessory is built differently for the same inputs. 3: the test poses judge a side by the body's
+#: outer wall only (``outer_wall_faces``) — a belt over a bent hip no longer fails on the inner wall, a piece pushed
+#: through the skin is caught at its true depth.
+ACCESSORY_VERSION = 3
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -495,7 +497,7 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
                    radius: float, pendant: Dict[str, Any], size_mm: float) -> Dict[str, Any]:
     """The pendant hung at the chain's lowest point (``accessory_pendant.place``), rigid with the chain's skin there
     (the first tube vertex of that ring — the tube's weights are already folded onto the base skeleton), checked
-    through the test poses. ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
+    through the test poses against the body's outer wall (``outer_wall_faces``). ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
     left off."""
     from app.core import accessory_curve, accessory_pendant, glb_mesh
     from app.core.garment_fit import dense_weights
@@ -527,7 +529,8 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     # The welded body and the skin of each welded vertex (``weld`` keeps the first vertex of each position).
     from scipy.spatial import cKDTree
     _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
-    poses = accessory_pendant.pose_check(Pw, Fw, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names), parents,
+    Fo = Fw[outer_wall_faces(Pw, Fw, body.joint_positions, parents)]
+    poses = accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, Jp, Wp, list(body.joint_names), parents,
                                          heads)
     inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
     if inside:
@@ -977,8 +980,8 @@ def around_plausible(key: str, metrics: Dict[str, Any]) -> None:
 
 
 def _body_context(rigged: bytes):
-    """``(body, dense, Pw, Fw, first)``: the body, its dense weights, the welded body and the source vertex of each
-    welded one."""
+    """``(body, dense, Pw, Fw, first, Fo)``: the body, its dense weights, the welded body, the source vertex of each
+    welded one and the faces the test poses judge a side by (``outer_wall_faces``)."""
     from scipy.spatial import cKDTree
     from app.core import accessory_curve, glb_mesh
     from app.core.garment_fit import dense_weights
@@ -986,18 +989,70 @@ def _body_context(rigged: bytes):
     dense = dense_weights(body)
     Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
     _, first = cKDTree(np.asarray(body.positions, np.float64)).query(Pw)
-    return body, dense, Pw, Fw, first
+    Fo = Fw[outer_wall_faces(Pw, Fw, body.joint_positions, glb_mesh.skin_joint_parents(rigged))]
+    return body, dense, Pw, Fw, first, Fo
 
 
-def _poses(rigged: bytes, body, dense, Pw, Fw, first, V, J, W) -> Dict[str, Dict[str, float]]:
-    """``accessory_pendant.pose_check`` of the piece ``V`` (skin ``J/W``) against the body in the CPU test poses."""
+#: Faces smaller than this (m²) never decide a point's side in the test poses: three micro-triangles with opposite
+#: normals at the front of Lirien's belly (0.07 mm² each) gave "inside" by the order they were met.
+SIGN_MIN_AREA_M2 = 0.5e-6
+#: How many of the nearest bone segments vote on a face's side (``outer_wall_faces``). Measured against faces a ray
+#: can leave the body from (Blender BVH, 25 rays per face, 10 bodies): the nearest segment alone dropped 0.2–4.2 % of
+#: that skin by area, four dropped 0.0–3.8 % and kept less inner wall on every body.
+OUTER_SEGMENTS = 4
+
+
+def outer_wall_faces(P: np.ndarray, F: np.ndarray, heads: Dict[str, Any], parents: Dict[str, str]) -> np.ndarray:
+    """The mask of the faces of the body's OUTER wall in the bind pose. Every generated base body is double-walled
+    (a second, inward-facing wall 5–19 mm under the skin), and ``garment_shell.signed_distance`` takes its sign from
+    the nearest face: where a bent hip brings the inner wall nearest, a piece outside the skin counts as inside, and
+    the cavity behind the inner wall counts as outside. A face is outer when its winding normal (signed by the
+    mesh's volume) points away from the bone segments of the base skeleton nearest to it (a base joint's head to its
+    base parent's head): the cosines to the ``OUTER_SEGMENTS`` nearest segments, weighted by 1 / distance², sum
+    above 0. One nearest segment alone took the skin under a bulge for inner wall where a segment ends at a joint
+    (the flank above the hip read against the hip bone: a belt there measured −8 mm); faces under
+    ``SIGN_MIN_AREA_M2`` are left out."""
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    P = np.asarray(P, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    by_key = {norm_bone_name(str(k)): np.asarray(v, np.float64) for k, v in heads.items()}
+    a, b = [], []
+    for name, parent in parents.items():
+        key, pkey = norm_bone_name(str(name)), norm_bone_name(str(parent or ""))
+        if key in BASE_JOINT_KEYS and pkey in BASE_JOINT_KEYS and key in by_key and pkey in by_key:
+            a.append(by_key[pkey])
+            b.append(by_key[key])
+    if not a:
+        return np.ones(len(F), bool)
+    A, D = np.asarray(a), np.asarray(b) - np.asarray(a)
+    dd = np.maximum(np.einsum("ij,ij->i", D, D), 1e-12)
+    N = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+    vol = np.einsum("ij,ij->i", P[F[:, 0]], np.cross(P[F[:, 1]], P[F[:, 2]])).sum()
+    N = N * (1.0 if vol >= 0 else -1.0)
+    C = P[F].mean(1)
+    m = min(OUTER_SEGMENTS, len(A))
+    away = np.zeros(len(F), bool)
+    for s in range(0, len(F), 20000):
+        c, n = C[s:s + 20000], N[s:s + 20000]
+        t = np.clip(np.einsum("cij,ij->ci", c[:, None] - A[None], D) / dd[None], 0.0, 1.0)
+        X = c[:, None] - (A[None] + t[..., None] * D[None])
+        d2 = np.maximum(np.einsum("cij,cij->ci", X, X), 1e-18)
+        cos = np.einsum("cij,cj->ci", X, n) / np.sqrt(d2)
+        near = np.argsort(d2, axis=1)[:, :m]
+        away[s:s + 20000] = (np.take_along_axis(cos, near, 1) / np.take_along_axis(d2, near, 1)).sum(1) > 0
+    return away & (np.linalg.norm(N, axis=1) / 2 >= SIGN_MIN_AREA_M2)
+
+
+def _poses(rigged: bytes, body, dense, Pw, Fo, first, V, J, W) -> Dict[str, Dict[str, float]]:
+    """``accessory_pendant.pose_check`` of the piece ``V`` (skin ``J/W``) against the body's outer wall ``Fo``
+    (``_body_context``) in the CPU test poses."""
     from app.core import accessory_pendant, glb_mesh
     from app.core.garment_shell import top4_weights
     from app.core.rig_contract import norm_bone_name
     Jb, Wb, used = top4_weights(dense)
     Jb = used[Jb]
     heads = {norm_bone_name(k): v for k, v in body.joint_positions.items()}
-    return accessory_pendant.pose_check(Pw, Fw, Jb[first], Wb[first], V, J, W, list(body.joint_names),
+    return accessory_pendant.pose_check(Pw, Fo, Jb[first], Wb[first], V, J, W, list(body.joint_names),
                                         glb_mesh.skin_joint_parents(rigged), heads, kq=POSE_KQ)
 
 
@@ -1026,7 +1081,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     from app.core import accessory_band as ab, accessory_mesh, glb_mesh
     from app.core.accessory_spec import BAND_KINDS
     started = time.monotonic()
-    body, dense, Pw, Fw, first = _body_context(rigged)
+    body, dense, Pw, Fw, first, Fo = _body_context(rigged)
     key = ab.region_key(spec)
     what = AROUND_WHAT[key]
     band = spec["kind"] in BAND_KINDS
@@ -1098,7 +1153,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     J, W = np.vstack([j for j, _ in skins]), np.vstack([w for _, w in skins])
     J, W = accessory_mesh.fold_to_base(J, W, list(body.joint_names), glb_mesh.skin_joint_parents(rigged))
     gap = np.concatenate(gaps) * 1000.0
-    poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)
+    poses = _poses(rigged, body, dense, Pw, Fo, first, V, J, W)
     metrics = {"gap_mm": {"p05": round(float(np.percentile(gap, 5)), 2), "p50": round(float(np.median(gap)), 2),
                           "p95": round(float(np.percentile(gap, 95)), 2), "min": round(float(gap.min()), 2)},
                "inside_share": round(float((gap < -0.5).mean()), 4),
@@ -1111,7 +1166,7 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
            "curve": np.vstack(curves), "landmarks": landmarks, "metrics": metrics}
     if part is not None and spec["kind"] == "belt":
         try:
-            out["pendant"] = attach_buckle(rigged, body, dense, Pw, Fw, first, curves[0], V, J, W, part,
+            out["pendant"] = attach_buckle(rigged, body, dense, Pw, Fo, first, curves[0], V, J, W, part,
                                            float(spec["buckle"]["size_mm"]), thickness)
         except ValueError as e:
             out["pendant_error"] = str(e)
@@ -1136,7 +1191,7 @@ def belt_top(under: List[Dict[str, Any]], bones: Dict[str, Any]) -> Optional[flo
 
 
 def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np.ndarray, rigged: bytes, body,
-                dense, Pw, Fw, first, size_mm: Optional[float], what: str) -> Dict[str, Any]:
+                dense, Pw, Fo, first, size_mm: Optional[float], what: str) -> Dict[str, Any]:
     """An item-image part already in place (``Vn``), rigid with the skin ``J_at / W_at``: the size and the test-pose
     gates of the pendant (``SIZE_TOLERANCE`` unless ``size_mm`` is None — a pair of drops measures across both;
     nothing inside in any pose). ``ValueError`` naming why it is left
@@ -1148,7 +1203,7 @@ def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np
         raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
     Jp = np.repeat(np.asarray(J_at)[None], len(Vn), 0)
     Wp = np.repeat(np.asarray(W_at)[None], len(Vn), 0)
-    poses = _poses(rigged, body, dense, Pw, Fw, first, Vn, Jp, Wp)
+    poses = _poses(rigged, body, dense, Pw, Fo, first, Vn, Jp, Wp)
     inside = [name for name, m in poses.items() if m["inside_share"] > 0.0]
     if inside:
         raise ValueError(f"the {what} would sink into the body in the {', '.join(inside)} pose")
@@ -1160,7 +1215,7 @@ def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np
             "metrics": {"size_mm": round(measured, 2), "triangles": int(len(F)), "joints": weights, "poses": poses}}
 
 
-def attach_buckle(rigged: bytes, body, dense, Pw, Fw, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+def attach_buckle(rigged: bytes, body, dense, Pw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
                   W: np.ndarray, part: Dict[str, Any], size_mm: float, thickness: float) -> Dict[str, Any]:
     """The belt's buckle (the item-image mesh, ``accessory_pendant.normalise``: front +Z, back at z 0) centred on the
     band's front (the centre-line point at angle 0, half the band's depth farther out), rigid with the band's skin
@@ -1171,7 +1226,7 @@ def attach_buckle(rigged: bytes, body, dense, Pw, Fw, first, curve: np.ndarray, 
     at = np.asarray(curve[0], np.float64)
     Vp = Vn + at + np.array([0.0, 0.0, thickness / 2 + 0.0005])
     k = int(np.argmin(np.linalg.norm(V - at, axis=1)))
-    hung = _rigid_part(Vp, part, J[k], W[k], rigged, body, dense, Pw, Fw, first, size_mm, "buckle")
+    hung = _rigid_part(Vp, part, J[k], W[k], rigged, body, dense, Pw, Fo, first, size_mm, "buckle")
     hung["metrics"]["anchor"] = [round(float(x), 5) for x in at]
     return hung
 
@@ -1185,7 +1240,7 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
     from app.core.accessory_curve import vertex_normals
     from app.core.rig_contract import norm_bone_name
     started = time.monotonic()
-    body, dense, Pw, Fw, first = _body_context(rigged)
+    body, dense, Pw, Fw, first, Fo = _body_context(rigged)
     head = [i for i, n in enumerate(body.joint_names) if norm_bone_name(str(n)) == "head"]
     if not head:
         raise KeyError("head")
@@ -1238,7 +1293,7 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
     W[:, 0] = 1.0
     from app.core.garment_shell import signed_distance
     sd = signed_distance(V, Pw, Fw) * 1000.0
-    poses = _poses(rigged, body, dense, Pw, Fw, first, V, J, W)
+    poses = _poses(rigged, body, dense, Pw, Fo, first, V, J, W)
     metrics = {"gap_mm": {"min": round(float(sd.min()), 2), "p50": round(float(np.median(sd)), 2)},
                "inside_share": round(float((sd < -0.5).mean()), 4), "style": style,
                "triangles": int(len(F)), "vertices": int(len(V)), "joints": {str(body.joint_names[head[0]]): 1.0},
@@ -1261,7 +1316,7 @@ def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, 
         try:
             both = {"V": Vp, "F": Fp, "UV": np.vstack([np.asarray(part["UV"], np.float64)] * len(part_V)),
                     "image": part.get("image"), "mime": part.get("mime"), "material": part.get("material")}
-            out["pendant"] = _rigid_part(Vp, both, J[0], W[0], rigged, body, dense, Pw, Fw, first, None, "drop")
+            out["pendant"] = _rigid_part(Vp, both, J[0], W[0], rigged, body, dense, Pw, Fo, first, None, "drop")
             # one drop's longest side (the pair measured together spans the head)
             out["pendant"]["metrics"]["size_mm"] = round(float(np.ptp(part_V[0], 0).max()) * 1000.0, 2)
         except ValueError as e:
@@ -1320,7 +1375,7 @@ def make_glasses(rigged: bytes, spec: Dict[str, Any]) -> Dict[str, Any]:
     from app.core import accessory_glasses as ag
     from app.core.rig_contract import norm_bone_name
     started = time.monotonic()
-    body, dense, Pw, Fw, first = _body_context(rigged)
+    body, dense, Pw, Fw, first, _Fo = _body_context(rigged)
     head = [i for i, n in enumerate(body.joint_names) if norm_bone_name(str(n)) == "head"]
     if not head:
         raise KeyError("head")
@@ -1394,7 +1449,7 @@ def preview_rings(character_name: str, spec: Dict[str, Any], *,
         return {"rings": [np.round(ar.centre_line(fr, sized["radius_m"], thickness), 5).tolist()],
                 "landmarks": {spec["side"]: {"centre": np.round(fr["centre"], 5).tolist()}},
                 "radius_m": thickness / 2, "inner_radius_mm": round(float(sized["radius_m"]) * 1000.0, 2)}
-    body, dense, Pw, Fw, first = _body_context(rigged)
+    body, dense, Pw, Fw, first, _Fo = _body_context(rigged)
     rings, marks = [], {}
     if spec["kind"] == "glasses":
         # the lens outlines, the bridge and the temples where the Build lays them (before its gate's pushes)

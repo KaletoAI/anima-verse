@@ -126,7 +126,7 @@ export {
 export { pickVariant, pickModelVariant } from './types'
 
 export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureBox, figureRootY, inGarment, isGarmentNode,
-  prepareSheerPieces, SHEER_RENDER_ORDER, prepareGlossyPieces, GLOSSY_FABRICS, prepareFigureTextures, FIGURE_ANISOTROPY,
+  prepareSheerPieces, SHEER_RENDER_ORDER, prepareGlossyPieces, GLOSSY_FABRICS, GLOSSY_ENV_INTENSITY, METAL_ENV_INTENSITY, isMetalPiece, prepareFigureTextures, FIGURE_ANISOTROPY,
   hipsTrackMedian, rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM } from './figure'
 export { clipShiftM } from './figure'
 export { DAYLIGHT_HEMI_SKY, DAYLIGHT_HEMI_GROUND, DAYLIGHT_SUN_NOON, DAYLIGHT_FILL, DAYLIGHT_FILL_POSITION,

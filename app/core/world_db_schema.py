@@ -12,7 +12,8 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 12  # 12: quest system tables (quest_templates, quest_runs, quest_facts)
+SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, quest_facts)
+#                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1065,6 +1066,7 @@ SCHEMA_STATEMENTS = [
         steps            INTEGER NOT NULL DEFAULT 0,
         max_steps        INTEGER NOT NULL DEFAULT 0,
         max_tokens_total INTEGER NOT NULL DEFAULT 0,
+        max_tokens       INTEGER,
         tokens_in        INTEGER NOT NULL DEFAULT 0,
         tokens_out       INTEGER NOT NULL DEFAULT 0,
         cost_total       REAL NOT NULL DEFAULT 0,
@@ -1172,6 +1174,10 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    # world_dev_runs: the per-reply max_tokens the run was started with (NULL
+    # = the model's default), so a follow-up after a restart resolves the
+    # model with the same cap.
+    ("world_dev_runs", "max_tokens", "INTEGER"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),

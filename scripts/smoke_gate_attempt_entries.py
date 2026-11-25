@@ -403,7 +403,7 @@ def run(root: Path) -> int:
     base_body.picture_edit_prompt = lambda *a, **k: ("dress the base view", "blurry")
     base_body._composite_extra = lambda *a, **k: {}
 
-    def composite_attempt(c, view, *, stem, draft, base_views, extra, front=None):
+    def composite_attempt(c, view, *, stem, draft, base_views, extra, front=None, front_region=None):
         path = png(Path(stem).with_suffix(".png"), (64, 96))
         return path, {"ok": counter.ok(), "composite": {"ok": True}, "guard": {"best": view},
                       "noise": {"score": 0.0}}

@@ -28,7 +28,7 @@ public static class ResumeCheck
         var handoff = typeof(HudOverlay).GetMethod(nameof(HudOverlay.HandoffScript))!;
         Is("handoff accepts same-session protection", handoff.GetParameters().Length == 5);
         string Script(bool end) => (string)handoff.Invoke(null, new object?[] { "stored-token", false,
-            "http://fixture/static/client3d/hud.html?bridge=gdcef", null, end })!;
+            "http://fixture/static/hud/hud.html?bridge=gdcef", null, end })!;
         Is("same-token handoff cannot log out", !Script(false).Contains("/auth/logout"));
         Is("different-token recovery retains guarded logout", Script(true).Contains(HudOverlay.EndSessionScript));
         File.WriteAllText(ProjectSettings.GlobalizePath("user://task89-handoff.json"), JsonSerializer.Serialize(new

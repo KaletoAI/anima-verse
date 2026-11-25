@@ -6,13 +6,13 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {mainFunction} from './mainFunction.mjs';
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
-const menu = read('../src/hud/GameMenu.tsx');
+const menu = read('../../hud/src/hud/GameMenu.tsx');
 assert.ok(menu.includes("t('Release avatar')"), 'menu offers release');
 assert.ok(menu.includes('ConfirmDialog'), 'release uses in-app confirmation');
 assert.ok(menu.includes('Your avatar leaves the map; you stay signed in.'), 'explains signed-in spectator state');
-const hud = read('../src/hud/Hud.tsx');
+const hud = read('../../hud/src/hud/Hud.tsx');
 assert.ok(hud.includes("t('Spectating')") && hud.includes("t('Take control')"), 'spectator has visible state and return action');
-const api = read('../src/api.ts');
+const api = read('../../hud/src/api.ts');
 assert.ok(api.includes('/account/release-character'), 'authenticated release API');
 const arrival = await mainFunction('placeAvatarOnArrival', {avatarName:'', awaitArrivalMount:()=>{throw Error('no avatar must not mount arrival');}});
 await arrival();
@@ -25,7 +25,7 @@ control();
 const {buildSync}=await import('esbuild');
 const cameraCode=buildSync({stdin:{resolveDir:new URL('../../',import.meta.url).pathname,contents:`
 export {enterEmbodied} from './client3d/src/game/embody';
-export {getGameState} from './client3d/src/hud/bus';
+export {getGameState} from './hud/src/hud/bus';
 `},bundle:true,write:false,platform:'node',format:'cjs'}).outputFiles[0].text;
 const cameraModule={exports:{}};new Function('module','exports',cameraCode)(cameraModule,cameraModule.exports);
 const camera={follow:null,zoomCap:null,zoomFloor:null,firstPerson:false,flyTo(){throw Error('spectator must not follow');}};
@@ -86,8 +86,8 @@ try {
   const script=(await build({stdin:{resolveDir:rootDir,loader:'tsx',contents:`
 import React from 'react';
 import {flushSync} from 'react-dom';
-import {mountHud} from './client3d/src/hud/mount';
-import {gameActions} from './client3d/src/hud/bus';
+import {mountHud} from './hud/src/hud/mount';
+import {gameActions} from './hud/src/hud/bus';
 const check=(ok,label)=>{if(!ok)throw Error(label);};
 (async()=>{try {
  localStorage.setItem('uiLang','en');
@@ -136,7 +136,7 @@ const check=(ok,label)=>{if(!ok)throw Error(label);};
  check(!!document.querySelector('.hud-chat'),'composer returns');
  document.body.dataset.result='PASS';
 } catch(e){document.body.dataset.result='FAIL';document.body.append(String(e.stack||e));}})();
-`},plugins:[{name:'instrument-navigation',setup(b){b.onResolve({filter:/^\.\/sceneTile$/},()=>({path:rootDir+'client3d/src/hud/sceneTile.ts'}));b.onLoad({filter:/[/]GameMenu\.tsx$/},()=>({contents:menu.replaceAll('location.reload();','window.__avatarReload();'),loader:'tsx',resolveDir:rootDir+'client3d/src/hud'}));}}],
+`},plugins:[{name:'instrument-navigation',setup(b){b.onResolve({filter:/^\.\/sceneTile$/},()=>({path:rootDir+'hud/src/hud/sceneTile.ts'}));b.onLoad({filter:/[/]GameMenu\.tsx$/},()=>({contents:menu.replaceAll('location.reload();','window.__avatarReload();'),loader:'tsx',resolveDir:rootDir+'hud/src/hud'}));}}],
  bundle:true,write:false,format:'iife',platform:'browser',loader:{'.css':'empty'},
  nodePaths:[rootDir+'node_modules'],define:{'process.env.NODE_ENV':'"production"'}})).outputFiles[0].text;
   const html=join(dir,'smoke.html');

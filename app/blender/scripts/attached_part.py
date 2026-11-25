@@ -286,6 +286,68 @@ def border_strip(points, edge_counts, border, band):
     return share * share * (3 - 2 * share)
 
 
+def grid_margin(shaft_radius, girth_max, tip_girth, voxel):
+    """The voxel grid's margin (metres) round the centre line and the pods: at
+    least 20 mm beyond the shaft's widest radius (``shaft_radius`` already carries
+    the size factor), so neither the shaft nor its ridges and relief reach the
+    grid's edge. The radius is added in whole voxels: the grid keeps the phase
+    of the plain 20 mm margin, so the surface it samples is the same wherever
+    that grid reached (a shifted lattice re-sampled a fold beside a thigh and
+    turned four shading normals past 90 degrees)."""
+    return .02 + math.ceil(shaft_radius * max(girth_max, tip_girth) / voxel - 1e-9) * voxel
+
+
+def _edge_counts(mesh):
+    """Face count per edge (vertex index pair) of a Blender mesh."""
+    counts = {}
+    for poly in mesh.polygons:
+        for edge in poly.edge_keys:
+            counts[edge] = counts.get(edge, 0) + 1
+    return counts
+
+
+def border_loops_of(edge_counts):
+    """The open border loops (lists of vertex indices) of a mesh whose edges are
+    ``edge_counts`` (vertex index pair -> face count)."""
+    links = {}
+    for (a, b), count in edge_counts.items():
+        if count == 1:
+            links.setdefault(a, []).append(b)
+            links.setdefault(b, []).append(a)
+    loops, seen = [], set()
+    for start in links:
+        if start in seen:
+            continue
+        loop, stack = [], [start]
+        seen.add(start)
+        while stack:
+            v = stack.pop()
+            loop.append(v)
+            for w in links[v]:
+                if w not in seen:
+                    seen.add(w)
+                    stack.append(w)
+        loops.append(loop)
+    return loops
+
+
+def attachment_loop(loops, points, root):
+    """The border loop passing closest to ``root`` (the attachment loop), as a set."""
+    if not loops:
+        return set()
+    points = np.asarray(points)
+    root = np.asarray(root)
+    return set(min(loops, key=lambda loop: np.linalg.norm(points[loop] - root, axis=1).min()))
+
+
+def off_chain_tip_vertices(stations, shaft_closer, chain_share, tip_start):
+    """Count of the tip's vertices (station at or past ``tip_start``, nearer the
+    shaft than the pods) whose weight share on the chain's bones is below 0.5:
+    such a vertex stays behind when the chain moves and draws a spike."""
+    stations = np.asarray(stations)
+    return int(np.count_nonzero((stations >= tip_start) & np.asarray(shaft_closer) & (np.asarray(chain_share) < .5)))
+
+
 def skin_texel_fallback(pixels):
     return np.median(pixels[..., :3].reshape(-1, 3), axis=0)
 
@@ -830,10 +892,14 @@ def build_part(group, companions, output):
 
     # Sample root-local unions of sweep, ridges, pods and body skin.
     # The grid also spans the sweep's top above the root plus its body fillet:
-    # with only the 20 mm margin a wide root was cut off flat there.
+    # with only the 20 mm margin a wide root was cut off flat there. The margin
+    # round the centre line grows with the shaft: at size 1.6 the tip's radius
+    # (27.7 mm) passed a fixed 20 mm, the grid cut the tip flat and left a hole
+    # whose skin weights pinned it to the hips (a spike when the chain rose).
     crown = root + upv * (shaft_radius * girth_max + body_blend)
     pts = np.vstack([centerline, [tuple(crown)], *[np.array(tuple(c)) + np.diag(r) for c, r in pod_ellipsoids], *[np.array(tuple(c)) - np.diag(r) for c, r in pod_ellipsoids]])
-    lo, hi = pts.min(0) - .02, pts.max(0) + .02
+    margin = grid_margin(shaft_radius, girth_max, tip_girth, voxel)
+    lo, hi = pts.min(0) - margin, pts.max(0) + margin
     nx, ny, nz = (np.ceil((hi - lo) / voxel)).astype(int) + 1
     if int(nx) * int(ny) * int(nz) > 8_000_000:
         raise ValueError('Part voxel grid exceeds 8 million samples')
@@ -1155,26 +1221,36 @@ def build_part(group, companions, output):
         for a, b in zip(face, np.roll(face, -1)):
             edge = tuple(sorted((int(a), int(b))))
             boundary_edges[edge] = boundary_edges.get(edge, 0) + 1
-    border = {vi for edge, count in boundary_edges.items() if count == 1 for vi in edge}
-    glue = border_strip(positions, boundary_edges, border, settings['seam']['band'])
-    vertex_weights = []
-    for i, point in enumerate(positions):
-        ws_ = shaft_weights(max(part_station[i], 0))
+    # The skin fillet takes the skin's weights, and so does the attachment loop
+    # with its strip (`seam.band` along the mesh): a border on part weights rose
+    # off the skin when the chain lifted (4 mm, Ruling A65c). Any other open
+    # border is a hole in the part's own surface and keeps the part's weights:
+    # a hole at the tip on skin weights stayed with the hips when the chain rose.
+    glue = border_strip(positions, boundary_edges,
+                        attachment_loop(border_loops_of(boundary_edges), positions, tuple(root)),
+                        settings['seam']['band'])
 
-        near_sh = float(np.clip(1 - max(shaft_distance[i], 0) / settings['pod_link_distance'], 0, 1)) ** 1.5 * settings['pod_link']
+
+    def part_weights(t, ds, dc):
+        """The part's own weights at station ``t``, ``ds`` from the shaft and ``dc`` from the pods."""
+        ws_ = shaft_weights(max(t, 0))
+        near_sh = float(np.clip(1 - max(ds, 0) / settings['pod_link_distance'], 0, 1)) ** 1.5 * settings['pod_link']
         wc_ = {pod_bone: 1 - near_sh, chain[0]['bone']: near_sh}
         # Shaft vs pods weights blend only across the junction (about 15 mm to each
         # side of the equal-distance surface); a wide one-sided ramp left the
         # shaft's underside on the pods bone, which shears it when the chain lifts.
-        mix = np.clip(.5 + (pod_distance[i] - shaft_distance[i]) / .03, 0, 1)
+        mix = np.clip(.5 + (dc - ds) / .03, 0, 1)
         w = {}
         for d_, f_ in ((ws_, mix), (wc_, 1 - mix)):
             for k_, x_ in d_.items():
                 w[k_] = w.get(k_, 0) + x_ * f_
-        # The skin fillet takes the skin's weights, and so does every open border
-        # with its strip (`seam.band` along the mesh): a border on part weights
-        # rose off the skin when the chain lifted (4 mm, Ruling A65c). Beyond the
-        # window the part is closed and has no border. Both shares are continuous.
+        return w
+
+
+    vertex_weights = []
+    for i, point in enumerate(positions):
+        w = part_weights(part_station[i], shaft_distance[i], pod_distance[i])
+        # Both shares are continuous.
         wroot = max(fillet_weight[i], glue[i])
         if wroot > 0:
             bw = skin_weights_at(*skin_nearest[i])
@@ -1252,6 +1328,8 @@ def build_part(group, companions, output):
     # and drops the copy, which opened a pinhole no border pass had seen.
     # Validate now, so every border is final from here on.
     partobj.data.validate()
+    before_close = len(partobj.data.vertices)
+    open_before = {vi for edge, count in _edge_counts(partobj.data).items() if count == 1 for vi in edge}
     # A hole loop that ends away from the skin is a gap in the part's own
     # closed surface (the cut left it where the part only rested on a thigh);
     # landing it on the nearest skin drew faces across to the thigh (A180).
@@ -1261,11 +1339,20 @@ def build_part(group, companions, output):
     final_positions = np.array([tuple(body_matrix @ v.co) for v in partobj.data.vertices])
     final_ds, final_t = shaft_sdf(final_positions)
     final_dc = pods_sdf(final_positions)
-    edge_counts = {}
-    for poly in partobj.data.polygons:
-        for edge in poly.edge_keys:
-            edge_counts[edge] = edge_counts.get(edge, 0) + 1
+    edge_counts = _edge_counts(partobj.data)
     final_border = {vi for edge, count in edge_counts.items() if count == 1 for vi in edge}
+    # A closed hole (its former border and the fan's centre) takes the part's
+    # weights at its own station: the fan otherwise inherits whatever its ring
+    # had, and a ring that once lay on an open border can carry skin weights.
+    filled = sorted((open_before - final_border) | set(range(before_close, len(final_positions))))
+    for i in filled:
+        for entry in list(partobj.data.vertices[i].groups):
+            partobj.vertex_groups[entry.group].remove([i])
+        for name_, weight_ in part_weights(final_t[i], final_ds[i], final_dc[i]).items():
+            if weight_ > 1e-4:
+                vg = partobj.vertex_groups.get(name_) or partobj.vertex_groups.new(name=name_)
+                vg.add([i], weight_, 'REPLACE')
+    print('closed hole vertices reweighted from the part', len(filled))
     seam = settings['seam']
     strip = border_strip(final_positions, edge_counts, final_border, seam['band'])
     # Only the attachment loop (the border loop passing closest to the root)
@@ -1273,27 +1360,7 @@ def build_part(group, companions, output):
     # rests on a thigh took that thigh's weights at full share, so a pose that
     # parted the legs pulled strands from the part to the thigh (A180): such a
     # loop and its strip stay on the part's side of the weights.
-    border_links = {}
-    for (a, b), count in edge_counts.items():
-        if count == 1:
-            border_links.setdefault(a, []).append(b)
-            border_links.setdefault(b, []).append(a)
-    border_loops, seen_ = [], set()
-    for start in border_links:
-        if start in seen_:
-            continue
-        loop_, stack_ = [], [start]
-        seen_.add(start)
-        while stack_:
-            v_ = stack_.pop()
-            loop_.append(v_)
-            for w_ in border_links[v_]:
-                if w_ not in seen_:
-                    seen_.add(w_)
-                    stack_.append(w_)
-        border_loops.append(loop_)
-    root_xyz = np.array(tuple(root))
-    attach_border = set(min(border_loops, key=lambda loop_: np.linalg.norm(final_positions[loop_] - root_xyz, axis=1).min())) if border_loops else set()
+    attach_border = attachment_loop(border_loops_of(edge_counts), final_positions, tuple(root))
     hole_border = final_border - attach_border
     attach_strip = border_strip(final_positions, edge_counts, attach_border, seam['band'])
     # Preserve the reference's interpolated weights after both modifiers.
@@ -1397,6 +1464,19 @@ def build_part(group, companions, output):
                 vg = partobj.vertex_groups.get(name_) or partobj.vertex_groups.new(name=name_)
                 vg.add([i], weight_, 'REPLACE')
     pme.update()
+    # The tip moves with the chain: a tip vertex mostly on other bones stays
+    # behind when the chain rises and draws a spike (Kai, size 1.6: 148
+    # vertices on Hips). Such a build fails instead of being published.
+    chain_bones = {link['bone'] for link in chain}
+    chain_share = np.zeros(len(final_positions))
+    for v in pme.vertices:
+        total = sum(entry.weight for entry in v.groups)
+        on_chain = sum(entry.weight for entry in v.groups if partobj.vertex_groups[entry.group].name in chain_bones)
+        chain_share[v.index] = on_chain / total if total > 0 else 0.
+    tip_off_chain = off_chain_tip_vertices(final_t, final_ds < final_dc, chain_share, tip_start)
+    print('tip vertices off the chain', tip_off_chain)
+    if tip_off_chain:
+        raise ValueError(f'{tip_off_chain} tip vertices are not carried by the chain (they would stay behind when it moves)')
     custom = []
     # The same share later wears the body's own texture (see the bake).
     seam_attribute = pme.attributes.new('seam', 'FLOAT', 'POINT')
@@ -1581,7 +1661,7 @@ def build_part(group, companions, output):
         'protrusion_mm': protrusion, 'flattened_vertices': flat,
         'reweighted_vertices': moved, 'part_tris': sum(len(poly.vertices) - 2 for poly in partobj.data.polygons),
         'skin_patch_px': S_, 'skin_patch_cm': S_ * mpp * 100,
-        'tip_vertices': tip_count,
+        'tip_vertices': tip_count, 'tip_off_chain_vertices': tip_off_chain,
         'border_vertices': len(final_border), 'hole_border_leg_moved': hole_leg_moved, 'free_holes_closed': holes_closed,
         'seam_vertices': seam_moved, 'seam_opposed_normals': opposed,
         'hole_border_vertices': len(hole_points), 'hole_border_vertices_left': holes_left,

@@ -148,6 +148,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
+from app.core.single_flight import SerialFlight
+
 logger = logging.getLogger(__name__)
 
 STEP_ORDER = ("plain_body", "base_repair", "tip_smoothing", "shape", "pieces", "template", "cut_texture", "pendant",
@@ -2926,6 +2928,43 @@ def _start_collision_run_all(character_name: str) -> Dict[str, Any]:
     return {"status": "started", "kind": RUN_ALL_COLLISION}
 
 
+def _ref_bsig(front: Optional[Path]) -> Optional[str]:
+    """The plain body a dressed view was rendered on (its sidecar's ``base_signature``), None when unknown."""
+    from app.core import base_body
+    if front is None:
+        return None
+    sig = base_body._ref_sidecar(front).get("base_signature")
+    return str(sig) if isinstance(sig, str) and sig.startswith("base") else None
+
+
+def _shape_views(character_name: str, shape: str) -> List[Dict[str, Any]]:
+    """The Body sub-tab's thumbnails of the worn body shape (round 2026-11-25): per dressed view ``{view, exists,
+    stamp (the file's mtime in ns — the picture URL's cache key), empty (an EMPTY composite: the base view
+    unchanged), lost_clothing (``base_body.view_lost_clothing``: EMPTY although the dressed front wears clothing, or
+    a band of the front's clothing kept too little — measured on the files, memoised; the base views are those of
+    the front sidecar's ``base_signature``),
+    jobs (``base_body.shape_view_jobs_of``: the image jobs of its Regenerate)}``. Read-only, sidecars only."""
+    from app.core import base_body, view_composite
+    from app.core.model_refs import find_ref_image
+    front = find_ref_image(character_name, "tpose", shape)
+    bsig = str(_ref_bsig(front) or "")
+    base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) if bsig else None
+                  for v in base_body.dressed_views()}
+    out: List[Dict[str, Any]] = []
+    for view in base_body.dressed_views():
+        path = front if view == "front" else find_ref_image(character_name, base_body._kind(view), shape)
+        try:
+            stamp = str(path.stat().st_mtime_ns) if path is not None else ""
+        except OSError:
+            stamp = ""
+        empty = path is not None and view_composite.is_empty(base_body._ref_sidecar(path).get("composite"))
+        out.append({"view": view, "exists": bool(stamp), "stamp": stamp, "empty": empty,
+                    "lost_clothing": bool(path is not None and view != "front" and base_body.view_lost_clothing(
+                        character_name, view, shape, front, base_views.get(view), base_views.get("front"))),
+                    "jobs": base_body.shape_view_jobs_of(view)})
+    return out
+
+
 def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     """The saved outfit whose pieces are exactly the worn ones, else ""."""
     ids = sorted({str(v) for v in (pieces or {}).values() if v})
@@ -2941,9 +2980,13 @@ def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     return ""
 
 
-#: ``figure_info`` memo: character -> (key, monotonic, answer) (fix round T12-F1, ruling F13 f).
+#: ``figure_info`` memo: character -> (key, monotonic, answer) (fix round T12-F1, ruling F13 f). The answer is
+#: never mutated and never handed out itself (callers get copies).
 _info_memo: Dict[str, Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = {}
 _info_lock = threading.Lock()
+#: One ``figure_info`` computation per character (slot) and key at a time, plus one follower (plan
+#: 2026-11-24-figure-poll-caches, Task 3).
+_INFO_FLIGHT = SerialFlight()
 
 
 def _stat(path) -> Tuple[int, int]:
@@ -2952,6 +2995,14 @@ def _stat(path) -> Tuple[int, int]:
         return st.st_mtime_ns, st.st_size
     except OSError:
         return 0, 0
+
+
+def _key_build(build: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of ``build`` whose ``step`` has no ``live`` progress (the memo key of ``_info_key``)."""
+    step = build.get("step")
+    if not isinstance(step, dict) or "live" not in step:
+        return dict(build)
+    return {**build, "step": {k: v for k, v in step.items() if k != "live"}}
 
 
 def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -2963,7 +3014,8 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
     placement is an item edit, as in ``figure.delivered_figure_cached``),
     the Build's state, and the stat of the character's ``model_refs`` /
     ``model3d`` / ``garments`` directories (an atomic publication renames
-    into them; a deletion too)."""
+    into them; a deletion too). The build's live step progress is not part of
+    the key (``_key_build``); figure_info sets the fresh build after the memo."""
     import hashlib
     from app.core import figure
     from app.core.garment_hair import BASE_HAIRSTYLE_KEY
@@ -2978,33 +3030,108 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
     root = get_character_dir(character_name)
     return (figure._generation[0], hashlib.sha1(figure._canonical(profile)).hexdigest(),
             hashlib.sha1(figure._canonical({i: get_item(i) for i in ids})).hexdigest(),
-            figure._canonical(build),
+            figure._canonical(_key_build(build)),
             tuple(_stat(root / name) for name in ("model_refs", "model3d", "garments")))
+
+
+def _memo_stat(key: str) -> None:
+    """Count one ``figure_memo`` event (``hot_path_stats``); never raises. Called outside every lock."""
+    try:
+        from app.core import hot_path_stats
+        hot_path_stats.count("figure_memo", key)
+    except Exception:  # noqa: BLE001 — statistics never disturb the poll
+        pass
+
+
+#: The read functions a cold figure / open-steps computation counts (``read_scope.tally`` names).
+_COMPUTE_READS = ("drape_state", "cut_key", "read_record", "garment_fsig", "get_item", "profile")
+
+
+def _compute_stat(ms_key: str, started: float, calls: Dict[str, int]) -> None:
+    """Record one cold computation as ``figure_compute``: its wall time under ``ms_key`` plus how often each of
+    ``_COMPUTE_READS`` ran inside it; never raises. Called outside every lock."""
+    try:
+        import time
+        from app.core import hot_path_stats
+        values: Dict[str, float] = {ms_key: (time.perf_counter() - started) * 1000.0}
+        values.update({name: calls.get(name, 0) for name in _COMPUTE_READS})
+        hot_path_stats.record("figure_compute", values)
+    except Exception:  # noqa: BLE001 — statistics never disturb the poll
+        pass
 
 
 def figure_info(character_name: str) -> Dict[str, Any]:
     """``_figure_info`` memoised (fix round T12-F1, ruling F13 f: the Figure
     tab's GET took 2–5 s): an answer is served again while its ``_info_key``
     holds, for at most ``figure.MEMO_TTL_S``, and stored only when no write
-    moved the figure generation while it was computed. A copy is returned."""
+    moved the figure generation while it was computed. The key leaves out the
+    Build's live step progress; every answer gets the fresh ``build`` set after
+    the memo. A miss runs under ``_INFO_FLIGHT`` (plan 2026-11-24-figure-poll-caches, Task 3): one computation
+    per character and key at a time plus one follower (``single_flight.SerialFlight``); a caller with the same
+    key waits for the running one. The computation reads profile, Build state and key ITSELF when it starts (a
+    follower starts later than the request of the caller that created it, and callers with yet another key join
+    it): it answers ``{info, build, key}`` from that one state, and a caller keeps its own ``build`` only when
+    its key equals the computed one, else the computation's — so ``status`` and ``build`` never disagree
+    (final review I1). Every caller gets its own copy; the stored answer is never handed out.
+    Statistics: ``figure_memo`` counts ``info_hit`` (served from the memo) or ``info_miss`` (a caller that did
+    not hit the memo — it computes, waits for a run or joins a follower), plus
+    ``info_unstored`` for a computation not stored because the generation moved; each computation records
+    ``figure_compute`` (``info_ms`` and the read calls inside it, ``read_scope``)."""
     import copy
     import time
-    from app.core import figure
+    from app.core import figure, read_scope
     profile = _profile_of(character_name, None)
     build = state(character_name)
     key = _info_key(character_name, profile, build)
     now = time.monotonic()
+    served = None
     with _info_lock:
         hit = _info_memo.get(character_name)
         if hit is not None and hit[0] == key and now - hit[1] < figure.MEMO_TTL_S:
-            return copy.deepcopy(hit[2])
-    info = _figure_info(character_name, profile=profile, build=build)
-    with _info_lock:
-        if key[0] == figure._generation[0]:
-            if len(_info_memo) >= 256:
-                _info_memo.clear()
-            _info_memo[character_name] = (key, now, copy.deepcopy(info))
-    return info
+            served = copy.deepcopy(hit[2])
+    if served is not None:
+        _memo_stat("info_hit")
+        served["build"] = build
+        return served
+    _memo_stat("info_miss")
+
+    def compute() -> Dict[str, Any]:
+        # Profile, Build state and key are read here, when the computation starts, and NOT taken from the
+        # creating caller: a follower starts only after the run before it, and callers with yet another key
+        # join it. Every part of the answer comes from this one state (final review I1).
+        c_profile = _profile_of(character_name, None)
+        c_build = state(character_name)
+        c_key = _info_key(character_name, c_profile, c_build)
+        c_now = time.monotonic()
+        # The answer of the run before (or of another caller) may already be stored under this key.
+        with _info_lock:
+            hit = _info_memo.get(character_name)
+            if hit is not None and hit[0] == c_key and c_now - hit[1] < figure.MEMO_TTL_S:
+                return {"info": hit[2], "build": c_build, "key": c_key}
+        started = time.perf_counter()
+        with read_scope.measure() as calls:
+            try:
+                info = _figure_info(character_name, profile=c_profile, build=c_build)
+            finally:
+                _compute_stat("info_ms", started, calls)
+        with _info_lock:
+            stored = c_key[0] == figure._generation[0]
+            if stored:
+                if len(_info_memo) >= 256:
+                    _info_memo.clear()
+                # The private result of the flight: nobody mutates it, every caller gets a copy.
+                _info_memo[character_name] = (c_key, c_now, info)
+        if not stored:
+            _memo_stat("info_unstored")
+        return {"info": info, "build": c_build, "key": c_key}
+
+    res = _INFO_FLIGHT.run(character_name, lambda: key, compute)
+    out = res["info"]
+    # The caller's own (fresher live progress) build only where its key is the computed one: then status, worn,
+    # wanted, ... were computed from a build with the same running / failed / step name. Otherwise the build the
+    # answer was computed from.
+    out["build"] = build if res["key"] == key else res["build"]
+    return out
 
 
 #: The plan steps the character list counts as the BASE (plain) body (Ruling A112); every other step is the
@@ -3028,7 +3155,14 @@ def open_steps(character_name: str) -> Dict[str, Any]:
     steps: [{label, jobs, hold, why}]}``; ``hold`` a step only a manual Build runs (``Step.manual``) or one that
     failed for its inputs (``Step.failed``). Plus ``building`` (a run goes). Off the pipeline both are empty.
     Read-only, no hub / LLM / Blender work; memoised like ``figure_info`` (``_info_key``, ``figure.MEMO_TTL_S``).
-    Never raises: an unreadable plan answers ``error`` with empty groups."""
+    An entry past the TTL with the same key is served once more and its character queued for a background
+    re-plan (``_queue_refresh``: at most two daemon workers ``open-steps-refresh-0/1`` share one queue, so a
+    hanging plan blocks no more than one of them). The route ``GET /characters/open-steps`` calls this through
+    ``open_steps_roster`` under its serial flight (one roster run at a time plus one follower,
+    ``app/core/single_flight.py``); ``figure_batch`` calls it directly.
+    Never raises: an unreadable plan answers ``error`` with empty groups. Statistics: ``figure_memo`` counts
+    ``open_hit`` (same key within the TTL), ``open_stale`` (same key past the TTL, served while a background
+    re-plan refreshes it) or ``open_miss`` (computed now); ``_compute_open`` records ``figure_compute``."""
     import copy
     import time
     from app.core import figure
@@ -3040,20 +3174,86 @@ def open_steps(character_name: str) -> Dict[str, Any]:
         logger.debug("open steps of %s: key not read", character_name, exc_info=True)
         return {"building": False, "base": _open_group([]), "outfit": _open_group([]), "error": str(e)}
     now = time.monotonic()
+    served, stale = None, False
     with _info_lock:
         hit = _open_memo.get(character_name)
         if hit is not None and hit[0] == key:
-            if now - hit[1] >= figure.MEMO_TTL_S and character_name not in _open_refreshing:
+            stale = now - hit[1] >= figure.MEMO_TTL_S
+            if stale and character_name not in _open_refreshing:
                 # Past the TTL with the same key: served once more while ONE background re-plan refreshes it
                 # (the list polls every character; a cold plan of ~30 characters takes about a second).
-                _open_refreshing.add(character_name)
-                threading.Thread(target=_refresh_open, args=(character_name,), daemon=True,
-                                 name=f"open-steps-{character_name}").start()
-            return copy.deepcopy(hit[2])
+                _queue_refresh(character_name)
+            served = copy.deepcopy(hit[2])
+    if served is not None:
+        _memo_stat("open_stale" if stale else "open_hit")
+        return served
+    _memo_stat("open_miss")
     return _compute_open(character_name, profile, build, key, now)
 
 
+def open_steps_roster(names: List[str]) -> Dict[str, Any]:
+    """The badges of a roster: ``{name: open_steps(name)}`` for every name with an open step or a running
+    Build (the loop of ``GET /characters/open-steps``, which runs it under its serial flight)."""
+    out: Dict[str, Any] = {}
+    for name in names:
+        info = open_steps(name)
+        if info["building"] or info["base"]["count"] or info["outfit"]["count"]:
+            out[name] = info
+    return out
+
+
+#: Characters queued or being re-planned in the background (no name is queued twice); guarded by ``_info_lock``.
 _open_refreshing: set = set()
+#: The names waiting for a background re-plan, in order; guarded by ``_info_lock``.
+_open_queue: Deque[str] = deque()
+#: The live refresh workers by index (0 or 1); guarded by ``_info_lock``. A worker removes itself under the
+#: lock when it finds the queue empty, so a later ``_queue_refresh`` starts a new one.
+_open_workers: Dict[int, threading.Thread] = {}
+_OPEN_WORKERS = 2
+
+
+def _queue_refresh(character_name: str) -> None:
+    """Queue a background re-plan of ``character_name`` and start a worker when fewer than two run. Called
+    under ``_info_lock``."""
+    _open_refreshing.add(character_name)
+    _open_queue.append(character_name)
+    if len(_open_workers) >= _OPEN_WORKERS:
+        return
+    index = next(i for i in range(_OPEN_WORKERS) if i not in _open_workers)
+    worker = threading.Thread(target=_open_worker, args=(index,), daemon=True,
+                              name=f"open-steps-refresh-{index}")
+    _open_workers[index] = worker
+    try:
+        worker.start()
+    except RuntimeError:  # no thread available
+        del _open_workers[index]
+        if not _open_workers:
+            # Nobody would ever drain the queue: drop it, so a later stale read of each of its names queues
+            # that name again and retries the start (final review I2).
+            for name in _open_queue:
+                _open_refreshing.discard(name)
+            _open_queue.clear()
+        logger.debug("open steps refresh worker not started", exc_info=True)
+
+
+def _open_worker(index: int) -> None:
+    """Re-plan queued characters one after the other; end (and deregister) when the queue is empty."""
+    try:
+        while True:
+            with _info_lock:
+                if not _open_queue:
+                    # Deregistered in the SAME lock block that saw the empty queue: a name queued after it
+                    # finds the index free and starts a new worker (final review I2).
+                    if _open_workers.get(index) is threading.current_thread():
+                        del _open_workers[index]
+                    return
+                name = _open_queue.popleft()
+            _refresh_open(name)
+    finally:
+        # Only an unexpected exit still holds the index here.
+        with _info_lock:
+            if _open_workers.get(index) is threading.current_thread():
+                del _open_workers[index]
 
 
 def _refresh_open(character_name: str) -> None:
@@ -3072,16 +3272,23 @@ def _refresh_open(character_name: str) -> None:
 def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str, Any],
                   key: Tuple[Any, ...], now: float) -> Dict[str, Any]:
     import copy
-    from app.core import figure
-    try:
-        steps = plan(character_name, profile=profile)
-        error = ""
-    except Exception as e:  # noqa: BLE001
-        logger.warning("open steps of %s not computable: %s", character_name, e)
-        steps, error = [], str(e)
-    out: Dict[str, Any] = {"building": bool(build.get("running")),
-                           "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
-                           "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
+    import time
+    from app.core import figure, read_scope
+    started = time.perf_counter()
+    with read_scope.measure() as calls:
+        try:
+            try:
+                with read_scope.scope():   # one read request (read_scope): repeated sub-reads computed once
+                    steps = plan(character_name, profile=profile)
+                error = ""
+            except Exception as e:  # noqa: BLE001
+                logger.warning("open steps of %s not computable: %s", character_name, e)
+                steps, error = [], str(e)
+            out: Dict[str, Any] = {"building": bool(build.get("running")),
+                                   "base": _open_group([s for s in steps if s.name in BASE_STEPS]),
+                                   "outfit": _open_group([s for s in steps if s.name not in BASE_STEPS])}
+        finally:
+            _compute_stat("open_ms", started, calls)
     if error:
         out["error"] = error
         return out
@@ -3094,6 +3301,15 @@ def _compute_open(character_name: str, profile: Dict[str, Any], build: Dict[str,
 
 
 def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
+    """``_figure_info_body`` inside one read scope (``read_scope``, plan 2026-11-24-figure-poll-caches, Task 5): the
+    profile, drape states, cut keys and fit signatures its sub-reads ask for again and again are computed once per
+    call. Never on a build path: the Build calls ``figure._delivered`` / ``plan`` itself, without a scope."""
+    from app.core import read_scope
+    with read_scope.scope():
+        return _figure_info_body(character_name, profile=profile, build=build)
+
+
+def _figure_info_body(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, served_built_at
     (when the served model was built — Ruling UI3 a), served_state (what that model is against the outfit worn
@@ -3142,6 +3358,10 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
             "shape": {"key": wanted.shape if meshed else "",
                       "state": ("ready" if delivered.shape == wanted.shape else "missing") if meshed else "plain"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
+    if meshed:
+        body["shape"]["views"] = _shape_views(character_name, wanted.shape)
+    from app.core import base_body as _bb
+    body["shape"]["regenerate"] = _bb.shape_view_state(character_name)
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
     # Ruling A131: a new body is being built (a base or body-shape step runs) or the newest body has no fits of
     # pieces that were fitted on the earlier one — the tab says so once; those pieces wait for it.

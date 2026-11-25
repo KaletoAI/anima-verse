@@ -79,7 +79,7 @@ public partial interface IWorldSource
     /// <summary>
     /// <c>GET /play/terrain-layers</c> (§ A16.7): without keys the INDEX (format, layer table, coarse overview
     /// mask, tile keys), with keys (at most <see cref="Ground.LayerCut.BatchMax"/>, payload spelling
-    /// <c>"tx,tz"</c>) the fine masks of those tiles — <c>fetchTerrainLayers</c> of client3d/src/api.ts.
+    /// <c>"tx,tz"</c>) the fine masks of those tiles — <c>fetchTerrainLayers</c> of hud/src/api.ts.
     /// </summary>
     Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys);
     /// <summary><c>GET /assets/surface-textures</c> (§ A7/§ A9): the bare array <c>[{kind, name, url, size_m, material?} | {kind, name, blend}]</c>.</summary>
@@ -103,7 +103,7 @@ public partial interface IWorldSource
 /// copy the sliding session sends back — on every later request. The password
 /// is used for the one login request and is not kept.
 ///
-/// Requests mirror the browser client (client3d/src/api.ts); no endpoint here is
+/// Requests mirror the browser client (hud/src/api.ts); no endpoint here is
 /// invented.
 /// </summary>
 public sealed partial class AnimaApi : IWorldSource, IDisposable

@@ -82,12 +82,14 @@ chat, movement, own inventory and outfit, gifts, scene photos, cancelling own ta
   **Media Generation** (*General & defaults · Backends · LoRA library · Scene
   rendering · Reference renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*).
   Saving stays section-wide, the URL hash (`#image_generation/blender`) survives a reload.
-- **3D player client** at **`/play`** (`client3d/`, Three.js + React HUD) — a zoomable
+- **3D player client** at **`/play`** (`client3d/`, Three.js; React HUD in `hud/`) — a zoomable
   world map that resolves buildings into walkable floor plans as you zoom in, with chat,
   self/others, inventory, mind, gallery, phone, news, quests and tasks in the HUD.
   `/` redirects here. FastAPI serves its committed build from `static/client3d/`, so only
   Python needs to run. Optional development with HMR uses `./start.sh --with-3d` or
-  `npm run dev:client3d` on port 5183. Shared player panels and character forms live in
+  `npm run dev:client3d` on port 5183. The HUD page is its own workspace `hud/` (`@anima/hud`,
+  built to `static/hud/`, `npm run dev:hud` on port 5184): the browser scene imports it as a
+  package, the native client's CEF HUD loads the built `static/hud/hud.html` from the server. Shared player panels and character forms live in
   `packages/player-ui`; geometry shared with the admin preview lives in `packages/scene-render`.
 
 **Three nouns, kept distinct:** a **Character** is any entity; an **Agent** is an LLM-driven chat
@@ -184,6 +186,12 @@ stops acting autonomously).
 - **Map layout backup:** the Map tab's **Download layout** saves where every location stands
   (position and rotation in metres) as a ZIP, **Restore layout** puts them back — matched by id,
   characters travelling along, terrain untouched (`/world/map/export`, `/world/map/import`).
+- **World Dev free mode:** Game-Admin → World Dev → **Free (agent)** gives a model a plain-language task
+  ("add a bakery with two rooms next to the market") and lets it build directly in the world through
+  journaled tools. The world is frozen while the run is open; a failed turn is rolled back on its own,
+  and the finished run is **Accept**ed or **Discard**ed (Discard undoes every write, skipping anything
+  someone else changed in the meantime). A safety backup per run can be restored offline with
+  `scripts/world_dev_restore.py` while the server is stopped.
 - **A cross-location move is a journey, not a jump:** the path is walked in metres over the painted
   terrain and the position is a pure function of the game clock, so a frozen world freezes every
   journey and all clients derive the same position.
@@ -614,7 +622,7 @@ No line at all means the world already has users.
 
 ### Frontend development
 
-The repository is an npm workspace root (`frontend`, `client3d`, `packages/*`) — one `npm install`
+The repository is an npm workspace root (`frontend`, `hud`, `client3d`, `packages/*`) — one `npm install`
 at the top covers all of them. The React app is committed pre-built under `static/game_admin/`, so a
 source checkout runs without Node at all.
 
@@ -623,9 +631,11 @@ npm install                  # once, from the repository root
 
 npm run dev:admin            # Vite dev server on :5173 (= npm run dev -w frontend)
 npm run build:admin          # tsc -b && vite build → static/game_admin/
+npm run dev:hud              # HUD page alone on :5184
+npm run build:hud            # tsc --noEmit && vite build → static/hud/
 npm run dev:client3d         # 3D client on :5183
 npm run build:client3d       # tsc --noEmit && vite build → static/client3d/
-npm run build                # both apps
+npm run build                # frontend, hud and client3d
 
 npm run lint -w frontend     # the only lint script; covers frontend/ and packages/*/src
 ANIMA_API=http://<host>:8000 npm run dev -w client3d   # against a backend elsewhere

@@ -43,6 +43,18 @@ Hand-derived expectations
      counter 2 — that is the RED half.
 [S2] QQscene_for_location(yard, id)QQ right after [S1] -> counter stays 1:
      the walk gate and the scene route share ONE composition.
+     The real POST /play/pos hands the walk gate the entry of
+     QQlist_locations()QQ (play.py: QQ_locs = list_locations()QQ, then
+     QQlocation_at_point(..., _locs)QQ -> QQstand_height_at(derived, ...)QQ),
+     not QQget_location_by_idQQ. That entry must hit the SAME cache slot:
+     QQforget_surfaces(yard)QQ, QQ_scene_specs(entry)QQ and
+     QQscene_for_location(entry, id)QQ -> counter still 1, and the payload is
+     the very object the QQget_location_by_idQQ read got. The other order
+     too: QQinvalidate_scene_cache()QQ, compose through the list entry
+     (counter 2), then QQscene_for_location(yard(), id)QQ -> counter stays 2.
+     Were the two dicts ever to fingerprint differently, route and walk gate
+     would evict each other in the one slot per location and every call
+     would compose again.
 [S3] the hut's layout gets model_offset_y -0.30 via QQupsert_locationQQ,
      QQforget_surfacesQQ -> the next QQ_scene_specsQQ composes: counter 2,
      and the declaration names the hut with walk_y_world 0.22.
@@ -89,8 +101,8 @@ from app.core import model_surface  # noqa: E402
 from app.core import scene_recipe  # noqa: E402
 from app.core.model_store import write_sidecar  # noqa: E402
 from app.models.world import (  # noqa: E402
-    add_location, get_location_by_id, update_location_position,
-    upsert_location)
+    add_location, get_location_by_id, list_locations,
+    update_location_position, upsert_location)
 
 FAILURES = []
 CHECKED = 0
@@ -192,6 +204,31 @@ scene = scene_recipe.scene_for_location(yard(), YARD)
 check("scene_for_location returns the payload", scene is not None)
 check("scene_for_location composes nothing more", COMPOSES[0] == 1,
       str(COMPOSES[0]))
+
+
+def yard_listed():
+    """The yard as POST /play/pos sees it: its entry of list_locations()."""
+    return next(l for l in list_locations() if l.get("id") == YARD)
+
+
+model_surface.forget_surfaces(YARD)
+model_surface._scene_specs(yard_listed())
+check("walk gate with the list_locations entry: no compose",
+      COMPOSES[0] == 1, str(COMPOSES[0]))
+listed_scene = scene_recipe.scene_for_location(yard_listed(), YARD)
+check("scene_for_location(list entry): no compose", COMPOSES[0] == 1,
+      str(COMPOSES[0]))
+check("...the very payload of the get_location_by_id read",
+      listed_scene is scene)
+scene_recipe.invalidate_scene_cache()
+model_surface.forget_surfaces(YARD)
+model_surface._scene_specs(yard_listed())
+check("cold cache, list entry composes once (counter 2)", COMPOSES[0] == 2,
+      str(COMPOSES[0]))
+scene_recipe.scene_for_location(yard(), YARD)
+check("then get_location_by_id hits it (counter stays 2)", COMPOSES[0] == 2,
+      str(COMPOSES[0]))
+COMPOSES[0] = 1  # [S3]..[S6] count from the [S1]/[S2] state
 
 print("[S3] a layout change recomposes")
 shape(-0.30)

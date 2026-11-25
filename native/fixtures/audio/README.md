@@ -86,5 +86,5 @@ itself is pinned in `audio.json` at strict thresholds .2/.8.
 
 Speech follows P3-R30: cap three WAITING lines and discard the oldest on
 overflow; an already sounding line is separate. Browser provenance is
-`client3d/src/game/voiceover.ts:214–224`. Stopping speech must leave both
+`hud/src/game/voiceover.ts:214–224`. Stopping speech must leave both
 playlists alone. Those lifecycle checks belong to Task 59.

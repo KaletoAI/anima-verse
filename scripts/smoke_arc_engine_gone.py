@@ -31,7 +31,9 @@ WHAT FOLLOWS BY HAND
      section is stripped on load, no "unknown root key" warning); after config._flatten_to_env({}) (a default
      config: every field falls back to its schema default) no os.environ name starts with "STORY_ENGINE_".
  (e) A text scan of app/, plugins/ (following the symlinked packs), shared/templates, shared/prompt_filters and
-     static/admin for the words story_arc | story_engine | arc_block | inject_arc_context finds exactly these lines
+     static/admin for the words story_arc | story_engine | arc_block | inject_arc_context | arc_context | _advance_arcs
+     (the last two: the thought turn's arc load and its arc-advance call site, which main rewrote after this branch
+     forked and which partly merged without a conflict marker) finds exactly these lines
      (stripped) and nothing else:
        app/core/config.py   the image-routing seed tuple    ("photo", ("story_engine.imagegen_default",)),
        app/core/config.py   the dead-field entry            DEAD_TOPLEVEL_ONLY_FIELDS ... "body_retexture", "story_engine")
@@ -86,7 +88,7 @@ def check(label, got, want):
         print(f"  FAIL {label}: got {got!r}, want {want!r}")
 
 
-WORDS = re.compile(r"story_arc|story_engine|arc_block|inject_arc_context")
+WORDS = re.compile(r"story_arc|story_engine|arc_block|inject_arc_context|arc_context|_advance_arcs")
 OLD_COMMIT = "3a444d8bf"
 OLD_MIN_LINES = 110
 

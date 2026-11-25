@@ -1,11 +1,11 @@
-import { encodePhotoCanvas, type PhotoFrame, type PhotoCapture } from '../game/photoMode';
+import { encodePhotoCanvas, type PhotoFrame, type PhotoCapture } from '@anima/hud/game/photoMode';
 import type { PhotoView } from '@anima/player-ui';
-import { effectiveRenderScale, type RenderScale } from '../game/prefs';
+import { effectiveRenderScale, type RenderScale } from '@anima/hud/game/prefs';
 import { gameHourLights } from './skyLight';
-import { isTypingTarget } from '../hud/dom';
+import { isTypingTarget } from '@anima/hud/hud/dom';
 import { createPropLightPool } from './lightPool';
 import { nightFactorAt } from './ambience';
-import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
+import { FOG_NEAR_M, FOG_FAR_M } from '@anima/hud/scene/fogConstants';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';

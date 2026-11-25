@@ -16,7 +16,7 @@ public readonly record struct ScatterPrefsCheck(ScatterPrefs? Prefs, string? Err
 }
 
 /// <summary>
-/// Port of the scatter detail distances of client3d/src/game/prefs.ts: three metre values
+/// Port of the scatter detail distances of hud/src/game/prefs.ts: three metre values
 /// (full mesh up to near, cheap mesh up to far, thinned out to cull). In the native client the
 /// HUD's menu checks what the player typed and sends <c>applyScatterPrefs</c> over the bridge;
 /// the scene runs the same <see cref="Check"/> on that message before it touches the LOD, so a

@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { transparentPortraitUrl } from '@anima/player-ui';
 import type { PropActionMotion, PropActionDeparture } from '@anima/player-ui/propActions';
-import type { SyncCounters } from '../game/perfstats';
-import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
+import type { SyncCounters } from '@anima/hud/game/perfstats';
+import type { LocomotionOverride, MapCharacter, MapInteraction, MapPropActionEntry } from '@anima/hud/types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { pairBlend, pairBlendOrigin, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, adoptHeldClock, clipTempo, pairClipPhase, stepHeldClock, type HeldClock } from '../game/pairClip';
@@ -13,8 +13,8 @@ import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, overrideMoveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
   type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
-import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
-import type { PhotoSubject } from '../game/photoView';
+import { RIDE_ARRIVE_M, rideStep, type StairRide } from '@anima/hud/game/stairs';
+import type { PhotoSubject } from '@anima/hud/game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, roleTurnFix, findContact, contactSampleOf,
@@ -25,10 +25,10 @@ import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
 import type { ChannelReadout, ContactRelation, PlaceEntry } from '@anima/scene-render';
-import { createReadoutPublisher } from '../game/channelReadouts';
-import { createReadoutReporter } from '../game/readoutReports';
-import { postSceneReadouts } from '../api';
-import { setChannelReadouts } from '../hud/bus';
+import { createReadoutPublisher } from '@anima/hud/game/channelReadouts';
+import { createReadoutReporter } from '@anima/hud/game/readoutReports';
+import { postSceneReadouts } from '@anima/hud/api';
+import { setChannelReadouts } from '@anima/hud/hud/bus';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';

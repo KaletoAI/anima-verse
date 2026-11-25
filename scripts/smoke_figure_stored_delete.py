@@ -17,13 +17,17 @@ Fixture — character Kai with three stored body shapes, the files real, the art
   be built on it now. Its files: model3d/OBH.glb, OBH.json, prerig/OBH.glb, model_refs/tpose_OBH.png + .json and
   the body fit garments/bodies/OBH/shirt_kai_f00000000003.glb + .json — 7 files of the body + 3 of the model.
 - OBC ``ob0000000b``: verdict "shape of a live outfit", and the figure stands on it (current).
-- OBN ``ob0000000c``: verdict "shape of a live outfit", not current.
+- OBN ``ob0000000c``: verdict "shape of a live outfit", not current; a saved outfit set would stand on it
+  (``figure.needed_shapes`` fixed to {OBC, OBN}).
 Every fixture file holds 4096 bytes.
 
 Expected, derived by hand (``figure.stored`` / ``delete_preview`` / ``delete_stored``, Ruling A64):
 [1] stored: OBH deletable, refusal "", history True; OBC refusal "current" (not deletable); OBN refusal "needed".
     The worn figure unresolvable (``_delivered`` raises) → OBH NOT deletable (refusal "needed"): only the
     graph's verdict decides then, and it is reachable.
+[1b] Round 2026-11-25 (Arvid's six shapes): with no saved set on OBN (``needed_shapes`` = {OBC}) its "shape of a
+    live outfit" no longer keeps it — deletable, refusal "", spare True, unneeded True, meshed True (model3d/OBN.glb),
+    reason ``figure.SHAPE_NOT_WORN``. Nothing is deleted by the listing (the tree is unchanged).
 [2] GET …/figure/stored/OBH/preview (admin) → 200: deletable, history, outfit_models = [label of aaaaaaaaaaaa],
     files = the 10 paths above relative to the character folder (sorted), bytes = 10 × 4096 = 40960.
     Every listed path resolves inside the character folder.
@@ -122,6 +126,7 @@ def main() -> int:
         artefact_graph.analyse = analyse
         current = types.SimpleNamespace(shape=OBC, texture="")
         figure._delivered = lambda name, **kw: (current, current)
+        figure.needed_shapes = lambda name, **kw: {OBC, OBN}
 
         # [1]
         listed = {e["key"]: e for e in figure.stored("Kai") if e["kind"] == "shape"}
@@ -137,6 +142,16 @@ def main() -> int:
         check("[1] worn figure unknown → OBH kept", (listed_b[OBH]["deletable"], listed_b[OBH]["refusal"]),
               (False, "needed"))
         figure._delivered = lambda name, **kw: (current, current)
+
+        # [1b]
+        unchanged = tree(base)
+        figure.needed_shapes = lambda name, **kw: {OBC}
+        spare = {e["key"]: e for e in figure.stored("Kai") if e["kind"] == "shape"}[OBN]
+        check("[1b] OBN neither worn nor saved", (spare["deletable"], spare["refusal"], spare["spare"],
+                                                  spare["unneeded"], spare["meshed"], spare["reason"]),
+              (True, "", True, True, True, figure.SHAPE_NOT_WORN))
+        check("[1b] the listing deletes nothing", tree(base) == unchanged, True)
+        figure.needed_shapes = lambda name, **kw: {OBC, OBN}
 
         from fastapi import FastAPI, Request
         from fastapi.testclient import TestClient

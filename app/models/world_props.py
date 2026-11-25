@@ -449,9 +449,26 @@ def _cached_payload():
 
 
 def payload_snapshot() -> Tuple[List[Dict[str, Any]], str]:
-    """Copy the finished rows and their matching cached signature together."""
+    """Copy the finished rows and their matching cached signature together.
+
+    For callers that may change what they get (the editor route). A caller
+    that only serializes the rows uses ``payload_shared`` and skips the
+    deep copy.
+    """
     _, rows, sig = _cached_payload()
     return deepcopy(rows), sig
+
+
+def payload_shared() -> Tuple[List[Dict[str, Any]], str]:
+    """The cached finished rows WITHOUT a copy, plus their signature.
+
+    READ-ONLY: the list and its dicts are the cache itself and are shared by
+    every caller until the next generation; they exist for serializers (the
+    worldmap poll encodes them and lets go). Anyone who wants to change a row
+    takes ``payload_snapshot`` instead.
+    """
+    _, rows, sig = _cached_payload()
+    return rows, sig
 
 
 def payload_rows() -> List[Dict[str, Any]]:

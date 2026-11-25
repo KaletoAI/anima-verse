@@ -81,6 +81,8 @@ public sealed partial class AvatarOffersController
         _hud.Handlers["pickPropAction"]=args=> {
             CloseMenu(new());
             if(args.Count<3 || args[1] is not JsonObject target) return;
+            // The action starts here, not when the menu opens: reading time in the menu is not measured.
+            if(Avatar is { } avatar) _steering.FirstStep.Arm("prop_offer",_steering.Clock,avatar.Position.X,avatar.Position.Z);
             PreviewPropTarget(target);
             PendingPropAction=MutatePropAsync(()=>RequestLoggedAsync(PropActionMotion.Text(args[0]),target,
                 PropActionMotion.Text(args[2]),

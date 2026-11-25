@@ -75,6 +75,7 @@ SCAN_DIRS = [
     "packages/player-ui/src",
     "packages/scene-render/src",
     "client3d/src",
+    "hud/src",
     "static/admin",
 ]
 SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".mjs"}

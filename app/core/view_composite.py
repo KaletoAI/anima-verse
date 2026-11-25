@@ -113,6 +113,27 @@ base view UNCHANGED (``empty`` True, ``coverage`` score None = n/a,
 numbers under ``composite_record`` (``sidecar_fields``). A draft that does
 not line up is refused as before: its "nothing" is no measurement.
 
+EMPTY needs a FRONT that may be bare in this view (round 2026-11-25, Henrik's naked back): the caller passes the
+garment region of the DRESSED FRONT the draft follows (``front_region``, the front's own put-on region —
+``base_body.front_garment_region``); at ``EMPTY_FRONT_MAX`` or more a draft that puts nothing on is refused
+(``NOTHING_ALTHOUGH_DRESSED``) instead of publishing the bare base view. Derived from the stored ``fit_gate`` records of
+Anima Divide (2026-11-25, 23 distinct published dressed backs with a front record): the back's region over the
+front's is at least ``BACK_FRONT_RATIO_MIN`` (0.90 — Rurik ob5aefa093 0.8332 / 0.9174 = 0.908, the smallest of the
+backs that kept the clothing; the three below it — Henrik oba9fcfdc7 0.0, Maximilian ob3b1c4c89 0.530, Arvid
+obf65c5d8c 0.606 — lost the shirt, looked at 2026-11-25, and are refused by the band rule below) wherever
+the front shows more than a misread blouse (Tilda's front 0.0019, back 0.0998). A front at ``region_min`` /
+``BACK_FRONT_RATIO_MIN`` = 0.0333 would therefore put at least ``region_min`` on its back: a draft that puts on less
+lost the clothing. The one EMPTY of the world (Henrik oba9fcfdc7: front 0.812, back 0.0) is refused; a necklace or
+a belt alone stays EMPTY (the piece rule above measured them 0.0055 / 0.0196 at full resolution, the outfit rule —
+head rows dropped, opened — less), and so does Tilda's misread blouse front. ``front_region`` None (a caller that does not know the front) keeps the old rule.
+
+A view that puts SOMETHING on can still lose a garment (the live Henrik copy, 2026-11-25: the regenerated back kept
+trousers and boots and lost the shirt — region 0.471, front 0.812). The caller passes the front's ``garment_bands``
+(``front_bands``, ``base_body.front_garment_bands``: the garment share per horizontal band below the head); the
+composite measures its own and refuses (``CLOTHING_LOST``) when a band the front is dressed in
+(``BAND_DRESSED_MIN``) keeps less than ``BAND_KEPT_MIN`` of the front's share (``clothing_lost``; derivation at the
+constants). ``front_bands`` None keeps the old rule.
+
 ``compose(mask_target=…)`` also writes the composite's SUPPORT — every pixel
 it may have changed (the garment mask and the flare grown by
 ``SUPPORT_GROW`` px: the feathered blend reaches 2 px past the mask, the
@@ -244,8 +265,14 @@ HEAD_SHOULDER_SEARCH = 0.32
 HEAD_ZONE_MARGIN = 0.04
 #: The sidecar value of an empty composite (module docstring).
 EMPTY = "empty"
+#: The smallest back/front garment-region ratio of the published dressed backs that kept the clothing (module
+#: docstring, EMPTY: 0.908 rounded down), and the front garment region from which a draft that puts nothing on is
+#: refused (``region_min`` of the outfit rule over it: 0.0333).
+BACK_FRONT_RATIO_MIN = 0.90
+EMPTY_FRONT_MAX = round(PUT_ON_MIN_REGION / BACK_FRONT_RATIO_MIN, 4)
 #: The refusal reasons.
 NOTHING_TO_PUT_ON = "nothing to put on"
+NOTHING_ALTHOUGH_DRESSED = "nothing put on although the dressed front wears clothing"
 NOT_ALIGNED = "the draft does not line up with the base"
 NOT_COVERED = "the composite did not put on what the draft wears"
 NO_FIGURE = "the draft has no figure"
@@ -821,23 +848,78 @@ def put_on(base: np.ndarray, draft: np.ndarray, result: np.ndarray, *, work_heig
             "draft_de": round(to_draft, 2)}
 
 
+# --- Clothing lost against the dressed front (round 2026-11-25) ---------------
+
+#: The figure below the head (``PUT_ON_HEAD_SHARE``) in this many horizontal bands of equal height.
+BAND_COUNT = 6
+#: A band the dressed front wears clothing in: its garment share (put-on region / figure, ``garment_bands``).
+BAND_DRESSED_MIN = 0.5
+#: A back / side view keeps the clothing of such a band when its own share is at least this fraction of the
+#: front's. Derived 2026-11-25 from every published dressed back of Anima Divide on its front (23 pairs; the
+#: smallest band ratio per pair where the front share >= 0.5): the correct backs lie at 0.551 (Tilda, a short top) …
+#: 1.0, the three that lost their shirt at 0.0 (Henrik oba9fcfdc7, EMPTY), 0.0 (Maximilian ob3b1c4c89) and 0.164
+#: (Arvid obf65c5d8c, the braces kept); the limit lies in that gap (geometric mean sqrt(0.164 * 0.551) = 0.30,
+#: rounded up to 0.35: a correct back keeps 1.6 x the limit, a lost shirt with braces stays 2.1 x below it).
+BAND_KEPT_MIN = 0.35
+#: The refusal of a view that lost clothing the dressed front wears.
+CLOTHING_LOST = "clothing of the dressed front lost in this view"
+
+
+def garment_bands(base: np.ndarray, view: np.ndarray, *, work_height: int = PUT_ON_WORK_HEIGHT,
+                  count: int = BAND_COUNT) -> List[float]:
+    """The garment share of ``view`` over ``base`` (two RGBA arrays in the same frame) per horizontal band of the
+    base figure below its head: the cells whose Lab colour differs by more than ``PUT_ON_REGION_DE`` (opened, as
+    ``put_on``'s region) over the base figure's cells of that band. A share may exceed 1 where the view's figure
+    is wider than the base's (a skirt). Pure."""
+    from scipy import ndimage as ndi
+    h, w = base.shape[:2]
+    size = (max(1, round(w * work_height / float(h))), work_height)
+    lab_b, fig_b = _cells(base, size)
+    lab_v, fig_v = _cells(view, size)
+    rows = np.nonzero(fig_b.any(axis=1))[0]
+    if rows.size == 0:
+        return [0.0] * count
+    head = int(rows[0]) + int(round(PUT_ON_HEAD_SHARE * (rows[-1] - rows[0] + 1)))
+    region = fig_v & (np.linalg.norm(lab_v - lab_b, axis=-1) > PUT_ON_REGION_DE)
+    if PUT_ON_OPEN:
+        region = ndi.binary_opening(region, iterations=PUT_ON_OPEN)
+    region[:head] = False
+    edges = np.linspace(head, rows[-1] + 1, count + 1).astype(int)
+    return [round(float(region[a:e].sum()) / max(int(fig_b[a:e].sum()), 1), 3) for a, e in zip(edges[:-1], edges[1:])]
+
+
+def clothing_lost(front_bands: Optional[List[float]], bands: Optional[List[float]]) -> List[int]:
+    """The bands (indexes) the dressed front wears clothing in (``BAND_DRESSED_MIN``) that the view keeps less than
+    ``BAND_KEPT_MIN`` of; [] when one of them is unknown."""
+    if not front_bands or not bands or len(front_bands) != len(bands):
+        return []
+    return [i for i, (f, b) in enumerate(zip(front_bands, bands))
+            if float(f) >= BAND_DRESSED_MIN and float(b) < BAND_KEPT_MIN * float(f)]
+
+
 # --- The composite ------------------------------------------------------------
 
-def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit", head: bool = False
-                     ) -> Tuple[np.ndarray, Dict[str, Any]]:
+def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit", head: bool = False,
+                     front_region: Optional[float] = None,
+                     front_bands: Optional[List[float]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """``(composite RGBA array in the base frame, record)`` of a draft (RGBA
     float 0..255, any size) put onto a base view (RGBA float 0..255) — the
     module docstring; ``rule``: a ``RULES`` key ("outfit" / "piece"). Pure
     and deterministic. ``CompositeError`` when the base has no figure or the
     rule is unknown; a draft without a figure comes back as the base with
     ``ok`` False (``NO_FIGURE``); an EMPTY one as the base with ``ok`` True.
-    ``head``: take the draft's head as well (``_composite``)."""
-    out, record, _support = _composite(base, draft, rule, take_head=head)
+    ``head``: take the draft's head as well (``_composite``). ``front_region``: the dressed front's garment region
+    (EMPTY needs a bare front, module docstring); ``front_bands``: its ``garment_bands`` (a view that loses the
+    clothing of a band is refused, ``clothing_lost``)."""
+    out, record, _support = _composite(base, draft, rule, take_head=head, front_region=front_region,
+                                       front_bands=front_bands)
     return out, record
 
 
 def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: bool = False,
-               base_alpha: bool = False) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+               base_alpha: bool = False, front_region: Optional[float] = None,
+               front_bands: Optional[List[float]] = None
+               ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
     """``composite_arrays`` plus the support mask (module docstring; all
     False when the result is the base).
 
@@ -866,6 +948,10 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
     if not bm.any():
         raise CompositeError("the base view has no figure")
     record: Dict[str, Any] = {"version": VERSION, "rule": rule, "iou_min": IOU_MIN, "coverage_min": COVERAGE_MIN}
+    if front_region is not None:
+        record["front_region"] = round(float(front_region), 4)
+    if front_bands:
+        record["front_bands"] = [round(float(b), 3) for b in front_bands]
     if not figure_mask(draft).any():
         return base.copy(), {**record, "ok": False, "reasons": [NO_FIGURE], "iou": 0.0,
                              "coverage": {"score": 0.0, "region": 0.0, "nothing": True}}, np.zeros_like(bm)
@@ -931,6 +1017,8 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
         "dropped": round(dropped_garment(base, dw, bm, dwm, mask | flare, skin_b), 4),
         "broad": round(float(broad.sum() / bm.sum()), 4),
     })
+    if front_bands:
+        record["bands"] = garment_bands(base, out)
     reasons = check(record)
     support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
     if coverage.get("nothing") and not reasons and zone is None and not broad.any():
@@ -945,18 +1033,30 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: boo
 
 def check(record: Dict[str, Any]) -> List[str]:
     """The refusal reasons of a composite record (none = it passes). Nothing
-    to put on refuses only a draft that does not line up (module docstring,
-    EMPTY); a garment left out refuses it either way (Ruling A99b: Tilda's
+    to put on refuses a draft that does not line up and one whose dressed
+    front wears clothing (``front_region``, module docstring, EMPTY); a view
+    that keeps too little of a band the front is dressed in (``clothing_lost``)
+    is refused whether or not it is EMPTY (round 2026-11-25); a
+    garment left out refuses it either way (Ruling A99b: Tilda's
     cream-blouse front passed as EMPTY, put-on region 0.0019)."""
     reasons = []
     coverage = record.get("coverage") or {}
     aligned = float(record.get("iou") or 0.0) >= IOU_MIN
     if coverage.get("nothing"):
+        front = record.get("front_region")
+        if front is not None and float(front) >= EMPTY_FRONT_MAX:
+            reasons.append(f"{NOTHING_ALTHOUGH_DRESSED} (garment region {float(coverage.get('region') or 0.0):.4f}, "
+                           f"front {float(front):.4f} >= {EMPTY_FRONT_MAX})")
         if not aligned:
             limit = RULES.get(str(record.get("rule") or "outfit"), RULES["outfit"])["put_on"]["region_min"]
             reasons.append(f"{NOTHING_TO_PUT_ON} (garment region {float(coverage.get('region') or 0.0):.4f} < {limit})")
     elif float(coverage.get("score") or 0.0) < COVERAGE_MIN:
         reasons.append(f"{NOT_COVERED} (coverage {float(coverage.get('score') or 0.0):.3f} < {COVERAGE_MIN})")
+    lost = clothing_lost(record.get("front_bands"), record.get("bands"))
+    if lost:
+        reasons.append(f"{CLOTHING_LOST} (bands {lost}: "
+                       + ", ".join(f"{float(record['bands'][i]):.3f} < {BAND_KEPT_MIN} x {float(record['front_bands'][i]):.3f}"
+                                   for i in lost) + ")")
     dropped = record.get("dropped")
     if dropped is not None and float(dropped) > DROP_MAX:
         reasons.append(f"{DROPPED} (region {float(dropped):.3f} > {DROP_MAX})")
@@ -1000,7 +1100,8 @@ def to_image(rgba: np.ndarray, background: Optional[Tuple[int, int, int]] = None
 
 def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
             background: Optional[Tuple[int, int, int]] = None,
-            mask_target: Optional[Path] = None, head: bool = False, base_alpha: bool = False) -> Dict[str, Any]:
+            mask_target: Optional[Path] = None, head: bool = False, base_alpha: bool = False,
+            front_region: Optional[float] = None, front_bands: Optional[List[float]] = None) -> Dict[str, Any]:
     """Composite ``draft`` onto ``base_view`` and write the result to
     ``target`` (PNG, in the base view's frame; RGBA, or flattened onto
     ``background``) — written whether or not it passes, the caller stages it;
@@ -1008,12 +1109,14 @@ def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
     ``mask_target``: where the support goes (``write_support``).
     ``head``: the draft's head comes too (Ruling A21, ``_composite``).
     ``base_alpha``: the alpha is the base's everywhere (Ruling A125).
+    ``front_region``: the dressed front's garment region (EMPTY, module docstring).
+    ``front_bands``: the dressed front's ``garment_bands`` (``clothing_lost``).
     Returns the record (``composite_arrays``). ``CompositeError`` on the
     event loop / a GPU-queue worker (``_guard_thread``) or for a base view
     without a figure."""
     _guard_thread()
     out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule, take_head=head,
-                                      base_alpha=base_alpha)
+                                      base_alpha=base_alpha, front_region=front_region, front_bands=front_bands)
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp")

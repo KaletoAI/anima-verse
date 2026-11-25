@@ -27,6 +27,20 @@ def _cap_malloc_arenas(limit: int) -> None:
 
 
 _cap_malloc_arenas(MALLOC_ARENA_MAX)
+
+#: How long a thread may keep the GIL before another one is let in. Python's
+#: default is 5 ms, and a thread that drops the GIL for a syscall waits up to
+#: that long to get it back — per CPU-bound thread in the process (figure
+#: builds, cut textures, geometry). Two measurements of 2026-11-25, mean per
+#: SELECT at 5 ms -> 0.5 ms: 4 CPU-bound threads 42 -> 8.5 ms, 16 threads
+#: 250 -> 54 ms (single runs go from 308 ms down to 0.5 ms; the spread is
+#: wide). Count on a factor of about five; the CPU-bound threads lose nothing
+#: measurable. It cannot preempt C code that keeps the GIL (a large json
+#: decode). Plan: docs/superpowers/plans/2026-11-25-event-loop-stability.md.
+GIL_SWITCH_INTERVAL_S = 0.0005
+
+import sys as _sys
+_sys.setswitchinterval(GIL_SWITCH_INTERVAL_S)
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.core.log import get_logger
@@ -244,6 +258,11 @@ _scheduler_manager = None
 async def lifespan(app: FastAPI):
     """Lifecycle manager for server startup and shutdown"""
     global _scheduler_manager
+
+    # World Dev free mode: a run left "running" by the last process becomes
+    # "interrupted" — nothing else is written (plan 2026-11-22, Task 7).
+    from app.core.world_dev_agent import mark_interrupted_on_boot
+    mark_interrupted_on_boot()
 
     # Startup
     from app.core.stat_rewards import register_hooks
@@ -1064,12 +1083,14 @@ async def lifespan(app: FastAPI):
 
         await _aio.sleep(60)  # Wait briefly for server readiness
         while True:
-            hours = _hours_since_last()
+            # The stamp file, the roster and the submissions are blocking
+            # reads and writes: off the event loop.
+            hours = await _aio.to_thread(_hours_since_last)
             if hours >= 6:
                 try:
                     from app.core.memory_service import run_consolidation_for_all_users
-                    run_consolidation_for_all_users()
-                    _mark_done()
+                    await _aio.to_thread(run_consolidation_for_all_users)
+                    await _aio.to_thread(_mark_done)
                 except Exception as ce:
                     logger.error("Memory consolidation error: %s", ce)
             # Check every 30 minutes whether six hours have elapsed
@@ -1086,9 +1107,14 @@ async def lifespan(app: FastAPI):
 
     from app.core import event_loop_watchdog
     event_loop_watchdog.start(tick=0.1, threshold_ms=1000.0)
+    # From here on requests are served: every world-DB access on this thread
+    # is counted and reported once a minute (app/core/loop_guard.py).
+    from app.core import loop_guard
+    loop_guard.register_server_loop()
 
     yield
 
+    loop_guard.unregister()
     event_loop_watchdog.stop()
     _consolidation_task.cancel()
     try:

@@ -199,7 +199,7 @@ globalThis.setTimeout = realTimeout;
 timeoutRelease(); await timedSpeech;
 
 // The actual HUD driver renders the next line only after playback completes.
-const { createVoiceover } = hud.load('client3d/src/game/voiceover.ts');
+const { createVoiceover } = hud.load('hud/src/game/voiceover.ts');
 const rendered = [], played = [];
 const releases = [];
 scene.gameActions.speak = url => { played.push(url); return new Promise(resolve => releases.push(resolve)); };

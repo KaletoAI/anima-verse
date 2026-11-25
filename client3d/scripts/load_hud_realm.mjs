@@ -50,8 +50,8 @@ export function loadHudRealm() {
     return module.exports;
   }
   return {
-    ...load(resolve(root, 'client3d/src/hud/bus.ts')),
-    ...load(resolve(root, 'client3d/src/hud/bridge.ts')),
+    ...load(resolve(root, 'hud/src/hud/bus.ts')),
+    ...load(resolve(root, 'hud/src/hud/bridge.ts')),
     load: relative => load(resolve(root, relative)),
   };
 }

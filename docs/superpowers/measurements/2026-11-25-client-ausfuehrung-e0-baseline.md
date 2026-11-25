@@ -1,0 +1,56 @@
+# Client execution — E0 baseline
+
+Purpose: the baseline of spec `docs/superpowers/specs/2026-11-25-client-ausfuehrung-design.md` § 7
+(measurement and success), taken **before** any client-execution change (E0). The same measurement is
+repeated after every stage with the same scenario, so the numbers compare.
+
+What it measures (read-only, `scripts/measure_client_execution.py`): server CPU per minute
+(`utime+stime` of the uvicorn process), the client-execution routes `/play/pos`, `/play/worldmap`,
+`/play/orders` (from the once-a-minute `hot_path client_exec_routes` lines in `logs/main.log`), the
+travel-ticker beats and the prop-action `advance()` / `_advance_run` / `_validate` steps
+(`hot_path client_exec_ticker`), and the native client's first step from click to the avatar's first
+centimetre (`[native] first_step` lines of the client log).
+
+## Preconditions
+
+- The server runs with the commits of tasks 1–2 (route counters and ticker counters), restarted by the user.
+- The world is a **clone** — never the play world.
+- The native client is built with task 4 (first-step probe).
+- The server must **not restart** during the measuring window; the script aborts when a log shrinks.
+
+## Scenario checklist (the same every run)
+
+1. [ ] The avatar walks freely for 60 s, then takes an armchair by click.
+2. [ ] Three NPCs are sent to bed, one after another.
+3. [ ] An overland journey is started and keeps running.
+
+## Command
+
+Run from the repo root while the scenario plays (window 420 s):
+
+```bash
+./.venv/bin/python scripts/measure_client_execution.py record --seconds 420 --pid $(cat .pids/main.pid) --client-log <export folder>/logs/native-<time>.log --label "E0 baseline" --out docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e0-baseline.md
+```
+
+- The PID comes from the PID file written by `start.sh` (`.pids/main.pid`), never from `pgrep -f`: under
+  `sg render` that would hit the wrapper. The script additionally checks the process command line and
+  aborts otherwise.
+- `--client-log` is the current `native-*.log` of the running native client.
+- The script appends its section (`## E0 baseline — <ISO time>`) with the filled-in table to this file.
+
+## Result
+
+Empty until the user's run appends its section below. Columns as written by the script:
+
+| Metric | Value | Raw sum | Log line span s | Measured s |
+|---|---|---|---|---|
+| Server CPU s/min | | | | |
+| `/play/pos`/s | | | | |
+| `/play/pos`/min | | | | |
+| `/play/worldmap`/min | | | | |
+| `/play/orders`/min | | | | |
+| Ticker beats/min | | | | |
+| `advance()`/min | | | | |
+| `_advance_run`/min | | | | |
+| `_validate` in advance/min | | | | |
+| First step median | | n/a | n/a | |

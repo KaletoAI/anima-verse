@@ -56,6 +56,7 @@ import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from app.core import read_scope
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,10 @@ LEG_VERSION = 1
 #: straight, its top edge onto the band and its armhole scooped (``garment_template_build`` ``straight_straps``; Lirien's dress had saw-tooth
 #: straps and a stepped top edge). Part of the drape and the cut key of such a piece only.
 STRAP_VERSION = 1
+#: Round 2026-11-25 (Lirien's leather top): a corset top with straps is the strapless corset's shell plus two straps
+#: laid along the body (``corset_straps`` / ``corset_strap_spec``; ``garment_template_build.shell_straps``). Part of
+#: its drape and cut keys only — a strapless corset's keys stay byte for byte.
+CORSET_STRAPS_VERSION = 1
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.
@@ -404,14 +409,19 @@ FABRICS: Dict[str, Dict[str, float]] = {
 #: A214: fabrics that share one drape — ``tsig`` keys them by the shared name, so a switch between them only
 #: re-assembles (the material changes, the cloth run does not).
 DRAPE_FABRIC = {"leather_glossy": "leather", "leather_rough": "leather"}
-#: A214: the surface of each leather finish (``material_overrides``). Glossy = low roughness under a full clear
-#: coat (KHR_materials_clearcoat); rough = matte suede / nubuck with a faint velvety sheen, no clear coat. Never metal.
+#: A214: the surface of each leather finish (``material_overrides``). Glossy = smooth finished leather: a mid base
+#: roughness under a light, soft clear coat (KHR_materials_clearcoat); rough = matte suede / nubuck with a faint
+#: velvety sheen, no clear coat. Never metal.
+#: Round 2026-11-25 (Lirien, "looks like glass"): glossy was roughness 0.2 under a full mirror coat (1.0, 0.08) —
+#: patent leather / car paint: the room's light boxes as sharp spots and a bright Fresnel rim on every silhouette.
+#: Now 0.38 under (0.35, 0.30), close to ``piece_material.PRESETS["leather"]`` (0.45 under 0.3 / 0.4).
 LEATHER_SURFACES: Dict[str, Dict[str, Any]] = {
-    "leather_glossy": {"roughness": 0.2, "clearcoat": (1.0, 0.08), "sheen": None},
+    "leather_glossy": {"roughness": 0.38, "clearcoat": (0.35, 0.30), "sheen": None},
     "leather_rough": {"roughness": 0.85, "clearcoat": None, "sheen": (0.25, 0.7)},
 }
-#: Bumped when a ``LEATHER_SURFACES`` value changes (part of ``material_key``, so the assembly is redone).
-LEATHER_SURFACE_VERSION = 1
+#: Bumped when a ``LEATHER_SURFACES`` value changes (part of ``material_key``, so the assembly is redone; the drape
+#: is not — the material is no part of ``tsig``). 2: round 2026-11-25, glossy no longer a mirror coat.
+LEATHER_SURFACE_VERSION = 2
 #: A204: the fabric drawn see-through. Its piece is grafted with alphaMode BLEND at ``opacity``, double-sided, and
 #: hides nothing: neither the body faces under it (``body_cover``, A133) nor an inner piece's faces (A192).
 SHEER = "sheer"
@@ -588,21 +598,26 @@ ARM_GROUPS = [{"name": "arm_" + side[0].lower(), "side": side[0].lower(), "frame
 
 
 def has_bodice(params: Dict[str, Any]) -> bool:
-    """A jacket, a top that is not strapless (A221), or a dress with straps or a covered bodice (Ruling A142)."""
-    return params["kind"] in ("top", "jacket", "dress") and (params["kind"] == "jacket"
-                                                             or params["shoulders"] != "strapless")
-
-
-def strapless_top(params: Dict[str, Any]) -> bool:
-    """A221: a top with nothing over the shoulders (bodice, bustier, corset)."""
-    return params["kind"] == "top" and params["shoulders"] == "strapless"
+    """A jacket, a covered or off-shoulder top (A221; a corset top — strapless or with straps — is a shell,
+    ``corset_top``), or a dress with straps or a covered bodice (Ruling A142)."""
+    kind = params["kind"]
+    if kind == "top":
+        return not corset_top(params)
+    return kind == "jacket" or (kind == "dress" and params["shoulders"] != "strapless")
 
 
 def panel_piece(params: Dict[str, Any]) -> bool:
-    """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a strapless
-    top. Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live ``uv_pattern.py``."""
+    """Step 3b (B16): a piece cut into pattern pieces by the panel construction — a ``PANEL_KINDS`` kind or a corset
+    top (``corset_top``). Its drape and cut keys carry ``PANEL_VERSION``; its flattening key is the live
+    ``uv_pattern.py``."""
     return params.get("kind") in PANEL_KINDS or (params.get("kind") == "top"
-                                                 and params.get("shoulders") == "strapless")
+                                                 and params.get("shoulders") in ("strapless", "straps"))
+
+
+def corset_straps(params: Dict[str, Any]) -> bool:
+    """Round 2026-11-25 (Lirien): a corset top with straps — the shell of a strapless one (``corset_top``) plus two
+    straps over the shoulders (``corset_strap_spec``). Its drape and cut keys carry ``CORSET_STRAPS_VERSION``."""
+    return params.get("kind") == "top" and params.get("shoulders") == "straps"
 
 
 def leg_piece(params: Dict[str, Any]) -> bool:
@@ -640,7 +655,9 @@ def neck_piece(params: Dict[str, Any]) -> bool:
 
 def corset_top(params: Dict[str, Any]) -> bool:
     """A221: a top cut as a corset bodice — strapless or with straps; its top edge is the chest band (straight or
-    sweetheart), the straps (if any) run from it over the shoulders."""
+    sweetheart), the straps (if any) run from it over the shoulders. Corset v2..v9: laid on the body as a shell
+    (``garment_template_build.corset_shell``), never draped; round 2026-11-25: with straps too (they were a bodice's
+    yoke cut down to the band: stepped edges, flaps under the arms, a gap at the back)."""
     return params["kind"] == "top" and params["shoulders"] in ("strapless", "straps")
 
 
@@ -881,7 +898,7 @@ def underbust_length(failed: Dict[str, Any]) -> Optional[float]:
         return None
     try:
         fold = _underbust_fold(meas)
-        origin = _length_origin(meas, top_y if strapless_top(params) else None)
+        origin = _length_origin(meas, top_y if corset_top(params) else None)
     except (KeyError, TypeError, ValueError):
         return None
     if fold is None:
@@ -1344,7 +1361,7 @@ def outline(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: boo
     top_y = waist_y
     if has_bodice(params):
         return _bodice_outline(params, meas, waist_y, waist_c, hem_c, over_sleeves=over_sleeves)
-    if strapless_top(params):
+    if corset_top(params):
         return _strapless_top_outline(params, meas, waist_y, tuck)
     knots = _skirt_knots(meas, waist_y, length, hem_c, waist_c)
     if params["kind"] == "dress":
@@ -1588,8 +1605,9 @@ def _strapless_top_outline(params: Dict[str, Any], meas: Dict[str, Any], waist_y
 def tuck_lines(params: Dict[str, Any], lower: List[str]) -> Tuple[str, ...]:
     """Corset v3: the waist heights (``waist_height``) of the worn template skirts / trousers (``TUCK_KINDS``) a
     strapless top's hem reaches under (``STRAPLESS_TUCK_M``) — sorted, each once; () for every other piece. Part of
-    the piece's drape and cut key (``under_tokens``)."""
-    if not strapless_top(params):
+    the piece's drape and cut key (``under_tokens``). Round 2026-11-25: a strapless top only — a corset top with straps
+    keeps the length asked (Lirien's 27 cm leather crop top ends above her trousers)."""
+    if not corset_top(params) or params.get("shoulders") != "strapless":
         return ()
     from app.models.inventory import get_item
     out = set()
@@ -1604,7 +1622,7 @@ def cup_rise(params: Dict[str, Any], meas: Dict[str, Any]) -> float:
     """Corset v2: how far a strapless top's front rises over its edge under the arms (``band_y`` -
     ``STRAPLESS_UNDERARM_M``) to cover the chest — corset v4: its top row, ``chest_apex_y`` + ``CUP_COVER_MAX_M`` less
     that edge, between 0 and ``CUP_RISE_MAX_M``; 0 for every other piece and on a body without the measure."""
-    if not strapless_top(params) or "chest_apex_y" not in meas:
+    if not corset_top(params) or "chest_apex_y" not in meas:
         return 0.0
     side_y = float(meas["band_y"]) - STRAPLESS_UNDERARM_M
     return round(min(CUP_RISE_MAX_M, max(0.0, float(meas["chest_apex_y"]) + CUP_COVER_MAX_M - side_y)), 4)
@@ -1648,10 +1666,10 @@ def sweetheart_depth(params: Dict[str, Any]) -> float:
 
 
 def top_drop(params: Dict[str, Any], cols: int) -> Optional[List[float]]:
-    """A221: how far each column of the FRONT panel's top edge of a strapless top lies under the band (metres; column
-    c at the angle pi + pi * c / (cols - 1), the front centre 1.5 pi) — a sweetheart dip, None for every other
-    piece (a top with straps carries its dip in ``bodice_spec``'s ``top_edge``)."""
-    if not strapless_top(params) or params["neckline"] != "sweetheart":
+    """A221: how far each column of the FRONT panel's top edge of a corset top (``corset_top``: strapless or with
+    straps) lies under the band (metres; column c at the angle pi + pi * c / (cols - 1), the front centre 1.5 pi) — a
+    sweetheart dip, None for every other piece."""
+    if not corset_top(params) or params["neckline"] != "sweetheart":
         return None
     depth = sweetheart_depth(params)
     return [round(sweetheart_drop(depth, abs(math.pi * c / (cols - 1) - math.pi / 2)), 5) for c in range(cols)]
@@ -1809,6 +1827,8 @@ def panel_spec(params: Dict[str, Any], meas: Dict[str, float], *, over_sleeves: 
                            "dip": drop or [0.0] * COLS}
     elif drop:
         out["top_drop"] = {"front": drop}
+    if corset_straps(params):
+        out["corset_straps"] = corset_strap_spec(meas)
     if has_bodice(params):
         out["bodice"] = bodice_spec(params, meas, over_sleeves=over_sleeves)
         if layer_ease(params, over_sleeves):
@@ -1916,6 +1936,19 @@ def strap_shoulder_x(meas: Dict[str, Any], neck_r: float) -> float:
     and ``PIN_SHARE`` of the half shoulder width — the straps of a dress / corset top (A221, ``bodice_spec``) and of a
     bra (A223, ``strap_spec``) alike."""
     return 0.5 * (neck_r + PIN_SHARE * meas["shoulder_w"] / 2.0)
+
+
+def corset_strap_spec(meas: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Round 2026-11-25: the straps of a corset top with straps (``corset_straps``) — the bra's strap record
+    (``strap_spec``, the same shoulder crossing ``strap_shoulder_x``) at a dress strap's width ``STRAP_W_M``, straight
+    down the back (``back_x`` = ``shoulder_x``). None on a body without arm / neck joints."""
+    if "shoulder_w" not in meas:
+        return None
+    neck_r = meas["neck_c"] / (2 * math.pi) + NECK_CLEAR_M
+    shoulder_x = strap_shoulder_x(meas, neck_r)
+    return {"style": "corset", "width_m": STRAP_W_M, "shoulder_x": round(shoulder_x, 4),
+            "back_x": round(shoulder_x, 4), "neck_y": round(meas["neck_y"] + NECK_SLICE_M, 4),
+            "neck_r": round(neck_r, 4)}
 
 
 def strap_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2139,9 +2172,12 @@ def tsig(params: Dict[str, Any], *, base_sha: str, texture_sha: str, lower: List
         payload["legs"] = LEG_VERSION
     if strap_piece(params):
         payload["straps"] = STRAP_VERSION
-    if strapless_top(params):
+    if corset_top(params):
         # corset v2: the strapless top is a shell on the body with a cup line (``CORSET_VERSION``)
         payload["corset"] = CORSET_VERSION
+    if corset_straps(params):
+        # round 2026-11-25: a strapped corset top is that shell plus its straps
+        payload["corset_straps"] = CORSET_STRAPS_VERSION
     return _md5(payload)
 
 
@@ -2181,10 +2217,11 @@ def failed_path(character_name: str, item_id: str, sig: str) -> Path:
 
 
 def _file_sha(path: str) -> str:
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError:
-        return ""
+    """sha256 of a texture source, "" when missing, through the stat-keyed
+    (size, mtime_ns, inode) hash cache of ``base_body.file_sha256``, so a poll
+    does not re-read unchanged images."""
+    from app.core.base_body import file_sha256
+    return file_sha256(Path(path))
 
 
 def texture_sources(character_name: str, item_id: str) -> Dict[str, str]:
@@ -2247,15 +2284,96 @@ def _template_kind(item: Optional[Dict[str, Any]]) -> Optional[str]:
     return params["kind"] if params and params["kind"] in BUILT_KINDS else None
 
 
+#: Round 2026-11-25 (Glut's gloves re-draped by a new bra): the coarse body regions a piece can touch. A piece is under
+#: another only when their regions overlap (``inner_pieces``); without that, the slot stacks and ``LAYER_RANK`` put a
+#: glove worn on ``outer`` over the bra and the briefs, and every change of those re-draped the glove.
+BODY_REGIONS = ("chest", "waist", "hip", "leg", "foot", "arm", "hand", "neck", "head")
+#: A top / jacket hem this far below the shoulder line or further reaches the hip region (``body_regions``): on the
+#: 1.70 m reference body the natural waist is 0.33–0.35 m below the shoulder line (0.6 m ends at the hip,
+#: ``KIND_DEFAULTS``); taken at the low end so a hem near the waist still counts as touching a waistband.
+TOP_HIP_REACH_M = 0.32
+#: The regions an own-mesh / shell piece can touch, per worn or covered slot (``inventory.VALID_PIECE_SLOTS``) —
+#: generous, since such a piece has no shape parameters: ``top`` and ``outer`` may carry sleeves, ``legs`` is hosiery
+#: from the hip to the foot, ``feet`` a boot's shaft.
+SLOT_REGIONS: Dict[str, Tuple[str, ...]] = {
+    "underwear_top": ("chest", "waist"),
+    "underwear_bottom": ("hip",),
+    "legs": ("hip", "leg", "foot"),
+    "top": ("chest", "waist", "arm"),
+    "bottom": ("waist", "hip", "leg"),
+    "outer": ("chest", "waist", "hip", "leg", "arm"),
+    "feet": ("foot", "leg"),
+    "hands": ("hand", "arm"),
+    "neck": ("neck", "chest"),
+    "face": ("head",),
+    "head": ("head", "neck"),
+}
+
+
+def body_regions(params: Optional[Dict[str, Any]], item: Optional[Dict[str, Any]] = None) -> frozenset:
+    """The body regions (``BODY_REGIONS``) a piece can touch: a template piece's from its parameters, any other piece's
+    from its worn and covered slots (``SLOT_REGIONS``). A template piece with no parameters, or an unknown slot,
+    counts as touching every region (it is never left out by ``regions_overlap``)."""
+    if params and params.get("kind") in BUILT_KINDS:
+        kind = params["kind"]
+        if kind == "gloves":
+            return frozenset({"hand", "arm"})
+        if kind == "bra":
+            return frozenset({"chest"})
+        if kind == "briefs":
+            out = {"hip"}
+            if params.get("rise") == "high":
+                out.add("waist")
+            if float(params.get("leg_length_m") or 0.0) > 0.0:
+                out.add("leg")
+            return frozenset(out)
+        if kind == "tights":
+            out = {"leg", "foot"}
+            if params.get("tights_style") == "tights" or str(params.get("garters") or "none") != "none":
+                out.add("hip")
+            return frozenset(out)
+        if kind in ("trousers", "skirt"):
+            return frozenset({"waist", "hip", "leg", "foot"} if kind == "trousers" else {"waist", "hip", "leg"})
+        if kind == "dress":
+            out = {"chest", "waist", "hip", "leg"}
+        else:   # top, jacket
+            out = {"chest", "waist"}
+            if float(params.get("length_m") or 0.0) >= TOP_HIP_REACH_M:
+                out.add("hip")
+        if has_sleeves(params):
+            out.add("arm")
+        return frozenset(out)
+    if params is None and item is not None:
+        from app.core import garment_set
+        slots = garment_set._cover_slots(item)
+        if slots and all(s in SLOT_REGIONS for s in slots):
+            return frozenset(r for s in slots for r in SLOT_REGIONS[s])
+    return frozenset(BODY_REGIONS)
+
+
+def _regions_of(item: Optional[Dict[str, Any]]) -> frozenset:
+    """``body_regions`` of an item: by its template parameters when it is a template piece, else by its slots."""
+    from app.core import garment_set
+    if item is not None and garment_set.mesh_mode_of(item) == garment_set.TEMPLATE:
+        return body_regions(params_of(item) or {})
+    return body_regions(None, item)
+
+
+def regions_overlap(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    """Whether the items ``a`` and ``b`` can touch (``body_regions``)."""
+    return bool(_regions_of(a) & _regions_of(b))
+
+
 def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[str, Dict[str, Any]]],
                                                                      List[Tuple[str, Dict[str, Any]]]]:
     """The worn pieces a template piece drapes OVER — ``(templates, own)``, each ``[(item id, item)]`` in id order.
 
     A piece is under ``item_id`` when ``garment_set.layer_order`` over the worn set puts it there (``LAYER_STACKS``
     and ``covers``, A200) or — for a template piece — by ``LAYER_RANK`` (Ruling A142: a jacket over a top or a
-    dress), unless the order puts it over ``item_id``. ``templates``: their drapes are colliders and their keys part
-    of this key; ``own``: own-mesh / shell clothing whose plain-body fit is a collider (A200, a draped jacket over a
-    generated top) and whose fit file's sha256 is part of this key."""
+    dress), unless the order puts it over ``item_id``. Either way only when the two can touch (``regions_overlap``,
+    round 2026-11-25): a glove is never over the bra or the briefs, a skirt never over a bra. ``templates``: their
+    drapes are colliders and their keys part of this key; ``own``: own-mesh / shell clothing whose plain-body fit is a
+    collider (A200, a draped jacket over a generated top) and whose fit file's sha256 is part of this key."""
     from app.core import garment_set
     from app.models.inventory import get_item
     others = sorted({str(i) for i in lower} - {item_id})
@@ -2264,9 +2382,12 @@ def inner_pieces(item_id: str, kind: str, lower: List[str]) -> Tuple[List[Tuple[
     order = garment_set.layer_order(set(others) | {item_id})
     below = set(order["under"].get(item_id, []))
     rank = LAYER_RANK.get(kind, 1)
+    mine = get_item(item_id)
     templates, own = [], []
     for other in others:
         it = get_item(other)
+        if not regions_overlap(mine, it):
+            continue
         okind = _template_kind(it)
         if okind is not None:
             by_rank = LAYER_RANK.get(okind, 1) < rank and item_id not in order["under"].get(other, [])
@@ -2526,11 +2647,29 @@ def refused_only_by_time(failed: Dict[str, Any]) -> bool:
 
 def drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``_drape_state`` memoised per read scope (read_scope), a copy per call: keyed by
+    ``(character_name, item_id, base_sha, lower, obj_sig(item))``; the profile, items and sidecars it reads below its
+    arguments count as constant for one scope (their writers clear it — plan 2026-11-24-figure-poll-caches, Task 5)."""
+    if not read_scope.active():
+        return _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    isig = read_scope.obj_sig(item)
+    if item is not None and isig is None:
+        return _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item)
+    return read_scope.memo("drape_state", (character_name, item_id, base_sha, tuple(lower or ()), isig),
+                           lambda: _drape_state(character_name, item_id, base_sha=base_sha, lower=lower, item=item))
+
+
+def _drape_state(character_name: str, item_id: str, *, base_sha: str, lower: List[str],
+                 item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """``{state, reason, tsig, path, record}`` — ``ready`` (the drape GLB of the current key exists
     and its record passed), ``failed`` (the current key failed; reason = ``DRAPE_FAILED``, plus ``failure`` =
     ``failure_info`` of the record),
     ``missing`` (``NOT_DRAPED``; also a failure record ``refused_only_by_time``; ``CUT_REDRAPE`` for a drape of
     another cut, ``cut_behind``) or ``blocked`` (no key: reason from ``key_for``). Read-only."""
+    try:
+        read_scope.tally("drape_state")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     from app.core.garment_store import read_record
     sig, reason, _sources, params, key_lower = _key(character_name, item_id, base_sha=base_sha, lower=lower,
                                                     item=item)
@@ -2745,7 +2884,7 @@ def build_args(params: Dict[str, Any], spec: Dict[str, Any], *, item_id: str, re
             "drape_quality": int(round(fabric["quality"] * (BODICE_DRAPE_QUALITY if has_bodice(params) else 1.0))),
             "pin": "top", "kind": params["kind"], "item_id": item_id, "node": f"garment_template_{item_id}",
             # corset v2: a strapless top is laid on the body as a shell (``corset_shell``), never draped
-            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if strapless_top(params) else {}),
+            **({"shell_clear_m": CORSET_CLEAR_M, "shell_gap_mm": {**CORSET_GAP_MM, **CORSET_MAX_MM}} if corset_top(params) else {}),
             "render": bool(render), "poses": list(poses or measured_poses(params)),
             "frames": (BODICE_FRAMES if has_bodice(params) else
                        int((spec.get("fitted") or {}).get("frames") or 50)),

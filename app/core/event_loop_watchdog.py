@@ -1,11 +1,15 @@
-"""Event-Loop-Watchdog mit Stack-Dump waehrend des Blocks.
+"""Event-loop watchdog with a stack dump while the block lasts.
 
-Zwei-Teiler:
-1. asyncio-Task aktualisiert alle `tick` Sekunden einen Heartbeat-Timestamp.
-2. Ein separater OS-Thread prueft periodisch wie alt der Heartbeat ist.
-   Wenn der Event-Loop > threshold nicht geantwortet hat, dumpt der Thread
-   die Frames aller Threads — inkl. Main-Thread mit dem aktuell blockierenden
-   Call. So sehen wir den Blocker live, nicht erst nachdem er vorbei ist.
+Two parts:
+1. An asyncio task refreshes a heartbeat stamp every `tick` seconds.
+2. A separate OS thread checks how old the heartbeat is. Once the event loop
+   has not answered for longer than the threshold it dumps the frames of all
+   threads — including the main thread with the call that blocks right now,
+   so the blocker is seen live and not only after it is over.
+
+Below the dump threshold, a lag of `LAG_NOTE_MS` is noted once per stall in
+the loop guard's per-minute line (``lag:<entry>><leaf>``) — one frame walk of
+the loop thread, no dump.
 """
 import asyncio
 import sys
@@ -22,6 +26,9 @@ _asyncio_task: asyncio.Task = None
 _thread: threading.Thread = None
 _stop_event = threading.Event()
 
+#: A stall of this length is counted in the loop guard's report line.
+LAG_NOTE_MS = 200.0
+
 
 async def _heartbeat_loop(tick: float) -> None:
     global _heartbeat
@@ -34,7 +41,7 @@ async def _heartbeat_loop(tick: float) -> None:
 
 
 def _format_all_threads() -> str:
-    """Formatiert Stacks aller Threads fuer das Log."""
+    """Format the stacks of all threads for the log."""
     frames = sys._current_frames()
     out = []
     for th in threading.enumerate():
@@ -47,9 +54,11 @@ def _format_all_threads() -> str:
 
 
 def _watchdog_thread(threshold_ms: float, check_interval: float) -> None:
-    """OS-Thread: prueft Heartbeat und dumpt wenn Event-Loop blockiert ist."""
+    """OS thread: checks the heartbeat and dumps when the event loop is blocked."""
+    from app.core import loop_guard
     threshold_s = threshold_ms / 1000.0
     already_dumped = False
+    lag_noted = False
     block_started_at = 0.0
     logger.info("Watchdog-Thread aktiv (check=%.0fms, threshold=%.0fms)",
                 check_interval * 1000, threshold_ms)
@@ -58,6 +67,20 @@ def _watchdog_thread(threshold_ms: float, check_interval: float) -> None:
         if _heartbeat == 0.0:
             continue
         lag = time.monotonic() - _heartbeat
+        # Catch-all below the dump threshold: once per stall, name what the
+        # loop thread is doing — a lock, a file, a wait for the GIL.
+        if lag * 1000.0 >= LAG_NOTE_MS:
+            if not lag_noted:
+                lag_noted = True
+                try:
+                    tid = loop_guard.server_loop_tid()
+                    if tid is not None:
+                        loop_guard.note_lag(sys._current_frames().get(tid), lag * 1000.0)
+                except Exception:
+                    pass
+        else:
+            lag_noted = False
+        loop_guard.report_if_due()
         if lag >= threshold_s:
             if not already_dumped:
                 block_started_at = _heartbeat

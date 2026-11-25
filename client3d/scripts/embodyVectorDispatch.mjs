@@ -4,10 +4,13 @@ import { loadVectors, near, resolveArgs } from '../../shared/test-vectors/vector
 
 const game = ['stairs', 'walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
   'locks', 'ground', 'polygon', 'enterLocation', 'placement', 'offers', 'posEcho', 'readiness'];
-const entry = game.map(n => `export * as ${n} from ${JSON.stringify(new URL(`../src/game/${n}.ts`, import.meta.url).pathname)};`);
+// These three moved into the HUD workspace (hud/src/game) with the HUD page.
+const inHud = new Set(['stairs', 'elevator', 'offers']);
+const entry = game.map(n => `export * as ${n} from ${JSON.stringify(new URL(
+  inHud.has(n) ? `../../hud/src/game/${n}.ts` : `../src/game/${n}.ts`, import.meta.url).pathname)};`);
 entry.push(...['cameraMath', 'cameraFraming'].map(n =>
   `export * as ${n} from ${JSON.stringify(new URL(`../src/scene/${n}.ts`, import.meta.url).pathname)};`));
-entry.push(`export * as bus from ${JSON.stringify(new URL('../src/hud/bus.ts', import.meta.url).pathname)};`);
+entry.push(`export * as bus from ${JSON.stringify(new URL('../../hud/src/hud/bus.ts', import.meta.url).pathname)};`);
 const built = await build({ stdin: { contents: entry.join('\n'), resolveDir: new URL('../../', import.meta.url).pathname, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', write: false });
 const modules = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);

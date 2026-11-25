@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConfirmDialog, syncHub } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { debounced, guardedInterval } from '../../lib/guardedPoll'
 
 interface BatchRow { name: string; phase?: string; reason?: string; step?: string }
 interface BatchStatus {
@@ -29,6 +30,7 @@ interface Preview {
 }
 
 const RUNNING_POLL_MS = 3000
+const PUSH_DEBOUNCE_MS = 300
 
 export function BuildAllOpenButton({ onRunning }: { onRunning: (running: boolean) => void }) {
   const { t, lang } = useI18n()
@@ -38,17 +40,18 @@ export function BuildAllOpenButton({ onRunning }: { onRunning: (running: boolean
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const load = useCallback(() => {
-    apiGet<BatchStatus>(`/characters/build-all${q}`).then(setStatus).catch(() => { /* keep the last answer */ })
+    return apiGet<BatchStatus>(`/characters/build-all${q}`).then(setStatus).catch(() => { /* keep the last answer */ })
   }, [q])
   useEffect(() => {
     load()
-    return syncHub().onTopics(['generation'], load)
+    const onPush = debounced(() => { load() }, PUSH_DEBOUNCE_MS)
+    const off = syncHub().onTopics(['generation'], onPush)
+    return () => { off(); onPush.cancel() }
   }, [load])
   const running = !!status?.running
   useEffect(() => {
     if (!running) return
-    const id = setInterval(load, RUNNING_POLL_MS)
-    return () => clearInterval(id)
+    return guardedInterval(load, RUNNING_POLL_MS)
   }, [running, load])
   // Tell the list on every change — including the end, so it re-reads the badges one last time.
   const wasRunning = useRef(false)

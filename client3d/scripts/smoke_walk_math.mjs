@@ -653,7 +653,7 @@
  * needs no loop to show it.
  *
 
- * --- Audio prefs (stage 4, task 2; `client3d/src/game/prefs.ts`) -----------
+ * --- Audio prefs (stage 4, task 2; `hud/src/game/prefs.ts`) -----------
  * The volume prefs are the one part of the audio layer that is pure maths on a
  * string, so they are checked here. Source of the defaults: the task brief —
  *   master 0.8, music 0.5, ambient 0.6, tts 1.0,
@@ -674,7 +674,7 @@
  *   - `savePrefs` is JSON, so `loadPrefs(savePrefs(p))` returns `p` unchanged
  *     for any already-valid `p` (the round trip the settings UI of task 4 does).
  *
- * --- Boot progress (stage 4, task 3; `client3d/src/game/boot.ts`) ----------
+ * --- Boot progress (stage 4, task 3; `hud/src/game/boot.ts`) ----------
  * Six stages: world, scenes, tiles, visible, figures, arrival. Step = 100/6.
  * [P1] In order: 0 -> 0/world, 1 -> 17/scenes (16.67 rounds up), 2 -> 33/tiles,
  * 3 -> 50/visible, 4 -> 67/figures, 5 -> 83/arrival, 6 -> 100/ready.
@@ -718,7 +718,7 @@
  * [B15] it measures the COLLAPSED length, like bubbleText: ' a \n b ' -> 'a b'
  *       = 3 characters -> 3500 + 165 = 3665.
  *
- * --- Location info panel (`client3d/src/game/infoPanel.ts`) ----------------
+ * --- Location info panel (`hud/src/game/infoPanel.ts`) ----------------
  * `infoPanelData(loc, chars, events, roomOf, view?, avatar?)` is a plain copy
  * of what the HUD shows; the fixture is the location Home with the rooms
  * r1 'Kitchen' and r2 'Hall', the characters A (travelling to Harbor, eta
@@ -737,7 +737,7 @@
  *      [I11] no avatar -> travel null.  [I12] a location without pos_x/pos_z
  *      -> travel {distanceM: null} (the button stays, the number goes).
  *
- * --- Scatter detail distances: typing (`client3d/src/game/prefs.ts`) -------
+ * --- Scatter detail distances: typing (`hud/src/game/prefs.ts`) -------
  * The stored side of these prefs (defaults, reading) is pinned in
  * `smoke_scatter_math.mjs` section (J); what the menu asks before it stores
  * anything is here, beside the other prefs:
@@ -779,7 +779,7 @@
  * the JSON round trip of the panel data, the NaN input of (J3), the boot
  * STORE (state across calls) and `attributeLongTask` (no C# consumer yet).
  *
- * --- Soundtrack (stage 4, task 5; `client3d/src/game/soundtrack.ts`) -------
+ * --- Soundtrack (stage 4, task 5; `hud/src/game/soundtrack.ts`) -------
  * WHICH music and WHICH ambience play. All four rules are pure lookups or a
  * state function, so they belong here and not in a listening session.
  *
@@ -842,7 +842,7 @@
  *   t=12999 'water' -> still ''                (4999 < 5000)
  *   t=13000 'water' -> applied 'water'         (the next one holds too)
  *
- * --- Voiceover (stage 4, task 6; `client3d/src/game/voiceover.ts`) ---------
+ * --- Voiceover (stage 4, task 6; `hud/src/game/voiceover.ts`) ---------
  * WHICH lines are read aloud and HOW MANY may wait. Both are pure, so the
  * rules are checkable without a voice.
  *
@@ -1298,6 +1298,10 @@ const vectorCase = vectorChecks(check, ["walk_control","collide"]);
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC_DIR = join(ROOT, 'client3d/src/game');
+/** The modules of MODULES that moved into the HUD workspace with the HUD page. */
+const HUD_DIR = join(ROOT, 'hud/src/game');
+const IN_HUD = new Set(['elevator', 'prefs', 'boot', 'soundtrack', 'voiceover', 'perfstats', 'minimap',
+  'stairs', 'infoPanel']);
 /** The pure modules under test. `walk.ts` and `proximity.ts` are import-free;
  *  `clickmove.ts` imports from `walk.ts` and nothing else — no `three`, no
  *  DOM. */
@@ -1319,8 +1323,8 @@ async function loadGameModules() {
     // `scene/fogConstants.ts` is import-free too and is what `minimap.ts` reads
     // its view radius from (P4 A-T4); it lands in the same flat directory, so
     // its `../scene/` import is folded onto `./` like the sibling imports.
-    const sources = [...MODULES.map((name) => [name, join(SRC_DIR, `${name}.ts`)]),
-      ['fogConstants', join(ROOT, 'client3d/src/scene/fogConstants.ts')]];
+    const sources = [...MODULES.map((name) => [name, join(IN_HUD.has(name) ? HUD_DIR : SRC_DIR, `${name}.ts`)]),
+      ['fogConstants', join(ROOT, 'hud/src/scene/fogConstants.ts')]];
     for (const [name, path] of sources) {
       const source = await readFile(path, 'utf8');
       const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
@@ -4401,7 +4405,7 @@ async function main() {
 
   /**
    * --- Minimap (stage 5 task 3; on the METRE world since E4 task 2) ---------
-   * `client3d/src/game/minimap.ts`
+   * `hud/src/game/minimap.ts`
    *
    * `minimapLayout(bounds, sizePx)` — the WHOLE world frame (`world_bounds`,
    * § A12, in METRES) fitted into a square canvas, north up, no scrolling and

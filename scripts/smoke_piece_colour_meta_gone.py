@@ -48,7 +48,7 @@ migration or the cleanup may be dropped later), more is a regression.
 
 SCANNED ROOTS
 
-app/, plugins/, frontend/src/, packages/, client3d/src/, static/admin/,
+app/, plugins/, frontend/src/, packages/, client3d/src/, hud/src/, static/admin/,
 docs/, README.md.  Skipped inside plugins/: ``attraction``, ``intimacy`` and
 ``nsfw_anatomy`` are symlinks into the private packs repo (read-only, not part
 of this repo's tree) and ``installed/`` holds gitignored marketplace installs.
@@ -72,6 +72,7 @@ ROOTS = (
     "frontend/src",
     "packages",
     "client3d/src",
+    "hud/src",
     "static/admin",
     "docs",
     "README.md",

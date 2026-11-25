@@ -162,6 +162,33 @@ with patch.object(agent_loop, "get_agent_loop", return_value=loop):
         "SELECT content FROM perceptions WHERE utterance_id=? AND perceiver='Reed'",
         (result["utterance_id"],)).fetchone()[0], "Hello across the courtyard.")
     check("addressed NPC owes response", "Reed" in result["bumped"], True)
+
+    # The same request with the worker threads REAL and the loop guard strict:
+    # the handler must not open the world DB on the event loop (it held the
+    # loop for 43 s in five watchdog dumps). The guard records a violation
+    # before it raises, so a swallowed raise still shows here.
+    async def say_strict():
+        from app.core import loop_guard
+
+        async def no_fallback(*args, **kwargs):
+            pass
+        loop_guard.register_server_loop()
+        loop_guard.strict(True)
+        loop_guard.clear_violations()
+        try:
+            with patch.object(play, "_storyteller_after_silence", no_fallback), \
+                 patch.object(play, "_storyteller_fallback", no_fallback):
+                answer = await asyncio.wait_for(play.play_say(SayRequest()), timeout=20)
+        finally:
+            seen = list(loop_guard.violations)
+            loop_guard.strict(False)
+            loop_guard.clear_violations()
+            loop_guard.unregister()
+        return answer, seen
+
+    strict_result, strict_seen = asyncio.run(say_strict())
+    check("play_say records under the strict loop guard", strict_result["ok"], True)
+    check("play_say opens no world DB on the event loop", strict_seen, [])
     talk = TalkToSkill({"enabled": True}, PluginContext("talk_to"))
     for sender, target in [("Reed", "Wren"), ("Wren", "Reed"), ("Vale", "Reed"), ("Reed", "Vale")]:
         outcome = talk.execute(json.dumps({"agent_name": sender, "name": target,

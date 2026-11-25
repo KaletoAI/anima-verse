@@ -2,18 +2,21 @@
   "name": "anima-verse-monorepo",
   "private": true,
   "version": "0.0.0",
-  "description": "npm-Workspaces-Wurzel: Game-Admin/Player (frontend), 3D-Client (client3d), geteilte Pakete (packages/*).",
+  "description": "npm workspaces root: Game-Admin (frontend), HUD page (hud), 3D client (client3d), shared packages (packages/*).",
   "workspaces": [
     "frontend",
+    "hud",
     "client3d",
     "packages/*"
   ],
   "scripts": {
     "dev:admin": "npm run dev -w frontend",
+    "dev:hud": "npm run dev -w hud",
     "dev:client3d": "npm run dev -w client3d",
     "build:admin": "npm run build -w frontend",
+    "build:hud": "npm run build -w hud",
     "build:client3d": "npm run build -w client3d",
-    "build": "npm run build -w frontend && npm run build -w client3d"
+    "build": "npm run build -w frontend && npm run build -w hud && npm run build -w client3d"
   },
   "overrides": {
     "js-yaml@4": "4.3.1",

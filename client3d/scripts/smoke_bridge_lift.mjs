@@ -300,7 +300,7 @@ async function loadClient() {
       `export { NpcManager } from '${src}/scene/npcs';`,
       `export { STAND_ADOPT_M } from '${src}/scene/standSettle';`,
       `export { moveClip, setClipTransitions } from '${src}/game/walk';`,
-      `export { getAnimationClips } from '${src}/api';`,
+      `export { getAnimationClips } from '${join(ROOT, 'hud/src')}/api';`,
       `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
     const built = await esbuild.build({

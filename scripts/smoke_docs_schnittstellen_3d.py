@@ -119,7 +119,7 @@ def doc_ids(text):
 def referenced_ids():
     """Every `§ <id>` the repository points at, outside the document itself."""
     import subprocess
-    roots = ["app", "client3d/src", "client3d/scripts", "packages", "scripts",
+    roots = ["app", "client3d/src", "hud/src", "client3d/scripts", "packages", "scripts",
              "frontend/src", "shared"]
     hits = {}
     for root in roots:

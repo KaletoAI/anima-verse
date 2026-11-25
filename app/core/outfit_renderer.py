@@ -52,11 +52,10 @@ def is_free_text_wardrobe(profile: Optional[Dict[str, Any]]) -> bool:
     if not name:
         return False
     try:
-        from app.models.character_template import get_template
-        tmpl = get_template(name) or {}
+        from app.models.character_template import template_features
+        return (template_features(name) or {}).get("outfit_system_enabled") is False
     except Exception:
         return False
-    return (tmpl.get("features") or {}).get("outfit_system_enabled") is False
 
 
 def undressed_text(profile: Optional[Dict[str, Any]]) -> str:

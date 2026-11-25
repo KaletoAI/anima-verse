@@ -176,7 +176,7 @@ from app.core import figure_build  # noqa: E402
 pre = inspect.getsource(figure_build._prestart_cut_texture)
 check("[5] no prestart over an own-mesh fit (a ':fit:' under token)", '":fit:" in t' in pre
       and pre.index('":fit:" in t') < pre.index("build_start("))
-ck = inspect.getsource(gtc.cut_key)
+ck = inspect.getsource(gtc._cut_key)   # the body behind the read-scope wrapper (read_scope, Task 5)
 check("[5] cut_key passes own_fallback_mode and returns own_mode", "own_fallback_mode(" in ck
       and "own_mode=own_mode" in ck)
 

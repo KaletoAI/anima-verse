@@ -189,7 +189,7 @@ Usage:  ./.venv/bin/python scripts/smoke_worldmap_travel.py
 """
 import json
 from datetime import datetime, timedelta, timezone
-from starlette.responses import JSONResponse
+from starlette.responses import Response
 import os
 import math
 import random
@@ -274,8 +274,12 @@ def check(label: str, actual, expected) -> None:
 
 
 def route_json(result):
-    check("JSONResponse encoded in the endpoint, off the event loop",
-          isinstance(result, JSONResponse), True)
+    # A finished Response (not a dict): the endpoint encoded it in its worker
+    # thread, off the event loop (since task 3 of the hot-path plan through
+    # play._json_fast, a plain Response with the JSON media type).
+    check("JSON response encoded in the endpoint, off the event loop",
+          (isinstance(result, Response), result.media_type),
+          (True, "application/json"))
     return json.loads(result.body)
 
 

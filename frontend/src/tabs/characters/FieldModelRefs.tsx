@@ -26,6 +26,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { ShapeViewRegenerate } from './ShapeViewRegenerate'
+import { SHAPE_VIEW_JOBS } from './shapeViewModel'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
@@ -559,6 +561,12 @@ export function FieldModelRefs({
         ) : null) : onOpenBody ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBody}
             title={t('The body shape and its pieces: the Body sub-tab')}>↗ {t('Body')}</button>
+        ) : null}
+        {/* Round 2026-11-25: the back here is a copy of the body shape's back — its own Regenerate is the shape's. */}
+        {!plainShape && source.source === 'shape' && extraViews.includes('back') ? (
+          <ShapeViewRegenerate character={character} view="back" jobs={SHAPE_VIEW_JOBS.back}
+            label={`↻ ${t('Regenerate the body shape’s back')}`}
+            disabledReason={building ? t(BUILD_RUNS_VIEWS) : null} onStarted={() => startPoll(1500)} />
         ) : null}
       </div>
     )

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Smoke: neither Vite dev server can answer a backend path itself.
+"""Smoke: no Vite dev server can answer a backend path itself.
 
 Usage:  ./.venv/bin/python scripts/smoke_vite_proxy.py
 
 Pure text work plus a few `node` calls: the FastAPI decorators under `app/`,
-`packages/dev-proxy-rule/index.js` and the two per-app bindings are read,
+`packages/dev-proxy-rule/index.js` and the three per-app bindings (`frontend`,
+`client3d`, `hud`) are read,
 nothing is started, no world DB is touched, no dev server and no backend are
 needed.
 
@@ -18,7 +19,8 @@ frontend's list had ten entries against the ~38 route prefixes the two pages
 call, and two of them (`/activities`, `/scheduler`) had no route behind them
 any more; client3d's had sixteen, one of them (`/state`) equally dead, while
 ~14 prefixes its own code and the shared panels call were missing. The rule is
-inverted now and it is ONE rule for both apps:
+inverted now and it is ONE rule for every app (`frontend` :5173, `client3d`
+:5183 and, since the HUD page moved into its own workspace, `hud` :5184):
 `packages/dev-proxy-rule/index.js` names the few paths VITE owns, everything
 else goes to the backend. Each app binds it to its own pages in its own
 `dev-proxy-rule.js` — which is the module this guard imports, so the guard
@@ -27,7 +29,7 @@ inverted rule can only be broken on purpose.
 
 WHAT IS CHECKED, and where every expected value comes from
 
-A) Every route the backend serves is FORWARDED, by BOTH apps. Expected value =
+A) Every route the backend serves is FORWARDED, by EVERY app. Expected value =
    the routes collected from the FastAPI decorators (the collector of
    `scripts/smoke_docs_readme.py` is imported, so both guards see the same
    routes): each `app/routes/*.py`'s `APIRouter(prefix=…)` plus its
@@ -41,9 +43,12 @@ A) Every route the backend serves is FORWARDED, by BOTH apps. Expected value =
                                 what http://localhost:5173/ has always opened
        frontend  /game-admin    the admin shell; in dev it is index.html
        client3d  /              the world map (index.html)
+       hud       (none)         its only entry is `hud.html` (`/hud.html` and
+                                `/hud` are Vite's); `/` is not a page of this
+                                app and goes to the backend like any route
 
-   Both apps forward `/play` to the built 3D player shell on the backend.
-   client3d also forwards `/game-admin` to the backend.
+   All three apps forward `/play` to the built 3D player shell on the backend.
+   client3d and hud also forward `/game-admin` to the backend.
 
 B) The paths VITE must keep, hand-derived from what a dev server serves:
    its own namespaces (`/@…`, `/__…`), the source tree (`/src/…`), the
@@ -51,27 +56,46 @@ B) The paths VITE must keep, hand-derived from what a dev server serves:
 
 C) The page/API collision, the reason this is not a one-line prefix rule:
    `/play` is the PAGE and `/play/…` is the API. Hand-derived verdicts per app
-   in `TABLE_FRONTEND` / `TABLE_CLIENT3D` below.
+   in `TABLE_FRONTEND` / `TABLE_CLIENT3D` / `TABLE_HUD` below. For `hud` the
+   entries are `/hud.html` → Vite (also `/hud` and `/hud?bridge=gdcef`, the
+   shared rule's extension-less form), everything else — `/`, `/index.html`,
+   `/play/…`, `/static/hud/hud.html` (the BUILT page) — goes to the backend.
 
-D) Every backend prefix the 3D client and the shared player panels CALL is
-   forwarded. Expected value = the prefixes extracted from `client3d/src` and
-   `packages/player-ui/src` (string literals starting with `/segment`, comment
-   lines skipped) — the same sweep the old `proxied` list was kept by hand
-   from. One hand-derived exception: `/models/…` is `client3d/public/models/`
-   (the manifest and the test meshes) and has no backend route, so it stays
-   Vite's.
+D) Every backend prefix an app's code and the shared player panels CALL is
+   forwarded by that app. The prefixes are the string literals starting with
+   `/segment` (comment lines skipped) — the same sweep the old `proxied` list
+   was kept by hand from. Per app the roots are what its dev server bundles:
+     client3d  `client3d/src` + `hud/src` + `packages/player-ui/src` (the
+               client3d dev server still bundles `@anima/hud`, and `api.ts`
+               lives in `hud/src` now)
+     hud       `hud/src` + `packages/player-ui/src`
+   Expected sizes, counted by reading the call-site literals of each root:
+     client3d/src           5  /assets /chat /play /static /world
+     hud/src                7  /account /assets /auth /characters /play /tts
+                               /world
+     packages/player-ui/src 17 /account /auth /characters /chat /diary /events
+                               /i18n /instagram /inventory /notifications /play
+                               /queue /respond /static /templates /thumbs /world
+     union client3d app     19 = player-ui's 17 + /assets (client3d, hud)
+                               + /tts (hud)
+     union hud app          19 = player-ui's 17 + /assets + /tts (hud); /chat
+                               and /static come from player-ui as well
+   Code that adds a call can only grow a set, so the check is a floor (>= 19).
+   One hand-derived exception: `/models/…` is `client3d/public/models/` (the
+   manifest and the test meshes) and has no backend route, so it stays Vite's.
 
-E) No explicit prefix list remains in either config. `server.proxy` must have
+E) No explicit prefix list remains in any config. `server.proxy` must have
    exactly one key, the catch-all `'^/'`. Any second key would be a list
-   starting to grow back. Both configs must use the SHARED rule — a private
+   starting to grow back. Every config must use the SHARED rule — a private
    copy is how the two dev servers drifted apart in the first place.
 
 F) The frontend's `base` must be conditional on the command. `/static/…` is a
    backend path (the HTML entry links the theme CSS and favicon there), so the
    dev server cannot also serve its own files under `/static/game_admin/`.
 
-G) One environment-variable convention for the backend address: both
-   `frontend/vite.config.ts` and `client3d/vite.config.ts` read `ANIMA_API`.
+G) One environment-variable convention for the backend address:
+   `frontend/vite.config.ts`, `client3d/vite.config.ts` and `hud/vite.config.ts`
+   all read `ANIMA_API`.
 
 H) Each app's rule knows exactly the HTML entries its build declares
    (`build.rollupOptions.input`) — an entry added to the build but not to the
@@ -89,6 +113,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 FRONTEND = REPO / "frontend"
 CLIENT3D = REPO / "client3d"
+HUD = REPO / "hud"
 SHARED_RULE = REPO / "packages" / "dev-proxy-rule" / "index.js"
 
 sys.path.insert(0, str(REPO / "scripts"))
@@ -97,6 +122,7 @@ from smoke_docs_readme import real_routes  # noqa: E402  (same route collector)
 # The production PAGE paths that are a Vite HTML entry in dev, per app (A).
 PAGES_FRONTEND = {"/": "/index.html", "/game-admin": "/index.html"}
 PAGES_CLIENT3D = {"/": "/index.html"}
+PAGES_HUD = {}
 
 _failures = []
 _checks = 0
@@ -146,7 +172,8 @@ class App:
 
 APP_FRONTEND = App("frontend", FRONTEND, PAGES_FRONTEND)
 APP_CLIENT3D = App("client3d", CLIENT3D, PAGES_CLIENT3D)
-APPS = [APP_FRONTEND, APP_CLIENT3D]
+APP_HUD = App("hud", HUD, PAGES_HUD)
+APPS = [APP_FRONTEND, APP_CLIENT3D, APP_HUD]
 
 
 def concrete(route):
@@ -269,9 +296,39 @@ TABLE_CLIENT3D = [
     ("/npc/sample", None),
 ]
 
+TABLE_HUD = [
+    # B) what Vite owns — the one entry, namespaces, source tree, dependencies
+    ("/hud.html", "/hud.html"),
+    ("/hud", "/hud.html"),
+    ("/hud?bridge=gdcef", "/hud.html?bridge=gdcef"),
+    ("/hud.html?bridge=gdcef", "/hud.html?bridge=gdcef"),
+    ("/src/hudPage.tsx", "/src/hudPage.tsx"),
+    ("/src/hud/hud.css", "/src/hud/hud.css"),
+    ("/@vite/client", "/@vite/client"),
+    ("/@fs/repo/packages/player-ui/src/api.ts", "/@fs/repo/packages/player-ui/src/api.ts"),
+    ("/node_modules/.vite/deps/react.js", "/node_modules/.vite/deps/react.js"),
+    ("/__open-in-editor", "/__open-in-editor"),
+    # not pages of this app: the backend's
+    ("/", None),
+    ("/index.html", None),
+    ("/models/manifest.json", None),   # client3d's public/, not hud's
+    ("/static/hud/hud.html", None),    # the BUILT page is the backend's
+    ("/play", None),
+    ("/play/say", None),
+    ("/game-admin", None),
+    # prefixes the HUD calls
+    ("/auth/status", None),
+    ("/account", None),
+    ("/characters/sample", None),
+    ("/tts/speak", None),
+    ("/assets/audio", None),
+    ("/world/game-time", None),
+]
+
 
 def check_tables():
-    for app, table in ((APP_FRONTEND, TABLE_FRONTEND), (APP_CLIENT3D, TABLE_CLIENT3D)):
+    for app, table in ((APP_FRONTEND, TABLE_FRONTEND), (APP_CLIENT3D, TABLE_CLIENT3D),
+                       (APP_HUD, TABLE_HUD)):
         got = app.targets([u for u, _ in table])
         bad = [(u, want, g) for (u, want), g in zip(table, got) if g != want]
         check(f"{app.name}: the hand-derived verdict table holds ({len(table)} paths)",
@@ -302,15 +359,27 @@ def called_prefixes(root):
     return out
 
 
+# Per app: the source roots its dev server bundles (D).
+CALL_ROOTS = [
+    (APP_CLIENT3D, ("client3d/src", "hud/src", "packages/player-ui/src")),
+    (APP_HUD, ("hud/src", "packages/player-ui/src")),
+]
+# Hand-derived floor per app — see D) in the docstring.
+CALL_MIN = {"client3d": 19, "hud": 19}
+
+
 def check_called_prefixes():
-    prefixes = called_prefixes(CLIENT3D / "src") | called_prefixes(REPO / "packages" / "player-ui" / "src")
-    check(f"prefixes extracted from client3d/src + packages/player-ui/src ({len(prefixes)})",
-          len(prefixes) >= 10, str(sorted(prefixes)))
-    wanted = sorted(prefixes - CALL_EXCEPTIONS)
-    got = APP_CLIENT3D.targets([p + "/sample" for p in wanted])
-    kept = [(p, t) for p, t in zip(wanted, got) if t is not None]
-    check(f"client3d: every called backend prefix is forwarded ({len(wanted)})",
-          not kept, str(kept))
+    for app, roots in CALL_ROOTS:
+        prefixes = set()
+        for root in roots:
+            prefixes |= called_prefixes(REPO / root)
+        check(f"{app.name}: prefixes extracted from {' + '.join(roots)} ({len(prefixes)})",
+              len(prefixes) >= CALL_MIN[app.name], str(sorted(prefixes)))
+        wanted = sorted(prefixes - CALL_EXCEPTIONS)
+        got = app.targets([p + "/sample" for p in wanted])
+        kept = [(p, t) for p, t in zip(wanted, got) if t is not None]
+        check(f"{app.name}: every called backend prefix is forwarded ({len(wanted)})",
+              not kept, str(kept))
 
 
 # ---------------------------------------------------------------------------

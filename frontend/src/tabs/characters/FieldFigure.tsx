@@ -68,6 +68,9 @@ import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { TemplateParamsDialog } from './TemplateParamsDialog'
 import { FigureStored } from './FigureStored'
+import { RefImage } from './RefImage'
+import { ShapeViewRegenerate } from './ShapeViewRegenerate'
+import { SHAPE_VIEW_LABELS } from './shapeViewModel'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureOutfitModel } from './FigureOutfitModel'
 import { fullBodyBuildNote } from './fullBodyReferenceModel'
@@ -691,6 +694,47 @@ function PlanRows({ data }: { data: FigurePayload }) {
   )
 }
 
+/** Round 2026-11-25 (Henrik's naked back): the worn body shape's views as small thumbnails, each with its own
+ *  Regenerate (ShapeViewRegenerate: the in-app confirmation names the image jobs and that the next Build re-meshes
+ *  the shape). A view that came out EMPTY although the dressed front wears clothing says so in red. */
+function ShapeViews({ character, data, onStarted }: { character: string; data: FigurePayload; onStarted: () => void }) {
+  const { t } = useI18n()
+  const shape = data.body?.shape
+  if (!shape?.views) return null
+  const run = shape.regenerate?.running
+  const last = shape.regenerate?.last
+  const busy = data.build.running ? t('A Build runs — regenerate after it') : run ? t('A body shape view renders now') : null
+  const enc = encodeURIComponent(character)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {shape.views.map((v) => (
+          <div key={v.view} style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 120 }}>
+            <span className="ga-hint">{t(SHAPE_VIEW_LABELS[v.view] || v.view)}{run?.view === v.view ? ` · ${t('Rendering…')}` : ''}</span>
+            {v.exists ? (
+              <RefImage key={`${v.view}-${v.stamp}`} src={`/characters/${enc}/figure/shape/${encodeURIComponent(shape.key)}/views/${v.view}?v=${v.stamp}`}
+                height={150} radius={6} compact label={`${t('Body shape')} · ${t(SHAPE_VIEW_LABELS[v.view] || v.view)}`} />
+            ) : <div className="ga-hint ga-ref-empty" style={{ height: 150 }}>{t('No render yet')}</div>}
+            {v.lost_clothing ? (
+              <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}
+                title={t('The draft wears nothing although the dressed front wears clothing — regenerate it.')}>
+                {t('Lost the clothing')}</span>
+            ) : v.empty ? <span className="ga-hint" title={t('Empty composite: the draft put nothing on — the base view unchanged')}>{t('Empty composite')}</span> : null}
+            <ShapeViewRegenerate character={character} view={v.view} jobs={v.jobs}
+              disabledReason={busy || (v.view !== 'front' && !shape.views?.find((f) => f.view === 'front')?.exists
+                ? t('Render the front first') : null)} onStarted={onStarted} />
+          </div>
+        ))}
+      </div>
+      {last && !run && last.shape === shape.key && !last.ok ? (
+        <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>
+          {t('The last Regenerate of the {view} failed: {error}').replace('{view}', t(SHAPE_VIEW_LABELS[last.view] || last.view))
+            .replace('{error}', last.error || t('unknown'))}</div>
+      ) : null}
+    </div>
+  )
+}
+
 function BodySection({ data, character, onChanged, onOpenBaseBody }: {
   data: FigurePayload
   character: string
@@ -712,6 +756,9 @@ function BodySection({ data, character, onChanged, onOpenBaseBody }: {
               <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}
                 title={baseBodyLine(data.body?.plain.state || 'ready', t)}>{t('Open Base body tab')}</button>
             </div>
+          ) : null}
+          {r.key === 'shape' && data.body?.shape.views?.length ? (
+            <ShapeViews character={character} data={data} onStarted={onChanged} />
           ) : null}
         </StepRowView>
       ))}

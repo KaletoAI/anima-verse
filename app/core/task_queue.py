@@ -39,6 +39,7 @@ from app.core.timeutils import utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from app.core import loop_guard
 from app.core.log import get_logger
 
 logger = get_logger("task_queue")
@@ -170,6 +171,7 @@ class TaskQueue:
     # ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
+        loop_guard.check("tq")
         conn = sqlite3.connect(
             str(self._db_path),
             check_same_thread=False,

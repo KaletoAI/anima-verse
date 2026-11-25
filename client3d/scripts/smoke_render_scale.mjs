@@ -14,9 +14,9 @@ function load(file, dependencies, window) {
 const events = new Map();
 const window = { innerWidth: 3840, innerHeight: 1080, devicePixelRatio: 1,
   addEventListener: (name, fn) => events.set(name, fn), removeEventListener: name => events.delete(name) };
-const P = load('client3d/src/game/prefs.ts', require, window);
+const P = load('hud/src/game/prefs.ts', require, window);
 const { Engine } = load('client3d/src/scene/engine.ts', name => name === 'three' ? require(name)
-  : name === '../game/prefs' ? P : {}, window);
+  : name === '@anima/hud/game/prefs' ? P : {}, window);
 const ratios = [], sizes = [], labels = [];
 const container = { clientWidth: 3840, clientHeight: 1080 };
 const engine = Object.assign(Object.create(Engine.prototype), { container, renderScalePref: 'auto',
@@ -42,7 +42,7 @@ const hooks = { useState(initial) { const i = stateIndex++; if (!(i in states)) 
   return [states[i], value => { states[i] = typeof value === 'function' ? value(states[i]) : value; }]; },
   useEffect(fn) { const i = effectIndex++; if (!effects.has(i)) { effects.add(i); fn(); } },
   useSyncExternalStore: () => ({ clientCache: null }) };
-const { GameMenu } = load('client3d/src/hud/GameMenu.tsx', name => {
+const { GameMenu } = load('hud/src/hud/GameMenu.tsx', name => {
   if (name === 'react') return hooks;
   if (name === 'react/jsx-runtime') return require(name);
   if (name === '@anima/player-ui') return { useI18n: () => ({ t: s => s }) };

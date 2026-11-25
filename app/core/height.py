@@ -91,7 +91,7 @@ def _is_humanoid(profile: Dict[str, Any], character_name: str = "", *,
             from app.core.model_refs import is_humanoid
             if config is not None:
                 return bool(is_humanoid(character_name, profile=profile, config=config))
-            return bool(is_humanoid(character_name))
+            return bool(is_humanoid(character_name, profile=profile))
         except Exception:
             return True
     return "animal" not in str((profile or {}).get("template", "")).lower()

@@ -49,9 +49,9 @@ public sealed class HudStorage
     /// <summary>The cap on the serialised store: 256 KB.</summary>
     public const int MaxBytes = 256 * 1024;
 
-    /// <summary><c>SHOW_ALL_KEY</c> of client3d/src/game/prefs.ts.</summary>
+    /// <summary><c>SHOW_ALL_KEY</c> of hud/src/game/prefs.ts.</summary>
     public const string ShowAllKey = "av3d.showAllLocations";
-    /// <summary><c>SCATTER_PREFS_KEY</c> of client3d/src/game/prefs.ts.</summary>
+    /// <summary><c>SCATTER_PREFS_KEY</c> of hud/src/game/prefs.ts.</summary>
     public const string ScatterPrefsKey = "av3d.view.scatter.v1";
 
     private readonly SortedDictionary<string, SortedDictionary<string, string>> _servers = new(StringComparer.Ordinal);

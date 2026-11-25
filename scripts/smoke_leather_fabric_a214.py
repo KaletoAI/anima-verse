@@ -11,10 +11,11 @@ Expected values, by hand:
       (``drape``'s defaults 15 / 15 / 5, Blender's default damping, as before A214).
   [B] drape key: glossy and rough share one ``tsig`` (``DRAPE_FABRIC`` -> "leather"); medium -> leather changes it;
       the key of stiff / medium / flowing / sheer equals the pre-A214 module's (commit 2a23beb00) — nothing re-drapes.
-  [C] surface: glossy = roughness 0.2, metallic 0, generator map dropped, clear coat 1.0 / roughness 0.08, sheen
-      removed (None); rough = roughness 0.85, metallic 0, sheen [0.25]*3 / 0.7, clear coat removed. Both
-      ``explicit_metallic`` False. ``material_key`` "leather_glossy.v1" / "leather_rough.v1"; medium "" (unchanged).
-      Merged over the cotton preset (roughness 0.95 + sheen): roughness 0.2 wins, sheen None, so the graft drops it.
+  [C] surface: glossy = roughness 0.38, metallic 0, generator map dropped, clear coat 0.35 / roughness 0.30 (round
+      2026-11-25: was 0.2 under 1.0 / 0.08, a mirror coat), sheen removed (None); rough = roughness 0.85, metallic 0,
+      sheen [0.25]*3 / 0.7, clear coat removed. Both ``explicit_metallic`` False. ``material_key``
+      "leather_glossy.v2" / "leather_rough.v2" (``LEATHER_SURFACE_VERSION`` 2); medium "" (unchanged).
+      Merged over the cotton preset (roughness 0.95 + sheen): roughness 0.38 wins, sheen None, so the graft drops it.
       A real ``glb_mesh.graft`` of the glossy keys writes KHR_materials_clearcoat into the material and extensionsUsed,
       no sheen.
   [D] due: the assembly state's ``material`` entry differs for medium / glossy / rough (a finish switch
@@ -101,8 +102,8 @@ gl = gt.validate_params({"fabric": "leather_glossy"})[0]
 ro = gt.validate_params({"fabric": "leather_rough"})[0]
 ov_g, ov_r = gt.material_overrides(gl), gt.material_overrides(ro)
 check("glossy overrides", ov_g == {
-    "pbrMetallicRoughness": {"metallicRoughnessTexture": None, "roughnessFactor": 0.2, "metallicFactor": 0.0},
-    "extensions": {"KHR_materials_clearcoat": {"clearcoatFactor": 1.0, "clearcoatRoughnessFactor": 0.08},
+    "pbrMetallicRoughness": {"metallicRoughnessTexture": None, "roughnessFactor": 0.38, "metallicFactor": 0.0},
+    "extensions": {"KHR_materials_clearcoat": {"clearcoatFactor": 0.35, "clearcoatRoughnessFactor": 0.3},
                    "KHR_materials_sheen": None},
     "extras": {"anima_material": "leather_glossy", "explicit_metallic": False}}, ov_g)
 check("rough overrides", ov_r == {
@@ -110,13 +111,13 @@ check("rough overrides", ov_r == {
     "extensions": {"KHR_materials_clearcoat": None,
                    "KHR_materials_sheen": {"sheenColorFactor": [0.25, 0.25, 0.25], "sheenRoughnessFactor": 0.7}},
     "extras": {"anima_material": "leather_rough", "explicit_metallic": False}}, ov_r)
-check("material keys", gt.material_key(gl) == "leather_glossy.v1" and gt.material_key(ro) == "leather_rough.v1"
+check("material keys", gt.material_key(gl) == "leather_glossy.v2" and gt.material_key(ro) == "leather_rough.v2"
       and gt.material_key(gt.validate_params({"fabric": "medium"})[0]) == "")
 from app.core import piece_material  # noqa: E402
 merged = garment_assembly._merge_overrides(piece_material.overrides("cotton"), ov_g)
-check("over cotton: roughness 0.2, sheen None, clear coat set",
-      merged["pbrMetallicRoughness"]["roughnessFactor"] == 0.2 and merged["extensions"]["KHR_materials_sheen"] is None
-      and merged["extensions"]["KHR_materials_clearcoat"]["clearcoatFactor"] == 1.0, merged)
+check("over cotton: roughness 0.38, sheen None, clear coat set",
+      merged["pbrMetallicRoughness"]["roughnessFactor"] == 0.38 and merged["extensions"]["KHR_materials_sheen"] is None
+      and merged["extensions"]["KHR_materials_clearcoat"]["clearcoatFactor"] == 0.35, merged)
 from app.core import glb_mesh  # noqa: E402
 material = {"pbrMetallicRoughness": {}, "extensions": {"KHR_materials_sheen": {"sheenRoughnessFactor": 0.9}}}
 for k, v in merged.items():      # the graft's merge rule (``glb_mesh.graft``): a None sub value removes that key
@@ -132,7 +133,7 @@ print("[D] due")
 item = lambda f: {"outfit_piece": {"template": {"params": {"kind": "skirt", "fabric": f}}}}  # noqa: E731
 keys = {f: garment_assembly._fabric_key({"template": True, "item": item(f)}) for f in ("medium", *LEATHERS)}
 check("fabric part of the assembly state: '', glossy, rough", keys == {
-    "medium": "", "leather_glossy": "leather_glossy.v1", "leather_rough": "leather_rough.v1"}, keys)
+    "medium": "", "leather_glossy": "leather_glossy.v2", "leather_rough": "leather_rough.v2"}, keys)
 asm = (ROOT / "app/core/garment_assembly.py").read_text()
 check("the state's material entry carries the fabric key", 'entry["material"] += "+" + fabric' in asm)
 check("leather is not sheer", not any(garment_assembly._is_sheer({"template": True, "item": item(f)})

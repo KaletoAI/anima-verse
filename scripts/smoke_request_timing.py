@@ -186,6 +186,8 @@ async def main():
         assert "/stack/items/1" not in stats and "/stack/items/2" not in stats
         for row in stats.values():
             assert set(row) == {"route", "method", "n", "p50", "p95", "max", "errors", "aborted", "streams"}
+        # The log is written by a writer thread; flush() writes what is queued.
+        request_timing.flush()
         rows = [json.loads(line) for line in request_timing.LOG_FILE.read_text().splitlines()]
         assert len(rows) == 3, rows
         failure = [row for row in rows if row["route"] == "/stack/error"]

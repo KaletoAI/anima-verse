@@ -2299,6 +2299,16 @@ _MIN_BEAT_S = 0.1
 _early_beats: Set[str] = set()
 
 
+def _count_ticker(key: str) -> None:
+    """Count one client-execution ticker event (hot-path line
+    ``client_exec_ticker``); a counter never breaks the tick."""
+    try:
+        from app.core import hot_path_stats
+        hot_path_stats.count("client_exec_ticker", key)
+    except Exception:  # noqa: BLE001 — a counter, never a failure
+        pass
+
+
 def _next_beat_s() -> float:
     """Real seconds until the next beat: the fixed tick, or sooner when an
     in-room approach (a walk to a seat, about a second long) arrives first.
@@ -2309,6 +2319,7 @@ def _next_beat_s() -> float:
     journeys keep the fixed beat — their arrival is minutes away and a few
     seconds do not show.
     """
+    _count_ticker("beat")
     from app.models.character import list_active_journeys
     if timeutils.motion_rate() <= 0:
         return _TICK_SECONDS

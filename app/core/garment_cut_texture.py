@@ -1128,11 +1128,12 @@ def _islands_of(pattern: dict) -> dict:
 
 
 def prompt_kind(params: dict | None) -> str:
-    """The prompt kind of template ``params``: the template kind, "strapless" for a strapless top (cut by ``wrap`` into
-    a front and a back panel, group B) — "" without parameters. Every csig of a piece is keyed by it
-    (``prompt_sha_of``): the record's and the one ``garment_template.cut_info`` looks the atlas up with."""
+    """The prompt kind of template ``params``: the template kind, "strapless" for a corset top (strapless or, round
+    2026-11-25, with straps: cut by ``wrap`` into a front and a back panel, group B, the straps their own small
+    pieces) — "" without parameters. Every csig of a piece is keyed by it (``prompt_sha_of``): the record's and the
+    one ``garment_template.cut_info`` looks the atlas up with."""
     params = params or {}
-    if params.get("kind") == "top" and params.get("shoulders") == "strapless":
+    if params.get("kind") == "top" and params.get("shoulders") in ("strapless", "straps"):
         return "strapless"
     return str(params.get("kind") or "")
 
@@ -1282,6 +1283,9 @@ def piece_name_of(params: dict) -> str:
     tights by style and foot; trousers by length and leg)."""
     p = params or {}
     kind = str(p.get("kind") or "garment")
+    if kind == "top" and p.get("shoulders") == "straps":
+        # round 2026-11-25: a top with straps is a corset top's shell with two straps
+        return "corset top with shoulder straps"
     if kind == "top" and p.get("shoulders") == "strapless":
         # group B (A4): a straight / sweetheart edge cut tight is a corset top
         tight = float(p.get("fit", 0.4)) <= 0.2 and p.get("neckline") in ("straight", "sweetheart")
@@ -1365,10 +1369,15 @@ def _upsampler_on(b) -> bool:
 
 
 def _write_record(path: Path, record: dict) -> None:
+    from app.core import read_scope
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(json.dumps(record, indent=1), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        # a cut-texture record moves no figure generation: a read scope of this context must not serve the old state
+        read_scope.clear()
 
 
 def _write_bytes(path: Path, data: bytes) -> None:
@@ -3098,11 +3107,11 @@ def placket_key(item_id: str, character_name: str = "", csig: str = "") -> str:
 
 
 def _has_seams(item_id: str) -> bool:
-    """Corset v3: whether the piece's cut carries painted seam lines (a strapless top: ``corset_darts.seam_lines``)."""
+    """Corset v3: whether the piece's cut carries painted seam lines (a corset top: ``corset_darts.seam_lines``)."""
     from app.core import garment_template as gt
     from app.models.inventory import get_item
     params = gt.params_of(get_item(item_id))
-    return bool(params) and gt.strapless_top(params)
+    return bool(params) and gt.corset_top(params)
 
 
 def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[bytes, dict | None]:

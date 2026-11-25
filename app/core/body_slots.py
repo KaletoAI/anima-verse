@@ -40,6 +40,7 @@ instead of dropping the fragment. A package may declare ``undressed_prompt``,
 the text an undressed free-text character says in place of the core's
 "no clothes".
 """
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from string import Formatter
@@ -697,7 +698,7 @@ def exposed_slot_loras(character_name: str,
             for attr, decl in spec.attributes.items():
                 name = str((stored.get(spec.id) or {}).get(attr, "") or "").strip()
                 if decl.get("type") == "lora_select" and name and name.lower() != "none":
-                    logger.info("Mesh input part dropped LoRA %s", name)
+                    logger.debug("Mesh input part dropped LoRA %s", name)
             continue
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) != "lora_select":
@@ -947,6 +948,14 @@ def filter_appearance_reference_loras(loras, profile):
     return kept
 
 
+#: LoRA names :func:`filter_mesh_input_loras` has already reported: one INFO
+#: line per name per process (the figure polls call it over and over); capped
+#: like ``lora_library.warn_dropped_loras``.
+_MESH_DROP_LOG_CAP = 256
+_mesh_drop_logged: set = set()
+_mesh_drop_lock = threading.Lock()
+
+
 def filter_mesh_input_loras(loras, profile):
     """Drop LoRAs matching active exposed part declarations for mesh inputs."""
     import fnmatch
@@ -955,10 +964,18 @@ def filter_mesh_input_loras(loras, profile):
                 if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile)
                 for pattern in slot.mesh_part.lora_patterns]
     kept = []
+    fresh = []
     for lora in loras:
         name = str(lora.get("name", ""))
         if any(fnmatch.fnmatchcase(name.casefold(), pattern) for pattern in patterns):
-            logger.info("Mesh input part dropped LoRA %s", name)
+            with _mesh_drop_lock:
+                if len(_mesh_drop_logged) >= _MESH_DROP_LOG_CAP:
+                    _mesh_drop_logged.clear()
+                if name not in _mesh_drop_logged:
+                    _mesh_drop_logged.add(name)
+                    fresh.append(name)
         else:
             kept.append(lora)
+    for name in fresh:
+        logger.info("Mesh input part dropped LoRA %s", name)
     return kept

@@ -1,7 +1,7 @@
 namespace AnimaNative.Sky;
 
 /// <summary>
-/// The distance fog the browser draws (<c>client3d/src/scene/fogConstants.ts</c>): three's linear fog over
+/// The distance fog the browser draws (<c>hud/src/scene/fogConstants.ts</c>): three's linear fog over
 /// view-space depth, a smoothstep from 220 m to 520 m — the shared horizon of scene fog, minimap and tile prefetch.
 /// </summary>
 public static class Fog

@@ -24,7 +24,7 @@
  * loaded its interior yet.
  */
 import * as THREE from 'three';
-import type { PlaceOffer } from '../types';
+import type { PlaceOffer } from '@anima/hud/types';
 import type { PlacePick } from '../game/placement';
 import type { PlaceEntry } from '@anima/scene-render';
 

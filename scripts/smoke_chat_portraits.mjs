@@ -145,7 +145,7 @@ const __dirname = path.dirname(__filename)
 
 async function main() {
   const ts = await import('typescript')
-  const source = fs.readFileSync(path.join(__dirname, '../client3d/src/hud/chatPanel.ts'), 'utf8')
+  const source = fs.readFileSync(path.join(__dirname, '../hud/src/hud/chatPanel.ts'), 'utf8')
   const compiled = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText

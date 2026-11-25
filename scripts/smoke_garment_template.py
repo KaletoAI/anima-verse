@@ -166,7 +166,9 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
             ``{params: cut_params, version, uv_pattern, base, lower}`` PLUS ``"neck": 1``; a covered top with neither
             is cut as before and carries none (``smoke_template_cut_tops_main.py``: byte-identical to 84feba712); an
             off-shoulder top and a top with straps (no neck ring: their islands are byte-identical,
-            ``smoke_template_cut_tops.py`` [5]) carry none, with a placket too — their cuts and atlases stay.
+            ``smoke_template_cut_tops.py`` [5]) carry none, with a placket too — their cuts and atlases stay. Round
+            2026-11-25: a top with straps is a corset shell (``corset_top``), its key adds ``panels``, ``corset``,
+            ``corset_rules`` and ``corset_straps``.
 """
 import json
 import shutil
@@ -855,10 +857,13 @@ for _extra18 in ({"placket": "buttons"}, {"collar": "stand"}):
           gtc.cut_sig(_n18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_n18), "neck": 1}))
 for _sh18 in ("off_shoulder", "straps"):
     _o18 = gt.validate_params({"kind": "top", "shoulders": _sh18, "sleeves": "elbow"})[0]
+    # round 2026-11-25: a top with straps is a corset shell — its cut carries the panel / corset / straps parts
+    _x18 = ({"panels": gt.PANEL_VERSION, "corset": gt.CORSET_VERSION, "corset_rules": gtc.CORSET_DARTS_SHA,
+             "corset_straps": gt.CORSET_STRAPS_VERSION} if _sh18 == "straps" else {})
     check(f"[18.3] a {_sh18} top's cut key carries no neck, with a placket too",
-          gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18(_cut18(_o18))
+          gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_o18), **_x18})
           and gtc.cut_sig(dict(_o18, placket="buttons"), base_sha="b" * 64, lower=["x"])
-          == _md18(_cut18(dict(_o18, placket="buttons"))))
+          == _md18({**_cut18(dict(_o18, placket="buttons")), **_x18}))
 
 print("\n" + ("all checks passed" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
 sys.exit(1 if FAILS else 0)

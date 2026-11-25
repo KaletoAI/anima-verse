@@ -58,7 +58,7 @@
  *        0.1264 → k = 1 (no compression). The same part at state length 1.35 (tip 0.17064): k = 0.1644 / 0.17064 =
  *        0.9634318; at length 2 (tip 0.2528): 0.6503165 → clamped to 0.8. Its R_eff (A161) = 0.0356 + 0.005 =
  *        0.0406 > R_rest: room 5 mm, never 0 (`allowedRadius` past the funnel).
- * [7] The live publisher of client3d (`client3d/src/game/channelReadouts.ts`, interval 100 ms): frames at t = 0 [A],
+ * [7] The live publisher of client3d (`hud/src/game/channelReadouts.ts`, interval 100 ms): frames at t = 0 [A],
  *     50 [A], 100 [A, B], 150 [], 200 [B], 300 [], 400 [], 450 [] → publications at 0 ([A], released []), 100 ([A, B]),
  *     200 ([B], released [key A]) and 300 (null); nothing at 50 / 150 (throttled), 400 / 450 (nothing engaged after
  *     the final null). An empty first frame publishes nothing.
@@ -179,7 +179,7 @@ async function main() {
   check('[6g] grown R 0.0406, room 5 mm', near(grownP.r, 0.0406, 1e-12)
     && near(C.allowedRadius(0.05, grownP, 0.0356), 0.005, 1e-12), `${grownP.r}`)
   // [7]
-  const P = await import('../client3d/src/game/channelReadouts.ts')
+  const P = await import('../hud/src/game/channelReadouts.ts')
   const got = []
   const pub = P.createReadoutPublisher((state) => got.push(state), 100)
   const A = { receiver: 'R', channel: 'inset', entering: 'E1' }, B = { receiver: 'R', channel: 'mouth', entering: 'E2' }

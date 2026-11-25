@@ -14,7 +14,7 @@ public readonly record struct GraphicsPrefsCheck(GraphicsPrefs? Prefs, string? E
 }
 
 /// <summary>
-/// Port of the graphics prefs of client3d/src/game/prefs.ts (Task 26d, the menu's Graphics tab): the anti-aliasing
+/// Port of the graphics prefs of hud/src/game/prefs.ts (Task 26d, the menu's Graphics tab): the anti-aliasing
 /// level (<c>"off"</c> / <c>"2x"</c> / <c>"4x"</c>), sun shadows and render resolution. Stored under <see cref="Key"/>
 /// (the HUD's localStorage, mirrored to <c>user://hud_storage.json</c>); the scene reads it at start with
 /// <see cref="Load"/> and takes every change from the HUD's <c>applyGraphicsPrefs</c> through <see cref="Check"/>,

@@ -12,7 +12,7 @@ public readonly record struct ConditionalAnswer(int Status, string Etag, JsonEle
 public sealed record Locations3d(string Etag, JsonElement Root);
 
 /// <summary>
-/// <c>getLocations3d</c> of client3d/src/api.ts: a conditional GET (<c>If-None-Match</c> with the cached ETag),
+/// <c>getLocations3d</c> of hud/src/api.ts: a conditional GET (<c>If-None-Match</c> with the cached ETag),
 /// single-flight. A 304 answers the CACHED data with ITS ETag — another caller may not have applied that data
 /// yet; a 304 with nothing cached is an error like any other non-2xx (the browser's <c>json()</c> throws on it).
 /// </summary>

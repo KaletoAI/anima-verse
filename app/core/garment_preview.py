@@ -606,7 +606,7 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
     hem = _hem_curve(left[0], right[0], dip)
     # the outline: up the right side, across the top, down the left side, along the hem
     if spec is None:
-        if gt.strapless_top(p) and p["neckline"] == "sweetheart":
+        if gt.corset_top(p) and p["neckline"] == "sweetheart":
             # A231: the strapless top edge dips at the front centre (the drape's ``top_drop``)
             depth = gt.sweetheart_depth(p)
             edge = top_edge_curve(x0, right[-1], left[-1], depth)
@@ -615,6 +615,14 @@ def shapes(params: Dict[str, Any], meas: Dict[str, Any], reg: Registration, *,
             mark(x0 + 0.02, right[-1][1] - depth, f"sweetheart −{round(depth * 100)} cm")
         else:
             add("body", "fill", right + left[::-1] + hem[::-1][1:-1])
+        st = gt.corset_strap_spec(m) if gt.corset_straps(p) else None
+        if st:
+            # round 2026-11-25: a corset top's straps run from its top edge over the shoulder (``corset_strap_spec``)
+            w, sh_y = st["width_m"] / 2, float(m["shoulder_y"]) + gt.SHOULDER_TOP_M
+            for sgn in (1, -1):
+                sx = x0 + sgn * st["shoulder_x"]
+                add("strap", "fill", [[sx - w, top_y], [sx + w, top_y], [sx + w, sh_y], [sx - w, sh_y]])
+            mark(x0 + st["shoulder_x"] + 0.03, sh_y - 0.03, "straps")
     else:
         sy = m["shoulder_y"]
         neck = neckline_geometry(spec, m, x0)

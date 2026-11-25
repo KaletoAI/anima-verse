@@ -18,6 +18,7 @@ import type { FootwearAllowanceView } from './footwearAllowanceModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { syncHub } from '@anima/player-ui'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
+import { debounced } from '../../lib/guardedPoll'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { CollisionPayload, FootPose } from '@anima/scene-render'
@@ -740,6 +741,7 @@ export interface HairInfo {
 const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
 const POLL_SLOW_AFTER = 40
+const PUSH_DEBOUNCE_MS = 300
 
 /** The row chip of an own-mesh piece (`garment_set.piece_status`). */
 export interface PieceStatus {
@@ -953,8 +955,9 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
     startPoll()
     // Ruling A136: a Build or re-fit of the character started or ended (`figure_build._notify_build_changed`) —
     // reload, so the dialog's text never stays stale after the Build re-fitted the piece.
-    const off = syncHub().onTopics(['generation'], () => startPoll(0))
-    return () => { off(); stopPoll() }
+    const onPush = debounced(() => startPoll(0), PUSH_DEBOUNCE_MS)
+    const off = syncHub().onTopics(['generation'], onPush)
+    return () => { off(); onPush.cancel(); stopPoll() }
   }, [url, startPoll, stopPoll])
 
   return { info, error, setInfo, startPoll }

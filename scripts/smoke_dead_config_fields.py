@@ -66,7 +66,7 @@ literal ``"<name>"`` / ``"<dotted.path>.<name>"`` and no attribute access
 ``.<name>`` anywhere in app/, plugins/ (the symlinked private packs
 FOLLOWED; marketplace installs under plugins/installed are user-local and not
 scanned — the corpus is ``git ls-files`` plus the symlinked packs),
-frontend/src, packages, client3d/src or static/ (the built bundle under
+frontend/src, packages, client3d/src, hud/src or static/ (the built bundle under
 static/game_admin/assets excluded — it is generated from frontend/src). In app/core/config.py only the two constant blocks are
 blanked out, so a bridge line like ``server.get("storage_dir", …)`` is still
 seen. f-string readers (``f"tpose_view_{v}"``) are out of reach of that scan;
@@ -225,7 +225,7 @@ REPO = Path(__file__).resolve().parents[1]
 # Where a reader could live. static/game_admin/assets is the build of
 # frontend/src and is skipped; app/core/config.py is scanned with its two
 # constant blocks blanked out (they NAME the fields, they do not read them).
-READER_ROOTS = ["app", "plugins", "frontend/src", "packages", "client3d/src", "static"]
+READER_ROOTS = ["app", "plugins", "frontend/src", "packages", "client3d/src", "hud/src", "static"]
 READER_SUFFIXES = {".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".json", ".yaml",
                    ".yml", ".md", ".html", ".css"}
 

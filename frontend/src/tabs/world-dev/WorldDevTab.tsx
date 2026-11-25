@@ -14,6 +14,7 @@ import {
   LayoutDraftPreview,
   type LayoutDraftCounts, type LayoutDraftWarning, type LayoutPreviewResponse,
 } from './LayoutDraftPreview'
+import { FreeModePanel } from './FreeModePanel'
 
 interface ModelEntry {
   name: string
@@ -104,6 +105,15 @@ const MAP_SCHEMA = 'map'
  * is always written as a whole.
  */
 const LAYOUT_SCHEMA = 'layout'
+
+/**
+ * "Free (agent)" is not a draft schema at all: the model builds directly in
+ * the paused world through journaled tools, and the run is accepted or
+ * discarded as a whole (plan docs/superpowers/plans/2026-11-22-world-dev-free-mode.md).
+ * Picking it replaces the chat, the extracted-JSON area and the input with
+ * `FreeModePanel`; only the model picker and the per-reply budget are shared.
+ */
+const FREE_SCHEMA = 'free'
 
 interface ApplyLayoutResponse {
   status?: string
@@ -558,6 +568,7 @@ export function WorldDevTab() {
   /* ------------------------------------------------------------- map draft */
 
   const isMap = schema === MAP_SCHEMA
+  const isFree = schema === FREE_SCHEMA
 
   // Every new draft is normalised by the SERVER before it is drawn: line
   // recipes widened, unknown kinds dropped, coordinates clamped, warnings
@@ -788,9 +799,11 @@ export function WorldDevTab() {
     <div className="ga-wd-shell">
       <div className="ga-wd-config">
         <div className="ga-wd-config-row">
-          <button className="ga-btn ga-btn-sm" onClick={newSession} title={t('Start a fresh conversation')}>
-            ↻ {t('New conversation')}
-          </button>
+          {!isFree ? (
+            <button className="ga-btn ga-btn-sm" onClick={newSession} title={t('Start a fresh conversation')}>
+              ↻ {t('New conversation')}
+            </button>
+          ) : null}
           <ModelPicker
             className="ga-wd-model-select"
             options={modelOptions}
@@ -803,6 +816,7 @@ export function WorldDevTab() {
               setProvider(prov || ''); setModel(name || '')
             }}
           />
+          {!isFree ? (
           <select
             className="ga-input ga-wd-compact-select"
             value={effort}
@@ -814,6 +828,7 @@ export function WorldDevTab() {
               <option key={lv} value={lv}>{t('Effort: {level}').replace('{level}', lv)}</option>
             ))}
           </select>
+          ) : null}
           <select
             className="ga-input ga-wd-compact-select"
             value={maxTokens}
@@ -829,6 +844,7 @@ export function WorldDevTab() {
             )}
             <option value="0">{t('Budget: none')}</option>
           </select>
+          {!isFree ? (
           <ModelPicker
             className="ga-wd-model-select"
             options={modelOptions}
@@ -842,6 +858,8 @@ export function WorldDevTab() {
               setValidateProvider(prov || ''); setValidateModel(name || '')
             }}
           />
+          ) : null}
+          {!isFree ? (
           <select
             className="ga-input ga-wd-compact-select"
             value={mode}
@@ -857,6 +875,7 @@ export function WorldDevTab() {
             <option value="new">{isMap ? t('New map') : t('Create new')}</option>
             <option value="edit">{isMap ? t('Edit existing map') : t('Edit')}</option>
           </select>
+          ) : null}
           <select
             className="ga-input ga-wd-compact-select"
             value={schema}
@@ -869,7 +888,7 @@ export function WorldDevTab() {
               </option>
             ))}
           </select>
-          {mode === 'new' && schema === 'character' ? (
+          {!isFree && mode === 'new' && schema === 'character' ? (
             <select
               className="ga-input ga-wd-compact-select"
               value={template}
@@ -889,7 +908,7 @@ export function WorldDevTab() {
           {/* A map has exactly one instance — there is nothing to pick. A
               floor plan always belongs to a location, so it picks in both
               modes; everything else only when editing. */}
-          {(isLayout || (mode === 'edit' && !isMap)) ? (
+          {!isFree && (isLayout || (mode === 'edit' && !isMap)) ? (
             <select
               className="ga-input ga-wd-target-select"
               value={editTarget}
@@ -908,6 +927,7 @@ export function WorldDevTab() {
           ) : null}
         </div>
 
+        {!isFree ? (<>
         <div className="ga-wd-context-row">
           <span className="ga-wd-context-label">{t('Locations')}</span>
           <div className="ga-tags-row ga-wd-tags">
@@ -973,8 +993,12 @@ export function WorldDevTab() {
             </select>
           </div>
         </div>
+        </>) : null}
       </div>
 
+      {isFree ? (
+        <FreeModePanel model={model} provider={provider} maxTokens={maxTokens} />
+      ) : (<>
       <div className="ga-wd-chat" ref={chatScrollRef}>
         {messages.length === 0 && !pending ? (
           <div className="ga-placeholder">
@@ -1220,6 +1244,7 @@ export function WorldDevTab() {
           {streaming ? t('…') : t('Send')}
         </button>
       </div>
+      </>)}
 
       {pendingAction
         && (pendingAction.kind === 'apply' || pendingAction.kind === 'restore') ? (

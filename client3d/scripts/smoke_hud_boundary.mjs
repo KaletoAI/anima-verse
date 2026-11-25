@@ -18,7 +18,7 @@ async function scan(dir) {
     }
   }
 }
-await scan('client3d/src/hud');
+await scan('hud/src/hud');
 // Each exception is infrastructure or a world-space label, never a game HUD surface.
 const bodyAllowlist = {
   'ui.ts': ['if (!el.isConnected) document.body.appendChild(el);'], // Boot status exists before React mounts.
@@ -41,7 +41,7 @@ async function scanBody(dir) {
 }
 await scanBody('client3d/src');
 assert.deepEqual(violations, [], `Forbidden HUD imports:\n${violations.join('\n')}`);
-const code = transformSync(await readFile('client3d/src/hud/bus.ts', 'utf8'), { loader: 'ts', format: 'esm' }).code;
+const code = transformSync(await readFile('hud/src/hud/bus.ts', 'utf8'), { loader: 'ts', format: 'esm' }).code;
 const bus = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 const game = { ...bus.getGameState(), mode: 'embodied', selected: { char: { name: 'Ada', location_id: 'home', pos: { x: 1, z: 2 }, pos_origin: { session: 'test', seq: 1 } }, isAvatar: true },
   placeMenu: { x: 100, y: 200, offer: { id: 'seat', label: 'Chair', group: 'sit', capacity: 1, free: 1, free_slots: [0], poses: [{ key: 'sit', label: 'Sit' }] } }, talkTarget: { name: 'Bob', dist: 1 }, movementLocked: true, partyLeader: 'Bob', groundRoomId: 'ground',
@@ -71,8 +71,8 @@ for (const [subscribe, set, get] of [[bus.subscribeBoot, bus.setBoot, bus.getBoo
   assert.notEqual(get(), previous);
   off(); set({ ...previous }); assert.equal(calls, 1);
 }
-const hudCss = await readFile('client3d/src/hud/hud.css', 'utf8');
+const hudCss = await readFile('hud/src/hud/hud.css', 'utf8');
 assert.match(hudCss, /box-sizing:\s*border-box;\s*margin:\s*0;\s*padding:\s*0;/, 'HUD surfaces need their own reset in the iframe');
-const placeSource = await readFile('client3d/src/hud/PlaceMenu.tsx', 'utf8');
+const placeSource = await readFile('hud/src/hud/PlaceMenu.tsx', 'utf8');
 assert.match(placeSource, /\.focus\(/, 'seat menu must receive focus so Escape works when opened from the parent canvas');
 console.log('hud boundary: PASS (imports, JSON snapshots, subscriptions, Esc priority, keyboard guards)');

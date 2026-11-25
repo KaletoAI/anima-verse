@@ -105,6 +105,7 @@ public static partial class PropActionsCheck
 
             var action=menu["prop_actions"]![0]!;
             hud.Handlers["pickPropAction"](new JsonArray(action["action_id"]!.DeepClone(),action["target"]!.DeepClone(),action["definition_revision"]!.DeepClone()));
+            Is("picking a prop action arms the first-step probe",steering.FirstStep.Armed);
             await offers.PendingPropAction!;
             Is("HUD dispatch exact body",source.Request?["action_id"]?.GetValue<string>()=="pose-56" && source.Request?["revision"]?.GetValue<string>()=="revision-56"
                 && source.Request?["target"]?["placement_id"]?.GetValue<string>()=="bench-56" && !source.Request!.AsObject().ContainsKey("members"));

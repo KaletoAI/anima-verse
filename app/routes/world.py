@@ -139,26 +139,32 @@ def get_freeze_status() -> Dict[str, Any]:
 
 
 @router.post("/freeze")
-async def freeze_world(
+def freeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Freezes the world: AgentLoop, hourly ticks and scheduler jobs
     pause. TaskQueue (image generation) + LLM tools stay
-    active. Persistent (survives a restart)."""
-    from app.models.world import set_world_frozen
-    set_world_frozen(True)
-    logger.info("World freeze AKTIVIERT (autonome Simulation angehalten)")
+    active. Persistent (survives a restart). During an open World Dev
+    free-mode run the wish is recorded on the run, so its end keeps the
+    world frozen."""
+    world_ops.freeze_world()
+    logger.info("World freeze ACTIVATED (autonomous simulation paused)")
     return {"frozen": True}
 
 
 @router.post("/unfreeze")
-async def unfreeze_world(
+def unfreeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Unfreezes the world — the autonomous simulation continues."""
-    from app.models.world import set_world_frozen
-    set_world_frozen(False)
-    logger.info("World freeze DEAKTIVIERT (autonome Simulation laeuft)")
+    """Unfreezes the world — the autonomous simulation continues. Refused
+    with 409 ``{detail, run_id}`` while a World Dev free-mode run is open."""
+    from app.core.world_dev_runs import RunOpenError
+    try:
+        world_ops.unfreeze_world()
+    except RunOpenError as e:
+        return JSONResponse(status_code=409,
+                            content={"detail": str(e), "run_id": e.run_id})
+    logger.info("World freeze DEACTIVATED (autonomous simulation running)")
     return {"frozen": False}
 
 
@@ -265,7 +271,7 @@ def get_sleep_status() -> Dict[str, Any]:
 
 
 @router.post("/sleep")
-async def sleep_world_route(
+def sleep_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Sleep mode ON: all NPCs fall asleep at once — no more NPC LLM chat
@@ -275,7 +281,7 @@ async def sleep_world_route(
 
 
 @router.post("/wake")
-async def wake_world_route(
+def wake_world_route(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Sleep mode OFF: NPCs put to sleep by sleep mode wake up; naturally
@@ -2533,8 +2539,8 @@ async def prop_surface(prop_id: str, request: Request,
 
 
 @router.delete("/props/{prop_id}/surface")
-async def prop_surface_delete(prop_id: str, variant: Optional[str] = None,
-                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+def prop_surface_delete(prop_id: str, variant: Optional[str] = None,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Remove a prop variant's baked walkable surface (``?variant=<store
     index>``; absent = every active variant).
 

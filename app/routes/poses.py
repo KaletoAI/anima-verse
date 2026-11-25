@@ -596,7 +596,7 @@ async def transition_affected_rule(start: str, target: str, start_role: str = ''
 
 
 @router.get("/transition-jobs/{task_id}/candidates/{index}/clip.fbx")
-async def transition_candidate(task_id: str, index: int, _: Dict[str, Any] = Depends(require_admin)):
+def transition_candidate(task_id: str, index: int, _: Dict[str, Any] = Depends(require_admin)):
     from fastapi.responses import FileResponse
     from app.core import pose_transition
     try:

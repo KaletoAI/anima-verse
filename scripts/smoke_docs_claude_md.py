@@ -21,7 +21,7 @@ WHAT IS CHECKED (everything in `backticks`, plus the fenced command block)
    extension, ends in "/", or contains a wildcard) must resolve:
      * as-is from the repo root, or
      * as a path/directory SUFFIX ("routes/world.py" -> "app/routes/world.py",
-       "src/hud/" -> "client3d/src/hud"), or
+       "src/hud/" -> "hud/src/hud"), or
      * by basename anywhere in the repo ("agent_loop.py"), or
      * for a token with a <placeholder>/glob, its longest literal prefix.
    Tokens starting with "/" are URL routes, not paths, and are skipped; the
@@ -36,8 +36,8 @@ WHAT IS CHECKED (everything in `backticks`, plus the fenced command block)
 
 4. PYTHON SYMBOLS — three shapes must resolve:
      * a backticked CALL (``foo()``, ``mod.foo(...)``) — the name has to be
-       defined somewhere under app/, plugins/, scripts/, packages/, client3d/
-       or frontend/ (def/class/assignment/JS function or const);
+       defined somewhere under app/, plugins/, scripts/, packages/, client3d/,
+       hud/ or frontend/ (def/class/assignment/JS function or const);
      * ``<file>.py::<symbol>`` — that file must define that symbol;
      * ``<module>.<name>`` where a file ``<module>.py`` exists in the repo —
        then ``<name>`` must be defined in it. This is the shape that catches a
@@ -136,7 +136,7 @@ for _p in ALL_FILES:
 
 # Source text of everything a symbol could be defined in, concatenated once.
 SRC_EXT = (".py", ".ts", ".tsx", ".mjs", ".js")
-SRC_ROOTS = ("app", "plugins", "scripts", "packages", "client3d", "frontend")
+SRC_ROOTS = ("app", "plugins", "scripts", "packages", "client3d", "hud", "frontend")
 _src_chunks = []
 for _p in ALL_FILES:
     if _p.suffix not in SRC_EXT:
@@ -203,7 +203,7 @@ def path_resolves(tok: str) -> bool:
     if "/" not in tok and tok in BY_NAME:      # "agent_loop.py"
         return True
     # suffix match: "core/world_ops.py" -> "app/core/world_ops.py",
-    # "src/hud" -> "client3d/src/hud", "tasks" -> "shared/templates/llm/tasks"
+    # "src/hud" -> "hud/src/hud", "tasks" -> "shared/templates/llm/tasks"
     suffix = "/" + tok
     if any(r.endswith(suffix) for r in REL_PATHS):
         return True
@@ -261,7 +261,7 @@ def scripts_of(rel: str):
 
 
 PKG = {rel: scripts_of(rel) for rel in
-       ("package.json", "frontend/package.json", "client3d/package.json")}
+       ("package.json", "frontend/package.json", "hud/package.json", "client3d/package.json")}
 
 npm_checked = 0
 for line in TEXT.splitlines():

@@ -27,6 +27,11 @@
  *      (Measured headless 2026-11-20 on a sRGB-128 plane: old 2.33x, new (0.474, 0.496, 0.452) — the hand value
  *      plus the rough specular lobe.)
  *   E  (anisotropy: prepareFigureTextures in figure.ts, guarded by scripts/smoke_figure_anisotropy.mjs)
+ *   G  `prepareGlossyPieces(root, env)` (round 2026-11-25): a mesh with three materials — `anima_material`
+ *      "leather_glossy" (explicit_metallic false), "metal" (explicit_metallic true), "leather_rough" — and a body
+ *      material without userData: it returns 2; the glossy leather gets the env at GLOSSY_ENV_INTENSITY = 0.3 (was 0.5),
+ *      the metal at METAL_ENV_INTENSITY = 1.0 (before the round: no env — a metal with no diffuse colour rendered
+ *      black between the highlights), the rough leather and the body none. env null -> 0, nothing set.
  *   F  Call sites (source text): Model3DViewer.tsx, meshSnapshot.ts and client3d engine.ts build the lights through
  *      createDaylightRig and construct no AmbientLight / HemisphereLight / DirectionalLight of their own;
  *      Model3DViewer and meshSnapshot call createModelEnvironment, prepareGlossyPieces and prepareFigureTextures;
@@ -105,6 +110,21 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
   near(old, 2.2615, 1e-3, 'D old admin rig')
   ok('D a front face at noon: (0.458, 0.480, 0.440) x albedo, was 2.26x')
 }
+// G
+{
+  near(SR.GLOSSY_ENV_INTENSITY, 0.3, 0, 'G glossy intensity'); near(SR.METAL_ENV_INTENSITY, 1.0, 0, 'G metal intensity')
+  const mats = [{ userData: { anima_material: 'leather_glossy', explicit_metallic: false } },
+    { userData: { anima_material: 'metal', explicit_metallic: true } },
+    { userData: { anima_material: 'leather_rough', explicit_metallic: false } }, { userData: {} }]
+  const root = { traverse: (fn) => [{ isMesh: true, material: mats.slice(0, 3) }, { isMesh: true, material: mats[3] }].forEach(fn) }
+  assert.equal(SR.prepareGlossyPieces(root, null), 0, 'G no env -> nothing')
+  const env = { tag: 'env' }
+  assert.equal(SR.prepareGlossyPieces(root, env), 2, 'G two materials set')
+  assert.equal(mats[0].envMap, env); near(mats[0].envMapIntensity, 0.3, 0, 'G glossy leather env')
+  assert.equal(mats[1].envMap, env); near(mats[1].envMapIntensity, 1.0, 0, 'G metal env')
+  assert.equal(mats[2].envMap, undefined, 'G rough leather keeps none'); assert.equal(mats[3].envMap, undefined, 'G body none')
+  ok('G glossy leather at 0.3, metal at 1.0, nothing else')
+}
 // F
 {
   const src = async (p) => readFile(join(ROOT, p), 'utf8')
@@ -125,4 +145,4 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
   assert.ok(engine.includes('createModelEnvironment('), 'F engine environment')
   ok('F call sites')
 }
-console.log(`${n}/5 checks passed`)
+console.log(`${n}/6 checks passed`)

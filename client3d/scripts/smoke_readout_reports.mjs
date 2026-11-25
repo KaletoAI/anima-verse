@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The channel readout REPORTER (`client3d/src/game/readoutReports.ts`, plan pair scene Task 5): per (scene, receiver,
+ * The channel readout REPORTER (`hud/src/game/readoutReports.ts`, plan pair scene Task 5): per (scene, receiver,
  * channel, entering) at most one row per second — the MEANS of insertionOfDepth and partRadiusM over the window, the
  * LAST restRadiusM and depthM, and the number of reach EDGES (insertionOfDepth going from < 1, or from not engaged,
  * to >= 1) — one send per scene with all its due rows.
@@ -33,7 +33,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../package.json', import.meta.url));
 const ts = require('typescript');
-const source = readFileSync(new URL('../src/game/readoutReports.ts', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../hud/src/game/readoutReports.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
 const { createReadoutReporter, REPORT_INTERVAL_MS } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));

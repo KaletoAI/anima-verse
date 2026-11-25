@@ -25,7 +25,19 @@ as a clean ``rolled_back``. Every handled entry is marked undone, so a second
 A PENDING entry WITH an inverse but without ``written`` (the process ended
 between the write and ``complete``) has nothing to compare against; its
 inverse is applied unconditionally — the write was the run's own and never
-reported back.
+reported back. One exception: such a ``delete_character`` (a crashed
+``create_character``) is ALWAYS skipped as ``may have written, no inverse —
+see backup``: the stored profile carries no marker of who created the row, so
+a character an admin created by hand under that name meanwhile could not be
+told apart, and a row is never deleted on a guess.
+
+A character left standing in a place the undo deleted, or in a room a
+``restore_location`` took away, stays there (nothing moves it). The undo
+reports it as an INFORMATIONAL record (reason :data:`REASON_OCCUPANT`, key
+``occupant``) that does not make the rollback incomplete;
+:func:`discard_preview` names the same characters before the discard. A
+character the same undo deletes (one the run created) is left out of both:
+there is nobody left to place anew.
 
 Inverse ops (``inverse["op"]``):
   delete_location{id} · restore_location{id, before:{key: value}} ·
@@ -69,6 +81,12 @@ REASON_GONE = "already gone"
 REASON_REFUSED = "delete refused"
 REASON_NO_INVERSE = "may have written, no inverse — see backup"
 REASON_ITEM_IN_USE = "item still in use"
+#: Reason (behind the character's quoted name) of the INFORMATIONAL record of
+#: a character left standing in a place (or room) the undo removed. It carries
+#: the key ``occupant`` and never makes a rollback incomplete: nothing was
+#: skipped, the character only has to be placed anew (nobody is moved
+#: automatically, see ``delete_location``).
+REASON_OCCUPANT = "stands in the removed place — place them anew"
 
 HOME_SCHEDULE_KEYS = ("home_location", "home_room", "daily_schedule",
                       "known_locations")
@@ -129,15 +147,22 @@ def home_schedule_state(name: str) -> Dict[str, Any]:
     the before/written shape of ``restore_home_schedule``. A character
     without a schedule row reads as ``get_character_daily_schedule`` answers
     (``{"enabled": False, "slots": []}``); ``known_locations`` is None when
-    the config has no such key (that is not the same as an empty list)."""
+    the config has no such key (that is not the same as an empty list);
+    ``home_location`` / ``home_room`` are :data:`ABSENT` when the config has
+    no such key."""
     from app.models.character import (get_character_config,
                                       get_character_daily_schedule)
     cfg = get_character_config(name) or {}
     sched = get_character_daily_schedule(name) or {}
     known = cfg.get("known_locations")
+
+    def home_key(key: str) -> Any:
+        # A missing key is ABSENT (restoring it removes the key again), not
+        # the empty string: the two are different stored states.
+        return str(cfg.get(key) or "") if key in cfg else ABSENT
     return _norm({
-        "home_location": str(cfg.get("home_location") or ""),
-        "home_room": str(cfg.get("home_room") or ""),
+        "home_location": home_key("home_location"),
+        "home_room": home_key("home_room"),
         "daily_schedule": {"enabled": bool(sched.get("enabled")),
                            "slots": list(sched.get("slots") or [])},
         "known_locations": list(known) if isinstance(known, list) else None,
@@ -171,14 +196,34 @@ def _apply_keys(record: Dict[str, Any], restore: Dict[str, Any]) -> None:
 
 # ── Locations ────────────────────────────────────────────────────────────
 
+def standing_in(loc_id: str, rooms: Optional[set] = None) -> List[Tuple[str, str]]:
+    """``(name, room)`` of every character standing in the place (in one of
+    ``rooms`` only, when given), sorted by name."""
+    from app.models.character import list_character_places
+    return sorted((name, str(room or ""))
+                  for name, (lid, room) in list_character_places().items()
+                  if lid == loc_id and (rooms is None or room in rooms))
+
+
+def _occupant_notes(loc_id: str, occupants: List[Tuple[str, str]]) -> List["_Skip"]:
+    # The name leads the reason: every reader of the skip list (the panel,
+    # the run note) shows reason and line, not the extra keys.
+    return [_Skip(f'"{name}" {REASON_OCCUPANT}', occupant=name, location=loc_id,
+                  **({"room": room} if room else {}))
+            for name, room in occupants]
+
+
 def _undo_delete_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
-    from app.models.world import delete_location, get_location_by_id
+    from app.models.world import (delete_location, get_location_by_id,
+                                  world_write_lock)
     lid = str(inv.get("id") or "")
-    if not lid or get_location_by_id(lid) is None:
-        raise _Skip(REASON_GONE)
-    if not delete_location(lid) and get_location_by_id(lid) is not None:
-        raise _Skip(REASON_REFUSED)
-    return []
+    with world_write_lock:  # re-entrant; delete_location takes it again
+        if not lid or get_location_by_id(lid) is None:
+            raise _Skip(REASON_GONE)
+        occupants = standing_in(lid)
+        if not delete_location(lid) and get_location_by_id(lid) is not None:
+            raise _Skip(REASON_REFUSED)
+    return _occupant_notes(lid, occupants)
 
 
 def _undo_restore_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
@@ -190,15 +235,29 @@ def _undo_restore_location(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["
         if cur is None:
             raise _Skip(REASON_GONE)
         cur = copy.deepcopy(cur)
+        rooms_before = {str(r.get("id") or "") for r in cur.get("rooms") or []
+                        if isinstance(r, dict)}
         restore, changed = _split_keys(inv.get("before") or {},
                                        entry.get("written"), cur)
+        occupants: List[Tuple[str, str]] = []
         if restore:
             _apply_keys(cur, restore)
             if not upsert_location(cur, sync_world=True):
                 raise RuntimeError(f"restoring location {lid} was not stored")
+            # The rooms the restore took away, read back from storage (the
+            # writer's corridor sync has a say too). Whoever stands in one
+            # stays there and is reported: the forward tool refuses this
+            # case, the undo cannot.
+            after = get_location_by_id(lid) or {}
+            gone = rooms_before - {str(r.get("id") or "")
+                                   for r in after.get("rooms") or []
+                                   if isinstance(r, dict)}
+            if gone:
+                occupants = standing_in(lid, gone)
+    notes = _occupant_notes(lid, occupants)
     if changed:
-        raise _Skip(REASON_CHANGED, keys=changed)
-    return []
+        notes.insert(0, _Skip(REASON_CHANGED, keys=changed))
+    return notes
 
 
 def _undo_restore_position(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
@@ -241,6 +300,11 @@ def _undo_delete_terrain_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> Lis
         raise _Skip(REASON_REFUSED)
     return []
 
+
+# Terrain and height restores compare the stored row with ``written`` and then
+# save with must_exist=True. The terrain/height writers have no writer lock to
+# share (only their generation counters are locked), so compare and save are
+# not one atomic span; in a frozen world the window is negligible.
 
 def _undo_restore_terrain_area(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
     from app.core.bulk_edit import GoneError
@@ -320,6 +384,12 @@ def _undo_delete_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["
     name = str(inv.get("name") or "")
     if not name or not character_row_exists(name):
         return [_Skip(REASON_GONE)] + _cleanup_items(inv.get("items") or [])
+    if entry.get("state") == "pending" and entry.get("written") is None:
+        # The process ended inside the create: the row may as well be one an
+        # admin created by hand under that name later (during the review of
+        # the interrupted run), and nothing stored tells the two apart. It is
+        # never deleted on a guess — the backup has the pre-run state.
+        raise _Skip(REASON_NO_INVERSE)
     if not delete_character(name) and character_row_exists(name):
         raise _Skip(REASON_REFUSED)
     return _cleanup_items(inv.get("items") or [])
@@ -470,12 +540,14 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     """Reverse every not-yet-undone WRITE entry of the run (or of one turn)
     newest-first: ``{"reversed": [seq], "skipped": [{"seq", "line",
     "reason", ...}], "complete": bool}``. ``complete`` is True when no
-    skip other than ``already gone`` happened — the target being absent is
-    the desired end state, so it never makes a rollback incomplete. An entry counts as reversed when its own target was
+    skip other than ``already gone`` or an occupant record happened — the
+    target being absent is the desired end state, so it never makes a
+    rollback incomplete. An entry counts as reversed when its own target was
     restored or removed; item skips of a deleted character (key ``item``)
     are reported beside it. ``already gone`` is a skip, not an error; an
     exception in one step becomes a skip (``undo failed: ...``) and the rest
-    still runs. Every handled entry is marked undone."""
+    still runs. Every handled entry is marked undone. Occupant records of
+    characters this undo deleted are dropped at the end."""
     reversed_seqs: List[int] = []
     skipped: List[Dict[str, Any]] = []
     for entry in wr.entries(run_id, turn=turn):
@@ -493,10 +565,16 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
             logger.error("world-dev undo %s#%s failed: %s", run_id, seq, e,
                          exc_info=True)
             skips = [_skip_dict(entry, _Skip(f"undo failed: {e}"))]
-        if not any("item" not in s for s in skips):
+        if not any("item" not in s and "occupant" not in s for s in skips):
             reversed_seqs.append(seq)
         skipped.extend(skips)
         wr.mark_undone(run_id, seq)
+    if any("occupant" in s for s in skipped):
+        # An occupant recorded before an older entry deleted that very
+        # character (created before the place) has nobody left to place.
+        from app.models.character import character_row_exists
+        skipped = [s for s in skipped if "occupant" not in s
+                   or character_row_exists(str(s.get("occupant") or ""))]
     logger.info("world-dev undo %s (turn %s): %d reversed, %d skipped",
                 run_id, turn, len(reversed_seqs), len(skipped))
     return {"reversed": reversed_seqs, "skipped": skipped,
@@ -504,27 +582,55 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
 
 
 def is_complete(skipped: List[Dict[str, Any]]) -> bool:
-    """True when every skip is ``already gone`` (or there is none)."""
-    return all(s.get("reason") == REASON_GONE for s in skipped or [])
+    """True when every skip is ``already gone`` or an informational
+    occupant record (key ``occupant``), or there is none."""
+    return all(s.get("reason") == REASON_GONE or "occupant" in s
+               for s in skipped or [])
 
 
 def discard_preview(run_id: str) -> List[str]:
     """One line per element the run created that still exists (oldest
     first); a created character also names its chat rows and the other
-    characters' memory rows that mention it — they go with it."""
-    from app.models.character import character_row_exists
+    characters' memory rows that mention it — they go with it. Then one line
+    per character standing in a created place, or in a room a
+    ``restore_location`` would take away (simulated with the writer's
+    corridor sync): it stays there and has to be placed anew. A character the
+    discard deletes itself (one the run created) gets no such line."""
+    from app.core.world_dev_tools import _rooms_removed_by
+    from app.models.character import character_row_exists, list_character_places
     from app.models.chat import count_messages_involving
     from app.models.memory import count_other_memories_naming
     from app.models.terrain import get_area
     from app.models.world import get_location_by_id
     lines: List[str] = []
+    created: Dict[str, str] = {}
+    removed_rooms: Dict[str, Dict[str, str]] = {}
+    deleted_names: set = set()
     for entry in reversed(wr.entries(run_id)):
         inv = entry.get("inverse") or {}
         op = inv.get("op")
         if op == "delete_location":
             loc = get_location_by_id(str(inv.get("id") or ""))
             if loc:
+                created[str(loc.get("id"))] = str(loc.get("name") or "")
                 lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}"')
+        elif op == "restore_location":
+            before = inv.get("before") or {}
+            if "rooms" not in before and "map3d" not in before:
+                continue
+            lid = str(inv.get("id") or "")
+            cur = get_location_by_id(lid) if lid else None
+            if not cur:
+                continue
+            b_rooms = before.get("rooms", ABSENT)
+            b_map3d = before.get("map3d", ABSENT)
+            new_rooms = (None if "rooms" not in before
+                         else [] if is_absent(b_rooms) else list(b_rooms or []))
+            new_map3d = (None if "map3d" not in before or is_absent(b_map3d)
+                         else b_map3d)
+            for room in _rooms_removed_by(cur, new_rooms, new_map3d):
+                rid = str(room.get("id") or "")
+                removed_rooms.setdefault(lid, {})[rid] = str(room.get("name") or rid)
         elif op == "delete_terrain_area":
             area = get_area(str(inv.get("id") or ""))
             if area:
@@ -535,9 +641,24 @@ def discard_preview(run_id: str) -> List[str]:
                 lines.append(f"height area {area['id']} ({area.get('height_m')} m)")
         elif op == "delete_character":
             name = str(inv.get("name") or "")
+            if entry.get("state") == "pending" and entry.get("written") is None:
+                continue  # never deleted by the undo (see _undo_delete_character)
             if name and character_row_exists(name):
+                deleted_names.add(name)
                 chats = count_messages_involving(name)
                 mems = count_other_memories_naming(name)
                 lines.append(f'character "{name}" — {chats} chat messages, '
                              f"{mems} memory rows of other characters name it")
+    if created or removed_rooms:
+        for name, (lid, room) in sorted(list_character_places().items()):
+            if name in deleted_names:
+                continue
+            if lid in created:
+                lines.append(f'character "{name}" stands in location {lid} '
+                             f'"{created[lid]}" — stays there, place them anew')
+            elif room in removed_rooms.get(lid, {}):
+                lines.append(f'character "{name}" stands in room '
+                             f'"{removed_rooms[lid][room]}" ({room}) of location '
+                             f"{lid}, which the undo removes — stays there, "
+                             "place them anew")
     return lines

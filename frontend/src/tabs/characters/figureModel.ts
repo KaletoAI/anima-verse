@@ -46,7 +46,7 @@ export const HAIR_MODE_LABELS: Record<HairMode, string> = {
 export const MESH_MODE_HINTS: Record<MeshMode, string> = {
   own_mesh: 'A finished mesh of its own, fitted on top of the body.',
   shell: 'Made from the body’s own surface where the piece-only views show the piece, 4 mm over the skin, coloured from those views — no generated mesh and no cut-outs (0 hub jobs after the views), fitted on the CPU. For close-fitting pieces: underwear, tights.',
-  in_body: 'Meshed as part of the body.',
+  in_body: 'Meshed as part of the body. Every combination of in-body pieces is its own body shape with its own mesh run.',
   template: 'A sewing pattern sized to the body and draped as cloth on the CPU (0 hub jobs); 1 LLM call suggests its parameters from the item picture. Skirts and dresses today.',
   accessory: 'A thin piece made on the CPU from the body (0 hub jobs): a chain or cord along the neck, optionally with a pendant from the item image (1 hub job per item). Its kind, drop, material and pendant are set in the Wardrobe.',
 }
@@ -612,13 +612,24 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   placket: 'Placket (painted)', buttons: 'Buttons (0 = automatic)',
 }
 
+/**
+ * Round 2026-11-25: one line under a field of the parameter dialog that says what the field controls (rendered for
+ * any key that has one). "Fabric" is the cloth simulation, "Material" (the select under it) the surface only.
+ */
+export const TEMPLATE_FIELD_HINTS: Partial<Record<keyof TemplateParams, string>> = {
+  fabric: 'Fabric = how the cloth falls (the cloth simulation: weight, stiffness, folds). Metal scales or chain: Stiff.',
+}
+
+/** Round 2026-11-25: the line under the material select of a template piece — the surface, never the drape. */
+export const TEMPLATE_MATERIAL_HINT = 'Material = the surface only (shine, roughness, metal); it never changes the drape. Metal scales or chain: Metal.'
+
 /** A204: one line per fabric under the select — what the cloth does and what a switch costs. */
 export const TEMPLATE_FABRIC_NOTES: Record<string, string> = {
   stiff: 'Holds its shape: few, wide folds.',
   medium: 'Ordinary cotton: the usual drape.',
   flowing: 'Soft folds that follow the body.',
   sheer: 'Very light, fine folds that flutter; see-through — the body and what is worn under it show.',
-  leather_glossy: 'Heavy and stiff: barely stretches, few wide folds; a shiny clear-coated surface.',
+  leather_glossy: 'Heavy and stiff: barely stretches, few wide folds; a smooth, glossy finished surface.',
   leather_rough: 'Heavy and stiff: barely stretches, few wide folds; a matte suede surface.',
 }
 
@@ -761,6 +772,23 @@ export interface FigureChange {
   front?: 'reference' | 'text'
 }
 
+/** One view of the worn body shape (`figure_build._shape_views`): `stamp` is the picture's cache key, `empty` an
+ *  EMPTY composite (the base view unchanged), `lost_clothing` EMPTY although the dressed front wears clothing. */
+export interface ShapeViewInfo {
+  view: string
+  exists: boolean
+  stamp: string
+  empty: boolean
+  lost_clothing: boolean
+  jobs: number
+}
+
+/** `base_body.shape_view_state`: the view a Regenerate renders now, and the last one's outcome. */
+export interface ShapeViewRegenerateState {
+  running: { shape: string; view: string } | null
+  last: { shape: string; view: string; ok: boolean; error: string } | null
+}
+
 export interface FigureBodyPart {
   key: string
   state: string
@@ -824,8 +852,9 @@ export interface FigurePayload {
         after_front: number | null
         model_followup?: ModelFollowup | null }
     }
-    /** `state`: ready · missing · plain (nothing in the body). */
-    shape: FigureBodyPart
+    /** `state`: ready · missing · plain (nothing in the body). `views` / `regenerate` (round 2026-11-25) only when
+     *  something is worn in the body. */
+    shape: FigureBodyPart & { views?: ShapeViewInfo[]; regenerate?: ShapeViewRegenerateState }
   } | null
 }
 

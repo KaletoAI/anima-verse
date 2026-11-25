@@ -7,7 +7,7 @@ const paths = {
   natural: 'client3d/src/scene/naturalGroundMath.ts', raster: 'client3d/src/scene/waterRaster.ts',
   shade: 'client3d/src/scene/waterShade.ts', plane: 'client3d/src/scene/waterPlaneMath.ts',
   fall: 'packages/scene-render/src/waterfall.ts', curtain: 'client3d/src/scene/waterfall.ts',
-  sky: 'client3d/src/scene/skyLight.ts', fog: 'client3d/src/scene/fogConstants.ts',
+  sky: 'client3d/src/scene/skyLight.ts', fog: 'hud/src/scene/fogConstants.ts',
   shadow: 'client3d/src/scene/shadowSnap.ts', backdrop: 'client3d/src/scene/backdropProfile.ts',
   veil: 'client3d/src/scene/fogVeilMath.ts', wave: 'packages/scene-render/src/materials.ts',
   ambience: 'client3d/src/scene/ambience.ts',

@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional
 
 import bcrypt
 
+from app.core import sessions
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
 
@@ -177,9 +178,14 @@ def update_user(user_id: str, **fields) -> bool:
 
     set_clause = ", ".join(f"{k}=?" for k in updates)
     values = list(updates.values()) + [user_id]
-    with transaction() as conn:
-        cur = conn.execute(f"UPDATE users SET {set_clause} WHERE id=?", values)
-        return cur.rowcount > 0
+    try:
+        with transaction() as conn:
+            cur = conn.execute(f"UPDATE users SET {set_clause} WHERE id=?", values)
+            return cur.rowcount > 0
+    finally:
+        # Role, allowed_characters and the active character (settings) are what
+        # the auth lookup cache holds — the next request must see the change.
+        sessions.invalidate_user(user_id)
 
 
 def update_user_checked(user_id: str, base_revision: str, fields: Dict[str, Any],
@@ -217,25 +223,38 @@ def update_user_checked(user_id: str, base_revision: str, fields: Dict[str, Any]
 def set_user_password(user_id: str, password: str) -> bool:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
-    with transaction() as conn:
-        cur = conn.execute(
-            "UPDATE users SET password_hash=? WHERE id=?",
-            (hash_password(password), user_id),
-        )
-        return cur.rowcount > 0
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (hash_password(password), user_id),
+            )
+            return cur.rowcount > 0
+    finally:
+        # The hash is not cached, but whoever changes a password also ends
+        # sessions (sessions.delete_*), and a fresh read costs nothing here.
+        sessions.invalidate_user(user_id)
 
 
 def delete_user(user_id: str) -> bool:
-    with transaction() as conn:
-        cur = conn.execute("DELETE FROM users WHERE id=?", (user_id,))
-        return cur.rowcount > 0
+    try:
+        with transaction() as conn:
+            cur = conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            return cur.rowcount > 0
+    finally:
+        # A session whose user is gone resolves to no user from now on, even
+        # before the caller deletes the user's sessions.
+        sessions.invalidate_user(user_id)
 
 
 def touch_last_login(user_id: str) -> None:
-    with transaction() as conn:
-        conn.execute(
-            "UPDATE users SET last_login=? WHERE id=?", (_now_iso(), user_id)
-        )
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE users SET last_login=? WHERE id=?", (_now_iso(), user_id)
+            )
+    finally:
+        sessions.invalidate_user(user_id)
 
 
 def ensure_default_admin() -> None:

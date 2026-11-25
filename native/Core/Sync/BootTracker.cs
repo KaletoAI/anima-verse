@@ -8,7 +8,7 @@ using AnimaNative.Overview;
 namespace AnimaNative.Sync;
 
 /// <summary>
-/// The line below the loading bar — <c>BootNote</c> of client3d/src/game/boot.ts: <c>retry</c> (the server did not
+/// The line below the loading bar — <c>BootNote</c> of hud/src/game/boot.ts: <c>retry</c> (the server did not
 /// answer, the next attempt in <see cref="Seconds"/>), <c>failed</c> (the start threw), <c>characters</c> (the
 /// world stands, the figures are still loading).
 /// </summary>

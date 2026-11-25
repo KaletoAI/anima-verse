@@ -36,7 +36,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Application code and runtime assets.
 #   app/      — backend
-#   static/   — committed frontend builds: game_admin/ and client3d/
+#   static/   — committed frontend builds: game_admin/, hud/ and client3d/
 #   shared/   — required LLM prompts, character templates, languages and schemas
 #   plugins/  — required skill packages: app/plugins/loader.py expects /app/plugins.
 #               Without these the server boots, but characters have no skills:

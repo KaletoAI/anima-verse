@@ -32,7 +32,7 @@ import * as THREE from 'three';
 import {
   BACKDROP_LAYERS, layerRadiusM, ridgeDirection, ridgeProfile, type RidgePoint,
 } from './backdropProfile';
-import type { BackdropSpec } from '../types';
+import type { BackdropSpec } from '@anima/hud/types';
 
 /** Base rock colour per ring, before the sky is mixed in. The back ring is
  *  lighter to begin with: aerial perspective washes distance out, and a back

@@ -22,7 +22,8 @@ the template name — `consolidation_scene` routes as `consolidation`,
 shared/templates/llm/
 ├── chat/      # chat + thought composites, rendered with render()
 ├── skills/    # name + description metadata per skill (load_skill_meta)
-└── tasks/     # one per llm_call() task, split into "## system" / "## user"
+├── tasks/     # one per llm_call() task, split into "## system" / "## user"
+└── world_dev_free/  # World Dev free mode: agent system prompt + manual sections
 ```
 
 A skill package brings its own templates along. The search order is **shared tree
@@ -332,6 +333,22 @@ Implicit narrative pose extraction never stops an owned semantic action;
 explicit tools/movement/stop remain authoritative. Controller coverage uses
 `scripts/smoke_prop_action_api.py` with real renderers, not source-text checks.
 
+
+## World Dev free mode (`world_dev_free/`)
+
+The free-mode agent (`app/core/world_dev_agent.py`) renders `system.md` once per run
+(`world_setup_block` first, then role, task loop, token rules, compass, call format,
+`tool_list` and `manual_sections`). The model reads the field rules on demand through
+the `read_manual` tool (`world_dev_tools`), which renders one section without variables:
+
+| Template | Purpose |
+|---|---|
+| `system.md` | Agent system prompt |
+| `manual_locations.md` | Location and room fields, position, outline |
+| `manual_map.md` | Terrain areas, strokes, height areas, composition |
+| `manual_characters.md` | create/update_character, template fields, soul sections, outfits |
+| `manual_homes.md` | Home, home room and daily schedule spellings and values |
+| `manual_naming.md` | Naming rules |
 
 ## Loader API
 

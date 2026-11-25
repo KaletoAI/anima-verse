@@ -33,8 +33,9 @@ import { createPortal } from 'react-dom'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut, apiUpload } from '../../lib/api'
+import { guardedInterval } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
-import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_LABELS, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
+import { FITTED_KINDS, TEMPLATE_CHOICE_LABELS, TEMPLATE_PRESET_HINTS, TEMPLATE_PRESET_LABELS, choiceLabel, TEMPLATE_DRAPE_FABRIC, TEMPLATE_FABRIC_NOTES, TEMPLATE_FIELD_HINTS, TEMPLATE_FIELD_LABELS, TEMPLATE_MATERIAL_HINT, cm, choiceAllowed, corsetTop, defaultSeat, hasBodice, offShoulder, lengthLabel, templateCost } from './figureModel'
 import { TEMPLATE_STATE_COLOR, TEMPLATE_STATE_LABELS, failureLines, templateLiveText } from './figureModel'
 import { FailureDetails } from './BuildProblem'
 import type { TemplateFieldSpec, TemplateInfo, TemplateParams, TemplateProgress } from './figureModel'
@@ -253,7 +254,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   /** Re-read only the progress (after a save, a started Build, and every 3 s while a Build drapes it) — and the
    *  views and the saved parameters: the cut flow sets Texture to "From cut" and may render the back view. */
   const reloadProgress = useCallback(() => {
-    apiGet<TemplatePayload>(`${path}?picture=0`)
+    return apiGet<TemplatePayload>(`${path}?picture=0`)
       .then((p) => {
         setData((d) => (d ? { ...d, progress: p.progress, params: p.params, updated_at: p.updated_at,
           material: p.material, views: p.views } : p))
@@ -267,8 +268,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
   const running = data?.progress?.state === 'running'
   useEffect(() => {
     if (!running) return
-    const id = window.setInterval(reloadProgress, 1500)
-    return () => window.clearInterval(id)
+    return guardedInterval(reloadProgress, 1500)
   }, [running, reloadProgress])
   const set = (key: keyof TemplateParams, value: string | number) => {
     if (!draft || !data) return
@@ -424,6 +424,9 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                             </span>
                           </span>
                         )}
+                        {TEMPLATE_FIELD_HINTS[key] ? (
+                          <span className="ga-form-hint" data-field-hint={key}>{t(TEMPLATE_FIELD_HINTS[key] as string)}</span>
+                        ) : null}
                         {key === 'fabric' && TEMPLATE_FABRIC_NOTES[draft.fabric] ? (
                           <span className="ga-form-hint" data-fabric-note={draft.fabric}>
                             {t(TEMPLATE_FABRIC_NOTES[draft.fabric])}
@@ -436,6 +439,7 @@ export function TemplateParamsDialog({ character, itemId, onClose, onSaved }: {
                         {key === 'fabric' && data.material ? (
                           <span data-material-select="" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <MaterialSelect itemId={itemId} material={data.material} onChanged={reloadProgress} />
+                            <span className="ga-form-hint" data-material-hint="">{t(TEMPLATE_MATERIAL_HINT)}</span>
                             {draft.fabric.startsWith('leather_') ? (
                               <span className="ga-form-hint">
                                 {t('A leather finish sets its own surface: the material preset\'s metal and sheen do not apply.')}
@@ -626,11 +630,10 @@ function TemplateViewsBox({ path, views, onChange }: {
   const running = views.views.some((v) => v.running)
   const held = views.busy ? t(views.busy) : ''
   const reload = useCallback(() => {
-    apiGet<TemplateViews>(`${path}/views`).then(onChange).catch(() => { /* the last state stays */ })
+    return apiGet<TemplateViews>(`${path}/views`).then(onChange).catch(() => { /* the last state stays */ })
   }, [path, onChange])
   useEffect(() => {
-    const id = window.setInterval(reload, running || held ? 2000 : 8000)
-    return () => window.clearInterval(id)
+    return guardedInterval(reload, running || held ? 2000 : 8000)
   }, [running, held, reload])
   const act = async (key: string, fn: () => Promise<TemplateViews>, done: string) => {
     setBusy(key)

@@ -18,9 +18,9 @@ const script=buildSync({stdin:{resolveDir:process.cwd(),contents:`
 import * as THREE from 'three';
 import {flushSync} from 'react-dom';
 import {Engine} from './client3d/src/scene/engine';
-import {createPhotoMode} from './client3d/src/game/photoMode';
-import {mountPhotoHint} from './client3d/src/hud/photoMode';
-import {photoView} from './client3d/src/game/photoView';
+import {createPhotoMode} from './hud/src/game/photoMode';
+import {mountPhotoHint} from './hud/src/hud/photoMode';
+import {photoView} from './hud/src/game/photoView';
 const check=(ok,label)=>{if(!ok)throw Error(label);};
 (async()=>{try {
   const engine=new Engine(document.getElementById('app'),{antialias:false,shadows:false});

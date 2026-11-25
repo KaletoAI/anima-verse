@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { useToast } from '../lib/Toast'
 
 // Global toggle for the persistent World-Freeze. Freezing pauses the autonomous
 // simulation (agent loop, hourly ticks, scheduler jobs) so the
@@ -8,6 +9,7 @@ import { apiGet, apiPost } from '../lib/api'
 // Backend: GET/POST /world/freeze-status|freeze|unfreeze (see plan-world-freeze.md).
 export function FreezeToggle() {
   const { t } = useI18n()
+  const { toast } = useToast()
   const [frozen, setFrozen] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -33,12 +35,15 @@ export function FreezeToggle() {
       // set the flag absolutely, so a repeated click cannot flip it back.
       const d = await apiPost<{ frozen?: boolean }>(frozen ? '/world/unfreeze' : '/world/freeze', {})
       setFrozen(!!d.frozen)
-    } catch {
-      // leave state untouched on error
+    } catch (e) {
+      // Leave the state untouched — but say why: unfreezing is refused (409)
+      // while a World Dev free-mode run is open, and the server names it.
+      toast((frozen ? t('Resume refused') : t('Freeze failed')) + ': '
+        + (e as Error).message, 'error')
     } finally {
       setBusy(false)
     }
-  }, [frozen, busy])
+  }, [frozen, busy, t, toast])
 
   if (frozen === null) return null
 

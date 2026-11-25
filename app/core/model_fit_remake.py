@@ -107,7 +107,8 @@ def remake_view(character_name: str, image: Path) -> str:
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=image.parent, ignore_cleanup_errors=True) as staging:
         stem = Path(staging) / image.stem
         staged, result = base_body._composite_attempt(character_name, view, stem=stem, draft=draft,
-                                                      base_views=base_views, extra=extra, front=front)
+                                                      base_views=base_views, extra=extra, front=front,
+                                                      front_region=base_body.front_garment_region(front))
         if not result["composite"].get("ok"):
             from app.core import view_composite
             _remove(image)

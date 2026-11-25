@@ -274,6 +274,8 @@ def extension_bone_names(character_name, profile=None):
 # skin for the field below the body (Ruling A98).
 # 14: only the attachment loop lands on the skin and carries thigh weights; a hole loop away from the skin is
 # closed, one on the skin keeps the part's side of the weights; the thigh reweight band grows with the part (A180).
+# 15: the voxel grid's margin grows with the shaft (size 1.6 cut the tip flat), only the attachment loop takes the
+# skin's weights, a closed hole takes the part's own, and a tip vertex off the chain fails the build.
 # inset_part 4: the skin the mesher modelled in the region is levelled onto the surface around it before the part
 # is built (Ruling A77). 5: the region and the part end before the channel between the legs closes, skin left deep
 # beneath fades out instead of being lifted, and slivers are mended (Ruling A77b). 6: past the part's end the skin is
@@ -284,7 +286,7 @@ def extension_bone_names(character_name, profile=None):
 # when the legs flex (Ruling A117). 9: the fit at the border (A169) — the inward-facing skin under the region stays
 # (removing it opened the outer skin and cut a strip of skin loose), the band's weights are a harmonic blend on the
 # welded mesh, the part is one-sided and carries the body's roughness.
-PART_BUILDS = {"attached_part": 14, "inset_part": 9}
+PART_BUILDS = {"attached_part": 15, "inset_part": 9}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it. 2: the tip
 # settles onto the levelled skin and the levelling is measured in the frame

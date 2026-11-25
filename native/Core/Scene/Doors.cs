@@ -66,7 +66,7 @@ public readonly record struct ElevatorStop(int Level, P2 Pos);
 public readonly record struct ElevatorRoom(string Id, int Level, P2 Center, bool Floor = false);
 
 /// <summary>
-/// The storey choice of client3d/src/game/elevator.ts (<c>elevatorLevels</c>, <c>elevatorTargetRoom</c>) and
+/// The storey choice of hud/src/game/elevator.ts (<c>elevatorLevels</c>, <c>elevatorTargetRoom</c>) and
 /// stairs.ts <c>nearestRoomAt</c> — checked against shared/test-vectors/npc_ground.json.
 /// </summary>
 public static class Elevator

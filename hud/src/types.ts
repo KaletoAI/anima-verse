@@ -1,0 +1,963 @@
+import type { PropActionOffer } from '@anima/player-ui';
+export type {
+  PropActionTarget, PropActionOffer, PropActionChoice, PropActionState,
+  PropActionExecution, PropActionResult,
+} from '@anima/player-ui';
+
+/** AV3D-2: placement of a room relative to the building footprint. The room
+ *  markers (places) are NOT read from here — the client takes them from the
+ *  scene payload's `markers[]`, finished in world metres (§ B). */
+export interface RoomLayout {
+  x: number;               // top-left corner (fraction 0..1)
+  y: number;
+  w: number;               // width/depth (fraction 0..1)
+  d: number;
+  level?: number;          // storey: 0 = ground floor, negative = basement
+  /** Turn of the room content around the vertical axis in degrees */
+  rotation?: number;
+  /** Diorama model anchor as fractions of the room rectangle
+   *  (added 2026-07-24); absent means centred */
+  model_at?: [number, number];
+  /** Diorama model height adjustment in WORLD metres; replaces
+   *  the retired sidecar offset_y for rooms */
+  model_offset_y?: number;
+  /** Always show the room regardless of the interior view, for outdoor
+   *  rooms not already represented in the building model. Default: false */
+  always_visible?: boolean;
+}
+
+export interface Room {
+  id: string;
+  name: string;
+  description?: string;
+  /** "indoor" | "outdoor": outdoor rooms lie outside the building
+   *  footprint and are always visible */
+  indoor?: string;
+  layout?: RoomLayout;
+  /** The location's GROUND room (§ A13) — derived by the server, never
+   *  stored; how a client recognises it without the reserved id. */
+  is_ground?: boolean;
+}
+
+/** AV3D-1: optional 3D metadata of a location. */
+export interface Map3dMeta {
+  style?: string;   // house | tower | shop | hall | generic | ...
+  floors?: number;
+  /** Area location (village, lake, forest) — the model IS the ground, or
+   *  (in detail mode) a shell that fades out. For the panel: rooms are
+   *  zones there, not chambers. */
+  area_model?: boolean;
+  color?: string;   // base colour of the facade, e.g. "#8fa3b0"
+  // `rotation` — the building yaw around the up axis — is GONE with contract
+  // v6 Nr. 10: the model sidecar's own orientation fix (`fix_euler` y) already
+  // turns the mesh around that very axis, and the location itself is turned
+  // by its anchor pin (§ A1.1).
+  // `size` — the model's share of the reference square — is GONE with v6
+  // Nr. 3: every model scales through its declared real width in metres.
+  /** AV3D-12: the drawn building floor plan — polygon points as fractions of
+   *  the reference square (`plan_width_m`), closed automatically. The client
+   *  renders floor and walls per used storey from it (door on the ground
+   *  floor). */
+  outline?: [number, number][];
+  /** AV3D-12: elevator position (fraction of the reference square) — placed
+   *  automatically on every storey; figures use it to change floors. */
+  elevator?: [number, number];
+  /** Storey height in REAL metres. Default 3. */
+  storey_height_m?: number;
+  /** THE FOOTPRINT (contract v6 "Gebiete"): the drawn outline as a closed
+   *  point sequence `[x, z]` in LOCAL METRES around the pin, clockwise in map
+   *  view, at most 64 points. Concave outlines are allowed. Absent = the
+   *  location has no area at all (only a pin) — there is no square fallback. */
+  boundary?: [number, number][];
+  /** Width of the boundary's bounding box in metres — a DERIVED quantity since
+   *  v6 Nr. 2, not a dial: the server recomputes it from `boundary` on every
+   *  save. It survives because the consumer contracts (load radius, viewport,
+   *  backdrop, texture repeat) are written in terms of it; in the scene payload
+   *  it is `extent_m`, and k = 1 — a world metre IS a real metre. */
+  plan_width_m?: number;
+  /** Floor texture kind per storey for floor-plan plates (room recipe §7),
+   *  with string level keys: {"0": "parquet", "-1": "stone"} */
+  level_floors?: Record<string, string>;
+  /** Authored pass-throughs at the LOCATION edge (§ B1 Nr. 13), as the world
+   *  editor stores them and the server sanitises them
+   *  (`world_ops._sanitize_map3d`): the key exists only when at least one
+   *  valid entry survived, so a present, non-empty list IS the statement
+   *  "this place has authored ways in".
+   *
+   *  AUTHORING DATA, not render data: the finished pass-throughs come off the
+   *  worldmap row (`MapLocation.openings`, § A1.3) in world metres, and that
+   *  is the ONE list anything geometric reads. Nothing anchors an opening from
+   *  this raw form — the server does it, for every location, scene or no
+   *  scene. */
+  boundary_openings?: BoundaryOpeningMeta[];
+}
+
+/** One authored boundary opening as `map3d` stores it: `edge` the 0-based
+ *  INDEX of the boundary edge it sits on (edge i = point i -> i+1, contract v6
+ *  Nr. 5), `at` a fraction along that edge, `width_m` in world metres. */
+export interface BoundaryOpeningMeta {
+  edge: number;
+  at: number;
+  width_m: number;
+  type?: string;
+  room?: string;
+}
+
+/** One authored boundary pass-through as the WORLDMAP row delivers it
+ *  (§ A1.3, contract v6): computed by the server with the very function the
+ *  entry gate of `POST /play/pos` measures with
+ *  (`boundary_entry.opening_world_frames`), so offer and crossing cannot
+ *  drift. Everything here is WORLD metres — the client adds no pin, applies no
+ *  rotation and derives no normal of its own. */
+export interface MapOpening {
+  /** boundary EDGE INDEX (edge i = point i -> i+1) */
+  edge: number;
+  /** the pass-through point, world metres */
+  at_world: [number, number];
+  /** inward unit normal at that point, world axes (x east, z south) */
+  inward: [number, number];
+  /** room this opening routes into; '' = none, then the arrival rule decides */
+  room?: string;
+}
+
+export interface WorldLocation {
+  id: string;
+  name: string;
+  description?: string;
+  /** Free metre position of the location's CENTRE on the world plane
+   *  (seamless world, E1). `null` = unplaced, i.e. not on the map at all —
+   *  the grid cell it used to sit in no longer exists. */
+  pos_x: number | null;
+  pos_z: number | null;
+  /** Rotation of the location's footprint about the up axis, in degrees,
+   *  world-map convention (§ A1.1). Always present, 0 when unrotated. */
+  yaw_deg?: number;
+  /** THE FOOTPRINT of this location as a POLYGON in LOCAL METRES around the pin
+   *  (contract v6 "Gebiete"), hoisted out of `map3d` by the server on the
+   *  worldmap row. A legacy square arrives as its four synthesized corners, so
+   *  the client never needs a square code path; `null`/absent = no area. */
+  boundary?: [number, number][] | null;
+  /** Width of the footprint's bounding box in world metres — DERIVED from
+   *  `boundary` (v6 Nr. 2), hoisted out of `map3d` by the server on the
+   *  worldmap row. It scales the surface texture and the selection ring;
+   *  containment and area come from `boundary` alone. */
+  plan_width_m?: number | null;
+  /** The authored boundary pass-throughs in WORLD metres, hoisted onto this
+   *  record from the worldmap row (§ A1.3) — the only opening list the client
+   *  reads. Empty = FREE boundary, absent = the row said nothing (an
+   *  unplaced location, which has no way in to speak of). */
+  openings?: MapOpening[];
+  rooms: Room[];
+  entry_room?: string;
+  indoor?: string;
+  background_images?: string[];
+  terrain?: string;   // AV3D-7: grass | forest | road | water | ...
+  /** The surface-library kind the server resolved `terrain` to — '' when it
+   *  names no entry. THE ground kind of this location; the client does not
+   *  look the mapping up itself (plan-grundflaeche.md § 5). */
+  surface_kind?: string;
+  map3d?: Map3dMeta;  // AV3D-1
+}
+
+/** One row of `/play/worldmap → locations` (§ A12, metre world).
+ *
+ *  Deliberately SLIM: the map builds a footprint from it and nothing else.
+ *  Everything the detail scene needs comes from the scene recipe, and the
+ *  fields the grid world carried here (terrain/surface_kind) are not in the
+ *  payload any more. */
+export interface MapLocation {
+  id: string;
+  name: string;
+  /** Centre of the footprint in world metres; `null` = unplaced. */
+  pos_x: number | null;
+  pos_z: number | null;
+  /** Footprint rotation in degrees (world-map convention, § A1.1). */
+  yaw_deg: number;
+  /** THE FOOTPRINT as a polygon in LOCAL METRES around the pin (v6 "Gebiete").
+   *  A legacy square arrives as its four synthesized corners; `null` = the
+   *  location has no area. */
+  boundary?: [number, number][] | null;
+  /** Width of the footprint's bounding box in world metres, DERIVED from
+   *  `boundary` by the server. `null` when the location has no area. */
+  plan_width_m: number | null;
+  /** THE authored pass-throughs, computed in WORLD metres (§ A1.3, v6). Always
+   *  present; the EMPTY list is the free-boundary statement ("this place never
+   *  said where its way in is"), and a non-empty one names the only ways in. */
+  openings: MapOpening[];
+  map3d?: Map3dMeta;  // AV3D-1 (only emitted when set)
+  /** Bumps when a room layout of this location changes — a running client
+   *  loads `/world/locations` once and refetches on this. */
+  layout_sig?: string;
+}
+
+/** Server-authoritative journey along a METRE polyline (contract § A11).
+ *
+ *  The client walks the line by DISTANCE (`progress_m`), never by re-deriving
+ *  the timing: the baked cumulative game seconds stay server-internal. */
+export interface MapTravel {
+  /** Indoor approach floor; older payloads resolve it from the room. */
+  floor_y?: number | null;
+  target_id: string;
+  /** The route as world points `[x, z]`, start to goal. `null` under the fog
+   *  (§ A12): a metre-exact line to a place the avatar may not know would
+   *  leak more than the opaque `target_id` — then the figure is drawn at its
+   *  `pos` and no line is shown. */
+  waypoints: [number, number][] | null;
+  /** metres already walked, and the whole length of the polyline. `null`
+   *  under the fog (§ A12) — a foreign traveller keeps its row, but distance
+   *  and route length are thinned out along with the waypoints. */
+  progress_m: number | null;
+  total_m: number | null;
+  /** Arrival on the WORLD CALENDAR as the canonical stamp
+   *  `Y0002-D109T14:00:00` (§ A11) — there is no world timezone any more and
+   *  no client parses this. `null` under the fog (§ A12) — the arrival time
+   *  would date the hidden route. */
+  eta_game: string | null;
+  /** The same arrival ALREADY RENDERED by the server: `eta_hhmm` is the clock
+   *  time ("14:00") the walking mark shows, `eta_label` the full calendar
+   *  label ("Summer, day 17 · 14:00 · Year 3"). `null` under the fog. */
+  eta_hhmm: string | null;
+  eta_label: string | null;
+  /** NOMINAL pace of the journey in metres per REAL second; `null` on a
+   *  frozen world. Independent of the per-segment extrapolation paces. */
+  speed_m_s_real: number | null;
+  /** Pace of the segment being walked RIGHT NOW (terrain `speed_factor` is
+   *  baked into the stamps, not into `speed_m_s`), metres per REAL second.
+   *  `null` on a frozen clock, after arrival and for a degenerate segment —
+   *  the three cases where the number would be a lie. */
+  pace_m_s_real: number | null;
+  /** One REAL pace per segment; null entries are timeless, null list forbids extrapolation. */
+  paces_m_s_real: (number | null)[] | null;
+  /** Only the avatar's journey identity; legacy journeys have null. */
+  journey_id: string | null;
+  /** REAL seconds until the figure STARTS walking — it is standing up until
+   *  then (`activity_animation` carries the clip it plays for that). `null`
+   *  once the journey is under way, which is the ordinary case. */
+  starts_in_s?: number | null;
+  /** The GAIT the server decided at the journey's start (§ A11,
+   *  `travel_engine.journey_gait`): "run" when the journey's nominal pace is
+   *  ≥ 1.5 × the world's walking pace. The figure plays the RUN pose's clip
+   *  family then, the WALK pose's otherwise — the ground still decides first
+   *  (swimming, crawling). Not thinned under the fog. Absent from an older
+   *  server = walk. */
+  gait?: 'walk' | 'run';
+}
+
+/** Visibility-filtered remaining motion, never another character's full journey. */
+export interface MapLocalApproach {
+  floor_y?: number | null;
+  journey_id: string;
+  room_id: string;
+  waypoints: [number, number][];
+  progress_m: number;
+  walked_m: number;
+  remaining_m: number;
+  paces_m_s_real: (number | null)[] | null;
+  starts_in_s: number | null;
+}
+
+/** Public physical entry only; no execution, consent, or target identity. */
+export interface MapPropActionEntry {
+  kind: string;
+  pose_key: string;
+  access: { x: number; y: number; z: number; yaw: number };
+  anchor: { x: number; y: number; z: number; yaw: number };
+  /** Authoritative body-root offset in metres; anchor.y already subtracts it. */
+  root_offset: number;
+  /** The entry clip's REAL length, and the real seconds already played as of
+   *  this poll — entries run on the server's motion clock (real time,
+   *  independent of the game-speed factor, § A11). */
+  duration_s: number;
+  elapsed_s: number;
+  /** Entry seconds per real second: 1 while it plays, 0 frozen/paused. */
+  clock_rate: number;
+  height_cm: number;
+  role: string | null;
+  /** Motion-clock second the entry began — identity only, never timing. */
+  started_s: number;
+}
+
+export interface MapCharacter {
+  name: string;
+  location_id: string;
+  /** Free metre point of the figure, or `null` when it has none (its
+   *  location is unplaced). Clients place the figure BY `pos` and only fall
+   *  back to the location centre when it is null. */
+  pos: { x: number; z: number } | null;
+  /** Optional authoritative facing in radians; older servers do not publish it. */
+  yaw?: number | null;
+  /** Report that produced this point; null for every other writer. */
+  pos_origin: { session: string; seq: number } | null;
+  /** AV3D-6: Authoritative animation category of the current activity */
+  activity_animation?: string;
+  /** Clip-set fallback chain, e.g. ["lady","female"] */
+  animation_sets?: string[];
+  animation_set?: string;
+  /** Body height in cm; determines the 3D figure scale */
+  height_cm?: number;
+  room_id?: string;   // AV3D-8
+  mood?: string;      // AV3D-8
+  activity?: string;
+  movement_target_id?: string;
+  movement_target_name?: string;
+  /** running journey (§ A11); null/absent when the character is not travelling */
+  travel?: MapTravel | null;
+  local_approach?: MapLocalApproach | null;
+  prop_action_entry?: MapPropActionEntry | null;
+  /** running PAIR interaction (§ A8a); null/absent when there is none */
+  interaction?: MapInteraction | null;
+  /** this character's closing clip inside its running action (§ A8c):
+   *  played ONCE per `id`, from the start, then back to the action's clip */
+  finale?: FinaleBlock | null;
+  /** The place the SERVER seated this character on (plan-posen-plaetze.md
+   *  § 4): the client draws the figure on that slot (looked up by `id` in
+   *  the room's markers) and chooses nothing. `x`/`z` are WORLD metres from
+   *  the server (the scene payload's marker slots are tile-local; for a
+   *  pair the point is the place's centre, its anchor). */
+  place?: {
+    id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string;
+    /** a SOLO furniture scene's clip clock (§ A8a): its id, CLIP seconds
+     *  since the held clip began, and the tempo it runs at (0.2..1) */
+    scene_id?: string; clip_s?: number; tempo?: number;
+  } | null;
+  avatar_url?: string;
+  /** Change key of the 3D MESH the server would serve for this character
+   *  (§ A11a) — the very string `GET /characters/<name>/model3d` reports as
+   *  `model.signature`. Same job as `terrain_sig`/`height_sig` one level up:
+   *  while it matches what the figure library already holds, there is
+   *  nothing to fetch. Absent = this character has no mesh store (or an
+   *  older server) — then nothing is polled for it at all. */
+  model_sig?: string;
+  model_rev?: string;
+  motion?: MotionPayload;
+  /** Icons behind the name (plan-intim-privatsphaere.md, part E): packages
+   *  contribute them on the server (`name_badges`), `title` is already in the
+   *  avatar's language. Absent = none. */
+  badges?: NameBadge[];
+  /** The `travel_speed` rule factor the AVATAR moves with (§ A11 character
+   *  row): the client walks AND runs its own figure at that multiple of
+   *  `WALK_SPEED`, and `POST /play/pos` judges the reports with the same
+   *  number. Only on the avatar's row; null on every other. */
+  travel_speed_factor?: number | null;
+  /** Move clips the character's active STATES replace (`{walk?, run?}`, clip
+   *  kinds) — played instead of the WALK/RUN pose's clip while the figure
+   *  moves on foot; the ground's swim/crawl keep precedence, and a figure
+   *  without the kind plays its normal clip. Absent = no override. */
+  locomotion?: LocomotionOverride;
+}
+
+/** The move clips a state replaces (worldmap character row, `locomotion`). */
+export interface LocomotionOverride {
+  walk?: string;
+  run?: string;
+}
+
+/** One icon behind a character's name — name tag and chat address chip. */
+export interface NameBadge {
+  icon: string;
+  title: string;
+}
+
+/** A pair interaction as the server states it (§ A8a): two characters play
+ *  the two halves of one pair clip (`<kind>__a` / `<kind>__b`) at ONE anchor,
+ *  in lockstep on the GAME clock. The clip frame has its origin at the anchor
+ *  and +X pointing from A to B; a figure stands at
+ *  `anchor + R_y(yaw) · clipRoot` (three.js Y rotation) and its root is
+ *  turned by `yaw` — the body's facing inside the clip comes from the clip. */
+export interface MapInteraction {
+  id: string;
+  /** the running SCENE it plays in: the interaction id, or the furniture run's execution id — what the channel
+   *  readout reports name (`POST /play/scene/readouts`, `game/readoutReports.ts`) */
+  scene_id?: string;
+  kind: string;
+  /** this figure's own clip role */
+  role: 'a' | 'b' | 'c' | 'd' | 'e';
+  /** every role -> its character, this figure included (G2b) */
+  members: Record<string, string>;
+  anchor: {
+    x: number; z: number; yaw: number;
+    /** The PLACE (marker id in the pair's room) the anchor sits on — the
+     *  server seated the pair there and the anchor is its centre; the client
+     *  draws the figures at that place's slot height. `null` when the pair
+     *  met halfway on the ground. */
+    place_id?: string | null;
+  };
+  started_at_game: string;
+  /** GAME seconds into the interaction at the time of this payload. Grows
+   *  without bound: an interaction has no clock end, only signals (E4). */
+  elapsed_s: number;
+  /** the clip's own length; with `loop` it repeats (phase mod this), without
+   *  it the clip holds its last frame */
+  clip_duration_s?: number;
+  loop?: boolean;
+  /** cycles a loop plays before it holds its last frame; null/missing = endless */
+  loop_count?: number | null;
+  /** GAME seconds per REAL second right now (0 = frozen world) */
+  rate: number;
+  /** the scene's clip clock: CLIP seconds since this clip began (a pose
+   *  switch starts it at 0), every second at the tempo it ran at — what the
+   *  clip is seeked to; advance it by dt · `tempo` (0 frozen) between polls */
+  clip_s?: number;
+  /** clip seconds per REAL second, 0.2..1 (1 = the clip's own speed) */
+  tempo?: number;
+  /** the ALT half this figure plays instead of its role's own (G6): the clip
+   *  is `<kind>__<role>~<alt>`; "" or missing = the role's own half */
+  alt?: string;
+}
+
+export interface MapEvent {
+  category: string;
+  text: string;
+}
+
+/** Extent of the world in METRES over ALL placed locations (contract § A12) —
+ *  computed BEFORE the fog filter, so the map frame does not move while one
+ *  discovers. A location with a scale anchor contributes its whole footprint
+ *  box, one without it only its centre point. `null` when nothing is placed. */
+export interface WorldBounds {
+  min_x: number;
+  min_z: number;
+  max_x: number;
+  max_z: number;
+}
+
+/**
+ * One instant on the WORLD CALENDAR, rendered by the server (§ A11,
+ * plan-game-calendar): seasons and days instead of a real date, and no
+ * timezone anywhere. The client displays these fields and reads
+ * `hour_fraction` for the sun — it never parses `canonical`.
+ */
+export interface GameTimeInfo {
+  /** sortable stamp `Y0002-D109T14:00:00` */
+  canonical: string;
+  total_seconds: number;
+  year: number;
+  day_of_year: number;
+  season: string;
+  season_name: string;
+  day_of_season: number;
+  hour: number;
+  minute: number;
+  /** hour of day 0..24 as a fraction — what the sun position is set from */
+  hour_fraction: number;
+  /** e.g. "Summer, day 17 · 14:23 · Year 3" — clock part ALWAYS 24h; this is
+   *  the string prompts and logs read. Show `label_display` instead. */
+  label: string;
+  /** "HH:MM" — 24h, like `label`. */
+  time: string;
+  /** `label` with the clock part in the configured display format
+   *  (`server.time_format`, e.g. "Summer, day 17 · 2:23 PM · Year 3"). */
+  label_display: string;
+  /** `time` in the configured display format, e.g. "2:23 PM". */
+  time_display: string;
+  is_night: boolean;
+  day_bucket: string;
+}
+
+export interface WorldMap {
+  /** Monotonic payload ages in milliseconds, measured on the server. */
+  sync: { clock_age_ms: number; build_ms: number };
+  locations_rev: string;
+  avatar: string;
+  current_location_id: string;
+  /** Only what the avatar knows — unless this is the admin's unfiltered view
+   *  (`?all=1`, § A12). */
+  locations: MapLocation[];
+  characters: MapCharacter[];
+  events_by_location: Record<string, MapEvent[]>;
+  /** The WORLD CLOCK this payload was computed with — the instant every
+   *  journey above was placed on, handed over ready to render. The sun takes
+   *  its hour from `hour_fraction` HERE (one source, no extra poll); nothing
+   *  in the client derives a game hour itself. */
+  game_time?: GameTimeInfo;
+  /** Game seconds per real second; zero freezes secondary dynamics. */
+  game_rate?: number;
+  /** § A12; `null` when nothing is placed */
+  world_bounds: WorldBounds | null;
+  /** Signature of the painted terrain (areas + world type rows). When it
+   *  changes, `/play/terrain` is refetched — the poll carries the sig so the
+   *  terrain itself needs no polling of its own. */
+  terrain_sig: string;
+  /** Signature of the world RELIEF (§ A16), the same trigger one step further:
+   *  when it changes, `/play/heightfield` is refetched and the ground is
+   *  draped again. Missing (an older server) means a flat world. */
+  height_sig?: string;
+  /** `true` = this is the filtered view, so unknown places stay hidden.
+   *  `false` = the admin's unfiltered view (`?all=1`).
+   *
+   *  THE VEIL DRAWS ON IT AGAIN (plan-fog-schleier-v2, 2026-08-24): a view in
+   *  which nothing is withheld gets no haze either — hazing it would be the
+   *  picture of a rule that is not running. What the server DOES withhold
+   *  still simply has no row here. */
+  fogged: boolean;
+  /** Signature of the avatar's EXPLORATION MEMORY (§ A12) — the same trigger
+   *  shape as `terrain_sig`: when it moves, `GET /play/explored` is refetched
+   *  and the veil opens over the newly walked cells. `""` without a taken-over
+   *  character, and missing on an older server (which is the same state: no
+   *  memory to draw on). */
+  explored_sig?: string;
+  /** The two WALK LIMITS the server judges every reported point with
+   *  (`game.max_step_height_m` / `game.max_slope_deg`, § A12/§ A15). The
+   *  client mirrors the height gate with them so the figure never walks into
+   *  a refusal it could have seen coming; missing (an older server) means the
+   *  built-in defaults 0.4 m / 40° apply. */
+  max_step_height_m?: number;
+  max_slope_deg?: number;
+  /** The far backdrop (§ A17) — the mountain silhouette at the world's
+   *  horizon, pure scenery. MISSING MEANS OFF, and that is also what an older
+   *  server sends: there is no default ring. */
+  backdrop?: BackdropSpec;
+  /** The AUTHORED props of the world plane (§ A9a) — single objects outside
+   *  any location, capped at 500 per world. NEVER FOGGED: pure decoration
+   *  belongs to no place and leaks no knowledge. Missing (an older server) is
+   *  the same state as an empty list. */
+  world_props?: WorldPropSpec[];
+  /** Signature over the FINISHED `world_props` block — the same trigger shape
+   *  as `terrain_sig`: when it moves the props are rebuilt, and never
+   *  otherwise. */
+  world_props_sig?: string;
+}
+
+/**
+ * ONE authored prop on the world plane (§ A9a).
+ *
+ * A placement spec, not a library record: everything about the PROP
+ * (`max_m`, `fix_euler`, the tier maps) is derived by the server on every
+ * poll, so a size corrected in the Props tab arrives without a rewrite.
+ *
+ * `bottom_y` is deliberately NOT in here — the client samples the ground under
+ * `(x, z)` with its own height sampler and adds `offset_y` plus the prop's own
+ * `ground_offset_m`, so a prop sticks to the relief that is really drawn.
+ */
+export interface WorldPropSpec {
+  /** Placement id — stable, and the SEED of the variant formula (§ A9a). */
+  id: string;
+  prop_id: string;
+  /** Library display name (debug/labels); the renderer draws no text from it. */
+  name?: string;
+  /** World metres. */
+  x: number;
+  z: number;
+  /** Degrees, this contract's turning sense (§ A1.1). */
+  yaw_deg: number;
+  /** Metres ABOVE the sampled ground — the trim of THIS placement. */
+  offset_y: number;
+  /** How deep the PROP stands in the ground, in metres (±5) — a fact about
+   *  the object, the same in every room and on every painted ground, derived
+   *  by the server from the library record. The bottom of a row is
+   *  `heightAt(x, z) + offset_y + ground_offset_m`. Absent = 0. */
+  ground_offset_m?: number;
+  /** Largest REAL edge of the object in metres; scaled with `measure: 'xyz'`,
+   *  the one scale law of `place()` (§ B2). */
+  max_m: number;
+  /** Always `'xyz'` — stated so the row is a complete placement spec. */
+  measure?: string;
+  fix_euler: { x: number; y: number; z: number };
+  /** Tier map of the PRIMARY variant (`variants === model_variants[0]`). */
+  variants: Record<string, string>;
+  /** Only present when the prop really HAS more than one active variant. */
+  model_variants?: Record<string, string>[];
+  /** Resolved index into `model_variants` — the SERVER chooses it (§ A9a). */
+  variant?: number;
+}
+
+/**
+ * The `backdrop` block of the worldmap payload (§ A17). The server authors it
+ * (`app/core/backdrop.py`) and hands the arcs over ALREADY RESOLVED to
+ * degrees — the client never translates a compass point, it draws what it is
+ * given.
+ */
+export interface BackdropSpec {
+  /** ridge height in world metres, server-clamped to [20; 300] */
+  height_m: number;
+  /** uint32 — the ridge is a pure function of it */
+  seed: number;
+  /** wrap-free ranges on the figure compass (§ A1.8, 0 = south, 90 = east):
+   *  `0 <= start < 360`, `start < end <= start + 360`. The full ring is the
+   *  one arc `[0, 360]`. */
+  arcs: Array<[number, number]>;
+}
+
+/**
+ * Answer of `POST /play/pos` — the free walker's position report (§ task 5).
+ *
+ * `ok: true` is the accepted report: `pos` is what the server stored (its own
+ * rounding), `location_id`/`room_id` are what the point derived, which is how
+ * a crossing announces itself before the next worldmap poll repeats it.
+ *
+ * `ok: false` carries the TWO non-error refusals, and both mean the same
+ * thing to the caller — the report was not taken, the point is still
+ * unreported, nothing is corrected and the player is never told:
+ *  - `throttled`: it came in faster than the server accepts them (~4 a
+ *    second) and was dropped;
+ *  - `stale`: its `seq` is not newer than the last ACCEPTED one, so it is a
+ *    leftover of a request we already aborted (§ A15, 2026-08-23). Dropping
+ *    it is what keeps a stalled server from taking a point seconds behind the
+ *    figure as the newest one and snapping the walk back onto it;
+ *  - `superseded`: another report of the same avatar was still in the
+ *    handler, and the server never waits for it (2026-08-24) — the next
+ *    report carries a fresher point anyway.
+ *
+ * The caller handles `ok: false` as ONE case and does not read the flags, so
+ * a new one added by the server needs no client change.
+ *
+ * Everything else is a 4xx and arrives as an `ApiError` with the server's
+ * `reason`, its player-facing `message` and the LAST VALID point to snap the
+ * figure back onto.
+ */
+export interface PosReport {
+  ok: boolean;
+  throttled?: boolean;
+  stale?: boolean;
+  superseded?: boolean;
+  pos?: { x: number; z: number };
+  location_id?: string;
+  room_id?: string;
+}
+
+// --- Painted terrain (`GET /play/terrain`) -----------------------------------
+// The ground of the seamless world: areas drawn on the metre plane plus the
+// effective type catalog they reference. NEVER withheld — terrain is always
+// visible, only locations hide.
+
+/** One entry of the terrain-type catalog (`app/core/terrain_types.py`). No
+ *  ground property is ever hardcoded in a client: colour, passability and
+ *  pace all come from here. */
+export interface TerrainType {
+  /** the id — of the terrain catalog alone. It says NOTHING about the ground
+   *  material any more: which surface a kind wears is `surface` below. */
+  kind: string;
+  /** display name; falls back to the kind */
+  name: string;
+  /** WHICH SURFACE-LIBRARY ENTRY SKINS THIS GROUND (2026-08-16) — a kind of
+   *  `/assets/surface-textures`, said by the author instead of matched by
+   *  name. Absent = no material was named, and the ground keeps the
+   *  procedural fallback in `color`; a value the library does not hold means
+   *  the same, and is the admin tab's business to flag, never the renderer's
+   *  to guess around. There is NO fallback to `kind`: two types may share one
+   *  material, a type may wear a differently named one, and renaming a
+   *  library entry no longer undresses a ground behind the author's back. */
+  surface?: string;
+  /** `#rrggbb`, the schematic fill of this kind (2D map, minimap, and the
+   *  3D fallback when the surface library has no texture for it) */
+  color: string;
+  /** may one STAND here — the wilderness answer; inside a placed footprint
+   *  the footprint wins (§ A15) */
+  passable: boolean;
+  /** walking-pace multiplier, 0..2 — it counts EVERYWHERE (§ A1.5, finding 3),
+   *  a footprint only neutralises a factor of 0 */
+  speed_factor: number;
+  /** Open bag of extras — a type says how ground LOOKS and how it is walked,
+   *  nothing about what grows on it (the scatter moved to the AREA with
+   *  finding B17). FOUR keys in it are a contract: `movement`, the two
+   *  depths `move_sink_m` / `idle_sink_m` and the depth they start at,
+   *  `swim_from_m`. */
+  meta?: TerrainTypeMeta;
+}
+
+/** A type's `meta`. Free-form by contract — the two keys with a meaning are
+ *  named, the rest stays open. */
+export interface TerrainTypeMeta {
+  /** HOW one moves over this ground (§ A9): `walk_run` (also when absent),
+   *  `walk`, `swim` or `crawl`. The clips come from the fixed movement poses,
+   *  never from the ground. */
+  movement?: 'walk_run' | 'walk' | 'swim' | 'crawl';
+  /** How deep a figure stands IN this ground while it MOVES over it, in metres
+   *  (§ A9, 0…1.5). The clip is normalised onto the surface, which puts a
+   *  swimmer on top of the lake; this is the extra drop. Absent = nothing
+   *  sinks. */
+  move_sink_m?: number;
+  /** The same for a figure WAITING on it — a second number, because the pose
+   *  is a different one (finding 13): a swimmer lies flat and its knee is a
+   *  hand's width down, a treader hangs upright and its foot is a body length
+   *  down. Only in force where the ground's movement has a resting pose
+   *  (`swim`, `crawl`). */
+  idle_sink_m?: number;
+  /** FROM WHICH WATER DEPTH under the figure the movement type and the two depths
+   *  above count at all, in metres (W4c, 0…10) — shallower water is WADED: the
+   *  figure keeps its own walk/run and standing clips and stands on the bed.
+   *  Absent = `walk.SWIM_FROM_DEFAULT_M` (1 m); an authored 0 means "swim from
+   *  the very rim", which is what water did before this round. */
+  swim_from_m?: number;
+  /** How far what GROWS on this ground bends in the wind, in metres (§ A9,
+   *  0.01…0.5) — the sideways deflection of a blade's TIP, quadratic in the
+   *  height above the ground. Read per painted AREA, so every scatter entry
+   *  of one shape sways together; the area's FILL never moves. Absent = the
+   *  scatter stands still. */
+  sway_m?: number;
+  /** How much grows on this ground WITHOUT anybody authoring it (§ A9,
+   *  0…1) — the share of the client's full undergrowth density the kind
+   *  carries, seeded 0.6 on `forest` and 0.3 on `grass`. Absent = bare
+   *  ground. Everything else about the layer (where the tufts stand, how
+   *  tall they are, how far they are drawn) belongs to the renderer. */
+  undergrowth?: number;
+  [key: string]: unknown;
+}
+
+/** The stored recipe of a line-drawn area (`meta.stroke`): the clicked
+ *  points, the ribbon width, how the line is bent — and what stands along it.
+ *  The client regenerates the very centre line the editor widened
+ *  (`@anima/scene-render` → `strokeCentreLine`) to place the rows. */
+export interface TerrainStrokeMeta {
+  points: [number, number][];
+  width_m: number;
+  style?: string;
+  spacing_m?: number;
+  amplitude_m?: number;
+  along?: TerrainAlongEntry[];
+}
+
+/** One row of props ALONG a drawn line — `meta.stroke.along[]`, server
+ *  whitelist `app/models/terrain._sanitize_along_entry`. The delivery adds
+ *  the same prop facts a scatter entry gets (`prop_height_m`, `variants`,
+ *  `model_variants`, `sway_factor`, `ground_offset_m`), so `scene/ground.ts`
+ *  builds a row exactly like a scatter row — only the points come from
+ *  `strokeStations` instead of the cell sampler. */
+export interface TerrainAlongEntry {
+  /** URL of the prop mesh; a row without one places nothing. */
+  model?: string;
+  /** Distance between two stations along the line, metres. */
+  spacing_m: number;
+  /** How far the row stands beside the centre line, metres. */
+  offset_m: number;
+  /** `right` (absent) / `left` / `both` / `alternate`, in drawing order. */
+  side?: 'right' | 'left' | 'both' | 'alternate';
+  /** The turn relative to the walking direction, degrees; absent = 0. */
+  yaw_deg?: number;
+  /** `random` = one seeded draw per instance instead. */
+  yaw_mode?: 'random';
+  /** Arc length of the first station; absent = half a spacing. */
+  start_m?: number;
+  /** The half-width of the random shift every station takes along the
+   *  line, 0..spacing_m (`strokeStations` `jitterM`); absent = the even row. */
+  spacing_jitter_m?: number;
+  /** A pinned model-variant list position for the whole row. */
+  variant?: number;
+  /** Reshuffle every this many GAME minutes (`reshuffleEpoch`); absent =
+   *  the row never moves. */
+  reshuffle_min?: number;
+  prop_height_m?: number;
+  sway_factor?: number;
+  ground_offset_m?: number;
+  variants?: Record<string, string>;
+  model_variants?: Record<string, string>[];
+}
+
+/** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
+ *  STORES the whitelisted fields below (`app/models/terrain._sanitize_scatter_list`)
+ *  and adds `variants`, `prop_height_m` + `sway_factor` on delivery;
+ *  `scene/ground.ts` reads them and hands them to the shared sampler. */
+export interface TerrainScatterEntry {
+  /** instances per 100 m2 of the painted area; 0 = nothing is scattered */
+  density_per_100m2: number;
+  /** URL of a model to instance; absent = the built-in tuft */
+  model?: string;
+  /** The least distance in metres this entry's OWN instances keep from each
+   *  other — handed to the shared sampler as `minSpacingM`, which subtracts
+   *  every candidate standing closer than this to a prop it already placed.
+   *  Absent or 0 = no constraint. A row whose spacing cannot be met at its
+   *  density ends up thinner than the density asks for, which is the honest
+   *  answer to "40 trees per 100 m2, 4 m apart". */
+  min_spacing_m?: number;
+  /** How the instances are TURNED (§ A9, 2026-09-10): absent = random,
+   *  `aligned` = `yaw_deg` relative to the local surface axis (the nearest
+   *  polygon edge, or a stroke's centre line). Handed to the shared sampler
+   *  (`scatterYaw`). */
+  yaw_mode?: 'aligned';
+  /** The angle of `yaw_mode` in degrees (0..360): 0 parallel to the rim, 90
+   *  facing in, 270 facing out; stored only beside a mode. */
+  yaw_deg?: number;
+  /** WHERE the row stands (2026-09-10): absent = spread over the ground
+   *  (`scatterCellInstances`), `edge` = a station every `min_spacing_m`
+   *  along the rim (`scatterEdgeInstances`), `center` = the one pole of
+   *  inaccessibility (`scatterCenterInstance`). */
+  place?: 'edge' | 'center';
+  /** How far an `edge` row stands INSIDE the rim, metres; stored only with
+   *  `place: "edge"`; absent = 0. */
+  offset_m?: number;
+  /** The half-width of the random shift every station of an `edge` row
+   *  takes along the rim, 0..min_spacing_m (`ringStations` `jitterM`);
+   *  stored only with `place: "edge"` and a spacing; absent = the even row. */
+  spacing_jitter_m?: number;
+  /** A pinned model-variant list position for the whole row, whatever its
+   *  placement (clamped to the count by the sampler); absent = the shared
+   *  variant formula mixes the instances. */
+  variant?: number;
+  /** WHICH POLYGON EDGES COUNT (Task 10, 2026-09-10): `longest` = the one
+   *  longest edge, `opposite` = the two longest; absent = every edge. Sets
+   *  the axis an `aligned` turn measures against (`areaAxis`) and the edges
+   *  an `edge` row runs along (`ringStations`); a stroke area ignores it. */
+  sides?: 'longest' | 'opposite';
+  /** Reshuffle every this many GAME minutes: the seed grows an epoch tail
+   *  (`reshuffleEpoch`), so the row is a different draw every interval.
+   *  Absent = never. */
+  reshuffle_min?: number;
+  /** The REAL height of the prop behind `model`, in metres, from its library
+   *  record — added by `GET /play/terrain`, never stored and never authored.
+   *  It IS the target height (`scatterTargetH`; the row carries none of its
+   *  own since Task 9), so a tree scatters as a tree instead of at the flat
+   *  fallback. Absent (a foreign URL, no model, an old cached answer) = the
+   *  fallback. */
+  prop_height_m?: number;
+  /** How much of its ground's wind the prop behind `model` takes part in
+   *  (0..1) — added by `GET /play/terrain` from the library record, never
+   *  stored on the entry and never authored here. The effective deflection is
+   *  the kind's `meta.sway_m` times this (`scatterSway`), so a boulder at 0
+   *  stands still in a meadow whose ferns bend fully. Absent = 1, the full
+   *  amount: the server ships the key only when it differs. */
+  sway_factor?: number;
+  /** How deep the prop behind `model` stands in the ground, in metres (±5) —
+   *  added by `GET /play/terrain` from the library record, never stored on the
+   *  entry and never authored here. Every instance is seated at
+   *  `heightAt(x, z) + ground_offset_m`, so a tree whose mesh carries no root
+   *  ball sinks by the same amount here as it does in a room. Absent = 0, the
+   *  prop stands ON the ground: the server ships the key only when it
+   *  differs. */
+  ground_offset_m?: number;
+  /** The resolution tiers this prop REALLY has, per tier token
+   *  (`{full: "/assets/props/<id>/model?tier=full", …}`) — added by
+   *  `GET /play/terrain`, never stored and never authored. Resolved with the
+   *  one `pickVariant` rule; absent (an old cached answer, a foreign URL)
+   *  means `model` is all there is. THE PRIMARY variant's map, i.e.
+   *  `model_variants[0]` whenever that field is there too. */
+  variants?: Record<string, string>;
+  /** One tier map per ACTIVE model variant of the prop, in its own order
+   *  (§ B2 addendum) — added by `GET /play/terrain`, and ONLY when the prop
+   *  really has more than one. Absent = one variant, and the wood is one mesh
+   *  exactly as before.
+   *
+   *  WHICH of them an instance shows is not in the payload: the instances of a
+   *  painted scatter are sampled in the client's own camera window, so the
+   *  renderers run the shared formula over the cell seed instead
+   *  (`scatterVariantIndex`). */
+  model_variants?: Record<string, string>[];
+}
+
+/** An area's `meta`. Free-form by contract — the known key is named, the rest
+ *  stays open. */
+export interface TerrainMeta {
+  scatter?: TerrainScatterEntry[];
+  [key: string]: unknown;
+  /** The recipe of a line-drawn area, with the rows along it (§ A9
+   *  addendum 2026-09-09) — `scene/ground.ts` regenerates the centre line
+   *  from it and plants the rows. */
+  stroke?: TerrainStrokeMeta;
+}
+
+/** One painted area. `polygon` is a ring of world points `[x, z]` in metres;
+ *  the list is sorted BOTTOM TO TOP by the server (z_order, then paint
+ *  order), so the LAST entry is drawn on top. */
+export interface TerrainArea {
+  id: string;
+  kind: string;
+  polygon: [number, number][];
+  z_order: number;
+  meta?: TerrainMeta;
+}
+
+export interface TerrainPayload {
+  /** the kind of the unpainted ground — the same resolver the walk rules use */
+  default_kind: string;
+  types: TerrainType[];
+  areas: TerrainArea[];
+  /**
+   * The ground box of every deliberately placed world prop (§ A9b) — what the
+   * scatter is sampled AROUND, exactly like a placed location's outline.
+   *
+   * Structurally `ScatterPropBox` of `@anima/scene-render`, which is where the
+   * four corners are worked out (`propBoxFootprints`); written out here
+   * because this file describes the PAYLOAD, and the payload is what the
+   * server sends whether or not a package happens to have a matching type.
+   *
+   * Absent from an older server: then nothing is excluded and the world looks
+   * as it did before, which is the only harmless answer.
+   */
+  prop_boxes?: {
+    id: string;
+    x: number;
+    z: number;
+    yaw_deg: number;
+    half_w: number;
+    half_d: number;
+  }[];
+  /** matches `WorldMap.terrain_sig`; a change means refetch */
+  sig: string;
+}
+
+export interface AtLocationChar {
+  name: string;
+  avatar_url?: string;
+  same_room?: boolean;
+  room?: string;
+}
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: string;
+}
+
+export type { MotionAttributeProfiles, ExtensionRigDeclaration } from '@anima/scene-render';
+
+/** Fully resolved extension motion, independent of mesh identity. */
+export interface MotionPayload {
+  rev: string;
+  groups: Record<string, {
+    bones: string[];
+    freq_hz: number;
+    zeta: number;
+    gravity: number;
+    spill: number;
+    flatten: number;
+    stretch: number;
+    spread: number;
+    flatten_floor: number;
+    length: number;
+    girth: number;
+    translate: number;
+    sag_max_deg: number;
+    spill_max_deg: number;
+    head_sag: number;
+    gravity_scale: number;
+    gain: number;
+    max_deg: number;
+    axis_gain: [number, number, number];
+    squash: [number, number];
+    rest_deg: number;
+    rest_max_deg: number;
+    straighten_deg: number;
+    freetext_clothing_gain: number;
+  }>;
+}
+
+/** Geometry/room-marker offer. Furniture behavior comes exclusively from
+ *  prop_actions; poses are legitimate room-marker poses, never furniture aliases. */
+export interface PlaceOffer {
+  id: string;
+  label: string;
+  group: string;
+  capacity: number;
+  free: number;
+  free_slots: number[];
+  poses: { key: string; label: string }[];
+  prop_actions?: PropActionOffer[];
+}
+
+/** A clip role of a pair or group (§ A8a): `a`..`e`. */
+export type FinaleRole = 'a' | 'b' | 'c' | 'd' | 'e';
+
+/** The worldmap row's `finale` block (§ A8c). */
+export interface FinaleBlock {
+  id: string;
+  kind: string;
+  role: FinaleRole | null;
+  /** the ALT half of `role` the finale closes in (G6); "" or missing = none */
+  alt?: string;
+  elapsed_s: number;
+  /** the whole finale, every cycle */
+  duration_s: number;
+  /** cycles of the clip; missing or not a whole number >= 1 = one */
+  loop_count?: number;
+  /** clip seconds per real second, 0.2..1; missing = 1 */
+  tempo?: number;
+}

@@ -36,11 +36,11 @@ Exports (`packages/player-ui/src/index.ts`):
   `I18nProvider` + `useI18n`, `usePolling`, `useQueue`, `thumbs`, `clockFormat`/`clockSettings`,
   `icons`.
 - **Styles** — `@anima/player-ui/panels.css`. It is themeable: every colour is a CSS custom
-  property, and each app brings its own theme (`client3d/src/hud/hud.css` + `theme-fantasy.css`, loaded after it).
+  property, and each app brings its own theme (`hud/src/hud/hud.css` + `theme-fantasy.css`, loaded after it).
 
 Two conventions matter when touching a panel:
 
-- **A panel bound to a skill declares it.** `PANELS` in `client3d/src/hud/Hud.tsx` carries a `requires` field with a skill id (e.g.
+- **A panel bound to a skill declares it.** `PANELS` in `hud/src/hud/Hud.tsx` carries a `requires` field with a skill id (e.g.
   `instagram`, `send_message`). `GET /play/scene` reports the world's capabilities, and a panel
   whose skill package is not installed disappears from the HUD launcher. That is what
   makes a package's deletion test hold all the way into the UI.

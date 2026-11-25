@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from app.core.auth_dependency import require_admin
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.log import get_logger
 
 logger = get_logger("world_dev")
@@ -557,6 +557,8 @@ def get_available_schemas() -> Dict[str, Any]:
                 "name": f.stem,
                 "label": f.stem.replace("_", " ").title(),
             })
+    # Free mode is no schema file: the agent builds through its tools.
+    schemas.append({"name": "free", "label": "Free (agent)"})
     return {"schemas": schemas}
 
 
@@ -819,30 +821,13 @@ async def world_dev_chat(request: Request):
 
     history = list(session["messages"])
 
-    # Resolve pricing for cost tracking
-    _pricing = {"input": 0.0, "output": 0.0}
-    try:
-        import asyncio as _asyncio
-        from app.core.provider_manager import get_provider_manager
-        _pm = get_provider_manager()
-        _prov_obj = _pm.get_provider(provider) if provider else _pm.find_provider_for_model(model)
-        if _prov_obj:
-            # A list_models cache miss may perform synchronous HTTP;
-            # use the thread pool instead of blocking the event loop.
-            _models = await _asyncio.to_thread(_prov_obj.list_models)
-            for _m in _models:
-                if _m["name"] == model:
-                    _pricing = _m.get("pricing", _pricing)
-                    break
-    except Exception:
-        pass
+    # Resolve pricing for cost tracking (per 1M tokens; shared with free mode)
+    from app.core.llm_cost import estimate_cost, resolve_pricing
+    _pricing = await resolve_pricing(model, provider)
 
     def _track_cost(input_text: str, output_text: str):
-        """Estimate tokens and accumulate session cost. Pricing is per 1M tokens."""
-        from app.utils.llm_logger import estimate_tokens
-        tok_in = estimate_tokens(input_text)
-        tok_out = estimate_tokens(output_text)
-        cost = (tok_in * _pricing["input"] / 1_000_000) + (tok_out * _pricing["output"] / 1_000_000)
+        """Estimate tokens and accumulate session cost."""
+        tok_in, tok_out, cost = estimate_cost(input_text, output_text, _pricing)
         session["tokens_total_in"] = session.get("tokens_total_in", 0) + tok_in
         session["tokens_total_out"] = session.get("tokens_total_out", 0) + tok_out
         session["cost_total"] = session.get("cost_total", 0.0) + cost
@@ -1580,7 +1565,7 @@ def _get_pause_state() -> Dict[str, bool]:
 
 
 @router.post("/pause-all")
-async def pause_all():
+def pause_all():
     """Pauses all LLM and background activities (except World Dev Chat).
 
     The llm_task_state "world_dev" preset disables background tasks,
@@ -1612,7 +1597,7 @@ async def pause_all():
 
 
 @router.post("/resume-all")
-async def resume_all():
+def resume_all():
     """Resumes all LLM and background activities."""
     from app.core.task_queue import get_task_queue
     from app.routes.scheduler import get_scheduler_manager
@@ -2154,3 +2139,181 @@ def _apply_json_sync(data: Any):
                 "applied_fields": res.get("applied_fields") or [], "warnings": []}
 
     raise HTTPException(status_code=400, detail=f"Unbekannter Typ: {detected}")
+
+
+
+# ── Free mode (agent) ────────────────────────────────────────────────────
+# Plan docs/superpowers/plans/2026-11-22-world-dev-free-mode.md, Task 8. Thin
+# adapters over app.core.world_dev_agent.RunManager; the state table lives
+# there. Fixed paths are declared before /free/{run_id}.
+
+def _run_conflict(run_id: str, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": detail, "run_id": run_id})
+
+
+def _opt_int(raw: Any, field: str, positive: bool = True) -> Optional[int]:
+    """An optional integer field: None/"" -> None; a bool, a non-number or
+    (with `positive`, the budgets) a value < 1 -> 400 before the manager is
+    called, so a bad budget never freezes the world or starts a run."""
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        return None
+    if isinstance(raw, bool):
+        raise HTTPException(status_code=400, detail=f"{field} must be a number")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be a number")
+    if positive and value < 1:
+        raise HTTPException(status_code=400, detail=f"{field} must be at least 1")
+    return value
+
+
+async def _free_body(request: Request) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001 — an empty body is an empty object
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _free_action(run_id: str, action):
+    """Run one RunManager action, mapping its errors to HTTP."""
+    from app.core.world_dev_agent import RunStateError
+    try:
+        return await action()
+    except RunStateError as e:
+        return _run_conflict(e.run_id or run_id, str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/free/defaults")
+def free_defaults() -> Dict[str, Any]:
+    from app.core.world_dev_agent import DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS_TOTAL
+    return {"max_steps": DEFAULT_MAX_STEPS, "max_tokens_total": DEFAULT_MAX_TOKENS_TOTAL}
+
+
+@router.post("/free/start")
+async def free_start(request: Request, user: Dict[str, Any] = Depends(require_admin)):
+    from app.core.world_dev_agent import (DEFAULT_MAX_STEPS, DEFAULT_MAX_TOKENS_TOTAL,
+                                          get_run_manager)
+    from app.core.world_dev_runs import RunOpenError
+    data = await _free_body(request)
+    model = str(data.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model required")
+    # The per-reply cap keeps "0 / negative = the model's default".
+    max_tokens = _opt_int(data.get("max_tokens"), "max_tokens", positive=False)
+    max_steps = _opt_int(data.get("max_steps"), "max_steps") or DEFAULT_MAX_STEPS
+    max_total = (_opt_int(data.get("max_tokens_total"), "max_tokens_total")
+                 or DEFAULT_MAX_TOKENS_TOTAL)
+    try:
+        run_id = await get_run_manager().start(
+            str(data.get("task") or ""), model, str(data.get("provider") or ""),
+            str((user or {}).get("id") or ""),
+            max_tokens=max_tokens if max_tokens and max_tokens > 0 else None,
+            max_steps=max_steps, max_tokens_total=max_total)
+    except RunOpenError as e:
+        return _run_conflict(e.run_id, str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"run_id": run_id}
+
+
+@router.get("/free/runs")
+async def free_runs() -> Dict[str, Any]:
+    from app.core import world_dev_runs as wr
+    return {"runs": await asyncio.to_thread(wr.list_runs)}
+
+
+@router.get("/free/open")
+async def free_open() -> Dict[str, Any]:
+    from app.core import world_dev_runs as wr
+    return {"run": await asyncio.to_thread(wr.open_run)}
+
+
+@router.get("/free/{run_id}")
+async def free_run_detail(run_id: str) -> Dict[str, Any]:
+    from app.core import world_dev_runs as wr
+    from app.core import world_dev_undo as wu
+    from app.core.world_dev_agent import get_run_manager
+
+    def _detail() -> Optional[Dict[str, Any]]:
+        run = wr.get_run(run_id)
+        if run is None:
+            return None
+        return {"run": run, "steps": wr.steps(run_id),
+                "skipped": run.get("skipped") or [],
+                "discard_preview": wu.discard_preview(run_id)}
+
+    detail = await asyncio.to_thread(_detail)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    detail["busy"] = get_run_manager().is_busy(run_id)
+    return detail
+
+
+@router.post("/free/{run_id}/message")
+async def free_message(run_id: str, request: Request):
+    from app.core.world_dev_agent import get_run_manager
+    data = await _free_body(request)
+    max_steps = _opt_int(data.get("max_steps"), "max_steps")
+    max_total = _opt_int(data.get("max_tokens_total"), "max_tokens_total")
+
+    async def _go():
+        await get_run_manager().message(run_id, str(data.get("text") or ""),
+                                        max_steps=max_steps, max_tokens_total=max_total)
+        return {"ok": True}
+    return await _free_action(run_id, _go)
+
+
+@router.post("/free/{run_id}/stop")
+async def free_stop(run_id: str):
+    from app.core.world_dev_agent import get_run_manager
+
+    async def _go():
+        await get_run_manager().stop(run_id)
+        return {"ok": True}
+    return await _free_action(run_id, _go)
+
+
+@router.post("/free/{run_id}/accept")
+async def free_accept(run_id: str):
+    from app.core.world_dev_agent import get_run_manager
+
+    async def _go():
+        await get_run_manager().accept(run_id)
+        return {"ok": True}
+    return await _free_action(run_id, _go)
+
+
+@router.post("/free/{run_id}/discard")
+async def free_discard(run_id: str):
+    from app.core.world_dev_agent import get_run_manager
+
+    async def _go():
+        report = await get_run_manager().discard(run_id)
+        return {"ok": True, "report": report}
+    return await _free_action(run_id, _go)
+
+
+@router.get("/free/{run_id}/events")
+async def free_events(run_id: str, after: int = 0):
+    """SSE: one "data:" frame per run event with ev > after (a {"ev": 0,
+    "type": "reset"} frame when after is beyond this process's buffer)."""
+    from app.core import world_dev_runs as wr
+    from app.core.world_dev_agent import get_run_manager
+    if await asyncio.to_thread(wr.get_run, run_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+
+    async def stream():
+        try:
+            async for ev in get_run_manager().subscribe(run_id, max(0, int(after))):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001 — end the stream with the error
+            logger.error("world-dev %s: event stream failed: %s", run_id, e)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream")

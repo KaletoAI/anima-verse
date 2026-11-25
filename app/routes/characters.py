@@ -15,6 +15,7 @@ from app.core.http_files import etag_file_response, etag_matches
 from app.core.portrait_images import (
     PortraitProcessingError, character_image_path, transparent_portrait_path)
 from app.core.log import get_logger
+from app.core.route_limits import MODEL3D_POLL, MODEL3D_POLL_LIMIT, limited
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
                                     ensure_mp4, guard_content_length,
                                     max_pack_bytes, read_upload_capped)
@@ -3851,6 +3852,7 @@ def get_character_animations(character_name: str, pose: str = "") -> Dict[str, A
 
 
 @router.get("/{character_name}/model3d")
+@limited(MODEL3D_POLL, MODEL3D_POLL_LIMIT)
 def get_character_model3d(character_name: str, request: Request, preview_states: Optional[str] = None) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination
     ({signature, has_input, model, pending}) + the character's animation set
@@ -3864,25 +3866,27 @@ def get_character_model3d(character_name: str, request: Request, preview_states:
     if preview_states is not None:
         require_admin(request)
         selected = [] if preview_states == "none" else [value.strip() for value in preview_states.split(",") if value.strip()]
-    from app.core.model_overview import annotate_model3d_info
-    from app.core.model3d_pipeline import annotate as annotate_pipeline
-    info = annotate_model3d_info(character_name, get_model3d_info(character_name, preview_states=selected))
-    # ``pipeline``: what the tab's actions mean on the base-body pipeline.
-    info = annotate_pipeline(character_name, info)
-    # The face cleanup of the source the face acts on (the base body's on the
-    # pipeline): state + what "Re-apply face cleanup" costs.
-    try:
-        from app.core.model3d import face_cleanup_signature, face_cleanup_state
-        signature = face_cleanup_signature(character_name, (info.get("model") or {}).get("signature") or "")
-        info["face_cleanup"] = face_cleanup_state(character_name, signature) if signature else None
-    except Exception:  # noqa: BLE001 — the status read never fails on it
-        logger.exception("Face cleanup state of %s failed", character_name)
-        info["face_cleanup"] = None
-    chain = resolve_sets(character_name)
-    info["animation_set"] = chain[0] if chain else ""
-    info["animation_sets"] = chain          # explicit first, then derived
-    info["animation_set_derived"] = derive_set(character_name)
-    return info
+    from app.core import read_scope
+    with read_scope.scope():   # one read request: repeated profile/cut/drape reads computed once (read_scope)
+        from app.core.model_overview import annotate_model3d_info
+        from app.core.model3d_pipeline import annotate as annotate_pipeline
+        info = annotate_model3d_info(character_name, get_model3d_info(character_name, preview_states=selected))
+        # ``pipeline``: what the tab's actions mean on the base-body pipeline.
+        info = annotate_pipeline(character_name, info)
+        # The face cleanup of the source the face acts on (the base body's on the
+        # pipeline): state + what "Re-apply face cleanup" costs.
+        try:
+            from app.core.model3d import face_cleanup_signature, face_cleanup_state
+            signature = face_cleanup_signature(character_name, (info.get("model") or {}).get("signature") or "")
+            info["face_cleanup"] = face_cleanup_state(character_name, signature) if signature else None
+        except Exception:  # noqa: BLE001 — the status read never fails on it
+            logger.exception("Face cleanup state of %s failed", character_name)
+            info["face_cleanup"] = None
+        chain = resolve_sets(character_name)
+        info["animation_set"] = chain[0] if chain else ""
+        info["animation_sets"] = chain          # explicit first, then derived
+        info["animation_set_derived"] = derive_set(character_name)
+        return info
 
 
 @router.post("/{character_name}/model3d/upload")

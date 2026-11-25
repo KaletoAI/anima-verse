@@ -137,10 +137,21 @@ body actions):
 * ``POST /characters/{c}/figure/waiting/cancel {id}`` — Cancel ONE waiting
   entry of ``generation_pause.waiting`` through its queue's own cancel
   (``generation_pause.cancel``); 404 when it does not wait any more.
+* ``POST /characters/{c}/figure/shape-view {view}`` — Regenerate ONE view of the body shape the worn figure stands
+  on (round 2026-11-25, ``base_body.start_shape_view``): a forced render in the background — the front 1 image job,
+  a back / side view 2 (the turn and the draft); the new view makes the stored shape outdated, the next Build meshes
+  it again. 202 ``{status: "started", shape, view, jobs}``; 400 for a view that is not dressed, 409 off the
+  pipeline, while a Build, a base step or another shape view runs, with nothing worn in the body or (back / side)
+  without the shape's front, or with media generation switched off. ``body.shape.views`` / ``body.shape.regenerate``
+  of ``GET …/figure`` are its thumbnails and its state.
+* ``GET  /characters/{c}/figure/shape/{key}/views/{view}`` — one stored view picture of the body shape ``key``
+  (``ob…``), ETag; 404 when absent, 400 for a key that is no body shape or an unknown view.
 * ``GET  /characters/{c}/figure/stored`` — the stored body shapes and the
   plain body's texture bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
-  built_for_name, outfits, last_used, reason, unneeded, deletable, running,
-  current}]}``.
+  built_for_name, outfits, last_used, reason, unneeded, deletable, refusal, history, spare, meshed, running,
+  current}]}`` — a shape is kept only for the worn combination and the saved outfit sets
+  (``figure.needed_shapes``, round 2026-11-25); the UI's bulk "Delete all not needed…" runs one DELETE per entry
+  after its confirmation.
 * ``GET /characters/{c}/figure/stored/{key}/preview`` — what that Delete
   would do (``figure.delete_preview``, Ruling A64): the files with their size,
   the outfit models deleted with a shape, whether it is deletable and why
@@ -173,11 +184,16 @@ from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
+from app.core.route_limits import FIGURE_POLLS, FIGURE_POLLS_LIMIT, limited
+from app.core.single_flight import SerialFlight
 from app.models.character import get_character_dir
 
 logger = get_logger("figure_routes")
 
 router = APIRouter(prefix="/characters", tags=["figure"])
+
+#: ``GET /characters/open-steps``: one roster computation at a time plus one follower (slot = the roster).
+_ROSTER_FLIGHT = SerialFlight()
 
 
 def _require_character(character_name: str) -> None:
@@ -186,16 +202,20 @@ def _require_character(character_name: str) -> None:
 
 
 @router.get("/open-steps")
+@limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
 def get_open_steps(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The character list's badges (Ruling A112): ``{"characters": {name: figure_build.open_steps(name)}}`` for
-    every character of the roster (dormant included) — only those with an open step or a running Build."""
-    from app.core import figure_build
+    every character of the roster (dormant included) — only those with an open step or a running Build.
+    Concurrent polls share one computation (``_ROSTER_FLIGHT``, slot = the roster, key = the figure
+    generation): a poll that finds a run with the same key waits for it, one with a newer key waits for the
+    slot's single follower. Every caller gets its own copy. Stale badges are re-planned by
+    ``figure_build``'s two background workers. The wait happens in this sync handler's worker thread, never on
+    the event loop."""
+    from app.core import figure, figure_build
     from app.models.character import list_available_characters
-    out: Dict[str, Any] = {}
-    for name in list_available_characters(include_dormant=True):
-        info = figure_build.open_steps(name)
-        if info["building"] or info["base"]["count"] or info["outfit"]["count"]:
-            out[name] = info
+    names = list(list_available_characters(include_dormant=True))
+    out = _ROSTER_FLIGHT.run(tuple(names), lambda: figure._generation[0],
+                             lambda: figure_build.open_steps_roster(names))
     return {"characters": out}
 
 
@@ -239,6 +259,7 @@ def cancel_build_all(lang: str = "en", _: Dict[str, Any] = Depends(require_admin
 
 
 @router.get("/{character_name}/figure")
+@limited(FIGURE_POLLS, FIGURE_POLLS_LIMIT)
 def get_figure(character_name: str, plain: bool = False,
                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import figure_build
@@ -799,6 +820,43 @@ def cancel_waiting(character_name: str, body: WaitingCancelRequest,
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+class ShapeViewRequest(BaseModel):
+    view: str
+
+
+@router.post("/{character_name}/figure/shape-view", status_code=202)
+def regenerate_shape_view(character_name: str, body: ShapeViewRequest,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import base_body
+    from app.imagegen.base import MediaGenerationDisabled
+    _require_character(character_name)
+    try:
+        return base_body.start_shape_view(character_name, body.view)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (LookupError, MediaGenerationDisabled) as e:
+        raise HTTPException(status_code=409, detail=str(e.args[0] if e.args else e))
+
+
+@router.get("/{character_name}/figure/shape/{key}/views/{view}")
+def get_shape_view_image(character_name: str, key: str, view: str, request: Request,
+                         _: Dict[str, Any] = Depends(require_admin)):
+    import mimetypes
+    from app.core import base_body
+    from app.core.http_files import etag_file_response
+    from app.core.model_refs import find_ref_image
+    if not base_body.is_outfit_body_signature(key):
+        raise HTTPException(status_code=400, detail="not a body shape key")
+    if view not in base_body.BASE_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(base_body.BASE_VIEWS)}")
+    _require_character(character_name)
+    path = find_ref_image(character_name, base_body._kind(view), key)
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _encoding = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "application/octet-stream")
+
+
 @router.get("/{character_name}/figure/stored")
 def get_figure_stored(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     from app.core import figure
@@ -1082,6 +1140,14 @@ def template_view_image(character_name: str, item_id: str, view: str, attempt: i
 # --- texture from cut (plan 2026-11-20-template-cut-uv-texture, Task 10) -----------------------------------------
 
 def _template_cut_payload(character_name: str, item_id: str) -> Dict[str, Any]:
+    """``_template_cut_body`` inside one read scope (``read_scope``, plan 2026-11-24-figure-poll-caches, Task 5): the
+    cut key the schedule, the pattern state and the dialog ask for is computed once per request."""
+    from app.core import read_scope
+    with read_scope.scope():
+        return _template_cut_body(character_name, item_id)
+
+
+def _template_cut_body(character_name: str, item_id: str) -> Dict[str, Any]:
     """``garment_cut_texture.dialog_state`` plus the picture URLs (``urls``: template / raw / atlas of the current
     csig, "" for a missing file; the query names the csig, so a new attempt is a new URL) and ``pattern_url`` (the
     debug sheet of the current islands, "" without islands)."""

@@ -37,7 +37,7 @@ import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import type { WorldWater } from './tiles';
 import { waterInside } from './waterShade';
-import type { WorldPropSpec as BaseWorldPropSpec } from '../types';
+import type { WorldPropSpec as BaseWorldPropSpec } from '@anima/hud/types';
 type WorldPropSpec = BaseWorldPropSpec & { light?: SceneModelSpec['light']; water?: SceneModelSpec['water'] };
 
 /**

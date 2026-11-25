@@ -16,8 +16,13 @@ sweetheart), so the dip never showed. ``garment_preview.top_edge_curve`` now use
 * depth 0.08 -> centre 1.12; depth 0.3 -> capped at SWEETHEART_MAX_M 0.10 -> centre 1.10.
 * ``shapes`` end to end (band_y 1.275; a test registration px = (x * 1000, (2 - y) * 1000)):
   strapless sweetheart top: top edge = band_y - STRAPLESS_UNDERARM_M 0.02 = 1.255, centre 1.255 - 0.05 = 1.205
-  -> px y 795; straps sweetheart top: the band 1.275, centre 1.225 -> px y 775; a straight neckline draws no
-  ``top_edge`` line.
+  -> px y 795, rims px y 745. Round 2026-11-25: a straps sweetheart top is a corset shell too (``corset_top``), its
+  top edge the same band_y - 0.02 = 1.255, centre 1.205 -> px y 795, rims px y 745 (before the round: the band
+  1.275, centre 1.225 -> 775 / 725). A straight neckline draws no ``top_edge`` line.
+* the straps top's two ``strap`` fills (``corset_strap_spec``): neck_r = 0.33 / (2 pi) + NECK_CLEAR_M 0.012
+  = 0.064521; shoulder_x = 0.5 x (0.064521 + PIN_SHARE 0.75 x 0.40 / 2) = 0.107261 -> 0.1073; half width
+  STRAP_W_M 0.032 / 2 = 0.016 -> x 0.0913 .. 0.1233 (px 91.3 .. 123.3; the other strap mirrored); from the top
+  edge 1.255 (px 745) up to shoulder_y 1.40 + SHOULDER_TOP_M 0.045 = 1.445 (px 555).
 """
 import os
 import sys
@@ -87,8 +92,15 @@ e = edge_of(shoulders="strapless", neckline="sweetheart")
 check("strapless centre px", e[12], (0.0, 795.0), 1e-3)
 check("strapless rim y px", e[0][1], 745.0, 1e-3)
 e = edge_of(shoulders="straps", neckline="sweetheart")
-check("straps centre px", e[12], (0.0, 775.0), 1e-3)
-check("straps rim y px", e[0][1], 725.0, 1e-3)
+check("straps centre px", e[12], (0.0, 795.0), 1e-3)
+check("straps rim y px", e[0][1], 745.0, 1e-3)
+params = gt.validate_params({"kind": "top", "length_m": 0.4, "shoulders": "straps", "neckline": "sweetheart"})[0]
+straps = [s["points"] for s in gp.shapes(params, M, Reg())["shapes"] if s["role"] == "strap"]
+check("strap fills", len(straps), 2)
+for name, pts, want_x in (("right strap", straps[0], (91.3, 123.3)), ("left strap", straps[1], (-123.3, -91.3))):
+    xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+    check(name + " x px", (min(xs), max(xs)), want_x, 1e-3)
+    check(name + " y px", (max(ys), min(ys)), (745.0, 555.0), 1e-3)
 check("straight: no edge", 0 if edge_of(shoulders="strapless", neckline="straight") is None else 1, 0)
 print("FAILED:" if FAILS else "all passed", FAILS or "")
 sys.exit(1 if FAILS else 0)

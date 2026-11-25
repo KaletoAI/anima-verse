@@ -1557,8 +1557,8 @@ acceptance against real music and TTS remains Task 61.
 
 ## HUD (Task S4)
 
-The browser HUD itself — `client3d/hud.html`, served by the Anima server at
-`/static/client3d/hud.html?bridge=gdcef` — runs in an off-screen Chromium
+The browser HUD itself — `hud/hud.html` of the `hud` workspace, built to `static/hud/` and served by the Anima server at
+`/static/hud/hud.html?bridge=gdcef` — runs in an off-screen Chromium
 (gdCEF) and is drawn over the world (`Hud/HudOverlay.cs`):
 
 - **View**: a full-window `TextureRect` on canvas layer 5 (above the status
@@ -1568,7 +1568,7 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   premultiplied, so the rect blends premultiplied. 3 s after the page loaded a
   log line `hud: transparency probe: … alpha=…` reports the painted alpha
   outside every HUD surface (0 = transparent) and inside the first one.
-- **Bridge**: protocol v4 of `client3d/src/hud/bridge.ts` (prop-action preparation and
+- **Bridge**: protocol v4 of `hud/src/hud/bridge.ts` (prop-action preparation and
   correlated mutation invalidation, plus speech completion), one JSON string per
   message over gdCEF's JS binding (`window.godotMethods.hud_bridge(json)` →
   `HudOverlay.hud_bridge`, Godot's `js_emit("hud_bridge", json)` →

@@ -10,7 +10,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// Task 11, the parts the shared vectors do not reach: the world-map parser behind the name tags and the frame
-/// readout of the performance overlay (client3d/src/game/perfstats.ts <c>pushFrame</c>/<c>pushWorstFrame</c> —
+/// readout of the performance overlay (hud/src/game/perfstats.ts <c>pushFrame</c>/<c>pushWorstFrame</c> —
 /// hand cases mirroring smoke_walk_math.mjs' "perf" section; every expected number is derived in the comment).
 /// </summary>
 public class TagRowTests

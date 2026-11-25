@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { mainFunction } from './mainFunction.mjs';
-const built = await build({ stdin: { contents: `export { Engine } from './client3d/src/scene/engine.ts'; export { NpcManager } from './client3d/src/scene/npcs.ts'; export { FirstPersonZoom } from './client3d/src/scene/cameraFraming.ts'; export * from './client3d/src/game/photoMode.ts'; export * as THREE from 'three';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, loader:{'.css':'empty'}, write: false, platform: 'node', format: 'esm' });
+const built = await build({ stdin: { contents: `export { Engine } from './client3d/src/scene/engine.ts'; export { NpcManager } from './client3d/src/scene/npcs.ts'; export { FirstPersonZoom } from './client3d/src/scene/cameraFraming.ts'; export * from './hud/src/game/photoMode.ts'; export * as THREE from 'three';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, loader:{'.css':'empty'}, write: false, platform: 'node', format: 'esm' });
 const bundleDir=await mkdtemp('/tmp/task94-photo-mode-');
 let loaded;
 try {

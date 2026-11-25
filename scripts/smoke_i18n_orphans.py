@@ -32,7 +32,7 @@ Derived by hand from the two consumers of the map:
      ``GET /i18n/translations/<lang>``. Its argument is often a variable fed
      from a label table in the same module (``t(VIEW_LABELS[v])``,
      ``t(field.label)``, ``t(mood)``), so ANY string literal in
-     frontend/src, packages/*/src and client3d/src counts as a source.
+     frontend/src, packages/*/src, client3d/src and hud/src counts as a source.
   2. Python ``t(en, lang)`` from app/core/i18n.py: the same map, server side.
      Callers pass literals directly and also hand raw English strings to the
      React clients, which then translate them (``t(p.message)``,
@@ -63,7 +63,7 @@ additionally gets a fallback haystack in which literal seams (``' + '``,
 string they contain.
 
 PLACEHOLDERS: React interpolates by hand —
-``t('Floor {n}').replace('{n}', String(level))`` (client3d/src/hud/Hud.tsx) —
+``t('Floor {n}').replace('{n}', String(level))`` (hud/src/hud/Hud.tsx) —
 so the braces stand VERBATIM in the source literal and a plain string match is
 exactly right. A template literal would carry ``${…}`` into the key and could
 never be looked up; check B asserts no key contains ``${``.
@@ -126,6 +126,7 @@ SOURCE_TREES = [
     ("frontend/src", {".ts", ".tsx"}),
     ("packages", {".ts", ".tsx"}),
     ("client3d/src", {".ts", ".tsx"}),
+    ("hud/src", {".ts", ".tsx"}),
     ("app", {".py"}),
     ("plugins", {".py", ".yaml", ".yml", ".json"}),
     ("shared/config", {".json"}),

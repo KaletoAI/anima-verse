@@ -13,10 +13,11 @@ figure a clip, right after the retarget / bind-relative step — a path that
 forgets them shows the figure standing in its shoes with bare-foot tracks,
 the heel 5 cm under the floor, and nothing says why.
 
-WHAT IS CHECKED, derived by hand from the two source trees
+WHAT IS CHECKED, derived by hand from the source trees
 ---------------------------------------------------------------------------
 The three clip-path primitives are ``bindRelativeClip(``, ``adaptExternalClips(``
-and ``retargetClips(``. Every CALL of one of them under ``client3d/src`` and
+and ``retargetClips(``. Every CALL of one of them under ``client3d/src``,
+``hud/src`` (the HUD page moved there; it holds no call today) and
 ``frontend/src`` (definitions, ``export`` lines, comments and docstrings are
 not calls) must sit inside a function from the LISTED SET below, and that
 function's body must either call ``applyFootPose(`` itself or forward a
@@ -89,7 +90,7 @@ ALLOWED: dict[str, set[str]] = {
     "frontend/src/tabs/poses/PlacePreview.tsx": {"useEffect"},
 }
 
-SCAN_DIRS = ("client3d/src", "frontend/src")
+SCAN_DIRS = ("client3d/src", "hud/src", "frontend/src")
 
 _FUNCTION = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(")
 _ARROW = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?:const|let)\s+(?P<name>[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=>")

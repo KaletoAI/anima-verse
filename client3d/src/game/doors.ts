@@ -36,7 +36,7 @@
  * turning afterwards would be wrong twice over.
  */
 
-import type { ScenePayload, SceneDoorway } from '../api';
+import type { ScenePayload, SceneDoorway } from '@anima/hud/api';
 
 export interface Point { x: number; z: number }
 

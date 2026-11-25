@@ -18,7 +18,7 @@ import {
   getLocationScene,
   type SceneExtra, type SceneModelSpec, type ScenePayload, type ScenePlate,
   type SceneWall,
-} from '../api';
+} from '@anima/hud/api';
 import { roomDoor } from '../game/doors';
 import { markerLiftPoint } from '../game/placement';
 import { applyOcclusionFade } from './occlusion';

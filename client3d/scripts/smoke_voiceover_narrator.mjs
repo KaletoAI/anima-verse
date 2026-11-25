@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke check for WHO THE NARRATOR IS in the voice-over filter
- * (`client3d/src/game/voiceover.ts`, bugrunde-2026-08-29 point 8) — numbers,
+ * (`hud/src/game/voiceover.ts`, bugrunde-2026-08-29 point 8) — numbers,
  * no listening (docs/schnittstellen-3d.md § B5a).
  *
  * Usage:  node client3d/scripts/smoke_voiceover_narrator.mjs
@@ -84,7 +84,7 @@ async function main() {
     process.exit(runResult.status ?? 1)
   }
 
-  const { isNarratorLine, speakableLines } = await import('../src/game/voiceover.ts')
+  const { isNarratorLine, speakableLines } = await import('../../hud/src/game/voiceover.ts')
 
   const FAILED = []
   function checkTrue(label, ok) {

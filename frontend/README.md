@@ -51,7 +51,7 @@ src/
 
 **Adding a tab** means one entry in `src/tabs/registry.ts` (`id`, English `label`, `Component`) —
 nothing else registers it. Player panels belong in `@anima/player-ui`; their HUD
-registration is in `client3d/src/hud/Hud.tsx`, including skill requirements.
+registration is in `hud/src/hud/Hud.tsx`, including skill requirements.
 
 Character forms and shared UI come from [`@anima/player-ui`](../packages/README.md),
 and geometry from `@anima/scene-render`. `src/lib/api.ts` and

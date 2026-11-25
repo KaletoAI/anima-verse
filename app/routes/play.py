@@ -2510,7 +2510,8 @@ async def _storyteller_after_silence(actor: str, text: str, location_id: str,
         from app.core.silence_check import should_narrate_silence
         from app.models import perception_store
         loop = get_agent_loop()
-        key = loop.room_key(location_id, room_id, actor)
+        # room_key reads the actor's position when there is no location.
+        key = await asyncio.to_thread(loop.room_key, location_id, room_id, actor)
         settled = await loop.wait_room_responds_settled(
             key, timeout_s=_SILENCE_CHECK_TIMEOUT_S, names=watch)
         if not settled:
@@ -2580,35 +2581,45 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     if not content.strip() and not has_image:
         raise HTTPException(status_code=400, detail="content is required")
 
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
+    # Every read and write of this handler runs in a worker thread: the event
+    # loop never opens the world DB (app/core/loop_guard.py). to_thread copies
+    # the request context, so the session's active character resolves there.
+    import asyncio
 
+    def _resolve_speaker():
+        avatar = (get_active_character() or "").strip()
+        if not avatar:
+            raise HTTPException(status_code=409, detail={"reason": "no_avatar"})
+        photo_url = None
+        if photo_filename:
+            from app.core.scene_photo import resolve_scene_photo
+            photo_url = resolve_scene_photo(avatar, photo_filename)
+        # Resolve the current place/room + who is reachable once (for the
+        # addressee filter, the reaction dispatch and the storyteller fallback).
+        loc = room = ""
+        present: set = set()
+        try:
+            from app.core.perception import addressable_for
+            from app.models.character import (get_character_current_location,
+                                               get_character_current_room)
+            loc = get_character_current_location(avatar) or ""
+            room = get_character_current_room(avatar) or ""
+            # THE one addressability rule: the room when there is one, plus
+            # whoever stands within earshot out in the open. Without the second
+            # half an avatar on the road could address nobody at all.
+            present = set(addressable_for(avatar))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("play_say location/presence lookup failed: %s", e)
+        return avatar, photo_url, loc, room, present
+
+    avatar, _photo_url, loc, room, present = await asyncio.to_thread(_resolve_speaker)
     if photo_filename:
-        from app.core.scene_photo import resolve_scene_photo
-        image_url = resolve_scene_photo(avatar, photo_filename)
+        image_url = _photo_url
         image_id = ""
 
     raw_addr = body.get("addressees") or []
     addressees = [str(a) for a in raw_addr] if isinstance(raw_addr, list) else []
     volume = str(body.get("volume") or VOLUME_NORMAL).strip()
-
-    # Resolve the current place/room + who is reachable once (for the addressee
-    # filter, the reaction dispatch and the storyteller fallback).
-    loc = room = ""
-    present: set = set()
-    try:
-        from app.core.perception import addressable_for
-        from app.models.character import (get_character_current_location,
-                                           get_character_current_room)
-        loc = get_character_current_location(avatar) or ""
-        room = get_character_current_room(avatar) or ""
-        # THE one addressability rule: the room when there is one, plus
-        # whoever stands within earshot out in the open. Without the second
-        # half an avatar on the road could address nobody at all.
-        present = set(addressable_for(avatar))
-    except Exception as e:  # noqa: BLE001
-        logger.debug("play_say location/presence lookup failed: %s", e)
 
     # Restrict addressees to who is ACTUALLY reachable: after a location/room
     # change the UI may still send an old selection (characters from the
@@ -2623,7 +2634,6 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     # A package may consume the message before anything is recorded (e.g. a
     # spoken trigger phrase). A consumed message is not broadcast: no
     # utterance, no spell detection, no room reactions.
-    import asyncio
     if content.strip():
         intercepted = await asyncio.to_thread(
             _run_say_intercepts, avatar=avatar, content=content, volume=volume,
@@ -2635,19 +2645,27 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     # Keep the visible utterance text clean: the thumbnail travels in
     # perception_meta, and only reaction context contains the description.
     # Only an actual image attachment makes this POST wait for analysis.
-    import asyncio
     img_display_url = ""
     img_block = ""
     if has_image:
         from app.routes.chat import resolve_chat_image, analyze_chat_image_blocking
-        img_path, img_display_url = resolve_chat_image(image_id, image_url)
+
+        def _resolve_image():
+            path, display_url = resolve_chat_image(image_id, image_url)
+            own_name = ""
+            if path:
+                # Library picks share the same disclosure semantics as Show in chat.
+                from app.models.character import get_character_images_dir
+                own_images = get_character_images_dir(avatar).resolve()
+                attached = Path(path).resolve()
+                if attached.parent == own_images:
+                    own_name = attached.name
+            return path, display_url, own_name
+
+        img_path, img_display_url, _own_name = await asyncio.to_thread(_resolve_image)
         if img_path:
-            # Library picks share the same disclosure semantics as Show in chat.
-            from app.models.character import get_character_images_dir
-            own_images = get_character_images_dir(avatar).resolve()
-            attached = Path(img_path).resolve()
-            if attached.parent == own_images:
-                photo_filename = attached.name
+            if _own_name:
+                photo_filename = _own_name
             _vision_agent = next((a for a in addressees if a and a != avatar), "") or avatar
             try:
                 _desc = await asyncio.wait_for(
@@ -2668,7 +2686,6 @@ async def play_say(request: Request, user=Depends(get_current_user)):
 
     # Detect a spell directed at the first addressee, execute its effects and
     # give the target a narrative hint for its response.
-    import asyncio
     spell = None
     # Spell detection has NO model routed while the avatar carries spell items:
     # `detect_and_cast` then fails silently (`resolve_llm` returns None, the
@@ -2682,7 +2699,9 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         try:
             from app.core.spell_engine import (
                 build_spell_catalog, detect_and_cast, has_spell_detect_routing)
-            if build_spell_catalog(avatar) and not has_spell_detect_routing(avatar):
+            if await asyncio.to_thread(
+                    lambda: bool(build_spell_catalog(avatar))
+                    and not has_spell_detect_routing(avatar)):
                 spell_routing_missing = True
                 logger.warning(
                     "play_say: no LLM routed for spell_detect — %s carries spell "
@@ -2706,23 +2725,26 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     # Carry an image URL in perception_meta for the scene thumbnail;
     # the visible text remains unchanged.
     _pmeta = {"image_url": img_display_url} if img_display_url else None
-    uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
-                           addressees=addressees, source="play",
-                           perception_meta=_pmeta)
-    if uid and photo_filename:
-        from app.core.scene_photo_watch import reveal_photo
-        await asyncio.to_thread(reveal_photo, avatar, photo_filename)
+    _hint = (spell.get("hint") or "").strip() if _is_spell else ""
 
-    # 2b) Make the spell result (success_/fail_text) visible as a storyteller line.
-    #     location_id explicit — the storyteller has no own location; the anchor
-    #     gives it the caster's point, without which the line reaches nobody out
-    #     in the open (it has no circle of its own).
-    if _is_spell:
-        _hint = (spell.get("hint") or "").strip()
+    def _record():
+        uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
+                               addressees=addressees, source="play",
+                               perception_meta=_pmeta)
+        if uid and photo_filename:
+            from app.core.scene_photo_watch import reveal_photo
+            reveal_photo(avatar, photo_filename)
+        # Make the spell result (success_/fail_text) visible as a storyteller
+        # line. location_id explicit — the storyteller has no own location;
+        # the anchor gives it the caster's point, without which the line
+        # reaches nobody out in the open (it has no circle of its own).
         if _hint:
             record_utterance(speaker=STORYTELLER_SPEAKER, content=_hint, volume=VOLUME_NORMAL,
                              location_id=loc, room_id=room, source="spell",
                              anchor=avatar)
+        return uid
+
+    uid = await asyncio.to_thread(_record)
 
     # Dispatch addressed mandatory replies and optional bystander chimes.
     # Spell targets react to chat_substitute plus the effect hint, not raw
@@ -2735,7 +2757,9 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         # Prepend the image description for agent reactions while preserving
         # the recorded clean text and thumbnail.
         _react_content = f"{img_block}\n\n{say_content}".strip() if img_block else say_content
-        reactions = get_agent_loop().dispatch_room_reactions(
+        # The awaitable variant: the roster and eligibility reads run in the
+        # agent loop's own pool, and everything it bumps is queued on return.
+        reactions = await get_agent_loop().dispatch_room_reactions_async(
             speaker=avatar, content=_react_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
             is_avatar=True, hints=hints, utterance_id=uid)
@@ -3894,6 +3918,45 @@ def _json_off_loop(payload: Any) -> JSONResponse:
     return JSONResponse(jsonable_encoder(payload))
 
 
+def _encode_default(obj: Any) -> Any:
+    """``json.dumps`` hook for a value that is not a JSON type (set, Path,
+    Enum, datetime, ...): FastAPI's own conversion of that one value."""
+    return jsonable_encoder(obj)
+
+
+def _json_fast(payload: Any) -> Response:
+    """Encode a payload of mostly native values in ONE C pass.
+
+    The same bytes as ``_json_off_loop`` (the options are those of
+    starlette's ``JSONResponse.render``), without the Python walk of
+    ``jsonable_encoder`` over the whole tree: only a value json cannot
+    write itself goes through ``_encode_default``. A ``TypeError`` from
+    the dump (e.g. a non-string dict key) falls back to ``_json_off_loop``,
+    which raises the same error type as before when the payload is really
+    unencodable; NaN stays a ``ValueError`` like the old path.
+
+    One deliberate difference: ``jsonable_encoder`` drops dict keys with the
+    SQLAlchemy prefix ``_sa``, this path keeps them. The worldmap payload
+    carries no SQLAlchemy objects, so such a key could only come from author
+    data and is now delivered instead of silently dropped
+    (``scripts/smoke_worldmap_encode.py`` [J7]).
+    """
+    try:
+        body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"),
+                          default=_encode_default).encode("utf-8")
+    except TypeError:
+        # Counted, so a key that ALWAYS falls back (both ways run on every
+        # poll) shows up in the minute line instead of staying silent.
+        try:
+            from app.core import hot_path_stats
+            hot_path_stats.count("worldmap_encode", "fallback")
+        except Exception:  # noqa: BLE001 — statistics never break a response
+            pass
+        return _json_off_loop(payload)
+    return Response(content=body, media_type="application/json")
+
+
 @router.get("/play/worldmap")
 def play_worldmap(user=Depends(get_current_user),
                   show_all: int = Query(0, alias="all")):
@@ -3906,7 +3969,8 @@ def play_worldmap(user=Depends(get_current_user),
     A PLAIN ``def`` for the same reason as ``/play/scene``: the payload is
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
-    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
+    ``_json_fast`` encodes the payload in the worker thread, in one C pass
+    (the shared world-prop rows are serialized, never copied).
 
     Every call feeds the hot-path statistics (``core/hot_path_stats``): one
     log line per minute, ``hot_path worldmap n=<n> <key>_p50=… <key>_p95=…``
@@ -3939,7 +4003,7 @@ def play_worldmap(user=Depends(get_current_user),
     build_ms = (time.monotonic() - t0) * 1000
     payload["sync"]["build_ms"] = round(build_ms, 1)
     t_enc = time.perf_counter()
-    response = _json_off_loop(payload)
+    response = _json_fast(payload)
     hot_path_stats.record("worldmap", {
         "build_ms": build_ms,
         "encode_ms": (time.perf_counter() - t_enc) * 1000,

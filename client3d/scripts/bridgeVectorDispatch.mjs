@@ -20,8 +20,10 @@ async function modules() {
         .map((p) => `export * from '${root}packages/scene-render/src/${p}.ts';`),
       ...['scene/legPin', 'scene/bridgeLift',
         'scene/bridgeTravel', 'scene/bridgeHeading', 'scene/standSettle',
-        'scene/footLockMeasure', 'game/stairs', 'game/npcWalk']
-        .map((p) => `export * from '${root}client3d/src/${p}.ts';`)].join('\n');
+        'scene/footLockMeasure', 'game/npcWalk']
+        .map((p) => `export * from '${root}client3d/src/${p}.ts';`),
+      // `game/stairs` moved into the HUD workspace with the HUD page.
+      ...['game/stairs'].map((p) => `export * from '${root}hud/src/${p}.ts';`)].join('\n');
       const built = await build({stdin: {contents: entry, resolveDir: root, loader: 'ts'},
         bundle: true, platform: 'node', format: 'esm', write: false,
         external: ['three', 'three/*'], logLevel: 'error'});

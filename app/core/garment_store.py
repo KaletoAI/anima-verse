@@ -144,6 +144,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
+from app.core import read_scope
 
 logger = get_logger("garment_store")
 
@@ -747,6 +748,21 @@ def _md5(payload: Dict[str, Any]) -> str:
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
+    """``_garment_fsig`` memoised per read scope (read_scope), a copy per call: keyed by every argument, ``profile``
+    by ``read_scope.obj_sig`` (plan 2026-11-24-figure-poll-caches, Task 5)."""
+    if not read_scope.active():
+        return _garment_fsig(character_name, item_id, profile=profile, state=state, method=method, swing=swing)
+    psig = read_scope.obj_sig(profile)
+    if profile is not None and psig is None:
+        return _garment_fsig(character_name, item_id, profile=profile, state=state, method=method, swing=swing)
+    return read_scope.memo("garment_fsig", (character_name, item_id, psig, state, method, swing),
+                           lambda: _garment_fsig(character_name, item_id, profile=profile, state=state,
+                                                 method=method, swing=swing))
+
+
+def _garment_fsig(character_name: str, item_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
+                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HAAR adds ``{method, ssig, seed, colour}`` (the served
     seed, ``haar_served_seed``; the colour override), ``cut`` only when the hairstyle has one
@@ -771,6 +787,10 @@ def garment_fsig(character_name: str, item_id: str, *,
     before Ruling H-R1 was made under, ``garment_refit.swing_default_fits``).
     ValueError when ``item_id`` is no garment of a known kind (or for a bad
     ``state``)."""
+    try:
+        read_scope.tally("garment_fsig")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
     if kind == "footwear":
@@ -829,6 +849,10 @@ def finite_json(value: Any) -> Any:
 def read_record(path: Path) -> Dict[str, Any]:
     """A sidecar's JSON object, {} when missing, unreadable or not an object; non-finite numbers (a NaN already
     on disk) read as None (``finite_json``)."""
+    try:
+        read_scope.tally("read_record")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):

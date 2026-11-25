@@ -70,10 +70,17 @@ class _Db:
         if str(path) not in _SCHEMA_READY:
             # The tables belong to the world schema (init_schema at boot); a
             # tool that opens a world without them must still work.
-            from app.core.world_db_schema import SCHEMA_STATEMENTS
+            from app.core.world_db_schema import ALTER_MIGRATIONS, SCHEMA_STATEMENTS
             for stmt in SCHEMA_STATEMENTS:
                 if "world_dev_" in stmt:
                     self.conn.execute(stmt)
+            for table, column, typedef in ALTER_MIGRATIONS:
+                if table.startswith("world_dev_"):
+                    try:
+                        self.conn.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+                    except sqlite3.OperationalError:
+                        pass  # the column exists
             self.conn.commit()
             _SCHEMA_READY.add(str(path))
         if self.immediate:
@@ -129,17 +136,20 @@ def _check_status(status: str) -> None:
 # ── Runs ─────────────────────────────────────────────────────────────────
 
 def create_run(task: str, model: str, provider: str, user_id: str,
-               max_steps: int, max_tokens_total: int) -> str:
-    """Insert a new ``running`` run; raises ``RunOpenError`` when one is open."""
+               max_steps: int, max_tokens_total: int,
+               max_tokens: Optional[int] = None) -> str:
+    """Insert a new ``running`` run; raises ``RunOpenError`` when one is open.
+    ``max_tokens`` is the per-reply cap (None = the model's default)."""
     run_id = "wdr_" + uuid.uuid4().hex[:12]
     try:
         with _Db() as conn:
             conn.execute(
                 "INSERT INTO world_dev_runs (id, task, model, provider, user_id, "
-                "status, max_steps, max_tokens_total, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+                "status, max_steps, max_tokens_total, max_tokens, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
                 (run_id, task or "", model or "", provider or "", user_id or "",
-                 int(max_steps), int(max_tokens_total), utc_now_iso()))
+                 int(max_steps), int(max_tokens_total),
+                 None if max_tokens is None else int(max_tokens), utc_now_iso()))
     except sqlite3.IntegrityError as exc:
         if "idx_world_dev_runs_one_open" not in str(exc):
             raise

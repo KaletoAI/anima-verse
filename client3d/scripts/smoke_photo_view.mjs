@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-const built = await build({ stdin: { contents: `export * from './client3d/src/game/photoView.ts'; export * as THREE from 'three';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm' });
+const built = await build({ stdin: { contents: `export * from './hud/src/game/photoView.ts'; export * as THREE from 'three';`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, platform: 'node', format: 'esm' });
 const { photoView, cropPhotoView, THREE } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
 const camera = new THREE.PerspectiveCamera(90, 2, 0.2, 100);
 camera.position.set(0, 3, 0);

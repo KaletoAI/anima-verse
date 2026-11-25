@@ -106,6 +106,68 @@ Run 5: seq 1 restore_character of "Demo Other" while the character-row read
   raises -> the skip reason starts with "undo failed:" (a read error is never
   reported as "already gone"); complete False.
 
+Run 6 (home keys ABSENT): "Demo Bare" has a config WITHOUT home_location and
+  home_room. home_schedule_state reads both as ABSENT (not ""). seq 1 sets
+  home_location "loc_m", home_room "r_keep" -> diff_keys before = {home_location:
+  ABSENT, home_room: ABSENT}, written = {"loc_m", "r_keep"}. undo -> reversed
+  [1], complete True, and the config has NEITHER key again (before the fix it
+  carried "" for both).
+
+Run 7 (occupants are reported, never "incomplete"): pre-existing loc_s with
+  room r_keep "Demo Hall".
+  seq 1  create location loc_n "Demo Nook" (delete_location{loc_n}).
+  seq 2  loc_s gets a second room r_new "Demo Attic" -> diff_keys: the only
+         differing key is "rooms" (restore_location{before: {rooms: [...]}}).
+  Then "Demo Walker" is put into loc_n and "Demo Roomer" into loc_s / r_new.
+  discard_preview, in its order (created elements oldest-first, then the
+  occupants sorted by name):
+    'location loc_n "Demo Nook"'
+    'character "Demo Roomer" stands in room "Demo Attic" (r_new) of location
+     loc_s, which the undo removes — stays there, place them anew'
+    'character "Demo Walker" stands in location loc_n "Demo Nook" — stays
+     there, place them anew'
+  undo newest-first: 2 -> rooms back to [r_keep] (+ ground), r_new gone,
+  occupant record '"Demo Roomer" stands in the removed place — place them
+  anew' (room r_new); 1 -> loc_n deleted, occupant record for "Demo Walker".
+  => reversed [2, 1], skipped == those two records (seqs [2, 1], keys
+  occupant = Roomer / Walker), complete True (informational only). Nobody is
+  moved: Walker still points at loc_n, Roomer at loc_s / r_new.
+
+Run 8 (pending create_character without written, the crash case): the
+  stored profile carries no "created by" marker (save_character_profile
+  stores created_by "" whatever it is given), so such a row is NEVER deleted:
+  seq 1  pending delete_character{"Demo Crash"} -> skipped "may have written,
+         no inverse — see backup", the character stays.
+  seq 2  pending delete_character{"Demo Manual"} (made by hand under that
+         name) -> skipped the same way, the character stays.
+  discard_preview lists neither (the discard would not delete them) -> [].
+  => reversed [], skipped [(2, no inverse), (1, no inverse)], complete False.
+
+Run 9 (a created character standing in a created place — the usual free-mode
+  run, apply_home_schedule puts a new character at its new home). The
+  discard deletes that character itself, so it is NOT an occupant to place
+  anew, in either journal order:
+  9a  seq 1 create location loc_p "Demo Patch"; seq 2 create character
+      "Demo New" (delete_character{items: []}), then "Demo New" is put into
+      loc_p. Preview (oldest-first, no chat rows, no memory rows naming it):
+        'location loc_p "Demo Patch"'
+        'character "Demo New" — 0 chat messages, 0 memory rows of other
+         characters name it'
+      and NO occupant line. undo: 2 -> Demo New deleted; 1 -> loc_p deleted,
+      nobody stands in it any more. => reversed [2, 1], skipped [], complete.
+  9b  seq 1 create character "Demo Early"; seq 2 create location loc_q
+      "Demo Quay"; "Demo Early" and the pre-existing "Demo Stayer" are put
+      into loc_q. Preview:
+        'character "Demo Early" — 0 chat messages, 0 memory rows of other
+         characters name it'
+        'location loc_q "Demo Quay"'
+        'character "Demo Stayer" stands in location loc_q "Demo Quay" — stays
+         there, place them anew'
+      undo: 2 -> loc_q deleted while both stand in it (two occupant records
+      at seq 2: Early, Stayer); 1 -> Demo Early deleted, so its record is
+      dropped. => reversed [2, 1], skipped == [(2, "Demo Stayer")] only,
+      complete True; Demo Stayer still points at loc_q.
+
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_undo.py
 """
@@ -482,6 +544,210 @@ reason5 = (rep["skipped"] or [{}])[0].get("reason", "")
 check("(5) read error -> undo failed", reason5.startswith("undo failed:"), rep)
 check("(5) not complete", rep["complete"] is False, rep)
 wr.set_status(run5, "rollback_incomplete")
+
+# ── Run 6: absent home keys stay absent ───────────────────────────────────
+check("(6) fixture Demo Bare created",
+      save_character_profile("Demo Bare", {"name": "Demo Bare"}, create_new=True))
+c6 = get_character_config("Demo Bare")
+c6.pop("home_location", None)
+c6.pop("home_room", None)
+save_character_config("Demo Bare", c6)
+c6 = get_character_config("Demo Bare")
+check("(6) config has no home keys",
+      "home_location" not in c6 and "home_room" not in c6, c6)
+hb6 = wu.home_schedule_state("Demo Bare")
+check("(6) state reads ABSENT for both",
+      hb6["home_location"] == wu.ABSENT and hb6["home_room"] == wu.ABSENT, hb6)
+run6 = wr.create_run("build 6", "m", "p", "u", 40, 300000)
+s = wr.begin(run6, 1, "write", "update_character", {}, "character", "Demo Bare")
+c6["home_location"] = "loc_m"
+c6["home_room"] = "r_keep"
+save_character_config("Demo Bare", c6)
+b6, w6 = wu.diff_keys(hb6, wu.home_schedule_state("Demo Bare"))
+check("(6) diff before = both ABSENT",
+      b6 == {"home_location": wu.ABSENT, "home_room": wu.ABSENT}
+      and w6 == {"home_location": "loc_m", "home_room": "r_keep"}, (b6, w6))
+wr.attach(run6, s, "Demo Bare", {"op": "restore_home_schedule", "name": "Demo Bare",
+                                 "before": b6})
+wr.complete(run6, s, w6, "home")
+rep = wu.undo(run6)
+check("(6) reversed [1], complete",
+      rep["reversed"] == [1] and rep["skipped"] == [] and rep["complete"] is True, rep)
+c6 = get_character_config("Demo Bare")
+check("(6) both keys absent again (not \"\")",
+      "home_location" not in c6 and "home_room" not in c6,
+      (c6.get("home_location"), c6.get("home_room")))
+wr.set_status(run6, "rolled_back")
+
+# ── Run 7: occupants of removed places are reported, never incomplete ────
+from app.models.character import (get_character_current_location,  # noqa: E402
+                                  get_character_current_room,
+                                  save_character_current_location,
+                                  save_character_current_room)
+
+loc("loc_s", "Demo Shed", rooms=[{"id": "r_keep", "name": "Demo Hall"}])
+for who in ("Demo Walker", "Demo Roomer"):
+    check(f"(7) fixture {who} created",
+          save_character_profile(who, {"name": who}, create_new=True))
+run7 = wr.create_run("build 7", "m", "p", "u", 40, 300000)
+
+# seq 1: create loc_n
+s = wr.begin(run7, 1, "write", "create_location", {}, "location")
+loc("loc_n", "Demo Nook")
+wr.attach(run7, s, "loc_n", {"op": "delete_location", "id": "loc_n"})
+wr.complete(run7, s, get_location_by_id("loc_n"), 'created location loc_n "Demo Nook"')
+
+# seq 2: loc_s gets room r_new
+sb = get_location_by_id("loc_s")
+s = wr.begin(run7, 1, "write", "update_location", {"id": "loc_s"}, "location", "loc_s")
+cur7 = copy.deepcopy(sb)
+cur7["rooms"] = list(cur7.get("rooms") or []) + [{"id": "r_new", "name": "Demo Attic"}]
+upsert_location(cur7, sync_world=False)
+b7, w7 = wu.diff_keys(sb, get_location_by_id("loc_s"))
+check("(7) loc_s diff is exactly rooms", sorted(b7) == ["rooms"], sorted(b7))
+check("(7) r_new stored",
+      any(r.get("id") == "r_new" for r in get_location_by_id("loc_s").get("rooms") or []))
+wr.attach(run7, s, "loc_s", {"op": "restore_location", "id": "loc_s", "before": b7},
+          before=b7)
+wr.complete(run7, s, w7, "updated loc_s")
+
+save_character_current_location("Demo Walker", "loc_n")
+save_character_current_location("Demo Roomer", "loc_s")
+save_character_current_room("Demo Roomer", "r_new")
+places = character_model.list_character_places()
+check("(7) Walker in loc_n, Roomer in loc_s/r_new",
+      places.get("Demo Walker", ("",))[0] == "loc_n"
+      and places.get("Demo Roomer") == ("loc_s", "r_new"), places)
+
+preview7 = wu.discard_preview(run7)
+check("(7) preview lists the place and both occupants, in order",
+      preview7 == [
+          'location loc_n "Demo Nook"',
+          'character "Demo Roomer" stands in room "Demo Attic" (r_new) of location '
+          "loc_s, which the undo removes — stays there, place them anew",
+          'character "Demo Walker" stands in location loc_n "Demo Nook" — stays '
+          "there, place them anew"], preview7)
+
+rep = wu.undo(run7)
+check("(7) reversed [2, 1]", rep["reversed"] == [2, 1], rep)
+check("(7) two occupant records, seqs [2, 1]",
+      [(x["seq"], x.get("occupant"), x["reason"]) for x in rep["skipped"]] == [
+          (2, "Demo Roomer", '"Demo Roomer" stands in the removed place — place them anew'),
+          (1, "Demo Walker", '"Demo Walker" stands in the removed place — place them anew')],
+      rep["skipped"])
+check("(7) Roomer record names room r_new",
+      rep["skipped"][0].get("room") == "r_new" if rep["skipped"] else False, rep["skipped"])
+check("(7) complete (occupants are informational)", rep["complete"] is True, rep)
+check("(7) is_complete accepts occupant records", wu.is_complete(rep["skipped"]))
+check("(7) loc_n gone", get_location_by_id("loc_n") is None)
+check("(7) r_new gone, r_keep kept",
+      sorted(r.get("id") for r in get_location_by_id("loc_s").get("rooms") or []
+             if not str(r.get("id")).startswith("__")) == ["r_keep"],
+      get_location_by_id("loc_s").get("rooms"))
+check("(7) nobody moved: Walker still points at loc_n",
+      get_character_current_location("Demo Walker") == "loc_n",
+      get_character_current_location("Demo Walker"))
+check("(7) nobody moved: Roomer still in r_new",
+      get_character_current_room("Demo Roomer") == "r_new",
+      get_character_current_room("Demo Roomer"))
+wr.set_status(run7, "rolled_back")
+
+# ── Run 8: a pending create_character is never deleted on a guess ─────────
+run8 = wr.create_run("build 8", "m", "p", "u", 40, 300000)
+wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Crash",
+         {"op": "delete_character", "name": "Demo Crash", "items": []})
+save_character_profile("Demo Crash", {"name": "Demo Crash", "created_by": "world_dev"},
+                       create_new=True)
+check("(8) the saver drops created_by",
+      get_character_profile("Demo Crash").get("created_by") == "",
+      get_character_profile("Demo Crash").get("created_by"))
+wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Manual",
+         {"op": "delete_character", "name": "Demo Manual", "items": []})
+save_character_profile("Demo Manual", {"name": "Demo Manual"}, create_new=True)
+check("(8) both entries pending without written",
+      [(e["seq"], e["state"], e.get("written")) for e in wr.entries(run8)]
+      == [(2, "pending", None), (1, "pending", None)], wr.entries(run8))
+check("(8) preview lists neither", wu.discard_preview(run8) == [],
+      wu.discard_preview(run8))
+rep = wu.undo(run8)
+check("(8) reversed []", rep["reversed"] == [], rep)
+check("(8) skipped [(2, no inverse), (1, no inverse)]",
+      [(x["seq"], x["reason"]) for x in rep["skipped"]]
+      == [(2, "may have written, no inverse — see backup"),
+          (1, "may have written, no inverse — see backup")], rep["skipped"])
+check("(8) not complete", rep["complete"] is False, rep)
+check("(8) Demo Crash kept", character_model.character_row_exists("Demo Crash"))
+check("(8) Demo Manual kept", character_model.character_row_exists("Demo Manual"))
+wr.set_status(run8, "rollback_incomplete")
+
+
+# ── Run 9: a created character in a created place is no occupant ─────────
+def _create_char(run, name):
+    s = wr.begin(run, 1, "write", "create_character", {"data": {"name": name}},
+                 "character", name, {"op": "delete_character", "name": name, "items": []})
+    check(f"(9) {name} created",
+          save_character_profile(name, {"name": name}, create_new=True))
+    wr.complete(run, s, {"name": name}, f"created {name}")
+
+
+def _create_loc(run, lid, name):
+    s = wr.begin(run, 1, "write", "create_location", {}, "location")
+    loc(lid, name)
+    wr.attach(run, s, lid, {"op": "delete_location", "id": lid})
+    wr.complete(run, s, get_location_by_id(lid), f'created location {lid} "{name}"')
+
+
+def _char_line(name):
+    return (f'character "{name}" — 0 chat messages, '
+            "0 memory rows of other characters name it")
+
+
+# 9a: place first, then the character
+run9a = wr.create_run("build 9a", "m", "p", "u", 40, 300000)
+_create_loc(run9a, "loc_p", "Demo Patch")
+_create_char(run9a, "Demo New")
+save_character_current_location("Demo New", "loc_p")
+check("(9a) Demo New stands in loc_p",
+      character_model.list_character_places().get("Demo New", ("",))[0] == "loc_p")
+preview9a = wu.discard_preview(run9a)
+check("(9a) preview: place + character, no occupant line",
+      preview9a == ['location loc_p "Demo Patch"', _char_line("Demo New")], preview9a)
+rep = wu.undo(run9a)
+check("(9a) reversed [2, 1], skipped [], complete",
+      rep["reversed"] == [2, 1] and rep["skipped"] == [] and rep["complete"] is True, rep)
+check("(9a) loc_p and Demo New gone",
+      get_location_by_id("loc_p") is None
+      and not character_model.character_row_exists("Demo New"))
+wr.set_status(run9a, "rolled_back")
+
+# 9b: character first, then the place
+check("(9b) fixture Demo Stayer created",
+      save_character_profile("Demo Stayer", {"name": "Demo Stayer"}, create_new=True))
+run9b = wr.create_run("build 9b", "m", "p", "u", 40, 300000)
+_create_char(run9b, "Demo Early")
+_create_loc(run9b, "loc_q", "Demo Quay")
+save_character_current_location("Demo Early", "loc_q")
+save_character_current_location("Demo Stayer", "loc_q")
+places = character_model.list_character_places()
+check("(9b) Early and Stayer stand in loc_q",
+      places.get("Demo Early", ("",))[0] == "loc_q"
+      and places.get("Demo Stayer", ("",))[0] == "loc_q", places)
+preview9b = wu.discard_preview(run9b)
+check("(9b) preview: character, place, only Stayer as occupant",
+      preview9b == [_char_line("Demo Early"), 'location loc_q "Demo Quay"',
+                    'character "Demo Stayer" stands in location loc_q "Demo Quay" '
+                    "— stays there, place them anew"], preview9b)
+rep = wu.undo(run9b)
+check("(9b) reversed [2, 1]", rep["reversed"] == [2, 1], rep)
+check("(9b) only Demo Stayer's occupant record is left",
+      [(x["seq"], x.get("occupant")) for x in rep["skipped"]] == [(2, "Demo Stayer")],
+      rep["skipped"])
+check("(9b) complete", rep["complete"] is True, rep)
+check("(9b) Demo Early gone, Demo Stayer kept and not moved",
+      not character_model.character_row_exists("Demo Early")
+      and get_character_current_location("Demo Stayer") == "loc_q",
+      get_character_current_location("Demo Stayer"))
+wr.set_status(run9b, "rolled_back")
 
 print()
 if failures:

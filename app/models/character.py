@@ -8,6 +8,7 @@ Storage: world.db — characters and character_state tables
 from datetime import datetime
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
+from app.core import read_scope
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import json
@@ -385,6 +386,16 @@ def _load_character_state(character_name: str, *, strict: bool = False) -> Dict[
 
 
 def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
+    """``_load_character_profile`` memoised per read scope (read_scope), a copy per call: keyed by
+    ``(character_name, strict)``; ``save_character_profile`` clears the scope (plan 2026-11-24-figure-poll-caches,
+    Task 5)."""
+    if not read_scope.active():
+        return _load_character_profile(character_name, strict=strict)
+    return read_scope.memo("profile", (character_name, strict),
+                           lambda: _load_character_profile(character_name, strict=strict))
+
+
+def _load_character_profile(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
     """Load a character profile from the DB.
 
     Runtime state (current_location/room/activity/feeling + *_changed_at)
@@ -402,6 +413,10 @@ def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[
     ``strict=True`` propagates storage/decoding errors and missing rows instead
     of returning a replacement profile. Existing callers retain their defaults.
     """
+    try:
+        read_scope.tally("profile")
+    except Exception:  # noqa: BLE001 — statistics never disturb a read
+        pass
     try:
         conn = get_connection()
         row = conn.execute(
@@ -859,6 +874,8 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
         logger.error("save_character_profile DB error for %s: %s",
                      character_name, e, exc_info=True)
         _stored = False
+    # The profile may have changed: a read scope of this context must not serve the old one (read_scope).
+    read_scope.clear()
 
     # Restore popped runtime keys to the caller's dictionary, including
     # after a failed save; callers expect their supplied keys to remain.

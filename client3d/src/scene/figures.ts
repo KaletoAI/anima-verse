@@ -3,8 +3,8 @@ import { createFocusQueue } from '../game/focusQueue';
 import { commitInListOrder, pairRootFor, pairRootsOf } from '../game/clipCommit';
 import { clipLoopMode, validLoopCount } from '../game/clipLoop';
 import type { ClipResult } from '../game/clipCommit';
-import { withPhase, markPhase } from '../game/boot';
-import type { MotionPayload } from "../types";
+import { withPhase, markPhase } from '@anima/hud/game/boot';
+import type { MotionPayload } from "@anima/hud/types";
 import * as THREE from 'three';
 import { createGLTFLoader } from './gltfLoader';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
@@ -29,8 +29,8 @@ import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, Collis
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import { getMaxAnisotropy, getModelEnvironment } from './glbMaterials';
-import type { ApiModel } from '../api';
-import { clipIndexName, getAnimationClips, getCharacterModel } from '../api';
+import type { ApiModel } from '@anima/hud/api';
+import { clipIndexName, getAnimationClips, getCharacterModel } from '@anima/hud/api';
 import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
   setMovementPoses } from '../game/walk';
 import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
@@ -1224,7 +1224,7 @@ export class FigureLibrary {
   }
 
   private clipRevision?: string;
-  private clipListing: import('../api').ApiClip[] = [];
+  private clipListing: import('@anima/hud/api').ApiClip[] = [];
   private clipEpoch = 0;
   private parseReloadClip?: (buf: ArrayBuffer, url: string) => Promise<THREE.AnimationClip | null>;
   private clipPreparation: Promise<void> | null = null;

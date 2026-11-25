@@ -17,6 +17,8 @@
 # For development with HMR, --with-3d starts a separate Vite process.
 # It can also run on another machine with ANIMA_API pointing at this host:
 #   ANIMA_API=http://<this-host>:8000 npm run dev -w client3d
+# The HUD page alone (workspace hud/, port 5184) the same way:
+#   ANIMA_API=http://<this-host>:8000 npm run dev -w hud
 
 set -euo pipefail
 

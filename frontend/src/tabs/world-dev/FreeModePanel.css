@@ -1,0 +1,98 @@
+/* World Dev free mode (FreeModePanel.tsx). Own file: game-admin.css is not
+   touched by this feature. */
+.ga-wd-free {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ga-wd-free-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #1f6feb;
+  background: rgba(31, 111, 235, 0.12);
+}
+.ga-wd-free-banner-running { border-color: #d29922; background: rgba(210, 153, 34, 0.12); }
+.ga-wd-free-banner-text { flex: 1; font-weight: 600; }
+.ga-wd-free-danger { color: #f85149; }
+
+.ga-wd-free-start,
+.ga-wd-free-run {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ga-wd-free-row,
+.ga-wd-free-follow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.ga-wd-free-follow textarea { flex: 1; min-width: 260px; resize: vertical; }
+.ga-wd-free-field { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.ga-wd-free-field input { width: 120px; }
+
+.ga-wd-free-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ga-wd-free-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+.ga-wd-free-status {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--bg-container, #161b22);
+  border: 1px solid var(--border, #30363d);
+}
+.ga-wd-free-status-running { color: #d29922; }
+.ga-wd-free-status-awaiting_review,
+.ga-wd-free-status-interrupted { color: #58a6ff; }
+.ga-wd-free-status-accepted { color: #3fb950; }
+.ga-wd-free-status-rollback_incomplete { color: #f85149; }
+
+.ga-wd-free-counters { display: flex; gap: 14px; font-size: 12px; }
+
+.ga-wd-free-steps {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg-container, #161b22);
+  max-height: 46vh;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.ga-wd-free-step { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.ga-wd-free-step-seq { color: #8b949e; min-width: 34px; }
+.ga-wd-free-step-tool { font-weight: 600; }
+.ga-wd-free-step-line { white-space: pre-wrap; word-break: break-word; }
+.ga-wd-free-step-read { color: #8b949e; }
+.ga-wd-free-step-write .ga-wd-free-step-mark { color: #3fb950; }
+.ga-wd-free-step-refused { color: #d29922; }
+.ga-wd-free-step-undone .ga-wd-free-step-line { text-decoration: line-through; }
+.ga-wd-free-live,
+.ga-wd-free-note {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.ga-wd-free-note {
+  border-left: 3px solid #58a6ff;
+  padding-left: 8px;
+}
+.ga-wd-free-skipped ul,
+.ga-wd-free-preview { margin: 2px 0 0 16px; padding: 0; font-size: 12px; }
+.ga-wd-free-skipped { color: #d29922; }
+
+.ga-wd-free-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ga-wd-free-table th,
+.ga-wd-free-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border, #30363d); }
+.ga-wd-free-table tbody tr { cursor: pointer; }
+.ga-wd-free-table tbody tr:hover { background: rgba(110, 118, 129, 0.12); }
+.ga-wd-free-current { background: rgba(31, 111, 235, 0.12); }
+.ga-wd-free-path { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
