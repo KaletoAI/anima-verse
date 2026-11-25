@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using AnimaNative.Figures;
 using AnimaNative.Overview;
@@ -27,6 +28,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     public Action? ReleasePropAction { get; set; }
     public Action<P2>? SteeringInput { get; set; }
     public double Clock => _clock;
+    /// <summary>Measures the time from a click walk or a picked prop offer to the avatar's first centimetre.</summary>
+    public FirstStepProbe FirstStep { get; } = new();
     public bool PendingSnap { get; set; }
     public string RoomId { get; set; } = "";
     public P2? Route { get; private set; }
@@ -94,7 +97,17 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         if (ClickMove.PlanClickWalk(pos,hit,(x,z)=>Blocked(mine,x,z)) is not { } goal) return false;
         Route=goal; StalledFrames=0;
         figures.SetWalkTarget(new((float)goal.X,(float)world.PlayerFloorY(mine,RoomId,goal.X,goal.Z),(float)goal.Z));
+        FirstStep.Arm("click_walk",_clock,pos.X,pos.Z);
         return true;
+    }
+
+    private void SampleFirstStep()
+    {
+        if (!FirstStep.Armed || Avatar is not { } a) return;
+        if (FirstStep.Sample(_clock,a.Position.X,a.Position.Z) is not { } r) return;
+        GD.Print(r.LatencyMs is { } ms
+            ? $"[native] first_step source={r.Source} ms={ms.ToString("0.0",CultureInfo.InvariantCulture)} frames={r.Frames.ToString(CultureInfo.InvariantCulture)}"
+            : $"[native] first_step source={r.Source} timeout");
     }
 
     private void ToastLoading()
@@ -110,6 +123,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     {
         using var hitch = AnimaNative.Ui.HitchLog.Time("PlayerSteering");
         _clock+=dt;
+        SampleFirstStep();
         if (!Active) { CancelRoute(); VerticalRide=WalkIn=Correction=null; return; }
         if (PendingSnap) { ToastLoading(); return; }
         if (PropPreparationPending) { CancelRoute(); return; }
