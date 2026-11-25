@@ -56,11 +56,32 @@ Hand-derived expectations:
     reads Kira's place) and the respond tick's first read (the pause gate)
     then reach the DB on the loop: violations >= 1 each.
 
+[8] One rp_first thought turn of Kira through the REAL StreamingAgent: the
+    routing runs for real through a character override (thought -> chat
+    fake, intent -> tool fake; only the instance lookup, the reservation and
+    the refusal filter are stubbed), the chat fake streams
+    "Ich summe leise vor mich hin. „Mara, komm mal her“, sage ich.", the tool
+    fake answers the decision with ONE Hum call and the speech retry with
+    NONE. Kira's room holds only Mara, so the B-lite net delivers the dropped
+    line itself: Hum ran once with {"tune": "soft"}, TalkTo once with
+    {"name": "Mara", "message": "Mara, komm mal her"}; outcome "ok";
+    violations == [] — the routing's config read, the presence read, the
+    LLM log lines and the tool gate all stay off the loop.
+[8b] Teeth, one hop at a time: the same turn with ONLY the named thread hop
+    of streaming.py run inline on the loop (_present_names, _log_llm_call,
+    _tool_verdicts) -> violations >= 1 each.
+[9] resolve_llm_async without a handed-in config reads it in a thread:
+    the override instance ("chat-x") comes back, violations == [].
+[9b] Teeth: the same call with asyncio.to_thread inline -> violations >= 1.
+
 What this does NOT prove: the reads inside thoughts.run_thought_turn go
 through asyncio.to_thread, not the agent loop's pool, so [5b] has no teeth
-for them — [5] only shows that they stay off the loop today.
+for them — [5] only shows that they stay off the loop today. Not reached by
+[8]: _log_llm_error, the upstream-error fallback and _format_tool_context
+(content tools / single mode).
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -412,6 +433,185 @@ finally:
     al._is_paused = _real_gate
 check("[7] the lock was free while the gate was read", _probe.get("free"), True)
 check("[7] status still reports the gate", _answer.get("paused"), False)
+
+# ── [8] an rp_first thought turn: real StreamingAgent, one tool, B-lite ──────
+SPEECH = "Mara, komm mal her"
+RP_TEXT = f"Ich summe leise vor mich hin. „{SPEECH}“, sage ich."
+HUMS, TALKS = [], []
+
+
+class _FakeClient:
+    """Chat side streams the RP text; tool side answers the decision with
+    one Hum call and the speech retry with NONE."""
+
+    def __init__(self, model):
+        self.model = model
+        self.calls = 0
+
+    async def astream(self, _messages):
+        from types import SimpleNamespace
+        yield SimpleNamespace(content=RP_TEXT)
+
+    def invoke(self, _messages):
+        from types import SimpleNamespace
+        from app.core.tool_formats import format_example, get_format_for_model
+        self.calls += 1
+        answer = (format_example(get_format_for_model(self.model), "Hum", '{"tune": "soft"}')
+                  if self.calls == 1 else "NONE")
+        return SimpleNamespace(content=answer, finish_reason="stop", usage=None)
+
+
+class _Quota:
+    def wait_seconds(self):
+        return 0
+
+
+class _SameQueue(_Queue):
+    """Registration that keeps the routed instance (no overflow move)."""
+
+    async def register_chat_active_async(self, *_a, **kw):
+        return ("t1", kw["llm_instance"]) if kw.get("overflow") else "t1"
+
+
+class _RoutedInst:
+    temperature = 0.7
+    repetition_penalty = None
+    available = True
+
+    def __init__(self, model):
+        from types import SimpleNamespace
+        self.provider_name = "stub"
+        self.model = model
+        self._provider = SimpleNamespace(quota=_Quota())
+        self.client = _FakeClient(model)
+
+    def create_llm(self, **_kw):
+        return self.client
+
+
+class _AsyncioShim:
+    """streaming's asyncio with the named functions' thread hops run INLINE
+    on the loop — the teeth: one hop at a time back on the loop."""
+
+    def __init__(self, inline):
+        self.inline = set(inline)
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+    async def to_thread(self, fn, *args, **kwargs):
+        if getattr(fn, "__name__", "") in self.inline:
+            return fn(*args, **kwargs)
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+def _rp_first_setup():
+    from app.models.character import get_character_config, save_character_config
+    cfg = dict(get_character_config("Kira") or {})
+    cfg.update(chat_mode="rp_first",
+               llm_routing_overrides={"thought": "stub::chat-x", "intent": "stub::tool-x"})
+    save_character_config("Kira", cfg)
+
+
+async def rp_first_thought_turn(inline=()):
+    """One thought turn of Kira through the REAL StreamingAgent in rp_first
+    mode. Returns (outcome, Hum inputs, TalkTo inputs)."""
+    from app.core import llm_router, streaming, thoughts
+    from app.core.dependencies import get_skill_manager
+    from app.plugins.context import PluginContext
+    from app.skills.base import ToolSpec
+    from app.utils import llm_logger
+    from plugins.talk_to.skill import TalkToSkill
+    talk = TalkToSkill({"enabled": True}, PluginContext("talk_to"))
+    talk.name = "TalkTo"
+    tools = [ToolSpec(name="Hum", description="Hum a tune.",
+                      func=lambda raw: HUMS.append(json.loads(raw)["input"]) or "Hummed."),
+             ToolSpec(name="TalkTo", description="Speak to someone present.",
+                      func=lambda raw: TALKS.append(json.loads(json.loads(raw)["input"]))
+                      or "Spoke.")]
+    insts = {"stub::chat-x": _RoutedInst("chat-x"), "stub::tool-x": _RoutedInst("tool-x")}
+    sm = get_skill_manager()
+    thoughts.set_thought_runner(thoughts.ThoughtRunner())
+    loop = al.AgentLoop()
+    HUMS.clear()
+    TALKS.clear()
+    llm_logger.LOG_FILE = STORAGE / "llm_calls.jsonl"
+    strict_on()
+    try:
+        with patch.object(llm_router, "get_llm_instance_by_name", side_effect=insts.get), \
+                patch.object(llm_router, "_reserve_instance", side_effect=lambda inst: inst), \
+                patch.object(llm_router, "_refusal_candidate", return_value=True), \
+                patch.object(sm, "get_agent_tools", return_value=tools), \
+                patch.object(sm, "get_skill_by_name",
+                             side_effect=lambda n: talk if n == "TalkTo" else None), \
+                patch.object(sm, "tool_names_with_flag",
+                             side_effect=lambda f: frozenset({"TalkTo"})
+                             if f == "DELIVERS_SPEECH" else frozenset()), \
+                patch.object(streaming.StreamingAgent, "_invoke_tool_llm_laned",
+                             lambda self, messages: self.tool_llm.invoke(messages)), \
+                patch.object(streaming, "asyncio", _AsyncioShim(inline)), \
+                patch("app.core.llm_queue.get_llm_queue", return_value=_SameQueue()), \
+                patch("app.core.chat_engine.post_process_response", return_value={}), \
+                patch.object(al, "_minutes_since_last_chat_with_avatar", return_value=None), \
+                patch.object(al.AgentLoop, "_maybe_active_conversation_chime",
+                             return_value=None):
+            # (Mara spoke to Kira in [6]: without the two patches above the
+            # turn would be an in-chat skip or a chime, not a thought.)
+            try:
+                await loop._run_turn("Kira")
+            except loop_guard.LoopBlockingCall:
+                pass
+        return (loop._recent[-1]["outcome"] if loop._recent else None,
+                list(HUMS), list(TALKS))
+    finally:
+        strict_off()
+
+
+_rp_first_setup()
+print("[8] an rp_first thought turn with a tool hit and a dropped spoken line")
+outcome, hums, talks = asyncio.run(rp_first_thought_turn())
+check("[8] outcome", outcome, "ok")
+check("[8] the Hum call ran once", hums, ['{"tune": "soft"}'])
+check("[8] the spoken line reached Mara through TalkTo",
+      talks, [{"name": "Mara", "message": SPEECH}])
+clean("[8]")
+
+for hop in ("_present_names", "_log_llm_call", "_tool_verdicts"):
+    print(f"[8b] teeth: the {hop} hop inline")
+    asyncio.run(rp_first_thought_turn(inline=(hop,)))
+    check(f"[8b] {hop} on the loop is caught (violations >= 1)",
+          len(loop_guard.violations) >= 1, True)
+    loop_guard.clear_violations()
+
+
+async def resolve_with_config_read(inline):
+    """[9] resolve_llm_async without a handed-in config reads it itself."""
+    from app.core import llm_router
+    insts = {"stub::chat-x": _RoutedInst("chat-x")}
+    strict_on()
+    try:
+        hop = (patch("asyncio.to_thread", side_effect=_inline) if inline
+               else patch.object(al, "_BOOT_GRACE_SECONDS", al._BOOT_GRACE_SECONDS))
+        with hop, patch.object(llm_router, "get_llm_instance_by_name", side_effect=insts.get), \
+                patch.object(llm_router, "_reserve_instance", side_effect=lambda inst: inst), \
+                patch.object(llm_router, "_refusal_candidate", return_value=True):
+            try:
+                inst = await llm_router.resolve_llm_async("thought", "Kira")
+            except loop_guard.LoopBlockingCall:
+                inst = None
+        return inst
+    finally:
+        strict_off()
+
+
+print("[9] resolve_llm_async reads the character config off the loop")
+inst = asyncio.run(resolve_with_config_read(False))
+check("[9] the override instance is chosen", getattr(inst, "model", None), "chat-x")
+clean("[9]")
+asyncio.run(resolve_with_config_read(True))
+check("[9b] teeth: the read inline is caught (violations >= 1)",
+      len(loop_guard.violations) >= 1, True)
+loop_guard.clear_violations()
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

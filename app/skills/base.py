@@ -4,7 +4,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from app.core.log import get_logger
 from app.core.tool_formats import format_example
@@ -236,6 +236,14 @@ class BaseSkill(ABC):
         "Red Mieder"). Joined generically by
         ``streaming.tool_state_note``; default: none."""
         return []
+
+    def speech_call_input(self, listener: Optional[str], words: str) -> str:
+        """The input with which this DELIVERS_SPEECH verb says ``words`` to
+        ``listener`` (None: to everyone in the room), as the tool LLM would
+        write it; '' when the verb cannot phrase that. The speech net uses it
+        for a FILLED example in its retry prompt and to deliver dropped lines
+        itself — the core never names a verb's input fields (R1)."""
+        return ""
 
     def thought_context_block(self, character_name: str) -> str:
         """Optional prompt contribution for the agent-thought context.

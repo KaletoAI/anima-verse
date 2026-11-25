@@ -1,4 +1,6 @@
 """One availability and success-only cost boundary for character skills."""
+import json
+import re
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from typing import Any, TypeVar
@@ -7,6 +9,9 @@ from time import perf_counter
 from app.core.tool_call_log import record, classify
 
 _Result = TypeVar('_Result')
+#: A whole argument value that is one angle-bracket placeholder ("<allowed id>",
+#: "<exact full name>"): text copied out of a tool description, never a value.
+_PLACEHOLDER_RE = re.compile(r'^<[^>]+>$')
 _running: ContextVar[frozenset[tuple[str, str]]] = ContextVar('gated_skill_calls', default=frozenset())
 
 
@@ -99,6 +104,42 @@ def charge(name: str, skill_id: str) -> dict:
                                  source=f'skill:{skill_id}')
 
 
+def _placeholder_values(value: Any) -> list[str]:
+    """Every string in the value (dict values, list items, nested) that is a
+    single angle-bracket placeholder as a WHOLE. Free text that merely
+    contains a tag ("a photo of <ref 1> at the beach") is not one."""
+    if isinstance(value, str):
+        return [value.strip()] if _PLACEHOLDER_RE.match(value.strip()) else []
+    if isinstance(value, dict):
+        return [hit for item in value.values() for hit in _placeholder_values(item)]
+    if isinstance(value, (list, tuple)):
+        return [hit for item in value for hit in _placeholder_values(item)]
+    return []
+
+
+def placeholder_refusal(tool_input: Any) -> str:
+    """The refusal for a tool input carrying a copied placeholder, or ''.
+
+    A JSON object is checked field by field; any other text only when the
+    whole input is one placeholder. The text starts with "Error:", so the
+    call counts as failed everywhere (no charge, error status in the log).
+    """
+    value = tool_input
+    if isinstance(tool_input, str):
+        text = tool_input.strip()
+        value = text
+        if text.startswith('{'):
+            try:
+                value, _ = json.JSONDecoder().raw_decode(text)
+            except ValueError:
+                pass
+    hits = _placeholder_values(value)
+    if not hits:
+        return ''
+    return (f'Error: {hits[0]} is a placeholder copied from the tool description, '
+            f'not a value — nothing was done. Send the real value instead.')
+
+
 def run_gated(name: str, skill_id: str, call: Callable[[], _Result], *,
               tool_input: Any = "", source: str = "", tool_name: str = "") -> _Result | str:
     """Recheck immediately before execution and charge only non-error results.
@@ -112,6 +153,7 @@ def run_gated(name: str, skill_id: str, call: Callable[[], _Result], *,
     if key in _running.get():
         return call()
     display_name = tool_name or skill_id
+    refusal = placeholder_refusal(tool_input)
     if not tool_name:
         try:
             from app.core.dependencies import get_skill_manager
@@ -124,6 +166,10 @@ def run_gated(name: str, skill_id: str, call: Callable[[], _Result], *,
         record(character=name, tool=display_name, status=status, result=result,
                tool_input=tool_input, source=source,
                duration_ms=(perf_counter() - started) * 1000)
+    # Checked before anything else: a copied placeholder runs nothing.
+    if refusal:
+        outcome('error', refusal)
+        return refusal
     # PropAction owns admission and charging; preserve its direct execution.
     if skill_id != 'prop_action':
         reason = blocked_reason(name, skill_id)
@@ -160,8 +206,13 @@ def run_tool(name: str, tool_name: str, call: Callable[[], _Result], *,
     key = (name, tool_name)
     if key in _running.get():
         return call()
-    token = _running.set(_running.get() | {key})
     started = perf_counter()
+    refusal = placeholder_refusal(tool_input)
+    if refusal:
+        record(character=name, tool=tool_name, status='error', result=refusal,
+               tool_input=tool_input, source=source, duration_ms=0)
+        return refusal
+    token = _running.set(_running.get() | {key})
     try:
         try:
             result = call()
@@ -193,3 +244,19 @@ def tool_blocked_reason(name: str, tool_name: str) -> str:
     from app.core.dependencies import get_skill_manager
     skill = get_skill_manager().get_skill_by_name(tool_name)
     return blocked_reason(name, skill.SKILL_ID) if skill else ''
+
+
+def tool_blocked_reasons(name: str, tool_names: Iterable[str]) -> dict[str, str]:
+    """tool_blocked_reason for several tool names at once, keyed by tool name
+    and omitting available ones; the rules and the profile are read once.
+    Storage reads: call it off the event loop."""
+    from app.core.dependencies import get_skill_manager
+    manager = get_skill_manager()
+    skills = {tool: manager.get_skill_by_name(tool) for tool in dict.fromkeys(tool_names)}
+    if not any(skills.values()):
+        return {}
+    from app.models.character import get_character_profile
+    rules = _skill_rules()
+    profile = get_character_profile(name) or {}
+    return {tool: reason for tool, skill in skills.items() if skill
+            and (reason := blocked_reason(name, skill.SKILL_ID, profile=profile, rules=rules))}

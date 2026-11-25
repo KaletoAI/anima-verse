@@ -903,6 +903,14 @@ def _dedupe_singleton_tools(matches: List[Tuple[str, str]]) -> List[Tuple[str, s
     return out
 
 
+def _retryable_upstream(err: BaseException) -> bool:
+    """A stream error the provider fallback acts on: a rate limit or a genuine
+    upstream failure (never a user/input error)."""
+    from app.core.llm_router import _is_upstream_failure
+    from app.core.provider_quota import is_rate_limit_error
+    return is_rate_limit_error(err) or _is_upstream_failure(err)
+
+
 async def _safe_anext(aiter):
     """Wrapper around __anext__ that turns StopAsyncIteration into a sentinel.
 
@@ -1206,7 +1214,7 @@ class StreamingAgent:
 
     async def _stream_chat_only(
         self, system_content: str, history: List, user_input: str) -> AsyncGenerator[StreamEvent, None]:
-        """Reiner Chat ohne Tools — ein LLM-Call."""
+        """Plain chat without tools — one LLM call."""
         _start = time.monotonic()
         state = _StreamState()
         async for event in self._stream_llm_response(
@@ -1216,7 +1224,7 @@ class StreamingAgent:
         logger.info("Beendet: 1 Iteration, %.2fs", time.monotonic() - _start)
 
     # ------------------------------------------------------------------
-    # Mode: single — Chat-LLM macht alles (1-2 Calls)
+    # Mode: single — the chat LLM does everything (1-2 calls)
     # ------------------------------------------------------------------
 
     async def _stream_single(
@@ -1246,7 +1254,7 @@ class StreamingAgent:
             logger.info("Beendet: 1 Iteration (keine Tools), %.2fs", time.monotonic() - _start)
             return
 
-        # Tools ausfuehren
+        # Run the tools
         tool_results = []
         pending_deferred = []
         async for event in self._execute_tools(state1.tool_matches, tool_results, pending_deferred):
@@ -1269,7 +1277,8 @@ class StreamingAgent:
             return
 
         # Phase 2: pass tool results and the original user input to the LLM.
-        tool_context = self._format_tool_context(tool_results)
+        tool_context = await asyncio.to_thread(
+            self._format_tool_context, tool_results)
         enhanced_system = system_content + "\n\n" + tool_context
         state2 = _StreamState()
         async for event in self._stream_llm_response(
@@ -1399,7 +1408,7 @@ class StreamingAgent:
             async for event in self._run_deferred_tools(rp_response, pending_deferred, user_input=user_input):
                 yield event
 
-        # Content-Tools (CONTENT_TOOL): ausfuehren, RP verwerfen, Chat-LLM Retry
+        # Content tools (CONTENT_TOOL): run them, discard the RP, chat-LLM retry
         if content_matches:
             logger.info("rp_first: %d Content-Tool(s) → RP wird neu generiert",
                         len(content_matches))
@@ -1413,8 +1422,9 @@ class StreamingAgent:
                 yield RetryHintEvent(
                     reason="Zusaetzliche Informationen gefunden — Antwort wird aktualisiert...")
 
-                # Phase 3: Chat-LLM nochmal MIT Tool-Ergebnissen (voller Prompt)
-                tool_context = self._format_tool_context(tool_results)
+                # Phase 3: the chat LLM again WITH the tool results (full prompt)
+                tool_context = await asyncio.to_thread(
+                    self._format_tool_context, tool_results)
                 retry_system = system_content + "\n\n" + tool_context
 
                 state_retry = _StreamState()
@@ -1560,7 +1570,7 @@ class StreamingAgent:
                     _waited += _sleep
                     yield HeartbeatEvent()
 
-            # Per-Attempt Variablen
+            # Per-attempt variables
             iteration_response = ""
             chunk_count = 0
             finish_reason = ""
@@ -1578,7 +1588,7 @@ class StreamingAgent:
             try:
                 _aiter = active_llm.astream(stream_messages).__aiter__()
             except Exception as _init_err:
-                self._log_llm_error(
+                await self._log_llm_error_off_loop(
                     active_llm, system_content, _logged_user_input, llm_label,
                     _init_err, _iter_start, history=history)
                 raise
@@ -1609,8 +1619,12 @@ class StreamingAgent:
                     # stream — no duplicate output. Once chunks have flowed we
                     # never restart.
                     if chunk_count == 0 and not iteration_response and count_sent == 0:
+                        _cfg = (await self._character_config_off_loop()
+                                if self.log_task and _retryable_upstream(_chunk_err)
+                                else None)
                         _next_llm = self._fallback_after_upstream_error(
-                            active_llm, _chunk_err, _tried_models)
+                            active_llm, _chunk_err, _tried_models,
+                            character_config=_cfg)
                         if _next_llm is None:
                             from app.core.provider_quota import is_rate_limit_error
                             from app.core.llm_router import quota_wait_seconds, resolve_llm_async
@@ -1629,7 +1643,7 @@ class StreamingAgent:
                                 continue  # re-enter loop, fetch from new provider
                             except Exception:
                                 pass  # re-init failed too — fall through to raise
-                    self._log_llm_error(
+                    await self._log_llm_error_off_loop(
                         active_llm, system_content, _logged_user_input, llm_label,
                         _chunk_err, _iter_start, partial_response=iteration_response,
                         history=history)
@@ -1752,7 +1766,7 @@ class StreamingAgent:
             response_length=len(iteration_response))
 
         # --- LLM logging ---
-        self._log_llm_call(
+        await self._log_llm_call_off_loop(
             active_llm, system_content, _logged_user_input, iteration_response,
             llm_label, _iter_start, history=history,
             finish_reason=finish_reason, usage=stream_usage)
@@ -1845,14 +1859,16 @@ class StreamingAgent:
         if not response_text and last_error is not None and not saw_empty:
             # Both attempts raised — surface the error like the old
             # streaming path did instead of faking a "no tools" result.
-            self._log_llm_error(self.tool_llm, system_content, user_input,
-                                "Tool-LLM", last_error, _start)
+            await self._log_llm_error_off_loop(
+                self.tool_llm, system_content, user_input,
+                "Tool-LLM", last_error, _start)
             raise last_error
 
-        self._log_llm_call(self.tool_llm, system_content, user_input,
-                           response_text, "Tool-LLM", _start,
-                           finish_reason=finish_reason, usage=tool_usage,
-                           lane_info=self._tool_lane)
+        await self._log_llm_call_off_loop(
+            self.tool_llm, system_content, user_input,
+            response_text, "Tool-LLM", _start,
+            finish_reason=finish_reason, usage=tool_usage,
+            lane_info=self._tool_lane)
         yield LoopInfoEvent(
             iteration=iteration,
             max_iterations=self.max_iterations,
@@ -1999,7 +2015,10 @@ class StreamingAgent:
         (``tasks/speech_retry.md``) — not appended to the 7.4k-token decision
         prompt, whose closing "respond with NONE" produced byte-identical
         answers. The tool list of that call is narrowed to the
-        DELIVERS_SPEECH verbs. Still nothing → WARNING (observable).
+        DELIVERS_SPEECH verbs. Still nothing (or only calls that copied a
+        placeholder) → the lines go out deterministically when exactly one
+        person is in the room (``_speech_fallback_calls``); otherwise a
+        WARNING (observable).
         """
         quotes, dropped = _scan_speech_candidates(rp_response, self.agent_name)
         if any(dropped.values()):
@@ -2020,7 +2039,7 @@ class StreamingAgent:
             logger.info("B-lite: every spoken line is carried by a content "
                         "tool of this turn — no retry")
             return
-        present = self._present_names()
+        present = await asyncio.to_thread(self._present_names)
         if not present:
             logger.info("B-lite: %d spoken line(s) without a speech verb, "
                         "nobody within earshot — no retry", len(quotes))
@@ -2038,14 +2057,32 @@ class StreamingAgent:
             logger.error("B-lite: speech_retry template failed: %s", err)
             return
         state_retry = _StreamState()
-        async for event in self._invoke_tool_decision(
-                state_retry, system, user):
-            yield event
+        try:
+            async for event in self._invoke_tool_decision(
+                    state_retry, system, user):
+                yield event
+        except Exception as err:
+            # The retry's own call failed: the lines are still there, the
+            # deterministic delivery below does not need the model.
+            logger.warning("B-lite: the speech retry call failed: %s", err)
+            state_retry.decision_failed = True
+        from app.core.skill_gate import placeholder_refusal
+        # A call that copied a placeholder would be refused at execution and
+        # deliver nothing — it does not count as a delivery.
         added = [(n, i) for n, i in state_retry.tool_matches
-                 if n in speech_names]
+                 if n in speech_names and not placeholder_refusal(i)]
         if added:
             state_tool.tool_matches = list(state_tool.tool_matches) + added
             logger.info("B-lite: %d speech call(s) added", len(added))
+            return
+        direct = await asyncio.to_thread(
+            self._speech_fallback_calls, quotes, present, speech_tools)
+        if direct:
+            state_tool.tool_matches = list(state_tool.tool_matches) + direct
+            logger.info(
+                "B-lite: the retry delivered no speech verb — %d spoken "
+                "line(s) delivered directly via %s to %s", len(direct),
+                direct[0][0], present[0] if len(present) == 1 else "the room")
         elif not state_retry.decision_failed:
             # decision_failed has its own loud warning in _invoke_tool_decision.
             logger.warning(
@@ -2055,6 +2092,42 @@ class StreamingAgent:
                 " · ".join(f"«{q[:60]}»" for q in quotes),
                 ", ".join(present))
 
+    def _speech_inputs(self, tool_name: str, listener: Optional[str],
+                       lines: List[str]) -> List[str]:
+        """The verb's own input for each line, spoken to ``listener`` (None:
+        to the whole room) — from the skill's ``speech_call_input``, so the
+        core names no input field (R1). [] when the verb cannot say it so."""
+        try:
+            from app.core.dependencies import get_skill_manager
+            skill = get_skill_manager().get_skill_by_name(tool_name)
+            make = getattr(skill, "speech_call_input", None) if skill else None
+            inputs = [make(listener, line) if make else "" for line in lines]
+        except Exception as err:
+            logger.debug("B-lite: speech input of %s failed: %s", tool_name, err)
+            return []
+        return inputs if inputs and all(inputs) else []
+
+    def _speech_fallback_calls(self, quotes: List[str], present: List[str],
+                               speech_tools: List[str]) -> List[Tuple[str, str]]:
+        """The deterministic delivery when the retry gave no speech verb.
+
+        Exactly one listener: every line goes to them through the first
+        in-room speech verb (DELIVERS_SPEECH without REMOTE_COMM) that can
+        phrase it. Several listeners: to the room, if such a verb takes the
+        room as addressee — otherwise nothing (the caller warns). Only one
+        listener is safe to assume: a line spoken while two people stand
+        there may be meant for either, or be the character thinking aloud.
+        """
+        listener = present[0] if len(present) == 1 else None
+        room_verbs = set(_room_speech_tools(self.tools_dict))
+        for tool_name in speech_tools:
+            if tool_name not in room_verbs:
+                continue
+            inputs = self._speech_inputs(tool_name, listener, quotes)
+            if inputs:
+                return [(tool_name, text) for text in inputs]
+        return []
+
     def _render_speech_retry(
         self,
         quotes: List[str],
@@ -2063,9 +2136,13 @@ class StreamingAgent:
         """Build the speech-retry prompt from ``tasks/speech_retry.md``.
 
         The tool descriptions come from the skills themselves — the core names
-        no verb and no input field (R1). The format example is the plain
-        syntax shell of the handler's tool format; the JSON shape stays in the
-        skill's description (decision E2)."""
+        no verb and no input field (R1). The example is a FILLED call: the
+        first line, said to the first person present, in the verb's own input
+        shape (``speech_call_input``). A placeholder example was copied
+        verbatim by small tool models (3 of 3 retries on 2026-11-25, every
+        line lost); a copied filled example is the real first line. A verb
+        set that cannot phrase one gets no example — its description states
+        the fields."""
         from app.core import prompt_templates
         from app.core.tool_formats import format_example
         descriptions = []
@@ -2080,9 +2157,14 @@ class StreamingAgent:
                 "name": name,
                 "description": (getattr(skill, "description", "") or "").strip(),
             })
-        example = format_example(
-            self.tool_format, speech_tools[0],
-            "<JSON input exactly as the tool description specifies>")
+        example = ""
+        room_verbs = set(_room_speech_tools(self.tools_dict))
+        # In-room verbs first: the people present are who the lines reach.
+        for name in sorted(speech_tools, key=lambda n: n not in room_verbs):
+            inputs = self._speech_inputs(name, present[0], quotes[:1])
+            if inputs:
+                example = format_example(self.tool_format, name, inputs[0])
+                break
         return prompt_templates.render_task(
             "speech_retry",
             character=self.agent_name or "the character",
@@ -2101,51 +2183,24 @@ class StreamingAgent:
         tool_results: List[Tuple[str, str]],
         pending_deferred: List[Tuple[str, str]]) -> AsyncGenerator[StreamEvent, None]:
         """Execute tools, yielding events and collecting results and deferred calls."""
-        from app.core.tool_call_log import record
-        for tool_name, tool_input_text in tool_matches:
-            from app.core.skill_gate import tool_blocked_reason
-            reason = tool_blocked_reason(self.agent_name, tool_name)
-            if reason:
-                result = f"Error: {reason}"
-                record(character=self.agent_name, tool=tool_name, status="blocked",
-                       tool_input=tool_input_text, result=result)
-                tool_results.append((tool_name, result))
-                yield ToolResultEvent(tool_name=tool_name, result=result)
+        # The gate (skill rules + profile) and the log rows of the calls that
+        # never run: ONE worker-thread hop for every match, before the loop.
+        verdicts = await asyncio.to_thread(self._tool_verdicts, tool_matches)
+        for (tool_name, tool_input_text), (verdict, text) in zip(tool_matches, verdicts):
+            if verdict == "blocked":
+                tool_results.append((tool_name, text))
+                yield ToolResultEvent(tool_name=tool_name, result=text)
                 continue
-            if tool_name not in self.tools_dict:
-                available = ", ".join(self.tools_dict.keys())
-                logger.warning("Tool '%s' halluziniert (verfuegbar: %s)", tool_name, available)
-                error_msg = (
-                    f"Tool '{tool_name}' is not available. "
-                    f"Available tools: {available}. "
-                    f"Please retry using the correct tool name."
-                )
-                record(character=self.agent_name, tool=tool_name, status="unknown_tool",
-                       tool_input=tool_input_text, result=error_msg)
-                tool_results.append((tool_name, f"[{tool_name} error]: {error_msg}"))
+            if verdict == "unknown_tool":
+                tool_results.append((tool_name, f"[{tool_name} error]: {text}"))
+                continue
+            if verdict in ("deferred", "suppressed"):
+                if verdict == "deferred":
+                    pending_deferred.append((tool_name, tool_input_text.strip()))
                 continue
 
             tool_input_text = tool_input_text.strip()
-
-            # Deferred tools: remember instead of executing → chat LLM answers first.
-            # Attachment-referencing calls ride along: their attachment (this
-            # turn's generated image) only exists after the image tools ran.
-            if tool_name in self.deferred_tools or _defers_for_attachment(
-                    tool_name, tool_input_text):
-                pending_deferred.append((tool_name, tool_input_text))
-                logger.info("Tool DEFERRED: %s (runs after the chat reply)", tool_name)
-                continue
-
-            # Do not leave while answering an in-person conversation.
-            # Packages declare which verbs this suppression applies to.
-            if self.suppress_move_in_conversation and tool_name in _suppress_in_person_tool_names():
-                record(character=self.agent_name, tool=tool_name, status="suppressed",
-                       tool_input=tool_input_text, result="suppressed: in-person reply turn")
-                logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "
-                            "(man geht nicht weg, waehrend man spricht)", tool_name)
-                continue
-
-            logger.info("Tool ausfuehrt: %s", tool_name)
+            logger.info("Tool runs: %s", tool_name)
             logger.debug("Input: %s", tool_input_text[:80])
 
             yield ToolStartEvent(tool_name=tool_name)
@@ -2174,6 +2229,59 @@ class StreamingAgent:
                 yield ToolErrorEvent(tool_name=tool_name, error=error_msg)
                 tool_results.append((tool_name, f"Fehler: {tool_error}"))
 
+    def _tool_verdicts(self, tool_matches: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """Thread side of _execute_tools: one (verdict, text) per match, in
+        order — "blocked" (text = the error result), "unknown_tool" (text =
+        the error message), "deferred", "suppressed" or "run". Reads the skill
+        gate once for all matches and writes the log rows of the calls that
+        will not run."""
+        from app.core.skill_gate import tool_blocked_reasons
+        from app.core.tool_call_log import record
+        reasons = tool_blocked_reasons(self.agent_name, [n for n, _ in tool_matches])
+        suppressed = (_suppress_in_person_tool_names()
+                      if self.suppress_move_in_conversation else frozenset())
+        out: List[Tuple[str, str]] = []
+        for tool_name, tool_input_text in tool_matches:
+            reason = reasons.get(tool_name)
+            if reason:
+                result = f"Error: {reason}"
+                record(character=self.agent_name, tool=tool_name, status="blocked",
+                       tool_input=tool_input_text, result=result)
+                out.append(("blocked", result))
+                continue
+            if tool_name not in self.tools_dict:
+                available = ", ".join(self.tools_dict.keys())
+                logger.warning("Tool '%s' hallucinated (available: %s)", tool_name, available)
+                error_msg = (
+                    f"Tool '{tool_name}' is not available. "
+                    f"Available tools: {available}. "
+                    f"Please retry using the correct tool name."
+                )
+                record(character=self.agent_name, tool=tool_name, status="unknown_tool",
+                       tool_input=tool_input_text, result=error_msg)
+                out.append(("unknown_tool", error_msg))
+                continue
+            stripped = tool_input_text.strip()
+            # Deferred tools: remember instead of executing → chat LLM answers first.
+            # Attachment-referencing calls ride along: their attachment (this
+            # turn's generated image) only exists after the image tools ran.
+            if tool_name in self.deferred_tools or _defers_for_attachment(
+                    tool_name, stripped):
+                logger.info("Tool DEFERRED: %s (runs after the chat reply)", tool_name)
+                out.append(("deferred", ""))
+                continue
+            # Do not leave while answering an in-person conversation.
+            # Packages declare which verbs this suppression applies to.
+            if tool_name in suppressed:
+                record(character=self.agent_name, tool=tool_name, status="suppressed",
+                       tool_input=stripped, result="suppressed: in-person reply turn")
+                logger.info("%s suppressed — reply in the same in-person turn "
+                            "(nobody walks away while speaking)", tool_name)
+                out.append(("suppressed", ""))
+                continue
+            out.append(("run", ""))
+        return out
+
     # ------------------------------------------------------------------
     # Deferred tool execution (after chat response)
     # ------------------------------------------------------------------
@@ -2197,11 +2305,17 @@ class StreamingAgent:
         user_text = user_input.strip() if user_input else ""
         logger.info("DEFERRED TOOLS: %d tool(s) after the chat response (rp_context=%d, user_input=%d chars)",
                      len(pending_deferred), len(rp_text), len(user_text))
-        from app.core.tool_call_log import record
+        unknown = [(n, i) for n, i in pending_deferred if n not in self.tools_dict]
+        if unknown:
+            # The log rows of the calls without an executor, in one hop.
+            def _record_unknown():
+                from app.core.tool_call_log import record
+                for name, text in unknown:
+                    record(character=self.agent_name, tool=name, status="unknown_tool",
+                           tool_input=text, result=f"Tool '{name}' is not available.")
+            await asyncio.to_thread(_record_unknown)
         for tool_name, tool_input_text in pending_deferred:
             if tool_name not in self.tools_dict:
-                record(character=self.agent_name, tool=tool_name, status="unknown_tool",
-                       tool_input=tool_input_text, result=f"Tool '{tool_name}' is not available.")
                 continue
             # Inject RP context and the user's input into the tool input
             enriched_input = _inject_rp_context(tool_input_text, rp_text, user_text)
@@ -2243,9 +2357,10 @@ class StreamingAgent:
     # ------------------------------------------------------------------
 
     def _format_tool_context(self, tool_results: List[Tuple[str, str]]) -> str:
-        """Formatiert Tool-Ergebnisse als System-Prompt-Kontext.
+        """Formats tool results as system-prompt context.
 
-        Ersetzt das alte tool_exchange/\"Bitte fortfahren\" System.
+        Replaces the old tool_exchange/"please continue" system. Reads the
+        character template (roleplay or not): call it off the event loop.
         """
         parts = ["[Ausgefuehrte Aktionen:]"]
         for name, result in tool_results:
@@ -2282,9 +2397,43 @@ class StreamingAgent:
     # LLM Logging helpers
     # ------------------------------------------------------------------
 
+    async def _log_llm_call_off_loop(self, *args, lane_info=None, **kwargs):
+        """``_log_llm_call`` in a worker thread: the line goes to a file and
+        the stats row to the world DB. Lane and overflow provenance are read
+        HERE, on the loop, from the registration's in-memory state, so the
+        thread receives finished values (to_thread copies the context, the
+        turn trace stays attached)."""
+        if not self.log_task:
+            return
+        await asyncio.to_thread(
+            self._log_llm_call, *args, lane_info=lane_info or self._lane_fields(),
+            overflow_from=self._overflow_from(), **kwargs)
+
+    async def _log_llm_error_off_loop(self, *args, **kwargs):
+        """``_log_llm_error`` in a worker thread, provenance read on the loop."""
+        if not self.log_task:
+            return
+        await asyncio.to_thread(
+            self._log_llm_error, *args, overflow_from=self._overflow_from(), **kwargs)
+
+    async def _character_config_off_loop(self) -> Optional[dict]:
+        """This character's config, read in a worker thread (None without a
+        character) — for a routing call that must stay on the loop."""
+        if not self.agent_name:
+            return None
+
+        def _read() -> dict:
+            try:
+                from app.models.character import get_character_config
+                return get_character_config(self.agent_name) or {}
+            except Exception:
+                return {}
+        return await asyncio.to_thread(_read)
+
     def _log_llm_call(self, active_llm, system_content, user_input,
                       response, llm_label, start_time, history=None,
-                      finish_reason="", usage=None, lane_info=None):
+                      finish_reason="", usage=None, lane_info=None,
+                      overflow_from=None):
         """Logs a completed LLM call.
 
         ``usage`` is the provider's report (``LLMResponse.usage`` shape). When
@@ -2300,7 +2449,8 @@ class StreamingAgent:
         looked up here (``_lane_fields``) instead of by the queue worker.
         ``lane_info`` overrides that lookup for a call that ran on a lane of
         its own — the nested tool decision, whose registration is suspended
-        exactly while it runs.
+        exactly while it runs. ``overflow_from`` likewise overrides
+        ``_overflow_from`` (None = look it up).
         """
         if not self.log_task:
             return
@@ -2327,11 +2477,12 @@ class StreamingAgent:
                 finish_reason=finish_reason or "",
                 lane=_lane,
                 cache_key=_cache_key,
-                overflow_from=self._overflow_from(),
+                overflow_from=(self._overflow_from() if overflow_from is None
+                               else overflow_from),
                 llm=active_llm,
                 llm_role=llm_label)
         except Exception as e:
-            logger.error("LLM-Log Fehler: %s", e)
+            logger.error("LLM log error: %s", e)
 
     def _overflow_from(self) -> str:
         """The registration owns provenance because it may have changed pools."""
@@ -2367,8 +2518,8 @@ class StreamingAgent:
 
     def _log_llm_error(self, active_llm, system_content, user_input,
                        llm_label, error, start_time, partial_response="",
-                       history=None):
-        """Logs a failed LLM call."""
+                       history=None, overflow_from=None):
+        """Logs a failed LLM call (``overflow_from`` as in _log_llm_call)."""
         if not self.log_task:
             return
         try:
@@ -2387,7 +2538,8 @@ class StreamingAgent:
                 max_tokens=get_max_tokens(active_llm),
                 messages=history or None,
                 error=str(error),
-                overflow_from=self._overflow_from(),
+                overflow_from=(self._overflow_from() if overflow_from is None
+                               else overflow_from),
                 llm=active_llm,
                 llm_role=llm_label)
         except Exception:
@@ -2409,7 +2561,8 @@ class StreamingAgent:
             return ""
 
     def _fallback_after_upstream_error(
-            self, failed_llm, err: BaseException, tried: set):
+            self, failed_llm, err: BaseException, tried: set, *,
+            character_config: Optional[dict] = None):
         """On an upstream failure during stream init: take the failed model/
         provider out of rotation and resolve the next provider in the chain.
 
@@ -2428,6 +2581,10 @@ class StreamingAgent:
 
         Note: per-turn overrides (frequency_penalty / anti-rep temperature) are
         lost on the fallback provider — acceptable in the error path.
+
+        Runs on the event loop (the re-resolve books a quota slot, which must
+        not straddle a suspension point); the caller reads the character
+        config off the loop and hands it in as ``character_config``.
         """
         from app.core.llm_router import (
             _is_upstream_failure, _cooldown_provider, resolve_llm,
@@ -2455,7 +2612,8 @@ class StreamingAgent:
             _cooldown_provider(prov_name, f"stream upstream-fail: {str(err)[:120]}")
         if not self.log_task:
             return None
-        instance = resolve_llm(self.log_task, agent_name=self.agent_name)
+        instance = resolve_llm(self.log_task, agent_name=self.agent_name,
+                               character_config=character_config)
         if instance is not None and (instance.provider_name, instance.model) in tried:
             # Not sent: its booked quota slot must not sit out the window.
             from app.core.llm_router import release_reservation

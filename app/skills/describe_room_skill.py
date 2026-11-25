@@ -73,7 +73,7 @@ class DescribeRoomSkill(BaseSkill):
         self._defaults = {
             "enabled": True,
             "max_custom_rooms": int(os.environ.get("SKILL_DESCRIBEROOM_MAX_ROOMS", "3")),
-            "design_locations": [],  # Locations die der Character gestalten darf (leer = alle erlaubten)
+            "design_locations": [],  # locations the character may design (empty = every allowed one)
         }
 
     def get_config_fields(self) -> dict:
@@ -91,17 +91,17 @@ class DescribeRoomSkill(BaseSkill):
         }
 
     def _get_allowed_location_ids(self, character_name: str) -> list:
-        """Gibt die Location-IDs zurueck, die der Character gestalten darf.
+        """The location ids the character may design.
 
-        Liest design_locations aus der Skill-Config.
-        Leere Liste = alle besuchbaren Locations erlaubt.
+        Reads design_locations from the skill config.
+        Empty list = every visitable location is allowed.
         """
         cfg = self._get_effective_config(character_name)
         design_locs = cfg.get("design_locations", [])
         if design_locs:
             return design_locs
 
-        # Fallback: alle Locations die der Character dank Wissens-Items sieht
+        # Fallback: every location the character sees thanks to knowledge items
         from app.models.world import list_locations_for_character
         visible = list_locations_for_character(character_name)
         return [loc.get("id") for loc in visible if loc.get("id")]
@@ -155,6 +155,7 @@ class DescribeRoomSkill(BaseSkill):
 
         # Check the permission
         allowed_ids = self._get_allowed_location_ids(character_name)
+        location_id = self._resolve_location_id(location_id, allowed_ids)
         if location_id not in allowed_ids:
             logger.warning(
                 "location '%s' not allowed for %s (allowed: %s)",
@@ -445,13 +446,13 @@ class DescribeRoomSkill(BaseSkill):
 
     @staticmethod
     def _sanitize_room_description(description: str, character_name: str) -> str:
-        """Bereinigt Raum-Beschreibungen von unerwuenschtem Inhalt.
+        """Cleans unwanted content out of a room description.
 
-        Entfernt:
-        - Eingebettete JSON-Objekte (halluzinierte Tool-Calls)
-        - Tool-Call-Tags (<tool name=...>)
-        - Character-Appearance-Beschreibungen
-        - Character-bezogene Saetze
+        Removes:
+        - embedded JSON objects (hallucinated tool calls)
+        - tool-call tags (<tool name=...>)
+        - character appearance descriptions
+        - sentences about characters
         """
         import re
 
@@ -459,10 +460,10 @@ class DescribeRoomSkill(BaseSkill):
         if not text:
             return text
 
-        # 1. Embedded JSON-Objekte entfernen (halluzinierte Tool-Calls)
-        #    z.B. {"location_id": "...", "room": "...", ...}
+        # 1. Remove embedded JSON objects (hallucinated tool calls)
+        #    e.g. {"location_id": "...", "room": "...", ...}
         if text.startswith("{"):
-            # Gesamter Text ist ein JSON-Objekt — kein gültiger Beschreibungstext
+            # The whole text is a JSON object — not a valid description
             try:
                 import json as _json
                 parsed = _json.loads(text)
@@ -471,7 +472,7 @@ class DescribeRoomSkill(BaseSkill):
                     return ""
             except Exception:
                 pass
-            # Versuche JSON-Praefix zu entfernen (JSON gefolgt von Text)
+            # Try to strip a JSON prefix (JSON followed by text)
             brace_depth = 0
             json_end = -1
             for i, ch in enumerate(text):
@@ -484,7 +485,7 @@ class DescribeRoomSkill(BaseSkill):
                         break
             if json_end > 0:
                 remainder = text[json_end + 1:].strip()
-                # Prüfe ob der Rest auch Tool-Tags enthält
+                # Check whether the rest contains tool tags too
                 remainder = re.sub(r'<tool\s+name="[^"]*">[^<]*(?:</tool>)?', '', remainder).strip()
                 if remainder:
                     logger.warning("JSON-Praefix aus Raum-Beschreibung entfernt (%d Zeichen)", json_end + 1)
@@ -493,17 +494,17 @@ class DescribeRoomSkill(BaseSkill):
                     logger.warning("Raum-Beschreibung besteht nur aus JSON + Tool-Tags — abgelehnt")
                     return ""
 
-        # 2. Tool-Call-Tags entfernen (<tool name="...">...</tool> oder unclosed)
+        # 2. Remove tool-call tags (<tool name="...">...</tool> or unclosed)
         text = re.sub(r'<tool\s+name="[^"]*">.*?</tool>', '', text, flags=re.DOTALL).strip()
         text = re.sub(r'<tool\s+name="[^"]*">.*', '', text, flags=re.DOTALL).strip()
-        # Auch [ToolName](...) Format entfernen
+        # Also remove the [ToolName](...) format
         text = re.sub(r'\[[A-Z][A-Za-z]+\]\([^)]*\)', '', text).strip()
 
         if not text:
             logger.warning("Raum-Beschreibung besteht nur aus Tool-Tags — abgelehnt")
             return ""
 
-        # 3. Appearance-Muster erkennen (physische Character-Beschreibungen)
+        # 3. Detect appearance patterns (physical character descriptions)
         appearance_patterns = [
             r'\b\d+\s*years?\s*(young|old)\b',
             r'\b(blonde|brunette|redhead)\b.*\b(hair|eyes)\b',
@@ -517,7 +518,7 @@ class DescribeRoomSkill(BaseSkill):
             logger.warning("Raum-Beschreibung enthaelt Appearance-Daten (score=%d) — abgelehnt", appearance_score)
             return ""
 
-        # 4. Character-bezogene Saetze entfernen
+        # 4. Drop sentences about characters
         sentences = re.split(r'(?<=[.!?])\s+', text)
         agent_lower = character_name.lower()
 
@@ -543,9 +544,9 @@ class DescribeRoomSkill(BaseSkill):
         return result
 
     def _execute_legacy(self, input_text: str, character_name: str) -> str:
-        """Fallback fuer altes Format ohne explizite location_id.
+        """Fallback for the old format without an explicit location_id.
 
-        Verwendet die aktuelle Location des Characters.
+        Uses the character's current location.
         """
         from app.models.character import (
             get_character_current_location,
@@ -559,7 +560,7 @@ class DescribeRoomSkill(BaseSkill):
         if not location:
             return "Fehler: Standort nicht gefunden."
 
-        # "Raumname: Beschreibung" oder nur "Beschreibung"
+        # "room name: description" or just "description"
         room = None
         new_description = input_text
 
@@ -589,7 +590,7 @@ class DescribeRoomSkill(BaseSkill):
         room_id = room.get("id", "")
         location_name = location.get("name", "?")
 
-        # Sanitization auch im Legacy-Pfad
+        # Sanitize in the legacy path too
         new_description = self._sanitize_room_description(new_description, character_name)
         if not new_description:
             return "Fehler: Beschreibung wurde bereinigt und ist leer — sie enthielt keine gueltige Raum-Beschreibung."
@@ -617,8 +618,8 @@ class DescribeRoomSkill(BaseSkill):
             'mop bucket in corner, water puddles reflecting harsh light"}'
         )
 
-    def _build_locations_hint(self, character_name: str) -> str:
-        """The allowed locations with id and rooms, for the tool description.
+    def _location_lines(self, character_name: str) -> list:
+        """The allowed locations, one "<id> = <name> (rooms: ...)" each.
 
         A corridor is listed with its DISPLAY name — unnamed it has no other
         one, and a room the model is never shown is a room it cannot describe
@@ -626,15 +627,12 @@ class DescribeRoomSkill(BaseSkill):
         the same expression the system prompt uses.
         """
         if not character_name:
-            return ""
+            return []
         try:
             from app.models.character import get_character_language
             lang = get_character_language(character_name) or "de"
-            allowed_ids = self._get_allowed_location_ids(character_name)
-            if not allowed_ids:
-                return ""
             hints = []
-            for loc_id in allowed_ids:
+            for loc_id in self._get_allowed_location_ids(character_name):
                 loc = get_location_by_id(loc_id)
                 if loc:
                     name = loc.get("name", "?")
@@ -649,11 +647,45 @@ class DescribeRoomSkill(BaseSkill):
                         hints.append(f"{loc_id} = {name} (rooms: {', '.join(room_names)})")
                     else:
                         hints.append(f"{loc_id} = {name}")
-            if hints:
-                return " Allowed locations: " + "; ".join(hints) + "."
+            return hints
         except Exception as e:
             logger.debug("could not load the location hints: %s", e)
-        return ""
+        return []
+
+    def _build_locations_hint(self, character_name: str) -> str:
+        """The allowed locations with id and rooms, for the tool description."""
+        hints = self._location_lines(character_name)
+        return (" Allowed locations: " + "; ".join(hints) + ".") if hints else ""
+
+    decision_menu_heading = ("takes these location ids — copy the id in front "
+                             "of = exactly; a room named in brackets is a room "
+                             "of that location")
+
+    def decision_menu(self, character_name: str) -> list:
+        """The allowed location ids for the rp_first tool step, which renders
+        only the brief: without them the tool LLM copied the brief's shape or
+        took a place name out of the prose (2026-11-25)."""
+        return self._location_lines(character_name)
+
+    def _resolve_location_id(self, requested: str, allowed_ids: list) -> str:
+        """An allowed id as given, else the id of the ONE allowed location
+        whose name equals `requested` exactly (case-insensitive) — a tool
+        model that writes the place name instead of its id. Nothing fuzzy, no
+        partial names: anything else comes back unchanged and is refused."""
+        if requested in allowed_ids:
+            return requested
+        wanted = requested.strip().casefold()
+        if not wanted:
+            return requested
+        hits = []
+        for loc_id in allowed_ids:
+            loc = get_location_by_id(loc_id)
+            if loc and (loc.get("name") or "").strip().casefold() == wanted:
+                hits.append(loc_id)
+        if len(hits) == 1:
+            logger.info("location name '%s' resolved to its id %s", requested, hits[0])
+            return hits[0]
+        return requested
 
     def as_tool(self, character_name: str = "") -> ToolSpec:
         locations_hint = self._build_locations_hint(character_name)

@@ -347,7 +347,10 @@ class ThoughtRunner:
 
         # Build LLM and tools (via the router, task from the llm_task
         # parameter, default "thought").
-        _thought_inst = await resolve_llm_async(llm_task, agent_name=character_name)
+        # The config of the setup reads above carries the override: no second
+        # read, and none on the event loop.
+        _thought_inst = await resolve_llm_async(
+            llm_task, agent_name=character_name, character_config=config or {})
         llm = _thought_inst.create_llm() if _thought_inst else None
         if not llm:
             logger.warning("Kein LLM fuer %s (task=%s)", character_name, llm_task)
