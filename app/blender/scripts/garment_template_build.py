@@ -3912,8 +3912,13 @@ def run(a):
                               "script_wall_s": round(time.time() - t_all, 2),
                               "script_cpu_s": round(time.process_time() - c_all, 2)}), files
     if col is not None:
-        col = _join_body_collider_late(obj, body, col, lower, binfo, thickness=float(prm.get("thickness", 0.004)),
-                                       hem_ramp=hem_ramp)
+        late = float(prm.get("thickness", 0.004))
+        if fitted and fitted.get("kind") == "bra":
+            # review round 2026-11-25 (gore / back gap): a bra is laid ``offset_m`` over the collider
+            # (``build_fitted``); cleared again at the cloth's thickness + BUILD_CLEAR_EXTRA_M it went to 5.5 mm, not
+            # its 4 mm, wherever a tip's sphere joined the collider (``BRA_EDGE_VERSION`` 3)
+            late = float(fitted["offset_m"]) - gd.BUILD_CLEAR_EXTRA_M
+        col = _join_body_collider_late(obj, body, col, lower, binfo, thickness=late, hem_ramp=hem_ramp)
     me = obj.data
     co0 = np.array([v.co for v in me.vertices])
     # outward normals (Solidify and the projection side test read them)

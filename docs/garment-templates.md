@@ -736,18 +736,31 @@ the hip, whatever the length: the hem is held at the waist at the lowest, `body_
   path's loops cut out (the over-shoulder section ran past the back section's start), resampled every 5 mm, evened,
   4 quads across, its front end 1.5 cm inside the cup and its back end 1.2 cm into the band, laid 2.5 mm over the
   cloth there and pinned whole; it lifts with its cup's push-up, fading out along it, but is never drawn in. Its
-  surface and edges are smooth, and its pattern piece is a clean strip. A cup's outer edge is a curve per height
-  (`_side_reach`): from the apex outward only as far as the cloth, laid out, stays inside the body's outline seen
-  from behind and no ray straight back from it misses the body; only the body the front sees is cup (the torso's side
-  under the breast is not). Before, the cup's side stood past the torso outline in the back view (a dark crescent
-  each side). The push-up fades out toward that edge and next to the gore, and the gore is laid on the breastbone
-  after the evening.
+  surface and edges are smooth, and its pattern piece is a clean strip. The push-up fades out next to the gore, and
+  the gore is laid on the breastbone after the evening.
+- **Cups round the breast's side, 4 mm gap (`BRA_EDGE_VERSION` 3, review of 2).** Version 2 kept the cup inside the
+  back outline by cutting it to the front of the breast (16 instead of 26 cm wide: the breast's side lay bare in the
+  side view, and the band's top edge was ragged where the side part had gone). Now a cup covers the breast's side and
+  round it, up to a vertical plane `CUP_BACK_M` (15 mm) in front of the body's middle; that plane is cut into the
+  collider before the faces are kept, so the cup's back edge is a straight line down to the band (no sawtooth, no
+  loose part under the arm). `_side_contour` finds the breast's side contour per height (its widest point seen from
+  behind); the push-up fades out over the outer `CUP_PUSH_FADE` of the way from the apex to it and is 0 behind it, so
+  the cup's side lies on the body where it crosses the outline — what stands past the outline in the back view is the
+  cloth's 4.5 mm distance plus its 1.5 mm thickness over the breast's widest point, the same rim the band shows at the
+  torso's side, no lifted crescent. A hole of up to `HOLE_FILL_EDGES` edges in the cut region (the collider can miss a
+  face in the crease under the arm) is filled. And the cloth keeps its 4 mm: after a tip's sphere joined the
+  collider, `_join_body_collider_late` cleared the built cloth to the drape thickness + 4 mm = 5.5 mm (every gap of
+  a bra measured 1.5 mm too wide); a bra is now cleared to its own `offset_m` (the drape's pre-inflate leaves 4.5 mm).
+- **A narrow island's overhang is its own cloth.** `cut_texture_post.narrow_overhang`: round an island narrower than
+  `NARROW_ISLAND_CM` (5 cm; a cup's upper part, the gore, a strap) the ring within `POCKET_CM` takes the colour of its
+  nearest island pixel. Lirien's upper cup parts carried a light and dark rim from the image model into the ring (the
+  stripe check 2.07 % against 1 %; on that atlas 0.44 % after). Texture post-processing only: no key changes.
 - **A bra under a cupped top is hidden (owner ruling 2).** `garment_template.hidden_by_cups` names the worn template
   bras a worn cupped top lies over by the usual layer rules (`inner_pieces`); `figure.worn_sets` leaves them out of
   both figures with the reason `HIDDEN_BY_CUPS` ("Hidden: the top's cups replace it"), as underwear goes unseen under
   a dress — never draped, never a lower layer, a collider or a shaping piece; the accessories ignore it too. The
   dialog says so under the `cups` field.
-- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_top_cups_cover.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
+- Smokes: `scripts/smoke_bra_edges.py`, `scripts/smoke_narrow_overhang.py`, `scripts/smoke_top_cups_cover.py`, `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
   `scripts/smoke_garment_template_fitted.py`, [S-C1]-[S-C5] in `scripts/smoke_bust_shaping.py`.
 
 ## 2. Texture from cut (step 2)

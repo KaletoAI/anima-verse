@@ -20,8 +20,9 @@ server, no world DB). Skipped with a note when no Blender is installed.
      within 1 µm of its line (the mean of two points on a line is on it; Blender keeps float32 coordinates),
      and a corner did move (> 1 mm).
 [E3] ``garment_template.tsig`` of a bra and of a top with cups carries ``bra_edges`` (proved in
-     ``smoke_top_cups_params`` [P6] and ``smoke_garment_template`` [16]); here only: ``BRA_EDGE_VERSION`` is 2 (1: cut + relaxed edges; 2: owner rulings 1 and 6 —
-     straps as strips, cups inside the back outline).
+     ``smoke_top_cups_params`` [P6] and ``smoke_garment_template`` [16]); here only: ``BRA_EDGE_VERSION`` is 3 (1: cut + relaxed edges; 2: owner rulings 1 and 6 —
+     straps as strips, cups inside the back outline; 3: the review of 2 — cups round the breast's side to a straight
+     back edge, the cloth cleared at its 4 mm after a tip's sphere joined the collider).
 
 Usage: ./.venv/bin/python scripts/smoke_bra_edges.py
 """
@@ -48,7 +49,7 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
-check("[E3] BRA_EDGE_VERSION is 2", getattr(gt, "BRA_EDGE_VERSION", None) == 2, getattr(gt, "BRA_EDGE_VERSION", None))
+check("[E3] BRA_EDGE_VERSION is 3", getattr(gt, "BRA_EDGE_VERSION", None) == 3, getattr(gt, "BRA_EDGE_VERSION", None))
 
 PROBE = r"""
 import sys, math, json

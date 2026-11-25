@@ -148,8 +148,10 @@ CORSET_STRAPS_VERSION = 1
 #: (``garment_template_fitted._relax_edges``). Part of the drape AND the cut key of such a piece only (0 = the keys
 #: before it). 2 (owner rulings 1 and 6): each strap is its own regular strip along its path
 #: (``garment_template_fitted.strap_strip``), a cup covers only body facing forward and its push-up fades out toward
-#: its side edge (no cup side past the torso outline in the back view).
-BRA_EDGE_VERSION = 2
+#: its side edge (no cup side past the torso outline in the back view). 3 (review of 2): a cup covers the breast's side
+#: again, round to a back edge cut straight into the collider (``CUP_BACK_M``), its push-up 0 behind the side contour;
+#: the cloth is cleared at its 4 mm after a tip's sphere joined the collider (5.5 mm before).
+BRA_EDGE_VERSION = 3
 #: The LLM task (``llm_tasks.TASK_TYPES``; unrouted → ``image_recognition``) and its template.
 TASK = "garment_template_params"
 #: Completion cap for the JSON answer.

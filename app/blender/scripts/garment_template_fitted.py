@@ -76,22 +76,21 @@ STRIP_LIFT_M = 0.0025
 STRIP_PUSH_FADE_M = 0.12
 #: ... and its front end starts this far under the cup's top edge (sewn onto the cup).
 STRIP_INTO_CUP_M = 0.015
-#: Round 2026-11-25 (owner ruling 6): a cup reaches at most CUP_OUT_M out from its apex, and per height only as far
-#: as its cloth stays inside the body's outline seen from behind (``_side_reach``, CUP_REACH_ROWS heights from the
-#: fold to over the cup's top, CUP_SIL_MARGIN_M inside the torso's widest point, the cloth laid out ``offset_m`` +
-#: CUP_SIL_THICK_M; the torso is what lies nearer the middle than CUP_ARM_X_M): a cup over the breast's side stood
-#: past the torso outline in the back view — a dark crescent each side. The push-up fades out over the outer
-#: CUP_PUSH_FADE of that reach, so the cup's side edge lies on the body instead of lifted off it.
-CUP_OUT_M = 0.075
-CUP_MIN_REACH_M = 0.02
+#: Round 2026-11-25 (owner ruling 6, review): a cup covers the breast to its side and round it — up to a vertical
+#: plane CUP_BACK_M in front of the body's middle (``cy``), cut into the collider before the faces are kept
+#: (``build_fitted``: a straight back edge instead of a sawtooth, and no loose lobe under the arm behind it). Per height
+#: (CUP_REACH_ROWS heights from the fold to over the cup's top) ``_side_contour`` finds the breast's side contour: the
+#: widest body point nearer the middle than CUP_ARM_X_M (the outline seen from behind) and how far forward it lies. The
+#: push-up fades out over the outer CUP_PUSH_FADE share of the way from the apex to that contour and is 0 behind it, so
+#: the cup's side lies on the body where it crosses the outline (lifted off it, the cup's side stood past the torso
+#: outline in the back view — a dark crescent each side).
+CUP_BACK_M = 0.015
 CUP_REACH_ROWS = 9
-CUP_SIL_MARGIN_M = 0.002
-CUP_SIL_THICK_M = 0.001
 CUP_ARM_X_M = 0.21
+CUP_MIN_REACH_M = 0.02
 CUP_PUSH_FADE = 0.35
 #: The push-up's draw toward the middle fades in over this distance from the gore's edge.
 GORE_PUSH_FADE_M = 0.025
-CUP_REACH_STEP_M = 0.004
 
 
 def _gltf_y(v):
@@ -324,31 +323,21 @@ def _fold(tree, apex, cy):
     return None
 
 
-def _side_reach(tree, co, apex, s, cx, cy, zs, off):
-    """Owner ruling 6: per height of ``zs`` how far out from ``apex`` (to side ``s``) the cup may reach, so that its
-    cloth (``off`` along the outward normal) stays inside the body's outline seen from behind: rays from the front
-    every CUP_REACH_STEP_M outward; the first one that misses the body, whose hit laid ``off`` out stands past the
-    torso's widest point at that height (``co`` within 5 mm of it, nearer the middle than the arms) less
-    CUP_SIL_MARGIN_M, or from which a ray straight back meets no body (a camera behind would see the cloth there)
-    ends the reach (at most CUP_OUT_M, at least CUP_MIN_REACH_M)."""
-    out = []
+def _side_contour(co, apex, s, cx, zs):
+    """Owner ruling 6 (review): per height of ``zs`` the breast's side contour on side ``s`` — the widest body vertex
+    (within 5 mm of the height, nearer the middle than CUP_ARM_X_M: the torso without the arm) as ``(reach, y)``: its
+    distance out from ``apex`` (at least CUP_MIN_REACH_M) and how far forward it lies."""
+    reach, ys = [], []
     for z in zs:
         band = co[(np.abs(co[:, 2] - z) < 0.005) & (s * (co[:, 0] - cx) > 0) & (s * (co[:, 0] - cx) < CUP_ARM_X_M)]
-        wide = float(np.max(s * (band[:, 0] - cx))) if len(band) else 9.0
-        d, reach = 0.0, CUP_OUT_M
-        while d < CUP_OUT_M:
-            x = float(apex[0]) + s * d
-            hit = tree.ray_cast(Vector((x, cy - 0.6, float(z))), Vector((0.0, 1.0, 0.0)), 1.0)
-            if hit[0] is None or s * (float(hit[0][0] + hit[1][0] * off) - cx) > wide - CUP_SIL_MARGIN_M:
-                reach = d - CUP_REACH_STEP_M
-                break
-            cloth = hit[0] + hit[1] * off
-            if tree.ray_cast(cloth + Vector((0.0, 0.001, 0.0)), Vector((0.0, 1.0, 0.0)), 1.0)[0] is None:
-                reach = d - CUP_REACH_STEP_M          # a camera straight behind would see the cloth here
-                break
-            d += CUP_REACH_STEP_M
-        out.append(max(CUP_MIN_REACH_M, reach))
-    return np.array(out)
+        if not len(band):
+            reach.append(CUP_MIN_REACH_M)
+            ys.append(float(apex[1]))
+            continue
+        k = int(np.argmax(s * (band[:, 0] - cx)))
+        reach.append(max(CUP_MIN_REACH_M, float(s * (band[k, 0] - apex[0]))))
+        ys.append(float(band[k, 1]))
+    return np.array(reach), np.array(ys)
 
 
 def strap_path(tree, st, start, cx, cy, s, under):
@@ -422,13 +411,19 @@ def bra_region(f, co, tree, cx, cy):
         zc = float(a[2]) + (cov - 0.5) * 2.0 * H
         r_in = max(0.02, abs(float(a[0]) - cx) - gore_half)
         zs = np.linspace(under, max(zc, float(a[2])), CUP_REACH_ROWS)
-        r_out = (zs, _side_reach(tree, co, a, s, cx, cy, zs, float(f["offset_m"]) + CUP_SIL_THICK_M))
+        r_out = (zs, *_side_contour(co, a, s, cx, zs))
         tops[s] = (a, H, zc, r_in, r_out)
     info["cup_reach_m"] = {("l" if s > 0 else "r"): [round(float(r), 3) for r in t[4][1]] for s, t in tops.items()}
+    back_y = cy - CUP_BACK_M
+    info["cup_back_y"] = round(back_y, 4)
 
     def reach_at(s, z):
-        zs, rs = tops[s][4]
+        zs, rs, _ys = tops[s][4]
         return np.interp(z, zs, rs)
+
+    def contour_y_at(s, z):
+        zs, _rs, ys = tops[s][4]
+        return np.interp(z, zs, ys)
 
     def cup_top(c, s):
         a, H, zc, r_in, r_out = tops[s]
@@ -449,16 +444,12 @@ def bra_region(f, co, tree, cx, cy):
         if style == "bandeau":
             zc = max(t[2] for t in tops.values())
             return (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zc)
-        front = c[:, 1] < cy
+        # owner ruling 6 (review): round the breast's side up to the plane ``back_y`` (cut into the collider first)
+        front = c[:, 1] < back_y
         for s in (1, -1):
             side = s * (c[:, 0] - cx) >= gore_half
-            zt, inside = cup_top(c, s)
-            out |= front & side & inside & (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zt)
-        # owner ruling 6: a cup lies on what the front sees — the torso's side under the breast's overhang (the same x,
-        # further back) is no cup (it was a loose lobe under the arm, its own island)
-        for k in np.where(out)[0]:
-            if tree.ray_cast(Vector(c[k]) + Vector((0.0, -0.002, 0.0)), Vector((0.0, -1.0, 0.0)), 0.5)[0] is not None:
-                out[k] = False
+            zt, _inside = cup_top(c, s)
+            out |= front & side & (c[:, 2] >= under - 1e-4) & (c[:, 2] <= zt)
         return out
 
     def gore(c):
@@ -505,8 +496,8 @@ def bra_region(f, co, tree, cx, cy):
 
     def push(v):
         """Per vertex the weight of the push-up (dz, dx toward the centre, out): 1 inside a cup, fading to 0 over the
-        outer ``CUP_PUSH_FADE`` share of the cup's reach toward its side edge (owner ruling 6: the edge lies on the
-        body, not lifted off it), 0 outside."""
+        outer ``CUP_PUSH_FADE`` share of the way from the apex to the breast's side contour, 0 behind the contour
+        (owner ruling 6: the cup's side lies on the body where it crosses the outline seen from behind), 0 outside."""
         if style == "bandeau":
             return np.zeros(len(v))
         w = cups(v).astype(float)
@@ -514,7 +505,7 @@ def bra_region(f, co, tree, cx, cy):
             m = s * (v[:, 0] - a[0]) > 0
             u = np.clip((np.abs(v[m, 0] - a[0]) / reach_at(s, v[m, 2]) - (1.0 - CUP_PUSH_FADE)) / CUP_PUSH_FADE,
                         0.0, 1.0)
-            w[m] *= 1.0 - u * u * (3.0 - 2.0 * u)
+            w[m] *= (1.0 - u * u * (3.0 - 2.0 * u)) * (v[m, 1] <= contour_y_at(s, v[m, 2]))
         return w
 
     def closure(v):
@@ -1158,6 +1149,8 @@ def _cut_pattern(bm, kind, f, arm, info, cx, cy, co, extra, dist):
 
 
 EDGE_RELAX_STEPS = 6
+#: Review round 2026-11-25: a hole in a bra region with at most this many boundary edges is filled (``build_fitted``).
+HOLE_FILL_EDGES = 16
 
 
 def _relax_edges(bm, tree, skip=()):
@@ -1266,6 +1259,15 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
                                clear_outer=False, clear_inner=False, dist=1e-5)
         bm.verts.ensure_lookup_table()
         bm.faces.ensure_lookup_table()
+        # owner ruling 6 (review): the cups' back edge is cut along its plane over the underbust line (a straight edge
+        # down the side of the torso, no sawtooth where the cup meets the band's top)
+        if f["style"] != "bandeau":
+            upper = [fa for fa in bm.faces if fa.calc_center_median().z > z]
+            geom = list({v for fa in upper for v in fa.verts}) + list({e for fa in upper for e in fa.edges}) + upper
+            bmesh.ops.bisect_plane(bm, geom=geom, plane_co=Vector((0.0, float(extra["cup_back_y"]), 0.0)),
+                                   plane_no=Vector((0.0, 1.0, 0.0)), clear_outer=False, clear_inner=False, dist=1e-5)
+            bm.verts.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
         bm.normal_update()
         cent = np.array([fa.calc_center_median() for fa in bm.faces])
         mask = keep(cent)
@@ -1300,6 +1302,13 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
         fa[keep_layer] = int(bool(k))
     bmesh.ops.delete(bm, geom=[fa for fa in bm.faces if not fa[keep_layer]], context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
+    if kind == "bra":
+        # review round 2026-11-25: a cup round the breast's side lies over the crease under the arm, where the collider
+        # can miss a face or two — a hole in the cloth (and a slit in the pattern, ``open_islands``); a boundary loop of
+        # at most HOLE_FILL_EDGES edges is filled
+        filled = bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=HOLE_FILL_EDGES)
+        bmesh.ops.triangulate(bm, faces=filled["faces"])
+        info["holes_filled"] = len(filled["faces"])
     # vertex attributes the planes / passes need, read before the cuts (new vertices take their edge's)
     for plane in planes:
         p, n = plane[0], plane[1]
