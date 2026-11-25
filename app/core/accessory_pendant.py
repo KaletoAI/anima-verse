@@ -353,10 +353,34 @@ def load_mesh(item_id: str, psig: str) -> Dict[str, Any]:
     return {"V": P, "F": F, "UV": U, "image": image, "mime": mime, "material": material}
 
 
-def normalise(V: np.ndarray, size_mm: float) -> np.ndarray:
-    """``V`` (+Y up, front +Z) centred in x and z, its top at y = 0, its back at z = 0 and scaled so the longest side
-    of its box is ``size_mm`` (module docstring)."""
+#: ``orient_thin_to_depth``: z stays the depth while its extent is within this share of the thinnest side (a nearly
+#: as thin x or y never tips the part over).
+THIN_TIE = 0.10
+
+
+def orient_thin_to_depth(V: np.ndarray, flip: bool = False) -> np.ndarray:
+    """``V`` turned so the thinnest side of its box is z (the depth: a buckle or a pendant lies flat on the body,
+    whatever axis the mesher put its thickness on). z stays when ``e_z ≤ (1 + THIN_TIE) · min(e)``; else the thinner of
+    x and y (x on a tie) becomes z — x by −90° about +Y (+X → +Z), y by +90° about +X (+Y → +Z, the old z → −Y).
+    ``flip`` then turns it 180° about +Y (the other side shows to the front)."""
     V = np.asarray(V, np.float64)
+    if len(V):
+        e = V.max(0) - V.min(0)
+        m = float(e.min())
+        if float(e[2]) > (1.0 + THIN_TIE) * m:
+            if float(e[0]) <= float(e[1]):
+                V = V @ _rot_y(-np.pi / 2).T
+            else:
+                V = V @ _rot_x(np.pi / 2).T
+    if flip:
+        V = V @ _rot_y(np.pi).T
+    return V
+
+
+def normalise(V: np.ndarray, size_mm: float, flip: bool = False) -> np.ndarray:
+    """``V`` turned thinnest side to depth (``orient_thin_to_depth``; +Y up, front +Z), centred in x and z, its top at
+    y = 0, its back at z = 0 and scaled so the longest side of its box is ``size_mm`` (module docstring)."""
+    V = orient_thin_to_depth(V, flip)
     lo, hi = V.min(0), V.max(0)
     scale = (float(size_mm) / 1000.0) / max(float((hi - lo).max()), 1e-12)
     out = (V - np.array([(lo[0] + hi[0]) / 2, hi[1], lo[2]])) * scale

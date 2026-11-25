@@ -38,6 +38,18 @@ Expected values, derived by hand:
     ``BackendFailedError`` → failed; a two-piece delivery → refused (not retried by a further ``pendant_state``).
 [8] ``accessory_build.asig`` of the earrings' drop: a ready drop psig changes the asig; with a psig the size changes it
     (18 → 30); without a psig the size does not (a drop that is not built is not part of the geometry).
+[G3a] ``orient_thin_to_depth`` (plan-anhaenger Task 3), box extents (x, y, z) → after: (0.030, 0.040, 0.005) stays;
+    (0.005, 0.040, 0.030) → (0.030, 0.040, 0.005) (x thinnest, turned −90° about +Y); (0.030, 0.005, 0.040) →
+    (0.030, 0.040, 0.005) (y thinnest, +90° about +X).
+[G3a-tie] the tie limit 1.10 · min: (0.0050, 0.040, 0.0054) stays (0.0054 ≤ 1.1 · 0.0050 = 0.0055);
+    (0.0050, 0.040, 0.0056) → (0.0056, 0.040, 0.0050) (0.0056 > 0.0055) — a pure axis swap: every box corner keeps its
+    magnitudes, x and z trade places with the old z's sign flipped; (0.0050, 0.0050, 0.040) → x wins the tie →
+    (0.040, 0.0050, 0.0050).
+[G3a-flip] box (0.030, 0.040, 0.005) centred, a marker vertex at x +0.015, z +0.0025: with ``flip`` it lies at
+    x −0.015, z −0.0025.
+[G3b] the measured extent of Lirien's old whole-belt buckle mesh (0.459, 0.115, 0.999) as a box: y is thinnest → after
+    turning (0.459, 0.999, 0.115); ``normalise(…, 65)`` → 65 · 0.459/0.999 = 29.86 mm wide, 65.0 mm high,
+    65 · 0.115/0.999 = 7.48 mm deep (before part items the 65 mm stood in z, the depth).
 """
 import io
 import json
@@ -250,6 +262,32 @@ pend30 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant
 check("[8] psig changes asig", ab.asig(pend18) != ab.asig(pend18, "0123456789ab"), True)
 check("[8] size with psig", ab.asig(pend18, "0123456789ab") != ab.asig(pend30, "0123456789ab"), True)
 check("[8] size without psig", ab.asig(pend18), ab.asig(pend30))
+
+# [G3] thinnest side as depth
+def box(ex, ey, ez):
+    return np.array([[sx * ex / 2, sy * ey / 2, sz * ez / 2] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+
+
+def ext(V):
+    return tuple(round(float(x), 5) for x in (V.max(0) - V.min(0)))
+
+
+for src, want in (((0.030, 0.040, 0.005), (0.030, 0.040, 0.005)), ((0.005, 0.040, 0.030), (0.030, 0.040, 0.005)),
+                  ((0.030, 0.005, 0.040), (0.030, 0.040, 0.005))):
+    check(f"[G3a] {src}", ext(ap.orient_thin_to_depth(box(*src))), want)
+check("[G3a-tie] z 0.0054 stays", ext(ap.orient_thin_to_depth(box(0.0050, 0.040, 0.0054))), (0.005, 0.04, 0.0054))
+B = box(0.0050, 0.040, 0.0056)
+Bt = ap.orient_thin_to_depth(B)
+check("[G3a-tie] z 0.0056 turns", ext(Bt), (0.0056, 0.04, 0.005))
+check("[G3a-tie] a pure axis swap", bool(np.allclose(Bt, np.c_[-B[:, 2], B[:, 1], B[:, 0]])), True)
+check("[G3a-tie] x before y", ext(ap.orient_thin_to_depth(box(0.0050, 0.0050, 0.040))), (0.04, 0.005, 0.005))
+M = np.vstack([box(0.030, 0.040, 0.005), [[0.015, 0.0, 0.0025]]])
+Mf = ap.orient_thin_to_depth(M, flip=True)
+check("[G3a-flip] marker", [round(float(x), 6) for x in Mf[-1]], [-0.015, 0.0, -0.0025])
+L = ap.orient_thin_to_depth(box(0.459, 0.115, 0.999))
+check("[G3b] turned", ext(L), (0.459, 0.999, 0.115))
+Ln = ap.normalise(box(0.459, 0.115, 0.999), 65)
+check("[G3b] normalised mm", tuple(round(float(x) * 1000, 2) for x in (Ln.max(0) - Ln.min(0))), (29.86, 65.0, 7.48))
 
 if FAIL:
     print(f"FAILED: {FAIL}")

@@ -437,10 +437,12 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
-def make_necklace(rigged: bytes, spec: Dict[str, Any], pendant: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def make_necklace(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """The necklace geometry on the rigged plain body ``rigged`` (GLB bytes): ``{V, F, N, J, W, joint_names, curve,
-    landmarks, metrics}`` (+ ``pendant`` — ``attach_pendant`` — when ``pendant`` (``accessory_pendant.load_mesh``)
-    is given). Pure CPU, no I/O beyond the bytes given."""
+    landmarks, metrics, parts, part_errors}``. ``parts``: ``[(link, mesh)]`` — the linked pendant (``link`` with its
+    effective ``size_mm`` / ``flip``; ``mesh`` = ``accessory_pendant.load_mesh``), hung at the chain's lowest point
+    (``attach_pendant``); ``out["parts"]`` = ``[hung | None]``, ``out["part_errors"]`` = ``{index: reason}``. Pure CPU,
+    no I/O beyond the bytes given."""
     from app.core import accessory_curve, accessory_mesh, glb_mesh
     from app.core.garment_fit import dense_weights
     started = time.monotonic()
@@ -467,13 +469,15 @@ def make_necklace(rigged: bytes, spec: Dict[str, Any], pendant: Optional[Dict[st
     plausible(metrics, float(spec["chain"]["drop_cm"]) / 100.0)
     out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names), "curve": curve,
            "landmarks": detail["landmarks"], "metrics": metrics}
-    if pendant is not None:
+    out["parts"], out["part_errors"] = [], {}
+    for i, (link, mesh) in enumerate(parts or []):
         try:
-            out["pendant"] = attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius,
-                                            pendant, float(spec["pendant"]["size_mm"]))
+            out["parts"].append(attach_pendant(body, rigged, curve, np.asarray(detail["outward"]), J, W, radius,
+                                               mesh, float(link.get("size_mm") or 18.0), bool(link.get("flip"))))
         except ValueError as e:
             # The chain stays; the pendant is left off with its reason (A225).
-            out["pendant_error"] = str(e)
+            out["parts"].append(None)
+            out["part_errors"][i] = str(e)
     return out
 
 
@@ -494,7 +498,7 @@ def anchor_index(curve: np.ndarray) -> int:
 
 
 def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, J: np.ndarray, W: np.ndarray,
-                   radius: float, pendant: Dict[str, Any], size_mm: float) -> Dict[str, Any]:
+                   radius: float, pendant: Dict[str, Any], size_mm: float, flip: bool = False) -> Dict[str, Any]:
     """The pendant hung at the chain's lowest point (``accessory_pendant.place``), rigid with the chain's skin there
     (the first tube vertex of that ring — the tube's weights are already folded onto the base skeleton), checked
     through the test poses against the body's outer wall (``outer_wall_faces``). ``{V, F, N, UV, J, W, image, mime, material, metrics}``; ``ValueError`` naming why it is
@@ -504,7 +508,7 @@ def attach_pendant(body, rigged: bytes, curve: np.ndarray, outward: np.ndarray, 
     from app.core.garment_shell import top4_weights
     from app.core.rig_contract import norm_bone_name
     a = anchor_index(curve)
-    Vn = accessory_pendant.normalise(pendant["V"], size_mm)
+    Vn = accessory_pendant.normalise(pendant["V"], size_mm, flip)
     Pw, Fw = accessory_curve.weld(np.asarray(body.positions, np.float64), np.asarray(body.faces, np.int64))
     # The pendant hangs in FRONT of the cord (its bail around it): its back starts one cord radius out.
     n = np.asarray(outward[a], np.float64)
@@ -876,23 +880,24 @@ def preview_curve(character_name: str, item_id: str, *, drop_cm: float, thicknes
 # --- A234: the kinds around the body and on a bone -------------------------------------------------------------------
 
 def make_any(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
-             context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+             context: Optional[Dict[str, Any]] = None, parts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """The geometry of any kind on the rigged plain body ``rigged``: the necklace (``make_necklace``), the earrings
     (``make_earrings``), the ring (``make_ring``), the glasses (``make_glasses``) or a piece around a body part (``make_around``). A chest shaping in ``context`` (A228 L7)
-    shapes the body first, so a piece near the chest sits on the shaped skin the figure shows."""
+    shapes the body first, so a piece near the chest sits on the shaped skin the figure shows. ``part``: the earrings'
+    own drop mesh; ``parts``: the linked parts ``[(link, mesh)]`` of a necklace or a belt."""
     context = context or {}
     if context.get("shaping") and _keyed_by_shaping(spec):
         from app.core import bust_shaping
         rigged = bust_shaping.shape_glb(rigged, context["shaping"])
     if spec["kind"] == "necklace":
-        return make_necklace(rigged, spec, part)
+        return make_necklace(rigged, spec, parts)
     if spec["kind"] == "earrings":
         return make_earrings(rigged, spec, part)
     if spec["kind"] == "ring":
         return make_ring(rigged, spec)
     if spec["kind"] == "glasses":
         return make_glasses(rigged, spec)
-    return make_around(rigged, spec, part, load_under(context.get("under") or []))
+    return make_around(rigged, spec, parts, load_under(context.get("under") or []))
 
 
 def load_under(under: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1070,14 +1075,14 @@ def _joint_maxima(joint_names, J: np.ndarray, W: np.ndarray) -> Dict[str, float]
 AROUND_GAP_M = {"strap:chest": 0.0035}
 
 
-def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None,
+def make_around(rigged: bytes, spec: Dict[str, Any], parts: Optional[List[Any]] = None,
                 under: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """A belt / choker / strap (a flat band) or an anklet / bracelet (a round tube) around its body part
     (``accessory_band``), on the outermost layer under it (``under``: ``load_under``; the body alone for
     ``band.layer: body``), skinned with the nearest body vertices' weights folded onto the base skeleton, gated by
-    ``around_plausible``. A belt's buckle (``part``: the item-image mesh) is hung at the front centre
-    (``attach_buckle``; left off with its reason when it does not fit). ``{V, F, N, J, W, joint_names, curve,
-    landmarks, metrics}`` (+ ``pendant`` / ``pendant_error``). Pure CPU."""
+    ``around_plausible``. A belt's linked parts (``parts``: ``[(link, mesh)]`` — the buckle and the side charms) are
+    placed by their links (``attach_parts``; one that does not fit is left off with its reason). ``{V, F, N, J, W,
+    joint_names, curve, landmarks, metrics, parts, part_errors}``. Pure CPU."""
     from app.core import accessory_band as ab, accessory_mesh, glb_mesh
     from app.core.accessory_spec import BAND_KINDS
     started = time.monotonic()
@@ -1164,12 +1169,10 @@ def make_around(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, An
     around_plausible(key, metrics)
     out = {"V": V, "F": F, "N": N, "J": J, "W": W, "joint_names": list(body.joint_names),
            "curve": np.vstack(curves), "landmarks": landmarks, "metrics": metrics}
-    if part is not None and spec["kind"] == "belt":
-        try:
-            out["pendant"] = attach_buckle(rigged, body, dense, Pw, Fo, first, curves[0], V, J, W, part,
-                                           float(spec["buckle"]["size_mm"]), thickness)
-        except ValueError as e:
-            out["pendant_error"] = str(e)
+    out["parts"], out["part_errors"] = [], {}
+    if parts and spec["kind"] == "belt":
+        out["parts"], out["part_errors"] = attach_parts(rigged, body, dense, Pw, Fw, Fo, first, curves[0], V, J, W,
+                                                        parts, thickness)
     metrics["cpu_s"] = round(time.monotonic() - started, 2)
     return out
 
@@ -1215,20 +1218,94 @@ def _rigid_part(Vn: np.ndarray, part: Dict[str, Any], J_at: np.ndarray, W_at: np
             "metrics": {"size_mm": round(measured, 2), "triangles": int(len(F)), "joints": weights, "poses": poses}}
 
 
-def attach_buckle(rigged: bytes, body, dense, Pw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
-                  W: np.ndarray, part: Dict[str, Any], size_mm: float, thickness: float) -> Dict[str, Any]:
-    """The belt's buckle (the item-image mesh, ``accessory_pendant.normalise``: front +Z, back at z 0) centred on the
-    band's front (the centre-line point at angle 0, half the band's depth farther out), rigid with the band's skin
-    there."""
+def curve_point_at(curve: np.ndarray, deg: float) -> int:
+    """The index of the point of ``curve`` whose azimuth about the curve's mean, ``atan2(x − cx, z − cz)`` (0 = the
+    front, +90 = the body's left), is nearest ``deg``."""
+    C = np.asarray(curve, np.float64)
+    c = C.mean(0)
+    az = np.degrees(np.arctan2(C[:, 0] - c[0], C[:, 2] - c[2]))
+    diff = np.abs(((az - float(deg)) + 180.0) % 360.0 - 180.0)
+    return int(np.argmin(diff))
+
+
+#: ``attach_part``: the AABB overlap (m, on every axis) at which two parts count as one on top of the other.
+PART_OVERLAP_M = 0.001
+#: How a part's role reads in its overlap reason.
+PART_WORDS = {"buckle": "buckle", "pendant": "pendant", "charm": "charm"}
+
+
+def attach_part(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+                W: np.ndarray, link: Dict[str, Any], mesh: Dict[str, Any], size_mm: float, flip: bool,
+                thickness: float, placed: List[Any]) -> Dict[str, Any]:
+    """A linked part (plan-anhaenger, design G) placed by its link on the band whose centre line is ``curve``: at the
+    curve point ``curve_point_at(link.at_deg)``, turned to face the horizontal outward direction there.
+
+    ``flat``: centred on that point, its back ``thickness / 2 + 0.5 mm`` out (on the band), no push. ``hang``: its top
+    centre at the same distance out and ``drop_cm`` lower, hung through ``accessory_pendant.place`` against ``Fw`` (the
+    whole welded body — the rest pose, as the necklace's pendant), at most ``PENDANT_MAX_PUSH_MM`` off its point.
+    Rigid with the band's skin at the nearest band vertex; the test poses judge it against the outer wall ``Fo``
+    (``_rigid_part``). ``placed``: ``(lo, hi, role)`` boxes of the parts already on the band — an overlap of
+    ``PART_OVERLAP_M`` or more on every axis leaves this one off ("it overlaps the …"). ``ValueError`` naming why it
+    is left off; else ``_rigid_part``'s dict (+ ``metrics.anchor / mount / at_deg``)."""
     from app.core import accessory_pendant
-    Vn = accessory_pendant.normalise(part["V"], size_mm)
-    Vn = Vn - np.array([0.0, (Vn[:, 1].min() + Vn[:, 1].max()) / 2, 0.0])     # centred in height too
-    at = np.asarray(curve[0], np.float64)
-    Vp = Vn + at + np.array([0.0, 0.0, thickness / 2 + 0.0005])
-    k = int(np.argmin(np.linalg.norm(V - at, axis=1)))
-    hung = _rigid_part(Vp, part, J[k], W[k], rigged, body, dense, Pw, Fo, first, size_mm, "buckle")
-    hung["metrics"]["anchor"] = [round(float(x), 5) for x in at]
+    C = np.asarray(curve, np.float64)
+    k = curve_point_at(C, float(link.get("at_deg") or 0.0))
+    at = C[k]
+    c = C.mean(0)
+    h = np.array([at[0] - c[0], 0.0, at[2] - c[2]])
+    h = h / np.linalg.norm(h) if np.linalg.norm(h) > 1e-9 else np.array([0.0, 0.0, 1.0])
+    Vn = accessory_pendant.normalise(mesh["V"], size_mm, flip)
+    local = Vn.copy()
+    off = float(thickness) / 2 + 0.0005
+    mount = link.get("mount") or "flat"
+    how: Dict[str, Any] = {}
+    if mount == "hang":
+        anchor = at + h * off - np.array([0.0, float(link.get("drop_cm") or 0.0) / 100.0, 0.0])
+        Vp, how = accessory_pendant.place(Vn, anchor, h, Pw, Fw)
+        how.pop("rotation", None)
+        if how["push_mm"] > PENDANT_MAX_PUSH_MM:
+            raise ValueError(PENDANT_OFF_CORD.format(mm=how["push_mm"]))
+    else:
+        Vn = Vn - np.array([0.0, (Vn[:, 1].min() + Vn[:, 1].max()) / 2, 0.0])     # centred in height too
+        R = accessory_pendant._rot_y(float(np.arctan2(h[0], h[2])))
+        anchor = at + h * off
+        Vp = Vn @ R.T + anchor
+    lo, hi = Vp.min(0), Vp.max(0)
+    for plo, phi, other in placed:
+        overlap = np.minimum(hi, phi) - np.maximum(lo, plo)
+        if bool((overlap >= PART_OVERLAP_M).all()):
+            raise ValueError(f"it overlaps the {PART_WORDS.get(other, other)}")
+    kv = int(np.argmin(np.linalg.norm(np.asarray(V, np.float64) - anchor, axis=1)))
+    hung = _rigid_part(Vp, mesh, J[kv], W[kv], rigged, body, dense, Pw, Fo, first, None,
+                       PART_WORDS.get(link.get("role"), "part"))
+    measured = float((local.max(0) - local.min(0)).max()) * 1000.0
+    if abs(measured - size_mm) > SIZE_TOLERANCE * size_mm:
+        raise ValueError(f"its size came out {measured:.1f} mm instead of {size_mm:.0f} mm")
+    hung["metrics"].update({"size_mm": round(measured, 2), "anchor": [round(float(x), 5) for x in anchor],
+                            "mount": mount, "at_deg": float(link.get("at_deg") or 0.0),
+                            "depth_mm": round(float((local.max(0) - local.min(0))[2]) * 1000.0, 2), **how})
     return hung
+
+
+def attach_parts(rigged: bytes, body, dense, Pw, Fw, Fo, first, curve: np.ndarray, V: np.ndarray, J: np.ndarray,
+                 W: np.ndarray, parts: List[Any], thickness: float):
+    """Every linked part of a band (``parts``: ``[(link, mesh)]``, link with the effective ``size_mm`` / ``mount`` /
+    ``flip``) through ``attach_part`` in order: ``([hung | None], {index: reason})`` — a part that does not fit is left
+    off with its reason, the band and the other parts stay."""
+    hung: List[Optional[Dict[str, Any]]] = []
+    errors: Dict[int, str] = {}
+    placed: List[Any] = []
+    for i, (link, mesh) in enumerate(parts):
+        try:
+            got = attach_part(rigged, body, dense, Pw, Fw, Fo, first, curve, V, J, W, link, mesh,
+                              float(link.get("size_mm") or 30.0), bool(link.get("flip")), thickness, placed)
+        except ValueError as e:
+            hung.append(None)
+            errors[i] = str(e)
+            continue
+        hung.append(got)
+        placed.append((got["V"].min(0), got["V"].max(0), link.get("role") or "part"))
+    return hung, errors
 
 
 def make_earrings(rigged: bytes, spec: Dict[str, Any], part: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
