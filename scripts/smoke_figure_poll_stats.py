@@ -119,6 +119,7 @@ def main() -> int:
     keys = {"info_ms", "drape_state", "cut_key", "read_record", "garment_fsig", "get_item", "profile"}
     check("M5 keys", set(comp[0]) if comp else set(), keys)
     check("M5 all >= 0", all(v >= 0 for v in comp[0].values()) if comp else False, True)
+    check("M5 profile >= 1", comp[0].get("profile", 0) >= 1 if comp else False, True)
 
     print("[M6] a write during the computation")
     figure_build._info_memo.clear()

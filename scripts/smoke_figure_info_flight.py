@@ -36,6 +36,14 @@ Expected values, by hand:
      end after A, B and C both carry n == 2. A's result is not stored (the generation moved during it), so
      afterwards _info_memo["demo"] holds the follower's answer (n == 2) under a key whose generation is the
      current one.
+[F3b] Memo emptied, three keys (final review I1). Thread A computes (R=True, K1); inside its _figure_info
+     figure.invalidate() moves the generation and B starts (K2: new generation, R=True) and becomes the follower;
+     0.05 s later R switches to False and C starts (K3: R=False) -> C finds a run with K1 and a follower: it
+     joins the follower. The follower reads profile, build and key when it starts (after A): R=False -> it
+     computes once with running False -> _figure_info 2x. Both B and C carry n == 2, status "idle" and
+     build.running False: B's own key (K2, running True) is not the computed one, so B gets the computation's
+     build, not its own. Before the fix: the follower computed with B's build (running True) -> status
+     "building", and C set its own build (running False) beside it -> status "building" with build.running False.
 [F4] Memo emptied; _figure_info raises ValueError (after 0.2 s); 3 threads -> all three get ValueError,
      _figure_info 1x, afterwards _INFO_FLIGHT.in_flight() == 0.
 [F5] Memo emptied; 3 threads at once, the first to get its answer sets r["generation_pause"] = 1 right away. The
@@ -127,7 +135,8 @@ def main() -> None:
             time.sleep(0.2)
             if S["raise"]:
                 raise ValueError("boom")
-            return {"build": build, "n": n, "big": [{"i": i, "v": [i, i + 1]} for i in range(3000)]}
+            return {"build": build, "n": n, "status": "building" if build["running"] else "idle",
+                    "big": [{"i": i, "v": [i, i + 1]} for i in range(3000)]}
         finally:
             with _lock:
                 S["active"] -= 1
@@ -208,6 +217,41 @@ def main() -> None:
     hit = figure_build._info_memo.get("demo")
     check("F3 memo holds the follower's answer", hit and hit[2]["n"], 2)
     check("F3 memo key is the current generation", hit and hit[0][0] == figure._generation[0], True)
+
+    # [F3b]
+    print("[F3b] three keys: the follower's answer is consistent for every caller")
+    figure_build._info_memo.clear()
+    reset()
+    res3b = {}
+
+    def runner3b(tag):
+        res3b[tag] = info("demo")
+
+    tb = threading.Thread(target=runner3b, args=("B",))
+    tc = threading.Thread(target=runner3b, args=("C",))
+
+    def hook3b(n):
+        if n == 1:
+            figure.invalidate()
+            tb.start()
+            time.sleep(0.05)
+            with _lock:
+                S["running"] = False
+            tc.start()
+
+    S["hook"] = hook3b
+    ta = threading.Thread(target=runner3b, args=("A",))
+    ta.start()
+    ta.join()
+    tb.join()
+    tc.join()
+    S["hook"] = None
+    check("F3b computations", S["calls"], 2)
+    for tag in ("B", "C"):
+        r = res3b.get(tag) or {}
+        check(f"F3b {tag} n", r.get("n"), 2)
+        check(f"F3b {tag} status/build.running",
+              (r.get("status"), (r.get("build") or {}).get("running")), ("idle", False))
 
     # [F4]
     print("[F4] an exception reaches every caller")

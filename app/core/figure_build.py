@@ -3031,8 +3031,13 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     Build's live step progress; every answer gets the fresh ``build`` set after
     the memo. A miss runs under ``_INFO_FLIGHT`` (plan 2026-11-24-figure-poll-caches, Task 3): one computation
     per character and key at a time plus one follower (``single_flight.SerialFlight``); a caller with the same
-    key waits for the running one. Every caller gets its own copy; the stored answer is never handed out.
-    Statistics: ``figure_memo`` counts ``info_hit`` (served from the memo) or ``info_miss`` (computed), plus
+    key waits for the running one. The computation reads profile, Build state and key ITSELF when it starts (a
+    follower starts later than the request of the caller that created it, and callers with yet another key join
+    it): it answers ``{info, build, key}`` from that one state, and a caller keeps its own ``build`` only when
+    its key equals the computed one, else the computation's — so ``status`` and ``build`` never disagree
+    (final review I1). Every caller gets its own copy; the stored answer is never handed out.
+    Statistics: ``figure_memo`` counts ``info_hit`` (served from the memo) or ``info_miss`` (a caller that did
+    not hit the memo — it computes, waits for a run or joins a follower), plus
     ``info_unstored`` for a computation not stored because the generation moved; each computation records
     ``figure_compute`` (``info_ms`` and the read calls inside it, ``read_scope``)."""
     import copy
@@ -3054,30 +3059,41 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     _memo_stat("info_miss")
 
     def compute() -> Dict[str, Any]:
-        # A follower finds the answer of the run before it here when the key stayed the same.
+        # Profile, Build state and key are read here, when the computation starts, and NOT taken from the
+        # creating caller: a follower starts only after the run before it, and callers with yet another key
+        # join it. Every part of the answer comes from this one state (final review I1).
+        c_profile = _profile_of(character_name, None)
+        c_build = state(character_name)
+        c_key = _info_key(character_name, c_profile, c_build)
+        c_now = time.monotonic()
+        # The answer of the run before (or of another caller) may already be stored under this key.
         with _info_lock:
             hit = _info_memo.get(character_name)
-            if hit is not None and hit[0] == key and time.monotonic() - hit[1] < figure.MEMO_TTL_S:
-                return hit[2]
+            if hit is not None and hit[0] == c_key and c_now - hit[1] < figure.MEMO_TTL_S:
+                return {"info": hit[2], "build": c_build, "key": c_key}
         started = time.perf_counter()
         with read_scope.measure() as calls:
             try:
-                info = _figure_info(character_name, profile=profile, build=build)
+                info = _figure_info(character_name, profile=c_profile, build=c_build)
             finally:
                 _compute_stat("info_ms", started, calls)
         with _info_lock:
-            stored = key[0] == figure._generation[0]
+            stored = c_key[0] == figure._generation[0]
             if stored:
                 if len(_info_memo) >= 256:
                     _info_memo.clear()
                 # The private result of the flight: nobody mutates it, every caller gets a copy.
-                _info_memo[character_name] = (key, now, info)
+                _info_memo[character_name] = (c_key, c_now, info)
         if not stored:
             _memo_stat("info_unstored")
-        return info
+        return {"info": info, "build": c_build, "key": c_key}
 
-    out = _INFO_FLIGHT.run(character_name, lambda: key, compute)
-    out["build"] = build
+    res = _INFO_FLIGHT.run(character_name, lambda: key, compute)
+    out = res["info"]
+    # The caller's own (fresher live progress) build only where its key is the computed one: then status, worn,
+    # wanted, ... were computed from a build with the same running / failed / step name. Otherwise the build the
+    # answer was computed from.
+    out["build"] = build if res["key"] == key else res["build"]
     return out
 
 
@@ -3172,8 +3188,14 @@ def _queue_refresh(character_name: str) -> None:
     _open_workers[index] = worker
     try:
         worker.start()
-    except RuntimeError:  # no thread available: the next stale read queues again and retries the start
+    except RuntimeError:  # no thread available
         del _open_workers[index]
+        if not _open_workers:
+            # Nobody would ever drain the queue: drop it, so a later stale read of each of its names queues
+            # that name again and retries the start (final review I2).
+            for name in _open_queue:
+                _open_refreshing.discard(name)
+            _open_queue.clear()
         logger.debug("open steps refresh worker not started", exc_info=True)
 
 
@@ -3183,12 +3205,15 @@ def _open_worker(index: int) -> None:
         while True:
             with _info_lock:
                 if not _open_queue:
+                    # Deregistered in the SAME lock block that saw the empty queue: a name queued after it
+                    # finds the index free and starts a new worker (final review I2).
+                    if _open_workers.get(index) is threading.current_thread():
+                        del _open_workers[index]
                     return
                 name = _open_queue.popleft()
             _refresh_open(name)
     finally:
-        # Deregistered under the lock right where the empty queue was seen (or on an unexpected exit), so a
-        # later _queue_refresh always finds a free index and starts a new worker.
+        # Only an unexpected exit still holds the index here.
         with _info_lock:
             if _open_workers.get(index) is threading.current_thread():
                 del _open_workers[index]

@@ -13,7 +13,8 @@ reuses the outer one — and ``memo(ns, key, compute)`` serves one computation p
 the first one too, gets ``copy.deepcopy`` of the stored result, so no caller's mutation reaches the entry;
 exceptions are not stored. The inputs a memoised function reads below its arguments (profile, items, sidecars) are
 taken as constant for the scope's lifetime only: every writer of them calls ``clear()``, and a scope lives one
-read request. Outside a scope ``memo`` just calls ``compute()``. A ``threading.Thread`` starts with an empty
+read request. Inside a scope ``get_character_profile`` serves the remembered profile even under
+``keyed_lock("character_profile")``, so NO profile read-modify-write may run inside a scope (final review M3). Outside a scope ``memo`` just calls ``compute()``. A ``threading.Thread`` starts with an empty
 context, so it never inherits a scope. Scopes are opened only in the read functions the plan names
 (``scripts/smoke_read_scope.py`` [S9] guards it), never on a build path.
 """
