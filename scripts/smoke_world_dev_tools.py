@@ -300,7 +300,8 @@ Open points 1-3 of the plan (runs 17-21):
        system", the line names "animal-default, human-roleplay", no row, no
        write row; with outfits [] -> ok, nothing "dropped". update_character
        {outfits} on that human-default character -> "no outfit system"; on
-       the human-roleplay Demo Other -> "not changed here". The template
+       the human-roleplay Demo Other (no "Daily" yet) -> added ("outfits added:
+       Daily (0 new piece(s), 0 existing)"), taken back by the undo. The template
        refusal (npc-temporary) lists "human-default (no outfits)" and
        "human-roleplay (outfits)"; read_manual characters contains
        "- `human-default` (Human Standard) — no outfits" (the label of
@@ -321,6 +322,51 @@ Open points 1-3 of the plan (runs 17-21):
        in the catalog, NO "exists again" line); undo reverses all 3 rows,
        skipped [], complete True; afterwards Demo Again and the scarf are
        absent — what the preview announced.
+
+  (an) update_character ADDS outfits (run 23). Demo Ragna (human-roleplay)
+       has "Daily" with a new piece "Demo Old Shirt" (top). Refused before
+       any write (no journal row, every table unchanged): "daily" (a name the
+       character has, any case), "Work" + "WORK" (given twice), item_id
+       "item_nope", an item_id whose item reveals a secret on hand-over, [].
+       get_character lists "outfits: Daily". Then Work = [NEW "Demo Work
+       Shirt" (top, "a grey linen shirt"), {item_id: the catalog scarf "a blue
+       silk scarf", not held}, "Demo Old Shirt" (held, same name + slot ->
+       reused)] and Festive (no pieces). By hand: 1 new, 2 existing; one
+       remove_outfits row: outfits = the 2 new set ids, inventory = sorted
+       [NEW, scarf] (the old shirt was held), items = [NEW]; Work pieces
+       [NEW, scarf, old shirt], text "wearing: a grey linen shirt, a blue
+       silk scarf" (the old shirt has no fragment). Undo: 1 reversed, nothing
+       skipped, complete, EVERY table as before (db_dump): NEW deleted, the
+       scarf only taken back from the inventory, it stays in the catalog.
+  (ao) run 24: an added "Evening" (new piece EVS) that the admin edits
+       afterwards is kept: skipped [changed since ["outfit Evening"], item
+       still in use EVS] (its piece stays with the kept set), not complete.
+       run 25: add_character_outfit stores "Crash Set" and the process ends;
+       the exact inverse never reaches the journal -> one pending row whose
+       inverse has names ["Crash Set"] and the new piece in items (journaled
+       as add_item returned it). Undo resolves it from that record:
+       complete, nothing skipped, every table as before the crash.
+  (ap) body slots (run 26/27), a FAKE package (same declarations as
+       smoke_world_dev_body_slots.py: hair color [blonde, red] allow_custom,
+       length [short, long], lora lora_select; eyes color [blue, green],
+       shape llm_generable false; facial_hair only gender=male). Demo Slots
+       (female, hair.color red): get_character fields [body_slots] = the
+       lines "hair: color=red [blonde|red|other]; length=- [short|long]" and
+       "eyes: color=- [blue|green]" (facial_hair does not apply, lora/shape
+       not fillable); the plain view says 2 attributes unset. Refused,
+       nothing written: facial_hair (does not apply; the refusal lists
+       "eyes, hair"), hair.lora, hair.length "medium", eyes.shape, eyes.color
+       " ". Accepted: hair {copper-red (custom), long} -> merged; journal
+       before {hair: {color: red, length: ABSENT}}, had_key True,
+       slots_present [hair], written {hair: {copper-red, long}}. Demo
+       Slotless (no body_slots key) with gender male + facial_hair + eyes in
+       one patch: facial_hair applies to the profile as it will be.
+       create_character with slot "tail" -> refused, no row; "Demo Born"
+       with hair.color blonde -> created, line names "hair.length,
+       eyes.color" unset. Undo: complete, every table as before — Demo
+       Slotless female again and WITHOUT a body_slots key. Run 27: eyes.color
+       blue, then the admin sets green -> skipped changed since
+       ["body_slots.eyes.color"], green stays.
 
 (h)/(u) patch world_ops._sanitize_map3d so that only the WRITER's call fails;
 the tool's own map3d pre-check calls the same function first and gets the
@@ -1640,8 +1686,11 @@ check("(al) update_character outfits on human-default -> refused 'no outfit syst
       not res.ok and "no outfit system" in res.line, res)
 res = wt.run_tool(w1, "update_character",
                   {"name": "Demo Other", "patch": {"outfits": [{"name": "Daily"}]}})
-check("(al) update_character outfits on human-roleplay -> refused 'not changed here'",
-      not res.ok and "not changed here" in res.line, res)
+# Demo Other has no outfit "Daily" -> update_character ADDS it (run 23 checks
+# the add in detail); the undo of run 21 below takes it back.
+check("(al) update_character outfits on human-roleplay -> added",
+      res.ok and res.line == 'updated character "Demo Other": outfits added: Daily '
+      "(0 new piece(s), 0 existing)", res)
 res = wt.run_tool(w1, "create_character",
                   {"data": {"character_name": "Demo Nope", "template": "npc-temporary"}})
 check("(al) the template refusal says per template whether it has outfits",
@@ -1689,6 +1738,264 @@ check("(am) what the preview announced: Demo Again and the scarf are gone",
       not character_row_exists("Demo Again") and _get_item(SCARF) is None,
       (character_row_exists("Demo Again"), _get_item(SCARF)))
 wr.set_status(run22, "rolled_back")
+
+print("run 23 (update_character adds outfits to an existing character)")
+from app.models.character import (add_character_outfit,  # noqa: E402
+                                  get_character_outfits)
+apply_character({"character_name": "Demo Ragna", "template": "human-roleplay",
+                 "outfits": [{"name": "Daily", "pieces": [
+                     {"slots": ["top"], "name": "Demo Old Shirt"}]}]})
+OLD = next(iid for iid in wu.inventory_entries("Demo Ragna")
+           if (_get_item(iid) or {}).get("name") == "Demo Old Shirt")
+SCARF_REF = add_item(name="Demo Blue Scarf", category="outfit_piece",
+                     prompt_fragment="a blue silk scarf",
+                     outfit_piece={"slots": ["neck"], "covers": [],
+                                   "partially_covers": []})["id"]
+SECRET_REF = add_item(name="Demo Locket", category="outfit_piece",
+                      prompt_fragment="a silver locket",
+                      reveals_secret={"owner": "Demo Other", "secret_id": "s1"},
+                      outfit_piece={"slots": ["neck"], "covers": [],
+                                    "partially_covers": []})["id"]
+dump23 = db_dump()
+run23 = wr.create_run("dress", "m", "p", "u", 40, 300000)
+d1 = wt.ToolCtx(run_id=run23, turn=1)
+for label, outfits, want in (
+        ("(an) a name the character has (any case) -> refused",
+         [{"name": "daily"}], "has an outfit 'daily' already"),
+        ("(an) a name given twice -> refused",
+         [{"name": "Work"}, {"name": "WORK"}], "is given twice"),
+        ("(an) an unknown item_id -> refused",
+         [{"name": "Work", "pieces": [{"item_id": "item_nope"}]}],
+         "no outfit piece with item_id 'item_nope'"),
+        ("(an) a piece that reveals a secret -> refused",
+         [{"name": "Work", "pieces": [{"item_id": SECRET_REF}]}], "reveals a secret"),
+        ("(an) an empty list -> refused", [], "must not be empty")):
+    res = wt.run_tool(d1, "update_character",
+                      {"name": "Demo Ragna", "patch": {"outfits": outfits}})
+    check(label, not res.ok and not res.wrote and want in res.line, res)
+check("(an) refusals wrote nothing", wr.entries(run23) == [] and dump_diff(dump23, db_dump()) == [],
+      dump_diff(dump23, db_dump()))
+res = wt.run_tool(d1, "get_character", {"name": "Demo Ragna"})
+check("(an) get_character names the outfits", res.ok and "\noutfits: Daily" in res.line, res.line)
+# By hand: Work = one NEW piece (Demo Work Shirt), the catalog scarf by id
+# (not held yet -> handed over), Demo Old Shirt (held, same name + slot ->
+# reused); Festive has no pieces. 1 new, 2 existing.
+res = wt.run_tool(d1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+    {"name": "Work", "pieces": [
+        {"slots": ["top"], "name": "Demo Work Shirt", "prompt_fragment": "a grey linen shirt"},
+        {"item_id": SCARF_REF},
+        {"slots": ["top"], "name": "Demo Old Shirt"}]},
+    {"name": "Festive"}]}})
+check("(an) outfits added", res.ok and res.wrote and res.line
+      == 'updated character "Demo Ragna": outfits added: Work, Festive '
+      "(1 new piece(s), 2 existing)", res)
+rows23 = wr.entries(run23)
+inv23 = (rows23[0].get("inverse") or {}) if rows23 else {}
+NEW23 = (inv23.get("items") or [None])[0]
+outs23 = {o["name"]: o for o in get_character_outfits("Demo Ragna")}
+check("(an) one remove_outfits row: 2 sets, inventory = new piece + scarf, items = new piece",
+      len(rows23) == 1 and inv23.get("op") == "remove_outfits"
+      and sorted(inv23.get("outfits") or []) == sorted([outs23["Work"]["id"],
+                                                        outs23["Festive"]["id"]])
+      and inv23.get("inventory") == sorted([NEW23, SCARF_REF])
+      and inv23.get("items") == [NEW23] and _get_item(NEW23) is not None, rows23)
+check("(an) Work: pieces new, scarf, old shirt; text from the fragments",
+      outs23["Work"].get("pieces") == [NEW23, SCARF_REF, OLD]
+      and outs23["Work"].get("outfit") == "wearing: a grey linen shirt, a blue silk scarf"
+      and outs23["Festive"].get("pieces") == [], outs23)
+check("(an) Daily untouched", sorted(outs23) == ["Daily", "Festive", "Work"])
+rep = wu.undo(run23)
+check("(an) undo: 1 reversed, nothing skipped, complete",
+      rep["complete"] and len(rep["reversed"]) == 1 and rep["skipped"] == [], rep)
+check("(an) undo exact: every table as before (new piece gone, scarf back in the "
+      "catalog only)", dump_diff(dump23, db_dump()) == []
+      and _get_item(NEW23) is None and _get_item(SCARF_REF) is not None,
+      dump_diff(dump23, db_dump()))
+wr.set_status(run23, "rolled_back")
+
+print("run 24 (added outfit changed since; a crash inside the write)")
+run24 = wr.create_run("dress2", "m", "p", "u", 40, 300000)
+e1 = wt.ToolCtx(run_id=run24, turn=1)
+res = wt.run_tool(e1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+    {"name": "Evening", "pieces": [{"slots": ["neck"], "name": "Demo Evening Scarf"}]}]}})
+EVS = ((wr.entries(run24)[0].get("inverse") or {}).get("items") or [None])[0]
+ev = next(o for o in get_character_outfits("Demo Ragna") if o["name"] == "Evening")
+# The admin edits the added set afterwards: it is kept, with its piece.
+add_character_outfit("Demo Ragna", {"id": ev["id"], "locations": ["Demo Inn"]})
+rep = wu.undo(run24)
+check("(ao) undo keeps the changed set and its piece: changed since + item in use",
+      [(s["reason"], s.get("keys"), s.get("item")) for s in rep["skipped"]]
+      == [("changed since", ["outfit Evening"], None), ("item still in use", None, EVS)]
+      and rep["complete"] is False, rep)
+check("(ao) Evening and its piece stay",
+      any(o["name"] == "Evening" for o in get_character_outfits("Demo Ragna"))
+      and EVS in wu.inventory_entries("Demo Ragna") and _get_item(EVS) is not None)
+wr.set_status(run24, "rollback_incomplete")
+
+run25 = wr.create_run("dress3", "m", "p", "u", 40, 300000)
+f1 = wt.ToolCtx(run_id=run25, turn=1)
+dump25 = db_dump()
+_orig_add_outfit = world_dev_apply.add_character_outfit
+_orig_attach = wr.attach
+
+
+def _outfit_then_crash(*a, **k):    # the set is stored, then the process ends
+    _orig_add_outfit(*a, **k)
+    raise Crash()
+
+
+def _attach_no_exact(run_id, seq, target_id, inverse, before=None):
+    # The exact inverse (with "outfits") never reaches the journal.
+    if isinstance(inverse, dict) and "outfits" in inverse:
+        raise Crash()
+    return _orig_attach(run_id, seq, target_id, inverse, before)
+
+
+world_dev_apply.add_character_outfit = _outfit_then_crash
+wr.attach = _attach_no_exact
+try:
+    wt.run_tool(f1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+        {"name": "Crash Set", "pieces": [{"slots": ["feet"], "name": "Demo Crash Shoes"}]}]}})
+    crashed = False
+except Crash:
+    crashed = True
+finally:
+    world_dev_apply.add_character_outfit = _orig_add_outfit
+    wr.attach = _orig_attach
+rows25 = wr.entries(run25)
+pinv = (rows25[0].get("inverse") or {}) if rows25 else {}
+SHOES = (pinv.get("items") or [None])[0]
+check("(ao) crash: one pending row, inverse without exact ids, the new piece recorded",
+      crashed and len(rows25) == 1 and rows25[0]["state"] == "pending"
+      and "outfits" not in pinv and pinv.get("names") == ["Crash Set"]
+      and SHOES is not None and _get_item(SHOES) is not None
+      and any(o["name"] == "Crash Set" for o in get_character_outfits("Demo Ragna")),
+      rows25)
+rep = wu.undo(run25)
+check("(ao) undo of the pending row: complete, every table as before the crash",
+      rep["complete"] and rep["skipped"] == [] and dump_diff(dump25, db_dump()) == [],
+      (rep, dump_diff(dump25, db_dump())))
+wr.set_status(run25, "rolled_back")
+
+print("run 26 (body slots from a package declaration)")
+# A FAKE species package (no dependency on the private packs), the same
+# declarations as scripts/smoke_world_dev_body_slots.py:
+#   hair   color select [blonde, red] allow_custom; length select [short, long];
+#          lora lora_select (not fillable)
+#   eyes   color select [blue, green]; shape llm_generable false (not fillable)
+#   facial_hair  applies_to gender=male; style select [short beard]
+from app.models.character_template import clear_template_cache  # noqa: E402
+from app.plugins import registry  # noqa: E402
+from app.plugins.registry import BodySlotSpec, Package  # noqa: E402
+from app.core.body_slots import set_slot_value  # noqa: E402
+
+registry.clear_registry()
+registry.register_package(Package(
+    id="smoke_species", dir=STORAGE, manifest={}, apply_to=["human-roleplay"],
+    body_slots=[
+        BodySlotSpec(id="hair", package_id="smoke_species", attributes={
+            "color": {"type": "select", "options": ["blonde", "red"], "allow_custom": True},
+            "length": {"type": "select", "options": ["short", "long"]},
+            "lora": {"type": "lora_select"}}),
+        BodySlotSpec(id="eyes", package_id="smoke_species", attributes={
+            "color": {"type": "select", "options": ["blue", "green"]},
+            "shape": {"type": "select", "options": ["round", "almond"],
+                      "llm_generable": False}}),
+        BodySlotSpec(id="facial_hair", package_id="smoke_species",
+                     applies_to={"gender": ["male"]}, attributes={
+                         "style": {"type": "select", "options": ["short beard"]}}),
+    ]))
+clear_template_cache()
+apply_character({"character_name": "Demo Slots", "template": "human-roleplay",
+                 "gender": "female", "body_slots": {"hair": {"color": "red"}}})
+apply_character({"character_name": "Demo Slotless", "template": "human-roleplay",
+                 "gender": "female"})
+check("(ap) fixture: Demo Slots hair red, Demo Slotless without a body_slots key",
+      get_character_profile("Demo Slots").get("body_slots") == {"hair": {"color": "red"}}
+      and "body_slots" not in get_character_profile("Demo Slotless"))
+run26 = wr.create_run("body", "m", "p", "u", 40, 300000)
+g1 = wt.ToolCtx(run_id=run26, turn=1)
+res = wt.run_tool(g1, "get_character", {"name": "Demo Slots", "fields": ["body_slots"]})
+# By hand: female -> hair, eyes (facial_hair is male only); lora / shape are
+# not fillable; hair.color red, the rest unset.
+check("(ap) get_character fields [body_slots]: the schema",
+      res.ok and res.line.split("\n")[1:] == [
+          "body slots (slot: attribute=value [allowed]; - = unset):",
+          "hair: color=red [blonde|red|other]; length=- [short|long]",
+          "eyes: color=- [blue|green]"], res.line)
+res = wt.run_tool(g1, "get_character", {"name": "Demo Slots"})
+check("(ap) get_character: 2 attributes unset (hair.length, eyes.color)",
+      res.ok and "body slots: 2 attribute(s) unset" in res.line, res.line)
+dump26 = db_dump()
+for label, body, want in (
+        ("(ap) a slot that does not apply (male only) -> refused",
+         {"facial_hair": {"style": "short beard"}},
+         "body slot 'facial_hair' does not apply to this character — slots: eyes, hair"),
+        ("(ap) a lora attribute -> refused",
+         {"hair": {"lora": "x.safetensors"}}, "attributes: color, length"),
+        ("(ap) a value outside the options -> refused",
+         {"hair": {"length": "medium"}}, "body_slots.hair.length must be one of: short, long"),
+        ("(ap) a not llm-generable attribute -> refused",
+         {"eyes": {"shape": "round"}}, "attributes: color"),
+        ("(ap) an empty value -> refused", {"eyes": {"color": " "}}, "non-empty string")):
+    res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {"body_slots": body}})
+    check(label, not res.ok and not res.wrote and want in res.line, res)
+check("(ap) refusals wrote nothing", wr.entries(run26) == []
+      and dump_diff(dump26, db_dump()) == [], dump_diff(dump26, db_dump()))
+res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {
+    "body_slots": {"hair": {"color": "copper-red", "length": "long"}}}})
+check("(ap) hair merged: copper-red (custom allowed) + long",
+      res.ok and res.line == 'updated character "Demo Slots": body slots hair.color, hair.length'
+      and get_character_profile("Demo Slots")["body_slots"]
+      == {"hair": {"color": "copper-red", "length": "long"}}, res)
+bs_row = wr.entries(run26)[0]
+check("(ap) journal: before red/ABSENT, written copper-red/long, had_key, slot present",
+      bs_row["inverse"] == {"op": "restore_body_slots", "name": "Demo Slots",
+                            "before": {"hair": {"color": "red", "length": wu.ABSENT}},
+                            "had_key": True, "slots_present": ["hair"]}
+      and bs_row["written"] == {"slots": {"hair": {"color": "copper-red", "length": "long"}}},
+      bs_row)
+# Gender male in the same patch makes facial_hair apply (checked against the
+# profile as it will be).
+res = wt.run_tool(g1, "update_character", {"name": "Demo Slotless", "patch": {
+    "gender": "male", "body_slots": {"facial_hair": {"style": "short beard"},
+                                     "eyes": {"color": "green"}}}})
+check("(ap) gender + male-only slot in one patch",
+      res.ok and get_character_profile("Demo Slotless").get("body_slots")
+      == {"facial_hair": {"style": "short beard"}, "eyes": {"color": "green"}}, res)
+res = wt.run_tool(g1, "create_character", {"data": {
+    "character_name": "Demo Tail", "gender": "female", "body_slots": {"tail": {"length": "long"}}}})
+check("(ap) create_character with a slot that does not apply -> refused, nothing created",
+      not res.ok and "body slot 'tail' does not apply" in res.line
+      and not character_row_exists("Demo Tail"), res)
+res = wt.run_tool(g1, "create_character", {"data": {
+    "character_name": "Demo Born", "gender": "female",
+    "body_slots": {"hair": {"color": "blonde"}}}})
+check("(ap) create_character names the unset slots",
+      res.ok and "; body slots not set: hair.length, eyes.color — set them with "
+      "update_character{patch: {body_slots}}" in res.line
+      and get_character_profile("Demo Born").get("body_slots") == {"hair": {"color": "blonde"}},
+      res)
+rep = wu.undo(run26)
+check("(ap) undo complete, nothing skipped", rep["complete"] and rep["skipped"] == [], rep)
+check("(ap) undo exact: every table as before (Demo Slotless without body_slots key, "
+      "female; Demo Slots hair red)", dump_diff(dump26, db_dump()) == []
+      and "body_slots" not in get_character_profile("Demo Slotless")
+      and get_character_profile("Demo Slots")["body_slots"] == {"hair": {"color": "red"}},
+      dump_diff(dump26, db_dump()))
+wr.set_status(run26, "rolled_back")
+run27 = wr.create_run("body2", "m", "p", "u", 40, 300000)
+h1 = wt.ToolCtx(run_id=run27, turn=1)
+res = wt.run_tool(h1, "update_character", {"name": "Demo Slots", "patch": {
+    "body_slots": {"eyes": {"color": "blue"}}}})
+set_slot_value("Demo Slots", "eyes", "color", "green")   # the admin, afterwards
+rep = wu.undo(run27)
+check("(ap) changed since: the admin's value stays",
+      res.ok and [(s["reason"], s.get("keys")) for s in rep["skipped"]]
+      == [("changed since", ["body_slots.eyes.color"])] and rep["complete"] is False
+      and get_character_profile("Demo Slots")["body_slots"]["eyes"] == {"color": "green"},
+      (res, rep))
+wr.set_status(run27, "rollback_incomplete")
 
 print()
 if failures:

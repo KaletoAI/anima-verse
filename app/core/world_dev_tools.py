@@ -771,7 +771,8 @@ def _find_characters(step: _Step, args: Dict[str, Any]) -> str:
 
 
 @_tool("get_character", False, "get_character{name, fields?:[...]}",
-       "one character; field names unless fields are asked for")
+       "one character; field names unless fields are asked for; "
+       "fields [\"body_slots\"] = its body slots with values and allowed values")
 def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import (character_row_exists, get_character_config,
                                       get_character_profile)
@@ -779,18 +780,35 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     name = _str(args, "name", required=True)
     if not character_row_exists(name):
         raise ToolRefusal(f"no character {name!r} — use find_characters")
+    from app.models.character import get_character_outfits
     fields = _fields_arg(args)
     prof = get_character_profile(name) or {}
     cfg = get_character_config(name) or {}
     if fields:
         out = [f'"{name}"']
+        schema: List[str] = []
         for key in fields:
+            if key == "body_slots":
+                # The schema of the package-declared slots, not the raw blob:
+                # what can be set, to what, and what is set now.
+                lines = _body_schema(prof)
+                schema = (["body slots (slot: attribute=value [allowed]; - = unset):"]
+                          + lines if lines else
+                          ["body slots: none — the template declares none for this "
+                           "character"])
+                continue
             src = prof if key in prof else cfg if key in cfg else None
             if src is None:
                 out.append(f"{key}: (not set)")
             else:
                 out.append(f"{key}: {_short(json.dumps(src[key], ensure_ascii=False), 600)}")
-        return _cut("\n".join(out))
+        text = _cut("\n".join(out))
+        if schema:
+            # The body-slot schema has its own, larger budget.
+            block = "\n".join(_cap_lines(schema, "too many slots",
+                                          budget=MAX_BODY_SCHEMA_CHARS))
+            text += "\n" + block
+        return text
 
     def nonempty(d: Dict[str, Any]) -> List[str]:
         return sorted(k for k, v in d.items()
@@ -803,6 +821,17 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
         "profile fields: " + (", ".join(nonempty(prof)) or "(none)"),
         "config fields: " + (", ".join(nonempty(cfg)) or "(none)"),
     ]
+    from app.core.world_dev_apply import _template_has_wardrobe
+    if _template_has_wardrobe(str(prof.get("template") or "human-default")):
+        names = [str(o.get("name") or "") for o in get_character_outfits(name)]
+        out.append("outfits: " + (", ".join(n for n in names if n) or "(none)"))
+    else:
+        out.append("outfits: (template without outfit system)")
+    if _body_specs(prof):
+        missing = _missing_body_attrs(name)
+        out.append("body slots: " + (f"{len(missing)} attribute(s) unset" if missing
+                                     else "all set")
+                   + ' — get_character{"fields": ["body_slots"]} shows them')
     return _cut("\n".join(out))
 
 
@@ -1539,6 +1568,129 @@ def _check_outfits(outfits: Any) -> None:
                 raise ToolRefusal(f"{pw}: {exc}")
 
 
+def _check_outfit_refs_reveal(outfits: Any) -> None:
+    """An existing catalog piece that reveals a secret on pickup is refused:
+    handing it over would mark the secret known (outside every undo)."""
+    from app.models.inventory import get_item
+    for i, outfit in enumerate(outfits or []):
+        for j, piece in enumerate((outfit or {}).get("pieces") or []):
+            if isinstance(piece, dict) and piece.get("item_id"):
+                item = get_item(str(piece["item_id"]).strip()) or {}
+                if item.get("reveals_secret"):
+                    raise ToolRefusal(f"outfits[{i}].pieces[{j}]: piece "
+                                      f"{piece['item_id']!r} reveals a secret when "
+                                      "handed over — it cannot be given here")
+
+
+# ── Body slots (declared by species packages, read through body_slots) ──
+
+#: Longest body-slot schema get_character returns (one line per slot).
+MAX_BODY_SCHEMA_CHARS = 4000
+
+
+def _body_specs(profile: Dict[str, Any]) -> List[Tuple[Any, Dict[str, Dict[str, Any]]]]:
+    """(spec, llm-fillable attributes) of every body slot that applies to a
+    character with this profile and has at least one fillable attribute —
+    the package declarations (body_slots.slots_for_character), never a
+    hard-coded slot list."""
+    from app.core.body_slots import llm_fillable_attributes, slots_for_character
+    out = []
+    for spec in slots_for_character("", profile=profile):
+        attrs = llm_fillable_attributes(spec)
+        if attrs:
+            out.append((spec, attrs))
+    return out
+
+
+def _attr_applies(decl: Dict[str, Any], slot_vals: Dict[str, Any],
+                  profile: Dict[str, Any]) -> bool:
+    """The attribute's own ``applies_to`` (an ``attributes.<key>`` condition
+    reads the sibling attribute of the same slot, any other key the profile
+    field) — same comparison as body_slots._slot_applies."""
+    from app.core.body_slots import normalize_condition_value as norm
+    for key, allowed in (decl.get("applies_to") or {}).items():
+        value = (slot_vals.get(key[len("attributes."):])
+                 if key.startswith("attributes.") else profile.get(key))
+        if norm(value) not in [norm(a) for a in allowed or []]:
+            return False
+    return True
+
+
+def _check_body_slots(raw: Any, profile: Dict[str, Any], template: str) -> Dict[str, Dict[str, str]]:
+    """Validate a body_slots draft/patch against the slots that apply to a
+    character with ``profile``; every invalid slot, attribute or value is
+    REFUSED (before any write) instead of skipped. Returns the clean
+    {slot: {attribute: value}} (values stripped)."""
+    if not isinstance(raw, dict):
+        raise ToolRefusal("'body_slots' must be an object {slot: {attribute: value}}")
+    specs = {spec.id: (spec, attrs) for spec, attrs in _body_specs(profile)}
+    if raw and not specs:
+        raise ToolRefusal(f"template {template!r} has no body slots for this character")
+    clean: Dict[str, Dict[str, str]] = {}
+    for slot_id, values in raw.items():
+        if str(slot_id) not in specs:
+            raise ToolRefusal(f"body slot {slot_id!r} does not apply to this character — "
+                              "slots: " + ", ".join(sorted(specs)))
+        spec, attrs = specs[str(slot_id)]
+        if not isinstance(values, dict) or not values:
+            raise ToolRefusal(f"body_slots.{slot_id} must be a non-empty object "
+                              "{attribute: value}")
+        out: Dict[str, str] = {}
+        for key, value in values.items():
+            decl = attrs.get(key)
+            if decl is None:
+                raise ToolRefusal(f"body_slots.{slot_id}: attribute {key!r} cannot be "
+                                  "set here — attributes: " + ", ".join(sorted(attrs)))
+            if not isinstance(value, str) or not value.strip():
+                raise ToolRefusal(f"body_slots.{slot_id}.{key} must be a non-empty "
+                                  "string (values cannot be cleared here)")
+            text = value.strip()
+            options = [str(o) for o in (decl.get("options") or [])]
+            if options and not decl.get("allow_custom") and text not in options:
+                raise ToolRefusal(f"body_slots.{slot_id}.{key} must be one of: "
+                                  + ", ".join(options))
+            out[key] = text
+        clean[spec.id] = out
+    return clean
+
+
+def _missing_body_attrs(name: str) -> List[str]:
+    """"slot.attribute" of every applicable, fillable attribute of a stored
+    character that has no value (attribute conditions that do not hold are
+    left out)."""
+    from app.models.character import get_character_profile
+    prof = get_character_profile(name) or {}
+    vals = prof.get("body_slots") if isinstance(prof.get("body_slots"), dict) else {}
+    out = []
+    for spec, attrs in _body_specs(prof):
+        slot_vals = vals.get(spec.id) if isinstance(vals.get(spec.id), dict) else {}
+        for key, decl in attrs.items():
+            if _attr_applies(decl, slot_vals, prof) and not str(slot_vals.get(key) or "").strip():
+                out.append(f"{spec.id}.{key}")
+    return out
+
+
+def _body_schema(prof: Dict[str, Any]) -> List[str]:
+    """One line per applicable slot: every fillable attribute with its
+    current value ("-" = unset) and what it takes."""
+    vals = prof.get("body_slots") if isinstance(prof.get("body_slots"), dict) else {}
+    lines = []
+    for spec, attrs in _body_specs(prof):
+        slot_vals = vals.get(spec.id) if isinstance(vals.get(spec.id), dict) else {}
+        parts = []
+        for key, decl in attrs.items():
+            if not _attr_applies(decl, slot_vals, prof):
+                continue
+            options = [str(o) for o in (decl.get("options") or [])]
+            takes = ("|".join(options) + ("|other" if decl.get("allow_custom") else "")
+                     if options else "text")
+            cur = str(slot_vals.get(key) or "").strip() or "-"
+            parts.append(f"{key}={cur} [{takes}]")
+        if parts:
+            lines.append(f"{spec.id}: " + "; ".join(parts))
+    return lines
+
+
 def _check_home_values(data: Dict[str, Any]) -> None:
     """home_location / home_room strings, daily_schedule a list of slot
     objects ({hour, location?, role?, sleep?})."""
@@ -1643,8 +1795,14 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
             _check_field_value(key, fields[key], value)
     if draft.get("outfits") is not None:
         _check_outfits(draft["outfits"])
-    if draft.get("body_slots") is not None and not isinstance(draft["body_slots"], dict):
-        raise ToolRefusal("'body_slots' must be an object")
+        _check_outfit_refs_reveal(draft["outfits"])
+    if draft.get("body_slots") is not None:
+        # Checked against the profile the character will have (template,
+        # gender, ... of the draft): an invalid slot, attribute or value is
+        # refused here instead of being skipped by the apply.
+        would_be = {k: v for k, v in draft.items() if k not in _CHAR_DRAFT_SPECIAL}
+        would_be.update(template=template, body_slots=draft["body_slots"])
+        draft["body_slots"] = _check_body_slots(draft["body_slots"], would_be, template)
     _check_home_values(draft)
     _check_home_targets(draft)
     # THE name rule (CharacterNameError is a ValueError -> refused), then
@@ -1704,12 +1862,16 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import get_character_config
     cfg = get_character_config(name) or {}
     home = str(cfg.get("home_location") or "")
+    # No silent gap: the applicable body-slot attributes the draft left unset.
+    missing = _missing_body_attrs(name)
     line = (f'created character "{name}" (template {template}'
             + (f", {len(outfits)} outfit(s), {len(items)} new piece(s)"
                + (f", {reused} existing" if reused else "") if outfits else "")
             + ")" + (f" home {home}" + (f" / {cfg.get('home_room')}"
                                         if cfg.get("home_room") else "")
                      if home else "")
+            + (f"; body slots not set: {', '.join(missing)} — set them with "
+               "update_character{patch: {body_slots}}" if missing else "")
             + _warn_suffix([str(w) for w in result.get("warnings") or []]))
     step.complete({"name": name, "items": items}, line)
     return line
@@ -1717,15 +1879,17 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
 
 @_tool("update_character", True, "update_character{name, patch}",
        "change fields of a character; 'soul:<field>' = the whole new text of a "
-       "soul section; home / home_room / schedule")
+       "soul section; home / home_room / schedule; body_slots (merged per "
+       "attribute); outfits (NEW outfits added)")
 def _update_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core import soul_writer
     from app.core.keyed_lock import keyed_lock
     from app.core.linked_characters import LOCKED_PROFILE_FIELDS, soul_owner
-    from app.core.world_dev_apply import _apply_home_and_schedule
+    from app.core.world_dev_apply import (_apply_home_and_schedule,
+                                          _apply_one_outfit, _template_has_wardrobe)
     from app.models.character import (character_row_exists, get_character_config,
-                                      get_character_profile, save_character_config,
-                                      save_character_profile)
+                                      get_character_outfits, get_character_profile,
+                                      save_character_config, save_character_profile)
     _only_keys(args, {"name", "patch"}, "update_character")
     name = _str(args, "name", required=True)
     patch = args.get("patch")
@@ -1744,6 +1908,8 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
     cfg_patch: Dict[str, Any] = {}
     soul_patch: Dict[str, str] = {}  # rel path -> full new text
     home_data: Dict[str, Any] = {}
+    outfits_patch: Optional[List[Dict[str, Any]]] = None
+    body_raw: Any = None
     for key, value in patch.items():
         if key.startswith("soul:"):
             fk = key[len("soul:"):]
@@ -1759,11 +1925,13 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                                   f"change it on {owner}")
             soul_patch[rel] = value
         elif key == "outfits":
-            from app.core.world_dev_apply import _template_has_wardrobe
             if not _template_has_wardrobe(template):
                 _refuse_outfits(template, character_templates())
-            raise ToolRefusal("outfits of an existing character are not changed "
-                              "here — only create_character gives outfits")
+            _check_outfits(value)
+            _check_outfit_refs_reveal(value)
+            outfits_patch = copy.deepcopy(value)
+        elif key == "body_slots":
+            body_raw = value
         elif key in _HOME_PATCH_KEYS:
             home_data[_HOME_PATCH_KEYS[key]] = value
         elif key in _HOME_DRAFT_SPELLINGS:
@@ -1788,6 +1956,44 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
         else:
             raise ToolRefusal(f"unknown character field {key!r} — use get_character "
                               "for the field names")
+    if outfits_patch is not None:
+        # Outfits are only ADDED: a name the character has already (or one
+        # given twice) is refused, so nothing that existed is ever replaced
+        # and the undo removes exactly what this call added.
+        taken = {str(o.get("name") or "").strip().casefold()
+                 for o in get_character_outfits(name)}
+        seen: set = set()
+        for i, outfit in enumerate(outfits_patch):
+            key_name = str(outfit.get("name") or "").strip().casefold()
+            if key_name in taken:
+                raise ToolRefusal(f"outfits[{i}]: {name} has an outfit "
+                                  f"{outfit.get('name')!r} already — outfits are only "
+                                  "added here, never replaced; use another name")
+            if key_name in seen:
+                raise ToolRefusal(f"outfits[{i}]: the name {outfit.get('name')!r} "
+                                  "is given twice")
+            seen.add(key_name)
+        if not outfits_patch:
+            raise ToolRefusal("'outfits' must not be empty")
+    body_clean: Dict[str, Dict[str, str]] = {}
+    if body_raw is not None:
+        # Checked against the profile as it will be after this patch (a
+        # gender change can make a slot apply), the stored values merged
+        # with the new ones.
+        would_be = copy.deepcopy(prof0)
+        would_be.update(copy.deepcopy(prof_patch))
+        merged = copy.deepcopy(would_be.get("body_slots")
+                               if isinstance(would_be.get("body_slots"), dict) else {})
+        if isinstance(body_raw, dict):
+            for slot_id, values in body_raw.items():
+                if isinstance(values, dict):
+                    merged.setdefault(str(slot_id), {})
+                    if isinstance(merged[str(slot_id)], dict):
+                        merged[str(slot_id)].update(values)
+        would_be["body_slots"] = merged
+        body_clean = _check_body_slots(body_raw, would_be, template)
+        if not body_clean:
+            raise ToolRefusal("'body_slots' must not be empty")
     _check_home_values(home_data)
     if home_data and not any(home_data.get(k) for k in home_data):
         raise ToolRefusal("home / home_room / schedule must not be empty — "
@@ -1885,6 +2091,100 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             cline = ", ".join(changed) if changed else "fields unchanged"
             cstep.complete({"profile": wp, "config": wc}, cline)
             lines.append(cline)
+
+        if body_clean:
+            bstep = group_step()
+            b_prof = get_character_profile(name) or {}
+            b_vals = (copy.deepcopy(b_prof["body_slots"])
+                      if isinstance(b_prof.get("body_slots"), dict) else {})
+            had_key = "body_slots" in b_prof
+            slots_present = sorted(s for s in body_clean if s in b_vals)
+            b_before = wu.body_slot_state(b_vals, body_clean)
+
+            def body_diff():
+                p = get_character_profile(name) or {}
+                now = p.get("body_slots") if isinstance(p.get("body_slots"), dict) else {}
+                return wu.body_slot_diff(b_before, wu.body_slot_state(now, body_clean))
+
+            def body_inverse(before_map):
+                return {"op": "restore_body_slots", "name": name, "before": before_map,
+                        "had_key": had_key, "slots_present": slots_present}
+
+            bstep.begin("character", name, body_inverse(b_before))
+
+            def reconcile_body():
+                bb, ww = body_diff()
+                return None if not bb else (name, body_inverse(bb), {"slots": ww})
+
+            with bstep.writing(reconcile_body):
+                from app.core.character_ops import apply_body_slot_values
+                for slot_id, values in body_clean.items():
+                    apply_body_slot_values(name, slot_id, values)
+            bb, ww = body_diff()
+            bstep.attach(name, body_inverse(bb))
+            bline = ("body slots " + ", ".join(f"{s}.{a}" for s in sorted(bb)
+                                               for a in sorted(bb[s]))
+                     if bb else "body slots unchanged")
+            bstep.complete({"slots": ww}, bline)
+            lines.append(bline)
+
+        if outfits_patch:
+            ostep = group_step()
+            o_before = set(wu.outfit_rows(name))
+            i_before = set(wu.inventory_entries(name))
+            refs = sorted({str(p["item_id"]).strip() for o in outfits_patch
+                           for p in o.get("pieces") or []
+                           if isinstance(p, dict) and p.get("item_id")})
+            new_items: List[str] = []
+            # Until the write is done the inverse names what to look for (a
+            # row left pending by a crash is resolved from it); afterwards the
+            # exact ids (world_dev_undo._undo_remove_outfits).
+            pending_inv = {"op": "remove_outfits", "name": name,
+                           "names": [str(o["name"]).strip() for o in outfits_patch],
+                           "outfits_before": sorted(o_before),
+                           "inventory_before": sorted(i_before), "refs": refs,
+                           "items": []}
+            ostep.begin("character", name, pending_inv)
+
+            def on_item(item_id: str) -> None:
+                # Durable the moment add_item returns the id.
+                new_items.append(str(item_id))
+                ostep.attach(name, {**pending_inv, "items": list(new_items)})
+
+            def added_now():
+                ours = set(refs) | set(new_items)
+                outs = {oid: o for oid, o in wu.outfit_rows(name).items()
+                        if oid not in o_before}
+                inv = {iid: e for iid, e in wu.inventory_entries(name).items()
+                       if iid not in i_before and iid in ours}
+                return outs, inv
+
+            def outfit_inverse(outs, inv):
+                return {"op": "remove_outfits", "name": name, "outfits": sorted(outs),
+                        "inventory": sorted(inv), "items": list(new_items)}
+
+            def reconcile_outfits():
+                outs, inv = added_now()
+                if not outs and not inv and not new_items:
+                    return None
+                return (name, outfit_inverse(outs, inv),
+                        {"outfits": outs, "inventory": inv})
+
+            applied: List[Dict[str, Any]] = []
+            with ostep.writing(reconcile_outfits):
+                for outfit in outfits_patch:
+                    applied.append(_apply_one_outfit(name, copy.deepcopy(outfit),
+                                                     on_item=on_item))
+            outs, inv = added_now()
+            ostep.attach(name, outfit_inverse(outs, inv))
+            created = sum(int(a.get("pieces_created") or 0) for a in applied)
+            reused = sum(int(a.get("pieces_reused") or 0) for a in applied)
+            oline = (f"outfits added: {', '.join(str(a.get('name')) for a in applied)} "
+                     f"({created} new piece(s), {reused} existing)"
+                     + _warn_suffix([str(w) for a in applied
+                                     for w in a.get("warnings") or []]))
+            ostep.complete({"outfits": outs, "inventory": inv}, oline)
+            lines.append(oline)
 
         if home_data:
             hstep = group_step()

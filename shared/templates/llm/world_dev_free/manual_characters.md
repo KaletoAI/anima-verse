@@ -21,7 +21,7 @@ the field names a character has; `find_characters{query?, location?}` finds them
 {%- endfor %}
 - every other key is a field of that template (`get_character` on a similar character shows
   them). Unknown keys are refused.
-- `outfits` — list of outfits (below); `body_slots` — `{"<slot>": {"<attribute>": "<value>"}}`.
+- `outfits` — list of outfits (below); `body_slots` — see "Body slots" below.
 - home and schedule — see `read_manual homes`.
 
 ## Field values
@@ -38,6 +38,23 @@ the field names a character has; `find_characters{query?, location?}` finds them
   blonde hair"). With body slots, hair/eyes/skin/build go into `body_slots`.
 - Personality and other prose are written in the character's language, without the name as the
   sentence opener.
+
+## Body slots
+
+Some templates get body slots from installed packages (hair, eyes, skin, build, …). Which slots
+and attributes a character has, and the values they take, depend on its template and gender:
+`get_character{"name": …, "fields": ["body_slots"]}` lists them as
+`slot: attribute=value [allowed values]` (`-` = unset, `|other` = another short English value
+is allowed, `[text]` = free short English text). For a new character, create it first (the
+result names the slots it left unset), then fill them.
+
+- `body_slots` is `{"<slot>": {"<attribute>": "<value>"}}`, values in English.
+- Set EVERY slot and attribute that applies to the character. Hair, eyes, skin, build etc. go
+  there — `character_appearance` / `face_appearance` keep only what no slot covers
+  (distinctive marks, hairstyle details, posture); never repeat a slot value there.
+- A slot, attribute or value that does not apply is refused; nothing of the call is written.
+- In `update_character` the given attributes are merged into the stored ones; the others stay.
+  Values cannot be cleared here.
 
 ## Soul sections
 
@@ -58,7 +75,10 @@ A section shared with a linked character is changed on its owner.
 
 ## Outfits
 
-Only for a template with outfits (see `template` above).
+Only for a template with outfits (see `template` above). `create_character` takes them in
+`data.outfits`; `update_character` ADDS outfits to an existing character with
+`patch.outfits` (same shape). An outfit name the character has already is refused — outfits
+are never replaced or removed here; `get_character` lists the outfit names.
 
 `{"name": "Daily", "pieces": [...], "locations": [], "activities": [], "excluded_locations": []}`
 
@@ -85,5 +105,6 @@ action, is linked to other characters, has chat messages, or other characters' m
 ## update_character
 
 `patch` keys: template fields (not `character_name` or `template`), `"soul:<field_key>"`,
-and `home` / `home_room` / `schedule` (only these spellings in a patch); `outfits` are not
-changed here. Fields of a linked character that belong to its leader are changed on the leader.
+`home` / `home_room` / `schedule` (only these spellings in a patch), `body_slots` (merged per
+attribute) and `outfits` (NEW outfits, added — see above). A character without clothing or with
+unset body slots (`get_character` shows both) is completed this way. Fields of a linked character that belong to its leader are changed on the leader.

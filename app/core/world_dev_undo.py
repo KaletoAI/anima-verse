@@ -72,7 +72,10 @@ Inverse ops (``inverse["op"]``):
   before_text} (file_id = path relative to the character directory, as
   ``soul_writer.read_text/write_text`` take it) · restore_home_schedule{name,
   before:{home_location, home_room, daily_schedule, known_locations}} ·
-  recreate_location{row} · recreate_terrain_area{row} ·
+  restore_body_slots{name, before:{slot: {attribute: value}}, had_key,
+  slots_present} · remove_outfits{name, outfits:[ids], inventory:[item ids],
+  items:[created piece ids]} (pending: {names, outfits_before,
+  inventory_before, refs, items}) · recreate_location{row} · recreate_terrain_area{row} ·
   recreate_height_area{row} (row = the reader's full record) ·
   recreate_character{name, snapshot:{rows, files, dirs, has_dir,
   file_bytes}} (:func:`character_snapshot`)
@@ -80,7 +83,9 @@ Inverse ops (``inverse["op"]``):
 Written shapes: restore_location / restore_home_schedule — the written map of
 :func:`diff_keys`; restore_position — ``{x, z, yaw}`` (:func:`position_of`);
 restore_*_area — the full re-read row; restore_character —
-``{"profile": {...}, "config": {...}}``; restore_soul — the stored text as a
+``{"profile": {...}, "config": {...}}``; restore_body_slots —
+``{"slots": {slot: {attribute: value}}}`` (:func:`body_slot_diff`);
+remove_outfits — ``{"outfits": {id: row}, "inventory": {item id: entry}}``; restore_soul — the stored text as a
 plain string (or None when the write removed the file). A key that did not exist is recorded as :data:`ABSENT` (restoring it
 removes the key again).
 
@@ -201,6 +206,57 @@ def home_schedule_state(name: str) -> Dict[str, Any]:
                            "slots": list(sched.get("slots") or [])},
         "known_locations": list(known) if isinstance(known, list) else None,
     })
+
+
+def body_slot_state(values: Dict[str, Any],
+                    keys: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """The stored values of the body-slot attributes named by ``keys``
+    (``{slot: {attribute: ...}}``) in a profile's ``body_slots`` map —
+    the before/written shape of ``restore_body_slots``; an unset attribute
+    is :data:`ABSENT`."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for slot, attrs in (keys or {}).items():
+        cur = values.get(slot) if isinstance(values, dict) else None
+        cur = cur if isinstance(cur, dict) else {}
+        out[slot] = {a: (copy.deepcopy(cur[a]) if a in cur else ABSENT)
+                     for a in attrs}
+    return _norm(out)
+
+
+def body_slot_diff(before: Dict[str, Dict[str, Any]],
+                   after: Dict[str, Dict[str, Any]]
+                   ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """The attributes whose value differs between two :func:`body_slot_state`
+    reads: ``(before_map, written_map)``, slots without a change left out."""
+    b_map: Dict[str, Dict[str, Any]] = {}
+    w_map: Dict[str, Dict[str, Any]] = {}
+    for slot in sorted(set(before or {}) | set(after or {})):
+        b_slot = (before or {}).get(slot) or {}
+        a_slot = (after or {}).get(slot) or {}
+        for attr in sorted(set(b_slot) | set(a_slot)):
+            bv = b_slot.get(attr, ABSENT)
+            av = a_slot.get(attr, ABSENT)
+            if _norm(bv) != _norm(av):
+                b_map.setdefault(slot, {})[attr] = bv
+                w_map.setdefault(slot, {})[attr] = av
+    return b_map, w_map
+
+
+def outfit_rows(name: str) -> Dict[str, Dict[str, Any]]:
+    """The stored outfit sets of a character by id (the written shape of
+    ``remove_outfits``)."""
+    from app.models.character import get_character_outfits
+    return _norm({str(o.get("id")): o for o in get_character_outfits(name)
+                  if o.get("id")})
+
+
+def inventory_entries(name: str) -> Dict[str, Dict[str, Any]]:
+    """The stored inventory entries of a character by item id. A read error
+    raises (never "holds nothing")."""
+    from app.models.inventory import _load_inventory
+    data = _load_inventory(name, strict=True)
+    return _norm({str(e.get("item_id")): e for e in data.get("inventory") or []
+                  if e.get("item_id")})
 
 
 def _split_keys(before: Dict[str, Any], written: Any,
@@ -466,6 +522,118 @@ def _undo_restore_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List[
     if changed:
         raise _Skip(REASON_CHANGED, keys=changed)
     return []
+
+
+def _undo_restore_body_slots(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Per attribute: restored when it still holds what the agent wrote
+    (a pending entry restores all), ``changed since`` otherwise. A slot
+    that did not exist before and is empty again goes; the profile's
+    ``body_slots`` key goes when it did not exist before and is empty."""
+    from app.models.character import (character_row_exists, get_character_profile,
+                                      save_character_profile)
+    name = str(inv.get("name") or "")
+    before = inv.get("before") or {}
+    written = entry.get("written")
+    w_slots = written.get("slots") if isinstance(written, dict) else None
+    present = set(inv.get("slots_present") or [])
+    changed: List[str] = []
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        if not before:
+            return []
+        prof = copy.deepcopy(get_character_profile(name) or {})
+        vals = prof.get("body_slots") if isinstance(prof.get("body_slots"), dict) else {}
+        vals = copy.deepcopy(vals)
+        touched = False
+        for slot, attrs in before.items():
+            cur = dict(vals.get(slot) or {}) if isinstance(vals.get(slot), dict) else {}
+            for attr, bval in (attrs or {}).items():
+                if isinstance(w_slots, dict) and attr in (w_slots.get(slot) or {}):
+                    now = cur[attr] if attr in cur else ABSENT
+                    if _norm(now) != _norm(w_slots[slot][attr]):
+                        changed.append(f"body_slots.{slot}.{attr}")
+                        continue
+                if is_absent(bval):
+                    cur.pop(attr, None)
+                else:
+                    cur[attr] = copy.deepcopy(bval)
+                touched = True
+            if cur or slot in present:
+                vals[slot] = cur
+            else:
+                vals.pop(slot, None)
+        if touched:
+            if vals or inv.get("had_key"):
+                prof["body_slots"] = vals
+            else:
+                prof.pop("body_slots", None)
+            if not save_character_profile(name, prof):
+                raise RuntimeError(f"profile of {name} was not stored")
+    if changed:
+        raise _Skip(REASON_CHANGED, keys=changed)
+    return []
+
+
+def _undo_remove_outfits(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Remove the outfit sets an update_character added, take back the
+    inventory entries it added and delete the catalog pieces it created
+    (only those held nowhere — :func:`_cleanup_items`). A done entry names
+    the exact ids and compares each with what was written (``changed
+    since`` when it differs: kept). A pending one (the process ended inside
+    the write) is resolved from what the inverse recorded before it: the
+    sets of the given names that did not exist before, and the inventory
+    entries of the named / created pieces that were not held before."""
+    from app.models.character import character_row_exists, delete_character_outfit
+    from app.models.inventory import remove_from_inventory
+    name = str(inv.get("name") or "")
+    written = entry.get("written")
+    w_outs = (written.get("outfits") or {}) if isinstance(written, dict) else None
+    w_inv = (written.get("inventory") or {}) if isinstance(written, dict) else None
+    items = [str(i) for i in inv.get("items") or [] if i]
+    changed: List[str] = []
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            return [_Skip(REASON_GONE)] + _cleanup_items(items)
+        outs = outfit_rows(name)
+        held = inventory_entries(name)
+        if "outfits" in inv:
+            out_ids = [str(o) for o in inv.get("outfits") or []]
+            inv_ids = [str(i) for i in inv.get("inventory") or []]
+        else:
+            names = {str(n).strip().casefold() for n in inv.get("names") or []}
+            before_o = set(inv.get("outfits_before") or [])
+            before_i = set(inv.get("inventory_before") or [])
+            out_ids = [oid for oid, o in outs.items() if oid not in before_o
+                       and str(o.get("name") or "").strip().casefold() in names]
+            inv_ids = [iid for iid in list(inv.get("refs") or []) + items
+                       if iid in held and iid not in before_i]
+        # The pieces of a set that is KEPT (changed since) stay with the
+        # character: taking them back would leave the kept set without them.
+        kept_pieces: set = set()
+        for oid in out_ids:
+            if oid not in outs:
+                continue
+            if isinstance(w_outs, dict) and oid in w_outs and outs[oid] != _norm(w_outs[oid]):
+                changed.append(f"outfit {outs[oid].get('name') or oid}")
+                kept_pieces.update(str(p) for p in outs[oid].get("pieces") or [])
+                continue
+            if not delete_character_outfit(name, oid) and oid in outfit_rows(name):
+                raise RuntimeError(f"outfit {oid} of {name} was not deleted")
+        for iid in inv_ids:
+            if iid not in held or iid in kept_pieces:
+                continue
+            if isinstance(w_inv, dict) and iid in w_inv and held[iid] != _norm(w_inv[iid]):
+                changed.append(f"inventory {iid}")
+                continue
+            qty = int(held[iid].get("quantity") or 1)
+            if (not remove_from_inventory(name, iid, quantity=qty, force=True)
+                    and iid in inventory_entries(name)):
+                raise RuntimeError(f"inventory entry {iid} of {name} was not removed")
+    skips = _cleanup_items(items)
+    if changed:
+        return [_Skip(REASON_CHANGED, keys=changed)] + skips
+    return skips
 
 
 def _undo_restore_soul(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
@@ -857,6 +1025,8 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "restore_character": _undo_restore_character,
     "restore_soul": _undo_restore_soul,
     "restore_home_schedule": _undo_restore_home_schedule,
+    "restore_body_slots": _undo_restore_body_slots,
+    "remove_outfits": _undo_remove_outfits,
     "recreate_location": _undo_recreate_location,
     "recreate_terrain_area": _undo_recreate_terrain_area,
     "recreate_height_area": _undo_recreate_height_area,
@@ -965,6 +1135,8 @@ _TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "restore_character": ("character", ("name",)),
     "restore_soul": ("character", ("name",)),
     "restore_home_schedule": ("character", ("name",)),
+    "restore_body_slots": ("character", ("name",)),
+    "remove_outfits": ("character", ("name",)),
     "recreate_character": ("character", ("name",)),
 }
 
