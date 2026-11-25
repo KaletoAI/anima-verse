@@ -43,6 +43,41 @@ export function deleteTemplate(id: string): Promise<unknown> {
   return apiDelete(`/quests/templates/${encodeURIComponent(id)}`)
 }
 
+/** One entry of a run's step log: who fulfilled which step (0-based) at which game stamp. */
+export interface StepLogEntry { step: number; avatar: string; mind?: string; game_ts?: string }
+
+/** A row of `GET /quests/runs` (`_run_row` in app/routes/quests.py); the labels are finished server strings. */
+export interface RunRow {
+  id: string
+  title: string
+  state: string
+  current_step: number
+  step_count: number
+  step_log: StepLogEntry[]
+  bindings: Record<string, Record<string, string>>
+  issues: Issue[]
+  started_game_label: string
+  expires_label: string
+}
+
+/** Runs, every not yet ended one first; `state` ('' = all) narrows to one state. */
+export async function fetchRuns(state: string, lang: string): Promise<RunRow[]> {
+  const qs = new URLSearchParams({ lang })
+  if (state) qs.set('state', state)
+  const data = await apiGet<{ runs?: RunRow[] }>(`/quests/runs?${qs.toString()}`)
+  return data.runs || []
+}
+
+/** End a not yet ended run as cancelled; `ok` is false when it had already ended. */
+export function cancelRun(id: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/quests/runs/${encodeURIComponent(id)}/cancel`, {})
+}
+
+/** Start a run of a ready template; a refusal is 422 `refused` with issues. */
+export function startRun(templateId: string, bindings: Record<string, Record<string, string>>): Promise<Record<string, unknown>> {
+  return apiPost<Record<string, unknown>>(`/quests/templates/${encodeURIComponent(templateId)}/start`, { bindings })
+}
+
 /** The parts of a /quests error the form acts on. `code` is '' for anything that is not such an error
  *  (a network failure, say); `message` is always set. */
 export interface QuestError { status: number; code: string; message: string; issues: Issue[] }

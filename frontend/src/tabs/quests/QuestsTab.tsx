@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { RunsView } from './RunsView'
 import { TemplatesView } from './TemplatesView'
 import type { PaneGuard } from './TemplatesView'
 
@@ -9,6 +10,7 @@ const STORAGE_KEY = 'ga-quests-subtab'
 const DEFAULT_SUBTAB: SubTab = 'runs'
 /** The sub-tabs that exist, in their order. A stored or default id that is not listed falls back to the first. */
 const SUBTABS: { id: SubTab; label: string }[] = [
+  { id: 'runs', label: 'Runs' },
   { id: 'templates', label: 'Templates' },
 ]
 
@@ -48,7 +50,8 @@ export function QuestsTab() {
             onClick={() => select(s.id)}>{t(s.label)}</button>
         ))}
       </nav>
-      {subtab === 'templates' ? <TemplatesView onGuard={onGuard} /> : null}
+      {subtab === 'runs' ? <RunsView /> : null}
+      {subtab === 'templates' ? <TemplatesView onGuard={onGuard} onStarted={() => select('runs')} /> : null}
     </>
   )
 }

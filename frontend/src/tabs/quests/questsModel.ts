@@ -144,6 +144,50 @@ export function defaultParams(type: CatalogType | undefined): Record<string, unk
   return out
 }
 
+/** What a role picker holds while the admin chooses: the union of the D6 binding keys. */
+export interface RolePick { name?: string; location_id?: string; room_id?: string; item_id?: string }
+
+/** The keys of a role kind's binding (D6), in their order. */
+const BINDING_KEYS: Record<RoleKind, (keyof RolePick)[]> = {
+  character: ['name'],
+  location: ['location_id'],
+  room: ['location_id', 'room_id'],
+  item: ['item_id'],
+}
+
+/** The D6 binding of a role of `kind` built from a picker's state — only the keys of that kind, and `null` while
+ *  one of them is still empty (a room needs its location AND its room) or the kind is unknown. */
+export function bindingFor(kind: RoleKind, pick: RolePick): Record<string, string> | null {
+  const keys = BINDING_KEYS[kind]
+  if (!keys) return null
+  const out: Record<string, string> = {}
+  for (const k of keys) {
+    const v = pick[k]
+    if (typeof v !== 'string' || !v) return null
+    out[k] = v
+  }
+  return out
+}
+
+/** True when every role has a complete binding among `picks` (keyed by role key). */
+export function bindingsComplete(roles: Role[], picks: Record<string, unknown>): boolean {
+  return roles.every((r) => {
+    const pick = picks[r.key]
+    return isObject(pick) && bindingFor(r.kind, pick as RolePick) !== null
+  })
+}
+
+/** The run states of a quest run (stage 1): not yet ended first, then the ended ones. */
+export const RUN_STATES = ['preparing', 'hidden', 'open', 'done', 'failed', 'cancelled', 'broken'] as const
+export type RunState = typeof RUN_STATES[number]
+export const RUN_OPEN_STATES: readonly string[] = ['preparing', 'hidden', 'open']
+
+/** "current / count" with the current step 1-based; a done run (current_step == count) stays at count. */
+export function stepProgress(current: number, count: number): string {
+  const n = Math.max(0, count)
+  return `${Math.min(Math.max(0, current) + 1, n)} / ${n}`
+}
+
 /** A fresh, empty template draft (no id: not yet created). */
 export function emptyDraft(): TemplateDraft {
   return rowToDraft({})

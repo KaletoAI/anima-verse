@@ -6,6 +6,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { useDiscardGuard, useDraft } from '../../lib/useDraft'
+import { StartRunDialog } from './StartRunDialog'
 import { TemplateForm } from './TemplateForm'
 import {
   createTemplate, deleteTemplate, fetchCatalog, fetchTemplate, fetchTemplates, questError, updateTemplate,
@@ -22,7 +23,11 @@ export type PaneGuard = (fn: () => void) => void
  * no id yet is new (created by Save). Save sends `base_revision`; a 409 `stale` offers Reload, a 422 `invalid`
  * shows the issue list — the way out of it is to save the template as a draft (the state select on Basics).
  */
-export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null) => void }) {
+export function TemplatesView({ onGuard, onStarted }: {
+  onGuard?: (guard: PaneGuard | null) => void
+  /** Called after a run was started from the open template (the tab switches to Runs). */
+  onStarted?: () => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [rows, setRows] = useState<TemplateListRow[] | null>(null)
@@ -34,6 +39,8 @@ export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null)
   const [stale, setStale] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pendingDelete, setPendingDelete] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const invalidMessage = t('A ready template must have no issues. Fix them, or set the state to Draft and save.')
 
   useEffect(() => {
     onGuard?.(guard)
@@ -95,12 +102,12 @@ export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null)
       setError(t('This template was changed elsewhere since you opened it. Reload it to continue; your edits here are lost.'))
     } else if (err.code === 'invalid') {
       setIssues(err.issues)
-      setError(t('A ready template must have no issues. Fix them, or set the state to Draft and save.'))
+      setError(invalidMessage)
     } else {
       setError(err.message)
     }
     toast(t('Error') + ': ' + (err.code === 'invalid' ? t('the template has issues') : err.message), 'error')
-  }, [t, toast])
+  }, [invalidMessage, t, toast])
 
   const save = useCallback(async () => {
     if (!draft) return
@@ -207,10 +214,18 @@ export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null)
               onDelete={draft.id ? () => setPendingDelete(true) : undefined}
               disabled={saving}
               dirty={dirty}
+              extra={
+                <button type="button" className="ga-btn ga-btn-sm"
+                  disabled={!draft.id || dirty || draft.state !== 'ready' || saving}
+                  title={draft.id && !dirty && draft.state === 'ready' ? undefined : t('Save the template as ready first')}
+                  onClick={() => setStarting(true)}>
+                  {t('Start run')}
+                </button>
+              }
             />
-            {error ? (
+            {error || (!stale && issues.length) ? (
               <div className="ga-hint ga-quest-error" role="alert">
-                <p>{error}</p>
+                {error ? <p>{error}</p> : null}
                 {stale ? (
                   <button type="button" className="ga-btn ga-btn-sm" onClick={reloadOpen}>{t('Reload')}</button>
                 ) : null}
@@ -220,7 +235,10 @@ export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null)
               </div>
             ) : null}
             <TemplateForm draft={draft} catalog={catalog} issues={issues}
-              onChange={(next) => setDraft(next)} onStructureChange={() => setIssues([])} />
+              onChange={(next) => setDraft(next)} onStructureChange={() => {
+                setIssues([])
+                setError((e) => (e === invalidMessage ? '' : e))
+              }} />
           </>
         ) : (
           <div className="ga-placeholder">{t('Click a quest template or create a new one.')}</div>
@@ -237,6 +255,16 @@ export function TemplatesView({ onGuard }: { onGuard?: (guard: PaneGuard | null)
         onConfirm={() => { void doDelete() }}
         onClose={() => setPendingDelete(false)}
       />
+      {draft && draft.id ? (
+        <StartRunDialog open={starting} templateId={draft.id} title={draft.title || draft.id} roles={draft.roles}
+          onClose={() => setStarting(false)}
+          onStarted={() => {
+            setStarting(false)
+            toast(t('Run started'))
+            void reload()
+            onStarted?.()
+          }} />
+      ) : null}
       {discardDialog}
     </div>
   )

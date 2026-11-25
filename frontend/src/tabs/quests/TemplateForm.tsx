@@ -22,6 +22,24 @@ const ROLE_KIND_LABELS: Record<RoleKind, string> = {
   item: 'Item',
 }
 
+/** The time limit in game hours. The text is held locally while the field has focus, so it can be emptied and
+ *  retyped; leaving the field commits it (empty or not a positive number = 0, no time limit). */
+function HoursInput({ value, onCommit }: { value: number; onCommit: (hours: number) => void }) {
+  const [text, setText] = useState<string | null>(null)
+  const shown = Number.isFinite(value) ? String(value) : '0'
+  return (
+    <input className="ga-input ga-quest-num" type="number" min={0} step="any"
+      value={text ?? shown}
+      onFocus={() => setText(shown)}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const n = parseFloat(text ?? shown)
+        setText(null)
+        onCommit(Number.isFinite(n) && n > 0 ? n : 0)
+      }} />
+  )
+}
+
 function Alerts({ issues }: { issues: Issue[] }) {
   return <>{issues.map((i, n) => <p key={n} className="ga-hint" role="alert">{i.message}</p>)}</>
 }
@@ -72,12 +90,7 @@ export function TemplateForm({
           </select>
         </Field>
         <Field label={t('Time limit (game hours)')} compact tip={t('0 = no time limit')}>
-          <input className="ga-input ga-quest-num" type="number" min={0} step="any"
-            value={Number.isFinite(draft.time_limit_h) ? draft.time_limit_h : 0}
-            onChange={(e) => {
-              const n = parseFloat(e.target.value)
-              set('time_limit_h', Number.isFinite(n) && n > 0 ? n : 0)
-            }} />
+          <HoursInput value={draft.time_limit_h} onCommit={(hours) => set('time_limit_h', hours)} />
           <Alerts issues={issuesAt(issues, 'time_limit_s')} />
         </Field>
       </div>
@@ -193,7 +206,7 @@ export function TemplateForm({
   )
 
   return (
-    <>
+    <div className="ga-quest-form">
       <nav className="ga-subtabs" aria-label={t('Quest template')}>
         {SECTIONS.map((s) => {
           const count = s.paths.reduce((n, p) => n + issuesAt(issues, p).length, 0)
@@ -207,6 +220,6 @@ export function TemplateForm({
         })}
       </nav>
       {section === 'basics' ? basics : section === 'roles' ? roles : section === 'steps' ? steps : start}
-    </>
+    </div>
   )
 }

@@ -3664,7 +3664,13 @@ a.ga-btn {
 .ga-quest-num { width: 90px; }
 .ga-quest-role > .ga-field:nth-child(3) { flex: 0 1 360px; }
 .ga-quest-remove { align-self: flex-end; }
-.ga-quest-cond [role="alert"], .ga-quest-step [role="alert"], .ga-quest-role [role="alert"],
+.ga-quest-form [role="alert"],
 .ga-quest-error { color: var(--danger, #f85149); margin: 2px 0; font-size: 12px; }
 .ga-quest-error ul { margin: 4px 0 0; padding-left: 18px; }
+/* Quests tab — runs view and start dialog. */
+.ga-quest-runs-bar { margin-bottom: 8px; align-items: center; }
+.ga-quest-runs-bar > select { width: auto; }
+.ga-quest-run-detail ul { margin: 2px 0 6px; padding-left: 18px; }
+.ga-quest-start { max-width: 560px; }
+.ga-quest-start .ga-form-row > select { flex: 1 1 0; min-width: 0; }
 .ga-subtabs .ga-tag-missing { margin-left: 6px; }
