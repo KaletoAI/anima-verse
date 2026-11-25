@@ -695,6 +695,36 @@ time. A dry run (0 jobs) with `placket` lacing put 22 eyelets down the back cent
   OK, plan empty; the gore between the cups shows a gold rim round a black core.
 - Smoke: `scripts/smoke_cut_texture_trims.py` [1.8] and the narrow strap in [2].
 
+## 1h. A top with cups (round 2026-11-25)
+
+A top can be cut like a bra with a long band: the field `cups` (top only, `CUPS`: `none` / `bra`, default `none`).
+With `cups` `bra` the top is built as a bra everywhere: drape, cut, texture prompt and preview all read the one
+switch `build_kind` in `garment_template` ("bra" for a cupped top, else the kind; `cupped_top`). It gets the bra's cups,
+centre piece (gore), straps and closure, and the same nine pattern pieces (`cup_l/r`, `cup_top_l/r`, `gore`,
+`band_l/r`, `strap_l/r`). What stays a top's: its slot, its layer rank and its body regions (chest, waist).
+
+- **Fields.** A cupped top shows the fields of `TOP_CUPS_FIELDS`: `kind`, `cups`, `fabric`, `opacity`, `length_m`,
+  `cup_style`, `cup_coverage`, `push_up`, `center_gore`, `closure`, `straps`, `texture`, `sleeve_print` (the dialog
+  reads `kind_fields["top:cups"]`). There is no `underband_m`; the length sets the band.
+- **Band to the hem.** `fitted_spec` measures the hem from the shoulder line like any top and holds it between the
+  waist and the thin back band under the underbust line:
+  `hem_y = min(max(origin - length_m, waist_y), under - BACK_STRAP_M)`, `band = max(BACK_STRAP_M, under - hem_y)`.
+  The hem is never lower than the waist, because below it the body widens to the hip and the pinned band would turn
+  into an hourglass. `hem_clamped` records the hold: > 0 at the waist, < 0 under the cups. The dialog says
+  "Hem held at the waist". The builder (`bra_region`) measures the band from the breast fold it finds down to that
+  absolute `hem_y`; a bra has no `hem_y` and keeps its own band.
+- **Keys (E5/E6).** `cups` enters the drape and cut keys only when it is `bra`, so a top with `cups` `none` keeps
+  every key it had. A top stores both field sets; only the active set is keyed. The parked top fields (shoulders,
+  neckline, sleeves …) are kept in the stored params (`stored_params`), reset to their defaults in the validated params
+  (`validate_params`), and come back unchanged when `cups` goes back to `none`.
+- **Chest shaping (E3).** A cupped top never shapes the chest: `bust_shaping.applies` reads the build kind, and "bra"
+  is not in `SHAPING_KINDS`. The push-up of its cups lifts the cloth, as a bra's does. It still drapes on the shaped
+  body when another piece of the worn set shapes it.
+- **Texture.** The prompt family is the bra's (fitted, front only for cups; a bandeau has a back job). The piece is
+  named "<style> crop top" below `CUPPED_BUSTIER_LENGTH_M` 0.375 m, else "<style> bustier top".
+- Smokes: `scripts/smoke_top_cups_params.py`, `scripts/smoke_top_cups_routing.py`, [C1]-[C6] in
+  `scripts/smoke_garment_template_fitted.py`, [S-C1]-[S-C5] in `scripts/smoke_bust_shaping.py`.
+
 ## 2. Texture from cut (step 2)
 
 ### The param `texture`

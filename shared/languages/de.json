@@ -7283,6 +7283,14 @@
     "The mesh is already built": "Das Mesh ist schon gebaut",
     "The mesh is being built": "Das Mesh wird gebaut",
     "Used by: … — unlink it there first": "Verwendet von: … – zuerst dort die Verknüpfung lösen",
-    "gone": "fehlt"
+    "gone": "fehlt",
+    "Cups in the top": "Körbchen im Oberteil",
+    "Bra cups": "BH-Körbchen",
+    "Bra cups: the top is cut like a bra with a long band — skin-tight, with its own cups, centre piece and straps. Its length sets the band's hem, at most down to the waist. For a loose, laced or longer top leave None. Switching back to None restores the top's own neckline, shoulders and sleeves.": "BH-Körbchen: Das Oberteil wird wie ein BH mit langem Band geschnitten – hauteng, mit eigenen Körbchen, Mittelsteg und Trägern. Seine Länge legt den Saum des Bands fest, höchstens bis zur Taille. Für ein lockeres, geschnürtes oder längeres Oberteil „Keine“ lassen. Zurück auf „Keine“ stellt Ausschnitt, Schultern und Ärmel des Oberteils wieder her.",
+    "Length (sets the band's hem)": "Länge (legt den Saum des Bands fest)",
+    "Hem held at the waist": "Saum an der Taille gehalten",
+    "Hem held under the cups": "Saum unter den Körbchen gehalten",
+    "{style} cups": "Körbchen {style}",
+    "{straps} straps": "Träger {straps}"
   }
 }

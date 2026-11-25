@@ -364,6 +364,9 @@ export interface TemplateParams {
    *  ("none" / "buttons" / "zip" / "lacing"); `buttons` 0 = automatic. Both TEXTURE_ONLY: a switch re-assembles. */
   placket?: string
   buttons?: number
+  /** Round 2026-11-25 (top only): "bra" = the top is built as a bra with a long band — its own cups, centre piece and
+   *  straps (`garment_template.cupped_top`); "none" = a top as before. */
+  cups?: string
 }
 
 /** A223: the close-fitting kinds cut from the body's surface (`garment_template.FITTED_KINDS`): no length, flare or
@@ -376,8 +379,26 @@ export const UPPER_KINDS = ['top', 'jacket']
 /** A221: the top edges of a strapless top (`garment_template.STRAPLESS_NECKLINES`). */
 export const STRAPLESS_NECKLINES = ['straight', 'sweetheart']
 
-/** Whether the piece has a covered bodice (sleeves, neckline): a jacket, or a top / dress with covered shoulders. */
-export function hasBodice(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
+/** Round 2026-11-25: a top with cups — built as a bra with a long band (`garment_template.cupped_top`). */
+export function cuppedTop(p: Pick<TemplateParams, 'kind' | 'cups'>): boolean {
+  return p.kind === 'top' && p.cups === 'bra'
+}
+
+/** The key of the draft's field list in `kind_fields`: "top:cups" for a top with cups, else the kind. */
+export function fieldsKey(p: Pick<TemplateParams, 'kind' | 'cups'>): string {
+  return cuppedTop(p) ? 'top:cups' : p.kind
+}
+
+/** Whether the piece is cut from the body's surface (`garment_template.build_kind` in FITTED_KINDS): a fitted kind,
+ *  or a top with cups (built as a bra). */
+export function isFitted(p: Pick<TemplateParams, 'kind' | 'cups'>): boolean {
+  return FITTED_KINDS.includes(p.kind) || cuppedTop(p)
+}
+
+/** Whether the piece has a covered bodice (sleeves, neckline): a jacket, or a top / dress with covered shoulders (a
+ *  top with cups has none — its shoulder fields are parked). */
+export function hasBodice(p: Pick<TemplateParams, 'kind' | 'shoulders' | 'cups'>): boolean {
+  if (cuppedTop(p)) return false
   return p.kind === 'jacket' || ((p.kind === 'top' || p.kind === 'dress')
     && (p.shoulders === 'covered' || p.shoulders === 'off_shoulder'))
 }
@@ -391,8 +412,8 @@ export function offShoulder(p: Pick<TemplateParams, 'kind' | 'shoulders'>): bool
 export const OFF_SHOULDER_SLEEVES = ['short', 'elbow', 'long']
 
 /** A221: a top cut as a corset bodice — strapless or with straps (`garment_template.corset_top`). */
-export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders'>): boolean {
-  return p.kind === 'top' && (p.shoulders === 'strapless' || p.shoulders === 'straps')
+export function corsetTop(p: Pick<TemplateParams, 'kind' | 'shoulders' | 'cups'>): boolean {
+  return p.kind === 'top' && !cuppedTop(p) && (p.shoulders === 'strapless' || p.shoulders === 'straps')
 }
 
 /** Whether a choice is offered for the draft (A221: a corset top's neckline is straight or sweetheart, a covered
@@ -578,6 +599,7 @@ export const TEMPLATE_FIELD_CHOICE_LABELS: Partial<Record<keyof TemplateParams, 
   leg_shape: { straight: 'Straight leg', wide: 'Wide leg', flared: 'Flared (bootcut)' },
   seat: { fitted: 'Fitted (second skin)', regular: 'Regular', relaxed: 'Relaxed (roomy seat)' },
   placket: { lacing: 'Lacing' },
+  cups: { bra: 'Bra cups' },
 }
 
 /** Bug round 2026-11-20: the dialog's presets (`presets` of the GET) — their button words and hints. */
@@ -611,6 +633,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
   trouser_length: 'Leg length', leg_shape: 'Leg shape', seat: 'Seat (above the crotch)', trouser_waist: 'Waist finish', fly: 'Fly (painted)',
   hem: 'Hem', texture: 'Texture', sleeve_print: 'Sleeves of the texture',
   placket: 'Placket (painted)', buttons: 'Buttons (0 = automatic)',
+  cups: 'Cups in the top',
 }
 
 /**
@@ -619,6 +642,7 @@ export const TEMPLATE_FIELD_LABELS: Record<keyof TemplateParams, string> = {
  */
 export const TEMPLATE_FIELD_HINTS: Partial<Record<keyof TemplateParams, string>> = {
   fabric: 'Fabric = how the cloth falls (the cloth simulation: weight, stiffness, folds). Metal scales or chain: Stiff.',
+  cups: 'Bra cups: the top is cut like a bra with a long band — skin-tight, with its own cups, centre piece and straps. Its length sets the band\'s hem, at most down to the waist. For a loose, laced or longer top leave None. Switching back to None restores the top\'s own neckline, shoulders and sleeves.',
 }
 
 /** Round 2026-11-25: the line under the material select of a template piece — the surface, never the drape. */
@@ -638,8 +662,19 @@ export const TEMPLATE_FABRIC_NOTES: Record<string, string> = {
 export const TEMPLATE_DRAPE_FABRIC: Record<string, string> = { leather_glossy: 'leather', leather_rough: 'leather' }
 
 /** The length field's label for a kind (Ruling A142: a top or jacket counts from the shoulder line). */
-export function lengthLabel(kind: string): string {
+export function lengthLabel(kind: string, cups?: string): string {
+  if (kind === 'top' && cups === 'bra') return 'Length (sets the band\'s hem)'
   return UPPER_KINDS.includes(kind) ? 'Length from the shoulder' : 'Length below the waist'
+}
+
+/** Round 2026-11-25: a top with cups' summary: "Top · Balconette cups · 30 cm · Wide straps · Leather (rough)" (the
+ *  band's height needs the body; the overlay draws and labels it). */
+export function cuppedSummary(p: TemplateParams, t: Tr = EN): string {
+  const parts = [t(TEMPLATE_CHOICE_LABELS.top), t('{style} cups').replace('{style}', t(TEMPLATE_CHOICE_LABELS[p.cup_style || 'molded'] || p.cup_style || ''))]
+  parts.push(cm(p.length_m))
+  if (p.straps && p.straps !== 'none') parts.push(t('{straps} straps').replace('{straps}', t(TEMPLATE_CHOICE_LABELS[p.straps] || p.straps)))
+  parts.push(t(TEMPLATE_CHOICE_LABELS[p.fabric] || p.fabric))
+  return parts.join(' · ')
 }
 
 /** "45 cm" of a length in metres. */
@@ -691,6 +726,7 @@ export function fittedSummary(p: TemplateParams, t: Tr = EN): string {
  *  parameters yet". */
 export function templateSummary(p: TemplateParams | null, t: Tr = EN): string {
   if (!p) return t('No parameters yet')
+  if (cuppedTop(p)) return cuppedSummary(p, t)
   if (FITTED_KINDS.includes(p.kind) || p.kind === 'trousers') return fittedSummary(p, t)
   const parts = [t(TEMPLATE_CHOICE_LABELS[p.kind] || p.kind), cm(p.length_m)]
   if (!UPPER_KINDS.includes(p.kind)) parts.push(t('flare {n}').replace('{n}', String(p.flare)))

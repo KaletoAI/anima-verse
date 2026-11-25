@@ -624,7 +624,7 @@ def get_template_params(character_name: str, item_id: str, picture: bool = True,
             # plan E6: the stored dict (a top's parked field set included) — the dialog shows ``fields_of`` of it
             "params": gt.stored_of(item),
             "source": stored.get("source") or "", "updated_at": stored.get("updated_at") or "", "spec": spec,
-            "built": list(gt.BUILT_KINDS), "kind_fields": {k: list(v) for k, v in gt.KIND_FIELDS.items()},
+            "built": list(gt.BUILT_KINDS), "kind_fields": {**{k: list(v) for k, v in gt.KIND_FIELDS.items()}, "top:cups": list(gt.TOP_CUPS_FIELDS)},
             # A172: with nothing stored the dialog starts from the kind the item most likely is (slots / name),
             # and a kind change starts from that kind's values
             "default_kind": gt.default_kind(item),

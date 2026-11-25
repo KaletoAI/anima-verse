@@ -1149,7 +1149,8 @@ def _bra(p, m, reg: Registration, spec: Dict[str, Any], cap_m: float, add, mark)
         # a top with cups: the band's height to the hem, and whether the hem was held (at the waist / the underbust)
         held = float(spec.get("hem_clamped") or 0.0)
         note = " · hem held at the waist" if held > 0 else (" · hem held under the cups" if held < 0 else "")
-        mark(x0 + br + 0.03, bottom, f"band {round((under - bottom) * 100)} cm{note}")
+        # on the left of the piece: the cup line's label sits on the right at the underbust line
+        mark(x0 - br - 0.03, bottom, f"band {round((under - bottom) * 100)} cm{note}", "end")
     if p["push_up"] > 0:
         mark(x0 + br + 0.03, under - 0.04, f"push-up {p['push_up']:.2f} (dashed: without)")
 
@@ -1469,6 +1470,9 @@ def overlay(character_name: str, item_id: str, params: Dict[str, Any]) -> Dict[s
         return out
     reg = register(frame, meas)
     drawn = shapes(params, meas, reg, over_sleeves=drapes_over_sleeves(character_name, item_id, params, base))
+    if gt.cupped_top(params):
+        # a top with cups: whether its hem is held at the waist (> 0) or under the cups (< 0) — the dialog says so
+        out["hem_clamped"] = gt.fitted_spec(params, meas)["fitted"].get("hem_clamped", 0.0)
     out.update(ok=True, px_per_m=round(reg.scale, 3), landmarks=reg.landmarks(), colour=fabric_colour(item_id),
                **drawn)
     return out
