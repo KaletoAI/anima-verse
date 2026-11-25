@@ -2075,6 +2075,9 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
       ``MIN_PIN_BAND_M``); ``leg_cut`` / ``back_coverage`` / ``side_width_m`` shape the leg openings (builder);
     * bra: ``under_y`` / ``bust_y`` (``_bust_lines``), the band ``band_m`` under the underbust line (``BACK_STRAP_M``
       round the back without one), the gore (``GORE``), ``push`` and the straps (``strap_spec``);
+      a top with cups (``cupped_top``, built as a bra) adds ``hem_y`` (its band runs down to it: the hem of
+      ``length_m``, held between the waist and ``BACK_STRAP_M`` under the underbust line), ``hem_clamped`` (hem - asked
+      hem, 0 when nothing was held) and ``top``; a bra's dict is the one it always was;
     * trousers (A233): ``trouser_spec`` — the waistband, the hem rule, the leg shape's radii, the gap, the pins;
     * gloves: ``reach_m`` = how far the cuff reaches from the wrist up the arm (``GLOVE_REACH`` of the measured
       forearm / upper arm), the gap ``offset_m`` (``FITTED_OFFSET_M`` + ``GLOVE_FIT_M`` x fit), the cuff."""
@@ -2111,6 +2114,18 @@ def fitted_spec(params: Dict[str, Any], meas: Dict[str, Any]) -> Dict[str, Any]:
                     "rigid_cups": params["cup_style"] == "molded",
                     "push_m": [PUSH_LIFT_M, PUSH_IN_M, PUSH_OUT_M], "straps": strap_spec(params, meas)})
         rows = [round(meas.get("shoulder_y", bust + 0.15), 4), round(under - max(band, BACK_STRAP_M), 4)]
+        if cupped_top(params):
+            # round 2026-11-25 (plan E4): a top with cups is a bra whose band runs from the underbust line down to the
+            # top's hem (``length_m`` from the shoulder line, ``_length_origin``) — never below the waist (under it the
+            # body widens again to the hip: the band, pinned whole and flattened as one ring, would be an hourglass),
+            # and at least ``BACK_STRAP_M`` (``min`` last: a waist over the underbust line gives the thin band). The hem
+            # is written ABSOLUTE: the builder measures the band from the fold it finds (``bra_region``).
+            want = _length_origin(meas, None) - float(params["length_m"])
+            hem_y = min(max(want, float(meas["waist_y"])), under - BACK_STRAP_M)
+            band = max(BACK_STRAP_M, under - hem_y)
+            fit.update({"band_m": round(band, 4), "hem_y": round(hem_y, 4), "top": True,
+                        "hem_clamped": round(hem_y - want, 4) if abs(hem_y - want) > 1e-6 else 0.0})
+            rows = [rows[0], round(hem_y, 4)]
     elif kind == "tights":
         style = params["tights_style"]
         top = meas["waist_y"] if style == "tights" else None      # the others: per leg, read off the bones (builder)
