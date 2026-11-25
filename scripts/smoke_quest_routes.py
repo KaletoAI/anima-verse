@@ -48,6 +48,20 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
  8. Delete while open (Review Focus 2): DELETE the Errand -> 409, detail.code "has_open_runs"; the template is still
     there. Cancel R1 -> {"ok": true}; a second cancel -> {"ok": false} (already ended). DELETE -> 200 {"ok": true},
     GET -> 404, DELETE again -> 404. The runs keep their snapshot: R1 still lists with title "Errand".
+ 9. Final fix wave (review R5, R6, R7, R15; item A):
+    R5: a template whose steps[0].condition is "not" nested 100 deep -> POST 200 (a draft), its issues hold
+    ("shape", "steps.0.condition" + ".not" x 17) — the cap of 16 group levels; GET 200 with the same issue. Nested
+    1200 deep -> SQLite's json_valid CHECK refuses the row (its JSON depth limit is 1000; measured: IntegrityError)
+    -> 400 "bad_request", not a 500, and no row. A body nested 20000 deep -> json.loads raises RecursionError ->
+    400 "bad_json", not a 500.
+    R6: POST {"title": "x", "summary": {"a": 1}} -> 400 "bad_request"; POST with time_limit_s 10**19 (over the
+    SQLite integer) -> 400; the raw body {"title": "x", "time_limit_s": 1e400} (parsed as float inf) -> 400; PUT
+    {"time_limit_s": 10**19} on the Empty template -> 400; nothing of it is a 500.
+    R7: a body of 300 KiB (a gm_notes string) -> 413 "too_large".
+    A + R15: template "Errand for {giver}" with one step at_place place (step text "Go to {place}."), ready, started
+    with E; A already stands in L1/r1, so quest_engine.evaluate("A") records it -> GET /quests/runs: that run's row
+    has title "Errand for N", binding_labels {"giver": "N", "place": "Front", "thing": "Lamp"}, and its one
+    step_log entry carries game_label == GameTime.parse(entry.game_ts).display_label("en") (not empty).
 """
 import os
 import sys
@@ -261,6 +275,58 @@ def main() -> int:
         check("delete again", call("DELETE", f"/quests/templates/{tid}").status_code, 404)
         titles = {r["id"]: r["title"] for r in call("GET", "/quests/runs").json().get("runs", [])}
         check("run keeps its snapshot", titles.get(r1.get("id")), "Errand")
+
+        print("[9] final fix wave")
+        def nested(depth):
+            expr = {"type": "at_place", "params": {"place": "place"}}
+            for _ in range(depth):
+                expr = {"not": expr}
+            return {**ERRAND, "title": f"Deep {depth}", "steps": [{"id": "s1", "text": "Deep.", "condition": expr}]}
+
+        before = len(call("GET", "/quests/templates").json().get("templates", []))
+        resp = call("POST", "/quests/templates", nested(1200))
+        check("1200 deep: refused, no row", (resp.status_code, code(resp),
+                                             len(call("GET", "/quests/templates").json().get("templates", []))),
+              (400, "bad_request", before))
+        resp = call("POST", "/quests/templates", nested(100))
+        deep_t = resp.json() if resp.status_code == 200 else {}
+        want_issue = ("shape", "steps.0.condition" + ".not" * 17)
+        check("100 deep: POST", (resp.status_code,
+                                  want_issue in {(i["code"], i["path"]) for i in deep_t.get("issues", [])}),
+              (200, True))
+        resp = call("GET", f"/quests/templates/{deep_t.get('id', 'missing')}")
+        check("100 deep: GET", (resp.status_code, want_issue in {
+            (i["code"], i["path"]) for i in (resp.json().get("issues", []) if resp.status_code == 200 else [])}),
+              (200, True))
+        raw = ('{"title": "x", "summary": ' + "[" * 20000 + "]" * 20000 + "}").encode()
+        resp = client.request("POST", "/quests/templates", content=raw,
+                              headers={"x-test-user": "admin", "content-type": "application/json"})
+        check("20000 deep body", (resp.status_code, code(resp)), (400, "bad_json"))
+        resp = call("POST", "/quests/templates", {"title": "x", "summary": {"a": 1}})
+        check("summary not text", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/templates", {"title": "x", "time_limit_s": 10 ** 19})
+        check("time limit over the SQLite integer", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = client.request("POST", "/quests/templates", content=b'{"title": "x", "time_limit_s": 1e400}',
+                              headers={"x-test-user": "admin", "content-type": "application/json"})
+        check("time limit inf", (resp.status_code, code(resp)), (400, "bad_request"))
+        rev = call("GET", f"/quests/templates/{eid}").json().get("revision")
+        resp = call("PUT", f"/quests/templates/{eid}", {"time_limit_s": 10 ** 19, "base_revision": rev})
+        check("PUT time limit over the SQLite integer", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/templates", {"title": "big", "gm_notes": "x" * (300 * 1024)})
+        check("300 KiB body", (resp.status_code, code(resp)), (413, "too_large"))
+        labelled = {**ERRAND, "title": "Errand for {giver}",
+                    "steps": [{"id": "s1", "text": "Go to {place}.", "hint": "",
+                               "condition": {"type": "at_place", "params": {"place": "place"}}}]}
+        lt = call("POST", "/quests/templates", labelled).json()
+        call("PUT", f"/quests/templates/{lt.get('id')}", {"state": "ready", "base_revision": 1})
+        lr = call("POST", f"/quests/templates/{lt.get('id')}/start", {"bindings": bindings}).json()
+        quest_engine.evaluate("A")
+        row = next((r for r in call("GET", "/quests/runs").json().get("runs", []) if r["id"] == lr.get("id")), {})
+        check("run row title rendered", row.get("title"), "Errand for N")
+        check("run row labels", row.get("binding_labels"), {"giver": "N", "place": "Front", "thing": "Lamp"})
+        log = row.get("step_log") or [{}]
+        want = GameTime.parse(log[0].get("game_ts") or "Y0001-D001T00:00:00").display_label("en")
+        check("step log game_label", (log[0].get("game_label"), bool(want)), (want, True))
 
     quest_engine.drain()
     if FAILURES:

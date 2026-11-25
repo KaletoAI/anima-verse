@@ -11,7 +11,7 @@ Errors answer `{"detail": ...}`; a refusal with issues carries them unchanged as
 convention: `PUT` needs `base_revision` (428 `revision_required`, 409 `stale`).
 
 Every error detail is an object with a `code` (`bad_json`, `bad_request`, `not_found`, `revision_required`,
-`stale`, `invalid`, `has_open_runs`, `refused`) and, except for the issue lists, a `message`.
+`stale`, `invalid`, `has_open_runs`, `refused`, `too_large`) and, except for the issue lists, a `message`.
 
 The ready rule of `PUT`: the RESULTING template is checked — stored fields merged with the body — and when its
 state is `ready` it must have no issues, else 422 `invalid` and nothing is written. That holds even when the body
@@ -20,6 +20,8 @@ unloaded) answers 422 to every plain edit. The way out is to send `"state": "dra
 set it `ready` again once its issues are gone.
 """
 import asyncio
+import json
+import sqlite3
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,6 +37,14 @@ _CREATE_KEYS = ("title", "summary", "gm_notes", "roles", "steps", "start_conditi
                 "time_limit_s")
 #: How many ended runs `GET /quests/runs` lists after the open ones.
 _ENDED_RUNS_LIMIT = 50
+#: The largest /quests request body (a template is copied into every run's snapshot; 256 KiB is far above any
+#: hand-written quest).
+_MAX_BODY_BYTES = 256 * 1024
+#: The largest `time_limit_s` SQLite can store (a signed 64-bit integer).
+_MAX_INT = 2 ** 63 - 1
+#: What the store raises for a value it cannot write — a 400, never a 500 (e.g. a JSON value nested deeper than
+#: SQLite's `json_valid` accepts fails the table's CHECK as an IntegrityError).
+_STORE_REFUSALS = (TypeError, ValueError, OverflowError, sqlite3.Error)
 
 
 def _not_found(what: str, ident: str) -> HTTPException:
@@ -46,11 +56,27 @@ def _bad(message: str) -> HTTPException:
 
 
 async def _json(request: Request) -> Any:
-    """The parsed request body; a malformed or empty one is 400 `bad_json`, never a 500."""
+    """The parsed request body; a malformed, empty or too deeply nested one is 400 `bad_json`, never a 500, and
+    one larger than `_MAX_BODY_BYTES` is 413 `too_large`."""
+    raw = await request.body()
+    if len(raw) > _MAX_BODY_BYTES:
+        raise HTTPException(413, {"code": "too_large",
+                                  "message": f"the body is larger than {_MAX_BODY_BYTES // 1024} KiB"})
     try:
-        return await request.json()
-    except ValueError:
+        return json.loads(raw)
+    except (ValueError, RecursionError):
         raise HTTPException(400, {"code": "bad_json", "message": "the body is not valid JSON"})
+
+
+def _check_fields(body: Dict[str, Any]) -> None:
+    """400 for a text field that is not text and a `time_limit_s` that is not a whole number SQLite can store."""
+    for key in ("title", "summary", "gm_notes"):
+        if key in body and not isinstance(body[key], str):
+            raise _bad(f"{key} must be text")
+    if "time_limit_s" in body:
+        limit = body["time_limit_s"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= _MAX_INT:
+            raise _bad("time_limit_s is a whole number of seconds, 0 or more")
 
 
 def _body_dict(body: Any) -> Dict[str, Any]:
@@ -77,14 +103,17 @@ def _label(canonical: str, lang: str) -> str:
 def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
     snapshot = run.get("template_snapshot") or {}
     steps = snapshot.get("steps") if isinstance(snapshot.get("steps"), list) else []
+    step_log = [{**entry, "game_label": _label(str(entry.get("game_ts") or ""), lang)}
+                for entry in run.get("step_log") or [] if isinstance(entry, dict)]
     return {
         "id": run.get("id"),
-        "title": snapshot.get("title") or "",
+        "title": quest_engine.render_text(str(snapshot.get("title") or ""), run),
         "state": run.get("state"),
         "current_step": run.get("current_step"),
         "step_count": len(steps),
-        "step_log": run.get("step_log") or [],
+        "step_log": step_log,
         "bindings": run.get("bindings") or {},
+        "binding_labels": run.get("binding_labels") or {},
         "issues": run.get("issues") or [],
         "started_game_label": _label(run.get("started_game_ts") or "", lang),
         "expires_label": _label(run.get("expires_at") or "", lang),
@@ -137,9 +166,10 @@ def _create_template_sync(body: Any) -> Dict[str, Any]:
         raise _bad(f"not a quest template field: {', '.join(unknown)}")
     if not isinstance(body.get("title"), str) or not body["title"].strip():
         raise _bad("title is required")
+    _check_fields(body)
     try:
         template = quests.create_template(**body)
-    except (TypeError, ValueError) as e:
+    except _STORE_REFUSALS as e:
         raise _bad(str(e))
     return _with_issues(template)
 
@@ -165,6 +195,7 @@ def _update_template_sync(template_id: str, body: Any) -> Dict[str, Any]:
         raise _bad(f"not editable on a quest template: {', '.join(unknown)}")
     if "state" in body and body["state"] not in ("draft", "ready"):
         raise _bad("state is draft or ready")
+    _check_fields(body)
     current = quests.get_template(template_id)
     if current is None:
         raise _not_found("Quest template", template_id)
@@ -183,7 +214,7 @@ def _update_template_sync(template_id: str, body: Any) -> Dict[str, Any]:
                                   "message": "The template changed since it was loaded"})
     except KeyError:
         raise _not_found("Quest template", template_id)
-    except (TypeError, ValueError) as e:
+    except _STORE_REFUSALS as e:
         raise _bad(str(e))
     return _with_issues(updated)
 
