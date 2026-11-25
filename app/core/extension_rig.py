@@ -91,8 +91,9 @@ def package_rig_groups_for(character_name, profile=None, mesh_variant=None):
         for rig in slot.rigs:
             if _rule_applies(slot, rig, values, profile, template_name, template, active_slots):
                 group = asdict(rig)
-                # The clothing slots that hide this group (``exposed_only``).
+                # The clothing slots that cover this group, and those whose full cover hides it (``cover_state``).
                 group["covered_by"] = list(slot.covered_by)
+                group["hide_under"] = list(rig.hide_under or slot.covered_by)
                 if part_on and rig.id in slot.mesh_part.rigs:
                     part = slot.mesh_part.rigs[rig.id]
                     if rig.op == "appendage_chain":
@@ -120,7 +121,7 @@ def region_declarations_for(character_name, profile=None):
 
     Each entry: ``{id: "<package>:<id>", slot, bone, offset, axis, depth,
     radius, cone_deg, funnel, accepts, min_length, compress_min, exposed_only,
-    interaction_kinds, from_rig, covered_by}`` — ``accepts`` the op names,
+    interaction_kinds, from_rig, covered_by, hide_under}`` — ``accepts`` the op names,
     ``radius`` / ``depth`` already multiplied by the slot's attribute values
     (``attribute_params``; an unmapped value multiplies by 1). Exposure is NOT
     decided here: a region stays listed under clothing, and the mesh part's
@@ -153,7 +154,8 @@ def region_declarations_for(character_name, profile=None):
                     "compress_min": region.compress_min, "exposed_only": region.exposed_only,
                     "interaction_kinds": (list(region.interaction_kinds)
                                           if region.interaction_kinds is not None else None),
-                    "from_rig": region.from_rig, "covered_by": list(slot.covered_by)})
+                    "from_rig": region.from_rig, "covered_by": list(slot.covered_by),
+                    "hide_under": list(region.hide_under or slot.covered_by)})
     return result
 
 
@@ -216,6 +218,87 @@ def piece_covering_slots(occupied, outfit_piece):
     piece = outfit_piece or {}
     return (set(occupied) | set(piece.get("slots") or []) | set(piece.get("covers") or [])
             | set(piece.get("partially_covers") or []))
+
+
+#: The three states of an extension group (or region) under the worn pieces (``cover_state``).
+EXPOSED, COVERED, HIDDEN = "exposed", "covered", "hidden"
+
+
+def _slot_names(values):
+    return {str(v).strip().lower() for v in values or [] if str(v).strip()}
+
+
+def cover_state(group, pieces, items, *, open_ids=()):
+    """THE cover rule of every model consumer: ``exposed``, ``covered`` or ``hidden``.
+
+    ``group`` needs ``covered_by`` and may carry ``hide_under`` (absent or empty = ``covered_by``); ``pieces`` is
+    ``{clothing slot: item id}``, ``items`` ``{item id: item}``; ``open_ids`` the pieces worn open (they cover
+    nothing, Ruling A8). Every slot name is compared after ``strip().lower()``.
+
+    Per worn piece, FULL = the slots it occupies (its keys in ``pieces`` and its ``outfit_piece.slots``) plus
+    ``covers``, PART = ``partially_covers``. No piece touches ``covered_by`` -> exposed; a piece covers a
+    ``hide_under`` slot FULLY without ``outfit_piece.exposed_detail: true`` -> hidden; otherwise covered (a
+    partial cover alone is never hidden)."""
+    covered_by = _slot_names(group.get("covered_by"))
+    if not covered_by:
+        return EXPOSED
+    hide_under = _slot_names(group.get("hide_under")) or covered_by
+    opened = {str(i) for i in open_ids or ()}
+    worn = {str(slot).strip().lower(): str(iid) for slot, iid in (pieces or {}).items() if iid}
+    touched = False
+    for item_id in sorted(set(worn.values()) - opened):
+        piece = ((items or {}).get(item_id) or {}).get("outfit_piece") or {}
+        full = ({slot for slot, iid in worn.items() if iid == item_id} | _slot_names(piece.get("slots"))
+                | _slot_names(piece.get("covers")))
+        part = _slot_names(piece.get("partially_covers"))
+        if (full | part) & covered_by:
+            touched = True
+        if full & hide_under and piece.get("exposed_detail") is not True:
+            return HIDDEN
+    return COVERED if touched else EXPOSED
+
+
+def cover_state_for(group, profile, *, pieces=None, items=None):
+    """``cover_state`` of ``group`` on a character: ``pieces`` None = the profile's ``equipped_pieces``; the pieces
+    the profile wears open (``outfit_renderer.covering_pieces``) cover nothing. A free-text wardrobe has no pieces:
+    dressed (``is_outfit_worn``) and a non-empty ``covered_by`` -> covered, else exposed — never hidden (free text
+    knows no underwear). Every consumer that has a profile reads this, never ``cover_state`` directly."""
+    from app.core.outfit_renderer import covering_pieces, is_free_text_wardrobe, is_outfit_worn
+    profile = profile or {}
+    if is_free_text_wardrobe(profile):
+        return COVERED if is_outfit_worn(profile) and _slot_names(group.get("covered_by")) else EXPOSED
+    source = profile.get("equipped_pieces") if pieces is None else pieces
+    worn = {str(slot): str(iid) for slot, iid in (source or {}).items() if iid} if isinstance(source, dict) else {}
+    if not worn:
+        return EXPOSED
+    if items is None:
+        from app.core.motion_item_cache import item_snapshot
+        items = item_snapshot()
+    closed = set(covering_pieces(profile, worn).values())
+    return cover_state(group, worn, items, open_ids=set(worn.values()) - closed)
+
+
+def pieces_of(item_ids, items):
+    """``{clothing slot: item id}`` of ``item_ids`` from each piece's ``outfit_piece.slots`` (lower case); a slot two
+    pieces claim goes to the smaller id."""
+    out = {}
+    for item_id in sorted({str(i) for i in item_ids or () if i}):
+        for slot in sorted(_slot_names((((items or {}).get(item_id) or {}).get("outfit_piece") or {}).get("slots"))):
+            out.setdefault(slot, item_id)
+    return out
+
+
+def rig_groups_unclothed(character_name, profile=None):
+    """The character's groups as they would be unclothed: every slot's separate mesh part counts where
+    ``mesh_part_active`` holds, whatever is worn (``rig_groups_for`` with that mesh variant)."""
+    from app.core.body_slots import mesh_part_active, mesh_variant_token
+    from app.plugins.registry import packages
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    variant = "".join(mesh_variant_token(slot) for package in packages() for slot in package.body_slots
+                      if slot.mesh_part and mesh_part_active(slot, profile))
+    return rig_groups_for(character_name, profile, variant)
 
 
 def hides_exposed_detail(groups, pieces, items):
@@ -516,6 +599,10 @@ def resolved_extension_groups(character_name, profile=None, signature=None, mesh
     return result
 
 
+#: Group keys ``motion_payload`` keeps out of its rev (their effect is in the payload itself).
+_REV_EXCLUDED = ("hide_under", "drape_collider", "pose_requires")
+
+
 # sag_max_deg bounds the whole chain static droop for each root chain.
 MOTION_FIELDS = ("length", "girth", "freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
@@ -764,7 +851,12 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + rest_lift * values["rest_max_deg"], values["rest_max_deg"])),
         }
     groups.update(hair)
-    inputs = {"declarations": declarations, "world": world, "equipment": equipment,
+    # The cover fields act only through the result (the pose gate and the rest under cloth in ``groups``, the
+    # held pose in ``held``), both part of ``inputs``: kept out of the hashed declarations, a figure without a
+    # held pose keeps its rev.
+    inputs = {"declarations": [{key: value for key, value in group.items() if key not in _REV_EXCLUDED}
+                               for group in declarations],
+              "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,
               "character": (profile.get("model3d_opts") or {}).get("extension_motion") or {},
               "gravity_scale": scale, "states": states, "groups": groups}

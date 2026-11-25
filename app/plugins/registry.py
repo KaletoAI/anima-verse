@@ -157,6 +157,15 @@ class RigSpec:
     # 2026-11-25, ``app/core/contact_clothing.py``): a piece on one of them, or one that ``covers`` one, blocks the
     # clip unless it is worn open or declared ``outfit_piece.open_below``. Empty = the group is no contact part.
     contact_free: List[str] = field(default_factory=list)
+    # The clothing slots (a subset of the owning slot's ``covered_by``) whose FULL cover hides the group
+    # (``extension_rig.cover_state``): under any other covering piece the group stays as an invisible collider.
+    # Empty = ``covered_by`` (every cover hides, the rule before the field existed).
+    hide_under: List[str] = field(default_factory=list)
+    # ``{"inflate": m, "radius": m|None}``: while covered (not hidden) the group shapes the drape over it — its part
+    # node (``radius`` None) or a sphere of ``radius`` around each chain's last bone (a group without a part node).
+    drape_collider: Optional[Dict[str, Any]] = None
+    # ``{pose id: "exposed"}``: the pose applies only while the group is exposed (``motion_payload``).
+    pose_requires: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, raw, attributes=None, covered_by=None):
@@ -301,15 +310,63 @@ class RigSpec:
         if not isinstance(poses, dict):
             raise ValueError("rig.poses must map pose ids to mappings")
         from app.core.prompt_filters import validate_pose_id, validate_pose_values
+        # ``requires`` leaves the pose before its values are validated: ``poses`` carries numbers only.
+        requires = {}
+        for pose_id, values in poses.items():
+            if isinstance(values, dict) and "requires" in values:
+                if values["requires"] != "exposed":
+                    raise ValueError(f"rig.poses.{pose_id}.requires must be 'exposed'")
+                requires[pose_id] = "exposed"
         spec.poses = {validate_pose_id(pose_id, where="rig.poses id"):
-                      validate_pose_values(values, spec.controls, where=f"rig.poses.{pose_id}")
+                      validate_pose_values({k: v for k, v in values.items() if k != "requires"}
+                                           if isinstance(values, dict) else values,
+                                           spec.controls, where=f"rig.poses.{pose_id}")
                       for pose_id, values in poses.items()}
+        spec.pose_requires = requires
         preview_pose = raw.get("preview_pose", "")
         if not isinstance(preview_pose, str) or (preview_pose and preview_pose not in spec.poses):
             raise ValueError("rig.preview_pose must name one of the group's poses")
         spec.preview_pose = preview_pose
         spec.contact_free = _parse_contact_free(raw, "rig")
+        spec.hide_under = _parse_hide_under(raw, "rig", covered_by)
+        spec.drape_collider = _parse_drape_collider(raw)
         return spec
+
+
+#: ``drape_collider`` bounds in metres: the inflate a collider surface gets, the sphere radius of a group without a
+#: part node.
+DRAPE_COLLIDER_INFLATE = (0.0, 0.01)
+DRAPE_COLLIDER_RADIUS = (0.002, 0.02)
+
+
+def _parse_hide_under(raw, label, covered_by):
+    """``hide_under`` of a rig or region: clothing-slot names (``strip().lower()``, no duplicates), a subset of the
+    owning slot's ``covered_by`` when that is given (absent = [])."""
+    value = raw.get("hide_under", [])
+    if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() for v in value):
+        raise ValueError(f"{label}.hide_under must be a list of clothing slot names")
+    slots = list(dict.fromkeys(v.strip().lower() for v in value))
+    if covered_by is not None and set(slots) - {str(c).strip().lower() for c in covered_by}:
+        raise ValueError(f"{label}.hide_under may name only the slot's covered_by")
+    return slots
+
+
+def _parse_drape_collider(raw):
+    """``drape_collider`` of a rig: None when absent, else ``{"inflate": m, "radius": m|None}``."""
+    value = raw.get("drape_collider")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"inflate", "radius"} or "inflate" not in value:
+        raise ValueError("rig.drape_collider requires inflate and allows radius")
+    inflate, radius = value["inflate"], value.get("radius")
+    lo, hi = DRAPE_COLLIDER_INFLATE
+    if not _is_finite_number(inflate) or not lo <= inflate <= hi:
+        raise ValueError(f"rig.drape_collider.inflate must lie in [{lo}, {hi}]")
+    if radius is not None:
+        lo, hi = DRAPE_COLLIDER_RADIUS
+        if not _is_finite_number(radius) or not lo <= radius <= hi:
+            raise ValueError(f"rig.drape_collider.radius must lie in [{lo}, {hi}]")
+    return {"inflate": float(inflate), "radius": float(radius) if radius is not None else None}
 
 
 def _parse_contact_free(raw, label):
@@ -446,7 +503,7 @@ REGION_KINDS = ("channel",)
 REGION_SCALED_PARAMS = ("radius", "depth")
 _REGION_KEYS = {"id", "kind", "bone", "offset", "axis", "depth", "radius", "cone_deg", "funnel", "accepts",
                 "min_length", "compress_min", "exposed_only", "interaction_kinds", "from_rig", "templates",
-                "applies_to", "attribute_params", "contact_free"}
+                "applies_to", "attribute_params", "contact_free", "hide_under"}
 
 
 @dataclass
@@ -479,12 +536,16 @@ class RegionSpec:
     # The clothing slots that must be FREE before this channel may be the target of a contact clip (owner decision
     # 2026-11-25, ``app/core/contact_clothing.py``); empty = no requirement.
     contact_free: List[str] = field(default_factory=list)
+    # Like ``RigSpec.hide_under``: the covers that remove the channel; empty = the slot's ``covered_by``.
+    hide_under: List[str] = field(default_factory=list)
 
     @classmethod
-    def parse(cls, raw, attributes, rig_ids):
+    def parse(cls, raw, attributes, rig_ids, covered_by=None):
         """Validate one region; ``attributes`` are the slot's declared
-        attributes, ``rig_ids`` the ids of the slot's rigs. ValueError for
-        anything malformed (the loader rejects the package, ruling R3)."""
+        attributes, ``rig_ids`` the ids of the slot's rigs, ``covered_by`` the
+        slot's covering clothing slots (``hide_under`` must be a subset).
+        ValueError for anything malformed (the loader rejects the package,
+        ruling R3)."""
         from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
         if not isinstance(raw, dict):
             raise ValueError("region must be a mapping")
@@ -565,7 +626,8 @@ class RegionSpec:
             attribute_params={param: {"attribute": mapping["attribute"],
                                       "values": {key: float(value) for key, value in mapping["values"].items()}}
                               for param, mapping in mappings.items()},
-            contact_free=_parse_contact_free(raw, "region"))
+            contact_free=_parse_contact_free(raw, "region"),
+            hide_under=_parse_hide_under(raw, "region", covered_by))
 
 
 @dataclass
