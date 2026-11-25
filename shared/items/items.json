@@ -4,10 +4,10 @@
       "id": "item_5bfe0cbc",
       "name": "Black Blazer",
       "category": "outfit_piece",
-      "prompt_fragment": "black tailored blazer, slightly open to reveal cleavage, fitted on athletic frame, silver buttons, business setting",
+      "prompt_fragment": "black tailored blazer, fitted, two silver buttons",
       "created_at": "2026-04-27T10:20:37.890374",
       "description": "",
-      "image": "1777278057.png",
+      "image": "1794953807.png",
       "image_prompt": "",
       "rarity": "common",
       "stackable": false,
@@ -19,10 +19,15 @@
         "enables_locations": [],
         "enables_activities": [],
         "stat_bonuses": {},
-        "uses": null
+        "uses": null,
+        "bonus_when": "equipped"
       },
       "effects": null,
       "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -31,20 +36,87 @@
         ],
         "outfit_types": [],
         "lora": {},
-        "slots": [
-          "outer"
-        ]
-      }
+        "exposed_detail": false,
+        "mesh_mode": "template",
+        "template": {
+          "params": {
+            "kind": "jacket",
+            "length_m": 0.47,
+            "flare": 0.3,
+            "waist_height": "natural",
+            "slit": "none",
+            "slit_m": 0.0,
+            "shoulders": "covered",
+            "sleeves": "long",
+            "band_m": 0.025,
+            "band_drop_m": 0.05,
+            "lacing": "none",
+            "lace_depth_m": 0.15,
+            "sleeve_fit": 0.0,
+            "fit": 0.0,
+            "neckline": "v",
+            "neck_depth_m": 0.26,
+            "front": "closed",
+            "collar": "none",
+            "fabric": "flowing",
+            "opacity": 0.4,
+            "rise": "mid",
+            "leg_cut": 0.5,
+            "back_coverage": 1.0,
+            "side_width_m": 0.05,
+            "waistband": "thin",
+            "leg_length_m": 0.0,
+            "sides": "fabric",
+            "string_width_m": 0.008,
+            "cup_style": "molded",
+            "cup_coverage": 0.7,
+            "push_up": 0.0,
+            "underband_m": 0.02,
+            "center_gore": "narrow",
+            "closure": "back_hook",
+            "straps": "thin",
+            "fingers": "full",
+            "length": "wrist",
+            "cuff": "none",
+            "tights_style": "tights",
+            "feet": "closed",
+            "garters": "none",
+            "trouser_length": "full",
+            "leg_shape": "straight",
+            "seat": "regular",
+            "trouser_waist": "belt",
+            "fly": "zip",
+            "hem": "plain"
+          },
+          "source": "user",
+          "updated_at": "2026-11-20T19:06:46+00:00"
+        },
+        "lift": 0.1
+      },
+      "owner": "",
+      "pages_source": "",
+      "portable": true,
+      "image_meta": {
+        "backend": "Qwen2.1 Turbo",
+        "backend_type": "openai_diffusion",
+        "model": "Qwen2.1-Turbo",
+        "routing": {
+          "occasion": "item",
+          "position": 1,
+          "spec": "Qwen2.1 Turbo"
+        }
+      },
+      "prompt_fragment_back": "black tailored blazer, fitted"
     },
     {
       "id": "item_68c4d249",
       "name": "Business Heels",
       "category": "outfit_piece",
-      "prompt_fragment": "business heels",
+      "prompt_fragment": "black leather business heels",
       "created_at": "2026-04-15T18:05:38.280195",
       "description": "",
       "image": "1776456991.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -54,9 +126,14 @@
         "enables_locations": [],
         "enables_activities": [],
         "stat_bonuses": {},
-        "uses": null
+        "uses": null,
+        "bonus_when": "equipped"
       },
       "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
@@ -65,10 +142,14 @@
           "clubwear",
           "formal"
         ],
-        "slots": [
-          "feet"
-        ]
-      }
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "owner": "",
+      "pages_source": "",
+      "portable": true,
+      "image_prompt": ""
     },
     {
       "id": "item_f85cb432",
@@ -94,6 +175,7 @@
         "slots": [
           "top"
         ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -101,7 +183,9 @@
         "outfit_types": [
           "business"
         ],
-        "lora": {}
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       },
       "image_prompt": ""
     },
@@ -109,7 +193,7 @@
       "id": "item_19f8855b",
       "name": "Business Skirt",
       "category": "outfit_piece",
-      "prompt_fragment": "business skirt",
+      "prompt_fragment": "navy business skirt",
       "created_at": "2026-04-17T14:09:11.237569",
       "description": "",
       "image": "1776457104.png",
@@ -129,6 +213,7 @@
         "slots": [
           "bottom"
         ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_bottom"
         ],
@@ -136,53 +221,21 @@
         "outfit_types": [
           "business"
         ],
-        "lora": {}
+        "lora": {},
+        "exposed_detail": false,
+        "open_below": true
       },
       "image_prompt": ""
-    },
-    {
-      "id": "item_fcc885b2",
-      "name": "Business Suit",
-      "category": "outfit_piece",
-      "prompt_fragment": "business suit",
-      "created_at": "2026-04-17T23:29:56.537877",
-      "description": "",
-      "image": "1776461414.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [
-          "underwear_top",
-          "underwear_bottom"
-        ],
-        "partially_covers": [],
-        "outfit_types": [
-          "business"
-        ],
-        "slots": [
-          "outer"
-        ]
-      }
     },
     {
       "id": "item_6cc8e8ae",
       "name": "Bussiness Shoes",
       "category": "outfit_piece",
-      "prompt_fragment": "bussiness shoes",
+      "prompt_fragment": "black leather business shoes",
       "created_at": "2026-04-15T15:31:38.830873",
       "description": "",
       "image": "1776457732.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -195,25 +248,29 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
           "business"
         ],
-        "slots": [
-          "feet"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
       "id": "item_85e23bf0",
       "name": "Bussiness Pants",
       "category": "outfit_piece",
-      "prompt_fragment": "bussiness Pants",
+      "prompt_fragment": "black business pants",
       "created_at": "2026-04-15T15:29:19.442888",
       "description": "",
       "image": "1776457480.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -226,6 +283,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "bottom"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_bottom"
         ],
@@ -233,9 +294,9 @@
         "outfit_types": [
           "business"
         ],
-        "slots": [
-          "bottom"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
@@ -272,39 +333,8 @@
         "lora": {},
         "slots": [
           "outer"
-        ]
-      }
-    },
-    {
-      "id": "item_0bdbf9e0",
-      "name": "Dark grey wool suit",
-      "category": "outfit_piece",
-      "prompt_fragment": "dark grey wool suit",
-      "created_at": "2026-04-16T23:20:10.321601",
-      "description": "",
-      "image": "1776374442.png",
-      "rarity": "common",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "image_prompt": "",
-      "effects": null,
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [],
-        "lora": {},
-        "slots": [
-          "outer"
-        ]
+        ],
+        "mesh_mode": "in_body"
       }
     },
     {
@@ -315,40 +345,6 @@
       "created_at": "2026-04-17T22:37:34.504472",
       "description": "",
       "image": "1776458260.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [
-          "underwear_bottom"
-        ],
-        "partially_covers": [],
-        "outfit_types": [
-          "casual"
-        ],
-        "slots": [
-          "bottom"
-        ]
-      }
-    },
-    {
-      "id": "item_375167b2",
-      "name": "Distressed Charcoal Denim Jacket",
-      "category": "outfit_piece",
-      "prompt_fragment": "distressed charcoal denim jacket worn open, rugged texture, silver buttons, casual fit",
-      "created_at": "2026-04-25T12:20:43.275053",
-      "description": "",
-      "image": "1777112455.png",
-      "image_prompt": "",
       "rarity": "common",
       "stackable": false,
       "max_stack": 1,
@@ -361,17 +357,20 @@
         "stat_bonuses": {},
         "uses": null
       },
-      "effects": null,
       "outfit_piece": {
-        "covers": [],
+        "slots": [
+          "bottom"
+        ],
+        "motion_damping": 1.0,
+        "covers": [
+          "underwear_bottom"
+        ],
         "partially_covers": [],
         "outfit_types": [
-          "intimate"
+          "casual"
         ],
         "lora": {},
-        "slots": [
-          "outer"
-        ]
+        "exposed_detail": false
       }
     },
     {
@@ -404,7 +403,8 @@
         "lora": {},
         "slots": [
           "legs"
-        ]
+        ],
+        "mesh_mode": "in_body"
       }
     },
     {
@@ -433,24 +433,28 @@
         "slots": [
           "outer"
         ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
           "sport",
           "beach"
         ],
-        "lora": {}
-      }
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "prompt_fragment_back": "ivory-colored faux-fur wrap robe"
     },
     {
       "id": "item_6c41aa2c",
       "name": "Jeans",
       "category": "outfit_piece",
-      "prompt_fragment": "jeans",
+      "prompt_fragment": "blue jeans",
       "created_at": "2026-04-15T12:41:29.633988",
       "description": "",
       "image": "1776457052.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -463,6 +467,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "bottom"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_bottom"
         ],
@@ -470,21 +478,21 @@
         "outfit_types": [
           "casual"
         ],
-        "slots": [
-          "bottom"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
       "id": "item_9b35c92f",
       "name": "Knee-high socks",
       "category": "outfit_piece",
-      "prompt_fragment": "knee-high socks",
+      "prompt_fragment": "black knee-high socks",
       "created_at": "2026-04-21T22:41:09.849142",
       "description": "",
       "image": "1776804072.png",
       "image_prompt": "",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -497,6 +505,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "legs"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [],
@@ -505,21 +517,78 @@
           "strength": 1.0,
           "workflow": ""
         },
-        "slots": [
-          "legs"
-        ]
+        "exposed_detail": false,
+        "mesh_mode": "template",
+        "template": {
+          "params": {
+            "kind": "tights",
+            "length_m": 0.5,
+            "flare": 0.3,
+            "waist_height": "natural",
+            "slit": "none",
+            "slit_m": 0.0,
+            "shoulders": "strapless",
+            "sleeves": "none",
+            "band_m": 0.025,
+            "band_drop_m": 0.05,
+            "lacing": "none",
+            "lace_depth_m": 0.15,
+            "sleeve_fit": 0.3,
+            "fit": 0.3,
+            "neckline": "crew",
+            "neck_depth_m": 0.0,
+            "front": "closed",
+            "collar": "none",
+            "placket": "none",
+            "buttons": 0,
+            "fabric": "medium",
+            "opacity": 0.4,
+            "rise": "mid",
+            "leg_cut": 0.5,
+            "back_coverage": 1.0,
+            "side_width_m": 0.05,
+            "gusset_m": 0.06,
+            "waistband": "thin",
+            "leg_length_m": 0.0,
+            "sides": "fabric",
+            "string_width_m": 0.008,
+            "cup_style": "molded",
+            "cup_coverage": 0.7,
+            "push_up": 0.0,
+            "underband_m": 0.02,
+            "center_gore": "narrow",
+            "closure": "back_hook",
+            "straps": "thin",
+            "fingers": "full",
+            "length": "wrist",
+            "cuff": "none",
+            "tights_style": "knee_high",
+            "feet": "closed",
+            "garters": "none",
+            "trouser_length": "full",
+            "leg_shape": "straight",
+            "seat": "regular",
+            "trouser_waist": "belt",
+            "fly": "zip",
+            "hem": "plain",
+            "texture": "projection",
+            "sleeve_print": "plain"
+          },
+          "source": "llm",
+          "updated_at": "2026-11-24T23:02:21+00:00"
+        }
       }
     },
     {
       "id": "item_946db709",
       "name": "Leather Boots",
       "category": "outfit_piece",
-      "prompt_fragment": "leather ankle boots, soft soles, worn with the jacket",
+      "prompt_fragment": "black leather ankle boots, soft soles, worn with the jacket",
       "created_at": "2026-04-22T11:16:28.904358",
       "description": "",
       "image": "1776849418.png",
       "image_prompt": "",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -533,86 +602,28 @@
       },
       "effects": null,
       "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [],
-        "lora": {},
         "slots": [
           "feet"
-        ]
-      }
-    },
-    {
-      "id": "item_aa40f2c9",
-      "name": "Light denim jeans",
-      "category": "outfit_piece",
-      "prompt_fragment": "light denim jeans",
-      "created_at": "2026-04-17T00:42:55.325349",
-      "description": "",
-      "image": "1776379386.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [],
-        "slots": [
-          "bottom"
-        ]
-      }
-    },
-    {
-      "id": "item_ddde1e35",
-      "name": "Light summer dress",
-      "category": "outfit_piece",
-      "prompt_fragment": "light summer dress with floral pattern",
-      "created_at": "2026-04-17T00:45:37.559026",
-      "description": "",
-      "image": "1776379598.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "image_prompt": "",
-      "effects": null,
-      "outfit_piece": {
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [],
         "lora": {},
-        "slots": [
-          "top",
-          "bottom"
-        ]
-      }
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "prompt_fragment_back": "black leather ankle boots, soft soles"
     },
     {
       "id": "item_52eea713",
       "name": "Long sport top",
       "category": "outfit_piece",
-      "prompt_fragment": "long sport top",
+      "prompt_fragment": "long charcoal sport top",
       "created_at": "2026-04-17T14:32:32.004548",
       "description": "",
       "image": "1776429165.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -625,6 +636,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "top"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -632,20 +647,19 @@
         "outfit_types": [
           "sport"
         ],
-        "slots": [
-          "top"
-        ]
+        "lora": {},
+        "exposed_detail": false
       }
     },
     {
       "id": "item_84188422",
       "name": "Male Underware",
       "category": "outfit_piece",
-      "prompt_fragment": "male underware",
+      "prompt_fragment": "navy male underwear",
       "created_at": "2026-04-15T15:43:24.603880",
       "description": "",
       "image": "1776457831.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -658,45 +672,56 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "underwear_bottom"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
           "business",
           "casual"
         ],
-        "slots": [
-          "underwear_bottom"
-        ]
-      }
-    },
-    {
-      "id": "item_c0ba44b9",
-      "name": "Navy roll-neck sweater",
-      "category": "outfit_piece",
-      "prompt_fragment": "navy roll-neck sweater",
-      "created_at": "2026-04-16T23:38:39.773363",
-      "description": "",
-      "image": "1776375543.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [
-          "underwear_top"
-        ],
-        "outfit_types": [],
-        "slots": [
-          "top"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "template",
+        "template": {
+          "params": {
+            "kind": "briefs",
+            "length_m": 0.5,
+            "flare": 0.3,
+            "waist_height": "natural",
+            "slit": "none",
+            "slit_m": 0.0,
+            "shoulders": "strapless",
+            "sleeves": "none",
+            "sleeve_fit": 0.3,
+            "fit": 0.3,
+            "neckline": "crew",
+            "neck_depth_m": 0.0,
+            "front": "closed",
+            "collar": "none",
+            "fabric": "medium",
+            "opacity": 0.4,
+            "rise": "mid",
+            "leg_cut": 0.0,
+            "back_coverage": 1.0,
+            "side_width_m": 0.1,
+            "waistband": "thin",
+            "cup_style": "molded",
+            "cup_coverage": 0.7,
+            "push_up": 0.0,
+            "underband_m": 0.02,
+            "center_gore": "narrow",
+            "closure": "back_hook",
+            "straps": "thin",
+            "fingers": "full",
+            "length": "wrist",
+            "cuff": "none"
+          },
+          "source": "user",
+          "updated_at": "2026-11-19T22:37:33+00:00"
+        }
       }
     },
     {
@@ -724,12 +749,15 @@
         "slots": [
           "underwear_bottom"
         ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
           "beach"
         ],
-        "lora": {}
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "shell"
       }
     },
     {
@@ -740,7 +768,7 @@
       "created_at": "2026-04-17T00:46:24.024923",
       "description": "",
       "image": "1776379603.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -753,90 +781,26 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [],
-        "slots": [
-          "outer"
-        ]
-      }
-    },
-    {
-      "id": "item_2faebe22",
-      "name": "White Sheer Blouse",
-      "category": "outfit_piece",
-      "prompt_fragment": "white sheer blouse, unbuttoned to waist, casual wear, soft fabric",
-      "created_at": "2026-04-28T01:29:20.056041",
-      "description": "",
-      "image": "1777332592.png",
-      "image_prompt": "",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "effects": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "casual"
-        ],
         "lora": {},
-        "slots": [
-          "top"
-        ]
-      }
-    },
-    {
-      "id": "item_76c857ec",
-      "name": "White Running Sneakers",
-      "category": "outfit_piece",
-      "prompt_fragment": "clean white athletic running sneakers, low-top, rubber soles, sporty laces",
-      "created_at": "2026-04-27T12:05:59.368263",
-      "description": "",
-      "image": "1777284695.png",
-      "image_prompt": "",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "sport"
-        ],
-        "lora": {},
-        "slots": [
-          "feet"
-        ]
+        "exposed_detail": false
       }
     },
     {
       "id": "item_83b010b8",
       "name": "Woman shoes",
       "category": "outfit_piece",
-      "prompt_fragment": "comfortable woman shoes",
+      "prompt_fragment": "comfortable brown leather woman shoes",
       "created_at": "2026-04-17T15:36:01.216549",
       "description": "",
       "image": "1776433023.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -849,24 +813,28 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [],
-        "slots": [
-          "feet"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
       "id": "item_700f308f",
       "name": "Towel",
       "category": "outfit_piece",
-      "prompt_fragment": "towel around the waist",
+      "prompt_fragment": "white towel around the waist",
       "created_at": "",
       "description": "Sauna",
       "description_de": "Sauna",
       "image": "1776427516.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -879,25 +847,28 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_bottom"
         ],
         "partially_covers": [],
         "outfit_types": [],
-        "slots": [
-          "outer"
-        ]
+        "lora": {},
+        "exposed_detail": false
       }
     },
     {
       "id": "item_ae7616b3",
       "name": "Tailored blazer",
       "category": "outfit_piece",
-      "prompt_fragment": "tailored blazer",
+      "prompt_fragment": "navy tailored blazer",
       "created_at": "2026-04-17T21:06:34.255112",
       "description": "",
       "image": "1776452900.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -910,6 +881,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "outer"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [
           "top"
@@ -917,43 +892,8 @@
         "outfit_types": [
           "business"
         ],
-        "color": "lightblue",
-        "slots": [
-          "outer"
-        ]
-      }
-    },
-    {
-      "id": "item_750811f7",
-      "name": "Tailored Black Trousers",
-      "category": "outfit_piece",
-      "prompt_fragment": "high-waisted tailored black trousers with a sharp crease down the leg, slim fit accentuating the athletic waist and long legs, professional cut",
-      "created_at": "2026-04-24T18:22:23.300550",
-      "description": "",
-      "image": "1777047773.png",
-      "image_prompt": "",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "business"
-        ],
         "lora": {},
-        "slots": [
-          "bottom"
-        ]
+        "exposed_detail": false
       }
     },
     {
@@ -964,7 +904,7 @@
       "created_at": "2026-04-15T12:40:43.472916",
       "description": "",
       "image": "1776249659.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -977,6 +917,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "top"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -984,42 +928,67 @@
         "outfit_types": [
           "casual"
         ],
-        "slots": [
-          "top"
-        ]
-      }
-    },
-    {
-      "id": "item_3710e421",
-      "name": "Stiletto Heels",
-      "category": "outfit_piece",
-      "prompt_fragment": "black satin stiletto heels with a pointed toe, high thin heel, glossy finish reflecting studio lights",
-      "created_at": "2026-04-24T14:22:55.086714",
-      "description": "",
-      "image": "1777033415.png",
-      "image_prompt": "",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "intimate"
-        ],
         "lora": {},
-        "slots": [
-          "feet"
-        ]
+        "exposed_detail": false,
+        "mesh_mode": "template",
+        "template": {
+          "params": {
+            "kind": "top",
+            "length_m": 0.47,
+            "flare": 0.3,
+            "waist_height": "natural",
+            "slit": "none",
+            "slit_m": 0.0,
+            "shoulders": "covered",
+            "sleeves": "short",
+            "band_m": 0.025,
+            "band_drop_m": 0.05,
+            "lacing": "none",
+            "lace_depth_m": 0.15,
+            "sleeve_fit": 0.3,
+            "fit": 0.11,
+            "neckline": "crew",
+            "neck_depth_m": 0.0,
+            "front": "closed",
+            "collar": "none",
+            "placket": "none",
+            "buttons": 0,
+            "fabric": "medium",
+            "opacity": 0.4,
+            "rise": "mid",
+            "leg_cut": 0.5,
+            "back_coverage": 1.0,
+            "side_width_m": 0.05,
+            "gusset_m": 0.06,
+            "waistband": "thin",
+            "leg_length_m": 0.0,
+            "sides": "fabric",
+            "string_width_m": 0.008,
+            "cup_style": "molded",
+            "cup_coverage": 0.7,
+            "push_up": 0.0,
+            "underband_m": 0.02,
+            "center_gore": "narrow",
+            "closure": "back_hook",
+            "straps": "thin",
+            "fingers": "full",
+            "length": "wrist",
+            "cuff": "none",
+            "tights_style": "tights",
+            "feet": "closed",
+            "garters": "none",
+            "trouser_length": "full",
+            "leg_shape": "straight",
+            "seat": "regular",
+            "trouser_waist": "belt",
+            "fly": "zip",
+            "hem": "plain",
+            "texture": "cut",
+            "sleeve_print": "plain"
+          },
+          "source": "user",
+          "updated_at": "2026-11-24T18:22:40+00:00"
+        }
       }
     },
     {
@@ -1030,7 +999,7 @@
       "created_at": "2026-04-15T18:39:34.598018",
       "description": "",
       "image": "1776271179.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -1043,54 +1012,28 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
+        "partially_covers": [],
         "outfit_types": [
           "sport"
         ],
-        "slots": [
-          "feet"
-        ]
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
       "id": "item_3c60cf62",
       "name": "Sneekers",
       "category": "outfit_piece",
-      "prompt_fragment": "Sneekers",
+      "prompt_fragment": "black sneakers with white soles",
       "created_at": "2026-04-15T15:33:08.824406",
       "description": "",
       "image": "1776457789.png",
-      "rarity": "generic",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "casual"
-        ],
-        "slots": [
-          "feet"
-        ]
-      }
-    },
-    {
-      "id": "item_daffe7ca",
-      "name": "Beige chinos",
-      "category": "outfit_piece",
-      "prompt_fragment": "beige chinos",
-      "created_at": "2026-04-16T23:39:01.461082",
-      "description": "",
-      "image": "1776375553.png",
       "rarity": "common",
       "stackable": false,
       "max_stack": 1,
@@ -1103,52 +1046,19 @@
         "stat_bonuses": {},
         "uses": null
       },
-      "image_prompt": "",
-      "effects": null,
       "outfit_piece": {
-        "covers": [
-          "underwear_bottom"
+        "slots": [
+          "feet"
         ],
+        "motion_damping": 1.0,
+        "covers": [],
         "partially_covers": [],
-        "outfit_types": [],
+        "outfit_types": [
+          "casual"
+        ],
         "lora": {},
-        "slots": [
-          "bottom"
-        ]
-      }
-    },
-    {
-      "id": "item_fede24fa",
-      "name": "Work Shoes",
-      "category": "outfit_piece",
-      "prompt_fragment": "brown work shoes, sturdy leather, laced up, practical design",
-      "created_at": "2026-05-06T20:52:10.173280",
-      "description": "",
-      "image": "1778093632.png",
-      "image_prompt": "",
-      "rarity": "common",
-      "stackable": false,
-      "max_stack": 1,
-      "transferable": true,
-      "consumable": false,
-      "reveals_secret": null,
-      "effects": null,
-      "properties": {
-        "enables_locations": [],
-        "enables_activities": [],
-        "stat_bonuses": {},
-        "uses": null
-      },
-      "outfit_piece": {
-        "slots": [
-          "feet"
-        ],
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [
-          "casual"
-        ],
-        "lora": {}
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       }
     },
     {
@@ -1177,6 +1087,7 @@
         "slots": [
           "outer"
         ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -1184,7 +1095,9 @@
         "outfit_types": [
           "casual"
         ],
-        "lora": {}
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
       },
       "image_prompt": ""
     },
@@ -1210,6 +1123,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "bottom"
+        ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_bottom"
         ],
@@ -1218,10 +1135,10 @@
           "home"
         ],
         "lora": {},
-        "slots": [
-          "bottom"
-        ]
-      }
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "prompt_fragment_back": "black sweatpants, elastic waistband, soft fleece material, loose fit"
     },
     {
       "id": "item_b79bd4a4",
@@ -1250,6 +1167,7 @@
         "slots": [
           "top"
         ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -1258,8 +1176,11 @@
           "home",
           "casual"
         ],
-        "lora": {}
-      }
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "prompt_fragment_back": "oversized grey hoodie, soft cotton texture, drawstrings, relaxed fit"
     },
     {
       "id": "item_3115fac3",
@@ -1283,6 +1204,10 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "head"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
@@ -1290,16 +1215,42 @@
           "clubwear"
         ],
         "lora": {},
-        "slots": [
-          "head"
-        ]
+        "exposed_detail": false,
+        "mesh_mode": "accessory",
+        "jewellery": {
+          "kind": "earrings",
+          "band": {
+            "height_cm": 0.0,
+            "width_cm": 4.0,
+            "layer": "auto",
+            "material": "from_image",
+            "at": "thigh"
+          },
+          "chain": {
+            "drop_cm": 4.0,
+            "thickness_mm": 1.5,
+            "style": "cable"
+          },
+          "metal": "gold",
+          "side": "both",
+          "sway": "off",
+          "earring": {
+            "style": "hoop",
+            "size_mm": 20.0
+          },
+          "buckle": {
+            "from_image": true,
+            "size_mm": 50.0
+          },
+          "pendant": null
+        }
       }
     },
     {
       "id": "item_1ae56416",
       "name": "choker",
       "category": "outfit_piece",
-      "prompt_fragment": "choker",
+      "prompt_fragment": "black choker with a silver ring",
       "created_at": "2026-04-15T17:21:15.237733",
       "description": "",
       "description_de": "",
@@ -1314,18 +1265,55 @@
         "enables_locations": [],
         "enables_activities": [],
         "stat_bonuses": {},
-        "uses": null
+        "uses": null,
+        "bonus_when": "equipped"
       },
       "outfit_piece": {
+        "slots": [
+          "neck"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
+        "partially_covers": [],
         "outfit_types": [
           "clubwear",
           "intimate"
         ],
-        "slots": [
-          "neck"
-        ]
-      }
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "accessory",
+        "jewellery": {
+          "kind": "choker",
+          "band": {
+            "height_cm": 0.0,
+            "width_cm": 2.0,
+            "layer": "auto",
+            "material": "from_image",
+            "at": "thigh"
+          },
+          "chain": {
+            "drop_cm": 4.0,
+            "thickness_mm": 1.5,
+            "style": "cable"
+          },
+          "metal": "gold",
+          "side": "both",
+          "sway": "off",
+          "earring": {
+            "style": "stud",
+            "size_mm": 6.0
+          },
+          "buckle": {
+            "from_image": true,
+            "size_mm": 50.0
+          },
+          "pendant": null
+        }
+      },
+      "owner": "",
+      "pages_source": "",
+      "portable": true,
+      "image_prompt": ""
     },
     {
       "id": "item_e4f34a8a",
@@ -1346,7 +1334,8 @@
         "enables_locations": [],
         "enables_activities": [],
         "stat_bonuses": {},
-        "uses": null
+        "uses": null,
+        "bonus_when": "equipped"
       },
       "effects": null,
       "image_prompt": "",
@@ -1354,6 +1343,7 @@
         "slots": [
           "outer"
         ],
+        "motion_damping": 1.0,
         "covers": [
           "underwear_top"
         ],
@@ -1362,8 +1352,14 @@
           "casual",
           "clubwear"
         ],
-        "lora": {}
-      }
+        "lora": {},
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "owner": "",
+      "pages_source": "",
+      "portable": true,
+      "prompt_fragment_back": "black leather moto jacket with silver zippers"
     },
     {
       "id": "item_7d91cd7a",
@@ -1384,9 +1380,14 @@
         "enables_locations": [],
         "enables_activities": [],
         "stat_bonuses": {},
-        "uses": null
+        "uses": null,
+        "bonus_when": "equipped"
       },
       "outfit_piece": {
+        "slots": [
+          "feet"
+        ],
+        "motion_damping": 1.0,
         "covers": [],
         "partially_covers": [],
         "outfit_types": [
@@ -1395,11 +1396,22 @@
           "intimate"
         ],
         "lora": {},
-        "slots": [
-          "feet"
-        ]
-      }
+        "exposed_detail": false,
+        "mesh_mode": "own_mesh"
+      },
+      "owner": "",
+      "pages_source": "",
+      "portable": true,
+      "image_prompt": "",
+      "prompt_fragment_back": "shiny black leather stiletto heels, high pointed toe"
     }
   ],
-  "last_updated": "2026-10-08T20:31:54+00:00"
+  "redefaulted_unworn_piece_modes": "2026-11-12T20:34:40+00:00",
+  "derived_piece_back_texts": "2026-11-12T21:02:06+00:00",
+  "migrated_shell_mode": "2026-11-17T11:26:47+00:00",
+  "migrated_painted_mode": "2026-11-20T13:30:25+00:00",
+  "migrated_trouser_params": "2026-11-20T18:31:39+00:00",
+  "prefilled_open_below": "2026-11-25T10:44:50+00:00",
+  "accessory_parts_v1": "2026-11-25T10:44:50+00:00",
+  "last_updated": "2026-11-25T10:44:50+00:00"
 }
