@@ -311,6 +311,11 @@ def _wipe_db_for_character(conn, character_name: str) -> None:
             "DELETE FROM relationships WHERE from_char=? OR to_char=?",
             (character_name, character_name),
         )
+    if _table_exists(conn, "quest_facts"):
+        conn.execute(
+            "DELETE FROM quest_facts WHERE mind=? OR subject=?",
+            (character_name, character_name),
+        )
 
 
 def _restore_table(conn, table: str, rows: List[Dict[str, Any]]) -> int:

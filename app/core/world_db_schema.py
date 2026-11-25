@@ -12,7 +12,7 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 11  # 11: World Dev free-mode runs + journal
+SCHEMA_VERSION = 12  # 12: quest system tables (quest_templates, quest_runs, quest_facts)
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1108,6 +1108,73 @@ SCHEMA_STATEMENTS = [
         created_at   TEXT NOT NULL,
         undone_at    TEXT,
         PRIMARY KEY (run_id, seq)
+    )""",
+    # Quest system (app/models/quests.py). Templates refer to
+    # ROLES; a run binds roles to world entities and freezes a
+    # template_snapshot at start (evaluation reads only the snapshot).
+    # Template state: draft | ready; origin: admin | auto | story | import.
+    # Run state — open: preparing | hidden | open; ended: done | failed |
+    # cancelled | broken. Game stamps (*_game_ts, expires_at) are canonical
+    # GameTime strings; created_at/updated_at/ended_at are SYSTEM time.
+    # quest_runs deliberately has NO character_name column: a deleted giver
+    # must leave the row for the engine to mark broken.
+    """CREATE TABLE IF NOT EXISTS quest_templates (
+        id              TEXT PRIMARY KEY,
+        title           TEXT NOT NULL DEFAULT '',
+        summary         TEXT NOT NULL DEFAULT '',
+        gm_notes        TEXT NOT NULL DEFAULT '',
+        origin          TEXT NOT NULL DEFAULT 'admin'
+                        CHECK(origin IN ('admin', 'auto', 'story', 'import')),
+        state           TEXT NOT NULL DEFAULT 'draft'
+                        CHECK(state IN ('draft', 'ready')),
+        kept            INTEGER NOT NULL DEFAULT 1,
+        revision        INTEGER NOT NULL DEFAULT 1,
+        roles           TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(roles)),
+        steps           TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(steps)),
+        start_condition TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(start_condition)),
+        prerequisites   TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(prerequisites)),
+        dependencies    TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(dependencies)),
+        setup_effects   TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(setup_effects)),
+        rewards         TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rewards)),
+        repeat          TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(repeat)),
+        time_limit_s    INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS quest_runs (
+        id                TEXT PRIMARY KEY,
+        template_id       TEXT NOT NULL,
+        state             TEXT NOT NULL
+                          CHECK(state IN ('preparing', 'hidden', 'open', 'done',
+                                          'failed', 'cancelled', 'broken')),
+        current_step      INTEGER NOT NULL DEFAULT 0,
+        bindings          TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(bindings)),
+        template_snapshot TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(template_snapshot)),
+        step_log          TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(step_log)),
+        issues            TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(issues)),
+        started_by        TEXT NOT NULL DEFAULT '',
+        started_game_ts   TEXT NOT NULL DEFAULT '',
+        ended_game_ts     TEXT NOT NULL DEFAULT '',
+        expires_at        TEXT NOT NULL DEFAULT '',
+        news_event_id     TEXT NOT NULL DEFAULT '',
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        ended_at          TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_quest_runs_state ON quest_runs (state)",
+    "CREATE INDEX IF NOT EXISTS idx_quest_runs_template ON quest_runs (template_id)",
+    # What a MIND did for quests (linked_characters.mind_of of the acting
+    # avatar): kind + subject, e.g. ('spoke_with', '<character>'). Written
+    # once (UNIQUE + INSERT OR IGNORE); delete_character clears the rows
+    # where the character is the mind OR the subject.
+    """CREATE TABLE IF NOT EXISTS quest_facts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        mind       TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        game_ts    TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(mind, kind, subject)
     )""",
 ]
 

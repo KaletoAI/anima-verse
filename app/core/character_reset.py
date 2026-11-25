@@ -210,6 +210,9 @@ STORES: Tuple[Store, ...] = (
     Store("item_reads", "item_reads", "reader=?", (SCOPE_REINIT,), "reading memory"),
     Store("item_caught_today", "item_caught_today", "reader=?", (SCOPE_REINIT,), "reading catches"),
     Store("item_discoveries", "item_discoveries", "character_name=?", (SCOPE_REINIT,), "discovered items"),
+    Store("quest_facts", "quest_facts", "mind=? OR subject=?", (SCOPE_REINIT,),
+          "what this character did for quests, and what others did with it",
+          params=2),
     # ── JSON-participant stores: pruned, not deleted ──────────────────────
     Store("intents", "intents", "", (SCOPE_REINIT,),
           "intents owned by or naming this character", json_column="participants"),

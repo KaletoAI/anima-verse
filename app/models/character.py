@@ -1163,6 +1163,13 @@ def delete_character(character_name: str) -> bool:
                                  (character_name, character_name))
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name='intents'").fetchone():
                     conn.execute("DELETE FROM intents WHERE owner=?", (character_name,))
+                # quest_facts(mind, subject): what this character did for
+                # quests and what others did with it (quests.delete_facts_about,
+                # as raw SQL in this transaction). quest_runs stay: a run whose
+                # bindings name the character is the quest engine's to break.
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='quest_facts'").fetchone():
+                    conn.execute("DELETE FROM quest_facts WHERE mind=? OR subject=?",
+                                 (character_name, character_name))
                 _prune_party_memberships(conn, character_name)
                 stored_tx_1 = True
         except Exception as e:

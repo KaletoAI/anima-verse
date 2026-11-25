@@ -348,7 +348,7 @@ EXPECTED_REINIT = EXPECTED_MEMORY | {
     "scheduler_jobs", "stories", "events", "party_invites", "explored_cells",
     "intents", "story_arcs", "group_chats", "parties", "notifications",
     "item_reading_sessions", "item_reads", "item_caught_today", "item_discoveries",
-    "reading_secret_membership", "utterances", "scenes"}
+    "reading_secret_membership", "utterances", "scenes", "quest_facts"}
 for scope, expected in (("memory", EXPECTED_MEMORY), ("reinit", EXPECTED_REINIT)):
     check(f"independent {scope} inventory covered", expected - {
         row["store"] for row in character_reset.describe_scope(scope)["cleared"]}, set())
