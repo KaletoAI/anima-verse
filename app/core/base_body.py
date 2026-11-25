@@ -2547,18 +2547,19 @@ def outfit_variant(character_name: str, pieces: Optional[Dict[str, str]], *,
                    profile: Optional[Dict[str, Any]] = None) -> str:
     """Which base model an outfit of ``pieces`` (``{clothing slot: item
     id}``) is built from: ``"covered"`` (``model3d/covered/<bsig>.glb``,
-    without the ``exposed_only`` extension groups) when a worn piece hides
-    them (``extension_rig.hides_exposed_detail``: it covers their slot and
-    does not set ``outfit_piece.exposed_detail``), else ``"rigged"``."""
-    from app.core.extension_rig import exposed_only_slots, hides_exposed_detail, rig_groups_for
+    without the ``exposed_only`` extension groups) when the worn pieces hide
+    them (``extension_rig.hides_exposed_detail``: ``cover_state`` ``hidden`` —
+    a full cover of a ``hide_under`` slot without ``outfit_piece.exposed_detail``),
+    else ``"rigged"`` (a merely covered group stays, as a collider under cloth)."""
+    from app.core.extension_rig import HIDDEN, cover_state, exposed_only_slots, hides_exposed_detail, rig_groups_for
     from app.core.motion_item_cache import item_snapshot
     if not pieces:
         return "rigged"
-    # Cheap first pass (this runs inside model lookups): without any piece
-    # hiding a slot of ANY package's exposed-only rig, no profile is read.
+    # Cheap first pass (this runs inside model lookups): a group can only be hidden by a full cover of one of its
+    # covering slots, so without the union of every exposed-only rig's slots hidden, no profile is read.
     slots = exposed_only_slots()
     items = item_snapshot()
-    if not slots or not hides_exposed_detail([{"exposed_only": True, "covered_by": slots}], pieces, items):
+    if not slots or cover_state({"covered_by": slots}, pieces, items) != HIDDEN:
         return "rigged"
     profile = _profile_of(character_name, profile)
     groups = rig_groups_for(character_name, profile=profile, mesh_variant="")

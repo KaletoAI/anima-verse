@@ -212,9 +212,9 @@ def motion_damping_slots():
 
 
 def piece_covering_slots(occupied, outfit_piece):
-    """Every clothing slot a worn piece covers: the slots it occupies (the
+    """Every clothing slot a worn piece touches: the slots it occupies (the
     outfit's ``pieces`` mapping and its own ``slots``) plus ``covers`` and
-    ``partially_covers`` — a partial cover counts as covering here."""
+    ``partially_covers``. Not the cover rule of extension groups (``cover_state``)."""
     piece = outfit_piece or {}
     return (set(occupied) | set(piece.get("slots") or []) | set(piece.get("covers") or [])
             | set(piece.get("partially_covers") or []))
@@ -302,24 +302,11 @@ def rig_groups_unclothed(character_name, profile=None):
 
 
 def hides_exposed_detail(groups, pieces, items):
-    """Whether an outfit hides its ``exposed_only`` groups.
-
-    ``groups``: the applicable declarations (``rig_groups_for``, each with
-    ``covered_by``); ``pieces``: the outfit's ``{clothing slot: item id}``;
-    ``items``: ``{item id: item}``. True when ANY worn piece covers a slot in
-    the ``covered_by`` of an ``exposed_only`` group (``piece_covering_slots``)
-    and does not set ``outfit_piece.exposed_detail``; False when nothing
-    covers such a slot or every covering piece shows the detail through."""
-    targets = {cover for group in groups if group.get("exposed_only")
-               for cover in group.get("covered_by") or []}
-    if not targets:
-        return False
-    for item_id in sorted(set((pieces or {}).values())):
-        piece = ((items or {}).get(item_id) or {}).get("outfit_piece") or {}
-        occupied = {slot for slot, worn in (pieces or {}).items() if worn == item_id}
-        if piece_covering_slots(occupied, piece) & targets and piece.get("exposed_detail") is not True:
-            return True
-    return False
+    """Whether an outfit hides its ``exposed_only`` groups: True when ``cover_state`` of ANY ``exposed_only`` group
+    (``rig_groups_for``, each with ``covered_by`` / ``hide_under``) under ``pieces`` (``{clothing slot: item id}``,
+    ``items`` ``{item id: item}``) is ``hidden`` — a piece fully covers a ``hide_under`` slot and does not set
+    ``outfit_piece.exposed_detail``. A covered group (a partial cover, or a cover outside ``hide_under``) stays."""
+    return any(group.get("exposed_only") and cover_state(group, pieces, items) == HIDDEN for group in groups)
 
 
 def extension_bone_names(character_name, profile=None):

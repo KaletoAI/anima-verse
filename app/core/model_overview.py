@@ -1382,25 +1382,28 @@ def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, A
 
 def _piece_decision(character_name: str, pieces: Dict[str, str]) -> Tuple[Optional[str], List[str], List[str]]:
     """``(variant the pieces call for, names of the pieces that hide the
-    exposed-only groups, names of covering pieces that show them through)``."""
+    exposed-only groups, names of covering pieces that show them through)`` —
+    by ``extension_rig.cover_state`` of each piece alone: a piece that only
+    covers a group (it stays as a collider under cloth) is in neither list."""
     from app.core import base_body
-    from app.core.extension_rig import piece_covering_slots, rig_groups_for
+    from app.core.extension_rig import EXPOSED, HIDDEN, cover_state, rig_groups_for
     from app.core.motion_item_cache import item_snapshot
     wanted = base_body.outfit_variant(character_name, pieces)
     if not pieces:
         return wanted, [], []
     items = item_snapshot()
-    groups = rig_groups_for(character_name, mesh_variant="")
-    targets = {cover for g in groups if g.get("exposed_only") for cover in g.get("covered_by") or []}
+    groups = [g for g in rig_groups_for(character_name, mesh_variant="") if g.get("exposed_only")]
     deciders, shown = [], []
     for item_id in sorted(set(pieces.values())):
         item = (items or {}).get(item_id) or {}
         piece = item.get("outfit_piece") or {}
-        occupied = {slot for slot, worn in pieces.items() if worn == item_id}
-        if not (piece_covering_slots(occupied, piece) & targets):
-            continue
+        own = {slot: worn for slot, worn in pieces.items() if worn == item_id}
+        states = {cover_state(g, own, items) for g in groups}
         name = str(item.get("name") or item_id)
-        (shown if piece.get("exposed_detail") is True else deciders).append(name)
+        if piece.get("exposed_detail") is True and states - {EXPOSED}:
+            shown.append(name)
+        elif HIDDEN in states:
+            deciders.append(name)
     return wanted, deciders, shown
 
 

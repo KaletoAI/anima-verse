@@ -122,6 +122,9 @@ ITEMS = {
 }
 inventory.get_item = lambda item_id: ITEMS.get(item_id)
 outfit_renderer._get_item = lambda item_id: ITEMS.get(item_id)
+# The model paths read the cover rule over the item snapshot (``extension_rig.cover_state_for``, plan anatomy task 2).
+import app.core.motion_item_cache as motion_item_cache  # noqa: E402
+motion_item_cache.item_snapshot = lambda **kw: dict(ITEMS)
 outfit_renderer.is_free_text_wardrobe = lambda profile: False
 
 # --- [1] covered_part_groups -----------------------------------------------------------------------------------

@@ -57,6 +57,9 @@ ITEMS = {
     "under": {"outfit_piece": {"slots": ["underwear_bottom"], "covers": [], "mesh_mode": "in_body"}},
 }
 outfit_renderer._get_item = lambda iid: ITEMS.get(iid)
+# The model paths read the cover rule over the item snapshot (``extension_rig.cover_state_for``, plan anatomy task 2).
+import app.core.motion_item_cache as motion_item_cache  # noqa: E402
+motion_item_cache.item_snapshot = lambda **kw: dict(ITEMS)
 import app.core.outfit_options as outfit_options  # noqa: E402
 
 _real_states = outfit_options.piece_states

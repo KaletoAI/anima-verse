@@ -19,7 +19,9 @@ pure pieces.
       shirt slot chest_c, no flag                    -> True
       shirt slot chest_c, exposed_detail true        -> False
       sheer top (flag) + jacket covers chest_c       -> True  (ANY hiding piece)
-      sheer top (flag) + vest partially_covers it    -> True  (partial counts)
+      sheer top (flag) + vest partially_covers it    -> False (a partial cover keeps the group as covered,
+                                                        never hidden: extension_rig.cover_state, plan anatomy
+                                                        Review Focus 1; True at d0bae1f34)
       trousers slot legs (plain group's slot only)   -> False
       exposed_detail "true" (a string, not True)     -> True  (only real true)
     without an exposed_only group                    -> False
@@ -158,7 +160,7 @@ def main() -> int:
     cases = [("nothing worn", {}, False), ("shirt", {"chest_c": "shirt"}, True),
              ("sheer", {"chest_c": "sheer"}, False),
              ("sheer + jacket", {"chest_c": "sheer", "outer": "jacket"}, True),
-             ("sheer + vest (partial)", {"chest_c": "sheer", "outer": "vest"}, True),
+             ("sheer + vest (partial)", {"chest_c": "sheer", "outer": "vest"}, False),
              ("trousers", {"legs": "trousers"}, False), ("string flag", {"chest_c": "stringy"}, True)]
     for label, pieces, want in cases:
         check(f"hides: {label}", extension_rig.hides_exposed_detail(groups, pieces, items), want)
