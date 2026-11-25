@@ -259,6 +259,11 @@ def set_run_state(run_id: str, state: str, *, issues: list | None = None,
     current state outside ``from_states``. ``issues`` replaces the stored
     list when given. Entering an ended state stamps ``ended_game_ts`` and
     ``ended_at``. An unknown state raises sqlite3.IntegrityError (CHECK).
+
+    The precondition lives in the UPDATE itself (``state`` must still be the
+    one just read): the read runs outside any transaction, and
+    ``expire_runs`` takes no run lock, so a run ended in between is refused
+    by the rowcount instead of being overwritten.
     """
     ended = state in RUN_ENDED_STATES
     game_stamp = game_time().canonical() if ended else ""
@@ -276,9 +281,10 @@ def set_run_state(run_id: str, state: str, *, issues: list | None = None,
         if ended:
             cols += ["ended_game_ts=?", "ended_at=?"]
             params += [game_stamp, now]
-        conn.execute("UPDATE quest_runs SET " + ", ".join(cols) + " WHERE id=?",
-                     (*params, run_id))
-        return True
+        cur = conn.execute(
+            "UPDATE quest_runs SET " + ", ".join(cols) + " WHERE id=? AND state=?",
+            (*params, run_id, row[0]))
+        return cur.rowcount > 0
 
 
 def set_run_field(run_id: str, field: str, value: str) -> bool:
@@ -296,12 +302,16 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
                      mind: str) -> dict | None:
     """Record that ``avatar`` (mind ``mind``) fulfilled step ``step_index``.
 
-    ONE transaction under the run lock that re-reads the row: refused (None)
-    unless the run is ``open`` and its ``current_step`` is ``step_index`` —
-    a second avatar fulfilling the same step, or a stale signal, writes
-    nothing. Otherwise the step log gets ``{step, avatar, mind, game_ts}``
-    and the run advances, or ends ``done`` after the snapshot's last step.
-    Returns the updated run.
+    Under the run lock: read the row, refuse (None) unless the run is
+    ``open`` and its ``current_step`` is ``step_index`` — a second avatar
+    fulfilling the same step, or a stale signal, writes nothing. Otherwise
+    the step log gets ``{step, avatar, mind, game_ts}`` and the run advances,
+    or ends ``done`` after the snapshot's last step. Returns the updated run.
+
+    The read is not part of the write's transaction (autocommit SELECT) and
+    ``expire_runs`` takes no run lock, so the UPDATE repeats the
+    precondition (``state='open' AND current_step=?``); a rowcount of 0 —
+    the run ended or moved on in between — is a refusal (None).
     """
     game_stamp = game_time().canonical()
     with keyed_lock("quest_run", run_id), transaction() as conn:
@@ -316,14 +326,19 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
         total = len(steps) if isinstance(steps, list) else 0
         now = utc_now_iso()
         if int(step_index) + 1 >= total:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE quest_runs SET step_log=?, current_step=?, state='done', "
-                "ended_game_ts=?, ended_at=?, updated_at=? WHERE id=?",
-                (_dump(log), int(step_index) + 1, game_stamp, now, now, run_id))
+                "ended_game_ts=?, ended_at=?, updated_at=? "
+                "WHERE id=? AND state='open' AND current_step=?",
+                (_dump(log), int(step_index) + 1, game_stamp, now, now, run_id,
+                 int(step_index)))
         else:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE quest_runs SET step_log=?, current_step=?, updated_at=? "
-                "WHERE id=?", (_dump(log), int(step_index) + 1, now, run_id))
+                "WHERE id=? AND state='open' AND current_step=?",
+                (_dump(log), int(step_index) + 1, now, run_id, int(step_index)))
+        if cur.rowcount == 0:
+            return None
     return get_run(run_id)
 
 

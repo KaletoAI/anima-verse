@@ -53,6 +53,18 @@ WHAT IS CHECKED, and where every expected value comes from
   (h) FACTS. `add_fact(m, k, s)` → True, the same again → False (UNIQUE);
       `has_fact` → True; a different subject → False.
 
+  (j) GUARDED WRITE. The read in record_step_done / set_run_state is an
+      autocommit SELECT and expire_runs takes no run lock, so a run can end
+      BETWEEN the read and the write. Injected without threads: the module's
+      ``transaction`` is wrapped so that, right after the function's SELECT
+      on quest_runs, a SECOND sqlite connection commits state='failed'.
+      Then: record_step_done(open run, last step 1) → None and the row
+      stays 'failed' with an empty step log (unguarded it would have written
+      'done'); record_step_done(open run, step 0 of 2) → None, current_step
+      0; set_run_state(open run, 'cancelled') → False, state stays 'failed'.
+      Plain case without injection: record_step_done / set_run_state on a run
+      that is already 'failed' → None / False.
+
   (i) DELETE. Character "Gone" is the MIND of one fact and the SUBJECT of a
       second; a third fact names neither. A run's bindings name "Gone".
       `delete_character("Gone")` → True; facts 1 and 2 are gone, fact 3
@@ -217,6 +229,69 @@ check("add_fact first → True", quests.add_fact("Ava", "spoke_with", "Bea") is 
 check("add_fact again → False", quests.add_fact("Ava", "spoke_with", "Bea") is False)
 check("has_fact → True", quests.has_fact("Ava", "spoke_with", "Bea") is True)
 check("has_fact other subject → False", quests.has_fact("Ava", "spoke_with", "Cid") is False)
+
+print("(j) guarded write")
+import contextlib  # noqa: E402
+
+_real_tx = quests.transaction
+
+
+class _InjectingConn:
+    """Proxy of the thread connection: after the first SELECT on quest_runs
+    a second connection ends the run ('failed') before the UPDATE runs."""
+
+    def __init__(self, conn, run_id):
+        self._conn, self._run_id, self.fired = conn, run_id, False
+
+    def execute(self, sql, params=()):
+        cur = self._conn.execute(sql, params)
+        if not self.fired and sql.lstrip().startswith("SELECT") and "quest_runs" in sql:
+            self.fired = True
+            other = sqlite3.connect(str(db.get_db_path()), timeout=10)
+            other.execute("UPDATE quest_runs SET state='failed' WHERE id=?", (self._run_id,))
+            other.commit()
+            other.close()
+        return cur
+
+
+def injected(run_id, fn):
+    proxy = {}
+
+    @contextlib.contextmanager
+    def _tx():
+        with _real_tx() as conn:
+            proxy["p"] = _InjectingConn(conn, run_id)
+            yield proxy["p"]
+
+    quests.transaction = _tx
+    try:
+        result = fn()
+    finally:
+        quests.transaction = _real_tx
+    return result, proxy.get("p") is not None and proxy["p"].fired
+
+
+one = quests.create_run(template={"id": "x", "steps": [{"id": "a"}, {"id": "b"}]},
+                        bindings={}, state="open")
+with db.transaction() as _c:
+    _c.execute("UPDATE quest_runs SET current_step=1 WHERE id=?", (one["id"],))
+res, fired = injected(one["id"], lambda: quests.record_step_done(one["id"], 1, avatar="A", mind="A"))
+g = quests.get_run(one["id"])
+check("last step: run ended underneath → None", fired and res is None)
+check("last step: row stays failed, no step log", (g["state"], g["step_log"]) == ("failed", []))
+two = quests.create_run(template={"id": "x", "steps": [{"id": "a"}, {"id": "b"}]},
+                        bindings={}, state="open")
+res, fired = injected(two["id"], lambda: quests.record_step_done(two["id"], 0, avatar="A", mind="A"))
+g = quests.get_run(two["id"])
+check("middle step: run ended underneath → None", fired and res is None)
+check("middle step: current_step 0, failed", (g["current_step"], g["state"]) == (0, "failed"))
+three = quests.create_run(template=snap, bindings={}, state="open")
+res, fired = injected(three["id"], lambda: quests.set_run_state(three["id"], "cancelled"))
+check("set_run_state: run ended underneath → False", fired and res is False)
+check("set_run_state: state stays failed", quests.get_run(three["id"])["state"] == "failed")
+check("record_step_done on a failed run → None",
+      quests.record_step_done(two["id"], 0, avatar="A", mind="A") is None)
+check("set_run_state on a failed run → False", quests.set_run_state(two["id"], "cancelled") is False)
 
 print("(i) delete_character")
 from app.models.character import delete_character, save_character_profile  # noqa: E402
