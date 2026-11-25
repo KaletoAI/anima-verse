@@ -142,6 +142,55 @@ def part_ids_of(item: Optional[Dict[str, Any]]) -> List[str]:
     return out
 
 
+# --- the state of the links (read-only) -----------------------------------------------------------------------------
+
+REASON_PART_MISSING = "Linked {role} not built yet — Build mesh spends 1 hub job"
+REASON_PART_GONE = "Linked {role} item {id} no longer exists — the {host} is shown without it"
+REASON_PART_NO_IMAGE = "Linked {role} has no image — generate it in Items (1 image job)"
+
+
+def part_states(spec: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Per link of the host ``spec`` (normalized): ``{**link, state, reason, psig, part_name, size_mm, mount, flip}``
+    with the EFFECTIVE size and mount (the link's, else the part's). ``state`` is the part mesh's
+    (``accessory_pendant.pendant_state``: ready / running / missing / refused / failed / no_image) or ``gone`` — the
+    item is missing or no part. Read-only, no job."""
+    from app.core import accessory_pendant, accessory_spec
+    from app.models.inventory import get_item
+    out: List[Dict[str, Any]] = []
+    host = str((spec or {}).get("kind") or "piece")
+    for link in accessory_spec.links(spec):
+        role = accessory_spec.ROLE_NAMES.get(link["role"], "Part").lower()
+        part = get_item(link["item"])
+        row = {**link, "psig": "", "part_name": (part or {}).get("name") or link["item"]}
+        if not is_part(part):
+            out.append({**row, "state": "gone", "size_mm": float(link.get("size_mm") or 0.0) or None,
+                        "mount": effective_mount(link, None), "flip": False,
+                        "reason": REASON_PART_GONE.format(role=role, id=link["item"], host=host)})
+            continue
+        ps = part_spec(part) or {}
+        row.update({"size_mm": effective_size_mm(link, part), "mount": effective_mount(link, part),
+                    "flip": bool(ps.get("flip"))})
+        try:
+            st = accessory_pendant.pendant_state(link["item"])
+        except ValueError:
+            st = {"state": "gone", "reason": REASON_PART_GONE.format(role=role, id=link["item"], host=host),
+                  "psig": ""}
+        reason = st["reason"]
+        if st["state"] == "missing" and reason == accessory_pendant.REASON_MISSING:
+            reason = REASON_PART_MISSING.format(role=role)
+        elif st["state"] == "no_image":
+            reason = REASON_PART_NO_IMAGE.format(role=role)
+        out.append({**row, "state": st["state"], "reason": reason, "psig": st.get("psig") or ""})
+    return out
+
+
+def ready_inputs(states: List[Dict[str, Any]]) -> List[list]:
+    """The geometry entries of the READY parts (``accessory_build.geometry_inputs``): ``[role, index, item, psig,
+    size_mm, at_deg, mount, drop_cm, flip]``."""
+    return [[s["role"], int(s["index"]), s["item"], s["psig"], float(s["size_mm"]), float(s["at_deg"]),
+             str(s["mount"]), float(s["drop_cm"]), bool(s["flip"])] for s in states if s["state"] == "ready"]
+
+
 # --- the outfit text ------------------------------------------------------------------------------------------------
 
 _WITH = re.compile(r"\bwith\b", re.I)

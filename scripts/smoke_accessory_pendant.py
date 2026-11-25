@@ -259,8 +259,8 @@ check("[7] refused stays refused", ap.pendant_state("item_p")["state"], "refused
 # [8] asig
 pend18 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant": {"size_mm": 18}})
 pend30 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant": {"size_mm": 30}})
-check("[8] psig changes asig", ab.asig(pend18) != ab.asig(pend18, "0123456789ab"), True)
-check("[8] size with psig", ab.asig(pend18, "0123456789ab") != ab.asig(pend30, "0123456789ab"), True)
+check("[8] psig changes asig", ab.asig(pend18) != ab.asig(pend18, drop_psig="0123456789ab"), True)
+check("[8] size with psig", ab.asig(pend18, drop_psig="0123456789ab") != ab.asig(pend30, drop_psig="0123456789ab"), True)
 check("[8] size without psig", ab.asig(pend18), ab.asig(pend30))
 
 # [G3] thinnest side as depth

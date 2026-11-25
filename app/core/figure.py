@@ -794,11 +794,15 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             state = accessory_build.accessory_state(character_name, item_id, profile=profile)
             if state["state"] == "current":
                 accessory.append(item_id)
-                # A225: a pendant switched on but not on this build — the chain is shown alone, the row says why.
+                # A225: the earrings' drop not on this build — shown without it, the row says why.
                 pend = state.get("pendant")
                 if pend and not isinstance((state.get("record") or {}).get("pendant"), dict):
                     notes[item_id] = ((state.get("record") or {}).get("pendant_error") or pend["reason"]
                                       or accessory_build.REASON_PENDANT)
+                # Design G: a linked part not on this build — the note goes on the HOST (a part is never worn).
+                missing = [r for r in accessory_build.part_rows(state, None, state.get("record")) if not r["on_figure"]]
+                if missing and item_id not in notes:
+                    notes[item_id] = missing[0]["reason"] or accessory_build.REASON_PART
             elif state.get("previous"):
                 accessory.append(item_id)
                 notes[item_id] = accessory_build.REASON_OUTDATED

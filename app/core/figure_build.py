@@ -408,25 +408,77 @@ def _cut_texture_step(character_name: str, item_id: str) -> Optional[Step]:
 ACCESSORY_LABEL = "Accessory · {name} (CPU, 0 hub jobs)"
 
 
-#: A225: the pendant's ONE hub job (item-wide, every wearer shares it).
+#: A225: an item-image part's ONE hub job (item-wide, every wearer shares it): the earrings' own drop.
 PENDANT_LABEL = "{part} · {name} (1 hub job)"
-#: Why the pendant step runs only in a manual Build.
-PENDANT_MANUAL = "The pendant is one paid hub job — a manual Build or Build pendant in the Wardrobe makes it"
+#: Design G: a linked part's ONE hub job, shared by every host that links it.
+PART_LABEL = "{role} · {part} for {hosts} (1 hub job)"
+#: Why a part mesh step runs only in a manual Build.
+PART_MANUAL = "A part mesh is one hub job — a manual Build or Build mesh in Items or the Wardrobe makes it"
 
 
 def _pendant_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:
-    """A225: the pendant mesh of a worn necklace whose pendant is switched on and not built yet — a manual step (only
-    a manual Build spends its job). A refused or failed pendant is not listed (never re-meshed automatically; the
-    Wardrobe's "Build pendant again" retries), nor one that is running or ready."""
+    """A225 / A234: the earrings' own drop mesh when it is not built yet — a manual step (only a manual Build spends
+    its job). A refused or failed one is not listed (never re-meshed automatically), nor one running or ready."""
     from app.core import accessory_build, accessory_spec
     from app.models.inventory import get_item
     spec = accessory_spec.of_item(get_item(item_id) or {})
     pendant = accessory_build.pendant_info(item_id, spec)
     if not pendant or pendant["state"] != "missing":
         return None
-    # A234: the belt's buckle and the earrings' drop are the same item-image job
     return Step("pendant", PENDANT_LABEL.format(part=accessory_spec.part_name(spec), name=_item_name(item_id)), 1,
-                item_id, manual=PENDANT_MANUAL)
+                item_id, manual=PART_MANUAL)
+
+
+def _part_steps(character_name: str, host_ids: List[str], profile: Dict[str, Any]) -> List[Step]:
+    """Design G: ONE manual mesh step per linked part whose mesh is missing (image there, never built) among the
+    worn hosts ``host_ids`` — ``item_id`` the PART's id, the label naming every host that links it. A refused or
+    failed part is not listed (Build mesh in Items retries), nor one running, ready, without an image or gone."""
+    from app.core import accessory_parts, accessory_spec
+    from app.models.inventory import get_item
+    wanted: Dict[str, Dict[str, Any]] = {}
+    for host in host_ids:
+        spec = accessory_spec.of_item(get_item(host) or {})
+        for ps in accessory_parts.part_states(spec):
+            if ps["state"] != "missing":
+                continue
+            entry = wanted.setdefault(ps["item"], {"role": ps["role"], "part": ps["part_name"], "hosts": []})
+            if host not in entry["hosts"]:
+                entry["hosts"].append(host)
+    steps = []
+    for part_id, e in wanted.items():
+        label = PART_LABEL.format(role=accessory_spec.ROLE_NAMES.get(e["role"], "Part"), part=e["part"],
+                                  hosts=", ".join(_item_name(h) for h in e["hosts"]))
+        steps.append(Step("pendant", label, 1, part_id, manual=PART_MANUAL))
+    return steps
+
+
+def _accessory_steps(character_name: str, accessory_ids: List[str], profile: Dict[str, Any]) -> List[Step]:
+    """The steps of the worn accessories ``accessory_ids``: design G — the linked parts' hub jobs first (manual only,
+    ONE per part however many worn hosts link it; ``_part_steps``), then per accessory the earrings' own drop job
+    (A225, manual only) and its CPU build (Ruling A118). A host that is current but links a part planned here (or
+    earrings whose drop is planned) is built again with it — a manual step, like the job it waits for."""
+    steps = _part_steps(character_name, accessory_ids, profile)
+    planned_parts = {s.item_id for s in steps}
+    for item_id in accessory_ids:
+        pendant = _pendant_step(character_name, item_id, profile)
+        if pendant is not None:
+            steps.append(pendant)
+        step = _accessory_step(character_name, item_id, profile)
+        if step is None and (pendant is not None or _links_any(item_id, planned_parts)):
+            step = Step("accessory", ACCESSORY_LABEL.format(name=_item_name(item_id)), 0, item_id,
+                        manual=PART_MANUAL)
+        if step is not None:
+            steps.append(step)
+    return steps
+
+
+def _links_any(host_id: str, part_ids: set) -> bool:
+    """Whether the host ``host_id`` links one of ``part_ids`` (design G)."""
+    if not part_ids:
+        return False
+    from app.core import accessory_parts
+    from app.models.inventory import get_item
+    return any(pid in part_ids for pid in accessory_parts.part_ids_of(get_item(host_id) or {}))
 
 
 def _accessory_step(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[Step]:
@@ -554,18 +606,7 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         step = _cut_texture_step(character_name, item_id)
         if step is not None:
             steps.append(step)
-    for item_id in wanted.accessory:
-        # A225: the pendant's hub job first (manual only); a chain that is current is then built again with it.
-        pendant = _pendant_step(character_name, item_id, profile)
-        if pendant is not None:
-            steps.append(pendant)
-        # Ruling A118: an accessory is built on the CPU (0 hub jobs) when its build for this body is missing.
-        step = _accessory_step(character_name, item_id, profile)
-        if step is None and pendant is not None:
-            step = Step("accessory", ACCESSORY_LABEL.format(name=_item_name(item_id)), 0, item_id,
-                        manual=PENDANT_MANUAL)
-        if step is not None:
-            steps.append(step)
+    steps.extend(_accessory_steps(character_name, list(wanted.accessory), profile))
 
     if wanted.hair == figure.HAIR_HAIRDECK:
         step = _hair_step(character_name, profile)
@@ -2307,7 +2348,8 @@ def _accessory_row(character_name: str, item_id: str, item: Dict[str, Any],
     return {"state": state["state"], "reason": state["reason"], "kind": spec["kind"] if spec else None,
             "suggested": accessory_spec.suggest_kind(item), "built_at": record.get("built_at") or "",
             "metrics": record.get("metrics") or None, "cost": {"hub_jobs": 0},
-            "pendant": accessory_build.pendant_row(state, spec, record)}
+            "pendant": accessory_build.pendant_row(state, spec, record),
+            "parts": accessory_build.part_rows(state, spec, record)}
 
 
 def _template_row(character_name: str, item_id: str, item: Dict[str, Any], wanted,
@@ -3410,7 +3452,7 @@ PROBLEM_FAILED = "failed"
 #: A failed step's label when the plan does not list it any more.
 STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
                "shape": "Body shape", "pieces": "Own mesh", "template": "Template drape",
-               "pendant": "Pendant", "accessory": "Accessory", "hair": "Hair",
+               "pendant": "Part mesh", "accessory": "Accessory", "hair": "Hair",
                "views": "Views", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL,
                "collision": COLLISION_LABEL}
 _VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")

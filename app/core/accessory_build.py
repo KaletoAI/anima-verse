@@ -43,8 +43,9 @@ logger = logging.getLogger(__name__)
 
 #: Bumped when an accessory is built differently for the same inputs. 3: the test poses judge a side by the body's
 #: outer wall only (``outer_wall_faces``) — a belt over a bent hip no longer fails on the inner wall, a piece pushed
-#: through the skin is caught at its true depth.
-ACCESSORY_VERSION = 3
+#: through the skin is caught at its true depth. 4: linked part items (plan-anhaenger, design G) — a part is placed by
+#: its link with its thinnest side as the depth.
+ACCESSORY_VERSION = 4
 #: A234: the build version of the kinds around the body / on a bone (``make_around``, ``make_earrings``). 2: a choker
 #: sits on a garment only where it hugs the neck (``accessory_band.UNDER_MAX_BY_KEY``).
 AROUND_VERSION = 2
@@ -66,8 +67,11 @@ REASON_NO_KIND = "Choose the accessory kind in the Wardrobe"
 REASON_KIND_LATER = "{kind}: not built yet in this version — shown on the figure once its phase lands"
 REASON_NO_BODY = "No plain body yet"
 REASON_FAILED = "Build failed — {error}"
-REASON_PENDANT_LEFT_OFF = "Pendant left off — {error}"
-REASON_PENDANT = "Pendant ready — Build puts it on the chain on the CPU (0 hub jobs)"
+REASON_PENDANT_LEFT_OFF = "Drop left off — {error}"
+REASON_PENDANT = "Drop ready — Build puts it on on the CPU (0 hub jobs)"
+#: Design G: a linked part's mesh became ready since the host was built.
+REASON_PART = "A linked part was built since — rebuild (CPU)"
+REASON_PART_LEFT_OFF = "{role} left off — {error}"
 #: A224: the figure's note of an accessory shown with its previously delivered build (``previous_record``).
 REASON_OUTDATED = "Outdated — Build makes it again (0 hub jobs)"
 
@@ -112,12 +116,13 @@ def shape_inputs(spec: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "",
-                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """What an accessory's GEOMETRY is made of (the metal is not). A225: a READY pendant mesh (``pendant_psig``) and
-    its size are part of it — a pendant switched on but not built yet is not (the chain alone is built and shown).
-    A234: the other kinds' shape fields (``shape_inputs``), the READY item-image part (buckle / drop) the same way,
-    and the worn context (``worn_context``): the garments under a band (``[item, fsig]``) and the chest shaping."""
+def geometry_inputs(spec: Dict[str, Any], parts_ready: Optional[List[list]] = None,
+                    context: Optional[Dict[str, Any]] = None, drop_psig: str = "") -> Dict[str, Any]:
+    """What an accessory's GEOMETRY is made of (the metal is not). Design G: the READY linked parts
+    (``parts_ready`` = ``accessory_parts.ready_inputs``: ``[role, index, item, psig, size_mm, at_deg, mount, drop_cm,
+    flip]``) — a part not built yet is not (the host alone is built and shown). A234: the other kinds' shape fields
+    (``shape_inputs``), the earrings' READY own drop (``drop_psig``) and its size, and the worn context
+    (``worn_context``): the garments under a band (``[item, fsig]``) and the chest shaping."""
     from app.core.accessory_spec import image_part_mm
     inputs: Dict[str, Any] = {"version": ACCESSORY_VERSION, "kind": spec["kind"]}
     if spec["kind"] == "necklace":
@@ -125,8 +130,10 @@ def geometry_inputs(spec: Dict[str, Any], pendant_psig: str = "",
     else:
         inputs["around"] = AROUND_VERSION
         inputs["shape"] = shape_inputs(spec)
-    if pendant_psig and image_part_mm(spec) is not None:
-        inputs["pendant"] = {"psig": pendant_psig, "size_mm": float(image_part_mm(spec))}
+    if drop_psig and image_part_mm(spec) is not None:
+        inputs["pendant"] = {"psig": drop_psig, "size_mm": float(image_part_mm(spec))}
+    if parts_ready:
+        inputs["parts"] = [list(p) for p in parts_ready]
     context = context or {}
     if context.get("under"):
         inputs["under"] = [[str(u["item_id"]), str(u["fsig"])] for u in context["under"]]
@@ -140,9 +147,10 @@ def shaping_key(rec: Dict[str, Any]) -> str:
     return hashlib.md5(json.dumps(rec, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
 
 
-def asig(spec: Dict[str, Any], pendant_psig: str = "", context: Optional[Dict[str, Any]] = None) -> str:
+def asig(spec: Dict[str, Any], parts_ready: Optional[List[list]] = None, context: Optional[Dict[str, Any]] = None,
+         drop_psig: str = "") -> str:
     """md5[:12] of ``geometry_inputs`` (canonical JSON)."""
-    raw = json.dumps(geometry_inputs(spec, pendant_psig, context), sort_keys=True,
+    raw = json.dumps(geometry_inputs(spec, parts_ready, context, drop_psig), sort_keys=True,
                      separators=(",", ":")).encode("utf-8")
     return hashlib.md5(raw).hexdigest()[:12]
 
@@ -211,7 +219,8 @@ def worn_context(character_name: str, profile: Dict[str, Any], base_sha: str,
 
 
 def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """A225: ``accessory_pendant.pendant_state`` of the item when ``spec`` switches a pendant on, else None."""
+    """``accessory_pendant.pendant_state`` of the item's OWN drop (the earrings' ``drop`` style — the only item-image
+    part left since part items, D1), else None."""
     from app.core import accessory_pendant, accessory_spec
     if not accessory_spec.pendant_on(spec):
         return None
@@ -223,9 +232,9 @@ def pendant_info(item_id: str, spec: Optional[Dict[str, Any]]) -> Optional[Dict[
 
 def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: Optional[Dict[str, Any]]
                 ) -> Optional[Dict[str, Any]]:
-    """A225: the pendant line of a Wardrobe / Figure row — ``{state, reason, size_mm, on_figure, metrics, cost}``, None
-    without a pendant switched on. ``state`` is the mesh's (``accessory_pendant.pendant_state``); ``on_figure`` whether
-    the CURRENT build carries it; ``reason`` says why the chain is shown without it."""
+    """The earrings' own drop line of a Wardrobe / Figure row — ``{state, reason, size_mm, on_figure, metrics, cost}``,
+    None without a drop. ``state`` is the mesh's (``accessory_pendant.pendant_state``); ``on_figure`` whether the
+    CURRENT build carries it; ``reason`` says why the earrings are shown without it."""
     pendant = state.get("pendant")
     if not pendant or not spec:
         return None
@@ -237,6 +246,35 @@ def pendant_row(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: O
     return {"state": pendant["state"], "reason": reason, "size_mm": float(accessory_spec_size(spec)),
             "on_figure": on, "metrics": (record.get("pendant") or {}).get("metrics") if on else None,
             "cost": {"hub_jobs": 0 if pendant["state"] == "ready" else 1}}
+
+
+def part_rows(state: Dict[str, Any], spec: Optional[Dict[str, Any]], record: Optional[Dict[str, Any]]
+              ) -> List[Dict[str, Any]]:
+    """Design G: one line per part link of a Wardrobe / Figure / Items row — ``{role, index, item, part_name, state,
+    reason, size_mm, mount, at_deg, drop_cm, flip, on_figure, metrics, cost, image_url}``. ``state`` is the part
+    mesh's (or ``gone``); ``on_figure`` whether the CURRENT build carries it; ``reason`` why it is not shown."""
+    from app.core import accessory_spec
+    record = record or {}
+    current = state.get("state") == "current"
+    built = {(p.get("role"), int(p.get("index", 0)), p.get("item")): p for p in record.get("parts") or []}
+    errors = record.get("part_errors") or {}
+    rows = []
+    for ps in state.get("parts") or []:
+        key = (ps["role"], int(ps["index"]), ps["item"])
+        on = current and key in built and built[key].get("psig") == ps["psig"]
+        reason = ps["reason"]
+        if ps["state"] == "ready" and not on:
+            err = errors.get(f"{ps['role']}:{ps['index']}")
+            reason = (REASON_PART_LEFT_OFF.format(role=accessory_spec.ROLE_NAMES.get(ps["role"], "Part"), error=err)
+                      if err and current else ("" if current else REASON_PART))
+        rows.append({"role": ps["role"], "index": int(ps["index"]), "item": ps["item"], "part_name": ps["part_name"],
+                     "state": ps["state"], "reason": reason, "size_mm": ps.get("size_mm"), "mount": ps.get("mount"),
+                     "at_deg": ps.get("at_deg"), "drop_cm": ps.get("drop_cm"), "flip": bool(ps.get("flip")),
+                     "on_figure": bool(on), "metrics": (built[key].get("metrics") if on else None),
+                     "cost": {"hub_jobs": 0 if ps["state"] in ("ready", "gone", "no_image") else 1},
+                     "image_url": (f"/inventory/items/{ps['item']}/image" if ps["state"] not in ("gone", "no_image")
+                                   else "")})
+    return rows
 
 
 def accessory_spec_size(spec: Dict[str, Any]) -> float:
@@ -364,9 +402,10 @@ def base_sha(character_name: str, profile: Optional[Dict[str, Any]] = None) -> s
 def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
                     item: Optional[Dict[str, Any]] = None,
                     context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """``{state, reason, asig, record, pendant, context}`` of a worn accessory (module docstring; ``pendant`` =
-    ``pendant_info``; ``context`` = ``worn_context``, read from the profile when not given). Read-only."""
-    from app.core import accessory_spec, model_geometry
+    """``{state, reason, asig, record, pendant, parts, context}`` of a worn accessory (module docstring; ``pendant`` =
+    ``pendant_info`` — the earrings' own drop; ``parts`` = ``accessory_parts.part_states`` — the linked parts;
+    ``context`` = ``worn_context``, read from the profile when not given). Read-only."""
+    from app.core import accessory_parts, accessory_spec, model_geometry
     profile = _profile_of(character_name, profile)
     if item is None:
         from app.models.inventory import get_item
@@ -381,12 +420,14 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     if base is None:
         return {"state": "blocked", "reason": REASON_NO_BODY, "asig": "", "record": None}
     pendant = pendant_info(item_id, spec)
+    parts = accessory_parts.part_states(spec)
+    ready = accessory_parts.ready_inputs(parts)
     if context is None:
         context = worn_context(character_name, profile, str(base[1]), spec)
-    sig = asig(spec, _ready_psig(pendant), context)
+    sig = asig(spec, ready, context, _ready_psig(pendant))
     records = _records(character_name, item_id)
     rec = records.get(sig)
-    out = {"asig": sig, "pendant": pendant, "context": context}
+    out = {"asig": sig, "pendant": pendant, "parts": parts, "context": context}
     if rec is not None and model_geometry.record_matches(rec, base[1]):
         return {"state": "current", "reason": "", "record": rec, **out}
     failed = _read(record_path(character_name, item_id, sig, ".failed.json"))
@@ -398,12 +439,20 @@ def accessory_state(character_name: str, item_id: str, *, profile: Optional[Dict
     if rec is not None:
         return {"state": "due", "reason": REASON_BODY, "record": None, **out}
     if records:
-        want = geometry_inputs(spec, _ready_psig(pendant), context)
+        want = geometry_inputs(spec, ready, context, _ready_psig(pendant))
         shape_keys = ("version", "kind", "chain", "around", "shape")
         same_shape = [r for r in records.values()
                       if all((r.get("inputs") or {}).get(k) == want.get(k) for k in shape_keys)]
+        lost = [p for p in parts if p["state"] != "ready"
+                and any([p["role"], p["index"], p["item"]] == q[:3]
+                        for r in same_shape for q in (r.get("inputs") or {}).get("parts") or [])]
         if _ready_psig(pendant) and any("pendant" not in (r.get("inputs") or {}) for r in same_shape):
             reason = REASON_PENDANT
+        elif lost:
+            # a part the last build carried is no longer ready (a new image, deleted): its own words
+            reason = lost[0]["reason"]
+        elif ready and any((r.get("inputs") or {}).get("parts") != want.get("parts") for r in same_shape):
+            reason = REASON_PART
         elif same_shape:
             reason = REASON_UNDER
         else:
@@ -662,12 +711,14 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
     state = accessory_state(character_name, item_id, profile=profile, item=item)
     if state["state"] == "blocked":
         return state
-    from app.core import accessory_pendant, accessory_spec
+    from app.core import accessory_parts, accessory_pendant, accessory_spec
     spec = accessory_spec.of_item(item)
     bsig, sha = _current_base(character_name, profile)
     psig = _ready_psig(state.get("pendant"))
     context = state.get("context") or {}
-    sig = asig(spec, psig, context)
+    ready_states = [p for p in state.get("parts") or [] if p["state"] == "ready"]
+    ready = accessory_parts.ready_inputs(ready_states)
+    sig = asig(spec, ready, context, psig)
     folder = store_dir(character_name)
     with keyed_lock("accessory_build", f"{character_name}/{item_id}"):
         folder.mkdir(parents=True, exist_ok=True)
@@ -676,7 +727,9 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
             from app.models.character import get_character_dir
             blob = (get_character_dir(character_name) / "model3d" / f"{bsig}.glb").read_bytes()
             mesh = accessory_pendant.load_mesh(item_id, psig) if psig else None
-            made = make_any(blob, spec, mesh, context)
+            parts = [({k: p[k] for k in ("role", "index", "item", "size_mm", "at_deg", "mount", "drop_cm", "flip")},
+                      accessory_pendant.load_mesh(p["item"], p["psig"])) for p in ready_states]
+            made = make_any(blob, spec, mesh, context, parts)
         except Exception as e:  # noqa: BLE001 — recorded as the step's failure, the figure leaves it off
             logger.exception("Accessory %s of %s failed", item_id, character_name)
             _write_atomic(failed_path, json.dumps({"error": failure_text(e)[:300], "base_model_sha256": sha,
@@ -694,6 +747,12 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
                            "PN": hung["N"].astype(np.float32), "PUV": hung["UV"].astype(np.float32),
                            "PJ": hung["J"].astype(np.int32), "PW": hung["W"].astype(np.float32),
                            "Pimage": np.frombuffer(hung["image"], np.uint8)})
+        placed = [(i, ps, h) for i, (ps, h) in enumerate(zip(ready_states, made.get("parts") or [])) if h is not None]
+        for slot, (_i, _ps, h) in enumerate(placed):
+            arrays.update({f"P{slot}V": h["V"].astype(np.float32), f"P{slot}F": h["F"].astype(np.int32),
+                           f"P{slot}N": h["N"].astype(np.float32), f"P{slot}UV": h["UV"].astype(np.float32),
+                           f"P{slot}J": h["J"].astype(np.int32), f"P{slot}W": h["W"].astype(np.float32),
+                           f"P{slot}image": np.frombuffer(h["image"] or b"", np.uint8)})
         lens = made.get("lens")
         if lens is not None:
             # the glasses: the lenses (their own node) and which frame faces are the temples (the distance tier)
@@ -703,7 +762,7 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
         np.savez_compressed(buf, **arrays)
         _write_atomic(record_path(character_name, item_id, sig, ".npz"), buf.getvalue())
         record = {"version": ACCESSORY_VERSION, "item_id": item_id, "asig": sig, "kind": spec["kind"],
-                  "inputs": geometry_inputs(spec, psig, context), "bsig": bsig, "base_model_sha256": sha,
+                  "inputs": geometry_inputs(spec, ready, context, psig), "bsig": bsig, "base_model_sha256": sha,
                   **model_geometry.stamp_on(character_name, bsig, sha),
                   "joint_names": made["joint_names"], "landmarks": made["landmarks"], "metrics": made["metrics"],
                   "hub_jobs": 0, "built_at": utc_now_iso()}
@@ -717,6 +776,18 @@ def build(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]
                                     if pend_rec.get("fallback_from") else {})}
         elif made.get("pendant_error"):
             record["pendant_error"] = REASON_PENDANT_LEFT_OFF.format(error=made["pendant_error"])
+        if ready_states:
+            record["parts"] = []
+            for slot, (_i, ps, h) in enumerate(placed):
+                prec = accessory_pendant.pendant_state(ps["item"]).get("record") or {}
+                record["parts"].append({
+                    "slot": slot, "role": ps["role"], "index": int(ps["index"]), "item": ps["item"],
+                    "psig": ps["psig"], "size_mm": float(ps["size_mm"]), "mime": h["mime"], "material": h["material"],
+                    "metrics": h["metrics"], "backend": prec.get("backend", ""), "routing": prec.get("routing") or {},
+                    **({"fallback_from": prec["fallback_from"]} if prec.get("fallback_from") else {})})
+            errors = made.get("part_errors") or {}
+            record["part_errors"] = {f"{ready_states[i]['role']}:{ready_states[i]['index']}": str(e)
+                                     for i, e in errors.items()}
         _write_atomic(record_path(character_name, item_id, sig), json.dumps(record, indent=1).encode("utf-8"))
         failed_path.unlink(missing_ok=True)
         # One build per item is kept: the other settings' builds go (a switch back rebuilds on the CPU).
@@ -799,6 +870,34 @@ def pendant_mesh(character_name: str, item_id: str, record: Dict[str, Any]):
                            mime=str(meta.get("mime") or ("image/png" if image else "")), material=material)
 
 
+def part_meshes(character_name: str, item_id: str, record: Dict[str, Any]) -> List[Any]:
+    """Design G: the stored linked parts of ``record`` as ``[(meta, glb_mesh.GarmentMesh)]`` (each with its own
+    texture and material from the mesher), in slot order; [] when the build carries none."""
+    metas = [m for m in record.get("parts") or [] if isinstance(m, dict)]
+    if not metas:
+        return []
+    from app.core.glb_mesh import GarmentMesh
+    out = []
+    with np.load(record_path(character_name, item_id, str(record["asig"]), ".npz")) as z:
+        for meta in metas:
+            k = f"P{int(meta.get('slot', 0))}"
+            if f"{k}V" not in z.files:
+                continue
+            image = z[f"{k}image"].tobytes()
+            material = dict(meta.get("material") or {})
+            material.setdefault("name", str(meta.get("role") or "part"))
+            if not image:
+                material.setdefault("pbrMetallicRoughness", {"baseColorFactor": [0.8, 0.78, 0.7, 1.0],
+                                                             "metallicFactor": 0.0, "roughnessFactor": 0.6})
+            out.append((meta, GarmentMesh(
+                positions=z[f"{k}V"].astype(np.float64), normals=z[f"{k}N"].astype(np.float64),
+                uvs=z[f"{k}UV"].astype(np.float64), indices=z[f"{k}F"].astype(np.int64),
+                joints=z[f"{k}J"].astype(np.int64), weights=z[f"{k}W"].astype(np.float64),
+                joint_names=list(record["joint_names"]), image=image,
+                mime=str(meta.get("mime") or ("image/png" if image else "")), material=material)))
+    return out
+
+
 #: A225 LOD: the distance tier carries the pendant only up to this many triangles (a 2 cm pendant is a few pixels
 #: there; a heavier delivery is left off at distance, never decimated through Blender for it).
 PENDANT_LOW_MAX_TRIS = 3000
@@ -832,6 +931,13 @@ def graft_accessory(blob: bytes, character_name: str, item_id: str, record: Dict
     if pend is not None:
         blob = glb_mesh.graft(blob, pend, name=accessory_mesh.node_name(item_id, "p"),
                               extras={**extras, "part": "pendant"})
+    # design G: one node per linked part (on the distance tier each only up to ``PENDANT_LOW_MAX_TRIS``)
+    for meta, mesh in part_meshes(character_name, item_id, record):
+        if low and len(mesh.indices) > PENDANT_LOW_MAX_TRIS:
+            continue
+        blob = glb_mesh.graft(blob, mesh, name=accessory_mesh.node_name(item_id, f"p{int(meta.get('slot', 0))}"),
+                              extras={**extras, "part": str(meta.get("role") or "part"),
+                                      "part_item": str(meta.get("item") or "")})
     return blob
 
 

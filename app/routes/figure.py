@@ -476,6 +476,8 @@ def get_accessory(character_name: str, item_id: str,
             "cords": list(accessory_spec.CORDS), "cord_thickness_mm": accessory_spec.CORD_THICKNESS_MM,
             "pendant_defaults": dict(accessory_spec.PENDANT_DEFAULTS),
             "pendant": accessory_build.pendant_row(state, accessory_spec.of_item(item), record),
+            # design G: the linked parts (buckle / pendant / charms), one row per link
+            "parts": accessory_build.part_rows(state, accessory_spec.of_item(item), record),
             "ranges": {k: list(v) for k, v in accessory_spec.RANGES.items()},
             "strap_at": list(accessory_spec.STRAP_AT), "earring_styles": list(accessory_spec.EARRING_STYLES),
             "band_materials": list(accessory_spec.BAND_MATERIALS), "fingers": list(accessory_spec.FINGERS),
@@ -506,7 +508,11 @@ def put_accessory(character_name: str, item_id: str, body: AccessoryRequest,
     with outfit_piece_lock(item_id):   # A216 review L5: the read and the write of the shared piece together
         piece = dict((get_item(item_id) or {}).get("outfit_piece") or {})
         piece["jewellery"] = spec
-        if update_item(item_id, {"outfit_piece": piece}) is None:
+        try:
+            saved = update_item(item_id, {"outfit_piece": piece})
+        except ValueError as e:     # a link to a missing item or to an item that is no part (design G)
+            raise HTTPException(status_code=400, detail=str(e))
+        if saved is None:
             raise HTTPException(status_code=500, detail="The item could not be saved")
     return {"item_id": item_id, "jewellery": spec}
 
@@ -543,14 +549,16 @@ def switch_piece_mode(character_name: str, item_id: str, body: ModeSwitchRequest
 @router.post("/{character_name}/figure/accessory/{item_id}/pendant")
 def build_pendant(character_name: str, item_id: str,
                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """A225: the explicit "Build pendant (1 hub job)" — the item's ONE routed ``jewellery_mesh`` job in the background
-    (``accessory_pendant.start``). 400 when the stored description has no pendant switched on or the item no image;
-    ``{status: "ready"}`` (nothing spent) when the mesh exists, ``"running"`` when a job runs, else ``"started"``."""
+    """A225 / A234: the explicit "Build drop (1 hub job)" of the EARRINGS' own drop — the item's ONE routed
+    ``jewellery_mesh`` job in the background (``accessory_pendant.start``). A necklace's pendant and a belt's buckle are
+    linked part items since design G (their mesh: ``POST /inventory/items/{part}/part-mesh``). 400 when the stored
+    description has no drop or the item no image; ``{status: "ready"}`` (nothing spent) when the mesh exists,
+    ``"running"`` when a job runs, else ``"started"``."""
     from app.core import accessory_build, accessory_pendant, accessory_spec
     item = _template_item(character_name, item_id)
     spec = accessory_spec.of_item(item)
     if not accessory_spec.pendant_on(spec):
-        raise HTTPException(status_code=400, detail="Switch the pendant on and save first")
+        raise HTTPException(status_code=400, detail="Only earrings with a drop make their part from their own image")
     pendant = accessory_build.pendant_info(item_id, spec) or {}
     if pendant.get("state") == "no_image":
         raise HTTPException(status_code=400, detail=accessory_pendant.REASON_NO_IMAGE)
