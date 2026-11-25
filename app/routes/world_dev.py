@@ -819,30 +819,13 @@ async def world_dev_chat(request: Request):
 
     history = list(session["messages"])
 
-    # Resolve pricing for cost tracking
-    _pricing = {"input": 0.0, "output": 0.0}
-    try:
-        import asyncio as _asyncio
-        from app.core.provider_manager import get_provider_manager
-        _pm = get_provider_manager()
-        _prov_obj = _pm.get_provider(provider) if provider else _pm.find_provider_for_model(model)
-        if _prov_obj:
-            # A list_models cache miss may perform synchronous HTTP;
-            # use the thread pool instead of blocking the event loop.
-            _models = await _asyncio.to_thread(_prov_obj.list_models)
-            for _m in _models:
-                if _m["name"] == model:
-                    _pricing = _m.get("pricing", _pricing)
-                    break
-    except Exception:
-        pass
+    # Resolve pricing for cost tracking (per 1M tokens; shared with free mode)
+    from app.core.llm_cost import estimate_cost, resolve_pricing
+    _pricing = await resolve_pricing(model, provider)
 
     def _track_cost(input_text: str, output_text: str):
-        """Estimate tokens and accumulate session cost. Pricing is per 1M tokens."""
-        from app.utils.llm_logger import estimate_tokens
-        tok_in = estimate_tokens(input_text)
-        tok_out = estimate_tokens(output_text)
-        cost = (tok_in * _pricing["input"] / 1_000_000) + (tok_out * _pricing["output"] / 1_000_000)
+        """Estimate tokens and accumulate session cost."""
+        tok_in, tok_out, cost = estimate_cost(input_text, output_text, _pricing)
         session["tokens_total_in"] = session.get("tokens_total_in", 0) + tok_in
         session["tokens_total_out"] = session.get("tokens_total_out", 0) + tok_out
         session["cost_total"] = session.get("cost_total", 0.0) + cost

@@ -29,9 +29,12 @@ C) The other way round: every `<name>.md` the document names as a template
    `relationship_summary_romantic_interests.md` dead although both live in a
    package (that is how the second one was almost deleted from the document).
 
-D) `shared/templates/llm/` holds no directory besides `tasks`, `chat` and
-   `skills` — the Layout block in the document names exactly those three, so
-   a fourth one would make it wrong without any row being wrong.
+B2) The same for `shared/templates/llm/world_dev_free/` (World Dev free mode).
+
+D) `shared/templates/llm/` holds no directory besides `tasks`, `chat`,
+   `skills` and `world_dev_free` — the Layout block in the document names
+   exactly those four, so a fifth one would make it wrong without any row
+   being wrong.
 
 Deliberately NOT checked: the Task and Caller columns. A caller moves with
 every refactor; pinning it here would make this check a maintenance burden
@@ -79,7 +82,7 @@ def named_in(text):
 def known_template_names():
     """Every template file name the loader could find, shared + packages."""
     names = set()
-    for sub in ("tasks", "chat", "skills"):
+    for sub in ("tasks", "chat", "skills", "world_dev_free"):
         names |= {p.name for p in (LLM_DIR / sub).glob("*.md")} if (LLM_DIR / sub).is_dir() else set()
     for pkg in (REPO / "plugins").glob("*/templates/llm/*"):
         if pkg.is_dir():
@@ -110,10 +113,15 @@ def main():
     ghosts = sorted(n for n in named_in(doc) if "/" not in n and n not in known)
     check("no row points at a deleted template", not ghosts, str(ghosts))
 
+    print(f"B2) every world_dev_free/ template is named "
+          f"({len(template_files('world_dev_free'))} files)")
+    miss = missing_from(doc, "world_dev_free")
+    check("no world_dev_free/ template missing from docs/llm-templates.md", not miss, str(miss))
+
     print("D) the Layout block still describes the directory")
     subdirs = sorted(p.name for p in LLM_DIR.iterdir() if p.is_dir())
-    check("shared/templates/llm/ holds exactly chat, skills, tasks",
-          subdirs == ["chat", "skills", "tasks"], str(subdirs))
+    check("shared/templates/llm/ holds exactly chat, skills, tasks, world_dev_free",
+          subdirs == ["chat", "skills", "tasks", "world_dev_free"], str(subdirs))
 
     print("E) part A against the PREVIOUS revision of the document "
           "(must find the gap the finding reported)")

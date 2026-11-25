@@ -258,6 +258,11 @@ async def lifespan(app: FastAPI):
     """Lifecycle manager for server startup and shutdown"""
     global _scheduler_manager
 
+    # World Dev free mode: a run left "running" by the last process becomes
+    # "interrupted" — nothing else is written (plan 2026-11-22, Task 7).
+    from app.core.world_dev_agent import mark_interrupted_on_boot
+    mark_interrupted_on_boot()
+
     # Startup
     from app.core.stat_rewards import register_hooks
     register_hooks()
