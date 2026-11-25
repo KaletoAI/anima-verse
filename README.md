@@ -184,6 +184,12 @@ stops acting autonomously).
 - **Map layout backup:** the Map tab's **Download layout** saves where every location stands
   (position and rotation in metres) as a ZIP, **Restore layout** puts them back — matched by id,
   characters travelling along, terrain untouched (`/world/map/export`, `/world/map/import`).
+- **World Dev free mode:** Game-Admin → World Dev → **Free (agent)** gives a model a plain-language task
+  ("add a bakery with two rooms next to the market") and lets it build directly in the world through
+  journaled tools. The world is frozen while the run is open; a failed turn is rolled back on its own,
+  and the finished run is **Accept**ed or **Discard**ed (Discard undoes every write, skipping anything
+  someone else changed in the meantime). A safety backup per run can be restored offline with
+  `scripts/world_dev_restore.py` while the server is stopped.
 - **A cross-location move is a journey, not a jump:** the path is walked in metres over the painted
   terrain and the position is a pure function of the game clock, so a frozen world freezes every
   journey and all clients derive the same position.
