@@ -10,10 +10,12 @@ import asyncio
 import math
 import os
 import re
+import threading
 import time
 from fastapi import HTTPException
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import (Any, Callable, Dict, List, NamedTuple, Optional, Tuple,
+                    TYPE_CHECKING)
 from app.core.log import get_logger
 from app.core import scene_recipe
 from app.core.scatter_curves import curve_map, tessellate
@@ -547,130 +549,38 @@ def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     return True
 
 
-def build_worldmap_payload(avatar_name: Optional[str] = None,
-                           show_all: bool = False,
-                           timings: Optional[Dict[str, float]] = None
-                           ) -> Dict[str, Any]:
-    """Aggregated world map in METRES: locations (centre/rotation/footprint
-    edge + optional map3d metadata), character positions (+avatar/activity/
-    room/mood/travel target) and active disruption/danger events. One request
-    instead of N fetches — read-only, for the player map panel and external
-    map clients.
+class LocationBlock(NamedTuple):
+    """The viewer-independent part of the worldmap's location block.
 
-    Payload v2 (Seamless World, E1): the grid is gone. A location is the
-    POLYGON ``map3d.boundary``, drawn in local metres around (``pos_x``,
-    ``pos_z``) and rotated by ``yaw_deg`` (contract v6); every character
-    carries its free metre point in ``pos``.
-    Painted terrain is deliberately NOT in here — clients fetch
-    ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
-    The world RELIEF travels the same way: ``height_sig`` is the trigger,
-    ``GET /play/heightfield`` the payload (§ A16), and so does the avatar's
-    EXPLORATION MEMORY — ``explored_sig`` here, ``GET /play/explored`` there
-    (§ A12).
-    The AUTHORED world props (§ A9a) DO ride along — a hand-set list capped
-    at 500 rows is not a raster, and it is never fogged: deco blocks nothing
-    and belongs to no location, so it leaks no knowledge.
-    The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
-    along: the client mirrors the height gate of ``POST /play/pos`` and needs
-    the very numbers the server judges with. So do the location's authored
-    pass-throughs (``openings``, contract v6): finished world points plus
-    inward normals off ``boundary_entry.opening_world_frames``, so no client
-    anchors an opening of its own any more.
-
-    Fog of war (§ A12): with ``show_all=False`` the payload only carries what
-    the avatar knows — placed locations pass through
-    ``location_visible_to_character``, characters and events follow their
-    location, and a character standing on ground the avatar has never
-    EXPLORED (``core/exploration``, the 64 m cells the 3D client draws its
-    haze over) is dropped as well unless it shares the avatar's location.
-    ``show_all=True`` is the unfiltered admin view. ``world_bounds``
-    is always computed BEFORE that filter, so the map keeps its extent no
-    matter how much of it is still dark — and it is not boundaries alone: a
-    placed location contributes the world-space box of its DRAWN boundary
-    when it has one and its bare CENTRE POINT when it has none, and every
-    painted terrain area contributes the box of its polygon (E4 finding B7).
-
-    ``timings`` (hot-path statistics): when a dict is handed in, it receives
-    the milliseconds of the phases ``world_props`` (the props snapshot),
-    ``locations_read`` (``list_locations()`` alone), ``locations`` (the
-    location loop incl. fog, without the read), ``characters`` (the
-    position/fog pre-reads plus the character loop), and ``model_sig`` /
-    ``motion`` (summed over every character, already inside
-    ``characters``). Measuring never changes the payload.
+    ``rows`` = (stored location, finished payload entry) for EVERY location in
+    ``list_locations()`` order, BEFORE the fog filter; ``name_by_id`` covers
+    every location; ``world_bounds`` is the extent over all placed locations
+    and all painted areas; ``areas`` are the areas the extent was read from.
+    Shared between requests and never mutated; a caller that wants to change
+    something copies it first.
     """
-    _pc = time.perf_counter
-    if timings is not None:
-        for _k in ("world_props", "locations_read", "locations", "characters",
-                   "model_sig", "motion"):
-            timings[_k] = 0.0
+    rows: Tuple[Tuple[Dict[str, Any], Dict[str, Any]], ...]
+    name_by_id: Dict[str, str]
+    world_bounds: Optional[Dict[str, float]]
+    areas: List[Dict[str, Any]]
 
-    def _lap(key: str, started: float) -> None:
-        """Add the milliseconds since ``started`` to phase ``key``."""
-        if timings is not None:
-            timings[key] += (_pc() - started) * 1000.0
 
-    def _timed_motion(fn, name: str, profile: Dict[str, Any]) -> Any:
-        """``fn(name, profile=profile)``, its time added to phase ``motion``
-        — evaluated in place inside the row, so the call order is unchanged."""
-        if timings is None:
-            return fn(name, profile=profile)
-        started = _pc()
-        try:
-            return fn(name, profile=profile)
-        finally:
-            _lap("motion", started)
+# ONE block per process: (key, LocationBlock). The lock guards only reading
+# and publishing the slot, never the build.
+_loc_block_lock = threading.Lock()
+_loc_block_cache: Optional[Tuple[tuple, LocationBlock]] = None
+# Test hook (smoke race): runs after a build and before its publication.
+_before_publish: Optional[Callable[[], None]] = None
 
-    from app.models.events import list_active_world_events
-    from app.models.character import (
-        list_available_characters, get_character_current_location,
-        get_character_pos, get_avatar_sync_snapshot, list_character_positions, get_character_config,
-        get_effective_activity, get_effective_pose_key, get_movement_target,
-        get_character_profile_image,
-        get_character_current_room, get_character_current_feeling,
-    )
-    from app.core.discovery import get_discovery_range_m
-    from app.core import pose_scene as _pose_scene
-    from app.core.exploration import explored_sig, point_explored, seen_cells
-    from app.core.backdrop import get_backdrop
-    from app.core.relief import get_max_slope_deg, get_max_step_height_m
-    from app.core.expression_pose_maps import resolve_pose_animation
-    from app.core.animation_sets import resolve_sets as resolve_animation_sets
-    from app.core.interaction_engine import payload_for as _interaction_payload
-    from app.core.world_geometry import (effective_boundary, local_to_world,
-                                         polygon_plan_width_m)
+
+def _build_location_block() -> LocationBlock:
+    """Read every location and every painted area and build the block."""
     from app.core.boundary_entry import opening_world_frames
-    from app.core.heightfield import current_sig as height_sig
-    from app.models.terrain import areas_snapshot, terrain_sig
-    from app.models.world_props import payload_snapshot
+    from app.core.world_geometry import effective_boundary, local_to_world
+    from app.models.terrain import list_areas
 
-    # Capture matching rows and signature together: a later write must not
-    # pair an older payload with a newer cache token.
-    _t = _pc()
-    _world_props, _world_props_sig = payload_snapshot()
-    _lap("world_props", _t)
-
-    avatar = (avatar_name or "").strip()
-    fogged = not show_all
-    # The fog predicate runs once per placed location on a 3-second poll —
-    # read the avatar's known_locations/inventory ONCE and hand them to the
-    # predicate instead of letting it re-read them per location.
-    _vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
-
-    def _visible(loc: Dict[str, Any]) -> bool:
-        """Fog predicate. An unplaced location (no metre position) is not on
-        the map at all — template placeholders always pass, they hide
-        nothing."""
-        if not fogged:
-            return True
-        if loc.get("pos_x") is None or loc.get("pos_z") is None:
-            return True
-        if not avatar:
-            return False
-        return location_visible_to_character(avatar, loc, context=_vis_ctx)
-
-    locations = []
-    name_by_id = {}
-    visible_ids = set()
+    rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    name_by_id: Dict[str, str] = {}
     # Map extent in metres over ALL placed locations AND all painted terrain
     # areas — computed BEFORE the fog filter, so the map keeps its extent no
     # matter how much of it is still dark. A location with a drawn boundary
@@ -689,11 +599,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         _min_z = z0 if _min_z is None else min(_min_z, z0)
         _max_z = z1 if _max_z is None else max(_max_z, z1)
 
-    _t = _pc()
-    _all_locations = list_locations()
-    _lap("locations_read", _t)
-    _t = _pc()
-    for loc in _all_locations:
+    for loc in list_locations():
         lid = loc.get("id") or ""
         name_by_id[lid] = loc.get("name") or ""
         # ONE geometry source: the DRAWN boundary decides both the extent and
@@ -709,9 +615,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         elif loc.get("pos_x") is not None and loc.get("pos_z") is not None:
             _cx, _cz = float(loc["pos_x"]), float(loc["pos_z"])
             _stretch(_cx, _cx, _cz, _cz)
-        if not _visible(loc):
-            continue
-        visible_ids.add(lid)
         # The boundary's bounding-box width is hoisted out of map3d: it is
         # the scale number every map client reads (loading radius, viewport,
         # backdrop), and none of them should have to dig for it. Derived
@@ -774,8 +677,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             from app.core.scene_recipe import layout_signature
             entry["layout_sig"] = layout_signature(_lay_map3d,
                                                    _lay_rooms)[:10]
-        locations.append(entry)
-    _lap("locations", _t)
+        rows.append((loc, entry))
 
     # The painted map is part of the world frame too (E4 finding B7). Without
     # this a largely painted world with few placed locations gets cropped to
@@ -783,7 +685,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # camera fit, minimap). Each area contributes the axis-aligned box of its
     # polygon; malformed or non-finite points are skipped rather than poisoning
     # the extent with NaN.
-    areas_key, areas = areas_snapshot()
+    areas = list_areas()
     for _area in areas:
         for _pt in (_area.get("polygon") or []):
             if not isinstance(_pt, (list, tuple)) or len(_pt) < 2:
@@ -799,6 +701,180 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     world_bounds = ({"min_x": round(_min_x, 2), "min_z": round(_min_z, 2),
                      "max_x": round(_max_x, 2), "max_z": round(_max_z, 2)}
                     if _min_x is not None else None)
+    return LocationBlock(tuple(rows), name_by_id, world_bounds, areas)
+
+
+def _location_block_keyed() -> Tuple[tuple, LocationBlock]:
+    """(key, block) for the active world.
+
+    The key (storage dir, world generation, terrain areas key) is captured
+    in full BEFORE anything is read, and a build is published under exactly
+    that key: a write that lands during the build moves the generation, so
+    the next request misses and rebuilds instead of serving a stale block
+    under a newer key. The areas key is the terrain signature's own cache key
+    (a harmless superset: a prop-library or season change rebuilds once).
+    """
+    global _loc_block_cache
+    from app.core.paths import get_storage_dir
+    from app.models.terrain import areas_key
+    from app.models.world import world_generation
+    key = (str(get_storage_dir()), world_generation(), areas_key())
+    with _loc_block_lock:
+        cached = _loc_block_cache
+    if cached is not None and cached[0] == key:
+        return cached
+    block = _build_location_block()
+    hook = _before_publish
+    if hook is not None:
+        hook()
+    with _loc_block_lock:
+        _loc_block_cache = (key, block)
+    return key, block
+
+
+def _location_block() -> LocationBlock:
+    """The cached viewer-independent location block (see :class:`LocationBlock`)."""
+    return _location_block_keyed()[1]
+
+
+def build_worldmap_payload(avatar_name: Optional[str] = None,
+                           show_all: bool = False,
+                           timings: Optional[Dict[str, float]] = None
+                           ) -> Dict[str, Any]:
+    """Aggregated world map in METRES: locations (centre/rotation/footprint
+    edge + optional map3d metadata), character positions (+avatar/activity/
+    room/mood/travel target) and active disruption/danger events. One request
+    instead of N fetches — read-only, for the player map panel and external
+    map clients.
+
+    Payload v2 (Seamless World, E1): the grid is gone. A location is the
+    POLYGON ``map3d.boundary``, drawn in local metres around (``pos_x``,
+    ``pos_z``) and rotated by ``yaw_deg`` (contract v6); every character
+    carries its free metre point in ``pos``.
+    Painted terrain is deliberately NOT in here — clients fetch
+    ``GET /play/terrain`` once and refetch it whenever ``terrain_sig`` changes.
+    The world RELIEF travels the same way: ``height_sig`` is the trigger,
+    ``GET /play/heightfield`` the payload (§ A16), and so does the avatar's
+    EXPLORATION MEMORY — ``explored_sig`` here, ``GET /play/explored`` there
+    (§ A12).
+    The AUTHORED world props (§ A9a) DO ride along — a hand-set list capped
+    at 500 rows is not a raster, and it is never fogged: deco blocks nothing
+    and belongs to no location, so it leaks no knowledge.
+    The two walk limits (``max_step_height_m`` / ``max_slope_deg``) DO ride
+    along: the client mirrors the height gate of ``POST /play/pos`` and needs
+    the very numbers the server judges with. So do the location's authored
+    pass-throughs (``openings``, contract v6): finished world points plus
+    inward normals off ``boundary_entry.opening_world_frames``, so no client
+    anchors an opening of its own any more.
+
+    Fog of war (§ A12): with ``show_all=False`` the payload only carries what
+    the avatar knows — placed locations pass through
+    ``location_visible_to_character``, characters and events follow their
+    location, and a character standing on ground the avatar has never
+    EXPLORED (``core/exploration``, the 64 m cells the 3D client draws its
+    haze over) is dropped as well unless it shares the avatar's location.
+    ``show_all=True`` is the unfiltered admin view. ``world_bounds``
+    is always computed BEFORE that filter, so the map keeps its extent no
+    matter how much of it is still dark — and it is not boundaries alone: a
+    placed location contributes the world-space box of its DRAWN boundary
+    when it has one and its bare CENTRE POINT when it has none, and every
+    painted terrain area contributes the box of its polygon (E4 finding B7).
+
+    ``timings`` (hot-path statistics): when a dict is handed in, it receives
+    the milliseconds of the phases ``world_props`` (the props snapshot),
+    ``locations_read`` (fetching the cached location block, a rebuild
+    included when the world or terrain generation moved — see
+    ``_location_block``), ``locations`` (the fog filter over that block),
+    ``characters`` (the
+    position/fog pre-reads plus the character loop), and ``model_sig`` /
+    ``motion`` (summed over every character, already inside
+    ``characters``). Measuring never changes the payload.
+    """
+    _pc = time.perf_counter
+    if timings is not None:
+        for _k in ("world_props", "locations_read", "locations", "characters",
+                   "model_sig", "motion"):
+            timings[_k] = 0.0
+
+    def _lap(key: str, started: float) -> None:
+        """Add the milliseconds since ``started`` to phase ``key``."""
+        if timings is not None:
+            timings[key] += (_pc() - started) * 1000.0
+
+    def _timed_motion(fn, name: str, profile: Dict[str, Any]) -> Any:
+        """``fn(name, profile=profile)``, its time added to phase ``motion``
+        — evaluated in place inside the row, so the call order is unchanged."""
+        if timings is None:
+            return fn(name, profile=profile)
+        started = _pc()
+        try:
+            return fn(name, profile=profile)
+        finally:
+            _lap("motion", started)
+
+    from app.models.events import list_active_world_events
+    from app.models.character import (
+        list_available_characters, get_character_current_location,
+        get_character_pos, get_avatar_sync_snapshot, list_character_positions, get_character_config,
+        get_effective_activity, get_effective_pose_key, get_movement_target,
+        get_character_profile_image,
+        get_character_current_room, get_character_current_feeling,
+    )
+    from app.core.discovery import get_discovery_range_m
+    from app.core import pose_scene as _pose_scene
+    from app.core.exploration import explored_sig, point_explored, seen_cells
+    from app.core.backdrop import get_backdrop
+    from app.core.relief import get_max_slope_deg, get_max_step_height_m
+    from app.core.expression_pose_maps import resolve_pose_animation
+    from app.core.animation_sets import resolve_sets as resolve_animation_sets
+    from app.core.interaction_engine import payload_for as _interaction_payload
+    from app.core.heightfield import current_sig as height_sig
+    from app.models.terrain import terrain_sig
+    from app.models.world_props import payload_snapshot
+
+    # Capture matching rows and signature together: a later write must not
+    # pair an older payload with a newer cache token.
+    _t = _pc()
+    _world_props, _world_props_sig = payload_snapshot()
+    _lap("world_props", _t)
+
+    avatar = (avatar_name or "").strip()
+    fogged = not show_all
+    # The fog predicate runs once per placed location on a 3-second poll —
+    # read the avatar's known_locations/inventory ONCE and hand them to the
+    # predicate instead of letting it re-read them per location.
+    _vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
+
+    def _visible(loc: Dict[str, Any]) -> bool:
+        """Fog predicate. An unplaced location (no metre position) is not on
+        the map at all — template placeholders always pass, they hide
+        nothing."""
+        if not fogged:
+            return True
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
+            return True
+        if not avatar:
+            return False
+        return location_visible_to_character(avatar, loc, context=_vis_ctx)
+
+    locations = []
+    visible_ids = set()
+    _t = _pc()
+    _blk_key, _block = _location_block_keyed()
+    _lap("locations_read", _t)
+    _t = _pc()
+    name_by_id = _block.name_by_id
+    # The block is shared and built BEFORE the fog filter (world_bounds keeps
+    # the map's extent however much of it is still dark); only the filter
+    # runs per request, and the shared entry dicts go into a NEW list.
+    for loc, entry in _block.rows:
+        if not _visible(loc):
+            continue
+        visible_ids.add(entry["id"])
+        locations.append(entry)
+    _lap("locations", _t)
+    world_bounds = _block.world_bounds
+    areas, areas_key = _block.areas, _blk_key[2]
 
     # Journeys are a pure function of the MOTION clock (real seconds the world
     # has run unfrozen) — read it ONCE for the whole payload so every
