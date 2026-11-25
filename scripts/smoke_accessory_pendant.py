@@ -8,7 +8,8 @@ Expected values, derived by hand:
 
 [1] Cords (``accessory_spec``): ``normalize({kind: necklace, metal: leather})`` takes the cord thickness 2.5 mm; an
     explicit 1.5 mm stays 1.5; gold keeps 1.5. ``metal_material`` leather → ("#5b3a24", 0.75, 0.0), gold → (…, 1.0).
-    ``pendant_on``: pendant {size_mm: 18} on a necklace → True; None → False; on a ring → False.
+    ``pendant_on`` (only the earrings' own drop since part items, D1): earrings drop → True; a necklace with a
+    size-only pendant → False (no linked item); on a ring → False.
 [2] ``mesh_gates`` of a closed slab 20 × 40 × 5 with 8 × 16 × 2 cells: triangles = 2·2·(16·2 + 8·2 + 8·16) =
     2·2·176 = 704; one piece → component share 1.0; aspect 40 / 5 = 8 → passes. Two such slabs side by side 100
     apart → each half of the area, neither inside the other's box → share 0.5 → refused ("pieces"). A 1 × 1 × 40
@@ -35,8 +36,8 @@ Expected values, derived by hand:
     passes → ready, record hub_jobs 1, backend + routing + fallback_from kept; a second ``run`` makes no call.
     A new item image → a new psig → missing again; a ``BackendBusyError`` → missing (load, hub_jobs 0); a
     ``BackendFailedError`` → failed; a two-piece delivery → refused (not retried by a further ``pendant_state``).
-[8] ``accessory_build.asig``: a ready pendant psig changes the asig; with a psig the size changes it (18 → 30);
-    without a psig the size does not (a pendant that is not built is not part of the geometry).
+[8] ``accessory_build.asig`` of the earrings' drop: a ready drop psig changes the asig; with a psig the size changes it
+    (18 → 30); without a psig the size does not (a drop that is not built is not part of the geometry).
 """
 import io
 import json
@@ -113,8 +114,8 @@ check("[1] cord explicit thickness", s.normalize({"kind": "necklace", "metal": "
 check("[1] gold thickness", s.normalize({"kind": "necklace"})["chain"]["thickness_mm"], 1.5)
 check("[1] leather material", s.metal_material(leather), ("#5b3a24", 0.75, 0.0))
 check("[1] gold metalness", s.metal_material(s.normalize({"kind": "necklace"}))[2], 1.0)
-check("[1] pendant on", s.pendant_on(s.normalize({"kind": "necklace", "pendant": {"size_mm": 18}})), True)
-check("[1] pendant off", s.pendant_on(s.normalize({"kind": "necklace"})), False)
+check("[1] pendant on", s.pendant_on(s.normalize({"kind": "earrings", "earring": {"style": "drop"}})), True)
+check("[1] pendant off", s.pendant_on(s.normalize({"kind": "necklace", "pendant": {"size_mm": 18}})), False)
 check("[1] pendant on a ring", s.pendant_on(s.normalize({"kind": "ring", "pendant": {"size_mm": 18}})), False)
 
 # [2] gates
@@ -244,8 +245,8 @@ check("[7] two pieces refused", ap.run("item_p")["state"], "refused")
 check("[7] refused stays refused", ap.pendant_state("item_p")["state"], "refused")
 
 # [8] asig
-pend18 = s.normalize({"kind": "necklace", "pendant": {"size_mm": 18}})
-pend30 = s.normalize({"kind": "necklace", "pendant": {"size_mm": 30}})
+pend18 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant": {"size_mm": 18}})
+pend30 = s.normalize({"kind": "earrings", "earring": {"style": "drop"}, "pendant": {"size_mm": 30}})
 check("[8] psig changes asig", ab.asig(pend18) != ab.asig(pend18, "0123456789ab"), True)
 check("[8] size with psig", ab.asig(pend18, "0123456789ab") != ab.asig(pend30, "0123456789ab"), True)
 check("[8] size without psig", ab.asig(pend18), ab.asig(pend30))
