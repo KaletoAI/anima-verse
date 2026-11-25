@@ -1029,6 +1029,13 @@ def _settle_wanderer(name: str) -> bool:
         # below, because the retry clears the target when it cannot start.
         if _send_wanderer(name, target):
             return False
+        # The retry builds a route, which can take minutes on a large world;
+        # an avatar may have started talking to the wanderer meanwhile, and
+        # turning it around or pooling it now would end that conversation.
+        if _in_chat(name):
+            logger.info("Wanderer '%s' stays: an avatar started talking to it",
+                        name)
+            return False
 
     from app.core.npc_pool import pool_npc
     origin = str(profile.get("wander_origin") or "").strip()
@@ -1050,7 +1057,13 @@ def _settle_wanderer(name: str) -> bool:
         # takes this lock itself.
         from app.core.keyed_lock import keyed_lock
         with keyed_lock("character_profile", name):
-            profile = get_character_profile(name) or {}
+            profile = get_character_profile(name)
+            if not profile:
+                # Gone meanwhile (the TTL sweep runs beside this tick):
+                # writing the two keys would resurrect an empty sheet.
+                logger.info("Wanderer '%s' vanished before it could turn "
+                            "around", name)
+                return False
             profile["wander_target"] = origin
             profile["wander_origin"] = here
             save_character_profile(name, profile)

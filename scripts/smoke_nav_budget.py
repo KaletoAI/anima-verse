@@ -71,6 +71,19 @@ Hand-derived expectations:
       sleep(0). The island goal of [2] with max_expansions=500 -> None after
       exactly 500 expansions (the reachable part of the box is larger).
 
+  [4] The time budget measures the SEARCH'S OWN WORK (CPU time of its
+      thread), not the wall clock: a search that waits for the GIL while
+      another thread computes must not run out of time for that. Hand-built
+      clock, same 100-expansion walk to (201,1) as in [3], max_seconds=1:
+        * the wall clock jumps 1000 s per read, the thread clock stands at 0
+          (a starved search): the clock is read at expansion 64 only (64 is
+          the one multiple of 64 below 100), CPU time 0 <= 1 -> the route
+          [(1,1), (201,1)] after 100 expansions, no warning;
+        * the thread clock jumps 1000 s per read (a search that really
+          works): first read at the start = 0, the read at expansion 64
+          = 1000 > 1 -> None after exactly 64 expansions, ONE warning naming
+          "time budget 1 s".
+
 Usage:  ./.venv/bin/python scripts/smoke_nav_budget.py
 """
 import heapq
@@ -407,6 +420,10 @@ class SleepSpy:
         return 0.0
 
     @staticmethod
+    def thread_time():
+        return 0.0
+
+    @staticmethod
     def sleep(s):
         SleepSpy.calls.append(s)
 
@@ -427,6 +444,51 @@ none = nav_grid._astar(island, nav_grid.cell_of(2.0, 2.0),
 check("island with budget 500: no route", none, None)
 check("island with budget 500: expansions", island.expansions, 500)
 check("island with budget 500: one warning", len(CAP.lines), 1)
+
+
+print("[4] the time budget counts the search's own CPU time")
+
+
+class Clock:
+    """Wall and thread clocks that each advance a fixed step per read."""
+
+    def __init__(self, wall_step, cpu_step):
+        self.wall = 0.0
+        self.cpu = 0.0
+        self.wall_step = wall_step
+        self.cpu_step = cpu_step
+
+    def monotonic(self):
+        now = self.wall
+        self.wall += self.wall_step
+        return now
+
+    def thread_time(self):
+        now = self.cpu
+        self.cpu += self.cpu_step
+        return now
+
+    @staticmethod
+    def sleep(_s):
+        pass
+
+
+for label, clock, want_out, want_n, want_warn in [
+        ("starved (wall runs, CPU stands)", Clock(1000.0, 0.0),
+         [(1.0, 1.0), (201.0, 1.0)], 100, []),
+        ("busy (CPU runs)", Clock(0.0, 1000.0), None, 64,
+         ["time budget 1 s"])]:
+    nav_grid.time = clock
+    try:
+        out, n, lines = budget_run((201.0, 1.0), max_seconds=1.0)
+    finally:
+        nav_grid.time = real_time
+    check(f"{label}: result", out, want_out)
+    check(f"{label}: expansions", n, want_n)
+    check(f"{label}: warnings", [w for w in want_warn
+                                 if any(w in s for s in lines)]
+          if lines else [], want_warn)
+    check(f"{label}: warning count", len(lines), len(want_warn))
 
 print()
 if FAILURES:

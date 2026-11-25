@@ -160,16 +160,23 @@ OPENING_EXEMPT_M = 1.5 + NAV_CELL_M
 # an unreachable goal used to walk all ~4.6 M cells of the box instead, and
 # with the old per-cell cost one valid route ran 2076 s.
 NAV_MAX_EXPANSIONS = 3_000_000
-# The same longest route in wall time (64 s, see above) times two. Only the
-# backstop for a starved or slow process: the expansion count decides first
-# on an ordinary day.
+# The same longest route (64 s, see above) times two, counted in CPU time of
+# the searching thread (``time.thread_time``), NOT wall time: a search that
+# waits for the GIL while another thread computes does no work, and with a
+# wall-clock budget one busy neighbour thread was enough to turn that very
+# route into "no route" (1.2 M of its 1.34 M expansions at 120 s wall). Only a
+# backstop for a slow machine: the expansion count decides first on an
+# ordinary day. The warning still reports the wall seconds.
 NAV_MAX_SECONDS = 120.0
 # How often the search yields the GIL (``time.sleep(0)``), in closed cells.
 # 64 cells are 2-3 ms of search. Measured on the route above, run in a thread
 # while a second thread timed 200 ``os.stat`` calls: without the yield the
 # p95 of one stat was 5.1 ms (the interpreter's 5 ms switch interval, paid
 # on every GIL re-acquisition), with it 0.018 ms — the unloaded figure is
-# 0.012 ms — and the route itself did not get slower.
+# 0.012 ms — and the route itself did not get slower. Those stat calls were
+# spaced 10 ms apart; a BURST is not free: 2000 back-to-back stat calls take
+# 2.8 ms unloaded, about 100 ms beside a yielding search and up to 9.7 s
+# beside one that never yields — the waiting thread's wake-up dominates.
 NAV_YIELD_EVERY = 64
 
 _SQRT2 = math.sqrt(2.0)
@@ -873,8 +880,11 @@ def _astar(search: _Search, start_cell: Cell, goal_cell: Cell,
     be the same route coming back up.
 
     THE SEARCH HAS A BUDGET (2026-11-25): at most ``max_expansions`` closed
-    cells (default :data:`NAV_MAX_EXPANSIONS`) and ``max_seconds`` of wall
-    time (default :data:`NAV_MAX_SECONDS`). Past either it gives up with
+    cells (default :data:`NAV_MAX_EXPANSIONS`) and ``max_seconds`` of CPU
+    time of the searching thread (``time.thread_time``, default
+    :data:`NAV_MAX_SECONDS`) — time spent waiting for the GIL behind another
+    thread does not count, so a busy process does not turn a valid long route
+    into no route. Past either it gives up with
     None — the "no route" every caller already handles — and ONE warning line.
     Without it an unreachable goal walks the whole world box (millions of
     cells) and a single route held a thread for over half an hour.
@@ -890,6 +900,7 @@ def _astar(search: _Search, start_cell: Cell, goal_cell: Cell,
     limit = NAV_MAX_EXPANSIONS if max_expansions is None else max_expansions
     budget_s = NAV_MAX_SECONDS if max_seconds is None else max_seconds
     started = time.monotonic()
+    started_cpu = time.thread_time()
     inv_best = 1.0 / max(search.ctx.best_factor, MIN_SPEED_FACTOR)
     relief = search.ctx.has_relief
 
@@ -925,7 +936,7 @@ def _astar(search: _Search, start_cell: Cell, goal_cell: Cell,
         expansions += 1
         if expansions % NAV_YIELD_EVERY == 0:
             search.expansions = expansions
-            if time.monotonic() - started > budget_s:
+            if time.thread_time() - started_cpu > budget_s:
                 _give_up(search, start_cell, goal_cell, expansions, started,
                          f"time budget {budget_s:g} s")
                 return None
