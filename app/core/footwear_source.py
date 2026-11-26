@@ -274,6 +274,21 @@ def refused_step(item_id: str, ssig: Optional[str] = None) -> Optional[Dict[str,
     return None
 
 
+def state_token(item_id: str) -> str:
+    """md5[:12] over the item's CURRENT ssig and every step record of that source — what a failure of a wearer's
+    chain was recorded on (``garments.cached_failure``): any change of the source since (a step run again, measured
+    under a new analysis version, accepted or un-accepted by the user, a new source) gives another token."""
+    ssig = current_ssig(item_id)
+    return _md5({"ssig": ssig, "steps": _read(source_dir(item_id, ssig))["steps"]})
+
+
+def stale_record(step: str, record: Dict[str, Any]) -> bool:
+    """A record measured by an older version of its step's analysis: an insole of another
+    ``footwear_insole.INSOLE_VERSION`` (the other steps carry no analysis version)."""
+    from app.core.footwear_insole import INSOLE_VERSION
+    return step == "insole" and bool(record) and record.get("version") != INSOLE_VERSION
+
+
 def step_done(item_id: str, ssig: str, step: str) -> bool:
     """Accepted record AND its output on disk."""
     if step not in _STEP_FILES:
@@ -918,27 +933,50 @@ def _accept_record(iid: str, ssig: str, d: Path, step: str, record: Dict[str, An
 def accept_step(item_id: str, step: str) -> Dict[str, Any]:
     """"Accept anyway" (2026-11-25): the refused result of ``step`` (``ACCEPTABLE_STEPS``) of the item's CURRENT
     source becomes the step's output, accepted by the user — the record keeps its gates and reasons and gains
-    ``user_accepted {at, ssig, gates, reasons, error}``. The mesh: ``raw.glb`` decimated as the mesh step does (CPU);
+    ``user_accepted {at, ssig, gates, reasons, error}``. A record measured by an older analysis (``stale_record``)
+    is measured again first, and a refused mesh whose stored delivery passes today's gates is re-gated (A187):
+    passed, nothing is accepted (``remeasured`` True, ``user_accepted`` None); refused again, the acceptance takes
+    the fresh record. The mesh: ``raw.glb`` decimated as the mesh step does (CPU);
     the empty shoe: its last kept attempt; the insole: ``insole.json`` as measured (a cap held back is cut now). The
     later steps are dropped — the chain runs them from it (the insole and the fit on the CPU, 0 hub jobs). One per
     item: every wearer's fit reads it. ValueError for an unknown step or one that is not refused by its gates;
-    FileNotFoundError when the refused result is not kept. ``{item_id, ssig, step, user_accepted}``."""
+    FileNotFoundError when the refused result is not kept. ``{item_id, ssig, step, remeasured, user_accepted}``."""
     if step not in ACCEPTABLE_STEPS:
         raise ValueError(f"step must be one of {', '.join(ACCEPTABLE_STEPS)}")
     iid = item_dir(item_id).name
     with _lock(iid):
-        ssig = current_ssig(iid)
+        cur = current(iid)
+        ssig = cur["ssig"]
         d = source_dir(iid, ssig)
         record = step_record(iid, ssig, step)
         if record.get("accepted") is not False or str(record.get("failure") or GATE) != GATE:
             raise ValueError(NOT_REFUSED.format(step=step))
+        remeasured = False
+        if stale_record(step, record) or (step == "mesh" and _regate_stored_mesh(iid, ssig, d, record)):
+            # 2026-11-26: a refusal recorded by an older analysis is never what the user accepts — the step is
+            # measured again under the current version first (CPU, 0 hub jobs; the mesh: A187's re-gate of the
+            # stored delivery). Passed: nothing is left to accept. Refused again: the acceptance takes the fresh
+            # record (a fit reads only an insole of the current version, ``garment_footwear.step_done``).
+            remeasured = True
+            if step_record(iid, ssig, step).get("accepted") is not True:
+                _drop_from(d, step)
+                try:
+                    _RUNNERS[step](iid, ssig, cur["seed"], d)
+                except StepRefused as e:
+                    if e.failure != GATE:
+                        raise ValueError(str(e)) from e
+            record = step_record(iid, ssig, step)
+            if step_done(iid, ssig, step):
+                logger.info("Shoe source %s/%s: %s measured again under the current analysis — accepted by its "
+                            "gates, nothing to accept", iid, ssig, step)
+                return {"item_id": iid, "ssig": ssig, "step": step, "remeasured": True, "user_accepted": None}
         later = ITEM_STEPS[ITEM_STEPS.index(step) + 1:]
         if later:
             _drop_from(d, later[0])
         _accept_record(iid, ssig, d, step, record)
         logger.info("Shoe source %s/%s: %s accepted by the user (refused: %s)", iid, ssig, step,
                     record.get("error") or "; ".join((record.get("gates") or {}).get("reasons") or []))
-        return {"item_id": iid, "ssig": ssig, "step": step,
+        return {"item_id": iid, "ssig": ssig, "step": step, "remeasured": remeasured,
                 "user_accepted": step_record(iid, ssig, step).get("user_accepted")}
 
 

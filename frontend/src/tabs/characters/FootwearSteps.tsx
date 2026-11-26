@@ -41,7 +41,8 @@
  * "Accept anyway" (2026-11-25): a step its gates refused (empty shoe, mesh, insole) can be accepted by the user after
  * an in-app confirmation (POST …/footwear/steps/{step}/accept, spends no job; the chain goes on from it on the CPU —
  * after the empty shoe the mesh is due, one mesh job). The step then reads "Accepted by you" with the refusal's
- * reasons kept beside it, and "Undo accept" brings the refusal back (…/unaccept).
+ * reasons kept beside it, and "Undo accept" brings the refusal back (…/unaccept). A refusal recorded by an older
+ * analysis version is measured again first (``remeasured``): passed, nothing is accepted and the chain goes on.
  */
 import { Fragment, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -210,9 +211,12 @@ function StepAcceptAnyway({ character, itemId, step, label, s, busy, onRun, onCh
   const call = async (action: 'accept' | 'unaccept') => {
     setWorking(true)
     try {
-      await apiPost(`${url}/${action}`, {})
-      toast(action === 'accept' ? `${label}: ${t('Accepted by you')} · ${t('nothing spent')}`
-        : `${label}: ${t('Acceptance undone — the refusal is back')}`, 'success')
+      const res = await apiPost<{ remeasured?: boolean; user_accepted?: unknown }>(`${url}/${action}`, {})
+      // A refusal of an older analysis is measured again first: passed, there was nothing left to accept.
+      const passed = action === 'accept' && !!res?.remeasured && !res?.user_accepted
+      toast(action !== 'accept' ? `${label}: ${t('Acceptance undone — the refusal is back')}`
+        : passed ? `${label}: ${t('Measured again under the current analysis — its gates accept it')}`
+          : `${label}: ${t('Accepted by you')} · ${t('nothing spent')}`, 'success')
       const next = ACCEPT_RUN[step]
       if (action === 'accept' && next) {
         onRun(next === 'fit' ? { step: 'fit', force: true, chain: true } : { step: next, chain: true },

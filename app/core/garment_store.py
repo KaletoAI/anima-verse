@@ -1117,8 +1117,10 @@ def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: s
 
 def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, error: str,
                    base_model_sha: str = "", stamp: Optional[Dict[str, Any]] = None,
-                   refit_offer: Optional[Dict[str, Any]] = None) -> None:
-    """Persist the failure of a chain run of ``(item_id, fsig)``. ``stamp`` (a refused refit of the sweep,
+                   refit_offer: Optional[Dict[str, Any]] = None, inputs_state: str = "") -> None:
+    """Persist the failure of a chain run of ``(item_id, fsig)``. ``inputs_state`` (a footwear chain,
+    ``footwear_source.state_token``): the shoe source the failure was recorded on — ``garments.cached_failure``
+    lets the failure go once it changed. ``stamp`` (a refused refit of the sweep,
     ``garment_refit.refusal_stamp``): ``{fit_version, inputs_id}`` merged into the record — the sweep does not
     try the same refit again (``garment_refit.held_refusal``, Ruling R7c). ``refit_offer`` (Ruling A162): the
     refused CPU refit that stopped the run before any hub job — ``{reason, source_fsig, source_bsig, attempt}``."""
@@ -1130,6 +1132,8 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
     record = {"item_id": item_id, "fsig": fsig, "step": step, "error": error,
               "base_model_sha256": base_model_sha, **model_geometry.stamp(base_model_sha),
               "failed_at": _iso(utc_now())}
+    if inputs_state:
+        record["inputs_state"] = inputs_state
     if step == "fit":
         # Refused by a fit that already widens a too-small piece (``garment_refit`` retries one without).
         from app.core.garment_fit import SCALE_RETRY_VERSION

@@ -45,7 +45,7 @@ an older ``garment_fit.FIT_VERSION`` is never served in its place (R11 ruling; t
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import numpy as np
@@ -347,17 +347,21 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
     item step starts a new source first (``footwear_source.regenerate``: next seed, new ssig, the accepted
     outputs before it copied), so it and every later item step run again.
 
+    A run that starts at the fit (``wanted`` ["fit"]) measures an insole of an older analysis version again first
+    (``_remeasure_stale_insole``; a run from an item step does the same after its source steps).
+
     Then the fit on the wearer's base model (CPU, ``fit``): it runs when the fit of the current fsig is not
     ``accepted`` on the current base model bytes (``fit_state``), when an item step ran, or when ``fit`` is
     wanted with ``force`` (Re-fit). A wearer without a base model yet ends after the item steps with
     ``fit: NO_BASE``. ``fit`` in the result = the fit state after the run.
 
-    -> ``{ok: True, fsig, ran, fit}`` or ``{ok: False, fsig, step, error, gates, error_type, ran}`` plus
+    -> ``{ok: True, fsig, ran, fit}`` or ``{ok: False, fsig, step, error, gates, error_type, ran, inputs_state}``
+    (``inputs_state`` = ``footwear_source.state_token`` at the failure) plus
     ``retry_later: True`` for load / the media switch or a run left due — a source step whose ``failure`` is
     ``footwear_source.LOAD``, an exception ``garments._is_load`` names (a retryable ``app.blender.outcome`` such as
     a Blender timeout or ``refit_pool.RefitInterrupted``): no failure record. A refused
     fit is ``{ok: False, step "fit", error, gates}`` (``garments._note_outcome`` records it per fsig)."""
-    from app.core import base_body, footwear_insole, footwear_source, garment_store as gs
+    from app.core import base_body, footwear_source, garment_store as gs
     from app.core.garments import _Refused
     from app.models.character import get_character_profile
     item_id = str(item.get("id") or "")
@@ -389,19 +393,20 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                                              keep_refused=() if wanted else KEEP_REFUSED)
             ran = list(res.get("ran") or [])
             if res.get("ok") and "insole" in steps and "insole" not in ran:
-                version = footwear_source.step_record(item_id, res["ssig"], "insole").get("version")
-                if version != footwear_insole.INSOLE_VERSION:
-                    # An insole of an older analysis version: measured again (CPU, no hub job).
-                    again = footwear_source.run_source(item_id, steps=["insole"], force=True, on_step=on_step)
-                    ran += list(again.get("ran") or [])
-                    res = {**again, "ran": ran}
-            if not res.get("ok"):
-                step = str(res.get("step") or step)
-                if running:
-                    running.pop()
-                return _failure(character_name, item_id, fsig, step, str(res.get("error") or ""),
-                                res.get("gates"), ran, str(res.get("error_type") or ""),
-                                retry_later=res.get("failure") == footwear_source.LOAD, outcome=res.get("outcome"))
+                res = _remeasure_stale_insole(item_id, res, ran, on_step)
+        else:
+            # A run from the fit (Re-fit, the chain after "Accept anyway"): an insole of an older analysis version
+            # under a done mesh is measured again first — the fit reads only the current version (``step_done``)
+            res = _remeasure_stale_insole(
+                item_id, {"ok": True, "ssig": footwear_source.current_ssig(item_id), "ran": []}, ran, on_step)
+            ran = list(res.get("ran") or [])
+        if not res.get("ok"):
+            step = str(res.get("step") or step)
+            if running:
+                running.pop()
+            return _failure(character_name, item_id, fsig, step, str(res.get("error") or ""),
+                            res.get("gates"), ran, str(res.get("error_type") or ""),
+                            retry_later=res.get("failure") == footwear_source.LOAD, outcome=res.get("outcome"))
         if running:
             gs.end(character_name, item_id, running.pop())
         base = base_body.current_base(character_name, profile=profile)
@@ -430,13 +435,33 @@ def run_chain(character_name: str, item: Dict[str, Any], wanted: Optional[List[s
                         type(e).__name__, retry_later=_is_load(e), outcome=ended if oc.is_retryable(ended) else None)
 
 
+def _remeasure_stale_insole(item_id: str, res: Dict[str, Any], ran: List[str],
+                            on_step: Callable[[str], None]) -> Dict[str, Any]:
+    """``res`` of a source run that ended ``ok``: when the current source has a done mesh and an insole recorded by
+    an older analysis version (``footwear_source.stale_record``), the insole is measured again (CPU, no hub job;
+    a user's acceptance carries over to the same refusal, ``footwear_source._carry_acceptance``) and that run's
+    answer comes back with ``ran`` extended; else ``res`` as it is."""
+    from app.core import footwear_source
+    ssig = res["ssig"]
+    if (not footwear_source.step_done(item_id, ssig, "mesh")
+            or not footwear_source.stale_record("insole", footwear_source.step_record(item_id, ssig, "insole"))):
+        return res
+    again = footwear_source.run_source(item_id, steps=["insole"], force=True, on_step=on_step)
+    return {**again, "ran": list(ran) + list(again.get("ran") or [])}
+
+
 def _failure(character_name: str, item_id: str, fsig: str, step: str, error: str, gates: Any, ran: List[str],
              error_type: str, *, retry_later: bool = False, outcome: Optional[str] = None) -> Dict[str, Any]:
-    from app.core import garment_store as gs
+    from app.core import footwear_source, garment_store as gs
     logger.info("Footwear run %s/%s refused at %s: %s", character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=gates)
     out = {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "error_type": error_type,
            "ran": ran}
+    try:
+        # what the failure was recorded on: ``garments.cached_failure`` lets it go once the source changed since
+        out["inputs_state"] = footwear_source.state_token(item_id)
+    except (OSError, ValueError):
+        pass
     if retry_later:
         out["retry_later"] = True
     if outcome:
@@ -1840,16 +1865,13 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         # not be shown beside the accepted fit of the current fsig (T27 acceptance: the cap reset).
         failed = None
     if failed is None and not status["running_step"] and fsig:
-        # After a restart: the persisted failure of the current fsig still holds the piece back.
-        record = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] or "")
+        # After a restart: what holds the automatic runs back (``garments.cached_failure``) — the persisted failure
+        # of the current fsig while its shoe source is unchanged, else a refusal of the source another wearer's
+        # run recorded (the source is one per item) — and the chip says so.
+        record = garments.cached_failure(character_name, item_id, profile=profile)
         if record is not None:
             failed = {"step": record.get("step"), "error": record.get("error"), "gates": None,
                       "failed_at": record.get("failed_at")}
-        elif footwear_source.refused_step(item_id) is not None:
-            # The shoe source is one per item: a refusal another wearer's run recorded holds THIS wearer's
-            # automatic runs back too (``garments.cached_failure``), and the chip says so.
-            refused = footwear_source.refused_step(item_id)
-            failed = {"step": refused["step"], "error": refused["error"], "gates": None, "failed_at": None}
     return {
         "item_id": item_id, "kind": KIND, "method": "shoe", "method_source": "world",
         "description": str(item.get("prompt_fragment") or ""), "fsig": fsig, "ssig": shown,
