@@ -1,12 +1,15 @@
-"""Map layouts an LLM drew — normalize, warn, apply, snapshot (E10 task 1).
+"""Map layouts an LLM drew — normalize, warn, and the stroke/polygon geometry.
 
-The world-dev chat can emit a whole MAP: painted terrain areas, optional
-height areas and where the existing locations stand, all in world metres.
-This module is the one place that turns such a draft into the exact rows the
-map editor writes, so nothing downstream has to know the map came from a
-model rather than from a mouse.
+This module is the map-layout SANITIZER plus the geometry it needs: it turns a
+drawn map (painted terrain areas, optional height areas and where locations
+stand, all in world metres) into the exact rows the map editor writes, so
+nothing downstream has to know the map came from a model rather than from a
+mouse. It writes nothing itself: the World Dev free-mode tools
+(``app/core/world_dev_tools.py`` — add_terrain_area, add_height_area,
+place_location, create_location, ...) run their input through it and write
+through the core writers, journaled so a run can be undone exactly.
 
-Three layers, deliberately separated:
+Two layers, deliberately separated:
 
 * **Pure geometry** — :func:`simplify_polygon`, :func:`stroke_to_polygon` and
   :func:`decorate_stroke`. No DB, no config. The last two are the SERVER TWIN
@@ -22,32 +25,12 @@ Three layers, deliberately separated:
   without a world. It returns the normalized draft plus WARNINGS, never
   exceptions, for everything a person can still want (a hut on impassable
   rock is a legitimate authoring choice); only junk is dropped, and dropping
-  is itself a warning.
-* **Writing** — :func:`apply_map_layout`, :func:`map_snapshot`,
-  :func:`list_snapshots`, :func:`restore_snapshot`. These touch the DB, and
-  they validate EVERYTHING before the first write: a layout with one broken
-  polygon must leave the world exactly as it was, not half-painted.
-
-The snapshot is the undo the map editor does not have. It is a full copy of
-the painted world (areas, height areas, every location's placement) under
-``<storage>/.cache/map_snapshots/`` — gitignored, capped at
-:data:`MAX_SNAPSHOTS`, and restored WITH the original row ids, so a restore
-puts back the very areas that were there rather than look-alikes. A state copy
-cannot express a CREATION, so the apply writes the ids of the places it created
-back into its own snapshot (:func:`record_created_locations`) and the restore
-deletes exactly those — never everything the roster happens to be missing,
-which would take a hand-made place with it.
+  is itself a warning. :func:`current_world_bounds` reads the extent the
+  sanitizer measures against.
 """
 
-import json
 import math
-import re
-import secrets
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-
-from app.core.log import get_logger
-
-logger = get_logger("map_layout")
 
 # ── Ported from frontend/src/tabs/map/mapMath.ts ────────────────────────────
 #: A join is bevelled once the miter would stick out further than this many
@@ -79,11 +62,6 @@ CORNER_BLEND_SPACINGS = 0.5
 SELF_INTERSECT_MAX_POINTS = 400
 #: The three styles a centre line may be bent with (``mapMath.STROKE_STYLES``).
 STROKE_STYLES = ("straight", "jagged", "wavy")
-
-#: How many snapshots are kept per world. Twenty apply runs is far more
-#: history than anybody scrolls back through, and each file is the whole
-#: painted world.
-MAX_SNAPSHOTS = 20
 
 #: Points a polygon in the ``{existing_map}`` prompt injection is boiled down
 #: to. Twelve is enough to recognise a shape and small enough that a whole map
@@ -591,10 +569,10 @@ def _warn(out: List[Dict[str, str]], code: str, ref: str, message: str) -> None:
     out.append({"code": code, "ref": ref, "message": message})
 
 
-def _box_union(a: Optional[Dict[str, Any]],
-               b: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+def box_union(a: Optional[Dict[str, Any]],
+              b: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
     """The smallest box containing both, or whichever one exists."""
-    boxes = [x for x in (a, b) if _valid_box(x)]
+    boxes = [x for x in (a, b) if valid_box(x)]
     if not boxes:
         return None
     return {"min_x": min(float(x["min_x"]) for x in boxes),
@@ -603,7 +581,8 @@ def _box_union(a: Optional[Dict[str, Any]],
             "max_z": max(float(x["max_z"]) for x in boxes)}
 
 
-def _valid_box(box: Any) -> bool:
+def valid_box(box: Any) -> bool:
+    """A dict with four finite numbers min_x/min_z/max_x/max_z, min <= max."""
     if not isinstance(box, dict):
         return False
     vals = [_finite(box.get(k)) for k in ("min_x", "min_z", "max_x", "max_z")]
@@ -612,7 +591,8 @@ def _valid_box(box: Any) -> bool:
     return vals[0] <= vals[2] and vals[1] <= vals[3]
 
 
-def _outside(box: Dict[str, float], x: float, z: float) -> bool:
+def point_outside(box: Dict[str, float], x: float, z: float) -> bool:
+    """Whether (x, z) lies outside ``box`` — the box edge itself is inside."""
     return (x < box["min_x"] or x > box["max_x"]
             or z < box["min_z"] or z > box["max_z"])
 
@@ -709,13 +689,101 @@ def _stub_danger(value: Any) -> Optional[int]:
         return None
 
 
+def impassable_warning(entry: Dict[str, Any], ref: str, *,
+                       catalog: Dict[str, Dict[str, Any]],
+                       areas: List[Dict[str, Any]],
+                       default_kind: str) -> Optional[Dict[str, str]]:
+    """The ``on_impassable`` warning of one placement entry, or None.
+
+    ``entry`` needs ``name``, ``pos_x`` and ``pos_z``; ``areas`` are the terrain
+    areas the ground is judged against, bottom-to-top (ascending ``z_order``,
+    the order ``terrain_query.kind_at`` reads — the last containing one wins).
+    A point no area covers stands on ``default_kind``. A kind the catalog does
+    not know counts as walkable.
+    """
+    from app.core.terrain_query import kind_at
+    ground = kind_at(entry["pos_x"], entry["pos_z"], areas=areas,
+                     default_kind=default_kind)
+    if bool((catalog.get(ground) or {}).get("passable", True)):
+        return None
+    return {"code": "on_impassable", "ref": ref,
+            "message": f"'{entry['name']}' stands on {ground!r}, which nobody "
+                       f"can walk on — the place would be unreachable."}
+
+
+def overlap_warnings(placed: Sequence[Dict[str, Any]], *,
+                     others: Sequence[Dict[str, Any]] = ()
+                     ) -> List[Dict[str, str]]:
+    """``footprint_overlap`` warnings, once per PAIR.
+
+    Every pair inside ``placed`` is compared (ref ``locations[<later index>]``),
+    then every ``placed`` entry against every one of ``others`` — places that
+    already stand in the world (ref ``locations[<index in placed>]``). Pairs
+    inside ``others`` are never reported: they are not what is being placed.
+    All entries have the :func:`boundaries_overlap` shape (``name``,
+    ``pos_x``, ``pos_z``, ``yaw_deg``, a drawn ``boundary``). Both sides
+    survive an overlap: overlapping places are legal (a hut on a village
+    square), they are just rarely intended.
+
+    An ``others`` entry that carries an ``id`` puts it into its warnings as
+    ``other_id`` (with ``other_name``), so a caller can name WHICH stored place
+    is in the way; the message text stays the same.
+    """
+    out: List[Dict[str, str]] = []
+    for a_i in range(len(placed)):
+        for b_i in range(a_i + 1, len(placed)):
+            a, b = placed[a_i], placed[b_i]
+            if not boundaries_overlap(a, b):
+                continue
+            _warn(out, "footprint_overlap", f"locations[{b_i}]",
+                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
+                  f"share ground.")
+    for b_i, b in enumerate(placed):
+        for a in others:
+            if not boundaries_overlap(a, b):
+                continue
+            _warn(out, "footprint_overlap", f"locations[{b_i}]",
+                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
+                  f"share ground.")
+            if a.get("id"):
+                out[-1]["other_id"] = str(a["id"])
+                out[-1]["other_name"] = str(a.get("name") or "")
+    return out
+
+
+def placement_warnings(entries: Sequence[Dict[str, Any]], *,
+                       catalog: Dict[str, Dict[str, Any]],
+                       areas: List[Dict[str, Any]],
+                       default_kind: str,
+                       others: Sequence[Dict[str, Any]] = ()
+                       ) -> List[Dict[str, str]]:
+    """Both placement checks for entries that are being placed: the
+    ``on_impassable`` warning per entry (ref ``locations[i]``), then the
+    overlaps among them and against ``others`` (:func:`overlap_warnings`).
+    The same two helpers :func:`sanitize_map_layout` runs, so a free tool
+    placing one place and a drawn map layout apply the same rules. They are
+    handed different outlines in one case only: a stored place WITHOUT a
+    drawn boundary — the placement tools judge it as the
+    :func:`seed_boundary` square, a drawn map layout (its world context from
+    ``world_dev_apply._map_world_context``) and the renderers give it no area.
+    """
+    out: List[Dict[str, str]] = []
+    for i, entry in enumerate(entries):
+        w = impassable_warning(entry, f"locations[{i}]", catalog=catalog,
+                               areas=areas, default_kind=default_kind)
+        if w is not None:
+            out.append(w)
+    out.extend(overlap_warnings(entries, others=others))
+    return out
+
+
 def sanitize_map_layout(data: Any, *,
                         catalog: Dict[str, Dict[str, Any]],
                         locations_by_id: Dict[str, Dict[str, Any]],
                         bounds: Optional[Dict[str, Any]] = None,
                         default_kind: str = "grass"
                         ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
-    """Turn one LLM map draft into the rows :func:`apply_map_layout` writes.
+    """Turn one LLM map draft into the normalized rows the free-mode tools write.
 
     PURE: the terrain catalog and the world's locations are handed in, so the
     whole rule set runs without a world DB. ``locations_by_id`` maps a
@@ -734,7 +802,7 @@ def sanitize_map_layout(data: Any, *,
     EXISTING place being positioned (unknown id → dropped, because a guessed id
     would move the wrong place), or a NEW STUB the map proposes — ``name`` +
     ``description`` + pin + an optional proposed ``boundary``. A stub keeps its
-    normalized ``is_new`` flag and is created by :func:`apply_map_layout`;
+    normalized ``is_new`` flag (a writer creates it as a new place);
     stubs with no outline get the :data:`SEED_BOUNDARY_M` square, so no place
     on a map is area-less. NAMES ARE NOT KEYS: a stub named like an existing
     place is a warning and is still created, never an update of that place.
@@ -751,8 +819,8 @@ def sanitize_map_layout(data: Any, *,
         raise ValueError("map layout must be an object")
 
     warnings: List[Dict[str, str]] = []
-    proposed = data.get("bounds") if _valid_box(data.get("bounds")) else None
-    box = _box_union(bounds, proposed)
+    proposed = data.get("bounds") if valid_box(data.get("bounds")) else None
+    box = box_union(bounds, proposed)
 
     # ── terrain areas ──
     areas: List[Dict[str, Any]] = []
@@ -826,7 +894,7 @@ def sanitize_map_layout(data: Any, *,
                   f"'{name}': the outline crosses itself — the painted area "
                   f"will look inverted where it does.")
         if box:
-            outliers = [p for p in polygon if _outside(box, p[0], p[1])]
+            outliers = [p for p in polygon if point_outside(box, p[0], p[1])]
             if outliers:
                 _warn(warnings, "out_of_bounds", ref,
                       f"'{name}': {len(outliers)} of {len(polygon)} points lie "
@@ -866,7 +934,7 @@ def sanitize_map_layout(data: Any, *,
             _warn(warnings, "self_intersecting", ref,
                   f"'{name}': the outline crosses itself.")
         if box:
-            outliers = [p for p in polygon if _outside(box, p[0], p[1])]
+            outliers = [p for p in polygon if point_outside(box, p[0], p[1])]
             if outliers:
                 _warn(warnings, "out_of_bounds", ref,
                       f"'{name}': {len(outliers)} of {len(polygon)} points lie "
@@ -885,7 +953,6 @@ def sanitize_map_layout(data: Any, *,
     # The draft's own areas are the ground the placement is judged against
     # (never the DB's): the model just drew this water, and a hut it put in
     # the middle of it must be reported even though nothing is painted yet.
-    from app.core.terrain_query import kind_at
     draft_areas = sorted(areas, key=lambda a: a["z_order"])
     placed: List[Dict[str, Any]] = []
     seen_ids: Dict[str, int] = {}
@@ -979,27 +1046,17 @@ def sanitize_map_layout(data: Any, *,
             entry["why"] = why
         placed.append(entry)
 
-        if box and _outside(box, entry["pos_x"], entry["pos_z"]):
+        if box and point_outside(box, entry["pos_x"], entry["pos_z"]):
             _warn(warnings, "out_of_bounds", ref,
                   f"'{entry['name']}' stands outside the agreed map bounds.")
 
-        ground = kind_at(entry["pos_x"], entry["pos_z"], areas=draft_areas,
-                         default_kind=default_kind)
-        if not bool((catalog.get(ground) or {}).get("passable", True)):
-            _warn(warnings, "on_impassable", ref,
-                  f"'{entry['name']}' stands on {ground!r}, which nobody can "
-                  f"walk on — the place would be unreachable.")
+        ground_warning = impassable_warning(entry, ref, catalog=catalog,
+                                            areas=draft_areas,
+                                            default_kind=default_kind)
+        if ground_warning is not None:
+            warnings.append(ground_warning)
 
-    # Boundary overlaps, once per PAIR. Both survive: overlapping places are
-    # legal (a hut on a village square), they are just rarely intended.
-    for a_i in range(len(placed)):
-        for b_i in range(a_i + 1, len(placed)):
-            a, b = placed[a_i], placed[b_i]
-            if not boundaries_overlap(a, b):
-                continue
-            _warn(warnings, "footprint_overlap", f"locations[{b_i}]",
-                  f"'{a['name']}' and '{b['name']}' overlap — their outlines "
-                  f"share ground.")
+    warnings.extend(overlap_warnings(placed))
 
     # The ONE hard error besides a non-object: a draft that says nothing at
     # all. A draft whose entries were ALL dropped is not that — it carries a
@@ -1018,22 +1075,7 @@ def sanitize_map_layout(data: Any, *,
     return normalized, warnings
 
 
-def layout_counts(normalized: Dict[str, Any]) -> Dict[str, int]:
-    """``{areas, heights, positions, created}`` of a normalized layout.
-
-    ``positions`` counts the EXISTING places the layout moves, ``created`` the
-    stubs it would bring into being — two different promises, and the
-    confirmation dialog has to be able to state them apart.
-    """
-    locs = normalized.get("locations") or []
-    created = [loc for loc in locs if loc.get("is_new")]
-    return {"areas": len(normalized.get("terrain_areas") or []),
-            "heights": len(normalized.get("height_areas") or []),
-            "positions": len(locs) - len(created),
-            "created": len(created)}
-
-
-# ── Writing ─────────────────────────────────────────────────────────────────
+# ── World extent ────────────────────────────────────────────────────────────
 
 def current_world_bounds() -> Optional[Dict[str, float]]:
     """The world's current extent in metres — placed BOUNDARIES AND painted
@@ -1066,334 +1108,3 @@ def current_world_bounds() -> Optional[Dict[str, float]]:
         return None
     return {"min_x": round(min(xs), 2), "min_z": round(min(zs), 2),
             "max_x": round(max(xs), 2), "max_z": round(max(zs), 2)}
-
-
-def apply_map_layout(normalized: Dict[str, Any],
-                     mode: str = "merge",
-                     snapshot_id: str = "") -> Dict[str, int]:
-    """Write a normalized layout to the world. Returns
-    ``{areas, heights, positions, created}``.
-
-    ``mode``:
-      * ``merge`` — the new areas are painted ON TOP of what is there.
-      * ``replace_terrain`` — every painted area and every height area is
-        deleted first. Placements are never wiped: only the locations the
-        layout names are moved, the rest stay where they are.
-
-    A ``locations[]`` entry marked ``is_new`` is a STUB: it is created through
-    the ordinary creation path (``world_ops.create_location_with_extras`` —
-    the writer behind ``POST /world/locations``, so the ground room, the
-    boundary whitelist and the derived ``plan_width_m`` are the editor's) and
-    then positioned like any other place. ``create_new`` is passed, so a stub
-    named like an existing place becomes a SECOND place: on a map a name is a
-    label, not a key.
-
-    ``snapshot_id`` — the snapshot this apply is undone with. Handing it in
-    lets the created stub ids be recorded IN that snapshot, which is the only
-    way a restore can take a creation back (:func:`record_created_locations`).
-
-    ALL-OR-NOTHING as far as SQLite allows: every area, every height area and
-    every location id is validated BEFORE the first write, so a draft with
-    one broken polygon leaves the world untouched. Once writing starts each
-    row is its own transaction (that is what ``save_area`` is), which is why
-    the snapshot exists.
-    """
-    from app.models import heightfield, terrain
-    from app.models.world import list_locations, update_location_position
-
-    if mode not in ("merge", "replace_terrain"):
-        raise ValueError(f"unknown apply mode {mode!r}")
-
-    # 1. validate everything, writing nothing. The sanitizers mint a FRESH id
-    #    per entry (the layout describes new ground, never an edit of a
-    #    specific existing row), so the writes below can pass them straight on.
-    ready_areas = [terrain.sanitize_area({k: v for k, v in area.items()
-                                          if k != "id"})
-                   for area in (normalized.get("terrain_areas") or [])]
-    ready_heights = [heightfield.sanitize_height_area(
-        {k: v for k, v in h.items() if k != "id"})
-        for h in (normalized.get("height_areas") or [])]
-    known = {loc.get("id") for loc in list_locations()}
-    ready_positions: List[Dict[str, Any]] = []
-    ready_stubs: List[Dict[str, Any]] = []
-    for entry in (normalized.get("locations") or []):
-        px, pz = _finite(entry.get("pos_x")), _finite(entry.get("pos_z"))
-        yaw = _finite(entry.get("yaw_deg")) or 0.0
-        if entry.get("is_new"):
-            name = str(entry.get("name") or "").strip()
-            if not name:
-                raise ValueError("a new place carries no name")
-            if px is None or pz is None:
-                raise ValueError(f"new place {name!r} has no usable position")
-            ready_stubs.append({"name": name,
-                                "description": str(entry.get("description")
-                                                   or ""),
-                                "indoor": str(entry.get("indoor") or ""),
-                                "danger_level": entry.get("danger_level"),
-                                "boundary": entry.get("boundary")
-                                or seed_boundary(),
-                                "pos_x": px, "pos_z": pz, "yaw_deg": yaw})
-            continue
-        loc_id = str(entry.get("id") or "").strip()
-        if loc_id not in known:
-            raise ValueError(f"unknown location id: {loc_id!r}")
-        if px is None or pz is None:
-            raise ValueError(f"location {loc_id!r} has no usable position")
-        ready_positions.append({"id": loc_id, "pos_x": px, "pos_z": pz,
-                                "yaw_deg": yaw})
-
-    # 2. write.
-    if mode == "replace_terrain":
-        for area in terrain.list_areas():
-            terrain.delete_area(area["id"])
-        for area in heightfield.list_height_areas():
-            heightfield.delete_height_area(area["id"])
-
-    for area in ready_areas:
-        terrain.save_area(area)
-    for h in ready_heights:
-        heightfield.save_height_area(h)
-    for pos in ready_positions:
-        update_location_position(pos["id"], pos["pos_x"], pos["pos_z"],
-                                 pos["yaw_deg"])
-
-    created_ids: List[str] = []
-    try:
-        _create_stubs(ready_stubs, created_ids)
-    finally:
-        # Whatever WAS created has to be in the snapshot even when the run
-        # broke half way — an undo that does not know about a place cannot
-        # take it back, and a half-applied map is exactly when one is needed.
-        if created_ids and snapshot_id:
-            record_created_locations(snapshot_id, created_ids)
-
-    counts = {"areas": len(ready_areas), "heights": len(ready_heights),
-              "positions": len(ready_positions), "created": len(created_ids)}
-    logger.info("map layout applied (%s): %s", mode, counts)
-    return counts
-
-
-def _create_stubs(ready_stubs: Sequence[Dict[str, Any]],
-                  created_ids: List[str]) -> None:
-    """Create and position the NEW places of one apply, appending each id to
-    ``created_ids`` as it lands — the list is the caller's record of what has
-    to be taken back, so it is filled step by step and never at the end."""
-    from app.core.world_ops import create_location_with_extras
-    from app.models.world import update_location_position
-
-    for stub in ready_stubs:
-        body: Dict[str, Any] = {
-            "name": stub["name"],
-            "description": stub["description"],
-            "rooms": [],
-            "indoor": stub["indoor"],
-            "map3d": {"boundary": stub["boundary"]},
-            # A map is not a place editor: a stub is a NEW place every time,
-            # never a silent update of whatever carries the same name.
-            "create_new": True,
-        }
-        if stub["danger_level"] is not None:
-            body["danger_level"] = stub["danger_level"]
-        created = (create_location_with_extras(body) or {}).get("location") or {}
-        new_id = str(created.get("id") or "")
-        if not new_id:
-            raise ValueError(f"creating {stub['name']!r} returned no id")
-        update_location_position(new_id, stub["pos_x"], stub["pos_z"],
-                                 stub["yaw_deg"])
-        created_ids.append(new_id)
-
-
-# ── Snapshots ───────────────────────────────────────────────────────────────
-
-def _snapshot_dir():
-    from app.core.paths import get_storage_dir
-    path = get_storage_dir() / ".cache" / "map_snapshots"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _snapshot_id() -> str:
-    """A sortable id from the SYSTEM clock — this is a technical stamp on a
-    cache file, not a moment in the game world, so it is UTC and not
-    ``GameTime``. The random tail keeps two applies in the same second
-    apart."""
-    from app.core.timeutils import utc_now_iso
-    digits = re.sub(r"[^0-9]", "", utc_now_iso())[:14]
-    return f"{digits}-{secrets.token_hex(3)}"
-
-
-def map_snapshot() -> str:
-    """Freeze the whole painted world into ``.cache/map_snapshots`` and return
-    the snapshot id.
-
-    Full copies, ids included: a restore has to put the very areas back, not
-    look-alikes with fresh ids, or every reference anybody kept would dangle.
-    Placements cover EVERY location, unplaced ones included (``pos_x: null``),
-    because "this place had no position" is a state a restore must reach.
-    """
-    from app.core.timeutils import utc_now_iso
-    from app.models import heightfield, terrain
-    from app.models.world import list_locations
-
-    positions = []
-    for loc in list_locations():
-        positions.append({
-            "id": loc.get("id"),
-            "pos_x": loc.get("pos_x"),
-            "pos_z": loc.get("pos_z"),
-            "yaw_deg": loc.get("yaw_deg"),
-        })
-    payload = {
-        "created_at": utc_now_iso(),
-        "terrain_areas": terrain.list_areas(),
-        "height_areas": heightfield.list_height_areas(),
-        "positions": positions,
-        # Filled in AFTER the apply by :func:`record_created_locations` — the
-        # places that did not exist when this was frozen. See there for why a
-        # roster diff is not used instead.
-        "created_locations": [],
-    }
-    snap_id = _snapshot_id()
-    path = _snapshot_dir() / f"{snap_id}.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-    # Keep the newest MAX_SNAPSHOTS. The id sorts chronologically, so the
-    # file name is the ordering — no read needed to prune.
-    files = sorted(_snapshot_dir().glob("*.json"), key=lambda p: p.name)
-    for stale in files[:-MAX_SNAPSHOTS]:
-        try:
-            stale.unlink()
-        except OSError as exc:  # noqa: BLE001 — pruning a cache never fails a write
-            logger.warning("Could not prune map snapshot %s: %s", stale.name, exc)
-    logger.info("map snapshot %s: %d areas, %d height areas, %d places",
-                snap_id, len(payload["terrain_areas"]),
-                len(payload["height_areas"]), len(positions))
-    return snap_id
-
-
-def record_created_locations(snapshot_id: str,
-                             location_ids: Sequence[str]) -> None:
-    """Note in a snapshot which places the apply after it CREATED.
-
-    A map snapshot is a copy of a state, and a state cannot express "this place
-    was not there yet" on its own: the roster is complete (every location, even
-    unplaced ones), so a restore COULD delete everything missing from it — but
-    that would also delete a place somebody created by hand between the apply
-    and the undo, which the snapshot has no business touching. So the apply
-    tells its own snapshot what it made, and the restore takes back exactly
-    that and nothing else.
-
-    A snapshot that cannot be written is a missing undo, never a failed apply —
-    the caller already warned about that; this only logs.
-    """
-    ids = [str(i) for i in (location_ids or []) if str(i or "").strip()]
-    if not ids:
-        return
-    try:
-        payload = _read_snapshot(snapshot_id)
-        known = [str(i) for i in (payload.get("created_locations") or [])]
-        payload["created_locations"] = known + [i for i in ids if i not in known]
-        path = _snapshot_dir() / f"{snapshot_id}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False),
-                        encoding="utf-8")
-    except (OSError, ValueError) as exc:  # noqa: BLE001
-        logger.warning("Could not record created places in snapshot %s: %s",
-                       snapshot_id, exc)
-        return
-    logger.info("map snapshot %s records %d created place(s)",
-                snapshot_id, len(ids))
-
-
-def _read_snapshot(snapshot_id: str) -> Dict[str, Any]:
-    snap_id = (snapshot_id or "").strip()
-    if not snap_id or "/" in snap_id or "\\" in snap_id or snap_id.startswith("."):
-        raise ValueError(f"invalid snapshot id: {snapshot_id!r}")
-    path = _snapshot_dir() / f"{snap_id}.json"
-    if not path.exists():
-        raise ValueError(f"no such snapshot: {snap_id}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"snapshot {snap_id} is unreadable")
-    return payload
-
-
-def list_snapshots() -> List[Dict[str, Any]]:
-    """All snapshots, newest first: ``{id, created_at, counts}``.
-
-    An unreadable file is skipped rather than raised over — the list is an
-    offer of undos, and one broken file must not hide the others.
-    """
-    out: List[Dict[str, Any]] = []
-    for path in sorted(_snapshot_dir().glob("*.json"),
-                       key=lambda p: p.name, reverse=True):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:  # noqa: BLE001
-            logger.warning("Skipping unreadable map snapshot %s: %s",
-                           path.name, exc)
-            continue
-        if not isinstance(payload, dict):
-            continue
-        out.append({
-            "id": path.stem,
-            "created_at": str(payload.get("created_at") or ""),
-            "counts": {
-                "areas": len(payload.get("terrain_areas") or []),
-                "heights": len(payload.get("height_areas") or []),
-                "positions": len(payload.get("positions") or []),
-                # Places the apply after this snapshot created — the ones a
-                # restore REMOVES again.
-                "created": len(payload.get("created_locations") or []),
-            },
-        })
-    return out
-
-
-def restore_snapshot(snapshot_id: str) -> Dict[str, int]:
-    """Put a snapshot back: every painted area and height area is deleted and
-    the stored ones are written again UNDER THEIR ORIGINAL IDS, then every
-    stored placement is set (or cleared), and every place the apply CREATED is
-    deleted again (``created_locations``, see
-    :func:`record_created_locations`) — an undo that left the new places
-    standing would only half undo the map.
-
-    Returns ``{areas, heights, positions, removed}``. Validated completely
-    before the first delete — a corrupt snapshot must not leave a world with
-    no ground.
-    """
-    from app.models import heightfield, terrain
-    from app.models.world import (delete_location, list_locations,
-                                  update_location_position)
-
-    payload = _read_snapshot(snapshot_id)
-    ready_areas = [terrain.sanitize_area(a)
-                   for a in (payload.get("terrain_areas") or [])]
-    ready_heights = [heightfield.sanitize_height_area(h)
-                     for h in (payload.get("height_areas") or [])]
-    known = {loc.get("id") for loc in list_locations()}
-    ready_positions = [p for p in (payload.get("positions") or [])
-                       if isinstance(p, dict) and p.get("id") in known]
-    ready_removals = [str(i) for i in (payload.get("created_locations") or [])
-                      if str(i) in known]
-
-    for area in terrain.list_areas():
-        terrain.delete_area(area["id"])
-    for area in heightfield.list_height_areas():
-        heightfield.delete_height_area(area["id"])
-    for area in ready_areas:
-        terrain.save_area(area)
-    for h in ready_heights:
-        heightfield.save_height_area(h)
-    for pos in ready_positions:
-        px, pz = _finite(pos.get("pos_x")), _finite(pos.get("pos_z"))
-        yaw = _finite(pos.get("yaw_deg"))
-        update_location_position(str(pos["id"]),
-                                 None if px is None or pz is None else px,
-                                 None if px is None or pz is None else pz,
-                                 yaw)
-    removed = sum(1 for loc_id in ready_removals if delete_location(loc_id))
-
-    counts = {"areas": len(ready_areas), "heights": len(ready_heights),
-              "positions": len(ready_positions), "removed": removed}
-    logger.info("map snapshot %s restored: %s", snapshot_id, counts)
-    return counts

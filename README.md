@@ -186,7 +186,7 @@ stops acting autonomously).
 - **Map layout backup:** the Map tab's **Download layout** saves where every location stands
   (position and rotation in metres) as a ZIP, **Restore layout** puts them back — matched by id,
   characters travelling along, terrain untouched (`/world/map/export`, `/world/map/import`).
-- **World Dev free mode:** Game-Admin → World Dev → **Free (agent)** gives a model a plain-language task
+- **World Dev free mode:** Game-Admin → **World Dev** gives a model a plain-language task
   ("add a bakery with two rooms next to the market") and lets it build directly in the world through
   journaled tools. The world is frozen while the run is open; a failed turn is rolled back on its own,
   and the finished run is **Accept**ed or **Discard**ed (Discard undoes every write, skipping anything
@@ -413,9 +413,12 @@ stops acting autonomously).
   vision-LLM caption → post, plus comment/reply verbs), `act` (an in-scene action narrated by the
   storyteller engine), `interact` (two present characters play a synchronised pair animation),
   `party`, `retrospect`, `take_photo`, `notify_user`, `set_pose`, `sleep`, `consume_item`.
-- **Story arcs** progress in the background with beats and per-beat scene images; the player reads
-  them spoiler-free in the quest book. The Game-Admin's **Storyteller** tab lists them (title,
-  status, participants, beats) and can **Generate arc** by hand or delete one.
+- **Quests** are hand-made in the Game-Admin's **Quests** tab: a template names its roles (a
+  character, a place, an item), lists sequential steps with a condition each, and is started as a
+  run that binds the roles to this world. Avatars fulfil the steps by acting in the world; the
+  player reads them spoiler-free in the HUD's quest book (`/play/quests`: done steps and the current
+  one, never the hints or the GM notes). Reference and the type contract for packages:
+  [`docs/quests.md`](docs/quests.md).
 - **Relationships** with automatic decay over GAME time (a "week" is seven game days;
   a frozen or slow world clock slows the decay with it) and periodic summaries.
   Each pair also carries a **form of address per direction** — free text saying how A
@@ -651,7 +654,7 @@ world**:
 
 - `world.db` — users, characters and their runtime state, locations/rooms, items, inventory,
   outfits, memories, knowledge, relationships, mood/state history, summaries, notifications, events,
-  scheduler jobs/logs, story arcs, parties, perceptions and chat messages, …
+  scheduler jobs/logs, quests, parties, perceptions and chat messages, …
 - `task_queue.db` — the persistent task queue (image/video/mesh generation, LLM jobs, animations).
 
 World data is **DB-only** — there are no JSON mirrors or backups on disk. Everything else under a
@@ -688,8 +691,8 @@ are stored in the world database (`llm_template_overrides`), not in the shared t
 
 Cross-world, read-only resources shared by every world live under `shared/`: character / expression /
 pose / soul templates, the LLM prompt templates, the item catalog, surface textures, the animation
-clip library and reference rig, language files, and the world-dev prompt specifications
-(`character`, `location`, `map`). **Model capabilities are deliberately outside the worlds** —
+clip library and reference rig, language files, and the prompt specifications of the building
+assistant (`layout`) and the temporary NPCs (`npc_character`). **Model capabilities are deliberately outside the worlds** —
 `shared/config/model_capabilities.json` describes a model plus its hardware, not a world, and is
 tracked in git. Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored), as do
 `voices/`, `exports/` and `storage/`.
@@ -914,6 +917,8 @@ imports anything that opens a database, and a tool meant for a real world gets `
 - **[`docs/room-conversation.md`](docs/room-conversation.md)** — who answers a line in a room:
   addressees, the single bystander the server picks, derived conversation pairs and the
   `chat.chattiness` / per-location chattiness settings.
+- **[`docs/quests.md`](docs/quests.md)** — the quest system: templates, roles and runs, the expression and
+  parameter shapes, the type contract for packages, signals and the tick, the player's quest book payload.
 - **[`docs/plugins.md`](docs/plugins.md)** / **[`docs/skill-core-api.md`](docs/skill-core-api.md)** —
   the plugin manifest reference and the callable core API a package may use.
 - **[`docs/hub-job-resume.md`](docs/hub-job-resume.md)** — how long AI-hub jobs survive a restart:

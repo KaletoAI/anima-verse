@@ -12,8 +12,11 @@ never b at its destination; arrival then reaches a/b. Utterance reaches a
 with scene. Outfit reaches a with presence+self. Party reaches a with
 presence+notices. Private npc patches reach nobody; private a reaches only
 a with self. Public npc patches reach a with presence+self. Delete,
-model_checkpoint reaches a with presence; profile_image reaches a with presence+self. The twin
-world_dev_patch follows the same private/public rule. Inventory is NEU:
+model_checkpoint reaches a with presence; profile_image reaches a with presence+self. The World Dev
+free mode's profile writers (world_dev_tools._update_character and the undo's
+world_dev_undo._undo_restore_character) follow the same private/public rule;
+their behaviour is smoke_world_dev_sync.py (a)/(b), here they are inventory
+rows only. Inventory is NEU:
 the old writers have no sync calls. Helper failures are NEU because the
 helpers did not exist; injected lookup/notification failures must escape
 none of them, and party_of must return empty. No REGRESSION cases are relabelled.
@@ -60,7 +63,8 @@ INVENTORY = {
     "app/core/perception.py": ["record_utterance"],
     "app/core/npc_pool.py": ["_unplace"],
     "app/core/character_ops.py": ["apply_profile_update"],
-    "app/routes/world_dev.py": ["_apply_profile_patch_data_sync"],
+    "app/core/world_dev_tools.py": ["_update_character"],
+    "app/core/world_dev_undo.py": ["_undo_restore_character"],
     "app/models/world.py": ["evict_rooms_to_ground"],
 }
 
@@ -79,18 +83,19 @@ INVENTORY.update({
     "app/models/terrain.py": ["_bump_terrain_generation"],
     "app/core/terrain_types.py": ["_bump_types_generation"],
     "app/models/world_props.py": ["_bump_world_props_generation"],
-    "app/models/heightfield.py": ["save_height_area", "delete_height_area", "save_height_areas_bulk"],
+    "app/models/heightfield.py": ["save_height_area", "delete_height_area", "save_height_areas_bulk", "restore_height_area"],
     "app/core/scene_recipe.py": ["invalidate_prop_lib_token"],
     "app/core/surface_textures.py": ["_surface_changed"],
     "app/models/thought_store.py": ["add_thought"],
     "app/models/memory.py": "save_memories add_memory delete_memory clear_memories record_mood".split(),
     "app/models/diary.py": ["_save_stored"],
-    "app/models/relationship.py": ["_save_relationship"],
+    "app/models/relationship.py": ["_save_relationship", "delete_pair_row", "restore_pair_row", "set_pair_row_meta_key"],
+    "app/core/quest_engine.py": ["_quests_changed"],
 })
 INVENTORY["app/models/chat_stat_evaluations.py"] = ["commit_evaluation"]
 # Plan E3 task 4: every order publication pushes "orders" (sync_topics.order_changed).
 INVENTORY["app/core/motion_orders.py"] = ["publish"]
-INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag"]
+INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag", "write_placement"]
 
 
 # Rows 10 and 15 inherit the location/publication writers rather than adding
@@ -400,12 +405,6 @@ def behaviour(case):
         if case == "private_profile":
             character_ops.apply_profile_update("a", {"fields": fields})
             expect(conns, ["self"])
-    elif case == "world_dev_patch":
-        from app.routes.world_dev import _apply_profile_patch_data_sync
-        _apply_profile_patch_data_sync({"character_name": "npc", "fields": {"backstory": "demo"}})
-        expect(conns)
-        _apply_profile_patch_data_sync({"character_name": "npc", "fields": {"current_feeling": "happy"}})
-        expect(conns, ["presence", "self"])
     elif case == "delete":
         assert ch.delete_character("npc")
         expect(conns, ["presence"])
@@ -700,19 +699,19 @@ def relationship_mixed_decay():
 def review_endpoint_gaps():
     """NEU: hand-derived endpoint keys from actual received writer topics.
 
-    Rule/event => scene, both maps, notices, badges; own movement => notices;
+    Rule/event => scene, both maps, notices, badges, quests; own movement => notices;
     relationship => others for the pair only; image => self for the owner.
     """
     source = (ROOT / "packages/player-ui/src/syncEndpoints.ts").read_text()
     endpoints = {key: set(re.findall(r"'([^']+)'", topics))
                  for key, topics in re.findall(r"(\w+): \{[^\n]*topics: \[([^\]]+)\]", source)}
-    assert len(endpoints) == 9
+    assert len(endpoints) == 10
     def keys(conn):
         topics = drain([conn])[0]
         return {key for key, wanted in endpoints.items() if topics & wanted}
     loc, conns = fixture("review_endpoint_gaps")
     from app.models import rules, events, relationship, account
-    expected = {"scene", "worldmapPlayer", "worldmap3d", "notices", "badges"}
+    expected = {"scene", "worldmapPlayer", "worldmap3d", "notices", "badges", "quests"}
     rules.save_rules([{"id": "demo", "character": "a"}])
     assert keys(conns[0]) == expected
     assert keys(conns[1]) == keys(conns[2]) == set()
@@ -764,7 +763,7 @@ def review_endpoint_gaps():
 
 if __name__ == "__main__":
     failures = []
-    cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image world_dev_patch helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
+    cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
     cases += ["part3_" + c for c in "notification mark_all_global phone inventory room_item room_item_cold room_item_hidden world_admin background_skill terrain height event_local event_global rule_local mind force_status".split()]
     cases += ["commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"]
     cases += ["review_endpoint_gaps"]

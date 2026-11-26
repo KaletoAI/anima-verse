@@ -11,6 +11,12 @@
  * `r = s(L) / s(Ls)`. The fit re-solves the foot's pose on the longer insole, so the preview is the shoe's size and
  * place, not the fit's last millimetre — "the fit applies it on the body" (the same caveat as the clothing preview).
  *
+ * The manual adjustment (2026-11-25, `footwear_fit.manual_matrix`) lives in the same cut frame, about its origin (the
+ * heel end of the sole on the ground, on the midline; z runs INWARD on both sides): `M = Translate(forward, up,
+ * −outward) · Ry(toe out) · Rz(toe up) · Rx(tilt in) · Scale(1 + size)`. The shown fit was made with `M0`
+ * (`frame.manual`), its cut frame follows the adjusted shoe; a draft `M1` is previewed as `M0⁻¹ · M1 · cutMap` —
+ * the allowance in the shoe's own frame, then the shoe placed by M1 instead of M0.
+ *
  * The shoe nodes are skinned: their positions live in the body's bind space. Per side the map is
  * `J · F⁻¹ · T · F · J⁻¹` with J the Foot joint's bind matrix (the skeleton's bone inverse, inverted) and F the
  * cut frame (Foot-local → cut). Matrices here are row-major arrays of 16.
@@ -23,7 +29,21 @@ export interface ShoeFrame {
   allow_m: number
   width_pct: number
   length_pct: number
+  /** The manual adjustment the shown fit was made with (absent on an older record = none). */
+  manual?: ManualAdjust
 }
+
+/** The manual adjustment of a fit (`garment_footwear.MANUAL_KEY`). */
+export interface ManualAdjust {
+  /** [forward, up, outward] in millimetres */
+  offset_mm: number[]
+  /** [toe out, toe up, tilt in] in degrees */
+  rotate_deg: number[]
+  /** size change in percent */
+  scale_pct: number
+}
+
+export const MANUAL_NONE: ManualAdjust = { offset_mm: [0, 0, 0], rotate_deg: [0, 0, 0], scale_pct: 0 }
 
 /** The allowance box of the footwear panel (`garment_footwear.allowance_view`). */
 export interface FootwearAllowanceView {
@@ -40,6 +60,12 @@ export interface FootwearAllowanceView {
   due: boolean
   /** No fit at all because the shoe itself was refused at this source step: nothing can apply an allowance yet. */
   blocked?: { step: string; error: string } | null
+  /** The manual adjustment saved for this piece on this character. */
+  manual?: ManualAdjust
+  /** Its bounds: ±offset_mm, ±rotate_deg, scale_pct [min, max]. */
+  manual_limits?: { offset_mm: number; rotate_deg: number; scale_pct: number[] }
+  /** The shown shoe's length (metres) — the reference the millimetre sliders are read against. */
+  shoe_len_m?: number | null
 }
 
 export type AllowanceSetting = 'auto' | number
@@ -87,9 +113,39 @@ export function cutMap(frame: ShoeFrame, width: number, length: number): M4 {
   return [r, 0, 0, dx, 0, r, 0, 0, 0, 0, wz, 0, 0, 0, 0, 1]
 }
 
-/** Whether the previewed allowance is the shown fit's own (nothing to deform). */
-export function isShown(frame: ShoeFrame | null | undefined, width: number, length: number): boolean {
-  return !frame || (Math.abs(width - frame.width_pct) < 1e-9 && Math.abs(length - frame.length_pct) < 1e-9)
+/** Whether the previewed allowance and adjustment are the shown fit's own (nothing to deform). */
+export function isShown(frame: ShoeFrame | null | undefined, width: number, length: number,
+  manual: ManualAdjust = frame?.manual ?? MANUAL_NONE): boolean {
+  return !frame || (Math.abs(width - frame.width_pct) < 1e-9 && Math.abs(length - frame.length_pct) < 1e-9
+    && sameManual(manual, frame.manual ?? MANUAL_NONE))
+}
+
+/** Whether two adjustments are the same. */
+export function sameManual(a: ManualAdjust, b: ManualAdjust): boolean {
+  const flat = (m: ManualAdjust) => [...m.offset_mm, ...m.rotate_deg, m.scale_pct]
+  const x = flat(a)
+  const y = flat(b)
+  return x.every((v, i) => Math.abs(v - y[i]) < 1e-9)
+}
+
+/** The cut-frame map of an adjustment (row-major; `footwear_fit.manual_matrix`). */
+export function manualMap(m: ManualAdjust): M4 {
+  const rad = Math.PI / 180
+  const [yaw, pitch, roll] = m.rotate_deg.map((v) => v * rad)
+  const s = 1 + m.scale_pct / 100
+  const Ry = [Math.cos(yaw), 0, Math.sin(yaw), 0, 0, 1, 0, 0, -Math.sin(yaw), 0, Math.cos(yaw), 0, 0, 0, 0, 1]
+  const Rz = [Math.cos(pitch), -Math.sin(pitch), 0, 0, Math.sin(pitch), Math.cos(pitch), 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+  const Rx = [1, 0, 0, 0, 0, Math.cos(roll), -Math.sin(roll), 0, 0, Math.sin(roll), Math.cos(roll), 0, 0, 0, 0, 1]
+  const R = mul(Ry, mul(Rz, Rx))
+  const [fx, fy, out] = m.offset_mm.map((v) => v / 1000)
+  return [s * R[0], s * R[1], s * R[2], fx, s * R[4], s * R[5], s * R[6], fy, s * R[8], s * R[9], s * R[10], -out,
+    0, 0, 0, 1]
+}
+
+/** The whole preview map in the shown fit's cut frame: `M0⁻¹ · M1 · cutMap` (module docstring). */
+export function previewMap(frame: ShoeFrame, width: number, length: number, manual: ManualAdjust): M4 {
+  const M0 = manualMap(frame.manual ?? MANUAL_NONE)
+  return mul(invAffine(M0), mul(manualMap(manual), cutMap(frame, width, length)))
 }
 
 /** The bind-space map of one side: `J · F⁻¹ · T · F · J⁻¹` (`boneInverse` = J⁻¹, row-major). */

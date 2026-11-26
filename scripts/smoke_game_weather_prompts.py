@@ -167,7 +167,7 @@ THOUGHT_CTX = {
 }
 _OPTIONAL = ("inbox_block", "events_block", "assignments_block",
              "general_task", "state_flags_block",
-             "outfit_decision_block", "arc_block", "retrospective_block",
+             "outfit_decision_block", "retrospective_block",
              "skill_context_blocks", "known_secrets_block", "effects_block", "recent_chat_block",
              "recent_thoughts", "outfit_self_block", "outfit_avatar_block",
              "room_items_block", "inventory_block", "elsewhere_block",

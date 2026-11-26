@@ -1274,18 +1274,67 @@ SECTIONS = {
             "backend": {
                 "type": "select",
                 "label": "Backend",
-                "choices": ["xtts", "f5", "magpie"],
+                "choices": ["ai_hub", "xtts", "f5", "magpie"],
                 "default": "xtts",
             },
             "fallback_backend": {
                 "type": "select",
                 "label": "Fallback Backend",
-                "choices": ["", "xtts", "f5", "magpie"],
+                "choices": ["", "ai_hub", "xtts", "f5", "magpie"],
                 "default": "",
                 "description": "Used when the primary backend is unreachable",
             },
         },
         "subsections": {
+            "ai_hub": {
+                "label": "AI-Hub (Aliases)",
+                "fields": {
+                    "url": {
+                        "type": "str",
+                        "label": "AI-Hub URL",
+                        "default": "",
+                        "description": "Base URL of the AI-Hub (e.g. http://192.168.8.10:4000). Leave empty to reuse the configured AI-Hub gateway.",
+                    },
+                    "api_key": {
+                        "type": "str",
+                        "label": "API Key",
+                        "default": "",
+                        "description": "Optional Bearer token for AI-Hub (stored in secrets.json). Leave empty to reuse the configured AI-Hub key.",
+                    },
+                    "default_alias": {
+                        "type": "str",
+                        "label": "Default TTS Alias",
+                        "default": "",
+                        "description": "Default AI-Hub TTS alias (e.g. ZONOS3-Mini, ming-3.0-tts-0.5b). Empty = first discovered local TTS alias.",
+                    },
+                    "extra_aliases": {
+                        "type": "str",
+                        "label": "Extra Aliases",
+                        "default": "",
+                        "description": "Comma-separated additional AI-Hub TTS aliases to expose (e.g. cloud voices like venice.ai/tts-kokoro).",
+                    },
+                    "include_cloud": {
+                        "type": "bool",
+                        "label": "Include cloud TTS aliases",
+                        "default": False,
+                        "description": "Also auto-discover cloud TTS aliases from AI-Hub (off = local TTS aliases + Extra Aliases only).",
+                    },
+                    "mode": {
+                        "type": "select",
+                        "label": "Generation Mode",
+                        "choices": ["sync", "async"],
+                        "default": "sync",
+                        "description": "sync = lowest latency for chat; async = job polling via /v1/jobs.",
+                    },
+                    "timeout": {
+                        "type": "int",
+                        "label": "Timeout (s)",
+                        "default": 120,
+                        "min": 5,
+                        "max": 600,
+                    },
+                },
+            },
             "xtts": {
                 "label": "XTTS v2",
                 "fields": {
@@ -1503,19 +1552,6 @@ SECTIONS = {
                 "type": "int", "label": "NPCs per scene", "default": 3,
                 "min": 2, "max": 5,
                 "description": "Participants of one director scene."},
-        },
-    },
-    "story_engine": {
-        "label": "Story Engine",
-        "icon": "📖",
-        "scope": "world",
-        "world_group": "story",
-        "fields": {
-            "enabled": {"type": "bool", "label": "Enabled", "default": False, "description": "Story arc progression (background process)"},
-            "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximum active arcs per user"},
-            "cooldown_hours": {"type": "int", "label": "Cooldown (hours)", "default": 6, "min": 1, "description": "Minimum cooldown between arc advances per user. SYSTEM time (real hours)."},
-            "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximum beats per arc before resolution"},
-            "beat_images": {"type": "bool", "label": "Beat images", "default": True, "description": "Generate images for each story beat"},
         },
     },
     "game": {

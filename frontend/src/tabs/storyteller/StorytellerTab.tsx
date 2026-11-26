@@ -4,7 +4,6 @@ import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '@anima/player-ui'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { StoryArcsPanel } from './StoryArcsPanel'
 
 /**
  * Game-Admin "Storyteller" tab — per-world config for the act-skill
@@ -195,12 +194,6 @@ export function StorytellerTab() {
             )
           })}
         </div>
-
-        {/* The other half of the narrative engine: the storylines it runs
-            across several characters. They live here because this is the
-            world's narrative tab — Events is admin-written news with its own
-            lifetime, an arc is generated and has beats. */}
-        <StoryArcsPanel />
 
         <div className="ga-form-hint" style={{ marginTop: 24 }}>
           {t('To edit the storyteller prompt itself, open ')}

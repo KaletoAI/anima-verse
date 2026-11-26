@@ -327,6 +327,52 @@ def delete_secrets_by_ref(character_name: str, source_ref: str) -> int:
         return count
 
 
+def secret_exists(secret_id: str) -> bool:
+    """Whether any stored secret has this id: the id in its meta (what
+    add_secret writes), or — for a legacy row whose meta has none — the
+    ``sec_<rowid>`` the reader (``_row_to_secret``) shows for it."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM secrets WHERE (CASE WHEN json_valid(meta) "
+        "AND json_type(meta, '$.id') IS NOT NULL "
+        "THEN json_extract(meta, '$.id') ELSE 'sec_' || id END) = ? LIMIT 1",
+        (secret_id,),
+    ).fetchone()
+    return row is not None
+
+
+def secrets_naming(name: Optional[str] = None,
+                   location: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every stored secret that names *name* (as a knower in ``known_by`` or
+    in ``related_characters``) or *location* (its ``related_location``), in
+    one scan of the table: ``[{"owner": mind, "secret": secret,
+    "why": [...]}]`` with ``why`` among "knows it", "related",
+    "location". Character names compare casefolded (a secret written
+    elsewhere may spell a name in other letter case); the location id
+    compares exactly. Read errors propagate."""
+    if not name and not location:
+        return []
+    key = name.casefold() if name else None
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, character_name, content, visibility, meta "
+        "FROM secrets ORDER BY id ASC").fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        secret = _row_to_secret(row)
+        why: List[str] = []
+        if key and key in {str(n).casefold() for n in secret.get("known_by") or []}:
+            why.append("knows it")
+        if key and key in {str(n).casefold()
+                           for n in secret.get("related_characters") or []}:
+            why.append("related")
+        if location and secret.get("related_location") == location:
+            why.append("location")
+        if why:
+            out.append({"owner": row[1], "secret": secret, "why": why})
+    return out
+
+
 # Secrets about other characters that this observer knows.
 
 def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:

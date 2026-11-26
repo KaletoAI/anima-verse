@@ -1178,6 +1178,137 @@ def delete_area(area_id: str) -> bool:
     return deleted
 
 
+def area_order_identity(area_id: str) -> Optional[Dict[str, Any]]:
+    """What places one stored area in the paint order beside its row:
+    ``{created_at, updated_at, rowid, tie_before, tie_after}``
+    (``list_areas`` sorts by z_order, created_at, rowid; ``updated_at`` is
+    the batch save's version token; ``tie_before`` / ``tie_after`` are the
+    ids of the areas sharing its z_order and created_at that sort before /
+    after it — :func:`_order_tie` checks the restored place against them),
+    or None. Read by the world-dev delete so its undo can put the area back
+    exactly where it was (:func:`restore_area`)."""
+    conn = get_connection()
+    aid = (area_id or "").strip()
+    row = conn.execute(
+        "SELECT created_at, updated_at, rowid, z_order FROM terrain_areas WHERE id=?",
+        (aid,)).fetchone()
+    if row is None:
+        return None
+    return _with_ties(conn, "terrain_areas", aid, row[0], row[1], row[2], row[3])
+
+
+def _with_ties(conn, table: str, area_id: str, created: Any, updated: Any,
+               rowid: Any, z_order: Optional[int]) -> Dict[str, Any]:
+    """The order identity of one stored area (see :func:`area_order_identity`):
+    its stamps and rowid plus the ids of its tie siblings on either side.
+    ``z_order`` None = a table without z_order (height areas)."""
+    sql = f"SELECT id, rowid FROM {table} WHERE created_at=? AND id<>?"
+    args: list = [created, area_id]
+    if z_order is not None:
+        sql += " AND z_order=?"
+        args.append(z_order)
+    sibs = sorted((int(r[1]), str(r[0])) for r in conn.execute(sql, args).fetchall())
+    return {"created_at": str(created or ""), "updated_at": str(updated or ""),
+            "rowid": int(rowid),
+            "tie_before": [s for r, s in sibs if r < int(rowid)],
+            "tie_after": [s for r, s in sibs if r > int(rowid)]}
+
+
+def order_tie_rule(siblings: List[tuple], identity: Dict[str, Any],
+                   new_rowid: int) -> bool:
+    """True when an area re-inserted under ``new_rowid`` does NOT sit where it
+    sat among the areas it ties with. ``siblings`` = ``(id, rowid)`` of every
+    area present now with its created_at (and z_order where the table sorts
+    by it). A sibling journalled in ``identity["tie_before"]`` must sort
+    before it (a smaller rowid), one in ``tie_after`` after it — on the
+    free-rowid branch too: a sibling re-created meanwhile under a fresh
+    rowid swaps sides with an area that gets its old rowid back. A sibling
+    of unknown side (an identity without the lists, or one stored after the
+    delete) counts when its rowid lies in [old, new): it sorted after before
+    and sorts before now (the one at exactly the old rowid took it); with
+    the old rowid free, old == new and it keeps its side. An old rowid that
+    is not an int counts every unknown sibling below the new one. Shared by
+    :func:`_order_tie` and the world-dev discard preview (its ``_OrderSim``)."""
+    old = identity.get("rowid") if isinstance(identity, dict) else None
+    low = old if isinstance(old, int) else -(1 << 62)
+    before = set((identity or {}).get("tie_before") or []) if isinstance(identity, dict) else set()
+    after = set((identity or {}).get("tie_after") or []) if isinstance(identity, dict) else set()
+    for sid, srow in siblings:
+        if sid in before:
+            if srow > new_rowid:
+                return True
+        elif sid in after:
+            if srow < new_rowid:
+                return True
+        elif low <= srow < new_rowid:
+            return True
+    return False
+
+
+def _order_tie(conn, table: str, z_order: Optional[int], created: str,
+               area_id: str, identity: Dict[str, Any], new_rowid: int) -> bool:
+    """:func:`order_tie_rule` against the rows stored now (the area itself
+    already inserted under ``new_rowid``). Shared with
+    ``heightfield.restore_height_area`` (``z_order`` None: no z_order)."""
+    sql = f"SELECT id, rowid FROM {table} WHERE created_at=? AND id<>?"
+    args: list = [created, area_id]
+    if z_order is not None:
+        sql += " AND z_order=?"
+        args.append(z_order)
+    sibs = [(str(r[0]), int(r[1])) for r in conn.execute(sql, args).fetchall()]
+    return order_tie_rule(sibs, identity, new_rowid)
+
+
+def area_order_rows() -> List[Dict[str, Any]]:
+    """``{id, rowid, created_at, z_order}`` of every stored area — the
+    paint-order identities the world-dev discard preview simulates its
+    re-creations against (:func:`restore_area` decides the same way)."""
+    return [{"id": r[0], "rowid": int(r[1]), "created_at": str(r[2] or ""),
+             "z_order": int(r[3] or 0)}
+            for r in get_connection().execute(
+                "SELECT id, rowid, created_at, z_order FROM terrain_areas").fetchall()]
+
+
+def restore_area(raw: Any, identity: Dict[str, Any]) -> tuple:
+    """Re-insert a DELETED area with the order identity it had
+    (:func:`area_order_identity`): its original created_at / updated_at and,
+    while it is still free, its rowid — so it lands at its old place in the
+    paint order instead of on top of its z_order tier (save_area stamps
+    "now"). The world-dev undo's writer for a deleted area.
+
+    Returns ``(area, exact_order)``: ``exact_order`` is False when the
+    relative order among the areas sharing its z_order and created_at
+    changed — a journalled tie sibling now on the other side, or one of
+    unknown side between the old and the new rowid (:func:`order_tie_rule`,
+    checked on both branches). Raises ValueError for
+    an unusable area and sqlite3.IntegrityError when the id is stored."""
+    area = settle_water_level(sanitize_area(raw))
+    created = str(identity.get("created_at") or "") or _edit_stamp()
+    updated = str(identity.get("updated_at") or "") or created
+    rowid = identity.get("rowid")
+    values = (area["id"], area["kind"],
+              json.dumps(area["polygon"], ensure_ascii=False), area["z_order"],
+              json.dumps(area["meta"], ensure_ascii=False), created, updated)
+    with transaction() as conn:
+        free = isinstance(rowid, int) and conn.execute(
+            "SELECT 1 FROM terrain_areas WHERE rowid=?", (rowid,)).fetchone() is None
+        if free:
+            conn.execute(
+                "INSERT INTO terrain_areas (rowid, id, kind, polygon, z_order, meta, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (rowid,) + values)
+            new_rowid = rowid
+        else:
+            new_rowid = conn.execute(
+                "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", values).lastrowid
+        tie = _order_tie(conn, "terrain_areas", area["z_order"], created,
+                         area["id"], identity, new_rowid)
+    _bump_terrain_generation()
+    _note_relief_write()
+    return area, not tie
+
+
 #: The scatter turn modes a stored area may still carry from before
 #: 2026-09-10. They are read NOWHERE else — the sanitizer refuses both — and
 #: the migration below is the only place the strings are allowed to appear.

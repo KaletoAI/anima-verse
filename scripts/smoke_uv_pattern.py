@@ -128,7 +128,7 @@ No server, no world DB, no Blender: ``uv_pattern`` is numpy only and imported th
 [21] Tops unchanged: ``pattern_uv`` of the hand-made top of [13] gives a byte-identical payload
     (``json.dumps(sort_keys=True)``) with this module and with ``uv_pattern.py`` at the base commit c926b67f0
     (read with ``git show``; skipped with a note when git is not available), and ``garment_template_cut.
-    TOP_UV_PATTERN_SHA`` (a top's cut key) is that file's md5[:12] — so a top's recorded cut stays current while the
+    UV_PATTERN_KEYS["top"]`` (a top's cut key) is that file's md5[:12] — so a top's recorded cut stays current while the
     file changes for the fitted kinds only; a change that alters a top's islands fails here and moves both.
 [22] Ring cut off theta 0: the cylinder of [16] with ``cut_dir`` turned 30 deg (cos 30, sin 30, 0) while its cut stays
     at +X (vertex 0): theta = 0 follows the cut copies, so u length 0.628066, the copies at u 0 and 0.628066 and the
@@ -694,9 +694,9 @@ if src is not None:
     import hashlib  # noqa: E402
     import re  # noqa: E402
     gtc_src = (ROOT / "app" / "core" / "garment_template_cut.py").read_text(encoding="utf-8")
-    pinned = re.search(r'^TOP_UV_PATTERN_SHA = "([0-9a-f]{12})"', gtc_src, re.M)
+    pinned = re.search(r'^\s*"top": "([0-9a-f]{12})",', gtc_src, re.M)
     base_md5 = hashlib.md5(src.encode("utf-8")).hexdigest()[:12]
-    check(f"[21] TOP_UV_PATTERN_SHA is the md5 of {BASE}'s uv_pattern.py",
+    check(f"[21] UV_PATTERN_KEYS[top] is the md5 of {BASE}'s uv_pattern.py",
           pinned is not None and pinned.group(1) == base_md5, (pinned and pinned.group(1), base_md5))
 
 # [22] ring cut off theta 0

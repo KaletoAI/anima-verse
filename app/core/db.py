@@ -8,6 +8,7 @@ Runtime and content data live here, with these exceptions:
 - Image files and diagnostic JSON sidecars remain on disk.
 - The task queue keeps its separate task_queue.db.
 """
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -22,6 +23,47 @@ logger = get_logger("db")
 
 _connections: dict = {}
 _lock = threading.Lock()
+
+
+#: The template variable of the removed story arc engine (the drop one-shot in
+#: init_schema repairs world overrides that still name it).
+_ARC_VAR = "arc_block"
+_ARC_IF_BLOCK = re.compile(
+    r"\{%-?\s*if\s+" + _ARC_VAR + r"\s*-?%\}.*?\{%-?\s*endif\s*-?%\}\n?",
+    re.DOTALL)
+_JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.DOTALL)
+_ARC_COMMENT_LINE = re.compile(
+    r"^[ \t]*" + _ARC_VAR + r"\b[^\n]*(?:\n|$)", re.MULTILINE)
+
+
+def _strip_arc_var(content: str) -> tuple:
+    """(content without the story arc block, True when the arc variable is
+    still read outside `{# … #}` comments afterwards).
+
+    Cut: every `{% if <arc var> %}…{% endif %}` block (any whitespace-control
+    variant, the shortest match) and, inside comments, a variable-list line that
+    starts with the arc variable's name."""
+    out = _ARC_IF_BLOCK.sub("", content)
+    out = _JINJA_COMMENT.sub(lambda m: _ARC_COMMENT_LINE.sub("", m.group(0)), out)
+    return out, _ARC_VAR in _JINJA_COMMENT.sub("", out)
+
+
+def _parses(content: str) -> bool:
+    """True when Jinja can parse `content` with the options of the prompt
+    template loader (`prompt_templates._build_env`): parse only, no render.
+    A repair can leave text that no longer parses (a nested `{% if %}` inside
+    the arc block leaves a dangling endif; a comment whose last line named the
+    arc variable loses its `#}`)."""
+    from jinja2 import StrictUndefined, TemplateSyntaxError
+    from jinja2.sandbox import SandboxedEnvironment
+    env = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined,
+                               trim_blocks=True, lstrip_blocks=True,
+                               keep_trailing_newline=False)
+    try:
+        env.parse(content)
+    except TemplateSyntaxError:
+        return False
+    return True
 
 
 def get_db_path() -> Path:
@@ -503,6 +545,61 @@ def init_schema() -> None:
             )
         except Exception as e:
             logger.warning("improvement steps fulfilled migration failed: %s", e)
+
+    # One-shot migration: the story arc engine is gone, quests replace it
+    # (quest system stage 1, D16). Its table goes, and so do the world
+    # overrides of its three templates. A world override of a thought template
+    # that still reads the removed arc block would raise under StrictUndefined
+    # on every thought turn, so it is REPAIRED: the arc block and the arc entry
+    # of a comment's variable list are cut out and the row is updated (the
+    # rest of a hand-tuned prompt stays). Only an override that still reads the
+    # arc variable outside comments after that, or whose repair Jinja can no
+    # longer parse, is deleted, and its full content is logged first. Existing arcs are discarded on purpose.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='story_arcs_dropped_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            conn.execute("DROP TABLE IF EXISTS story_arcs")
+            try:
+                conn.execute(
+                    "DELETE FROM llm_template_overrides WHERE path IN (?, ?, ?)",
+                    ("tasks/story_arc_generation.md",
+                     "tasks/story_arc_advancement.md",
+                     "tasks/story_arc_resolve.md"))
+                stale = conn.execute(
+                    "SELECT path, content FROM llm_template_overrides "
+                    "WHERE instr(content, ?) > 0", (_ARC_VAR,)
+                ).fetchall()
+                for path, content in stale:
+                    repaired, still_reads = _strip_arc_var(content)
+                    if not still_reads and _parses(repaired):
+                        conn.execute(
+                            "UPDATE llm_template_overrides SET content = ? "
+                            "WHERE path = ?", (repaired, path))
+                        logger.warning(
+                            "Template override %s of world %s: the removed "
+                            "story arc block was cut out, the rest is kept",
+                            path, get_db_path().parent)
+                        continue
+                    logger.warning(
+                        "Template override %s of world %s still reads the "
+                        "removed story arc variable outside its block, or its "
+                        "repair no longer parses, and is deleted; the shipped "
+                        "template takes over. Its full content was:\n%s",
+                        path, get_db_path().parent, content)
+                    conn.execute(
+                        "DELETE FROM llm_template_overrides WHERE path = ?",
+                        (path,))
+            except sqlite3.OperationalError as e:
+                logger.info("story arc removal: no template overrides to "
+                            "clean (%s)", e)
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('story_arcs_dropped_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("story arc removal migration failed: %s", e)
 
     # One-time migration: remove legacy keys from character_state.meta.
     # Plan section 8 (step-8 cleanup, May 2026):

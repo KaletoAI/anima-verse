@@ -44,7 +44,6 @@
      recent_thoughts           — how this character's OWN last thoughts ENDED,
                                  short closing excerpts (private — never another
                                  character's, never in a chat prompt)
-     arc_block                 — Low: active story arc context
      retrospective_block       — Low (with boost): "time to reflect"
      tools_hint                — tool-format hint for single-mode tool use
      lang_instruction          — which language this character speaks
@@ -180,11 +179,6 @@ If this turn starts something you will only carry out LATER, record it with a ma
 
 === Tracker ===
 {{ tracker_block }}
-{% endif %}
-{% if arc_block %}
-
-=== Story you're part of ===
-{{ arc_block }}
 {% endif %}
 {% if retrospective_block %}
 

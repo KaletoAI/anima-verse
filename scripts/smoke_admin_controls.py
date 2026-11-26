@@ -457,6 +457,12 @@ DELETED = [
     # No caller either: the Mind panel reads memories and the diary through
     # their own routes.
     ("GET", "/play/journal"),
+    # 2026-11-25, quest system stage 1 (D16): the story arc engine is gone; the
+    # quest book reads /play/quests, quests are run under /quests.
+    ("POST", "/queue/story-arc/generate"),
+    ("DELETE", "/queue/story-arc/{arc_id}"),
+    ("GET", "/queue/story-arc/status"),
+    ("GET", "/play/story-arcs"),
 ]
 KEPT = [
     ("POST", "/admin/settings/llm-suitability-test/delete-old"),
@@ -500,9 +506,6 @@ KEPT = [
     ("GET", "/queue/tasks/status"),
     ("DELETE", "/queue/tasks/clear"),
     ("POST", "/queue/force-resume"),
-    ("POST", "/queue/story-arc/generate"),
-    ("DELETE", "/queue/story-arc/{arc_id}"),
-    ("GET", "/queue/story-arc/status"),
     ("POST", "/notifications/{notification_id}/read"),
     ("POST", "/notifications/read-all"),
     ("GET", "/templates/list"),

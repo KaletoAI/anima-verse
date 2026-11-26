@@ -74,6 +74,16 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 
+@router.get("/contact-anchors")
+def get_contact_anchors(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The declared contact anchors of the loaded packages (``collision_channels.declared_contact_anchors``): where
+    the attached part and the channels sit on the skeleton alone — the opening a renderer without built channels
+    samples a pair loop against (packages/scene-render/src/pairHeight.ts). No renderer reads it yet (the native
+    client's loop sampler is not built); admin-only until one does."""
+    from app.core.collision_channels import declared_contact_anchors
+    return declared_contact_anchors()
+
+
 @router.get("/animation-clips")
 def list_animation_clips() -> Dict[str, Any]:
     """Lists the shared animation clips.

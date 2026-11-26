@@ -1510,6 +1510,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # Owner decision 2026-11-20 (§ A8a): the contact pivot [side, forward] cm real figure heights scale about
         # (None = the clip frame's origin; always None for a solo clip).
         "pair_pivot_cm": clip_pair_pivot(meta) if entry["role"] else None,
+        # Owner decision 2026-11-25 (§ A8a): the contact heights per relation the vertical compensation of real figure
+        # heights reads (None = none stored: nothing is computed; always None for a solo clip).
         # Saved orientation and renderer calibration. Angles and role
         # offsets are baked; the whole-clip shift is applied at placement.
         "orientation": {k: geometry.get(k) for k in

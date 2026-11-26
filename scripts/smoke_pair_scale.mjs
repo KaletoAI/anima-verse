@@ -38,7 +38,8 @@
  *     (0.31588235, 0.08235294) → (10.08235294, 21.68411765); 1.60 m, a = 16/17: p' = (0.28941176, 0.11176471) →
  *     (10.11176471, 21.71058824) (±1e-8).
  *
- * VECTOR: shared/test-vectors/pair_scale.json carries [1] (the contact point p_i' + a_i·c_i at the frames t = 0, 1/4,
+ * VECTOR: the cases labelled H[…] are the vertical half (pairHeight.ts), derived in scripts/smoke_pair_height.mjs.
+ * shared/test-vectors/pair_scale.json carries [1] (the contact point p_i' + a_i·c_i at the frames t = 0, 1/4,
  * 1/2, 3/4 — sin/cos exact there — for both height orders, = C ±1e-12), [2]–[5] and [8] for the native client; this
  * smoke replays it after its own asserts. [6]/[7] (Auto-align, admin only) stay local.
  */
@@ -178,6 +179,13 @@ for (const [sa, sb] of [[aA, aB], [aB, aA]]) {
       const c = Math.cos(anchor.yaw), s = Math.sin(anchor.yaw)
       return { x: anchor.x + r.x * c + r.z * s, z: anchor.z - r.x * s + r.z * c }
     },
+    // the vertical half (scene-render pairHeight.ts; hand derivations in scripts/smoke_pair_height.mjs)
+    pairAxisGap: (f) => S.pairAxisGap(f),
+    pairContactFrame: (frames) => S.pairContactFrame(frames),
+    pairRoleClass: (role) => S.pairRoleClass(role),
+    pairRoleRange: (role) => S.pairRoleRange(role),
+    ikKnee: (hip, knee, ankle, target) => S.ikKnee(hip, knee, ankle, target),
+    pairHeightOffsets: (input) => S.pairHeightOffsets(input),
   })
   assert.equal(failed, 0, `pair_scale.json: ${failed} failed`)
   ok(`[vector] pair_scale.json: ${passed} cases`)

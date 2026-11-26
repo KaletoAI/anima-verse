@@ -56,7 +56,10 @@ is dropped as an unknown root. The two names stay known at the TOP LEVEL
 only (``DEAD_TOPLEVEL_ONLY_FIELDS``) — worlds/hotopia still carries them
 there — and test 5 is their hand case. The third top-level-only name is
 ``body_retexture``, the whole section of the painted-body worker (A224);
-no schema section owns it any more, so it is dead at the top level.
+no schema section owns it any more, so it is dead at the top level. The
+fourth is ``story_engine``, the whole section of the story arc engine, removed
+with the engine (quest system stage 1, D16); a world that stored it would
+otherwise log "unknown root key ignored" on every load.
 
 Test 1b is the "no reader" half for every name of the table: no string
 literal ``"<name>"`` / ``"<dotted.path>.<name>"`` and no attribute access
@@ -187,7 +190,7 @@ EXPECTED_DEAD = {
 }
 
 # Names that are dead at the TOP LEVEL only (no section owns them any more).
-EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height", "body_retexture"}
+EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height", "body_retexture", "story_engine"}
 EXPECTED_TOTAL = 21
 
 # The nested strip's table, by hand: use-case entries with no render occasion.
@@ -402,12 +405,12 @@ def main():
 
         print("5) top-level strays (worlds older than the sectioning)")
         check(set(cfgmod.DEAD_TOPLEVEL_ONLY_FIELDS) == EXPECTED_DEAD_TOPLEVEL_ONLY,
-              "DEAD_TOPLEVEL_ONLY_FIELDS == the two item sizes + body_retexture")
+              "DEAD_TOPLEVEL_ONLY_FIELDS == the two item sizes + body_retexture + story_engine")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
               == ({k for keys in EXPECTED_DEAD.values() for k in keys}
                   | EXPECTED_DEAD_TOPLEVEL_ONLY),
               f"DEAD_TOPLEVEL_FIELDS == the {EXPECTED_TOTAL} names flat + the two "
-              f"item sizes + body_retexture")
+              f"item sizes + body_retexture + story_engine")
         # worlds/hotopia looks exactly like this: the two item sizes sit at
         # the top level. llm_task_state is the one LIVING root key that is no
         # schema section (config_scope.EXTRA_ROOTS, read by llm_task_state.py).
@@ -415,6 +418,7 @@ def main():
             "item_image_width": 256,
             "item_image_height": 256,
             "body_retexture": {"enabled": True},
+            "story_engine": {"enabled": True, "max_beats": 5},
             "storage_dir": "./storage",
             "llm_task_state": {"disabled_tasks": ["x"]},
             "server": {"storage_dir": "./storage", "log_level": "DEBUG"},
@@ -427,6 +431,8 @@ def main():
               "both top-level item sizes are gone")
         check("body_retexture" not in old,
               "the painted-body worker's top-level section is gone (A224)")
+        check("story_engine" not in old,
+              "the story arc engine's stored section is gone (quest stage 1, D16)")
         check("storage_dir" not in old and "storage_dir" not in old["server"],
               "storage_dir falls at both depths")
         check("mapfit_backend" not in old["image_generation"],

@@ -805,6 +805,7 @@
       "label_de": "Sprache (TTS)",
       "column": 10,
       "row": 0,
+      "special": "tts_config",
       "fields": [
         {
           "key": "tts_enabled",
@@ -845,24 +846,31 @@
           "store": "config"
         },
         {
-          "key": "tts_voice",
-          "label": "TTS Voice",
-          "label_de": "TTS Voice",
+          "key": "tts_model",
+          "label": "Model / Backend",
+          "label_de": "Modell / Backend",
           "type": "select",
-          "source": "tts_voices",
           "store": "config",
-          "hint": "Voice for Magpie",
-          "hint_de": "Voice für Magpie"
+          "hint": "AI-Hub alias or TTS backend (empty = global default)",
+          "hint_de": "AI-Hub-Alias oder TTS-Backend (leer = globaler Standard)"
         },
         {
-          "key": "tts_speaker_wav",
-          "label": "Speaker WAV",
-          "label_de": "Speaker WAV",
+          "key": "tts_voice",
+          "label": "Voice",
+          "label_de": "Stimme",
           "type": "select",
-          "source": "tts_speakers",
           "store": "config",
-          "hint": "Reference voice for XTTS / F5-TTS",
-          "hint_de": "Referenz-Stimme für XTTS / F5-TTS"
+          "hint": "Model preset voice or cloned reference voice (voices/)",
+          "hint_de": "Modell-Stimme oder geklonte Referenz-Stimme (voices/)"
+        },
+        {
+          "key": "tts_param",
+          "label": "Voice parameter",
+          "label_de": "Stimm-Parameter",
+          "type": "text",
+          "store": "config",
+          "hint": "Model-specific character tuning (e.g. speaking rate or voice style)",
+          "hint_de": "Modellspezifischer Parameter (z. B. Sprechtempo oder Stimm-Stil)"
         }
       ]
     },

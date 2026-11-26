@@ -277,7 +277,9 @@ async def play_story_section(request: Request) -> StreamingResponse:
                             text=clean_text,
                             voice=tts_cfg.get("voice", ""),
                             speaker_wav=tts_cfg.get("speaker_wav", ""),
-                            language=tts_cfg.get("language", "de")))
+                            language=tts_cfg.get("language", "de"),
+                            model=tts_cfg.get("model", ""),
+                            param=tts_cfg.get("param", "")))
                 except Exception as tts_err:
                     logger.error("TTS Init Fehler: %s", tts_err)
 

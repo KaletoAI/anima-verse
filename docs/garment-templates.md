@@ -8,8 +8,10 @@ cuts it from sewing-pattern parameters, drapes it on the character's base body a
 and the second texture path, "texture from cut". The checked facts below are guarded by
 `scripts/smoke_docs_garment_templates.py`.
 
-Template version: **`TEMPLATE_VERSION` 10** (the bump that introduced the pattern UV; every drape of an older version
-is out of date and is re-draped by the next Build).
+Template version: **`TEMPLATE_VERSIONS` 10** for every kind (the bump that introduced the pattern UV; every drape of an
+older version is out of date and is re-draped by the next Build). Since the key isolation of 2026-11-25 the version is
+held per built kind (`template_version`): a change that drapes or cuts one kind differently bumps that kind's entry,
+never every kind's — see "Key isolation" below.
 
 ## 1. Pattern-piece UV islands (step 1: tops)
 
@@ -133,7 +135,7 @@ Key — the cut signature `cut_sig` (md5, 12 hex) over exactly what the cut read
 | the params as `tsig` has them (`keyed_params`: without `TEXTURE_ONLY` / `MATERIAL_ONLY` and the other kinds' fields) minus `DRAPE_ONLY` = (`fabric`,) | every other field shapes `panel_spec` or `slit`; `fabric` reaches the builder only as the cloth settings, read after the cut |
 | the base model sha256 | the body the panels are wrapped round, laid out of and measured on |
 | the drape key's lower-layer tokens (`under_tokens`) plus one `collider:<item>` per lower template drape that is READY | the drapes / fits under the piece are the colliders `clear_of_body` lays the panels out of (only ready drapes are handed over); the jacket allowance and the chest shaping change the pattern or the body |
-| `TEMPLATE_VERSION`, the flattening key (`uv_pattern_key`: a top's `TOP_UV_PATTERN_SHA`, a fitted piece's `UV_PATTERN_SHA` = md5 of `uv_pattern.py`) | a builder version or a new flattening re-cuts (seconds) |
+| the kind's `template_version`, the flattening key (`uv_pattern_key`: the piece's `pattern_group` pin in `UV_PATTERN_KEYS`) | a builder version or a new flattening of that kind re-cuts (seconds) |
 
 No sig — and no Blender run — while a lower template layer is still to be draped (state `missing`): the next Build
 drapes it first and lays this piece out of it, so a cut made now would differ from that drape; the dialog says
@@ -245,18 +247,18 @@ fitted kinds have their OWN prompt files (`FITTED_PROMPT_FILES`: `garment_cut_te
 `…_fitted_front_decorated.md`, `…_fitted_back.md`, four dialect sections each): the top's tested wording, the main
 pieces named by where they lie (`main_words`: "the two largest shapes are the right front leg panel and the left
 front leg panel", "the top left shape is the front panel"), the article of a pair noun ("a pair of gloves",
-`a_piece`), the small pieces named as plain. Their sha (`prompt_sha_of(kind)`, `PROMPT_SHAS["fitted"]`) keys the
-fitted atlases only; a top's `PROMPT_SHA` and atlases stay as they were. Before the cut, the Build's estimate counts a
+`a_piece`), the small pieces named as plain. Their md5 (`PROMPT_SHAS["fitted"]`) was the pin of every kind of the
+family (`PROMPT_KEYS`, `prompt_sha_of(kind)`); a top's pin and atlases stay as they were. Before the cut, the Build's estimate counts a
 back view and a back job only for a kind with back pieces (`kind_has_back`: not tights, not a cupped bra).
 
-**Keys.** `tsig` of a fitted kind carries `FITTED_VERSION` = **1** (group A, 2026-11-21: released together with the
+**Keys.** `tsig` of a fitted kind carries its `FITTED_VERSIONS` entry = **1** (group A, 2026-11-21: released together with the
 texture choice). **One-time re-drape:** every existing briefs, bra, gloves, tights and trousers drape made before it
 (key without `fitted`, planar box UV) is due again on the next Build of its character — CPU only, 0 hub jobs, about a
 minute per piece — and then carries its pattern islands; its texture stays the projection until the user chooses
-"From cut". (It was held at 0 while nothing could use the islands.) `cut_sig` carries it and `FITTED_PATTERN_SHA` (md5 of
-`fitted_pattern.py`), so a change of the cut rules re-cuts. A fitted piece's cut also keys `UV_PATTERN_SHA` (md5 of
-`uv_pattern.py`); a top's keys `TOP_UV_PATTERN_SHA` instead — the md5 of the `uv_pattern.py` that last changed a top's
-islands (c926b67f0). Step 3a's additions leave the tops' islands byte-identical, so no top drape counts as
+"From cut". (It was held at 0 while nothing could use the islands.) `cut_sig` carries it and the kind's
+`FITTED_PATTERN_KEYS` pin (`fitted_pattern.py`), so a change of that kind's cut rules re-cuts it. Every piece's cut also
+keys its `pattern_group` pin in `UV_PATTERN_KEYS` (`uv_pattern.py`): the md5 of the file that last changed that group's
+islands — a top's is c926b67f0's. Step 3a's additions leave the tops' islands byte-identical, so no top drape counts as
 `cut_behind` for them; a later change that alters a top's islands fails `scripts/smoke_uv_pattern.py` [21] and moves
 the pinned sha and that smoke's base commit together.
 
@@ -293,7 +295,7 @@ New slit sides `front_left` / `front_right` (`SLIT_SIDES`): 6 columns (0.471 rad
 
 **Keys.** `PANEL_VERSION` = **1** is in `tsig` AND `cut_sig` of a panel piece (`panel_piece`: `PANEL_KINDS` =
 (`skirt`,) and the strapless top), so every existing skirt and strapless top is re-draped ONCE on the next Build (CPU,
-0 hub jobs); no other top and no fitted kind moves. Their cut keys the live `UV_PATTERN_SHA`. A skirt's new fields:
+0 hub jobs); no other top and no fitted kind moves. Their cut keys their own `UV_PATTERN_KEYS` pins. A skirt's new fields:
 `waistband` (a new skirt defaults to `wide`; a saved skirt keeps the `thin` it was filled with) and `texture`.
 
 Measured on copies of the world's bodies (cut only, 0 hub jobs) against the plan's acceptance (A5: panels area
@@ -1031,15 +1033,44 @@ The upsampler rewrites the prompt; a P-H3 backend without that entry still runs,
   gaps (142, 106, 93), lighter than the item). `LACE_VERSION` 2.
 - Seam continuity (`seam_continuity`, the median ΔE76 across the `seams` pairs) is a metric, not a gate.
 
+### Key isolation (2026-11-25)
+
+A piece's drape key (`tsig`), cut key (`cut_sig`) and cut-texture key (`csig`) change only when the piece itself, the
+body it sits on or a piece that really overlaps its body region (`inner_pieces`, `regions_overlap`) changes. Every
+version in them is scoped to what it changes:
+
+- `TEMPLATE_VERSIONS` / `FITTED_VERSIONS` per built kind (`template_version`, `fitted_version`); the feature versions
+  (`PANEL_VERSION`, `LEG_VERSION`, `STRAP_VERSION`, `CORSET_VERSION`, `CORSET_STRAPS_VERSION`, `NECK_VERSION`,
+  `BRA_EDGE_VERSION`) only in the keys of the pieces their predicate names.
+- The flattening and the fitted part rules are pinned per group (`UV_PATTERN_KEYS`, `FITTED_PATTERN_KEYS`): the md5 of
+  the file that last changed that group's islands. Changing `uv_pattern.py` / `fitted_pattern.py` means deciding which
+  groups' islands change, moving those pins to the new md5 and `UV_PATTERN_REVIEWED` / `FITTED_PATTERN_REVIEWED` with
+  them; `scripts/smoke_key_isolation.py` fails until that is done.
+- The prompt is pinned per prompt kind (`PROMPT_KEYS`, `prompt_sha_of`): the md5 of the family's files that last
+  changed what that kind is sent. A rewording aimed at one kind, or one dialect's section, moves only the pins of the
+  kinds whose request it changes, and `PROMPT_REVIEWED` with them; the live `PROMPT_SHAS` are only the guard.
+  The corset dart rules are pinned the same way per corset variant (`CORSET_DARTS_KEYS`: "strapless", "straps";
+  `CORSET_DARTS_REVIEWED`). `scripts/smoke_key_isolation.py` fails until such a decision is made.
+- `POST_VERSION` is in `csig`, but a bump re-posts the stored answers (`predecessors`) and renders nothing. A
+  re-posted answer the new post-processing rejects is not taken from the predecessor again: that job renders anew.
+
+A rejected cut texture is not rendered again by a Build while the request would be the same
+(`retry_changes_request`: the same csig, the same seeds, the same routing chain, every attempt judged on its intended
+entry). The Build lists it as rejected with 0 image jobs; the texture dialog's Redo renders the next ROUND — the seed
+moves by `ROUND_SEED_STEP` per round, so a retry is a new request.
+
 ### The key `csig`
 
-`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), `PROMPT_SHA` of the three prompt files of the piece's family — a top's, or the fitted kinds' own (`prompt_sha_of(kind)`) —, `POST_VERSION`), 12 hex.
+`csig` = md5 of (`islands_sha` of the cut's `islands.json`, `item_sha` of the item picture, `back_sha` of the back view the back job reads ("" without a back panel), the prompt pin of the piece's kind in `PROMPT_KEYS` (`prompt_sha_of(kind)`: the md5 of its family's three prompt files — a top's, or the fitted kinds' own — that last changed what the kind is sent), `POST_VERSION`), 12 hex.
 
 It deliberately does not contain the drape key `tsig`: `tsig` also carries the piece-only views, and a re-rendered
 FRONT view changes nothing the cut atlas depends on. The back view does: a new back view makes the cut stale (the
 Views tab says so next to it). A re-drape with new islands (new body, new params, a version bump), a
 new item picture, a changed prompt or post version gives a new `csig`; the figure then shows the projection and the
-row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never painted onto new islands.
+row says "cut out of date" (`cut_info` state `stale`) — an old atlas is never painted onto new islands. A new
+`POST_VERSION` alone renders nothing again: `reused_jobs` takes the passed answers of a predecessor record
+(`predecessors`: the same islands, item picture, back view and prompt under an older post version) and posts them
+anew — 0 image jobs.
 
 The atlas is made from the CUT's islands and mapped onto a drape by the drape's islands sha: every drape of the same
 cut writes the same bytes, so the atlas stays valid across re-drapes (new views, a retry, a new fabric) as long as the

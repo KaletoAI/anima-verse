@@ -1430,8 +1430,15 @@ def schedule(character_name: str, signature: Optional[str] = None, *, retry: boo
     while one runs makes it run once more. Inside a staged model operation
     the request waits for that operation's publication. A build that failed
     is not retried with unchanged inputs unless ``retry`` (a manual Build, A181). True if started (or
-    deferred)."""
+    deferred). While a World Dev turn defers the character (``world_dev_media``)
+    nothing is scheduled — False, recorded for the turn's end."""
     try:
+        from app.core import world_dev_media
+        # Recorded WITHOUT the signature: a later write of the same turn may have
+        # changed the outfit, so the replay re-resolves the serving model.
+        if world_dev_media.suppress_if_deferred(character_name, "garment_assembly.schedule",
+                                                (None,), {"retry": retry}):
+            return False
         model3d = _model3d()
         if signature is None:
             path = model3d.find_model3d_serving(character_name)[0]

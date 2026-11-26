@@ -43,7 +43,7 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_matte")
 
-#: Bumped when the same picture cuts differently (part of ``garment_template.TEMPLATE_VERSION``'s reason, A230).
+#: Bumped when the same picture cuts differently (part of the reason of ``garment_template.TEMPLATE_VERSIONS`` 8, A230).
 #: 2 (A235): enclosed backdrop-coloured holes (the gap of a ring, between chain links) open instead of being filled;
 #: thin / near-edge parts are despilled, not only the rim.
 MATTE_VERSION = 2

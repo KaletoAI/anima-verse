@@ -11,7 +11,9 @@ it never opens a real world, never starts a server and never touches
 
 Four server functions lost their UI when the old vanilla web UI was removed.
 The routes stayed, without a caller, for months. Each gets a control in the
-React Game-Admin; this check pins the BACKEND half of each one.
+React Game-Admin; this check pins the BACKEND half of each one. The fourth, the
+story arc panel, left with the story arc engine (quest system stage 1,
+2026-11-25); its section [5] went with it.
 
 Hand-derived expectations
 =========================
@@ -92,21 +94,6 @@ Hand-derived expectations
       4d  what the dialog claims: the export holds ONLY
           {id, name, pos_x, pos_z, yaw_deg} — no terrain, no strokes, no
           height areas, no rooms.
-
-[5] STORY ARCS — ``/queue/story-arc/status|generate|{id}`` and the queue
-    handler behind the generate route.
-      5a  the status payload has {total, active, resolved, arcs} and counts
-          what ``get_all_arcs`` holds,
-      5b  every arc row carries what the admin list shows: title, status,
-          participants, beats, updated_at,
-      5c  deleting an arc removes EXACTLY that one; the other stays,
-      5d  deleting an unknown id is a 404,
-      5e  ``_handle_story_arc_generate`` no longer refuses an empty
-          ``user_id``. The route submits ``{"user_id": ""}`` and every caller
-          has since the multiuser refactor, so the handler answered "user_id
-          fehlt" and NO arc was ever generated from the button. Checked with a
-          stub engine, so no LLM is called. This is the second check that
-          fails on commit f548ed5f.
 """
 import os
 import sys
@@ -128,11 +115,8 @@ import io  # noqa: E402
 import json  # noqa: E402
 import zipfile  # noqa: E402
 
-from fastapi import HTTPException  # noqa: E402
-
-from app.core import content_io, skill_package_io, story_engine  # noqa: E402
+from app.core import content_io, skill_package_io  # noqa: E402
 from app.models import world  # noqa: E402
-from app.models import story_arcs  # noqa: E402
 from app.models.character import (  # noqa: E402
     save_character_profile, set_is_sleeping)
 from app.models.notifications import get_notifications  # noqa: E402
@@ -361,48 +345,6 @@ check("4c an unknown id is reported and creates nothing",
       [e["id"] for e in report["skipped_unknown"]] == ["does-not-exist"]
       and len(after) == loc_count_before,
       str(report["skipped_unknown"]))
-
-# ── [5] story arcs ──────────────────────────────────────────────────────────
-
-print("[5] storyteller — story arcs")
-from app.routes import queue as queue_route  # noqa: E402
-
-arc1 = story_arcs.create_arc("Smoke Feud", ["Ada", "Ben"], "They argue.",
-                             tension=2, first_beat_hint="a cold greeting")
-arc2 = story_arcs.create_arc("Smoke Pact", ["Ada", "Cleo"], "They plan.")
-
-status = queue_route.story_arc_status()
-check("5a the status payload counts what the model holds",
-      set(status.keys()) == {"total", "active", "resolved", "arcs"}
-      and status["total"] == 2 and status["active"] == 2 and status["resolved"] == 0,
-      str({k: v for k, v in status.items() if k != "arcs"}))
-row = next(a for a in status["arcs"] if a["id"] == arc1["id"])
-check("5b an arc row carries what the admin list shows",
-      row["title"] == "Smoke Feud" and row["status"] == "active"
-      and row["participants"] == ["Ada", "Ben"] and row["beats"] == []
-      and bool(row["updated_at"]),
-      str(sorted(row.keys())))
-
-queue_route.delete_story_arc(arc1["id"])
-left = [a["id"] for a in story_arcs.get_all_arcs()]
-check("5c delete removes exactly one arc", left == [arc2["id"]], str(left))
-ok, detail = raises(HTTPException, queue_route.delete_story_arc, "arc_nope")
-check("5d deleting an unknown arc is a 404", ok and "404" in detail or ok, detail)
-
-
-class _StubEngine:
-    """Stands in for the LLM-backed engine — the handler's gate is what is
-    under test, not the generation itself."""
-
-    def generate_arc(self):
-        return {"id": "arc_stub", "title": "Stub"}
-
-
-story_engine._story_engine = _StubEngine()
-generated = story_engine._handle_story_arc_generate({"user_id": ""})
-check("5e the queued generation no longer refuses an empty user_id",
-      generated.get("success") is True and generated["arc"]["id"] == "arc_stub",
-      str(generated))
 
 print()
 if FAILURES:

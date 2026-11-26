@@ -12,7 +12,11 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 12  # 12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
+SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, quest_facts)
+#                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
+#                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
+#                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state
+#                     (+ CREATE IF NOT EXISTS world_dev_media, world_dev_media_baseline)
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -211,8 +215,8 @@ SCHEMA_STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS characters (
         name         TEXT PRIMARY KEY,
         template     TEXT DEFAULT '',
-        profile_json TEXT DEFAULT '{}',   -- Stamm+Config als Blob (bewusst)
-        config_json  TEXT DEFAULT '{}',   -- Stamm+Config als Blob (bewusst)
+        profile_json TEXT DEFAULT '{}',   -- base data + config as a blob (on purpose)
+        config_json  TEXT DEFAULT '{}',   -- base data + config as a blob (on purpose)
         created_at   TEXT NOT NULL,
         updated_at   TEXT NOT NULL
     )""",
@@ -489,16 +493,6 @@ SCHEMA_STATEMENTS = [
         meta           TEXT DEFAULT '{}',
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL
-    )""",
-    """CREATE TABLE IF NOT EXISTS story_arcs (
-        id           TEXT PRIMARY KEY,
-        title        TEXT NOT NULL,
-        state        TEXT DEFAULT 'active',
-        beats        TEXT DEFAULT '[]',
-        participants TEXT DEFAULT '[]',
-        meta         TEXT DEFAULT '{}',
-        created_at   TEXT NOT NULL,
-        updated_at   TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS outfits_sets (
         id             TEXT PRIMARY KEY,
@@ -1076,6 +1070,7 @@ SCHEMA_STATEMENTS = [
         max_steps        INTEGER NOT NULL DEFAULT 0,
         max_tokens_total INTEGER NOT NULL DEFAULT 0,
         max_tokens       INTEGER,
+        effort           TEXT NOT NULL DEFAULT '',
         tokens_in        INTEGER NOT NULL DEFAULT 0,
         tokens_out       INTEGER NOT NULL DEFAULT 0,
         cost_total       REAL NOT NULL DEFAULT 0,
@@ -1110,6 +1105,104 @@ SCHEMA_STATEMENTS = [
         undone_at    TEXT,
         PRIMARY KEY (run_id, seq)
     )""",
+    # World Dev media lane (app/core/world_dev_media.py): one row per element
+    # job (kind location | character). status: queued | running | done |
+    # failed | skipped | cancelled | removed; steps_json = [{id, label,
+    # status, note, fp}], produced_json = the artefacts recorded exactly.
+    # scheduled_turn is informational (the run's turn when it was scheduled).
+    """CREATE TABLE IF NOT EXISTS world_dev_media (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id         TEXT NOT NULL,
+        kind           TEXT NOT NULL,
+        target_id      TEXT NOT NULL,
+        status         TEXT NOT NULL,
+        scheduled_turn INTEGER,
+        steps_json     TEXT,
+        produced_json  TEXT,
+        note           TEXT NOT NULL DEFAULT '',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_world_dev_media_element
+       ON world_dev_media (run_id, kind, target_id)""",
+    # The look of an element at the run's first touch: {step_id: fingerprint}
+    # as JSON; fps_json NULL = created by the run (every step due).
+    """CREATE TABLE IF NOT EXISTS world_dev_media_baseline (
+        run_id     TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        target_id  TEXT NOT NULL,
+        fps_json   TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, kind, target_id)
+    )""",
+    # Quest system (app/models/quests.py). Templates refer to
+    # ROLES; a run binds roles to world entities and freezes a
+    # template_snapshot at start (evaluation reads only the snapshot).
+    # Template state: draft | ready; origin: admin | auto | story | import.
+    # Run state — open: preparing | hidden | open; ended: done | failed |
+    # cancelled | broken. Game stamps (*_game_ts, expires_at) are canonical
+    # GameTime strings; created_at/updated_at/ended_at are SYSTEM time.
+    # quest_runs deliberately has NO character_name column: a deleted giver
+    # must leave the row for the engine to mark broken.
+    """CREATE TABLE IF NOT EXISTS quest_templates (
+        id              TEXT PRIMARY KEY,
+        title           TEXT NOT NULL DEFAULT '',
+        summary         TEXT NOT NULL DEFAULT '',
+        gm_notes        TEXT NOT NULL DEFAULT '',
+        origin          TEXT NOT NULL DEFAULT 'admin'
+                        CHECK(origin IN ('admin', 'auto', 'story', 'import')),
+        state           TEXT NOT NULL DEFAULT 'draft'
+                        CHECK(state IN ('draft', 'ready')),
+        kept            INTEGER NOT NULL DEFAULT 1,
+        revision        INTEGER NOT NULL DEFAULT 1,
+        roles           TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(roles)),
+        steps           TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(steps)),
+        start_condition TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(start_condition)),
+        prerequisites   TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(prerequisites)),
+        dependencies    TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(dependencies)),
+        setup_effects   TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(setup_effects)),
+        rewards         TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rewards)),
+        repeat          TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(repeat)),
+        time_limit_s    INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS quest_runs (
+        id                TEXT PRIMARY KEY,
+        template_id       TEXT NOT NULL,
+        state             TEXT NOT NULL
+                          CHECK(state IN ('preparing', 'hidden', 'open', 'done',
+                                          'failed', 'cancelled', 'broken')),
+        current_step      INTEGER NOT NULL DEFAULT 0,
+        bindings          TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(bindings)),
+        binding_labels    TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(binding_labels)),
+        template_snapshot TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(template_snapshot)),
+        step_log          TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(step_log)),
+        issues            TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(issues)),
+        started_by        TEXT NOT NULL DEFAULT '',
+        started_game_ts   TEXT NOT NULL DEFAULT '',
+        ended_game_ts     TEXT NOT NULL DEFAULT '',
+        expires_at        TEXT NOT NULL DEFAULT '',
+        news_event_id     TEXT NOT NULL DEFAULT '',
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        ended_at          TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_quest_runs_state ON quest_runs (state)",
+    "CREATE INDEX IF NOT EXISTS idx_quest_runs_template ON quest_runs (template_id)",
+    # What a MIND did for quests (linked_characters.mind_of of the acting
+    # avatar): kind + subject, e.g. ('spoke_with', '<character>'). Written
+    # once (UNIQUE + INSERT OR IGNORE); delete_character clears the rows
+    # where the character is the mind OR the subject.
+    """CREATE TABLE IF NOT EXISTS quest_facts (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        mind       TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        subject    TEXT NOT NULL,
+        game_ts    TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(mind, kind, subject)
+    )""",
 ]
 
 
@@ -1120,6 +1213,20 @@ ALTER_MIGRATIONS = [
     # = the model's default), so a follow-up after a restart resolves the
     # model with the same cap.
     ("world_dev_runs", "max_tokens", "INTEGER"),
+    # world_dev_runs: the Effort level the run was started with ('' = the
+    # model's default; world_dev_agent.EFFORT_LEVELS), so a follow-up after a
+    # restart resolves the model with the same thinking depth.
+    ("world_dev_runs", "effort", "TEXT NOT NULL DEFAULT ''"),
+    # world_dev_runs: the run's build box as JSON {min_x, min_z, max_x, max_z}
+    # (NULL = none set; world_dev_runs.set_bounds). Run metadata, not world
+    # data: out-of-box writes only warn, and the undo never touches it.
+    ("world_dev_runs", "bounds", "TEXT"),
+    # world_dev_runs: the run's media switch (1 = the server renders what the
+    # run built at the end of every review turn; world_dev_media) and the
+    # media state open | accepted | closed (accepted = no more journal rows,
+    # closed = discarded, nothing new is rendered).
+    ("world_dev_runs", "media_enabled", "INTEGER NOT NULL DEFAULT 1"),
+    ("world_dev_runs", "media_state", "TEXT NOT NULL DEFAULT 'open'"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),

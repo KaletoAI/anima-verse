@@ -28,6 +28,7 @@ from __future__ import annotations
 
 
 import math
+import re
 
 import numpy as np
 from PIL import Image
@@ -1919,3 +1920,702 @@ def draw_placket(atlas: np.ndarray, masks: dict, marks: dict, *, kind: str, styl
                     _disc(out, sel, e, LACE_EYE_CM * px_per_cm / 4.0, cord)
             info["eyelets"] = 2 * len(pairs)
     return out, info
+
+
+# ----------------------------------------------------------------------------------------------------------- trousers
+
+#: Round 2026-11-25 (Kai's jeans: the fly, the waistband and the back pockets the parameters ask for never appeared —
+#: no step of the chain asked for them): a trouser's construction details are painted by code onto the composed atlas at
+#: assembly, like the placket (``draw_trouser_details``), along lines derived from the cut's own seams
+#: (``trouser_lines``: the ``islands.json`` seam samples, 1 cm apart in 3D, matched on both sides) — no image job, no
+#: Blender run. Part of the assembly key of a trouser piece (``garment_cut_texture.placket_key``).
+TROUSER_DETAIL_VERSION = 1
+#: The fly (``fly`` zip / buttons): a J-shaped double topstitch on the LEFT front panel (the wearer's; fixed side, no
+#: parameter) FLY_W_CM inside the centre-front seam, FLY_LEN_CM down from the waist seam — at most to FLY_CROTCH_CLEAR_CM
+#: above the seam's lower end (the crotch); under FLY_MIN_CM of seam there is no fly. A button fly shows FLY_BUTTONS
+#: buttons of FLY_BUTTON_D_CM half way between the seam and the J.
+FLY_W_CM = 3.5
+FLY_LEN_CM = 17.0
+FLY_CROTCH_CLEAR_CM = 4.0
+FLY_MIN_CM = 8.0
+FLY_BUTTONS = 4
+FLY_BUTTON_D_CM = 1.1
+#: Double topstitching: the second row this far from the first; a thread THREAD_W_CM wide, dashed THREAD_DASH_CM on /
+#: THREAD_GAP_CM off; the first row of a seam lies THREAD_IN_CM off it.
+STITCH_GAP_CM = 0.6
+THREAD_W_CM = 0.1
+THREAD_DASH_CM = 0.3
+THREAD_GAP_CM = 0.12
+THREAD_IN_CM = 0.2
+#: A sewn edge (the fly's edge, a patch pocket's outline, a yoke, a belt loop's sides) is a groove SEAM_GROOVE_CM wide,
+#: SEAM_DL darker (``_seam_shade``; lighter only on a near-black fabric, as ``draw_seams``).
+TROUSER_GROOVE_CM = 0.12
+#: The waistband's button (a fly and a waistband): a metal shank button of BAND_BUTTON_D_CM at the centre front, in the
+#: middle of the band's height; rivets of RIVET_D_CM at the jeans' front-pocket corners.
+BAND_BUTTON_D_CM = 1.7
+RIVET_D_CM = 0.55
+#: Belt loops (``trouser_waist`` belt): LOOP_W_CM wide over the band's height, at the centre back (split by the band's
+#: opening: half at each end), BACK_LOOP_CM either side of it, SIDE_LOOP_BACK_CM behind each side seam and
+#: FRONT_LOOP_CM either side of the centre front — 7 loops. A loop is LOOP_DL lighter than the band (darker on a light
+#: fabric) with grooved sides and a bar tack at each end.
+LOOP_W_CM = 1.0
+BACK_LOOP_CM = 7.0
+SIDE_LOOP_BACK_CM = 1.5
+FRONT_LOOP_CM = 9.0
+LOOP_DL = 6.0
+#: A bar tack: BAR_TACK_CM long across its line, BAR_TACK_W_CM wide, solid thread.
+BAR_TACK_CM = 0.8
+BAR_TACK_W_CM = 0.18
+#: Front pockets: the opening runs from the waist seam FRONT_POCKET_IN_CM from the centre front to the side seam
+#: FRONT_POCKET_DEPTH_CM under its top — a scoop (jeans: the quadratic curve through the corner under its start) or a
+#: slant (tailored: straight, TAILORED_POCKET_DEPTH_CM deep).
+FRONT_POCKET_IN_CM = 10.0
+FRONT_POCKET_DEPTH_CM = 8.0
+TAILORED_POCKET_DEPTH_CM = 16.0
+#: Back (jeans): the yoke from the centre-back seam YOKE_CB_CM under the waist seam to the side seam YOKE_SIDE_CM under
+#: it; a patch pocket BACK_POCKET_W_CM wide, BACK_POCKET_SIDE_CM down its sides and BACK_POCKET_H_CM down its middle
+#: (a point), its top centre BACK_POCKET_FROM_CB_CM along the waist seam from the centre back and
+#: BACK_POCKET_TOP_CM under it (at least BACK_POCKET_UNDER_YOKE_CM under the yoke), parallel to the yoke; its opening
+#: hemmed BACK_POCKET_HEM_CM under its top. Tailored: a welt pocket — two lips WELT_CM apart, BACK_POCKET_W_CM - 1 wide.
+YOKE_CB_CM = 6.5
+YOKE_SIDE_CM = 3.5
+BACK_POCKET_W_CM = 14.0
+BACK_POCKET_SIDE_CM = 13.5
+BACK_POCKET_H_CM = 15.0
+BACK_POCKET_FROM_CB_CM = 9.0
+BACK_POCKET_TOP_CM = 7.5
+BACK_POCKET_UNDER_YOKE_CM = 1.0
+BACK_POCKET_HEM_CM = 1.5
+WELT_CM = 1.0
+#: The waistband's two topstitch rows lie BAND_STITCH_IN_CM inside its edges.
+BAND_STITCH_IN_CM = 0.3
+#: The thread colour must differ by at least THREAD_MIN_DE (dE76) from the fabric; else (the item names or shows a
+#: thread of the fabric's own colour) it is the fabric moved by THREAD_DL in L*.
+THREAD_MIN_DE = 12.0
+THREAD_DL = 22.0
+#: The gate (``trouser_detail_gate``): a configured detail is painted when at least DETAIL_MIN_PX of its pixels changed,
+#: by at least DETAIL_MIN_DE on average.
+DETAIL_MIN_PX = 20
+DETAIL_MIN_DE = 6.0
+#: The seam polylines are evened by this many rounds of (1, 2, 1) / 4 (the fitted cut's borders are jagged), chains of
+#: one seam within JOIN_CM of each other's ends joined.
+LINE_SMOOTH = 3
+BAND_SMOOTH = 12
+JOIN_CM = 3.0
+#: The jeans words of an item's text (``trouser_style``): yoke, patch pockets with rivets, a scooped front pocket.
+JEANS_WORDS = ("jeans", "jean", "denim", "denims")
+
+
+def trouser_style(text: str) -> str:
+    """"jeans" when the item text names jeans or denim, else "tailored" (slant front pockets, welt back pockets, no
+    yoke, no rivets)."""
+    words = set(re.findall(r"[a-z]+", (text or "").lower()))
+    return "jeans" if words & set(JEANS_WORDS) else "tailored"
+
+
+def trouser_wanted(fly: str, waist: str) -> list[str]:
+    """The details a trouser's parameters ask for: ``fly`` (zip / buttons) -> the fly, the front pockets, the back
+    pockets; a waistband (``trouser_waist`` not none) -> its topstitching, with a fly its button, a belt band its
+    loops."""
+    out = []
+    fly_on = fly not in (None, "", "none")
+    band = waist not in (None, "", "none")
+    if fly_on:
+        out += ["fly", "front_pocket_l", "front_pocket_r", "back_pocket_l", "back_pocket_r"]
+    if band:
+        out.append("band_stitch")
+        if fly_on:
+            out.append("band_button")
+        if waist == "belt":
+            out.append("belt_loops")
+    return out
+
+
+def seam_pairs(islands: dict, one: str, other: str) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Every seam chain between the islands ``one`` and ``other`` (``islands.json`` ``seams``, samples in chain order)
+    as ``(px on one's side, px on other's side)``, each (n, 2); chains of fewer than 2 samples left out."""
+    chains: dict[int, dict] = {}
+    for smp in islands.get("seams") or []:
+        c = chains.setdefault(int(smp["seam"]), {"a": smp["a"], "b": smp["b"], "pa": [], "pb": []})
+        c["pa"].append(smp["uv_a_px"])
+        c["pb"].append(smp["uv_b_px"])
+    out = []
+    for k in sorted(chains):
+        c = chains[k]
+        if (c["a"], c["b"]) == (one, other):
+            pair = (np.asarray(c["pa"], float), np.asarray(c["pb"], float))
+        elif (c["a"], c["b"]) == (other, one):
+            pair = (np.asarray(c["pb"], float), np.asarray(c["pa"], float))
+        else:
+            continue
+        if len(pair[0]) >= 2:
+            out.append(pair)
+    return out
+
+
+def _join(lines: list, join_px: float) -> np.ndarray | None:
+    """The polylines ``lines`` (each (n, 2)) joined end to end into one, starting from the longest: the line whose end
+    lies nearest an end of the joined one (within ``join_px``) is added there, reversed when needed. None without a
+    line; lines too far from it are left out."""
+    rest = [np.asarray(x, float) for x in lines if len(x) >= 2]
+    if not rest:
+        return None
+    rest.sort(key=len, reverse=True)
+    cur = rest.pop(0)
+    while rest:
+        best = None
+        for i, ln in enumerate(rest):
+            for at_end in (True, False):
+                end = cur[-1] if at_end else cur[0]
+                for rev in (False, True):
+                    seg = ln[::-1] if rev else ln
+                    d = float(np.linalg.norm((seg[0] if at_end else seg[-1]) - end))
+                    if best is None or d < best[0]:
+                        best = (d, i, at_end, seg)
+        if best[0] > join_px:
+            break
+        _d, i, at_end, seg = best
+        cur = np.vstack([cur, seg]) if at_end else np.vstack([seg, cur])
+        rest.pop(i)
+    return cur
+
+
+def _from(p: np.ndarray, q) -> np.ndarray:
+    """``p`` ordered to start at its end nearer the point ``q``."""
+    return p if np.linalg.norm(p[0] - q) <= np.linalg.norm(p[-1] - q) else p[::-1]
+
+
+def _top_first(p: np.ndarray) -> np.ndarray:
+    """``p`` ordered to start at its higher end (smaller image y: the islands are oriented up)."""
+    return p if p[0][1] <= p[-1][1] else p[::-1]
+
+
+def _normal_to(p: np.ndarray, s: np.ndarray, t: float, towards) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(point, unit tangent, unit normal)`` at arc length ``t`` of the polyline, the normal turned to the side of the
+    point ``towards``."""
+    c, tg = _at(p, s, t)
+    n = np.array([-tg[1], tg[0]])
+    if (np.asarray(towards, float) - c) @ n < 0:
+        n = -n
+    return c, tg, n
+
+
+def _offset_line(p: np.ndarray, d: float, towards) -> np.ndarray:
+    """The polyline ``p`` moved ``d`` px along its normals, to the side of the point ``towards`` (the normal at each
+    point from its neighbours, turned consistently with the first)."""
+    p = np.asarray(p, float)
+    if len(p) < 2:
+        return p.copy()
+    tg = np.gradient(p, axis=0)
+    tg /= np.maximum(np.linalg.norm(tg, axis=1), 1e-9)[:, None]
+    n = np.stack([-tg[:, 1], tg[:, 0]], 1)
+    mid = p[len(p) // 2]
+    if (np.asarray(towards, float) - mid) @ n[len(p) // 2] < 0:
+        n = -n
+    return p + n * d
+
+
+def _upto(p: np.ndarray, s: np.ndarray, t: float) -> np.ndarray:
+    """The polyline from its start to arc length ``t`` (the end point interpolated)."""
+    k = int(np.searchsorted(s, t, side="right"))
+    pts = list(p[:k])
+    end, _ = _at(p, s, t)
+    if not pts or np.linalg.norm(pts[-1] - end) > 1e-9:
+        pts.append(end)
+    return np.asarray(pts, float)
+
+
+def _bezier(a, c, b, n: int = 32) -> np.ndarray:
+    t = np.linspace(0.0, 1.0, n)[:, None]
+    a, c, b = (np.asarray(v, float) for v in (a, c, b))
+    return (1 - t) ** 2 * a + 2 * (1 - t) * t * c + t * t * b
+
+
+def _island(islands: dict, name: str) -> dict | None:
+    return next((i for i in islands.get("islands") or [] if i["name"] == name), None)
+
+
+def _centroid(isl: dict) -> np.ndarray:
+    return np.asarray(isl["verts_px"], float).mean(0)
+
+
+def _loop_path(isl: dict, a, b) -> np.ndarray | None:
+    """The shorter way along the island's (longest) boundary loop from the loop point nearest ``a`` to the one nearest
+    ``b`` — a panel's top edge between two corners when no waistband seam marks it."""
+    loops = [np.asarray(lp, float) for lp in isl.get("loops_px") or [] if len(lp) >= 3]
+    if not loops:
+        return None
+    lp = max(loops, key=len)
+    i = int(np.argmin(np.linalg.norm(lp - np.asarray(a, float), axis=1)))
+    j = int(np.argmin(np.linalg.norm(lp - np.asarray(b, float), axis=1)))
+    n = len(lp)
+    fwd = [lp[(i + k) % n] for k in range(((j - i) % n) + 1)]
+    bwd = [lp[(i - k) % n] for k in range(((i - j) % n) + 1)]
+
+    def length(path):
+        q = np.asarray(path)
+        return float(np.linalg.norm(np.diff(q, axis=0), axis=1).sum()) if len(q) > 1 else 0.0
+    return np.asarray(fwd if length(fwd) <= length(bwd) else bwd, float)
+
+
+def _panel_frame(islands: dict, panel: str, centre_mate: str, side_mate: str, join_px: float) -> dict | None:
+    """The construction lines of one leg panel (``front_l`` ...), image pixels, every polyline evened
+    (``LINE_SMOOTH``): ``centre`` = the seam to ``centre_mate`` (the other front / back panel: centre front / back)
+    from its top down; ``side`` = the outseam to ``side_mate`` (of the panel's seams to it the one reaching highest)
+    from its top down; ``waist`` = the panel's top edge from the centre end to the side end (its seam to the waistband,
+    else its boundary between the two tops). None when the centre or the side seam is missing."""
+    isl = _island(islands, panel)
+    if isl is None:
+        return None
+    centre = _join([a for a, _b in seam_pairs(islands, panel, centre_mate)], join_px)
+    sides = [a for a, _b in seam_pairs(islands, panel, side_mate)]
+    if centre is None or not sides:
+        return None
+    side = _top_first(min(sides, key=lambda q: float(q[:, 1].min())))
+    centre = _top_first(centre)
+    band = _join([a for a, _b in seam_pairs(islands, panel, "waistband")], join_px)
+    waist = _from(band, centre[0]) if band is not None else _loop_path(isl, centre[0], side[0])
+    if waist is None or len(waist) < 2:
+        return None
+    sm = lambda q: _smooth_points(q, LINE_SMOOTH)  # noqa: E731
+    return {"centre": sm(centre), "side": sm(side), "waist": sm(waist), "banded": band is not None,
+            "mid": _centroid(isl)}
+
+
+def trouser_lines(islands: dict, *, fly: str, waist: str, style: str = "jeans",
+                  band_cm: float = 4.0) -> dict:
+    """The detail geometry of a trouser cut (``TROUSER_*`` constants), in the atlas pixels of ``islands`` — no mask, no
+    picture: ``{"lines": {name: {"island", "px", "kind"}}, "points": {name: {"island", "px", "d_cm", "kind"}},
+    "loops": [{"island", "a", "b"}], "wanted": [...], "placed": [...], "missing": [...]}`` — ``kind`` "stitch" (a
+    dashed thread), "groove" (a sewn edge) or "tack" (a bar tack, a line across); a point "button" / "rivet".
+    ``wanted`` = ``trouser_wanted(fly, waist)``; a detail is "placed" when its geometry could be derived from the
+    cut's seams (the fly needs the centre-front seam of ``front_l``, the band its seams to the panels, a pocket its
+    panel's centre and side seams), else "missing"."""
+    ppc = float(islands.get("px_per_cm") or 0.0)
+    out: dict = {"lines": {}, "points": {}, "loops": [], "wanted": trouser_wanted(fly, waist), "placed": [],
+                 "missing": []}
+    if ppc <= 0:
+        out["missing"] = list(out["wanted"])
+        return out
+    jp = JOIN_CM * ppc
+    gap = STITCH_GAP_CM * ppc
+    jeans = style == "jeans"
+
+    def line(name, island, px, kind="stitch"):
+        out["lines"][name] = {"island": island, "px": [[round(float(x), 2), round(float(y), 2)] for x, y in px],
+                              "kind": kind}
+
+    def point(name, island, px, d_cm, kind):
+        out["points"][name] = {"island": island, "px": [round(float(px[0]), 2), round(float(px[1]), 2)],
+                               "d_cm": d_cm, "kind": kind}
+
+    placed = set()
+    frames = {}
+    for sd, ot in (("l", "r"), ("r", "l")):
+        frames["front_" + sd] = _panel_frame(islands, "front_" + sd, "front_" + ot, "back_" + sd, jp)
+        frames["back_" + sd] = _panel_frame(islands, "back_" + sd, "back_" + ot, "front_" + sd, jp)
+    # the fly: on the left front, along the centre-front seam
+    fr = frames.get("front_l")
+    if "fly" in out["wanted"] and fr is not None:
+        p, s = _polyline(fr["centre"])
+        length = min(FLY_LEN_CM * ppc, s[-1] - FLY_CROTCH_CLEAR_CM * ppc)
+        if length >= FLY_MIN_CM * ppc:
+            w = FLY_W_CM * ppc
+            for k, r in enumerate((w, w - gap)):
+                pts = []
+                for t in np.linspace(0.0, length - w, max(2, int((length - w) / ppc) + 1)):
+                    c, _tg, n = _normal_to(p, s, t, fr["mid"])
+                    pts.append(c + n * r)
+                for phi in np.linspace(0.0, math.pi / 2, 16)[1:]:
+                    c, _tg, n = _normal_to(p, s, length - w + r * math.sin(phi), fr["mid"])
+                    pts.append(c + n * r * math.cos(phi))
+                line(f"fly_{k + 1}", "front_l", pts)
+            line("fly_edge", "front_l", _upto(p, s, length), "groove")
+            c, tg, n = _normal_to(p, s, length - THREAD_IN_CM * ppc, fr["mid"])
+            line("fly_tack", "front_l", [c + n * 0.1 * ppc, c + n * (0.1 * ppc + BAR_TACK_CM * ppc)], "tack")
+            if fly == "buttons":
+                for j in range(FLY_BUTTONS):
+                    t = 2.0 * ppc + j * (length - w - 2.0 * ppc) / max(1, FLY_BUTTONS - 1)
+                    c, _tg, n = _normal_to(p, s, t, fr["mid"])
+                    point(f"fly_button_{j + 1}", "front_l", c + n * w / 2.0, FLY_BUTTON_D_CM, "button")
+            placed.add("fly")
+    # the front pockets
+    for sd in ("l", "r"):
+        fr = frames.get("front_" + sd)
+        if f"front_pocket_{sd}" not in out["wanted"] or fr is None:
+            continue
+        wp, ws = _polyline(fr["waist"])
+        sp, ss = _polyline(fr["side"])
+        if ws[-1] < FRONT_POCKET_IN_CM * ppc + 2.0 * ppc or ss[-1] < TAILORED_POCKET_DEPTH_CM * ppc:
+            continue
+        p0, _tg, down = _normal_to(wp, ws, FRONT_POCKET_IN_CM * ppc, fr["mid"])
+        p1, _ = _at(sp, ss, (FRONT_POCKET_DEPTH_CM if jeans else TAILORED_POCKET_DEPTH_CM) * ppc)
+        isl = "front_" + sd
+        if jeans:
+            curve = _bezier(p0, p0 + down * float((p1 - p0) @ down), p1)
+            line(f"front_pocket_{sd}_edge", isl, curve, "groove")
+            # the rows run on the pocket's facing side: toward the panel's middle from the opening
+            line(f"front_pocket_{sd}_1", isl, _offset_line(curve, THREAD_IN_CM * ppc, fr["mid"]))
+            line(f"front_pocket_{sd}_2", isl, _offset_line(curve, THREAD_IN_CM * ppc + gap, fr["mid"]))
+            point(f"front_pocket_{sd}_rivet_1", isl, p0 + down * 0.5 * ppc, RIVET_D_CM, "rivet")
+            point(f"front_pocket_{sd}_rivet_2", isl, p1 + (p0 - p1) / max(1e-9, float(np.linalg.norm(p0 - p1)))
+                  * 0.5 * ppc, RIVET_D_CM, "rivet")
+        else:
+            curve = np.array([p0, p1])
+            line(f"front_pocket_{sd}_edge", isl, curve, "groove")
+            line(f"front_pocket_{sd}_1", isl, _offset_line(curve, THREAD_IN_CM * ppc, fr["mid"]))
+        placed.add(f"front_pocket_{sd}")
+    # the back: yoke and patch pockets (jeans) or welt pockets (tailored)
+    for sd in ("l", "r"):
+        fr = frames.get("back_" + sd)
+        if f"back_pocket_{sd}" not in out["wanted"] or fr is None:
+            continue
+        isl = "back_" + sd
+        cp, cs = _polyline(fr["centre"])
+        sp, ss = _polyline(fr["side"])
+        wp, ws = _polyline(fr["waist"])
+        if ws[-1] < BACK_POCKET_FROM_CB_CM * ppc + BACK_POCKET_W_CM / 2.0 * ppc or cs[-1] < YOKE_CB_CM * ppc:
+            continue
+        w0, wt, down = _normal_to(wp, ws, BACK_POCKET_FROM_CB_CM * ppc, fr["mid"])
+        across = wt
+        top = BACK_POCKET_TOP_CM * ppc
+        if jeans:
+            ya, _ = _at(cp, cs, YOKE_CB_CM * ppc)
+            yb, _ = _at(sp, ss, YOKE_SIDE_CM * ppc)
+            yoke = np.array([ya, yb])
+            line(f"yoke_{sd}_edge", isl, yoke, "groove")
+            line(f"yoke_{sd}_1", isl, _offset_line(yoke, THREAD_IN_CM * ppc, fr["mid"]))
+            line(f"yoke_{sd}_2", isl, _offset_line(yoke, THREAD_IN_CM * ppc + gap, fr["mid"]))
+            across = (yb - ya) / max(1e-9, float(np.linalg.norm(yb - ya)))
+            down = np.array([-across[1], across[0]])
+            if (fr["mid"] - w0) @ down < 0:
+                down = -down
+            # the yoke's depth under w0 along ``down``: where the yoke line crosses the ray
+            ab = yb - ya
+            den = down[0] * ab[1] - down[1] * ab[0]
+            if abs(den) > 1e-9:
+                wx = ya - w0
+                depth = (wx[0] * ab[1] - wx[1] * ab[0]) / den
+                top = max(top, depth + BACK_POCKET_UNDER_YOKE_CM * ppc)
+        tc = w0 + down * top
+        hw = BACK_POCKET_W_CM / 2.0 * ppc
+        if jeans:
+            tl, tr = tc - across * hw, tc + across * hw
+            bl, br = tl + down * BACK_POCKET_SIDE_CM * ppc, tr + down * BACK_POCKET_SIDE_CM * ppc
+            bot = tc + down * BACK_POCKET_H_CM * ppc
+            outline = np.array([tl, bl, bot, br, tr])
+            line(f"back_pocket_{sd}_edge", isl, np.vstack([outline, tl]), "groove")
+            inner = np.array([tc, tc + down * BACK_POCKET_SIDE_CM * ppc])    # a point inside the pocket
+            mid_in = inner.mean(0)
+
+            def inset(d):
+                return _inset_polygon(outline, d, mid_in)
+            line(f"back_pocket_{sd}_1", isl, inset(THREAD_IN_CM * ppc))
+            line(f"back_pocket_{sd}_2", isl, inset(THREAD_IN_CM * ppc + gap))
+            line(f"back_pocket_{sd}_hem", isl, [tl + down * BACK_POCKET_HEM_CM * ppc + across * 0.3 * ppc,
+                                                 tr + down * BACK_POCKET_HEM_CM * ppc - across * 0.3 * ppc])
+            for k, corner in enumerate((tl, tr)):
+                inward = across if k == 0 else -across
+                line(f"back_pocket_{sd}_tack_{k + 1}", isl,
+                     [corner + inward * 0.15 * ppc, corner + inward * 0.15 * ppc + down * BAR_TACK_CM * ppc], "tack")
+        else:
+            hw -= 0.5 * ppc
+            for k, d in enumerate((0.0, WELT_CM * ppc)):
+                a, b = tc - across * hw + down * d, tc + across * hw + down * d
+                line(f"back_pocket_{sd}_welt_{k + 1}", isl, [a, b], "groove")
+            line(f"back_pocket_{sd}_1", isl, [tc - across * hw + down * WELT_CM / 2.0 * ppc,
+                                              tc + across * hw + down * WELT_CM / 2.0 * ppc])
+        placed.add(f"back_pocket_{sd}")
+    # the waistband: its two rows, the button at the centre front, the belt loops
+    band = _island(islands, "waistband")
+    if band is not None and any(d in out["wanted"] for d in ("band_stitch", "band_button", "belt_loops")):
+        runs = []
+        for panel in ("back_r", "front_r", "front_l", "back_l"):
+            for _a, b in seam_pairs(islands, "waistband", panel):
+                runs += [(q, panel) for q in _a]
+        if len(runs) >= 4:
+            P = np.array([q for q, _ in runs])
+            lab = [n for _, n in runs]
+            V = np.asarray(band["verts_px"], float)
+            ctr = V.mean(0)
+            ev = np.linalg.eigh(np.cov((V - ctr).T))[1][:, -1]
+            if ev[0] < 0:
+                ev = -ev
+            order = np.argsort((P - ctr) @ ev, kind="stable")
+            P, lab = P[order], [lab[i] for i in order]
+            # the junctions are read on the samples as cut (``u_between``: two runs meeting share a sample); the
+            # evened bottom edge drops one of each pair closer than a quarter cm
+            raw_u, raw_lab = (P - ctr) @ ev, list(lab)
+            keep = [0] + [i for i in range(1, len(P)) if float(np.linalg.norm(P[i] - P[i - 1])) >= 0.25 * ppc]
+            P = P[keep]
+            up = np.array([-ev[1], ev[0]])
+            if (ctr - P.mean(0)) @ up < 0:
+                up = -up
+            bottom = _smooth_points(P, BAND_SMOOTH)
+            u = (bottom - ctr) @ ev
+            # the band's height as cut: per seam sample the farthest band vertex up within 1 cm along the band, the
+            # median of those (the fitted cut's band is jagged and a little higher than ``band_cm``)
+            vu = (V - ctr) @ ev
+            reach = [float(((V[np.abs(vu - uu) < ppc] - q) @ up).max()) for q, uu in zip(bottom, u)
+                     if (np.abs(vu - uu) < ppc).any()]
+            h = float(np.median(reach)) if reach else float(band_cm) * ppc
+            out["band_h_cm"] = round(h / ppc, 3)
+            if "band_stitch" in out["wanted"]:
+                line("band_stitch_1", "waistband", bottom + up * BAND_STITCH_IN_CM * ppc)
+                line("band_stitch_2", "waistband", bottom + up * (h - BAND_STITCH_IN_CM * ppc))
+                placed.add("band_stitch")
+
+            def u_between(x, y):
+                """The band coordinate of the junction of the runs of panels x and y (the mean of the nearest pair)."""
+                ix = [i for i, n in enumerate(raw_lab) if n == x]
+                iy = [i for i, n in enumerate(raw_lab) if n == y]
+                if not ix or not iy:
+                    return None
+                best = min(((abs(raw_u[i] - raw_u[j]), i, j) for i in (ix[0], ix[-1]) for j in (iy[0], iy[-1])))
+                return float((raw_u[best[1]] + raw_u[best[2]]) / 2.0)
+
+            def at_u(uu, lift):
+                """The point of the band's bottom edge at band coordinate ``uu``, ``lift`` px up (past the first /
+                last seam sample along the band's axis)."""
+                if uu <= u[0]:
+                    return bottom[0] + ev * (uu - u[0]) + up * lift
+                if uu >= u[-1]:
+                    return bottom[-1] + ev * (uu - u[-1]) + up * lift
+                k = int(np.clip(np.searchsorted(u, uu), 1, len(u) - 1))
+                f = float(np.clip((uu - u[k - 1]) / max(1e-9, u[k] - u[k - 1]), 0.0, 1.0))
+                return bottom[k - 1] * (1 - f) + bottom[k] * f + up * lift
+
+            cf = u_between("front_l", "front_r")
+            if "band_button" in out["wanted"] and cf is not None:
+                point("band_button", "waistband", at_u(cf, h / 2.0), BAND_BUTTON_D_CM, "button")
+                placed.add("band_button")
+            if "belt_loops" in out["wanted"] and cf is not None:
+                side_l, side_r = u_between("front_l", "back_l"), u_between("front_r", "back_r")
+                if side_l is not None and side_r is not None:
+                    to_l = 1.0 if side_l > cf else -1.0
+                    # the centre back is the band's opening: its two ends (the island's extent along the band)
+                    e0, e1 = float(vu.min()), float(vu.max())
+                    us = [e0, e1, cf + to_l * FRONT_LOOP_CM * ppc, cf - to_l * FRONT_LOOP_CM * ppc,
+                          side_l + to_l * SIDE_LOOP_BACK_CM * ppc, side_r - to_l * SIDE_LOOP_BACK_CM * ppc,
+                          e0 + BACK_LOOP_CM * ppc, e1 - BACK_LOOP_CM * ppc]
+                    for uu in us:
+                        out["loops"].append({"island": "waistband",
+                                             "a": [round(float(v), 2) for v in at_u(uu, 0.0)],
+                                             "b": [round(float(v), 2) for v in at_u(uu, h)]})
+                    placed.add("belt_loops")
+    out["placed"] = [d for d in out["wanted"] if d in placed]
+    out["missing"] = [d for d in out["wanted"] if d not in placed]
+    return out
+
+
+def _inset_polygon(poly: np.ndarray, d: float, inside) -> np.ndarray:
+    """The open polyline ``poly`` with every vertex moved ``d`` px toward ``inside`` along the bisector of its two edge
+    normals (an end vertex along its one edge's normal) — the rows inside a patch pocket's outline."""
+    p = np.asarray(poly, float)
+    out = []
+    for i in range(len(p)):
+        ns = []
+        for a, b in ((p[i - 1], p[i]) if i > 0 else (None, None), (p[i], p[i + 1]) if i + 1 < len(p) else (None, None)):
+            if a is None:
+                continue
+            tg = (b - a) / max(1e-9, float(np.linalg.norm(b - a)))
+            n = np.array([-tg[1], tg[0]])
+            if (np.asarray(inside, float) - (a + b) / 2.0) @ n < 0:
+                n = -n
+            ns.append(n)
+        if len(ns) == 2:
+            bis = ns[0] + ns[1]
+            ln = float(np.linalg.norm(bis))
+            cosh = max(0.2, ln / 2.0)
+            out.append(p[i] + bis / max(ln, 1e-9) * d / cosh)
+        else:
+            out.append(p[i] + ns[0] * d)
+    return np.asarray(out)
+
+
+def _dashed(out: np.ndarray, sel: np.ndarray, p: np.ndarray, half: float, dash: float, gap: float, rgb) -> int:
+    """Paint the polyline ``p`` as dashes ``dash`` px on, ``gap`` px off (within ``half`` of it, ``sel`` only).
+    Returns the dashes painted."""
+    p, s = _polyline(p)
+    if s[-1] <= 0:
+        return 0
+    n = 0
+    t = 0.0
+    while t < s[-1]:
+        t1 = min(s[-1], t + dash)
+        a, _ = _at(p, s, t)
+        k0 = int(np.searchsorted(s, t, side="right"))
+        k1 = int(np.searchsorted(s, t1, side="left"))
+        pts = [a] + [p[k] for k in range(k0, k1)] + [_at(p, s, t1)[0]]
+        for x, y in zip(pts, pts[1:]):
+            _band(out, sel, x, y, half, rgb)
+        n += 1
+        t = t1 + gap
+    return n
+
+
+def thread_colour(fabric_lab, thread_rgb=None) -> tuple[np.ndarray, str]:
+    """The topstitch thread's sRGB and its source: the item's own ``thread_rgb`` (its text or its picture,
+    ``garment_cut_texture.thread_rgb``) when it differs by ``THREAD_MIN_DE`` from the fabric, else the fabric moved by
+    ``THREAD_DL`` in L* (``_shade``: darker on a light fabric) — "contrast"."""
+    if thread_rgb is not None:
+        rgb = np.clip(np.rint(np.asarray(thread_rgb, np.float64)[:3]), 0, 255).astype(np.uint8)
+        if float(np.linalg.norm(srgb_to_lab(rgb.astype(np.float64)) - np.asarray(fabric_lab, float))) >= THREAD_MIN_DE:
+            return rgb, "item"
+    return _shade(fabric_lab, THREAD_DL), "contrast"
+
+
+def draw_trouser_details(atlas: np.ndarray, masks: dict, lines: dict, *, px_per_cm: float, thread_rgb=None,
+                         button_rgb=None) -> tuple[np.ndarray, dict]:
+    """Paint a trouser's ``trouser_lines`` into ``atlas`` — each element only inside its own island (``masks`` =
+    {island name: bool mask}), nothing outside an island changes. The fabric is the median L*a*b* of each island.
+
+    - a groove (``TROUSER_GROOVE_CM`` wide, ``SEAM_DL`` darker, ``_seam_shade``) on every "groove" line;
+    - a dashed thread (``THREAD_*``, ``thread_colour``) on every "stitch" line, a solid bar on every "tack";
+    - a belt loop per ``loops`` entry: a ``LOOP_W_CM`` strip over the band, ``LOOP_DL`` off the band, grooved sides,
+      a bar tack at each end;
+    - a button / rivet per point: a metal disc (``button_rgb``, else the zip's metal L*) with a darker rim and a
+      lighter centre.
+
+    Returns the new atlas and ``{"thread", "thread_source", "painted": {detail: pixels}, "de": {detail: mean dE76 of
+    its changed pixels}}`` — a detail is the name's stem (``fly_1`` -> fly, ``back_pocket_l_edge`` -> back_pocket_l,
+    the loops belt_loops, the band's rows band_stitch)."""
+    src = np.asarray(atlas)
+    out = np.array(atlas, copy=True)
+    info: dict = {"painted": {}, "de": {}}
+    if px_per_cm <= 0 or not lines:
+        return out, info
+    lab_of = {}
+    for name, m in masks.items():
+        m = np.asarray(m, bool)
+        lab_of[name] = np.median(srgb_to_lab(src[m][:: max(1, int(m.sum() // 20000))].astype(np.float64)), axis=0) \
+            if m.any() else np.array([50.0, 0.0, 0.0])
+    main = next((lab_of[n] for n in ("front_l", "front_r", "back_l", "back_r") if n in lab_of), np.array([50.0, 0, 0]))
+    thread, source = thread_colour(main, thread_rgb)
+    info["thread"], info["thread_source"] = [int(v) for v in thread], source
+    ppc = float(px_per_cm)
+    half = max(0.5, THREAD_W_CM * ppc / 2.0)
+    dash, gap = THREAD_DASH_CM * ppc, THREAD_GAP_CM * ppc
+    touched: dict[str, np.ndarray] = {}
+
+    def stem(name: str) -> str:
+        for d in ("fly", "band_stitch", "band_button", "front_pocket_l", "front_pocket_r", "back_pocket_l",
+                  "back_pocket_r"):
+            if name == d or name.startswith(d + "_"):
+                return d
+        if name.startswith("yoke_"):
+            return "back_pocket_" + name.split("_")[1]
+        return name
+
+    def mark(detail: str, before: np.ndarray, sel: np.ndarray) -> None:
+        changed = (np.abs(out.astype(np.int16) - before.astype(np.int16)).max(-1) > 0) & sel
+        touched[detail] = changed if detail not in touched else (touched[detail] | changed)
+
+    groove_half = max(0.6, TROUSER_GROOVE_CM * ppc / 2.0)
+    # grooves first, threads over them
+    for kind in ("groove", "stitch", "tack"):
+        for name, ln in sorted(lines.get("lines", {}).items()):
+            if ln["kind"] != kind or ln["island"] not in masks or len(ln["px"]) < 2:
+                continue
+            sel = np.asarray(masks[ln["island"]], bool)
+            fab = lab_of[ln["island"]]
+            before = out.copy()
+            pts = np.asarray(ln["px"], float)
+            if kind == "groove":
+                sign = 1.0 if fab[0] >= SEAM_DARK_MIN_L else -1.0
+                col = _seam_shade(fab, sign * SEAM_DL)
+                for a, b in zip(pts, pts[1:]):
+                    _band(out, sel, a, b, groove_half, col)
+            elif kind == "stitch":
+                _dashed(out, sel, pts, half, dash, gap, thread)
+            else:
+                for a, b in zip(pts, pts[1:]):
+                    _band(out, sel, a, b, max(half, BAR_TACK_W_CM * ppc / 2.0), thread)
+            mark(stem(name), before, sel)
+    for lp in lines.get("loops") or []:
+        if lp["island"] not in masks:
+            continue
+        sel = np.asarray(masks[lp["island"]], bool)
+        fab = lab_of[lp["island"]]
+        before = out.copy()
+        a, b = np.asarray(lp["a"], float), np.asarray(lp["b"], float)
+        ax = (b - a) / max(1e-9, float(np.linalg.norm(b - a)))
+        nrm = np.array([-ax[1], ax[0]])
+        w = LOOP_W_CM * ppc
+        lab = np.asarray(fab, float).copy()
+        lab[0] = float(np.clip(lab[0] + (LOOP_DL if lab[0] < 50.0 else -LOOP_DL), 0.0, 100.0))
+        body = np.clip(np.rint(lab_to_srgb(lab)), 0, 255).astype(np.uint8)
+        _band(out, sel, a, b, w / 2.0, body)
+        edge = _seam_shade(fab, SEAM_DL if fab[0] >= SEAM_DARK_MIN_L else -SEAM_DL)
+        for sg in (1, -1):
+            _band(out, sel, a + nrm * sg * w / 2.0, b + nrm * sg * w / 2.0, groove_half, edge)
+        for end, inward in ((a, ax), (b, -ax)):
+            c = end + inward * 0.35 * ppc
+            _band(out, sel, c - nrm * w * 0.4, c + nrm * w * 0.4, max(half, BAR_TACK_W_CM * ppc / 2.0), thread)
+        mark("belt_loops", before, sel)
+    metal = np.clip(np.rint(lab_to_srgb(np.array([ZIP_L, 0.0, 0.0]))), 0, 255).astype(np.uint8)
+    disc = np.clip(np.rint(np.asarray(button_rgb, np.float64)[:3]), 0, 255).astype(np.uint8) \
+        if button_rgb is not None else metal
+    dlab = srgb_to_lab(disc.astype(np.float64))
+    rim = _seam_shade(dlab, 18.0)
+    hi = _seam_shade(dlab, -12.0)
+    for name, pt in sorted((lines.get("points") or {}).items()):
+        if pt["island"] not in masks:
+            continue
+        sel = np.asarray(masks[pt["island"]], bool)
+        before = out.copy()
+        r = float(pt["d_cm"]) * ppc / 2.0
+        c = np.asarray(pt["px"], float)
+        _disc(out, sel, c, r, rim)
+        _disc(out, sel, c, r * 0.8, disc)
+        _disc(out, sel, c - np.array([0.2, 0.2]) * r, r * 0.3, hi)
+        mark(stem(name) if not name.startswith("front_pocket") else stem(name), before, sel)
+    for d, m in touched.items():
+        n = int(m.sum())
+        info["painted"][d] = n
+        if n:
+            diff = srgb_to_lab(out[m].astype(np.float64)) - srgb_to_lab(src[m].astype(np.float64))
+            info["de"][d] = round(float(np.linalg.norm(diff, axis=1).mean()), 2)
+    return out, info
+
+
+def trouser_detail_gate(info: dict, wanted: list) -> list[str]:
+    """The configured details (``wanted``) that the painting did not put on the atlas: under ``DETAIL_MIN_PX`` changed
+    pixels or under ``DETAIL_MIN_DE`` mean change."""
+    painted, de = info.get("painted") or {}, info.get("de") or {}
+    return [d for d in wanted if painted.get(d, 0) < DETAIL_MIN_PX or de.get(d, 0.0) < DETAIL_MIN_DE]
+
+
+#: ``picture_thread``: the item picture at ``long`` px on its long side; the garment = not near-white, eroded 3 px; a
+#: candidate pixel lies more than ``de`` (dE76) from the picture's base fabric (``fabric_colour``), has a chroma over
+#: ``chroma`` and a hue at least ``hue_deg`` from the fabric's; the thread is the THIN part of the candidates (what an
+#: opening by one pixel removes: a stitch line, never a button, a rivet or a label patch) when it holds ``min_px``
+#: pixels — their median colour. Measured on Kai's jeans picture (380 x 1024, at 768): 76 candidates, 68 thin, median
+#: (139, 112, 92) — the tan topstitching on the blue denim (fabric L* 39.8, b* -22.1).
+THREAD_FIND = {"long": 768, "de": 20.0, "chroma": 12.0, "hue_deg": 60.0, "min_px": 30}
+
+
+def picture_thread(rgb) -> dict | None:
+    """The topstitch thread of an item picture on white (``THREAD_FIND``): ``{"rgb", "pixels"}`` or None."""
+    from scipy import ndimage
+    g = THREAD_FIND
+    im = Image.fromarray(np.asarray(rgb)[..., :3].astype(np.uint8))
+    s = g["long"] / float(max(im.size))
+    im = im.resize((max(1, round(im.size[0] * s)), max(1, round(im.size[1] * s))), Image.LANCZOS)
+    a = np.asarray(im).astype(np.float64)
+    garment = ndimage.binary_erosion((255.0 - a).max(-1) > 30.0, iterations=3)
+    if garment.sum() < 64:
+        return None
+    fab = fabric_colour(np.asarray(im), garment)
+    if not fab:
+        return None
+    lab = srgb_to_lab(a)
+    fl = np.asarray(fab["lab"], np.float64)
+    de = np.linalg.norm(lab - fl, axis=-1)
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    dh = np.abs(np.angle(np.exp(1j * (np.arctan2(lab[..., 2], lab[..., 1]) - math.atan2(fl[2], fl[1])))))
+    cand = garment & (de > g["de"]) & (chroma > g["chroma"]) & (dh >= math.radians(g["hue_deg"]))
+    thin = cand & ~ndimage.binary_opening(cand, iterations=1)
+    if int(thin.sum()) < g["min_px"]:
+        return None
+    return {"rgb": [int(round(v)) for v in np.median(a[thin], axis=0)], "pixels": int(thin.sum())}

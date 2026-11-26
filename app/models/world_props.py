@@ -181,7 +181,10 @@ def sanitize_world_prop(raw: Any) -> Dict[str, Any]:
     if not prop_id or not prop_store.read_sidecar(prop_id):
         raise ValueError(f"unknown prop: {raw.get('prop_id')!r}")
     placement_id = str(raw.get("id") or "").strip() or f"wp_{secrets.token_hex(4)}"
-    yaw = _finite(raw.get("yaw_deg")) or 0.0
+    yaw = round((_finite(raw.get("yaw_deg")) or 0.0) % 360, 1)
+    if yaw >= 360.0:
+        # 359.96 rounds up to a full turn — which is 0, never 360.
+        yaw = 0.0
     offset = _finite(raw.get("offset_y")) or 0.0
     out: Dict[str, Any] = {
         "id": placement_id,
@@ -190,7 +193,7 @@ def sanitize_world_prop(raw: Any) -> Dict[str, Any]:
         "z": _coord(raw.get("z"), "z"),
         # A full turn is the same turn: the yaw wraps instead of being
         # refused, so a chip that keeps adding 15° never runs into a 400.
-        "yaw_deg": round(yaw % 360, 1),
+        "yaw_deg": yaw,
         # Clamped rather than refused — a lift is a knob, not a form.
         "offset_y": round(min(max(offset, -MAX_OFFSET_Y), MAX_OFFSET_Y), 3),
         "variant": None,

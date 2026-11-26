@@ -1437,7 +1437,7 @@ def _apply_outfit_set_route_sync(character_name: str,
     """
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_outfits
-    from app.models.inventory import apply_equipped_pieces, get_item
+    from app.models.inventory import apply_equipped_pieces, outfit_set_pieces_by_slot
     outfit_id = (body.get("outfit_id") or "").strip()
     name = (body.get("name") or "").strip()
     # user_id is unused, so not required, matching equip/unequip. The admin
@@ -1457,14 +1457,9 @@ def _apply_outfit_set_route_sync(character_name: str,
     if not target:
         raise HTTPException(status_code=404, detail="outfit not found")
 
-    # Map preset pieces (item ids) to slot -> id. Pass one declared slot per
-    # piece; apply_equipped_pieces handles all mirrored slots from its definition.
-    pieces_by_slot: Dict[str, str] = {}
-    for pid in (target.get("pieces") or []):
-        it = get_item(pid) or {}
-        slots = ((it.get("outfit_piece") or {}).get("slots") or [])
-        if slots:
-            pieces_by_slot[slots[0]] = pid
+    # One declared slot per piece; apply_equipped_pieces handles all
+    # mirrored slots from the item's definition.
+    pieces_by_slot = outfit_set_pieces_by_slot(target)
 
     with keyed_lock("character_profile", character_name):
         result = apply_equipped_pieces(character_name,

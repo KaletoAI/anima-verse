@@ -79,7 +79,7 @@ _SELECT = [
     ("extraction_chat_state", 4), ("extraction", 4), ("npc_action", 3),
     ("relationship_summary", 3), ("image_prompt", 3), ("consolidation", 3),
     ("furnish", 1), ("building_layout", 1), ("outfit_generation", 1),
-    ("story_arc_generation", 1), ("story_arc_advancement", 1), ("random_event", 1), ("secret_generation", 1),
+    ("random_event", 1), ("secret_generation", 1),
     ("image_analysis", 2), ("image_recognition", 2),
 ]
 _TOOL_REPEATS = 3

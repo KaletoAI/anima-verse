@@ -52,7 +52,7 @@ Second rule: the appearance PROMPT fields ship no default at all
 ------------------------------------------------------------------
 Even a default made purely of living tokens is wrong here, because it does
 not only feed the previews: the form prefill (TemplateSectionForm), the
-world-dev apply seeding (routes/world_dev.py) and the template switch
+world-dev apply seeding (core/world_dev_apply.py) and the template switch
 (character_ops) all write a default into the stored profile, and
 ``build_prompt_section`` renders a stored value into the chat system prompt
 WITHOUT resolving tokens. A seeded "{gender}" would therefore reach the LLM

@@ -85,13 +85,13 @@ def md(payload):
 
 
 def base(p):
-    return {"params": gtc.cut_params(p), "version": gt.TEMPLATE_VERSION, "uv_pattern": gtc.uv_pattern_key(p),
+    return {"params": gtc.cut_params(p), "version": gt.template_version(p), "uv_pattern": gtc.uv_pattern_key(p),
             "base": "b" * 64, "lower": [], "panels": 1}
 
 
 check("[4] a strapless top's cut key = payload + corset 9",
       gtc.cut_sig(corset, base_sha="b" * 64, lower=[]) == md({**base(corset), "corset": 9,
-                                                              "corset_rules": gtc.CORSET_DARTS_SHA}))
+                                                              "corset_rules": gtc.CORSET_DARTS_KEYS["strapless"]}))
 check("[4] a skirt's cut key carries no corset",
       gtc.cut_sig(skirt, base_sha="b" * 64, lower=[]) == md({**base(skirt), "legs": 1}))
 

@@ -72,14 +72,6 @@ can add a template, not override one. That is where
 | `random_event_solution_rp.md` | `thought` | `random_events._generate_solution_rp` | Character RP-describes how they resolve the event |
 | `random_event_resolved_image.md` | `random_event` | `event_images` | Rewrite the event's image prompt for the resolved state |
 
-### Story Arcs
-
-| Template | Task | Caller | Purpose |
-|---|---|---|---|
-| `story_arc_generation.md` | `consolidation` | `story_engine.generate_arc` | Generate a multi-character mini-storyline |
-| `story_arc_advancement.md` | `consolidation` | `story_engine.advance_arc` | Advance an arc by one beat after an interaction |
-| `story_arc_resolve.md` | `consolidation` | `story_engine.resolve_arc` | Close an arc with résumé + per-character outcomes |
-
 ### Image / Vision
 
 | Template | Task | Caller | Purpose |
@@ -123,7 +115,7 @@ into "what does the room need" and "what does the library already have";
 | `room_description_sync.md` | `room_description_sync` | `room_description_sync.propose` | Rewrite a room's description so it names the props that now stand in it — preview in the Furnish dialog, the admin decides |
 | `prop_mount_classify.md` | `prop_mount_classify` | `props_mount.classify_mounts` | Classify library props into `floor` / `wall` / `ceiling` / `surface` (batched); the guess lands as `mount_suggested` and the admin confirms it in the Props tab |
 | `hull_design.md` | `hull_design` | `hull_model` | Choose a building hull style and bounded overrides from floor plan facts |
-| `world_dev_validate.md` | the model chosen in the dialog (`routes/world_dev.py`); `npc_ops` uses `npc_generate` | `routes/world_dev.py`, `npc_ops` | Check a world-dev draft against its schema and list what is wrong |
+| `world_dev_validate.md` | `npc_generate` | `npc_ops` (the validate stage of a temporary NPC) | Check a generated NPC draft against its schema and list what is wrong |
 
 ### Temporary NPCs
 
@@ -279,7 +271,7 @@ privacy, see [the public Influence contract](skill-core-api.md#rp-influence--app
 The AgentLoop's slim system prompt. Pre-decision logic in
 [app/core/thought_context.py](../app/core/thought_context.py) builds a
 dict with only the blocks that have content (inbox, events,
-assignments, general task, intents, outfit-decision, story arc,
+assignments, general task, intents, outfit-decision,
 retrospective). The template renders nothing for empty blocks.
 
 `birthday_today` is part of the always-present situation data: True
@@ -302,10 +294,9 @@ attention:
 5. General task (`character_task` from profile)
 6. Open plans from the intents table (with ids)
 7. Outfit-decision (after location change or wake)
-8. Active story arc
-9. Retrospective (existing beliefs/improvements + boost hint when overdue)
-10. Tools hint
-11. Decision instruction
+8. Retrospective (existing beliefs/improvements + boost hint when overdue)
+9. Tools hint
+10. Decision instruction
 
 Room furniture uses mandatory `prop_actions_block`, not a catalog-wide pose
 list. `chat/chat_moment.md`, both thought templates and `tasks/npc_action.md`
@@ -348,16 +339,20 @@ explicit tools/movement/stop remain authoritative. Controller coverage uses
 The free-mode agent (`app/core/world_dev_agent.py`) renders `system.md` once per run
 (`world_setup_block` first, then role, task loop, token rules, compass, call format,
 `tool_list` and `manual_sections`). The model reads the field rules on demand through
-the `read_manual` tool (`world_dev_tools`), which renders one section without variables:
+the `read_manual` tool (`world_dev_tools`), which renders one section — without variables,
+except `manual_characters.md`, which gets `character_templates` (`[{name, label, outfits}]`
+of the templates `create_character` offers):
 
 | Template | Purpose |
 |---|---|
 | `system.md` | Agent system prompt |
 | `manual_locations.md` | Location and room fields, position, outline |
 | `manual_map.md` | Terrain areas, strokes, height areas, composition |
-| `manual_characters.md` | create/update_character, template fields, soul sections, outfits |
-| `manual_homes.md` | Home, home room and daily schedule spellings and values |
+| `manual_characters.md` | create/update_character, template fields, soul sections, outfits; skills on/off (`set_skill`) |
+| `manual_homes.md` | Home, home room and daily schedule spellings and values; placing an existing character (`place_character`) and its refusals |
+| `manual_layout.md` | set_room_layout: floor plan, openings, plot openings, stairs, storey height |
 | `manual_naming.md` | Naming rules |
+| `manual_systems.md` | Access rules (`add_block_rule`): when a rule fits, the condition grammar, what cannot be built; world events (`add_event`): one-off happenings, TTL in game hours, global vs place; quests (`create_quest_template`): draft templates, roles instead of fixed entities, steps as catalog conditions, `{role_key}` placeholders, `gm_notes` stay with the admin |
 
 ## Loader API
 

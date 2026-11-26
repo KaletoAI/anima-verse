@@ -311,6 +311,11 @@ def _wipe_db_for_character(conn, character_name: str) -> None:
             "DELETE FROM relationships WHERE from_char=? OR to_char=?",
             (character_name, character_name),
         )
+    if _table_exists(conn, "quest_facts"):
+        conn.execute(
+            "DELETE FROM quest_facts WHERE mind=? OR subject=?",
+            (character_name, character_name),
+        )
 
 
 def _restore_table(conn, table: str, rows: List[Dict[str, Any]]) -> int:
@@ -533,7 +538,7 @@ def import_character_from_zip(
     # was already in the world under this name (a re-import over an existing
     # character) AND every store the `character_name` column sweep cannot see:
     # perceptions, party invites, explored cells, notifications, and the
-    # JSON-participant stores (intents, story arcs, group chats, parties).
+    # JSON-participant stores (intents, group chats, parties).
     # It also resets the Retrospect soul files to an empty scaffold.
     reset_report: Dict[str, Any] = {}
     if fresh:

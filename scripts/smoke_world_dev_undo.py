@@ -133,15 +133,25 @@ Run 7 (occupants are reported, never "incomplete"): pre-existing loc_s with
   occupant = Roomer / Walker), complete True (informational only). Nobody is
   moved: Walker still points at loc_n, Roomer at loc_s / r_new.
 
-Run 8 (pending create_character without written, the crash case): the
-  stored profile carries no "created by" marker (save_character_profile
-  stores created_by "" whatever it is given), so such a row is NEVER deleted:
-  seq 1  pending delete_character{"Demo Crash"} -> skipped "may have written,
-         no inverse — see backup", the character stays.
-  seq 2  pending delete_character{"Demo Manual"} (made by hand under that
-         name) -> skipped the same way, the character stays.
-  discard_preview lists neither (the discard would not delete them) -> [].
-  => reversed [], skipped [(2, no inverse), (1, no inverse)], complete False.
+Run 8 (a create_character left PENDING by a crash, without written). The
+  tool stores claimed: true in the inverse under the profile lock right
+  before the profile save, and every new piece id as add_item returns it
+  (scripts/smoke_world_dev_tools.py run 18 proves that order). The stored
+  profile itself carries no "created by" marker (save_character_profile
+  stores created_by "" whatever it is given), so the claim alone decides:
+  seq 1  pending delete_character{"Demo Manual", no claim}; a character of
+         that name made by hand exists -> skipped "not written" (nothing of
+         the create was written), Demo Manual stays.
+  seq 2  pending delete_character{"Demo Ghost", claimed} and no such row (the
+         crash came after the claim, before the save) -> skipped "already
+         gone", nothing to do.
+  seq 3  pending delete_character{"Demo Crash", claimed, items [P]}; the row
+         and the piece P (held by Demo Crash only) exist (the crash came after
+         the save) -> Demo Crash deleted, then P is held nowhere -> deleted.
+  discard_preview lists only Demo Crash (0 chat, 0 memory rows, and the
+  "1 outfit piece it brought" of its items [P], P still in the catalog).
+  => reversed [3], skipped [(2, already gone), (1, not written)],
+     complete True.
 
 Run 9 (a created character standing in a created place — the usual free-mode
   run, apply_home_schedule puts a new character at its new home). The
@@ -167,6 +177,11 @@ Run 9 (a created character standing in a created place — the usual free-mode
       at seq 2: Early, Stayer); 1 -> Demo Early deleted, so its record is
       dropped. => reversed [2, 1], skipped == [(2, "Demo Stayer")] only,
       complete True; Demo Stayer still points at loc_q.
+
+Run 10 (the snapshot of a cross-turn character delete mirrors the sweep):
+  every literal "DELETE FROM <table> WHERE <clause>" in the source of
+  delete_character equals the set CHARACTER_SWEEP_SPECIAL (11 entries, copied
+  by hand from its step 1); the dynamic sweep is the character_name column.
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_undo.py
@@ -652,33 +667,48 @@ check("(7) nobody moved: Roomer still in r_new",
       get_character_current_room("Demo Roomer"))
 wr.set_status(run7, "rolled_back")
 
-# ── Run 8: a pending create_character is never deleted on a guess ─────────
+# ── Run 8: a pending create_character acts only on a durable claim ────────
+from app.models.inventory import add_item, add_to_inventory, get_item  # noqa: E402
+
 run8 = wr.create_run("build 8", "m", "p", "u", 40, 300000)
-wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Crash",
-         {"op": "delete_character", "name": "Demo Crash", "items": []})
+save_character_profile("Demo Manual", {"name": "Demo Manual"}, create_new=True)
+wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Manual",
+         {"op": "delete_character", "name": "Demo Manual", "items": []})
+wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Ghost",
+         {"op": "delete_character", "name": "Demo Ghost", "items": [], "claimed": True})
 save_character_profile("Demo Crash", {"name": "Demo Crash", "created_by": "world_dev"},
                        create_new=True)
 check("(8) the saver drops created_by",
       get_character_profile("Demo Crash").get("created_by") == "",
       get_character_profile("Demo Crash").get("created_by"))
-wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Manual",
-         {"op": "delete_character", "name": "Demo Manual", "items": []})
-save_character_profile("Demo Manual", {"name": "Demo Manual"}, create_new=True)
-check("(8) both entries pending without written",
+piece = add_item(name="Demo Crash Cap", description="", category="outfit_piece",
+                 image_prompt="", prompt_fragment="a cap",
+                 outfit_piece={"slots": ["head"], "covers": [], "partially_covers": []})
+add_to_inventory(character_name="Demo Crash", item_id=piece["id"])
+wr.begin(run8, 1, "write", "create_character", {}, "character", "Demo Crash",
+         {"op": "delete_character", "name": "Demo Crash", "items": [piece["id"]],
+          "claimed": True})
+check("(8) three entries pending without written",
       [(e["seq"], e["state"], e.get("written")) for e in wr.entries(run8)]
-      == [(2, "pending", None), (1, "pending", None)], wr.entries(run8))
-check("(8) preview lists neither", wu.discard_preview(run8) == [],
+      == [(3, "pending", None), (2, "pending", None), (1, "pending", None)],
+      wr.entries(run8))
+check("(8) preview lists only Demo Crash",
+      wu.discard_preview(run8) == ['character "Demo Crash" — 0 chat messages, '
+                                   "0 memory rows of other characters name it, "
+                                   "1 outfit piece it brought"],
       wu.discard_preview(run8))
 rep = wu.undo(run8)
-check("(8) reversed []", rep["reversed"] == [], rep)
-check("(8) skipped [(2, no inverse), (1, no inverse)]",
+check("(8) reversed [3]", rep["reversed"] == [3], rep)
+check("(8) skipped [(2, already gone), (1, not written)]",
       [(x["seq"], x["reason"]) for x in rep["skipped"]]
-      == [(2, "may have written, no inverse — see backup"),
-          (1, "may have written, no inverse — see backup")], rep["skipped"])
-check("(8) not complete", rep["complete"] is False, rep)
-check("(8) Demo Crash kept", character_model.character_row_exists("Demo Crash"))
+      == [(2, "already gone"), (1, "not written")], rep["skipped"])
+check("(8) complete", rep["complete"] is True, rep)
+check("(8) Demo Crash and its piece gone",
+      not character_model.character_row_exists("Demo Crash")
+      and get_item(piece["id"]) is None)
 check("(8) Demo Manual kept", character_model.character_row_exists("Demo Manual"))
-wr.set_status(run8, "rollback_incomplete")
+check("(8) no Demo Ghost", not character_model.character_row_exists("Demo Ghost"))
+wr.set_status(run8, "rolled_back")
 
 
 # ── Run 9: a created character in a created place is no occupant ─────────
@@ -748,6 +778,34 @@ check("(9b) Demo Early gone, Demo Stayer kept and not moved",
       and get_character_current_location("Demo Stayer") == "loc_q",
       get_character_current_location("Demo Stayer"))
 wr.set_status(run9b, "rolled_back")
+
+
+# ── Run 10: the character snapshot mirrors delete_character's sweep ──────
+# Every literal "DELETE FROM <table> WHERE <clause>" in delete_character's
+# source (the dynamic per-table character_name sweep is the f-string, read
+# off the schema the same way by both) must be one entry of
+# CHARACTER_SWEEP_SPECIAL — the snapshot of a cross-turn delete covers
+# exactly what the delete removes. Expected set copied by hand from
+# app/models/character.py delete_character, step 1.
+import inspect  # noqa: E402
+import re  # noqa: E402
+
+src = inspect.getsource(character_model.delete_character)
+found = set(re.findall(r'"DELETE FROM (\w+) WHERE ([^"]+)"', src))
+check("(10) delete_character's literal sweeps == CHARACTER_SWEEP_SPECIAL",
+      found == set(wu.CHARACTER_SWEEP_SPECIAL), (found, wu.CHARACTER_SWEEP_SPECIAL))
+# 10 since quest stage 1 added "DELETE FROM quest_facts WHERE mind=? OR
+# subject=?" to delete_character; 11 since T12 added "DELETE FROM
+# notifications WHERE title=? AND kind<>'room_furnish'" (a deleted
+# character's notices; room_furnish keeps a room label in title).
+check("(10) the hand list has the 11 special sweeps",
+      {t for t, _w in wu.CHARACTER_SWEEP_SPECIAL} == {
+          "characters", "relationships", "llm_call_stats", "chat_messages",
+          "chat_stat_evaluations", "parties", "party_invites",
+          "interaction_invites", "intents", "quest_facts", "notifications"},
+      wu.CHARACTER_SWEEP_SPECIAL)
+check("(10) the dynamic sweep is the character_name column",
+      'DELETE FROM {tbl} WHERE character_name=?' in src)
 
 print()
 if failures:

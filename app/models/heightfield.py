@@ -187,6 +187,68 @@ def delete_height_area(area_id: str) -> bool:
     return deleted
 
 
+def height_area_order_identity(area_id: str) -> Optional[Dict[str, Any]]:
+    """``{created_at, updated_at, rowid, tie_before, tie_after}`` of one
+    stored height area — its place in :func:`list_height_areas`' order (and
+    so in :func:`height_sig`), the batch save's version token and the ids of
+    the height areas sharing its created_at on either side — or None. The terrain twin is
+    ``terrain.area_order_identity``."""
+    from app.models.terrain import _with_ties
+    conn = get_connection()
+    aid = (area_id or "").strip()
+    row = conn.execute(
+        "SELECT created_at, updated_at, rowid FROM height_areas WHERE id=?",
+        (aid,)).fetchone()
+    if row is None:
+        return None
+    return _with_ties(conn, "height_areas", aid, row[0], row[1], row[2], None)
+
+
+def restore_height_area(raw: Any, identity: Dict[str, Any]) -> tuple:
+    """Re-insert a DELETED height area with its order identity
+    (:func:`height_area_order_identity`) — the world-dev undo's writer, the
+    twin of ``terrain.restore_area``. Returns ``(area, exact_order)``:
+    False when its place among the height areas sharing its created_at
+    changed (``terrain.order_tie_rule``, checked on both branches). Raises ValueError for an unusable area and
+    sqlite3.IntegrityError when the id is stored."""
+    from app.models.terrain import _order_tie
+    area = sanitize_height_area(raw)
+    created = str(identity.get("created_at") or "") or utc_now_iso("microseconds")
+    updated = str(identity.get("updated_at") or "") or created
+    rowid = identity.get("rowid")
+    values = (area["id"], json.dumps(area["polygon"], ensure_ascii=False),
+              area["height_m"], area["falloff_m"],
+              json.dumps(area["meta"], ensure_ascii=False), created, updated)
+    with transaction() as conn:
+        free = isinstance(rowid, int) and conn.execute(
+            "SELECT 1 FROM height_areas WHERE rowid=?", (rowid,)).fetchone() is None
+        if free:
+            conn.execute(
+                "INSERT INTO height_areas (rowid, id, polygon, height_m, falloff_m, "
+                "meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (rowid,) + values)
+            new_rowid = rowid
+        else:
+            new_rowid = conn.execute(
+                "INSERT INTO height_areas (id, polygon, height_m, falloff_m, "
+                "meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                values).lastrowid
+        tie = _order_tie(conn, "height_areas", None, created, area["id"],
+                         identity, new_rowid)
+    _invalidate()
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())
+    return area, not tie
+
+
+def height_area_order_rows() -> List[Dict[str, Any]]:
+    """``{id, rowid, created_at}`` of every stored height area — the twin of
+    ``terrain.area_order_rows`` for the discard preview."""
+    return [{"id": r[0], "rowid": int(r[1]), "created_at": str(r[2] or "")}
+            for r in get_connection().execute(
+                "SELECT id, rowid, created_at FROM height_areas").fetchall()]
+
+
 def height_area_stamps() -> Dict[str, str]:
     """``{id: updated_at}`` of every stored height area — the version tokens
     the batch save checks against (``core.bulk_edit``).

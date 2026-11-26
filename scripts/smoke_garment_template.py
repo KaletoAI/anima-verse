@@ -125,11 +125,11 @@ Expected numbers, derived by hand from ``app/core/garment_template.py``:
      builder has no other UV — for a top, a jacket and a covered dress with sleeves. A stubbed ``_build_drape`` whose run hands back ``outputs.islands`` moves that file next to the GLB as
      ``{item}_{tsig}.islands.json`` (``islands_path``), byte-equal, and the record carries ``islands`` = {file: that
      name, sha256: the sha-256 of its bytes, px_per_cm: the payload's 19.59}; a run without an islands output (a
-     grid piece) writes no file and no ``islands`` key. ``TEMPLATE_VERSION`` is 10 (the one bump of that plan).
+     grid piece) writes no file and no ``islands`` key. Every kind's ``TEMPLATE_VERSIONS`` entry is 10 (the one bump of that plan).
 [16] Step 3a (the fitted kinds' pattern pieces): briefs, bra, gloves, tights and trousers are pattern kinds too
-     (``PATTERN_KINDS``), and ``build_args`` sends them no ``uv_mode`` either (B17). ``FITTED_VERSION`` is 1 since the fitted kinds' texture choice was
+     (``PATTERN_KINDS``), and ``build_args`` sends them no ``uv_mode`` either (B17). ``FITTED_VERSIONS`` of every fitted kind is 1 since the fitted kinds' texture choice was
      released (group A, one re-drape of every fitted drape): a fitted kind's ``tsig`` is md5 of the payload
-     ``{params: keyed_params, version: TEMPLATE_VERSION, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
+     ``{params: keyed_params, version: 10, base, texture, lower: sorted(lower)}`` PLUS ``"fitted": 1`` —
      it differs from the pre-release key (the same payload without ``fitted``) in exactly that one component, for
      briefs, bra, gloves, tights and trousers alike — a bra's payload carries ``"bra_edges": 4`` besides
      (``BRA_EDGE_VERSION``, round 2026-11-25: its band top is cut straight), no other fitted kind's does. A top carries no ``fitted`` component: its ``tsig`` still equals
@@ -672,7 +672,7 @@ for _kw in ({"kind": "jacket"}, {"kind": "dress", "shoulders": "covered", "sleev
     _p15, _ = gt.validate_params(_kw)
     check(f"[15] {_kw['kind']} -> no uv_mode (B17)",
           "uv_mode" not in gt.build_args(_p15, gt.panel_spec(_p15, MU), item_id="x"))
-check("[15] TEMPLATE_VERSION 10", gt.TEMPLATE_VERSION == 10, gt.TEMPLATE_VERSION)
+check("[15] TEMPLATE_VERSIONS all 10", set(gt.TEMPLATE_VERSIONS.values()) == {10} and set(gt.TEMPLATE_VERSIONS) == set(gt.BUILT_KINDS), gt.TEMPLATE_VERSIONS)
 
 # [16] step 3a: the fitted kinds are cut into pattern pieces
 # the arm joints of Dario's base body (from scripts/smoke_template_cut_first.py) — gloves are fitted to them
@@ -684,15 +684,17 @@ for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _p16, _ = gt.validate_params({"kind": _k16})
     check(f"[16] {_k16} -> no uv_mode (B17)",
           "uv_mode" not in gt.build_args(_p16, gt.panel_spec(_p16, _mu16), item_id="x"))
-check("[16] FITTED_VERSION is 1", gt.FITTED_VERSION == 1, gt.FITTED_VERSION)
+check("[16] FITTED_VERSIONS all 1", gt.FITTED_VERSIONS == {k: 1 for k in gt.FITTED_KINDS}, gt.FITTED_VERSIONS)
 _kw16 = dict(base_sha="a" * 64, texture_sha="t1", lower=["b", "a"])
 for _k16 in ("briefs", "bra", "gloves", "tights", "trousers"):
     _pp16 = gt.validate_params({"kind": _k16})[0]
-    _pre16 = {"params": gt.keyed_params(_pp16), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+    _pre16 = {"params": gt.keyed_params(_pp16), "version": 10, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got16 = gt.tsig(_pp16, **_kw16)
     _edge16 = {"bra_edges": 4} if _k16 == "bra" else {}
-    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{' + bra_edges 4' if _edge16 else ''}",
+    # round 2026-11-25: a default (straight-leg) trousers carries the knee bridge, knee 1
+    _edge16 = {"knee": 1} if _k16 == "trousers" else _edge16
+    check(f"[16] a default {_k16}'s tsig = pre-release payload + fitted 1{''.join(f' + {k} {v}' for k, v in _edge16.items())}",
           _got16 == gt._md5({**_pre16, "fitted": 1, **_edge16}))
     check(f"[16] ... and differs from the pre-release key", _got16 != gt._md5(_pre16))
 import importlib.util  # noqa: E402
@@ -726,7 +728,7 @@ check("[17.1] a top with a bodice: no waistband_m", "waistband_m" not in gt.buil
     _top15, gt.panel_spec(_top15, MU), item_id="x"))
 check("[17.2] PANEL_VERSION is 1", gt.PANEL_VERSION == 1, gt.PANEL_VERSION)
 for _p17 in (_sk17, _sl17):
-    _pre17 = {"params": gt.keyed_params(_p17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+    _pre17 = {"params": gt.keyed_params(_p17), "version": 10, "base": "a" * 64, "texture": "t1",
               "lower": ["a", "b"]}
     _got17 = gt.tsig(_p17, **_kw16)
     _want17 = {**_pre17, "panels": 1, **({"legs": 1} if _p17["kind"] == "skirt" else {}),
@@ -746,7 +748,7 @@ check("[17.5] LEG_VERSION 1, STRAP_VERSION 1", (gt.LEG_VERSION, gt.STRAP_VERSION
 _dr17 = gt.validate_params({"kind": "dress", "shoulders": "straps", "sleeves": "none", "neckline": "crew"})[0]
 _ct17 = gt.validate_params({"kind": "top", "shoulders": "straps", "neckline": "sweetheart"})[0]
 _jk17 = gt.validate_params({"kind": "jacket"})[0]
-_pd17 = {"params": gt.keyed_params(_dr17), "version": gt.TEMPLATE_VERSION, "base": "a" * 64, "texture": "t1",
+_pd17 = {"params": gt.keyed_params(_dr17), "version": 10, "base": "a" * 64, "texture": "t1",
          "lower": ["a", "b"]}
 check("[17.5] strapped crew dress: tsig = payload + panels + legs + straps",
       gt.tsig(_dr17, **_kw16) == gt._md5({**_pd17, "panels": 1, "legs": 1, "straps": 1}))
@@ -841,7 +843,7 @@ check("[18.3] NECK_VERSION is 1", getattr(gt, "NECK_VERSION", None) == 1)
 
 
 def _cut18(p):
-    return {"params": gtc.cut_params(p), "version": gt.TEMPLATE_VERSION, "uv_pattern": gtc.uv_pattern_key(p),
+    return {"params": gtc.cut_params(p), "version": 10, "uv_pattern": gtc.uv_pattern_key(p),
             "base": "b" * 64, "lower": ["x"]}
 
 
@@ -861,7 +863,7 @@ for _extra18 in ({"placket": "buttons"}, {"collar": "stand"}):
 for _sh18 in ("off_shoulder", "straps"):
     _o18 = gt.validate_params({"kind": "top", "shoulders": _sh18, "sleeves": "elbow"})[0]
     # round 2026-11-25: a top with straps is a corset shell — its cut carries the panel / corset / straps parts
-    _x18 = ({"panels": gt.PANEL_VERSION, "corset": gt.CORSET_VERSION, "corset_rules": gtc.CORSET_DARTS_SHA,
+    _x18 = ({"panels": gt.PANEL_VERSION, "corset": gt.CORSET_VERSION, "corset_rules": gtc.CORSET_DARTS_KEYS["straps"],
              "corset_straps": gt.CORSET_STRAPS_VERSION} if _sh18 == "straps" else {})
     check(f"[18.3] a {_sh18} top's cut key carries no neck, with a placket too",
           gtc.cut_sig(_o18, base_sha="b" * 64, lower=["x"]) == _md18({**_cut18(_o18), **_x18})

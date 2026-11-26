@@ -1,7 +1,7 @@
 """Persistent task queue — SQLite-backed, multi-queue, prioritized, pausable.
 
 This is the ONE background queue of the server: every deferred job (memory
-consolidation, story arcs, social dialog, package background work, …) is
+consolidation, social dialog, package background work, …) is
 submitted here via ``get_task_queue().submit(...)`` and executed by a fixed
 pool of ``_NUM_WORKERS`` worker threads — so up to that many tasks run at the
 same time, in priority order.

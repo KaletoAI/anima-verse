@@ -303,8 +303,14 @@ def apply_outfit_compliance(
     is_intimate: Optional[bool] = None,
     is_wet: Optional[bool] = None,
     is_sleeping: Optional[bool] = None,
+    notify: bool = True,
 ) -> Dict[str, Any]:
     """The central compliance function (plan §2).
+
+    ``notify=False`` writes no violation notice — for a caller that reports
+    the violations itself and must stay exactly undoable (World Dev free
+    mode: a notice can evict the oldest row of the bounded notification
+    window, which no inverse brings back).
 
     State flags (is_intimate, is_wet, is_sleeping) are read from
     character_state unless passed explicitly; activity skills set them.
@@ -384,7 +390,8 @@ def apply_outfit_compliance(
                 worn, decency, required_slots=required,
                 swim_allowed=bool(ctx.get("swim_allowed")), is_wet=is_wet)):
             result["violations"].append({"slot": slot, "reason": "outfit_not_worn"})
-        _notify_violations(character_name, decency, result["violations"])
+        if notify:
+            _notify_violations(character_name, decency, result["violations"])
         return result
 
     eq_pieces: Dict[str, str] = dict(profile.get("equipped_pieces") or {})
@@ -487,6 +494,7 @@ def apply_outfit_compliance(
         )
 
     # 6. Notification for the hard decency violations (not forbidden ones).
-    _notify_violations(character_name, decency, result["violations"])
+    if notify:
+        _notify_violations(character_name, decency, result["violations"])
 
     return result

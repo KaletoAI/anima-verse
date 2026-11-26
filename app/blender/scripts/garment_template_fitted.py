@@ -1032,6 +1032,186 @@ def trouser_widen(V, f, sides, cx):
     return V, info
 
 
+#: Round 2026-11-25 (Kai's jeans: an outward dome over the upper calf under a pinch ring in the knee hollow) — the knee
+#: bridge (``knee_bridge``) of a widened trouser leg: per side and per sector of ``KNEE_SECTORS`` round the leg's bone
+#: axis, the cloth's radius along the leg from where the widening is full (``ramp_m`` under the crotch; at least
+#: ``KNEE_BRIDGE_ABOVE_M`` above the knee joint) to the hem is lifted to the upper concave hull of its own profile — the
+#: cloth falls from the thigh over the knee hollow to the widest point of the calf and straight from there to the hem,
+#: never pulled in. (From 12 cm above the knee only, a dent of 10-17 mm stayed at the zone's top on Kai's jeans: the
+#: straight leg narrows from the thigh to the knee and the calf is wider.) The bridge fades in over
+#: ``KNEE_BRIDGE_FADE_M`` at its upper end; a profile is sampled every ``KNEE_GRID_M`` along the leg.
+KNEE_SECTORS = 16
+KNEE_BRIDGE_ABOVE_M = 0.12
+KNEE_BRIDGE_FADE_M = 0.03
+KNEE_GRID_M = 0.005
+#: A sector holding fewer points than this has no hull (its vertices keep their radius).
+KNEE_MIN_POINTS = 4
+
+
+def upper_hull(s, r):
+    """The upper concave hull of the points ``(s, r)`` as ``(s_k, r_k)`` with ``s_k`` ascending (Andrew's monotone
+    chain over the points sorted by s; of points with the same s only the largest r counts): the smallest concave
+    function at or over every point, linear between its corners."""
+    s = np.asarray(s, float)
+    r = np.asarray(r, float)
+    if not len(s):
+        return np.zeros(0), np.zeros(0)
+    order = np.lexsort((-r, s))
+    pts = []
+    last = None
+    for i in order:
+        if last is not None and s[i] == last:
+            continue
+        last = s[i]
+        p = (float(s[i]), float(r[i]))
+        while len(pts) >= 2:
+            (s0, r0), (s1, r1) = pts[-2], pts[-1]
+            # the middle point is dropped when it lies on or under the chord from the one before to the new one
+            if (s1 - s0) * (p[1] - r0) - (r1 - r0) * (p[0] - s0) >= 0:
+                pts.pop()
+            else:
+                break
+        pts.append(p)
+    a = np.array(pts)
+    return a[:, 0], a[:, 1]
+
+
+def hull_at(s, r, s_eval):
+    """``upper_hull`` of ``(s, r)`` evaluated at ``s_eval`` (linear between its corners); NaN outside [min s, max s]."""
+    hs, hr = upper_hull(s, r)
+    s_eval = np.asarray(s_eval, float)
+    if not len(hs):
+        return np.full(s_eval.shape, np.nan)
+    out = np.interp(s_eval, hs, hr)
+    return np.where((s_eval < hs[0]) | (s_eval > hs[-1]), np.nan, out)
+
+
+def _axis_s(p, pts, knee_index=1):
+    """Per point of ``p`` (n, 3): its nearest point on the polyline ``pts`` and its arc length along it from the
+    polyline's point ``knee_index`` (negative above it)."""
+    best = np.zeros_like(p)
+    dist = np.full(len(p), 9.0)
+    arc = np.zeros(len(p))
+    run = 0.0
+    seg_start = []
+    for a, b in zip(pts[:-1], pts[1:]):
+        seg_start.append(run)
+        run += float(np.linalg.norm(b - a))
+    for k, (a, b) in enumerate(zip(pts[:-1], pts[1:])):
+        ab = b - a
+        ln = max(1e-12, float(ab @ ab))
+        t = np.clip(((p - a) @ ab) / ln, 0.0, 1.0)
+        q = a + t[:, None] * ab
+        d = np.linalg.norm(p - q, axis=1)
+        m = d < dist
+        best[m], dist[m] = q[m], d[m]
+        arc[m] = seg_start[k] + t[m] * math.sqrt(ln)
+    return best, arc - seg_start[knee_index]
+
+
+def sector_hulls(s, theta, r, s0, s1, sectors=KNEE_SECTORS, grid=KNEE_GRID_M):
+    """The bridge's table: per sector of ``sectors`` round the axis (sector k centred at -pi + (k + 0.5) x 2 pi /
+    sectors) the ``hull_at`` of its points with ``s0 <= s <= s1`` on the grid ``s0, s0 + grid, ... <= s1``, then lifted
+    to the (1, 2, 1) / 4 mean of the sector and its two neighbours where that is higher (a sector never comes out
+    under its own hull). Returns ``(grid points, table (sectors, n))``; NaN where a sector has no hull."""
+    g = np.arange(s0, s1 + 1e-9, grid)
+    T = np.full((sectors, len(g)), np.nan)
+    k = np.clip(((np.asarray(theta) + math.pi) / (2 * math.pi) * sectors).astype(int), 0, sectors - 1)
+    zone = (s >= s0 - 1e-6) & (s <= s1 + 1e-6)
+    for j in range(sectors):
+        m = zone & (k == j)
+        if m.sum() >= KNEE_MIN_POINTS:
+            T[j] = hull_at(s[m], r[m], g)
+    nb = (np.roll(T, 1, axis=0) + 2.0 * T + np.roll(T, -1, axis=0)) / 4.0
+    T = np.where(np.isfinite(nb), np.fmax(T, nb), T)
+    return g, T
+
+
+def _table_at(g, T, s, theta):
+    """``sector_hulls``' table at points ``(s, theta)``: linear in theta between the two nearest sector centres (round
+    the circle), linear in s on the grid; NaN where either sector has none."""
+    n = T.shape[0]
+    x = (np.asarray(theta) + math.pi) / (2 * math.pi) * n - 0.5
+    k0 = np.floor(x).astype(int)
+    w = x - k0
+    k0 %= n
+    k1 = (k0 + 1) % n
+    gi = np.clip((np.asarray(s) - g[0]) / (g[1] - g[0] if len(g) > 1 else 1.0), 0, len(g) - 1)
+    i0 = np.floor(gi).astype(int)
+    i1 = np.minimum(i0 + 1, len(g) - 1)
+    u = gi - i0
+
+    def at(k):
+        return T[k, i0] * (1.0 - u) + T[k, i1] * u
+    return at(k0) * (1.0 - w) + at(k1) * w
+
+
+def knee_bridge(V, f, sides, cx):
+    """Round 2026-11-25: the knee bridge of a widened trouser leg (``f["shape_r"]`` set: every leg shape but skinny;
+    constants ``KNEE_*``), run on the laid-out drape start AFTER the pattern UVs (the cut's islands keep their bytes,
+    the drape only moves vertices). Per side: every vertex's nearest point on the bone axis (hip -> knee -> ankle),
+    its arc length ``s`` from the knee joint and its angle round the axis (frame: X made normal to hip -> ankle, and
+    the axis x that); the radius ``r`` of every vertex from the zone's top (the axis point at ``ramp_m`` under the
+    crotch, at least ``KNEE_BRIDGE_ABOVE_M`` above the knee) to the hem (a cuffed hem's cuff left out) goes into the
+    ``sector_hulls`` table, and each vertex in that zone moves out along its radial direction to
+    max(r, H(s, theta)) faded in by a smoothstep over ``KNEE_BRIDGE_FADE_M`` from the zone's top. An inner side stays
+    ``centre_gap_m`` off the centre plane (as ``trouser_widen``). Returns ``(V, info)``."""
+    V = np.array(V, float, copy=True)
+    info = {}
+    if not f.get("shape_r"):
+        return V, info
+    for s_, d in sides.items():
+        side = np.where((V[:, 0] - cx) * s_ > 0)[0]
+        if not len(side):
+            continue
+        axis = np.array(d["axis"], float)
+        P = V[side]
+        q, s = _axis_s(P, axis)
+        r = P - q
+        rl = np.maximum(np.linalg.norm(r, axis=1), 1e-6)
+        dv = axis[-1] - axis[0]
+        dv = dv / max(1e-9, float(np.linalg.norm(dv)))
+        e1 = np.array([1.0, 0.0, 0.0]) - dv[0] * dv
+        e1 /= max(1e-9, float(np.linalg.norm(e1)))
+        e2 = np.cross(dv, e1)
+        theta = np.arctan2(r @ e2, r @ e1)
+        knee_z = float(axis[1][2])
+        # the zone's top: the axis point at the height where the widening is full (``ramp_m`` under the crotch)
+        top_z = float(d["crotch"]) - float(f.get("ramp_m") or 0.0)
+        hip_z = float(axis[0][2])
+        seg = float(np.linalg.norm(axis[1] - axis[0]))
+        t_top = np.clip((hip_z - top_z) / max(1e-9, hip_z - knee_z), 0.0, 1.0)
+        s0 = min(-(1.0 - float(t_top)) * seg, -KNEE_BRIDGE_ABOVE_M)
+        under = P[:, 2] < float(d["crotch"])
+        lo = float(d["hem"]) + (float(f["cuff_m"]) if f.get("hem") == "cuffed" else 0.0)
+        src = under & (P[:, 2] >= lo - 1e-9)
+        if not (src & (s >= s0)).any():
+            continue
+        s1 = float(s[src].max())
+        if s1 - s0 < 4 * KNEE_GRID_M:
+            continue
+        g, T = sector_hulls(s[src], theta[src], rl[src], s0, s1)
+        zone = under & (s >= s0)
+        H = _table_at(g, T, np.clip(s, s0, s1), theta)
+        t = np.clip((s - s0) / KNEE_BRIDGE_FADE_M, 0.0, 1.0)
+        t = t * t * (3.0 - 2.0 * t)
+        lift = np.where(zone & np.isfinite(H), np.maximum(0.0, np.nan_to_num(H) - rl) * t, 0.0)
+        new = rl + lift
+        Pn = q + r / rl[:, None] * new[:, None]
+        moved = lift > 1e-6
+        gap = float(f["centre_gap_m"])
+        inner = moved & ((Pn[:, 0] - cx) * s_ < gap)
+        Pn[inner, 0] = cx + s_ * gap
+        V[side] = Pn
+        # the back of the knee (+Y in Blender: the back) for the record
+        tb = math.atan2(float(e2[1]), float(e1[1]))
+        back = zone & (np.abs(s) < 0.02) & (np.abs(np.angle(np.exp(1j * (theta - tb)))) < math.pi / 6)
+        info[str(s_)] = {"moved": int(moved.sum()), "lift_max_mm": round(float(lift.max()) * 1000, 1),
+                         "knee_z": round(knee_z, 4), "zone_m": [round(s0, 3), round(s1, 3)],
+                         "back_knee_lift_p50_mm": round(float(np.median(lift[back])) * 1000, 1) if back.any() else None}
+    return V, info
+
+
 def _hull2(P):
     """The 2D convex hull of the points ``P`` (n, 2), counter-clockwise (Andrew's monotone chain)."""
     pts = sorted(set(map(tuple, np.round(P, 6))))
@@ -1776,6 +1956,9 @@ def build_fitted(prm, spec, arm, body, ctree, col=None, cut=None, boots=()):
     info["verts"] = len(mesh.vertices)
     info["pinned_share"] = round(len(pin) / max(1, len(mesh.vertices)), 3)
     info["pattern"] = pattern
+    if kind == "trousers":
+        # round 2026-11-25: what ``knee_bridge`` needs after the pattern UVs (``garment_template_build.run`` pops it)
+        info["knee_sides"] = {"sides": tsides, "cx": cx}
     return obj, pin, info
 
 

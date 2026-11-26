@@ -15,11 +15,27 @@ as `[result <tool>] <line>`, and so on until a reply carries no tool call.
 Turn ends:
 * no tool call (turn >= 2, or turn 1 after at least one step) ->
   `awaiting_review`, note = the final reply;
-* hard failure (LLM error, step/token budget, 3 unparseable calls in a row,
-  turn 1 without any tool call, a tool raising a non-refusal exception) or
-  Stop -> the turn's writes are undone (`world_dev_undo.undo(run, turn)`);
-  turn 1 then ends terminal (`rolled_back` / `rollback_incomplete`), a
-  later turn returns to `awaiting_review` with the error as note.
+* budget reached (the step or token budget OF THIS TURN, see below) ->
+  `awaiting_review` WITHOUT any undo: the turn's work is kept, the note
+  starts "budget reached (" and asks for a follow-up, and the history gets
+  one assistant line saying the turn was cut off, so the next turn continues
+  where it stopped. Exception: turn 1 that hit a budget before its first
+  step has nothing to keep and is a hard failure;
+* hard failure (LLM error, 3 unparseable calls in a row, turn 1 without any
+  tool call, a tool raising a non-refusal exception) or Stop -> the turn's
+  writes are undone (`world_dev_undo.undo(run, turn)`); turn 1 then ends
+  terminal (`rolled_back` / `rollback_incomplete`), a later turn returns
+  to `awaiting_review` with the error as note.
+
+Budgets are PER TURN: `max_steps` / `max_tokens_total` of the run row
+bound each turn on its own (start and every follow-up get the full
+budget); the run row keeps the run TOTALS (steps, tokens, cost). The
+per-turn counters are measured against the totals at the turn's start and
+live in memory only — a turn never survives a restart. A follow-up may
+raise the budgets for itself and every later turn, never lower them.
+Each turn's outcome (`kept` / `cut_by_budget` / `rolled_back`) is
+remembered per process; `turn_summaries` merges it with the journal for
+the run detail (writes and undone writes per turn).
 From `awaiting_review` a follow-up `message` starts the next turn;
 `accept` / `discard` (also from `interrupted`) end the run. `_close` is
 the ONE terminal transition: status + ended_at, then the freeze state the
@@ -51,6 +67,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
+from app.core import world_dev_media as wdm
 from app.core import world_dev_runs as wr
 from app.core import world_dev_tools as wt
 from app.core import world_dev_undo as wu
@@ -58,11 +75,15 @@ from app.core.log import get_logger
 
 logger = get_logger("world_dev_agent")
 
-DEFAULT_MAX_STEPS = 40
-DEFAULT_MAX_TOKENS_TOTAL = 300_000
+#: Per-TURN budgets (each turn of a run gets them in full).
+DEFAULT_MAX_STEPS = 60
+DEFAULT_MAX_TOKENS_TOTAL = 600_000
+#: Start of the note of a turn cut off by its budget (work kept).
+BUDGET_NOTE_PREFIX = "budget reached ("
 #: Consecutive replies with an unparseable tool call that fail the turn.
 MAX_BAD_CALLS = 3
-#: Read results kept whole in the history; older ones become a stub.
+#: Read results kept whole in the history; older ones become a stub (pinned
+#: reference reads excepted — they stay whole until the same read repeats).
 KEEP_RESULTS = 4
 BAD_BODY_LINE = "error: body is not a JSON object"
 SYSTEM_TEMPLATE = "world_dev_free/system.md"
@@ -82,15 +103,64 @@ class _Stopped(Exception):
 
 # ── LLM plumbing (module level so a test can replace it) ─────────────────
 
+#: Effort levels of the Anthropic Messages API (`output_config.effort`).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: Completion budget for a Claude model when neither the request nor the LLM
+#: routing names one: thinking and reply share max_tokens (Anthropic's
+#: suggested start; 32768 left a map JSON ~600 tokens, 2026-11-23).
+ANTHROPIC_DEFAULT_MAX_TOKENS = 65536
+
+
+def anthropic_budget(is_anthropic: bool, requested: Optional[int],
+                     routed: Optional[int]) -> Optional[int]:
+    """The per-reply max_tokens: the cap the user sent wins; else the
+    routing entry's; else ANTHROPIC_DEFAULT_MAX_TOKENS for a Claude model
+    and None (the provider's default) for any other."""
+    if requested:
+        return int(requested)
+    if routed:
+        return int(routed)
+    return ANTHROPIC_DEFAULT_MAX_TOKENS if is_anthropic else None
+
+
+def apply_effort(llm: Any, effort: str) -> None:
+    """Set the Effort level on a Claude client (`output_config.effort`).
+    '' = the model's default; other providers ignore it. ValueError for a
+    level not in EFFORT_LEVELS."""
+    from app.core.llm_client import AnthropicLLMClient, merge_extra_params
+    effort = (effort or "").strip().lower()
+    if not effort:
+        return
+    if effort not in EFFORT_LEVELS:
+        raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+    if isinstance(llm, AnthropicLLMClient):
+        llm.extra_params = merge_extra_params(
+            llm.extra_params, {"output_config": {"effort": effort}})
+
+
 def _default_llm_factory(model: str, provider: str,
                          max_tokens: Optional[int]) -> Optional[Tuple[Any, Any]]:
-    """(LLM client, LLMInstance) for the World Dev model, or None."""
+    """(LLM client, LLMInstance) for the World Dev model, or None.
+
+    The per-reply budget follows `anthropic_budget`: `create_llm_instance`
+    keeps the routing entry's max_tokens when called with None, so that value
+    is the routed one; the result is written to the client AND the instance
+    (the instance is what the queue tracking reports)."""
+    from app.core.llm_client import AnthropicLLMClient
     from app.core.llm_router import create_llm_instance
     instance = create_llm_instance(task="chat", model=model, provider_name=provider or "",
                                    max_tokens=max_tokens)
     if instance is None:
         return None
-    return instance.create_llm(), instance
+    routed = getattr(instance, "max_tokens", None) if max_tokens is None else None
+    llm = instance.create_llm()
+    if llm is None:
+        return None
+    budget = anthropic_budget(isinstance(llm, AnthropicLLMClient), max_tokens, routed)
+    llm.max_tokens = budget
+    instance.max_tokens = budget
+    logger.info("world-dev LLM: %s/%s max_tokens=%s", provider or "?", model, budget)
+    return llm, instance
 
 
 async def _chat_active(llm_instance: Any) -> Any:
@@ -137,6 +207,49 @@ def _display_cut(text: str) -> int:
     return len(text)
 
 
+def _tokens(run: Dict[str, Any]) -> int:
+    return int(run["tokens_in"] or 0) + int(run["tokens_out"] or 0)
+
+
+def turn_summaries(run: Dict[str, Any], steps: List[Dict[str, Any]],
+                   known: Optional[Dict[int, Dict[str, str]]] = None) -> List[Dict[str, Any]]:
+    """One row per turn of the run: {turn, status, reason, writes, undone}.
+
+    `writes` / `undone` count the turn's WRITE journal rows and those of
+    them already undone. `status`: `running` for the working turn of a
+    running run; else the outcome this process recorded (`known`, from
+    `RunManager.turn_outcomes`); without one (after a restart) it is
+    derived — undone writes in a run that was not discarded = `rolled_back`,
+    the newest turn whose note starts with BUDGET_NOTE_PREFIX =
+    `cut_by_budget`, otherwise `kept`. The reason of a derived row is the
+    run note for the newest turn, else empty. A discarded run's turns keep
+    their own outcome (the discard is the run's status)."""
+    known = known or {}
+    last = int(run.get("turn") or 0)
+    note = str(run.get("note") or "")
+    discarded = run.get("status") in ("rolled_back", "rollback_incomplete")
+    out: List[Dict[str, Any]] = []
+    for turn in range(1, last + 1):
+        rows = [s for s in steps
+                if int(s.get("turn") or 0) == turn and s.get("kind") == "write"]
+        writes = len(rows)
+        undone = sum(1 for s in rows if s.get("undone_at"))
+        o = known.get(turn)
+        if turn == last and run.get("status") == "running":
+            status, reason = "running", ""
+        elif o:
+            status, reason = o.get("status") or "kept", o.get("reason") or ""
+        elif undone and not discarded:
+            status, reason = "rolled_back", note if turn == last else ""
+        elif turn == last and note.startswith(BUDGET_NOTE_PREFIX):
+            status, reason = "cut_by_budget", note
+        else:
+            status, reason = "kept", ""
+        out.append({"turn": turn, "status": status, "reason": reason,
+                    "writes": writes, "undone": undone})
+    return out
+
+
 # ── Per-run in-memory state ──────────────────────────────────────────────
 
 @dataclass
@@ -153,6 +266,8 @@ class _RunState:
     llm_instance: Any = None
     system: str = ""
     pricing: Dict[str, float] = field(default_factory=dict)
+    #: the run totals at the start of the current turn (per-turn budgets)
+    base: Dict[str, int] = field(default_factory=dict)
 
 
 class RunManager:
@@ -162,6 +277,10 @@ class RunManager:
         #: (model, provider, max_tokens) -> (llm, llm_instance) | None
         self.llm_factory: Callable[[str, str, Optional[int]], Any] = _default_llm_factory
         self._states: Dict[str, _RunState] = {}
+        #: run id -> {turn: {"status", "reason"}} of the turns this process ended
+        self._outcomes: Dict[str, Dict[int, Dict[str, str]]] = {}
+        #: run id -> {"turn", "steps", "tokens"} of the newest turn this process ran
+        self._turn_usage: Dict[str, Dict[str, int]] = {}
 
     # ── helpers ──
     def _state(self, run_id: str) -> _RunState:
@@ -181,18 +300,34 @@ class RunManager:
         st = self._states.get(run_id)
         return bool(st and st.busy)
 
+    def turn_outcomes(self, run_id: str) -> Dict[int, Dict[str, str]]:
+        """The outcomes of the turns this process ended (empty after a restart)."""
+        return dict(self._outcomes.get(run_id) or {})
+
+    def turn_usage(self, run_id: str) -> Optional[Dict[str, int]]:
+        """Per-turn counters of the newest turn this process ran, or None."""
+        u = self._turn_usage.get(run_id)
+        return dict(u) if u else None
+
+    def _set_outcome(self, run_id: str, turn: int, status: str, reason: str) -> None:
+        if turn > 0:
+            self._outcomes.setdefault(run_id, {})[turn] = {"status": status,
+                                                           "reason": reason}
+
     async def _emit(self, st: _RunState, ev: Dict[str, Any]) -> None:
         async with st.cond:
             ev = {"ev": len(st.events) + 1, **ev}
             st.events.append(ev)
             st.cond.notify_all()
 
-    async def _resolve(self, model: str, provider: str,
-                       max_tokens: Optional[int]) -> Tuple[Any, Any, str, Dict[str, float]]:
+    async def _resolve(self, model: str, provider: str, max_tokens: Optional[int],
+                       effort: str = "") -> Tuple[Any, Any, str, Dict[str, float]]:
         from app.core.llm_cost import resolve_pricing
         resolved = await asyncio.to_thread(self.llm_factory, model, provider, max_tokens)
         if not resolved or resolved[0] is None:
             raise ValueError(f"no provider for model {model!r}")
+        # Here, not in the factory: the factory seam keeps its 3 arguments.
+        apply_effort(resolved[0], effort)
         system = await asyncio.to_thread(_render_system)
         pricing = await resolve_pricing(model, provider)
         return resolved[0], resolved[1], system, pricing
@@ -218,6 +353,7 @@ class RunManager:
                 logger.error("world-dev %s: restoring the freeze state failed: %s",
                              run_id, e, exc_info=True)
         logger.info("world-dev run %s closed: %s", run_id, status)
+        await self._release_media(run_id, closing=True)
         st = self._state(run_id)
         await self._emit(st, {"type": "status", "status": status,
                               "note": note if note is not None else run.get("note") or ""})
@@ -226,6 +362,17 @@ class RunManager:
         st.history, st.llm, st.llm_instance, st.system = [], None, None, ""
         if self._states.get(run_id) is st:
             self._states.pop(run_id, None)
+
+    async def _release_media(self, run_id: str, *, closing: bool = False) -> None:
+        """Lift the run's deferral of automatic renders (``world_dev_media``,
+        plan 2026-11-25-world-dev-free-media Task 2): at every turn end
+        (``release_turn``) and when the run closes (``release_all``). Never
+        raises — the run's transition stands either way."""
+        try:
+            await asyncio.to_thread(wdm.release_all if closing else wdm.release_turn, run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("world-dev %s: releasing the media deferral failed: %s",
+                         run_id, e, exc_info=True)
 
     def _spawn(self, run_id: str, st: _RunState, text: str) -> None:
         st.stop = False
@@ -237,18 +384,25 @@ class RunManager:
     async def start(self, task: str, model: str, provider: str, user_id: str,
                     max_tokens: Optional[int] = None,
                     max_steps: int = DEFAULT_MAX_STEPS,
-                    max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL) -> str:
-        """Start a run; ValueError (nothing changed) when the task is empty or
-        the model cannot be resolved, RunOpenError when a run is open."""
+                    max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL,
+                    effort: str = "") -> str:
+        """Start a run; ValueError (nothing changed) when the task is empty,
+        the effort unknown or the model cannot be resolved, RunOpenError when
+        a run is open. `effort` is stored on the run (EFFORT_LEVELS, '' =
+        the model's default)."""
         from app.models.world import is_world_frozen, set_world_frozen
         task = (task or "").strip()
         if not task:
             raise ValueError("the task is empty")
-        llm, instance, system, pricing = await self._resolve(model, provider, max_tokens)
+        effort = (effort or "").strip().lower()
+        if effort and effort not in EFFORT_LEVELS:
+            raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+        llm, instance, system, pricing = await self._resolve(model, provider, max_tokens,
+                                                             effort)
         run_id = await asyncio.to_thread(
             wr.create_run, task, model, provider, user_id,
             int(max_steps or DEFAULT_MAX_STEPS),
-            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens)
+            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens, effort)
         st = self._state(run_id)
         async with st.lock:
             recorded = False  # was_frozen holds the world's real pre-run state
@@ -275,7 +429,8 @@ class RunManager:
 
     async def message(self, run_id: str, text: str, max_steps: Optional[int] = None,
                       max_tokens_total: Optional[int] = None) -> None:
-        """A follow-up turn; only from `awaiting_review`. Budgets may only be
+        """A follow-up turn; only from `awaiting_review`. The budgets given
+        apply per turn to this turn and every later one; they may only be
         raised: each stored budget becomes max(stored, requested)."""
         text = (text or "").strip()
         if not text:
@@ -299,10 +454,11 @@ class RunManager:
             if st.llm is None:
                 # This process did not start the run (server restart while it
                 # waited for review): resolve again with the run's own
-                # per-reply cap, rebuild the context.
+                # per-reply cap and effort, rebuild the context.
                 (st.llm, st.llm_instance, st.system,
                  st.pricing) = await self._resolve(run["model"], run["provider"],
-                                                   run.get("max_tokens"))
+                                                   run.get("max_tokens"),
+                                                   run.get("effort") or "")
                 st.history = await asyncio.to_thread(self._rebuilt_history, run)
             await asyncio.to_thread(wr.set_status, run_id, "running", "")
             await self._emit(st, {"type": "status", "status": "running", "note": ""})
@@ -444,10 +600,15 @@ class RunManager:
                     if outcome == "final":
                         await asyncio.to_thread(wr.set_status, run_id,
                                                 "awaiting_review", note)
+                        self._set_outcome(run_id, turn, "kept", "")
                         status_ev = {"type": "status", "status": "awaiting_review",
                                      "note": note}
+                    elif outcome == "budget":
+                        status_ev = await self._cut_by_budget(run_id, st, turn, note)
                     else:
                         status_ev = await self._fail(run_id, st, turn, note, mark)
+                    # After the turn's undo (a failed turn), before the status event.
+                    await self._release_media(run_id)
                     st.busy = False
                     if status_ev:
                         await self._emit(st, status_ev)
@@ -471,6 +632,7 @@ class RunManager:
         `running` becomes `interrupted` (accept / discard work from there)."""
         logger.error("world-dev %s: %s", run_id, note, exc_info=exc)
         st.busy = False
+        await self._release_media(run_id)
         try:
             run = await asyncio.to_thread(wr.get_run, run_id)
             if run is not None and run["status"] == "running":
@@ -481,6 +643,19 @@ class RunManager:
             logger.error("world-dev %s: marking interrupted failed: %s", run_id, e,
                          exc_info=True)
 
+    async def _cut_by_budget(self, run_id: str, st: _RunState, turn: int,
+                             note: str) -> Dict[str, Any]:
+        """The turn reached its budget: NO undo — its work stays, the run
+        waits for review, and the history says the turn was cut off so a
+        follow-up continues where it stopped."""
+        logger.info("world-dev %s turn %s cut off: %s", run_id, turn, note)
+        st.history.append({"role": "assistant", "content":
+                           f"[turn {turn} was cut off: {note}. Every write of that turn "
+                           "is kept — continue where it stopped, do not redo it.]"})
+        await asyncio.to_thread(wr.set_status, run_id, "awaiting_review", note)
+        self._set_outcome(run_id, turn, "cut_by_budget", note)
+        return {"type": "status", "status": "awaiting_review", "note": note}
+
     async def _fail(self, run_id: str, st: _RunState, turn: int, note: str,
                     mark: int) -> Optional[Dict[str, Any]]:
         """Hard failure / Stop: undo the turn. Turn 1 ends terminal; a later
@@ -488,6 +663,7 @@ class RunManager:
         plus a rollback note. Returns the status event still to emit (None
         when _close emitted it)."""
         logger.warning("world-dev %s turn %s failed: %s", run_id, turn, note)
+        self._set_outcome(run_id, turn, "rolled_back", note)
         try:
             report = await asyncio.to_thread(wu.undo, run_id, turn)
         except Exception as e:  # noqa: BLE001
@@ -514,6 +690,7 @@ class RunManager:
         # Truthful history: drop what this turn added after its user message
         # (results of writes that are gone) and say so once.
         del st.history[mark + (1 if turn else 0):]
+        self._restore_superseded(st)
         hist = (f"[turn {turn} was rolled back: {note} — every write of that turn "
                 "was undone")
         if not_reversed:
@@ -528,16 +705,46 @@ class RunManager:
         return ([{"role": "system", "content": st.system}]
                 + [{"role": m["role"], "content": m["content"]} for m in st.history])
 
-    def _add_result(self, st: _RunState, tool: str, line: str) -> None:
+    def _add_result(self, st: _RunState, tool: str, line: str,
+                    args: Optional[Dict[str, Any]] = None, ok: bool = True) -> None:
+        """Append one tool result to the history and shrink older reads.
+
+        A pinned reference read is never shrunk; only a newer result of the
+        same tool with the same args (`_key`) turns its older copy into a
+        stub (its text kept in `_orig` for _restore_superseded). Only an ok
+        result is pinned — a refused one follows the normal rule. Pinned
+        results still count among the newest KEEP_RESULTS."""
         spec = wt.TOOLS.get(tool)
+        pinned = bool(spec is not None and spec.pinned and ok)
+        key = tool + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        if pinned:
+            for m in st.history:
+                if m.get("_pinned") and m.get("_key") == key and not m.get("_superseded"):
+                    m["_orig"] = m["content"]
+                    m["content"] = f"[result {tool}] (superseded — see the later copy)"
+                    m["_superseded"] = True
         st.history.append({"role": "user", "content": f"[result {tool}] {line}",
-                           "_result": True, "_tool": tool,
+                           "_result": True, "_tool": tool, "_pinned": pinned, "_key": key,
                            "_read": bool(spec is not None and not spec.write)})
         results = [m for m in st.history if m.get("_result")]
         for m in results[:-KEEP_RESULTS]:
-            if m.get("_read") and not m.get("_shrunk"):
+            if m.get("_read") and not m.get("_pinned") and not m.get("_shrunk"):
                 m["content"] = f"[result {m['_tool']}] (shrunk — call again if needed)"
                 m["_shrunk"] = True
+
+    @staticmethod
+    def _restore_superseded(st: _RunState) -> None:
+        """After a rollback cut the history: a superseded pinned copy whose
+        newer copy was cut away gets its whole text back. The history is
+        walked newest first, so in a chain of copies the NEWEST surviving
+        one is restored and the older ones stay stubs."""
+        live = {m.get("_key") for m in st.history
+                if m.get("_pinned") and not m.get("_superseded")}
+        for m in reversed(st.history):
+            if m.get("_superseded") and m.get("_key") not in live:
+                m["content"] = m.pop("_orig", m["content"])
+                m["_superseded"] = False
+                live.add(m.get("_key"))
 
     async def _call_llm(self, run_id: str, st: _RunState, pattern) -> str:
         """One streamed LLM call; returns the reply up to the end of its first
@@ -603,32 +810,63 @@ class RunManager:
             "\n".join(m["content"] for m in messages), reply, st.pricing)
         await asyncio.to_thread(wr.add_usage, run_id, t_in, t_out, cost)
         run = await asyncio.to_thread(self._get, run_id)
-        await self._emit(st, {"type": "usage", "tokens_in": run["tokens_in"],
-                              "tokens_out": run["tokens_out"],
-                              "cost": run["cost_total"], "steps": run["steps"],
-                              "max_steps": run["max_steps"],
-                              "max_tokens_total": run["max_tokens_total"]})
+        await self._emit(st, {"type": "usage", **self._usage(run_id, run, st.base)})
         return reply
 
+    def _usage(self, run_id: str, run: Dict[str, Any],
+               base: Dict[str, int]) -> Dict[str, Any]:
+        """Run totals plus this turn's counters (remembered for the detail)."""
+        turn = {"turn": int(base.get("turn") or 0),
+                "steps": int(run["steps"] or 0) - int(base.get("steps") or 0),
+                "tokens": _tokens(run) - int(base.get("tokens") or 0)}
+        self._turn_usage[run_id] = turn
+        return {"tokens_in": run["tokens_in"], "tokens_out": run["tokens_out"],
+                "cost": run["cost_total"], "steps": run["steps"],
+                "max_steps": run["max_steps"],
+                "max_tokens_total": run["max_tokens_total"],
+                "turn": turn["turn"], "turn_steps": turn["steps"],
+                "turn_tokens": turn["tokens"]}
+
     @staticmethod
-    def _over_tokens(run: Dict[str, Any]) -> Optional[str]:
-        used = int(run["tokens_in"] or 0) + int(run["tokens_out"] or 0)
+    def _over_budget(run: Dict[str, Any], base: Dict[str, int],
+                     steps_too: bool) -> Optional[Tuple[str, int, int]]:
+        """(kind, used, budget) when THIS TURN has used up its tokens (or,
+        with `steps_too`, its steps), else None."""
+        used = _tokens(run) - int(base.get("tokens") or 0)
         if used >= int(run["max_tokens_total"] or 0):
-            return f"token budget exhausted ({used} of {run['max_tokens_total']} tokens)"
+            return "tokens", used, int(run["max_tokens_total"] or 0)
+        steps = int(run["steps"] or 0) - int(base.get("steps") or 0)
+        if steps_too and steps >= int(run["max_steps"] or 0):
+            return "steps", steps, int(run["max_steps"] or 0)
         return None
 
     async def _loop(self, run_id: str, st: _RunState, turn: int) -> Tuple[str, str]:
-        """("final", reply) or ("fail", note)."""
+        """("final", reply), ("budget", note) or ("fail", note). A budget hit
+        in turn 1 before its first step is a failure: nothing to keep."""
         pattern = _tag_pattern()
         ctx = wt.ToolCtx(run_id=run_id, turn=turn)
         bad = 0
+        run = await asyncio.to_thread(self._get, run_id)
+        base = st.base = {"turn": turn, "steps": int(run["steps"] or 0),
+                          "tokens": _tokens(run)}
+        self._turn_usage[run_id] = {"turn": turn, "steps": 0, "tokens": 0}
+
+        def budget(hit: Tuple[str, int, int]) -> Tuple[str, str]:
+            kind, used, limit = hit
+            if turn == 1 and int(run["steps"] or 0) == base["steps"]:
+                word = "token" if kind == "tokens" else "step"
+                return "fail", (f"{word} budget exhausted before the first step "
+                                f"({used} of {limit} {kind})")
+            return "budget", (f"{BUDGET_NOTE_PREFIX}{kind}: {used} of {limit} this turn) "
+                              "— the turn's work is kept; send a follow-up to continue")
+
         while True:
             if st.stop:
                 return "fail", "stopped by the admin"
             run = await asyncio.to_thread(self._get, run_id)
-            over = self._over_tokens(run)
+            over = self._over_budget(run, base, steps_too=False)
             if over:
-                return "fail", over
+                return budget(over)
             try:
                 reply = await self._call_llm(run_id, st, pattern)
             except _Stopped:
@@ -645,14 +883,13 @@ class RunManager:
                                     "Pick another model.")
                 st.history.append({"role": "assistant", "content": reply})
                 return "final", reply.strip()
-            # Only a reply that asks for more work is held to the token
-            # budget after the call: a final reply has finished the turn (the
-            # check at the top of the loop blocks any further call anyway).
-            over = self._over_tokens(run)
+            # Only a reply that asks for more work is held to the budgets
+            # after the call: a final reply has finished the turn (the check
+            # at the top of the loop blocks any further call anyway). The
+            # reply that asked is NOT kept in the history: its tool never ran.
+            over = self._over_budget(run, base, steps_too=True)
             if over:
-                return "fail", over
-            if int(run["steps"] or 0) >= int(run["max_steps"] or 0):
-                return "fail", f"step budget exhausted ({run['steps']} steps)"
+                return budget(over)
             if m is None:
                 # A tool tag that never closed: unparseable like a bad body.
                 opened = _TOOL_OPEN.search(reply)
@@ -674,7 +911,8 @@ class RunManager:
                                               body if m else reply, line)
                 await self._emit(st, {"type": "step", "tool": name, "ok": False,
                                       "line": line, "kind": "refused", "seq": seq})
-                self._add_result(st, name, line)
+                self._add_result(st, name, line, args if isinstance(args, dict) else None,
+                                 ok=False)
                 if bad >= MAX_BAD_CALLS:
                     return "fail", (f"{MAX_BAD_CALLS} tool calls in a row had a body that is "
                                     "not a JSON object")
@@ -692,7 +930,7 @@ class RunManager:
                 return "fail", f"tool {name} failed: {e}"
             await self._emit(st, {"type": "step", "tool": name, "ok": res.ok,
                                   "line": res.line, "wrote": res.wrote, "seq": res.seq})
-            self._add_result(st, name, res.line)
+            self._add_result(st, name, res.line, args, ok=res.ok)
             if st.stop:
                 return "fail", "stopped by the admin"
 

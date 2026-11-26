@@ -40,7 +40,6 @@ SITUATION = "situation"
 PRESENCE = "presence"
 EVENTS = "events"
 MEMORY = "memory"
-ARCS = "arcs"
 RELATIONSHIPS = "relationships"
 RULES_PRESENCE = "rules_presence"
 INTENT = "intent"
@@ -50,7 +49,7 @@ RECENT_ACTIVITY = "recent_activity"
 # Convenience: load everything (used by the rp_first tool-system builder).
 THOUGHT_FULL: Set[str] = {
     IDENTITY, TASK, ASSIGNMENTS, PENDING, SITUATION, PRESENCE,
-    EVENTS, MEMORY, ARCS, RULES_PRESENCE, INTENT, RESPONSE_RULES,
+    EVENTS, MEMORY, RULES_PRESENCE, INTENT, RESPONSE_RULES,
     RECENT_ACTIVITY,
 }
 
@@ -138,9 +137,6 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
 
     if MEMORY in sections:
         data["memory_section"] = _load_memory(character_name)
-
-    if ARCS in sections:
-        data["arc_context"] = _load_arcs(character_name)
 
     if ASSIGNMENTS in sections:
         data["assignment_section"] = _load_assignments(character_name)
@@ -318,15 +314,6 @@ def _load_memory(character_name: str, partner_name: str = "") -> str:
     return ""
 
 
-def _load_arcs(character_name: str) -> str:
-    try:
-        from app.core.story_engine import get_story_engine
-        return get_story_engine().inject_arc_context(character_name) or ""
-    except Exception as e:
-        logger.debug("Arc-Kontext nicht verfuegbar: %s", e)
-    return ""
-
-
 def _load_assignments(character_name: str) -> str:
     try:
         from app.models.intents import build_intents_prompt_section
@@ -486,8 +473,8 @@ def build_recent_activity_section(character_name: str,
         if not rows:
             return ""
 
-        # Activity-Werte die rein technisch sind und keinen Mehrwert im
-        # Activity-Log haben — komplett rausfiltern.
+        # Activity values that are purely technical and add nothing to the
+        # activity log — filter them out completely.
         _DROP_ACTIVITY_VALUES = {"none", "skip", "greeting"}
 
         events: list = []

@@ -491,3 +491,54 @@ def declarations_info(character_name: str, path: Optional[Path], meta: Dict[str,
                           else reasons.get(entry["id"], "Not computed"))
         out.append(info)
     return out
+
+
+#: The axes a rig op's ``anchor_offset`` is given in (Blender's world, Z up, the figure facing -Y) read as the body
+#: frame [side, up, front] of a glTF figure facing +Z: side = x, up = z, front = -y.
+def _blender_to_frame(offset: List[float]) -> List[float]:
+    x, y, z = (float(v) for v in offset)
+    return [x, z, -y + 0.0]
+
+
+def declared_contact_anchors() -> Dict[str, List[Dict[str, Any]]]:
+    """The DECLARED contact anchors of every loaded package, independent of any character or model (owner decision
+    2026-11-25; 2026-11-26: the opening a renderer without built channels samples a pair loop against, see
+    packages/scene-render/src/pairHeight.ts): where the attached part and the channels sit when no figure has them
+    BUILT - the skeleton alone carries these points.
+
+    - ``channels``: every ``kind: channel`` region - ``{id, bone, offset, accepts, genders}``, ``offset`` in the body
+      frame [side, up, front] from the joint ``bone`` (the ``declared`` placement of ``resolve_channels``: joint +
+      offset . frame, bound rigidly to the joint).
+    - ``parts``: every rig whose op a channel (or the core's mouth) accepts and whose params name an ``anchor_bone``
+      - ``{id, op, bone, offset, genders}``; ``anchor_offset`` (Blender axes) is turned into the body frame
+      (``_blender_to_frame``). The anchor is where the build starts looking for the part's root.
+
+    ``genders`` = the declaration's ``applies_to.gender`` (None = any). Declaration order (package, slot, entry)."""
+    from app.core import mouth_channel
+    from app.plugins.registry import packages
+    channels: List[Dict[str, Any]] = []
+    parts: List[Dict[str, Any]] = []
+    accepted = set(mouth_channel.ACCEPTS)
+    for package in packages():
+        for slot in package.body_slots:
+            for region in slot.regions:
+                if region.kind != "channel":
+                    continue
+                accepted.update(region.accepts_ops)
+                genders = region.applies_to.get("gender") or slot.applies_to.get("gender")
+                channels.append({"id": f"{package.id}:{region.id}", "bone": region.bone,
+                                 "offset": [float(v) for v in region.offset], "accepts": list(region.accepts_ops),
+                                 "genders": [str(g) for g in genders] if genders else None})
+    for package in packages():
+        for slot in package.body_slots:
+            for rig in slot.rigs:
+                params = rig.params or {}
+                bone, offset = params.get("anchor_bone"), params.get("anchor_offset")
+                if rig.op not in accepted or not isinstance(bone, str) or not isinstance(offset, (list, tuple)) \
+                        or len(offset) != 3:
+                    continue
+                genders = rig.applies_to.get("gender") or slot.applies_to.get("gender")
+                parts.append({"id": f"{package.id}:{rig.id}", "op": rig.op, "bone": bone,
+                              "offset": _blender_to_frame(list(offset)),
+                              "genders": [str(g) for g in genders] if genders else None})
+    return {"channels": channels, "parts": parts}

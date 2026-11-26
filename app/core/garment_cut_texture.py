@@ -17,8 +17,9 @@ The PROMPT is one of three shipped SECTIONED templates (``PROMPT_FILES``: front 
 section per edit-prompt dialect, ``app/imagegen/edit_prompt.py``, ``docs/edit-prompts.md`` §6) — deliberately not
 world-overridable (``/admin/templates`` stays LLM-only). Code picks the variant (``is_decorated``, the side); the
 backend the render lands on picks the dialect, inside the routed render, so attempt 2 on another backend gets its own
-wording. ``PROMPT_SHA`` (md5 of the three file texts) enters the cut atlas key and the record (``prompt_sha``), so a
-reworded section makes an old atlas stale. The render runs on the occasion ``CUT_OCCASION`` with the use case
+wording. The piece's kind's prompt pin (``PROMPT_KEYS``, ``prompt_sha_of``: the md5 of the family's files that last
+changed what that kind is sent) enters the cut atlas key and the record (``prompt_sha``), so a rewording that changes
+a kind's request makes that kind's old atlases stale — and no other kind's. The render runs on the occasion ``CUT_OCCASION`` with the use case
 ``CUT_USE_CASE`` (empty style/negative/instruction: the prompt is the whole subject).
 
 The JOB (Task 8): ``start`` checks synchronously (media switch, a configured chain, a ready CUT with islands
@@ -27,9 +28,12 @@ renders: a gate rejection of attempt 1 renders attempt 2 on the routing chain's 
 (``routing.gate_attempts``); a failure (busy, media off, no route, a dead backend) never does. It never waits for a drape and may run while the Build drapes the piece. The character's Build runs the same
 flow as its step "cut_texture" for a top whose ``texture`` is "cut" (``build_state`` / ``build_start`` /
 ``build_join``, user test 2026-11-21) — no click on the dialog's button is needed. A cut
-atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, ``PROMPT_SHA``,
+atlas is keyed by ``csig`` (the cut's islands sha, the item picture sha, the kind's ``PROMPT_KEYS`` pin,
 ``cut_texture_post.POST_VERSION``), never by ``tsig``; its record lives under ``cut_dir`` (``templates/cut/``) with
-the state "ready" / "rejected" / "failed". The assembly maps it onto a drape whose islands have the same sha — every
+the state "ready" / "rejected" / "failed". A new ``POST_VERSION`` alone renders nothing: the passed answers of a
+record with the same inputs are re-posted (``predecessors``). A rejected record is rendered again by a manual Build only
+when that is a different request (``retry_changes_request``); a Redo renders the next round with a new seed
+(``job_seed``, key isolation 2026-11-25). The assembly maps it onto a drape whose islands have the same sha — every
 drape of the same cut (``garment_template.cut_info``). Every render goes ``routing.run_routed`` -> ``run_on_backend`` ->
 ``run_on_backend_channel``; the central handoff's ``edit_prompt.normalise`` finds the section already in its dialect.
 
@@ -76,16 +80,36 @@ FITTED_PROMPT_FILES = {"front_plain": _PROMPT_DIR / "garment_cut_texture_fitted_
 PROMPT_SETS = {"top": PROMPT_FILES, "fitted": FITTED_PROMPT_FILES}
 PROMPT_TEXTS = {family: {variant: path.read_text(encoding="utf-8") for variant, path in files.items()}
                 for family, files in PROMPT_SETS.items()}
-#: md5 of a family's three shipped files (every section) — part of the cut atlas key, so a reworded section makes an
-#: atlas of that family stale (and only of that family).
+#: md5 of a family's three shipped files as they are now (every section) — the guard of ``PROMPT_KEYS``, never a key.
 PROMPT_SHAS = {family: hashlib.md5("\0".join(texts[v] for v in PROMPT_SETS[family]).encode("utf-8")).hexdigest()
                for family, texts in PROMPT_TEXTS.items()}
-#: A top's prompt sha (unchanged by group A: a top's atlases keep their csig).
+#: The live md5 of a top's files (``PROMPT_SHAS["top"]``).
 PROMPT_SHA = PROMPT_SHAS["top"]
+#: The prompt's part of the cut atlas key PER PROMPT KIND (``prompt_kind``; key isolation 2026-11-25, review): the md5
+#: of the family's files that last changed what a piece of that kind is sent. The md5 of the whole family re-rendered
+#: every atlas of the family on any byte — a skirt-only rewording or one dialect's section re-rendered the gloves'
+#: textures on the hub. A change of a family's files sets the entries of the kinds whose request it changes to the new
+#: md5 and ``PROMPT_REVIEWED[family]`` to it as well; ``scripts/smoke_key_isolation.py`` fails while a family's md5
+#: differs from ``PROMPT_REVIEWED``, so the decision is never skipped. Every entry started at its family's md5 at
+#: ac232ef4d (no csig moved). "" is a piece without template parameters (family "top").
+PROMPT_KEYS: dict[str, str] = {
+    "": "8bbee7343d5f86703e8099d19892ba17", "top": "8bbee7343d5f86703e8099d19892ba17",
+    "skirt": "0b413012b95bb9d07089f86c331f963a", "dress": "0b413012b95bb9d07089f86c331f963a",
+    "jacket": "0b413012b95bb9d07089f86c331f963a", "strapless": "0b413012b95bb9d07089f86c331f963a",
+    "trousers": "0b413012b95bb9d07089f86c331f963a", "briefs": "0b413012b95bb9d07089f86c331f963a",
+    "bra": "0b413012b95bb9d07089f86c331f963a", "gloves": "0b413012b95bb9d07089f86c331f963a",
+    "tights": "0b413012b95bb9d07089f86c331f963a",
+}
+#: The family md5 whose effect on every kind ``PROMPT_KEYS`` reflects (the guard above).
+PROMPT_REVIEWED = {"top": "8bbee7343d5f86703e8099d19892ba17", "fitted": "0b413012b95bb9d07089f86c331f963a"}
 #: Renders per job: a gate rejection of attempt 1 renders attempt 2 on the chain's second entry (docs/edit-prompts.md
 #: §7); a single-entry chain renders it on the same backend with ``ATTEMPT_SEED_STEP`` added to the seed.
 CUT_ATTEMPTS = 2
 ATTEMPT_SEED_STEP = 1000
+#: A job rendered AGAIN under the same csig (a Redo, a Run all or a Build after a failure) is a new ROUND: its seed moves
+#: on by this per round (key isolation 2026-11-25, Glut's gloves — the seed came from the csig alone, so every retry of
+#: a rejected job sent the very same request and got the very same verdict). Round 0 keeps the seed it always had.
+ROUND_SEED_STEP = 100000
 
 TEMPLATE_FILL = (190, 190, 190)
 TEMPLATE_LINE = (80, 80, 80)
@@ -138,8 +162,10 @@ def prompt_family(kind) -> str:
 
 
 def prompt_sha_of(kind) -> str:
-    """The prompt sha a piece of ``kind`` is keyed by (``PROMPT_SHAS`` of its ``prompt_family``)."""
-    return PROMPT_SHAS[prompt_family(kind)]
+    """The prompt sha a piece of ``kind`` is keyed by: its ``PROMPT_KEYS`` pin. A kind outside the table (none of the
+    template kinds) is keyed like a piece without parameters — ``prompt_family`` gives it the top's files too."""
+    k = str(kind or "")
+    return PROMPT_KEYS[k] if k in PROMPT_KEYS else PROMPT_KEYS[""]
 
 
 def _fill_triangle(out: np.ndarray, tri: np.ndarray, value: int) -> None:
@@ -939,11 +965,13 @@ def unzoom(image: np.ndarray, grown: np.ndarray, frame: dict, size: int) -> tupl
     return out, g
 
 
-def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str = PROMPT_SHA) -> str:
+def csig(islands_sha: str, item_sha: str, back_sha: str = "", prompt_sha: str | None = None) -> str:
     """The cut atlas key: the cut's islands, the item image, the back view the back job read ("" for a pattern
-    without a back panel, or before the view exists), the prompt files of the piece's family (``prompt_sha_of``; a
-    top's by default) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
+    without a back panel, or before the view exists), the prompt pin of the piece's kind (``PROMPT_KEYS`` via
+    ``prompt_sha_of``; None = a piece without parameters, a top's files) and the post-processing version — NOT ``tsig`` (it carries the piece-only views' sha for the
     projection, which the atlas does not depend on)."""
+    if prompt_sha is None:
+        prompt_sha = prompt_sha_of("")
     raw = "|".join([str(islands_sha), str(item_sha), str(back_sha or ""), str(prompt_sha),
                     str(cut_texture_post.POST_VERSION)])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
@@ -1466,6 +1494,19 @@ def _routed_render(item_id: str, side: str, prompt_for, template_png: Path, ref_
     return bytes(images[0]), used, route, chosen.get("dialect", ""), chosen.get("prompt", "")
 
 
+def next_round(before: dict | None) -> int:
+    """The round a job renders in (``ROUND_SEED_STEP``): 0 the first time under its csig, the previous entry's round
+    + 1 when ``before`` (the job's entry of the same csig's record) was rendered (it has ``attempts``)."""
+    before = before or {}
+    return int(before.get("round") or 0) + 1 if before.get("attempts") else 0
+
+
+def job_seed(sig: str, job: str, rnd: int = 0) -> int:
+    """The seed of attempt 1 of ``job`` ("front" / "back") under csig ``sig`` in round ``rnd``: the csig's first 8 hex
+    + 1 for the back job + ``ROUND_SEED_STEP`` per round, mod 2**31 (round 0 is the seed every job had before rounds)."""
+    return (int(sig[:8], 16) + (0 if job == "front" else 1) + ROUND_SEED_STEP * int(rnd)) % 2 ** 31
+
+
 def attempt_seed(seed: int, attempt: int) -> int:
     """The seed of render ``attempt`` (1-based): ``seed`` + ``ATTEMPT_SEED_STEP`` per later attempt — a single-entry
     chain clamps attempt 2 onto the same backend, and the same seed would give the same answer."""
@@ -1501,11 +1542,16 @@ def _ensure_back_view(character_name: str, item_id: str) -> dict:
 
 
 def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str | None = None) -> dict:
-    """The jobs whose stored answer of csig ``sig`` a flow re-uses instead of rendering it again: every job of
-    ``parts`` other than ``only`` whose record entry is "ready" and whose raw answer file exists (re-posted from that
-    file, 0 image jobs). Run all (``only`` None) therefore spends only on what did not pass — a rejected back job
-    re-renders the back alone (review finding 2026-11-20); Redo ``only`` always renders that job. The ONE rule both
-    ``generate`` and ``job_plan`` (the buttons' counts) use. ``{job: record entry}``."""
+    """The jobs whose stored answer a flow re-uses instead of rendering it again: every job of ``parts`` other than
+    ``only`` whose record entry of csig ``sig`` is "ready" and whose raw answer file exists (re-posted from that file,
+    0 image jobs) — else, the same of a PREDECESSOR record (``predecessors``: the same islands, item picture, back view
+    and prompt under an older ``cut_texture_post.POST_VERSION``; the entry then carries ``raw_from``, the answer's
+    file, and ``reused_from``, its csig): a new post-processing re-posts the answers it has, it never renders them
+    again — but only for a job whose own entry under ``sig`` is not "rejected" (a re-posted answer the current
+    post-processing rejected is rendered anew, never taken from the predecessor again). Run all (``only`` None)
+    therefore spends only on what did not pass — a rejected back job re-renders the back
+    alone (review finding 2026-11-20); Redo ``only`` always renders that job. The ONE rule both ``generate`` and
+    ``job_plan`` (the buttons' counts) use. ``{job: record entry}``. Read-only."""
     previous = read_record(character_name, item_id, sig)
     stem = _stem(character_name, item_id, sig)
     out = {}
@@ -1513,7 +1559,60 @@ def reused_jobs(character_name: str, item_id: str, sig: str, parts, *, only: str
         entry = (previous.get("jobs") or {}).get(job) or {}
         if job != only and entry.get("state") == "ready" and _file(stem, f".raw_{job}.png").is_file():
             out[job] = entry
+    # a predecessor's answer fills only a job this csig has not judged yet: once the current post-processing rejected
+    # the re-posted answer (entry "rejected"), taking it again would reject it again on every Build (review 2026-11-25)
+    missing = [j for j in parts if j not in out and j != only
+               and ((previous.get("jobs") or {}).get(j) or {}).get("state") != "rejected"]
+    if missing:
+        for other, rec in predecessors(character_name, item_id, sig):
+            ostem = _stem(character_name, item_id, other)
+            for job in list(missing):
+                entry = (rec.get("jobs") or {}).get(job) or {}
+                raw = _file(ostem, f".raw_{job}.png")
+                if entry.get("state") == "ready" and raw.is_file():
+                    out[job] = {**entry, "raw_from": str(raw), "reused_from": other}
+                    missing.remove(job)
+            if not missing:
+                break
     return out
+
+
+def predecessors(character_name: str, item_id: str, sig: str) -> list[tuple[str, dict]]:
+    """The item's records whose answers fit csig ``sig`` although their own csig differs: made under another
+    ``cut_texture_post.POST_VERSION`` from the SAME islands, item picture, back view and prompt (their record's
+    ``islands_sha`` / ``item_sha`` / ``back_sha`` / ``prompt_sha`` give ``sig`` under the current version). Newest
+    first: ``[(csig, record)]``. Key isolation (2026-11-25): a post-processing version is no reason to render an
+    answer again."""
+    folder = cut_dir(character_name)
+    if not folder.is_dir():
+        return []
+    prefix = f"{item_id}_"
+    out = []
+    for path in folder.glob(f"{glob.escape(item_id)}_*.json"):
+        other = path.name[len(prefix):-len(".json")]
+        if other == sig or not _CSIG_RE.fullmatch(other):
+            continue
+        rec = read_record(character_name, item_id, other)
+        if not rec or rec.get("post_version") == cut_texture_post.POST_VERSION or not rec.get("prompt_sha"):
+            continue
+        if csig(str(rec.get("islands_sha") or ""), str(rec.get("item_sha") or ""), str(rec.get("back_sha") or ""),
+                str(rec.get("prompt_sha"))) == sig:
+            out.append((other, rec))
+    return sorted(out, key=lambda x: str(x[1].get("created_at") or ""), reverse=True)
+
+
+def _item_png_for(character_name: str, item_id: str, sig: str, reuse: dict) -> Path | None:
+    """The upscaled item picture a flow of csig ``sig`` sends: its own ``.item.png``, else the one beside the
+    predecessor whose front answer it re-uses (``reused_jobs`` ``reused_from``); None when neither exists."""
+    own = _file(_stem(character_name, item_id, sig), ".item.png")
+    if own.is_file():
+        return own
+    other = (reuse.get("front") or {}).get("reused_from")
+    if other:
+        theirs = _file(_stem(character_name, item_id, other), ".item.png")
+        if theirs.is_file():
+            return theirs
+    return None
 
 
 def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str, side: int,
@@ -1529,9 +1628,8 @@ def _plan_one(character_name: str, item_id: str, islands: dict, islands_sha: str
         if sig:
             reuse = reused_jobs(character_name, item_id, sig, parts, only=only)
     todo = [j for j in parts if j not in reuse]
-    item_png = _file(_stem(character_name, item_id, sig), ".item.png") if sig else None
-    upscale = 1 if 0 < side < MIN_ITEM_SIDE and ("front" in todo or item_png is None or not item_png.is_file()) \
-        else 0
+    item_png = _item_png_for(character_name, item_id, sig, reuse) if sig else None
+    upscale = 1 if 0 < side < MIN_ITEM_SIDE and ("front" in todo or item_png is None) else 0
     front = 1 if "front" in todo else 0
     back = 1 if "back" in todo and not plain else 0     # a plain back is the front's fabric: 0 image jobs
     total = view + upscale + front + back
@@ -2254,13 +2352,19 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
     results: dict = {}
     try:
         item_png, back_png = _file(stem, ".item.png"), _file(stem, ".back_ref.png")
-        if "front" in todo or not item_png.is_file():
+        carried = _item_png_for(character_name, item_id, sig, reuse)
+        if "front" in todo or carried is None:
             _set_progress(key, "upscale")
             data, info = item_source(item_id)
             record.update(info)
             _write_bytes(item_png, data)
         else:
-            record.update({"item_px": previous.get("item_px"), "upscale": previous.get("upscale")})
+            origin = previous
+            if carried != item_png:
+                # the front answer comes from a predecessor (``reused_jobs``): its upscaled picture comes along
+                origin = read_record(character_name, item_id, reuse["front"]["reused_from"])
+                _write_bytes(item_png, carried.read_bytes())
+            record.update({"item_px": origin.get("item_px"), "upscale": origin.get("upscale")})
         if "back" in parts:
             _write_bytes(back_png, back_source(back_view(character_name, item_id)))
         refs = references(character_name, item_id, "back" in parts)
@@ -2268,6 +2372,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                             "detail": refs["detail"]}
         name = piece_name(item_id)
         from app.imagegen import routing as _routing
+        # what a later Build compares before it renders a rejected job again (``retry_changes_request``)
+        record["chain"] = [spec for spec, _source, _pos in _routing.chain_for(CUT_OCCASION)]
         stopped = False             # a job did not pass: no further image job is spent, re-used answers still post
         for job in parts:
             if plain and job == "back":
@@ -2279,8 +2385,13 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                                                          held=record["held"], sleeve_print=record["sleeve_print"])))
             raw_png = _file(stem, f".raw_{job}.png")
             if job in reuse:
-                answer = raw_png.read_bytes()
-                entry = {k: v for k, v in reuse[job].items() if k not in ("metrics", "state", "reason")}
+                if reuse[job].get("raw_from"):
+                    # a predecessor's answer (another POST_VERSION, the same request): copied, then posted anew
+                    answer = Path(reuse[job]["raw_from"]).read_bytes()
+                    _write_bytes(raw_png, answer)
+                else:
+                    answer = raw_png.read_bytes()
+                entry = {k: v for k, v in reuse[job].items() if k not in ("metrics", "state", "reason", "raw_from")}
                 force = bool(reuse[job].get("accepted"))
                 if job == "front":
                     refs["halo"] = entry.get("prompt") == "decorated" and family == "top"
@@ -2303,7 +2414,9 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                 ep = edit_prompt(piece=name, side=job, decorated=decorated, front_place=place,
                                  pieces=prompt_pieces(said), layout=layout_words(said, family),
                                  sleeves=plain_pieces, family=family, main=main, weave=weave_words)
-                seed = (int(sig[:8], 16) + (0 if job == "front" else 1)) % 2 ** 31
+                # a job rendered before under this csig renders as the next round: a new seed (``job_seed``)
+                rnd = next_round((previous.get("jobs") or {}).get(job))
+                seed = job_seed(sig, job, rnd)
                 ref = item_png if job == "front" else back_png
                 attempts: list = []
                 for attempt in _routing.gate_attempts(CUT_ATTEMPTS):
@@ -2318,7 +2431,7 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                                            job, attempt, e)
                             break
                         record["jobs"][job] = {"state": "failed", "reason": _failure_reason(e),
-                                               "reference": JOB_REFERENCE[job], "attempts": attempts}
+                                               "reference": JOB_REFERENCE[job], "attempts": attempts, "round": rnd}
                         raise
                     _write_bytes(_file(stem, f".raw_{job}.a{attempt}.png"), answer)
                     _write_bytes(raw_png, answer)
@@ -2326,7 +2439,8 @@ def generate(character_name: str, item_id: str, *, only: str | None = None, appl
                              "dialect": dialect, "prompt": "decorated" if decorated else "plain",
                              "weave_words": weave_words,
                              "upsampler_on": _upsampler_on(used), "reference": JOB_REFERENCE[job],
-                             "islands": [str(i["name"]) for i in said["islands"]], "attempt": attempt}
+                             "islands": [str(i["name"]) for i in said["islands"]], "attempt": attempt,
+                             "round": rnd}
                     _set_progress(key, "post")
                     res = post_job(answer, islands, size, px_per_cm, job, refs, force=False,
                                    sleeve_print=record["sleeve_print"], held=record["held"])
@@ -2627,6 +2741,10 @@ def _launch(character_name: str, item_id: str, call, *, select: bool) -> bool:
 BUILD_OFF, BUILD_DONE, BUILD_DUE, BUILD_COMPOSE, BUILD_FAILED = "off", "done", "due", "compose", "failed"
 #: The Build step's labels (English; ``figure_build`` shows them as they are).
 BUILD_LABEL = "Texture from cut · {name} (+{n} image jobs)"
+#: The same when a rejected first attempt may add the second (``job_plan`` "max" above "total").
+BUILD_LABEL_UP_TO = "Texture from cut · {name} (+{n} image jobs, up to {m} when an attempt is rejected)"
+#: A rejected record whose retry would send the same request (``retry_changes_request``): no Build renders it again.
+BUILD_HELD_LABEL = "Texture from cut · {name}: rejected (0 image jobs — Redo in the texture dialog tries a new seed)"
 BUILD_LABEL_ESTIMATE = "Texture from cut · {name} (+{n} image jobs, estimate — the pattern is cut first)"
 BUILD_COMPOSE_LABEL = "Texture from cut · {name}: compose again (CPU, 0 hub jobs)"
 #: The cost note's part of the cut texture (``figure_build.cost``).
@@ -2671,6 +2789,40 @@ def _estimate_jobs(character_name: str, item_id: str) -> int:
     return view + upscale + 1 + back
 
 
+def retry_changes_request(record: dict) -> bool:
+    """Whether rendering the failed jobs of ``record`` (a "rejected" / "failed" record of the CURRENT csig) again
+    would send a request that differs from the one that was judged (key isolation 2026-11-25, Glut's gloves: a manual
+    Build rendered the same rejected back job five times a day, same inputs, same seed, same backends, same verdict).
+    True when the record failed without a verdict (state "failed": a busy or dead backend, the media switch, a refused
+    back view), a job's answer was only re-posted from a predecessor (``reused_from``: never rendered for this key), an
+    attempt failed or did not land on its intended chain entry (``fallback_from`` / ``overflow_from``), or the
+    occasion's routing chain differs from the one recorded (``chain``), or no rejected job carries a judged attempt
+    (nothing proves the request). A record from before the chain was recorded, whose rejected jobs were all rendered
+    and judged, is False. A Redo in the dialog is always a new request: it
+    renders the next round (``ROUND_SEED_STEP``)."""
+    if record.get("state") != "rejected":
+        return record.get("state") == "failed"
+    judged = False
+    for entry in (record.get("jobs") or {}).values():
+        if not isinstance(entry, dict) or entry.get("state") not in ("rejected", "failed"):
+            continue
+        if entry.get("state") == "failed" or entry.get("reused_from"):
+            return True
+        for attempt in entry.get("attempts") or []:
+            routing = attempt.get("routing") or {}
+            if attempt.get("state") == "failed" or routing.get("fallback_from") or routing.get("overflow_from"):
+                return True
+            judged = True
+    if not judged:
+        return True         # no rendered and judged attempt on record: nothing says the request would be the same
+    if "chain" in record:
+        from app.imagegen import routing as _routing
+        now = [spec for spec, _source, _pos in _routing.chain_for(CUT_OCCASION)]
+        if list(record.get("chain") or []) != now:
+            return True
+    return False
+
+
 def build_state(character_name: str, item_id: str, *, item: dict | None = None) -> dict:
     """What the Build has to do for the piece's texture from cut: ``{state, reason, jobs, estimate}`` —
 
@@ -2682,7 +2834,9 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
       "failed" — a cached failure: an automatic Build skips it; a MANUAL Build re-runs only what failed (``retry``):
       "cut" — the cut-only run once more (``garment_template_cut.ensure`` ``retry_failed``), then the image jobs
       (``jobs``, an estimate); "jobs" — only the jobs that did not pass are rendered again (``reused_jobs``; ``jobs``
-      what that spends); "" — nothing a Build can re-run (no item picture);
+      what that spends) — only when that is a different request (``retry_changes_request``); "" — nothing a Build
+      can re-run (no item picture; ``held`` True: a rejected record the same request would reject again — 0 jobs,
+      the dialog's Redo renders a new round);
     - ``due``: nothing made for the current csig yet (or the cut not made yet: ``estimate`` True, ``jobs`` from
       ``_estimate_jobs``).
 
@@ -2690,7 +2844,7 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
     from app.core import garment_template as gt
     from app.core import garment_template_cut as gtc
     from app.models.inventory import get_item
-    out = {"state": BUILD_OFF, "reason": "", "jobs": 0, "estimate": False, "retry": ""}
+    out = {"state": BUILD_OFF, "reason": "", "jobs": 0, "max": 0, "estimate": False, "retry": "", "held": False}
     try:
         item = item if item is not None else get_item(item_id)
         params = gt.params_of(item) or {}
@@ -2720,9 +2874,12 @@ def build_state(character_name: str, item_id: str, *, item: dict | None = None) 
                 return {**out, "state": BUILD_DONE}
             return {**out, "state": BUILD_COMPOSE}
         if record.get("state") in ("rejected", "failed"):
-            return {**out, "state": BUILD_FAILED, "reason": str(record.get("reason") or record["state"]),
-                    "jobs": int(plan["total"]), "retry": "jobs"}
-        return {**out, "state": BUILD_DUE, "jobs": int(plan["total"])}
+            reason = str(record.get("reason") or record["state"])
+            if not retry_changes_request(record):
+                return {**out, "state": BUILD_FAILED, "reason": reason, "held": True}
+            return {**out, "state": BUILD_FAILED, "reason": reason, "jobs": int(plan["total"]),
+                    "max": int(plan["max"]), "retry": "jobs"}
+        return {**out, "state": BUILD_DUE, "jobs": int(plan["total"]), "max": int(plan["max"])}
     except Exception as e:  # noqa: BLE001 — a plan never fails on it
         logger.warning("Cut texture %s %s: Build state not read: %s", character_name, item_id, e)
         return {**out, "reason": str(e) or type(e).__name__}
@@ -3118,17 +3275,157 @@ def button_rgb(item_id: str, character_name: str = "", csig: str = "") -> tuple[
     return (list(found["rgb"]), "picture") if found else (None, "")
 
 
+#: Round 2026-11-25: the thread nouns of an item text (``thread_text_colour``).
+THREAD_NOUNS = ("stitch", "stitching", "topstitch", "topstitching", "thread", "seam")
+_thread_pic_cache: dict[tuple[str, int, int], dict | None] = {}
+
+
+def thread_text_colour(text: str) -> tuple[int, int, int] | None:
+    """The topstitching's colour as the item ``text`` names it ("jeans with orange stitching", "gold contrast
+    stitches"), None without one — ``button_text_colour``'s clause rule with the thread nouns (``THREAD_NOUNS``) and
+    the trims' colour words only."""
+    low = (text or "").lower()
+    for clause in (c for part in re.split(r"[,;]", low) for c in re.split(r"\b(?:with|and)\b", part)):
+        words = _TRIM_WORD.findall(clause)
+        at = next((i for i, w in enumerate(words) if _noun(w, THREAD_NOUNS)), None)
+        if at is None:
+            continue
+        colour = next((w for w in reversed(words[:at]) if w in TRIM_COLOURS), None) \
+            or next((w for w in words[at + 1:] if w in TRIM_COLOURS), None)
+        if colour:
+            return tuple(TRIM_COLOURS[colour])
+    return None
+
+
+def trouser_of(item_id: str) -> dict | None:
+    """Round 2026-11-25: a trouser piece's painted details — ``{"fly", "waist", "style", "band_cm", "wanted"}``
+    (``cut_texture_post.trouser_style`` of its text, ``trouser_wanted``), None for any other kind or one that asks for
+    none."""
+    from app.core import garment_template as gt
+    from app.models.inventory import get_item
+    item = get_item(item_id) or {}
+    p = gt.params_of(item) or {}
+    if p.get("kind") != "trousers":
+        return None
+    fly, waist = str(p.get("fly") or "none"), str(p.get("trouser_waist") or "none")
+    wanted = cut_texture_post.trouser_wanted(fly, waist)
+    if not wanted:
+        return None
+    text = " ".join(str(item.get(k) or "") for k in ("name", "prompt_fragment"))
+    return {"fly": fly, "waist": waist, "style": cut_texture_post.trouser_style(text),
+            "band_cm": round(float(gt.TROUSER_WAIST_M.get(waist, 0.0)) * 100.0, 2), "wanted": wanted}
+
+
+def thread_rgb(item_id: str, character_name: str = "", csig: str = "") -> tuple[list[int] | None, str]:
+    """The painted topstitching's colour (round 2026-11-25): the item TEXT's (``thread_text_colour``), else the item
+    PICTURE's (``cut_texture_post.picture_thread``, cached by the file's stat; the cut's own upscaled picture of
+    ``csig`` when there is one, as ``button_rgb``), else None (a contrast shade of the fabric,
+    ``cut_texture_post.thread_colour``). ``(rgb, source)`` with source "text" / "picture" / ""."""
+    from app.models.inventory import get_item
+    said = thread_text_colour(str((get_item(item_id) or {}).get("prompt_fragment") or ""))
+    if said is not None:
+        return list(said), "text"
+    path = _file(_stem(character_name, item_id, csig), ".item.png") if character_name and csig else None
+    if path is None or not path.is_file():
+        try:
+            path = _item_path(item_id)
+        except NotReady:
+            return None, ""
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _thread_pic_cache:
+        with Image.open(path) as im:
+            rgba = np.asarray(im.convert("RGBA")).astype(np.float64)
+        rgb = rgba[..., :3] * (rgba[..., 3:] / 255.0) + 255.0 * (1.0 - rgba[..., 3:] / 255.0)  # flattened on white
+        _thread_pic_cache[key] = cut_texture_post.picture_thread(rgb)
+    found = _thread_pic_cache[key]
+    return (list(found["rgb"]), "picture") if found else (None, "")
+
+
+def _trouser_key(item_id: str, character_name: str, csig: str) -> str:
+    """The assembly key part of a trouser's painted details ("" without any): their version, the fly, the waist, the
+    style and the thread / button colours."""
+    tr = trouser_of(item_id)
+    if tr is None:
+        return ""
+    thread = thread_rgb(item_id, character_name, csig)[0]
+    button = button_text_colour(_item_text(item_id))
+    tint = "".join(f"{int(v):02x}" for v in (thread or [])) + "-" + "".join(f"{int(v):02x}" for v in (button or []))
+    return f":trousers{cut_texture_post.TROUSER_DETAIL_VERSION}-{tr['fly']}-{tr['waist']}-{tr['style']}-{tint}"
+
+
+def _item_text(item_id: str) -> str:
+    from app.models.inventory import get_item
+    return str((get_item(item_id) or {}).get("prompt_fragment") or "")
+
+
 def placket_key(item_id: str, character_name: str = "", csig: str = "") -> str:
     """The assembly key part of a piece's painted placket ("" without one): a changed style, button count, button
     colour (``button_rgb``) or ``cut_texture_post.PLACKET_VERSION`` re-assembles on the CPU, the record's atlas and
-    csig stay."""
+    csig stay. A trouser's painted details (``_trouser_key``) are part of it."""
     style, buttons, _, _ = placket_of(item_id)
     seams = f":seams{cut_texture_post.SEAM_VERSION}" if _has_seams(item_id) else ""
+    seams += _trouser_key(item_id, character_name, csig)
     if style == "none":
         return seams
     colour = button_rgb(item_id, character_name, csig)[0] if style == "buttons" else None
     tint = "-" + "".join(f"{int(v):02x}" for v in colour) if colour else ""
     return f":placket{cut_texture_post.PLACKET_VERSION}-{style}-{buttons}{tint}{seams}"
+
+
+def trouser_atlas(character_name: str, item_id: str, atlas: bytes, trousers: dict) -> tuple[bytes, dict | None]:
+    """Round 2026-11-25: the composed cut atlas of a trouser with its construction details painted
+    (``cut_texture_post.trouser_lines`` from the ready cut's islands, ``draw_trouser_details``) — at assembly, so a
+    changed fly or waist is a CPU re-assembly without an image job. The gate (``trouser_detail_gate``): every configured
+    detail the islands could not carry or the painting did not put on the atlas is listed in ``info["missing"]`` and
+    logged; ``garment_template_cut`` cuts a piece whose islands could not carry them once more (``details_due``).
+    Unchanged (info None) without a ready cut."""
+    try:
+        pattern = _ready_pattern(character_name, item_id)
+    except NotReady:
+        return atlas, None
+    islands = json.loads(Path(pattern["islands_path"]).read_text(encoding="utf-8"))
+    lines = cut_texture_post.trouser_lines(islands, fly=trousers["fly"], waist=trousers["waist"],
+                                           style=trousers["style"], band_cm=trousers["band_cm"])
+    with Image.open(io.BytesIO(atlas)) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    size = rgb.shape[0]
+    scale = size / float(islands.get("atlas_px") or size)
+    if scale != 1.0:
+        lines = _scaled_lines(lines, scale)
+    labels = rasterise_islands(islands, size)
+    ids = island_ids(islands)
+    names = {v["island"] for v in list(lines["lines"].values()) + list(lines["points"].values()) + lines["loops"]}
+    masks = {n: labels == ids[n] for n in names if n in ids}
+    csig = current_csig(character_name, item_id) or ""
+    thread, tsource = thread_rgb(item_id, character_name, csig)
+    button = button_text_colour(_item_text(item_id))
+    ppc = float(islands.get("px_per_cm") or 0.0) * scale
+    out, info = cut_texture_post.draw_trouser_details(rgb, masks, lines, px_per_cm=ppc, thread_rgb=thread,
+                                                      button_rgb=button)
+    if cut_texture_post.trouser_detail_gate(info, lines["placed"]) and thread is not None:
+        # the gate's second attempt: the details painted again in the fabric's contrast shade (an item thread too
+        # close to the atlas's fabric left a detail unseen)
+        out, info = cut_texture_post.draw_trouser_details(rgb, masks, lines, px_per_cm=ppc, thread_rgb=None,
+                                                          button_rgb=button)
+        info["attempts"] = 2
+        tsource = ""
+    missing = sorted(set(lines["missing"]) | set(cut_texture_post.trouser_detail_gate(info, lines["placed"])))
+    info.update(style="trousers", details=trousers["style"], fly=trousers["fly"], waist=trousers["waist"],
+                wanted=lines["wanted"], missing=missing, thread_from=tsource or info.get("thread_source"),
+                lines=sorted(info.get("painted") or {}))
+    if missing:
+        logger.warning("Trouser details %s %s: not painted %s", character_name, item_id, missing)
+    return _png(Image.fromarray(out, "RGB")), info
+
+
+def _scaled_lines(lines: dict, k: float) -> dict:
+    """``trouser_lines`` with every pixel coordinate scaled by ``k`` (an atlas stored at another size)."""
+    sc = lambda p: [[round(x * k, 2), round(y * k, 2)] for x, y in p]  # noqa: E731
+    return {**lines,
+            "lines": {n: {**v, "px": sc(v["px"])} for n, v in lines["lines"].items()},
+            "points": {n: {**v, "px": sc([v["px"]])[0]} for n, v in lines["points"].items()},
+            "loops": [{**v, "a": sc([v["a"]])[0], "b": sc([v["b"]])[0]} for v in lines["loops"]]}
 
 
 def _has_seams(item_id: str) -> bool:
@@ -3146,6 +3443,9 @@ def placket_atlas(character_name: str, item_id: str, atlas: bytes) -> tuple[byte
     cut or without a marks file (a cut that wrote no line; an old top cut is cut once more for it, B11)."""
     style, buttons, kind, collar = placket_of(item_id)
     seams = _has_seams(item_id)
+    trousers = trouser_of(item_id)
+    if trousers is not None:
+        return trouser_atlas(character_name, item_id, atlas, trousers)
     if style == "none" and not seams:
         return atlas, None
     try:

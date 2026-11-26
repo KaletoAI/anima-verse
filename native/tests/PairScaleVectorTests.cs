@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -22,6 +23,14 @@ namespace AnimaNative.Tests;
 ///   pairContactPoint   PivotOf + FigureScale + ScaleRoot           (p, pivot cm, height) → p' + a·(C − p), the body-fixed
 ///                                                                  contact point after scaling (= C)
 ///   pairPlacedRoot     FigureScale + ScaleRoot + PairClip.AnchorPoint   FigureManager.TickPair's order: scale, then the anchor
+///   pairAxisGap        PairHeight.AxisGap                          {root, axis, lengthM, opening} ↔ PairHeightRelationFrame
+///   pairContactFrame   PairHeight.ContactFrame                     [frame | null] → index
+///   pairRoleClass      PairHeight.RoleClass                        {frames: [{groundM, hipsM, legs: [{hip, knee, ankle}]}], fixed?}
+///                                                                  ↔ PairHeightRole → {stance, planted, kneeHeld}
+///   pairRoleRange      PairHeight.RoleRange                        the same role → {down, up, stance, planted, kneeHeld}
+///   ikKnee             PairHeight.IkKnee                           [x, y, z] ↔ V3
+///   pairHeightOffsets  PairHeight.Offsets                          {roles, relations: [{key, part, receiver, frames}]}
+///                                                                  → {offsets, residuals, gaps, contactFrames, ranges}
 /// </code>
 /// </summary>
 public class PairScaleVectorTests
@@ -35,6 +44,17 @@ public class PairScaleVectorTests
     private static (double X, double Z) Xz(JsonNode? n) => (N(n!["x"]), N(n["z"]));
     private static PairXZ Pivot(JsonNode? n) => new(N(n!["x"]), N(n["z"]));
     private static JsonObject Out((double X, double Z) p) => new() { ["x"] = p.X, ["z"] = p.Z };
+
+    private static V3 P3(JsonNode? n) => new(N(n![0]), N(n[1]), N(n[2]));
+    private static JsonArray V(V3 v) => new(v.X, v.Y, v.Z);
+    private static PairHeightRoleFrame RoleFrame(JsonNode? n) => new(N(n!["groundM"]), N(n["hipsM"]),
+        n["legs"]!.AsArray().Select(l => new PairLeg(P3(l!["hip"]), P3(l["knee"]), P3(l["ankle"]))).ToArray());
+    private static PairHeightRole Role(JsonNode? n) => new(n!["frames"]!.AsArray().Select(RoleFrame).ToArray(),
+        n["fixed"] is JsonValue f && f.GetValue<bool>());
+    private static PairHeightRelationFrame? RelFrame(JsonNode? n) => n is null ? null
+        : new PairHeightRelationFrame(P3(n["root"]), P3(n["axis"]), N(n["lengthM"]), P3(n["opening"]));
+    private static JsonArray Bools(bool[] b) => new(b.Select(p => (JsonNode)JsonValue.Create(p)).ToArray());
+    private static JsonObject ClassOut(PairRoleClass c) => new() { ["stance"] = c.Stance, ["planted"] = Bools(c.Planted), ["kneeHeld"] = Bools(c.KneeHeld) };
 
     private static JsonElement Element(JsonNode? n)
     {
@@ -56,6 +76,36 @@ public class PairScaleVectorTests
             var q = PairScale.ScaleRoot(p, c, s);
             return Out((q.X + s * (c.X - p.X), q.Z + s * (c.Z - p.Z)));
         },
+        ["pairAxisGap"] = a => PairHeight.AxisGap(RelFrame(Arity(a, 1, 1)[0])!),
+        ["pairContactFrame"] = a => PairHeight.ContactFrame(Arity(a, 1, 1)[0]!.AsArray().Select(RelFrame).ToArray()),
+        ["pairRoleClass"] = a => ClassOut(PairHeight.RoleClass(Role(Arity(a, 1, 1)[0]))),
+        ["pairRoleRange"] = a =>
+        {
+            var r = PairHeight.RoleRange(Role(Arity(a, 1, 1)[0]));
+            var o = ClassOut(r);
+            o["down"] = r.Down; o["up"] = r.Up;
+            return o;
+        },
+        ["ikKnee"] = a => V(PairHeight.IkKnee(P3(Arity(a, 4, 4)[0]), P3(a[1]), P3(a[2]), P3(a[3]))),
+        ["pairHeightOffsets"] = a =>
+        {
+            var input = Arity(a, 1, 1)[0]!;
+            var roles = input["roles"]!.AsObject().ToDictionary(kv => kv.Key, kv => Role(kv.Value));
+            var relations = input["relations"]!.AsArray().Select(r => new PairHeightRelation(
+                r!["key"]!.GetValue<string>(), r["part"]!.GetValue<string>(), r["receiver"]!.GetValue<string>(),
+                r["frames"]!.AsArray().Select(RelFrame).ToArray())).ToArray();
+            var s = PairHeight.Offsets(roles, relations);
+            static JsonObject Map<T>(System.Collections.Generic.Dictionary<string, T> d)
+            {
+                var o = new JsonObject();
+                foreach (var (k, v) in d) o[k] = JsonValue.Create(v);
+                return o;
+            }
+            var ranges = new JsonObject();
+            foreach (var (k, r) in s.Ranges) { var o = ClassOut(r); o["down"] = r.Down; o["up"] = r.Up; ranges[k] = o; }
+            return new JsonObject { ["offsets"] = Map(s.Offsets), ["residuals"] = Map(s.Residuals), ["gaps"] = Map(s.Gaps),
+                                    ["contactFrames"] = Map(s.ContactFrames), ["ranges"] = ranges };
+        },
         ["pairPlacedRoot"] = a =>
         {
             var r = PairScale.ScaleRoot(Xz(Arity(a, 4, 4)[0]), Pivot(a[1]), PairScale.FigureScale(Height(a[2])));
@@ -74,7 +124,21 @@ public class PairScaleVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(Dispatch));
 
     [Fact]
-    public void AllFortyTwoCasesAreConsumed() => Assert.Equal(42, File.Value.Cases.Count);
+    public void AllSixtyFiveCasesAreConsumed() => Assert.Equal(65, File.Value.Cases.Count);
+
+    /// <summary>H[7] beyond the vector: gaps inside the deadband compute no range at all (nothing is applied).</summary>
+    [Fact]
+    public void GapsInsideTheDeadbandComputeNothing()
+    {
+        var leg = new PairLeg(new V3(0.1, 0.88, 0), new V3(0.1, 0.48, 0.2), new V3(0.1, 0.08, 0));
+        var role = new PairHeightRole(new[] { new PairHeightRoleFrame(0, 0.95, new[] { leg, leg }) });
+        var frame = new PairHeightRelationFrame(new V3(0, 1, 0), new V3(0, 0, 1), 0.2, new V3(0, 0.996, 0.15));
+        var s = PairHeight.Offsets(new System.Collections.Generic.Dictionary<string, PairHeightRole> { ["a"] = role, ["b"] = role },
+            new[] { new PairHeightRelation("b>a:mouth", "b", "a", new PairHeightRelationFrame?[] { frame }) });
+        Assert.Empty(s.Ranges);
+        Assert.Equal(0.0, s.Gaps["b>a:mouth"]);
+        Assert.All(s.Offsets.Values, v => Assert.Equal(0.0, v));
+    }
 
     /// <summary>[3] beyond the vector: a == 1 returns the very input (no arithmetic) — the bit-identity of a 1.70 m figure.</summary>
     [Fact]

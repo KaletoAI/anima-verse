@@ -879,12 +879,33 @@ def declared_piece_slots(character_name: str) -> Optional[Tuple[Tuple[str, ...],
     try:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
-        for pkg in _species_packages_for(profile):
+    except Exception as e:
+        logger.debug("piece slots for %s failed: %s", character_name, e)
+        return None
+    return _declared_piece_slots_of(profile)
+
+
+def _declared_piece_slots_of(profile: Dict[str, Any]) -> Optional[Tuple[Tuple[str, ...], Dict[str, str]]]:
+    """``declared_piece_slots`` for a profile dict (the character need not exist yet)."""
+    try:
+        for pkg in _species_packages_for(profile or {}):
             if pkg.piece_slots:
                 return tuple(pkg.piece_slots), dict(pkg.piece_slot_labels)
     except Exception as e:
-        logger.debug("piece slots for %s failed: %s", character_name, e)
+        logger.debug("piece slots of template %r failed: %s", (profile or {}).get("template"), e)
     return None
+
+
+def piece_slots_for_profile(profile: Dict[str, Any]) -> Tuple[str, ...]:
+    """Effective clothing-slot topology of a profile (only its template
+    decides): the first species package's ``piece_slots``, otherwise the
+    core default (inventory.VALID_PIECE_SLOTS) — for a character that does
+    not exist yet (World Dev create checks the draft against it)."""
+    declared = _declared_piece_slots_of(profile)
+    if declared:
+        return declared[0]
+    from app.models.inventory import VALID_PIECE_SLOTS
+    return tuple(VALID_PIECE_SLOTS)
 
 
 def portrait_piece_slots(profile: Dict[str, Any]) -> Tuple[str, ...]:

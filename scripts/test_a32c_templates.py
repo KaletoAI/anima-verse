@@ -129,7 +129,6 @@ THOUGHT_CTX = {
     "general_task": "",
     "state_flags_block": "",
     "outfit_decision_block": "",
-    "arc_block": "",
     "retrospective_block": "",
     "skill_context_blocks": "",
     "known_secrets_block": "",

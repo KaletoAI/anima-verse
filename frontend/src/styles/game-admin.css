@@ -208,6 +208,12 @@ a.ga-btn {
   min-width: 0;
 }
 
+select.ga-input option,
+select.ga-input optgroup {
+  background: var(--bg, #0d1117);
+  color: var(--text, #c9d1d9);
+}
+
 .ga-textarea {
   background: var(--bg, #0d1117);
   color: var(--text, #c9d1d9);
@@ -1448,8 +1454,8 @@ a.ga-btn {
   padding: 2px 6px;
 }
 
-/* World Dev — chat-style with config bar on top, message list, extracted-JSON
-   action row, input box at the bottom. Fills the body; only the chat scrolls. */
+/* World Dev — the config bar (model, effort, budget) on top of the free-mode
+   panel. Fills the body. */
 .ga-wd-shell {
   display: flex;
   flex-direction: column;
@@ -1488,20 +1494,8 @@ a.ga-btn {
   font-size: 12px;
 }
 
-.ga-wd-target-select {
-  flex: 1 1 200px;
-  min-width: 180px;
-}
-
-/* Context rows — one row per kind (Locations / Characters), label
-   on the left, tag-picker on the right. Far more compact than the
-   per-item checkbox list it replaced. */
-.ga-wd-context-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
+/* Small uppercase label left of a pane (used by the building assistant's
+   layout draft preview). */
 .ga-wd-context-label {
   flex: 0 0 90px;
   font-size: 11px;
@@ -1509,113 +1503,6 @@ a.ga-btn {
   letter-spacing: 0.4px;
   color: var(--text-muted, #8b949e);
   padding-top: 6px;
-}
-
-.ga-wd-tags {
-  flex: 1;
-}
-
-.ga-wd-tag-add {
-  width: auto;
-  font-size: 11px;
-  padding: 2px 6px;
-}
-
-.ga-wd-chat {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 6px;
-  padding: 10px;
-  background: var(--bg-container, #161b22);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ga-wd-msg {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.ga-wd-msg-user {
-  align-items: flex-end;
-}
-
-.ga-wd-msg-role {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-muted, #8b949e);
-}
-
-.ga-wd-msg-body {
-  max-width: 85%;
-  margin: 0;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--bg-message, #1c2333);
-  font-family: inherit;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-}
-
-.ga-wd-msg-user .ga-wd-msg-body {
-  background: var(--primary, #1f6feb);
-  color: #fff;
-}
-
-.ga-wd-extracted {
-  padding: 8px;
-  border: 1px solid var(--secondary, #238636);
-  border-radius: 6px;
-  background: rgba(35, 134, 54, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ga-wd-input {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-
-.ga-wd-input textarea {
-  flex: 1;
-  resize: vertical;
-}
-
-/* Session-stats column between the input textarea and the Send button.
-   Shows accumulated token in / out and total cost as the conversation
-   progresses. */
-.ga-wd-stats {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-  align-self: stretch;
-  justify-content: flex-end;
-  padding: 0 8px 2px 8px;
-  border-left: 1px solid var(--border, #30363d);
-  border-right: 1px solid var(--border, #30363d);
-  white-space: nowrap;
-  min-width: 100px;
-}
-
-.ga-wd-stats strong {
-  display: inline-block;
-  min-width: 26px;
-  color: var(--text, #c9d1d9);
-  font-weight: 600;
-  margin-right: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-size: 10px;
 }
 
 /* === Map tab ============================================================
@@ -3644,3 +3531,42 @@ a.ga-btn {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Quests tab — template editor (frontend/src/tabs/quests/). */
+.ga-quest-cond { display: flex; flex-direction: column; gap: 6px; }
+.ga-quest-cond-head > select { width: auto; }
+.ga-quest-cond-children {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-left: 8px; padding-left: 10px; border-left: 2px solid var(--border, #30363d);
+}
+.ga-quest-cond-child { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ga-quest-cond-child > .ga-quest-cond { align-self: stretch; }
+.ga-quest-cond .ga-form-row > select { width: auto; max-width: 320px; }
+.ga-quest-params > .ga-field { flex: 0 1 220px; }
+.ga-quest-step {
+  display: flex; flex-direction: column; gap: 8px; width: 100%;
+  padding: 8px 0; border-bottom: 1px solid var(--border, #30363d);
+}
+.ga-quest-key { width: 110px; }
+.ga-quest-num { width: 90px; }
+.ga-quest-role > .ga-field:nth-child(3) { flex: 0 1 360px; }
+.ga-quest-remove { align-self: flex-end; }
+.ga-quest-form [role="alert"],
+.ga-quest-error { color: var(--danger, #f85149); margin: 2px 0; font-size: 12px; }
+.ga-quest-error ul { margin: 4px 0 0; padding-left: 18px; }
+/* An inline issue stands UNDER its control, never beside it: the control row of a field wraps, the issue takes a
+   whole line (beside the input it wrapped and squeezed the input). */
+.ga-quest-form .ga-field-control { flex-wrap: wrap; }
+.ga-quest-form .ga-field-control > [role="alert"] { flex-basis: 100%; }
+.ga-quest-locked { max-width: 480px; }
+.ga-quest-move { display: flex; gap: 2px; align-self: flex-end; }
+.ga-quest-placeholders { font-family: var(--font-mono, monospace); }
+.ga-quest-picker { display: flex; flex-direction: column; gap: 4px; }
+.ga-quest-filter { max-width: 240px; }
+/* Quests tab — runs view and start dialog. */
+.ga-quest-runs-bar { margin-bottom: 8px; align-items: center; }
+.ga-quest-runs-bar > select { width: auto; }
+.ga-quest-run-detail ul { margin: 2px 0 6px; padding-left: 18px; }
+.ga-quest-start { max-width: 560px; }
+.ga-quest-start .ga-form-row > select { flex: 1 1 0; min-width: 0; }
+.ga-subtabs .ga-tag-missing { margin-left: 6px; }

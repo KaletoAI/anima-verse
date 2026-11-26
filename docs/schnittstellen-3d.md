@@ -103,6 +103,7 @@ Intervals and minimum request spacing from `SYNC_ENDPOINTS` (seconds):
 | `self` | self | 5 | 30 | 5 |
 | `belongings` | self | 5 | 30 | 5 |
 | `mind` | self | 10 | 30 | 10 |
+| `quests` | notices | 15 | 30 | 15 |
 | `worldmapPlayer` | presence, world | 10 | 20 | 10 |
 | `worldmap3d` | presence, world | 3 | 6 | 3 |
 
@@ -2911,15 +2912,51 @@ des Clips: `p' = C + a·(p − C)` im Clip-Rahmen, danach `anchor + R(yaw)·p'` 
 - Ohne gespeicherten Drehpunkt gilt der Ursprung des Clip-Rahmens (0, 0) — nach der Rahmenregel oben der Schwerpunkt
   der Rollenwurzeln am Ankerframe (beim Paar die Mitte der beiden Wurzeln). Jeder Paar-Clip wird also skaliert, nie
   nur ein Teil.
-- Nur horizontal: Boden-/Platzhöhe und die pro Rig skalierte Hüfthöhe bleiben, wie sie sind. Der senkrechte Rest
-  `(a_B − a_A)·d` (d = Kontakthöhe im 1,70-m-Clip) ist durch Platzierung nicht zu beheben; bei 1,60 m / 1,85 m und
-  Kontakt auf Hüfthöhe (d ≈ 0,90 m) sind das 0,147 × 0,90 = 13,2 cm — Sache von Wurzelwinkel und Kettenbiegung.
+- Die Platzierung ist nur horizontal: Boden-/Platzhöhe und die pro Rig skalierte Hüfthöhe bleiben, wie sie sind. Den
+  senkrechten Rest schließt der vertikale Größenausgleich (nächster Absatz).
 - Partner Bs Tilt/Roll/Yaw sind Winkel und bleiben; ihr Drehpunkt (`fixPivot`) ist Bs skalierte Wurzel plus seine
   eigene Bind-Hüfte, folgt der Regel also von selbst. Die renderer-only `shift_cm` einer Paar-/Gruppenhälfte ist eine
   Länge der 1,70-m-Anordnung und wird mit `a` multipliziert (bei Solo-Clips bleibt sie absolut, siehe
   "Horizontal clip calibration").
 - `a = 1` (1,70 m oder keine Größe) reproduziert die bisherige Platzierung bitgenau. Die Vorschau der Pose-Bibliothek
-  normiert immer auf 1,70 m und skaliert nie.
+  normiert auf 1,70 m; nur ihr Schalter „Real heights“ (Places-Ansicht) zeigt die Besetzung in Profilgrößen mit
+  beiden Ausgleichen — währenddessen sind Auto-align und Speichern aus, weil beide 1,70-m-Daten messen und ablegen.
+
+**Vertikaler Größenausgleich (Owner-Entscheidung 2026-11-25, neu gefasst 2026-11-26).** Nichts wird gespeichert.
+Beim Start einer Paar-/Gruppen-Interaktion (und wenn sich ihre Anordnung ändert: Mitglieder, Clips, Körper, Anker)
+TASTET der Renderer eine Schleife des Clips ab — `PAIR_HEIGHT_SAMPLES` = 24 Phasen, ohne Rendern, ohne Ausgleich,
+ohne Sekundärbewegung —, mit jeder Figur dort, wo ihre Hälfte sie in dieser Phase hinstellt: auf IHREM Bodenpunkt,
+in ihrer Größe, mit ihrem Körper. Je Phase und Rolle: Bodenhöhe, Hüfte, Beine (Welt). Je Phase und Kontaktrelation:
+die GERADE ACHSE des Teils (die Kette in Bind-Lage am posierten Körper, der Wurzelwinkel des Clips eingerechnet:
+Wurzel P, Richtung u, Länge L) und die ÖFFNUNG O der empfangenden Figur (Kanal, Mund oder Hand, wie der Renderer sie
+auflöst). Gelände, Figurengröße und die Lage der Öffnung an DIESEM Körper stecken damit schon in den Zahlen.
+- KONTAKTPHASE einer Relation: die abgetastete Phase, in der O dem Segment P … P + L·u am nächsten ist. LÜCKE dort:
+  `λ = ⟨(O − P)_xz, u_xz⟩ / |u_xz|²` (λ ≥ 0; eine fast senkrechte Achse nimmt `⟨O − P, u⟩`), `Δ = P_y + λ·u_y − O_y` —
+  wie weit die Achse dort, wo sie waagrecht der Öffnung am nächsten kommt, über ihr vorbeiläuft. |Δ| < 5 mm zählt als 0.
+- Geschlossen durch einen KONSTANTEN Hüft-Versatz `o` je Figur und Clip (`o_r − o_p = Δ`), den beide Renderer nach
+  der Clip-Pose und vor Phase B anwenden (Hüfte senkrecht um `o`, eine Zwei-Knochen-Bein-IK hält jedes aufgesetzte
+  Fußgelenk, der Fuß behält seine Weltdrehung), gewichtet mit dem eigenen Gewicht der Paar-Aktion. Die Pose-Routine
+  setzt vor jedem Frame jeden Knochen zurück, den sie im letzten Frame geschrieben hat (Hüfte UND die Bein-Drehungen),
+  sofern er noch ihren Wert trägt — ein Mixer schreibt einen unveränderten Wert nicht neu (gehaltener, eingefrorener
+  oder geklemmter Clip).
+- WER NIMMT DIE LÜCKE (`pairRoleClass`/`pairRoleRange`, über ALLE abgetasteten Phasen): eine Figur auf einem Platz
+  (Möbel) oder auf dem eigenen Anker einer Möbel-Aktion nimmt nichts. Je Phase das tiefste Gelenk der Figur
+  (Fußgelenke, Knie); ein Gelenk ist UNTEN, wenn es höchstens 12 % seiner Beinlänge darüber liegt, OBEN ab 22 %,
+  dazwischen zählt es nicht (Hysterese). Ein Bein ist aufgesetzt, wenn es in mehr Phasen unten als oben ist; sein Knie
+  gehalten, wenn das Knie es ist. Liegend/sitzend (Median Hüfte unter 22 cm über dem tiefsten Gelenk), getragen
+  (Median tiefstes Gelenk mehr als 35 cm über dem Boden) oder ohne aufgesetztes Bein: nichts. STEHEND (jedes
+  aufgesetzte Bein in den meisten Phasen unter 35° gebeugt, kein Knie gehalten): nur absenken; kniend/hockend: beide
+  Richtungen. Der Bereich ist der kleinste, den JEDE Phase erlaubt (12° Restbeugung, nicht zuklappen, gehaltenes Knie
+  ≤ 2 cm, kein Knie unter 6 cm über den Boden, |o| ≤ 15 cm).
+- LÖSUNG (`pairHeightOffsets`): kleinste Quadrate über alle Relationen in den Bereichen, projiziertes Gauß–Seidel, die
+  Figur mit dem größeren Bereich in der verlangten Richtung zuerst. Was bleibt (`residuals`), übernimmt die
+  Kettenbiegung.
+- Rechnung: `packages/scene-render/src/pairHeight.ts` (Anwendung `pairHeightPose.ts`), Abtastung im 3D-Client
+  `NpcManager.measurePairHeights`, in der Pose-Bibliothek „Real heights“ (`PlacePreview.measureHeights`); nativ
+  dieselbe reine Funktion `native/Core/Figures/PairHeight.cs`, aber noch OHNE Abtastung (keine Partner-Kanäle; die
+  deklarierten Anker aus `GET /assets/contact-anchors` liest er noch nicht) — der native Client gleicht senkrecht
+  bisher nichts aus. Vektoren `shared/test-vectors/pair_scale.json` (Fälle `H[…]`), Handrechnungen
+  `scripts/smoke_pair_height.mjs`.
 - Der Wurzelpfad gehört zur Datei, die die Set-Kette der Figur wählt (Cache pro Kind UND Set, wie der Clip-Index).
 - Rechnung: `packages/scene-render/src/pairScale.ts`; Handrechnungen in `scripts/smoke_pair_scale.mjs`,
   `client3d/scripts/smoke_pair_root_sets.mjs` und `scripts/smoke_clip_pair_pivot.py`. Die Spielzustands-Position
@@ -13319,6 +13356,70 @@ wall — reported, not judged; the shin under the collar is gone, so `shaft_poke
 null); penetration counts every footwear node. Numbers in
 `--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
 `scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).
+
+**Accept anyway and Adjust shoe (2026-11-25; server only — the payload is unchanged).** A refused source step
+(empty shoe, mesh, insole: `footwear_source.ACCEPTABLE_STEPS`) can be accepted by the admin
+(`POST /characters/{c}/garments/{item}/footwear/steps/{step}/accept`, undone by `…/unaccept`): the refused result
+becomes the step's output, the record keeps its gates and gains `user_accepted {at, ssig, gates, reasons, error}`, the
+later steps are dropped and run again from it (insole and fit on the CPU, 0 hub jobs). A re-measured insole (a new
+`INSOLE_VERSION`) that is refused for the same gates, none worse, keeps the acceptance (`user_accepted.carried`).
+Accepting a record an older analysis made (`footwear_source.stale_record`: an insole of another `INSOLE_VERSION`)
+measures the step again first (2026-11-26; a refused mesh whose stored delivery passes today's gates is re-gated,
+A187): passed, nothing is accepted (answer `remeasured` true, `user_accepted` null); refused again, the acceptance
+takes the fresh record. A run that starts at the fit measures an insole of an older version again too
+(`garment_footwear._remeasure_stale_insole`). A persisted failure of a footwear chain records the shoe source it was
+recorded on (`inputs_state` = `footwear_source.state_token`); `garments.cached_failure` lets it go once that changed
+(a step run again, re-measured, accepted or un-accepted), so an acceptance never stays blocked by the failure before it.
+A refused FIT keeps its attempt as before (`fit_attempts`, accepted per body). The shoe's manual adjustment
+(`POST …/footwear/manual`, profile key `footwear_manual` per item: `offset_mm` [forward, up, outward] ≤ 40 mm,
+`rotate_deg` [toe out, toe up, tilt in] ≤ 25°, `scale_pct` −20 … +25) is a map `T` in the fit's cut frame about the
+heel end of the sole (`footwear_fit.manual_matrix`; outward and tilt in mirrored per side), applied in the fit
+before the cut and the gates, so both renderers receive the adjusted shoe as ordinary fit output; it enters the
+fit fingerprint only when it changes something. The Wardrobe viewer previews it with the same map
+(`footwearAllowanceModel.ts` `manualMap`, proof `scripts/smoke_footwear_manual.py` [M6]).
+General rules of the same day (`scripts/smoke_footwear_general_rules.py`): a class-`none` shoe is a boot only when one
+wall stands above 10 cm (`footwear_insole.ONE_WALL_SHAFT_M`), the open seed is searched behind the middle of the
+shoe, `deep_outside` is recorded but never refuses (`footwear_cut.REPORTED_ONLY`), `strap_push_max_mm` 50, and a
+shaft cap is cut from `prepared.glb` only once the insole passes.
+Since fit version 21 (2026-11-26, `scripts/smoke_footwear_toe_front.py`): a closed shoe carries the gate `toe_front`
+— the insole area in front of the toe tip over (its widest width × the foot length), read on the foot reaching
+furthest into the shoe (a pair is one size), limit `footwear_fit.TOE_FRONT_MAX` 0.06 (right-looking shoes 0 – 0.048,
+the Sneekers 0.118 – 0.173, measured on every stored shoe on every body). A shoe refused by it gets the toe box attempt
+(`fit_height`): the toes end where the forepart in front is `TOE_FRONT_TARGET` 0.048 (`footwear_fit.toe_box_size`,
+heel room planned behind the foot's own toe station), the toe box is raised where it is ready (`HEIGHT_CAP`), the cut
+slims the rest — instead of a longer shoe. Auto length answers a heel through the counter in either attempt with heel
+room. When no attempt is accepted and the first one was refused for `toe_front` alone, that whole, long shoe is the
+refused attempt kept for the preview and for "Accept anyway" (`garment_footwear.LONG_ONLY_GATES`), never a toe box
+attempt that put the heel through the counter. The record's `scale.toe_front` holds both sides. The cut records `skin_seen_mm2`
+(`footwear_cut.skin_seen`): the largest spot of skin enclosed by the shoe on the four horizontal views (a hole of the
+mesh, a heel through the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the
+worst under `gates`. Since fit version 22 the raster is 1 mm (`SKIN_SEEN_PX_M`) with a 0.25-mm depth tolerance
+(`SKIN_SEEN_EPS_M`), the enclosed pixels are opened by a 2 × 2 block (`SKIN_SEEN_OPEN_PX`, a one-pixel sliver along a
+topline drops out) and the value is the largest connected spot — the 2-mm raster read the visible counter spots of
+the Sneekers on Lirien and Kira as one pixel, the same as edge noise. The limit `footwear_cut.SKIN_SEEN_MAX_MM2` comes
+from the distribution over every stored shoe on every body through the chain (its comment). Since fit version 23 the
+value is the larger of that enclosed spot and the skin lying on the outside of a wall it came through: seen skin pixels
+with the shoe at most `SKIN_POKE_M` (3 mm) behind them, opened by a 4 × 4 block (`SKIN_POKE_OPEN_PX`) — a heel through
+the counter whose spot reaches the topline is open to the outside and read 0 as enclosed (the Woman shoes on five of
+eight bodies: 98 – 367 mm² now, every other kept closed fit 0).
+Since fit version 24 the width taper of a closed shoe without a shaft is bounded (`footwear_fit.TAPER_SLOPE_MAX` 0.1
+for the insole middle and the shift toward the foot, `TAPER_SHARE_SLOPE_MAX` 0.2 for the share times the shoe's reach
+from that middle, a majorant that only widens): read per station, the profiles sheared the heel counter until its
+lining came through the outer skin. The cut also records `inside_seen_mm2` (`footwear_cut.inside_seen`): on the same
+four views and raster, the pixels whose nearest face of the outward-wound shoe is turned away from the camera — the
+shoe's inside lying on the outside of its own wall — opened by a 2 × 2 block, the largest spot per side and view under
+`diagnostics.<side>.cut.inside_seen_mm2`, the worst under `gates`, limit `footwear_cut.INSIDE_SEEN_MAX_MM2`; a
+face turned away with nothing turned toward the camera within `SKIN_POKE_M` behind it (the far wall of a one-sheet
+shoe over a low counter) does not count. Auto length answers it with heel room like `skin_seen_mm2`. A split fit (a
+boot) records it with `gating` false: its shaft is judged in bind space, the exact inverse of the leg's skin.
+
+The insole step adds the FOOTBED of a hollow platform sole (`footwear_insole.footbed_fill`, INSOLE_VERSION 12): when the
+mesher left the platform an open box — the rays through the opening meet only the outsole's own skin, the analysis is
+refused for `insole_cover` — a flat sheet is laid at the height of the welt shelf the upper stands on (per station the
+median of the first sheet above the floor in each side's outer quarter of columns, the lower side, smoothed by a
+trimmed quadratic), spanning the upper's inner walls. It is written into `prepared.glb` only when the analysis of the
+filled mesh passes; insole.json records `footbed` = {`added_faces`, `stations`, `heel_h_m`, `toe_h_m`}. A shoe whose
+own analysis passes is never filled.
 
 ### P2 runtime contract: secondary motion
 

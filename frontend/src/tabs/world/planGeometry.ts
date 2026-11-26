@@ -736,15 +736,16 @@ export function stairSymbol(flight: StairFlight): StairSymbol | null {
   }
 }
 
-// ── The one surface without a composed flight: the world-dev DRAFT ──────────
-// `POST /world-dev/preview-layout` normalizes an LLM's plan; it does not
+// ── The one surface without a composed flight: the building-assistant DRAFT ─
+// `POST /world/locations/{id}/building-assistant/propose` normalizes an LLM's
+// plan; it does not
 // compose a scene, so its preview has no `stairs` block to draw — only the
 // authored `at` / `from_level` / `dir_deg` and the location's storey height.
 // The rectangle below is therefore the SERVER'S FORMULA REPEATED, the last
 // copy of it on this side, and it exists for that one pane.
 //
-// TO REMOVE IT the draft preview needs a composed flight: either
-// `/world-dev/preview-layout` returns `_stair_flights(...)`'s blocks along
+// TO REMOVE IT the draft preview needs a composed flight: either the
+// building assistant's propose returns `_stair_flights(...)`'s blocks along
 // with the normalized plan, or the pane posts its draft through
 // `POST /play/scene-preview` like the floor-plan editor does. Both are server-
 // side or wiring work; until then this function is the marked exception and
@@ -758,7 +759,7 @@ const DRAFT_STAIR_DIRS: Record<number, Pt> = {
   0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0],
 }
 
-/** The plan symbol of an AUTHORED flight, for the world-dev draft alone —
+/** The plan symbol of an AUTHORED flight, for the building-assistant draft alone —
  *  see the block comment above. The drawing itself is `stairSymbol`'s: only
  *  the rectangle is derived here. `null` for a `dir_deg` that is not one of
  *  the four quarter turns, the same entry the server refuses. */

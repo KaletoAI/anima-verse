@@ -283,6 +283,14 @@ SHAFT_CUT_GATES: Tuple[str, ...] = ("shaft_poke", "collar_conform_m", "collar_fl
 #: The gates a split fit does not carry: they read the foot before the cut, and under a boot the cut takes the whole
 #: foot (CUT_VERSION 5) — nothing of it can show (recorded in the side's diagnostics).
 HIDDEN_UNDER_BOOT: Tuple[str, ...] = ("deep_outside", "toe_conform_m")
+#: Gates recorded with their value and limit but never refusing a fit (``gating`` False, 2026-11-25): ``deep_outside``
+#: reads the foot BEFORE the cut — vertices the cut then removes — through a voxel fill of the shoe's outside that
+#: leaks through every opening of a mesher hull (a heel tab, lace holes, a heel window). Measured on every stored shoe
+#: on every body (72 fits): the value is bimodal, 0 – 0.016 or 0.33 – 0.55, the high mode spread evenly over heel,
+#: middle and toes, and it flips between the modes for a 2 % length step with no visible change; the fits refused at
+#: 0.546 and 0.342 look right from every side. What is SEEN is ``visible_poke`` (and ``toe_conform_m``), which refused
+#: the one fit that really showed skin through a hole of the mesh.
+REPORTED_ONLY: Tuple[str, ...] = ("deep_outside",)
 #: Gates whose value may be None (no shin vertex in the shaft's height range): recorded, not judged.
 POKE_OPTIONAL: Tuple[str, ...] = ("shaft_poke", "collar_flex_poke")
 GATE_LABELS = {
@@ -1701,6 +1709,183 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
     }
 
 
+#: Skin seen THROUGH the shoe (2026-11-26): the cut body and the shoe parts in bind space, seen from the four
+#: horizontal sides the Wardrobe's views show (front, back, outer and inner side), rasterised at ``SKIN_SEEN_PX_M``
+#: (nearest depth per pixel, ``garment_fit._raster``). A body pixel is seen where no shoe lies nearer than
+#: ``SKIN_SEEN_EPS_M`` in front of it. A connected patch of seen body pixels that the shoe encloses on every side —
+#: it touches neither the picture's edge nor a pixel with nothing on it — is skin seen through the shoe: a hole of the
+#: mesh (a heel window, a torn counter) or a foot poking through a wall. The leg above the rim, the ankle in front of
+#: the tongue and a sliver at the rim all hang together with the leg and do not count as enclosed; a heel that stands
+#: out of the counter all the way up to the rim is the THROUGH-THE-WALL part below (fit version 23). ``visible_poke`` counts foot
+#: vertices under the rim in the cut frame and does not see skin through a hole of the mesh (Kai's Sneakers moved
+#: forward by hand, 2026-11-25: visible_poke 0.0006, the heel seen through the counter from behind).
+#: A SPOT (fit version 22, 2026-11-26): the enclosed pixels are opened with a ``SKIN_SEEN_OPEN_PX`` square (only
+#: pixels inside a fully enclosed 2 x 2 mm block stay) and the value per view is the LARGEST connected patch left, in
+#: mm2. At the 2-mm raster with a 1-mm depth tolerance (fit version 21) the visible spots of the Sneekers on Lirien
+#: (outer counter, side + back renders) and Kira (right counter, back renders) read 4 mm2 — one pixel, the same as
+#: edge noise — and Kira's spot is a heel lying just under 1 mm through the counter, which the tolerance hid. At 1 mm
+#: with 0.25 mm they read 13 and 24 mm2, and the one-pixel-wide sliver along a pump's topline (Lirien's Woman shoes,
+#: 8 mm2 enclosed, no spot in the renders) opens to 0. The limit comes from every stored shoe on every body through
+#: the chain ("Run all" through the routes on a world copy, the kept evaluation of 41 accepted closed fits,
+#: 2026-11-26): 38 read 0, Ylva's Woman shoes 6 (a 2 x 3 mm dot mid-side, not seen in the renders), the two
+#: render-confirmed spots 13 (Lirien's Sneekers) and 24 (Kira's) -> 8 mm2, between the largest clean value and the
+#: smallest seen spot.
+SKIN_SEEN_LABEL = ("a spot of skin seen through the shoe from front, back or a side (a hole, or skin lying on a wall "
+                   "it came through, as a heel through the counter), largest")
+SKIN_SEEN_PX_M = 0.001
+SKIN_SEEN_EPS_M = 0.00025
+SKIN_SEEN_OPEN_PX = 2
+SKIN_SEEN_MAX_MM2 = 8.0
+#: THROUGH THE WALL (fit version 23, 2026-11-26): a seen skin pixel with the shoe at most ``SKIN_POKE_M`` behind it lies
+#: on the outside of a wall it came through; those pixels are opened by a ``SKIN_POKE_OPEN_PX`` square and count like
+#: an enclosed spot. The enclosed rule alone missed a heel through the counter whose spot reaches the topline (the
+#: Woman shoes, a loafer with a closed back: the heel in a jagged notch of the counter on five of eight bodies, open to
+#: the outside, read 0). Measured on every stored closed shoe on every body through the chain ("Run all" through the
+#: routes on a world copy, code 0c27b0b70, the kept evaluation of 64 closed fits): with 2 / 3 / 5 mm and a 2 / 3 / 4
+#: square, the five notches seen in the renders (Woman shoes on Kai, Lirien, Rosi, Ylva, Tilda) read 98 – 367 mm2 at
+#: 3 mm / 4 px, every other fit 0; a 2-px square keeps the slivers where the skin meets the rim (Kai's Sneekers 47,
+#: Vallerie's Woman shoes 303 as a thin line, clean in the renders) and 5 mm reaches the collar padding of clean
+#: Sneekers (32 – 69). A deep poke reads its band at the wall, and ``visible_poke`` / ``deep_outside`` judge it too.
+SKIN_POKE_M = 0.003
+SKIN_POKE_OPEN_PX = 4
+#: The views: name -> (coordinate order put on (col, row, depth), sign: 1 = the camera on the + side).
+SKIN_SEEN_VIEWS: Dict[str, Tuple[Tuple[int, int, int], float]] = {
+    "front": ((0, 1, 2), 1.0), "back": ((0, 1, 2), -1.0), "left": ((2, 1, 0), 1.0), "right": ((2, 1, 0), -1.0)}
+
+
+def _largest_mm2(mask: np.ndarray, opening: int, px: float) -> float:
+    """The largest connected patch (mm2) of ``mask`` opened by an ``opening`` square."""
+    from scipy import ndimage
+    if opening > 1:
+        mask = ndimage.binary_opening(mask, structure=np.ones((opening, opening), bool))
+    spots, m = ndimage.label(mask)
+    if not m:
+        return 0.0
+    return float(np.bincount(spots.ravel())[1:].max()) * px * px * 1e6
+
+
+def seen_spot_mm2(shoe_d: np.ndarray, body_d: np.ndarray, px: float = SKIN_SEEN_PX_M,
+                  eps: float = SKIN_SEEN_EPS_M, opening: int = SKIN_SEEN_OPEN_PX,
+                  poke: float = SKIN_POKE_M, poke_opening: int = SKIN_POKE_OPEN_PX) -> float:
+    """The largest spot (mm2) of one view: ``shoe_d`` / ``body_d`` the nearest depth per pixel (larger = nearer the
+    camera, -inf where nothing is); body pixels with no shoe ``eps`` in front of them are seen. The larger of
+    - ENCLOSED: the seen patches touching neither an empty pixel nor the picture's edge, opened by an ``opening``
+      square (a hole of the mesh, a heel through a closed counter);
+    - THROUGH THE WALL (fit version 23): the seen pixels with the shoe at most ``poke`` behind the skin, opened by a
+      ``poke_opening`` square — skin lying on the outside of a wall it came through, also where that spot reaches
+      the rim (a heel through the counter of a pump, open to the topline). The leg above a rim has the far side of
+      the shoe a foot's depth behind it, never a few millimetres."""
+    from scipy import ndimage
+    shoe = np.isfinite(shoe_d)
+    seen = np.isfinite(body_d) & ~(shoe & (shoe_d >= body_d - eps))
+    lab, n = ndimage.label(seen)
+    if not n:
+        return 0.0
+    empty = ~shoe & ~seen
+    # a patch touching an empty pixel or the picture's edge is open to the outside
+    near_empty = ndimage.binary_dilation(empty, structure=np.ones((3, 3), bool))
+    edge = np.zeros(seen.shape, bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    enclosed = seen & ~np.isin(lab, np.unique(lab[(near_empty | edge) & seen]))
+    with np.errstate(invalid="ignore"):
+        through = seen & shoe & (body_d - shoe_d <= poke)
+    return max(_largest_mm2(enclosed, opening, px), _largest_mm2(through, poke_opening, px))
+
+
+def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]]) -> Dict[str, Any]:
+    """Skin seen through the shoe (``SKIN_SEEN_PX_M`` block): ``{"mm2": {side: {view: largest spot mm2}},
+    "worst_mm2": the largest}`` over the parts of each side (``foot`` and a boot's ``shaft``) on the cut ``body``
+    (bind space)."""
+    from app.core.garment_fit import _raster
+    P = np.asarray(body.positions, np.float64)
+    Fb = np.asarray(body.faces, np.int64).reshape(-1, 3)
+    px = SKIN_SEEN_PX_M
+    out: Dict[str, Dict[str, float]] = {}
+    for side, side_parts in parts.items():
+        Xs, Fs, base = [], [], 0
+        for mesh in side_parts.values():
+            X = np.asarray(mesh.positions, np.float64)
+            Xs.append(X)
+            Fs.append(np.asarray(mesh.indices, np.int64).reshape(-1, 3) + base)
+            base += len(X)
+        if not Xs:
+            continue
+        X, F = np.concatenate(Xs), np.concatenate(Fs)
+        lo3, hi3 = X.min(0) - 0.02, X.max(0) + 0.02
+        Fn = Fb[np.all((P[Fb] >= lo3) & (P[Fb] <= hi3), axis=2).any(1)]
+        out[side] = {}
+        for view, (order, sign) in SKIN_SEEN_VIEWS.items():
+            Xv, Pv = X[:, order], P[:, order]
+            lo = Xv.min(0)[:2] - 4 * px
+            hi = Xv.max(0)[:2] + 4 * px
+            shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
+            out[side][view] = seen_spot_mm2(_raster(Xv, F, lo, shape, px, sign),
+                                                _raster(Pv, Fn, lo, shape, px, sign), px)
+    worst = max((v for views in out.values() for v in views.values()), default=0.0)
+    return {"mm2": out, "worst_mm2": worst}
+
+
+#: The shoe's INSIDE seen from outside (fit version 24, 2026-11-26): the shoe parts of a side, seen from the four
+#: horizontal views of ``SKIN_SEEN_VIEWS`` and rasterised at ``SKIN_SEEN_PX_M`` (``garment_fit._raster``) once with
+#: every face and once with the faces turned toward the camera only. The mesher's shoe is a closed, outward-wound
+#: surface: from outside, the lining and the insole show their front through the opening, never their back. A pixel
+#: whose nearest face is turned away (no front face within ``SKIN_SEEN_EPS_M`` of it) while the nearest face turned
+#: toward the camera lies at most ``SKIN_POKE_M`` behind it is the shoe's inside lying on the outside of a wall it came
+#: through (the wall's outer skin just behind it) — the insole texture in flecks on a stretched heel counter (the Woman shoes
+#: on Kai, Tilda and Ylva at Auto heel room, fit version 23, a width taper that sheared the wall). A shoe of one sheet
+#: (no wall thickness) shows the back of its far wall over a low counter with nothing turned toward the camera close
+#: behind it — not counted. Opened by a
+#: ``SKIN_SEEN_OPEN_PX`` square, the largest patch per view in mm2. A split fit (a boot) records it without gating
+#: (``garment_footwear``): its shaft's bind-space position is the exact inverse of the leg's skin (``footwear_fit``
+#: step 9), not the stand the figure shows, and the boots read 1 000 – 4 600 mm2 there on code eb64c751b — in the
+#: shaft and band, nothing of it in their renders. Measured through the routes on a world copy (Run all, every stored
+#: shoe on eight bodies, the served fit; ``INSIDE_SEEN_MAX_MM2``): the closed shoes on fit version 24 read
+#: Sneakers 0 (8 bodies), Woman shoes 0 (8), Black Stilettos 4 – 8 (8; single specks a pixel wide in their renders, the
+#: same spot on every body: the source's own); on fit version 23 (code eb64c751b) the same three read 0 – 165,
+#: 49 – 237 and 0 – 99, the defect's smallest spots 26 – 37 (Woman shoes on Kira and Rosi). The limit lies between:
+#: twice the clean maximum, 16 mm2 (a 4 x 4 mm patch), below the smallest defect. Rerun at 16: Woman shoes unchanged
+#: (0, the same Auto lengths), Black Stilettos on Vallerie took Auto +2 % at 14 mm2 — a seam line where the black upper
+#: meets the yellow sole, in the front view; its renders show nothing.
+INSIDE_SEEN_MAX_MM2 = 16.0
+INSIDE_SEEN_LABEL = ("a spot of the shoe's inside (lining, insole) seen from outside through its own wall from front, "
+                     "back or a side, largest")
+
+
+def inside_seen(parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]], px: float = SKIN_SEEN_PX_M,
+                eps: float = SKIN_SEEN_EPS_M, opening: int = SKIN_SEEN_OPEN_PX,
+                poke: float = SKIN_POKE_M) -> Dict[str, Any]:
+    """The shoe's inside seen from outside (block above): ``{"mm2": {side: {view: largest spot mm2}}, "worst_mm2"}``
+    over the parts of each side (``foot`` and a boot's ``shaft``, bind space, outward-wound)."""
+    from app.core.garment_fit import _raster
+    out: Dict[str, Dict[str, float]] = {}
+    for side, side_parts in parts.items():
+        Xs, Fs, base = [], [], 0
+        for mesh in side_parts.values():
+            X = np.asarray(mesh.positions, np.float64)
+            Xs.append(X)
+            Fs.append(np.asarray(mesh.indices, np.int64).reshape(-1, 3) + base)
+            base += len(X)
+        if not Xs:
+            continue
+        X, F = np.concatenate(Xs), np.concatenate(Fs)
+        N = np.cross(X[F[:, 1]] - X[F[:, 0]], X[F[:, 2]] - X[F[:, 0]])
+        out[side] = {}
+        for view, (order, sign) in SKIN_SEEN_VIEWS.items():
+            Xv = X[:, order]
+            lo = Xv.min(0)[:2] - 4 * px
+            hi = Xv.max(0)[:2] + 4 * px
+            shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
+            facing = sign * N[:, order[2]] > 0.0
+            every = _raster(Xv, F, lo, shape, px, sign)
+            front = _raster(Xv, F[facing], lo, shape, px, sign)
+            with np.errstate(invalid="ignore"):
+                back = (np.isfinite(every) & np.isfinite(front) & (front < every - eps)
+                        & (every - front <= poke))
+            out[side][view] = _largest_mm2(back, opening, px)
+    worst = max((v for views in out.values() for v in views.values()), default=0.0)
+    return {"mm2": out, "worst_mm2": worst}
+
+
 def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]], cut: Dict[str, Any], *,
               joints: Dict[str, np.ndarray], body_before: Prim) -> Dict[str, Any]:
     """The cut's gates (module docstring): ``{"ok", "reasons", "gates": {name: {value, limit, ok}}, "sides": {side:
@@ -1742,20 +1927,23 @@ def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]
         return max(values) if values else None
 
     metrics = {key: worst(key) for key in active}
-    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in active.items()}
-    ok, reasons = check_gates(metrics, table, optional=POKE_OPTIONAL)
+    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in active.items()
+             if name not in REPORTED_ONLY}
+    ok, reasons = check_gates({k: v for k, v in metrics.items() if k in table}, table, optional=POKE_OPTIONAL)
     gates = {}
     for name, (kind, limit) in active.items():
         passed: Optional[bool] = None if metrics[name] is None and name in POKE_OPTIONAL else \
             check_gates({name: metrics[name]}, {name: (kind, limit, GATE_LABELS[name])})[0]
         gates[name] = {"value": metrics[name], "limit": limit, "ok": passed}
+        if name in REPORTED_ONLY:
+            gates[name]["gating"] = False   # recorded, never refusing (absent = gating, as every other gate table)
     picked = {"deep": before, "visible": body_after}
     parts_p, parts_j, parts_w = [], [], []
     for side in sides.values():
         found = side.pop("_marks", None) or {}
         for key, gate in (("deep", "deep_outside"), ("visible", "visible_poke")):
             idx = np.asarray(found.get(key, ()), np.int64)
-            if (gates.get(gate) or {}).get("ok") is False and len(idx):
+            if (gates.get(gate) or {}).get("ok") is False and gates[gate].get("gating", True) and len(idx):
                 prim = picked[key]
                 parts_p.append(np.asarray(prim.positions, np.float64)[idx])
                 parts_j.append(np.asarray(prim.joints, np.int64)[idx])

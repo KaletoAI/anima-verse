@@ -484,16 +484,6 @@ class ThoughtRunner:
             logger.info("Thought fuer %s mit context_hint: %s",
                         character_name, context_hint[:100])
 
-        # Load arc context for later advancement.
-        _arc_context_loaded = False
-        try:
-            from app.core.story_engine import get_story_engine
-            arc_context = await asyncio.to_thread(
-                lambda: get_story_engine().inject_arc_context(character_name) or "")
-            _arc_context_loaded = True
-        except Exception:
-            arc_context = ""
-
         tool_step_builder = None
         if mode == "rp_first":
             from functools import partial
@@ -577,7 +567,6 @@ class ThoughtRunner:
         # post-processing or the intent parser below.
         extracted_markers = ""
         had_notification_tool = False
-        notification_tool_content = ""
         from app.core.thought_rut import rut_hint
         from app.core.prompt_templates import render_async
         if ctx is None:
@@ -709,7 +698,6 @@ class ThoughtRunner:
                     _tool_exec_counts[event.tool_name] = _tool_exec_counts.get(event.tool_name, 0) + 1
                     if event.tool_name in _user_notification_tool_names():
                         had_notification_tool = True
-                        notification_tool_content = event.result
                     logger.debug("Tool-Result: %s -> %s", event.tool_name, event.result[:100])
         finally:
             if _thought_state["task_id"]:
@@ -903,12 +891,6 @@ class ThoughtRunner:
         # No telepathic cross-memory: characters explicitly contact each other
         # through speech or messaging tools.
 
-        # Advance story arcs after a participant has interacted.
-        if arc_context and (full_response or had_notification_tool):
-            await asyncio.to_thread(
-                self._advance_arcs, character_name,
-                (full_response or notification_tool_content)[:300])
-
         # [INTENT:…] markers of a thought turn are applied ONCE, by
         # chat_engine.post_process_response above (feature-gated there). A
         # second parse here used to create every plan twice.
@@ -956,21 +938,3 @@ class ThoughtRunner:
                                 present=_present, nearby=_nearby)
             except Exception as _je:
                 logger.debug("Thought journal error: %s", _je)
-
-    @staticmethod
-    def _advance_arcs(character_name: str, summary: str) -> None:
-        """Queue an arc advancement for every active arc of the character.
-        Runs in a worker thread (arc read + task-queue writes)."""
-        try:
-            from app.models.story_arcs import get_active_arcs
-            from app.core.task_queue import get_task_queue
-            active_arcs = get_active_arcs(character_name)
-            for arc in active_arcs:
-                get_task_queue().submit("story_arc_advance", {
-                    "user_id": "",
-                    "arc_id": arc["id"],
-                    "interaction_summary": summary,
-                })
-                logger.debug("Arc advancement triggered: %s", arc["id"])
-        except Exception as e:
-            logger.debug("Arc advancement error: %s", e)

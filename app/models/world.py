@@ -2811,9 +2811,23 @@ def purge_location_references(location_ids: Set[str]) -> Dict[str, int]:
         return touched
 
     for name in list_available_characters(include_pooled=True) or []:
+        # ONE config read per character, strict: the plain reader writes the
+        # default config back into a row that still holds '{}', and this
+        # sweep must write only what it purges (a world-dev undo that deletes
+        # a place must leave every other character's row as it was). A failed
+        # strict read falls back to the plain reader.
+        try:
+            cfg = get_character_config(name, strict=True) or {}
+        except Exception:
+            cfg = None
+
         # --- the travel-target list -------------------------------------
         try:
-            known = get_known_locations(name) or []
+            if cfg is None:
+                known = get_known_locations(name) or []
+            else:
+                raw = cfg.get("known_locations")
+                known = [str(v) for v in raw if v] if isinstance(raw, list) else []
             keep = [i for i in known if i not in ids]
             if len(keep) != len(known):
                 set_known_locations(name, keep)
@@ -2854,7 +2868,11 @@ def purge_location_references(location_ids: Set[str]) -> Dict[str, int]:
 
         # --- where auto-sleep walks to ----------------------------------
         try:
-            cfg = get_character_config(name) or {}
+            # Re-read: the known-list purge above may have saved the config.
+            try:
+                cfg = get_character_config(name, strict=True) or {}
+            except Exception:
+                cfg = get_character_config(name) or {}
             if (cfg.get("home_location") or "").strip() in ids:
                 save_character_config(name, dict(cfg, home_location="",
                                                  home_room=""))

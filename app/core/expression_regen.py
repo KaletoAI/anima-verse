@@ -1164,10 +1164,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
             # slots (hair, eyes, skin) — is the character part. A waist-up
             # frame adds the slots declared `portrait` (general and, only
             # while uncovered, exposed fragments); head and neck adds nothing.
-            from app.core.character_ops import _resolve_face_prompt
+            from app.core.character_ops import resolve_face_prompt
             from app.models.character_template import get_template
             _tid = _render_profile.get("template") or ""
-            appearance = _resolve_face_prompt(
+            appearance = resolve_face_prompt(
                 _render_profile, character_name,
                 get_template(_tid) if _tid else None,
                 apply_modifiers=apply_state_modifiers) or appearance

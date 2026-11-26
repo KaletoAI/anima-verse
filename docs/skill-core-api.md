@@ -276,6 +276,38 @@ and a true OR branch cannot hide it. An empty expression is available/true.
 This opt-in path does not change ordinary `evaluate_condition` or the legacy
 missing-value defaults described above.
 
+## Quest catalog — `app.core.quest_catalog`
+
+The types a quest expression is made of (reference: [`docs/quests.md`](quests.md)). One capability,
+`quest.types`: a package registers ONE contributor per owner from its `on_load` module; the contributor answers
+the LIST of all that owner's types. The core names no package (R1); the plugin loader's
+`unregister_owned_providers` removes a package's types with it.
+
+| Name | Contract |
+|---|---|
+| `QuestType(id, kind, label, description, params, signals, validate, evaluate, needs_open_run)` | Frozen dataclass. `kind` is one of `KINDS` (`condition`, `prerequisite`, `effect`); `params` a tuple of parameter dicts (default empty), `signals` a tuple of hook event names (default empty); `validate` and `evaluate` are optional callables (default `None`) — see "Type hooks" below. `needs_open_run` (default `False`): the type can only be read once the run has opened (it counts from `started_game_ts`), so `validate_template` refuses it in a start condition (code `not_allowed_here`) |
+| `register(owner, contributor) -> None` | Register the contributor of `owner` — a function without arguments that returns `list[QuestType]`. A second call by the same owner replaces the first (a `hooks` provider of `CAPABILITY` with `owner` and `multiple=True`) |
+| `types(*, strict=False) -> Dict[str, QuestType]` | id → type of every type registered NOW, rebuilt from the registry on every call (never cached). A raising contributor is skipped (with `strict=True` it re-raises instead — the tick's reference check uses that, so a hiccup skips the run rather than reading as "type gone"), an entry that is not a `QuestType` with an id and a known kind is dropped, of two equal ids the first registered wins (each logged) |
+| `get(type_id) -> Optional[QuestType]` | One type, or `None` |
+| `public_descriptor(t) -> Dict[str, Any]` | The JSON-safe part of a type (`id`, `kind`, `label`, `description`, `params`, `signals`) |
+| `catalog_payload() -> Dict[str, List[Dict[str, Any]]]` | `{"conditions", "prerequisites", "effects"}` of public descriptors, sorted by label (`GET /quests/catalog`) |
+| `walk(expr) -> Iterator[Tuple[str, dict]]` | `(path, leaf)` of every `{"type", "params"}` leaf, paths relative to `expr` (`""` = the root); malformed parts are skipped |
+| `check_expression(expr, roles, *, allowed_kinds) -> List[Dict[str, str]]` | Every issue `{"path", "code", "message"}` of `expr`, paths relative to it (the caller prefixes its position). `roles` are the template's role dicts, `allowed_kinds` the type kinds this position accepts. Codes `shape`, `unknown_type`, `wrong_kind`, `missing_param`, `bad_param`, `unknown_role`, `wrong_role_kind`, plus whatever a type's own validate hook names (reported at `.type`) |
+| `evaluate_expression(expr, ctx) -> ConditionResult` | Three-state value; never raises. Unavailable is contagious through `all` / `any` / `not`; a type that is not registered, has no evaluate hook, raises or answers no `ConditionResult` is unavailable |
+| `signals_of(expr) -> set[str]` | The union of the signals of every registered leaf type |
+| `CAPABILITY`, `KINDS`, `ROLE_KINDS`, `PARAM_TYPES` | `"quest.types"`; the type kinds; `character`, `location`, `room`, `item`; `str`, `text`, `int`, `float`, `bool`, `select`, `role` |
+| `app.core.quest_types.check_binding(kind, binding) -> list[ConditionIssue]` | The issues of one role binding (D6 shapes). RAISES on a storage error; an issue only when the binding is malformed or the entity is definitely gone |
+| `app.core.quest_types.build_context(avatar, run) -> QuestContext \| None` | The evaluation context of an avatar for a run: `avatar` (acting body), `mind`, `profile`, `location_id`, `room_id`, `now` (`GameTime`), `bindings`, `run`. `None` when the profile or the clock cannot be read |
+
+**Type hooks.** The evaluate hook is called with `(params, ctx)` and returns a `ConditionResult` of
+`app.core.activity_engine` — unavailable, never false, when a read fails. The optional validate hook is called with
+`(params, bindings)` and returns a list of `ConditionIssue`; `bindings` is `None` at template time (check only
+what needs no world entity) and the run's bindings at start and at every tick. Both receive CLEANED parameters: the
+generic checks passed, declared defaults filled in, and an absent parameter without a default DROPPED — read them with
+`params.get`. A validate hook may raise: at start that refuses the run (a `bad_param` issue), at the tick the run is
+skipped for that tick, never marked broken. Location, room and inventory are read for `ctx.avatar` (the acting
+body); facts for `ctx.mind`.
+
 ## Skill gate — `app.core.skill_gate` ⚠
 
 Rules of type `block` with `target.scope = "skill"` and the world setting
@@ -446,7 +478,7 @@ paths keep `body_slots.is_slot_exposed`.
 
 | Funktion | Semantik |
 |---|---|
-| `apply_outfit_compliance(character_name, *, is_intimate=None, is_wet=None, is_sleeping=None) -> Dict` | Decency/Style des aktuellen Raums gegen `equipped_pieces` abgleichen — nach JEDER Zustandsänderung rufen, die die Kleiderordnung beeinflusst. Die drei Kwargs geben den Zustand mit, wenn er gerade geschrieben wurde und noch nicht im Profil steht |
+| `apply_outfit_compliance(character_name, *, is_intimate=None, is_wet=None, is_sleeping=None, notify=True) -> Dict` | Decency/Style des aktuellen Raums gegen `equipped_pieces` abgleichen — nach JEDER Zustandsänderung rufen, die die Kleiderordnung beeinflusst. Die drei Kwargs geben den Zustand mit, wenn er gerade geschrieben wurde und noch nicht im Profil steht |
 | `app.core.outfit_renderer.is_outfit_worn(profile) -> bool` | Binärer „angezogen?"-Zustand für Freitext-Garderoben (undress-Paket) |
 | `app.core.outfit_renderer.set_outfit_worn(character_name, worn) -> bool` | Setzt `outfit_worn` einer Freitext-Garderobe wie der Editor (String "true"/"false", unter dem Profil-Lock, Sync-Signal, Compliance-Runde); True = Zustand ist danach `worn` (auch wenn er es schon war), False = kein Profil, Piece-Garderobe (unangetastet) oder Speichern fehlgeschlagen |
 | `app.core.outfit_renderer.is_free_text_wardrobe(profile) -> bool` | Template ohne Outfit-System (`outfit_system_enabled: false`) — Kleidung = `outfit_description` + `outfit_worn` |
@@ -487,8 +519,9 @@ Inventory and equipment calls for packages (stable):
 | Function | Contract |
 |---|---|
 | `app.models.inventory.get_carried_item_ids(character_name) -> set[str]` | IDs of the items the character holds (quantity > 0), in ONE query, without profile reads or item enrichment — for "does she carry the power item" checks on hot paths |
-| `app.models.inventory.add_to_inventory(character_name, item_id, quantity=1, obtained_from="", obtained_method="manual", locked=None) -> bool` | Add a world item to the inventory; `False` for an unknown item or a failed write. Passive: effects apply only through `consume_item`. `locked=True` protects it from removal without `force` |
-| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry only with `force=True`. `False` when nothing was removed |
+| `app.models.inventory.get_item_quantity(character_name, item_id, *, strict=False) -> int` | How many of the item the character holds, in ONE query; `0` when it holds none. A read failure answers `0`, or propagates with `strict=True` |
+| `app.models.inventory.add_to_inventory(character_name, item_id, quantity=1, obtained_from="", obtained_method="manual", locked=None) -> bool` | Add a world item to the inventory; `False` for an unknown item, a full inventory or a failed write. A durable write emits `inventory.changed` (see „Hooks"). Passive: effects apply only through `consume_item`. `locked=True` protects it from removal without `force` |
+| `app.models.inventory.remove_from_inventory(character_name, item_id, quantity=1, force=False) -> bool` | Remove (part of) a stack; a locked entry only with `force=True`. `False` when nothing was removed or the write failed. A durable write emits `inventory.changed` |
 | `app.models.inventory.apply_equipped_pieces(character_name, *, pieces=None, items=None, remove_slots=None, source="") -> dict` | Atomic equip change with diff detection. `pieces` = COMPLETE target state of the piece slots (slot → item ID; occupied slots missing from it are cleared), `items` = target list of the non-piece items, `None` = untouched; `remove_slots` clears explicitly. Returns `{status, changed, applied, cleared, skipped, pieces_before, pieces_after, items_before, items_after}`. A profile read-modify-write: call it under `keyed_lock("character_profile", name)` |
 
 Public discovery helpers (stable):
@@ -748,7 +781,7 @@ remain unchanged; strict mode propagates actual read/decoding failures.
 |---|---|
 | `app.models.character` | `app.models.character.get_character_pos(character_name="", *, strict=False)`, `app.models.character.get_character_daily_schedule(character_name, *, strict=False)` |
 | `app.models.secrets` | `app.models.secrets.list_secrets(character_name, *, strict=False)` |
-| `app.models.inventory` | `app.models.inventory.get_item(item_id, *, strict=False)`, `app.models.inventory.get_shared_item(item_id, *, strict=False)`, `app.models.inventory.resolve_item_id(token, *, strict=False)`, `app.models.inventory.has_item(character_name, item_id, *, strict=False)`, `app.models.inventory.get_room_items(location_id, room_id, *, strict=False)` |
+| `app.models.inventory` | `app.models.inventory.get_item(item_id, *, strict=False)`, `app.models.inventory.get_shared_item(item_id, *, strict=False)`, `app.models.inventory.resolve_item_id(token, *, strict=False)`, `app.models.inventory.has_item(character_name, item_id, *, strict=False)`, `app.models.inventory.get_item_quantity(character_name, item_id, *, strict=False)`, `app.models.inventory.get_room_items(location_id, room_id, *, strict=False)` |
 | `app.models.world` | `app.models.world.get_location_by_id(location_id, *, strict=False)`, `app.models.world.list_locations(*, strict=False)`, `app.models.world.get_world_setting(key, default="", *, strict=False)`, `app.models.world.is_world_frozen(*, strict=False)` |
 | `app.core.prompt_filters` | `app.core.prompt_filters.load_filters(*, strict=False)` |
 | `app.core.stat_boosts` | `app.core.stat_boosts.effective_stat(profile, key, *, strict=False)`, `app.core.stat_boosts.active_boosts(profile, *, now=None, strict=False)`, `app.core.stat_boosts.active_states(profile, *, now=None, strict=False)` |
@@ -1291,6 +1324,8 @@ Events, die der Core heute feuert:
 |---|---|
 | `startup` | — (nach dem Boot, aus `app/server.py`) |
 | `character.entered_room` | `character`, `location_id`, `room_id`; once after a successful actual room change, including a location change into its arrival room. Same-room saves, departures to no room and failed writes emit nothing. Delivery waits until the emitting thread releases all world/keyed locks, including caller-held locks; multiple changes are delivered in order without coalescing. |
+| `inventory.changed` | `character`, `item_id`, `delta` (signed int: the quantity actually added, or removed as a negative number); emitted by `add_to_inventory`, `remove_from_inventory` and by `update_inventory_entry` when it applies a `quantity`. Successful durable write only (a failed write and a zero delta emit nothing); delivered after all locks of the emitting thread are released. `delete_item` and the phantom cleanup of a deleted definition emit nothing — read the quantity (`get_item_quantity`), never sum deltas |
+| `utterance.heard` | `utterance_id`, `speaker`, `speaker_is_avatar`, `heard_by` (sorted names that got the content, the speaker excluded), `avatars` (sorted avatars among `heard_by`), `addressees`, `location_id`, `room_id`, `source`; emitted by `perception.record_utterance` after the utterance and its perceptions are stored. Not for the storyteller speaker, not for display-only lines, not when a dedupe hit stored nothing. Delivered after all locks of the emitting thread are released — `/play/say` records on the event loop, so a listener must stay cheap and hand real work off |
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
 | `interaction.ended` | `character`, `members` (everyone, clip-role order), `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair or group is cleared, its memories and relationship rows written. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
@@ -1322,6 +1357,7 @@ Capabilities, die der Core heute abfragt:
 | `prop_action.consent_carries` | `prop_action_engine.request_with_creation`: an "ask" for another furniture action on the piece the actor and every invitee already use together in ONE active run that the request ends — every invitee requested that run or said "yes" to it (the partner of a "react" run did not), nobody new joins (one of them may stay out) — switches in place at once without a question (`consents` all "yes", `consent_carried`). Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called with two positional arguments, copies of the old and the new action definition, and veto with anything but `True`; a raising contributor counts as a veto. Admission (`participation.check`, requirements) still runs on the switch. Free pair poses switch the same way (`interaction_engine.switch_consent_carries`, called with `{"ability": "pose", "pose_key": …}` for the old and the new pose): another pose for the two who play one free pair together keeps the interaction (id, consent record) and starts the new clip in place; it carries when that pair began with an accepted "ask" invitation between the two, otherwise the switch is asked (or reacted to) like any pair (`intimacy`: never carries into an intimate action from a non-intimate one) | The consent always carries |
 | `play.say_intercept` | `routes/play.py` `play_say`, after the addressees are filtered and before spell detection. Contributors (`register_provider(..., owner="<package id>", multiple=True)`) are called in registration order, off the event loop, with the keywords `avatar`, `content`, `volume`, `addressees` (the reachable ones), `location_id`, `room_id`; answer `None` to pass or `{"consumed": True, "result": {...}}` to take the message. The first consuming contributor wins: no utterance is recorded, no spell detection and no room reaction runs, the route answers `{"ok": true, "intercepted": <result>}`. A raising contributor is logged and skipped; image-only messages are not offered | Every message is spoken into the room as usual |
 | `character_panel:<package id>` | `app.core.character_panels` for the admin routes `/characters/{name}/panels/{package}` and the skill listing (`panel_package`); see "Character panels" below | No panel on the Skills tab, the routes answer 404 |
+| `quest.types` | `app.core.quest_catalog.types(*, strict=False)` — every quest condition, prerequisite and effect type (`multiple=True`, one contributor per owner answering a LIST of `QuestType`; register through `quest_catalog.register`, see "Quest catalog" above) | Only the core's built-in types (owner `core`); a run using a removed package's type turns `broken` once the type is missing at two consecutive ticks |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |

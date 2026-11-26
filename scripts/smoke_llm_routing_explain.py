@@ -15,7 +15,7 @@ Synthetic config:
     #2 A/m2 DISABLED tasks chat_stream@2, translation@1
     #3 A/m3 enabled  tasks image_recognition@1   (m3 in cooldown 42 s)
   disabled (persistent): {"secret_generation"}; runtime_disabled: {"hull_design"}
-  story_engine.enabled = False (gates story_stream off)
+  random_events.enabled = False (gates random_event off — llm_tasks gate "random_events.enabled")
   embedding.backend = "internal", internal_model = "BAAI/bge-small-en-v1.5"
 
 Expected (by hand from the resolver rule):
@@ -33,7 +33,7 @@ Expected (by hand from the resolver rule):
   6. npc_talk: via fallback, resolved #0 via_task "chat_stream".
   7. image_recognition: via none — sole candidate in model cooldown;
      chain[0].skipped == "model cooldown".
-  8. story_stream: via gated_off, resolved None, gated_off True.
+  8. random_event: via gated_off, resolved None, gated_off True.
   9. secret_generation: via disabled, disabled True.
  10. hull_design: via disabled, runtime_disabled True.
  11. pose_embedding: via direct, resolved None, reason startswith "built-in".
@@ -93,7 +93,7 @@ CFG = {
         {"provider": "A", "model": "m3", "enabled": True,
          "tasks": [{"task": "image_recognition", "order": 1}]},
     ],
-    "story_engine": {"enabled": False},
+    "random_events": {"enabled": False},
     "embedding": {"backend": "internal", "internal_model": "BAAI/bge-small-en-v1.5"},
 }
 PROV = {"A": SimpleNamespace(available=True, type="openai"),
@@ -112,7 +112,7 @@ t = T["translation"]; check(t["via"] == "none" and t["chain"] == [] and t["fallb
 t = T["furnish"]; check(t["via"] == "fallback" and t["resolved"]["index"] == 0 and t["resolved"]["via_task"] == "intent" and t["fallback"] == "intent", "5. furnish")
 t = T["npc_talk"]; check(t["via"] == "fallback" and t["resolved"]["via_task"] == "chat_stream", "6. npc_talk")
 t = T["image_recognition"]; check(t["via"] == "none" and t["chain"][0]["skipped"] == "model cooldown", "7. image_recognition")
-t = T["story_stream"]; check(t["via"] == "gated_off" and t["resolved"] is None and t["gated_off"] is True, "8. story_stream")
+t = T["random_event"]; check(t["via"] == "gated_off" and t["resolved"] is None and t["gated_off"] is True, "8. random_event")
 t = T["secret_generation"]; check(t["via"] == "disabled" and t["disabled"] is True, "9. secret_generation")
 t = T["hull_design"]; check(t["via"] == "disabled" and t["runtime_disabled"] is True, "10. hull_design")
 t = T["pose_embedding"]; check(t["via"] == "direct" and t["resolved"] is None and t["reason"].startswith("built-in"), "11. pose_embedding")

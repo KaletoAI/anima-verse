@@ -210,11 +210,12 @@ STORES: Tuple[Store, ...] = (
     Store("item_reads", "item_reads", "reader=?", (SCOPE_REINIT,), "reading memory"),
     Store("item_caught_today", "item_caught_today", "reader=?", (SCOPE_REINIT,), "reading catches"),
     Store("item_discoveries", "item_discoveries", "character_name=?", (SCOPE_REINIT,), "discovered items"),
+    Store("quest_facts", "quest_facts", "mind=? OR subject=?", (SCOPE_REINIT,),
+          "what this character did for quests, and what others did with it",
+          params=2),
     # ── JSON-participant stores: pruned, not deleted ──────────────────────
     Store("intents", "intents", "", (SCOPE_REINIT,),
           "intents owned by or naming this character", json_column="participants"),
-    Store("story_arcs", "story_arcs", "", (SCOPE_REINIT,),
-          "membership in story arcs", json_column="participants"),
     Store("group_chats", "group_chats", "", (SCOPE_REINIT,),
           "membership in group chats", json_column="participants"),
     Store("parties", "parties", "", (SCOPE_REINIT,),
@@ -274,7 +275,6 @@ def _prune_json_members(conn, store: Store, character_name: str) -> int:
 
     id_col = {
         "intents": "id",
-        "story_arcs": "id",
         "group_chats": "id",
         "parties": "party_id",
         "notifications": "id",

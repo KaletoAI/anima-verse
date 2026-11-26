@@ -8,7 +8,7 @@ Hand-derived expectations:
 [1] ``KIND_FIELDS`` of every fitted kind carries "texture" and "sleeve_print" (the dialog renders them generically);
     ``validate_params`` keeps a trousers' ``texture`` "cut" (a field outside ``KIND_FIELDS`` would be reset to
     "projection"), and ``sleeve_print`` "picture".
-[2] ``FITTED_VERSION`` is 1, so a fitted drape key carries ``"fitted": 1`` (every fitted drape is re-draped once): the
+[2] ``FITTED_VERSIONS["trousers"]`` is 1, so a fitted drape key carries ``"fitted": 1`` (every fitted drape is re-draped once): the
     trousers' ``tsig`` equals md5 of ``{params, version, base, texture, lower, fitted: 1}`` and differs from the same
     payload without the key; a top's ``tsig`` has no such key (md5 of the payload without it). ``texture`` is
     ``TEXTURE_ONLY``: "cut" and "projection" give the same trousers ``tsig``.
@@ -87,7 +87,7 @@ check("[1] trousers keep texture cut", params["texture"], "cut")
 check("[1] trousers keep sleeve_print picture", params["sleeve_print"], "picture")
 
 # [2]
-check("[2] FITTED_VERSION", gt.FITTED_VERSION, 1)
+check("[2] FITTED_VERSIONS[trousers]", gt.FITTED_VERSIONS["trousers"], 1)
 
 
 def md5(payload):
@@ -95,13 +95,13 @@ def md5(payload):
 
 
 tp = gt.validate_params({"kind": "trousers"})[0]
-base = {"params": gt.keyed_params(tp), "version": gt.TEMPLATE_VERSION, "base": "b", "texture": "t", "lower": []}
+base = {"params": gt.keyed_params(tp), "version": gt.template_version(tp), "base": "b", "texture": "t", "lower": []}
 check("[2] trousers tsig carries fitted 1", gt.tsig(tp, base_sha="b", texture_sha="t", lower=[]),
-      md5({**base, "fitted": 1}))
+      md5({**base, "fitted": 1, "knee": 1}))  # a straight leg (the default) also carries the knee bridge
 check("[2] ... and differs without it", md5(base) != gt.tsig(tp, base_sha="b", texture_sha="t", lower=[]), True)
 top = gt.validate_params({"kind": "top", "shoulders": "covered", "sleeves": "short"})[0]
 check("[2] a top's tsig has no fitted key", gt.tsig(top, base_sha="b", texture_sha="t", lower=[]),
-      md5({"params": gt.keyed_params(top), "version": gt.TEMPLATE_VERSION, "base": "b", "texture": "t", "lower": []}))
+      md5({"params": gt.keyed_params(top), "version": gt.template_version(top), "base": "b", "texture": "t", "lower": []}))
 check("[2] texture is TEXTURE_ONLY", gt.tsig({**tp, "texture": "cut"}, base_sha="b", texture_sha="t", lower=[]),
       gt.tsig({**tp, "texture": "projection"}, base_sha="b", texture_sha="t", lower=[]))
 

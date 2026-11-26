@@ -86,6 +86,9 @@ def _stub_world():
     mr.is_humanoid = lambda name, **_k: False
     mr.enabled_tpose_views = lambda name: ()
     mr.get_auto_kinds = lambda name: dict(AUTO)
+    # The timer body re-checks that the character still exists (a deleted
+    # one gets no render); here the stub character always "exists".
+    mr._character_still_exists = lambda name: True
     mr._enabled = lambda: ENABLED[0]
     mr._debounce_seconds = lambda: DEBOUNCE
     mr._fire_kinds = lambda name, kinds, force=False: FIRED.append((name, tuple(kinds), force))

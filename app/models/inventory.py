@@ -1631,8 +1631,12 @@ def _load_inventory(character_name: str, *, strict: bool = False) -> Dict[str, A
         return {"inventory": [], "max_slots": 20, "last_updated": None}
 
 
-def _save_inventory(character_name: str, data: Dict[str, Any]):
-    """Upsert the character inventory in the DB."""
+def _save_inventory(character_name: str, data: Dict[str, Any]) -> bool:
+    """Upsert the character inventory in the DB.
+
+    Returns True when the transaction committed, False when the write failed
+    (logged, never raised) — callers report and signal only a durable write.
+    """
     now = utc_now_iso()
     inventory = data.get("inventory", [])
     try:
@@ -1676,9 +1680,24 @@ def _save_inventory(character_name: str, data: Dict[str, Any]):
                 ))
     except Exception as e:
         logger.error("_save_inventory DB error for %s: %s", character_name, e)
-        return
+        return False
     from app.core import sync_topics
     sync_topics.avatars([character_name], "self")
+    return True
+
+
+def _emit_inventory_changed(character_name: str, item_id: str, delta: int) -> None:
+    """Signal a durable quantity change once this thread holds no lock any more.
+
+    Called only after ``_save_inventory`` returned True; a zero delta (a stack
+    already at ``max_stack``) changed nothing and is not signalled.
+    """
+    if not delta:
+        return
+    from app.core.hooks import emit
+    from app.core.keyed_lock import _after_locks
+    _after_locks(lambda: emit("inventory.changed", character=character_name,
+                              item_id=item_id, delta=delta))
 
 
 def get_carried_item_ids(character_name: str) -> set[str]:
@@ -1797,8 +1816,12 @@ def add_to_inventory(character_name: str,
         for entry in inventory:
             if entry.get("item_id") == item_id:
                 max_stack = item.get("max_stack", 99)
-                entry["quantity"] = min(entry.get("quantity", 1) + quantity, max_stack)
-                _save_inventory(character_name, data)
+                before = entry.get("quantity", 1)
+                entry["quantity"] = min(before + quantity, max_stack)
+                if not _save_inventory(character_name, data):
+                    return False
+                _emit_inventory_changed(character_name, item_id,
+                                        entry["quantity"] - before)
                 return True
 
     # Check slot capacity; wardrobe pieces do not count toward the limit.
@@ -1825,9 +1848,17 @@ def add_to_inventory(character_name: str,
     }
     if locked:
         new_entry["locked"] = True
+    # A second entry with the same item_id (non-stackable item already held,
+    # or a locked add onto a stack) is upserted OVER the stored row, so the
+    # stored quantity is replaced, not increased: the delta is measured
+    # against what was stored before.
+    before = next((e.get("quantity", 1) for e in inventory
+                   if e.get("item_id") == item_id), 0)
     inventory.append(new_entry)
     data["inventory"] = inventory
-    _save_inventory(character_name, data)
+    if not _save_inventory(character_name, data):
+        return False
+    _emit_inventory_changed(character_name, item_id, new_entry["quantity"] - before)
     logger.info("Item %s zum Inventar von %s hinzugefuegt%s",
                 item_id, character_name,
                 " (locked)" if locked else "")
@@ -1909,11 +1940,15 @@ def remove_from_inventory(character_name: str,
                 logger.info("Item %s ist locked auf %s — Entfernen abgelehnt",
                             item_id, character_name)
                 return False
-            entry["quantity"] = entry.get("quantity", 1) - quantity
+            before = entry.get("quantity", 1)
+            entry["quantity"] = before - quantity
             if entry["quantity"] <= 0:
                 inventory.remove(entry)
             data["inventory"] = inventory
-            _save_inventory(character_name, data)
+            if not _save_inventory(character_name, data):
+                return False
+            _emit_inventory_changed(character_name, item_id,
+                                    -max(0, min(before, quantity)))
             logger.info("Item %s aus Inventar von %s entfernt", item_id, character_name)
             return True
     return False
@@ -1924,17 +1959,29 @@ def remove_from_inventory(character_name: str,
 def update_inventory_entry(character_name: str,
     item_id: str,
     updates: Dict[str, Any]) -> bool:
-    """Update an inventory entry, including equipped state and notes."""
+    """Update an inventory entry, including equipped state and notes.
+
+    False when the entry is missing or the write failed. An applied
+    ``quantity`` signals ``inventory.changed`` with the difference.
+    """
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
 
     for entry in inventory:
         if entry.get("item_id") == item_id:
+            before = entry.get("quantity", 1)
             allowed = {"equipped", "notes", "quantity"}
             for key, value in updates.items():
                 if key in allowed:
                     entry[key] = value
-            _save_inventory(character_name, data)
+            if not _save_inventory(character_name, data):
+                return False
+            if "quantity" in updates:
+                try:
+                    delta = int(entry["quantity"]) - int(before)
+                except (TypeError, ValueError):
+                    delta = 0
+                _emit_inventory_changed(character_name, item_id, delta)
             return True
     return False
 
@@ -1992,6 +2039,28 @@ def find_inventory_piece_by_name_slot(character_name: str,
                             name, iid, target_frag[:60], stored[:60])
                 return iid
     return None
+
+
+def get_item_quantity(character_name: str, item_id: str, *, strict: bool = False) -> int:
+    """How many of an item the character holds; 0 when it holds none.
+
+    One indexed query, no item enrichment. A read failure answers 0, or
+    propagates with ``strict=True``.
+    """
+    try:
+        row = get_connection().execute(
+            "SELECT quantity FROM inventory_items WHERE character_name=? AND item_id=?",
+            (character_name, item_id),
+        ).fetchone()
+    except Exception as e:
+        if strict:
+            raise
+        logger.warning("get_item_quantity DB error for %s/%s: %s",
+                       character_name, item_id, e)
+        return 0
+    if row is None or row[0] is None:
+        return 0
+    return max(0, int(row[0]))
 
 
 def has_item(character_name: str, item_id: str, *, strict: bool = False) -> bool:
@@ -2727,6 +2796,20 @@ def unequip_mesh_piece(character_name: str, slot: str) -> bool:
 # ============================================================
 # 4b. CENTRAL EQUIPMENT DIFF
 # ============================================================
+
+def outfit_set_pieces_by_slot(outfit: Dict[str, Any]) -> Dict[str, str]:
+    """An outfit set's pieces as the ``pieces`` argument of
+    :func:`apply_equipped_pieces`: first declared slot -> item id, one entry
+    per piece (the apply sets every mirrored slot from the item's
+    definition). A piece without a declared slot is left out."""
+    pieces_by_slot: Dict[str, str] = {}
+    for pid in (outfit.get("pieces") or []):
+        it = get_item(pid) or {}
+        slots = ((it.get("outfit_piece") or {}).get("slots") or [])
+        if slots:
+            pieces_by_slot[slots[0]] = pid
+    return pieces_by_slot
+
 
 def apply_equipped_pieces(character_name: str, *,
     pieces: Optional[Dict[str, str]] = None,

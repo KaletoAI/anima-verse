@@ -6337,19 +6337,23 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
     return rec
 
 
-def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
+def list_props(*, full: bool = False, read_only: bool = False) -> List[Dict[str, Any]]:
     """All props. ``full`` adds the sidecar detail + file urls (admin);
     otherwise the lean client shape (id, name, category, width_m, depth_m,
     height_m, tags, mount, mount_suggested, description, dims_estimated,
     marker_count, has_model).
 
     The marker LISTS ride only on the full record — the lean client library
-    gets the count, exactly as before the markers became per-variant."""
+    gets the count, exactly as before the markers became per-variant.
+
+    ``read_only`` is the listing of a pure reader (e.g. the world-dev
+    ``find_props`` tool): no lazy sidecar write (variant list, bbox backfill)
+    and no distance-mesh job — the records answer from what is stored."""
     out = []
     for pid in _all_prop_ids():
-        meta = read_sidecar(pid)
+        meta = read_sidecar(pid, read_only=read_only)
         if meta:
-            out.append(_prop_record(pid, meta, full=full))
+            out.append(_prop_record(pid, meta, full=full, read_only=read_only))
     return out
 
 

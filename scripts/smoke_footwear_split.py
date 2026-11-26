@@ -77,7 +77,7 @@ Expected, by hand:
      False (the source material says so); glb_mesh.garment_arrays(prefix) raises on the foot name (two
      matches), exact=True returns it. foot_pose of the boot fit == foot_pose of the clog fit on the same foot
      (bones, root_lift_m, contacts: the split changes no pose; the boot's foot part IS the clog).
-[B6] FOOTWEAR_FIT_VERSION 20 (A219); COLLAR_BAND_M 0.03; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
+[B6] FOOTWEAR_FIT_VERSION 21 (2026-11-26 toe_front); COLLAR_BAND_M 0.03; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
      seam gap 2 mm / stretch 1.5 / follow 1 deg (+ the knee gates of [B9]), SHAFT_GATING seam_stretch_max False,
      shaft_push_p95_m / shaft_push_max_m False (fit version 12, Task 9 fix 5, Ruling 15f: under a boot the body is cut
      away, the push is recorded only — on ebcd6c0b both gated) and the rest True;
@@ -186,7 +186,7 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 20 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 24 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
           and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",) and ff.KNEE_MARGIN_M == 0.04
           and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 19, no boot gate, split + knee + collar band constants")

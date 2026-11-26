@@ -61,7 +61,6 @@ DELIBERATE = {
     "outfit_decision_block": "no outfit changes while a conversation runs",
     "daily_schedule_block": "the schedule would start something unrelated",
     "rhythm_sleep_now": "sleeping is not decided inside a conversation",
-    "arc_block": "story-arc initiative is not a conversation step",
     "assignments_block": "assignments would pull the character out of the chat",
     "intent_tracking_enabled": "the [INTENT:] grammar belongs with the assignments — "
                                "new plans would pull the character out of the chat",

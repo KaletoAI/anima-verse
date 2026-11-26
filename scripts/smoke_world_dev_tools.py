@@ -168,8 +168,10 @@ Task 6 — character tools (runs 9-12):
       undo: personality.md == "calm\n" exactly, presence.md absent again,
       beliefs.md is the human's text, tasks.md is the human's text with
       the one skip "changed since".
-  (y) soul_owner patched to name a leader -> the shared section is refused
-      naming the leader. update_character home/home_room/schedule [8
+  (y) soul_owner patched to name a leader for personality.md only -> that
+      shared section is refused naming the leader; the character's own
+      section soul:character_task "own tasks" is written ("own tasks\n") with
+      one restore_soul step (the run's undo puts back "tasks by a human\n"). update_character home/home_room/schedule [8
       Lakeside "fishing"] -> home = Lakeside/Bedroom, one slot at Lakeside,
       Lakeside known; one restore_home_schedule step. delete_created of the
       pre-existing Demo Other -> refused; of "Demo Brief" created in this
@@ -236,6 +238,137 @@ Task 6 review findings (runs 13-16, after (z); Demo Other is human-roleplay):
   (ag) apply_character reports a skipped item_id: an outfit with
        {item_id: "item_nope"} given straight to apply_character (the route
        path, no tool pre-check) -> a warning naming "item_nope".
+
+Open points 1-3 of the plan (runs 17-21):
+
+  (ah) cross-turn delete. Turn 1 creates "Demo Longhouse" (room Hall, at
+       500/500), a water area TA, a 4 m height area HA and "Demo Ragna"
+       (human-roleplay, one outfit with ONE new piece "Demo Fur Cloak"); Ragna
+       gets one own memory plus a hand-inserted memory_embeddings row (no
+       character column: it goes by ON DELETE CASCADE with the memory; vector
+       BLOB 00 01 02 ff). D1 = every row of every table (rowid order; the
+       journal tables, sqlite_sequence and the derived height raster
+       world_heightfield left out), F1 = Ragna's directory
+       bytes (it has soul/*.md files from the apply).
+       Turn 2: delete_created of all four -> ok, each line "... an earlier
+       turn"; all four absent, the embedding row gone with them; the turn-2
+       journal holds exactly recreate_location, recreate_terrain_area,
+       recreate_height_area, recreate_character (state done); the 4 turn-1
+       creates are NOT undone.
+       undo(run, turn=2) -> complete, 4 reversed; every table row-equal to
+       D1 — except created_at/updated_at of locations/terrain_areas/
+       height_areas, which their writers always set to "now" (technical
+       stamps the readers do not return; the readers' records are compared
+       in full: diff_keys empty);
+       Ragna's files byte-equal to F1.
+       Turn 3: delete_created of Ragna and the Longhouse again -> ok.
+       discard_preview = exactly the two area lines ("terrain area TA
+       (water)", "height area HA (4.0 m)"): the location and Ragna are net
+       absent (re-created, then deleted by their creates). undo(run) ->
+       complete; all four absent, Ragna's directory gone, the cloak deleted
+       (held nowhere once Ragna is gone).
+  (ai) the create claim is durable. wr.complete is patched to raise Crash
+       (a BaseException: the process ends, the row stays pending):
+       1. "Demo Unclaimed": world_dev_apply._row_exists raises Crash — the
+          apply's first step, before the claim -> pending, no claim.
+       2. "Demo Before": world_dev_apply.save_character_profile records the
+          journal inverse and raises Crash -> at that moment the inverse
+          already carries claimed true; no row stored.
+       3. "Demo After": add_to_inventory (the hand-over right after add_item)
+          records the inverse, stores, then raises Crash -> the inverse
+          carries claimed true and the ONE new piece id; the row is stored.
+       An admin then creates "Demo Unclaimed" by hand. undo(run) -> skips
+       {Unclaimed: "not written", Before: "already gone"}, reversed = [the
+       After row], complete True; Demo After and its piece gone, the admin's
+       Demo Unclaimed kept.
+  (aj) cross-turn refusals (created in turn 1, deleted in turn 2): "Demo
+       Talker" with 1 chat message -> refused naming "1 chat messages";
+       "Demo Remembered", named by 1 memory row of Demo Other -> refused
+       naming "1 memory rows"; "Demo Gallery Hut" with a file in
+       world_gallery/<id>/ -> refused naming that directory; the pre-existing
+       Demo Other -> "not created by this run". No refused call adds a write
+       row; all three stay.
+  (ak) "Demo Twin" created in turn 1, deleted in turn 2; an admin creates a
+       "Demo Twin" (dialogue_style "the admin's"). discard_preview = exactly
+       the one line "character Demo Twin was deleted by this run and exists
+       again — the discard leaves it alone". undo -> both rows skipped
+       "changed since" (the re-creation finds the foreign row; the create's
+       delete is skipped for the same target), reversed [], complete False;
+       the admin's Demo Twin stays with its dialogue_style.
+  (al) outfits. From shared/templates/character/*.json
+       features.outfit_system_enabled: human-default false, human-roleplay
+       true, animal-default true -> character_templates() says exactly that.
+       create_character human-default with 2 outfits -> refused "no outfit
+       system", the line names "animal-default, human-roleplay", no row, no
+       write row; with outfits [] -> ok, nothing "dropped". update_character
+       {outfits} on that human-default character -> "no outfit system"; on
+       the human-roleplay Demo Other (no "Daily" yet) -> added ("outfits added:
+       Daily (0 new piece(s), 0 existing)"), taken back by the undo. The template
+       refusal (npc-temporary) lists "human-default (no outfits)" and
+       "human-roleplay (outfits)"; read_manual characters contains
+       "- `human-default` (Human Standard) — no outfits" (the label of
+       human-default.json) and a human-roleplay line with "— outfits".
+  (am) delete + re-create under the same name (the correction path: a
+       character made on the wrong template is deleted and made again).
+       Turn 1 create_character "Demo Again" (human-roleplay, no outfits);
+       turn 2 delete_created it (cross-turn -> recreate_character row) and
+       create_character "Demo Again" again with one outfit and one NEW piece
+       "Demo Again Scarf". Journal newest-first: delete_character (items
+       [scarf]), recreate_character, delete_character (items []). The
+       undo's walk: the newest create deletes the row (absent), the
+       re-creation finds it absent and re-creates it, the oldest create
+       deletes it again -> Demo Again goes, nothing is foreign. So
+       discard_preview = exactly ['character "Demo Again" — 0 chat
+       messages, 0 memory rows of other characters name it, 1 outfit piece
+       it brought'] (one line for the two creating entries, the piece still
+       in the catalog, NO "exists again" line); undo reverses all 3 rows,
+       skipped [], complete True; afterwards Demo Again and the scarf are
+       absent — what the preview announced.
+
+  (an) update_character ADDS outfits (run 23). Demo Ragna (human-roleplay)
+       has "Daily" with a new piece "Demo Old Shirt" (top). Refused before
+       any write (no journal row, every table unchanged): "daily" (a name the
+       character has, any case), "Work" + "WORK" (given twice), item_id
+       "item_nope", an item_id whose item reveals a secret on hand-over, [].
+       get_character lists "outfits: Daily". Then Work = [NEW "Demo Work
+       Shirt" (top, "a grey linen shirt"), {item_id: the catalog scarf "a blue
+       silk scarf", not held}, "Demo Old Shirt" (held, same name + slot ->
+       reused)] and Festive (no pieces). By hand: 1 new, 2 existing; one
+       remove_outfits row: outfits = the 2 new set ids, inventory = sorted
+       [NEW, scarf] (the old shirt was held), items = [NEW]; Work pieces
+       [NEW, scarf, old shirt], text "wearing: a grey linen shirt, a blue
+       silk scarf" (the old shirt has no fragment). Undo: 1 reversed, nothing
+       skipped, complete, EVERY table as before (db_dump): NEW deleted, the
+       scarf only taken back from the inventory, it stays in the catalog.
+  (ao) run 24: an added "Evening" (new piece EVS) that the admin edits
+       afterwards is kept: skipped [changed since ["outfit Evening"], item
+       still in use EVS] (its piece stays with the kept set), not complete.
+       run 25: add_character_outfit stores "Crash Set" and the process ends;
+       the exact inverse never reaches the journal -> one pending row whose
+       inverse has names ["Crash Set"] and the new piece in items (journaled
+       as add_item returned it). Undo resolves it from that record:
+       complete, nothing skipped, every table as before the crash.
+  (ap) body slots (run 26/27), a FAKE package (same declarations as
+       smoke_world_dev_body_slots.py: hair color [blonde, red] allow_custom,
+       length [short, long], lora lora_select; eyes color [blue, green],
+       shape llm_generable false; facial_hair only gender=male). Demo Slots
+       (female, hair.color red): get_character fields [body_slots] = the
+       lines "hair: color=red [blonde|red|other]; length=- [short|long]" and
+       "eyes: color=- [blue|green]" (facial_hair does not apply, lora/shape
+       not fillable); the plain view says 2 attributes unset. Refused,
+       nothing written: facial_hair (does not apply; the refusal lists
+       "eyes, hair"), hair.lora, hair.length "medium", eyes.shape, eyes.color
+       " ". Accepted: hair {copper-red (custom), long} -> merged; journal
+       before {hair: {color: red, length: ABSENT}}, had_key True,
+       slots_present [hair], written {hair: {copper-red, long}}. Demo
+       Slotless (no body_slots key) with gender male + facial_hair + eyes in
+       one patch: facial_hair applies to the profile as it will be.
+       create_character with slot "tail" -> refused, no row; "Demo Born"
+       with hair.color blonde -> created, line names "hair.length,
+       eyes.color" unset. Undo: complete, every table as before — Demo
+       Slotless female again and WITHOUT a body_slots key. Run 27: eyes.color
+       blue, then the admin sets green -> skipped changed since
+       ["body_slots.eyes.color"], green stays.
 
 (h)/(u) patch world_ops._sanitize_map3d so that only the WRITER's call fails;
 the tool's own map3d pre-check calls the same function first and gets the
@@ -911,21 +1044,30 @@ check("(x) the human's tasks.md kept, skipped 'changed since'",
       and [s["reason"] for s in rep["skipped"]] == [wu.REASON_CHANGED], rep)
 wr.set_status(run11, "rollback_incomplete")
 
-# Shared soul section of a linked character -> refused.
+# Shared soul section of a linked character -> refused; its own section
+# -> written and journaled.
 from app.core import linked_characters  # noqa: E402
 _orig_owner = linked_characters.soul_owner
-linked_characters.soul_owner = (lambda n, s: "Demo Leader" if n == "Demo Other"
+linked_characters.soul_owner = (lambda n, s: "Demo Leader"
+                                if n == "Demo Other" and s == P_REL
                                 else _orig_owner(n, s))
 run12 = wr.create_run("misc", "m", "p", "u", 40, 300000)
 ctx12 = wt.ToolCtx(run_id=run12, turn=1)
 try:
     res = wt.run_tool(ctx12, "update_character",
                       {"name": "Demo Other", "patch": {"soul:character_personality": "x"}})
+    res_own = wt.run_tool(ctx12, "update_character",
+                          {"name": "Demo Other", "patch": {"soul:character_task": "own tasks"}})
 finally:
     linked_characters.soul_owner = _orig_owner
 check("(y) a linked character's shared section refused",
       not res.ok and "Demo Leader" in res.line
       and soul_writer.read_text("Demo Other", P_REL) == "calm\n", res)
+own_e = [e for e in wr.entries(run12) if (e.get("inverse") or {}).get("op")
+         == "restore_soul"]
+check("(y) a linked character's own section written and journaled",
+      res_own.ok and soul_writer.read_text("Demo Other", T_REL) == "own tasks\n"
+      and len(own_e) == 1, (res_own, own_e))
 
 # Home + schedule through update_character, then undo.
 h0 = wu.home_schedule_state("Demo Other")
@@ -962,6 +1104,9 @@ rep = wu.undo(run12)
 check("(y) undo: home and schedule as before",
       rep["complete"] and wu.home_schedule_state("Demo Other") == h0,
       (rep, wu.home_schedule_state("Demo Other"), h0))
+check("(y) undo: the own soul section as before",
+      soul_writer.read_text("Demo Other", T_REL) == "tasks by a human\n",
+      soul_writer.read_text("Demo Other", T_REL))
 wr.set_status(run12, "rolled_back")
 
 # apply_character contract (Task 1 acceptance): a False save is a ValueError;
@@ -1196,6 +1341,683 @@ result_ag = apply_character({"character_name": "Demo Other", "template": "human-
                                  {"item_id": "item_nope"}]}]})
 check("(ag) a skipped item_id is a warning in the apply result",
       any("item_nope" in w for w in result_ag.get("warnings") or []), result_ag)
+
+# ── Open points 1-3 (cross-turn delete, durable claim, outfits) ─────────
+import sqlite3  # noqa: E402
+
+from app.core.db import get_connection  # noqa: E402
+from app.models import chat as chat_model  # noqa: E402
+from app.models import memory as memory_model  # noqa: E402
+from app.models.character import get_user_characters_dir  # noqa: E402
+from app.models.inventory import get_item as _get_item  # noqa: E402
+
+#: Tables that are the journal itself (with the media lane's rows and
+#: baselines — run machinery, plan 2026-11-25-world-dev-free-media), SQLite's own counter, or the derived
+#: world height raster (a cache rastered from the terrain/height areas and
+#: places — app/models/heightfield.py "The grid ... is derived from those
+#: areas"; when it is rastered depends on which write came last).
+_DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "sqlite_sequence",
+              "world_heightfield", "world_dev_media", "world_dev_media_baseline"}
+#: Tables whose created_at/updated_at their writers always set to "now"
+#: (upsert_location, terrain.save_area, heightfield.save_height_area):
+#: technical SYSTEM stamps the readers do not return.
+_STAMP_TABLES = ("locations", "terrain_areas", "height_areas")
+
+
+def db_dump():
+    """Every row of every table, with its rowid, in rowid order."""
+    conn = get_connection()
+    out = {}
+    for (tbl,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                               "ORDER BY name").fetchall():
+        if tbl in _DUMP_SKIP:
+            continue
+        try:
+            rows = conn.execute(f'SELECT rowid, * FROM "{tbl}" ORDER BY rowid').fetchall()
+        except sqlite3.OperationalError:
+            rows = sorted(conn.execute(f'SELECT * FROM "{tbl}"').fetchall(), key=repr)
+        out[tbl] = [tuple(r) for r in rows]
+    return out
+
+
+def dump_diff(a, b, stamp_tables=()):
+    """Tables whose rows differ. For a table in stamp_tables the
+    created_at/updated_at columns are left out (see run 17)."""
+    out = []
+    for tbl in sorted(set(a) | set(b)):
+        ra, rb = a.get(tbl), b.get(tbl)
+        if tbl in stamp_tables and ra is not None and rb is not None:
+            cols = [c[1] for c in get_connection().execute(
+                f'PRAGMA table_info("{tbl}")').fetchall()]
+            drop = {i + 1 for i, c in enumerate(cols) if c in ("created_at", "updated_at")}
+            ra = [tuple(v for i, v in enumerate(r) if i not in drop) for r in ra]
+            rb = [tuple(v for i, v in enumerate(r) if i not in drop) for r in rb]
+        if ra != rb:
+            out.append(tbl)
+    return out
+
+
+def files_of(name):
+    root = get_user_characters_dir() / name
+    return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*"))} if root.exists() else None
+
+
+SQUARE = lambda x, z, s: [[x, z], [x + s, z], [x + s, z + s], [x, z + s]]  # noqa: E731
+
+print("run 17 (cross-turn delete: exact rollback, then discard)")
+run17 = wr.create_run("cross", "m", "p", "u", 40, 300000)
+t1 = wt.ToolCtx(run_id=run17, turn=1)
+res = wt.run_tool(t1, "create_location",
+                  {"data": {"name": "Demo Longhouse", "description": "long",
+                            "rooms": [{"name": "Hall"}]}, "x": 500, "z": 500})
+LH = (by_name("Demo Longhouse") or [{}])[0].get("id")
+res_a = wt.run_tool(t1, "add_terrain_area", {"kind": "water",
+                                             "polygon": SQUARE(600, 600, 50)})
+TA = (wr.entries(run17)[0].get("inverse") or {}).get("id")
+res_h = wt.run_tool(t1, "add_height_area", {"polygon": SQUARE(700, 700, 100),
+                                            "height_m": 4})
+HA = (wr.entries(run17)[0].get("inverse") or {}).get("id")
+res_c = wt.run_tool(t1, "create_character",
+                    {"data": {"character_name": "Demo Ragna", "template": "human-roleplay",
+                              "dialogue_style": "blunt", "character_personality": "proud",
+                              "outfits": [{"name": "Winter", "pieces": [
+                                  {"slots": ["outer"], "name": "Demo Fur Cloak",
+                                   "prompt_fragment": "a grey fur cloak"}]}]}})
+check("(ah) turn 1: four creates ok",
+      res.ok and res_a.ok and res_h.ok and res_c.ok and LH and TA and HA,
+      (res, res_a, res_h, res_c))
+CLOAK = ((next(e for e in wr.entries(run17) if e["tool"] == "create_character")
+          .get("inverse") or {}).get("items") or [None])[0]
+# Ragna's own memory with an embedding row: memory_embeddings has no
+# character column — it goes by ON DELETE CASCADE with its memory, and its
+# vector is a BLOB. The snapshot has to bring both back.
+memory_model.add_memory("Demo Ragna", "I came down from the north")
+mem_rowid = get_connection().execute(
+    "SELECT id FROM memories WHERE character_name='Demo Ragna'").fetchone()[0]
+get_connection().execute(
+    "INSERT INTO memory_embeddings (memory_id, model_id, vector, ts) VALUES (?, ?, ?, ?)",
+    (int(mem_rowid), "demo-model", bytes([0, 1, 2, 255]), "2026-01-01T00:00:00"))
+get_connection().commit()
+D1, F1 = db_dump(), files_of("Demo Ragna")
+check("(ah) fixture: one embedding row for Ragna's memory",
+      len(D1.get("memory_embeddings") or []) == 1, D1.get("memory_embeddings"))
+loc1, ta1, ha1 = (copy.deepcopy(get_location_by_id(LH)), terrain.get_area(TA),
+                  wt._height_area(HA))
+check("(ah) fixture: Ragna has a directory with soul files",
+      bool(F1) and any(k.startswith("soul/") for k in F1), F1 and sorted(F1))
+
+t2 = wt.ToolCtx(run_id=run17, turn=2)
+dels = [wt.run_tool(t2, "delete_created", {"kind": k, "id": i})
+        for k, i in (("location", LH), ("terrain", TA), ("height", HA),
+                     ("character", "Demo Ragna"))]
+check("(ah) turn 2: four cross-turn deletes ok, 'an earlier turn'",
+      all(d.ok and d.wrote and "an earlier turn" in d.line for d in dels), dels)
+check("(ah) all four gone, the embedding row with Ragna's memory",
+      get_location_by_id(LH) is None and terrain.get_area(TA) is None
+      and wt._height_area(HA) is None and not character_row_exists("Demo Ragna")
+      and not db_dump().get("memory_embeddings"))
+rows2 = wr.entries(run17, turn=2)
+check("(ah) turn 2 journal: recreate_location/terrain/height/character, done",
+      [e["inverse"].get("op") for e in reversed(rows2)]
+      == ["recreate_location", "recreate_terrain_area", "recreate_height_area",
+          "recreate_character"] and all(e["state"] == "done" for e in rows2), rows2)
+check("(ah) the turn-1 creates are not undone",
+      len(wr.entries(run17, turn=1)) == 4, wr.entries(run17, turn=1))
+rep = wu.undo(run17, turn=2)
+check("(ah) rollback of turn 2 complete, 4 reversed",
+      rep["complete"] and len(rep["reversed"]) == 4, rep)
+D2, F2 = db_dump(), files_of("Demo Ragna")
+# Expected: byte-equal rows everywhere (same rowids). The ONE exception are
+# the created_at/updated_at stamps of _STAMP_TABLES (see there); the
+# readers' records are compared in full below.
+check("(ah) rollback: every table row-equal (writer stamps aside)",
+      dump_diff(D1, D2, stamp_tables=_STAMP_TABLES) == [],
+      [(t, set(D1.get(t) or []) ^ set(D2.get(t) or [])) for t in
+       dump_diff(D1, D2, stamp_tables=_STAMP_TABLES)])
+check("(ah) rollback: the readers' records equal (diff_keys empty)",
+      wu.diff_keys(loc1, get_location_by_id(LH)) == ({}, {})
+      and wu.diff_keys(ta1, terrain.get_area(TA)) == ({}, {})
+      and wu.diff_keys(ha1, wt._height_area(HA)) == ({}, {}),
+      (wu.diff_keys(loc1, get_location_by_id(LH)),
+       wu.diff_keys(ta1, terrain.get_area(TA)), wu.diff_keys(ha1, wt._height_area(HA))))
+check("(ah) rollback: Ragna's files byte-equal", F2 == F1,
+      (sorted(F1 or {}), sorted(F2 or {})))
+
+t3 = wt.ToolCtx(run_id=run17, turn=3)
+d3 = [wt.run_tool(t3, "delete_created", {"kind": k, "id": i})
+      for k, i in (("character", "Demo Ragna"), ("location", LH))]
+check("(ah) turn 3: cross-turn deletes again ok", all(d.ok for d in d3), d3)
+prev17 = wu.discard_preview(run17)
+check("(ah) preview: only the two areas (location and Ragna are net absent)",
+      prev17 == [f"terrain area {TA} (water)", f"height area {HA} (4.0 m)"], prev17)
+rep = wu.undo(run17)
+check("(ah) discard complete", rep["complete"], rep)
+check("(ah) discard: everything absent, the cloak deleted",
+      get_location_by_id(LH) is None and terrain.get_area(TA) is None
+      and wt._height_area(HA) is None and not character_row_exists("Demo Ragna")
+      and files_of("Demo Ragna") is None and CLOAK and _get_item(CLOAK) is None,
+      (CLOAK, files_of("Demo Ragna")))
+wr.set_status(run17, "rolled_back")
+
+print("run 18 (create_character: the claim is durable)")
+run18 = wr.create_run("crash", "m", "p", "u", 40, 300000)
+ctx18 = wt.ToolCtx(run_id=run18, turn=1)
+
+
+class Crash(BaseException):
+    """The process ends: nothing after this point runs."""
+
+
+def journal_inverse(name):
+    return next((e.get("inverse") for e in wr.entries(run18)
+                 if (e.get("inverse") or {}).get("name") == name), None)
+
+
+_orig_complete = wr.complete
+
+
+def _complete_crashes(*a, **k):
+    raise Crash()
+
+
+def crash_call(name, patches):
+    """run_tool with wr.complete crashing (the row stays pending) plus the
+    given (module, attr, replacement) patches."""
+    saved = [(m, a, getattr(m, a)) for m, a, _f in patches]
+    wr.complete = _complete_crashes
+    for m, a, f in patches:
+        setattr(m, a, f)
+    try:
+        wt.run_tool(ctx18, "create_character",
+                    {"data": {"character_name": name, "template": "human-roleplay",
+                              "outfits": [{"name": "Daily", "pieces": [
+                                  {"slots": ["top"], "name": f"{name} Shirt",
+                                   "prompt_fragment": "a plain shirt"}]}]}})
+        return False
+    except Crash:
+        return True
+    finally:
+        wr.complete = _orig_complete
+        for m, a, f in saved:
+            setattr(m, a, f)
+
+
+seen = {}
+
+
+def _before_generable(*a, **k):   # apply_character's first step, before the claim
+    raise Crash()
+
+
+def _save_sees_claim(name, profile, **k):   # the claim, then the save
+    seen["at_save"] = copy.deepcopy(journal_inverse(name))
+    raise Crash()
+
+
+import app.models.inventory as inventory_model  # noqa: E402
+_orig_add_inv = inventory_model.add_to_inventory
+
+
+def _hand_over_sees_item(*a, **k):   # after add_item, at the hand-over
+    seen["at_hand_over"] = copy.deepcopy(journal_inverse("Demo After"))
+    _orig_add_inv(*a, **k)
+    raise Crash()
+
+
+c1 = crash_call("Demo Unclaimed", [(world_dev_apply, "_row_exists", _before_generable)])
+c2 = crash_call("Demo Before", [(world_dev_apply, "save_character_profile",
+                                 _save_sees_claim)])
+c3 = crash_call("Demo After", [(inventory_model, "add_to_inventory",
+                                _hand_over_sees_item)])
+check("(ai) three simulated crashes", c1 and c2 and c3, (c1, c2, c3))
+check("(ai) at the profile save the claim is already in the journal",
+      (seen.get("at_save") or {}).get("claimed") is True, seen.get("at_save"))
+items_c3 = (seen.get("at_hand_over") or {}).get("items") or []
+check("(ai) at the hand-over the new piece is already in the journal",
+      (seen.get("at_hand_over") or {}).get("claimed") is True and len(items_c3) == 1,
+      seen.get("at_hand_over"))
+pend = {e["inverse"]["name"]: e for e in wr.entries(run18)}
+check("(ai) three pending rows; only the unclaimed one has no claim",
+      sorted(pend) == ["Demo After", "Demo Before", "Demo Unclaimed"]
+      and all(e["state"] == "pending" for e in pend.values())
+      and not pend["Demo Unclaimed"]["inverse"].get("claimed")
+      and pend["Demo Before"]["inverse"].get("claimed") is True
+      and pend["Demo After"]["inverse"].get("claimed") is True, pend)
+check("(ai) storage: no Demo Unclaimed / Demo Before row, Demo After stored",
+      not character_row_exists("Demo Unclaimed") and not character_row_exists("Demo Before")
+      and character_row_exists("Demo After"))
+# An admin creates "Demo Unclaimed" by hand before the discard: never touched.
+apply_character({"character_name": "Demo Unclaimed", "template": "human-roleplay"})
+rep = wu.undo(run18)
+reasons18 = {pend_name: [s["reason"] for s in rep["skipped"]
+                         if s["seq"] == pend[pend_name]["seq"]] for pend_name in pend}
+check("(ai) undo: unclaimed 'not written', before-save 'already gone', after-save deleted",
+      reasons18 == {"Demo Unclaimed": ["not written"], "Demo Before": ["already gone"],
+                    "Demo After": []}
+      and rep["reversed"] == [pend["Demo After"]["seq"]], (reasons18, rep))
+check("(ai) undo complete", rep["complete"], rep)
+check("(ai) Demo After and its new piece gone; the admin's Demo Unclaimed stays",
+      bool(items_c3) and not character_row_exists("Demo After")
+      and _get_item(items_c3[0]) is None and character_row_exists("Demo Unclaimed"))
+wr.set_status(run18, "rolled_back")
+
+print("run 19 (cross-turn delete refusals)")
+run19 = wr.create_run("refuse", "m", "p", "u", 40, 300000)
+u1 = wt.ToolCtx(run_id=run19, turn=1)
+u2 = wt.ToolCtx(run_id=run19, turn=2)
+for nm in ("Demo Talker", "Demo Remembered"):
+    wt.run_tool(u1, "create_character",
+                {"data": {"character_name": nm, "template": "human-roleplay"}})
+wt.run_tool(u1, "create_location", {"data": {"name": "Demo Gallery Hut",
+                                             "rooms": [{"name": "Room"}]}})
+GH = by_name("Demo Gallery Hut")[0]["id"]
+chat_model.save_message({"role": "assistant", "content": "hello"},
+                        character_name="Demo Talker")
+memory_model.add_memory("Demo Other", "I met Demo Remembered at the lake")
+gdir = STORAGE / "world_gallery" / GH
+gdir.mkdir(parents=True)
+(gdir / "day.png").write_bytes(b"png")
+n19 = len(wr.entries(run19))
+r_t = wt.run_tool(u2, "delete_created", {"kind": "character", "id": "Demo Talker"})
+r_m = wt.run_tool(u2, "delete_created", {"kind": "character", "id": "Demo Remembered"})
+r_g = wt.run_tool(u2, "delete_created", {"kind": "location", "id": GH})
+check("(aj) a character with chat messages -> refused, stays",
+      not r_t.ok and "1 chat messages" in r_t.line and character_row_exists("Demo Talker"),
+      r_t)
+check("(aj) a character other memories name -> refused, stays",
+      not r_m.ok and "1 memory rows" in r_m.line
+      and character_row_exists("Demo Remembered"), r_m)
+check("(aj) a place with gallery images -> refused, stays",
+      not r_g.ok and f"world_gallery/{GH}" in r_g.line
+      and get_location_by_id(GH) is not None, r_g)
+check("(aj) no refused call left a write row", len(wr.entries(run19)) == n19,
+      wr.entries(run19))
+r_p = wt.run_tool(u2, "delete_created", {"kind": "character", "id": "Demo Other"})
+check("(aj) a pre-existing character -> refused", not r_p.ok
+      and "not created by this run" in r_p.line, r_p)
+rep = wu.undo(run19)
+check("(aj) undo complete", rep["complete"], rep)
+wr.set_status(run19, "rolled_back")
+
+print("run 20 (a foreign character under a deleted name)")
+run20 = wr.create_run("foreign", "m", "p", "u", 40, 300000)
+v1 = wt.ToolCtx(run_id=run20, turn=1)
+v2 = wt.ToolCtx(run_id=run20, turn=2)
+wt.run_tool(v1, "create_character", {"data": {"character_name": "Demo Twin",
+                                              "template": "human-roleplay"}})
+res = wt.run_tool(v2, "delete_created", {"kind": "character", "id": "Demo Twin"})
+check("(ak) cross-turn delete ok", res.ok and not character_row_exists("Demo Twin"), res)
+apply_character({"character_name": "Demo Twin", "template": "human-roleplay",
+                 "dialogue_style": "the admin's"})
+prev20 = wu.discard_preview(run20)
+check("(ak) preview names the foreign Twin, no deletion line",
+      prev20 == ["character Demo Twin was deleted by this run and exists again — "
+                 "the discard leaves it alone"], prev20)
+rep = wu.undo(run20)
+check("(ak) undo: both rows skipped 'changed since', not complete",
+      [s["reason"] for s in rep["skipped"]] == ["changed since", "changed since"]
+      and rep["reversed"] == [] and rep["complete"] is False, rep)
+check("(ak) the admin's Demo Twin stays",
+      character_row_exists("Demo Twin")
+      and get_character_profile("Demo Twin").get("dialogue_style") == "the admin's")
+wr.set_status(run20, "rollback_incomplete")
+
+print("run 21 (outfits only on a template with the outfit system)")
+# Expected from shared/templates/character/*.json features.outfit_system_enabled:
+# human-default false, human-roleplay true, animal-default true.
+check("(al) character_templates(): outfits per template",
+      {t["name"]: t["outfits"] for t in wt.character_templates()}
+      == {"animal-default": True, "human-default": False, "human-roleplay": True},
+      wt.character_templates())
+run21 = wr.create_run("outfits", "m", "p", "u", 40, 300000)
+w1 = wt.ToolCtx(run_id=run21, turn=1)
+res = wt.run_tool(w1, "create_character",
+                  {"data": {"character_name": "Demo Plain", "template": "human-default",
+                            "outfits": [{"name": "Daily", "pieces": [
+                                {"slots": ["top"], "name": "Demo Plain Shirt"}]},
+                                        {"name": "Work"}]}})
+check("(al) human-default + outfits -> refused, names the templates with outfits",
+      not res.ok and not res.wrote and "no outfit system" in res.line
+      and "animal-default, human-roleplay" in res.line
+      and not character_row_exists("Demo Plain"), res)
+check("(al) no write row", wr.entries(run21) == [], wr.entries(run21))
+res = wt.run_tool(w1, "create_character",
+                  {"data": {"character_name": "Demo Plain", "template": "human-default",
+                            "outfits": []}})
+check("(al) human-default with an empty outfit list -> ok (nothing dropped)",
+      res.ok and character_row_exists("Demo Plain") and "dropped" not in res.line, res)
+res = wt.run_tool(w1, "create_character",
+                  {"data": {"character_name": "Demo Full",
+                            "outfits": [{"name": "Daily"}]}})
+# No template given -> human-roleplay (the full NPC template, it has the outfit
+# system), so the outfit is not refused.
+check("(al) no template -> human-roleplay, outfits accepted",
+      res.ok and get_character_profile("Demo Full").get("template") == "human-roleplay"
+      and "no outfit system" not in res.line, res)
+res = wt.run_tool(w1, "update_character",
+                  {"name": "Demo Plain", "patch": {"outfits": [{"name": "Daily"}]}})
+check("(al) update_character outfits on human-default -> refused 'no outfit system'",
+      not res.ok and "no outfit system" in res.line, res)
+res = wt.run_tool(w1, "update_character",
+                  {"name": "Demo Other", "patch": {"outfits": [{"name": "Daily"}]}})
+# Demo Other has no outfit "Daily" -> update_character ADDS it (run 23 checks
+# the add in detail); the undo of run 21 below takes it back.
+check("(al) update_character outfits on human-roleplay -> added",
+      res.ok and res.line == 'updated character "Demo Other": outfits added: Daily '
+      # Task 9: only the outfits group was touched, and it has one now.
+      "(0 new piece(s), 0 existing); complete", res)
+res = wt.run_tool(w1, "create_character",
+                  {"data": {"character_name": "Demo Nope", "template": "npc-temporary"}})
+check("(al) the template refusal says per template whether it has outfits",
+      not res.ok and "human-default (no outfits)" in res.line
+      and "human-roleplay (outfits)" in res.line, res)
+res = wt.run_tool(w1, "read_manual", {"section": "characters"})
+check("(al) manual_characters lists the templates with/without outfits",
+      res.ok and "- `human-default` (Human Standard) — no outfits" in res.line
+      and "- `human-roleplay` (" in res.line and "— outfits" in res.line, res.line[:600])
+rep = wu.undo(run21)
+check("(al) undo complete, Demo Plain and Demo Full gone",
+      rep["complete"] and not character_row_exists("Demo Plain")
+      and not character_row_exists("Demo Full"), rep)
+wr.set_status(run21, "rolled_back")
+
+print("run 22 (delete + re-create the same name: preview equals undo)")
+run22 = wr.create_run("again", "m", "p", "u", 40, 300000)
+x1 = wt.ToolCtx(run_id=run22, turn=1)
+x2 = wt.ToolCtx(run_id=run22, turn=2)
+r1 = wt.run_tool(x1, "create_character", {"data": {"character_name": "Demo Again",
+                                                   "template": "human-roleplay"}})
+r2 = wt.run_tool(x2, "delete_created", {"kind": "character", "id": "Demo Again"})
+r3 = wt.run_tool(x2, "create_character",
+                 {"data": {"character_name": "Demo Again", "template": "human-roleplay",
+                           "outfits": [{"name": "Daily", "pieces": [
+                               {"slots": ["neck"], "name": "Demo Again Scarf",
+                                "prompt_fragment": "a red wool scarf"}]}]}})
+check("(am) create, cross-turn delete, create again: all ok",
+      r1.ok and r2.ok and r3.ok and character_row_exists("Demo Again"), (r1, r2, r3))
+rows22 = wr.entries(run22)
+check("(am) journal newest-first: delete_character, recreate_character, delete_character",
+      [(e.get("inverse") or {}).get("op") for e in rows22]
+      == ["delete_character", "recreate_character", "delete_character"], rows22)
+SCARF = ((rows22[0].get("inverse") or {}).get("items") or [None])[0]
+check("(am) the scarf is a new catalog piece", SCARF and _get_item(SCARF) is not None,
+      SCARF)
+prev22 = wu.discard_preview(run22)
+check("(am) preview: Demo Again goes with its piece, no 'exists again' line",
+      prev22 == ['character "Demo Again" — 0 chat messages, 0 memory rows of '
+                 "other characters name it, 1 outfit piece it brought"], prev22)
+rep = wu.undo(run22)
+check("(am) discard complete, 3 reversed, nothing skipped",
+      rep["complete"] and len(rep["reversed"]) == 3 and rep["skipped"] == [], rep)
+check("(am) what the preview announced: Demo Again and the scarf are gone",
+      not character_row_exists("Demo Again") and _get_item(SCARF) is None,
+      (character_row_exists("Demo Again"), _get_item(SCARF)))
+wr.set_status(run22, "rolled_back")
+
+print("run 23 (update_character adds outfits to an existing character)")
+from app.models.character import (add_character_outfit,  # noqa: E402
+                                  get_character_outfits)
+apply_character({"character_name": "Demo Ragna", "template": "human-roleplay",
+                 "outfits": [{"name": "Daily", "pieces": [
+                     {"slots": ["top"], "name": "Demo Old Shirt"}]}]})
+OLD = next(iid for iid in wu.inventory_entries("Demo Ragna")
+           if (_get_item(iid) or {}).get("name") == "Demo Old Shirt")
+SCARF_REF = add_item(name="Demo Blue Scarf", category="outfit_piece",
+                     prompt_fragment="a blue silk scarf",
+                     outfit_piece={"slots": ["neck"], "covers": [],
+                                   "partially_covers": []})["id"]
+SECRET_REF = add_item(name="Demo Locket", category="outfit_piece",
+                      prompt_fragment="a silver locket",
+                      reveals_secret={"owner": "Demo Other", "secret_id": "s1"},
+                      outfit_piece={"slots": ["neck"], "covers": [],
+                                    "partially_covers": []})["id"]
+dump23 = db_dump()
+run23 = wr.create_run("dress", "m", "p", "u", 40, 300000)
+d1 = wt.ToolCtx(run_id=run23, turn=1)
+for label, outfits, want in (
+        ("(an) a name the character has (any case) -> refused",
+         [{"name": "daily"}], "has an outfit 'daily' already"),
+        ("(an) a name given twice -> refused",
+         [{"name": "Work"}, {"name": "WORK"}], "is given twice"),
+        ("(an) an unknown item_id -> refused",
+         [{"name": "Work", "pieces": [{"item_id": "item_nope"}]}],
+         "no outfit piece with item_id 'item_nope'"),
+        ("(an) a piece that reveals a secret -> refused",
+         [{"name": "Work", "pieces": [{"item_id": SECRET_REF}]}], "reveals a secret"),
+        ("(an) an empty list -> refused", [], "must not be empty")):
+    res = wt.run_tool(d1, "update_character",
+                      {"name": "Demo Ragna", "patch": {"outfits": outfits}})
+    check(label, not res.ok and not res.wrote and want in res.line, res)
+check("(an) refusals wrote nothing", wr.entries(run23) == [] and dump_diff(dump23, db_dump()) == [],
+      dump_diff(dump23, db_dump()))
+res = wt.run_tool(d1, "get_character", {"name": "Demo Ragna"})
+check("(an) get_character names the outfits", res.ok and "\noutfits: Daily" in res.line, res.line)
+# By hand: Work = one NEW piece (Demo Work Shirt), the catalog scarf by id
+# (not held yet -> handed over), Demo Old Shirt (held, same name + slot ->
+# reused); Festive has no pieces. 1 new, 2 existing.
+res = wt.run_tool(d1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+    {"name": "Work", "pieces": [
+        {"slots": ["top"], "name": "Demo Work Shirt", "prompt_fragment": "a grey linen shirt"},
+        {"item_id": SCARF_REF},
+        {"slots": ["top"], "name": "Demo Old Shirt"}]},
+    {"name": "Festive"}]}})
+check("(an) outfits added", res.ok and res.wrote and res.line
+      == 'updated character "Demo Ragna": outfits added: Work, Festive '
+      # Task 9: only the outfits group was touched, and it has outfits now.
+      "(1 new piece(s), 2 existing); complete", res)
+rows23 = wr.entries(run23)
+inv23 = (rows23[0].get("inverse") or {}) if rows23 else {}
+NEW23 = (inv23.get("items") or [None])[0]
+outs23 = {o["name"]: o for o in get_character_outfits("Demo Ragna")}
+check("(an) one remove_outfits row: 2 sets, inventory = new piece + scarf, items = new piece",
+      len(rows23) == 1 and inv23.get("op") == "remove_outfits"
+      and sorted(inv23.get("outfits") or []) == sorted([outs23["Work"]["id"],
+                                                        outs23["Festive"]["id"]])
+      and inv23.get("inventory") == sorted([NEW23, SCARF_REF])
+      and inv23.get("items") == [NEW23] and _get_item(NEW23) is not None, rows23)
+check("(an) Work: pieces new, scarf, old shirt; text from the fragments",
+      outs23["Work"].get("pieces") == [NEW23, SCARF_REF, OLD]
+      and outs23["Work"].get("outfit") == "wearing: a grey linen shirt, a blue silk scarf"
+      and outs23["Festive"].get("pieces") == [], outs23)
+check("(an) Daily untouched", sorted(outs23) == ["Daily", "Festive", "Work"])
+rep = wu.undo(run23)
+check("(an) undo: 1 reversed, nothing skipped, complete",
+      rep["complete"] and len(rep["reversed"]) == 1 and rep["skipped"] == [], rep)
+check("(an) undo exact: every table as before (new piece gone, scarf back in the "
+      "catalog only)", dump_diff(dump23, db_dump()) == []
+      and _get_item(NEW23) is None and _get_item(SCARF_REF) is not None,
+      dump_diff(dump23, db_dump()))
+wr.set_status(run23, "rolled_back")
+
+print("run 24 (added outfit changed since; a crash inside the write)")
+run24 = wr.create_run("dress2", "m", "p", "u", 40, 300000)
+e1 = wt.ToolCtx(run_id=run24, turn=1)
+res = wt.run_tool(e1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+    {"name": "Evening", "pieces": [{"slots": ["neck"], "name": "Demo Evening Scarf"}]}]}})
+EVS = ((wr.entries(run24)[0].get("inverse") or {}).get("items") or [None])[0]
+ev = next(o for o in get_character_outfits("Demo Ragna") if o["name"] == "Evening")
+# The admin edits the added set afterwards: it is kept, with its piece.
+add_character_outfit("Demo Ragna", {"id": ev["id"], "locations": ["Demo Inn"]})
+rep = wu.undo(run24)
+check("(ao) undo keeps the changed set and its piece: changed since + item in use",
+      [(s["reason"], s.get("keys"), s.get("item")) for s in rep["skipped"]]
+      == [("changed since", ["outfit Evening"], None), ("item still in use", None, EVS)]
+      and rep["complete"] is False, rep)
+check("(ao) Evening and its piece stay",
+      any(o["name"] == "Evening" for o in get_character_outfits("Demo Ragna"))
+      and EVS in wu.inventory_entries("Demo Ragna") and _get_item(EVS) is not None)
+wr.set_status(run24, "rollback_incomplete")
+
+run25 = wr.create_run("dress3", "m", "p", "u", 40, 300000)
+f1 = wt.ToolCtx(run_id=run25, turn=1)
+dump25 = db_dump()
+_orig_add_outfit = world_dev_apply.add_character_outfit
+_orig_attach = wr.attach
+
+
+def _outfit_then_crash(*a, **k):    # the set is stored, then the process ends
+    _orig_add_outfit(*a, **k)
+    raise Crash()
+
+
+def _attach_no_exact(run_id, seq, target_id, inverse, before=None):
+    # The exact inverse (with "outfits") never reaches the journal.
+    if isinstance(inverse, dict) and "outfits" in inverse:
+        raise Crash()
+    return _orig_attach(run_id, seq, target_id, inverse, before)
+
+
+world_dev_apply.add_character_outfit = _outfit_then_crash
+wr.attach = _attach_no_exact
+try:
+    wt.run_tool(f1, "update_character", {"name": "Demo Ragna", "patch": {"outfits": [
+        {"name": "Crash Set", "pieces": [{"slots": ["feet"], "name": "Demo Crash Shoes"}]}]}})
+    crashed = False
+except Crash:
+    crashed = True
+finally:
+    world_dev_apply.add_character_outfit = _orig_add_outfit
+    wr.attach = _orig_attach
+rows25 = wr.entries(run25)
+pinv = (rows25[0].get("inverse") or {}) if rows25 else {}
+SHOES = (pinv.get("items") or [None])[0]
+check("(ao) crash: one pending row, inverse without exact ids, the new piece recorded",
+      crashed and len(rows25) == 1 and rows25[0]["state"] == "pending"
+      and "outfits" not in pinv and pinv.get("names") == ["Crash Set"]
+      and SHOES is not None and _get_item(SHOES) is not None
+      and any(o["name"] == "Crash Set" for o in get_character_outfits("Demo Ragna")),
+      rows25)
+rep = wu.undo(run25)
+check("(ao) undo of the pending row: complete, every table as before the crash",
+      rep["complete"] and rep["skipped"] == [] and dump_diff(dump25, db_dump()) == [],
+      (rep, dump_diff(dump25, db_dump())))
+wr.set_status(run25, "rolled_back")
+
+print("run 26 (body slots from a package declaration)")
+# A FAKE species package (no dependency on the private packs), the same
+# declarations as scripts/smoke_world_dev_body_slots.py:
+#   hair   color select [blonde, red] allow_custom; length select [short, long];
+#          lora lora_select (not fillable)
+#   eyes   color select [blue, green]; shape llm_generable false (not fillable)
+#   facial_hair  applies_to gender=male; style select [short beard]
+from app.models.character_template import clear_template_cache  # noqa: E402
+from app.plugins import registry  # noqa: E402
+from app.plugins.registry import BodySlotSpec, Package  # noqa: E402
+from app.core.body_slots import set_slot_value  # noqa: E402
+
+registry.clear_registry()
+registry.register_package(Package(
+    id="smoke_species", dir=STORAGE, manifest={}, apply_to=["human-roleplay"],
+    body_slots=[
+        BodySlotSpec(id="hair", package_id="smoke_species", attributes={
+            "color": {"type": "select", "options": ["blonde", "red"], "allow_custom": True},
+            "length": {"type": "select", "options": ["short", "long"]},
+            "lora": {"type": "lora_select"}}),
+        BodySlotSpec(id="eyes", package_id="smoke_species", attributes={
+            "color": {"type": "select", "options": ["blue", "green"]},
+            "shape": {"type": "select", "options": ["round", "almond"],
+                      "llm_generable": False}}),
+        BodySlotSpec(id="facial_hair", package_id="smoke_species",
+                     applies_to={"gender": ["male"]}, attributes={
+                         "style": {"type": "select", "options": ["short beard"]}}),
+    ]))
+clear_template_cache()
+apply_character({"character_name": "Demo Slots", "template": "human-roleplay",
+                 "gender": "female", "body_slots": {"hair": {"color": "red"}}})
+apply_character({"character_name": "Demo Slotless", "template": "human-roleplay",
+                 "gender": "female"})
+check("(ap) fixture: Demo Slots hair red, Demo Slotless without a body_slots key",
+      get_character_profile("Demo Slots").get("body_slots") == {"hair": {"color": "red"}}
+      and "body_slots" not in get_character_profile("Demo Slotless"))
+run26 = wr.create_run("body", "m", "p", "u", 40, 300000)
+g1 = wt.ToolCtx(run_id=run26, turn=1)
+res = wt.run_tool(g1, "get_character", {"name": "Demo Slots", "fields": ["body_slots"]})
+# By hand: female -> hair, eyes (facial_hair is male only); lora / shape are
+# not fillable; hair.color red, the rest unset.
+check("(ap) get_character fields [body_slots]: the schema",
+      res.ok and res.line.split("\n")[1:] == [
+          "body slots (slot: attribute=value [allowed]; - = unset):",
+          "hair: color=red [blonde|red|other]; length=- [short|long]",
+          "eyes: color=- [blue|green]"], res.line)
+res = wt.run_tool(g1, "get_character", {"name": "Demo Slots"})
+check("(ap) get_character: 2 attributes unset (hair.length, eyes.color)",
+      res.ok and "body slots: 2 attribute(s) unset" in res.line, res.line)
+dump26 = db_dump()
+for label, body, want in (
+        ("(ap) a slot that does not apply (male only) -> refused",
+         {"facial_hair": {"style": "short beard"}},
+         "body slot 'facial_hair' does not apply to this character — slots: eyes, hair"),
+        ("(ap) a lora attribute -> refused",
+         {"hair": {"lora": "x.safetensors"}}, "attributes: color, length"),
+        ("(ap) a value outside the options -> refused",
+         {"hair": {"length": "medium"}}, "body_slots.hair.length must be one of: short, long"),
+        ("(ap) a not llm-generable attribute -> refused",
+         {"eyes": {"shape": "round"}}, "attributes: color"),
+        ("(ap) an empty value -> refused", {"eyes": {"color": " "}}, "non-empty string")):
+    res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {"body_slots": body}})
+    check(label, not res.ok and not res.wrote and want in res.line, res)
+check("(ap) refusals wrote nothing", wr.entries(run26) == []
+      and dump_diff(dump26, db_dump()) == [], dump_diff(dump26, db_dump()))
+res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {
+    "body_slots": {"hair": {"color": "copper-red", "length": "long"}}}})
+check("(ap) hair merged: copper-red (custom allowed) + long",
+      # Task 9: the body_slots group was touched; the eyes slot of the fake
+      # package applies to Demo Slots and its color is still unset.
+      res.ok and res.line == 'updated character "Demo Slots": body slots hair.color, hair.length'
+      "; missing: body slots unset: eyes.color"
+      and get_character_profile("Demo Slots")["body_slots"]
+      == {"hair": {"color": "copper-red", "length": "long"}}, res)
+bs_row = wr.entries(run26)[0]
+check("(ap) journal: before red/ABSENT, written copper-red/long, had_key, slot present",
+      bs_row["inverse"] == {"op": "restore_body_slots", "name": "Demo Slots",
+                            "before": {"hair": {"color": "red", "length": wu.ABSENT}},
+                            "had_key": True, "slots_present": ["hair"]}
+      and bs_row["written"] == {"slots": {"hair": {"color": "copper-red", "length": "long"}}},
+      bs_row)
+# Gender male in the same patch makes facial_hair apply (checked against the
+# profile as it will be).
+res = wt.run_tool(g1, "update_character", {"name": "Demo Slotless", "patch": {
+    "gender": "male", "body_slots": {"facial_hair": {"style": "short beard"},
+                                     "eyes": {"color": "green"}}}})
+check("(ap) gender + male-only slot in one patch",
+      res.ok and get_character_profile("Demo Slotless").get("body_slots")
+      == {"facial_hair": {"style": "short beard"}, "eyes": {"color": "green"}}, res)
+res = wt.run_tool(g1, "create_character", {"data": {
+    "character_name": "Demo Tail", "gender": "female", "body_slots": {"tail": {"length": "long"}}}})
+check("(ap) create_character with a slot that does not apply -> refused, nothing created",
+      not res.ok and "body slot 'tail' does not apply" in res.line
+      and not character_row_exists("Demo Tail"), res)
+res = wt.run_tool(g1, "create_character", {"data": {
+    "character_name": "Demo Born", "gender": "female",
+    "body_slots": {"hair": {"color": "blonde"}}}})
+check("(ap) create_character names the unset slots",
+      res.ok and "; body slots unset: hair.length, eyes.color" in res.line
+      and get_character_profile("Demo Born").get("body_slots") == {"hair": {"color": "blonde"}},
+      res)
+rep = wu.undo(run26)
+# characters.updated_at is the SYSTEM stamp of the restoring save ("now"):
+# compared, it failed whenever the undo crossed a second boundary. Every
+# other column (profile_json, config_json, ...) is still compared exactly.
+check("(ap) undo complete, nothing skipped", rep["complete"] and rep["skipped"] == [], rep)
+check("(ap) undo exact: every table as before (Demo Slotless without body_slots key, "
+      "female; Demo Slots hair red)", dump_diff(dump26, db_dump(), ("characters",)) == []
+      and "body_slots" not in get_character_profile("Demo Slotless")
+      and get_character_profile("Demo Slots")["body_slots"] == {"hair": {"color": "red"}},
+      dump_diff(dump26, db_dump(), ("characters",)))
+wr.set_status(run26, "rolled_back")
+run27 = wr.create_run("body2", "m", "p", "u", 40, 300000)
+h1 = wt.ToolCtx(run_id=run27, turn=1)
+res = wt.run_tool(h1, "update_character", {"name": "Demo Slots", "patch": {
+    "body_slots": {"eyes": {"color": "blue"}}}})
+set_slot_value("Demo Slots", "eyes", "color", "green")   # the admin, afterwards
+rep = wu.undo(run27)
+check("(ap) changed since: the admin's value stays",
+      res.ok and [(s["reason"], s.get("keys")) for s in rep["skipped"]]
+      == [("changed since", ["body_slots.eyes.color"])] and rep["complete"] is False
+      and get_character_profile("Demo Slots")["body_slots"]["eyes"] == {"color": "green"},
+      (res, rep))
+wr.set_status(run27, "rollback_incomplete")
 
 print()
 if failures:

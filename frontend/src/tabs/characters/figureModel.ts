@@ -481,6 +481,9 @@ export interface CutBuild {
   /** What a manual Build re-runs of a failure (an automatic Build skips it): "cut" — the pattern is cut again, then
    *  the texture is made; "jobs" — only the image jobs that did not pass; "" — nothing (e.g. no item picture). */
   retry?: '' | 'cut' | 'jobs'
+  /** A rejected answer the same request would get again (same inputs, seed and backends): no Build renders it; the
+   *  texture dialog's Redo renders a new seed. */
+  held?: boolean
   /** Where a running flow is ("cut", "back_view", "upscale", "front", "back", "post", "apply"). */
   step: string
 }
@@ -506,6 +509,10 @@ export interface TemplateCut {
 export function cutBuildFailedLine(b: CutBuild, t: Tr = EN): string {
   const reason = t(b.reason || 'no reason')
   const n = String(b.jobs || 0)
+  if (b.held) {
+    return t('Texture from cut rejected: {reason} — a Build would send the same request again, so it renders nothing; Redo in the texture dialog tries a new seed')
+      .replace('{reason}', reason)
+  }
   if (b.retry === 'cut') {
     return t('Texture from cut failed: {reason} — an automatic Build skips it; a click on Build cuts the pattern again, then makes the texture (+{n} image jobs)')
       .replace('{reason}', reason).replace('{n}', n)

@@ -57,7 +57,13 @@ Expected values derived by hand:
      (commit baac1102c, the module read by ``git show`` and run on the same fixture: the pre-fix proof) left them at
      ±0.06; the gap a side 0.06 - 0.03 = 30 mm -> 10.9 mm. The fit is accepted, every cut gate 0 / ok, and the cut's
      footprint at the heel (cut-frame x <= 0.02 m) stands at ±0.040944 too — the cut and the walls agree.
-[S7] versions: ``garment_shell.SHELL_VERSION`` 8 (A219 set 5, A220 6, A226 7, A235 8), ``footwear_fit.FOOTWEAR_FIT_VERSION`` 20.
+     Since fit version 24 (footwear_fit.TAPER_SHARE_SLOPE_MAX, scripts/smoke_footwear_inside_seen.py) the share is the
+     majorant of slope 0.2 / reach per raw unit, reach = the clog's wall half 0.04 raw -> 5: the narrowed box ends at
+     the station x1 = 0.046778 raw (43 stations of 0.0010879; share 1 from there), so the heel end's share is
+     max(1 / factor, 1 - 5 x1) = 0.766110 and its walls (the shoe's rearmost millimetre) stand at
+     0.04 · k · factor · 0.766110 = ±0.046041 (+-2e-4) — the step of 0.32 within one station became a ramp; every
+     vertex behind body x -0.045 stays inside the uniform ±0.06, and the footprint at the heel stays within the walls.
+[S7] versions: ``garment_shell.SHELL_VERSION`` 8 (A219 set 5, A220 6, A226 7, A235 8), ``footwear_fit.FOOTWEAR_FIT_VERSION`` 24 (the bounded taper).
 """
 import subprocess
 import sys
@@ -223,8 +229,15 @@ fit, half = heel_half(ff)
 sc = fit.record["scale"]
 check("[S6] accepted", (fit.ok, fit.reasons), (True, []))
 check("[S6] factor 1.46542 (+-3e-3)", sc["width_factor"], 1.46542, 3e-3)
-check("[S6] heel share = 1 / factor", sc["width_taper"]["share"][0], 1.0 / sc["width_factor"], 2e-6)
-check("[S6] heel walls ±0.040944", half, 0.040944, 2e-4)
+tx, tsh = np.array(sc["width_taper"]["x_raw"]), np.array(sc["width_taper"]["share"])
+x1 = float(tx[np.argmax(tsh >= 1.0)])
+check("[S6] x1 (the narrowed box ends) 0.046778", x1, 0.046778, 1e-6)
+check("[S6] heel share = max(1 / factor, 1 - 5 x1)", float(tsh[0]), max(1.0 / sc["width_factor"], 1.0 - 5.0 * x1), 2e-6)
+pr_ = fit.parts["right"]["foot"].positions
+end_ = pr_[pr_[:, 0] <= pr_[:, 0].min() + 0.001]
+check("[S6] heel end walls ±0.04 k factor share", float(np.abs(end_[:, 2] - 0.10).max()),
+      0.04 * sc["k_m_per_unit"] * sc["width_factor"] * float(tsh[0]), 2e-4)
+check("[S6] heel walls inside the uniform ±0.06", half < 0.06 - 2e-4, True)
 prim = glb_mesh.body_primitive_arrays(glb)[0]
 cut = footwear_cut.cut_description(fit, ins_c)
 after, _st = footwear_cut.apply_cut(prim, cut, joints)
@@ -232,7 +245,7 @@ gates = footwear_cut.cut_gates(after, fit.parts, cut, joints=joints, body_before
 check("[S6] cut gates ok", (gates["ok"], {k: v["value"] for k, v in gates["gates"].items()}),
       (True, {k: 0.0 for k in gates["gates"]}))
 fp = np.asarray(cut["sides"]["right"]["footprint"], np.float64).reshape(-1, 2)
-check("[S6] footprint at the heel ±0.040944", float(np.abs(fp[fp[:, 0] <= 0.02, 1]).max()), 0.040944, 2e-4)
+check("[S6] footprint at the heel within the walls", float(np.abs(fp[fp[:, 0] <= 0.02, 1]).max()) <= half + 2e-4, True)
 old_src = subprocess.run(["git", "show", "baac1102c:app/core/footwear_fit.py"], cwd=ROOT, capture_output=True,
                          text=True).stdout
 old = types.ModuleType("footwear_fit_baac1102c")
@@ -243,7 +256,7 @@ check("[S6] baac1102c: heel walls ±0.06 (the uniform factor)", half_old, 0.06, 
 
 print("[S7] versions")
 check("[S7] SHELL_VERSION 8 (A235)", gs.SHELL_VERSION, 8)
-check("[S7] FOOTWEAR_FIT_VERSION 20", ff.FOOTWEAR_FIT_VERSION, 20)
+check("[S7] FOOTWEAR_FIT_VERSION 24", ff.FOOTWEAR_FIT_VERSION, 24)
 
 print("ALL OK" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

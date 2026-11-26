@@ -47,15 +47,30 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     -> its LLM call carries no message naming "Demo D2" (neither the call
     nor its result) and one assistant message "[turn 2 was rolled back: ..."
     -> awaiting_review again. discard -> D1 gone too, rolled_back.
-(e) max_steps=2, [create E1, create E2, create E3, final] -> the third call
-    finds steps 2 >= 2 -> budget failure in turn 1 -> rolled_back, E1/E2
-    gone, E3 never written, world unfrozen. Was-frozen variant: same with the
-    world frozen before -> rolled_back and still frozen.
-    Foreign-edit variant: max_steps=2, [update_location P description
-    "agent", (foreign edit P description -> "foreign", then create E4),
-    create E5] -> budget failure -> undo turn 1: E4 removed, P's update
-    skipped "changed since" -> rollback_incomplete, P keeps "foreign",
-    world unfrozen, open_run() None.
+    Before the third message: turn_summaries with this manager's outcomes =
+    [turn 1 kept 1 write 0 undone; turn 2 rolled_back, reason "LLM error:
+    provider down" (the _fail note), 1 write 1 undone]; without outcomes (a
+    restart) turn 2 is derived rolled_back from its undone write, reason =
+    the run note.
+(e) budgets are PER TURN and a cut turn keeps its work. max_steps=3,
+    [create E1, E2, E3, E4]: calls 1-3 write E1-E3 (turn steps 1, 2, 3); the
+    4th reply asks for create E4, but the check after the call finds 3 >= 3
+    -> the turn is CUT, not rolled back: awaiting_review, note starts
+    "budget reached (steps: 3 of 3 this turn)" and names the follow-up,
+    4 LLM calls, E1-E3 exist with 3 write rows none undone, E4 never written,
+    world frozen. Follow-up "continue" [create E4, create E5, "E5 done."]:
+    turn 2 measures from its own start (3 steps) -> 1, 2, final ->
+    awaiting_review "E5 done.", run total steps 5 while max_steps stays 3
+    (a cumulative budget would have refused turn 2's first call). Turn 2's
+    first LLM call (call 5) carries the assistant line "[turn 1 was cut off:
+    budget reached (steps..." and never names "Demo E4" (the refused reply
+    was not kept). turn_summaries = [turn 1 cut_by_budget, reason = the note,
+    3 writes, 0 undone; turn 2 kept, 2 writes]. discard -> E1-E5 gone.
+    Real failure + foreign edit: [update_location P description "agent",
+    (foreign edit P -> "foreign", then create E6), RuntimeError("provider
+    down")] -> LLM error = hard failure in turn 1 -> undo turn 1: E6 removed,
+    P's update skipped "changed since" -> rollback_incomplete, P keeps
+    "foreign", world unfrozen, open_run() None.
 (f) [create "Demo F1", a reply that blocks forever] -> the turn task is
     cancelled (process death); a NEW RunManager's mark_interrupted_on_boot()
     -> interrupted; steps(run) identical before/after (nothing written).
@@ -85,8 +100,9 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     tool, TOOLS[...].write False).
 (n) token budget: max_tokens_total=50. The system prompt alone is far over
     200 characters (= 50 tokens at 4 characters a token), so the check after
-    the first call fails turn 1 before its tool runs -> rolled_back, note
-    names "token budget", "Demo N1" never written (0 write rows).
+    the first call stops turn 1 before its tool runs; turn 1 has no step yet,
+    nothing to keep -> a hard failure -> rolled_back, note names "token
+    budget" and "before the first step", "Demo N1" never written.
 (o) RunStateError: on the rolled_back run of (n) accept, discard, message
     and stop each raise RunStateError, and the status stays rolled_back.
 (p) restart follow-up: start with max_tokens=1234 -> the run row stores
@@ -114,8 +130,19 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     the tool runs; the top-of-loop check 100 < 150 allows call 2 -> 200 >=
     150, but that reply is final -> awaiting_review, note "T1 done.", T1
     kept (2 calls, 200 tokens).
-(u) defaults 40 / 300000; message(max_steps=5, max_tokens_total=1000) keeps
-    (40, 300000) = max of each; message(max_steps=50) -> (50, 300000).
+(y) estimate_cost patched to 100 tokens a call, max_tokens_total=150:
+    [create Y1, create Y2]. Call 1 -> 100 < 150, Y1 written; call 2 -> 200
+    >= 150 and the reply asks for a tool -> turn 1 cut (it has 1 step):
+    awaiting_review, note "budget reached (tokens: 200 of 150 this turn)...",
+    Y1 kept, Y2 never written. Follow-up [create Y2, "Y2 done."]: turn 2
+    counts from 200 -> call 3: turn 100 (total 300) < 150, Y2 written; call 4:
+    turn 200 (total 400), final -> awaiting_review "Y2 done.". Turn-2 usage
+    events carry (turn_tokens, total) = (100, 300), (200, 400); turn_usage =
+    {turn 2, steps 1, tokens 200}; run total 400.
+(u) defaults 60 / 600000 (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL, plan
+    2026-11-25 E15); message(max_steps=5, max_tokens_total=1000) keeps
+    (60, 600000) = max of each; message(max_steps=70) -> (70, 600000) — the
+    raise must exceed the default 60 to prove raising.
 (v) world frozen before; set_was_frozen raises "disk full" right after
     create_run -> start raises it, the newest run is rolled_back with
     "disk full" in its note, no LLM call, the world stays frozen (the
@@ -130,6 +157,16 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
 (x) like (h) with P -> "foreign3", but wr.set_skipped raises during discard:
     the run still closes rollback_incomplete, X1 gone, P keeps "foreign3",
     unfrozen, no open run.
+(z) pinned reads through the loop (plan 2026-11-25 Task 10): turn 1
+    [read_manual{characters}, read_manual{homes}, "Read."] -> awaiting_review;
+    the 3rd LLM call holds two read_manual results, both whole (start
+    "[result read_manual] # Manual"), no stub — so _loop passes the parsed
+    args (with one key "read_manual" + "null" the homes read would supersede
+    the characters read). Turn 2 [read_manual{characters},
+    RuntimeError("down")] -> rolled back (awaiting_review); turn 3 ["ok."]:
+    its LLM call holds exactly two read_manual results again, both whole,
+    none "superseded" (_fail restored the turn-1 copy whose newer copy was
+    cut away).
 Last: every LLM-queue registration was closed (active == done).
 """
 import asyncio
@@ -352,6 +389,17 @@ async def main():
     check("(d) D1 kept", len(by_name("Demo D1")) == 1)
     check("(d) D2 undone", not by_name("Demo D2"))
     check("(d) still frozen", is_world_frozen())
+    run_d = wr.get_run(run_id)
+    summ = wa.turn_summaries(run_d, wr.steps(run_id), rm.turn_outcomes(run_id))
+    check("(d) turn summaries: turn 1 kept, turn 2 rolled_back with its reason",
+          summ == [{"turn": 1, "status": "kept", "reason": "", "writes": 1, "undone": 0},
+                   {"turn": 2, "status": "rolled_back", "reason": "LLM error: provider down",
+                    "writes": 1, "undone": 1}], summ)
+    derived = wa.turn_summaries(run_d, wr.steps(run_id))
+    check("(d) derived after a restart (no outcomes): the undone turn is rolled_back, "
+          "reason = the run note",
+          [(r["status"], r["reason"]) for r in derived]
+          == [("kept", ""), ("rolled_back", run_d["note"])], derived)
     fake.replies += ["Nothing more."]
     await rm.message(run_id, "raise the budget, continue")
     run = await settle(rm, run_id)
@@ -369,37 +417,69 @@ async def main():
     check("(d) D1 gone", not by_name("Demo D1"))
     check("(d) unfrozen", not is_world_frozen())
 
-    print("(e) step budget in turn 1")
-    rm, _ = manager([create("Demo E1"), create("Demo E2"), create("Demo E3"), "x"])
-    run_id = await start(rm, max_steps=2)
+    print("(e) step budget per turn: the cut turn keeps its work")
+    rm, fake = manager([create("Demo E1"), create("Demo E2"), create("Demo E3"),
+                        create("Demo E4")])
+    run_id = await start(rm, max_steps=3)
     run = await settle(rm, run_id)
-    check("(e) rolled_back", run["status"] == "rolled_back", (run["status"], run["note"]))
-    check("(e) note names the budget", "budget" in (run["note"] or ""), run["note"])
-    check("(e) E1/E2/E3 absent", not (by_name("Demo E1") or by_name("Demo E2")
-                                      or by_name("Demo E3")))
+    note1 = run["note"] or ""
+    check("(e) awaiting_review, not rolled back", run["status"] == "awaiting_review",
+          (run["status"], run["note"]))
+    check("(e) note: budget reached (steps: 3 of 3 this turn)",
+          note1.startswith("budget reached (steps: 3 of 3 this turn)")
+          and "follow-up" in note1, note1)
+    check("(e) 4 LLM calls", len(fake.calls) == 4, len(fake.calls))
+    check("(e) E1/E2/E3 kept, E4 never written",
+          all(len(by_name(n)) == 1 for n in ("Demo E1", "Demo E2", "Demo E3"))
+          and not by_name("Demo E4"))
+    check("(e) 3 write rows, none undone",
+          [bool(s.get("undone_at")) for s in wr.entries(run_id, include_undone=True)]
+          == [False] * 3, wr.entries(run_id, include_undone=True))
+    check("(e) frozen during review", is_world_frozen())
+    fake.replies += [create("Demo E4"), create("Demo E5"), "E5 done."]
+    await rm.message(run_id, "continue")
+    run = await settle(rm, run_id)
+    check("(e) turn 2 gets the full budget again: 2 more writes, final",
+          run["status"] == "awaiting_review" and run["note"] == "E5 done.",
+          (run["status"], run["note"]))
+    check("(e) run total 5 steps > max_steps 3 (the budget is per turn)",
+          (run["steps"], run["max_steps"]) == (5, 3), (run["steps"], run["max_steps"]))
+    check("(e) E4/E5 written", len(by_name("Demo E4")) == 1 and len(by_name("Demo E5")) == 1)
+    first2 = fake.calls[4] if len(fake.calls) > 4 else []
+    check("(e) turn 2 history says turn 1 was cut off",
+          any(m["role"] == "assistant"
+              and m["content"].startswith("[turn 1 was cut off: budget reached (steps")
+              for m in first2), [m["content"][:80] for m in first2])
+    check("(e) the call the budget refused is not in the history",
+          not any("Demo E4" in m["content"] for m in first2),
+          [m["content"][:80] for m in first2 if "Demo E4" in m["content"]])
+    summ = wa.turn_summaries(run, wr.steps(run_id), rm.turn_outcomes(run_id))
+    check("(e) turn summaries: cut_by_budget 3 writes, kept 2 writes",
+          summ == [{"turn": 1, "status": "cut_by_budget", "reason": note1,
+                    "writes": 3, "undone": 0},
+                   {"turn": 2, "status": "kept", "reason": "", "writes": 2, "undone": 0}],
+          summ)
+    await rm.discard(run_id)
+    check("(e) discard -> rolled_back, E1-E5 gone",
+          wr.get_run(run_id)["status"] == "rolled_back"
+          and not any(by_name(f"Demo E{i}") for i in range(1, 6)))
     check("(e) unfrozen", not is_world_frozen())
-    set_world_frozen(True)
-    rm, _ = manager([create("Demo E1"), create("Demo E2"), create("Demo E3"), "x"])
-    run_id = await start(rm, max_steps=2)
-    run = await settle(rm, run_id)
-    check("(e) was-frozen: rolled_back", run["status"] == "rolled_back", run["status"])
-    check("(e) was-frozen: still frozen", is_world_frozen())
-    set_world_frozen(False)
 
     def foreign_then_create():
         set_pond("foreign")
-        return create("Demo E4")
+        return create("Demo E6")
 
     rm, _ = manager([call("update_location", '{"id": "%s", "patch": {"description": '
-                          '"agent"}}' % P), foreign_then_create, create("Demo E5")])
-    run_id = await start(rm, max_steps=2)
+                          '"agent"}}' % P), foreign_then_create,
+                     RuntimeError("provider down")])
+    run_id = await start(rm)
     run = await settle(rm, run_id)
-    check("(e) foreign edit -> rollback_incomplete", run["status"] == "rollback_incomplete",
-          (run["status"], run["note"]))
+    check("(e) real failure + foreign edit -> rollback_incomplete",
+          run["status"] == "rollback_incomplete", (run["status"], run["note"]))
     check("(e) skipped names changed since",
           any(s.get("reason") == "changed since" for s in run["skipped"]), run["skipped"])
     check("(e) P keeps the foreign edit", get_location_by_id(P)["description"] == "foreign")
-    check("(e) E4 removed", not by_name("Demo E4"))
+    check("(e) E6 removed", not by_name("Demo E6"))
     check("(e) unfrozen", not is_world_frozen())
     check("(e) no open run", wr.open_run() is None)
 
@@ -556,12 +636,14 @@ async def main():
     check("(m) M1 gone", not by_name("Demo M1"))
     check("(m) unfrozen", not is_world_frozen())
 
-    print("(n) token budget")
+    print("(n) token budget hit in turn 1 before the first step")
     rm, _ = manager([create("Demo N1"), "x"])
     run_id = await start(rm, max_tokens_total=50)
     run = await settle(rm, run_id)
     check("(n) rolled_back", run["status"] == "rolled_back", (run["status"], run["note"]))
     check("(n) note names the token budget", "token budget" in (run["note"] or ""),
+          run["note"])
+    check("(n) note says before the first step", "before the first step" in (run["note"] or ""),
           run["note"])
     check("(n) N1 never written", not by_name("Demo N1")
           and not [s for s in wr.steps(run_id) if s["kind"] == "write"])
@@ -692,19 +774,49 @@ async def main():
     check("(t) T1 kept", len(by_name("Demo T1")) == 1)
     await rm.discard(run_id)
 
+    print("(y) token budget per turn: cut, kept, next turn starts at 0")
+    llm_cost.estimate_cost = lambda *a, **k: (60, 40, 0.0)
+    try:
+        rm, fake = manager([create("Demo Y1"), create("Demo Y2")])
+        run_id = await start(rm, max_tokens_total=150)
+        run = await settle(rm, run_id)
+        check("(y) turn 1 cut by tokens, Y1 kept, Y2 never written",
+              run["status"] == "awaiting_review"
+              and (run["note"] or "").startswith("budget reached (tokens: 200 of 150 this turn)")
+              and len(by_name("Demo Y1")) == 1 and not by_name("Demo Y2"),
+              (run["status"], run["note"]))
+        fake.replies += [create("Demo Y2"), "Y2 done."]
+        await rm.message(run_id, "continue")
+        run = await settle(rm, run_id)
+        y_evs = [e async for e in rm.subscribe(run_id, 0)
+                 if e["type"] == "usage" and e.get("turn") == 2]
+    finally:
+        llm_cost.estimate_cost = real_estimate
+    check("(y) turn 2 final, Y2 written", run["status"] == "awaiting_review"
+          and run["note"] == "Y2 done." and len(by_name("Demo Y2")) == 1,
+          (run["status"], run["note"]))
+    check("(y) run total 400 tokens", run["tokens_in"] + run["tokens_out"] == 400,
+          (run["tokens_in"], run["tokens_out"]))
+    check("(y) turn-2 usage: turn_tokens 100, 200 against totals 300, 400",
+          [(e["turn_tokens"], e["tokens_in"] + e["tokens_out"]) for e in y_evs]
+          == [(100, 300), (200, 400)], y_evs)
+    check("(y) turn_usage of the newest turn", rm.turn_usage(run_id)
+          == {"turn": 2, "steps": 1, "tokens": 200}, rm.turn_usage(run_id))
+    await rm.discard(run_id)
+
     print("(u) budgets are only raised")
     rm, fake = manager([create("Demo U1"), "U1 done.", "ok.", "ok."])
     run_id = await start(rm)
     await settle(rm, run_id)
     await rm.message(run_id, "lower", max_steps=5, max_tokens_total=1000)
     run = await settle(rm, run_id)
-    check("(u) lowering keeps 40 / 300000",
-          (run["max_steps"], run["max_tokens_total"]) == (40, 300000),
+    check("(u) lowering keeps 60 / 600000",
+          (run["max_steps"], run["max_tokens_total"]) == (60, 600000),
           (run["max_steps"], run["max_tokens_total"]))
-    await rm.message(run_id, "raise", max_steps=50)
+    await rm.message(run_id, "raise", max_steps=70)
     run = await settle(rm, run_id)
-    check("(u) raising steps -> 50 / 300000",
-          (run["max_steps"], run["max_tokens_total"]) == (50, 300000),
+    check("(u) raising steps -> 70 / 600000",
+          (run["max_steps"], run["max_tokens_total"]) == (70, 600000),
           (run["max_steps"], run["max_tokens_total"]))
     await rm.discard(run_id)
 
@@ -808,6 +920,36 @@ async def main():
     check("(x) P keeps foreign3", get_location_by_id(P)["description"] == "foreign3")
     check("(x) unfrozen", not is_world_frozen())
     check("(x) no open run", wr.open_run() is None)
+
+    print("(z) pinned reads through the loop")
+    man_c = call("read_manual", '{"section": "characters"}')
+    man_h = call("read_manual", '{"section": "homes"}')
+    rm, fake = manager([man_c, man_h, "Read.", man_c,
+                        RuntimeError("down"), "ok."])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    check("(z) turn 1 awaiting_review", run["status"] == "awaiting_review", run["status"])
+
+    def man_results(msgs):
+        return [m["content"] for m in msgs
+                if m["content"].startswith("[result read_manual]")]
+
+    z1 = man_results(fake.calls[2]) if len(fake.calls) >= 3 else []
+    check("(z) call 3: two whole manual reads",
+          len(z1) == 2 and all(c.startswith("[result read_manual] # Manual") for c in z1),
+          [c[:60] for c in z1])
+    await rm.message(run_id, "again")
+    run = await settle(rm, run_id)
+    check("(z) turn 2 rolled back to review", run["status"] == "awaiting_review"
+          and "down" in (run["note"] or ""), (run["status"], run["note"]))
+    await rm.message(run_id, "go on")
+    await settle(rm, run_id)
+    z3 = man_results(fake.calls[-1]) if len(fake.calls) == 6 else []
+    check("(z) 6 LLM calls", len(fake.calls) == 6, len(fake.calls))
+    check("(z) turn 3: both turn-1 reads whole, none superseded",
+          len(z3) == 2 and all(c.startswith("[result read_manual] # Manual") for c in z3),
+          [c[:60] for c in z3])
+    await rm.discard(run_id)
 
     check("every LLM registration closed", COUNTS["active"] == COUNTS["done"]
           and COUNTS["active"] > 0, COUNTS)

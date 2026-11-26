@@ -47,7 +47,8 @@
         "adventurous",
         "loved",
         "freudig",
-        "gluecklich"
+        "gluecklich",
+        "erleichtert"
       ]
     },
     "sad": {
@@ -225,6 +226,719 @@
         "neckisch",
         "schalkhaft"
       ]
+    },
+    "qwen21-woman_neutral": {
+      "prompt": "make the woman normal",
+      "label": "Neutral",
+      "synonyms": [
+        "neutral"
+      ]
+    },
+    "qwen21-woman_frustrated": {
+      "label": "Frustrated",
+      "prompt": "make the woman frustrated",
+      "synonyms": [
+        "frustrated"
+      ]
+    },
+    "qwen21-woman_happy": {
+      "label": "Happy",
+      "prompt": "make the woman happy",
+      "synonyms": [
+        "happy"
+      ]
+    },
+    "qwen21-woman_disgusted": {
+      "label": "Disgusted",
+      "prompt": "make the woman disgusted",
+      "synonyms": [
+        "disgusted"
+      ]
+    },
+    "qwen21-woman_hopeful": {
+      "label": "Hopeful",
+      "prompt": "make the woman hopeful",
+      "synonyms": [
+        "hopeful"
+      ]
+    },
+    "qwen21-woman_overwhelmed": {
+      "label": "Overwhelmed",
+      "prompt": "make the woman overwhelmed",
+      "synonyms": [
+        "overwhelmed"
+      ]
+    },
+    "qwen21-woman_enraged": {
+      "label": "Enraged",
+      "prompt": "make the woman enraged",
+      "synonyms": [
+        "enraged"
+      ]
+    },
+    "qwen21-woman_lovestruck": {
+      "label": "Lovestruck",
+      "prompt": "make the woman lovestruck",
+      "synonyms": [
+        "lovestruck"
+      ]
+    },
+    "qwen21-woman_anxious": {
+      "label": "Anxious",
+      "prompt": "make the woman anxious",
+      "synonyms": [
+        "anxious"
+      ]
+    },
+    "qwen21-woman_goofy": {
+      "label": "Goofy",
+      "prompt": "make the woman goofy",
+      "synonyms": [
+        "goofy"
+      ]
+    },
+    "qwen21-woman_sad": {
+      "label": "Sad",
+      "prompt": "make the woman sad",
+      "synonyms": [
+        "sad"
+      ]
+    },
+    "qwen21-woman_confident": {
+      "label": "Confident",
+      "prompt": "make the woman confident",
+      "synonyms": [
+        "confident"
+      ]
+    },
+    "qwen21-woman_angry": {
+      "label": "Angry",
+      "prompt": "make the woman angry",
+      "synonyms": [
+        "angry"
+      ]
+    },
+    "qwen21-woman_mischievous": {
+      "label": "Mischievous",
+      "prompt": "make the woman mischievous",
+      "synonyms": [
+        "mischievous"
+      ]
+    },
+    "qwen21-woman_confused": {
+      "label": "Confused",
+      "prompt": "make the woman confused",
+      "synonyms": [
+        "confused"
+      ]
+    },
+    "qwen21-woman_shocked": {
+      "label": "Shocked",
+      "prompt": "make the woman shocked",
+      "synonyms": [
+        "shocked"
+      ]
+    },
+    "qwen21-woman_smug": {
+      "label": "Smug",
+      "prompt": "make the woman smug",
+      "synonyms": [
+        "smug"
+      ]
+    },
+    "qwen21-woman_ashamed": {
+      "label": "Ashamed",
+      "prompt": "make the woman ashamed",
+      "synonyms": [
+        "ashamed"
+      ]
+    },
+    "qwen21-woman_ecstatic": {
+      "label": "Ecstatic",
+      "prompt": "make the woman ecstatic",
+      "synonyms": [
+        "ecstatic"
+      ]
+    },
+    "qwen21-woman_shaky": {
+      "label": "Shaky",
+      "prompt": "make the woman shaky",
+      "synonyms": [
+        "shaky"
+      ]
+    },
+    "qwen21-woman_exertion": {
+      "label": "Exertion",
+      "prompt": "make the woman strain with exertion",
+      "synonyms": [
+        "exertion"
+      ]
+    },
+    "qwen21-woman_hysterical": {
+      "label": "Hysterical",
+      "prompt": "make the woman hysterical",
+      "synonyms": [
+        "hysterical"
+      ]
+    },
+    "qwen21-woman_suspicious": {
+      "label": "Suspicious",
+      "prompt": "make the woman suspicious",
+      "synonyms": [
+        "suspicious"
+      ]
+    },
+    "qwen21-woman_shy": {
+      "label": "Shy",
+      "prompt": "make the woman shy",
+      "synonyms": [
+        "shy"
+      ]
+    },
+    "qwen21-woman_frightened": {
+      "label": "Frightened",
+      "prompt": "make the woman frightened",
+      "synonyms": [
+        "frightened"
+      ]
+    },
+    "qwen21-woman_pain": {
+      "label": "Pain",
+      "prompt": "make the woman wince in pain",
+      "synonyms": [
+        "pain"
+      ]
+    },
+    "qwen21-woman_dazed": {
+      "label": "Dazed",
+      "prompt": "make the woman dazed",
+      "synonyms": [
+        "dazed"
+      ]
+    },
+    "qwen21-woman_screaming": {
+      "label": "Screaming",
+      "prompt": "make the woman scream",
+      "synonyms": [
+        "screaming"
+      ]
+    },
+    "qwen21-woman_yelling": {
+      "label": "Yelling",
+      "prompt": "make the woman yell",
+      "synonyms": [
+        "yelling"
+      ]
+    },
+    "qwen21-woman_laughing": {
+      "label": "Laughing",
+      "prompt": "make the woman laugh",
+      "synonyms": [
+        "laughing"
+      ]
+    },
+    "qwen21-woman_crying": {
+      "label": "Crying",
+      "prompt": "make the woman cry",
+      "synonyms": [
+        "crying"
+      ]
+    },
+    "qwen21-woman_embarrassed": {
+      "label": "Embarrassed",
+      "prompt": "make the woman embarrassed",
+      "synonyms": [
+        "embarrassed"
+      ]
+    },
+    "qwen21-woman_determined": {
+      "label": "Determined",
+      "prompt": "make the woman determined",
+      "synonyms": [
+        "determined"
+      ]
+    },
+    "qwen21-woman_bored": {
+      "label": "Bored",
+      "prompt": "make the woman bored",
+      "synonyms": [
+        "bored"
+      ]
+    },
+    "qwen21-woman_eye_roll": {
+      "label": "Eye-Roll",
+      "prompt": "make the woman roll her eyes",
+      "synonyms": [
+        "eye-roll",
+        "eye roll"
+      ]
+    },
+    "qwen21-woman_wink": {
+      "label": "Wink",
+      "prompt": "make the woman wink",
+      "synonyms": [
+        "wink"
+      ]
+    },
+    "qwen21-woman_thinking": {
+      "label": "Thinking",
+      "prompt": "make the woman think",
+      "synonyms": [
+        "thinking"
+      ]
+    },
+    "qwen21-woman_seductive": {
+      "label": "Seductive",
+      "prompt": "make the woman seductive",
+      "synonyms": [
+        "seductive"
+      ]
+    },
+    "qwen21-woman_relieved": {
+      "label": "Relieved",
+      "prompt": "make the woman relieved",
+      "synonyms": [
+        "relieved"
+      ]
+    },
+    "qwen21-woman_lip_bite": {
+      "label": "Lip Bite",
+      "prompt": "make the woman bite her lip",
+      "synonyms": [
+        "lip bite"
+      ]
+    },
+    "qwen21-woman_crazy": {
+      "label": "Crazy",
+      "prompt": "make the woman crazy",
+      "synonyms": [
+        "crazy"
+      ]
+    },
+    "qwen21-woman_speaking_ah": {
+      "label": "Speaking Ah",
+      "prompt": "make the woman say ah",
+      "synonyms": [
+        "speaking ah"
+      ]
+    },
+    "qwen21-woman_speaking_oh": {
+      "label": "Speaking Oh",
+      "prompt": "make the woman say oh",
+      "synonyms": [
+        "speaking oh"
+      ]
+    },
+    "qwen21-woman_speaking_ee": {
+      "label": "Speaking Ee",
+      "prompt": "make the woman say ee",
+      "synonyms": [
+        "speaking ee"
+      ]
+    },
+    "qwen21-woman_speaking_mm": {
+      "label": "Speaking Mm",
+      "prompt": "make the woman say mm",
+      "synonyms": [
+        "speaking mm"
+      ]
+    },
+    "qwen21-woman_worried": {
+      "label": "Worried",
+      "prompt": "make the woman worried",
+      "synonyms": [
+        "worried"
+      ]
+    },
+    "qwen21-woman_grumpy": {
+      "label": "Grumpy",
+      "prompt": "make the woman grumpy",
+      "synonyms": [
+        "grumpy"
+      ]
+    },
+    "qwen21-woman_surprised": {
+      "label": "Surprised",
+      "prompt": "make the woman surprised",
+      "synonyms": [
+        "surprised"
+      ]
+    },
+    "qwen21-woman_pouting": {
+      "label": "Pouting",
+      "prompt": "make the woman pout",
+      "synonyms": [
+        "pouting"
+      ]
+    },
+    "qwen21-woman_sleepy": {
+      "label": "Sleepy",
+      "prompt": "make the woman sleepy",
+      "synonyms": [
+        "sleepy"
+      ]
+    },
+    "qwen21-woman_skeptical": {
+      "label": "Skeptical",
+      "prompt": "make the woman skeptical",
+      "synonyms": [
+        "skeptical"
+      ]
+    },
+    "qwen21-woman_content": {
+      "label": "Content",
+      "prompt": "make the woman content",
+      "synonyms": [
+        "content"
+      ]
+    },
+    "qwen21-woman_awkward": {
+      "label": "Awkward",
+      "prompt": "make the woman awkward",
+      "synonyms": [
+        "awkward"
+      ]
+    },
+    "qwen21-woman_contempt": {
+      "label": "Contempt",
+      "prompt": "make the woman contemptuous",
+      "synonyms": [
+        "contempt"
+      ]
+    },
+    "qwen21-woman_pleading": {
+      "label": "Pleading",
+      "prompt": "make the woman pleading",
+      "synonyms": [
+        "pleading"
+      ]
+    },
+    "qwen21-woman_disappointed": {
+      "label": "Disappointed",
+      "prompt": "make the woman disappointed",
+      "synonyms": [
+        "disappointed"
+      ]
+    },
+    "qwen21-woman_sheepish": {
+      "label": "Sheepish",
+      "prompt": "make the woman sheepish",
+      "synonyms": [
+        "sheepish"
+      ]
+    },
+    "qwen21-woman_amazed": {
+      "label": "Amazed",
+      "prompt": "make the woman amazed",
+      "synonyms": [
+        "amazed"
+      ]
+    },
+    "qwen21-woman_kissy": {
+      "label": "Kissy",
+      "prompt": "make the woman kissy",
+      "synonyms": [
+        "kissy"
+      ]
+    },
+    "qwen21-woman_yawning": {
+      "label": "Yawning",
+      "prompt": "make the woman yawn",
+      "synonyms": [
+        "yawning"
+      ]
+    },
+    "qwen21-woman_touched": {
+      "label": "Touched",
+      "prompt": "make the woman touched",
+      "synonyms": [
+        "touched"
+      ]
+    },
+    "qwen21-woman_awestruck": {
+      "label": "Awestruck",
+      "prompt": "make the woman awestruck",
+      "synonyms": [
+        "awestruck"
+      ]
+    },
+    "qwen21-woman_bluesteel": {
+      "label": "BlueSteel",
+      "prompt": "make the woman blue-steel",
+      "synonyms": [
+        "bluesteel"
+      ]
+    },
+    "qwen21-woman_bug_eyed": {
+      "label": "Bug-Eyed",
+      "prompt": "make the woman bug-eyed",
+      "synonyms": [
+        "bug-eyed",
+        "bug eyed"
+      ]
+    },
+    "qwen21-woman_crosseyed": {
+      "label": "CrossEyed",
+      "prompt": "make the woman cross-eyed",
+      "synonyms": [
+        "crosseyed"
+      ]
+    },
+    "qwen21-woman_crying_sobbing": {
+      "label": "Crying-Sobbing",
+      "prompt": "make the woman crying-sobbing",
+      "synonyms": [
+        "crying-sobbing",
+        "crying sobbing"
+      ]
+    },
+    "qwen21-woman_delight": {
+      "prompt": "make the woman delight",
+      "label": "Delight",
+      "synonyms": [
+        "delight"
+      ]
+    },
+    "qwen21-woman_drowsy": {
+      "label": "Drowsy",
+      "prompt": "make the woman drowsy",
+      "synonyms": [
+        "drowsy"
+      ]
+    },
+    "qwen21-woman_duckface": {
+      "label": "DuckFace",
+      "prompt": "make the woman duck-face",
+      "synonyms": [
+        "duckface"
+      ]
+    },
+    "qwen21-woman_femmefatale": {
+      "label": "FemmeFatale",
+      "prompt": "make the woman femme-fatale",
+      "synonyms": [
+        "femmefatale"
+      ]
+    },
+    "qwen21-woman_fish_face": {
+      "label": "Fish-Face",
+      "prompt": "make the woman fish-face",
+      "synonyms": [
+        "fish-face",
+        "fish face"
+      ]
+    },
+    "qwen21-woman_gag": {
+      "label": "Gag",
+      "prompt": "make the woman gag",
+      "synonyms": [
+        "gag"
+      ]
+    },
+    "qwen21-woman_gasp": {
+      "label": "Gasp",
+      "prompt": "make the woman gasp",
+      "synonyms": [
+        "gasp"
+      ]
+    },
+    "qwen21-woman_giggle": {
+      "label": "Giggle",
+      "prompt": "make the woman giggle",
+      "synonyms": [
+        "giggle"
+      ]
+    },
+    "qwen21-woman_licklip": {
+      "label": "LickLip",
+      "prompt": "make the woman lick-lip",
+      "synonyms": [
+        "licklip"
+      ]
+    },
+    "qwen21-woman_lipbite": {
+      "label": "LipBite",
+      "prompt": "make the woman lip-bite",
+      "synonyms": [
+        "lipbite"
+      ]
+    },
+    "qwen21-woman_liptwist": {
+      "label": "LipTwist",
+      "prompt": "make the woman lip-twist",
+      "synonyms": [
+        "liptwist"
+      ]
+    },
+    "qwen21-woman_mouth_agape": {
+      "label": "Mouth-Agape",
+      "prompt": "make the woman mouth-agape",
+      "synonyms": [
+        "mouth-agape",
+        "mouth agape"
+      ]
+    },
+    "qwen21-woman_one_brow_raised": {
+      "label": "One-Brow-Raised",
+      "prompt": "make the woman one-brow-raised",
+      "synonyms": [
+        "one-brow-raised",
+        "one brow raised"
+      ]
+    },
+    "qwen21-woman_puffy_cheeks": {
+      "label": "Puffy-Cheeks",
+      "prompt": "make the woman puffy-cheeks",
+      "synonyms": [
+        "puffy-cheeks",
+        "puffy cheeks"
+      ]
+    },
+    "qwen21-woman_puppyeyes": {
+      "label": "PuppyEyes",
+      "prompt": "make the woman puppy-dog-eyes",
+      "synonyms": [
+        "puppyeyes"
+      ]
+    },
+    "qwen21-woman_quiver": {
+      "label": "Quiver",
+      "prompt": "make the woman quiver",
+      "synonyms": [
+        "quiver"
+      ]
+    },
+    "qwen21-woman_satisfied": {
+      "label": "Satisfied",
+      "prompt": "make the woman satisfied",
+      "synonyms": [
+        "satisfied"
+      ]
+    },
+    "qwen21-woman_scared": {
+      "label": "Scared",
+      "prompt": "make the woman scared",
+      "synonyms": [
+        "scared"
+      ]
+    },
+    "qwen21-woman_scrunch": {
+      "label": "Scrunch",
+      "prompt": "make the woman nose-scrunch",
+      "synonyms": [
+        "scrunch"
+      ]
+    },
+    "qwen21-woman_seething": {
+      "label": "Seething",
+      "prompt": "make the woman seething",
+      "synonyms": [
+        "seething"
+      ]
+    },
+    "qwen21-woman_side_eye": {
+      "label": "Side-Eye",
+      "prompt": "make the woman side-eye",
+      "synonyms": [
+        "side-eye",
+        "side eye"
+      ]
+    },
+    "qwen21-woman_snarl_lip": {
+      "label": "Snarl-Lip",
+      "prompt": "make the woman snarl-lip",
+      "synonyms": [
+        "snarl-lip",
+        "snarl lip"
+      ]
+    },
+    "qwen21-woman_sticking_tongue_out": {
+      "label": "Sticking Tongue Out",
+      "prompt": "make the woman tongue-stick",
+      "synonyms": [
+        "sticking tongue out"
+      ]
+    },
+    "qwen21-woman_surprised_mild": {
+      "label": "Surprised-Mild",
+      "prompt": "make the woman surprised-mild",
+      "synonyms": [
+        "surprised-mild",
+        "surprised mild"
+      ]
+    },
+    "qwen21-woman_teeth_clench": {
+      "label": "Teeth-Clench",
+      "prompt": "make the woman teeth-clench",
+      "synonyms": [
+        "teeth-clench",
+        "teeth clench"
+      ]
+    },
+    "qwen21-woman_terrified": {
+      "label": "Terrified",
+      "prompt": "make the woman terrified",
+      "synonyms": [
+        "terrified"
+      ]
+    },
+    "qwen21-woman_tongue_bite": {
+      "label": "Tongue Bite",
+      "prompt": "make the woman tongue-bite",
+      "synonyms": [
+        "tongue bite"
+      ]
+    },
+    "qwen21-woman_tongue_out": {
+      "label": "Tongue out",
+      "prompt": "make the woman tongue-out",
+      "synonyms": [
+        "tongue out"
+      ]
+    },
+    "qwen21-woman_tongue_wink": {
+      "label": "Tongue-Wink",
+      "prompt": "make the woman tongue-wink",
+      "synonyms": [
+        "tongue-wink",
+        "tongue wink"
+      ]
+    },
+    "qwen21-woman_whistle": {
+      "label": "Whistle",
+      "prompt": "make the woman whistle",
+      "synonyms": [
+        "whistle"
+      ]
+    },
+    "qwen21-woman_wince": {
+      "label": "Wince",
+      "prompt": "make the woman wince",
+      "synonyms": [
+        "wince"
+      ]
+    },
+    "qwen21-woman_worried_lip_bite": {
+      "label": "Worried-Lip-Bite",
+      "prompt": "make the woman worried-lip-bite",
+      "synonyms": [
+        "worried-lip-bite",
+        "worried lip bite"
+      ]
+    },
+    "qwen21-woman_orgasm": {
+      "label": "Orgasm",
+      "prompt": "make the woman orgasm",
+      "synonyms": [
+        "orgasm"
+      ]
+    },
+    "qwen21-woman_ahegao": {
+      "label": "Ahegao",
+      "prompt": "make the woman make an Ahegao Face",
+      "synonyms": [
+        "ahegao"
+      ]
     }
   },
   "groups": {
@@ -251,6 +965,114 @@
         "animal_attentive",
         "animal_relaxed",
         "animal_defensive"
+      ]
+    },
+    "qwen21-woman": {
+      "label": "Qwen2.1 Woman",
+      "default": "qwen21-woman_neutral",
+      "lora": "Qwen2.1-_Emote_Version 2.safetensors",
+      "lora_strength": 0.8,
+      "members": [
+        "qwen21-woman_neutral",
+        "qwen21-woman_frustrated",
+        "qwen21-woman_happy",
+        "qwen21-woman_disgusted",
+        "qwen21-woman_hopeful",
+        "qwen21-woman_overwhelmed",
+        "qwen21-woman_enraged",
+        "qwen21-woman_lovestruck",
+        "qwen21-woman_anxious",
+        "qwen21-woman_goofy",
+        "qwen21-woman_sad",
+        "qwen21-woman_confident",
+        "qwen21-woman_angry",
+        "qwen21-woman_mischievous",
+        "qwen21-woman_confused",
+        "qwen21-woman_shocked",
+        "qwen21-woman_smug",
+        "qwen21-woman_ashamed",
+        "qwen21-woman_ecstatic",
+        "qwen21-woman_shaky",
+        "qwen21-woman_exertion",
+        "qwen21-woman_hysterical",
+        "qwen21-woman_suspicious",
+        "qwen21-woman_shy",
+        "qwen21-woman_frightened",
+        "qwen21-woman_pain",
+        "qwen21-woman_dazed",
+        "qwen21-woman_screaming",
+        "qwen21-woman_yelling",
+        "qwen21-woman_laughing",
+        "qwen21-woman_crying",
+        "qwen21-woman_embarrassed",
+        "qwen21-woman_determined",
+        "qwen21-woman_bored",
+        "qwen21-woman_eye_roll",
+        "qwen21-woman_wink",
+        "qwen21-woman_thinking",
+        "qwen21-woman_seductive",
+        "qwen21-woman_relieved",
+        "qwen21-woman_lip_bite",
+        "qwen21-woman_crazy",
+        "qwen21-woman_speaking_ah",
+        "qwen21-woman_speaking_oh",
+        "qwen21-woman_speaking_ee",
+        "qwen21-woman_speaking_mm",
+        "qwen21-woman_worried",
+        "qwen21-woman_grumpy",
+        "qwen21-woman_surprised",
+        "qwen21-woman_pouting",
+        "qwen21-woman_sleepy",
+        "qwen21-woman_skeptical",
+        "qwen21-woman_content",
+        "qwen21-woman_awkward",
+        "qwen21-woman_contempt",
+        "qwen21-woman_pleading",
+        "qwen21-woman_disappointed",
+        "qwen21-woman_sheepish",
+        "qwen21-woman_amazed",
+        "qwen21-woman_kissy",
+        "qwen21-woman_yawning",
+        "qwen21-woman_touched",
+        "qwen21-woman_awestruck",
+        "qwen21-woman_bluesteel",
+        "qwen21-woman_bug_eyed",
+        "qwen21-woman_crosseyed",
+        "qwen21-woman_crying_sobbing",
+        "qwen21-woman_delight",
+        "qwen21-woman_drowsy",
+        "qwen21-woman_duckface",
+        "qwen21-woman_femmefatale",
+        "qwen21-woman_fish_face",
+        "qwen21-woman_gag",
+        "qwen21-woman_gasp",
+        "qwen21-woman_giggle",
+        "qwen21-woman_licklip",
+        "qwen21-woman_lipbite",
+        "qwen21-woman_liptwist",
+        "qwen21-woman_mouth_agape",
+        "qwen21-woman_one_brow_raised",
+        "qwen21-woman_puffy_cheeks",
+        "qwen21-woman_puppyeyes",
+        "qwen21-woman_quiver",
+        "qwen21-woman_satisfied",
+        "qwen21-woman_scared",
+        "qwen21-woman_scrunch",
+        "qwen21-woman_seething",
+        "qwen21-woman_side_eye",
+        "qwen21-woman_snarl_lip",
+        "qwen21-woman_sticking_tongue_out",
+        "qwen21-woman_surprised_mild",
+        "qwen21-woman_teeth_clench",
+        "qwen21-woman_terrified",
+        "qwen21-woman_tongue_bite",
+        "qwen21-woman_tongue_out",
+        "qwen21-woman_tongue_wink",
+        "qwen21-woman_whistle",
+        "qwen21-woman_wince",
+        "qwen21-woman_worried_lip_bite",
+        "qwen21-woman_orgasm",
+        "qwen21-woman_ahegao"
       ]
     }
   }

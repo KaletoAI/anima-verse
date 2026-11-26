@@ -50,16 +50,19 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 20, fit_version 20, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 24, fit_version 24, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
-     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 10}}; scale.k_m_per_unit 1.023599
+     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 12}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 3, sides left + right with foot_joint LeftFoot / RightFoot,
-     toe_joint LeftToeBase / RightToeBase}; gates = the eight of footwear_fit.FIT_GATES + footwear_cut.CUT_GATES
+     toe_joint LeftToeBase / RightToeBase}; gates = the ten of footwear_fit.FIT_GATES + CLOSED_GATES (toe_front: the
+     wedge's toes end in its toe box) + footwear_cut.CUT_GATES + skin_seen_mm2 (0: the foot is cut away under the shoe)
+     + inside_seen_mm2 (fit version 24; 0: the wedge's inside is never on the outside of its wall)
      (the round-1 ``boot`` gate is gone since fit version 6; a shoe carries no shaft gate), every one ok and
-     gating True; deep_outside / visible_poke / throat_ledge_p95_mm / toe_conform_m 0 (the box foot
+     gating True except deep_outside (gating False: recorded only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``);
+     deep_outside / visible_poke / throat_ledge_p95_mm / toe_conform_m 0 (the box foot
      lies under the clog's roof: no toe to push); cut_stats {removed_faces
      1032, bisected_faces 0, new_vertices 0}; diagnostics.left.cut {should_enclosed 384, visible_n 0, slim_share
      0.047059 (+-1e-4), throat_moved 0}; foot_pose bones LeftFoot deg 0, root_lift_m 0.010236, source {item_id
@@ -73,8 +76,11 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      0.1 mm tolerance, far from the feet) -> "stale", info steps.fit {status stale, freshness reason "Body changed — refit pending"};
      the next run refits (ran ["fit"]) -> accepted on the new sha; fsig unchanged (no base in it).
 [P3] set_width_cap(Demo, heels, 1.02) -> True, profile footwear_width_cap {heels: 1.02}, fsig F2 != F; the run
-     fits F2 with scale.width_factor = min(1.02, 1.0380) = 1.02 and width_cap 1.02, slim_needed 1 - 0.081888 x
-     1.02 / 0.085 = 0.01735 (+-1e-3); F's fit stays on disk. The route: cap 1.2 -> 400, cap "wide" -> 400, cap
+     fits F2 with the total widening min(1.02, 1.0380) = 1.02 and width_cap 1.02, slim_needed 1 - 0.081888 x
+     1.02 / 0.085 = 0.01735 (+-1e-3). At 1.02 the foot's ball stands (0.085 - 0.081888 x 1.02) / 2 = 0.74 mm out of
+     each side wall, more than footwear_cut.SKIN_SEEN_EPS_M 0.25 mm: a skin spot (fit version 22), so Auto adds
+     length; a size step widens the shoe with it, and the cap holds the TOTAL: scale.width_factor x
+     allowance.size = 1.02 (4 places), skin_seen_mm2 ok; F's fit stays on disk. The route: cap 1.2 -> 400, cap "wide" -> 400, cap
      1.02 -> {width_cap 1.02, fsig F2}; cap null -> width cap 1.10, the profile key gone, fsig back to F.
      set_width_cap on a non-footwear item -> ValueError.
 [P4] Mesh mode, outfit body A (its own bytes: the joints renamed "mixamorig:<name>", the Mixamo chain): with the
@@ -113,17 +119,18 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
 [P6] Without a base model (Mira: on the pipeline, no model file) run_garment(Mira, heels) -> {ok True, ran [],
      fit "no_base"}; info steps.fit.status "missing".
 [P7] The cut gates refuse (Task 15). fit(Demo, pumps) — the wedge pump, whose fit gates pass (smoke_footwear_fit.py)
-     — raises garments._Refused (step "fit", error naming deep_outside and visible_poke, gates with the eight
-     entries: deep_outside {ok False, gating True}, slim_needed {ok True}), no fit file; run_garment -> {ok False,
+     — raises garments._Refused (step "fit", error naming visible_poke and no longer deep_outside — recorded only
+     since 2026-11-25; gates with the eight entries: deep_outside {ok False, gating False}, slim_needed {ok True}),
+     no fit file; run_garment -> {ok False,
      step "fit", error_type "GateRefused"}, cached_failure(Demo, pumps) = {step "fit", fsig} and info
      steps.fit.status "refused". The base replaced by the 0.10 m wide feet (foot_body_glb(0.10), sha changes):
      run_garment(Demo, pumps) at the DEFAULT cap (fit version 13): the pump has no shaft, so it is widened to the
-     feet, x 0.10 / 0.070824 = 1.4119, slim_needed 0 (ok) -> refused by the cut (deep_outside, as on the 0.085
+     feet, x 0.10 / 0.070824 = 1.4119, slim_needed 0 (ok) -> refused by the cut (visible_poke, as on the 0.085
      feet). With the Wardrobe cap 1.05 (set_width_cap) -> refused BEFORE any cut by the fit's own gate, error
      containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
      gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
      default. An older fit reads stale: a pumps record of fit_version 14 (and 13, 12), accepted on the current
-     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19 too; fit_version 20 -> "accepted").
+     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20, 21, 22 and 23 too; fit_version 24 -> "accepted").
 """
 import hashlib
 import json
@@ -360,13 +367,16 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 20,
-             "fit_version": 20, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 24,
+             "fit_version": 24, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
-        gate_names = list(footwear_fit.FIT_GATES) + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES]
-        check("P1 eight gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
-              {k: (True, True) for k in gate_names})
+        # fit version 21 (22: the skin spot): a closed shoe's toe_front (footwear_fit.CLOSED_GATES) and the cut's skin_seen_mm2
+        gate_names = (list(footwear_fit.FIT_GATES) + list(footwear_fit.CLOSED_GATES)
+                      + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES] + ["skin_seen_mm2"]
+                      + ["inside_seen_mm2"])  # fit version 24
+        check("P1 ten gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
+              {k: (True, k != "deep_outside") for k in gate_names})
         check("P1 cut gates at 0 (a shoe: no shaft_poke)", {k: rec["gates"][k]["value"] for k in footwear_cut.CUT_GATES if k in rec["gates"]},
               {"deep_outside": 0.0, "visible_poke": 0.0, "throat_ledge_p95_mm": 0.0, "toe_conform_m": 0.0})
         check("P1 cut stats", rec.get("cut_stats"), {"removed_faces": 1032, "bisected_faces": 0, "new_vertices": 0})
@@ -377,7 +387,7 @@ def main() -> int:
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
             "source": {"ssig": ssig, "empty_sha256": sha(src / "empty.png"),
-                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 10}})
+                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 12}})
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 1.023599, 2e-4)
         for side in ("left", "right"):
@@ -437,8 +447,10 @@ def main() -> int:
         res = garments.run_garment("Demo", heels)
         check("P3 run", (res.get("ok"), res.get("fsig"), res.get("ran")), (True, F2, ["fit"]))
         rec2 = gs.read_record(gs.garment_path("Demo", heels, F2, "fit").with_suffix(".json"))
-        check("P3 width factor / cap", ((rec2.get("scale") or {}).get("width_factor"),
-                                        (rec2.get("scale") or {}).get("width_cap")), (1.02, 1.02))
+        sc2 = rec2.get("scale") or {}
+        check("P3 total width / cap / skin", (round(float(sc2.get("width_factor") or 0) * float(
+            (sc2.get("allowance") or {}).get("size") or 0), 4), sc2.get("width_cap"),
+            ((rec2.get("gates") or {}).get("skin_seen_mm2") or {}).get("ok")), (1.02, 1.02, True))
         near("P3 slim needed left", (rec2.get("scale") or {}).get("slim_needed", {}).get("left"), 0.01735, 1e-3)
         check("P3 old fsig fit kept", fit_path.is_file(), True)
 
@@ -558,7 +570,8 @@ def main() -> int:
         # the stretch and (fit version 12) the push are recorded, not gating
         check("P5 gates ok except the recorded stretch", {k: (g.get("ok"), g.get("gating")) for k, g in brec["gates"].items()
                                                           if k != "seam_stretch_max"},
-              {k: (True, k not in ("shaft_push_p95_m", "shaft_push_max_m")) for k in brec["gates"] if k != "seam_stretch_max"})
+              {k: (True, k not in ("shaft_push_p95_m", "shaft_push_max_m", "inside_seen_mm2"))
+               for k in brec["gates"] if k != "seam_stretch_max"})  # fit version 24: a split fit records inside_seen_mm2
         check("P5 seam_stretch_max recorded, not gating", (brec["gates"]["seam_stretch_max"]["ok"],
                                                            brec["gates"]["seam_stretch_max"]["gating"], brec["accepted"]),
               (False, False, True))
@@ -614,10 +627,10 @@ def main() -> int:
                                           (g7.get("deep_outside") or {}).get("ok"),
                                           (g7.get("deep_outside") or {}).get("gating"),
                                           (g7.get("slim_needed") or {}).get("ok")),
-                  ("fit", True, True, sorted(gate_names), False, True, True))
+                  ("fit", False, True, sorted(gate_names), False, False, True))
         check("P7 no fit file", gs.garment_path("Demo", pumps, FP, "fit").exists(), False)
         res = garments.run_garment("Demo", pumps)
-        check("P7 run", (res.get("ok"), res.get("step"), res.get("error_type"), "deep_outside" in str(res.get("error"))),
+        check("P7 run", (res.get("ok"), res.get("step"), res.get("error_type"), "visible_poke" in str(res.get("error"))),
               (False, "fit", "GateRefused", True))
         failure = garments.cached_failure("Demo", pumps) or {}
         check("P7 failure per fsig", (failure.get("step"), failure.get("fsig")), ("fit", FP))
@@ -628,7 +641,7 @@ def main() -> int:
         # fit version 13: by default the pump (no shaft) widens to the wide feet (x1.4119, slim 0) -> the cut judges
         gw = (res.get("gates") or {}).get("slim_needed") or {}
         check("P7 wide feet, default cap: widened, slim 0 ok, the cut refuses",
-              (res.get("ok"), res.get("step"), "deep_outside" in str(res.get("error")), gw.get("value"), gw.get("ok")),
+              (res.get("ok"), res.get("step"), "visible_poke" in str(res.get("error")), gw.get("value"), gw.get("ok")),
               (False, "fit", True, 0.0, True))
         check("P7 Wardrobe cap 1.05", gf.set_width_cap("Demo", pumps, 1.05), True)
         res = garments.run_garment("Demo", pumps)
@@ -645,7 +658,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "accepted")):
+        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "stale"), (23, "stale"), (24, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

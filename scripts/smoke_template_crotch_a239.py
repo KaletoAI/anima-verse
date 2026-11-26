@@ -34,7 +34,7 @@ Hand-derived expectations (Blender z-up metres, cx = 0, top = 1.0; ``CROTCH_SLIT
      0.789 (min over all hits: 0.72, i.e. the rule's 0.74 again).
 [C10] within one column the lowest hit counts (a column that meets the crotch at 0.82 at one y and the buttock's
      underside at 0.86 at another): the stub answers y > 0.02 at 0.86, the rest at 0.82, in every column -> 0.82.
-[V1] ``garment_template.TEMPLATE_VERSION`` is at least 9 (the same parameters drape differently).
+[V1] ``garment_template.TEMPLATE_VERSIONS`` of every fitted kind is at least 9 (the same parameters drape differently).
 """
 import ast
 import sys
@@ -146,7 +146,7 @@ got = crotch(co, w, 0.0, 1.0, ColumnTree(lambda x, y: 0.72 if x < -0.0015 else 0
 check("C9 narrow gap off the centre -> 0.789", abs(got - 0.789) < 1e-9, got)
 got = crotch(co, w, 0.0, 1.0, ColumnTree(lambda x, y: 0.86 if y > 0.02 else 0.82))
 check("C10 the lowest hit of a column counts -> 0.82", abs(got - 0.82) < 1e-9, got)
-check("V1 TEMPLATE_VERSION >= 9", gt.TEMPLATE_VERSION >= 9, gt.TEMPLATE_VERSION)
+check("V1 TEMPLATE_VERSIONS of the fitted kinds >= 9", all(gt.TEMPLATE_VERSIONS[k] >= 9 for k in gt.FITTED_KINDS), gt.TEMPLATE_VERSIONS)
 
 print("ALL OK" if not FAILED else f"FAILED: {FAILED}")
 sys.exit(1 if FAILED else 0)

@@ -21,11 +21,12 @@ import {
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
   prepareSheerPieces, prepareGlossyPieces, prepareFigureTextures, pairFigureScale, pairPivotOf, scalePairShift,
+  pairHeightRigOf, pairHeightPoser,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
   ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle,
-  PairXZ } from '@anima/scene-render';
+  PairXZ, PairLeg } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import { getMaxAnisotropy, getModelEnvironment } from './glbMaterials';
@@ -105,6 +106,8 @@ const clipPairPivots = new WeakMap<THREE.AnimationClip, PairXZ>();
 export function setClipPairPivot(clip: THREE.AnimationClip, wire: unknown): void {
   clipPairPivots.set(clip, pairPivotOf(Array.isArray(wire) ? wire : null));
 }
+/** One track of a clip bound for a direct sample (`Figure.posePairSample`). */
+interface SampleTrack { binding: { setValue(values: ArrayLike<number>, offset: number): void }; at: { evaluate(t: number): ArrayLike<number> } }
 /** The bend limits of a played clip (the core default when the listing names none). */
 export function clipBendLimitsOf(clip: THREE.AnimationClip | null | undefined): BendLimits {
   return (clip && clipBendLimits.get(clip)) || BEND_LIMITS_DEFAULT;
@@ -1465,6 +1468,7 @@ export class FigureLibrary {
     return root ? { ...rootPathAt(root.path, t), pivot: root.pivot } : null;
   }
 
+
   /** Remember a character's set fallback chain (from /play/worldmap). */
   setCharacterSets(charName: string, sets: string[] | undefined) {
     if (sets?.length) this.charSets.set(charName, sets);
@@ -2288,6 +2292,12 @@ export class Figure {
   /** What `clipShift` is multiplied by: the figure's scale a = height / 1.70 while a pair/group half plays (its shift is
    *  a length of the 1.70 m arrangement, scene-render `pairScale.ts`), 1 otherwise (a solo shift is absolute). */
   private clipShiftScale = 1;
+  /** Owner decision 2026-11-25: the pair half's vertical size compensation (`setPairHeight`); null = none. */
+  private pairHeight: { action: THREE.AnimationAction; offset: number; planted: boolean[] } | null = null;
+  /** The poser of the bones it moves (`pairHeightRigOf` / `pairHeightPoser`), made once; null = no hips. */
+  private pairHeightPose: ((offsetM: number, planted: readonly boolean[]) => void) | null | undefined = undefined;
+  /** The offset applied this frame (metres). */
+  private pairHeightNow = 0;
   /** The model's foot pose (`LoadedModel.footPose`): its root lift rides the
    *  clip height term of the ground group (`setClipHeight`), so it fades with
    *  the group like the listing's offsets do; seat and lie get 0. */
@@ -2338,6 +2348,11 @@ export class Figure {
   /** Owner decision 2026-11-23: the turn [tilt, roll, yaw] degrees of `role` in the clip playing now ([0, 0, 0] = none). */
   roleTurnDeg(role: string): [number, number, number] {
     return clipRoleTurn(this.current?.getClip(), role);
+  }
+
+  /** Ruling A139: the contact relations of pair half `clipName` ([] = automatic or not bound). */
+  contactRelationsOf(clipName: string): ContactRelation[] {
+    return clipContactRelationsOf(this.actions.get(clipName)?.getClip());
   }
 
   /** Ruling A139: the contact relations of the clip playing now ([] = automatic). */
@@ -3056,6 +3071,137 @@ export class Figure {
    *  PAIR_RESYNC_S from `t`, so a poll never makes the figure stutter.
    *  Returns false when the half is not bound on this rig — the caller then
    *  falls back to a solo clip. */
+  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the constant vertical offset (metres, + = up) this
+   *  figure's hips take while pair half `clipName` plays, with the legs the IK holds ([left, right]); 0 = none. Set by
+   *  the interaction every frame; applied in `update` by the half's weight, so it fades with the clip transition. */
+  setPairHeight(clipName: string, offsetM: number, planted: readonly boolean[]): void {
+    const action = this.actions.get(clipName) ?? null;
+    if (!action || !(offsetM !== 0 && Number.isFinite(offsetM))) {
+      if (this.pairHeight && this.pairHeight.action === action) this.pairHeight = null;
+      return;
+    }
+    this.pairHeight = { action, offset: offsetM, planted: [...planted] };
+  }
+
+  /** The offset of the pair half as shown this frame (offset × the action's weight; 0 = none) — the check reads it. */
+  get pairHeightShown(): number { return this.pairHeightNow; }
+
+  private applyPairHeightStep(): void {
+    this.pairHeightNow = 0;
+    const ph = this.pairHeight;
+    const w = ph && ph.action.enabled ? ph.action.getEffectiveWeight() : 0;
+    if (ph && !(w > 1e-4) && this.current !== ph.action) this.pairHeight = null;
+    if (!ph || !(w > 1e-4)) {
+      // puts back hips a former offset left where no clip writes them (nothing when none was applied)
+      this.pairHeightPose?.(0, []);
+      return;
+    }
+    if (this.pairHeightPose === undefined) this.pairBodyNow();
+    if (!this.pairHeightPose) return;
+    this.root.updateMatrixWorld(true);
+    const before = Figure.probePairHeight ? this.legPoints() : null;
+    this.pairHeightNow = ph.offset * w;
+    this.pairHeightPose(this.pairHeightNow, ph.planted);
+    if (before) {
+      this.root.updateMatrixWorld(true);
+      const after = this.legPoints();
+      this.pairHeightProbe = { offset: this.pairHeightNow, planted: [...ph.planted], legs: after.map((l, i) => {
+        if (!l) return null;
+        const u = l.hip.clone().sub(l.knee), v = l.ankle.clone().sub(l.knee);
+        return { ankleBefore: before[i]?.ankle.toArray() ?? null, ankle: l.ankle.toArray(), hip: l.hip.toArray(),
+          knee: l.knee.toArray(), kneeDeg: THREE.MathUtils.radToDeg(u.angleTo(v)) };
+      }) };
+    }
+  }
+
+  /** Debug probe (`debug3d.ts`, only with ?debug3d=1): when on, every frame with a pair height records each leg's
+   *  ankle before and after the pose (world) and the knee's interior angle after it — read-only, it moves nothing. */
+  static probePairHeight = false;
+  pairHeightProbe: { offset: number; planted: boolean[]; legs: ({ ankleBefore: number[] | null; ankle: number[]
+    hip: number[]; knee: number[]; kneeDeg: number } | null)[] } | null = null;
+  private pairHeightRig: ReturnType<typeof pairHeightRigOf> = null;
+  private legPoints(): ({ hip: THREE.Vector3; knee: THREE.Vector3; ankle: THREE.Vector3 } | null)[] {
+    return (this.pairHeightRig?.legs ?? []).map((l) => l ? { hip: l.upper.getWorldPosition(new THREE.Vector3()),
+      knee: l.lower.getWorldPosition(new THREE.Vector3()), ankle: l.foot.getWorldPosition(new THREE.Vector3()) } : null);
+  }
+
+  /** Debug only (`NpcManager.debugPair`): put the running pair half at clip time `t` exactly (no resync tolerance). */
+  debugSeekPair(t: number): void {
+    if (this.current) this.current.time = t;
+  }
+
+  /** Debug only: hips, head and the root (support) in world metres, with this figure's model scale. */
+  debugBodyPoints(): Record<string, unknown> {
+    let hips: THREE.Object3D | null = null;
+    this.root.traverse((o) => { if (!hips && (o as THREE.Bone).isBone && normBoneName(o.name) === 'hips') hips = o; });
+    const w = (o: THREE.Object3D | null) => o ? o.getWorldPosition(new THREE.Vector3()).toArray() : null;
+    const rig = this.pairHeightRig;
+    const det = (o: THREE.Object3D) => +o.matrixWorld.determinant().toExponential(3);
+    return { hips: w(hips), head: w(this.head), root: this.root.getWorldPosition(new THREE.Vector3()).toArray(),
+      scale: this.baseScale, legs: this.legPoints().map((l) => l && { hip: l.hip.toArray(), knee: l.knee.toArray(), ankle: l.ankle.toArray() }),
+      rig: rig ? { hips: rig.hips.name, hipsParent: rig.hips.parent?.name ?? null, sameHips: rig.hips === hips, hipsDet: det(rig.hips),
+        legs: rig.legs.map((l) => l && { upper: l.upper.name, foot: l.foot.name, ankle: w(l.foot), det: det(l.foot),
+          chain: (() => { const n: string[] = []; for (let p: THREE.Object3D | null = l.upper.parent; p && p !== rig.hips; p = p.parent) n.push(p.name); return n; })() }) } : null };
+  }
+
+  /** Owner decision 2026-11-26 (scene-render `pairHeight.ts` WHAT IS MEASURED): the loop sample of a pair half. Every
+   *  local transform under `holder` (the placement root this figure hangs from) is recorded; the returned function puts
+   *  them all back exactly and updates the world matrices — the sampling leaves the frame as it found it, so a clip
+   *  the mixer does not rewrite next frame still shows what it showed. */
+  snapshotPose(holder: THREE.Object3D): () => void {
+    const rows: { o: THREE.Object3D; p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 }[] = [];
+    holder.traverse((o) => { rows.push({ o, p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() }); });
+    return () => {
+      for (const r of rows) { r.o.position.copy(r.p); r.o.quaternion.copy(r.q); r.o.scale.copy(r.s); }
+      holder.updateMatrixWorld(true);
+    };
+  }
+
+  private sampleTracks = new WeakMap<THREE.AnimationClip, SampleTrack[]>();
+  /** Pose pair half `clipName` at clip time `t` from its own tracks alone — no mixer, no transition, no compensation, no
+   *  secondary motion (the caller holds `snapshotPose`). False when the half is not bound on this rig. */
+  posePairSample(clipName: string, t: number): boolean {
+    const clip = this.actions.get(clipName)?.getClip();
+    if (!clip) return false;
+    let tracks = this.sampleTracks.get(clip);
+    if (!tracks) {
+      const root = this.mixer.getRoot() as THREE.Object3D;
+      // three.js sets `createInterpolant` per track type and `setValue` per binding at runtime (absent from its types)
+      tracks = clip.tracks.map((tr) => ({
+        binding: THREE.PropertyBinding.create(root, tr.name) as unknown as SampleTrack['binding'],
+        at: (tr as unknown as { createInterpolant(): SampleTrack['at'] }).createInterpolant() }));
+      this.sampleTracks.set(clip, tracks);
+    }
+    const time = Math.min(Math.max(t, 0), clip.duration);
+    for (const tr of tracks!) tr.binding.setValue(tr.at.evaluate(time), 0);
+    return true;
+  }
+
+  /** The loaded length of pair half `clipName` (seconds); 0 when not bound. */
+  pairClipDuration(clipName: string): number {
+    return this.actions.get(clipName)?.getClip().duration ?? 0;
+  }
+
+  /** The hips and the legs [left, right] in world metres as the bones stand now (`pairHeightRigOf`); null without a
+   *  rig. The caller has the world matrices current. */
+  pairBodyNow(): { hipsM: number; legs: PairLeg[] } | null {
+    if (this.pairHeightPose === undefined) {
+      const rig = pairHeightRigOf(this.root);
+      this.pairHeightRig = rig;
+      this.pairHeightPose = rig ? pairHeightPoser(THREE, rig) : null;
+    }
+    const rig = this.pairHeightRig;
+    if (!rig) return null;
+    const w = (o: THREE.Object3D): [number, number, number] => o.getWorldPosition(new THREE.Vector3()).toArray();
+    if (rig.legs.some((l) => !l)) return null;
+    return { hipsM: w(rig.hips)[1], legs: rig.legs.map((l) => ({ hip: w(l!.upper), knee: w(l!.lower), ankle: w(l!.foot) })) };
+  }
+
+  /** The op chains STRAIGHT on the current pose (`FigureRuntime.straightChains`), `inspect().chains` order. */
+  straightChains(): { op: string; points: [[number, number, number], [number, number, number]] }[] {
+    return this.runtime.straightChains();
+  }
+
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
@@ -3339,6 +3485,10 @@ export class Figure {
     if (this.heightGroup === 'seat' && this.footPose && this.floorY !== null) {
       seatFootLift(THREE, this.root, this.footPose, this.floorY);
     }
+    // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the pair clip's vertical size compensation — the hips
+    // by the constant offset, the planted legs held by the leg IK — after the whole clip pose and before phase B, by
+    // the pair action's own weight (its fade in/out is the transition). Nothing at all for an offset of 0.
+    this.applyPairHeightStep();
     // Final anchors now include mixer pose, bridge travel, turn and lift. The engine clamps its animation
     // delta; secondary motion uses real time. Phase B's share is recorded by the runtime: the strands and the
     // secondary motion step in `updateSecondary`, once every figure has posed.

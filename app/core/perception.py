@@ -854,6 +854,19 @@ def record_utterance(*, speaker: str, content: str,
                 "meta": pmeta,
             })
         perception_store.insert_perceptions(uid, rows)
+        if speaker != STORYTELLER_SPEAKER and not _umeta.get("display_only"):
+            # The speaker is no listener of its own line (it gets a self-row).
+            _heard = sorted(content_targets - {speaker})
+            _payload = dict(
+                utterance_id=uid, speaker=speaker,
+                speaker_is_avatar=is_player_controlled(speaker),
+                heard_by=_heard,
+                avatars=sorted(avatar_audience - {speaker}),
+                addressees=list(addr), location_id=loc or "",
+                room_id=room or "", source=source)
+            from app.core.hooks import emit
+            from app.core.keyed_lock import _after_locks
+            _after_locks(lambda: emit("utterance.heard", **_payload))
         from app.core.stat_sources import (
             collect_stat_source, get_stat_source_collector, source_from_utterance,
         )

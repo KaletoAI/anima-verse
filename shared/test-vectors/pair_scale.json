@@ -9,6 +9,286 @@
     "C": {
       "x": 0.12,
       "z": 0.3
+    },
+    "H_CROUCH": {
+      "groundM": 0,
+      "hipsM": 0.95,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            -0.1,
+            0.08,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CROUCH_HI": {
+      "groundM": 0,
+      "hipsM": 1,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.93,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.505,
+            0.1479019945774904
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            0.93,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.505,
+            0.1479019945774904
+          ],
+          "ankle": [
+            -0.1,
+            0.08,
+            0
+          ]
+        }
+      ]
+    },
+    "H_STAND": {
+      "groundM": 0,
+      "hipsM": 1.03,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.96,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.52,
+            0.09433981132056604
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            0.96,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.52,
+            0.09433981132056604
+          ],
+          "ankle": [
+            -0.1,
+            0.08,
+            0
+          ]
+        }
+      ]
+    },
+    "H_LYING": {
+      "groundM": 0,
+      "hipsM": 0.15,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.12,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.12,
+            0.45
+          ],
+          "ankle": [
+            0.1,
+            0.1,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            0.12,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.12,
+            0.45
+          ],
+          "ankle": [
+            -0.1,
+            0.1,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CARRIED": {
+      "groundM": 0,
+      "hipsM": 1.2,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            1.1,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.7,
+            0.2
+          ],
+          "ankle": [
+            0.1,
+            0.5,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            1.1,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.7,
+            0.2
+          ],
+          "ankle": [
+            -0.1,
+            0.5,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CROUCH_LIFT24": {
+      "groundM": 0,
+      "hipsM": 0.95,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            1.12,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.72,
+            0.20615528128088303
+          ],
+          "ankle": [
+            -0.1,
+            0.32,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CROUCH_LIFT15": {
+      "groundM": 0,
+      "hipsM": 0.95,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            1.03,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.63,
+            0.20615528128088303
+          ],
+          "ankle": [
+            -0.1,
+            0.22999999999999998,
+            0
+          ]
+        }
+      ]
     }
   },
   "cases": [
@@ -703,6 +983,813 @@
         "z": 21.71058824
       },
       "eps": 1e-8
+    },
+    {
+      "label": "H[1] gap: level axis 8 cm above the opening",
+      "fn": "pairAxisGap",
+      "args": [
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.92,
+            0.15
+          ]
+        }
+      ],
+      "expect": 0.08,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[1] gap: tilted axis (0, −0.6, 0.8)",
+      "fn": "pairAxisGap",
+      "args": [
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            -0.6,
+            0.8
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.8,
+            0.2
+          ]
+        }
+      ],
+      "expect": 0.05,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[1] gap: vertical axis",
+      "fn": "pairAxisGap",
+      "args": [
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            -1,
+            0
+          ],
+          "lengthM": 0.4,
+          "opening": [
+            0.01,
+            0.7,
+            0
+          ]
+        }
+      ],
+      "expect": 0,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[1] gap: opening behind the root (λ = 0)",
+      "fn": "pairAxisGap",
+      "args": [
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.9,
+            -0.1
+          ]
+        }
+      ],
+      "expect": 0.1,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[2] contact phase: the frame nearest the segment",
+      "fn": "pairContactFrame",
+      "args": [
+        [
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              0,
+              1
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.6,
+              0.15
+            ]
+          },
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              0,
+              1
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.92,
+              0.15
+            ]
+          },
+          null,
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              -0.6,
+              0.8
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.8,
+              0.2
+            ]
+          }
+        ]
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "H[2] contact phase: none resolved",
+      "fn": "pairContactFrame",
+      "args": [
+        [
+          null,
+          null
+        ]
+      ],
+      "expect": -1,
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: crouch over the loop",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "bent",
+        "planted": [
+          true,
+          true
+        ],
+        "kneeHeld": [
+          false,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: standing",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_STAND"
+            },
+            {
+              "$fixture": "H_STAND"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "standing",
+        "planted": [
+          true,
+          true
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: lying rests",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_LYING"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "resting"
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: carried is free",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CARRIED"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "free"
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: furniture is fixed",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ],
+          "fixed": true
+        }
+      ],
+      "expect": {
+        "stance": "fixed",
+        "planted": [
+          false,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: a leg up in 3 of 4 frames is not planted",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "bent",
+        "planted": [
+          true,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: a leg inside the band counts neither way",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH_LIFT15"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT15"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "planted": [
+          true,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[4] range: crouch up = 2l·cos 6° − d, down −MAX",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": -0.15,
+        "up": 0.09506970583144592,
+        "stance": "bent",
+        "planted": [
+          true,
+          true
+        ]
+      },
+      "eps": 1e-9
+    },
+    {
+      "label": "H[4] range: the smaller up of two frames",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH_HI"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": -0.15,
+        "up": 0.045069705831445914
+      },
+      "eps": 1e-9
+    },
+    {
+      "label": "H[4] range: standing lowers only",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_STAND"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": -0.15,
+        "up": 0,
+        "stance": "standing"
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "H[4] range: lying takes nothing",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_LYING"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": 0,
+        "up": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[4] ikKnee at +0.05",
+      "fn": "ikKnee",
+      "args": [
+        [
+          0.1,
+          0.93,
+          0
+        ],
+        [
+          0.1,
+          0.53,
+          0.20615528128088303
+        ],
+        [
+          0.1,
+          0.13,
+          0
+        ],
+        [
+          0.1,
+          0.08,
+          0
+        ]
+      ],
+      "expect": [
+        0.1,
+        0.505,
+        0.14790199457749043
+      ],
+      "eps": 1e-12
+    },
+    {
+      "label": "H[5] pair Δ 0.08: b takes it all",
+      "fn": "pairHeightOffsets",
+      "args": [
+        {
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
+            }
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.92,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "offsets": {
+          "a": 0,
+          "b": -0.08
+        },
+        "residuals": {
+          "b>a:channel": 0
+        },
+        "contactFrames": {
+          "b>a:channel": 0
+        }
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "H[5] pair Δ 0.20: split 0.15 / 0.05",
+      "fn": "pairHeightOffsets",
+      "args": [
+        {
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
+            }
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.8,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "offsets": {
+          "a": 0.05,
+          "b": -0.15
+        },
+        "residuals": {
+          "b>a:channel": 0
+        }
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "H[5] pair Δ 0.30: residual left to the bend",
+      "fn": "pairHeightOffsets",
+      "args": [
+        {
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
+            }
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.7,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "offsets": {
+          "a": 0.09506970583144592,
+          "b": -0.15
+        },
+        "residuals": {
+          "b>a:channel": 0.05493029416855408
+        }
+      },
+      "eps": 1e-9
+    },
+    {
+      "label": "H[6] group least squares",
+      "fn": "pairHeightOffsets",
+      "args": [
+        {
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_LYING"
+                }
+              ]
+            },
+            "c": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
+            }
+          },
+          "relations": [
+            {
+              "key": "b>a:mouth",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.88,
+                    0.15
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "c>a:channel",
+              "part": "c",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.98,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "offsets": {
+          "a": 0.07,
+          "b": 0,
+          "c": 0
+        },
+        "residuals": {
+          "b>a:mouth": 0.05,
+          "c>a:channel": -0.05
+        }
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "H[7] deadband: a 4 mm gap is none",
+      "fn": "pairHeightOffsets",
+      "args": [
+        {
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
+            }
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.996,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "offsets": {
+          "a": 0,
+          "b": 0
+        },
+        "gaps": {
+          "b>a:channel": 0
+        },
+        "ranges": {}
+      },
+      "eps": 0
     }
   ]
 }

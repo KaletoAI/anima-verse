@@ -157,7 +157,7 @@ def build_npc_schema_text(location_id: str, room_id: str = "",
     """
     from app.models.character import list_available_characters
     from app.models.world_setup import get_world_setup_text
-    from app.routes.world_dev import _load_schema
+    from app.core.layout_prompt import load_schema
 
     setup = (get_world_setup_text() or "").strip()
     setup_block = f"## World setup\n\n{setup}\n\n" if setup else ""
@@ -167,7 +167,7 @@ def build_npc_schema_text(location_id: str, room_id: str = "",
     loc_name, room_name = (place_labels if place_labels
                            else _location_labels(location_id, room_id))
 
-    return sanitize_injected_markdown(_load_schema(
+    return sanitize_injected_markdown(load_schema(
         NPC_SCHEMA,
         world_setup_block=setup_block,
         generable_fields=npc_generable_fields(template),
@@ -771,7 +771,7 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
 
     from app.core.llm_router import llm_call
     from app.core.prompt_templates import render_task
-    from app.routes.world_dev import _extract_json_block
+    from app.core.layout_prompt import extract_json_block
 
     if not briefing.strip():
         return {"ok": False, "error": "briefing required"}
@@ -786,8 +786,8 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
                             agent_name="NpcGenerator",
                             label=f"NPC spawn ({slot_role or 'wanderer'})",
                             max_tokens=NPC_MAX_TOKENS)
-        return _extract_json_block(getattr(response, "content", "") or "",
-                                   NPC_FENCE)
+        return extract_json_block(getattr(response, "content", "") or "",
+                                  NPC_FENCE)
 
     try:
         data = _turn("npc_generate", schema_text=schema_text,
@@ -885,7 +885,7 @@ async def generate_npc(briefing: str, location_id: str, room_id: str = "",
     A frame with ``"error"`` ends the run.
     """
     from app.core.prompt_templates import render_task
-    from app.routes.world_dev import _extract_json_block
+    from app.core.layout_prompt import extract_json_block
 
     if not briefing.strip():
         yield {"stage": "generate", "error": "briefing required"}
@@ -924,7 +924,7 @@ async def generate_npc(briefing: str, location_id: str, room_id: str = "",
         async for frame in _run_pipeline(
                 llm, schema_text, briefing, location_id, room_id, ttl_hours,
                 validator_model or model, validator_provider or provider,
-                created_by, render_task, _extract_json_block):
+                created_by, render_task, extract_json_block):
             yield frame
     finally:
         if task_id:
@@ -933,7 +933,7 @@ async def generate_npc(briefing: str, location_id: str, room_id: str = "",
 
 async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
                         ttl_hours, v_model, v_provider, created_by,
-                        render_task, _extract_json_block
+                        render_task, extract_json_block
                         ) -> AsyncGenerator[Dict[str, Any], None]:
     """The four stages themselves — split out so the queue registration in
     ``generate_npc`` gets a single try/finally around all of them."""
@@ -944,7 +944,7 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
     except Exception as e:  # noqa: BLE001
         yield {"stage": "generate", "error": f"LLM error: {e}"}
         return
-    data = _extract_json_block(raw, NPC_FENCE)
+    data = extract_json_block(raw, NPC_FENCE)
     if not data:
         yield {"stage": "generate",
                "error": "no ```json:npc block in the answer"}
@@ -988,7 +988,7 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
             gaps="\n".join(f"- {g}" for g in gaps))
         try:
             raw2 = await _collect(llm, r_system, r_user)
-            repaired = _extract_json_block(raw2, NPC_FENCE)
+            repaired = extract_json_block(raw2, NPC_FENCE)
         except Exception as e:  # noqa: BLE001
             logger.warning("NPC repair turn failed, keeping the draft: %s", e)
             repaired = None

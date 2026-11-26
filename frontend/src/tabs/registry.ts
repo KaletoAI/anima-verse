@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import { SetupTab } from './setup/SetupTab'
 import { CharactersTab } from './characters/CharactersTab'
 import { StorytellerTab } from './storyteller/StorytellerTab'
+import { QuestsTab } from './quests/QuestsTab'
 import { RulesTab } from './rules/RulesTab'
 import { StatesTab } from './states/StatesTab'
 import { ItemsTab } from './items/ItemsTab'
@@ -24,6 +25,7 @@ export type TabId =
   | 'setup'
   | 'characters'
   | 'storyteller'
+  | 'quests'
   | 'rules'
   | 'states'
   | 'items'
@@ -52,6 +54,7 @@ export const TABS: TabSpec[] = [
   { id: 'setup', label: 'Setup', Component: SetupTab },
   { id: 'characters', label: 'Characters', Component: CharactersTab },
   { id: 'storyteller', label: 'Storyteller', Component: StorytellerTab },
+  { id: 'quests', label: 'Quests', Component: QuestsTab },
   { id: 'rules', label: 'Rules', Component: RulesTab },
   { id: 'states', label: 'States', Component: StatesTab },
   { id: 'items', label: 'Items', Component: ItemsTab },

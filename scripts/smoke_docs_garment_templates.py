@@ -14,7 +14,8 @@ the same thing.
 WHAT IS CHECKED, and where every expected value comes from
 -----------------------------------------------------------
 
-A) ``TEMPLATE_VERSION`` (``app/core/garment_template.py``) — the document says "TEMPLATE_VERSION <n>".
+A) ``TEMPLATE_VERSIONS`` (``app/core/garment_template.py``): every kind holds the same value n, and the document says
+   "`TEMPLATE_VERSIONS` <n>".
 B) The atlas: ``PATTERN_ATLAS_PX`` and ``PATTERN_MARGIN_CM`` (``app/blender/scripts/garment_template_build.py``)
    appear with their values ("2048", "1.5 cm").
 C) The parts: every name of ``PARTS`` and every id of ``STRIP_PARTS`` (``app/blender/scripts/uv_pattern.py``)
@@ -113,8 +114,9 @@ def main() -> int:
     gt = GT.read_text(encoding="utf-8")
 
     # A
-    v = const(GT, "TEMPLATE_VERSION")
-    check(f"A  TEMPLATE_VERSION {v}", f"TEMPLATE_VERSION {v}" in doc or f"`TEMPLATE_VERSION` {v}" in doc)
+    versions = set(const(GT, "TEMPLATE_VERSIONS").values())
+    v = min(versions)
+    check(f"A  TEMPLATE_VERSIONS {v}", len(versions) == 1 and f"`TEMPLATE_VERSIONS` {v}" in doc, versions)
 
     # B
     px, margin = const(BUILD, "PATTERN_ATLAS_PX"), const(BUILD, "PATTERN_MARGIN_CM")
@@ -165,9 +167,9 @@ def main() -> int:
     # G
     gct = GCT.read_text(encoding="utf-8")
     body = re.search(r"def csig\(.*?return", gct, re.S)
-    inputs = ["islands_sha", "item_sha", "back_sha", "PROMPT_SHA", "POST_VERSION"]
+    inputs = ["islands_sha", "item_sha", "back_sha", "PROMPT_KEYS", "POST_VERSION"]
     check("G  csig inputs found in the code", body is not None and all(i in body.group(0) for i in inputs))
-    line = next((ln for ln in doc.splitlines() if "`csig`" in ln and "PROMPT_SHA" in ln), "")
+    line = next((ln for ln in doc.splitlines() if "`csig`" in ln and "PROMPT_KEYS" in ln), "")
     check("G  doc line naming csig's five inputs", all(i in line for i in inputs), line[:120])
     check("G  that line does not put tsig into csig",
           bool(line) and re.search(r"csig[^.]*=\s*[^.]*`tsig`", line) is None)

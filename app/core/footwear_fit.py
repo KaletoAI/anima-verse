@@ -330,7 +330,7 @@ disagrees with its own image (``footwear_gates.image_agreement``); otherwise the
 """
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -378,7 +378,25 @@ from app.core.footwear_gates import check_gates
 #: 20 (A219, Kira's Black Stilettos): a closed shoe widened to the foot keeps its heel narrow — the width factor
 #:    tapers from the heel to the foot's own need (``width_taper``) instead of widening the heel cup by the BALL's
 #:    factor (1.25: a 10 mm gap a side at the heel). A shoe whose heel needs the full factor comes out as at v19.
-FOOTWEAR_FIT_VERSION = 20
+#: 21 (2026-11-26): the gate ``toe_front`` (``TOE_FRONT_MAX``) and the toe box attempt (``TOE_FRONT_TARGET``) — a
+#:    closed shoe whose toes stop short of its toe box is refused and fitted again with the toes in it instead of
+#:    being lengthened (Kai's Sneekers 378 -> 346 mm), heel room planned behind the foot's own toe station
+#:    (``toe_box_size``); an accepted first attempt keeps its geometry (a new fsig), the record carries
+#:    ``scale.toe_front``. The cut of a closed shoe gates ``skin_seen_mm2``
+#:    (``footwear_cut.SKIN_SEEN_MAX_MM2``: skin seen through a hole or a heel through the counter), Auto answers it
+#:    with heel room. One CPU refit.
+#: 22 (2026-11-26): ``skin_seen_mm2`` is the largest SPOT of skin on a 1-mm raster with a 0.25-mm depth tolerance
+#:    (``footwear_cut.SKIN_SEEN_PX_M`` block) — the 2-mm raster read a visible spot on a counter as one pixel of
+#:    noise. Every closed fit is judged again; Auto may add heel room where a spot shows. One CPU refit.
+#: 23 (2026-11-26): ``skin_seen_mm2`` also counts skin lying on the outside of a wall it came through
+#:    (``footwear_cut.SKIN_POKE_M`` block) — a heel through the counter whose spot reaches the topline read 0 as it
+#:    is not enclosed. Every closed fit is judged again; Auto may add heel room where a spot shows. One CPU refit.
+#: 24 (2026-11-26): the width taper's profiles are bounded (``TAPER_SLOPE_MAX`` / ``TAPER_SHARE_SLOPE_MAX``) — read per
+#:    station they sheared the heel counter until its lining came through the outer skin (the Woman shoes on Kai,
+#:    Tilda and Ylva at Auto heel room: insole-texture flecks on the counter, accepted). The cut of a closed shoe
+#:    gates ``inside_seen_mm2`` (``footwear_cut.INSIDE_SEEN_MAX_MM2``: the shoe's inside seen through its own wall),
+#:    Auto answers it with heel room. Every tapered shoe changes shape slightly. One CPU refit.
+FOOTWEAR_FIT_VERSION = 24
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Ruling A82: the per-piece footwear allowances the Wardrobe offers (percent; ``garment_footwear.ALLOWANCE_KEY``).
@@ -393,6 +411,54 @@ ALLOW_M = 0.005
 #: A174: negative steps make the shoe tighter (narrower / shorter, the heel contact that much further back); the
 #: fit's gates still refuse a shoe the foot pokes out of — a negative step is never clamped.
 ALLOWANCE_STEPS: Tuple[int, ...] = (-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 15, 20)
+#: The manual adjustment of a fit (2026-11-25, ``garment_footwear.MANUAL_KEY``): ``{"offset_mm": [forward, up,
+#: outward], "rotate_deg": [toe_out, toe_up, tilt_in], "scale_pct": size}`` in the fit's CUT FRAME (metres; x from the
+#: shoe's heel end toward the toe, y up from the shoe's ground, z across — ``footwear_cut.cut_description``'s
+#: ``frame``), about its origin (the heel end of the sole on the ground, on the shoe's midline). ``manual_matrix``
+#: is the map ``T = Translate(offset) · Ry(toe out) · Rz(toe up) · Rx(tilt in) · Scale(1 + size)``; both sides use the
+#: same numbers in their own (mirrored) frames, so the pair stays mirror-symmetric. The fit places the shoe with it
+#: (``_fit``'s ``placed``: a cut-frame point c of the unadjusted shoe goes to T·c) BEFORE the root lift, the width
+#: taper, the cut and every gate — the gates judge the adjusted shoe. The 3D preview applies the same T
+#: (``footwearAllowanceModel.ts`` ``manualMap``). Offsets in millimetres, rotations in degrees, size in percent:
+MANUAL_OFFSET_MM = 40.0
+MANUAL_ROTATE_DEG = 25.0
+MANUAL_SCALE_PCT = (-20.0, 25.0)
+#: The cut frame's z runs INWARD on both sides (``placed``: the left side's z is ``forward x up`` = the body's right,
+#: the right side mirrored = the body's left), so "outward" is −z and "toe out" a rotation about +y.
+MANUAL_NONE: Dict[str, Any] = {"offset_mm": [0.0, 0.0, 0.0], "rotate_deg": [0.0, 0.0, 0.0], "scale_pct": 0.0}
+
+
+def manual_matrix(manual: Optional[Dict[str, Any]]) -> np.ndarray:
+    """The cut-frame map ``T`` (4x4) of a manual adjustment (``MANUAL_OFFSET_MM`` docstring); identity for None or
+    ``MANUAL_NONE``. ``offset_mm`` = [forward, up, outward], ``rotate_deg`` = [toe out (about up), toe up (about the
+    across axis), tilt in (about the forward axis)], ``scale_pct`` = the size change."""
+    m = manual or MANUAL_NONE
+    fx, fy, out = (float(v) / 1000.0 for v in m.get("offset_mm") or (0.0, 0.0, 0.0))
+    yaw, pitch, roll = (math.radians(float(v)) for v in m.get("rotate_deg") or (0.0, 0.0, 0.0))
+    size = 1.0 + float(m.get("scale_pct") or 0.0) / 100.0
+    # toe out: x (forward) turns toward -z (outward) — a rotation about +y by +yaw
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]])
+    # toe up: x turns toward +y — a rotation about +z by +pitch
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    Rz = np.array([[cp, -sp, 0.0], [sp, cp, 0.0], [0.0, 0.0, 1.0]])
+    # tilt in: the top (+y) leans inward (+z) — a rotation about +x by +roll
+    cr, sr = math.cos(roll), math.sin(roll)
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
+    T = np.eye(4)
+    T[:3, :3] = Ry @ Rz @ Rx * size
+    T[:3, 3] = [fx, fy, -out]
+    return T
+
+
+def is_manual(manual: Optional[Dict[str, Any]]) -> bool:
+    """Whether ``manual`` changes anything (``manual_matrix`` is not the identity)."""
+    if not manual:
+        return False
+    return any(abs(float(v)) > 1e-12 for v in list(manual.get("offset_mm") or []) + list(manual.get("rotate_deg") or [])
+               + [manual.get("scale_pct") or 0.0])
+
+
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
 BLEND_M = 0.015
 #: The largest width factor a fit may apply (spec § 5.5), also the default cap — the cap of a boot (an item whose
@@ -420,6 +486,20 @@ TAPER_BAND_M = 0.004
 #: ``garment_shell.THICKNESS_M`` off the skin. The fit belongs to the item, not to an outfit, so the room is always
 #: there (the assembly takes the stocking into the shoe, ``garment_assembly._into_shoe``).
 TAPER_LAYER_M = 0.004
+#: The taper's shear (fit version 24, 2026-11-26). The map ``z' = c(x) + (z − m(x)) · t(x)`` moves a wall point
+#: across the shoe by ``dz'/dx = c' − m' t + (z − m) t'`` per unit of length. Read per station, the insole's middle
+#: ``m`` (the insole columns on the analysis' grid), the foot's middle (the shift) and the share stepped from one
+#: station to the next: on the Woman shoes on Kai (Auto +6 % heel room) ``m`` by 0.0068 raw over 0.0045 raw
+#: (slope 1.5), the shift by 2.7 and the share by 0.062 a station (``(z − m) t'`` about 2 at the counter). A wall
+#: whose normal leans 45° in the plane is crossed by its own lining at a shear of 2 (the lining moved one wall
+#: thickness through the outer skin): the insole texture showed as flecks on the outside of the heel counter. Every
+#: profile is therefore bounded behind the ball: ``m`` and the shift each by ``TAPER_SLOPE_MAX`` (a backward pass from
+#: the ball, where the shift is 0), the share by the smallest majorant whose ``reach · t'`` stays within
+#: ``TAPER_SHARE_SLOPE_MAX`` (``reach`` = the shoe's farthest point from ``m`` behind the ball) — it only ever widens,
+#: so the foot keeps its room; the share is read after the bounded shift. Together the shear stays at or below 0.4,
+#: a fifth of the crossing shear, and the shoe's inside is judged as well (``footwear_cut.INSIDE_SEEN_MAX_MM2``).
+TAPER_SLOPE_MAX = 0.1
+TAPER_SHARE_SLOPE_MAX = 0.2
 #: The smallest per-fit width cap override.
 WIDTH_CAP_MIN = 1.00
 #: A shoe widened to the foot (``applied_width_cap`` = ``SHOE_WIDTH_CAP``) has its UPPER fitted to the foot's height
@@ -475,6 +555,30 @@ FIT_GATES: Dict[str, Tuple[str, Any]] = {
     "lift_asymmetry_mm": ("max", 10.0),
     "slim_needed": ("max", 0.18),
     "stand_floor_mm": ("range", (-3.0, 3.0)),
+}
+#: 2026-11-26: the forepart in front of the toes — the insole's area ahead of the foot's toe tip over (its widest width x
+#: the foot's length), read on the foot that reaches furthest into the shoe (the smaller side's value: a pair is one
+#: size, the other foot's shortfall is the body's own asymmetry — Vallerie's toe box attempt 0.061 / 0.090, Dario's
+#: 0.064 / 0.098). A closed shoe is scaled so the toes end where its toe box still holds them
+#: (``_scale``); a toe box the mesher made LOW ends them early and the shoe grows long for it: the toes stop in the
+#: wide forepart with the whole toe cap in front of them (Kai's Sneekers 378 mm on a 307-mm foot). A pointed toe
+#: in front of the toes is long but narrow, a round one wide but short — the area tells both from a shoe too long.
+#: The shoe's length over the foot's alone does not: the knee boots' heel block makes theirs 1.24 – 1.29, the
+#: Sneekers' 1.22 – 1.33. Measured on every stored shoe on every body (first attempt, 64 closed fits, copies
+#: 2026-11-26, the smaller side): the shoes that look right 0.000 – 0.048 (Black Stilettos 0.003 – 0.028, Woman
+#: shoes 0.016 – 0.043, ankle boots 0.000 – 0.033, knee boots 0.018 – 0.048), the Sneekers 0.118 – 0.173. The limit: the largest right-looking value with 20 % room, 0.048 x 1.2 = 0.0576 -> 0.06. A
+#: refused closed shoe gets the toe box attempt (``garment_footwear.fit_compute``'s second attempt, ``fit_height``):
+#: the toes end where the forepart in front of them is ``TOE_FRONT_TARGET`` (``toe_box_size``), a toe box ready for
+#: it is raised (``HEIGHT_CAP``), the cut slims the rest and the gates judge — instead of a longer shoe. Auto adds
+#: heel room to it when the heel comes through the counter. A shoe that cannot take that keeps the refusal with its
+#: reason; when the first attempt was refused for ``toe_front`` alone, that whole, long shoe is the one kept
+#: (``garment_footwear.LONG_ONLY_GATES``).
+TOE_FRONT_MAX = 0.06
+#: Where the toe box attempt ends the toes: the largest right-looking value measured (above).
+TOE_FRONT_TARGET = 0.048
+#: The gates of a closed shoe only (an open shoe's toes lie on its whole sole, ``OPEN_GATES``).
+CLOSED_GATES: Dict[str, Tuple[str, Any]] = {
+    "toe_front": ("max", TOE_FRONT_MAX),
 }
 #: The split (boots spec 2026-11-11 § 6.2): band half-width about the ankle, the margin a topline must clear the
 #: ankle by to be a boot (the round-1 ``boot`` refusal at 3 cm is retired; its value is the diagnostic
@@ -563,6 +667,7 @@ GATE_LABELS = {
     "ball_placement_mm": "the posed ball contact vs the shoe's ball point, worse side",
     "lift_asymmetry_mm": "difference of the two sides' lifts",
     "slim_needed": "share of the ball width the forefoot slimming must take off, worse side",
+    "toe_front": "insole area in front of the toes over widest width x foot length (toes stop short of the toe box), the foot reaching furthest",
     "stand_floor_mm": "lowest shoe point in the shod stand above the floor",
     "shaft_push_p95_m": "p95 push of the shaft and band off the shin, worse side",
     "shaft_push_max_m": "largest push of the shaft and band off the shin, worse side",
@@ -648,7 +753,11 @@ STRAP_INSIDE_M = -0.0005
 #: sole that stands on the insole, and how deep the foot's sole lies under the insole surface (95th percentile).
 OPEN_GATES: Dict[str, Tuple[str, Any]] = {
     "strap_inside_share": ("max", 0.02),
-    "strap_push_max_mm": ("max", 30.0),
+    # 50 mm since 2026-11-25, from the distribution: the Braided Leather Sandals on all eight stored bodies pushed their
+    # straps 25.2 – 27.8 mm (accepted at the old 30) and 30.8 – 42.2 mm (refused) — every one of those looks right from
+    # front, side, back and above (the straps follow a wider foot; 42.2 mm on Rosi). The largest right-looking value
+    # plus 20 %: 42.2 x 1.2 = 50.6 -> 50. ``strap_inside_share`` (always 0 there) stays the check of what is seen.
+    "strap_push_max_mm": ("max", 50.0),
     "sole_cover": ("min", 0.90),
     "sole_sink_mm": ("max", 8.0),
 }
@@ -893,21 +1002,24 @@ class _Insole:
     def arc_at(self, x: float) -> float:
         return float(np.interp(x, self.px, self.arc))
 
-    def chord_to(self, xh: float, d: float, k: float) -> float:
+    def chord_to(self, xh: float, d: float, k: float, forced: bool = False) -> float:
         """The first x >= xh whose insole point lies ``d`` metres from the insole point at ``xh`` (linear
-        between dense samples); _Refused when the insole ends first."""
+        between dense samples); _Refused when the insole ends first — ``forced``: the insole's end then."""
         xs = np.linspace(xh, self.x1, 8000)
         dd = np.hypot((xs - xh) * k, (self.z(xs) - self.z(xh)) * k)
         hit = np.nonzero(dd >= d)[0]
         if not len(hit) or hit[0] == 0:
+            if forced and xh < self.x1:
+                return float(self.x1)
             raise _Refused("The foot is longer than the shoe's insole")
         i = int(hit[0])
         f = (d - dd[i - 1]) / (dd[i] - dd[i - 1])
         return float(xs[i - 1] + f * (xs[i] - xs[i - 1]))
 
 
-def _scale(ins: _Insole, foot_len: float, toe_h: float) -> Tuple[float, float]:
-    """``(k, x_end)``: the spike's fixed point k = (foot + ALLOW) / arc(cavity end at k)."""
+def _scale(ins: _Insole, foot_len: float, toe_h: float, forced: bool = False) -> Tuple[float, float]:
+    """``(k, x_end)``: the spike's fixed point k = (foot + ALLOW) / arc(cavity end at k). ``forced``: a toe box lower
+    than the toes everywhere ends the foot at the insole's end instead of refusing (``fit_pair``'s ``force``)."""
     k = foot_len / ins.arc_at(0.9 * ins.length)
     x_end = ins.x1
     for _ in range(SCALE_ITERATIONS):
@@ -915,13 +1027,46 @@ def _scale(ins: _Insole, foot_len: float, toe_h: float) -> Tuple[float, float]:
                         ins.cav) * k
         xs_ok = ins.gx[(room >= toe_h) & ins.ok]
         if not len(xs_ok):
-            raise _Refused("The toe box is lower than the toes everywhere")
+            if not forced:
+                raise _Refused("The toe box is lower than the toes everywhere")
+            xs_ok = ins.gx[ins.ok]
         x_end = float(xs_ok.max())
         k = (foot_len + ALLOW_M) / ins.arc_at(x_end)
     return k, x_end
 
 
 # --- the fit ----------------------------------------------------------------------------------------------------------
+
+def forepart_area(gx: np.ndarray, width: np.ndarray) -> np.ndarray:
+    """Per station of ``gx`` the insole's area in FRONT of it (trapezoids of ``width`` between the stations; 0 at the
+    last) — what of the forepart lies ahead of toes ending there (``TOE_FRONT_MAX``)."""
+    gx, width = np.asarray(gx, np.float64), np.asarray(width, np.float64)
+    seg = 0.5 * (width[1:] + width[:-1]) * np.diff(gx)
+    return np.concatenate([np.cumsum(seg[::-1])[::-1], [0.0]])
+
+
+def front_station(gx: np.ndarray, front: np.ndarray, ok: np.ndarray, room: float, fallback: float) -> float:
+    """The first station (``ok``) whose forepart in front (``forepart_area``) is at most ``room``; ``fallback``
+    when none is."""
+    hit = np.nonzero((np.asarray(front) <= room) & np.asarray(ok, bool))[0]
+    return float(gx[hit[0]]) if len(hit) else float(fallback)
+
+
+def toe_box_size(arc_at: Callable[[float], float], front_end: Callable[[float, float], float], x1: float,
+                 length: float, room: float, k0: float, x0: float) -> Tuple[float, float]:
+    """``(k, x_end)`` of the toe box attempt (``TOE_FRONT_TARGET``) for a foot of ``length`` with ``room`` of heel
+    room behind it: the toe TIP onto ``front_end(length, k)`` — the station of the foot's OWN length —, the cavity end
+    ``ALLOW_M`` in front of it, ``k = (length + room + ALLOW_M) / arc(x_end)`` (a fixed point in k); the heel room
+    lies behind the heel and moves the foot forward by itself. ``(k0, x0)`` (``_scale``'s answer) when that would
+    end the toes no further in. Read for ``length + room`` the forepart left in front grew with the heel room and
+    the toe box attempt with heel room was refused for ``toe_front`` again (2026-11-26: Tilda's worse side 0.071 at
+    +0, 0.077 at +6 %, 0.082 at +12 %)."""
+    kw, xw = k0, x0
+    for _ in range(SCALE_ITERATIONS):
+        xw = min(x1, front_end(length, kw) + ALLOW_M / kw)
+        kw = (length + room + ALLOW_M) / arc_at(xw)
+    return (kw, xw) if xw > x0 else (k0, x0)
+
 
 def _frame_matrix(insole: Dict[str, Any]) -> np.ndarray:
     """4x4 mesh coordinates -> shoe frame ``(x, height, z)``."""
@@ -961,7 +1106,8 @@ def _local_axis(J: np.ndarray, axis_w: np.ndarray) -> np.ndarray:
 
 def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
              joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None,
-             fit_height: bool = False, allowance: Optional[Dict[str, Any]] = None) -> FootwearFit:
+             fit_height: bool = False, allowance: Optional[Dict[str, Any]] = None,
+             manual: Optional[Dict[str, Any]] = None, force: bool = False) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
     and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
@@ -973,14 +1119,32 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
     to the foot's height (step 4b) where ``scale.height_ready`` holds; False (the default) only measures it — the
     first attempt of ``garment_footwear.fit_compute``, byte-identical to fit version 13. ``allowance`` (Ruling A82):
     ``{"width": percent, "length": percent}`` of ``ALLOWANCE_STEPS`` (``ALLOWANCE_STEPS`` docstring); None / zeros =
-    none."""
+    none. ``manual`` (2026-11-25): the user's adjustment (``manual_matrix``), recorded as ``scale.manual``.
+
+    ``force`` (2026-11-25): a shoe that cannot be put on the usual way (``_Refused``: "The foot is longer than the
+    shoe's insole", "The toe box is lower than the toes everywhere") is placed anyway — the toes at the insole's end —
+    so the refusal keeps a fitted, cut attempt the user can look at, adjust and accept (``fit_attempts.accept``). Such
+    a fit is never accepted on its own: ``ok`` False, the reason first, ``record.forced`` names it."""
     applied = applied_width_cap(insole, width_cap)
     width_cap = WIDTH_CAP if width_cap is None else min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
-        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height, allowance_shares(allowance))
+        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height, allowance_shares(allowance),
+                    manual=manual)
     except _Refused as exc:
         reason = str(exc)
+        if force:
+            try:
+                fit = _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height,
+                           allowance_shares(allowance), manual=manual, forced=True)
+            except _Refused:
+                fit = None
+            if fit is not None:
+                fit.ok = False
+                fit.reasons = [reason] + list(fit.reasons)
+                fit.record["forced"] = reason
+                fit.record.pop("cut", None)
+                return fit
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
                            parts={}, foot_pose={})
 
@@ -1247,8 +1411,27 @@ def width_taper_at(x: np.ndarray, taper: Optional[Dict[str, Any]]) -> Tuple[np.n
             m + np.interp(x, xs, ce - mid, left=float(ce[0] - mid[0]), right=0.0))
 
 
+def _bounded_back(v: np.ndarray, x: np.ndarray, slope: float) -> np.ndarray:
+    """``v`` over the stations ``x`` with every step at most ``slope`` per unit of x: one pass from the last station
+    backward, each value clipped to its successor's band (the last stays)."""
+    out = np.asarray(v, np.float64).copy()
+    for i in range(len(out) - 2, -1, -1):
+        band = slope * abs(float(x[i + 1] - x[i]))
+        out[i] = min(max(out[i], out[i + 1] - band), out[i + 1] + band)
+    return out
+
+
+def _majorant(v: np.ndarray, x: np.ndarray, slope: float) -> np.ndarray:
+    """The smallest function over the stations ``x`` that is at least ``v`` and changes by at most ``slope`` per unit
+    of x: ``max_j (v_j − slope · |x_i − x_j|)``."""
+    v = np.asarray(v, np.float64)
+    x = np.asarray(x, np.float64)
+    return (v[None, :] - slope * np.abs(x[:, None] - x[None, :])).max(1)
+
+
 def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.ndarray, k: float,
-                width_factor: float, x_ball: float, clearance_m: float) -> Optional[Dict[str, Any]]:
+                width_factor: float, x_ball: float, clearance_m: float,
+                shoe_xz: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
     """A219: the width taper of a closed shoe (``WIDTH_TAPER_MIN``), per station (raw x ``stations``) from the
     insole's edges and the foot's edges there (``(n, 2)`` raw z, NaN where not measured; the foot as placed, its z
     raw = metres / (k · width_factor)). Behind ``x_ball`` the walls are scaled about the insole's middle ``m`` and
@@ -1261,6 +1444,10 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     3. ``share`` = the larger of ``share0`` and what the foot needs with the shift's remainder
        ``(half + |f − m − shift| · k · width_factor + clearance_m) / (insole half · k · width_factor)``, at most 1,
        a running maximum again.
+    Fit version 24 (``TAPER_SLOPE_MAX``): ``m`` and the shift are bounded to ``TAPER_SLOPE_MAX`` per unit of x before
+    step 3, the share after it to the majorant of ``TAPER_SHARE_SLOPE_MAX`` / reach — ``shoe_xz`` (raw ``(n, 2)``
+    x / z of the shoe) gives the reach, the farthest shoe point from ``m`` behind the ball; without it the widest
+    insole half.
     Kept: the stations behind the ball and the first at it (share 1, no shift). None when nothing is taken off
     (``WIDTH_TAPER_MIN``) or nothing is measured."""
     st = np.asarray(stations, np.float64)
@@ -1273,7 +1460,7 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     ok_m = np.isfinite(m)
     if not ok_m.any():
         return None
-    m = np.interp(st, st[ok_m], m[ok_m])
+    m = _bounded_back(np.interp(st, st[ok_m], m[ok_m]), st, TAPER_SLOPE_MAX)
     ih = 0.5 * (il[:, 1] - il[:, 0])
     fh = 0.5 * (fl[:, 1] - fl[:, 0]) * k * width_factor
     f = 0.5 * (fl[:, 0] + fl[:, 1])
@@ -1295,16 +1482,22 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     if float(share0.min()) > 1.0 - WIDTH_TAPER_MIN:
         return None
     w = np.clip((1.0 - share0) / max(1.0 - float(share0.min()), 1e-9), 0.0, 1.0)
-    shift = np.where(measured, f - m, 0.0) * w
+    shift = _bounded_back(np.where(behind, np.where(measured, f - m, 0.0) * w, 0.0), st, TAPER_SLOPE_MAX)
     rest = np.abs(np.where(measured, f - m, 0.0) - shift) * k * width_factor
     need1 = np.where(measured, (fh + rest + clearance_m) / np.where(measured, ih * k * width_factor, 1.0), np.nan)
     share = running(np.clip(np.fmax(need1 * width_factor, share0 * width_factor), 1.0, width_factor)) / width_factor
+    reach = float(np.nanmax(np.where(measured, ih, np.nan)))
+    if shoe_xz is not None and len(shoe_xz):
+        sx = np.asarray(shoe_xz, np.float64).reshape(-1, 2)
+        sx = sx[sx[:, 0] < x_ball]
+        if len(sx):
+            reach = max(reach, float(np.abs(sx[:, 1] - np.interp(sx[:, 0], st, m)).max()))
+    share = np.minimum(1.0, _majorant(share, st, TAPER_SHARE_SLOPE_MAX / max(reach, 1e-9)))
     if float(share.min()) > 1.0 - WIDTH_TAPER_MIN:
         return None
     keep = behind.copy()
     if (~behind).any():
         keep[int(np.argmax(~behind))] = True      # the first station at the ball: the full factor from there on
-    shift = np.where(behind, shift, 0.0)
     r6 = lambda a: [round(float(v), 6) for v in a[keep]]  # noqa: E731
     return {"x_raw": r6(st), "share": r6(share), "mid_raw": r6(m), "centre_raw": r6(m + shift),
             "min_factor": round(float(share.min() * width_factor), 6)}
@@ -1447,7 +1640,8 @@ def _sole_contact(pl: np.ndarray, ins: "_Insole", imap: np.ndarray, k: float) ->
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
          cap_applied: float, fit_height: bool = False,
-         allow: Tuple[float, float] = (0.0, 0.0)) -> FootwearFit:
+         allow: Tuple[float, float] = (0.0, 0.0), *, manual: Optional[Dict[str, Any]] = None,
+         forced: bool = False) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
@@ -1466,10 +1660,26 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     # whole insole, ``OPEN_ALLOW_M`` shorter than it
     open_kind = insole.get("kind") == "open"
 
-    def _size(length: float) -> Tuple[float, float]:
+    # the insole's width per station (raw units) — the forepart in front of the toes (``TOE_FRONT_MAX``)
+    iw = np.array([float(np.ptp(gz[np.nonzero(~np.isnan(imap[i]))[0]])) if (~np.isnan(imap[i])).sum() >= 2 else 0.0
+                   for i in range(len(gx))])
+    front_area = forepart_area(gx, iw)
+    # the toe box attempt (``fit_height``, ``TOE_FRONT_MAX``): the toes go at least as far into the toe box as into a
+    # shoe that fits — where the forepart in front of them is down to ``TOE_FRONT_TARGET``; the toe box is then
+    # raised (``height_ready``) and the cut slims the rest, the gates judge. Never shorter than the first attempt.
+    toe_box_attempt = fit_height and not open_kind and iw.max() > 0.0
+
+    def _front_end(length: float, kk: float) -> float:
+        return front_station(gx, front_area, ins.ok, TOE_FRONT_TARGET * float(iw.max()) * length / kk, ins.x1)
+
+    def _size(length: float, room: float = 0.0) -> Tuple[float, float]:
+        """``(k, x_end)`` for a foot of ``length`` with ``room`` of heel room behind it."""
         if open_kind:
-            return (length + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
-        return _scale(ins, length, toe_h)
+            return (length + room + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
+        k_, x_ = _scale(ins, length + room, toe_h, forced)
+        if not toe_box_attempt:
+            return k_, x_
+        return toe_box_size(ins.arc_at, _front_end, ins.x1, length, room, k_, x_)
     k, x_end = _size(foot_len)
     # Ruling A82 (``ALLOWANCE_STEPS``): the length allowance is heel room — the scale of the longer foot, the heel
     # contact that much further in; ``size`` = the scale ratio the width factor is divided by
@@ -1477,7 +1687,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     heel_room = foot_len * length_share
     k0 = k
     if heel_room != 0.0:  # A174: a negative length step is a shorter shoe (less heel room)
-        k, x_end = _size(foot_len + heel_room)
+        k, x_end = _size(foot_len, heel_room)
     size = k / k0
     heel_edge = OPEN_EDGE_M if open_kind else 0.0
 
@@ -1496,7 +1706,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         # the pose on the chord to that ball: a fixed point, started from the rigid solve (the chord of
         # the bind heel–ball distance minus the rest pitch) and converged in a few turns
         # (|correction| < BALL_SOLVE_TOL_RAD, at most BALL_SOLVE_STEPS).
-        xb = ins.chord_to(xh, fm.heel_ball_m, k)
+        xb = ins.chord_to(xh, fm.heel_ball_m, k, forced)
         chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
         theta = chord - math.radians(fm.rest_pitch_deg)
         # an open shoe shows the toes: they turn from where they point in the bind pose onto the sole (module
@@ -1511,7 +1721,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             Bs = _skin(P, body, fm.ball_ids, mats)
             B1 = Bs.mean(0)
             B1[1] = Bs[:, 1].min()
-            xb = ins.chord_to(xh, float(np.linalg.norm(B1 - H1)), k)
+            xb = ins.chord_to(xh, float(np.linalg.norm(B1 - H1)), k, forced)
             chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
             pitch = math.atan2(float(H1[1] - B1[1]), float(np.hypot(B1[0] - H1[0], B1[2] - H1[2])))
             if abs(chord - pitch) < BALL_SOLVE_TOL_RAD:
@@ -1558,6 +1768,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                           toe_turn=toe_turn, H1=H1, B1=B1, P4=P4, ball_err=ball_err, sl=sl, off=off, xc=xc,
                           fw_ball=fw_ball, iw_ball=iw_ball, Xf=Xf, mirror=mirror)
 
+    manual_T = manual_matrix(manual) if is_manual(manual) else None
     # one width factor for the pair
     needed = {s: w["fw_ball"] / w["iw_ball"] for s, w in work.items()}
     width_factor = min(cap_applied, max(1.0, max(needed.values()) * size))
@@ -1571,7 +1782,11 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         R4[:3, :3] = [[c, 0.0, -s_], [0.0, 1.0, 0.0], [s_, 0.0, c]]
         D4 = np.diag([1.0, 1.0, wf, 1.0])
         A = _translation([w["xc"], 0.0, w["off"] + w["sl"] * w["xc"]]) @ R4 @ _translation([-w["xc"], 0.0, 0.0]) @ D4
-        return w["P4"] @ A                        # shoe frame -> posed body (before the root lift)
+        if manual_T is None:
+            return w["P4"] @ A                    # shoe frame -> posed body (before the root lift)
+        # the manual adjustment in the cut frame c = Dm q (``MANUAL_OFFSET_MM``): q -> Dm^-1 T Dm q
+        Dm = np.diag([k, k, k * wf, 1.0])
+        return w["P4"] @ A @ np.linalg.inv(Dm) @ manual_T @ Dm
 
     open_widened = 1.0
     if open_kind:
@@ -1643,6 +1858,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                                       "roof_mm": float(ins.cav[i]) * k * 1000.0, "need_mm": need * k * 1000.0,
                                       "foot_mm": foot * k * 1000.0, "foot_raw_mm": top * k * 1000.0}
         height_needed[side] = worst
+    # the forepart in front of the toe tip (``TOE_FRONT_MAX``) per side, the gate reads the smaller; a closed shoe
+    toe_front = ({s: float(np.interp(w["toe_x_raw"], gx, front_area, left=float(front_area[0]), right=0.0)) * k
+                  / (float(iw.max()) * w["fm"].length_m) for s, w in work.items()}
+                 if not open_kind and iw.max() > 0.0 else None)
     # a closed toe box (Ruling 15i): a roof of at least CAVITY_MIN_M over the instep stations
     from app.core.footwear_insole import CAVITY_MIN_M
     span = ins.ok & (gx >= INSTEP_FROM_SHARE * ins.length) & (gx < BALL_SHARE * ins.length)
@@ -1704,7 +1923,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                     # the pair: the wider extent of both feet (one shoe geometry for both sides)
                     fl[i] = (np.fmin(fl[i, 0], float(Cr[sel, 2].min())), np.fmax(fl[i, 1], float(Cr[sel, 2].max())))
         x_ball = min(w["xb_final"] for w in work.values())
-        taper = width_taper(gx, il, fl, k, width_factor, x_ball, CLEARANCE_M + TAPER_LAYER_M)
+        taper = width_taper(gx, il, fl, k, width_factor, x_ball, CLEARANCE_M + TAPER_LAYER_M, shoe_xz=Q[:, [0, 2]])
         if taper is not None:
             Q = width_taper_map(Q, taper)[0]
 
@@ -2032,6 +2251,9 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         "stand_floor_mm": min(lowest) * 1000.0,
     }
     table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()}
+    if toe_front is not None:
+        metrics["toe_front"] = min(toe_front.values())
+        table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in CLOSED_GATES.items()})
     if any_split:
         # the worse side: the largest value, except the knee margin (the smaller one)
         metrics.update({name: ((min if name in WORST_IS_MIN else max)(values) if values else None)
@@ -2049,7 +2271,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     ok, reasons = check_gates(metrics, table, optional=FOLLOW_OPTIONAL)
     gates: Dict[str, Any] = {}
     for name, value in metrics.items():
-        kind, limit = (FIT_GATES.get(name) or OPEN_GATES.get(name) or SHAFT_GATES[name])
+        kind, limit = (FIT_GATES.get(name) or CLOSED_GATES.get(name) or OPEN_GATES.get(name) or SHAFT_GATES[name])
         passed = (None if value is None and name in FOLLOW_OPTIONAL
                   else check_gates({name: value}, {name: (kind, limit, labels[name])})[0])
         gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
@@ -2076,8 +2298,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "height_factor": height_factor, "height_needed": height_needed, "height": height,
             "height_ready": height_ready, "instep_roof_share": instep_roof, "height_worst": height_worst,
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
+            "toe_front": toe_front, "toe_box_attempt": toe_box_attempt,
             **({"allowance": {"width_pct": round(width_share * 100.0, 6), "length_pct": round(length_share * 100.0, 6),
                               "heel_room_m": heel_room, "size": size}} if width_share or heel_room else {}),
+            **({"manual": {"offset_mm": [float(v) for v in manual["offset_mm"]],
+                           "rotate_deg": [float(v) for v in manual["rotate_deg"]],
+                           "scale_pct": float(manual["scale_pct"])}} if manual_T is not None else {}),
             **({"open": {"allow_m": OPEN_ALLOW_M, "edge_m": OPEN_EDGE_M, "widened": open_widened,
                          "height_factor": open_height, "height_needed": open_height_needed,
                          "height_cap": OPEN_HEIGHT_CAP}} if open_kind else {}),

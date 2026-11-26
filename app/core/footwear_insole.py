@@ -48,6 +48,20 @@ Blender:
   keeps 93.1 % of the heels' columns, x 0.013 … 0.996 L (the round-1 footprint ran 0.004 … 1.0 L), the ball
   station's width unchanged and the median station 2.1 mm (one rim column of rounded sole edge) narrower;
   ``insole_cover`` 0.890 -> 0.929. Every synthetic shoe (pump, clog, sandal, shaft) reads 1.0.
+- **Hollow platform soles** (``footbed_fill``, INSOLE_VERSION 12): a mesher may close a platform sole's silhouette
+  and leave it an open box — the black platform boots (``item_black_platform_boots``, 2026-11-26): every ray down
+  through the opening meets the outsole's own skin (0.4 mm above its underside) and nothing else, the platform's top
+  is only a shelf along the rim (21–26 % L at the heel, 17–19 % L at the toe), so the tracking finds no insole
+  (``insole_cover`` 0.17) and the provisional frame was even flipped by the floor's noise. The footbed of such a
+  sole is its shelf: at least ``FOOTBED_SKIN_SHARE`` of the outsole columns meet the skin first (within AIR of the
+  underside), at least ``FOOTBED_STATION_SHARE`` of those stations have a sheet above the floor on both sides (the
+  outer quarter of the columns, the lower side's median), at least ``FOOTBED_EMPTY_SHARE`` of the middle columns
+  are empty between the floor and the shelf; the footbed is a quadratic in x through the shelf points with
+  outliers trimmed (a lace, an eyelet), spanning the inner walls the station's cross-section crosses at that height
+  (``FOOTBED_INSET_SHARE`` off them), ``FOOTBED_COLUMNS`` points per row. ``footwear_source`` adds it to the
+  prepared mesh only for an analysis refused for ``insole_cover`` and only when the filled mesh passes every gate
+  (the boots: cover 0.88, heel seat 6.5 cm, ball 4.6 cm, not flipped). A shoe whose own analysis passes is never
+  filled.
 - **Shaft block** (``shaft``, INSOLE_VERSION 3 — boots spec § 6.1), measured in the shoe frame:
   ``collar_h_raw`` = the highest topline over the stations behind the THROAT (the first roofed station in the
   front half, ``footwear_cut``'s rule; every station without one) minus the insole at the HEEL SEAT. The
@@ -197,6 +211,17 @@ a closed tube (``closed_share`` at the shaft gate's 0.9, its ring above the topl
 world (sneakers, pumps, loafers, sandals, four boots incl. the knee-highs) gives a byte-identical analysis apart from
 the version: on a real boot the topline's collar stands at or above its ring (11.9 / 11.4, 32.1 / 31.5, 21.8 / 21.7,
 11.5 / 11.1 cm), and a low shoe has no closed ring at all.
+
+**One wall above 10 cm, seed behind the opening (INSOLE_VERSION 11, 2026-11-25).** Two general rules replace the per-shoe
+patches of versions 6 – 10 (measured on every stored shoe of the world on a copy, nine sources on eight bodies):
+(1) a shoe of class ``none`` has a shaft only when its higher side stands above ``ONE_WALL_SHAFT_M`` 10 cm
+(``has_shaft_of``; before: the class bound 7 cm) — a low shoe whose heel tab or tongue stands above 7 cm (Kai's
+sneakers ``item_3c60cf62``: collar 6.4 cm, higher side 8.8 cm) was judged as a boot: the shaft gate
+read the tongue's rings (closed share 0.571, refused), the cap rule cut 68 faces out of the tongue and the fit kept the
+boot width cap ×1.10 although the foot needed ×1.18; (2) the open seed is searched behind ``SEED_BEHIND_SHARE`` of the
+shoe first — under the closed toe box of a hollow sole plate the floor of the cavity is "open" (the rim stands 29 mm
+there) and was taken for the footbed (2 mm instead of 22 mm). On the copy: Kai's insole passes (footbed 22.5 mm, no
+cap), the Fur-Lined Boots' cap goes from 21 to 26 faces, every other source keeps its insole.
 """
 import math
 from dataclasses import dataclass
@@ -223,7 +248,15 @@ from app.core.footwear_gates import check_gates
 #: 10: a closed tube gives the collar when its ring stands above the topline's (``collar_source`` "slab_ring") — a
 #:    platform sole wider than the shaft no longer reads a boot as a low shoe (module docstring, "Platform soles");
 #:    stored insoles re-run on the CPU.
-INSOLE_VERSION = 10
+#: 11: the general rules of 2026-11-25 (module docstring, "One wall above 10 cm, seed behind the opening"): one wall alone
+#:    is a shaft only above ``ONE_WALL_SHAFT_M`` (``has_shaft_of``), and the open seed is searched behind the middle
+#:    of the shoe first
+#:    (``SEED_BEHIND_SHARE``); stored insoles re-run on the CPU.
+#: 12: a HOLLOW platform sole (the mesher left the platform an open box: the floor under the opening is the outsole's
+#:    own skin, the platform's top only a shelf along its rim) gets a footbed at the shelf (``footbed_fill``,
+#:    module docstring "Hollow platform soles") when its analysis is refused for ``insole_cover``; stored insoles
+#:    re-run on the CPU.
+INSOLE_VERSION = 12
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -239,6 +272,16 @@ UP_MIN = 0.3
 #: opening (``_seed_open``; a mesher cap still on the shaft): the forepart, its lowest candidate (the spike's rule).
 SEED_SHARE = 0.55
 #: The open seed (``_seed_open``) needs at least this many open cells at its station; fewer is the spike's seed.
+#: The open seed is searched first among the stations behind this share of the shoe (INSOLE_VERSION 11): only there does
+#: one look down through the collar onto the footbed. Under a closed toe box the rim stands low (Kai's sneakers: 29 mm at
+#: 0.77 L), so the floor of a hollow sole plate counts as open there and won the station count (the footbed at 22 mm read
+#: as 2 mm). Every stored low shoe and boot has its opening behind 0.5 L; without an open station there, all stations.
+SEED_BEHIND_SHARE = 0.5
+#: A low shoe (class ``none``) whose HIGHER side stands above this is one boot wall alone — a mesher hole, a shaft the
+#: shaft gate refuses (INSOLE_VERSION 11). The distribution of every stored shoe (2026-11-25): low shoes' higher side
+#: 3.7 – 8.8 cm (a heel tab, a tongue: Kai's sneakers 8.8), real boots' collar 11.5 – 32 cm; 10 cm lies between with
+#: room on both sides (8.8 x 1.14, 11.5 / 1.15). The ``none`` class bound (7 cm) it replaces read Kai's tongue as a boot.
+ONE_WALL_SHAFT_M = 0.10
 SEED_OPEN_MIN = 3
 #: Recorded hits per ray. 12 (the spike's) truncated the column of a multi-layer sole: the live sneakers'
 #: (``item_3c60cf62``) sole stacks 9–13 surfaces and the vamp roof above them is the 10th–14th hit (module docstring,
@@ -319,6 +362,18 @@ OPEN_GATES: Dict[str, Tuple[str, Any, str]] = {
     "strap_share": ("min", 0.08, "share of the insole stations with a strap, wall or upper above the insole"),
     "insole_step": ("max", TOL_SHARE, "largest jump of the insole between neighbouring stations, share of the length"),
 }
+#: Hollow platform soles (INSOLE_VERSION 12, module docstring): at least this share of the outsole columns meet the
+#: sole's own skin first (the floor within AIR of the underside) ...
+FOOTBED_SKIN_SHARE = 0.6
+#: ... at least this share of those stations show a shelf on both sides (the platform's top rim) ...
+FOOTBED_STATION_SHARE = 0.6
+#: ... and at least this share of the middle columns is empty between the floor and the footbed.
+FOOTBED_EMPTY_SHARE = 0.8
+#: The quadratic footbed keeps the shelf points within max(2.5 robust spreads, this share of the length).
+FOOTBED_TRIM_SHARE = 0.005
+#: Lateral points per footbed row, and the gap to the inner wall (share of the length).
+FOOTBED_COLUMNS = 16
+FOOTBED_INSET_SHARE = 0.004
 STRAPLESS_REFUSED = "Solid mesh or bare sole: nothing stands above the insole"
 INSOLE_REFUSED = "No insole found in the shoe mesh"
 SOLID_REFUSED = "Solid mesh: no shoe opening found"
@@ -581,8 +636,9 @@ def _seed_open(cand_mask: np.ndarray, hz: np.ndarray, above: np.ndarray, top: Op
     above it reaches up to the topline: nothing above it, or the next hit at most ``air`` under the topline — the
     footbed seen through the collar, or under a vamp whose underside is the roof. The floor of a hollow sole plate
     is a candidate too (its sheet above is more than ``air`` higher), but the footbed's underside closes it far under
-    the walls' top: it is not open. The seed station is the one with the most open cells (ties: the one nearest
-    ``SEED_SHARE``); per column the HIGHEST open candidate there, else the candidate nearest the station's median open
+    the walls' top: it is not open. The seed station is the one with the most open cells behind
+    ``SEED_BEHIND_SHARE`` of the shoe (INSOLE_VERSION 11; any station when none there has ``SEED_OPEN_MIN``; ties: the
+    one nearest ``SEED_SHARE``); per column the HIGHEST open candidate there, else the candidate nearest the station's median open
     height within 2 ``tol`` (a column whose ray hits a lace or a strap first), else -1: ``_track`` gives that
     column the spike's seed (its lowest candidate)."""
     if top is None:
@@ -592,6 +648,10 @@ def _seed_open(cand_mask: np.ndarray, hz: np.ndarray, above: np.ndarray, top: Op
     with np.errstate(invalid="ignore"):
         is_open = cand_mask & (hz <= t - air) & (np.isnan(above) | (above >= t - air))
     counts = is_open.any(axis=2).sum(axis=1)
+    behind = counts.copy()
+    behind[int(SEED_BEHIND_SHARE * nx):] = 0
+    if int(behind.max()) >= SEED_OPEN_MIN:
+        counts = behind  # INSOLE_VERSION 11: the footbed seen through the opening, never the floor under a toe box
     if int(counts.max()) < SEED_OPEN_MIN:
         return None
     best = np.nonzero(counts == counts.max())[0]
@@ -881,6 +941,147 @@ def strip_cap(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) 
     return P[used].copy(), inverse.reshape(-1, 3).astype(np.int64), removed
 
 
+# --- hollow platform soles (INSOLE_VERSION 12) -------------------------------------------------------------------------
+
+def _station_cuts(pf: np.ndarray, F: np.ndarray, s: float, h: float) -> np.ndarray:
+    """The lateral positions (z) where the mesh's cross-section at x = ``s`` crosses the height ``h``: every face
+    the plane cuts gives a segment, every segment that crosses ``h`` one z."""
+    tri = pf[F]
+    d = tri[:, :, 0] - s
+    m = (d.min(1) < 0) & (d.max(1) > 0)
+    T, dd = tri[m], d[m]
+    ends = []
+    for a, b in ((0, 1), (1, 2), (2, 0)):
+        cr = (dd[:, a] < 0) != (dd[:, b] < 0)
+        t = np.where(cr, dd[:, a] / np.where(cr, dd[:, a] - dd[:, b], 1.0), np.nan)
+        ends.append(T[:, a] + t[:, None] * (T[:, b] - T[:, a]))
+    E = np.stack(ends, 1)
+    valid = ~np.isnan(E[:, :, 0])
+    two = valid.sum(1) == 2
+    E, valid = E[two], valid[two]
+    if not len(E):
+        return np.zeros(0)
+    order = np.argsort(~valid, axis=1, kind="stable")[:, :2]
+    seg = np.take_along_axis(E, order[:, :, None], axis=1)
+    y0, y1 = seg[:, 0, 1], seg[:, 1, 1]
+    cr = (y0 - h) * (y1 - h) < 0
+    t = (h - y0[cr]) / (y1[cr] - y0[cr])
+    return seg[cr, 0, 2] + t * (seg[cr, 1, 2] - seg[cr, 0, 2])
+
+
+def footbed_fill(positions: np.ndarray, faces: np.ndarray) -> Optional[Dict[str, Any]]:
+    """The footbed of a HOLLOW platform sole (module docstring, "Hollow platform soles"; INSOLE_VERSION 12), or None
+    when the mesh is no such sole: ``{"positions": (n, 3) mesh coordinates, "faces": (m, 3) indices into them (face
+    up), "heel_h_raw", "toe_h_raw", "stations"}``. Writes nothing; ``footwear_source`` appends it to the prepared mesh
+    only when the analysis of the filled mesh passes."""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if not len(F):
+        return None
+    frame = shoe_frame(P, F)
+    L = frame.length
+    if not L > 0:
+        return None
+    pf = frame.to_frame(P)
+    used = pf[np.unique(F)]
+    gx = np.linspace(0.0, L, STATIONS)
+    zlo, zhi = float(used[:, 2].min()), float(used[:, 2].max())
+    gz = np.linspace(zlo, zhi, max(8, int(STATIONS * (zhi - zlo) / L)))
+    H = vertical_hits(pf, F, gx, gz)
+    hz, hn = H[..., 0], H[..., 1]
+    air = AIR_SHARE * L
+    low = hz[:, :, 0]
+    with np.errstate(invalid="ignore"):
+        sole = ~np.isnan(low) & (hn[:, :, 0] <= DOWN_MAX)
+        # the floor a ray meets first is the sole's own skin: up-facing, within AIR of the underside
+        skin = sole & (hn[:, :, 1] > UP_MIN) & (hz[:, :, 1] - low <= air)
+    n_sole = int(sole.sum())
+    if not n_sole or skin.sum() < FOOTBED_SKIN_SHARE * n_sole:
+        return None
+    floor = np.where(skin, hz[:, :, 1], np.nan)
+
+    def first_sheet(i: int, j: int) -> float:
+        with np.errstate(invalid="ignore"):
+            k = np.nonzero((hz[i, j] > floor[i, j] + air) & (np.abs(hn[i, j]) > UP_MIN))[0]
+        return float(hz[i, j, k[0]]) if len(k) else float("nan")
+
+    shelf = np.full(STATIONS, np.nan)
+    rows = 0
+    for i in range(STATIONS):
+        js = np.nonzero(skin[i])[0]
+        if len(js) < 8:
+            continue
+        rows += 1
+        q = max(2, len(js) // 4)
+        sides = []
+        for cols in (js[:q], js[-q:]):
+            v = [first_sheet(i, j) for j in cols]
+            v = [x for x in v if x == x]
+            if v:
+                sides.append(float(np.median(v)))
+        if len(sides) == 2:
+            shelf[i] = min(sides)
+    idx = np.nonzero(~np.isnan(shelf))[0]
+    if not rows or len(idx) < FOOTBED_STATION_SHARE * rows:
+        return None
+    # one smooth footbed: a quadratic in x through the shelf, outliers (a lace, an eyelet, a strap) trimmed
+    keep = np.ones(len(idx), bool)
+    coef = np.polyfit(gx[idx], shelf[idx], 2)
+    for _ in range(5):
+        coef = np.polyfit(gx[idx][keep], shelf[idx][keep], 2)
+        res = shelf[idx] - np.polyval(coef, gx[idx])
+        spread = 1.4826 * float(np.median(np.abs(res[keep])))
+        keep = np.abs(res) <= max(2.5 * spread, FOOTBED_TRIM_SHARE * L)
+    h = np.polyval(coef, gx[idx])
+    # hollow: the middle columns are empty between the floor and the footbed (a real stack would be hit there)
+    empty, total = 0, 0
+    for n_i, i in enumerate(idx):
+        js = np.nonzero(skin[i])[0]
+        q = max(2, len(js) // 4)
+        for j in js[q:-q]:
+            total += 1
+            with np.errstate(invalid="ignore"):
+                between = (hz[i, j] > floor[i, j] + air) & (hz[i, j] < h[n_i] - air)
+            empty += int(not between.any())
+    if not total or empty < FOOTBED_EMPTY_SHARE * total:
+        return None
+    floor_i = np.array([np.nanmedian(floor[i][skin[i]]) for i in idx])
+    if float(np.median(h - floor_i)) < 2 * air:
+        return None
+    inset = FOOTBED_INSET_SHARE * L
+    rows_v: List[np.ndarray] = []
+    used_st: List[int] = []
+    for n_i, i in enumerate(idx):
+        z = _station_cuts(pf, F, float(gx[i]), float(h[n_i]))
+        js = np.nonzero(skin[i])[0]
+        zc = 0.5 * (gz[js[0]] + gz[js[-1]])
+        left, right = z[z < zc], z[z > zc]
+        if not len(left) or not len(right):
+            continue
+        zl, zr = float(left.max()) + inset, float(right.min()) - inset
+        if zr - zl < 4 * inset:
+            continue
+        rows_v.append(np.stack([np.full(FOOTBED_COLUMNS, gx[i]), np.full(FOOTBED_COLUMNS, h[n_i]),
+                                np.linspace(zl, zr, FOOTBED_COLUMNS)], axis=1))
+        used_st.append(int(i))
+    if len(rows_v) < 2:
+        return None
+    V = np.concatenate(rows_v)
+    M = FOOTBED_COLUMNS
+    tris = []
+    for a in range(len(rows_v) - 1):
+        for m in range(M - 1):
+            p, q2 = a * M + m, (a + 1) * M + m
+            tris += [(p, q2, p + 1), (p + 1, q2, q2 + 1)]
+    T = np.asarray(tris, np.int64)
+    n = np.cross(V[T[:, 1]] - V[T[:, 0]], V[T[:, 2]] - V[T[:, 0]])
+    down = n[:, 1] < 0
+    T[down] = T[down][:, [0, 2, 1]]
+    return {"positions": frame.to_mesh(V), "faces": T, "stations": len(used_st),
+            "heel_h_raw": float(np.polyval(coef, gx[used_st[0]])), "toe_h_raw": float(np.polyval(coef, gx[used_st[-1]])),
+            "length_raw": float(L)}
+
+
 def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray, top: np.ndarray,
                  prof: np.ndarray, cav: np.ndarray, roof: np.ndarray, seat: Optional[float], k: float,
                  L: float, top_hi: Optional[np.ndarray] = None) -> Dict[str, Any]:
@@ -927,7 +1128,8 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
         rounded = _r(nominal)
         cls = next((name for name, limit in SHAFT_CLASS_M.items() if rounded <= limit), "overknee")
     # a low shoe has no shaft and so no cap: the closed rings above its slab floor are the tongue or the counter's
-    # lip (INSOLE_VERSION 6); a wall that stands on ONE side only is still a shaft (a mesher hole, refused)
+    # lip (INSOLE_VERSION 6); a wall that stands on ONE side only above ONE_WALL_SHAFT_M is still a shaft (a mesher
+    # hole, refused; the bound from the distribution since INSOLE_VERSION 11)
     has_shaft = has_shaft_of(cls, upper)
     cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum()) if has_shaft else 0
     return {"collar_h_raw": collar, "collar_h_nominal": nominal, "collar_source": collar_source, "class": cls,
@@ -937,12 +1139,14 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
 
 
 def has_shaft_of(cls: Optional[str], upper_nominal: Optional[float]) -> bool:
-    """Whether a shoe has a shaft the shaft gates judge and the cap rule reads (INSOLE_VERSION 6): its class is not
-    ``none``, or its HIGHER side's collar (``upper_collar_h_nominal``) stands above the ``none`` bound — one wall
-    standing alone is a boot with a mesher hole, not a low shoe."""
+    """Whether a shoe has a shaft the shaft gates judge, the cap rule reads and the boot width cap applies to: its
+    shaft class is not ``none``, or its HIGHER side's collar (``upper_collar_h_nominal``) stands above
+    ``ONE_WALL_SHAFT_M`` — one wall standing alone that high is a boot with a mesher hole (refused by the shaft gate).
+    Until INSOLE_VERSION 10 the bound was the ``none`` class's 7 cm; measured on every stored shoe (2026-11-25) a low
+    shoe's higher side is a heel tab or a tongue up to 8.8 cm (Kai's sneakers), a real boot's collar 11.5 – 32 cm."""
     if cls not in (None, "none"):
         return True
-    return upper_nominal is not None and _r(upper_nominal) > SHAFT_CLASS_M["none"]
+    return upper_nominal is not None and _r(upper_nominal) > ONE_WALL_SHAFT_M
 
 
 # --- analysis ---------------------------------------------------------------------------------------------------------

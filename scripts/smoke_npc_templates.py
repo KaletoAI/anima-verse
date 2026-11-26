@@ -41,7 +41,7 @@ current output):
    does, and asserts both halves come out whole. Without the sanitizer this
    check fails, which is how the hazard was found.
 
-5. The fence marker survives rendering. `_extract_json_block(text, "npc")`
+5. The fence marker survives rendering. `layout_prompt.extract_json_block(text, "npc")`
    looks for exactly ```json:npc; if the instruction that produces it were
    reworded away, every run would end in "no ```json:npc block".
 

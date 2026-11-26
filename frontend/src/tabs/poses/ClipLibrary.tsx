@@ -267,6 +267,7 @@ function useViewportHeight(): number {
   return h
 }
 
+
 export function ClipLibrary({
   listing,
   poses,
@@ -345,6 +346,10 @@ export function ClipLibrary({
   // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot an Auto-align run measured ([side,
   // forward] cm, null = none pending) — stored with Save.
   const [pivotDraft, setPivotDraft] = useState<[number, number] | null>(null)
+  // Owner decision 2026-11-25/26 (scene-render `pairScale.ts`, `pairHeight.ts`): the Places view's "Real heights"
+  // switch — while it is on, Auto-align and Save are off: both measure and store data of 1.70 m figures, which the
+  // real-height preview no longer shows.
+  const [realHeights, setRealHeights] = useState(false)
   const [heightBusy, setHeightBusy] = useState(false)
   // Empty selects the ground height and draws only the grid.
   const [footprint, setFootprint] = useState('')
@@ -577,6 +582,7 @@ export function ClipLibrary({
   const runAlignAll = useCallback(async () => {
     const targets = shown.filter((r) => (r.roles ?? 0) >= 2 && !r.missing && (includeDone || kindStatus(r.clips).key !== 'done'))
     const back = selected
+    setRealHeights(false)
     alignAllStop.current = false
     stageCast.current = autoAlignRef.current?.cast ?? null
     castRef.current = stageCast.current
@@ -631,6 +637,7 @@ export function ClipLibrary({
     const byClip = new Map<string, AlignAllRow[]>()
     for (const r of cur.rows) byClip.set(`${r.kind}|${r.set}`, [...(byClip.get(`${r.kind}|${r.set}`) ?? []), r])
     let rows = cur.rows.map((r) => ({ ...r, outcome: '' }))
+    setRealHeights(false)
     alignAllStop.current = false
     castRef.current = stageCast.current
     setAlignAll({ ...cur, running: 'apply', done: 0, total: byClip.size, rows })
@@ -927,8 +934,8 @@ export function ClipLibrary({
   const checkStored = !!(placeCheck && savedCheck && savedCheck.prop === placeCheck.prop
     && savedCheck.place === placeCheck.place)
   const checkOnly = !orientDirty && !heightDirty && !!placeCheck && !checkStored
-  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly || rootDirty || pivotDirty) && !heightLocked
-    && !(orientDirty && orientLocked)
+  const canSave = !!orientTarget && (orientDirty || heightDirty || checkOnly || rootDirty || pivotDirty)
+    && !heightLocked && !(orientDirty && orientLocked) && !realHeights
   /** The consequence of Save, shown BEFORE the click (checklist point 2). */
   const saveConsequence = useMemo(() => saveSteps({
     bake: bakeDirty, shift: clipShiftDirty || turnDirty, heights: heightDirty, root: rootDirty, pivot: pivotDirty,
@@ -943,8 +950,8 @@ export function ClipLibrary({
     'clear-check': t('the stored place check is cleared'),
     root: t('the root angle goes to the sidecar'),
     pivot: t('the contact pivot goes to the sidecar (figures of other heights are scaled about it in the game)'),
-  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, pivotDirty, placeCheck, rootDirty,
-    savedCheck, t, turnDirty])
+  })[step]), [bakeDirty, checkStored, clipShiftDirty, finaleKinds, heightDirty, orientDirty, pivotDirty,
+    placeCheck, rootDirty, savedCheck, t, turnDirty])
   /** THE one save path: bake/shift (orient), heights, root angle and contact pivot (PATCH) and the place check, in that
    *  order — the pivot after the orient write, which turns or drops a stored one. */
   const save = useCallback(async () => {
@@ -1609,6 +1616,7 @@ export function ClipLibrary({
                     draftRef={draftRef} draftSeq={alignmentDraft} bust={seq} height={previewH}
                     poses={poses.filter((p) => (p.animation || '').trim() === row.kind)}
                     onOpenPose={onOpenPose} onReadout={setPlaceReadout} autoAlignRef={autoAlignRef} castRef={castRef}
+                    realHeights={realHeights} onRealHeights={setRealHeights}
                     />
                 ) : null}
                 {innerTab === 'clip' && !row.missing ? (
@@ -1761,8 +1769,9 @@ export function ClipLibrary({
                           ? t('move {r} (receiving)').replace('{r}', alignChoice.rel.at.toUpperCase()) : t('move the receiving role')}</option>
                       </select>
                       <button type="button" className="ga-btn ga-btn-sm" data-testid="align-auto"
-                        disabled={orientLocked || innerTab !== 'places'}
-                        title={innerTab !== 'places'
+                        disabled={orientLocked || innerTab !== 'places' || realHeights}
+                        title={realHeights ? t('Switch “Real heights” off: Auto-align measures and stores the arrangement of 1.70 m figures.')
+                          : innerTab !== 'places'
                           ? t('Open the Places view: Auto-align measures the figures shown there.')
                           : t('Aligns the chosen contact by moving the chosen role (at most the alignment range in every direction and the rotation range in tilt, roll and yaw, around the arrangement you set, staying on its seat or bed) and the part’s root angle: at the deepest frame the part goes in as far as it can — its root just outside the opening, or less when the bottom stops the tip — and at both the deepest and the shallowest frame the shaft runs along the axis through the opening. The moved role may not go deeper into any other person than the clip already does (at least 5 mm allowed); a result that would, or that ends worse than it started, is not applied. Every other role stays. Writes the role and root-angle dials and measures the contact pivot; Save stores them.')}
                         onClick={() => {
@@ -1956,6 +1965,7 @@ export function ClipLibrary({
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button type="button" data-testid="align-save"
                         className="ga-btn ga-btn-sm ga-btn-primary" disabled={!canSave}
+                        title={realHeights ? t('Switch “Real heights” off to save: the dials and the measured values belong to 1.70 m figures.') : undefined}
                         onClick={() => void save()}>
                         {orientBusy || heightBusy ? t('Saving…')
                           : bakeDirty ? t('Save (Blender run)')

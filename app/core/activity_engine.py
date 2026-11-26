@@ -1028,6 +1028,30 @@ def _check_has_secret(character_name: str) -> Tuple[bool, str]:
 # 7. HOURLY TIMER — decay/regeneration for all status values
 # ============================================================
 
+def condition_references(condition: str) -> List[Tuple[str, str]]:
+    """The entities a condition names, as ``(family, token)`` pairs in
+    order: ``item`` / ``room_item`` with the item token (an id or a name),
+    ``present`` / ``relationship`` / ``romantic`` with the character name
+    (the ``any`` of relationship/romantic is no name and left out). Parsed
+    the way the runtime parses atoms (strict); reads nothing from the world.
+    Shared by :func:`validate_condition_references` and the reference checks
+    of delete paths (``rules.rules_naming``)."""
+    out: List[Tuple[str, str]] = []
+    if not condition:
+        return out
+    for group in _condition_groups(condition):
+        for part in group:
+            _, atom = _condition_atom(part)
+            family = _classify_condition_atom(atom)
+            if family not in ("item", "room_item", "present", "relationship", "romantic"):
+                continue
+            token = _atom_match(family, atom, strict=True)[1].strip()
+            if family in ("relationship", "romantic") and token.lower() == "any":
+                continue
+            out.append((family, token))
+    return out
+
+
 def validate_condition_references(condition: str) -> List[str]:
     """Validate filter/rule references using the same resolvers as runtime.
 
@@ -1035,30 +1059,21 @@ def validate_condition_references(condition: str) -> List[str]:
     Return readable warnings for unresolved references.
     """
     warns: List[str] = []
-    if not condition:
-        return warns
-    for group in _condition_groups(condition):
-        for part in group:
-            _, atom = _condition_atom(part)
-            family = _classify_condition_atom(atom)
-            if family in ("item", "room_item"):
-                token = _atom_match(family, atom, strict=True)[1].strip()
-                try:
-                    from app.models.inventory import resolve_item_id, get_item
-                    if not get_item(resolve_item_id(token) or token):
-                        warns.append(f"Item '{token}' does not exist")
-                except Exception:
-                    pass
-            elif family in ("present", "relationship", "romantic"):
-                name = _atom_match(family, atom, strict=True)[1].strip()
-                if name.lower() == "any" and family != "present":
-                    continue
-                try:
-                    from app.models.character import list_available_characters
-                    if name not in (list_available_characters() or []):
-                        warns.append(f"Character '{name}' does not exist ({family}:)")
-                except Exception:
-                    pass
+    for family, token in condition_references(condition):
+        if family in ("item", "room_item"):
+            try:
+                from app.models.inventory import resolve_item_id, get_item
+                if not get_item(resolve_item_id(token) or token):
+                    warns.append(f"Item '{token}' does not exist")
+            except Exception:
+                pass
+        else:
+            try:
+                from app.models.character import list_available_characters
+                if token not in (list_available_characters() or []):
+                    warns.append(f"Character '{token}' does not exist ({family}:)")
+            except Exception:
+                pass
     return warns
 
 

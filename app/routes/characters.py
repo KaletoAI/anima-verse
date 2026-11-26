@@ -192,7 +192,7 @@ def profile_image_prompt(character_name: str) -> Dict[str, Any]:
     from app.models.character_template import get_template
     profile = get_character_profile(character_name) or {}
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    return {"prompt": character_ops._resolve_face_prompt(profile, character_name, tmpl)}
+    return {"prompt": character_ops.resolve_face_prompt(profile, character_name, tmpl)}
 
 
 @router.get("/{character_name}/current-location")
@@ -3615,6 +3615,78 @@ def set_character_footwear_allowance(character_name: str, item_id: str, body: Fo
             "due": state != "accepted"}
 
 
+class FootwearManualRequest(BaseModel):
+    # 2026-11-25: the manual adjustment of the wearer's fit; plain Any so garment_footwear.validate_manual answers
+    # (400 with its message, not a schema 422). ``reset`` True removes it.
+    offset_mm: Any = None
+    rotate_deg: Any = None
+    scale_pct: Any = None
+    reset: bool = False
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/manual")
+def set_character_footwear_manual(character_name: str, item_id: str, body: FootwearManualRequest,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Store the manual adjustment of the footwear piece's fit on this character (``garment_footwear.set_manual``):
+    ``offset_mm`` [forward, up, outward], ``rotate_deg`` [toe out, toe up, tilt in], ``scale_pct`` — or ``reset``.
+    Runs nothing and spends nothing: the adjustment enters the fit fingerprint, the fit becomes due and Re-fit / the
+    Build refits on the CPU, 0 hub jobs; the gates then judge the adjusted shoe. 400 for a bad value or an item that
+    is no footwear piece of this character. ``{item_id, manual, fsig, due}``."""
+    from app.core import base_body, garment_footwear, garment_store as gs
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    value = None if body.reset else {k: v for k, v in (("offset_mm", body.offset_mm), ("rotate_deg", body.rotate_deg),
+                                                         ("scale_pct", body.scale_pct)) if v is not None}
+    try:
+        saved = garment_footwear.set_manual(character_name, item_id, value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    profile = get_character_profile(character_name) or {}
+    fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    base = base_body.current_base(character_name, profile=profile)
+    state = garment_footwear.fit_state(character_name, item_id, fsig, base[1]) if base else "missing"
+    return {"item_id": item_id, "manual": garment_footwear.manual(profile, item_id), "fsig": fsig,
+            "due": state != "accepted"}
+
+
+def _footwear_step_call(fn, character_name: str, item_id: str, step: str) -> Dict[str, Any]:
+    from app.core import garment_footwear
+    _require_character(character_name)
+    try:
+        garment_footwear._check(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        return fn(item_id, step)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/steps/{step}/accept")
+def accept_character_footwear_step(character_name: str, item_id: str, step: str,
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """"Accept anyway": the REFUSED result of the shoe source step ``step`` (empty / mesh / insole) becomes the step's
+    output, accepted by the user with its reasons kept (``footwear_source.accept_step``, under the item lock). One per
+    item — every wearer's fit reads it; the later steps become due (the insole and the fit run on the CPU). Spends no
+    job. 404 for an item that is no footwear piece of this character, 409 when the step is not refused by its gates or
+    its refused result is not kept."""
+    from app.core import footwear_source
+    return _footwear_step_call(footwear_source.accept_step, character_name, item_id, step)
+
+
+@router.post("/{character_name}/garments/{item_id}/footwear/steps/{step}/unaccept")
+def unaccept_character_footwear_step(character_name: str, item_id: str, step: str,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Undo "Accept anyway" of a shoe source step (``footwear_source.undo_accept_step``): the refusal is back, the
+    later steps go, the fits made from it become outdated. 409 when the step is not accepted by the user."""
+    from app.core import footwear_source
+    return _footwear_step_call(footwear_source.undo_accept_step, character_name, item_id, step)
+
+
 @router.get("/{character_name}/garments/{item_id}/hairdeck/{image}")
 def get_character_garment_hairdeck_image(character_name: str, item_id: str, image: str, request: Request,
                                          _: Dict[str, Any] = Depends(require_admin)):
@@ -5204,9 +5276,13 @@ def _toggle_character_skill_sync(character_name: str, skill_name: str,
                     status_code=409,
                     detail=f"Cannot enable '{skill_name}': {reason}")
 
-        config = get_character_skill_config(character_name, skill_name)
-        config["enabled"] = bool(enabled)
-        save_character_skill_config(character_name, skill_name, config)
+        # The read-modify-write of the config file under its lock (the
+        # World Dev set_skill tool and its undo take the same one).
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("skill_config", character_name):
+            config = get_character_skill_config(character_name, skill_name)
+            config["enabled"] = bool(enabled)
+            save_character_skill_config(character_name, skill_name, config)
         return {"status": "success", "skill": skill_name, "enabled": bool(enabled)}
     except HTTPException as e:
         raise e
@@ -5248,15 +5324,17 @@ def _update_character_skill_config_route_sync(character_name: str,
         user_id = data.get("user_id", "")
         config = data.get("config", {})
         if not isinstance(config, dict):
-            raise HTTPException(status_code=400, detail="config muss ein Objekt sein")
+            raise HTTPException(status_code=400, detail="config must be an object")
 
-        # Merge supplied fields into the existing configuration
-        existing = get_character_skill_config(character_name, skill_name)
-        if existing:
-            existing.update(config)
-            config = existing
-
-        save_character_skill_config(character_name, skill_name, config)
+        # Merge supplied fields into the existing configuration — one
+        # read-modify-write under the config file's lock.
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("skill_config", character_name):
+            existing = get_character_skill_config(character_name, skill_name)
+            if existing:
+                existing.update(config)
+                config = existing
+            save_character_skill_config(character_name, skill_name, config)
         return {
             "status": "success",
             "character": character_name,

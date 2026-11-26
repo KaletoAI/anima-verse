@@ -1321,8 +1321,14 @@ def _kind_lock(key: tuple) -> threading.Lock:
 def _run_generation(character_name: str, kind: str, force: bool = False,
                     tpose_view: Optional[str] = None) -> None:
     # Serial per (character, kind); the equipped state is read at run time,
-    # so the latest outfit always wins.
+    # so the latest outfit always wins. A character deleted since the render
+    # was requested (a World Dev undo of the create included) gets nothing —
+    # neither the render nor the T-pose auto-mesh hook below.
     from app.core.timeutils import utc_now
+    if not _character_still_exists(character_name):
+        logger.info("Model ref render for %s (%s): character deleted — skipped",
+                    character_name, kind)
+        return
     key = (character_name, kind)
     with _lock:
         _running[key] = utc_now()
@@ -1340,7 +1346,7 @@ def _run_generation(character_name: str, kind: str, force: bool = False,
     # hook itself verifies the T-pose file exists for the current
     # combination — a mesh run never starts before its input succeeded.
     # Spawns its own worker; the tpose kind lock is released here.
-    if kind == "tpose":
+    if kind == "tpose" and _character_still_exists(character_name):
         try:
             from app.core.model3d import maybe_auto_generate_for_outfit
             maybe_auto_generate_for_outfit(character_name)
@@ -1383,20 +1389,54 @@ def cancel_build_timer(character_name: str) -> None:
     _cancel_timers(character_name, (BUILD_TIMER,))
 
 
+def cancel_character_timers(character_name: str) -> None:
+    """Disarm EVERY debounce timer of the character (every reference kind and
+    the Build timer) — for ``delete_character``: a character that is gone
+    must not get a render its deletion (or a World Dev undo) cannot take
+    back. ``_fire_kind`` also re-checks the row, for a timer whose body had
+    already started."""
+    with _lock:
+        for key in [k for k in _pending_timers if k[0] == character_name]:
+            old = _pending_timers.pop(key, None)
+            if old:
+                old.timer.cancel()
+
+
+def _character_still_exists(character_name: str) -> bool:
+    """Whether the character's row still exists. Only a CONFIRMED missing row
+    means gone: a read error (a transiently locked DB, say) fires as before —
+    the popped timer is not re-armed, so treating it as gone would drop the
+    render of a character that exists."""
+    try:
+        from app.models.character import character_row_exists
+        return character_row_exists(character_name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Model ref timer for %s: row check failed, firing anyway: %s",
+                       character_name, e)
+        return True
+
+
 def _fire_kind(character_name: str, kind: str) -> None:
     """Timer body. Fires only if THIS timer is still the armed one: a timer
     cancelled a moment too late (its body already started) must not render —
     the newer timer, or the manual trigger that cancelled it, covers the
-    latest state. The auto toggle is re-read: switched off since arming means
-    nothing to render. The Build timer asks the Build (``figure_build.request``
-    re-reads "Build automatically" itself). While the character's automatic
-    generation is paused the render is held (Ruling A42, ``generation_pause``)."""
+    latest state. A character deleted since arming (an undo of the create
+    included) gets nothing. The auto toggle is re-read: switched off since
+    arming means nothing to render. The Build timer asks the Build
+    (``figure_build.request`` re-reads "Build automatically" itself). While
+    the character's automatic generation is paused the render is held
+    (Ruling A42, ``generation_pause``)."""
     key = (character_name, kind)
     with _lock:
         entry = _pending_timers.get(key)
         if entry is None or entry.timer is not threading.current_thread():
             return
         _pending_timers.pop(key, None)
+    if not _character_still_exists(character_name):
+        return
+    from app.core import world_dev_media
+    if world_dev_media.suppress_if_deferred(character_name, f"model_refs._fire_kind:{kind}"):
+        return   # a World Dev turn holds the character's renders; the release re-arms THIS kind
     if kind == BUILD_TIMER:
         from app.core import figure_build
         figure_build.request(character_name, "outfit_change")
@@ -1424,7 +1464,13 @@ def schedule_outfit_render(character_name: str) -> None:
     dressed views are a step of the character's Build, and the Build has
     its own timer (``BUILD_TIMER`` → ``figure_build.request(name,
     "outfit_change")``; "Build automatically" decides, plan
-    2026-11-12-unified-worn-pieces Task 8)."""
+    2026-11-12-unified-worn-pieces Task 8).
+
+    While a World Dev turn defers the character (``world_dev_media``) nothing
+    is armed; the call is recorded for the turn's end."""
+    from app.core import world_dev_media
+    if world_dev_media.suppress_if_deferred(character_name, "model_refs.schedule_outfit_render"):
+        return
     if not _enabled():
         return
     from app.core.base_body import is_base_pipeline
@@ -1433,6 +1479,21 @@ def schedule_outfit_render(character_name: str) -> None:
     kinds = tuple(k for k in REF_KINDS if auto.get(k) and not (pipeline and k == "tpose"))
     if pipeline:
         kinds += (BUILD_TIMER,)
+    _arm(character_name, kinds)
+
+
+def rearm_timer(character_name: str, kind: str) -> None:
+    """Arm the debounce timer of ONE kind (a reference kind or ``BUILD_TIMER``)
+    again — the replay of a timer body a World Dev turn swallowed
+    (``world_dev_media``), so the release re-arms only the kind that was
+    pending, not every enabled one. The body re-checks the row, the auto
+    toggle and the pause as for any timer."""
+    _arm(character_name, (kind,))
+
+
+def _arm(character_name: str, kinds: tuple) -> None:
+    """(Re-)arm one debounce timer per kind; an armed timer of the same kind
+    is cancelled first (trailing edge, latest state wins)."""
     if not kinds:
         return
     from app.core.timeutils import utc_now

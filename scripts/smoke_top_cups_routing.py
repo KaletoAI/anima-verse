@@ -22,7 +22,7 @@ Also, for the cupped top on ``M``:
 - ``build_args(...)``: "kind" "bra", "frames" == ``FITTED_FRAMES`` (15, from the fitted spec), no ``shell_clear_m``
   (not a corset shell), no ``straight_straps``, no ``neck_rules``;
 - the cut key's payload carries ``fitted`` and ``fitted_pattern`` (its cut follows the fitted part rules) and no
-  ``corset`` / ``corset_straps``; ``uv_pattern_key == UV_PATTERN_SHA``;
+  ``corset`` / ``corset_straps``; ``uv_pattern_key`` is the bra's pin (``UV_PATTERN_KEYS["bra"]``);
 - ``garment_cut_texture.prompt_family("bra") == "fitted"``; ``kind_has_back`` False for balconette cups (a cupped
   bra has no back job, D4) and True for a bandeau;
 - the piece name: length 0.30 < ``CUPPED_BUSTIER_LENGTH_M`` 0.375 -> "balconette crop top"; 0.40 -> "balconette
@@ -98,14 +98,14 @@ TABLE = {  # build_kind, has_bodice, corset_top, panel_piece, corset_straps, fit
 
 
 def tsig_payload_has_fitted(p):
-    """Whether ``tsig`` carries the fitted version: the key with FITTED_VERSION changed differs."""
+    """Whether ``tsig`` carries the fitted version: the key with every FITTED_VERSIONS entry changed differs."""
     a = gt.tsig(p, base_sha="b", texture_sha="t", lower=[])
-    old = gt.FITTED_VERSION
-    gt.FITTED_VERSION = old + 1000
+    old = gt.FITTED_VERSIONS
+    gt.FITTED_VERSIONS = {k: v + 1000 for k, v in old.items()}
     try:
         b = gt.tsig(p, base_sha="b", texture_sha="t", lower=[])
     finally:
-        gt.FITTED_VERSION = old
+        gt.FITTED_VERSIONS = old
     return a != b
 
 
@@ -135,11 +135,12 @@ def cut_payload_keys(p):
     """The optional parts of the cut key: each one's constant bumped changes the key."""
     base = gtc.cut_sig(p, base_sha="b", lower=[])
     out = set()
-    for mod, attr, part in ((gt, "FITTED_VERSION", "fitted"), (gtc, "FITTED_PATTERN_SHA", "fitted_pattern"),
+    for mod, attr, part in ((gt, "FITTED_VERSIONS", "fitted"), (gtc, "FITTED_PATTERN_KEYS", "fitted_pattern"),
                             (gt, "CORSET_VERSION", "corset"), (gt, "CORSET_STRAPS_VERSION", "corset_straps"),
                             (gt, "PANEL_VERSION", "panels")):
         old = getattr(mod, attr)
-        setattr(mod, attr, (old + 1000) if isinstance(old, int) else old + "x")
+        setattr(mod, attr, {k: (v + 1000 if isinstance(v, int) else v + "x") for k, v in old.items()}
+                if isinstance(old, dict) else (old + 1000) if isinstance(old, int) else old + "x")
         try:
             if gtc.cut_sig(p, base_sha="b", lower=[]) != base:
                 out.add(part)
@@ -151,7 +152,7 @@ def cut_payload_keys(p):
 parts = cut_payload_keys(cup)
 check("[cut] the cut key carries fitted + fitted_pattern, no corset / panels", parts == {"fitted", "fitted_pattern"},
       sorted(parts))
-check("[cut] uv_pattern_key is the live uv_pattern.py", gtc.uv_pattern_key(cup) == gtc.UV_PATTERN_SHA)
+check("[cut] uv_pattern_key is the bra's pin", gtc.uv_pattern_key(cup) == gtc.UV_PATTERN_KEYS["bra"])
 check("[cut] prompt family of bra is fitted", gct.prompt_family("bra") == "fitted")
 check("[cut] balconette cups: no back job; bandeau: a back job",
       gct.kind_has_back(cup) is False and gct.kind_has_back(V(kind="top", cups="bra", cup_style="bandeau")) is True)

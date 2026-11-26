@@ -602,42 +602,6 @@ def _drive_random_event_solution_rp(agent: str, avatar: str) -> PreviewResult:
             "note": "Production: random_events._generate_solution_rp with sample fire event."}
 
 
-def _drive_story_arc_generation(agent: str, avatar: str) -> PreviewResult:
-    from app.core.story_engine import get_story_engine
-    task, sys, user = _capture_render(lambda: get_story_engine().generate_arc())
-    return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: story_engine.generate_arc."}
-
-
-def _drive_story_arc_advancement(agent: str, avatar: str) -> PreviewResult:
-    from app.models.story_arcs import get_active_arcs
-    arcs = get_active_arcs(agent) or []
-    if not arcs:
-        return {"ok": False, "output": "",
-                "note": f"No active story arc for {agent}."}
-    arc = arcs[0]
-    from app.core.story_engine import get_story_engine
-    task, sys, user = _capture_render(
-        lambda: get_story_engine().advance_arc(arc["id"], "Brief tense exchange."))
-    return {"ok": True, "output": _format(task, sys, user),
-            "note": f"Production: story_engine.advance_arc({arc['id']!r}) "
-                    f"with a sample interaction summary."}
-
-
-def _drive_story_arc_resolve(agent: str, avatar: str) -> PreviewResult:
-    from app.models.story_arcs import get_active_arcs
-    arcs = get_active_arcs(agent) or []
-    if not arcs:
-        return {"ok": False, "output": "",
-                "note": f"No active story arc for {agent}."}
-    arc = arcs[0]
-    from app.core.story_engine import get_story_engine
-    task, sys, user = _capture_render(
-        lambda: get_story_engine().resolve_arc(arc["id"]))
-    return {"ok": True, "output": _format(task, sys, user),
-            "note": f"Production: story_engine.resolve_arc({arc['id']!r})."}
-
-
 def _drive_image_prompt_scene(agent: str, avatar: str) -> PreviewResult:
     from app.routes.chat import _generate_image_prompt
     appearances = [{"name": agent, "appearance": ""}]
@@ -872,9 +836,6 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/random_event_secret_hint.md": _drive_random_event_secret_hint,
     "tasks/random_event_validate_solution.md": _drive_random_event_validate_solution,
     "tasks/random_event_solution_rp.md": _drive_random_event_solution_rp,
-    "tasks/story_arc_generation.md": _drive_story_arc_generation,
-    "tasks/story_arc_advancement.md": _drive_story_arc_advancement,
-    "tasks/story_arc_resolve.md": _drive_story_arc_resolve,
     "tasks/image_prompt_scene.md": _drive_image_prompt_scene,
     "tasks/image_prompt_improver.md": _drive_image_prompt_improver,
     "tasks/video_prompt_improver.md": _drive_video_prompt_improver,

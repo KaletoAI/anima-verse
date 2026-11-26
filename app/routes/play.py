@@ -3019,13 +3019,17 @@ def play_others(user=Depends(get_current_user)):
     return out
 
 
-@router.get("/play/story-arcs")
-def play_story_arcs(user=Depends(get_current_user)):
-    """The avatar's quest book: running arcs first, then the last finished
-    ones. Spoiler-free by construction — see build_player_story_arcs."""
-    from app.core.world_ops import build_player_story_arcs
+@router.get("/play/quests")
+def play_quests(user=Depends(get_current_user)):
+    """The avatar's quest book (quest stage 1, D14): open quests first, then the last ended ones.
+    Spoiler-free by construction — see ``app/core/quest_book.py``. Labels are in the avatar's language,
+    as ``/play/news`` builds them; without an avatar ``{"avatar": "", "quests": []}``."""
+    from app.core.quest_book import build_player_quests
     from app.models.account import get_active_character
-    return build_player_story_arcs(get_active_character() or "")
+    from app.models.character import get_character_language
+    avatar = (get_active_character() or "").strip()
+    lang = get_character_language(avatar) if avatar else "en"
+    return _json_off_loop(build_player_quests(avatar, lang))
 
 
 @router.get("/play/notices")

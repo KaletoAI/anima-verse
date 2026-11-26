@@ -2550,7 +2550,8 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
             base = base_body.current_base(character_name)
             gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
                               error=str(result.get("error") or ""), base_model_sha=base[1] if base else "",
-                              stamp=result.get("refusal_stamp"), refit_offer=result.get(REFIT_OFFER))
+                              stamp=result.get("refusal_stamp"), refit_offer=result.get(REFIT_OFFER),
+                              inputs_state=str(result.get("inputs_state") or ""))
     except (OSError, ValueError) as e:
         logger.warning("Garment failure record %s/%s not written: %s", character_name, item_id, e)
 
@@ -2575,6 +2576,26 @@ def cached_failure(character_name: str, item_id: str, *,
         # Ruling A27: the refusal was recorded under an older gate and a stored attempt passes the current one
         # (the hem snap) — it no longer holds; the run takes that attempt without a render.
         failure = None
+    if failure is not None and failure.get("inputs_state"):
+        # 2026-11-26: a footwear failure holds only while the shoe source it was recorded on is unchanged — a step
+        # run again, measured under a new analysis, accepted anyway (or undone) gives the chain its next try
+        try:
+            if _item(character_name, item_id)[1] == _footwear():
+                from app.core import footwear_source
+                if footwear_source.state_token(item_id) != failure["inputs_state"]:
+                    failure = None
+        except (OSError, ValueError):
+            pass
+    if failure is not None and str(failure.get("step") or "") in ("empty", "mesh", "insole"):
+        # 2026-11-25 "Accept anyway": a shoe source step the user accepted (or a later run passed) no longer blocks
+        # any wearer's automatic run — the source is one per item, the failure was recorded per wearer
+        try:
+            if _item(character_name, item_id)[1] == _footwear():
+                from app.core import footwear_source
+                if footwear_source.step_done(item_id, footwear_source.current_ssig(item_id), str(failure["step"])):
+                    failure = None
+        except ValueError:
+            pass
     if failure is not None:
         return failure
     # Footwear: the source is ONE per item, whoever wears it, so a refused

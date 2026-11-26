@@ -1481,6 +1481,30 @@ the place, the core the editor; the core refuses a name outside `CORE_BLOCKS` (a
 |---|---|
 | `linked_characters` | The link editor of `app.core.linked_characters` for the panel's character (`GET`/`PUT`/`DELETE /characters/{name}/link`): on a body its leader (with "Open"), its status, the shared soul sections and "Unlink"; otherwise the leader select (link this character as a body), its bodies (each opens in the editor) and "Link an existing character" (`describe(name)["body_candidates"]`, linked as a body with the default shared sections after an in-app confirmation). Creating a NEW body is not part of the block — that is the embedding package's action (`create_linked`, e.g. with `open_character`) |
 
+### Quest types
+
+A package adds quest conditions (and prerequisites) through the capability
+`quest.types`. Unlike most capabilities the contributor returns a LIST:
+contributors are per OWNER, so one package registers ONE function that answers
+all of its types, and registering again replaces it. Registration, from the
+`on_load` module:
+
+```python
+from app.core.quest_catalog import QuestType, register
+
+def _types() -> list[QuestType]:
+    return [QuestType(id="<package id>.<name>", kind="condition", label="…",
+                      description="…", params=(…), signals=(…), evaluate=…)]
+
+register("<package id>", _types)
+```
+
+The core asks the registry on every read (no cache), so removing the package
+removes its types at once; a running quest that used one turns `broken` at the
+next tick. The type contract (parameters, evaluate/validate, signals) and a
+complete minimal package are in [`docs/quests.md`](quests.md#type-contract-for-packages),
+the callable names in `docs/skill-core-api.md` → "Quest catalog".
+
 ## PluginContext API
 
 | Attribut/Methode | Beschreibung |

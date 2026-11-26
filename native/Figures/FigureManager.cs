@@ -926,11 +926,23 @@ public partial class FigureManager : Node3D
         fig.Position = new Vector3((float)shown.X, (float)shown.Y, (float)shown.Z);
         fig.FaceTowards(new Vector3((float)Math.Sin(shown.Yaw), 0, (float)Math.Cos(shown.Yaw)), snap: true);
         ApplyRoleTurn(fig, clip, shown.Yaw);
+        // Owner decision 2026-11-25 (scene-render pairHeight.ts): the vertical size compensation of the half.
+        var height = PairHeightOf(fig, it, clip);
+        fig.SetPairHeight(clip, height.Offset, height.Planted);
         if (age >= PairBlend.BlendS) it.Blend = null;
         fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
         fig.UpdateFigure(restart ? 0 : dt);
         return true;
     }
+
+    /// <summary>
+    /// npcs.ts <c>pairHeightOf</c>: the hips offset of <paramref name="fig"/> while it plays pair half <paramref name="clip"/>.
+    /// The renderers solve it from ONE SAMPLED LOOP of the running interaction (scene-render pairHeight.ts, <see cref="PairHeight"/>):
+    /// each member posed from the clip at <see cref="PairHeight.Samples"/> phases, the part's straight axis against the
+    /// receiving opening. This client has no loop sampler yet (no partner channels; the declared anchors are not read
+    /// here), so it applies nothing — 0, no held legs.
+    /// </summary>
+    private static (double Offset, bool[] Planted) PairHeightOf(Figure fig, PairPlay it, string clip) => (0.0, Array.Empty<bool>());
 
     /// <summary>
     /// npcs.ts <c>pairFixOf</c> / <c>applyPairFix</c> (owner decision 2026-11-23): the half's stored role turn
