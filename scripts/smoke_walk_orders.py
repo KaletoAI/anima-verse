@@ -577,6 +577,53 @@ class Walks(unittest.TestCase):
         scheduler = (REPO / "app/scheduler/scheduler_manager.py").read_text()
         self.assertNotIn("motion_orders", scheduler)
 
+    def _far_location(self):
+        far = F.W.add_location("Far", "fixture")
+        far.update(pos_x=160, pos_z=0, map3d={"plan_width_m": 10, "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]]})
+        F.W.upsert_location(far, sync_world=True)
+        return far["id"]
+
+    def test_w17_location_setter_cancels_the_walk(self):
+        far = self._far_location()
+        name = npc((97, -1), self.loc, "r-a")
+        stroll(name)
+        F.MOTION[0] = 101.0
+        F.C.force_set_status(name, location=far)
+        self.assertEqual(kind_of(name), "cancel")
+        self.assertNotIn("order", F.C.get_character_profile(name))
+        here = pos(name)
+        F.MOTION[0] = 103.0
+        self.assertEqual(MO.settle_due(), 0)
+        self.assertEqual(F.C.get_character_current_location(name), far)
+        self.assertEqual(pos(name), here)
+
+    def test_w18_room_setter_cancels_the_walk(self):
+        name = npc((97, -1), self.loc, "r-a")
+        stroll(name)
+        F.MOTION[0] = 101.0
+        F.C.save_character_current_room(name, "r-b")
+        self.assertEqual(kind_of(name), "cancel")
+        here = pos(name)
+        F.MOTION[0] = 103.0
+        self.assertEqual(MO.settle_due(), 0)
+        self.assertEqual(F.C.get_character_current_room(name), "r-b")
+        self.assertEqual(pos(name), here)
+        # The decision point still publishes ITS walk after the setter.
+        mover = npc((97, -1), self.loc, "r-a")
+        self.room_change(mover)
+        self.assertEqual(kind_of(mover), "walk")
+
+    def test_w19_world_dev_placement_refuses_a_walker(self):
+        from app.core.world_dev_tools import _placement_state_refusal
+        name = npc((97, -1), self.loc, "r-a")
+        self.assertIsNone(_placement_state_refusal(name, F.C.get_character_profile(name)))
+        stroll(name)
+        refusal = _placement_state_refusal(name, F.C.get_character_profile(name))
+        self.assertIn("travelling", refusal or "")
+        F.MOTION[0] = 103.0
+        MO.settle_due()
+        self.assertIsNone(_placement_state_refusal(name, F.C.get_character_profile(name)))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

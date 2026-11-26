@@ -6565,7 +6565,11 @@ def _placement_state_refusal(name: str, prof: Dict[str, Any]) -> Optional[str]:
         return f"{name} sleeps off the map" + _PLACE_STATE_HINT
     if is_character_sleeping(name, profile=prof):
         return f"{name} is asleep" + _PLACE_STATE_HINT
-    if isinstance(prof.get("journey"), dict) or str(prof.get("movement_target") or "").strip():
+    from app.core.motion_orders import walking
+    if (isinstance(prof.get("journey"), dict) or str(prof.get("movement_target") or "").strip()
+            or walking(name, profile=prof)):
+        # A live walk order is "on the way" too (plan E3 decision 20): its flip
+        # would write the walk's target over the placement.
         return f"{name} is travelling" + _PLACE_STATE_HINT
     if prof.get("place"):
         return f"{name} is seated on a piece of furniture" + _PLACE_STATE_HINT

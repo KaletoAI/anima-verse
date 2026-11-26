@@ -1839,6 +1839,15 @@ def save_character_current_location(character_name: str = "", location: str = ""
         _interrupt_prop_action(character_name, "location")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="location")
+        # A live walk order ends with every location change that is not the
+        # walk's own flip (plan E3 decision 20): its flip would write the old
+        # target — and with it the old location — back over this one. The
+        # flip itself writes with _preserve_movement_target and must not
+        # cancel itself; a decision point publishes its new walk only after
+        # this setter returns.
+        if not _preserve_movement_target:
+            from app.core.motion_orders import cancel_for
+            cancel_for(character_name, reason="location")
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the WHOLE profile_json blob, so a stale read drops every field
     # a concurrent writer (an equip route, the seat assignment) stored in
@@ -3056,6 +3065,11 @@ def save_character_current_room(character_name: str, room_id: str,
         _interrupt_prop_action(character_name, "room")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="room")
+        # And a live walk order (plan E3 decision 20): its flip would put the
+        # figure back onto a point of the room it just left. A decision point
+        # publishes its room-change walk only after this setter returns.
+        from app.core.motion_orders import cancel_for
+        cancel_for(character_name, reason="room")
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob. The span ends at the save —
     # ``stand_up``, the party drag (another character's profile) and the
