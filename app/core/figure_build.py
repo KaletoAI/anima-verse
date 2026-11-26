@@ -993,8 +993,14 @@ def request(character_name: str, trigger: str) -> bool:
     the Build's failure (ruling F13 e). A request while a base-body step runs is
     deferred until it is done (Ruling A26 a) — True as well. While the
     character's automatic generation is paused the request is held instead
-    (Ruling A42, ``generation_pause.hold_build``) — False. Never raises."""
+    (Ruling A42, ``generation_pause.hold_build``) — False. While a World Dev
+    turn defers the character (``world_dev_media``) — False, recorded for the
+    turn's end. Never raises."""
     try:
+        from app.core import world_dev_media
+        if world_dev_media.suppress_if_deferred(character_name, "figure_build.request", (trigger,)):
+            logger.debug("Build %s not requested (%s): deferred by World Dev", character_name, trigger)
+            return False
         try:
             profile = _read_profile(character_name)
         except Exception as e:  # noqa: BLE001 — recorded, never "not requested" in silence

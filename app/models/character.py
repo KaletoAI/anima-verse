@@ -11,6 +11,8 @@ from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
 from app.core import read_scope
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import contextlib
+import contextvars
 import copy
 import json
 import math
@@ -1277,6 +1279,26 @@ def _get_character_defaults() -> Dict[str, Any]:
     }
 
 
+#: True inside ``no_config_auto_create()`` (per context: a thread starts with
+#: the default, False).
+_NO_CONFIG_AUTO_CREATE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "no_config_auto_create", default=False)
+
+
+@contextlib.contextmanager
+def no_config_auto_create():
+    """Inside this block ``get_character_config`` returns the defaults of a
+    character without a stored config IN MEMORY instead of saving them — for a
+    pure read that must leave no write behind (the World Dev media baseline is
+    read before a journaled write, and a Discard could not undo a config the
+    read itself created)."""
+    token = _NO_CONFIG_AUTO_CREATE.set(True)
+    try:
+        yield
+    finally:
+        _NO_CONFIG_AUTO_CREATE.reset(token)
+
+
 def get_character_config(character_name: str, *, profile=None,
                          strict: bool = False) -> Dict[str, Any]:
     """Return per-character configuration (LLM, Vision, TTS, etc.).
@@ -1336,7 +1358,7 @@ def get_character_config(character_name: str, *, profile=None,
                 _exists = (get_user_characters_dir() / character_name).is_dir()
             except Exception:
                 pass
-        if _exists:
+        if _exists and not _NO_CONFIG_AUTO_CREATE.get():
             save_character_config(character_name, config)
             logger.info("Auto-Config fuer %s erstellt", character_name)
         else:

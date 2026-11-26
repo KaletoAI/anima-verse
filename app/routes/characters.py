@@ -192,7 +192,7 @@ def profile_image_prompt(character_name: str) -> Dict[str, Any]:
     from app.models.character_template import get_template
     profile = get_character_profile(character_name) or {}
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    return {"prompt": character_ops._resolve_face_prompt(profile, character_name, tmpl)}
+    return {"prompt": character_ops.resolve_face_prompt(profile, character_name, tmpl)}
 
 
 @router.get("/{character_name}/current-location")

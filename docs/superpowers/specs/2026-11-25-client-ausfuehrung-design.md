@@ -459,7 +459,7 @@ Navmesh liegt bis zu `cell_height` über dem Boden).
   `QueryPath` + Abspieler.
 
 **Außenwelt:** **kein Navmesh** für Terrain-Kacheln (256 m bei 2 m Schritt, `Payloads.cs:586`; draußen blockiert
-fast nichts). Draußen gelten die vorhandenen Regeln (`Walk.SlopeBlocks`, `WalkGround.TerrainPace`, Wasser-Gates)
+fast nichts). Draußen gelten die vorhandenen Regeln (`Walk.SlopeBlocks`, `WalkGround.TerrainPace`, Wasser-Gates; **Entscheidung (Claude, E3 Task 9):** ein Server-`walk`-Auftrag läuft ohne `TerrainPace` mit seinem bindenden `speed_m_s`, damit Bild und Schätzung übereinstimmen — `TerrainPace` gilt für Avatar und client-lokale Gänge)
 plus RVO auf der Welt-Map (Avoidance braucht keine Region). Ein lokales Chunk-Navmesh (Zelle 0,5 m, Radius
 ≤ 64 m um den Spieler) erst, wenn Streuobjekte nachweislich Wege versperren (offen, Abschnitt 8).
 

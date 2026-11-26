@@ -323,7 +323,7 @@ def main() -> int:
             sent.append(json.loads(payload))
             raise LoraNotAllowedError("flux-backend", ["qwen_style.safetensors"])
 
-    ops._resolve_face_prompt = lambda *a, **k: "a face"
+    ops.resolve_face_prompt = lambda *a, **k: "a face"
     import app.models.character as char_mod
     char_mod.get_character_profile = lambda *a, **k: {"name": "demo"}
     svc_mod.get_image_service = lambda: _Svc()

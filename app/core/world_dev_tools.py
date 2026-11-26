@@ -149,6 +149,13 @@ class _Step:
     def begin(self, target_kind: str, target_id: Optional[str] = None,
               inverse: Optional[dict] = None) -> int:
         _ensure_backup(self.ctx.run_id)
+        # Deferred before wr.begin: should begin raise or the step refuse
+        # without writing, the character simply stays deferred until the turn
+        # ends — harmless, the release replays whatever was suppressed.
+        self._defer_media(target_kind, target_id)
+        # The element's media baseline at the run's first touch — before the
+        # write (create-inverse = created by the run, plan Task 4).
+        self._note_media_touch(target_kind, target_id, inverse)
         self.seq = wr.begin(self.ctx.run_id, self.ctx.turn, "write", self.tool,
                             self.args, target_kind, target_id, inverse)
         self.kind = "write"
@@ -166,6 +173,29 @@ class _Step:
                before: Any = None) -> None:
         wr.attach(self.ctx.run_id, self.seq, target_id, inverse, before)
         self._note_target(target_id, inverse)
+        self._defer_media(self.target_kind, target_id)
+        self._note_media_touch(self.target_kind, target_id, inverse)
+
+    def _note_media_touch(self, target_kind: Optional[str], target_id: Optional[str],
+                          inverse: Optional[dict]) -> None:
+        """``world_dev_media.note_touch`` for a location / character target,
+        and for an item target the touch of every character wearing it
+        (``note_item_touch`` — an edited shared piece re-plans its wearers'
+        media). Never raises: a fingerprint error must not refuse the tool."""
+        if target_kind in ("location", "character") and target_id:
+            from app.core import world_dev_media
+            world_dev_media.note_touch(self.ctx.run_id, str(target_kind), str(target_id), inverse)
+        elif target_kind == "item" and target_id:
+            from app.core import world_dev_media
+            world_dev_media.note_item_touch(self.ctx.run_id, str(target_id), inverse)
+
+    def _defer_media(self, target_kind: Optional[str], target_id: Optional[str]) -> None:
+        """A character the step writes gets no automatic render until the turn
+        ends (``world_dev_media.defer``, plan 2026-11-25-world-dev-free-media
+        Task 2) — set BEFORE the write, so no trigger it reaches arms one."""
+        if target_kind == "character" and target_id:
+            from app.core import world_dev_media
+            world_dev_media.defer(str(target_id), self.ctx.run_id)
 
     def complete(self, written: Any, line: str, kind: Optional[str] = None) -> None:
         wr.complete(self.ctx.run_id, self.seq, written, line, kind)
@@ -2203,8 +2233,7 @@ def _references_to_location(loc_id: str) -> List[str]:
     secrets whose ``related_location`` is loc_id (``secret <id> of <owner>``),
     world rules whose target place is loc_id (``rule <id> "<name>"``) and
     active events at loc_id (``event <id>``)."""
-    from app.models.rules import rules_naming
-    from app.models.secrets import secrets_naming
+    from app.models import rules as rules_mod, secrets as secrets_mod
     from app.models.character import (get_character_config,
                                       get_character_daily_schedule,
                                       list_available_characters)
@@ -2221,8 +2250,8 @@ def _references_to_location(loc_id: str) -> List[str]:
             why.append("schedule")
         if why:
             out.append(f"{name} ({', '.join(why)})")
-    out += _secret_refs(secrets_naming(location=loc_id))
-    out += _rule_refs(rules_naming(location=loc_id))
+    out += _secret_refs(_naming_refs(secrets_mod.secrets_naming, "secrets", location=loc_id))
+    out += _rule_refs(_naming_refs(rules_mod.rules_naming, "world rules", location=loc_id))
     out += _event_refs(loc_id)
     return out
 
@@ -6151,11 +6180,26 @@ def _references_to_character(name: str) -> List[str]:
     paths refuse while any is left — never a dangling reference. Deliberately
     not in ``_character_delete_blockers`` (the same-turn path never calls
     those). World rules whose ``character`` is it or whose condition names
-    it (``rule <id> "<name>"``) are listed too."""
-    from app.models.rules import rules_naming
-    from app.models.secrets import secrets_naming
-    return (_secret_refs([r for r in secrets_naming(name=name) if r["owner"] != name])
-            + _rule_refs(rules_naming(character=name)))
+    it (``rule <id> "<name>"``) are listed too. A read error of either
+    refuses the delete (``_naming_refs``)."""
+    from app.models import rules as rules_mod, secrets as secrets_mod
+    return (_secret_refs([r for r in _naming_refs(secrets_mod.secrets_naming, "secrets", name=name)
+                          if r["owner"] != name])
+            + _rule_refs(_naming_refs(rules_mod.rules_naming, "world rules", character=name)))
+
+
+def _naming_refs(fn: Callable[..., List[Dict[str, Any]]], label: str,
+                 **kw: Any) -> List[Dict[str, Any]]:
+    """The rows of a strict "who names it" reader (``rules.rules_naming``,
+    ``secrets.secrets_naming``), called with *kw*. Any exception — a broken
+    rules layer (``RuleWriteError``), a locked table — refuses the delete,
+    like ``_event_refs``: a read error is never read as "nothing names it".
+    The callers run before the first write, so a refusal leaves only a
+    ``refused`` journal row."""
+    try:
+        return fn(**kw)
+    except Exception as e:
+        raise ToolRefusal(f"the {label} could not be read ({e}) — nothing was deleted") from e
 
 
 # ── Access rules ─────────────────────────────────────────────────────────
@@ -6908,8 +6952,8 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
             raise ToolRefusal(f"item {ident} is the knowledge item of location "
                               + ", ".join(named) + " — change that place first "
                               "(undo of that step) or keep it")
-        from app.models.rules import rules_naming
-        rule_refs = _rule_refs(rules_naming(item=ident))
+        from app.models import rules
+        rule_refs = _rule_refs(_naming_refs(rules.rules_naming, "world rules", item=ident))
         if rule_refs:
             raise ToolRefusal(f"item {ident} is still named by: " + "; ".join(rule_refs)
                               + " — delete or change those first")

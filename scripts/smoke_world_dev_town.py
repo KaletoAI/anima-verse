@@ -207,7 +207,8 @@ def dump():
 
 
 # The run's own bookkeeping, which the undo keeps on purpose.
-DB_ROWS_SKIP_TABLES = {"world_dev_journal", "world_dev_runs"}
+DB_ROWS_SKIP_TABLES = {"world_dev_journal", "world_dev_runs", "world_dev_media",
+                       "world_dev_media_baseline"}
 DB_ROWS_SKIP_COLUMNS = {"updated_at"}
 
 

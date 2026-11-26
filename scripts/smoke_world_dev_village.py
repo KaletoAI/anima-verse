@@ -217,7 +217,8 @@ check("setup: rp is registered next to the fake package",
 
 #: As scripts/smoke_world_dev_tools.py: the journal, SQLite's counter and the
 #: derived height raster.
-_DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "sqlite_sequence",
+_DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "world_dev_media", "world_dev_media_baseline",
+              "sqlite_sequence",
               "world_heightfield"}
 
 

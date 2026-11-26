@@ -335,15 +335,15 @@ def _render_profile_image(name: str) -> str:
     NPC portrait lands on the configured backend instead of whatever the pool
     happens to pick. Blocking — this runs in a queue worker.
     """
-    from app.core.character_ops import _resolve_face_prompt
+    from app.core.character_ops import resolve_face_prompt
     from app.imagegen.service import get_image_service
     from app.models.character import get_character_profile
     from app.models.character_template import get_template
 
     profile = get_character_profile(name) or {}
     template = profile.get("template") or ""
-    prompt = _resolve_face_prompt(profile, name,
-                                  get_template(template) if template else None)
+    prompt = resolve_face_prompt(profile, name,
+                                 get_template(template) if template else None)
     result = str(get_image_service().generate_from_input(json.dumps({
         "prompt": prompt,
         "agent_name": name,

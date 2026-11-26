@@ -64,7 +64,7 @@ def seed_default_skills(character_name: str) -> None:
 
 # === Pure helpers ===
 
-def _resolve_face_prompt(profile: dict, character_name: str, tmpl, *,
+def resolve_face_prompt(profile: dict, character_name: str, tmpl, *,
                          apply_modifiers: bool = True) -> str:
     """Profile-image prompt = face prompt (face_appearance), tokens resolved
     (target_key 'character_appearance' — this resolves both appearance fields).
@@ -1625,7 +1625,7 @@ def build_prompt_preview(character_name: str) -> Dict[str, str]:
     from app.core.scene_render import _appearance_text
     return {
         "scene": _appearance_text(character_name),
-        "face": _resolve_face_prompt(profile, character_name, tmpl),
+        "face": resolve_face_prompt(profile, character_name, tmpl),
         "outfit": (render_outfit(character_name=character_name).get("full", "") or ""),
     }
 
@@ -3239,7 +3239,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     from app.models.character_template import get_template
     profile = get_character_profile(character_name)
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    appearance = _resolve_face_prompt(profile, character_name, tmpl)
+    appearance = resolve_face_prompt(profile, character_name, tmpl)
 
     # Prompt from the dialog or the face prompt (the style comes from the
     # "profile" use case).

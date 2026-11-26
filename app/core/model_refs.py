@@ -1434,6 +1434,9 @@ def _fire_kind(character_name: str, kind: str) -> None:
         _pending_timers.pop(key, None)
     if not _character_still_exists(character_name):
         return
+    from app.core import world_dev_media
+    if world_dev_media.suppress_if_deferred(character_name, f"model_refs._fire_kind:{kind}"):
+        return   # a World Dev turn holds the character's renders; the release re-arms THIS kind
     if kind == BUILD_TIMER:
         from app.core import figure_build
         figure_build.request(character_name, "outfit_change")
@@ -1461,7 +1464,13 @@ def schedule_outfit_render(character_name: str) -> None:
     dressed views are a step of the character's Build, and the Build has
     its own timer (``BUILD_TIMER`` → ``figure_build.request(name,
     "outfit_change")``; "Build automatically" decides, plan
-    2026-11-12-unified-worn-pieces Task 8)."""
+    2026-11-12-unified-worn-pieces Task 8).
+
+    While a World Dev turn defers the character (``world_dev_media``) nothing
+    is armed; the call is recorded for the turn's end."""
+    from app.core import world_dev_media
+    if world_dev_media.suppress_if_deferred(character_name, "model_refs.schedule_outfit_render"):
+        return
     if not _enabled():
         return
     from app.core.base_body import is_base_pipeline
@@ -1470,6 +1479,21 @@ def schedule_outfit_render(character_name: str) -> None:
     kinds = tuple(k for k in REF_KINDS if auto.get(k) and not (pipeline and k == "tpose"))
     if pipeline:
         kinds += (BUILD_TIMER,)
+    _arm(character_name, kinds)
+
+
+def rearm_timer(character_name: str, kind: str) -> None:
+    """Arm the debounce timer of ONE kind (a reference kind or ``BUILD_TIMER``)
+    again — the replay of a timer body a World Dev turn swallowed
+    (``world_dev_media``), so the release re-arms only the kind that was
+    pending, not every enabled one. The body re-checks the row, the auto
+    toggle and the pause as for any timer."""
+    _arm(character_name, (kind,))
+
+
+def _arm(character_name: str, kinds: tuple) -> None:
+    """(Re-)arm one debounce timer per kind; an armed timer of the same kind
+    is cancelled first (trailing edge, latest state wins)."""
     if not kinds:
         return
     from app.core.timeutils import utc_now

@@ -15,6 +15,8 @@ Conventions:
 SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
+#                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state
+#                     (+ CREATE IF NOT EXISTS world_dev_media, world_dev_media_baseline)
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1103,6 +1105,36 @@ SCHEMA_STATEMENTS = [
         undone_at    TEXT,
         PRIMARY KEY (run_id, seq)
     )""",
+    # World Dev media lane (app/core/world_dev_media.py): one row per element
+    # job (kind location | character). status: queued | running | done |
+    # failed | skipped | cancelled | removed; steps_json = [{id, label,
+    # status, note, fp}], produced_json = the artefacts recorded exactly.
+    # scheduled_turn is informational (the run's turn when it was scheduled).
+    """CREATE TABLE IF NOT EXISTS world_dev_media (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id         TEXT NOT NULL,
+        kind           TEXT NOT NULL,
+        target_id      TEXT NOT NULL,
+        status         TEXT NOT NULL,
+        scheduled_turn INTEGER,
+        steps_json     TEXT,
+        produced_json  TEXT,
+        note           TEXT NOT NULL DEFAULT '',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_world_dev_media_element
+       ON world_dev_media (run_id, kind, target_id)""",
+    # The look of an element at the run's first touch: {step_id: fingerprint}
+    # as JSON; fps_json NULL = created by the run (every step due).
+    """CREATE TABLE IF NOT EXISTS world_dev_media_baseline (
+        run_id     TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        target_id  TEXT NOT NULL,
+        fps_json   TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, kind, target_id)
+    )""",
     # Quest system (app/models/quests.py). Templates refer to
     # ROLES; a run binds roles to world entities and freezes a
     # template_snapshot at start (evaluation reads only the snapshot).
@@ -1189,6 +1221,12 @@ ALTER_MIGRATIONS = [
     # (NULL = none set; world_dev_runs.set_bounds). Run metadata, not world
     # data: out-of-box writes only warn, and the undo never touches it.
     ("world_dev_runs", "bounds", "TEXT"),
+    # world_dev_runs: the run's media switch (1 = the server renders what the
+    # run built at the end of every review turn; world_dev_media) and the
+    # media state open | accepted | closed (accepted = no more journal rows,
+    # closed = discarded, nothing new is rendered).
+    ("world_dev_runs", "media_enabled", "INTEGER NOT NULL DEFAULT 1"),
+    ("world_dev_runs", "media_state", "TEXT NOT NULL DEFAULT 'open'"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),

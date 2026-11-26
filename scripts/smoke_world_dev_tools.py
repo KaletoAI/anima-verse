@@ -1351,12 +1351,13 @@ from app.models import memory as memory_model  # noqa: E402
 from app.models.character import get_user_characters_dir  # noqa: E402
 from app.models.inventory import get_item as _get_item  # noqa: E402
 
-#: Tables that are the journal itself, SQLite's own counter, or the derived
+#: Tables that are the journal itself (with the media lane's rows and
+#: baselines — run machinery, plan 2026-11-25-world-dev-free-media), SQLite's own counter, or the derived
 #: world height raster (a cache rastered from the terrain/height areas and
 #: places — app/models/heightfield.py "The grid ... is derived from those
 #: areas"; when it is rastered depends on which write came last).
 _DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "sqlite_sequence",
-              "world_heightfield"}
+              "world_heightfield", "world_dev_media", "world_dev_media_baseline"}
 #: Tables whose created_at/updated_at their writers always set to "now"
 #: (upsert_location, terrain.save_area, heightfield.save_height_area):
 #: technical SYSTEM stamps the readers do not return.

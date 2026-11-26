@@ -43,6 +43,9 @@ STATUSES = OPEN_STATUSES + TERMINAL_STATUSES
 KINDS = ("read", "write", "refused")
 TARGET_KINDS = ("location", "terrain", "height", "character", "world_prop", "terrain_type",
                 "item", "relationship", "secret", "rule", "event", "quest_template")
+# Media lane (world_dev_media): row statuses and the run's media state.
+MEDIA_STATUSES = ("queued", "running", "done", "failed", "skipped", "cancelled", "removed")
+MEDIA_STATES = ("open", "accepted", "closed")
 
 
 class RunOpenError(RuntimeError):
@@ -116,6 +119,8 @@ def _run_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
         return None
     d = dict(row)
     d["was_frozen"] = bool(d.get("was_frozen"))
+    d["media_enabled"] = bool(d.get("media_enabled", 1))
+    d["media_state"] = d.get("media_state") or "open"
     d["skipped"] = _load(d.get("skipped_json")) or []
     bounds = _load(d.get("bounds"))
     d["bounds"] = bounds if isinstance(bounds, dict) else None
@@ -140,8 +145,10 @@ def _check_status(status: str) -> None:
 
 def create_run(task: str, model: str, provider: str, user_id: str,
                max_steps: int, max_tokens_total: int,
-               max_tokens: Optional[int] = None, effort: str = "") -> str:
+               max_tokens: Optional[int] = None, effort: str = "",
+               media_enabled: bool = True) -> str:
     """Insert a new ``running`` run; raises ``RunOpenError`` when one is open.
+    ``media_enabled`` is the run's media switch (world_dev_media);
     ``max_tokens`` is the per-reply cap (None = the model's default);
     ``effort`` the Effort level ('' = the model's default), stored lowercased;
     ValueError for a level not in EFFORT_LEVELS (checked before the insert)."""
@@ -155,12 +162,14 @@ def create_run(task: str, model: str, provider: str, user_id: str,
         with _Db() as conn:
             conn.execute(
                 "INSERT INTO world_dev_runs (id, task, model, provider, user_id, "
-                "status, max_steps, max_tokens_total, max_tokens, effort, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)",
+                "status, max_steps, max_tokens_total, max_tokens, effort, "
+                "media_enabled, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)",
                 (run_id, task or "", model or "", provider or "", user_id or "",
                  int(max_steps), int(max_tokens_total),
                  None if max_tokens is None else int(max_tokens),
                  effort,
+                 1 if media_enabled else 0,
                  utc_now_iso()))
     except sqlite3.IntegrityError as exc:
         if "idx_world_dev_runs_one_open" not in str(exc):
@@ -256,6 +265,147 @@ def set_bounds(run_id: str, box: Dict[str, float]) -> None:
 
 def set_backup(run_id: str, path: str) -> None:
     _update_run(run_id, "backup_path=?", (str(path or ""),))
+
+
+def set_media_enabled(run_id: str, on: bool) -> None:
+    """The run's media switch (world_dev_media decides what it means)."""
+    _update_run(run_id, "media_enabled=?", (1 if on else 0,))
+
+
+def set_media_state(run_id: str, state: str) -> None:
+    """open · accepted · closed; ValueError for anything else."""
+    if state not in MEDIA_STATES:
+        raise ValueError(f"unknown media state: {state!r}")
+    _update_run(run_id, "media_state=?", (state,))
+
+
+# ── Media baselines ──────────────────────────────────────────────────────
+
+def note_baseline(run_id: str, kind: str, target_id: str,
+                  fps: Optional[dict]) -> bool:
+    """Store an element's look at the run's first touch ({step_id: fp};
+    None = created by the run). INSERT OR IGNORE: the first baseline wins;
+    True when this call inserted it."""
+    with _Db() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO world_dev_media_baseline "
+            "(run_id, kind, target_id, fps_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (run_id, kind, str(target_id), _dump(fps), utc_now_iso()))
+        return cur.rowcount > 0
+
+
+def mark_created(run_id: str, kind: str, target_id: str) -> None:
+    """The run created this element: its baseline becomes NULL, overriding
+    any baseline stored earlier (UPSERT)."""
+    with _Db() as conn:
+        conn.execute(
+            "INSERT INTO world_dev_media_baseline "
+            "(run_id, kind, target_id, fps_json, created_at) VALUES (?, ?, ?, NULL, ?) "
+            "ON CONFLICT (run_id, kind, target_id) DO UPDATE SET fps_json=NULL",
+            (run_id, kind, str(target_id), utc_now_iso()))
+
+
+def baselines(run_id: str) -> Dict[Tuple[str, str], Optional[dict]]:
+    """{(kind, target_id): fps or None} of every element the run touched."""
+    with _Db() as conn:
+        rows = conn.execute(
+            "SELECT kind, target_id, fps_json FROM world_dev_media_baseline "
+            "WHERE run_id=? ORDER BY rowid", (run_id,)).fetchall()
+    return {(r["kind"], r["target_id"]): _load(r["fps_json"]) for r in rows}
+
+
+# ── Media rows ───────────────────────────────────────────────────────────
+
+def _media_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    d = dict(row)
+    d["steps"] = _load(d.pop("steps_json", None)) or []
+    d["produced"] = _load(d.pop("produced_json", None)) or []
+    return d
+
+
+def add_media_row(run_id: str, kind: str, target_id: str, steps: List[dict],
+                  scheduled_turn: Optional[int] = None) -> int:
+    """Insert a ``queued`` element job and return its id."""
+    now = utc_now_iso()
+    with _Db() as conn:
+        cur = conn.execute(
+            "INSERT INTO world_dev_media (run_id, kind, target_id, status, "
+            "scheduled_turn, steps_json, produced_json, note, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'queued', ?, ?, '[]', '', ?, ?)",
+            (run_id, kind, str(target_id),
+             None if scheduled_turn is None else int(scheduled_turn),
+             _dump(list(steps or [])), now, now))
+        return int(cur.lastrowid)
+
+
+def oldest_queued_row() -> Optional[Dict[str, Any]]:
+    """The queued row with the lowest id across ALL runs (the one lane)."""
+    with _Db() as conn:
+        row = conn.execute(
+            "SELECT * FROM world_dev_media WHERE status='queued' "
+            "ORDER BY id ASC LIMIT 1").fetchone()
+    return _media_dict(row) if row is not None else None
+
+
+def media_rows(run_id: str, kind: Optional[str] = None,
+               target_id: Optional[str] = None,
+               statuses: Optional[Tuple[str, ...]] = None) -> List[Dict[str, Any]]:
+    """The run's media rows oldest-first (steps/produced JSON-decoded),
+    optionally narrowed by kind, target and statuses. ValueError on an
+    unknown status in statuses (a misspelled filter must not read as
+    "no rows")."""
+    if statuses is not None:
+        statuses = tuple(statuses)
+        bad = [s for s in statuses if s not in MEDIA_STATUSES]
+        if bad:
+            raise ValueError(f"unknown media status: {bad[0]!r}")
+    where = ["run_id=?"]
+    params: list = [run_id]
+    if kind is not None:
+        where.append("kind=?")
+        params.append(kind)
+    if target_id is not None:
+        where.append("target_id=?")
+        params.append(str(target_id))
+    if statuses is not None:
+        if not statuses:
+            return []
+        where.append(f"status IN ({','.join('?' * len(statuses))})")
+        params.extend(statuses)
+    with _Db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM world_dev_media WHERE {' AND '.join(where)} "
+            "ORDER BY id ASC", params).fetchall()
+    return [_media_dict(r) for r in rows]
+
+
+def update_media_row(row_id: int, *, status: Optional[str] = None,
+                     steps: Optional[List[dict]] = None,
+                     produced: Optional[List[dict]] = None,
+                     note: Optional[str] = None) -> None:
+    """Update the given fields and stamp ``updated_at``. ValueError on an
+    unknown status (nothing written), KeyError on an unknown row."""
+    if status is not None and status not in MEDIA_STATUSES:
+        raise ValueError(f"unknown media status: {status!r}")
+    cols, vals = ["updated_at=?"], [utc_now_iso()]
+    if status is not None:
+        cols.append("status=?")
+        vals.append(status)
+    if steps is not None:
+        cols.append("steps_json=?")
+        vals.append(_dump(list(steps)))
+    if produced is not None:
+        cols.append("produced_json=?")
+        vals.append(_dump(list(produced)))
+    if note is not None:
+        cols.append("note=?")
+        vals.append(note)
+    with _Db() as conn:
+        cur = conn.execute(
+            f"UPDATE world_dev_media SET {', '.join(cols)} WHERE id=?",
+            (*vals, int(row_id)))
+        if cur.rowcount == 0:
+            raise KeyError(f"unknown world-dev media row: {row_id}")
 
 
 # ── Journal ──────────────────────────────────────────────────────────────

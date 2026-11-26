@@ -67,6 +67,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
+from app.core import world_dev_media as wdm
 from app.core import world_dev_runs as wr
 from app.core import world_dev_tools as wt
 from app.core import world_dev_undo as wu
@@ -352,6 +353,7 @@ class RunManager:
                 logger.error("world-dev %s: restoring the freeze state failed: %s",
                              run_id, e, exc_info=True)
         logger.info("world-dev run %s closed: %s", run_id, status)
+        await self._release_media(run_id, closing=True)
         st = self._state(run_id)
         await self._emit(st, {"type": "status", "status": status,
                               "note": note if note is not None else run.get("note") or ""})
@@ -360,6 +362,17 @@ class RunManager:
         st.history, st.llm, st.llm_instance, st.system = [], None, None, ""
         if self._states.get(run_id) is st:
             self._states.pop(run_id, None)
+
+    async def _release_media(self, run_id: str, *, closing: bool = False) -> None:
+        """Lift the run's deferral of automatic renders (``world_dev_media``,
+        plan 2026-11-25-world-dev-free-media Task 2): at every turn end
+        (``release_turn``) and when the run closes (``release_all``). Never
+        raises — the run's transition stands either way."""
+        try:
+            await asyncio.to_thread(wdm.release_all if closing else wdm.release_turn, run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("world-dev %s: releasing the media deferral failed: %s",
+                         run_id, e, exc_info=True)
 
     def _spawn(self, run_id: str, st: _RunState, text: str) -> None:
         st.stop = False
@@ -594,6 +607,8 @@ class RunManager:
                         status_ev = await self._cut_by_budget(run_id, st, turn, note)
                     else:
                         status_ev = await self._fail(run_id, st, turn, note, mark)
+                    # After the turn's undo (a failed turn), before the status event.
+                    await self._release_media(run_id)
                     st.busy = False
                     if status_ev:
                         await self._emit(st, status_ev)
@@ -617,6 +632,7 @@ class RunManager:
         `running` becomes `interrupted` (accept / discard work from there)."""
         logger.error("world-dev %s: %s", run_id, note, exc_info=exc)
         st.busy = False
+        await self._release_media(run_id)
         try:
             run = await asyncio.to_thread(wr.get_run, run_id)
             if run is not None and run["status"] == "running":

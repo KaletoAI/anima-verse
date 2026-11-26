@@ -58,8 +58,10 @@ Run 3 / 4 (references, same turn and earlier-turn path):
 Run 5 (singular, strict read):
   (g) add_event ttl_hours 1 -> line ends "(uncategorized, 1 game hour): ..."
       (singular, no "hours"). With events.event_exists patched to None (the
-      events table cannot be read): discard_preview raises RuntimeError naming
-      "could not be read" (a read error is never "already gone"); undo -> not
+      events table cannot be read): discard_preview == ['event <H> — the
+      events cannot be read; the discard will report it'] (a read error is
+      never "already gone", and the preview never raises — plan
+      2026-11-25-world-dev-free-media.md Task 1); undo -> not
       complete, exactly one skip whose reason starts "undo failed", the event
       H still stored. Patch removed, H removed by hand.
 Run 6 (strict reference read):
@@ -302,11 +304,13 @@ _real_exists = events.event_exists
 events.event_exists = lambda _eid: None
 try:
     try:
-        wu.discard_preview(run)
-        prev_err = ""
-    except RuntimeError as e:
-        prev_err = str(e)
-    check("(g) preview raises on a read error", "could not be read" in prev_err, prev_err)
+        prev_lines, prev_err = wu.discard_preview(run), ""
+    except Exception as e:  # noqa: BLE001 — reported by the check
+        prev_lines, prev_err = [], repr(e)
+    check("(g) preview names the read error",
+          not prev_err and prev_lines == [f"event {H} — the events cannot be read; "
+                                          "the discard will report it"],
+          prev_err or prev_lines)
     u = wu.undo(run)
     skips = u.get("skipped") or []
     check("(g) undo not complete", not u["complete"], u)

@@ -94,7 +94,10 @@ created in draft order — on_item order = the create step's inverse items):
       apply_equipped_pieces, so it is no "skipped" entry.
   (m) render timers of a created character (model_refs, default config:
       model_ref_renders_enabled missing = on, debounce missing = 60 s, no
-      model_ref_auto key = every kind on): right after the create the armed
+      model_ref_auto key = every kind on): right after the create NOTHING is
+      armed (the turn defers Demo Twin, world_dev_media — plan
+      2026-11-25-world-dev-free-media Task 2); world_dev_media.release_turn
+      names Demo Twin and replays the suppressed call, after which the armed
       kinds of Demo Twin are exactly schedule_outfit_render's set — on the
       base-body pipeline {"pose", "figure_build"} (tpose is a Build step),
       else {"tpose", "pose"}. undo(run) -> complete, Demo Twin gone, and NO
@@ -214,7 +217,8 @@ def all_rows(name):
 
 
 #: The journal itself and SQLite's own counter (as smoke_world_dev_tools).
-_DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "sqlite_sequence"}
+_DUMP_SKIP = {"world_dev_journal", "world_dev_runs", "world_dev_media", "world_dev_media_baseline",
+              "sqlite_sequence"}
 
 
 def db_dump():
@@ -382,7 +386,7 @@ check("(i) route applied list", out.get("applied") == [
     {"item_id": boots, "slot": "feet"}], out.get("applied"))
 
 # (j)
-from app.core import figure_build, model_refs  # noqa: E402
+from app.core import figure_build, model_refs, world_dev_media  # noqa: E402
 from app.core.base_body import is_base_pipeline  # noqa: E402
 
 
@@ -450,7 +454,13 @@ if len(items_l) == 3:
 
 # (m)
 want_m = {"pose", "figure_build"} if is_base_pipeline("Demo Twin") else {"tpose", "pose"}
-check("(m) timers armed after the create", armed("Demo Twin") == want_m,
+# The turn defers the created character's renders (world_dev_media, plan
+# 2026-11-25-world-dev-free-media Task 2): nothing is armed until the turn
+# ends; the release replays the suppressed schedule_outfit_render.
+check("(m) no timer armed during the turn", armed("Demo Twin") == set(), armed("Demo Twin"))
+check("(m) the turn end releases Demo Twin",
+      "Demo Twin" in world_dev_media.release_turn(run_l))
+check("(m) timers armed after the turn's release", armed("Demo Twin") == want_m,
       (armed("Demo Twin"), want_m))
 rep = wu.undo(run_l)
 check("(m) undo complete, Demo Twin gone",

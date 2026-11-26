@@ -132,8 +132,13 @@ plain string (or None when the write removed the file). A key that did not exist
 removes the key again).
 
 A step that RAISES is reported as ``undo failed: ...`` and still marked
-undone (it is not retried by a second ``undo``). Read errors propagate into
-that path; they are never read as "absent".
+undone (it is not retried by a second ``undo``) — except a delete_secret /
+delete_rule / delete_event step: its row still stands, so it stays in the
+journal (later previews list it, the next undo retries it) and the
+delete_location / delete_character of what its written row names is skipped
+in that pass (``still named by a step whose undo failed``, see
+``_HOLDING_OPS``). Read errors propagate into that path; they are never read
+as "absent".
 
 Never call this inside an open ``db.transaction()`` — the journal helpers
 open their own connections.
@@ -1953,6 +1958,85 @@ def apply_inverse(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [_skip_dict(entry, s)]
 
 
+#: Inverse ops whose undo can fail on a read error while their row stays
+#: standing (the discard preview's "cannot be read" kinds). A step of these
+#: whose undo RAISED is not marked undone: the row still exists, so it stays
+#: in later previews and the next undo (the final discard after a turn
+#: rollback) tries it again — their handlers compare with ``written`` and are
+#: safe to repeat. While it stands it HOLDS the places and characters its
+#: written row names (:func:`held_names`): their creating delete in the same
+#: pass is skipped with :data:`REASON_HELD` and stays in the journal too,
+#: never leaving the row naming a missing place or character.
+_HOLDING_OPS = frozenset({"delete_secret", "delete_rule", "delete_event"})
+
+#: Reason (behind it: the steps that hold it) of a delete_location /
+#: delete_character skipped because a rule, secret or event whose undo failed
+#: in the same pass still names the place or character.
+REASON_HELD = "still named by a step whose undo failed"
+
+
+def held_names(entry: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """The places and characters the row of a holding step (:data:`_HOLDING_OPS`)
+    names, from the row as the step WROTE it (the stored one could not be
+    read): ``("location", id)`` and ``("character", casefolded name)``. The
+    same references the forward delete paths check (``rules.rules_naming``,
+    ``secrets.secrets_naming`` without the owner, ``_event_refs``). A step
+    without a written row (pending) names nothing."""
+    inv = entry.get("inverse") or {}
+    op = str(inv.get("op") or "")
+    row = entry.get("written")
+    if op not in _HOLDING_OPS or not isinstance(row, dict):
+        return []
+    out: List[Tuple[str, str]] = []
+
+    def place(value: Any) -> None:
+        if str(value or "").strip():
+            out.append(("location", str(value).strip()))
+
+    def person(value: Any) -> None:
+        if str(value or "").strip():
+            out.append(("character", str(value).strip().casefold()))
+
+    if op == "delete_rule":
+        target = row.get("target") if isinstance(row.get("target"), dict) else {}
+        place(target.get("location_id") or target.get("location"))
+        person(row.get("character"))
+        try:
+            from app.core.activity_engine import condition_references
+            refs = condition_references(str(row.get("condition") or ""))
+        except Exception:  # noqa: BLE001 — a condition the parser rejects names nobody
+            refs = []
+        for fam, tok in refs:
+            if fam in ("present", "relationship", "romantic"):
+                person(tok)
+    elif op == "delete_secret":
+        place(row.get("related_location"))
+        owner = str(inv.get("owner") or "").strip().casefold()
+        for name in list(row.get("known_by") or []) + list(row.get("related_characters") or []):
+            if str(name or "").strip().casefold() != owner:
+                person(name)
+    elif op == "delete_event":
+        place(row.get("location_id"))
+    return out
+
+
+def _held_key(inv: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """The key :func:`held_names` would use for the target of a creating
+    delete_location / delete_character inverse, or None."""
+    op = str(inv.get("op") or "")
+    if op == "delete_location" and inv.get("id"):
+        return ("location", str(inv.get("id")))
+    if op == "delete_character" and str(inv.get("name") or "").strip():
+        return ("character", str(inv.get("name")).strip().casefold())
+    return None
+
+
+def _holder_label(inv: Dict[str, Any]) -> str:
+    kind = {"delete_rule": "rule", "delete_secret": "secret",
+            "delete_event": "event"}.get(str(inv.get("op") or ""), "step")
+    return f"{kind} {inv.get('id') or ''}".strip()
+
+
 # ── Public entry points ──────────────────────────────────────────────────
 
 def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
@@ -1966,7 +2050,12 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     restored or removed; item skips of a deleted character (key ``item``)
     are reported beside it. ``already gone`` is a skip, not an error; an
     exception in one step becomes a skip (``undo failed: ...``) and the rest
-    still runs. Every handled entry is marked undone. Occupant records of
+    still runs. Every handled entry is marked undone — except a secret,
+    rule or event step whose undo raised (its row still stands, it stays in
+    later previews and the next undo retries it) and the delete_location /
+    delete_character of a place or character that such a step still names
+    (skipped with ``still named by a step whose undo failed (...)``, key
+    ``held_by``; see :data:`_HOLDING_OPS`). Occupant records of
     characters this undo deleted are dropped at the end, and so are the
     ``item still in use`` records of items a final cleanup pass deletes
     (held only by an older element of the run that the walk removed later).
@@ -1986,6 +2075,9 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
     # Targets whose re-creation the writer refused -> those skip records;
     # an older creating entry of the target in this pass marks them net_absent.
     refused: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    # Places/characters (held_names keys) still named by a holding step whose
+    # undo failed in this pass -> labels of those steps.
+    held: Dict[Tuple[str, str], List[str]] = {}
     for entry in wr.entries(run_id, turn=turn):
         seq = int(entry["seq"])
         target = _target_of(entry.get("inverse") or {})
@@ -2001,12 +2093,28 @@ def undo(run_id: str, turn: Optional[int] = None) -> Dict[str, Any]:
             # its own to reverse.
             wr.mark_undone(run_id, seq)
             continue
+        inv_now = entry.get("inverse") or {}
+        hkey = _held_key(inv_now)
+        if hkey is not None and hkey in held:
+            # Deleting it would leave the failed step's row naming a missing
+            # place/character: skipped, and kept in the journal for a later
+            # discard (not marked undone, like the holder).
+            skipped.append(_skip_dict(entry, _Skip(
+                f"{REASON_HELD} ({', '.join(held[hkey])}) — kept for a later discard",
+                held_by=list(held[hkey]))))
+            continue
         try:
             skips = apply_inverse(entry)
         except Exception as e:  # noqa: BLE001 — one failed step must not stop the rest
             logger.error("world-dev undo %s#%s failed: %s", run_id, seq, e,
                          exc_info=True)
             skips = [_skip_dict(entry, _Skip(f"undo failed: {e}"))]
+            if str(inv_now.get("op") or "") in _HOLDING_OPS:
+                # Its row still stands: not marked undone (see _HOLDING_OPS).
+                for key in held_names(entry):
+                    held.setdefault(key, []).append(_holder_label(inv_now))
+                skipped.extend(skips)
+                continue
         if not any("item" not in s and "occupant" not in s for s in skips):
             reversed_seqs.append(seq)
         elif (target is not None
@@ -2599,6 +2707,42 @@ def _skill_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[st
     return lines
 
 
+#: Kinds whose discard_preview branch turns a read error into a line
+#: ("... cannot be read; the discard will report it") instead of raising —
+#: the same error the undo handler reports as "undo failed".
+_READ_ERROR_LINE_KINDS = frozenset({"secret", "rule", "event"})
+
+
+def _preview_held(entries: List[Dict[str, Any]], foreign: set
+                  ) -> Dict[Tuple[str, str], List[str]]:
+    """What undo() will hold back (:data:`_HOLDING_OPS`): per
+    :func:`held_names` key, the labels of the run's secret / rule / event
+    steps whose row cannot be read now — the read the undo handler makes
+    first, so its undo will fail the same way."""
+    from app.models import rules
+    held: Dict[Tuple[str, str], List[str]] = {}
+    for entry in entries:
+        inv = entry.get("inverse") or {}
+        op = str(inv.get("op") or "")
+        if op not in _HOLDING_OPS or _target_of(inv) in foreign:
+            continue
+        ident = str(inv.get("id") or "")
+        try:
+            if op == "delete_secret":
+                owner = str(inv.get("owner") or "")
+                if owner and ident:
+                    secret_row(owner, ident)
+            elif op == "delete_rule":
+                if ident:
+                    rules.world_rule(ident)
+            elif ident:
+                _event_row_strict(ident)
+        except Exception:  # noqa: BLE001 — the undo reports it as "undo failed"
+            for key in held_names(entry):
+                held.setdefault(key, []).append(_holder_label(inv))
+    return held
+
+
 def discard_preview(run_id: str) -> List[str]:
     """One line per element the run created that still exists (oldest
     first); a created character also names its chat rows and the other
@@ -2651,7 +2795,17 @@ def discard_preview(run_id: str) -> List[str]:
     discard leaves it alone" line when its stored row differs from what the
     step wrote; the event writer's cascade (event-bound rules, image files)
     gets no line — a run's own event has neither (only ``random_events``
-    binds rules, and an image changes the row, so it is left alone). A quest
+    binds rules, and an image changes the row, so it is left alone). When the
+    rule or the event cannot be read, the line is ``rule <id> — the world
+    rules cannot be read; the discard will report it`` / ``event <id> — the
+    events cannot be read; the discard will report it`` (the undo handler
+    reports the same error as "undo failed"), never an exception; a place
+    or character the run created that such an unreadable row names (by the
+    row the step wrote, :func:`held_names`) is ``location <id> "<name>" is
+    still named by rule <id>, which cannot be read — the discard leaves it``
+    (``character "<name>" ...`` likewise): undo() skips it
+    (:data:`REASON_HELD`), and both stay in the journal, so a later preview
+    still lists them. A quest
     template the run created (``delete_quest_template``) is
     ``quest template <id> "<title>"``, or one "was changed since — the discard
     leaves it alone" line when its revision moved on or a run of it exists
@@ -2702,7 +2856,15 @@ def discard_preview(run_id: str) -> List[str]:
         if target is None or target in foreign:
             continue
         if target not in alive:
-            alive[target] = _exists(target)
+            try:
+                alive[target] = _exists(target)
+            except Exception:
+                if target[0] not in _READ_ERROR_LINE_KINDS:
+                    raise
+                # No re-creation exists for these kinds, so the simulation
+                # needs no real answer: the op branch below reads the row
+                # again and turns the error into its "cannot be read" line.
+                alive[target] = True
             if target[0] == "world_prop":
                 prop_rows[target] = world_prop_row(target[1])
             elif target[0] == "terrain_type":
@@ -2752,6 +2914,7 @@ def discard_preview(run_id: str) -> List[str]:
             alive[target] = False
     from app.models.inventory import get_item
     clears = _run_cleared_uses(entries, foreign)
+    held = _preview_held(entries, foreign)
     listed: set = set()
     item_lines: List[Tuple[int, str, str]] = []
     for entry in reversed(entries):
@@ -2771,7 +2934,13 @@ def discard_preview(run_id: str) -> List[str]:
             listed.add(target)
         if op == "delete_location":
             loc = get_location_by_id(str(inv.get("id") or ""))
-            if loc:
+            hkey = _held_key(inv)
+            if loc and hkey in held:
+                # undo() skips it (REASON_HELD): it stays, nobody is stranded.
+                lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}" is '
+                             f"still named by {', '.join(held[hkey])}, which cannot be "
+                             "read — the discard leaves it")
+            elif loc:
                 created[str(loc.get("id"))] = str(loc.get("name") or "")
                 lines.append(f'location {loc.get("id")} "{loc.get("name") or ""}"')
         elif op == "delete_terrain_area":
@@ -2806,9 +2975,16 @@ def discard_preview(run_id: str) -> List[str]:
                 else:
                     lines.append(f'secret {sid} of "{owner}" ({srow.get("category")})')
         elif op == "delete_rule":
-            from app.models.rules import world_rule
+            from app.models import rules
             rid = str(inv.get("id") or "")
-            rrow = world_rule(rid) if rid else None
+            try:
+                rrow = rules.world_rule(rid) if rid else None
+            except Exception:
+                # _undo_delete_rule reports the same read error as
+                # "undo failed" and leaves the rule alone.
+                lines.append(f"rule {rid} — the world rules cannot be read; "
+                             "the discard will report it")
+                rrow = None
             if rrow is not None:
                 written = entry.get("written")
                 if written is not None and _norm(rrow) != _norm(written):
@@ -2818,7 +2994,14 @@ def discard_preview(run_id: str) -> List[str]:
                     lines.append(f'rule {rid} "{rrow.get("name") or ""}"')
         elif op == "delete_event":
             eid = str(inv.get("id") or "")
-            erow = _event_row_strict(eid) if eid else None
+            try:
+                erow = _event_row_strict(eid) if eid else None
+            except Exception:
+                # _undo_delete_event reports the same read error as
+                # "undo failed" and leaves the event alone.
+                lines.append(f"event {eid} — the events cannot be read; "
+                             "the discard will report it")
+                erow = None
             if erow is not None:
                 written = entry.get("written")
                 if written is not None and _norm(erow) != _norm(written):
@@ -2864,7 +3047,13 @@ def discard_preview(run_id: str) -> List[str]:
             if (entry.get("state") == "pending" and entry.get("written") is None
                     and not inv.get("claimed")):
                 continue  # nothing written (see _undo_delete_character)
-            if name and character_row_exists(name):
+            hkey = _held_key(inv)
+            if name and hkey in held and character_row_exists(name):
+                # undo() skips it (REASON_HELD): it stays with everything it has.
+                lines.append(f'character "{name}" is still named by '
+                             f"{', '.join(held[hkey])}, which cannot be read — "
+                             "the discard leaves it")
+            elif name and character_row_exists(name):
                 deleted_names.add(name)
                 chats = count_messages_involving(name)
                 mems = count_other_memories_naming(name)
