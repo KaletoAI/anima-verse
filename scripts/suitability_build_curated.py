@@ -147,7 +147,7 @@ def build():
             game_time_label='Tag 1, 14:00', rooms=[dict(id='hall', name='Flur', hint='Bücher zurückgeben', places=''),
                 dict(id='reading_room', name='Lesezimmer', hint='Bücher ordnen und lesen', places='2 freie Sitzplätze')],
             home='', pose_keys=['stand', 'sit'], npc_goals='', arrival_reason='', dialogue_style='',
-            talk_allowed=False, present=[], pair_keys=[], extension_prompt='', recent=[], prop_actions_block='')
+            talk_allowed=False, present=[], pair_keys=[], extension_prompt='', quest_block='', recent=[], prop_actions_block='')
         cases.append(helper('npc_room', 'npc_action', npc, {'room_ids': ['reading_room', 'hall'], 'pose_keys': ['stand', 'sit', '']},
             dict(json_fields=['room', 'activity', 'pose'], in_sets={'room': 'room_ids', 'pose': 'pose_keys'}, text_fields={'activity': de})))
 

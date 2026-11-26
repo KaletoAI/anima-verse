@@ -304,7 +304,8 @@ def plan_room(*, kit: str, room_type: str, geom: Dict, library: Dict,
 
 
 def solve_kit(*, kit: str, room_type: str, geom: Dict, library: Dict,
-              room_id: str, existing, storey_height_m: float, template=None) -> Dict:
+              room_id: str, existing, storey_height_m: float, template=None,
+              full_library: Optional[Dict] = None) -> Dict:
     """Solve and retry bounded alternatives without worsening any placement pass.
 
     Replaying the whole plan keeps dependent pieces attached to moved supports.
@@ -316,7 +317,7 @@ def solve_kit(*, kit: str, room_type: str, geom: Dict, library: Dict,
                         room_id=room_id, template=template)
     plan = [dict(entry) for entry in planned["entries"]]
     items = fp.build_items(planned["needs"], library)
-    props = fp.solver_props(items, library)
+    props = fp.solver_props(items, full_library if full_library is not None else library)
     mounts = {item["id"]: item["mount"] for item in items}
 
     def solve(entries):

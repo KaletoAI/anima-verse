@@ -449,7 +449,8 @@ def _try_generate_secret_hint_event(loc_id: str,
     for c in char_names:
         try:
             secs = [s for s in list_secrets(c)
-                    if not is_record(s) and s.get("content") and len(s.get("known_by", [])) < 3]
+                    if not is_record(s) and s.get("source") != "quest"
+                    and s.get("content") and len(s.get("known_by", [])) < 3]
             if secs:
                 candidates.append((c, secs))
         except Exception:

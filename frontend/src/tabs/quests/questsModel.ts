@@ -404,14 +404,43 @@ export function targetOptions(
   return out
 }
 
-/** Client-side authoring issues (D1: a step without a condition). */
-export function clientIssues(draft: TemplateDraft): Issue[] {
+/** Client-side authoring issues (D1: a step without a condition; rewards targeting non-permanent effect keys). */
+export function clientIssues(draft: TemplateDraft, effectTypes: CatalogType[] = []): Issue[] {
   const out: Issue[] = []
   draft.steps.forEach((step, i) => {
     if (!isObject(step.condition) || isEmptyExpr(step.condition)) {
       out.push({ path: `steps.${i}.condition`, code: 'required', message: 'A step needs a condition' })
     }
   })
+  if (effectTypes.length && draft.rewards.length) {
+    const nonPermanent = new Set<string>()
+    for (const e of draft.setup_effects || []) {
+      if (e.key && e.permanent !== true) nonPermanent.add(e.key)
+    }
+    for (const step of draft.steps || []) {
+      for (const e of step.on_done || []) {
+        if (e.key && e.permanent !== true) nonPermanent.add(e.key)
+      }
+    }
+    if (nonPermanent.size) {
+      const byId = new Map(effectTypes.map((t) => [t.id, t]))
+      draft.rewards.forEach((entry, i) => {
+        const t = byId.get(entry.type)
+        if (!t) return
+        for (const spec of t.params || []) {
+          if (spec.type !== 'target') continue
+          const val = entry.params?.[spec.key]
+          if (typeof val === 'string' && nonPermanent.has(val)) {
+            out.push({
+              path: `rewards.${i}.params.${spec.key}`,
+              code: 'not_permanent',
+              message: 'A reward can only use a permanent object: this one is removed when the quest ends',
+            })
+          }
+        }
+      })
+    }
+  }
   return out
 }
 

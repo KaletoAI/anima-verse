@@ -876,6 +876,56 @@ check("Boden behaelt seine Platzierung",
 check("verworfene Boden-Geometrie gemeldet",
       "ground layout: room-geometry field(s) dropped" in warn_text, True)
 
+print("\n[14] Location export drops placements of quest-tagged props without mutating DB")
+# Fails on d026dc0fb: export_location_to_zip keeps quest-tagged prop placements in db/location.json.
+q_prop = create_prop(name="Quest Banner", category="decoration", width_m=0.5,
+                     depth_m=0.5, height_m=1.5, quest_run="qr_export_test")
+Q_PID = q_prop["id"]
+u_prop = create_prop(name="Plain Stool", category="furniture", width_m=0.4,
+                     depth_m=0.4, height_m=0.5)
+U_PID = u_prop["id"]
+qloc = add_location("QuestHall", "Hall with one quest prop and one normal prop.",
+                    rooms=[{"name": "Main", "description": ""}])
+QLOC_ID = qloc["id"]
+QROOM_ID = qloc["rooms"][0]["id"]
+qdata = _load_world_data()
+for entry in qdata.get("locations", []):
+    if entry.get("id") != QLOC_ID:
+        continue
+    for room in entry.get("rooms", []):
+        if room.get("id") == QROOM_ID:
+            room["layout"] = {
+                "x": 0, "y": 0, "w": 4, "d": 4,
+                "props": [
+                    {"prop_id": Q_PID, "id": "qplace1", "at": [1.0, 1.0], "yaw": 0},
+                    {"prop_id": U_PID, "id": "uplace1", "at": [2.0, 2.0], "yaw": 0},
+                ],
+            }
+        elif room.get("id") == GROUND_ROOM_ID:
+            room["layout"] = {
+                "props": [
+                    {"prop_id": Q_PID, "id": "qground1", "at": [1.0, 1.0], "yaw": 0},
+                    {"prop_id": U_PID, "id": "uground1", "at": [2.0, 2.0], "yaw": 0},
+                ],
+            }
+_save_world_data(qdata)
+qblob = export_location_to_zip(QLOC_ID)
+with zipfile.ZipFile(io.BytesIO(qblob)) as qzf:
+    exported_loc = json.loads(qzf.read("db/location.json"))
+exp_main = next(r for r in exported_loc["rooms"] if r["id"] == QROOM_ID)
+exp_ground = next(r for r in exported_loc["rooms"] if r["id"] == GROUND_ROOM_ID)
+check("zip db/location.json room keeps only untagged placement",
+      [p["prop_id"] for p in exp_main["layout"]["props"]], [U_PID])
+check("zip db/location.json ground keeps only untagged placement",
+      [p["prop_id"] for p in exp_ground["layout"]["props"]], [U_PID])
+live_qloc = get_location_by_id(QLOC_ID)
+live_main = next(r for r in live_qloc["rooms"] if r["id"] == QROOM_ID)
+live_ground = next(r for r in live_qloc["rooms"] if r["id"] == GROUND_ROOM_ID)
+check("DB location room still has both placements",
+      [p["prop_id"] for p in live_main["layout"]["props"]], [Q_PID, U_PID])
+check("DB location ground still has both placements",
+      [p["prop_id"] for p in live_ground["layout"]["props"]], [Q_PID, U_PID])
+
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

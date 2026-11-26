@@ -28,3 +28,7 @@ When the text shows the character setting off for another place, write one line 
 Open plans (id | title):
 {{ plans }}
 {% endif %}
+{% if quest_block %}
+Quests you are part of:
+{{ quest_block }}
+{% endif %}

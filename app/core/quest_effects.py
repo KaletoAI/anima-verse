@@ -217,11 +217,12 @@ def _apply_entry(
     key = str(entry.get("key") or "")
 
     all_objects = quests.list_objects(run_id)
-    rows = [o for o in all_objects if o.get("effect_key") == key and o.get("status") in ("pending", "live")]
+    key_rows = [o for o in all_objects if o.get("effect_key") == key]
+    if key_rows and not any(o.get("status") == "pending" for o in key_rows):
+        return ("done", None, "")
+    rows = [o for o in key_rows if o.get("status") in ("pending", "live")]
 
     if rows:
-        if all(o.get("status") == "live" for o in rows):
-            return ("done", None, "")
         pending_rows = [o for o in rows if o.get("status") == "pending"]
         all_present = True
         for row in pending_rows:
@@ -400,6 +401,9 @@ def _step_setup(payout: dict) -> Tuple[int, Optional[str], int]:
         fresh = quests.get_run(run_id)
         if fresh is not None:
             quest_engine._announce(fresh)
+        after = quests.get_run(run_id)
+        if after is None or after.get("state") != "open":
+            quest_engine._withdraw_announcement(run_id)
     return (1, run_id, 0)
 
 
@@ -575,8 +579,13 @@ def pass_once() -> Dict[str, Any]:
             # (3) Cleanup of non-permanent objects of ended runs: effects in reverse creation
             # order, so dependents such as placements and grants go before the items they
             # reference; the rows of one effect in creation order, so e.g. a placement goes
-            # before the library entry it shows.
+            # before the library entry it shows. Wait while the run still has pending payouts.
+            runs_with_pending_payouts = {
+                p.get("run_id") for p in quests.list_payouts(states=("pending",))
+            }
             for row in _cleanup_order(quests.objects_to_clean()):
+                if row.get("run_id") in runs_with_pending_payouts:
+                    continue
                 try:
                     reverted += _step_cleanup_row(row)
                 except Exception:  # noqa: BLE001

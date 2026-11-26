@@ -439,6 +439,21 @@ for sent in (359.96, 360):
     check(f"(r) tool yaw {sent} refused, stored as 0.0",
           not res.ok and "would be stored as 0.0" in res.line, res.line)
 
+print("(s) quest-tagged prop excluded from find_props and place_world_prop")
+# Fails on d026dc0fb: _find_props lists quest-tagged props and _place_world_prop accepts them.
+QPROP = props.create_prop(name="Demo Quest Relic", category="outdoor", width_m=1, depth_m=1,
+                          height_m=1, mount="floor", quest_run="qr_smoke_s")["id"]
+res_s_find = call(4, "find_props", {"query": "Quest Relic"}, run7)
+check("(s) tagged prop absent from find_props",
+      res_s_find.ok and res_s_find.line == "no props match", res_s_find.line)
+n0_s = len(rows())
+res_s_place = call(4, "place_world_prop", {"prop_id": QPROP, "x": 90, "z": 90}, run7)
+check("(s) place_world_prop refuses tagged prop and writes no row",
+      not res_s_place.ok and not res_s_place.wrote and "find_props" in res_s_place.line
+      and len(rows()) == n0_s, res_s_place.line)
+res_s_ok, P_S = new_prop(lambda: call(4, "place_world_prop", {"prop_id": WELL, "x": 91, "z": 91}, run7))
+check("(s) untagged prop still places", res_s_ok.ok and bool(P_S), res_s_ok.line)
+
 if failures:
     print(f"\nFAILED: {len(failures)}")
     for f in failures:

@@ -1086,6 +1086,52 @@ def main() -> int:
     check("discarding the yard job leaves the accepted placement alone",
           room_furnish.get_status(yard_job) is None)
 
+    # ── Quest-tagged prop already standing in a room (review fix #5) ─────
+    # Fails on d026dc0fb: _full_library does not exist and _phase_needs uses
+    # _library() for existing placements, so a quest-tagged prop in the room is
+    # missing from the needs prompt's "existing" list.
+    print("\n[quest prop in room: full_library vs catalog]")
+    qprop = props.create_prop(name="Quest Monolith", category="decoration",
+                              width_m=1.0, depth_m=1.0, height_m=2.0,
+                              mount="floor", quest_run="qr_furnish_smoke")
+    qpid = qprop["id"]
+    check("_full_library contains quest-tagged prop",
+          qpid in room_furnish._full_library())
+    check("_library excludes quest-tagged prop",
+          qpid not in room_furnish._library())
+    qloc = add_location(
+        "QuestRoomLoc", "A room with a placed quest prop.",
+        rooms=[{"name": "Sanctum", "description": "A stone room.",
+                "activities": []}])
+    qroom_id = qloc["rooms"][0]["id"]
+    data = _load_world_data()
+    for entry in data["locations"]:
+        if entry["id"] == qloc["id"]:
+            for r in entry["rooms"]:
+                if r["id"] == qroom_id:
+                    r["layout"] = {
+                        "x": 0, "y": 0, "w": 4, "d": 4,
+                        "props": [{"id": "qp01", "prop_id": qpid,
+                                   "at": [2.0, 2.0], "yaw": 0}],
+                    }
+    _save_world_data(data)
+    answers["needs"] = {"needs": [
+        need("a", "table", category="table", count=1, mount="floor",
+             width_m=1.2, depth_m=0.8, height_m=0.75,
+             description="a plain oak table")]}
+    answers["match"] = lambda prompt: {"matches": [
+        {"need": "n1", "ref": ref_for(prompt, "Table")}]}
+    room_furnish.start(qroom_id)
+    status = wait_for(("proposal_ready", "error"), job=qroom_id)
+    check("quest-prop room reaches proposal_ready",
+          status and status["state"] == "proposal_ready",
+          (status or {}).get("error") or "")
+    check("needs prompt lists placed quest prop in existing",
+          "Quest Monolith" in last_prompt(calls, "needs"))
+    check("match prompt excludes quest prop from catalog",
+          "Quest Monolith" not in last_prompt(calls, "match"))
+    room_furnish.discard(qroom_id)
+
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

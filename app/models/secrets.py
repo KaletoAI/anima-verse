@@ -453,6 +453,8 @@ def known_about_others_block(character_name: str) -> str:
     known_about_others = []
     counts = {}
     for entry in candidates:
+        if entry["secret"].get("source") == "quest":
+            continue
         owner = entry["secret_owner"]
         if not (entry["secret"].get("content") or "").strip():
             continue

@@ -82,8 +82,9 @@ HAND-DERIVED EXPECTATIONS
       monkeypatching app.models.quests.list_runs to raise RuntimeError ->
       lines_for("Giver") == []; restored afterwards.
   (j) NPC action context:
-      _with_action_context("Giver", {})["extension_prompt"] contains
-      "Quests you are part of:" while the runs of (h) are live.
+      _with_action_context("Giver", {}) sets quest_block == block_for("Giver")
+      and leaves extension_prompt == "" (review fix #7 moved the quest block out
+      of extension_prompt into its own quest_block variable).
 """
 import os
 import sys
@@ -340,8 +341,8 @@ def main() -> int:
     # (j) NPC action context
     section("(j)", "NPC action context")
     out_vars = npc_actions._with_action_context("Giver", {})
-    check("extension_prompt has quest header",
-          "Quests you are part of:" in out_vars.get("extension_prompt", ""), True)
+    check("quest_block matches block_for", out_vars.get("quest_block", ""), qp.block_for("Giver"))
+    check("extension_prompt stays empty", out_vars.get("extension_prompt", ""), "")
 
     if FAILURES:
         print(f"\nFAILED ({len(FAILURES)}): {', '.join(FAILURES)}")

@@ -543,11 +543,9 @@ def _with_action_context(name: str, variables: Dict[str, Any]) -> Dict[str, Any]
         variables["extension_prompt"] = provider(name, variables) or ""
     blocks = [variables["extension_prompt"]] if variables["extension_prompt"] else []
     emit("character.prompt_context", character_name=name, mode=TASK, blocks=blocks)
-    from app.core.quest_prompt import block_for
-    quest_block = block_for(name)
-    if quest_block:
-        blocks.append("Quests you are part of:\n" + quest_block)
     variables["extension_prompt"] = "\n\n".join(blocks)
+    from app.core.quest_prompt import block_for
+    variables["quest_block"] = block_for(name)
     from app.core.prop_actions import prompt_block
     variables["prop_actions_block"] = prompt_block(name)
     return variables

@@ -191,7 +191,7 @@ export function TemplatesView({ onGuard, onStarted }: {
 
   const serverIssuePaths = new Set(issues.map((i) => i.path))
   const allIssues = draft
-    ? [...issues, ...clientIssues(draft).filter((i) => !serverIssuePaths.has(i.path))]
+    ? [...issues, ...clientIssues(draft, catalog.effects).filter((i) => !serverIssuePaths.has(i.path))]
     : issues
 
   return (

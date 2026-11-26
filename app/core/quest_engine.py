@@ -440,6 +440,7 @@ def validate_template(template: dict) -> list[dict]:
             issues.append(_issue(f"steps.{i}.on_done", "shape", "'on_done' must be a list"))
     props_before = 0
     earlier_keys: set = set()
+    non_permanent_keys: set = set()
     for prefix, entries, position in effect_positions(template):
         issues.extend(quest_catalog.check_effects(
             entries,
@@ -448,6 +449,7 @@ def validate_template(template: dict) -> list[dict]:
             reward=(position == "reward"),
             props_before=props_before,
             setup=(position == "setup"),
+            non_permanent=non_permanent_keys if position == "reward" else (),
         ))
         props_before += sum(1 for e in entries if isinstance(e, dict)
                             and e.get("type") == quest_catalog.CREATE_PROP_TYPE)
@@ -460,6 +462,8 @@ def validate_template(template: dict) -> list[dict]:
                 if key not in list_keys and key in earlier_keys:
                     issues.append(_issue(f"{prefix}.{j}.key", "duplicate", f"Effect key '{key}' is used twice"))
                 list_keys.add(key)
+            if position != "reward" and entry.get("permanent") is not True and isinstance(key, str) and key:
+                non_permanent_keys.add(key)
         earlier_keys.update(list_keys)
     known = quest_catalog.types()
     start = template.get("start_condition") or {}

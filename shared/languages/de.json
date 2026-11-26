@@ -7508,6 +7508,7 @@
     "You received {quantity} × {item}.": "Du hast {quantity} × {item} erhalten.",
     "You learned something: {content}": "Du hast etwas erfahren: {content}",
     "Your {stat} changed by {delta}.": "Dein Wert {stat} hat sich um {delta} verändert.",
-    "The setup has no avatar: choose a character": "Die Vorbereitung hat keinen Avatar: wähle einen Charakter"
+    "The setup has no avatar: choose a character": "Die Vorbereitung hat keinen Avatar: wähle einen Charakter",
+    "A reward can only use a permanent object: this one is removed when the quest ends": "Eine Belohnung kann nur ein dauerhaftes Objekt verwenden: dieses wird entfernt, wenn die Quest endet"
   }
 }

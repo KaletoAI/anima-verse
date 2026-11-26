@@ -3575,8 +3575,9 @@ def _check_prop_model(entry: Dict[str, Any], what: str, required: bool) -> None:
                               f"nothing; give a prop model URL /assets/props/<id>/model")
         return
     pid = prop_id_from_model_url(model) if isinstance(model, str) else ""
+    prop = get_prop(pid, read_only=True) if pid else None
     if not pid or model != f"/assets/props/{pid}/model" \
-            or get_prop(pid, read_only=True) is None:
+            or prop is None or prop.get("quest_run"):
         raise ToolRefusal(f"'{what}.model' must be the model URL /assets/props/<id>/model "
                           f"of an existing prop — {_shown(model)} is none")
 
@@ -4178,6 +4179,8 @@ def _find_props(step: _Step, args: Dict[str, Any]) -> str:
     records = sorted(list_props(read_only=True),
                      key=lambda r: (str(r.get("name") or "").lower(), str(r.get("id") or "")))
     for rec in records:
+        if rec.get("quest_run"):
+            continue
         tags = [str(t).lower() for t in rec.get("tags") or []]
         if category and str(rec.get("category") or "").lower() != category:
             continue
@@ -4250,6 +4253,9 @@ def _place_world_prop(step: _Step, args: Dict[str, Any]) -> str:
     if wp.count_world_props() >= wp.MAX_WORLD_PROPS:
         raise ToolRefusal(f"the world already holds its limit of {wp.MAX_WORLD_PROPS} "
                           "world props — no more can be placed")
+    from app.core.props import read_sidecar
+    if read_sidecar(prop_id, read_only=True).get("quest_run"):
+        raise ToolRefusal(f"prop {_shown(prop_id)} belongs to a running quest — find_props lists the props")
     existing = {r["id"] for r in wp.list_world_props()}
     wid = _new_id("wp", lambda i: i in existing)
     raw = {"id": wid, "prop_id": prop_id, "x": x, "z": z,

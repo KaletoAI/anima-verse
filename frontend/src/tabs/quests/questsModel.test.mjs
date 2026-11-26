@@ -44,6 +44,11 @@
 //   * scopeAt with 'nonsense' throws;
 // - clientIssues: bigRock -> []; empty steps[0].condition -> [{path: 'steps.0.condition', code: 'required',
 //   message: 'A step needs a condition'}];
+// - clientIssues(draft, fx) (review fix #2; fails on d026dc0fb: clientIssues ignores effectTypes / rewards):
+//   * bigRock -> [];
+//   * copy with rewards[1].params.item = 'box' (non-permanent setup item) ->
+//     [{path: 'rewards.1.params.item', code: 'not_permanent', message: 'A reward can only use a permanent object: this one is removed when the quest ends'}];
+//   * same copy with setup_effects[1].permanent = true -> [].
 // - draftWarnings: bigRock -> []; 4th step found_item('box_spot') (hidden: true, difficulty: 3) -> [];
 //   same with box_spot difficulty 0 -> one warning (path 'steps.3.condition', code 'not_hidden');
 //   nested in {all: [...]} -> still that one warning;
@@ -236,17 +241,17 @@ const bigRock = {"title": "The big rock", "summary": "{giver} lost something nea
   // subset of GET /quests/catalog, copied from app/core/quest_effects.py and quest_types.py
   const createProp = { id: 'create_prop', kind: 'effect', label: 'Create a prop', description: '', params: [],
     object_kind: 'world_prop', object_kind_when: [['room', 'room_prop']] };
+  const giveItemParam = { key: 'item', type: 'target', role_kinds: ['item'], object_kinds: ['item'] };
   const fx = [
     createProp,
     { id: 'create_item', kind: 'effect', label: 'Create an item', description: '', params: [], object_kind: 'item' },
     { id: 'place_item', kind: 'effect', label: 'Place an item', description: '', params: [], object_kind: 'room_item' },
     { id: 'give_hint', kind: 'effect', label: 'Give a hint', description: '', params: [], object_kind: 'secret' },
     { id: 'narrate', kind: 'effect', label: 'Narrate', description: '', params: [], object_kind: '' },
-    { id: 'give_item', kind: 'effect', label: 'Give an item', description: '', params: [], object_kind: 'grant' },
+    { id: 'give_item', kind: 'effect', label: 'Give an item', description: '', params: [giveItemParam], object_kind: 'grant' },
   ];
   const knowsSecretParam = { key: 'secret', type: 'target', role_kinds: [], object_kinds: ['secret'] };
   const holdsItemParam = { key: 'item', type: 'target', role_kinds: ['item'], object_kinds: ['item'] };
-  const giveItemParam = { key: 'item', type: 'target', role_kinds: ['item'], object_kinds: ['item'] };
   const nearObjectParam = { key: 'object', type: 'target', role_kinds: [], object_kinds: ['world_prop', 'room_prop', 'room_item'] };
   const placeItemParam = { key: 'item', type: 'target', role_kinds: ['item'], object_kinds: ['item'] };
 
@@ -269,6 +274,18 @@ const bigRock = {"title": "The big rock", "summary": "{giver} lost something nea
   assert.ok(s0.later.includes('charm_given'));
   assert.ok(!s0.later.includes('rock'));
   assert.throws(() => scopeAt(draft, 'nonsense', fx));
+
+  // Review fix #2: reward targeting a non-permanent effect key.
+  assert.deepEqual(clientIssues(draft, fx), []);
+  const badReward = rowToDraft(bigRock);
+  badReward.rewards[1].params.item = 'box';
+  assert.deepEqual(clientIssues(badReward, fx), [{
+    path: 'rewards.1.params.item',
+    code: 'not_permanent',
+    message: 'A reward can only use a permanent object: this one is removed when the quest ends',
+  }]);
+  badReward.setup_effects[1].permanent = true;
+  assert.deepEqual(clientIssues(badReward, fx), []);
 }
 {
   const draft = rowToDraft(bigRock);

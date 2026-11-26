@@ -454,6 +454,12 @@ def _library() -> Dict[str, Dict[str, Any]]:
     return {p["id"]: p for p in list_props() if not p.get("quest_run")}
 
 
+def _full_library() -> Dict[str, Dict[str, Any]]:
+    """Every prop in the store keyed by id — used to resolve what already stands in a room."""
+    from app.core.props import list_props
+    return {p["id"]: p for p in list_props()}
+
+
 def _placements(lay: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [p for p in (lay.get("props") or []) if isinstance(p, dict)]
 
@@ -663,17 +669,18 @@ def _phase_needs(room_id: str) -> None:
     loc, room = _load_room(room_id)
     geom = _geometry(loc, room)
     library = _library()
+    full_library = _full_library()
     # The LLM only sees the FILTERED catalog (job's exclude filter) — full
     # library stays in use for resolving what already stands in the room.
     exclude = ((_get_row(room_id) or {}).get("proposal") or {}).get("exclude")
     catalog_lib = _apply_exclude(library, exclude)
     lay = geom["layout"]
     placed = _placements(lay)
-    existing = _aggregate(placed, library)
+    existing = _aggregate(placed, full_library)
     # The floor budget belongs to the FLOOR pieces alone (B3): what hangs on a
     # wall or stands on a table never took floor away in the first place.
     budget = max(0.0, geom["area_m2"] * BUDGET_FRACTION
-                 - _floor_used_area(placed, library))
+                 - _floor_used_area(placed, full_library))
     room_name = _room_label(room)
     style_hint = str(room.get("style_hint") or loc.get("style_hint") or "")
     setting, is_yard, indoor = _setting(loc, room)
@@ -811,6 +818,7 @@ def _phase_place(room_id: str) -> None:
     loc, room = _load_room(room_id)
     geom = _geometry(loc, room)
     library = _library()
+    full_library = _full_library()
     lay = geom["layout"]
     items = furnish_place.build_items(_needs(row.get("proposal")), library)
     room_name = _room_label(room)
@@ -833,7 +841,7 @@ def _phase_place(room_id: str) -> None:
     # solver wants boxes in room metres, so the parent link is resolved by the
     # one function that resolves it (``room_recipe.compose_on_chain``) before
     # the yard's origin shift moves the whole room into the solver's frame.
-    composed = compose_on_chain(placed_props, _stack_facts(library))
+    composed = compose_on_chain(placed_props, _stack_facts(full_library))
     existing_solver = [{"prop_id": p.get("prop_id"),
                         "id": p.get("id") or "",
                         "at": [c["at"][0] - ox, c["at"][1] - oy],
@@ -846,7 +854,8 @@ def _phase_place(room_id: str) -> None:
         selection = proposal["kit"]
         solved = furniture_kits.solve_kit(
             kit=selection["kit"], room_type=selection["room_type"],
-            geom=geom, library=library, room_id=_target(room_id)[0],
+            geom=geom, library=library, full_library=full_library,
+            room_id=_target(room_id)[0],
             existing=existing_solver, storey_height_m=storey_height_m)
         result = {key: solved[key] for key in
                   ("placed", "unplaced", "phase_counts", "missing_roles")}
@@ -856,13 +865,13 @@ def _phase_place(room_id: str) -> None:
     else:
         def _name_of(prop_id: Any) -> str:
             pid = str(prop_id or "")
-            return str((library.get(pid) or {}).get("name") or pid)
+            return str((full_library.get(pid) or {}).get("name") or pid)
 
         by_place_id = {str(p.get("id") or ""): p for p in placed_props}
         template_existing = [
             {"id": str(p.get("id") or ""),
              "name": _name_of(p.get("prop_id")),
-             "mount": _mount_of(library.get(str(p.get("prop_id") or "")) or {}),
+             "mount": _mount_of(full_library.get(str(p.get("prop_id") or "")) or {}),
              # Told in the SOLVER's frame, so the model's "beside the table"
              # refers to the same numbers the solver reasons about.
              "x_m": round(c["at"][0] - ox, 2),
@@ -890,7 +899,7 @@ def _phase_place(room_id: str) -> None:
         result = furnish_place.run(
             room_name=room_name, room_description=str(room.get("description") or ""),
             geom=geom, storey_height_m=storey_height_m, items=items,
-            props=furnish_place.solver_props(items, library),
+            props=furnish_place.solver_props(items, full_library),
             existing=existing_solver, template_existing=template_existing,
             template_openings=template_openings, ask=_ask,
             alive=lambda: _get_row(room_id) is not None)

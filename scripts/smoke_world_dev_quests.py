@@ -547,6 +547,24 @@ check("(j) no new write rows", len(writes()) == n_writes, len(writes()))
 check("(j) no new templates", len(quests.list_templates()) == n_templates,
       len(quests.list_templates()))
 
+# ── (k) ──────────────────────────────────────────────────────────────────
+# Fails on d026dc0fb: validate_template does not reject a reward targeting a
+# non-permanent setup effect key, so create_quest_template stores it.
+print("(k) reward targeting non-permanent setup item is refused")
+n_writes_k = len(writes())
+n_templates_k = len(quests.list_templates())
+k_tpl = {
+    **BASE,
+    "setup_effects": [{"key": "box", "type": "create_item", "params": {"name": "Box", "category": "tool"}}],
+    "rewards": [{"key": "gift", "type": "give_item", "permanent": True, "params": {"item": "box"}}],
+}
+res_k = call("create_quest_template", k_tpl)
+check("(k) refused with rewards.0.params.item",
+      not res_k.ok and not res_k.wrote and "rewards.0.params.item" in res_k.line, res_k.line)
+check("(k) no new write rows", len(writes()) == n_writes_k, len(writes()))
+check("(k) no new templates", len(quests.list_templates()) == n_templates_k,
+      len(quests.list_templates()))
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}):")

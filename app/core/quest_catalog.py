@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Collection, Dict, Iterator, List, Optional, Tuple
 
 from app.core.activity_engine import ConditionIssue, ConditionResult
 from app.core.log import get_logger
@@ -375,10 +375,12 @@ def check_expression(expr: dict, scope: Scope, *, allowed_kinds: Tuple[str, ...]
 
 
 def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str, reward: bool,
-                  props_before: int = 0, setup: bool = False) -> List[Dict[str, str]]:
+                  props_before: int = 0, setup: bool = False,
+                  non_permanent: Collection[str] = ()) -> List[Dict[str, str]]:
     """Every issue of one effect list (D2), with absolute paths built from ``path`` (e.g. ``setup_effects.1.key``).
-    ``scope_for(i)`` answers the reachable :class:`Scope` of entry ``i``; ``reward=True`` refuses ``permanent=False``;
-    ``props_before`` is how many ``create_prop`` entries earlier lists of the same template already used;
+    ``scope_for(i)`` answers the reachable :class:`Scope` of entry ``i``; ``reward=True`` refuses ``permanent=False``
+    and refuses any ``target`` parameter naming an effect key in ``non_permanent`` (those objects are removed when the
+    quest ends); ``props_before`` is how many ``create_prop`` entries earlier lists of the same template already used;
     ``setup=True`` refuses leaving any ``avatar_default`` parameter empty (a setup has no acting avatar)."""
     if not isinstance(effects, list):
         return [_issue(path, "shape", "An effect list must be a list")]
@@ -388,6 +390,7 @@ def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str,
         issues.append(_issue(path, "too_many", f"At most {MAX_EFFECTS} effects per list"))
     allowed_entry_keys = set(EFFECT_ENTRY_KEYS)
     seen_keys: set[str] = set()
+    non_perm = set(non_permanent) if reward and non_permanent else set()
     prop_count = props_before
     for i, entry in enumerate(effects):
         p = f"{path}.{i}"
@@ -430,6 +433,19 @@ def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str,
                                 f"{p}.params.{pkey}",
                                 "required",
                                 "The setup has no avatar: choose a character",
+                            ))
+        if reward and non_perm:
+            t = known.get(entry["type"])
+            if t is not None:
+                for spec in t.params:
+                    if spec.get("type") == "target":
+                        pkey = spec.get("key")
+                        val = entry_params.get(pkey)
+                        if isinstance(val, str) and val in non_perm:
+                            issues.append(_issue(
+                                f"{p}.params.{pkey}",
+                                "not_permanent",
+                                "A reward can only use a permanent object: this one is removed when the quest ends",
                             ))
         if entry["type"] == CREATE_PROP_TYPE:
             prop_count += 1

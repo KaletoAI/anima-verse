@@ -26,6 +26,7 @@ def build_tool_step_prompt(
         turn_tools, decision_menu_note, open_questions_note,
         tool_decision_guardrails, speech_turn_note,
     )
+    from app.core.quest_prompt import block_for
     from app.models.intents import build_open_intents_brief
     from app.routes.chat import _marker_travel_refusal
 
@@ -63,5 +64,6 @@ def build_tool_step_prompt(
         marker_travel_allowed=marker_allowed,
         known_places=known_places,
         plans='' if constrained else build_open_intents_brief(character),
+        quest_block=block_for(character),
     )
     return ToolStepPrompt(system, user, names, hidden)

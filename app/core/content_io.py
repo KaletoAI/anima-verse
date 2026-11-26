@@ -14,6 +14,7 @@ the importer; the `version` field is the only forward-compat anchor.
 """
 from __future__ import annotations
 
+import copy
 import io
 import json
 import re
@@ -845,6 +846,22 @@ def export_location_to_zip(location_id: str) -> bytes:
         # Same file set as a single prop export (props.export_files).
         from app.core.props import _prop_dir, read_sidecar
         from app.core.props import export_files as prop_export_files
+        loc = copy.deepcopy(loc)
+        tagged_props: Set[str] = set()
+        for room in (loc.get("rooms") or []):
+            if not isinstance(room, dict):
+                continue
+            layout = room.get("layout")
+            if not isinstance(layout, dict) or not isinstance(layout.get("props"), list):
+                continue
+            kept_props = []
+            for p in layout["props"]:
+                pid = (p.get("prop_id") or "").strip() if isinstance(p, dict) else ""
+                if pid and (pid in tagged_props or read_sidecar(pid, read_only=True).get("quest_run")):
+                    tagged_props.add(pid)
+                    continue
+                kept_props.append(p)
+            layout["props"] = kept_props
         prop_ids = _referenced_prop_ids(loc)
         bundled_props: List[str] = []
         for pid in prop_ids:

@@ -592,7 +592,10 @@ def objects_to_clean() -> list[dict]:
 
 def permanent_props_of_ended_runs() -> list[dict]:
     """Permanent ``prop`` objects of ended runs whose status is ``live`` or
-    ``pending``, ordered by object id (for D17 sidecar untagging)."""
+    ``pending``, ordered by object id (for D17 sidecar untagging). Rows whose
+    prop sidecar no longer exists are marked ``gone`` and omitted."""
+    from app.core import props
+
     states = RUN_ENDED_STATES
     sql = (
         "SELECT o.* "
@@ -605,7 +608,16 @@ def permanent_props_of_ended_runs() -> list[dict]:
         "ORDER BY o.id"
         % ",".join("?" * len(states))
     )
-    return [_object_dict(r) for r in get_connection().execute(sql, states).fetchall()]
+    rows = [_object_dict(r) for r in get_connection().execute(sql, states).fetchall()]
+    live: list[dict] = []
+    for row in rows:
+        pid = str((row.get("ref") or {}).get("prop_id") or "")
+        sidecar = props._sidecar_path(pid) if pid else None
+        if sidecar is None or not sidecar.exists():
+            set_object_status(row["id"], "gone")
+            continue
+        live.append(row)
+    return live
 
 
 # ── Run Payouts ──────────────────────────────────────────────────────────

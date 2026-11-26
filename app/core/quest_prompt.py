@@ -8,9 +8,10 @@ Builds at most ``MAX_LINES`` short English lines for a character:
 
 Cache rule: quest state and current steps change between turns, so this block
 belongs ONLY in per-turn prompts — the chat scene state (``chat/chat_moment.md``),
+the per-turn tool decision (``chat/tool_step_turn.md``),
 thought prompts (``chat/agent_thought.md``, ``chat/agent_thought_in_chat.md``),
-and NPC action prompts (``npc_actions._with_action_context``). It must NEVER
-enter the stable chat system prompt (``chat/chat_stream.md`` / ``reply_base.md``).
+and NPC action prompts (``tasks/npc_action.md`` via ``npc_actions._with_action_context``).
+It must NEVER enter the stable chat system prompt (``chat/chat_stream.md`` / ``reply_base.md``).
 """
 from app.core.log import get_logger
 
