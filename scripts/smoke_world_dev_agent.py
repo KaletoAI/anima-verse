@@ -773,8 +773,10 @@ async def main():
     check("(q) Q1 gone", not by_name("Demo Q1"))
     check("(q) unfrozen", not is_world_frozen())
 
-    print("(r) unclosed tool tag")
-    rm, _ = manager(['Look: <tool name="world_overview">{}', call("world_overview", "{}"),
+    print("(r) unclosed tool tag with an incomplete body")
+    # A COMPLETE body after an unclosed tag runs anyway (smoke_world_dev_json_repair);
+    # an incomplete one is still refused.
+    rm, _ = manager(['Look: <tool name="world_overview">{"x":', call("world_overview", "{}"),
                      "Looked."])
     run_id = await start(rm)
     run = await settle(rm, run_id)

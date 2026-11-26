@@ -113,6 +113,9 @@ export function WorldDevTab() {
             )}
           </select>
         </div>
+        <div className="ga-form-hint">
+          {t('World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.')}
+        </div>
       </div>
 
       <FreeModePanel model={model} provider={provider} maxTokens={maxTokens} effort={effort} />

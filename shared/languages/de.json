@@ -7511,6 +7511,7 @@
     "The setup has no avatar: choose a character": "Die Vorbereitung hat keinen Avatar: wähle einen Charakter",
     "A reward can only use a permanent object: this one is removed when the quest ends": "Eine Belohnung kann nur ein dauerhaftes Objekt verwenden: dieses wird entfernt, wenn die Quest endet",
     "Read aloud": "Vorlesen",
-    "Stop reading aloud": "Vorlesen beenden"
+    "Stop reading aloud": "Vorlesen beenden",
+    "World Dev writes long nested tool calls — use a strong model (e.g. Claude Opus). Small or flash models often break the JSON.": "World-Dev schreibt lange, verschachtelte Tool-Aufrufe — nutze ein starkes Modell (z. B. Claude Opus). Kleine oder Flash-Modelle zerstören oft das JSON."
   }
 }

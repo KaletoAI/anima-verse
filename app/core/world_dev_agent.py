@@ -128,13 +128,121 @@ BAD_BODY_LINE = "error: body is not a JSON object"
 # model must type (backslash + quote, backslash + n), never the characters.
 BAD_JSON_HINT = (" — inside a string write a double quote as \\\" and a line break "
                  "as \\n; split a very long text into several calls")
+REPAIR_NOTE = ("note: the closing brackets of your call were wrong and were "
+               "repaired — count { [ ] } carefully")
+UNCLOSED_NOTE = ("note: your tool call was not closed with </tool> — it ran "
+                 "anyway; always end it with </tool>")
 
 
-def _bad_json_line(e: json.JSONDecodeError) -> str:
+def _excerpt(body: str, pos: int, radius: int = 20) -> str:
+    """Short single-line snippet of body around pos with ellipses when clipped."""
+    start = max(0, pos - radius)
+    end = min(len(body), pos + radius)
+    frag = body[start:end].replace("\n", "\\n").replace("\r", "\\r")
+    return ("…" if start > 0 else "") + frag + ("…" if end < len(body) else "")
+
+
+def _repair_closers(body: str) -> Optional[str]:
+    """Repair a JSON object body whose ONLY problem is its trailing run of
+    closing brackets/braces (extra closer, missing closer, or swapped }] / ]}).
+
+    Strips the maximal suffix made only of '}', ']' and whitespace, scans the
+    remaining prefix with a JSON-aware string/bracket scanner, and appends the
+    exact closers required by the open bracket stack. Returns the repaired text
+    only when the prefix has no structural mismatch, ends outside a string, and
+    json.loads produces a dict; else None. Never alters anything before the
+    trailing closer run."""
+    end = len(body)
+    while end > 0 and (body[end - 1] in "}]" or body[end - 1].isspace()):
+        end -= 1
+    prefix = body[:end]
+    if not prefix:
+        return None
+    in_string = False
+    escape = False
+    stack: List[str] = []
+    for ch in prefix:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                expected = "{" if ch == "}" else "["
+                if not stack or stack[-1] != expected:
+                    return None
+                stack.pop()
+    if in_string or not stack:
+        return None
+    repaired = prefix + "".join("}" if c == "{" else "]" for c in reversed(stack))
+    try:
+        parsed = json.loads(repaired)
+    except ValueError:
+        return None
+    return repaired if isinstance(parsed, dict) else None
+
+
+def _structural_hint(body: str) -> Optional[str]:
+    """If body has a bracket/brace structural problem outside strings (extra
+    closer, mismatched closer, or unclosed brackets at EOF), return a precise
+    hint naming the position and an excerpt; else None."""
+    if not body:
+        return None
+    in_string = False
+    escape = False
+    stack: List[str] = []
+    prev_non_ws = ""
+    for i, ch in enumerate(body):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            prev_non_ws = ch
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            col = i - body.rfind("\n", 0, i)
+            excerpt = _excerpt(body, i)
+            expected = "{" if ch == "}" else "["
+            if not stack:
+                what = "object" if ch == "}" else "array"
+                return (f' — one "{ch}" too many at column {col}: {excerpt}'
+                        f' — the {what} was already closed')
+            if stack[-1] != expected:
+                if ch == "}" and prev_non_ws == "}":
+                    return (f' — one "}}" too many at column {col}: {excerpt}'
+                            f' — the object was already closed')
+                return f' — "{ch}" closes a "{stack[-1]}" at column {col}: {excerpt}'
+            stack.pop()
+        if not ch.isspace():
+            prev_non_ws = ch
+    if not in_string and stack:
+        need = "".join("}" if c == "{" else "]" for c in reversed(stack))
+        noun = "bracket" if len(stack) == 1 else "brackets"
+        return f' — {len(stack)} {noun} not closed at the end (need "{need}")'
+    return None
+
+
+def _bad_json_line(e: json.JSONDecodeError, body: str = "") -> str:
     """The refused line for an unparseable body: BAD_BODY_LINE stays the exact
     prefix (panel and smokes key on it), then where json stopped and how to fix it."""
+    hint = _structural_hint(body) or BAD_JSON_HINT
     return (f"{BAD_BODY_LINE} (JSON error: {e.msg} at line {e.lineno} column {e.colno})"
-            + BAD_JSON_HINT)
+            + hint)
 SYSTEM_TEMPLATE = "world_dev_free/system.md"
 
 
@@ -1083,13 +1191,26 @@ class RunManager:
             # otherwise lag one LLM call behind (the budget reads the row).
             counted = await asyncio.to_thread(self._get, run_id)
             await self._emit(st, {"type": "usage", **self._usage(run_id, counted, base)})
+            notes: List[str] = []
             if m is None:
-                # A tool tag that never closed: unparseable like a bad body.
+                # A tool tag that never closed: run it if the text right after
+                # the opening tag starts with a complete JSON object, else refuse.
                 opened = _TOOL_OPEN.search(reply)
                 name = opened.group(1) if opened else "tool"
                 st.history.append({"role": "assistant", "content": reply})
                 args, line = None, (f'error: tool call not closed — write <tool name="{name}">'
                                     '{...}</tool>')
+                if opened is not None:
+                    gt = reply.find(">", opened.end())
+                    tail = reply[gt + 1:].lstrip() if gt >= 0 else ""
+                    if tail:
+                        try:
+                            decoded, _ = json.JSONDecoder().raw_decode(tail)
+                        except json.JSONDecodeError:
+                            decoded = None
+                        if isinstance(decoded, dict):
+                            args = decoded
+                            notes.append(UNCLOSED_NOTE)
             else:
                 name, body = m.group(1), m.group(2).strip()
                 st.history.append({"role": "assistant", "content": reply})
@@ -1097,8 +1218,13 @@ class RunManager:
                 try:
                     args = json.loads(body) if body else {}
                 except json.JSONDecodeError as e:
-                    args = None
-                    line = _bad_json_line(e)
+                    repaired = _repair_closers(body)
+                    if repaired is not None:
+                        args = json.loads(repaired)
+                        notes.append(REPAIR_NOTE)
+                    else:
+                        args = None
+                        line = _bad_json_line(e, body)
                 except ValueError:
                     args = None
                 else:
@@ -1127,9 +1253,10 @@ class RunManager:
                                       "line": f"failed: {e}",
                                       "kind": "write" if spec and spec.write else "read"})
                 return "fail", f"tool {name} failed: {e}"
+            result_line = "\n".join([res.line, *notes]) if notes else res.line
             await self._emit(st, {"type": "step", "tool": name, "ok": res.ok,
-                                  "line": res.line, "wrote": res.wrote, "seq": res.seq})
-            self._add_result(st, name, res.line, args, ok=res.ok)
+                                  "line": result_line, "wrote": res.wrote, "seq": res.seq})
+            self._add_result(st, name, result_line, args, ok=res.ok)
             if st.stop:
                 return "fail", "stopped by the admin"
 
