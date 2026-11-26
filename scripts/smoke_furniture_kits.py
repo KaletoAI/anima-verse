@@ -3,7 +3,8 @@
 
 Hand derivation: three kits times twenty unique roles = sixty props. The
 21-role union omits toilet in rustic/castle and workbench in modern. Bedroom
-has five distinct roles; with only bed present its other four are missing.
+has eight distinct roles (bed, nightstand, rug, wardrobe, chest, desk, chair,
+ceiling_light); with only bed present its other seven are missing.
 Counts: 2 + floor(30 * .04) = 3; 2 + floor(200 * .04) = 10,
 clamped to 6. Four chairs times two tables = 8; times six = 24,
 clamped to 12. Integers 5 and 20 yield 5 and 12; absent yields 1.
@@ -81,7 +82,7 @@ def planner_smoke():
         ("e", 4.0), ("w", 4.0), ("s", 3.7), ("n", 1.8)]
     assert plan(windows, library)["entries"][3]["anchor"] == "wall_e"
     missing = plan(geom, demo_library(rows[1:]))
-    assert missing["missing_roles"] == ["bed"]
+    assert missing["missing_roles"] == ["bed", "chest", "desk", "chair"]
     # The bedroom rug lies in the room's middle, so it survives a missing bed.
     assert [e["prop"] for e in missing["entries"]] == ["rug", "wardrobe", "ceiling_light"]
     assert len(missing["needs"]) == 3
@@ -89,7 +90,7 @@ def planner_smoke():
                            ("armchair", .7, .7, 1), ("shelf", 1, .4, 1.8),
                            ("ceiling_light", .4, .4, .5)])
     missing = plan(windows, living, "living")
-    assert missing["missing_roles"] == ["sofa"]
+    assert missing["missing_roles"] == ["sofa", "dining_table", "chair", "chest", "cupboard"]
     assert [e["prop"] for e in missing["entries"]] == ["shelf", "ceiling_light"]
     # The surviving shelf fixes main=e, then its other slot selects w.
     assert missing["entries"][0]["anchor"] == "wall_w"
@@ -247,10 +248,12 @@ def main():
         assert f.resolve_count(spec, area_m2=area, ref_instances=refs) == expected
     result = f.catalog(library=library)
     assert set(result) == {"kits", "room_types", "location_kit", "room_type", "room_type_guess", "missing_roles"}
-    assert next(t["roles"] for t in result["room_types"] if t["id"] == "bedroom") == ["bed", "nightstand", "rug", "wardrobe", "ceiling_light"]
+    assert next(t["roles"] for t in result["room_types"] if t["id"] == "bedroom") == [
+        "bed", "nightstand", "rug", "wardrobe", "chest", "desk", "chair", "ceiling_light"]
     assert result["location_kit"] is result["room_type"] is result["room_type_guess"] is None
-    assert result["missing_roles"]["rustic"]["bedroom"] == ["nightstand", "rug", "wardrobe", "ceiling_light"]
-    # Bedroom has five roles (bed + four missing); two nightstands are instances.
+    assert result["missing_roles"]["rustic"]["bedroom"] == [
+        "nightstand", "rug", "wardrobe", "chest", "desk", "chair", "ceiling_light"]
+    # Bedroom has eight roles (bed + seven missing); two nightstands are instances.
     hull = ModuleType("app.core.hull_model")
     world = ModuleType("app.models.world")
     hull.hull_status = lambda lid: {"active": True, "stale": True, "description": {"style": "burg"}}

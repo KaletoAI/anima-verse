@@ -170,6 +170,8 @@ class _Solver:
         self.centroid = (sum(p[0] for p in self.poly) / len(self.poly),
                          sum(p[1] for p in self.poly) / len(self.poly))
         self.storey = max(2.0, float(storey_height_m or 3.0))
+        from app.core.scene_recipe import ceiling_height_m
+        self.ceiling = ceiling_height_m(self.storey)
         self.props = props or {}
         self.openings = [op for op in (openings or []) if isinstance(op, dict)]
         self.zones = fg.opening_zones(self.poly, self.centroid, self.openings,
@@ -829,10 +831,10 @@ def _place_under(s: _Solver, item: _Item, ref_pieces: List[_Piece],
 
 # ── Pass B — wall and ceiling ───────────────────────────────────────────
 
-def _wall_base(item: _Item, storey: float) -> float:
-    """``base_m`` from the plan, clamped to ``[0.3, storey − height]``; absent →
+def _wall_base(item: _Item, ceiling: float) -> float:
+    """``base_m`` from the plan, clamped to ``[0.3, ceiling − height]``; absent →
     centred at 1.5 m, clamped the same way (B1/E2)."""
-    top = max(WALL_BASE_MIN_M, storey - item.h)
+    top = max(WALL_BASE_MIN_M, ceiling - item.h)
     want = (item.base_m if item.base_m is not None
             else WALL_BASE_CENTRE_M - item.h / 2)
     return min(max(want, WALL_BASE_MIN_M), top)
@@ -852,7 +854,7 @@ def _place_wall_piece(s: _Solver, item: _Item,
         return None, (f"wall budget on wall_{wall} exhausted — "
                       f"use another wall or drop the piece")
     yaw = fg.WALL_YAW_ROOM[wall]
-    base = _wall_base(item, s.storey)
+    base = _wall_base(item, s.ceiling)
     hit = _place_at_wall(s, item, yaw, wall=wall, gap=WALL_GAP_M, base=base,
                          series=False)
     if hit:
@@ -897,7 +899,7 @@ def _place_wall_above(s: _Solver, item: _Item,
         return None, (f"wall budget on wall_{wall} exhausted — "
                       f"use another wall or drop the piece")
     yaw = fg.WALL_YAW_ROOM[wall]
-    top = max(WALL_BASE_MIN_M, s.storey - item.h)
+    top = max(WALL_BASE_MIN_M, s.ceiling - item.h)
     want = (item.base_m if item.base_m is not None
             else ref_piece.top + WALL_ABOVE_GAP_M)
     base = min(max(want, WALL_BASE_MIN_M), top)
@@ -965,7 +967,7 @@ def _place_at_opening(s: _Solver, item: _Item
         height = float(op.get("height_m") or 2.1)
     except (TypeError, ValueError):
         sill, height = 0.0, 2.1
-    top = max(0.05, s.storey - item.h)
+    top = max(0.05, s.ceiling - item.h)
     base = min(max(sill + height + OPENING_PIECE_GAP_M - item.h, 0.05), top)
     yaw = fg.WALL_YAW_ROOM[wall]
     perp = fg.half_extent(item.w, item.d, yaw, n)
@@ -983,9 +985,9 @@ def _place_at_opening(s: _Solver, item: _Item
 
 def _place_ceiling(s: _Solver, item: _Item, ref_pieces: List[_Piece]
                    ) -> Tuple[Optional[Dict[str, Any]], str]:
-    """A hanging piece: its base is the storey height minus its own height (the
-    prop's height includes chain or cord), never below 1.9 m."""
-    base = max(CEILING_MIN_BASE_M, s.storey - item.h)
+    """A hanging piece: its base is the clear ceiling height minus its own
+    height (the prop's height includes chain or cord), never below 1.9 m."""
+    base = max(CEILING_MIN_BASE_M, s.ceiling - item.h)
     if ref_pieces:
         ref_piece = s._pick(ref_pieces)
         at = ref_piece.at
@@ -1000,6 +1002,52 @@ def _place_ceiling(s: _Solver, item: _Item, ref_pieces: List[_Piece]
                       f"try another reference or center")
     return s._commit(item, at_world=at, yaw_world=yaw, y0=base,
                      offset_y=base - item.ground_offset_m), ""
+
+
+def _ceiling_grid_cells(s: _Solver, count: int) -> List[Vec]:
+    """Deterministic grid of cell centres for ``count > 1`` ref-less ceiling
+    pieces, matching the room's aspect ratio and ordered nearest to centroid
+    first (north-west tie-break)."""
+    best_grid: Optional[Tuple[int, float, int, int, int]] = None
+    for nx in range(1, count + 1):
+        for nz in range(1, count + 1):
+            if nx * nz < count:
+                continue
+            cand = (nx * nz - count, abs(s.W / nx - s.D / nz), -nx, nx, nz)
+            if best_grid is None or cand < best_grid:
+                best_grid = cand
+    nx, nz = (best_grid[3], best_grid[4]) if best_grid else (1, 1)
+    cells = [(s.W * (i + 0.5) / nx, s.D * (j + 0.5) / nz)
+             for j in range(nz) for i in range(nx)]
+    cells.sort(key=lambda c: (round(math.hypot(c[0] - s.centroid[0],
+                                               c[1] - s.centroid[1]), 6),
+                              c[1], c[0]))
+    return cells
+
+
+def _place_ceiling_grid(s: _Solver, item: _Item, placed: List[Dict[str, Any]],
+                        unplaced: List[Dict[str, str]]) -> None:
+    """Spread multiple ref-less ``center`` ceiling pieces over a deterministic
+    room grid at clear ceiling height."""
+    base = max(CEILING_MIN_BASE_M, s.ceiling - item.h)
+    cells = _ceiling_grid_cells(s, item.count)
+    used: set = set()
+    for _ in range(item.count):
+        hit = None
+        for idx, at in enumerate(cells):
+            if idx in used:
+                continue
+            corners = fg.rect_corners(at[0], at[1], item.w, item.d, 0.0)
+            if s._fits(corners, base, base + item.h):
+                used.add(idx)
+                hit = s._commit(item, at_world=at, yaw_world=0.0, y0=base,
+                                offset_y=base - item.ground_offset_m)
+                break
+        if hit:
+            placed.append(hit)
+        else:
+            unplaced.append(_fail(item, "the ceiling over the room centre is "
+                                        "taken — try another reference or center"))
 
 
 # ── Pass C — surface ────────────────────────────────────────────────────
@@ -1184,6 +1232,9 @@ def _run_wall(s: _Solver, items: List[_Item], placed: List[Dict[str, Any]],
         if item.anchor not in allowed:
             for _ in range(item.count):
                 unplaced.append(_fail(item, _anchor_error(item)))
+            continue
+        if item.mount == "ceiling" and item.anchor == "center" and item.count > 1:
+            _place_ceiling_grid(s, item, placed, unplaced)
             continue
         for _ in range(item.count):
             ref_pieces: List[_Piece] = []

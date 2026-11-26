@@ -444,7 +444,8 @@ def _geometry(loc: Dict[str, Any], room: Dict[str, Any]) -> Dict[str, Any]:
     outline_m = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in pts]
     return {"layout": lay, "origin": [0.0, 0.0], "w_m": w_m, "d_m": d_m,
             "outline_m": outline_m, "area_m2": round(_poly_area(outline_m), 2),
-            "is_rect": not lay.get("outline"), "openings": _openings(lay)}
+            "is_rect": not lay.get("outline"),
+            "openings": room_openings(loc, room)}
 
 
 def _library() -> Dict[str, Dict[str, Any]]:
@@ -777,6 +778,52 @@ def _openings(lay: Dict[str, Any]) -> List[Dict[str, Any]]:
     from app.core.room_recipe import _normalize_opening
     return [_normalize_opening(op) for op in (lay.get("openings") or [])
             if isinstance(op, dict)]
+
+
+def room_openings(loc: Optional[Dict[str, Any]],
+                  room: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Own normalized openings of a regular room plus mirrored openings from
+    sibling rooms on shared walls, deduplicated when both sides authored the
+    same opening."""
+    from app.core.room_recipe import _mirrored_openings
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+    lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}
+    own = _openings(lay)
+    own_id = str(room.get("id") or "")
+    if own_id == GROUND_ROOM_ID or is_floor_room(own_id):
+        return own
+    siblings = [
+        r for r in ((loc or {}).get("rooms") or [])
+        if isinstance(r, dict)
+        and r is not room
+        and (not own_id or str(r.get("id") or "") != own_id)
+        and str(r.get("id") or "") != GROUND_ROOM_ID
+        and not is_floor_room(str(r.get("id") or ""))
+        and isinstance(r.get("layout"), dict)
+    ]
+    mirrored = _mirrored_openings(lay, siblings)
+    if not mirrored:
+        return own
+    out = list(own)
+    for mop in mirrored:
+        try:
+            me = int(mop.get("edge") or 0)
+            mat = float(mop.get("at") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        dup = False
+        for oop in own:
+            try:
+                oe = int(oop.get("edge") or 0)
+                oat = float(oop.get("at") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if oe == me and abs(oat - mat) <= 0.02:
+                dup = True
+                break
+        if not dup:
+            out.append(mop)
+    return out
 
 
 def _stack_facts(library: Dict[str, Dict[str, Any]]):

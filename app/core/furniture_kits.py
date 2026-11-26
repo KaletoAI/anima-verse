@@ -57,6 +57,9 @@ def _validate_room_types(types: Dict) -> None:
         _require(isinstance(room_type, dict) and isinstance(room_type.get("name"), str) and bool(room_type["name"]), f"Invalid room type: {tid}")
         keywords = room_type.get("keywords")
         _require(isinstance(keywords, list) and bool(keywords) and all(isinstance(k, str) and k.strip() for k in keywords), f"Invalid keywords: {tid}")
+        if "max_m2" in room_type:
+            max_m2 = room_type["max_m2"]
+            _require(type(max_m2) in (int, float) and math.isfinite(max_m2) and max_m2 > 0, f"Invalid max_m2: {tid}")
         template = room_type.get("template")
         _require(isinstance(template, list) and bool(template), f"Invalid template: {tid}")
         for entry in template:

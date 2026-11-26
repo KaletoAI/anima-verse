@@ -121,7 +121,7 @@ def main() -> None:
                 room_furnish.resume("kit-bedroom")
                 status = ready()
             placements = status["placements"]
-            assert placements["missing_roles"] == ["rug"], placements
+            assert placements["missing_roles"] == ["rug", "chest", "desk", "chair"], placements
             used = {p["prop_id"] for p in placements["placed"]}
             used.update(p["name"] for p in placements["unplaced"])
             assert ids["rug"] not in used

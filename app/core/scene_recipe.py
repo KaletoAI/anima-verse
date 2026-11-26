@@ -1108,7 +1108,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
 
 # ── Walls ───────────────────────────────────────────────────────────────
 
-def _wall_height(storey: float) -> float:
+def ceiling_height_m(storey: float) -> float:
+    """Clear wall/ceiling height of one storey over its floor (metres)."""
     return max(WALL_MIN_HEIGHT, storey - WALL_HEAD_ROOM)
 
 
@@ -1309,7 +1310,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     its own ``surfaces.wall``. Without a kind the contour stays untextured and
     the renderers fall back to ``style.wall_color``.
     """
-    height = _wall_height(storey)
+    height = ceiling_height_m(storey)
     # ONE kind per storey, resolved once (:func:`level_wall_kind`): the
     # storey's own entry in ``level_walls``, else the shell-wide ``wall_kind``,
     # else the active plan hull's stored kind.
@@ -1704,7 +1705,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     # Room shell walls stand on the ROOM's own floor (``_plate_top``): the
     # room plate (0.10) on a declared storey, the TERRAIN (0.0) on storey 0.
     base = _room_floor_y(recipe, storey) + _plate_top(recipe)
-    height = _wall_height(storey)
+    height = ceiling_height_m(storey)
     kind = str(((recipe.get("surfaces") or {}).get("wall")) or "").strip()
     room_id = recipe.get("room_id") or ""
     role = _opacity_role(level, ground_level)
@@ -1888,7 +1889,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
         return out
 
     tol = SHARE_TOL_M + 1e-4
-    wall_h = _wall_height(storey)
+    wall_h = ceiling_height_m(storey)
     # (entry, unclamped centre) of the openings on their OWN room's wall, and
     # the neighbours' mirrored copies. Own ones are deduped FIRST, so an entry
     # is based on a room that owns its wall stretch wherever one exists.
@@ -2111,7 +2112,7 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
     out: List[Dict[str, Any]] = []
     problems: List[Dict[str, Any]] = []
     reported: Set[int] = set()
-    wall_h = _wall_height(storey)
+    wall_h = ceiling_height_m(storey)
     for op in (map3d or {}).get("hull_openings") or []:
         if not isinstance(op, dict):
             continue

@@ -2,6 +2,7 @@
   "room_types": {
     "living": {
       "name": "Living Room",
+      "max_m2": 45,
       "keywords": [
         "living room",
         "living",
@@ -42,13 +43,57 @@
           "wall": "other"
         },
         {
+          "role": "dining_table",
+          "anchor": "center",
+          "count": {
+            "base": 0,
+            "per_m2": 0.02,
+            "max": 2
+          }
+        },
+        {
+          "role": "chair",
+          "anchor": "around",
+          "ref": "dining_table",
+          "count": {
+            "per_ref": 4,
+            "max": 8
+          }
+        },
+        {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "other",
+          "count": {
+            "base": 0,
+            "per_m2": 0.025,
+            "max": 2
+          }
+        },
+        {
+          "role": "cupboard",
+          "anchor": "wall",
+          "wall": "any",
+          "count": {
+            "base": 0,
+            "per_m2": 0.02,
+            "max": 2
+          }
+        },
+        {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "bedroom": {
       "name": "Bedroom",
+      "max_m2": 25,
       "keywords": [
         "bedroom",
         "schlafzimmer",
@@ -84,13 +129,47 @@
           "wall": "other"
         },
         {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "other",
+          "count": {
+            "base": 0,
+            "per_m2": 0.04,
+            "max": 2
+          }
+        },
+        {
+          "role": "desk",
+          "anchor": "wall",
+          "wall": "any",
+          "count": {
+            "base": 0,
+            "per_m2": 0.03,
+            "max": 1
+          }
+        },
+        {
+          "role": "chair",
+          "anchor": "in_front_of",
+          "ref": "desk",
+          "count": {
+            "per_ref": 1
+          }
+        },
+        {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "kitchen": {
       "name": "Kitchen",
+      "max_m2": 30,
       "keywords": [
         "kitchen",
         "küche",
@@ -117,7 +196,12 @@
         },
         {
           "role": "dining_table",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.015,
+            "max": 3
+          }
         },
         {
           "role": "chair",
@@ -128,13 +212,29 @@
           }
         },
         {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "any",
+          "count": {
+            "base": 0,
+            "per_m2": 0.03,
+            "max": 2
+          }
+        },
+        {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "dining": {
       "name": "Dining Room",
+      "max_m2": 50,
       "keywords": [
         "dining",
         "dining room",
@@ -145,14 +245,20 @@
       "template": [
         {
           "role": "dining_table",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.03,
+            "max": 4
+          }
         },
         {
           "role": "chair",
           "anchor": "around",
           "ref": "dining_table",
           "count": {
-            "per_ref": 4
+            "per_ref": 4,
+            "max": 16
           }
         },
         {
@@ -167,12 +273,18 @@
         },
         {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "bathroom": {
       "name": "Bathroom",
+      "max_m2": 15,
       "keywords": [
         "bathroom",
         "bath",
@@ -201,12 +313,18 @@
         },
         {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "study": {
       "name": "Study",
+      "max_m2": 25,
       "keywords": [
         "study",
         "office",
@@ -241,12 +359,18 @@
         },
         {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "hall": {
       "name": "Hall",
+      "max_m2": 30,
       "keywords": [
         "hall",
         "lobby",
@@ -271,13 +395,29 @@
           "wall": "main"
         },
         {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "other",
+          "count": {
+            "base": 0,
+            "per_m2": 0.05,
+            "max": 2
+          }
+        },
+        {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "storage": {
       "name": "Storage",
+      "max_m2": 30,
       "keywords": [
         "storage",
         "storeroom",
@@ -296,12 +436,21 @@
           "role": "shelf",
           "anchor": "wall",
           "wall": "main",
-          "count": 2
+          "count": {
+            "base": 2,
+            "per_m2": 0.08,
+            "max": 8
+          }
         },
         {
           "role": "chest",
           "anchor": "wall",
-          "wall": "other"
+          "wall": "other",
+          "count": {
+            "base": 1,
+            "per_m2": 0.05,
+            "max": 6
+          }
         },
         {
           "role": "chest",
@@ -311,6 +460,7 @@
     },
     "workshop": {
       "name": "Workshop",
+      "max_m2": 100,
       "keywords": [
         "workshop",
         "werkstatt",
@@ -323,16 +473,31 @@
         {
           "role": "workbench",
           "anchor": "wall",
-          "wall": "main"
+          "wall": "main",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         },
         {
           "role": "shelf",
           "anchor": "wall",
-          "wall": "other"
+          "wall": "other",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         },
         {
           "role": "chest",
-          "anchor": "corner"
+          "anchor": "corner",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         },
         {
           "role": "chair",
@@ -341,12 +506,18 @@
         },
         {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     },
     "tavern": {
       "name": "Tavern",
+      "max_m2": 200,
       "keywords": [
         "tavern",
         "bar",
@@ -378,7 +549,7 @@
           "count": {
             "base": 2,
             "per_m2": 0.04,
-            "max": 6
+            "max": 10
           }
         },
         {
@@ -387,7 +558,7 @@
           "ref": "dining_table",
           "count": {
             "per_ref": 4,
-            "max": 12
+            "max": 40
           }
         },
         {
@@ -396,8 +567,23 @@
           "wall": "other"
         },
         {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "other",
+          "count": {
+            "base": 0,
+            "per_m2": 0.015,
+            "max": 3
+          }
+        },
+        {
           "role": "ceiling_light",
-          "anchor": "center"
+          "anchor": "center",
+          "count": {
+            "base": 1,
+            "per_m2": 0.02,
+            "max": 4
+          }
         }
       ]
     }

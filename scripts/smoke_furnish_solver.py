@@ -106,7 +106,8 @@ B beside.  ``sofa wall_n`` → [3.0, 0.5], yaw 0, its left is EAST. Both copies
   x 2.0…4.0, z 0.05…0.95) but the BOXES do not: 0.85 ≤ 1.05.
 
 3 picture base defaults.  ``picture wall_e`` without base_m → centred at
-  1.5 m → base 1.5 − 0.6/2 = 1.2.  base_m 2.9 → clamped to 3.0 − 0.6 = 2.4.
+  1.5 m → base 1.5 − 0.6/2 = 1.2.  With clear ceiling height
+  ceiling_height_m(3.0) = 2.85 m, base_m 2.9 → clamped to 2.85 − 0.6 = 2.25.
   base_m 0.1 → clamped up to 0.3.
 
 4 candle on the table.  Raster over the table top, step 0.15, inset by the
@@ -124,7 +125,8 @@ B beside.  ``sofa wall_n`` → [3.0, 0.5], yaw 0, its left is EAST. Both copies
   The mug has 2 variants → variant = ordinal mod 2 = 0, 1, 0, 1, …
 
 6 pendant lamp.  ``lamp above table`` → at = the table's centre [3.0, 2.0],
-  base = max(1.9, 3.0 − 1.0) = 2.0.
+  with clear ceiling height ceiling_height_m(3.0) = 2.85 m,
+  base = max(1.9, 2.85 − 1.0) = 1.9.
 
 7 door clearance.  Room [[0,0],[4,0],[4,3],[0,3]] (4 m of south wall, 3 m
   deep), door centred on the south edge, width 1.0 → strip x 1.3…2.7,
@@ -467,7 +469,7 @@ def row_wall_above() -> None:
 
 def row_wall_base() -> None:
     print("\n3 — the wall base and its clamp")
-    for base_m, want in ((None, 1.2), (2.9, 2.4), (0.1, 0.3)):
+    for base_m, want in ((None, 1.2), (2.9, 2.25), (0.1, 0.3)):
         item = {"prop": "picture", "count": 1, "anchor": "wall_e"}
         if base_m is not None:
             item["base_m"] = base_m
@@ -538,9 +540,9 @@ def row_ceiling() -> None:
     out = run([{"prop": "table", "count": 1, "anchor": "center", "facing": "s"},
                {"prop": "lamp", "count": 1, "anchor": "above", "ref": "table"}])
     lamp = by_prop(out["placed"], "lamp")
-    check("it hangs over the table's centre at 3.0 − 1.0 = 2.0",
+    check("it hangs over the table's centre at max(1.9, 2.85 − 1.0) = 1.9",
           len(lamp) == 1 and at_near(lamp[0]["at"], 3.0, 2.0)
-          and near(lamp[0].get("offset_y", -1), 2.0, 1e-6),
+          and near(lamp[0].get("offset_y", -1), 1.9, 1e-6),
           json.dumps(lamp) + reasons(out["unplaced"]))
 
 

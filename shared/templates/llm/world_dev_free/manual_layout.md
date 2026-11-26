@@ -22,18 +22,20 @@ Metres, in the place's own frame — the same frame as its `map3d.boundary` (the
 - `level` stacks storeys: `0` ground floor, `1` the floor above, `-1` a cellar. Rooms on
   different levels may stand on top of each other; rooms on the SAME level must not.
 
-Real sizes (a person is 1.70 m tall):
+Real sizes (a person is 1.70 m tall; keep rooms within realistic `max_m2` guidelines — larger rooms trigger a warning and furnish poorly):
 
-| room | typical |
-|---|---|
-| corridor / hallway | 1.2–2 m wide |
-| bathroom | 2 × 2.5 m |
-| bedroom, kitchen | 3 × 4 m |
-| living room / parlour | 5 × 6 m |
-| taproom, hall, workshop | 8 × 10 m and up |
-| door | 0.9 m wide, 2.1 m high |
-| double door / gateway | 1.8–3 m wide |
-| window | 1.2 m wide, 1.4 m high, sill 0.9 m |
+| room | typical | max_m2 guideline |
+|---|---|---|
+| bathroom | 2 × 2.5 m | 15 m² |
+| bedroom, study | 3 × 4 m | 25 m² |
+| kitchen, hall, storage | 3 × 4 m / 1.5–2 m wide | 30 m² |
+| living room / parlour | 5 × 6 m | 45 m² |
+| dining room | 5 × 6 m | 50 m² |
+| workshop | 8 × 10 m | 100 m² |
+| tavern / taproom | 8 × 10 m and up | 200 m² |
+| door | 0.9 m wide, 2.1 m high | — |
+| double door / gateway | 1.8–3 m wide | — |
+| window | 1.2 m wide, 1.4 m high, sill 0.9 m | — |
 
 ## `layout`
 
@@ -82,7 +84,8 @@ by the building panel's button, not by you.
     (door/passage 2.1 m high, sill 0; window 1.4 m high, sill 0.9 m).
   - `to` — optional: the room on the other side (an id, or `"outside"`).
   **Doors connect ADJACENT rooms**: put the door on the wall two rooms share, at an `at`
-  inside the shared stretch.
+  inside the shared stretch. One door in the shared wall suffices for both rooms — it is
+  mirrored onto the neighbour's wall automatically.
 
 ### `boundary_openings` — how one gets onto the plot
 
@@ -125,17 +128,27 @@ outside its range (`at` 0…1, `sill_m` 0…3, a plan coordinate beyond ±500 m)
 the value it would store. Only rounding to the centimetre passes. The first refusal of a plan
 lists every dropped part — fix them all and send the plan again.
 
+The whole call is also REFUSED when two rooms on the same level overlap (whether both are
+in the plan or one is an omitted stored room).
+
 The plan is written but the result ends `; warnings: …` for states of a plan in progress: a
-room reaching over the place's outline, two rooms on one level sharing floor (only rooms named
-in the same plan are compared — name both), a door `to` a room that is not there (kept as a
-plain hole), a place without an outline, a named room sharing floor with a stored room the plan
-omits, a stair flight from or onto a level without rooms, a level other than 0 that no flight
-reaches (a level above 0 needs a flight from the level below it; a cellar level a flight
-from itself). Fix them with another `set_room_layout` unless meant.
+room reaching over the place's outline, a room larger than its `room_type`'s `max_m2` guideline,
+a door `to` a room that is not there (kept as a plain hole), a place without an outline, a stair
+flight from or onto a level without rooms, a level other than 0 that no flight reaches (a level
+above 0 needs a flight from the level below it; a cellar level a flight from itself). Fix them
+with another `set_room_layout` unless meant.
+
+After a successful `set_room_layout`, `furnish_rooms` or `place_room_prop`, the result also ends
+`; findings: …` whenever the composed 3D scene reports reachability or furnishing issues (such as
+`room_unreachable`, `prop_in_doorway`, `prop_outside_room`, ceiling/wall placement defects). Read
+the `findings` and fix them.
 
 ## Rules
 
-- Every closed room needs a way in (a door or passage); every storey needs a way up.
+- Rooms on the same level must NEVER overlap.
+- Every closed room needs a way in (a door or passage; one door in a shared wall suffices for both
+  adjacent rooms); every storey needs a way up.
+- Keep rooms within realistic sizes (`max_m2` guidelines above); smaller rooms furnish better.
 - Keep the plan inside the outline; a plan much larger than the place is wrong.
 - A place with rooms but no floor plan is reported by `check_run` as `no floor plan`: it
   cannot be drawn in 3D.
@@ -152,7 +165,8 @@ image or model generation. A room is furnished only when it has:
 
 The call is refused when no room qualifies; the refusal names every room with its reason. The
 result names the furnished rooms with their piece count, the roles the kit had no piece for, and
-the rooms it skipped. Call it once per place after its floor plan stands. There is no LLM
+the rooms it skipped, followed by `; findings: …` if any 3D scene findings remain — read and fix
+them. Call it once per place after its floor plan stands. There is no LLM
 furnishing and no hull here — the building panel does those. To stand ONE library prop in a room (a
 statue, a rug, a bench — even in a room that already has furniture), use `place_room_prop`
 (`find_props` lists the library; name missing props under *left open*, never create an item

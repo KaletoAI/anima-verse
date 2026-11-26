@@ -27,8 +27,8 @@ reserved_room, nameless_room, duplicate_room, unknown_surface, invalid_layout,
 opening_dropped, room_type_dropped, room_not_placed, unknown_opening_target,
 room_outside_boundary, no_boundary, room_overlap, unknown_entry_room,
 boundary_opening_dropped, stair_dropped, hull_style_unknown. KEPT (warn) are
-exactly four (E2): unknown_opening_target, room_outside_boundary,
-room_overlap, no_boundary; every other code refuses.
+exactly three: unknown_opening_target, room_outside_boundary, no_boundary;
+every other code (including room_overlap) refuses.
 
   (g) the create line ends "missing: no floor plan" — a run-created place with
       a real room (Taproom), no room layout, no map3d.outline and no building
@@ -56,7 +56,8 @@ room_overlap, no_boundary; every other code refuses.
       (layout_apply.py, the "storey_height_m" in data branch), 6 -> 4.5.
       storey_height_m 3.2 (turn 3) -> ok, map3d.storey_height_m == 3.2.
   (d4) world_dev_tools._LAYOUT_KEPT_CODES == {"unknown_opening_target",
-      "room_outside_boundary", "room_overlap", "no_boundary"} (hand-written).
+      "room_outside_boundary", "no_boundary"} (hand-written; room_overlap now
+      refuses).
   (d5) a layout with "hull" -> refused ("building panel"); an unknown layout
       key "foo" -> refused; set_room_layout on "nope" -> refused
       "no location".
@@ -68,9 +69,10 @@ room_overlap, no_boundary; every other code refuses.
       keeps what it had).
   (e) turn 4: the plan names Taproom (x -8, w 8, as in (a)) and Kitchen moved
       to x -2, w 4 (Taproom spans x -8…0, Kitchen -2…2 -> 2 m shared floor,
-      both y -6…0, level 0) -> ok with "; warnings:" and "share floor on
-      level 0" (room_overlap message; sanitize_layout compares the rooms the
-      plan names, so both are sent).
+      both y -6…0, level 0) -> refused naming both rooms ("share floor on
+      level 0"), nothing written. And an omitted-room overlap (Kitchen alone
+      moved to x -3, w 4, overlapping stored Taproom) is also refused naming
+      both rooms, nothing written.
   (f) update_location patch map3d {stairs []} -> refused "use set_room_layout";
       map3d {wall_kind "x"} -> refused "floor-plan editor".
   (j) every sent value the sanitizer would REWRITE refuses (row unchanged),
@@ -230,7 +232,7 @@ def refused(label, args, *needles, turn=2):
 
 # (d4)
 check("(d4) kept codes", getattr(wt, "_LAYOUT_KEPT_CODES", None) == {
-    "unknown_opening_target", "room_outside_boundary", "room_overlap", "no_boundary"},
+    "unknown_opening_target", "room_outside_boundary", "no_boundary"},
     getattr(wt, "_LAYOUT_KEPT_CODES", None))
 
 # (a)
@@ -354,18 +356,15 @@ check("(c) taproom kept its layout",
                                                if r.get("id") == TAP).get("layout"))
 
 # (e)
-res = call("set_room_layout", {"location_id": LID, "layout": {"rooms": [
+refused("(e) overlap refused", {"location_id": LID, "layout": {"rooms": [
     {"id": TAP, "x": -8, "y": -6, "w": 8, "d": 6},
-    {"id": KIT, "x": -2, "y": -6, "w": 4, "d": 6}]}}, turn=4)
-check("(e) ok", res.ok and res.wrote, res)
-check("(e) overlap warning", "; warnings:" in res.line
-      and "share floor on level 0" in res.line, res.line)
+    {"id": KIT, "x": -2, "y": -6, "w": 4, "d": 6}]}},
+    "Taproom", "Kitchen", "share floor on level 0")
 
 # (k)
-res = call("set_room_layout", {"location_id": LID, "layout": {"rooms": [
-    {"id": KIT, "x": -3, "y": -6, "w": 4, "d": 6}]}}, turn=4)
-check("(k) omitted-room overlap warns", res.ok and "'Kitchen' shares floor on level 0 "
-      "with 'Taproom', which this plan does not name" in res.line, res.line)
+refused("(k) omitted-room overlap refused", {"location_id": LID, "layout": {"rooms": [
+    {"id": KIT, "x": -3, "y": -6, "w": 4, "d": 6}]}},
+    "'Kitchen' shares floor on level 0 with 'Taproom', which this plan does not name")
 res = call("set_room_layout", {"location_id": LID, "layout": {
     "rooms": [TAP_RECT], "stairs": [{"at": [-7.4, -5.5], "from_level": 7, "dir_deg": 0}]}},
     turn=4)

@@ -3117,7 +3117,7 @@ def _place_location(step: _Step, args: Dict[str, Any]) -> str:
 #: states of a plan in progress that drop nothing. Every other code refuses —
 #: also a code added to the sanitizer later (never silently a warning).
 _LAYOUT_KEPT_CODES = frozenset({"unknown_opening_target", "room_outside_boundary",
-                                "room_overlap", "no_boundary"})
+                                "no_boundary"})
 #: The keys of a set_room_layout `layout` (the json:layout object; `hull`
 #: is refused, E4).
 _LAYOUT_KEYS = ("rooms", "entry_room", "boundary_openings", "stairs",
@@ -3221,13 +3221,41 @@ def _layout_reach_warnings(normalized: Dict[str, Any],
                if isinstance(r, dict) and str(r.get("id") or "") not in named
                and r.get("id") != GROUND_ROOM_ID and not is_floor_room(str(r.get("id")))
                and _layout_level(r.get("layout")) is not None]
-    out: List[str] = []
+    overlaps: List[str] = []
     for e in entries:
         lvl = _layout_level(e["layout"])
         for r in omitted:
             if _layout_level(r["layout"]) == lvl and rooms_overlap(e["layout"], r["layout"]):
-                out.append(f"'{e['name']}' shares floor on level {lvl} with "
-                           f"'{r.get('name') or r.get('id')}', which this plan does not name")
+                overlaps.append(
+                    f"'{e['name']}' shares floor on level {lvl} with "
+                    f"'{r.get('name') or r.get('id')}', which this plan does not name")
+    if overlaps:
+        raise ToolRefusal("rooms on the same level may not overlap, nothing was written: "
+                          + "; ".join(overlaps))
+    out: List[str] = []
+    from app.core.furniture_kits import load_room_types
+    from app.core.room_furnish import _poly_area
+    room_types = load_room_types()
+    existing_types = {
+        str(r.get("id") or ""): r.get("room_type")
+        for r in (loc.get("rooms") or []) if isinstance(r, dict)
+    }
+    for e in entries:
+        rtype = e.get("room_type") or existing_types.get(e["room_id"])
+        spec = room_types.get(rtype) if isinstance(rtype, str) else None
+        max_m2 = spec.get("max_m2") if isinstance(spec, dict) else None
+        if not max_m2:
+            continue
+        lay = e["layout"]
+        pts = lay.get("outline")
+        if isinstance(pts, list) and len(pts) >= 3:
+            area = _poly_area([[float(p[0]), float(p[1])] for p in pts])
+        else:
+            area = float(lay.get("w") or 0.0) * float(lay.get("d") or 0.0)
+        if area > max_m2:
+            out.append(
+                f"'{e['name']}' is {_g(round(area, 1))} m² — a {rtype} is rarely "
+                f"over {_g(max_m2)} m²; smaller rooms furnish better")
     levels = {_layout_level(e["layout"]) for e in entries}
     levels |= {_layout_level(r["layout"]) for r in omitted}
     m3 = loc.get("map3d") if isinstance(loc.get("map3d"), dict) else {}
@@ -3317,6 +3345,10 @@ def _layout_pass(layout: Dict[str, Any], loc: Dict[str, Any],
     normalized, warnings = sanitize_layout(copy.deepcopy(layout), location=loc,
                                            surface_kinds=kinds)
     dropped = [w for w in warnings if w.get("code") not in _LAYOUT_KEPT_CODES]
+    overlaps = [w for w in dropped if w.get("code") == "room_overlap"]
+    if overlaps and len(overlaps) == len(dropped):
+        raise ToolRefusal("rooms on the same level may not overlap, nothing was written: "
+                          + "; ".join(str(w.get("message") or w.get("code")) for w in overlaps))
     if dropped:
         text = "; ".join(f"{w.get('ref') or '?'}: {w.get('message') or w.get('code')}"
                          for w in dropped)
@@ -3330,6 +3362,59 @@ def _layout_pass(layout: Dict[str, Any], loc: Dict[str, Any],
     _carry_room_content(normalized, loc)
     kept = [str(w.get("message") or w.get("code")) for w in warnings]
     return normalized, kept + _layout_reach_warnings(normalized, loc)
+
+
+#: Scene finding kinds reported back after layout, furnishing and prop placement.
+_SCENE_FINDING_KINDS = frozenset({
+    "room_unreachable",
+    "prop_in_doorway",
+    "prop_outside_room",
+    "ceiling_prop_through_ceiling",
+    "ceiling_prop_not_hanging",
+    "wall_prop_on_floor",
+    "wall_prop_facing_wall",
+    "wall_prop_off_wall",
+})
+
+
+def _scene_findings(lid: str) -> List[str]:
+    """Compose the location's 3D scene and format furnishing / reachability
+    findings for the tool result line. Composition errors are logged and return
+    an empty list."""
+    try:
+        from app.core.scene_recipe import compose_scene
+        from app.models.world import get_location_by_id
+        loc = get_location_by_id(lid)
+        if not loc:
+            return []
+        room_names = {
+            str(r.get("id") or ""): str(r.get("name") or r.get("id") or "")
+            for r in (loc.get("rooms") or []) if isinstance(r, dict)
+        }
+        scene = compose_scene(loc)
+        out: List[str] = []
+        for p in scene.get("problems") or []:
+            if not isinstance(p, dict):
+                continue
+            kind = str(p.get("kind") or "")
+            if kind not in _SCENE_FINDING_KINDS:
+                continue
+            rid = str(p.get("room_id") or "")
+            rname = room_names.get(rid) or rid or "room"
+            pnames = [str(n) for n in (p.get("prop_names") or []) if n]
+            if pnames:
+                out.append(f"{rname}: {kind} ({', '.join(pnames)})")
+            else:
+                out.append(f"{rname}: {kind}")
+        return out
+    except Exception:
+        logger.exception("scene findings failed for location %s", lid)
+        return []
+
+
+def _findings_suffix(findings: List[str]) -> str:
+    findings = [f for f in findings if f]
+    return f"; findings: {'; '.join(findings)}" if findings else ""
 
 
 @_tool("set_room_layout", True, "set_room_layout{location_id, layout}",
@@ -3392,13 +3477,15 @@ def _set_room_layout(step: _Step, args: Dict[str, Any]) -> str:
                     before=b)
         counts = layout_counts(normalized)
         stairs = len((after.get("map3d") or {}).get("stairs") or [])
-        line = (f'updated layout of location {lid} "{after.get("name") or ""}": '
-                f'{_plural(counts["rooms"], "room")} ({counts["new_rooms"]} new) '
-                f'with {_plural(counts["openings"], "opening")}; the place has '
-                f'{_plural(stairs, "stair flight")}'
-                + ("" if b else " — no change")
-                + _warn_suffix(kept)
-                + completeness.location_suffix(step.ctx.run_id, after))
+        line = _cut(
+            f'updated layout of location {lid} "{after.get("name") or ""}": '
+            f'{_plural(counts["rooms"], "room")} ({counts["new_rooms"]} new) '
+            f'with {_plural(counts["openings"], "opening")}; the place has '
+            f'{_plural(stairs, "stair flight")}'
+            + ("" if b else " — no change")
+            + _warn_suffix(kept)
+            + _findings_suffix(_scene_findings(lid))
+            + completeness.location_suffix(step.ctx.run_id, after))
         step.complete(w, line)
     return line
 
@@ -3507,7 +3594,8 @@ def _furnish_rooms(step: _Step, args: Dict[str, Any]) -> str:
                 f'{lid} "{after.get("name") or ""}"'
                 + (f": {done}" if done else "")
                 + (f"; missing roles: {missing}" if missing else "")
-                + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
+                + (f"; skipped: {'; '.join(skipped)}" if skipped else "")
+                + _findings_suffix(_scene_findings(lid)))
         line = _cut(line)
         step.complete(w, line)
     return line
@@ -3545,15 +3633,17 @@ def _room_for_prop(loc: Dict[str, Any], room_arg: str) -> Dict[str, Any]:
     raise ToolRefusal(f"location {lid} has no room {room_arg!r} — rooms: {ids or 'none'}")
 
 
-def _check_room_prop_fit(room: Dict[str, Any], prop: Dict[str, Any],
-                         x: float, z: float, yaw: float,
+def _check_room_prop_fit(loc: Dict[str, Any], room: Dict[str, Any],
+                         prop: Dict[str, Any], x: float, z: float, yaw: float,
                          offset_y: Optional[float]) -> List[Dict[str, Any]]:
     """Verify the room has a floor plan, is below the 100-prop cap, keeps the
-    prop's turned footprint inside w×d and does not collide with an existing
-    non-underlay placement. Returns the room's current placements list."""
+    prop's turned footprint inside w×d, does not block a door/passage/window
+    keep-out zone (own + mirrored openings) and does not collide with an
+    existing non-underlay placement. Returns the room's current placements list."""
     from app.core import furnish_geometry as fg
-    from app.core.furnish_solver import UNDERLAY_MAX_H
+    from app.core.furnish_solver import DOOR_CLEAR_M, UNDERLAY_MAX_H
     from app.core.props import MOUNT_KEY, get_prop
+    from app.core.room_furnish import room_openings
     rid = str(room.get("id") or "")
     rname = str(room.get("name") or "")
     lay = room.get("layout")
@@ -3591,6 +3681,25 @@ def _check_room_prop_fit(room: Dict[str, Any], prop: Dict[str, Any],
             f"z: {_g(round(hz, 2))}…{_g(round(d - hz, 2))}")
     new_mount = str(prop.get(MOUNT_KEY) or "floor").strip().lower() or "floor"
     new_underlay = new_mount == "floor" and ph <= UNDERLAY_MAX_H
+    if ph > UNDERLAY_MAX_H and pw > 0 and pd > 0:
+        new_corners = fg.rect_corners(x, z, pw, pd, yaw)
+        y0 = float(prop.get("ground_offset_m") or 0.0) + (0.0 if offset_y is None else offset_y)
+        y1 = y0 + ph
+        raw_pts = lay.get("outline")
+        pts = (raw_pts if isinstance(raw_pts, list) and len(raw_pts) >= 3
+               else [[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]])
+        poly = [(float(p[0]), float(p[1])) for p in pts]
+        centroid = (sum(p[0] for p in poly) / len(poly),
+                    sum(p[1] for p in poly) / len(poly))
+        openings = room_openings(loc, room)
+        for zone in fg.opening_zones(poly, centroid, openings,
+                                     DOOR_CLEAR_M, DOOR_CLEAR_M):
+            if zone.blocks(new_corners, y0, y1):
+                op = openings[zone.opening]
+                op_type = str(op.get("type") or "door")
+                raise ToolRefusal(
+                    f'prop {pid} "{pname}" at ({_g(x + 0.0)}, {_g(z + 0.0)}) '
+                    f'blocks a {op_type} opening in room {rid} "{rname}"')
     if not new_underlay and pw > 0 and pd > 0:
         new_corners = fg.rect_corners(x, z, pw, pd, yaw)
         y0 = float(prop.get("ground_offset_m") or 0.0) + (0.0 if offset_y is None else offset_y)
@@ -3669,7 +3778,7 @@ def _place_room_prop(step: _Step, args: Dict[str, Any]) -> str:
     yaw_val = 0.0 if yaw_arg is None else float(yaw_arg)
     # Cheap pre-checks before the backup: a refused first write copies nothing.
     room = _room_for_prop(loc, room_arg)
-    _check_room_prop_fit(room, prop, x, z, yaw_val, offset_y)
+    _check_room_prop_fit(loc, room, prop, x, z, yaw_val, offset_y)
     step.prepare()
     with world_write_lock:
         cur = get_location_by_id(lid)
@@ -3678,7 +3787,7 @@ def _place_room_prop(step: _Step, args: Dict[str, Any]) -> str:
         room = _room_for_prop(cur, room_arg)
         rid = str(room["id"])
         rname = str(room.get("name") or "")
-        existing = _check_room_prop_fit(room, prop, x, z, yaw_val, offset_y)
+        existing = _check_room_prop_fit(cur, room, prop, x, z, yaw_val, offset_y)
         existing_ids = {str(p.get("id") or "") for p in existing}
         place_id = new_place_id()
         while place_id in existing_ids:
@@ -3722,9 +3831,11 @@ def _place_room_prop(step: _Step, args: Dict[str, Any]) -> str:
         sx, sz = (stored or entry)["at"]
         syaw = float((stored or entry).get("yaw") or 0.0)
         pname = str(prop.get("name") or pid)
-        line = (f'placed prop {pid} "{_short(pname, 60)}" in room {rid} '
-                f'"{_short(rname, 60)}" of {lid} at ({_g(sx + 0.0)}, {_g(sz + 0.0)}) '
-                f"yaw {_g(syaw + 0.0)}")
+        line = _cut(
+            f'placed prop {pid} "{_short(pname, 60)}" in room {rid} '
+            f'"{_short(rname, 60)}" of {lid} at ({_g(sx + 0.0)}, {_g(sz + 0.0)}) '
+            f"yaw {_g(syaw + 0.0)}"
+            + _findings_suffix(_scene_findings(lid)))
         step.complete(w, line)
     return line
 

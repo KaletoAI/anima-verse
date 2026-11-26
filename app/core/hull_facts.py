@@ -153,10 +153,10 @@ def hull_facts(location: Dict[str, Any], location_id: str = '', *,
                               normal=[sr._r(v) for v in normal],
                               openings=[] if filler else _edge_openings(scene['walls'], level, a,
                                                       frame, floor,
-                                                      sr._wall_height(storey)),
+                                                      sr.ceiling_height_m(storey)),
                               rooms=[] if filler else _room_spans(scene['walls'], level, a, frame)))
         levels.append(dict(level=level, filler=filler, floor_y=sr._r(floor),
-                           top_y=sr._r(floor + sr._wall_height(storey)),
+                           top_y=sr._r(floor + sr.ceiling_height_m(storey)),
                            outline=[[sr._r(v) for v in p] for p in outline],
                            ccw=ccw, edges=edges))
     if not levels:
@@ -194,7 +194,7 @@ def with_storeys(facts: dict, total: int) -> dict:
         levels[-1]['top_y'] = floor
         following = deepcopy(template)
         following.update(level=level, floor_y=floor, filler=True,
-                         top_y=sr._r(floor + sr._wall_height(storey)))
+                         top_y=sr._r(floor + sr.ceiling_height_m(storey)))
         for edge in following['edges']:
             edge['openings'] = []
         levels.append(following)
