@@ -1326,10 +1326,10 @@ with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
                  lambda: subjects.generate_prop_image('sample_prop#1', ''), 'render failed')
 
 # Clothing forwards its image backend via the supported overrides argument.
-from app.routes import inventory as inventory_route
+from app.core import item_images
 clothing_calls = []
 with patch.object(subjects, 'clothing_image_done', return_value=False), \
-     patch.object(inventory_route, 'generate_item_image_sync',
+     patch.object(item_images, 'generate_item_image_sync',
                   side_effect=lambda *args, **kwargs: clothing_calls.append((args, kwargs)) or True):
     subjects.generate_clothing_image('sample_item', 'image_pick')
 check('clothing backend override reaches producer', clothing_calls,

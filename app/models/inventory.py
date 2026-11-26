@@ -1424,7 +1424,9 @@ def placement_visible_to(viewer: str, location_id: str, room_id: str,
                 "(location_id, room_id, item_id, character_name, game_ts) VALUES (?, ?, ?, ?, ?)",
                 (location_id, room_id, item_id, viewer, game_time().canonical())).rowcount == 1
     if inserted:
+        from app.core.hooks import emit
         from app.core.i18n import localized, t
+        from app.core.keyed_lock import _after_locks
         from app.models.notifications import create_notification
         lang = profile.get("language") or "de"
         item_name = localized(get_item(item_id), "name", lang) or item_id
@@ -1432,6 +1434,8 @@ def placement_visible_to(viewer: str, location_id: str, room_id: str,
             viewer, t("You discovered {item}.", lang).format(item=item_name),
             notification_type="item_discovered",
             metadata={"item_id": item_id, "location_id": location_id, "room_id": room_id})
+        _after_locks(lambda: emit("item.discovered", character=viewer, location_id=location_id,
+                                  room_id=room_id, item_id=item_id))
     return True
 
 
@@ -1579,6 +1583,140 @@ def find_item_location(item_id: str,
     except Exception as e:
         logger.debug("find_item_location room-scan failed: %s", e)
     return None
+
+
+def remove_item_everywhere(item_id: str) -> dict:
+    """Remove a world item from all five places in order, leaving shared library items untouched.
+
+    Clears, in order:
+    1. equipment (``equipped_items``, ``equipped_pieces``, ``equipped_mesh_pieces``) for every holder;
+    2. every character inventory (under ``keyed_lock("character_profile", name)``, emitting
+       ``inventory.changed`` via ``remove_from_inventory(..., force=True)``);
+    3. every room placement (via ``remove_item_from_room`` with no profile lock held);
+    4. leftover discovery rows in ``item_discoveries``;
+    5. the item definition row and its media via ``delete_item``.
+
+    A shared library item (``is_shared_item(item_id)``) is never touched.
+    """
+    if is_shared_item(item_id):
+        return {
+            "item_id": item_id,
+            "shared": True,
+            "found": True,
+            "deleted": False,
+            "unequipped": [],
+            "inventories": [],
+            "placements": [],
+            "discoveries": 0,
+        }
+
+    from app.core.keyed_lock import keyed_lock
+
+    existed_at_start = get_item(item_id) is not None
+    unequipped: List[str] = []
+    inventories: List[str] = []
+    placements: List[List[str]] = []
+    discoveries = 0
+
+    # 1 & 2) Equipment and inventories per holder, under the holder's profile lock.
+    holders: List[str] = []
+    try:
+        rows = get_connection().execute(
+            "SELECT DISTINCT character_name FROM inventory_items WHERE item_id=?",
+            (item_id,),
+        ).fetchall()
+        holders = sorted({(r[0] or "").strip() for r in rows if (r[0] or "").strip()})
+    except Exception as e:
+        logger.warning("remove_item_everywhere %s: holder query failed: %s", item_id, e)
+
+    for name in holders:
+        try:
+            with keyed_lock("character_profile", name):
+                unequipped_any = False
+                try:
+                    if unequip_item(name, item_id, source="quest_cleanup").get("status") == "ok":
+                        unequipped_any = True
+                except Exception as e:
+                    logger.warning("remove_item_everywhere %s: unequip_item failed for %s: %s",
+                                   item_id, name, e)
+                try:
+                    if unequip_piece(name, item_id=item_id, source="quest_cleanup").get("status") == "ok":
+                        unequipped_any = True
+                except Exception as e:
+                    logger.warning("remove_item_everywhere %s: unequip_piece failed for %s: %s",
+                                   item_id, name, e)
+                try:
+                    mesh_pieces = get_equipped_mesh_pieces(name)
+                    for slot, worn_id in list(mesh_pieces.items()):
+                        if worn_id == item_id:
+                            if unequip_mesh_piece(name, slot):
+                                unequipped_any = True
+                except Exception as e:
+                    logger.warning("remove_item_everywhere %s: unequip_mesh_piece failed for %s: %s",
+                                   item_id, name, e)
+                if unequipped_any:
+                    unequipped.append(name)
+
+                qty = get_item_quantity(name, item_id)
+                if qty > 0 and remove_from_inventory(name, item_id, quantity=qty, force=True):
+                    inventories.append(name)
+        except Exception as e:
+            logger.warning("remove_item_everywhere %s: holder cleanup failed for %s: %s",
+                           item_id, name, e)
+
+    # 3) Room placements (no profile lock held).
+    room_targets: List[tuple] = []
+    try:
+        from app.models.world import _load_world_data
+        for loc in (_load_world_data() or {}).get("locations", []) or []:
+            loc_id = str(loc.get("id") or "")
+            if not loc_id:
+                continue
+            for room in loc.get("rooms", []) or []:
+                room_id = str(room.get("id") or "")
+                if not room_id:
+                    continue
+                for ri in room.get("items", []) or []:
+                    if ri.get("item_id") == item_id:
+                        qty = max(1, int(ri.get("quantity", 1) or 1))
+                        room_targets.append((loc_id, room_id, qty))
+    except Exception as e:
+        logger.warning("remove_item_everywhere %s: room scan failed: %s", item_id, e)
+
+    for loc_id, room_id, qty in room_targets:
+        try:
+            if remove_item_from_room(loc_id, room_id, item_id, quantity=qty):
+                placements.append([loc_id, room_id])
+        except Exception as e:
+            logger.warning("remove_item_everywhere %s: room removal failed for %s/%s: %s",
+                           item_id, loc_id, room_id, e)
+
+    # 4) Leftover discovery rows.
+    try:
+        with transaction() as conn:
+            cur = conn.execute("DELETE FROM item_discoveries WHERE item_id=?", (item_id,))
+            discoveries = max(0, int(cur.rowcount or 0))
+    except Exception as e:
+        logger.warning("remove_item_everywhere %s: discovery sweep failed: %s", item_id, e)
+
+    # 5) Item definition row and media.
+    deleted = False
+    try:
+        deleted = bool(delete_item(item_id))
+    except Exception as e:
+        logger.warning("remove_item_everywhere %s: delete_item failed: %s", item_id, e)
+
+    found = bool(existed_at_start or inventories or placements or discoveries)
+    return {
+        "item_id": item_id,
+        "shared": False,
+        "found": found,
+        "deleted": deleted,
+        "unequipped": sorted(unequipped),
+        "inventories": sorted(inventories),
+        "placements": placements,
+        "discoveries": discoveries,
+    }
 
 
 # ============================================================

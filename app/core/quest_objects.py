@@ -5,7 +5,8 @@ reference-checking tick (:mod:`app.core.quest_engine`) check, remove and label a
 world object that a quest run created.
 
 This registry is core-only in stage 2 (not package-extensible); built-in kinds
-registered here: ``event``, ``secret``, ``grant``, ``stat``, ``marker``.
+registered here: ``event``, ``secret``, ``grant``, ``stat``, ``marker``,
+``item``, ``room_item``.
 For ``event``, an absent row whose ``ref["expires_at"]`` has already passed in
 game time still counts as existing (it ran out on schedule rather than breaking).
 
@@ -143,9 +144,24 @@ register_kind("secret", exists=_secret_exists, remove=_secret_remove, label=_sec
 
 def _grant_exists(ref: dict) -> Optional[bool]:
     from app.models import inventory
-    item_id = str((ref or {}).get("item_id") or "")
+    ref = ref or {}
+    item_id = str(ref.get("item_id") or "")
     if not item_id:
         return False
+    if "before" in ref:
+        character = str(ref.get("character") or "")
+        if not character:
+            return False
+        before = int(ref.get("before") or 0)
+        qty = int(ref.get("quantity") or 1)
+        try:
+            current = inventory.get_item_quantity(character, item_id, strict=True)
+        except Exception:  # noqa: BLE001
+            return None
+        return current >= before + qty
+    # A live grant must not break its run when the avatar later uses, drops, or
+    # hands on the item; only a pending row needs the inventory comparison to
+    # decide whether the write happened.
     try:
         return inventory.get_item(item_id, strict=True) is not None
     except Exception:  # noqa: BLE001
@@ -155,19 +171,25 @@ def _grant_exists(ref: dict) -> Optional[bool]:
 def _grant_remove(ref: dict) -> str:
     from app.core.keyed_lock import keyed_lock
     from app.models import inventory
-    character = str((ref or {}).get("character") or "")
-    item_id = str((ref or {}).get("item_id") or "")
+    ref = ref or {}
+    character = str(ref.get("character") or "")
+    item_id = str(ref.get("item_id") or "")
     if not character or not item_id:
         return REMOVE_GONE
-    qty = int((ref or {}).get("quantity") or 1)
+    qty = int(ref.get("quantity") or 1)
     with keyed_lock("character_profile", character):
         try:
             held = inventory.get_item_quantity(character, item_id, strict=True)
         except Exception:  # noqa: BLE001
             return REMOVE_LATER
-        if held <= 0:
+        if "before" in ref:
+            before = int(ref.get("before") or 0)
+            to_reclaim = max(0, min(qty, held - before))
+        else:
+            to_reclaim = min(held, qty)
+        if to_reclaim <= 0:
             return REMOVE_GONE
-        ok = inventory.remove_from_inventory(character, item_id, quantity=min(held, qty), force=True)
+        ok = inventory.remove_from_inventory(character, item_id, quantity=to_reclaim, force=True)
         return REMOVE_DONE if ok else REMOVE_LATER
 
 
@@ -225,3 +247,119 @@ def _marker_label(ref: dict) -> str:
 
 
 register_kind("marker", exists=_marker_exists, remove=_marker_remove, label=_marker_label)
+
+
+# --- Built-in kind: item ----------------------------------------------------------------------
+
+def _item_exists(ref: dict) -> Optional[bool]:
+    from app.models import inventory
+    item_id = str((ref or {}).get("item_id") or "")
+    if not item_id:
+        return False
+    try:
+        return inventory.get_item(item_id, strict=True) is not None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _item_remove(ref: dict) -> str:
+    from app.models import inventory
+    item_id = str((ref or {}).get("item_id") or "")
+    if not item_id:
+        return REMOVE_GONE
+    try:
+        res = inventory.remove_item_everywhere(item_id)
+    except Exception:  # noqa: BLE001
+        return REMOVE_LATER
+    if res.get("shared"):
+        return REMOVE_GONE
+    if not res.get("found"):
+        return REMOVE_GONE
+    return REMOVE_DONE if res.get("deleted") else REMOVE_LATER
+
+
+def _item_label(ref: dict) -> str:
+    from app.models import inventory
+    item_id = str((ref or {}).get("item_id") or "")
+    item = inventory.get_item(item_id) if item_id else None
+    name = str((item or {}).get("name") or "").strip()
+    return name or item_id
+
+
+register_kind("item", exists=_item_exists, remove=_item_remove, label=_item_label)
+
+
+# --- Built-in kind: room_item -----------------------------------------------------------------
+
+def _room_item_quantity(location_id: str, room_id: str, item_id: str) -> int:
+    from app.models import inventory
+    room_items = inventory.get_room_items(location_id, room_id, strict=True)
+    return sum(int(ri.get("quantity", 1) or 1) for ri in room_items if ri.get("item_id") == item_id)
+
+
+def _room_item_exists(ref: dict) -> Optional[bool]:
+    from app.models import inventory
+    from app.models.world import get_location_by_id, get_room_by_id
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    item_id = str(ref.get("item_id") or "")
+    if not location_id or not room_id or not item_id:
+        return False
+    if "before" in ref:
+        before = int(ref.get("before") or 0)
+        qty = int(ref.get("quantity") or 1)
+        try:
+            current = _room_item_quantity(location_id, room_id, item_id)
+        except Exception:  # noqa: BLE001
+            return None
+        return current >= before + qty
+    # A placement picked up by an avatar is normal play and must not break its
+    # run; only a missing item definition, location, or room counts as gone.
+    try:
+        if inventory.get_item(item_id, strict=True) is None:
+            return False
+        loc = get_location_by_id(location_id, strict=True)
+        if loc is None:
+            return False
+        return get_room_by_id(loc, room_id) is not None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _room_item_remove(ref: dict) -> str:
+    from app.models import inventory
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    item_id = str(ref.get("item_id") or "")
+    if not location_id or not room_id or not item_id:
+        return REMOVE_GONE
+    qty = int(ref.get("quantity") or 1)
+    try:
+        current = _room_item_quantity(location_id, room_id, item_id)
+    except Exception:  # noqa: BLE001
+        return REMOVE_LATER
+    if "before" in ref:
+        before = int(ref.get("before") or 0)
+        to_remove = max(0, min(qty, current - before))
+    else:
+        to_remove = qty
+    if current <= 0 or to_remove <= 0:
+        return REMOVE_GONE
+    ok = inventory.remove_item_from_room(location_id, room_id, item_id, quantity=min(current, to_remove))
+    return REMOVE_DONE if ok else REMOVE_LATER
+
+
+def _room_item_label(ref: dict) -> str:
+    from app.models import inventory
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    item_id = str(ref.get("item_id") or "")
+    item = inventory.get_item(item_id) if item_id else None
+    name = str((item or {}).get("name") or "").strip() or item_id
+    return f"{name} in {location_id}/{room_id}"
+
+
+register_kind("room_item", exists=_room_item_exists, remove=_room_item_remove, label=_room_item_label)

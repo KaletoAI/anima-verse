@@ -797,7 +797,7 @@ def clothing_image_done(item_id: str) -> bool:
 def generate_clothing_image(item_id: str, backend: str = "") -> None:
     """Use the blocking item producer and preserve typed load/failure errors."""
     from app.imagegen.routing import NoRouteError
-    from app.routes.inventory import generate_item_image_sync
+    from app.core.item_images import generate_item_image_sync
     # The queue may have waited while an admin filled the image or removed the
     # item. Never overwrite that image or resurrect a deleted definition.
     if clothing_image_done(item_id):

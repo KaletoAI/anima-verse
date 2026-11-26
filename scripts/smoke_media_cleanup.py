@@ -400,9 +400,9 @@ def section_f_h_items() -> None:
     from app.models.inventory import get_item
     check("the other item's later edit survives the delete",
           (get_item(other) or {}).get("name"), "Rope (edited)")
-    from app.routes.inventory import _store_item_image
+    from app.core.item_images import store_item_image
     check("a render for the deleted item stores nothing",
-          _store_item_image(iid, png_bytes()), "")
+          store_item_image(iid, png_bytes()), "")
     check("...and leaves no items/<id>", d.exists(), False)
 
 

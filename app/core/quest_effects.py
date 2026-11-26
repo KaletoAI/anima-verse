@@ -19,7 +19,14 @@ the same entry twice:
         ``rewards`` for ``open``, ``hidden`` or ``done`` runs; mark failed with ``run_ended``
         if the run ended ``cancelled``, ``failed`` or ``broken``.
     (3) Cleanup — remove every non-permanent object of an ended run whose status is ``live``,
-        ``pending`` or ``revert_pending`` via :mod:`app.core.quest_objects`.
+        ``pending`` or ``revert_pending`` via :mod:`app.core.quest_objects`: effects in reverse
+        creation order, so dependents such as placements and grants go before the items they
+        reference; the rows of one effect in creation order, so e.g. a placement goes before the
+        library entry it shows.
+
+BUILT-IN EFFECTS (:func:`builtin_effect_types`). Registered under owner ``"core"``:
+``give_hint``, ``reveal_secret``, ``change_stat``, ``post_news``, ``narrate``, ``give_item``,
+``create_item``, ``place_item``.
 
 IDEMPOTENCE & RESTART RECONCILIATION. An effect applies at most once per ``(run_id, effect_key)``.
 Before an external write, an effect may call :meth:`EffectContext.record_pending` so a
@@ -38,6 +45,7 @@ when a pass changes anything it calls ``quest_engine._refresh_live()`` and
 """
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -49,6 +57,8 @@ from app.core.log import get_logger
 logger = get_logger("quest_effects")
 
 PASS_INTERVAL_S = 15.0
+CREATE_ITEM_CATEGORIES = ("tool", "key", "consumable", "evidence", "gift", "quest", "decoration", "document")
+DIFFICULTY_SCALE = 10
 
 
 class EffectFailed(Exception):
@@ -471,6 +481,21 @@ def _step_cleanup_row(row: dict) -> int:
     return 0
 
 
+def _cleanup_order(rows: list) -> list:
+    """Order cleanup rows so effects are undone in reverse creation order while
+    rows of one effect keep their creation order."""
+    first_id: Dict[Tuple[str, str], int] = {}
+    for row in rows:
+        pair = (str(row.get("run_id") or ""), str(row.get("effect_key") or ""))
+        rid = int(row["id"])
+        if pair not in first_id or rid < first_id[pair]:
+            first_id[pair] = rid
+    return sorted(
+        rows,
+        key=lambda r: (-first_id[(str(r.get("run_id") or ""), str(r.get("effect_key") or ""))], int(r["id"])),
+    )
+
+
 def pass_once() -> Dict[str, Any]:
     """Run one serialized pass: (1) setup payouts, (2) step/reward payouts, (3) ended-run cleanup.
 
@@ -510,8 +535,11 @@ def pass_once() -> Dict[str, Any]:
                 except Exception:  # noqa: BLE001
                     logger.exception("quest effects: payout %s failed for run %s", pos, payout.get("run_id"))
 
-            # (3) Cleanup of non-permanent objects of ended runs
-            for row in quests.objects_to_clean():
+            # (3) Cleanup of non-permanent objects of ended runs: effects in reverse creation
+            # order, so dependents such as placements and grants go before the items they
+            # reference; the rows of one effect in creation order, so e.g. a placement goes
+            # before the library entry it shows.
+            for row in _cleanup_order(quests.objects_to_clean()):
                 try:
                     reverted += _step_cleanup_row(row)
                 except Exception:  # noqa: BLE001
@@ -672,6 +700,10 @@ def _apply_reveal_secret(params: dict, ctx: EffectContext) -> List[CreatedObject
     return []
 
 
+# change_stat writes no pending row because a stat change cannot be checked for
+# "already applied" afterwards (a stat moves for many reasons); a crash between
+# adjust_status_effects and the object row can therefore apply it a second time
+# - accepted, the window is one function call.
 def _apply_change_stat(params: dict, ctx: EffectContext) -> List[CreatedObject]:
     from app.core.keyed_lock import keyed_lock
     from app.models.character import adjust_status_effects, get_character_profile
@@ -774,6 +806,15 @@ def _apply_give_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
     quantity = int(params.get("quantity") or 1)
     name = str(item.get("name") or "").strip() or item_id
     with keyed_lock("character_profile", to):
+        try:
+            before = inventory.get_item_quantity(to, item_id, strict=True)
+        except Exception as e:  # noqa: BLE001
+            raise EffectFailed("The inventory could not be read", retryable=True) from e
+        ctx.record_pending(
+            "grant",
+            {"character": to, "item_id": item_id, "quantity": quantity, "before": before},
+            f"{name} -> {to}",
+        )
         ok = inventory.add_to_inventory(
             to,
             item_id,
@@ -794,6 +835,176 @@ def _apply_give_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
         _notify(to, "You received {quantity} × {item}.", ctx.run, ctx.effect_key,
                 quantity=quantity, item=item_label)
     return [CreatedObject("grant", {"character": to, "item_id": item_id, "quantity": quantity}, f"{name} -> {to}")]
+
+
+def _render_item_image(item_id: str) -> None:
+    from app.core import item_images
+    from app.imagegen.base import MediaGenerationDisabled
+    try:
+        item_images.generate_item_image_sync(item_id, raise_errors=True)
+    except MediaGenerationDisabled:
+        logger.info("quest item %s: media generation is off, the item keeps no image", item_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest item %s: background image render failed: %s", item_id, e)
+
+
+def _validate_create_item(params: dict, bindings: dict | None) -> list:
+    from app.core.activity_engine import ConditionIssue
+    from app.models import inventory
+
+    issues: list = []
+    raw_effects = params.get("effects")
+    if isinstance(raw_effects, str) and raw_effects.strip():
+        try:
+            parsed_effects = json.loads(raw_effects)
+        except ValueError:
+            issues.append(ConditionIssue("bad_json", "Effects must be a JSON object"))
+        else:
+            if not isinstance(parsed_effects, dict):
+                issues.append(ConditionIssue("bad_json", "Effects must be a JSON object"))
+
+    raw_bonuses = params.get("stat_bonuses")
+    if isinstance(raw_bonuses, str) and raw_bonuses.strip():
+        try:
+            parsed_bonuses = json.loads(raw_bonuses)
+        except ValueError:
+            issues.append(ConditionIssue("bad_json", "Stat bonuses must be a JSON object"))
+        else:
+            if not isinstance(parsed_bonuses, dict):
+                issues.append(ConditionIssue("bad_json", "Stat bonuses must be a JSON object"))
+            else:
+                bonus_when = str(params.get("bonus_when") or "equipped")
+                try:
+                    inventory._validate_passive_bonuses({"stat_bonuses": parsed_bonuses, "bonus_when": bonus_when})
+                except ValueError as e:
+                    issues.append(ConditionIssue("bad_param", str(e)))
+    return issues
+
+
+def _apply_create_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.models import inventory
+
+    iid = (ctx.previous[0].get("ref") or {}).get("item_id") if ctx.previous else ""
+    if not iid:
+        iid = ctx.mint("item_q")
+    name = str(params.get("name") or "").strip()
+    ctx.record_pending("item", {"item_id": iid}, name)
+
+    raw_effects = str(params.get("effects") or "").strip()
+    effects = None
+    if raw_effects:
+        try:
+            parsed_effects = json.loads(raw_effects)
+        except ValueError as e:
+            raise EffectFailed(f"Effects must be a JSON object: {e}") from e
+        if not isinstance(parsed_effects, dict):
+            raise EffectFailed("Effects must be a JSON object")
+        effects = parsed_effects
+
+    raw_bonuses = str(params.get("stat_bonuses") or "").strip()
+    properties = None
+    if raw_bonuses:
+        try:
+            parsed_bonuses = json.loads(raw_bonuses)
+        except ValueError as e:
+            raise EffectFailed(f"Stat bonuses must be a JSON object: {e}") from e
+        if not isinstance(parsed_bonuses, dict):
+            raise EffectFailed("Stat bonuses must be a JSON object")
+        bonus_when = str(params.get("bonus_when") or "equipped")
+        properties = {
+            "enables_locations": [],
+            "enables_activities": [],
+            "stat_bonuses": parsed_bonuses,
+            "uses": None,
+            "bonus_when": bonus_when,
+        }
+
+    try:
+        inventory.add_item(
+            name,
+            description=str(params.get("description") or ""),
+            category=str(params.get("category") or "quest"),
+            image_prompt=str(params.get("image_prompt") or ""),
+            consumable=bool(params.get("consumable", False)),
+            properties=properties,
+            effects=effects,
+            item_id=iid,
+        )
+    except ValueError as e:
+        raise EffectFailed(str(e)) from e
+
+    if inventory.get_item(iid) is None:
+        raise EffectFailed("The item was not stored", retryable=True)
+
+    threading.Thread(
+        target=_render_item_image,
+        args=(iid,),
+        daemon=True,
+        name=f"quest-item-image-{iid}",
+    ).start()
+    return [CreatedObject("item", {"item_id": iid}, name)]
+
+
+def _apply_place_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.models import inventory
+
+    item_key = params.get("item")
+    ref = _target_ref(params, ctx, "item")
+    item_id = str((ref or {}).get("item_id") or "")
+    if not item_id:
+        raise EffectFailed(f"The item '{item_key}' does not exist yet")
+    item = inventory.get_item(item_id)
+    if item is None:
+        raise EffectFailed(f"The item '{item_key}' is gone")
+
+    room_key = params.get("room")
+    location_id = _role_value(params, ctx, "room", "location_id")
+    room_id = _role_value(params, ctx, "room", "room_id")
+    if not location_id or not room_id:
+        raise EffectFailed(f"Role '{room_key}' is not bound")
+
+    quantity = int(params.get("quantity") or 1)
+    hidden = bool(params.get("hidden", False))
+    difficulty = int(params.get("difficulty") or 0)
+    note = str(params.get("note") or "")
+    name = str(item.get("name") or "").strip() or item_id
+    label = f"{name} in {location_id}/{room_id}"
+
+    try:
+        room_items = inventory.get_room_items(location_id, room_id, strict=True)
+    except Exception as e:  # noqa: BLE001
+        raise EffectFailed("The room could not be read", retryable=True) from e
+    before = sum(int(ri.get("quantity", 1) or 1) for ri in room_items if ri.get("item_id") == item_id)
+
+    ctx.record_pending(
+        "room_item",
+        {
+            "location_id": location_id,
+            "room_id": room_id,
+            "item_id": item_id,
+            "quantity": quantity,
+            "before": before,
+        },
+        label,
+    )
+    ok = inventory.add_item_to_room(
+        location_id,
+        room_id,
+        item_id,
+        quantity,
+        hidden=hidden,
+        discovery_difficulty=difficulty * DIFFICULTY_SCALE,
+        note=note,
+    )
+    if not ok:
+        raise EffectFailed(f"{name} could not be placed in {location_id}/{room_id}")
+    return [
+        CreatedObject(
+            "room_item",
+            {"location_id": location_id, "room_id": room_id, "item_id": item_id, "quantity": quantity},
+            label,
+        )
+    ]
 
 
 def builtin_effect_types() -> list:
@@ -900,5 +1111,57 @@ def builtin_effect_types() -> list:
             ),
             apply=_apply_give_item,
             object_kind="grant",
+        ),
+        QuestType(
+            id="create_item",
+            kind="effect",
+            label="Create an item",
+            description="Creates a new item; deleted everywhere when the quest ends unless permanent.",
+            params=(
+                {"key": "name", "type": "str", "label": "Name", "required": True},
+                {"key": "description", "type": "text", "label": "Description"},
+                {"key": "category", "type": "select", "label": "Category",
+                 "choices": list(CREATE_ITEM_CATEGORIES),
+                 "choice_labels": [c.capitalize() for c in CREATE_ITEM_CATEGORIES],
+                 "default": "quest"},
+                {"key": "consumable", "type": "bool", "label": "Consumable", "default": False},
+                {"key": "effects", "type": "text", "label": "Effects (JSON)",
+                 "description": 'A JSON object in the item effects format, e.g. {"<stat>_change": 5}',
+                 "placeholders": False},
+                {"key": "stat_bonuses", "type": "text", "label": "Stat bonuses (JSON)",
+                 "description": "A JSON object {stat: whole number -100..100}",
+                 "placeholders": False},
+                {"key": "bonus_when", "type": "select", "label": "Bonus when",
+                 "choices": ["equipped", "carried"],
+                 "choice_labels": ["Equipped", "Carried"],
+                 "default": "equipped"},
+                {"key": "image_prompt", "type": "text", "label": "Image prompt",
+                 "description": "Empty = the name"},
+            ),
+            validate=_validate_create_item,
+            apply=_apply_create_item,
+            object_kind="item",
+        ),
+        QuestType(
+            id="place_item",
+            kind="effect",
+            label="Place an item",
+            description="Puts an item into a room, optionally hidden; taken away when the quest ends unless permanent.",
+            params=(
+                {"key": "item", "type": "target", "label": "Item",
+                 "description": "An item role or the key of an item effect",
+                 "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+                {"key": "room", "type": "role", "label": "Room",
+                 "role_kinds": ["room"], "required": True},
+                {"key": "quantity", "type": "int", "label": "Quantity",
+                 "min": 1, "max": 20, "step": 1, "default": 1},
+                {"key": "hidden", "type": "bool", "label": "Hidden", "default": False},
+                {"key": "difficulty", "type": "int", "label": "Difficulty",
+                 "description": "0-10; times 10 against the discovery stat (0-100)",
+                 "min": 0, "max": 10, "step": 1, "default": 0},
+                {"key": "note", "type": "str", "label": "Note"},
+            ),
+            apply=_apply_place_item,
+            object_kind="room_item",
         ),
     ]

@@ -165,11 +165,12 @@ WHAT FOLLOWS BY HAND
     - j. check_bindings with 5th setup entry eff_v -> validate_template == [], check_bindings ==
       [("setup_effects.4.type", "eff_bound")].
     - k. _unregistered: with stubs registered, owed=("setup","step:1","reward") -> []; after unregistering "test"
-      (core stays, so holds_item, give_hint, narrate and give_item remain registered while create_prop, create_item,
-      place_item, near_object and knows_secret are stub-only), owed=() -> ["steps.0.condition.type",
-      "steps.1.condition.type"]; owed=("setup",) -> those 2 + setup_effects.0..2.type (create_prop, create_item,
-      place_item; setup_effects.3 give_hint is core -> 5 paths); owed=("step:1",) -> only those 2 (steps.1.on_done.0
-      narrate is core -> 2 paths); qc.types() still has give_hint and narrate with kind "effect".
+      (core stays, so holds_item, give_hint, narrate, give_item, create_item and place_item remain registered while
+      create_prop, near_object and knows_secret are stub-only), owed=() -> ["steps.0.condition.type",
+      "steps.1.condition.type"]; owed=("setup",) -> those 2 + setup_effects.0.type (create_prop is still stub-only;
+      setup_effects.1 create_item, setup_effects.2 place_item and setup_effects.3 give_hint are core -> 3 paths);
+      owed=("step:1",) -> only those 2 (steps.1.on_done.0 narrate is core -> 2 paths); qc.types() still has
+      give_hint, narrate, create_item and place_item with kind "effect".
     - l. After restoring core: validate_template(ERRAND) == [].
  25. Preparing runs in start_run and tick (stage 2, Task 4):
     Stub effect "p_hold" (owner "smoke_p", kind "effect", object_kind "", apply returning []). This smoke never calls
@@ -967,14 +968,13 @@ def main() -> int:
         check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(ROCK)),
               ["steps.0.condition.type", "steps.1.condition.type"])
         check("k. _unregistered owed=(setup,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("setup",))),
-              ["setup_effects.0.type", "setup_effects.1.type", "setup_effects.2.type",
-               "steps.0.condition.type", "steps.1.condition.type"])
+              ["setup_effects.0.type", "steps.0.condition.type", "steps.1.condition.type"])
         check("k. _unregistered owed=(step:1,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("step:1",))),
               ["steps.0.condition.type", "steps.1.condition.type"])
         core_now = qc.types()
-        check("k. core built-ins give_hint and narrate stay registered",
-              {k: core_now[k].kind for k in ("give_hint", "narrate") if k in core_now},
-              {"give_hint": "effect", "narrate": "effect"})
+        check("k. core built-ins give_hint, narrate, create_item and place_item stay registered",
+              {k: core_now[k].kind for k in ("give_hint", "narrate", "create_item", "place_item") if k in core_now},
+              {"give_hint": "effect", "narrate": "effect", "create_item": "effect", "place_item": "effect"})
     finally:
         hooks.unregister_owned_providers("test")
         hooks.unregister_owned_providers(qt.OWNER)

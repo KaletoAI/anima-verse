@@ -632,15 +632,15 @@ class OutfitCreationSkill(BaseSkill):
             if created:
                 import threading
                 def _gen_item_images():
-                    from app.routes.inventory import generate_item_image_sync
+                    from app.core.item_images import generate_item_image_sync
                     for c in created:
                         try:
                             generate_item_image_sync(c["id"])
                         except Exception as _e:
-                            logger.warning("Item-Bild fuer '%s' fehlgeschlagen: %s", c["name"], _e)
+                            logger.warning("Item image for '%s' failed: %s", c["name"], _e)
                 threading.Thread(target=_gen_item_images, daemon=True,
                                   name=f"outfit-item-images-{character_name}").start()
-                logger.info("Item-Bild-Generierung fuer %d Pieces gestartet (Background)", len(created))
+                logger.info("Item image generation started for %d pieces (background)", len(created))
 
             _tq.track_finish(_track_id)
             if reused and created:
