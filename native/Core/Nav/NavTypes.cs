@@ -18,12 +18,15 @@ public sealed record NavFloor(P2[] Outline, P2[][] Holes);
 public sealed record NavObstacle(P2[] Outline, double BottomY, double TopY, string Kind);
 
 /// <summary>
-/// The walkable region across a sealed doorway (decision 2). <see cref="Quad"/> runs (x0, z0) → (x1, z0) → (x1, z1) →
-/// (x0, z1) for an axis-aligned rectangle (in general: counter-clockwise in (x, z), positive shoelace area, starting
-/// at the corner with the smallest x + z). <see cref="Outside"/> is the doorway's own <c>outside</c> flag;
-/// <see cref="OuterPoint"/> (outside doors only) = threshold centre + outward normal · (t/2 + r).
+/// The walkable region across a sealed doorway (decision 2; fix plan "Kollision im nativen Client", step 2): an hourglass of
+/// three convex parts. <see cref="Parts"/>[0] is the neck, ±(w/2 − r) along the wall and ±t/2 across it; [1] and [2] are the
+/// funnels, one per side, each a trapezoid from the wall face (±(w/2 − r) wide) to the storey edge t/2 + r off the wall line
+/// (±w/2 wide), so a walk that meets the door off centre slides into the neck instead of stopping. Every part is
+/// counter-clockwise in (x, z) (positive shoelace area) and starts at the corner with the smallest x + z (then x): an
+/// axis-aligned rectangle runs (x0, z0) → (x1, z0) → (x1, z1) → (x0, z1). <see cref="Outside"/> is the doorway's own
+/// <c>outside</c> flag; <see cref="OuterPoint"/> (outside doors only) = threshold centre + outward normal · (t/2 + r).
 /// </summary>
-public sealed record NavThreshold(int Doorway, int Level, P2[] Quad, double Y, string[] Rooms, bool Outside, P2? OuterPoint);
+public sealed record NavThreshold(int Doorway, int Level, P2[][] Parts, double Y, string[] Rooms, bool Outside, P2? OuterPoint);
 
 /// <summary>One off-mesh connection: a stair flight or one lift hop between two neighbouring stops.</summary>
 public sealed record NavLinkSpec(ulong Owner, string Kind, Vec3 Start, Vec3 End, int FromLevel, int ToLevel, double EnterCost);
@@ -46,8 +49,16 @@ public sealed record NavSourceData(IReadOnlyList<NavStoreySource> Storeys, IRead
     public bool IsEmpty => Storeys.All(s => s.Floors.Count == 0);
 }
 
-/// <summary>A measured world box of one furniture placement on storey <see cref="Level"/>.</summary>
-public readonly record struct NavPropBox(int Level, Vec3 Min, Vec3 Max);
+/// <summary>
+/// One obstacle rectangle of a furniture placement on storey <see cref="Level"/>: a world-xz outline (counter-clockwise in
+/// (x, z)) and the height band it occupies (<see cref="PropFootprint"/>; a placement gives one entry per rectangle).
+/// </summary>
+public sealed record NavProp(int Level, double BottomY, double TopY, P2[] Outline)
+{
+    /// <summary>An axis-aligned world box as one entry (outline (x0, z0) → (x1, z0) → (x1, z1) → (x0, z1)).</summary>
+    public static NavProp Box(int level, Vec3 min, Vec3 max)
+        => new(level, min.Y, max.Y, new[] { new P2(min.X, min.Z), new P2(max.X, min.Z), new P2(max.X, max.Z), new P2(min.X, max.Z) });
+}
 
 /// <summary>Navigation layers: one bit per storey (level + 8, clamped to 0…30), links on bit 31; queries use all.</summary>
 public static class NavLayers

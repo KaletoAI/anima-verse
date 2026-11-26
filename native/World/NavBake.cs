@@ -49,14 +49,25 @@ public static class NavBake
     }
 
     /// <summary>
-    /// The threshold rectangle as its own mesh: the quad as a one-polygon <see cref="NavigationPolygon"/>, turned into 3D
-    /// the same way as a storey (so its winding matches the storey meshes it is welded to), at <c>t.Y</c>.
+    /// The threshold hourglass as its own mesh: its three convex parts (neck and the two funnels) as polygons of one
+    /// <see cref="NavigationPolygon"/> over shared corners (a corner within 1e-6 m of an earlier one is that one, so the
+    /// parts are connected inside the region), turned into 3D the same way as a storey (so its winding matches the storey
+    /// meshes it is welded to), at <c>t.Y</c>.
     /// </summary>
     public static NavigationMesh ThresholdMesh(NavThreshold t, NavBakeParams p)
     {
         var poly = new NavigationPolygon { CellSize = (float)p.CellSize };
-        poly.SetVertices(t.Quad.Select(q => new Vector2((float)q.X, (float)q.Z)).ToArray());
-        poly.AddPolygon(Enumerable.Range(0, t.Quad.Length).ToArray());
+        var verts = new List<P2>();
+        int Index(P2 q)
+        {
+            for (int i = 0; i < verts.Count; i++)
+                if (Math.Abs(verts[i].X - q.X) <= 1e-6 && Math.Abs(verts[i].Z - q.Z) <= 1e-6) return i;
+            verts.Add(q);
+            return verts.Count - 1;
+        }
+        var polygons = t.Parts.Select(part => part.Select(Index).ToArray()).ToList();
+        poly.SetVertices(verts.Select(q => new Vector2((float)q.X, (float)q.Z)).ToArray());
+        foreach (var indices in polygons) poly.AddPolygon(indices);
         return Lift(poly.GetNavigationMesh(), p, (_, _) => t.Y);
     }
 

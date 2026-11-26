@@ -14,7 +14,7 @@ namespace AnimaNative.Nav;
 
 /// <summary>
 /// Builds the navigation source of one mounted location (plan 2026-11-25-client-ausfuehrung-e2, decisions 2, 7, 8, 13)
-/// from its scene recipe, its tile frame, its places and the measured furniture boxes — everything in WORLD metres.
+/// from its scene recipe, its tile frame, its places and the measured furniture outlines — everything in WORLD metres.
 /// Hand derivations: native/fixtures/README.md, section "Nav world"; tests: tests/NavSourceTests.cs.
 /// </summary>
 public static class NavSource
@@ -39,12 +39,12 @@ public static class NavSource
     /// The source. Storey 0 = the boundary pushed out (<see cref="OffsetRing"/>), the <c>floor_plan</c> rooms, the
     /// storey-0 plates and corridors; every other storey = each plate as its own floor plus its corridors, a plate hole
     /// kept only where no other plate of the storey covers it. Obstacles = walls (the <see cref="Collide.WallSegments"/>
-    /// filter: no lintel, no leaf, glass blocks), door seals and furniture boxes, minus everything whose top is within the
+    /// filter: no lintel, no leaf, glass blocks), door seals and furniture outlines, minus everything whose top is within the
     /// climb of the floor or whose bottom is at or above the agent height. <paramref name="building"/> changes nothing
     /// yet: decision 7 gives buildings and open locations the same storey 0.
     /// </summary>
     public static NavSourceData Build(ScenePayload scene, TileFrame frame, PlaceInventory places,
-                                      IReadOnlyList<NavPropBox> props, bool building, NavBakeParams p)
+                                      IReadOnlyList<NavProp> props, bool building, NavBakeParams p)
     {
         double datum = frame.Center.Y;
         var problems = new List<NavProblem>();
@@ -104,11 +104,7 @@ public static class NavSource
                 FloorsOf(corridor.Level).Add(new NavFloor(WorldRing(poly), Array.Empty<P2[]>()));
 
         var floorY = new Dictionary<int, double>();
-        foreach (var level in floors.Keys)
-        {
-            var tops = scene.Plates.Where(pl => pl.Level == level).Select(pl => pl.TopY).ToList();
-            floorY[level] = datum + (level == 0 || tops.Count == 0 ? scene.FloorY(level) : tops.Max());
-        }
+        foreach (var level in floors.Keys) floorY[level] = StoreyFloorY(scene, frame, level);
         double StoreyY(int level) => floorY.TryGetValue(level, out var y) ? y : datum + scene.FloorY(level);
         bool Blocks(int level, double bottom, double top)
             => !(top <= StoreyY(level) + p.AgentMaxClimb) && !(bottom >= StoreyY(level) + p.AgentHeight);
@@ -156,6 +152,16 @@ public static class NavSource
                 continue;
             }
             double depth = t / 2 + p.AgentRadius;
+            // The hourglass (fix plan step 2): the neck inside the wall, a funnel on each side from the wall face (±along)
+            // out to the storey edge (±half), so its slanted sides lead an off-centre walk into the neck.
+            var nAcross = new P2(u.Z, -u.X);
+            P2 L(double s, double q) => ToWorld(Add(Add(d.AtWorld, Scale(u, s)), Scale(nAcross, q)));
+            var parts = new[]
+            {
+                Rect(d.AtWorld, u, along, t / 2, ToWorld),
+                Canonical(new[] { L(-along, t / 2), L(along, t / 2), L(half, depth), L(-half, depth) }),
+                Canonical(new[] { L(-along, -t / 2), L(along, -t / 2), L(half, -depth), L(-half, -depth) }),
+            };
             P2? outer = null;
             if (d.Outside)
             {
@@ -164,18 +170,15 @@ public static class NavSource
                 var c = ToWorld(d.AtWorld);
                 outer = new P2(c.X + nw.X * depth, c.Z + nw.Z * depth);
             }
-            thresholds.Add(new NavThreshold(i, d.Level, Rect(d.AtWorld, u, along, depth, ToWorld), StoreyY(d.Level),
+            thresholds.Add(new NavThreshold(i, d.Level, parts, StoreyY(d.Level),
                                             d.Rooms.ToArray(), d.Outside, outer));
         }
 
-        foreach (var box in props)
+        foreach (var prop in props)
         {
-            if (!obstacles.ContainsKey(box.Level) || !Blocks(box.Level, box.Min.Y, box.Max.Y)) continue;
-            var outline = new[]
-            {
-                new P2(box.Min.X, box.Min.Z), new P2(box.Max.X, box.Min.Z), new P2(box.Max.X, box.Max.Z), new P2(box.Min.X, box.Max.Z),
-            };
-            obstacles[box.Level].Add(new NavObstacle(outline, box.Min.Y, box.Max.Y, "prop"));
+            if (!obstacles.ContainsKey(prop.Level) || !Blocks(prop.Level, prop.BottomY, prop.TopY)) continue;
+            if (prop.Outline.Length < 3 || !prop.Outline.All(Finite)) continue;
+            obstacles[prop.Level].Add(new NavObstacle(Ccw(prop.Outline), prop.BottomY, prop.TopY, "prop"));
         }
 
         // ---- links --------------------------------------------------------------------------------------------
@@ -194,6 +197,24 @@ public static class NavSource
             level, floorY[level], level == 0, level == 0 ? hulls0 : new List<P2[]>(), floors[level], obstacles[level])).ToList();
         return new NavSourceData(storeys, thresholds, links, problems, Fingerprint(storeys, thresholds, links, problems, p));
     }
+
+    /// <summary>
+    /// The world floor height of storey <paramref name="level"/> as <see cref="Build"/> uses it: the datum (the frame's
+    /// centre y) plus the scene's <c>floor_y</c> for storey 0 or a storey without plates, else the highest plate top.
+    /// The furniture band (<see cref="PropFootprint"/>) is measured from it.
+    /// </summary>
+    public static double StoreyFloorY(ScenePayload scene, TileFrame frame, int level)
+    {
+        var tops = scene.Plates.Where(pl => pl.Level == level).Select(pl => pl.TopY).ToList();
+        return frame.Center.Y + (level == 0 || tops.Count == 0 ? scene.FloorY(level) : tops.Max());
+    }
+
+    /// <summary>
+    /// A model spec that can block the walk (decision 8): role <c>prop</c>, not a door, not walkable, and not a window — the
+    /// payload places a window as a prop with the id prefix <c>window:</c>, but the wall it sits in already blocks.
+    /// </summary>
+    public static bool IsObstacleSpec(SceneModelSpec spec)
+        => spec.Role == "prop" && spec.Door is null && !spec.Walkable && !spec.Id.StartsWith("window:", StringComparison.Ordinal);
 
     /// <summary>
     /// Pushes a ring outwards by <paramref name="d"/> (decision 7): the winding is first made counter-clockwise in (x, z)
@@ -382,7 +403,7 @@ public static class NavSource
         {
             sb.Append("|threshold,");
             N(t.Doorway); N(t.Level); N(t.Y); sb.Append(t.Outside ? "out," : "in,");
-            Ring(t.Quad);
+            foreach (var part in t.Parts) Ring(part);
             foreach (var r in t.Rooms) S(r);
             if (t.OuterPoint is { } op) { N(op.X); N(op.Z); }
         }

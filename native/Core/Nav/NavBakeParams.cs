@@ -12,7 +12,7 @@ public sealed record NavBakeParams(double AgentRadius, double AgentHeight, doubl
                                    double CellSize, double CellHeight, double EdgeConnectionMargin, double LinkConnectionRadius)
 {
     /// <summary>Part of every fingerprint: raise it when the source rules or the bake change.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
     public const double MinCellSize = 0.05;
     public const double ElevatorEnterCost = 20;
     public const double ElevatorTravelCost = 10;

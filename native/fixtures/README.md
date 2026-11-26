@@ -1797,29 +1797,40 @@ Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc
   x 93.95…106.05 (−6.3 + r = −6.05, 6.3 − r = 6.05; review measurement 93.953…106.047), z −7.05 (−7.3 + r) … −4.35 (W1
   outer face −4.1 − r). The strips outside W2/W3/W4 (0.2 m between the wall face and the pushed-out edge) vanish in the
   erosion. Yard height: terrain 0 (`FollowGround`, flat).
-- Seal D1: x 96.55…97.45, z −4.1…−3.9. Threshold T1: x 96.8…97.2 (± (0.45 − 0.25)), z −4.35…−3.65 (± (0.1 + 0.25)),
-  outside, `OuterPoint` (97, −4.35) = centre + (0, −1)·0.35; welded to `r-a` (edge z −3.65) and the yard (edge z −4.35).
-- Seal D0: x 99.9…100.1, z 1.55…2.45. Threshold T0: x 99.65…100.35 (± (0.1 + 0.25)), z 1.8…2.2 (± (0.45 − 0.25)), y 0.
+- Thresholds are hourglasses (fix plan "Kollision im nativen Client", step 2): the NECK ± (w/2 − r) = ± 0.2 along the
+  wall and ± t/2 = ± 0.1 across it, and on each side a FUNNEL, the trapezoid from the wall face (± 0.2 along) out to the
+  storey edge t/2 + r = 0.35 off the wall line (± w/2 = ± 0.45 along); its slanted sides run at 45°.
+- Seal D1: x 96.55…97.45, z −4.1…−3.9. Threshold T1: neck x 96.8…97.2, z −4.1…−3.9; funnels (96.55, −4.35) (97.45, −4.35)
+  (97.2, −4.1) (96.8, −4.1) and (96.8, −3.9) (97.2, −3.9) (97.45, −3.65) (96.55, −3.65); outside, `OuterPoint` (97, −4.35)
+  = centre + (0, −1)·0.35; welded to `r-a` (edge z −3.65) and the yard (edge z −4.35).
+- Seal D0: x 99.9…100.1, z 1.55…2.45. Threshold T0: neck x 99.9…100.1, z 1.8…2.2; funnels (99.65, 1.55) (99.9, 1.8)
+  (99.9, 2.2) (99.65, 2.45) in `r-a` and (100.1, 1.8) (100.35, 1.55) (100.35, 2.45) (100.1, 2.2) in `r-b`; y 0. The
+  funnel stays inside what the wall collision allows (`Collide`: wall lines, free ends eased 0.12 → W5 ends at z 1.43,
+  W6 starts at 2.57): its outer corner (99.65, 2.45) is √(0.35² + 0.12²) = 0.37 from (100, 2.57), the slanted side
+  (99.65, 2.45)–(99.9, 2.2) 0.33 from it — both above r 0.25.
 - Armchair eroded: x 96.35…97.65, z −2.65…−1.35 (corners rounded depending on the join — no path assumption touches
   them). Bed eroded: x 103.05…104.95, z 0.25…2.75. Rug: no obstacle (0.02 ≤ 0.25).
 - Links: stairs owner 65536 = `(1 << 16) | 0`, start (101, 0, −3.3), end (104.5, 3, −3.3), both on the mesh (distance 0),
   costs enter 0 / travel 1. Lift owner 131200 = `(2 << 16) | 128`, start (105.2, 0.05, 3.2), end (105.2, 3.05, 3.2),
   `enter_cost` 20, `travel_cost` 10. In a path only the **entry point** carries the owner; path points lie on the mesh
   (lift bottom (105.2, 0.0, 3.2), top (105.2, 3.0, 3.2)).
-- **P1** (97, 0, −1) → (103, 0, −1): through T0 over the lower corners (99.65, 0, 1.8) and (100.35, 0, 1.8); length
-  2·√(2.65² + 2.8²) + 0.7 = 2·3.855191 + 0.7 = **8.410382**.
-- **P2** (97, 0, −1) → loft (104, 3, 2): (99.65, 1.8) → (100.35, 1.8) → stair foot (101, −3.3) [√(0.65² + 5.1²) =
-  5.141255] → link [√(3.5² + 3²) = 4.609772] → (104, 2) [√(0.5² + 5.3²) = 5.323533; does not cross the hole zone: at
-  z −2.55, x = 104.5 − 0.5·0.75/5.3 = 104.4292 > 104.25]; length 3.855191 + 0.7 + 5.141255 + 4.609772 + 5.323533 =
-  **19.629751** (review measured 19.6307), exactly one point with owner ≠ 0, owner 65536. The way back (104, 3, 2) →
-  (97, 0, −1) has the same length over the stairs.
-- **P3** = P2 with the stairs disabled, over the lift: (97, −1) → (99.65, 1.8) [3.855191] → bed corner (103.05, 2.75)
-  [√(3.4² + 0.95²) = 3.530227; at x 100.35, z = 1.8 + 0.7·0.95/3.4 = 1.9956 ∈ T0 1.8…2.2, the corner (100.35, 1.8)
-  drops out] → lift bottom (105.2, 0, 3.2) [√(2.15² + 0.45²) = 2.196588; at x 104.95, z = 3.148 > 2.75, clear of the
-  bed] → link [3] → (104, 3, 2) [√(1.2² + 1.2²) = 1.697056]; length **14.279062** (review measured 14.279). **Why P2
-  still takes the stairs:** the cost over the lift ≥ (14.279062 − 3) + 3·10 = 41.28 (without `enter_cost`, which 4.7.2
-  does not reliably count in the choice) > 19.63 over the stairs (travel 1). With only `enter_cost` 20, P2 forwards
-  took the lift when measured (14.279).
+- **P1** (97, 0, −1) → (103, 0, −1): through T0 over the neck corners (99.9, 0, 1.8) and (100.1, 0, 1.8); the line
+  (97, −1) → (99.9, 1.8) passes the funnel corner (99.65, 1.55) at z −1 + 2.65·2.8/2.9 = 1.5586 > 1.55 (mirror image on
+  the `r-b` side); length 2·√(2.9² + 2.8²) + 0.2 = 2·4.031129 + 0.2 = **8.262258** (measured 8.262; before the funnel
+  8.410382 over the old threshold corners (99.65, 1.8) / (100.35, 1.8)).
+- **P2** (97, 0, −1) → loft (104, 3, 2): (99.9, 1.8) [4.031129] → (100.1, 1.8) [0.2] → the `r-b` funnel corner
+  (100.35, 1.55) [√(0.25² + 0.25²) = 0.353553; needed: the straight line (100.1, 1.8) → (101, −3.3) is at z 1.8 − 0.25·5.1/0.9
+  … x 100.144 at z 1.55, inside the wall's erosion] → stair foot (101, −3.3) [√(0.65² + 4.85²) = 4.893363] → link
+  [√(3.5² + 3²) = 4.609772] → (104, 2) [√(0.5² + 5.3²) = 5.323533; does not cross the hole zone: at z −2.55,
+  x = 104.5 − 0.5·0.75/5.3 = 104.4292 > 104.25]; length **19.411350** (measured 19.412), exactly one point with owner ≠ 0,
+  owner 65536. The way back (104, 3, 2) → (97, 0, −1) has the same length over the stairs.
+- **P3** = P2 with the stairs disabled, over the lift: (97, −1) → (99.9, 1.8) [4.031129] → bed corner (103.05, 2.75)
+  [√(3.15² + 0.95²) = 3.290137; at x 100.1, z = 1.8 + 0.2·0.95/3.15 = 1.8603 ∈ the neck 1.8…2.2, at x 100.35 z 1.9357
+  inside the funnel's ± 0.45] → lift bottom (105.2, 0, 3.2) [√(2.15² + 0.45²) = 2.196588; at x 104.95, z = 3.148 > 2.75,
+  clear of the bed] → link [3] → (104, 3, 2) [√(1.2² + 1.2²) = 1.697056]; length **14.214910** (measured 14.215). **Why P2
+  still takes the stairs:** the cost over the lift ≥ (14.214910 − 3) + 3·10 = 41.21 (without `enter_cost`, which 4.7.2
+  does not reliably count in the choice) > 19.41 over the stairs (travel 1). With only `enter_cost` 20, P2 forwards
+  took the lift when measured (14.279, before the funnel).
 - **Probes `MapGetClosestPoint`**: (100.05, 0, 0) in W5 → (100.35, 0, 0) (0.30 to `r-b` against 0.40 to `r-a`);
   (97, 0, −1.5) at the armchair's edge → (97, 0, −1.35); (97, 0, 2) on the rug → unchanged; (100, 0, 2) in the door →
   unchanged; (97, 0, −5.5) in the yard → unchanged; (97, 0, −7.2) beyond the yard → (97, 0, −7.05).
@@ -1831,12 +1842,16 @@ Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc
 - Storey 0: 3 floors — the pushed-out boundary (bounds x 93.7…106.3, z −7.3…4.3), the two `floor_plan` rooms (also the
   two hulls) — at y 0, `FollowGround`. Storey 1: one floor (the plate) with its one hole x 101.5…104.0, z −3.8…−2.8 (no
   other plate covers it) at y 3.0 (the highest plate top), flat.
-- Obstacles storey 0: 7 walls (W1a, W1b, W2–W6) + 2 seals + 2 props (armchair, bed; the rug's top 0.02 ≤ 0.25) = 11;
+- Obstacles storey 0: 7 walls (W1a, W1b, W2–W6) + 2 seals + 2 props (armchair, bed; the rug's top 0.02 ≤ 0.25) = 11; a
+  prop is passed through as its own outline (a 30° turned rectangle stays that rectangle, `PropOutlineIsPassedThrough`);
   storey 1: 4 walls. W5 = x 99.9…100.1, z −4…1.55, y 0…3 (half thickness 0.1, no end caps).
 - A narrow door (D0 at 0.45 m, W5/W6 ending at z 1.775 / 2.225): w/2 − r = −0.025 ≤ 0 → seal x 99.9…100.1,
   z 1.775…2.225, no threshold, problem `door_too_narrow` 0. Without W5/W6, D0 has no adjacent wall → open floor.
-- Turned by yaw π/2 (`TileToWorld(lx, lz) = (100 + lz, ·, −lx)`): T0 local x −0.35…0.35, z 1.8…2.2 → world x 101.8…102.2,
-  z −0.35…0.35.
+- Turned by yaw π/2 (`TileToWorld(lx, lz) = (100 + lz, ·, −lx)`): T0's neck local x −0.1…0.1, z 1.8…2.2 → world
+  x 101.8…102.2, z −0.1…0.1; the whole hourglass local x −0.35…0.35, z 1.55…2.45 → world x 101.55…102.45, z −0.35…0.35.
+- `NavSource.StoreyFloorY`: storey 0 → 0, storey 1 → the plate top 3, + the frame's datum (y 0.5 → 3.5).
+  `NavSource.IsObstacleSpec`: role `prop`, no door, not walkable, and no window — a `window:…` prop sits in a wall that
+  already blocks.
 - Boundary offset rule on the L (0,0)(6,0)(6,3)(3,3)(3,6)(0,6) by 0.3: (−0.3,−0.3)(6.3,−0.3)(6.3,3.3)(3.3,3.3)(3.3,6.3)
   (−0.3,6.3); the concave corner (3,3) → (3.3,3.3) is where z = 3.3 meets x = 3.3. A notch 0.4 wide (< 2·0.3): the
   moved notch walls x = 2.9 and x = 3.1 swap sides, the moved top edges overlap on x 2.9…3.1 → refused, the ring stays
@@ -1844,7 +1859,7 @@ Model specs after the pattern of the placeholders in `fixtures/storeys/scene_loc
 
 **`--check nav` (Task 3, `Check/NavCheck.cs`):** the source is built straight from `scene_loc-nav.json`, frame (100, 0, 0)
 yaw 0, the three boxes of the table, `NavBakeParams.Current` (r 0.25, cells 0.05 / 0.05, edge connection margin 0.1,
-link connection radius 0.6, `Version` 2), terrain `groundAt` = 0; baked by `World/NavBake.cs`, mapped by `LocationNav`
+link connection radius 0.6, `Version` 3), terrain `groundAt` = 0; baked by `World/NavBake.cs`, mapped by `LocationNav`
 (`World/NavMaps.cs`). "Ready" = the map iteration has risen past the last effective change; the check waits for it physics
 frame by physics frame, at most 120 (`AwaitReady`), after the creation and after every change in N6/N7. Tolerance 0.05 m
 for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
@@ -1853,7 +1868,7 @@ for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
   count one above its value before the bake; `MapGetLinkConnectionRadius` 0.6; on the first Ready map
   `Closest((97, 0, −1))` = (97, 0, −1) (inside eroded `r-a`, x 94.35…99.65, z −3.65…3.65, clear of the armchair's
   z ≤ −1.35 — an empty map would answer (0, 0, 0)).
-- **N1** T0 x 99.65…100.35 meets eroded `r-a` at x 99.65 and `r-b` at x 100.35 → 2 edge connections; T1 z −4.35…−3.65 meets
+- **N1** T0's funnels end at x 99.65 / 100.35 (z 1.55…2.45) and meet eroded `r-a` at x 99.65 and `r-b` at x 100.35 → 2 edge connections; T1's at z −4.35 / −3.65 meet
   `r-a` at z −3.65 and the yard at z −4.35 → 2.
 - **N2** the six probes of "Probes `MapGetClosestPoint`" above. Wall probes, each 0.05 m inside a wall face (in the wall
   body, on the room side, away from doors, corners, the armchair, the bed and the stair hole), land on the eroded edge
@@ -1867,16 +1882,16 @@ for positions, ±0.05 for lengths — a navmesh is never compared bit for bit.
   mesh, distance 0; the lift stops (105.2, 0.05 | 3.05, 3.2) are 0.05 above their floors); a link farther off would be
   silently dead. Armchair access (97, 0, −1.45) → closest (97, 0, −1.35), gap 0.10 ≤ 0.4; the piece between them crosses no
   `Collide.WallSegments(scene, 0, (100, 0))` segment.
-- **N4** P1 length 8.410382 ± 0.05 with the points (99.65, 0, 1.8) and (100.35, 0, 1.8), no link point.
-- **N5** P2 length 19.629751 ± 0.05, exactly one point with owner ≠ 0, owner 65536, last point (104, 3, 2); the way back
-  (104, 3, 2) → (97, 0, −1) is 19.629751 ± 0.05 over owner 65536 as well (the link choice holds in both directions).
-- **N6** `SetLinkEnabled(65536, false)` (returns true) → Ready → P2's query takes the lift: length 14.279062 ± 0.05 (P3 above,
+- **N4** P1 length 8.262258 ± 0.05 with the points (99.9, 0, 1.8) and (100.1, 0, 1.8), no link point.
+- **N5** P2 length 19.411350 ± 0.05, exactly one point with owner ≠ 0, owner 65536, last point (104, 3, 2); the way back
+  (104, 3, 2) → (97, 0, −1) is 19.411350 ± 0.05 over owner 65536 as well (the link choice holds in both directions).
+- **N6** `SetLinkEnabled(65536, false)` (returns true) → Ready → P2's query takes the lift: length 14.214910 ± 0.05 (P3 above,
   path length, not cost), exactly one link point, owner 131200, at the entry (105.2, 0.0, 3.2); the stairs are switched on again.
 - **N7** `ApplyLocks({r-b: ""}, "r-a")` → `Locks.DoorwayLock([r-a, r-b], …, "r-a")` = "" → T0 off; T1 ([r-a], the avatar's own
   room) stays on → Ready → P1 can no longer reach `r-b` (no other way in: W1b/W4 have no opening, the stair foot is in
   `r-b`) and ends ≥ 0.5 m before (103, 0, −1) (it stops at the closest reachable point, x ≤ 99.65). `ApplyLocks(null, "r-a")` →
-  P1 again 8.410382. `ApplyLocks({r-b: ""}, "r-b")` → the avatar's own room is left out → T0 stays on, returns false. Lock and
-  unlock in one frame → both return true, T0 ends on and P1 is 8.410382 (the server's getters still answer the old state
+  P1 again 8.262258. `ApplyLocks({r-b: ""}, "r-b")` → the avatar's own room is left out → T0 stays on, returns false. Lock and
+  unlock in one frame → both return true, T0 ends on and P1 is 8.262258 (the server's getters still answer the old state
   within that frame — measured; `LocationNav` compares with the state it last wrote).
 - **N7b** `ApplyLocks(null, "r-a")` twice → the second returns false, `ChangedAtIteration` unchanged, `Ready` stays true (no
   wait); `SetLinkEnabled(65536, true)` on the enabled stairs → false.
@@ -1899,19 +1914,23 @@ ready; `MapChanged` is subscribed only while a map is pending. Physics frames ru
 The source fingerprint is the cache key (16 entries, memory only); every bake logs
 `[nav] bake loc=<id> storeys=<n> thresholds=<t> links=<l> ms=<x> cache=<hit|miss>`.
 
-- **N9** `NavFor(slot)` set; `NavPropBoxes(slot)` = exactly the three boxes of the table (armchair, bed, rug — the rug is
-  dropped only by `NavSource`), each within 0.01 m (the placeholders are measured as `placeholder_dims` boxes standing on
-  `bottom_y` 0 at their anchor + (100, 0, 0)); the fingerprint equals `NavSource.Build(scene, frame (100, 0, 0) yaw 0,
-  PlaceInventory.Compose(scene, frame), the same measured boxes, building)` — the exact boxes, since the fingerprint hashes
-  the numbers in "R" form and a float measurement is not the decimal of the table; P1 over `NavFor(slot)` = 8.410382 ± 0.05.
+- **N9** `NavFor(slot)` set; `NavProps(slot)` = the footprints of the placeholder boxes (`PropFootprint` of their
+  `BoxMesh` triangles, band 0.25…1.8): exactly two rectangles, the armchair x 96.6…97.4, z −2.4…−1.6, y 0.25…0.9 and the
+  bed x 103.3…104.7, z 0.5…2.5, y 0.25…0.5, each within 0.01 m (the box edges are the grid's own ends, no raster growth);
+  the rug (top 0.02) has nothing in the band and gives none; the fingerprint equals `NavSource.Build(scene, frame (100, 0, 0)
+  yaw 0, PlaceInventory.Compose(scene, frame), the same measured outlines, building)` — the exact outlines, since the
+  fingerprint hashes the numbers in "R" form and a float measurement is not the decimal of the table; P1 over
+  `NavFor(slot)` = 8.262258 ± 0.05. Every bake also logs `[nav] props loc=<id> yaw_deg=<frame yaw> props=<n>
+  aabb_m2=<Σ world AABB areas> footprint_m2=<Σ footprint areas>` (fix plan step 0; here `props=3 aabb_m2=6.44
+  footprint_m2=3.44`: 0.64 + 2.8 + 3 m² of AABBs, the rug's 3 m² gone).
 - **N10** a second `DeriveStands(slot)` without a change → same fingerprint → nothing baked, nothing pending, the same
-  `Map` rid three physics frames later. The armchair node moved +0.5 m in x → box x 97.1…97.9 → a new fingerprint → a
+  `Map` rid three physics frames later. The armchair node moved +0.5 m in x → outline x 97.1…97.9 → a new fingerprint → a
   new map once synced; two physics frames after the swap `ActiveMaps` equals its value before the move (the old map freed).
 - **N12** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → in the same frame `NavFor(slot)` is the same object
   (review N-W4); once ready T0 is off. The armchair moved back (−0.5 m) + `DeriveStands` → the first fingerprint again
   (cache hit) → the pending map is armed with the lock (T0 off: a real change, so it waits for its next `MapChanged`) and
   swapped once ready: T0 of the NEW map off, T1 on, P1 ends ≥ 0.5 m before (103, 0, −1) (as N7). `SetLocks(None)` → T0 on,
-  P1 8.410382 again.
+  P1 8.262258 again.
 - **N11** the way down is queued first (`SetOpen(false)`, a stream view without the avatar at (400, 0): 300 m from the
   location, beyond the 180 m near hysteresis and within 560 m → far; no pin holds it), then — still near in that frame —
   the armchair moves +0.25 m and `DeriveStands` starts a bake (cache miss). The driver's down step unmounts the detail
@@ -1943,11 +1962,11 @@ and on its goal (no 0.2 m early arrival). `At(x, z)` snaps the avatar onto `Play
   view 1: plane y 3 → t 0.7 → (98, 0.8), inside → `WalkTo(…, 1)`, target y 3 (storey 1 of the source): the nearest mesh point is
   the loft's eroded edge (100.35, 3, 0.8) (horizontal 2.35 < 3 to the floor below) → planner case 3 → the walk order's goal
   `steering.WalkGoal` (100.35, 3, 0.8) ± 0.05.
-- **A1** `WalkTo((103, −1))` → a walk order whose plan is P1: length 8.410 ± 0.05, corners include (99.65, 1.8) and
-  (100.35, 1.8) (± 0.05; the polygon path also has edge points between them), `Route` = (103, −1) (the end goal, review W5).
-  8.410 m at 3.4 m/s = 2.474 s: the frame that lands on the goal is ⌈2.474·60⌉ = **149** (± 6 frames = ± 0.1 s), within 0.05 of
+- **A1** `WalkTo((103, −1))` → a walk order whose plan is P1: length 8.262 ± 0.05, corners include the neck corners
+  (99.9, 1.8) and (100.1, 1.8) (± 0.05; the polygon path also has edge points between them), `Route` = (103, −1) (the end goal, review W5).
+  8.262 m at 3.4 m/s = 2.430 s: the frame that lands on the goal is ⌈2.430·60⌉ = **146** (± 6 frames = ± 0.1 s), within 0.05 of
   (103, 0, −1); the order then ends (`WalkOrderId` null). Crossing x 100: the door opening is z 1.55…2.45 (W5 ends at 1.55, W6
-  starts at 2.45); the walk lands on every corner, so it crosses on the segment (99.65, 1.8) → (100.35, 1.8): z **1.8** ± 0.05.
+  starts at 2.45); the walk lands on every corner, so it crosses on the neck segment (99.9, 1.8) → (100.1, 1.8): z **1.8** ± 0.05.
   (E2's `NavRoute` reached a corner 0.2 m early, lowest crossing 1.70.)
 - **A2** keys `w` from (97, −1), 8 frames: frame 1 asks (97, −1.85), inside the eroded armchair; the clamp slides to its nearest
   mesh point (97, −1.35) (0.50 away against 0.65 / 0.80). Frame 2 asks (97, −2.2), whose nearest mesh point is the FAR edge
@@ -1962,13 +1981,13 @@ and on its goal (no 0.2 m early arrival). `At(x, z)` snaps the avatar onto `Play
   → no plan, start and goal inside the footprint → false; four frames later the avatar has not moved (≤ 1e-4). `LockState.None`
   → after Ready → true.
 - **A5** scenario `nav-up`; `WalkTo((104, 2), level: 1)` (target y 3) → a walk order whose plan is P2 over the stairs: length
-  19.630 ± 0.05, exactly one link section, owner 65536 (kind `stairs`). At the foot (within 0.4 of (101, 0, −3.3)) the order walk
+  19.411 ± 0.05, exactly one link section, owner 65536 (kind `stairs`). At the foot (within 0.4 of (101, 0, −3.3)) the order walk
   begins the avatar's ride (`AvatarRoomsController.OrderLinkRide("stairs")`): flight 0, current storey 0 (room r-a) → the head
   (104.5, 3, −3.3) on storey 1, target room `NearestRoomAt(1, …)` = r-up → one `POST /play/enter-room {room_id: r-up}` (200),
   `RoomId` r-up BEFORE the ride moves the figure (`Requested` holds it at the foot), then the NPC stair ride up the flight inside
   the order (no `VerticalRide`), then (104.5, −3.3) → (104, 2). End: the order over, within 0.05 of (104, 2) horizontally and
-  0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up. Frames: 19.630 m less the flight's climb the ride does not walk
-  (√(3.5² + 3²) − 3.5 = 1.110 m) = 18.52 m / 3.4 = 5.45 s ≈ 327 frames, plus the frames of the room answer (measured 328).
+  0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up. Frames: 19.411 m less the flight's climb the ride does not walk
+  (√(3.5² + 3²) − 3.5 = 1.110 m) = 18.30 m / 3.4 = 5.38 s ≈ 323 frames, plus the frames of the room answer (measured 324).
 - **A5b** scenario `nav-up-rejected` (same request → 409): back to (97, −1), room r-a, view 0; the same click walks to the foot,
   the ride is refused (`Refused` → `link_refused`, the order aborted) → the click walk ends where it stands: `WalkOrderId`,
   `Route` and `VerticalRide` null, no order player left, y < 0.1, within 0.05 of the foot (101, 0, −3.3), room r-a; exactly one
@@ -1977,7 +1996,7 @@ and on its goal (no 0.2 m early arrival). `At(x, z)` snaps the avatar onto `Play
   click walks to the stair foot (within `LinkArriveM` 0.4 of (101, 0, −3.3)), where the order's ride is requested
   (`PlayerSteering.LinkRiding`, room still r-a, one request). Ten frames of key `w`: the order goes on, the figure holds
   (≤ 1e-4), and `WalkTo((97, −1))` is refused. The gate opens; with `w` held while `LinkRiding` (released after the ride)
-  the walk rides the flight and ends in the loft like A5: within 0.05 of (104, 2), room r-up, one request (measured 328 frames,
+  the walk rides the flight and ends in the loft like A5: within 0.05 of (104, 2), room r-up, one request (measured 324 frames,
   as A5 — the held key changes nothing).
 - **A5d** the same with the walk ended during the request (`CancelRoute()`, as a correction or the end of embodiment would):
   the answer (200) arrives after the ride was aborted → `EnterLinkRoomAsync` adopts nothing; room r-a, y < 0.1, no walk.
@@ -2004,13 +2023,56 @@ surfaces, every vertex 0.03 m above its source:
 - surface 0 (triangles, #3a7bd5 α 0.35): every polygon of the two storey region meshes as a fan, a polygon with n corners gives
   n − 2 triangles → vertex count = 3 · Σ(n − 2), Σ counted from `LocationNav.StoreyMeshes` (the baker's polygon split is not
   derived by hand; the check requires Σ > 0; measured 24);
-- surface 1 (triangles): T0 and T1 are one quad each (`NavBake.ThresholdMesh`, 4 corners) → 2 + 2 = 4 triangles, 12 vertices,
+- surface 1 (triangles): T0 and T1 are three quads each (neck and two funnels, `NavBake.ThresholdMesh`, 4 corners each) →
+  6 + 6 = 12 triangles, 36 vertices,
   T0 (doorway 0) first; T0's floor y 0 → vertex y 0.03; colour #3ad57b on, #d53a3a off;
 - surface 2 (lines, #e0c040): two links (stairs, lift) → 2 lines, 4 vertices; the first starts at its link's start y + 0.03.
 
 No lock → both thresholds green. `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → T0 red, T1 green in the frame of
 `SetLocks` (the overlay reads the state last written, `LocationNav.ThresholdEnabled`, not the server's getter, which answers the
 old state until the next sync); `LockState.None` → both green; `NavOverlayVisible = false` → the node is invisible.
+
+**`--check nav`, footprint and funnel part F1–F5 (fix plan "Kollision im nativen Client", `Check/NavFootprintCheck.cs`,
+`Core/Nav/PropFootprint.cs`, `tests/PropFootprintTests.cs`).** Furniture used to enter the navmesh as the WORLD AABB of the
+whole model (`ModelPlacement.Measure`), and a threshold was one rectangle W − 2r wide without a funnel. Now each placement's
+triangles (`Mesh.GetFaces`) are clipped to the band storey floor + 0.25 … + 1.8 and rastered in the prop's OWN horizontal
+frame (the x axis of its `Yaw` node in world, i.e. after prop and location yaw) on a 0.05 m grid that starts at the band
+geometry's own minimum; a cell is filled when marked (an edge point or an inside projection) or between marked cells in
+its row AND its column; equal runs of neighbouring rows merge into rectangles, the last row / column ends at the geometry's
+own maximum. Windows (`window:` ids) are left out (`NavSource.IsObstacleSpec`).
+
+Unit derivations (`PropFootprintTests`, band 0.25…1.8): a box 1.6 × 0.9 × 0.75 turned 0 / ±30 / 45° about (2, 3) → ONE
+rectangle with exactly the box's turned corners (± 1e-9), y 0.25…0.75, area 1.44; the one-piece L sofa (bars
+x −1.3…1.3, z −1…−0.1 and x −1.3…−0.4, z −1…1, h 0.85) at 0° / 45° → every L point covered, every point more than one cell
+(0.05) inside the free corner x −0.4…1.3, z −0.1…1 uncovered, its centre (0.45, 0.45) uncovered, area 3.33 … 3.33 + 0.05·(1.7
++ 1.1); a rug (y 0…0.02) and a lamp (y 1.9…2.2) → no footprint; a table (top 0.72…0.75 over 1.2 × 0.8, four 5 cm legs)
+→ one 1.2 × 0.8 rectangle, y 0.25…0.75; a cabinet of four upright sides only (0.6 × 0.4, y 0…2) → its inside filled, one
+rectangle of 0.24 m², y 0.25…1.8.
+
+On baked maps (an open scene: boundary and `floor_plan` x −8…8, z −8…8, no walls, frame (0, 0, 0)), r = 0.25:
+
+- **F1** the 1.6 × 0.9 × 0.75 box turned 30° once as the prop (yaw 30°) and once as the location (frame yaw π/6): along the
+  box's own outward normals, 7 samples per edge (1/8 … 7/8 of it), the first mesh point (probed in 2.5 mm steps, "on the
+  mesh" = closest point within 1 mm) is r = 0.25 off the face; accepted 0.24 … 0.35 (the probe step below; + 0.05 raster +
+  0.05 bake cell above). Measured 0.245 … 0.25 both ways; with the old AABB 0.32 … 0.96 (half extents 0.8·cos 30° +
+  0.45·sin 30° = 0.918 and 0.8·sin 30° + 0.45·cos 30° = 0.790 instead of 0.8 / 0.45).
+- **F2** the L sofa at 0° and 45°: the centre of the free inner corner (local (0.45, 0.45), 0.55 from the seat front z −0.1 and
+  0.85 from x −0.4, so 0.30 / 0.60 beyond the erosion) lies on the mesh (≤ 0.02); the seat fronts facing it (z −0.1 at
+  x 0.2 … 1.2, x −0.4 at z 0.3 … 0.75, all ≥ 0.6 from the inner corner) are ≤ 0.35 off the mesh along their normals.
+  Measured: on the mesh, fronts ≤ 0.303; with the old AABB (2.6 × 2.0 / its 45° box) the centre was 0.80 / 0.465 off the mesh.
+- **F3** two 1 × 1 boxes (local x −1.35…−0.35 and 0.35…1.35, z −0.5…0.5) turned 30°: the gap 0.7 − 2r = 0.2 stays
+  open; keys along its centre line (local x 0, from z −1.5, the `KeyWalk` below, 120 frames) reach local z ≥ 1.0 (measured
+  5.3, the end of the 120 frames); with the old AABBs (overlapping) the walk stopped at local z −0.54.
+- **F4** the nav world's T0 (no furniture), `KeyWalk`: per 60 Hz frame the lead max(3.4/60, `MinLead` 0.15) along +x, then
+  `Collide.ClampAgainstWalls` (r 0.25, the eased wall lines), then `PlayerSteering.ClampToNav`, then 3.4/60 m towards
+  the result; start (99.0, 2 + o) for o = −0.45 … 0.45 in 0.05 steps (19 runs, 300 frames); through = x > 100.6. Off centre
+  a walk now meets a funnel's 45° side and slides along it into the neck; the run is through for every |o| ≤ 0.40 — at least
+  17 of 19 (measured 17; ± 0.45 is the jamb line itself). Before: 9 of 19 (|o| ≥ 0.25 stopped at the storey edge x 99.65).
+  The funnel alone is not enough: a 0.15 m lead from inside the funnel (e.g. from (99.79, 2.274)) reaches the neck's depth
+  (x 99.94), whose nearest mesh point (99.94, 2.2) is 0.167 away — longer than the step, refused as "the far side of an
+  obstacle"; so `ClampToNav` tries the half and the quarter step last: (99.865, 2.274) slides to (99.846, 2.255) on the
+  slanted side, 0.059 ≤ 0.075.
+- **F5** the rug and the lamp of the unit tests have no footprint on this path either.
 
 **Embody checks on the navmesh (Task 6, review N-W3).** `EmbodyWalkCheck`, `EmbodyPositionCheck`, `EmbodyOffersCheck` and
 `EmbodyRoomsCheck` now wait (physics frames, ≤ 240) until the hall's navigation is swapped in, right after the build, so every
@@ -2039,7 +2101,7 @@ decision 9. Task 5 ran it with both bake modes (docs/superpowers/measurements/20
 the polygon bake passed N4–N7b with a largest N2 wall-probe edge error of 0.0016 m; the voxel (Recast) bake failed N4
 (its door corners at (99.625, 0.1, 1.8) / (100.375, 0.1, 1.8): one cell height above the floor and 0.025 off) with an edge
 error of 0.05 m. Polygon won on rule (a) alone, and on (b) by 0.048 m (≫ the 0.01 tie band); the voxel bake, its
-parameters (cells 0.1 / 0.1, margin 0.25) and `NavBakeMode` are gone, `NavBakeParams.Version` is 2. The tolerances
+parameters (cells 0.1 / 0.1, margin 0.25) and `NavBakeMode` are gone, `NavBakeParams.Version` was 2 (3 since the prop footprints and door funnels). The tolerances
 above (N2/N4/N5/N9: 0.05) stay, since the winner's measured edge deviation (0.0016) is far inside them. What stays is the
 measurement of the winner, one line per fixture:
 `[navcompare] fixture=<f> mode=polygon ms=<median of 5 synchronous bakes> polys=<n> edge_err=<m|-> paths=<ok|fail|-> thresholds_welded=<n>`.
@@ -2118,14 +2180,15 @@ Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.
 - **R7** (plan E3 Task 9) a server `walk` `ord-r7` for Uli r-a (97, −1) → r-up (104, 3, 2), issued 100, flip = eta =
   100 + 24.0573666 / 1.4 + 0.5 = **117.683833** (the server's room-chain estimate, Task 1 O2), delivered by the second poll
   at t = 0.5 together with the new room. The client walks its own navmesh path: in this world the bed narrows r-b, so
-  the path bends there — corners (97, 0, −1) (98.367, 0, 0.445) (99.649, 0, 1.8) (100.351, 0, 1.8) (100.721, 0, 1.283)
+  the path bends there — corners (97, 0, −1) (99.9, 0, 1.8) (100.1, 0, 1.8) (T0's neck) (100.35, 0, 1.55) (the `r-b`
+  funnel's outer corner: the straight line from the neck to (102, −0.5) is at z 1.497 < 1.55 at x 100.35)
   (102, 0, −0.5) (102, 0, −1.5) (101, 0, −3.3), the flight (101, 0, −3.3) → (104.5, 3, −3.3) √(3.5² + 3²) = 4.610,
-  then (104.376, 3, −1.988) (104, 3, 2): 1.989 + 1.866 + 0.702 + 0.636 + 2.194 + 1 + 2.059 + 4.610 + 1.318 + 4.006 =
-  **20.379 m** (the nav world's P2 19.630 has no bed in its way); it crosses x = 100 at z 1.8 (in T0), exactly ONE link
-  section (owner 65536); horizontally 20.379 − (4.610 − 3.5) = 19.269 m at 1.4 m/s (the NPC ride keeps the pace) →
-  the loop on the goal at 0.5 + 13.76 ≈ **14.28 s**, long before flip + 5 = 22.68 s; no `healed` event.
+  then (104, 3, 2): 4.031 + 0.2 + 0.354 + √(1.65² + 2.05²) 2.632 + 1 + 2.059 + 4.610 + 5.324 = **20.209 m** (measured
+  20.2087; 20.379 before the door funnel; the nav world's P2 19.411 has no bed in its way); it crosses x = 100 at z 1.8
+  (in T0), exactly ONE link section (owner 65536); horizontally 20.209 − (4.610 − 3.5) = 19.099 m at 1.4 m/s (the NPC
+  ride keeps the pace) → the loop on the goal at 0.5 + 13.64 ≈ **14.14 s**, long before flip + 5 = 22.68 s; no `healed` event.
 - **R7b** the same room change as a row WITHOUT order (poll 2 at t = 0.5: room r-up, pos (104, 2)) → a client-local
-  `walk` (`local:<n>`) over the same mesh: path length **20.379 ± 0.05**, every walk point on the mesh (≤ 0.05 m from
+  `walk` (`local:<n>`) over the same mesh: path length **20.209 ± 0.05**, every walk point on the mesh (≤ 0.05 m from
   `Closest`); at the goal it blends into the row's point (104, 3, 2) and the rows place the figure again.
 - **R14** the pair, then a follow order `ord-follow` for Uli alone (sequence loop only): no exit for Uli; a cancel for Ona
   alone (exit lie/laying 1.0 s, stand (103.05, 1.5)) plays exactly one exit, for Ona.

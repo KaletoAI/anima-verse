@@ -28,7 +28,8 @@ namespace AnimaNative.Tests;
 ///          rug x 96…98, y 0…0.02, z 1.25…2.75
 /// </code>
 /// With r = 0.25 (agent radius) and t = 0.2: a seal is the door gap (half length w/2 = 0.45 along the wall, half depth
-/// t/2 = 0.1 across), a threshold has half length w/2 − r = 0.2 and half depth t/2 + r = 0.35; the outer point of an
+/// t/2 = 0.1 across); a threshold is an hourglass — the neck ±(w/2 − r) = ±0.2 along, ±t/2 = ±0.1 across, and on each side
+/// a funnel from the wall face (±0.2 along) to t/2 + r = 0.35 across (±0.45 along); the outer point of an
 /// outside door is the threshold centre + outward normal · 0.35. Storey 0's walkable area is the boundary pushed out by
 /// r + 0.05 = 0.30. A wall / box whose top is ≤ floor + 0.25 or whose bottom is ≥ floor + 1.8 is no obstacle.
 /// </summary>
@@ -56,12 +57,12 @@ public class NavSourceTests
 
     private static readonly TileFrame Frame0 = new(new Vec3(100, 0, 0), 0);
 
-    private static readonly NavPropBox Armchair = new(0, new Vec3(96.6, 0, -2.4), new Vec3(97.4, 0.9, -1.6));
-    private static readonly NavPropBox Bed = new(0, new Vec3(103.3, 0, 0.5), new Vec3(104.7, 0.5, 2.5));
-    private static readonly NavPropBox Rug = new(0, new Vec3(96, 0, 1.25), new Vec3(98, 0.02, 2.75));
-    private static readonly NavPropBox[] Props = { Armchair, Bed, Rug };
+    private static readonly NavProp Armchair = NavProp.Box(0, new Vec3(96.6, 0, -2.4), new Vec3(97.4, 0.9, -1.6));
+    private static readonly NavProp Bed = NavProp.Box(0, new Vec3(103.3, 0, 0.5), new Vec3(104.7, 0.5, 2.5));
+    private static readonly NavProp Rug = NavProp.Box(0, new Vec3(96, 0, 1.25), new Vec3(98, 0.02, 2.75));
+    private static readonly NavProp[] Props = { Armchair, Bed, Rug };
 
-    private static NavSourceData Build(JsonNode? scene = null, TileFrame? frame = null, IReadOnlyList<NavPropBox>? props = null,
+    private static NavSourceData Build(JsonNode? scene = null, TileFrame? frame = null, IReadOnlyList<NavProp>? props = null,
                                        NavBakeParams? p = null)
     {
         var s = Parse(scene ?? SceneJson());
@@ -112,17 +113,32 @@ public class NavSourceTests
         return a / 2;
     }
 
-    /// <summary>Corner order (x0, z0) → (x1, z0) → (x1, z1) → (x0, z1), positive shoelace area.</summary>
+    /// <summary>
+    /// The neck (part 0): corner order (x0, z0) → (x1, z0) → (x1, z1) → (x0, z1), positive shoelace area; the two funnels:
+    /// four corners each, positive shoelace area, starting at the corner with the smallest x + z.
+    /// </summary>
     private static void AssertQuadOrder(NavThreshold t)
     {
-        var (x0, x1, z0, z1) = Bounds(t.Quad);
-        Assert.Equal(4, t.Quad.Length);
-        AssertPoint(t.Quad[0], x0, z0, 1e-9);
-        AssertPoint(t.Quad[1], x1, z0, 1e-9);
-        AssertPoint(t.Quad[2], x1, z1, 1e-9);
-        AssertPoint(t.Quad[3], x0, z1, 1e-9);
-        Assert.True(Shoelace(t.Quad) > 0);
+        Assert.Equal(3, t.Parts.Length);
+        var neck = t.Parts[0];
+        var (x0, x1, z0, z1) = Bounds(neck);
+        Assert.Equal(4, neck.Length);
+        AssertPoint(neck[0], x0, z0, 1e-9);
+        AssertPoint(neck[1], x1, z0, 1e-9);
+        AssertPoint(neck[2], x1, z1, 1e-9);
+        AssertPoint(neck[3], x0, z1, 1e-9);
+        foreach (var part in t.Parts)
+        {
+            Assert.Equal(4, part.Length);
+            Assert.True(Shoelace(part) > 0);
+            Assert.True(part.Skip(1).All(q => q.X + q.Z >= part[0].X + part[0].Z - 1e-9));
+        }
     }
+
+    /// <summary>The part whose corners are exactly these points (any order, ±1e-9).</summary>
+    private static void AssertPart(NavThreshold t, params (double X, double Z)[] corners)
+        => Assert.Contains(t.Parts, part => part.Length == corners.Length
+                                             && corners.All(c => part.Any(q => Math.Abs(q.X - c.X) < 1e-9 && Math.Abs(q.Z - c.Z) < 1e-9)));
 
     private static NavStoreySource Storey(NavSourceData d, int level) => d.Storeys.Single(s => s.Level == level);
 
@@ -206,7 +222,11 @@ public class NavSourceTests
         Assert.NotNull(ObstacleWith(Storey(d, 0), "seal", 99.9, 100.1, 1.55, 2.45));
         var t0 = Threshold(d, 0);
         Assert.Equal(0, t0.Level);
-        AssertBounds(t0.Quad, 99.65, 100.35, 1.8, 2.2);   // ±0.35 across, ±0.2 along
+        // neck ±0.1 across, ±0.2 along; funnels from the wall faces x 99.9 / 100.1 (±0.2) out to x 99.65 / 100.35 (±0.45)
+        AssertBounds(t0.Parts[0], 99.9, 100.1, 1.8, 2.2);
+        AssertPart(t0, (99.65, 1.55), (99.9, 1.8), (99.9, 2.2), (99.65, 2.45));
+        AssertPart(t0, (100.1, 1.8), (100.35, 1.55), (100.35, 2.45), (100.1, 2.2));
+        AssertBounds(t0.Parts.SelectMany(q => q), 99.65, 100.35, 1.55, 2.45);
         AssertEqual(0, t0.Y);
         Assert.Equal(new[] { "r-a", "r-b" }, t0.Rooms);
         Assert.False(t0.Outside);
@@ -219,7 +239,9 @@ public class NavSourceTests
         var d = Build();
         Assert.NotNull(ObstacleWith(Storey(d, 0), "seal", 96.55, 97.45, -4.1, -3.9));
         var t1 = Threshold(d, 1);
-        AssertBounds(t1.Quad, 96.8, 97.2, -4.35, -3.65);
+        AssertBounds(t1.Parts[0], 96.8, 97.2, -4.1, -3.9);
+        AssertPart(t1, (96.55, -4.35), (97.45, -4.35), (97.2, -4.1), (96.8, -4.1));
+        AssertPart(t1, (96.8, -3.9), (97.2, -3.9), (97.45, -3.65), (96.55, -3.65));
         Assert.Equal(new[] { "r-a" }, t1.Rooms);
         Assert.True(t1.Outside);
         Assert.NotNull(t1.OuterPoint);
@@ -367,7 +389,7 @@ public class NavSourceTests
     [Fact]
     public void FlatAndOverheadPropsAreNoObstacles()
     {
-        var lamp = new NavPropBox(0, new Vec3(102, 1.9, -1), new Vec3(102.5, 2.2, -0.5));
+        var lamp = NavProp.Box(0, new Vec3(102, 1.9, -1), new Vec3(102.5, 2.2, -0.5));
         var s0 = Storey(Build(props: new[] { Armchair, Bed, Rug, lamp }), 0);
         var props = s0.Obstacles.Where(o => o.Kind == "prop").ToList();
         Assert.Equal(2, props.Count);
@@ -380,12 +402,50 @@ public class NavSourceTests
     }
 
     [Fact]
+    public void PropOutlineIsPassedThrough()
+    {
+        // A footprint rectangle turned 30° (a 1.6 × 0.9 box at (102, 0)): the obstacle is its own outline, not a box around it.
+        double c = Math.Cos(Math.PI / 6), s = Math.Sin(Math.PI / 6);
+        P2 At(double x, double z) => new(102 + c * x - s * z, s * x + c * z);
+        var ring = new[] { At(-0.8, -0.45), At(0.8, -0.45), At(0.8, 0.45), At(-0.8, 0.45) };
+        var s0 = Storey(Build(props: new[] { new NavProp(0, 0.25, 0.75, ring) }), 0);
+        var prop = Assert.Single(s0.Obstacles, o => o.Kind == "prop");
+        Assert.Equal(4, prop.Outline.Length);
+        foreach (var q in ring) Assert.Contains(prop.Outline, o => Math.Abs(o.X - q.X) < 1e-12 && Math.Abs(o.Z - q.Z) < 1e-12);
+        Assert.True(Shoelace(prop.Outline) > 0);
+        AssertEqual(0.25, prop.BottomY);
+        AssertEqual(0.75, prop.TopY);
+    }
+
+    [Fact]
+    public void WindowsDoorsAndWalkablesAreNoObstacleSpecs()
+    {
+        static SceneModelSpec Spec(string role, string id) => new(role, id, "", false, new Dictionary<string, string>(), null, 0,
+                                                                     0, 0, 0, 0, 1, "xyz", null, 0, 0, 0);
+        Assert.True(NavSource.IsObstacleSpec(Spec("prop", "chair")));
+        Assert.False(NavSource.IsObstacleSpec(Spec("prop", "window:w-3")));   // the wall it sits in already blocks
+        Assert.False(NavSource.IsObstacleSpec(Spec("prop", "chair") with { Walkable = true }));
+        Assert.False(NavSource.IsObstacleSpec(Spec("room", "chair")));
+    }
+
+    [Fact]
+    public void StoreyFloorHeights()
+    {
+        var s = Parse(SceneJson());
+        AssertEqual(0, NavSource.StoreyFloorY(s, Frame0, 0));
+        AssertEqual(3, NavSource.StoreyFloorY(s, Frame0, 1));                                   // the plate top
+        AssertEqual(3.5, NavSource.StoreyFloorY(s, new TileFrame(new Vec3(100, 0.5, 0), 0), 1)); // + the datum
+    }
+
+    [Fact]
     public void YawTurnsThresholdIntoWorld()
     {
-        // yaw π/2: TileToWorld(lx, lz) = (100 + lz, ·, −lx); T0 local x −0.35…0.35, z 1.8…2.2
+        // yaw π/2: TileToWorld(lx, lz) = (100 + lz, ·, −lx); T0's neck local x −0.1…0.1, z 1.8…2.2, the whole hourglass
+        // local x −0.35…0.35, z 1.55…2.45
         var d = Build(frame: new TileFrame(new Vec3(100, 0, 0), Math.PI / 2));
         var t0 = Threshold(d, 0);
-        AssertBounds(t0.Quad, 101.8, 102.2, -0.35, 0.35);
+        AssertBounds(t0.Parts[0], 101.8, 102.2, -0.1, 0.1);
+        AssertBounds(t0.Parts.SelectMany(q => q), 101.55, 102.45, -0.35, 0.35);
         AssertQuadOrder(t0);
     }
 
@@ -396,7 +456,7 @@ public class NavSourceTests
         var b = Build();
         Assert.Equal(a.Fingerprint, b.Fingerprint);
         Assert.Matches("^[0-9a-f]{64}$", a.Fingerprint);
-        var moved = new NavPropBox(0, new Vec3(96.61, 0, -2.4), new Vec3(97.41, 0.9, -1.6));
+        var moved = NavProp.Box(0, new Vec3(96.61, 0, -2.4), new Vec3(97.41, 0.9, -1.6));
         Assert.NotEqual(a.Fingerprint, Build(props: new[] { moved, Bed, Rug }).Fingerprint);
         // The bake parameters are part of the key: other cells, another fingerprint.
         Assert.NotEqual(a.Fingerprint, Build(p: NavBakeParams.Create(0.1, 0.1)).Fingerprint);
@@ -428,13 +488,14 @@ public class NavSourceTests
         AssertEqual(0.05, p.CellSize);
         AssertEqual(0.05, p.CellHeight);
         AssertEqual(0.05, NavBakeParams.Create(double.NaN, double.PositiveInfinity).CellSize);
-        // The one parameter set after Task 5 (the polygon bake won): cells 0.05 / 0.05, edge margin 0.1, version 2.
+        // The one parameter set after Task 5 (the polygon bake won): cells 0.05 / 0.05, edge margin 0.1; version 3 since
+        // the prop footprints and the door funnels (fix plan "Kollision im nativen Client").
         var poly = NavBakeParams.Current;
         Assert.Equal(NavBakeParams.Create(0.05, 0.05), poly);
         AssertEqual(0.05, poly.CellSize);
         AssertEqual(0.05, poly.CellHeight);
         AssertEqual(0.1, poly.EdgeConnectionMargin);
-        Assert.Equal(2, NavBakeParams.Version);
+        Assert.Equal(3, NavBakeParams.Version);
         AssertEqual(0.25, poly.AgentRadius);
         AssertEqual(1.8, poly.AgentHeight);
         AssertEqual(0.25, poly.AgentMaxClimb);

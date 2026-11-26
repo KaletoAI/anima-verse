@@ -121,6 +121,7 @@ public sealed partial class WorldBuilder
         st.RoomFloors.AddRange(floors);
 
         var measured = slot.PropBoxes = MeasurePropBoxes(slot);
+        slot.NavFootprints = MeasureNavFootprints(slot, scene, measured);
         st.DeriveAll(roomId => RoomPropBoxes(measured, roomId), slot.Places);
         RequestNavBake(slot);
     }
@@ -128,7 +129,7 @@ public sealed partial class WorldBuilder
     /// <summary>
     /// The box measure of <c>deriveRoomSpots</c>, done once per <see cref="DeriveStands"/>: the WORLD bounding box of every
     /// placed prop (a stand-in box too; an object without a mesh has none). The room stands
-    /// (<see cref="RoomPropBoxes"/>) and the navigation (<see cref="NavPropBoxes"/>) both read this list.
+    /// (<see cref="RoomPropBoxes"/>) reads this list; the navigation reads <see cref="MeasureNavFootprints"/>.
     /// </summary>
     private static List<MeasuredPropBox> MeasurePropBoxes(LocationSlot slot)
     {
@@ -147,6 +148,65 @@ public sealed partial class WorldBuilder
         return boxes;
     }
 
+    /// <summary>
+    /// Fix plan step 1: the <see cref="PropFootprint"/> of every placement the navigation looks at
+    /// (<see cref="NavSource.IsObstacleSpec"/>), from the mesh triangles in world metres (<c>Mesh.GetFaces</c>), the band
+    /// <c>storey floor + climb … storey floor + agent height</c> (<see cref="NavSource.StoreyFloorY"/>), in the frame of
+    /// the placement's yaw node (its x axis after the prop's and the location's yaw). Each result is kept per node instance
+    /// and reused while the node's world transform and the band stay the same.
+    /// </summary>
+    private static List<MeasuredFootprint> MeasureNavFootprints(LocationSlot slot, ScenePayload scene, IReadOnlyList<MeasuredPropBox> boxes)
+    {
+        var group = slot.Group;
+        var p = Nav.NavBakeParams.Current;
+        var result = new List<MeasuredFootprint>();
+        var seen = new HashSet<ulong>();
+        foreach (var rec in slot.Placements)
+        {
+            if (!Nav.NavSource.IsObstacleSpec(rec.Spec) || rec.Node is not { } node || !GodotObject.IsInstanceValid(node)) continue;
+            var xf = group.Transform * ChainTo(node.GetParent(), group) * node.Transform;
+            double floor = Nav.NavSource.StoreyFloorY(scene, slot.Stands.Frame, rec.Spec.Level);
+            double low = floor + p.AgentMaxClimb, high = floor + p.AgentHeight;
+            ulong id = node.GetInstanceId();
+            seen.Add(id);
+            Nav.PropFootprint.Result? fp;
+            if (slot.FootprintCache.TryGetValue(id, out var hit) && hit.Xf == xf && hit.Low == low && hit.High == high) fp = hit.Footprint;
+            else
+            {
+                var tris = new List<Overview.Vec3>();
+                CollectFaces(node, xf, tris);
+                if (tris.Count == 0) continue;   // no mesh: no outline (as the box measure skips it)
+                var basis = (node.GetNodeOrNull<Node3D>("Yaw") is { } yaw ? xf * yaw.Transform : xf).Basis;
+                fp = Nav.PropFootprint.Of(tris, new P2(basis.X.X, basis.X.Z), low, high);
+                slot.FootprintCache[id] = (xf, low, high, fp);
+            }
+            var box = boxes.FirstOrDefault(b => ReferenceEquals(b.Spec, rec.Spec));
+            double aabb = box is null ? 0 : (box.Max.X - box.Min.X) * (box.Max.Z - box.Min.Z);
+            result.Add(new MeasuredFootprint(rec.Spec, fp, aabb));
+        }
+        foreach (var stale in slot.FootprintCache.Keys.Where(k => !seen.Contains(k)).ToList()) slot.FootprintCache.Remove(stale);
+        return result;
+    }
+
+    /// <summary>Every mesh triangle under <paramref name="node"/> in the frame <paramref name="xf"/> maps into (its own transform included).</summary>
+    private static void CollectFaces(Node node, Transform3D xf, List<Overview.Vec3> tris)
+    {
+        var faces = node switch
+        {
+            MeshInstance3D mi when mi.Mesh is not null => mi.Mesh.GetFaces(),
+            ImporterMeshInstance3D imi when imi.Mesh is not null => imi.Mesh.GetMesh()?.GetFaces(),
+            _ => null,
+        };
+        if (faces is not null)
+            foreach (var f in faces)
+            {
+                var w = xf * f;
+                tris.Add(new Overview.Vec3(w.X, w.Y, w.Z));
+            }
+        foreach (var child in node.GetChildren())
+            if (child is Node3D c) CollectFaces(c, xf * c.Transform, tris);
+    }
+
     /// <summary><c>roomProps</c>: the measured boxes of the room's props.</summary>
     private static List<SpotBox> RoomPropBoxes(IReadOnlyList<MeasuredPropBox> measured, string roomId)
         => measured.Where(b => b.Spec.RoomId == roomId).Select(b => new SpotBox(b.Min, b.Max)).ToList();
@@ -154,3 +214,6 @@ public sealed partial class WorldBuilder
 
 /// <summary>One placed prop's measured world box (<see cref="WorldBuilder.DeriveStands"/>).</summary>
 internal sealed record MeasuredPropBox(SceneModelSpec Spec, Overview.Vec3 Min, Overview.Vec3 Max);
+
+/// <summary>One furniture placement's navigation outline (null: nothing in the walking band) and its old AABB area (log).</summary>
+internal sealed record MeasuredFootprint(SceneModelSpec Spec, Nav.PropFootprint.Result? Footprint, double AabbArea);

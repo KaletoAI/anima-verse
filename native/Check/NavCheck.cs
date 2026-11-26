@@ -19,7 +19,8 @@ namespace AnimaNative.Check;
 /// <summary>
 /// <c>--check nav</c> (part of every <c>--check</c>, plan 2026-11-25-client-ausfuehrung-e2 Task 3): the Godot bake and
 /// navigation map of the nav world, built straight from its source — <c>fixtures/nav/scene_loc-nav.json</c> at world
-/// (100, 0), yaw 0, plus the three hand boxes (armchair, bed, rug). Every number is derived by hand in
+/// (100, 0), yaw 0, plus the three hand boxes (armchair, bed, rug), then the footprint/funnel part F1–F5
+/// (<see cref="NavFootprintCheck"/>). Every number is derived by hand in
 /// native/fixtures/README.md, section "Nav world" (the derived values and the check sections N0–N8 there); positions
 /// are checked within 0.05 m, path lengths within ±0.05 (a navmesh is never compared bit for bit):
 ///
@@ -30,8 +31,8 @@ namespace AnimaNative.Check;
 ///      off that face — the largest deviation is logged as the edge error;
 ///   N3 both ends of every link lie within the link connection radius of the mesh; the armchair access point is 0.10
 ///      off the mesh and the last straight piece to it crosses no wall;
-///   N4 P1 through the door threshold T0 (8.410); N5 P2 up the stairs (19.630, one link point, owner 65536) and back;
-///   N6 stairs off → P3 over the lift (14.279, owner 131200, entry (105.2, 0, 3.2)); N7 a lock on r-b closes T0, the
+///   N4 P1 through the door threshold T0's neck (8.262); N5 P2 up the stairs (19.411, one link point, owner 65536) and back;
+///   N6 stairs off → P3 over the lift (14.215, owner 131200, entry (105.2, 0, 3.2)); N7 a lock on r-b closes T0, the
 ///      avatar's own room is never closed; N7b an unchanged lock or link state changes nothing and keeps Ready;
 ///   N8 Free() releases the map (the active map count is back to where it was after two physics frames);
 ///   N14 the clamp on a sloped one-polygon mesh with the avatar above its plane (final review E2, I-1, <see cref="SlopeAsync"/>).
@@ -39,7 +40,7 @@ namespace AnimaNative.Check;
 /// Task 4 then builds the same scene as a world through <see cref="WorldBuilder"/> (<c>fixtures/nav/</c>, goto "Navhaus")
 /// and lets the real residency path bake it (the check never requests a bake itself):
 ///
-///   N9  the swapped navigation: three measured furniture boxes (± 0.01), the Task 1 fingerprint, P1 8.410 again;
+///   N9  the swapped navigation: two measured furniture outlines (± 0.01; the rug has none), the Task 1 fingerprint, P1 8.262 again;
 ///   N10 an unchanged DeriveStands bakes nothing; the armchair moved 0.5 m → a new map, the old one freed;
 ///   N11 a bake in flight while the detail unmounts → no navigation, no subscription, active maps back to the start;
 ///   N12 a lock on r-b keeps NavFor in its frame, closes T0, survives a rebake (T0 of the new map off), unlock opens it;
@@ -58,15 +59,15 @@ public static class NavCheck
     private const double Tol = 0.05;
     private const int MaxReadyFrames = 120;
     private const ulong Stairs = 65536, Lift = 131200;
-    private const double P1Len = 8.410382, P2Len = 19.629751, P3Len = 14.279062;
+    private const double P1Len = 8.262258, P2Len = 19.411350, P3Len = 14.214910;
     private static readonly Vec3 Start = new(97, 0, -1), P1End = new(103, 0, -1), Loft = new(104, 3, 2);
 
     // The three measured furniture boxes of the README table (world metres).
-    private static readonly NavPropBox[] Boxes =
+    private static readonly NavProp[] Boxes =
     {
-        new(0, new Vec3(96.6, 0, -2.4), new Vec3(97.4, 0.9, -1.6)),     // armchair
-        new(0, new Vec3(103.3, 0, 0.5), new Vec3(104.7, 0.5, 2.5)),     // bed
-        new(0, new Vec3(96, 0, 1.25), new Vec3(98, 0.02, 2.75)),        // rug (no obstacle: 0.02 ≤ climb)
+        NavProp.Box(0, new Vec3(96.6, 0, -2.4), new Vec3(97.4, 0.9, -1.6)),     // armchair
+        NavProp.Box(0, new Vec3(103.3, 0, 0.5), new Vec3(104.7, 0.5, 2.5)),     // bed
+        NavProp.Box(0, new Vec3(96, 0, 1.25), new Vec3(98, 0.02, 2.75)),        // rug (no obstacle: 0.02 ≤ climb)
     };
 
     public static async Task<string> RunAsync(Node3D host, string fixtures)
@@ -148,8 +149,9 @@ public static class NavCheck
             var slopePart = await SlopeAsync(host);
             var worldPart = await WorldAsync(host, fixtures);
             var avatarPart = await AvatarAsync(host, fixtures);
+            var footprintPart = await NavFootprintCheck.RunAsync(host, fixtures);
             return $"nav regions={nav.Storeys.Count} thresholds={nav.Thresholds.Count} links={nav.Links.Count} p1={p1.Length:0.###} "
-                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {slopePart}; {worldPart}; {avatarPart}";
+                   + $"p2={p2.Length:0.###} p3={p3.Length:0.###} edge_error={edgeError:0.###} maps={mapsAfter}; {slopePart}; {worldPart}; {avatarPart}; {footprintPart}";
         }
         finally
         {
@@ -166,7 +168,7 @@ public static class NavCheck
         // ---- N4 P1 ----
         var p1 = nav.Query(Start, P1End);
         Near("N4 P1 length", p1.Length, P1Len, Tol);
-        Expect("N4 P1 through T0's corners", Has(p1, new Vec3(99.65, 0, 1.8)) && Has(p1, new Vec3(100.35, 0, 1.8)), Pts(p1));
+        Expect("N4 P1 through T0's neck corners", Has(p1, new Vec3(99.9, 0, 1.8)) && Has(p1, new Vec3(100.1, 0, 1.8)), Pts(p1));
         Expect("N4 P1 no link", p1.Owners.All(o => o == 0), Pts(p1));
 
         // ---- N5 P2 and back ----
@@ -242,12 +244,12 @@ public static class NavCheck
     /// </summary>
     public static async Task<string> RunCompareAsync(Node3D host, string fixtures)
     {
-        var rows = new (string Fixture, string File, TileFrame Frame, NavPropBox[] Boxes)[]
+        var rows = new (string Fixture, string File, TileFrame Frame, NavProp[] Boxes)[]
         {
             ("nav", "nav/scene_loc-nav.json", new TileFrame(new Vec3(100, 0, 0), 0), Boxes),
-            ("walk", "walk/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
-            ("embody", "embody/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
-            ("storeys", "storeys/scene_loc-tower.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavPropBox>()),
+            ("walk", "walk/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavProp>()),
+            ("embody", "embody/scene_loc-hall.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavProp>()),
+            ("storeys", "storeys/scene_loc-tower.json", new TileFrame(new Vec3(0, 0, 0), 0), Array.Empty<NavProp>()),
         };
         var p = NavBakeParams.Current;
         double total = 0;
@@ -328,12 +330,15 @@ public static class NavCheck
             Expect("N13 unsubscribed once no map is pending", !builder.NavMapChangedSubscribed, "");
 
             // ---- N9 the baked navigation of the mount ----
-            var boxes = builder.NavPropBoxes(slot);
-            Eq("N9 three furniture boxes", boxes.Count, 3);
-            foreach (var want in Boxes)
-                Expect($"N9 box {Fmt(want.Min)}…{Fmt(want.Max)} measured",
-                       boxes.Any(b => b.Level == want.Level && Dist(b.Min, want.Min) <= 0.01 && Dist(b.Max, want.Max) <= 0.01),
-                       string.Join(" ", boxes.Select(b => $"{b.Level}:{Fmt(b.Min)}…{Fmt(b.Max)}")));
+            // The footprints: one rectangle each for the armchair and the bed (their band parts y 0.25…0.9 / 0.25…0.5), none
+            // for the rug (its top 0.02 is below the band) — README "Nav world", N9.
+            var boxes = builder.NavProps(slot);
+            Eq("N9 two furniture outlines", boxes.Count, 2);
+            foreach (var (want, top) in new[] { (Boxes[0], 0.9), (Boxes[1], 0.5) })
+                Expect($"N9 outline {OutlineText(want)} measured",
+                       boxes.Any(b => b.Level == want.Level && SameBounds(b.Outline, want.Outline, 0.01)
+                                      && Math.Abs(b.BottomY - 0.25) <= 0.01 && Math.Abs(b.TopY - top) <= 0.01),
+                       string.Join(" ", boxes.Select(OutlineText)));
             var scene = slot.Scene!;
             var frame = new TileFrame(new Vec3(100, 0, 0), 0);
             var p = NavBakeParams.Current;
@@ -354,9 +359,10 @@ public static class NavCheck
             int mapsMid = ActiveMaps();
             chair.Node!.Position += new Vector3(0.5f, 0, 0);
             builder.DeriveStands(slot);
-            var moved = builder.NavPropBoxes(slot).Where(b => b.Max.Y > 0.8).ToList();
-            Expect("N10 the armchair box moved by 0.5", moved.Count == 1 && Math.Abs(moved[0].Min.X - 97.1) <= 0.01 && Math.Abs(moved[0].Max.X - 97.9) <= 0.01,
-                   string.Join(" ", moved.Select(b => $"{Fmt(b.Min)}…{Fmt(b.Max)}")));
+            var moved = builder.NavProps(slot).Where(b => b.TopY > 0.8).ToList();
+            Expect("N10 the armchair outline moved by 0.5", moved.Count == 1 && Math.Abs(moved[0].Outline.Min(q => q.X) - 97.1) <= 0.01
+                                                                      && Math.Abs(moved[0].Outline.Max(q => q.X) - 97.9) <= 0.01,
+                   string.Join(" ", moved.Select(OutlineText)));
             var nav2 = await AwaitNav(host, builder, slot, map0, "N10");
             Expect("N10 a new fingerprint", nav2.Fingerprint != nav.Fingerprint, "");
             await PhysicsFrames(host, 2);
@@ -537,15 +543,15 @@ public static class NavCheck
             }
             var corners = plan1?.Steps.OfType<AnimaNative.Nav.NavWalk>().SelectMany(w => w.Points).ToList() ?? new List<Vec3>();
             string cs = string.Join(" ", corners.Select(Fmt));
-            Expect("A1 the walk's plan has the corner (99.65, 1.8)", corners.Any(c => Math.Abs(c.X - 99.65) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
-            Expect("A1 the walk's plan has the corner (100.35, 1.8)", corners.Any(c => Math.Abs(c.X - 100.35) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
-            Near("A1 the walk's plan is P1 (8.410)", plan1?.Length ?? -1, P1Len, Tol);
-            // 8.410 m at the avatar's 3.4 m/s = 2.474 s → the frame that lands on the goal is frame ⌈2.474 · 60⌉ = 149;
+            Expect("A1 the walk's plan has the neck corner (99.9, 1.8)", corners.Any(c => Math.Abs(c.X - 99.9) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Expect("A1 the walk's plan has the neck corner (100.1, 1.8)", corners.Any(c => Math.Abs(c.X - 100.1) <= Tol && Math.Abs(c.Z - 1.8) <= Tol), cs);
+            Near("A1 the walk's plan is P1 (8.262)", plan1?.Length ?? -1, P1Len, Tol);
+            // 8.262 m at the avatar's 3.4 m/s = 2.430 s → the frame that lands on the goal is frame ⌈2.430 · 60⌉ = 146;
             // ± 0.1 s = ± 6 frames (README "Nav world", A1).
-            Expect("A1 arrives on the goal at frame 149 ± 6", steering.WalkOrderId is null && Horizontal(Pos(), P1End) <= Tol && Math.Abs(Pos().Y) <= 0.2
-                   && Math.Abs(a1 - 149) <= 6, $"{a1} frames, at {Fmt(Pos())}");
+            Expect("A1 arrives on the goal at frame 146 ± 6", steering.WalkOrderId is null && Horizontal(Pos(), P1End) <= Tol && Math.Abs(Pos().Y) <= 0.2
+                   && Math.Abs(a1 - 146) <= 6, $"{a1} frames, at {Fmt(Pos())}");
             // The door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45); the walk lands on every corner, so it
-            // crosses x 100 on the segment (99.65, 1.8) → (100.35, 1.8): at z 1.8 (README "Nav world", A1).
+            // crosses x 100 on the neck segment (99.9, 1.8) → (100.1, 1.8): at z 1.8 (README "Nav world", A1).
             Expect("A1 crosses x 100 through the door at z 1.8", crossZ is { } cz && Math.Abs(cz - 1.8) <= Tol, $"z {crossZ}");
 
             // ---- A2 the clamp at the armchair; A2b out of the chair ----
@@ -604,7 +610,7 @@ public static class NavCheck
             var owners = plan5?.Steps.OfType<NavLink>().Select(l => l.Owner).ToHashSet() ?? new HashSet<ulong>();
             Expect("A5 exactly one enter-room r-up", source.RoomRequests.SequenceEqual(new[] { "r-up" }), string.Join(",", source.RoomRequests));
             Expect("A5 one link section, the stairs 65536", owners.SetEquals(new ulong[] { Stairs }), string.Join(",", owners));
-            Near("A5 the walk's plan is P2 (19.630)", plan5?.Length ?? -1, P2Len, Tol);
+            Near("A5 the walk's plan is P2 (19.411)", plan5?.Length ?? -1, P2Len, Tol);
             Expect("A5 the walk order rode the flight after the room was entered", rode && roomOnFlight == "r-up" && steering.VerticalRide is null,
                    $"rode {rode} room on the flight {roomOnFlight}");
             double loftY = builder.PlayerFloorY(slot, "r-up", 104, 2);
@@ -763,7 +769,7 @@ public static class NavCheck
     /// <summary>
     /// O1 the F9 overlay (plan E2 Task 7) on the open location's swapped navigation; hand derivation in native/fixtures/README.md,
     /// section "Nav world" (O1): one mesh of three surfaces — the storeys as triangle fans (Σ(corners − 2) over every polygon
-    /// of the region meshes), the two thresholds T0/T1 as 2 + 2 triangles, the two links as 2 lines (4 vertices); everything
+    /// of the region meshes), the two thresholds T0/T1 as 6 + 6 triangles (three parts of 2 each), the two links as 2 lines (4 vertices); everything
     /// 0.03 m above its source (T0's floor y 0 → 0.03). A lock on r-b from r-a turns T0 red (#d53a3a) in the frame of
     /// SetLocks, T1 stays green (#3ad57b); no lock → both green; hidden → the node is invisible. Returns the storey triangles.
     /// </summary>
@@ -784,7 +790,7 @@ public static class NavCheck
                mesh.SurfaceGetPrimitiveType(0) == Mesh.PrimitiveType.Triangles && mesh.SurfaceGetPrimitiveType(1) == Mesh.PrimitiveType.Triangles
                && mesh.SurfaceGetPrimitiveType(2) == Mesh.PrimitiveType.Lines, "");
         Eq("O1 storey triangles = Σ(corners − 2)", mesh.SurfaceGetArrayLen(0), 3 * want);
-        Eq("O1 threshold triangles (T0, T1: 2 + 2)", mesh.SurfaceGetArrayLen(1), 3 * 4);
+        Eq("O1 threshold triangles (T0, T1: 6 + 6)", mesh.SurfaceGetArrayLen(1), 3 * 12);
         Eq("O1 link line vertices (2 lines)", mesh.SurfaceGetArrayLen(2), 4);
         var tv = mesh.SurfaceGetArrays(1)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
         Near("O1 T0 drawn 0.03 above its floor y 0", tv[0].Y, 0.03, 1e-4);
@@ -805,14 +811,14 @@ public static class NavCheck
         return want;
     }
 
-    /// <summary>The threshold surface's vertex colours: the first six are T0's (doorway 0), the next six T1's (RGB within 0.01).</summary>
+    /// <summary>The threshold surface's vertex colours: the first 18 are T0's (doorway 0), the next 18 T1's (RGB within 0.01).</summary>
     private static void ThresholdColors(string what, WorldBuilder builder, Color t0, Color t1)
     {
         var mesh = (ArrayMesh)builder.NavOverlayNode!.Mesh;
         var colors = mesh.SurfaceGetArrays(1)[(int)Mesh.ArrayType.Color].AsColorArray();
         static bool Rgb(Color a, Color b) => Math.Abs(a.R - b.R) <= 0.01 && Math.Abs(a.G - b.G) <= 0.01 && Math.Abs(a.B - b.B) <= 0.01;
         Expect($"{what}: T0 {t0.ToHtml(false)}, T1 {t1.ToHtml(false)}",
-               colors.Length == 12 && colors.Take(6).All(c => Rgb(c, t0)) && colors.Skip(6).All(c => Rgb(c, t1)),
+               colors.Length == 36 && colors.Take(18).All(c => Rgb(c, t0)) && colors.Skip(18).All(c => Rgb(c, t1)),
                string.Join(" ", colors.Select(c => c.ToHtml(false))));
     }
 
@@ -951,6 +957,11 @@ public static class NavCheck
     }
 
     private static bool Has(NavPath path, Vec3 p) => path.Points.Any(q => Dist(q, p) <= Tol);
+    private static bool SameBounds(P2[] a, P2[] b, double tol)
+        => Math.Abs(a.Min(q => q.X) - b.Min(q => q.X)) <= tol && Math.Abs(a.Max(q => q.X) - b.Max(q => q.X)) <= tol
+        && Math.Abs(a.Min(q => q.Z) - b.Min(q => q.Z)) <= tol && Math.Abs(a.Max(q => q.Z) - b.Max(q => q.Z)) <= tol;
+    private static string OutlineText(NavProp b)
+        => $"{b.Level}:x {b.Outline.Min(q => q.X):0.###}…{b.Outline.Max(q => q.X):0.###} z {b.Outline.Min(q => q.Z):0.###}…{b.Outline.Max(q => q.Z):0.###} y {b.BottomY:0.###}…{b.TopY:0.###}";
     private static double Dist(Vec3 a, Vec3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z));
     private static Vec3 V(Vector3 v) => new(v.X, v.Y, v.Z);
     private static string Fmt(Vec3 v) => $"({v.X:0.###}, {v.Y:0.###}, {v.Z:0.###})";

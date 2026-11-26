@@ -9,7 +9,7 @@ namespace AnimaNative.World;
 /// F9: the navigation of the open location drawn over the scene (plan 2026-11-25-client-ausfuehrung-e2, Task 7). One
 /// <see cref="ArrayMesh"/> with three surfaces, every vertex <see cref="Lift"/> above its source:
 ///   0 the storeys — every polygon of every storey region mesh as a triangle fan (corners − 2 triangles), #3a7bd5, alpha 0.35;
-///   1 the thresholds — the same fans of each threshold quad, #3ad57b while the region is on, #d53a3a while a lock has it off
+///   1 the thresholds — the same fans of each threshold part (neck and two funnels), #3ad57b while the region is on, #d53a3a while a lock has it off
 ///     (<see cref="LocationNav.ThresholdEnabled"/>: the state last written, so a lock shows in the frame it is set);
 ///   2 the links — one line from start to end per stair flight / lift hop, #e0c040.
 /// Vertices are world metres (the regions carry no transform), so the node sits at the origin of the locations root.
@@ -58,13 +58,13 @@ public sealed partial class NavOverlay : MeshInstance3D
         foreach (var t in nav.Source.Thresholds.OrderBy(t => t.Doorway))
         {
             var color = nav.ThresholdEnabled(t.Doorway) ? OpenColor : LockedColor;
-            var q = t.Quad;
-            for (int k = 1; k + 1 < q.Length; k++)
-                foreach (var p in new[] { q[0], q[k], q[k + 1] })
-                {
-                    doorV.Add(new Vector3((float)p.X, (float)t.Y + Lift, (float)p.Z));
-                    doorC.Add(color);
-                }
+            foreach (var q in t.Parts)
+                for (int k = 1; k + 1 < q.Length; k++)
+                    foreach (var p in new[] { q[0], q[k], q[k + 1] })
+                    {
+                        doorV.Add(new Vector3((float)p.X, (float)t.Y + Lift, (float)p.Z));
+                        doorC.Add(color);
+                    }
         }
         Add(mesh, Mesh.PrimitiveType.Triangles, doorV, doorC, "thresholds");
 

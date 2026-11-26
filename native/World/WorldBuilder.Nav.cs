@@ -161,12 +161,15 @@ public sealed partial class WorldBuilder
             : Array.Empty<P2>();
 
     /// <summary>
-    /// Decision 8: the measured world boxes of the slot's furniture (role prop, no door, not walkable), from the one
-    /// measurement of the last <see cref="DeriveStands"/>; <c>Level</c> = the spec's storey.
+    /// Decision 8 with the fix plan's step 1: the furniture of the slot (<see cref="NavSource.IsObstacleSpec"/>: role prop,
+    /// no door, not walkable, no window) as its real outline — one entry per rectangle of each placement's
+    /// <see cref="PropFootprint"/>, measured in the last <see cref="DeriveStands"/>; <c>Level</c> = the spec's storey. A
+    /// placement with nothing in the walking band (a rug, a ceiling lamp) gives none.
     /// </summary>
-    public IReadOnlyList<NavPropBox> NavPropBoxes(LocationSlot slot)
-        => slot.PropBoxes.Where(b => b.Spec.Role == "prop" && b.Spec.Door is null && !b.Spec.Walkable)
-                         .Select(b => new NavPropBox(b.Spec.Level, b.Min, b.Max)).ToList();
+    public IReadOnlyList<NavProp> NavProps(LocationSlot slot)
+        => slot.NavFootprints.Where(f => f.Footprint is not null)
+               .SelectMany(f => f.Footprint!.Outlines.Select(o => new NavProp(f.Spec.Level, f.Footprint.BottomY, f.Footprint.TopY, o)))
+               .ToList();
 
     /// <summary>
     /// Decision 5: bake the slot's navigation if its source changed. Not near or nothing walkable → released; the same
@@ -181,7 +184,7 @@ public sealed partial class WorldBuilder
             return;
         }
         var p = NavBakeParams.Current;
-        var src = NavSource.Build(scene, slot.Stands.Frame, slot.Places, NavPropBoxes(slot), slot.IsBuilding, p);
+        var src = NavSource.Build(scene, slot.Stands.Frame, slot.Places, NavProps(slot), slot.IsBuilding, p);
         if (src.IsEmpty)
         {
             ReleaseNav(slot);
@@ -200,6 +203,7 @@ public sealed partial class WorldBuilder
         if (_navPending.TryGetValue(slot, out var pending) && pending.Nav.Fingerprint == src.Fingerprint) return;
 
         var watch = Stopwatch.StartNew();
+        LogNavProps(slot);
         if (CachedNav(src.Fingerprint) is { } meshes)
         {
             LogBake(slot, src, watch, hit: true);
@@ -370,6 +374,19 @@ public sealed partial class WorldBuilder
             _navCache.Remove(_navCacheOrder.Last!.Value);
             _navCacheOrder.RemoveLast();
         }
+    }
+
+    /// <summary>
+    /// Fix plan step 0, one line per bake: the location's yaw (the frame of the tile, degrees), the furniture placements the
+    /// navigation looks at, the summed area of their old world AABBs and of their footprint rectangles (m²) — the AABB grows
+    /// with the yaw of prop and location, the footprint does not.
+    /// </summary>
+    private void LogNavProps(LocationSlot slot)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double aabb = slot.NavFootprints.Sum(f => f.AabbArea), real = slot.NavFootprints.Sum(f => f.Footprint?.Area ?? 0);
+        _log(string.Format(inv, "[nav] props loc={0} yaw_deg={1:0.##} props={2} aabb_m2={3:0.##} footprint_m2={4:0.##}",
+                           slot.Loc.Id, slot.Stands.Frame.Yaw * 180 / Math.PI, slot.NavFootprints.Count, aabb, real));
     }
 
     private void LogBake(LocationSlot slot, NavSourceData src, Stopwatch watch, bool hit)

@@ -180,6 +180,10 @@ public sealed class LocationSlot
     public LocationNav? Nav { get; internal set; }
     /// <summary>The world boxes of every placed prop, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
     internal IReadOnlyList<MeasuredPropBox> PropBoxes { get; set; } = Array.Empty<MeasuredPropBox>();
+    /// <summary>The navigation outlines of the furniture, measured once per <see cref="WorldBuilder.DeriveStands"/>.</summary>
+    internal IReadOnlyList<MeasuredFootprint> NavFootprints { get; set; } = Array.Empty<MeasuredFootprint>();
+    /// <summary>The last footprint per prop node instance, with the world transform and band it was measured for.</summary>
+    internal Dictionary<ulong, (Transform3D Xf, double Low, double High, Nav.PropFootprint.Result? Footprint)> FootprintCache { get; } = new();
 
     /// <summary>
     /// The tile as the figure placement reads it right now (view state + inventory, npcPlacement.ts <c>PlacementTile</c>).

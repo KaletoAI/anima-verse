@@ -32,7 +32,7 @@ namespace AnimaNative.Check;
 ///   R11 a phase revision changes the pose from the row, no new run;  R12 late entry in phase 2 shows that phase;
 ///   R13 a row without order (order_seq ≥ seq) blends into the rest placement; R13b an older row changes nothing;
 ///   R13c a local walk outlives a row without order;
-///   R7  a server walk r-a → r-up: one stair link (owner 65536), through T0, length 20.379, arrival before flip + 5, no
+///   R7  a server walk r-a → r-up: one stair link (owner 65536), through T0, length 20.209, arrival before flip + 5, no
 ///       healing; R7b the same room change as a row without order → a client-local walk of the same path, on the mesh;
 ///   R14 a held member's follow pose has no exit clip, a cancel for one member exits only that one;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
@@ -350,7 +350,7 @@ public static partial class OrderCheck
                 return false;
             }
             const double R7FlipRel = 17.683833;   // README "Orders world" R7: 24.0573666 / 1.4 + 0.5
-            const double R7LenM = 20.379;         // README "Orders world" R7: the corner sum of the walk's path
+            const double R7LenM = 20.209;         // README "Orders world" R7: the corner sum of the walk's path
             // The client drew Uli in r-a (the first poll); the next poll carries the new room AND the order.
             var r7 = await Start(Map());
             r7.Until(0.5);
@@ -376,10 +376,10 @@ public static partial class OrderCheck
             Is("R7 exactly one link section, owner 65536 (the stairs)", links7.Count == 1 && links7[0].Owner == 65536,
                $"links [{string.Join(",", links7.Select(l => l.Owner))}] length {plan7.Length:0.###} {Seq(r7, Uli)}");
             // README "Orders world" R7: the orders world's bed narrows r-b, so the path bends at (102, −0.5)/(102, −1.5)
-            // and is 20.379 m, not the nav world's P2 19.630. Independent of this mesh: a bed in the way can only lengthen
-            // the shortest path, so it is never below the obstacle-free P2 (plan Step 4, 19.63).
+            // and is 20.209 m, not the nav world's P2 19.411. Independent of this mesh: a bed in the way can only lengthen
+            // the shortest path, so it is never below the obstacle-free P2 (19.411 since the door funnel).
             Near("R7 path length (orders world)", plan7.Length, R7LenM, TolM);
-            Is("R7 not shorter than the obstacle-free P2 19.630", plan7.Length >= 19.630 - TolM, $"{plan7.Length:0.###}");
+            Is("R7 not shorter than the obstacle-free P2 19.411", plan7.Length >= 19.411 - TolM, $"{plan7.Length:0.###}");
             Is("R7 through T0", ThroughT0(plan7));
             Is("R7 arrived before flip + 5", r7.At(Uli, OrderState.Loop) is { } loop7 && loop7 <= 0.5 + R7FlipRel + 5, Seq(r7, Uli));
             Is("R7 no healing", !r7.Events.Any(e => e.Name == Uli && e.Event == "healed"),

@@ -248,9 +248,12 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     /// never longer than the step asked for (a longer one is the closest mesh point on the FAR side of an obstacle — a
     /// large frame step deep into furniture), and a step the clamp holds tries its two axis parts, the larger first, like
     /// <see cref="Walk.SlideBlocked"/> — so an avatar standing just off the mesh (between the eroded edge and the wall
-    /// collision, after a snap or a server position) still slides along the wall without going deeper.
+    /// collision, after a snap or a server position) still slides along the wall without going deeper. Last, the half and the
+    /// quarter of the step (fix plan "Kollision im nativen Client", step 2): a 0.15 m lead from inside a door funnel can
+    /// reach past the funnel's slanted side to the neck's depth, whose nearest mesh point is farther than the step and is
+    /// refused; the shorter step slides along the slanted side into the neck (README "Nav world", F4).
     /// </summary>
-    private static P2 ClampToNav(P2 from, P2 to, double y, double storeyM, LocationNav nav)
+    internal static P2 ClampToNav(P2 from, P2 to, double y, double storeyM, LocationNav nav)
     {
         P2 Clamp(P2 t)
         {
@@ -265,6 +268,11 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         {
             if (part==from) continue;
             var c=Clamp(part);
+            if (c!=from) return c;
+        }
+        foreach (var k in new[]{.5,.25})
+        {
+            var c=Clamp(new P2(from.X+dx*k,from.Z+dz*k));
             if (c!=from) return c;
         }
         return from;
