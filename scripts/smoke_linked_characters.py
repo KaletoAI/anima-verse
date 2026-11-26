@@ -83,8 +83,9 @@ WHAT FOLLOWS BY HAND
     build_soul_files(Glut): beliefs shared_from "Tilda", goals shared_from "".
     A read-modify-write save of Glut leaves Glut's OWN soul/beliefs.md without
     "Fire is honest" (the mind is never copied into the body).
-    World-dev is no side door: apply-soul(Glut, beliefs) -> 409 with the same
-    text, apply-soul(Glut, goals) -> success; an applied character JSON for
+    World-dev is no side door (its soul writes, update_character
+    {"soul:<field>"} of the free mode, are checked shared/own in
+    smoke_world_dev_tools.py (y)): an applied character JSON for
     Glut carrying a beliefs field leaves both beliefs files as they were
     (Tilda's still holds "Fire is honest", Glut's own has no "Smoke lies").
 [H] Rosters with Glut + Kim dormant: list_available_characters() =
@@ -369,17 +370,9 @@ edit("Glut", current_feeling="calm")
 _own = _gdir / "soul" / "beliefs.md"
 check("mind not copied into the body",
       "Fire is honest" in (_own.read_text(encoding="utf-8") if _own.exists() else ""), False)
-from app.routes import world_dev  # noqa: E402
-try:
-    world_dev._apply_soul_data_sync({"character_name": "Glut", "section": "beliefs",
-                                     "content": "# B\n- no"})
-    check("world-dev apply-soul shared refused", "no error", 409)
-except HTTPException as e:
-    check("world-dev apply-soul shared refused", (e.status_code, e.detail),
-          (409, "This section is shared with Tilda — edit it on Tilda."))
-_wd = world_dev._apply_soul_data_sync({"character_name": "Glut", "section": "goals",
-                                       "content": "# G\n- Fly high."})
-check("world-dev apply-soul own section", _wd.get("status"), "success")
+# The World Dev soul-section write is the free mode's update_character
+# {"soul:<field>"}; its shared-section refusal and own-section write are
+# checked in smoke_world_dev_tools.py (y) (the schema route /apply-soul is gone).
 _glut_prof = ch.get_character_profile("Glut") or {}
 _bel_key = next((f.get("key") for s_ in (get_template(_glut_prof.get("template", "")) or {}).get("sections", [])
                  for f in s_.get("fields", [])

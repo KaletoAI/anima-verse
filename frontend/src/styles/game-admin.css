@@ -1454,8 +1454,8 @@ select.ga-input optgroup {
   padding: 2px 6px;
 }
 
-/* World Dev — chat-style with config bar on top, message list, extracted-JSON
-   action row, input box at the bottom. Fills the body; only the chat scrolls. */
+/* World Dev — the config bar (model, effort, budget) on top of the free-mode
+   panel. Fills the body. */
 .ga-wd-shell {
   display: flex;
   flex-direction: column;
@@ -1494,20 +1494,8 @@ select.ga-input optgroup {
   font-size: 12px;
 }
 
-.ga-wd-target-select {
-  flex: 1 1 200px;
-  min-width: 180px;
-}
-
-/* Context rows — one row per kind (Locations / Characters), label
-   on the left, tag-picker on the right. Far more compact than the
-   per-item checkbox list it replaced. */
-.ga-wd-context-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
+/* Small uppercase label left of a pane (used by the building assistant's
+   layout draft preview). */
 .ga-wd-context-label {
   flex: 0 0 90px;
   font-size: 11px;
@@ -1515,113 +1503,6 @@ select.ga-input optgroup {
   letter-spacing: 0.4px;
   color: var(--text-muted, #8b949e);
   padding-top: 6px;
-}
-
-.ga-wd-tags {
-  flex: 1;
-}
-
-.ga-wd-tag-add {
-  width: auto;
-  font-size: 11px;
-  padding: 2px 6px;
-}
-
-.ga-wd-chat {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 6px;
-  padding: 10px;
-  background: var(--bg-container, #161b22);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ga-wd-msg {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.ga-wd-msg-user {
-  align-items: flex-end;
-}
-
-.ga-wd-msg-role {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-muted, #8b949e);
-}
-
-.ga-wd-msg-body {
-  max-width: 85%;
-  margin: 0;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--bg-message, #1c2333);
-  font-family: inherit;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-}
-
-.ga-wd-msg-user .ga-wd-msg-body {
-  background: var(--primary, #1f6feb);
-  color: #fff;
-}
-
-.ga-wd-extracted {
-  padding: 8px;
-  border: 1px solid var(--secondary, #238636);
-  border-radius: 6px;
-  background: rgba(35, 134, 54, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ga-wd-input {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-
-.ga-wd-input textarea {
-  flex: 1;
-  resize: vertical;
-}
-
-/* Session-stats column between the input textarea and the Send button.
-   Shows accumulated token in / out and total cost as the conversation
-   progresses. */
-.ga-wd-stats {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-  align-self: stretch;
-  justify-content: flex-end;
-  padding: 0 8px 2px 8px;
-  border-left: 1px solid var(--border, #30363d);
-  border-right: 1px solid var(--border, #30363d);
-  white-space: nowrap;
-  min-width: 100px;
-}
-
-.ga-wd-stats strong {
-  display: inline-block;
-  min-width: 26px;
-  color: var(--text, #c9d1d9);
-  font-weight: 600;
-  margin-right: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-size: 10px;
 }
 
 /* === Map tab ============================================================

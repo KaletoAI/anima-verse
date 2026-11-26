@@ -42,11 +42,6 @@ room_overlap, no_boundary; every other code refuses.
       "2 rooms (0 new) with 1 opening" (counts of the sent plan; the stair
       count "the place has 0 stair flights" is what is stored). After it, check_run no longer names
       Demo Tavern (both rooms have a layout now).
-  (i) route parity: POST /world-dev/preview-layout with layout (a) on a
-      throwaway FastAPI app carrying the real world_dev router (require_admin
-      overridden, no lifespan) -> 200; its normalized.rooms[*].layout equals
-      the stored Taproom/Kitchen layouts (existing room ids are stable, so
-      the same input sanitizes to the same layout). Unknown place -> 404.
   (b) a room {id "r_nope", x 0, y 0, w 2, d 2} -> refused, the line has
       "has no room with id 'r_nope'" (unknown_room message); the location
       row is equal to before and the journal row is "refused".
@@ -258,30 +253,6 @@ res = call("check_run", {}, turn=2)
 check("(g) check_run no longer names the tavern", res.ok and "Demo Tavern" not in res.line,
       res.line)
 AFTER_A = plan_state(LID)
-
-# (i) route parity
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.core.auth_dependency import require_admin  # noqa: E402
-from app.routes import world_dev as wd_route  # noqa: E402
-
-app = FastAPI()
-app.include_router(wd_route.router)
-app.dependency_overrides[require_admin] = lambda: {"id": "u", "role": "admin"}
-client = TestClient(app)
-r = client.post("/world-dev/preview-layout",
-                json={"layout_data": copy.deepcopy(LAYOUT_A), "location_id": LID})
-check("(i) preview 200", r.status_code == 200, r.text[:200])
-if r.status_code == 200:
-    prev_layouts = {e["room_id"]: e["layout"] for e in r.json()["normalized"]["rooms"]}
-    check("(i) preview layouts == stored",
-          prev_layouts == {TAP: room(LID, rid=TAP).get("layout"),
-                           KIT: room(LID, rid=KIT).get("layout")},
-          (prev_layouts, room(LID, rid=TAP).get("layout")))
-r = client.post("/world-dev/preview-layout",
-                json={"layout_data": copy.deepcopy(LAYOUT_A), "location_id": "nope"})
-check("(i) unknown place 404", r.status_code == 404, r.status_code)
 
 # (b) (d) (d2) (d3) (d5)
 refused("(b) unknown room id", {"location_id": LID, "layout": {"rooms": [

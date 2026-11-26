@@ -102,15 +102,64 @@ class _Stopped(Exception):
 
 # ── LLM plumbing (module level so a test can replace it) ─────────────────
 
+#: Effort levels of the Anthropic Messages API (`output_config.effort`).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: Completion budget for a Claude model when neither the request nor the LLM
+#: routing names one: thinking and reply share max_tokens (Anthropic's
+#: suggested start; 32768 left a map JSON ~600 tokens, 2026-11-23).
+ANTHROPIC_DEFAULT_MAX_TOKENS = 65536
+
+
+def anthropic_budget(is_anthropic: bool, requested: Optional[int],
+                     routed: Optional[int]) -> Optional[int]:
+    """The per-reply max_tokens: the cap the user sent wins; else the
+    routing entry's; else ANTHROPIC_DEFAULT_MAX_TOKENS for a Claude model
+    and None (the provider's default) for any other."""
+    if requested:
+        return int(requested)
+    if routed:
+        return int(routed)
+    return ANTHROPIC_DEFAULT_MAX_TOKENS if is_anthropic else None
+
+
+def apply_effort(llm: Any, effort: str) -> None:
+    """Set the Effort level on a Claude client (`output_config.effort`).
+    '' = the model's default; other providers ignore it. ValueError for a
+    level not in EFFORT_LEVELS."""
+    from app.core.llm_client import AnthropicLLMClient, merge_extra_params
+    effort = (effort or "").strip().lower()
+    if not effort:
+        return
+    if effort not in EFFORT_LEVELS:
+        raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+    if isinstance(llm, AnthropicLLMClient):
+        llm.extra_params = merge_extra_params(
+            llm.extra_params, {"output_config": {"effort": effort}})
+
+
 def _default_llm_factory(model: str, provider: str,
                          max_tokens: Optional[int]) -> Optional[Tuple[Any, Any]]:
-    """(LLM client, LLMInstance) for the World Dev model, or None."""
+    """(LLM client, LLMInstance) for the World Dev model, or None.
+
+    The per-reply budget follows `anthropic_budget`: `create_llm_instance`
+    keeps the routing entry's max_tokens when called with None, so that value
+    is the routed one; the result is written to the client AND the instance
+    (the instance is what the queue tracking reports)."""
+    from app.core.llm_client import AnthropicLLMClient
     from app.core.llm_router import create_llm_instance
     instance = create_llm_instance(task="chat", model=model, provider_name=provider or "",
                                    max_tokens=max_tokens)
     if instance is None:
         return None
-    return instance.create_llm(), instance
+    routed = getattr(instance, "max_tokens", None) if max_tokens is None else None
+    llm = instance.create_llm()
+    if llm is None:
+        return None
+    budget = anthropic_budget(isinstance(llm, AnthropicLLMClient), max_tokens, routed)
+    llm.max_tokens = budget
+    instance.max_tokens = budget
+    logger.info("world-dev LLM: %s/%s max_tokens=%s", provider or "?", model, budget)
+    return llm, instance
 
 
 async def _chat_active(llm_instance: Any) -> Any:
@@ -270,12 +319,14 @@ class RunManager:
             st.events.append(ev)
             st.cond.notify_all()
 
-    async def _resolve(self, model: str, provider: str,
-                       max_tokens: Optional[int]) -> Tuple[Any, Any, str, Dict[str, float]]:
+    async def _resolve(self, model: str, provider: str, max_tokens: Optional[int],
+                       effort: str = "") -> Tuple[Any, Any, str, Dict[str, float]]:
         from app.core.llm_cost import resolve_pricing
         resolved = await asyncio.to_thread(self.llm_factory, model, provider, max_tokens)
         if not resolved or resolved[0] is None:
             raise ValueError(f"no provider for model {model!r}")
+        # Here, not in the factory: the factory seam keeps its 3 arguments.
+        apply_effort(resolved[0], effort)
         system = await asyncio.to_thread(_render_system)
         pricing = await resolve_pricing(model, provider)
         return resolved[0], resolved[1], system, pricing
@@ -320,18 +371,25 @@ class RunManager:
     async def start(self, task: str, model: str, provider: str, user_id: str,
                     max_tokens: Optional[int] = None,
                     max_steps: int = DEFAULT_MAX_STEPS,
-                    max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL) -> str:
-        """Start a run; ValueError (nothing changed) when the task is empty or
-        the model cannot be resolved, RunOpenError when a run is open."""
+                    max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL,
+                    effort: str = "") -> str:
+        """Start a run; ValueError (nothing changed) when the task is empty,
+        the effort unknown or the model cannot be resolved, RunOpenError when
+        a run is open. `effort` is stored on the run (EFFORT_LEVELS, '' =
+        the model's default)."""
         from app.models.world import is_world_frozen, set_world_frozen
         task = (task or "").strip()
         if not task:
             raise ValueError("the task is empty")
-        llm, instance, system, pricing = await self._resolve(model, provider, max_tokens)
+        effort = (effort or "").strip().lower()
+        if effort and effort not in EFFORT_LEVELS:
+            raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
+        llm, instance, system, pricing = await self._resolve(model, provider, max_tokens,
+                                                             effort)
         run_id = await asyncio.to_thread(
             wr.create_run, task, model, provider, user_id,
             int(max_steps or DEFAULT_MAX_STEPS),
-            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens)
+            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens, effort)
         st = self._state(run_id)
         async with st.lock:
             recorded = False  # was_frozen holds the world's real pre-run state
@@ -383,10 +441,11 @@ class RunManager:
             if st.llm is None:
                 # This process did not start the run (server restart while it
                 # waited for review): resolve again with the run's own
-                # per-reply cap, rebuild the context.
+                # per-reply cap and effort, rebuild the context.
                 (st.llm, st.llm_instance, st.system,
                  st.pricing) = await self._resolve(run["model"], run["provider"],
-                                                   run.get("max_tokens"))
+                                                   run.get("max_tokens"),
+                                                   run.get("effort") or "")
                 st.history = await asyncio.to_thread(self._rebuilt_history, run)
             await asyncio.to_thread(wr.set_status, run_id, "running", "")
             await self._emit(st, {"type": "status", "status": "running", "note": ""})

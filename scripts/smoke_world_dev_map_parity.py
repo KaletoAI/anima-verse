@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: World Dev free mode — map parity (E13): everything the `map` schema
-can do is reachable through the free tools, and `delete_area` removes ANY area.
+"""Smoke: World Dev free mode — map parity (E13): everything the former `map` schema
+mode could write is reachable through the free tools, and `delete_area` removes ANY area.
 
 Plan docs/superpowers/plans/2026-11-25-world-dev-free-p2-buildings-terrain.md, Task 11.
 ONE temp world (paths.init BEFORE any world-DB import), an EMPTY ANIMATION_CLIPS_DIR; no
@@ -14,8 +14,9 @@ WHAT IS CHECKED, and where every expected value comes from
 ----------------------------------------------------------
 
 The example is the json block under "## Structure of a map layout" of
-shared/world_dev_schemas/map.md, read from the file at runtime (the plan names it as the
-source). Its "loc_abc123" is replaced by the id of a fixture place "Demo Square" created
+shared/world_dev_schemas/map.md as of commit a90d96e7e (the schema file was deleted with
+the schema modes, plan 2026-11-25-world-dev-free-remove-schema-modes.md, Task 5), copied
+verbatim into the constant EXAMPLE below — pinned to that commit, not to HEAD. Its "loc_abc123" is replaced by the id of a fixture place "Demo Square" created
 through world_ops.create_location_with_extras before anything else (an unknown id would be
 dropped by the sanitizer). From that block, by hand:
   terrain_areas: "Eastern woods" forest, polygon [[120,-200],[400,-180],[420,150],[140,120]],
@@ -27,11 +28,10 @@ dropped by the sanitizer). From that block, by hand:
     mill on the river bend, its wheel still turning.", indoor "indoor", danger_level 0,
     boundary [[-8,-6],[8,-6],[8,6],[-8,6]], pos (-10, 60), yaw 90.
 
-Schema side: map_layout_apply.map_snapshot() of the world, then
-sanitize_map_layout(example, <world_dev_apply._map_world_context()>) + apply_map_layout(merge,
-snapshot) — the rows are read through the model readers (terrain.list_areas,
-heightfield.list_height_areas, world.get_location_by_id), then restore_snapshot puts the
-world back (no area, no height area, Demo Square unplaced, the mill deleted — asserted).
+The schema side (the map writer's snapshot, apply and restore) is gone with the
+schema modes; the free side is checked against the block's values alone, read back through
+the model readers (terrain.list_areas, heightfield.list_height_areas,
+world.get_location_by_id).
 
 Free side, run R, turn 1: add_terrain_area{forest, label, polygon, z_order 0};
 add_terrain_area{water, label, stroke (the five keys as in the block), z_order 1,
@@ -41,18 +41,20 @@ add_height_area{polygon, height_m 12, falloff_m 40, label}; place_location{Demo 
 x 120, z -40, yaw 0}; create_location{data {name, description, indoor "indoor",
 danger_level 0}, x -10, z 60, yaw 90, boundary}.
 
-  (a) terrain rows: two each side; per label the same kind, polygon, z_order and the
-      WHOLE meta — so meta.stroke (the stroke recipe) is identical as well. The plan allowed
-      meta.source to differ; it does not: add_terrain_area runs the area through the same
-      sanitize_map_layout, which marks it map_layout_apply.SOURCE ("world_dev") on both
-      sides, so the check is the stricter one. ids differ (fresh per write).
-  (b) height row: polygon, height_m 12.0, falloff_m 40.0 and the label equal on both sides
-      and equal to the block's values.
-  (c) the stub: name, description, indoor, danger_level, map3d.boundary, pos_x -10,
-      pos_z 60, yaw_deg 90 equal on both sides (and equal to the block's values);
-      Demo Square: pos_x 120, pos_z -40, yaw_deg 0 on both sides.
+  (a) terrain rows: exactly two, keyed by label. "Eastern woods": kind forest, polygon
+      the block's four points, z_order 0. "The river": kind water, z_order 1, and its
+      meta.stroke carries the block's five recipe keys with the block's values (points,
+      width_m 14, style wavy, spacing_m 40, amplitude_m 8) — the ribbon polygon is derived
+      from that recipe (pinned in smoke_map_layout_apply [1]/[2]). Both rows carry
+      meta.source map_layout_apply.SOURCE ("world_dev"): add_terrain_area runs the area
+      through sanitize_map_layout, which marks it.
+  (b) height row: exactly one; polygon the block's square, height_m 12, falloff_m 40,
+      meta.label "Watch hill".
+  (c) the stub: name "The Old Mill", the block's description, indoor "indoor",
+      danger_level 0, map3d.boundary [[-8,-6],[8,-6],[8,6],[-8,6]], pos_x -10, pos_z 60,
+      yaw_deg 90; Demo Square: pos_x 120, pos_z -40, yaw_deg 0.
 
-Fixtures written through the core AFTER the restore and BEFORE the run: terrain area
+Fixtures written through the core after turn 1 (foreign rows: no entry of the run made them): terrain area
 "ta_pre" (grass, square (900,900)-(910,910), label "Demo Field") and height area "ha_pre"
 (square (950,950)-(960,960), height_m 3, falloff_m 5); their rows PRE_T / PRE_H are read
 back right after.
@@ -110,10 +112,8 @@ Each later run closes the previous one first (one open run at a time).
 from __future__ import annotations
 
 import atexit
-import copy
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -141,7 +141,6 @@ from app.core import map_layout_apply as mla  # noqa: E402
 from app.core import world_dev_runs as wr  # noqa: E402
 from app.core import world_dev_tools as wt  # noqa: E402
 from app.core import world_dev_undo as wu  # noqa: E402
-from app.core.world_dev_apply import _map_world_context  # noqa: E402
 from app.core.world_ops import create_location_with_extras  # noqa: E402
 from app.models import heightfield, terrain  # noqa: E402
 from app.models.world import get_location_by_id, list_locations  # noqa: E402
@@ -165,9 +164,47 @@ def sq(x0, z0, x1, z1):
 
 
 # ── the example ──────────────────────────────────────────────────────────
-text = (ROOT / "shared/world_dev_schemas/map.md").read_text(encoding="utf-8")
-section = text[text.index("## Structure of a map layout"):]
-EXAMPLE = json.loads(re.search(r"```json\n(.*?)\n```", section, re.S).group(1))
+# Verbatim from `git show a90d96e7e:shared/world_dev_schemas/map.md`, section
+# "## Structure of a map layout" (the file is deleted; the commit is pinned, not HEAD).
+EXAMPLE = json.loads(r"""
+{
+  "summary": "One paragraph: the idea of this layout, so the user can read what you drew.",
+  "bounds": {"min_x": -600, "min_z": -600, "max_x": 600, "max_z": 600},
+  "terrain_areas": [
+    {
+      "kind": "forest",
+      "label": "Eastern woods",
+      "polygon": [[120, -200], [400, -180], [420, 150], [140, 120]],
+      "z_order": 0
+    },
+    {
+      "kind": "water",
+      "label": "The river",
+      "stroke": {
+        "points": [[-20, -600], [10, -300], [-30, 0], [5, 320], [-10, 600]],
+        "width_m": 14,
+        "style": "wavy",
+        "spacing_m": 40,
+        "amplitude_m": 8
+      },
+      "z_order": 1
+    }
+  ],
+  "height_areas": [
+    {"label": "Watch hill", "polygon": [[300, 300], [380, 300], [380, 380], [300, 380]],
+     "height_m": 12, "falloff_m": 40}
+  ],
+  "locations": [
+    {"id": "loc_abc123", "pos_x": 120, "pos_z": -40, "yaw_deg": 0,
+     "why": "the market square faces the river"},
+    {"name": "The Old Mill", "description": "A water mill on the river bend, its wheel still turning.",
+     "pos_x": -10, "pos_z": 60, "yaw_deg": 90,
+     "boundary": [[-8, -6], [8, -6], [8, 6], [-8, 6]],
+     "indoor": "indoor", "danger_level": 0,
+     "why": "the river bend is the only spot with enough current"}
+  ]
+}
+""")
 check("example: 2 areas, 1 height, 2 places",
       (len(EXAMPLE["terrain_areas"]), len(EXAMPLE["height_areas"]),
        len(EXAMPLE["locations"])) == (2, 1, 2), EXAMPLE)
@@ -199,25 +236,6 @@ def by_label(rows):
 def mill_row():
     return next((l for l in list_locations() if l.get("name") == "The Old Mill"), None)
 
-
-# ── schema side ──────────────────────────────────────────────────────────
-snap = mla.map_snapshot()
-catalog, locs, bounds, default_kind = _map_world_context()
-normalized, _warnings = mla.sanitize_map_layout(
-    copy.deepcopy(EXAMPLE), catalog=catalog, locations_by_id=locs, bounds=bounds,
-    default_kind=default_kind)
-counts = mla.apply_map_layout(normalized, "merge", snap)
-check("schema apply wrote 2 / 1 / 1 / 1", counts == {"areas": 2, "heights": 1,
-                                                     "positions": 1, "created": 1}, counts)
-S_AREAS = by_label(terrain.list_areas())
-S_HEIGHTS = heightfield.list_height_areas()
-S_MILL = copy.deepcopy(mill_row())
-S_SQUARE = copy.deepcopy(get_location_by_id(SQUARE))
-mla.restore_snapshot(snap)
-check("restore: world empty again",
-      not terrain.list_areas() and not heightfield.list_height_areas()
-      and mill_row() is None and (get_location_by_id(SQUARE) or {}).get("pos_x") is None,
-      (terrain.list_areas(), heightfield.list_height_areas()))
 
 # ── free side, turn 1 ───────────────────────────────────────────────────
 run = wr.create_run("parity", "m", "p", "u", 60, 300000)
@@ -253,52 +271,39 @@ F_SQUARE = get_location_by_id(SQUARE) or {}
 
 
 # (a)
-check("(a) two terrain rows each side", len(S_AREAS) == 2 and len(F_AREAS) == 2,
-      (list(S_AREAS), list(F_AREAS)))
-for label in (WOODS["label"], RIVER["label"]):
-    s, f = S_AREAS.get(label) or {}, F_AREAS.get(label) or {}
-    for key in ("kind", "polygon", "z_order"):
-        check(f"(a) {label}: {key} equal", js(s.get(key)) == js(f.get(key)),
-              (s.get(key), f.get(key)))
-    check(f"(a) {label}: meta equal (incl. source {mla.SOURCE!r})",
-          js(s.get("meta")) == js(f.get("meta"))
-          and (f.get("meta") or {}).get("source") == mla.SOURCE,
-          (s.get("meta"), f.get("meta")))
-    check(f"(a) {label}: ids differ", s.get("id") != f.get("id"))
-sm, fm = (S_AREAS.get(RIVER["label"]) or {}).get("meta") or {}, \
-    (F_AREAS.get(RIVER["label"]) or {}).get("meta") or {}
-check("(a) stroke recipe identical", bool(sm.get("stroke"))
-      and js(sm.get("stroke")) == js(fm.get("stroke")), (sm.get("stroke"), fm.get("stroke")))
-check("(a) woods polygon is the block's", (S_AREAS.get(WOODS["label"]) or {}).get("polygon")
-      == [[120, -200], [400, -180], [420, 150], [140, 120]])
+check("(a) exactly the two block areas", sorted(F_AREAS) == sorted([WOODS["label"], RIVER["label"]]),
+      list(F_AREAS))
+fw, fr = F_AREAS.get(WOODS["label"]) or {}, F_AREAS.get(RIVER["label"]) or {}
+check("(a) woods: forest, the block's polygon, z_order 0",
+      fw.get("kind") == "forest" and fw.get("z_order") == 0
+      and fw.get("polygon") == [[120, -200], [400, -180], [420, 150], [140, 120]], fw)
+check("(a) river: water, z_order 1", fr.get("kind") == "water" and fr.get("z_order") == 1, fr)
+fstroke = (fr.get("meta") or {}).get("stroke") or {}
+check("(a) river stroke recipe is the block's",
+      {k: fstroke.get(k) for k in ("points", "width_m", "style", "spacing_m", "amplitude_m")}
+      == {"points": [[-20, -600], [10, -300], [-30, 0], [5, 320], [-10, 600]], "width_m": 14,
+          "style": "wavy", "spacing_m": 40, "amplitude_m": 8}, fstroke)
+for label, row in ((WOODS["label"], fw), (RIVER["label"], fr)):
+    check(f"(a) {label}: meta.source {mla.SOURCE!r}",
+          (row.get("meta") or {}).get("source") == mla.SOURCE, row.get("meta"))
 
 # (b)
-check("(b) one height row each side", len(S_HEIGHTS) == 1 and len(F_HEIGHTS) == 1,
-      (S_HEIGHTS, F_HEIGHTS))
-sh, fh = (S_HEIGHTS or [{}])[0], (F_HEIGHTS or [{}])[0]
-for key in ("polygon", "height_m", "falloff_m", "label"):
-    check(f"(b) height {key} equal", js(sh.get(key)) == js(fh.get(key)),
-          (sh.get(key), fh.get(key)))
+check("(b) one height row", len(F_HEIGHTS) == 1, F_HEIGHTS)
+fh = (F_HEIGHTS or [{}])[0]
 check("(b) height values are the block's",
-      sh.get("polygon") == [[300, 300], [380, 300], [380, 380], [300, 380]]
-      and sh.get("height_m") == 12 and sh.get("falloff_m") == 40, sh)
+      fh.get("polygon") == [[300, 300], [380, 300], [380, 380], [300, 380]]
+      and fh.get("height_m") == 12 and fh.get("falloff_m") == 40
+      and (fh.get("meta") or {}).get("label") == "Watch hill", fh)
 
 # (c)
-for key in ("name", "description", "indoor", "danger_level", "pos_x", "pos_z", "yaw_deg"):
-    check(f"(c) mill {key} equal", js((S_MILL or {}).get(key)) == js(F_MILL.get(key)),
-          ((S_MILL or {}).get(key), F_MILL.get(key)))
-check("(c) mill boundary equal",
-      js(((S_MILL or {}).get("map3d") or {}).get("boundary"))
-      == js((F_MILL.get("map3d") or {}).get("boundary")),
-      ((S_MILL or {}).get("map3d"), F_MILL.get("map3d")))
 check("(c) mill values are the block's",
-      (F_MILL.get("pos_x"), F_MILL.get("pos_z"), F_MILL.get("yaw_deg")) == (-10, 60, 90)
-      and F_MILL.get("indoor") == "indoor"
+      F_MILL.get("name") == "The Old Mill"
+      and F_MILL.get("description")
+      == "A water mill on the river bend, its wheel still turning."
+      and F_MILL.get("indoor") == "indoor" and F_MILL.get("danger_level") == 0
+      and (F_MILL.get("pos_x"), F_MILL.get("pos_z"), F_MILL.get("yaw_deg")) == (-10, 60, 90)
       and (F_MILL.get("map3d") or {}).get("boundary") == [[-8, -6], [8, -6], [8, 6], [-8, 6]],
       F_MILL)
-for key in ("pos_x", "pos_z", "yaw_deg"):
-    check(f"(c) Demo Square {key} equal", (S_SQUARE or {}).get(key) == F_SQUARE.get(key),
-          ((S_SQUARE or {}).get(key), F_SQUARE.get(key)))
 check("(c) Demo Square at (120,-40) yaw 0",
       (F_SQUARE.get("pos_x"), F_SQUARE.get("pos_z"), F_SQUARE.get("yaw_deg")) == (120, -40, 0),
       F_SQUARE)

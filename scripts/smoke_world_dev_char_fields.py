@@ -179,8 +179,11 @@ def dump_db():
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
             if tname.startswith("world_dev") or tname.startswith("sqlite_"):
                 continue
-            rows = con.execute(f'SELECT * FROM "{tname}"').fetchall()
-            out[tname] = sorted(repr(r) for r in rows)
+            cur = con.execute(f'SELECT * FROM "{tname}"')
+            # updated_at is a wall-clock stamp: an undo in a later second
+            # restores every value but not the stamp, so it is left out.
+            keep = [i for i, d in enumerate(cur.description) if d[0] != "updated_at"]
+            out[tname] = sorted(repr(tuple(r[i] for i in keep)) for r in cur.fetchall())
         return out
     finally:
         con.close()

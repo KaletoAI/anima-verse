@@ -75,9 +75,8 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # variants (the free-text normalizer is gone — poses come from the catalog,
     # plan-pose-katalog.md).
     "pose_embedding":     {"label": "Pose Embedding",            "priority": Priority.LOW,    "category": "embedding"},
-    # `world_dev_validate` removed: validator model is now picked
-    # dynamically in the World Dev UI right next to the chat model — no
-    # separate task entry to maintain in /admin/settings → LLM Routing.
+    # No `world_dev_validate` task: its template is rendered only by the
+    # temporary-NPC generation (npc_ops), on that pipeline's own model.
 
     # Room furnishing ("✨ Furnish", plan-furnish-v2.md): three strict-JSON
     # steps of ONE job (needs → match → placement) on one routing task; the

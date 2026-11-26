@@ -370,8 +370,8 @@ def _only_keys(args: Dict[str, Any], allowed, what: str) -> None:
                           + (", ".join(sorted(allowed)) or "none"))
 
 
-# The location schema (shared/world_dev_schemas/location.md) plus the
-# location editor's extra fields the core writers take.
+# The location fields the core writers take, including the location
+# editor's extra fields.
 _LOC_STR = ("name", "description", "image_prompt_day", "image_prompt_night",
             "image_prompt_building", "indoor", "decency", "style_hint",
             "activity_hint", "terrain", "entry_room",
@@ -1911,9 +1911,8 @@ def _placement_entry(loc_like: Dict[str, Any], x: Any, z: Any, yaw: Any) -> Dict
 
 def _placement_world() -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], str]:
     """(terrain catalog, the world's terrain areas bottom-to-top, default
-    kind) — the ground the placement checks read, from the same world facts
-    the map schema is sanitized with (only the ground: no location outlines,
-    no world bounds)."""
+    kind) — the ground the placement checks read (only the ground: no
+    location outlines, no world bounds)."""
     from app.core.terrain_types import effective_catalog
     from app.core.world_dev_apply import default_terrain_kind
     from app.models.terrain import list_areas
@@ -2059,7 +2058,7 @@ def _newly_impassable(before: Dict[str, Tuple[str, str]],
 
 @_tool("create_location", True,
        "create_location{data, x?, z?, yaw?, boundary?:[[x,z],...]}",
-       "new place (location schema fields + rooms); boundary in local metres")
+       "new place (the place fields the core writers take, plus rooms); boundary in local metres")
 def _create_location(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.world_ops import create_location_with_extras
     from app.models.world import (get_location_by_id, list_locations,
@@ -4810,7 +4809,7 @@ def _refuse_foreign_sweep_rows(name: str) -> None:
 @_tool("create_character", True,
        "create_character{data, home?, home_room?, schedule?:[{hour, location?, role?, sleep?}], "
        "known_places?:[place]}",
-       "new character (character schema fields + outfits); home = a place id or name; "
+       "new character (the fields of its character template, plus outfits); home = a place id or name; "
        "known_places = further places it may travel to")
 def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.character_name import validate_character_name
@@ -4842,8 +4841,7 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     tmpl = get_template(template)
     if tmpl is None:
         raise ToolRefusal(f"no character template {template!r}")
-    # Only the templates the World Dev character schema offers (see
-    # character_templates).
+    # Only the templates character_templates() offers.
     templates = character_templates()
     if (template not in {t["name"] for t in templates}
             or (tmpl.get("features") or {}).get("temporary_npc")):
@@ -5206,6 +5204,16 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                                "profile": bp, "config": bc},
                         {"profile": wp, "config": wc})
 
+            def push_profile(bp, wp):
+                # Inside the keyed_lock("character_profile") taken above,
+                # right after the journaled write (D12): a later group's
+                # refusal or exception cannot drop it. Profile keys only —
+                # config is no sync topic (D9).
+                if bp:
+                    from app.core import sync_topics
+                    sync_topics.profile_patched(name, wu.absent_as_none(bp),
+                                                wu.absent_as_none(wp))
+
             with cstep.writing(reconcile_char):
                 if prof_patch:
                     new_prof = copy.deepcopy(prof)
@@ -5217,9 +5225,19 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                     if not save_character_profile(name, new_prof):
                         raise ValueError(f"the profile of {name} was not stored")
                 if cfg_patch:
-                    new_cfg = copy.deepcopy(get_character_config(name) or {})
-                    new_cfg.update(cfg_patch)
-                    if not save_character_config(name, new_cfg):
+                    cfg_stored = False
+                    try:
+                        new_cfg = copy.deepcopy(get_character_config(name) or {})
+                        new_cfg.update(cfg_patch)
+                        cfg_stored = bool(save_character_config(name, new_cfg))
+                    finally:
+                        if not cfg_stored:
+                            # The profile half may be stored and reconcile_char
+                            # journals it: its push must not be dropped, whether
+                            # the config save returned False or raised.
+                            bp, wp, _bc, _wc = diff_now()
+                            push_profile(bp, wp)
+                    if not cfg_stored:
                         raise ValueError(f"the config of {name} was not stored")
             bp, wp, bc, wc = diff_now()
             cstep.attach(name, {"op": "restore_character", "name": name,
@@ -5228,6 +5246,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                        + [f"config {k}" for k in sorted(bc)])
             cline = ", ".join(changed) if changed else "fields unchanged"
             cstep.complete({"profile": wp, "config": wc}, cline)
+            push_profile(bp, wp)
             lines.append(cline)
 
         if stat_patch:
@@ -5618,7 +5637,7 @@ def _delete_area_row(step: _Step, kind: str, ident: str, line: str) -> str:
 
 @_tool("delete_area", True, "delete_area{kind, id}",
        "remove ANY terrain or height area (kind terrain|height), also one that existed "
-       "before the run — the map schema's replace, one area at a time; the discard "
+       "before the run, one area at a time; the discard "
        "brings it back")
 def _delete_area(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, {"kind", "id"}, "delete_area")

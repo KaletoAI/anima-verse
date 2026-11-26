@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react'
  * transparently via a small tag so callers can keep using Sets.
  *
  * Same signature as `useState`, plus a storage `key` (namespace it, e.g.
- * "worlddev.messages"). On a JSON/quota error it silently falls back to the
+ * "worlddev.free.task"). On a JSON/quota error it silently falls back to the
  * in-memory value so it can never break the UI.
  */
 function replacer(_k: string, v: unknown): unknown {

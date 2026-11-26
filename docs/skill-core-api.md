@@ -478,7 +478,7 @@ paths keep `body_slots.is_slot_exposed`.
 
 | Funktion | Semantik |
 |---|---|
-| `apply_outfit_compliance(character_name, *, is_intimate=None, is_wet=None, is_sleeping=None) -> Dict` | Decency/Style des aktuellen Raums gegen `equipped_pieces` abgleichen — nach JEDER Zustandsänderung rufen, die die Kleiderordnung beeinflusst. Die drei Kwargs geben den Zustand mit, wenn er gerade geschrieben wurde und noch nicht im Profil steht |
+| `apply_outfit_compliance(character_name, *, is_intimate=None, is_wet=None, is_sleeping=None, notify=True) -> Dict` | Decency/Style des aktuellen Raums gegen `equipped_pieces` abgleichen — nach JEDER Zustandsänderung rufen, die die Kleiderordnung beeinflusst. Die drei Kwargs geben den Zustand mit, wenn er gerade geschrieben wurde und noch nicht im Profil steht |
 | `app.core.outfit_renderer.is_outfit_worn(profile) -> bool` | Binärer „angezogen?"-Zustand für Freitext-Garderoben (undress-Paket) |
 | `app.core.outfit_renderer.set_outfit_worn(character_name, worn) -> bool` | Setzt `outfit_worn` einer Freitext-Garderobe wie der Editor (String "true"/"false", unter dem Profil-Lock, Sync-Signal, Compliance-Runde); True = Zustand ist danach `worn` (auch wenn er es schon war), False = kein Profil, Piece-Garderobe (unangetastet) oder Speichern fehlgeschlagen |
 | `app.core.outfit_renderer.is_free_text_wardrobe(profile) -> bool` | Template ohne Outfit-System (`outfit_system_enabled: false`) — Kleidung = `outfit_description` + `outfit_worn` |

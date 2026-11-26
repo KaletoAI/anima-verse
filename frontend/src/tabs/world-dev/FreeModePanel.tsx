@@ -7,7 +7,7 @@ import { usePersistentState } from '../../lib/usePersistentState'
 import './FreeModePanel.css'
 
 /**
- * World Dev "Free (agent)" mode — plan
+ * World Dev free mode (the only World Dev mode) — plan
  * docs/superpowers/plans/2026-11-22-world-dev-free-mode.md, Task 9.
  *
  * The server owns the run (app/core/world_dev_agent.py); this panel only
@@ -154,11 +154,13 @@ function posInt(raw: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined
 }
 
-export function FreeModePanel({ model, provider, maxTokens }: {
+export function FreeModePanel({ model, provider, maxTokens, effort }: {
   model: string
   provider: string
   /** The per-reply budget of the tab's budget select ('' = auto, '0' = none). */
   maxTokens: string
+  /** The tab's Effort select (Claude thinking depth; '' = the model's default). */
+  effort: string
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -432,6 +434,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
       const d = await apiPost<{ run_id: string }>('/world-dev/free/start', {
         task: task.trim(), model, provider,
         max_tokens: Number.isFinite(perReply) ? perReply : undefined,
+        effort: effort || undefined,
         max_steps: posInt(maxSteps),
         max_tokens_total: posInt(maxTotal),
       })
@@ -448,7 +451,7 @@ export function FreeModePanel({ model, provider, maxTokens }: {
     } finally {
       setBusy(false)
     }
-  }, [attach, loadRuns, maxSteps, maxTokens, maxTotal, model, provider, rememberEv, runId, t, task, toast])
+  }, [attach, effort, loadRuns, maxSteps, maxTokens, maxTotal, model, provider, rememberEv, runId, t, task, toast])
 
   const action = useCallback(async (what: 'stop' | 'accept' | 'discard') => {
     if (!runId) return

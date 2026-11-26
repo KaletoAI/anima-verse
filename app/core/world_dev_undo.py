@@ -174,6 +174,11 @@ def is_absent(value: Any) -> bool:
     return isinstance(value, dict) and value == ABSENT
 
 
+def absent_as_none(values: Dict[str, Any]) -> Dict[str, Any]:
+    """A key map with ABSENT shown as None — the shape a sync push compares."""
+    return {k: (None if is_absent(v) else v) for k, v in values.items()}
+
+
 def diff_keys(before: Optional[Dict[str, Any]],
               after: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Top-level keys whose stored value differs between two storage reads:
@@ -557,9 +562,20 @@ def _undo_restore_character(entry: Dict[str, Any], inv: Dict[str, Any]) -> List[
             restore, ch = _split_keys(inv["profile"], w_prof, prof)
             changed += [f"profile.{k}" for k in ch]
             if restore:
+                was = {k: (copy.deepcopy(prof[k]) if k in prof else ABSENT)
+                       for k in restore}
                 _apply_keys(prof, restore)
                 if not save_character_profile(name, prof):
                     raise RuntimeError(f"profile of {name} was not stored")
+                # Inside the profile lock, right after the save (D12): a
+                # later config failure or the changed-since skip cannot drop
+                # it. Only the restored profile keys; never config (D9).
+                # A value that differs only as absent vs None is no change
+                # for the push: skip it instead of a bare avatars signal.
+                was_n, restore_n = absent_as_none(was), absent_as_none(restore)
+                if was_n != restore_n:
+                    from app.core import sync_topics
+                    sync_topics.profile_patched(name, was_n, restore_n)
         if inv.get("config"):
             cfg = copy.deepcopy(get_character_config(name) or {})
             restore, ch = _split_keys(inv["config"], w_cfg, cfg)

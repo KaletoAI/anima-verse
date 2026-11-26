@@ -168,8 +168,10 @@ Task 6 — character tools (runs 9-12):
       undo: personality.md == "calm\n" exactly, presence.md absent again,
       beliefs.md is the human's text, tasks.md is the human's text with
       the one skip "changed since".
-  (y) soul_owner patched to name a leader -> the shared section is refused
-      naming the leader. update_character home/home_room/schedule [8
+  (y) soul_owner patched to name a leader for personality.md only -> that
+      shared section is refused naming the leader; the character's own
+      section soul:character_task "own tasks" is written ("own tasks\n") with
+      one restore_soul step (the run's undo puts back "tasks by a human\n"). update_character home/home_room/schedule [8
       Lakeside "fishing"] -> home = Lakeside/Bedroom, one slot at Lakeside,
       Lakeside known; one restore_home_schedule step. delete_created of the
       pre-existing Demo Other -> refused; of "Demo Brief" created in this
@@ -1042,21 +1044,30 @@ check("(x) the human's tasks.md kept, skipped 'changed since'",
       and [s["reason"] for s in rep["skipped"]] == [wu.REASON_CHANGED], rep)
 wr.set_status(run11, "rollback_incomplete")
 
-# Shared soul section of a linked character -> refused.
+# Shared soul section of a linked character -> refused; its own section
+# -> written and journaled.
 from app.core import linked_characters  # noqa: E402
 _orig_owner = linked_characters.soul_owner
-linked_characters.soul_owner = (lambda n, s: "Demo Leader" if n == "Demo Other"
+linked_characters.soul_owner = (lambda n, s: "Demo Leader"
+                                if n == "Demo Other" and s == P_REL
                                 else _orig_owner(n, s))
 run12 = wr.create_run("misc", "m", "p", "u", 40, 300000)
 ctx12 = wt.ToolCtx(run_id=run12, turn=1)
 try:
     res = wt.run_tool(ctx12, "update_character",
                       {"name": "Demo Other", "patch": {"soul:character_personality": "x"}})
+    res_own = wt.run_tool(ctx12, "update_character",
+                          {"name": "Demo Other", "patch": {"soul:character_task": "own tasks"}})
 finally:
     linked_characters.soul_owner = _orig_owner
 check("(y) a linked character's shared section refused",
       not res.ok and "Demo Leader" in res.line
       and soul_writer.read_text("Demo Other", P_REL) == "calm\n", res)
+own_e = [e for e in wr.entries(run12) if (e.get("inverse") or {}).get("op")
+         == "restore_soul"]
+check("(y) a linked character's own section written and journaled",
+      res_own.ok and soul_writer.read_text("Demo Other", T_REL) == "own tasks\n"
+      and len(own_e) == 1, (res_own, own_e))
 
 # Home + schedule through update_character, then undo.
 h0 = wu.home_schedule_state("Demo Other")
@@ -1093,6 +1104,9 @@ rep = wu.undo(run12)
 check("(y) undo: home and schedule as before",
       rep["complete"] and wu.home_schedule_state("Demo Other") == h0,
       (rep, wu.home_schedule_state("Demo Other"), h0))
+check("(y) undo: the own soul section as before",
+      soul_writer.read_text("Demo Other", T_REL) == "tasks by a human\n",
+      soul_writer.read_text("Demo Other", T_REL))
 wr.set_status(run12, "rolled_back")
 
 # apply_character contract (Task 1 acceptance): a False save is a ValueError;

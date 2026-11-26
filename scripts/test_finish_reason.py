@@ -263,9 +263,10 @@ def main() -> int:
           repr("".join(c.content for c in chunks_none)))
 
     # The other two astream consumers, replayed as they are written:
-    # routes/world_dev.py:1532 (accumulate, skipping falsy content) and
+    # an accumulating consumer (skipping falsy content, as the removed World
+    # Dev schema chat did) and
     # llm_router.py:212 (preload ping, breaks after the first chunk).
-    async def world_dev_pattern():
+    async def accumulate_pattern():
         full = ""
         async for chunk in stream_client(pieces, "length").astream([]):
             content = getattr(chunk, "content", None)
@@ -279,8 +280,8 @@ def main() -> int:
             break
         return True
 
-    check("world_dev consumer sees the same text",
-          asyncio.run(world_dev_pattern()) == expected)
+    check("accumulating consumer sees the same text",
+          asyncio.run(accumulate_pattern()) == expected)
     check("preload ping still terminates", asyncio.run(preload_ping()))
 
     print("7. SSE path (StreamingAgent)")

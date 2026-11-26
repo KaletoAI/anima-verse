@@ -141,7 +141,7 @@ item that reveals a secret is refused.
 ## Position and outline
 
 - `x`, `z` — the pin, world metres (x east, z south). Give both or neither; `yaw` needs them.
-- A new place drawn on the map (the map schema's stub: name, description, spot, outline) is
+- A new place drawn on the map (name, description, spot, outline) is
   `create_location{data: {name, description, indoor, danger_level}, x, z, yaw, boundary}`;
   rooms and the rest follow with `update_location` / `set_room_layout`.
 - `boundary` — the ground the place covers, `[[x, z], …]` in metres measured FROM ITS OWN PIN

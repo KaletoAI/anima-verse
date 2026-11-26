@@ -116,7 +116,7 @@ Sections:
       Re-seeding one active intent with the NPC before delete_character
       must also leave that intent expired with participant_gone.
 
-  [9] The generation schema resolves completely. `_load_schema` substitutes by
+  [9] The generation schema resolves completely. `layout_prompt.load_schema` substitutes by
       plain `str.replace` and leaves an unknown placeholder standing as literal
       `{name}`, so the LLM would be told to fill a field list that reads
       "{generable_fields}". Any leftover `{lower_snake_case}` token fails. The
@@ -682,7 +682,7 @@ check("delete_character swept the trace", count_memories(OBSERVER), 2)
 
 # ---------------------------------------------------------------------------
 print("\n[9] The generation schema comes out fully resolved")
-# `_load_schema` substitutes by plain str.replace and leaves an unknown
+# `layout_prompt.load_schema` substitutes by plain str.replace and leaves an unknown
 # placeholder standing as literal `{name}` — the LLM would then be told to fill
 # a field list that reads "{generable_fields}". A leftover brace is therefore a
 # hard failure, not cosmetics. (`{` inside the JSON examples is fine; the check

@@ -16,6 +16,7 @@
     "build:admin": "npm run build -w frontend",
     "build:hud": "npm run build -w hud",
     "build:client3d": "npm run build -w client3d",
+    "lint": "npm run lint -w frontend",
     "build": "npm run build -w frontend && npm run build -w hud && npm run build -w client3d"
   },
   "overrides": {

@@ -12,8 +12,11 @@ never b at its destination; arrival then reaches a/b. Utterance reaches a
 with scene. Outfit reaches a with presence+self. Party reaches a with
 presence+notices. Private npc patches reach nobody; private a reaches only
 a with self. Public npc patches reach a with presence+self. Delete,
-model_checkpoint reaches a with presence; profile_image reaches a with presence+self. The twin
-world_dev_patch follows the same private/public rule. Inventory is NEU:
+model_checkpoint reaches a with presence; profile_image reaches a with presence+self. The World Dev
+free mode's profile writers (world_dev_tools._update_character and the undo's
+world_dev_undo._undo_restore_character) follow the same private/public rule;
+their behaviour is smoke_world_dev_sync.py (a)/(b), here they are inventory
+rows only. Inventory is NEU:
 the old writers have no sync calls. Helper failures are NEU because the
 helpers did not exist; injected lookup/notification failures must escape
 none of them, and party_of must return empty. No REGRESSION cases are relabelled.
@@ -60,7 +63,8 @@ INVENTORY = {
     "app/core/perception.py": ["record_utterance"],
     "app/core/npc_pool.py": ["_unplace"],
     "app/core/character_ops.py": ["apply_profile_update"],
-    "app/routes/world_dev.py": ["_apply_profile_patch_data_sync"],
+    "app/core/world_dev_tools.py": ["_update_character"],
+    "app/core/world_dev_undo.py": ["_undo_restore_character"],
     "app/models/world.py": ["evict_rooms_to_ground"],
 }
 
@@ -399,12 +403,6 @@ def behaviour(case):
         if case == "private_profile":
             character_ops.apply_profile_update("a", {"fields": fields})
             expect(conns, ["self"])
-    elif case == "world_dev_patch":
-        from app.routes.world_dev import _apply_profile_patch_data_sync
-        _apply_profile_patch_data_sync({"character_name": "npc", "fields": {"backstory": "demo"}})
-        expect(conns)
-        _apply_profile_patch_data_sync({"character_name": "npc", "fields": {"current_feeling": "happy"}})
-        expect(conns, ["presence", "self"])
     elif case == "delete":
         assert ch.delete_character("npc")
         expect(conns, ["presence"])
@@ -763,7 +761,7 @@ def review_endpoint_gaps():
 
 if __name__ == "__main__":
     failures = []
-    cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image world_dev_patch helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
+    cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
     cases += ["part3_" + c for c in "notification mark_all_global phone inventory room_item room_item_cold room_item_hidden world_admin background_skill terrain height event_local event_global rule_local mind force_status".split()]
     cases += ["commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"]
     cases += ["review_endpoint_gaps"]

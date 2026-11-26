@@ -1067,6 +1067,7 @@ SCHEMA_STATEMENTS = [
         max_steps        INTEGER NOT NULL DEFAULT 0,
         max_tokens_total INTEGER NOT NULL DEFAULT 0,
         max_tokens       INTEGER,
+        effort           TEXT NOT NULL DEFAULT '',
         tokens_in        INTEGER NOT NULL DEFAULT 0,
         tokens_out       INTEGER NOT NULL DEFAULT 0,
         cost_total       REAL NOT NULL DEFAULT 0,
@@ -1179,6 +1180,10 @@ ALTER_MIGRATIONS = [
     # = the model's default), so a follow-up after a restart resolves the
     # model with the same cap.
     ("world_dev_runs", "max_tokens", "INTEGER"),
+    # world_dev_runs: the Effort level the run was started with ('' = the
+    # model's default; world_dev_agent.EFFORT_LEVELS), so a follow-up after a
+    # restart resolves the model with the same thinking depth.
+    ("world_dev_runs", "effort", "TEXT NOT NULL DEFAULT ''"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),

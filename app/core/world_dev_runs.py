@@ -138,19 +138,28 @@ def _check_status(status: str) -> None:
 
 def create_run(task: str, model: str, provider: str, user_id: str,
                max_steps: int, max_tokens_total: int,
-               max_tokens: Optional[int] = None) -> str:
+               max_tokens: Optional[int] = None, effort: str = "") -> str:
     """Insert a new ``running`` run; raises ``RunOpenError`` when one is open.
-    ``max_tokens`` is the per-reply cap (None = the model's default)."""
+    ``max_tokens`` is the per-reply cap (None = the model's default);
+    ``effort`` the Effort level ('' = the model's default), stored lowercased;
+    ValueError for a level not in EFFORT_LEVELS (checked before the insert)."""
+    # Lazy: world_dev_agent imports this module.
+    from app.core.world_dev_agent import EFFORT_LEVELS
+    effort = (effort or "").strip().lower()
+    if effort and effort not in EFFORT_LEVELS:
+        raise ValueError(f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})")
     run_id = "wdr_" + uuid.uuid4().hex[:12]
     try:
         with _Db() as conn:
             conn.execute(
                 "INSERT INTO world_dev_runs (id, task, model, provider, user_id, "
-                "status, max_steps, max_tokens_total, max_tokens, created_at) "
-                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+                "status, max_steps, max_tokens_total, max_tokens, effort, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)",
                 (run_id, task or "", model or "", provider or "", user_id or "",
                  int(max_steps), int(max_tokens_total),
-                 None if max_tokens is None else int(max_tokens), utc_now_iso()))
+                 None if max_tokens is None else int(max_tokens),
+                 effort,
+                 utc_now_iso()))
     except sqlite3.IntegrityError as exc:
         if "idx_world_dev_runs_one_open" not in str(exc):
             raise

@@ -153,14 +153,12 @@ relief.
   the run (a wood that has to give way to a lake); the discard of the run brings it back
   exactly. An area created in THIS turn is refused there — use `delete_created` for it.
 
-## From a map layout — every map-schema field and its tool
+## Which tool for which map change
 
-| map layout field | free tool |
+| what the task asks for | tool |
 |---|---|
-| `terrain_areas[]` (kind, label, polygon or stroke, z_order) | `add_terrain_area` with the same keys — a water `stroke` flows forward here unless it sends `"water": {"flow_along": ""}` (still water, as in the map schema) |
-| `height_areas[]` (polygon, height_m, falloff_m, label) | `add_height_area` with the same keys |
-| `locations[]` with an `id` (pos_x, pos_z, yaw_deg) | `place_location{id, x, z, yaw}` |
-| `locations[]` stub (name, description, indoor, danger_level, pos, yaw, boundary) | `create_location{data: {name, description, indoor, danger_level}, x, z, yaw, boundary}` (`read_manual locations`) |
-| replace mode (wipe the painted ground first) | `delete_area` per area that has to go — never a blanket wipe |
-| `bounds` | stay inside the bounds `world_overview` names |
-| `why` / `summary` | your summary of the turn |
+| a terrain area (kind, label, polygon or stroke, z_order) | `add_terrain_area` — a water `stroke` flows forward unless it sends `"water": {"flow_along": ""}` (still water) |
+| a hill, plateau or hollow (polygon, height_m, falloff_m, label) | `add_height_area` |
+| move or turn an existing location | `place_location{id, x, z, yaw}` |
+| a new place on the map | `create_location{data: {name, description, indoor, danger_level}, x, z, yaw, boundary}` (`read_manual locations`) |
+| painted ground that has to give way | `delete_area` per area that has to go — never a blanket wipe |

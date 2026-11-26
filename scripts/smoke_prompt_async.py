@@ -90,7 +90,6 @@ class AsyncPrompts(unittest.IsolatedAsyncioTestCase):
                 "get_character_profile", "get_character_current_location", "get_character_current_room"}},
             "app/core/act_engine.py": {"_run_storyteller_agent": {"render_task"}},
             "app/core/npc_ops.py": {"_run_pipeline": {"render_task"}},
-            "app/routes/world_dev.py": {"validate_json_route": {"render_task"}},
             "app/routes/content_packs.py": {"character_intro_suggest": {"render_task"}},
             "app/core/streaming.py": {"_ensure_speech_mapped": {"_render_speech_retry"}},
         }

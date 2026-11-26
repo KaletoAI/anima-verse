@@ -186,7 +186,7 @@ stops acting autonomously).
 - **Map layout backup:** the Map tab's **Download layout** saves where every location stands
   (position and rotation in metres) as a ZIP, **Restore layout** puts them back — matched by id,
   characters travelling along, terrain untouched (`/world/map/export`, `/world/map/import`).
-- **World Dev free mode:** Game-Admin → World Dev → **Free (agent)** gives a model a plain-language task
+- **World Dev free mode:** Game-Admin → **World Dev** gives a model a plain-language task
   ("add a bakery with two rooms next to the market") and lets it build directly in the world through
   journaled tools. The world is frozen while the run is open; a failed turn is rolled back on its own,
   and the finished run is **Accept**ed or **Discard**ed (Discard undoes every write, skipping anything
@@ -691,8 +691,8 @@ are stored in the world database (`llm_template_overrides`), not in the shared t
 
 Cross-world, read-only resources shared by every world live under `shared/`: character / expression /
 pose / soul templates, the LLM prompt templates, the item catalog, surface textures, the animation
-clip library and reference rig, language files, and the world-dev prompt specifications
-(`character`, `location`, `map`). **Model capabilities are deliberately outside the worlds** —
+clip library and reference rig, language files, and the prompt specifications of the building
+assistant (`layout`) and the temporary NPCs (`npc_character`). **Model capabilities are deliberately outside the worlds** —
 `shared/config/model_capabilities.json` describes a model plus its hardware, not a world, and is
 tracked in git. Model binaries fetched by `fetch_models.sh` live under `models/` (gitignored), as do
 `voices/`, `exports/` and `storage/`.

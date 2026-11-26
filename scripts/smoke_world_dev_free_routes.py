@@ -23,8 +23,18 @@ WHAT IS CHECKED, and where every expected value comes from
 
 Start state: world not frozen, no run.
 
- 1. GET /world-dev/schemas (admin) lists {"name": "free", "label": "Free
-    (agent)"} (interface list of Task 8).
+ 1. The schema modes are gone (plan 2026-11-25-world-dev-free-remove-schema-
+    modes.md, Task 4): GET /world-dev/schemas, POST /world-dev/chat, POST
+    /world-dev/apply-json and GET /world-dev/character-templates (admin)
+    -> 404 each (no route of that path left on the router; the admin passes
+    the gate, so a 404 is the router's, not a refusal). And the router's
+    whole (method, path) set is exactly the 14 the plan keeps (Task 4):
+    POST pause-all, POST resume-all, GET pause-status, POST trigger-thought,
+    GET free/defaults, POST free/start, GET free/runs, GET free/open,
+    GET free/{run_id}, POST free/{run_id}/message, POST free/{run_id}/stop,
+    POST free/{run_id}/accept, POST free/{run_id}/discard,
+    GET free/{run_id}/events — all under /world-dev. A removed route that
+    comes back fails here.
  2. GET /world-dev/free/defaults (admin) -> {"max_steps": 60,
     "max_tokens_total": 600000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
     of world_dev_agent).
@@ -249,9 +259,27 @@ def location_names():
 def main(c):
     set_world_frozen(False)
 
-    r = c.get("/world-dev/schemas", headers=ADMIN)
-    check("1 schemas lists free", {"name": "free", "label": "Free (agent)"}
-          in r.json().get("schemas", []), r.json())
+    for method, path in (("get", "/world-dev/schemas"), ("post", "/world-dev/chat"),
+                         ("post", "/world-dev/apply-json"),
+                         ("get", "/world-dev/character-templates")):
+        r = getattr(c, method)(path, headers=ADMIN)
+        check(f"1 removed route {method.upper()} {path} -> 404",
+              r.status_code == 404, r.status_code)
+    kept = {("POST", "/world-dev/pause-all"), ("POST", "/world-dev/resume-all"),
+            ("GET", "/world-dev/pause-status"), ("POST", "/world-dev/trigger-thought"),
+            ("GET", "/world-dev/free/defaults"), ("POST", "/world-dev/free/start"),
+            ("GET", "/world-dev/free/runs"), ("GET", "/world-dev/free/open"),
+            ("GET", "/world-dev/free/{run_id}"),
+            ("POST", "/world-dev/free/{run_id}/message"),
+            ("POST", "/world-dev/free/{run_id}/stop"),
+            ("POST", "/world-dev/free/{run_id}/accept"),
+            ("POST", "/world-dev/free/{run_id}/discard"),
+            ("GET", "/world-dev/free/{run_id}/events")}
+    have = {(m, rt.path) for rt in world_dev_route.router.routes
+            for m in (getattr(rt, "methods", None) or ()) if m != "HEAD"}
+    check("1 the router's (method, path) set is exactly the 14 kept routes",
+          len(kept) == 14 and have == kept,
+          {"extra": sorted(have - kept), "missing": sorted(kept - have)})
 
     r = c.get("/world-dev/free/defaults", headers=ADMIN)
     check("2 defaults", r.status_code == 200

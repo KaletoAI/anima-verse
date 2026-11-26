@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: World-Dev and temp NPCs know the species body slots (prompt + apply + patch);
+"""Smoke: World-Dev and temp NPCs know the species body slots (prompt + apply);
 World-Dev also sets home, daily schedule, start place and chat mode.
 
 Body details (hair, eyes, build, …) are not template fields — species packages
@@ -40,8 +40,6 @@ WHAT IS CHECKED, and where every expected value comes from
       An attribute condition {"attributes.type": ["vagina", None]} renders as
       " (only when type=vagina)": the prefix goes, the null entry is dropped
       (checked through ``body_slots._format_conditions`` directly).
-      The block is part of ``_format_generable_fields_for_templates`` — that
-      is what fills ``{generable_fields}`` in the character schema.
 
   (b) THE APPLY of a new female ``human-roleplay`` character with
 
@@ -56,19 +54,21 @@ WHAT IS CHECKED, and where every expected value comes from
       llm_generable: false → skipped (eyes stores nothing); facial_hair
       applies only to gender=male → skipped; tail is no slot → skipped. Stored: {"hair": {"color": "copper-red"}}, 6 warnings.
 
-  (c) THE PROFILE PATCH with {age: 30, body_slots: {hair: {length: long}}}:
-      the slot merges per attribute → {"hair": {"color": "copper-red",
-      "length": "long"}}, age 30, applied_fields ["age", "body_slots"], no
-      warning. A patch with ONLY body_slots {eyes: {color: green}} adds
-      {"eyes": {"color": "green"}} and reports ["body_slots"].
+  The World Dev schema modes are gone (plan 2026-11-25-world-dev-free-remove-
+  schema-modes.md, Task 4): the checks on the schema chat's prompt builders
+  (``_format_generable_fields_for_templates``, ``_format_home_schedule_block``)
+  and on the profile-patch route went with them. The free mode's body-slot and
+  home/schedule writes are checked in smoke_world_dev_char_fields.py and
+  smoke_world_dev_tools.py; this smoke keeps the temp-NPC prompt block and the
+  core writer ``world_dev_apply.apply_character``.
 
-  (d) THE TEMP-NPC FIELD LIST: ``npc_generable_fields()`` (template "" →
+  (c) THE TEMP-NPC FIELD LIST: ``npc_generable_fields()`` (template "" →
       ``npc-temporary``) ends with the very block of (a), only the header
       names ``npc-temporary``: the template field lines, one blank line, then
       ``llm_slot_block("npc-temporary")``. Its slot lines equal those of (a)
       — same package, same declarations.
 
-  (e) HOME, DAILY SCHEDULE, START PLACE, CHAT MODE. Two places: "Waldgasthaus"
+  (d) HOME, DAILY SCHEDULE, START PLACE, CHAT MODE. Two places: "Waldgasthaus"
       (rooms Gästezimmer, Schankstube) and "Kontor" (room Büro). A new
       character with
 
@@ -87,15 +87,12 @@ WHAT IS CHECKED, and where every expected value comes from
       3 warnings.
       An EDIT apply with home_location "Kontor" re-homes it (Kontor, no room)
       but does not move it (still Waldgasthaus / Gästezimmer) and keeps
-      known_locations [Waldgasthaus, Kontor]. A profile patch {home_room:
-      "Büro"} refers to the current home → home_room = id of Büro,
-      applied_fields ["home_room"], no warning; {home_room: "Keller"} → 1
-      warning, home_room unchanged. An edit with the SAME home "Kontor" and no
-      room keeps Büro.
-      The prompt block is "" without context locations and names
-      `home_location` / `daily_schedule` with them.
+      known_locations [Waldgasthaus, Kontor]. An edit apply {home_location
+      "Kontor", home_room "Büro"} sets home_room = id of Büro (the room is
+      resolved inside the new home). An edit with the SAME home "Kontor" and
+      no room keeps Büro.
 
-  (f) THE CORE CONTRACT of ``world_dev_apply.apply_character`` (moved out of
+  (e) THE CORE CONTRACT of ``world_dev_apply.apply_character`` (moved out of
       the route for the free mode). A new ``human-roleplay`` character "Smoke
       Tailor" with one outfit "Work" of two pieces: {slots [top], "Linen
       Shirt"} and {slots [bogus], "Ghost Piece"}. By hand: "bogus" is no
@@ -140,9 +137,6 @@ from app.models.character import (get_character_config,  # noqa: E402
                                   get_character_outfits,
                                   list_available_characters)
 from app.core.world_dev_apply import apply_character  # noqa: E402
-from app.routes.world_dev import (  # noqa: E402
-    _apply_profile_patch_data_sync,
-    _format_generable_fields_for_templates, _format_home_schedule_block)
 
 FAILS = []
 
@@ -193,8 +187,6 @@ check("(a) header", block.splitlines()[0], "### Body (`body_slots`, template `hu
 check("(a) animal-default has no block", llm_slot_block("animal-default"), "")
 check("(a) attribute condition", _format_conditions({"attributes.type": ["vagina", None]}),
       " (only when type=vagina)")
-check("(a) block is part of {generable_fields}",
-      block in _format_generable_fields_for_templates("human-roleplay"), True)
 
 # (b) apply of a new character
 NAME = "Smoke Ylva"
@@ -211,32 +203,17 @@ check("(b) stored slots", get_character_profile(NAME).get("body_slots"),
       {"hair": {"color": "copper-red"}})
 check("(b) warning count", len(result["warnings"]), 6)
 
-# (c) profile patch
-patch = _apply_profile_patch_data_sync({"character_name": NAME, "fields": {
-    "age": 30, "body_slots": {"hair": {"length": "long"}}}})
-profile = get_character_profile(NAME)
-check("(c) merged slot", profile.get("body_slots"),
-      {"hair": {"color": "copper-red", "length": "long"}})
-check("(c) age patched", profile.get("age"), 30)
-check("(c) applied fields", patch["applied_fields"], ["age", "body_slots"])
-check("(c) no warnings", patch["warnings"], [])
-patch = _apply_profile_patch_data_sync({"character_name": NAME, "fields": {
-    "body_slots": {"eyes": {"color": "green"}}}})
-check("(c) body_slots-only patch", get_character_profile(NAME).get("body_slots"),
-      {"hair": {"color": "copper-red", "length": "long"}, "eyes": {"color": "green"}})
-check("(c) body_slots-only applied fields", patch["applied_fields"], ["body_slots"])
-
-# (d) temp-NPC field list
+# (c) temp-NPC field list
 npc_block = llm_slot_block("npc-temporary")
 npc_fields = npc_generable_fields("")
-check("(d) npc header", npc_block.splitlines()[0],
+check("(c) npc header", npc_block.splitlines()[0],
       "### Body (`body_slots`, template `npc-temporary`)")
-check("(d) npc slot lines equal (a)",
+check("(c) npc slot lines equal (a)",
       [line for line in npc_block.splitlines() if line.startswith(("- ", "  - "))],
       [line for line in block.splitlines() if line.startswith(("- ", "  - "))])
-check("(d) npc field list ends with the block", npc_fields.endswith("\n\n" + npc_block), True)
+check("(c) npc field list ends with the block", npc_fields.endswith("\n\n" + npc_block), True)
 
-# (e) home, daily schedule, start place, chat mode
+# (d) home, daily schedule, start place, chat mode
 INN = world.add_location("Waldgasthaus", "An inn at the edge of the wood.",
                          rooms=[{"name": "Gästezimmer"}, {"name": "Schankstube"}])["id"]
 OFFICE = world.add_location("Kontor", "An office.", rooms=[{"name": "Büro"}])["id"]
@@ -248,10 +225,6 @@ def room_id(loc_id, name):
 
 
 GUEST, DESK = room_id(INN, "Gästezimmer"), room_id(OFFICE, "Büro")
-check("(e) no block without context", _format_home_schedule_block([]), "")
-_hb = _format_home_schedule_block([INN])
-check("(e) block names the fields", ("`home_location`" in _hb, "`daily_schedule`" in _hb),
-      (True, True))
 WANDERER = "Smoke Wanderer"
 result = apply_character({
     "character_name": WANDERER, "template": "human-roleplay", "gender": "female",
@@ -267,41 +240,36 @@ result = apply_character({
 }, created_by="smoke")
 cfg = get_character_config(WANDERER)
 profile = get_character_profile(WANDERER)
-check("(e) home", (cfg.get("home_location"), cfg.get("home_room")), (INN, GUEST))
-check("(e) schedule", get_character_daily_schedule(WANDERER)["slots"], [
+check("(d) home", (cfg.get("home_location"), cfg.get("home_room")), (INN, GUEST))
+check("(d) schedule", get_character_daily_schedule(WANDERER)["slots"], [
     {"hour": 0, "sleep": True, "location": "", "role": ""},
     {"hour": 9, "location": OFFICE, "role": "arbeitet", "sleep": False},
     {"hour": 19, "location": INN, "role": "isst", "sleep": False},
 ])
-check("(e) known_locations", cfg.get("known_locations"), [INN, OFFICE])
-check("(e) placed at home", (profile.get("current_location"), profile.get("current_room")),
+check("(d) known_locations", cfg.get("known_locations"), [INN, OFFICE])
+check("(d) placed at home", (profile.get("current_location"), profile.get("current_room")),
       (INN, GUEST))
-check("(e) chat_mode", cfg.get("chat_mode"), "rp_first")
-check("(e) warning count", len(result["warnings"]), 3)
+check("(d) chat_mode", cfg.get("chat_mode"), "rp_first")
+check("(d) warning count", len(result["warnings"]), 3)
 
 apply_character({"character_name": WANDERER, "template": "human-roleplay",
                            "home_location": "Kontor"}, created_by="smoke")
 cfg = get_character_config(WANDERER)
 profile = get_character_profile(WANDERER)
-check("(e) edit re-homes", (cfg.get("home_location"), cfg.get("home_room")), (OFFICE, ""))
-check("(e) edit does not move", (profile.get("current_location"), profile.get("current_room")),
+check("(d) edit re-homes", (cfg.get("home_location"), cfg.get("home_room")), (OFFICE, ""))
+check("(d) edit does not move", (profile.get("current_location"), profile.get("current_room")),
       (INN, GUEST))
-check("(e) edit keeps known_locations", cfg.get("known_locations"), [INN, OFFICE])
+check("(d) edit keeps known_locations", cfg.get("known_locations"), [INN, OFFICE])
 
-patch = _apply_profile_patch_data_sync({"character_name": WANDERER,
-                                        "fields": {"home_room": "Büro"}})
-check("(e) patch room of current home", get_character_config(WANDERER).get("home_room"), DESK)
-check("(e) patch applied fields", (patch["applied_fields"], patch["warnings"]),
-      (["home_room"], []))
-patch = _apply_profile_patch_data_sync({"character_name": WANDERER,
-                                        "fields": {"home_room": "Keller"}})
-check("(e) unknown room", (len(patch["warnings"]),
-                           get_character_config(WANDERER).get("home_room")), (1, DESK))
+apply_character({"character_name": WANDERER, "template": "human-roleplay",
+                 "home_location": "Kontor", "home_room": "Büro"}, created_by="smoke")
+check("(d) edit sets the room of the new home",
+      get_character_config(WANDERER).get("home_room"), DESK)
 apply_character({"character_name": WANDERER, "template": "human-roleplay",
                            "home_location": "Kontor"}, created_by="smoke")
-check("(e) same home keeps the room", get_character_config(WANDERER).get("home_room"), DESK)
+check("(d) same home keeps the room", get_character_config(WANDERER).get("home_room"), DESK)
 
-# (f) core contract: created_items, must_be_new, ValueError
+# (e) core contract: created_items, must_be_new, ValueError
 TAILOR = "Smoke Tailor"
 DRAFT = {"character_name": TAILOR, "template": "human-roleplay", "gender": "male",
          "outfits": [{"name": "Work", "pieces": [
@@ -310,12 +278,12 @@ DRAFT = {"character_name": TAILOR, "template": "human-roleplay", "gender": "male
          ]}]}
 result = apply_character(dict(DRAFT), created_by="smoke")
 _work = next((o for o in get_character_outfits(TAILOR) if o.get("name") == "Work"), {})
-check("(f) one item created", len(result.get("created_items") or []), 1)
-check("(f) created_items are the outfit's pieces", result.get("created_items"),
+check("(e) one item created", len(result.get("created_items") or []), 1)
+check("(e) created_items are the outfit's pieces", result.get("created_items"),
       _work.get("pieces"))
-check("(f) pieces_created", [o["pieces_created"] for o in result["outfits"]], [1])
+check("(e) pieces_created", [o["pieces_created"] for o in result["outfits"]], [1])
 result = apply_character(dict(DRAFT), created_by="smoke")
-check("(f) re-apply creates nothing", result.get("created_items"), [])
+check("(e) re-apply creates nothing", result.get("created_items"), [])
 
 
 def raises_value_error(data, **kw):
@@ -328,15 +296,15 @@ def raises_value_error(data, **kw):
     return "no error"
 
 
-check("(f) must_be_new on an existing name",
+check("(e) must_be_new on an existing name",
       raises_value_error({"character_name": TAILOR, "template": "human-roleplay"},
                          must_be_new=True), "ValueError")
-check("(f) must_be_new compares the VALIDATED name",
+check("(e) must_be_new compares the VALIDATED name",
       raises_value_error({"character_name": " Smoke Tailor ", "template": "human-roleplay"},
                          must_be_new=True), "ValueError")
-check("(f) still one Smoke Tailor",
+check("(e) still one Smoke Tailor",
       [n for n in list_available_characters() if n.strip() == TAILOR], [TAILOR])
-check("(f) invalid new name is a ValueError",
+check("(e) invalid new name is a ValueError",
       raises_value_error({"character_name": "a/b", "template": "human-roleplay"}),
       "CharacterNameError")
 

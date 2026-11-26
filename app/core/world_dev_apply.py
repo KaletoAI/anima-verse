@@ -1,11 +1,11 @@
-"""World Dev character apply — the core behind the World Dev routes.
+"""World Dev character apply — one character draft written through the core.
 
 One character draft (profile fields, soul sections, config fields, body
 slots, outfits, home and daily schedule) is written through the character
-model savers. Called by the World Dev routes (``/apply-character``,
-``/apply-json``, the outfit and profile-patch routes), by the temp-NPC
-generator (``npc_ops.apply_npc``) and by the World Dev free mode. Errors are
-``ValueError``; the routes map them to HTTP 400.
+model savers. Called by the World Dev free mode (``world_dev_tools``) and by
+the temp-NPC generator (``npc_ops.apply_npc``). Errors are ``ValueError``;
+the free mode turns them into a refused tool call, the NPC generator into
+its own error.
 
 Also home of ``_map_world_context``, the one reader of the world facts the
 map-layout sanitizer needs.
@@ -82,7 +82,6 @@ def _stat_number(value: Any) -> bool:
     """A stat value the apply takes: a finite WHOLE number 0-100 (no bool) —
     a fractional value is skipped with a warning like any other, never
     truncated (the free-mode tool refuses it the same way)."""
-    import math
     # Range before any float(): a huge JSON integer (10**400) would make
     # float() raise OverflowError; NaN fails the range comparison.
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -98,15 +97,15 @@ def apply_character(char_data: Dict[str, Any],
                     place_compliance: bool = True) -> Dict[str, Any]:
     """Apply character JSON in-process (profile + soul MD + outfits + config).
 
-    Used by /apply-character (HTTP), /apply-json (smart import), the temp-NPC
-    generator (``npc_ops.apply_npc``) and the World Dev free mode. Caller
+    Used by the temp-NPC generator (``npc_ops.apply_npc``) and the World Dev
+    free mode. Caller
     is responsible for handing in a *normalized* dict — flat fields, no nested
     soul object. Sub-sections without a template source_file mapping (e.g.
     soul/soul.md, soul/tasks.md) can be passed via the special key
     ``_extra_soul_md`` as ``{"<section>": "<full markdown>"}``.
 
     Raises ``ValueError`` (a ``CharacterNameError`` for a name the rule
-    refuses) — the routes map it to a 400. With ``must_be_new=True`` a
+    refuses) — the caller reports its text. With ``must_be_new=True`` a
     character whose VALIDATED name already exists is a ``ValueError`` too,
     before anything is written. It is checked once more under the
     ``character_profile`` lock, right before the new row is stored; only
@@ -138,8 +137,8 @@ def apply_character(char_data: Dict[str, Any],
     # THE name rule (app/core/character_name.py) — only for a NEW character.
     # An existing one is never re-validated, so a world built before the rule
     # keeps applying. The error is a CharacterNameError carrying the localized
-    # text; the routes turn every ValueError into a 400 with that text, so the
-    # World Dev tab shows it in its error toast as before.
+    # text; the callers report every ValueError with that text (the free mode
+    # as the refusal line the agent and the panel see).
     if _is_new:
         from app.core.character_name import (CharacterNameError,
                                              localized_message,
@@ -170,7 +169,7 @@ def apply_character(char_data: Dict[str, Any],
 
     # SERIALIZED PER CHARACTER (``character_profile``): from the read to the
     # save this is one read-modify-write of the whole profile. The apply runs
-    # in the threadpool like every other route body, so a concurrent writer of
+    # in a worker thread, so a concurrent writer of
     # the same character (a profile patch, an equip) would otherwise be
     # overwritten with the pre-state this call read.
     from app.core.keyed_lock import keyed_lock
@@ -427,37 +426,6 @@ def _resolve_room_id(location: Dict[str, Any], identifier: Any) -> str:
         if name and (room.get("id") == ident or name.casefold() == folded):
             return str(room.get("id") or "")
     return ""
-
-
-def _home_schedule_for_edit(char_name: str) -> Dict[str, Any]:
-    """The character's current home and daily schedule in the draft's own
-    shape — place and room NAMES, as the LLM writes them — for the edit
-    context. Empty keys are left out."""
-    from app.models.character import get_character_daily_schedule
-    from app.models.world import get_location_by_id
-
-    def place_name(loc_id: str) -> str:
-        loc = get_location_by_id(loc_id) if loc_id else None
-        return str((loc or {}).get("name") or loc_id or "")
-
-    out: Dict[str, Any] = {}
-    cfg = get_character_config(char_name) or {}
-    home_id = str(cfg.get("home_location") or "").strip()
-    home = get_location_by_id(home_id) if home_id else None
-    if home:
-        out["home_location"] = home.get("name") or home_id
-        room_id = str(cfg.get("home_room") or "").strip()
-        room = next((r for r in home.get("rooms") or [] if r.get("id") == room_id), None)
-        if room and room.get("name"):
-            out["home_room"] = room["name"]
-    schedule = get_character_daily_schedule(char_name) or {}
-    if schedule.get("enabled") and schedule.get("slots"):
-        out["daily_schedule"] = [
-            {"hour": s["hour"], "sleep": True} if s.get("sleep") else
-            {"hour": s["hour"], "location": place_name(s.get("location") or ""),
-             "role": s.get("role") or ""}
-            for s in schedule["slots"]]
-    return out
 
 
 def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],

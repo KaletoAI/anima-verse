@@ -1,6 +1,6 @@
 ---
 task: world_dev_validate
-purpose: Validates a draft JSON object against a schema (markdown) and lists missing/incomplete fields. Used by /world-dev/validate.
+purpose: Validates a generated NPC draft against its schema (markdown) and lists missing/incomplete fields. Used by the temporary-NPC generation (npc_ops).
 placeholders:
   schema_text: Markdown schema description
   draft_json: The draft JSON object as a pretty-printed string

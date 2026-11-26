@@ -115,7 +115,7 @@ into "what does the room need" and "what does the library already have";
 | `room_description_sync.md` | `room_description_sync` | `room_description_sync.propose` | Rewrite a room's description so it names the props that now stand in it — preview in the Furnish dialog, the admin decides |
 | `prop_mount_classify.md` | `prop_mount_classify` | `props_mount.classify_mounts` | Classify library props into `floor` / `wall` / `ceiling` / `surface` (batched); the guess lands as `mount_suggested` and the admin confirms it in the Props tab |
 | `hull_design.md` | `hull_design` | `hull_model` | Choose a building hull style and bounded overrides from floor plan facts |
-| `world_dev_validate.md` | the model chosen in the dialog (`routes/world_dev.py`); `npc_ops` uses `npc_generate` | `routes/world_dev.py`, `npc_ops` | Check a world-dev draft against its schema and list what is wrong |
+| `world_dev_validate.md` | `npc_generate` | `npc_ops` (the validate stage of a temporary NPC) | Check a generated NPC draft against its schema and list what is wrong |
 
 ### Temporary NPCs
 

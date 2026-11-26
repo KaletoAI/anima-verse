@@ -121,32 +121,26 @@ port of (`frontend/src/tabs/map/mapMath.ts`), the rest from the geometry.
           the seed square of a stub at (0,0) and the 10 m square of `loc_c`
               at (8,0) span [-5,5] and [3,13] -> they share [3,5]
                                   -> footprint_overlap
-          layout_counts splits the two promises: one existing place moved and
-              one stub -> {"positions": 1, "created": 1}
 
-  [5b] Stub apply / restore:
-        apply -> the place EXISTS, with the ground room every location has,
-              its boundary stored clockwise, plan_width_m derived, indoor and
-              danger_level set, and positioned at the stub's pin
-        a stub named exactly like an existing place -> a SECOND place with its
-              own id (names are not keys), the first one untouched
-        restore -> the created places are DELETED again ("removed": 2) while
-              the moved existing one is put back where it was; a place created
-              BY HAND after the apply survives the restore, because the
-              snapshot only takes back what it recorded
+  [5] The writing half (apply, stub creation, snapshots, restore) is gone
+      (plan 2026-11-25-world-dev-free-remove-schema-modes.md, Task 5 — the
+      free-mode tools write the map, journaled; its absence is proven by the
+      plan's grep, not here). What stays is current_world_bounds, against a
+      throwaway world: Tavern (40 m square SQ_40, pin (5,5)) spans [-15,25]
+      on both axes, Smithy is unplaced and adds nothing, the grass square
+      [0,10]² lies inside
+        -> {"min_x": -15, "min_z": -15, "max_x": 25, "max_z": 25}
 
-  [5] Apply / snapshot / restore against a throwaway world:
-        merge      -> counts, and the areas that were there survive
-        replace_terrain -> the old areas are gone, only the new ones remain
-        positions  -> update_location_position was called for each named place
-        an invalid polygon in the batch -> ValueError and NOTHING was written
-        snapshot -> restore puts back the EXACT ids, polygons and positions
-              that were there before the apply (ids included: a restore must
-              return the very rows, not look-alikes)
+  [6] A standing guard that the module stays read-only, by an AST scan of
+      every import in it (top-level AND lazy): the modules it reads are
+      exactly math, typing, app.core.{world_geometry, world_ops,
+      terrain_query} and app.models.{terrain, world} — no json, no secrets,
+      no task queue; and the only names it takes from app.models are the
+      three readers {MAX_POINTS, list_areas, list_locations}. A writer
+      import (any save/upsert/delete/add from the models) fails here.
 
 Usage:  ./.venv/bin/python scripts/smoke_map_layout_apply.py
 """
-import json
 import math
 import os
 import sys
@@ -166,7 +160,7 @@ db.init_schema()
 from app.core import map_layout_apply as mla  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
     point_in_polygon, polygon_bounds)
-from app.models import heightfield, terrain, world  # noqa: E402
+from app.models import terrain, world  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
@@ -523,13 +517,6 @@ raises_value_error("a list is not a layout", lambda: sane([]))
 raises_value_error("an empty layout", lambda: sane({}))
 raises_value_error("nothing usable in it",
                    lambda: sane({"terrain_areas": [], "locations": []}))
-check("layout_counts",
-      mla.layout_counts(sane({"terrain_areas": [
-          {"kind": "grass", "polygon": [[0, 0], [10, 0], [10, 10]]}],
-          "height_areas": [{"polygon": [[0, 0], [5, 0], [5, 5]],
-                            "height_m": 3}],
-          "locations": [{"id": "loc_c", "pos_x": 0, "pos_z": 200}]})[0]),
-      {"areas": 1, "heights": 1, "positions": 1, "created": 0})
 
 # ── [4b] new place stubs ────────────────────────────────────────────────────
 print("[4b] sanitize_map_layout — NEW PLACE STUBS")
@@ -601,174 +588,42 @@ norm, warns = sane({"locations": [
 check("seed square [-5,5] and the 10 m square [3,13] share [3,5]",
       codes(warns), ["footprint_overlap"])
 
-check("layout_counts splits moved from created",
-      mla.layout_counts(sane({"locations": [
-          {"id": "loc_c", "pos_x": 0, "pos_z": 0},
-          {"name": "Mill", "pos_x": 200, "pos_z": 200}]})[0]),
-      {"areas": 0, "heights": 0, "positions": 1, "created": 1})
 
-# ── [5] apply / snapshot / restore against a real (throwaway) world ─────────
-print("[5] apply_map_layout / map_snapshot / restore_snapshot")
+# ── [5] current_world_bounds against a throwaway world ─────────────────────
+print("[5] current_world_bounds")
 LOC_A = world.add_location("Tavern", "A tavern.", rooms=[{"name": "Bar"}])
 LOC_B = world.add_location("Smithy", "A smithy.", rooms=[{"name": "Forge"}])
-ID_A, ID_B = LOC_A["id"], LOC_B["id"]
+ID_A = LOC_A["id"]
 _data = world._load_world_data()
 for _loc in _data["locations"]:
     _loc["map3d"] = {"plan_width_m": 40.0, "boundary": SQ_40}
 world._save_world_data(_data)
 world.update_location_position(ID_A, 5.0, 5.0, 0.0)
-
-OLD = terrain.save_area({"kind": "grass",
-                         "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]})
-OLD_HEIGHT = heightfield.save_height_area(
-    {"polygon": [[0, 0], [8, 0], [8, 8]], "height_m": 4, "falloff_m": 2})
-
-SNAP = mla.map_snapshot()
-check("snapshot id shape", len(SNAP.split("-")), 2)
-_listed = mla.list_snapshots()
-check("snapshot listed", [s["id"] for s in _listed], [SNAP])
-check("snapshot counts", _listed[0]["counts"],
-      {"areas": 1, "heights": 1, "positions": 2, "created": 0})
-check_true("snapshot has a created_at", _listed[0]["created_at"])
-
-WORLD_CATALOG = {}
-from app.core.terrain_types import effective_catalog  # noqa: E402
-WORLD_CATALOG = effective_catalog()
-WORLD_LOCS = {ID_A: {"name": "Tavern", "boundary": SQ_40, "plan_width_m": 40.0},
-              ID_B: {"name": "Smithy", "boundary": SQ_40, "plan_width_m": 40.0}}
-
-DRAFT = {
-    "summary": "forest and a road",
-    "terrain_areas": [
-        {"kind": "forest", "label": "Woods",
-         "polygon": [[100, 100], [200, 100], [200, 200], [100, 200]]},
-        {"kind": "path", "label": "Road",
-         "stroke": {"points": [[0, 300], [200, 300]], "width_m": 6}},
-    ],
-    "height_areas": [{"label": "Knoll",
-                      "polygon": [[300, 300], [340, 300], [340, 340]],
-                      "height_m": 6, "falloff_m": 20}],
-    "locations": [{"id": ID_B, "pos_x": 400, "pos_z": 400, "yaw_deg": 90}],
-}
-NORM, WARN = mla.sanitize_map_layout(DRAFT, catalog=WORLD_CATALOG,
-                                     locations_by_id=WORLD_LOCS, bounds=None)
-check("draft is clean", codes(WARN), [])
-check("merge counts", mla.apply_map_layout(NORM, mode="merge"),
-      {"areas": 2, "heights": 1, "positions": 1, "created": 0})
-check("merge kept the old area",
-      sorted(a["kind"] for a in terrain.list_areas()),
-      ["forest", "grass", "path"])
-check("merge kept the old height area", len(heightfield.list_height_areas()), 2)
-_b = world.get_location_by_id(ID_B)
-check("position written", (_b["pos_x"], _b["pos_z"], _b["yaw_deg"]),
-      (400.0, 400.0, 90.0))
-check("meta.source on every written area",
-      sorted({(a["meta"].get("source") or "-") for a in terrain.list_areas()}),
-      ["-", "world_dev"])
-
-check("replace_terrain counts",
-      mla.apply_map_layout(NORM, mode="replace_terrain"),
-      {"areas": 2, "heights": 1, "positions": 1, "created": 0})
-check("replace_terrain wiped the old ground",
-      sorted(a["kind"] for a in terrain.list_areas()), ["forest", "path"])
-check("replace_terrain wiped the old heights",
-      len(heightfield.list_height_areas()), 1)
-
-BAD = dict(NORM, terrain_areas=list(NORM["terrain_areas"])
-           + [{"kind": "forest", "polygon": [[0, 0], [1, 1]], "z_order": 0,
-               "meta": {}}])
-_before = [a["id"] for a in terrain.list_areas()]
-raises_value_error("a broken polygon in the batch",
-                   lambda: mla.apply_map_layout(BAD, mode="merge"))
-check("nothing was written", [a["id"] for a in terrain.list_areas()], _before)
-
-RESTORED = mla.restore_snapshot(SNAP)
-check("restore counts", RESTORED,
-      {"areas": 1, "heights": 1, "positions": 2, "removed": 0})
-check("restore put back the EXACT area id",
-      [(a["id"], a["kind"], a["polygon"]) for a in terrain.list_areas()],
-      [(OLD["id"], "grass", [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0],
-                             [0.0, 10.0]])])
-check("restore put back the EXACT height area id",
-      [(h["id"], h["height_m"]) for h in heightfield.list_height_areas()],
-      [(OLD_HEIGHT["id"], 4.0)])
-_a = world.get_location_by_id(ID_A)
-_b = world.get_location_by_id(ID_B)
-check("restore put the Tavern back", (_a["pos_x"], _a["pos_z"]), (5.0, 5.0))
-check("restore unplaced the Smithy again",
-      (_b.get("pos_x"), _b.get("pos_z")), (None, None))
-
-check("world bounds from the restored world",
+terrain.save_area({"kind": "grass",
+                   "polygon": [[0, 0], [10, 0], [10, 10], [0, 10]]})
+check("world bounds of a throwaway world",
       mla.current_world_bounds(),
       {"min_x": -15.0, "min_z": -15.0, "max_x": 25.0, "max_z": 25.0})
 
-# ── [5b] stubs against the real world ───────────────────────────────────────
-print("[5b] stubs — create through the ordinary path, then take them back")
-STUB_DRAFT = {
-    "locations": [
-        {"id": ID_A, "pos_x": 60, "pos_z": 60, "yaw_deg": 0},
-        {"name": "The Old Mill", "description": "A water mill.",
-         "pos_x": 200, "pos_z": 0, "yaw_deg": 90, "boundary": L4_CCW,
-         "indoor": "indoor", "danger_level": 2, "why": "at the bend"},
-        {"name": "Tavern", "description": "A second house, same name.",
-         "pos_x": 400, "pos_z": 0},
-    ],
-}
-SNORM, SWARN = mla.sanitize_map_layout(STUB_DRAFT, catalog=WORLD_CATALOG,
-                                       locations_by_id=WORLD_LOCS, bounds=None)
-check("only the repeated name is complained about", codes(SWARN),
-      ["duplicate_name"])
-SNAP2 = mla.map_snapshot()
-check("stub apply counts",
-      mla.apply_map_layout(SNORM, mode="merge", snapshot_id=SNAP2),
-      {"areas": 0, "heights": 0, "positions": 1, "created": 2})
-
-MILLS = [loc for loc in world.list_locations()
-         if loc.get("name") == "The Old Mill"]
-check("the mill was created, once", len(MILLS), 1)
-MILL = MILLS[0]
-check("the CCW outline is stored clockwise", MILL["map3d"]["boundary"],
-      [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [2.0, 2.0], [2.0, 4.0], [0.0, 4.0]])
-check("plan_width_m derived from its 4 × 4 box",
-      MILL["map3d"]["plan_width_m"], 4.0)
-check("pin and yaw", (MILL["pos_x"], MILL["pos_z"], MILL["yaw_deg"]),
-      (200.0, 0.0, 90.0))
-check("description, indoor and danger_level",
-      (MILL["description"], MILL["indoor"], MILL["danger_level"]),
-      ("A water mill.", "indoor", 2))
-check("it has the ground room every location has",
-      [r.get("id") for r in MILL.get("rooms") or []], [world.GROUND_ROOM_ID])
-
-TAVERNS = [loc for loc in world.list_locations() if loc.get("name") == "Tavern"]
-check("a repeated name creates a SECOND place", len(TAVERNS), 2)
-check("...with two distinct ids", len({t["id"] for t in TAVERNS}), 2)
-_a = world.get_location_by_id(ID_A)
-check("...and the first one was NOT overwritten", _a["description"],
-      "A tavern.")
-check("the existing place moved", (_a["pos_x"], _a["pos_z"]), (60.0, 60.0))
-check("the snapshot knows what to take back",
-      [s["counts"]["created"] for s in mla.list_snapshots()
-       if s["id"] == SNAP2], [2])
-
-HAND = world.add_location("Hand Made", "Drawn by a person after the apply.")
-RESTORED2 = mla.restore_snapshot(SNAP2)
-check("restore removes exactly the created places", RESTORED2["removed"], 2)
-check("the mill is gone",
-      [loc for loc in world.list_locations()
-       if loc.get("name") == "The Old Mill"], [])
-check("one Tavern again",
-      len([loc for loc in world.list_locations()
-           if loc.get("name") == "Tavern"]), 1)
-check("the moved Tavern is back where it stood",
-      (world.get_location_by_id(ID_A)["pos_x"],
-       world.get_location_by_id(ID_A)["pos_z"]), (5.0, 5.0))
-check("a place made BY HAND after the apply survives the restore",
-      bool(world.get_location_by_id(HAND["id"])), True)
-
-raises_value_error("unknown snapshot id",
-                   lambda: mla.restore_snapshot("nope"))
-raises_value_error("a traversing snapshot id",
-                   lambda: mla.restore_snapshot("../../etc/passwd"))
+# ── [6] the module stays read-only ─────────────────────────────────────────
+print("[6] map_layout_apply imports readers only")
+import ast as _ast  # noqa: E402
+_tree = _ast.parse(Path(mla.__file__).read_text(encoding="utf-8"))
+_modules = set()
+_model_names = set()
+for _node in _ast.walk(_tree):
+    if isinstance(_node, _ast.Import):
+        _modules.update(a.name for a in _node.names)
+    elif isinstance(_node, _ast.ImportFrom):
+        _modules.add(_node.module or "")
+        if (_node.module or "").startswith("app.models"):
+            _model_names.update(a.name for a in _node.names)
+check("imported modules", sorted(_modules),
+      sorted({"math", "typing", "app.core.world_geometry",
+              "app.core.world_ops", "app.core.terrain_query",
+              "app.models.terrain", "app.models.world"}))
+check("names taken from app.models", sorted(_model_names),
+      ["MAX_POINTS", "list_areas", "list_locations"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

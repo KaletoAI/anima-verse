@@ -1,12 +1,13 @@
 /**
- * LayoutDraftPreview — the floor plan an LLM proposed, drawn as a read-only
- * mini plan next to the chat it came out of.
+ * LayoutDraftPreview — the floor plan the building assistant proposed, drawn
+ * as a read-only mini plan inside `BuildingAssistantPanel`.
  *
  * READ-ONLY, and structurally so: there is not a single pointer handler on the
- * geometry. The draft is not persisted either — it lives in the World-Dev
- * session until "Apply" writes it through `/world-dev/apply-layout`.
+ * geometry. The draft is not persisted either — it lives in the panel until
+ * "Apply and build" writes it through the building assistant's apply route.
  *
- * THE GEOMETRY IS THE SERVER'S. `POST /world-dev/preview-layout` runs the raw
+ * THE GEOMETRY IS THE SERVER'S.
+ * `POST /world/locations/{id}/building-assistant/propose` runs the raw
  * model JSON through the very sanitizer the floor-plan editor saves with
  * (`world_ops._sanitize_room_layout`), and this component only projects what
  * came back: rooms already in location-local metres, outlines already folded
@@ -30,12 +31,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 // the drawing to the very same symbol routine. It is the one place the run
 // formula is still repeated on this side; the comment at its definition names
 // what closes it.
-import { draftStairSymbol } from '../world/planGeometry'
-import type { StairSpec } from '../world/planGeometry'
+import { draftStairSymbol } from './planGeometry'
+import type { StairSpec } from './planGeometry'
 
 /* ------------------------------------------------------------------ types */
 
-/** One finding of `POST /world-dev/preview-layout`. Never an error — the apply
+/** One sanitizer finding on the proposal. Never an error — the apply
  *  runs regardless; this is what the author is asked to look at. */
 export interface LayoutDraftWarning {
   code: string
@@ -102,21 +103,6 @@ export interface LayoutDraftNormalized {
   /** The location's storey height in metres — how much floor a flight eats
    *  follows from it. Absent = 3, the scene's own default. */
   storey_height_m?: number
-}
-
-export interface LayoutDraftCounts {
-  rooms: number
-  new_rooms: number
-  openings: number
-  boundary_openings: number
-  stairs: number
-}
-
-/** `POST /world-dev/preview-layout`. */
-export interface LayoutPreviewResponse {
-  normalized: LayoutDraftNormalized
-  warnings?: LayoutDraftWarning[]
-  counts?: LayoutDraftCounts
 }
 
 /* -------------------------------------------------------------- constants */
@@ -194,11 +180,10 @@ function niceStep(rawM: number): number {
 /* --------------------------------------------------------------- component */
 
 export function LayoutDraftPreview({
-  normalized, warnings, counts,
+  normalized, warnings,
 }: {
   normalized: LayoutDraftNormalized
   warnings: LayoutDraftWarning[]
-  counts?: LayoutDraftCounts
 }) {
   const { t } = useI18n()
   // Memoised because both are `?? []` fallbacks: a fresh empty array on every
@@ -422,16 +407,8 @@ export function LayoutDraftPreview({
       </svg>
 
       <div className="ga-form-hint">
-        {counts
-          ? t('{r} rooms ({n} new) · {o} openings · {b} plot entrances · {s} staircases')
-            .replace('{r}', String(counts.rooms))
-            .replace('{n}', String(counts.new_rooms))
-            .replace('{o}', String(counts.openings))
-            .replace('{b}', String(counts.boundary_openings))
-            .replace('{s}', String(counts.stairs ?? 0))
-          : ''}
         {normalized.entry_room
-          ? ` · ${t('entry room')}: ${rooms.find((r) => r.room_id === normalized.entry_room)?.name || normalized.entry_room}`
+          ? `${t('entry room')}: ${rooms.find((r) => r.room_id === normalized.entry_room)?.name || normalized.entry_room}`
           : ''}
       </div>
 
