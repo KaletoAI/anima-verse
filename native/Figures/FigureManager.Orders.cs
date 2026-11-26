@@ -39,6 +39,12 @@ public partial class FigureManager
     private readonly Dictionary<string, (Vector3 From, double At)> _orderBlends = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _orderLoopShown = new(StringComparer.Ordinal);
     /// <summary>
+    /// A server walk let go at its end (<see cref="EndedServerWalk"/>): order id and the newest revision seen. The row
+    /// carries the ended order for the server's tail; without this every poll there would adopt it again and keep the
+    /// rows from placing the figure. Forgotten once a row comes without that order.
+    /// </summary>
+    private readonly Dictionary<string, (string Id, long Revision)> _releasedWalks = new(StringComparer.Ordinal);
+    /// <summary>
     /// The loop start held before the row carries the loop pose (E3 final review I2): order id, since when, and whether
     /// an entry bridge was held (its last frame, <see cref="Figure.HoldPropPoseAtAnchor"/>).
     /// </summary>
@@ -206,7 +212,7 @@ public partial class FigureManager
     {
         string name = fig.CharacterName;
         if (IsPlayerDriven(name)) return false;
-        if (!_rowByName.TryGetValue(name, out var row) || row.Order is not null || row.LocationId.Length == 0) return false;
+        if (!_rowByName.TryGetValue(name, out var row) || (row.Order is not null && !Released(name, row.Order)) || row.LocationId.Length == 0) return false;
         if (Slots?.Invoke().GetValueOrDefault(row.LocationId) is not { } tile) return false;
         double dx = plan.Pos.X - fig.Position.X, dz = plan.Pos.Z - fig.Position.Z;
         if (dx * dx + dz * dz <= OrderPlayer.ArriveTolM * OrderPlayer.ArriveTolM) return false;
@@ -262,6 +268,7 @@ public partial class FigureManager
             {
                 string name = actor.Name;
                 if (name.Length == 0 || (name == AvatarName && IgnoresAvatarOrder?.Invoke(order) == true)) continue;
+                if (Released(name, order)) continue;
                 if (!_figures.TryGetValue(name, out var fig) || !Mounted(order.LocationId))
                 {
                     if (!_parkedOrders.TryGetValue(name, out var parked) || Newer(order, parked.Order))
@@ -278,6 +285,10 @@ public partial class FigureManager
             }
         }
     }
+
+    /// <summary>The order is the figure's released server walk (<see cref="_releasedWalks"/>), not a newer revision of it.</summary>
+    private bool Released(string name, Order? order)
+        => order is not null && _releasedWalks.TryGetValue(name, out var r) && r.Id == order.Id && order.Revision <= r.Revision;
 
     private static bool Newer(Order a, Order b) => a.Seq != b.Seq ? a.Seq > b.Seq : a.Revision > b.Revision;
 
@@ -355,6 +366,9 @@ public partial class FigureManager
     {
         double? motionNow = root.TryGetProperty("motion_now", out var mn) && mn.ValueKind == JsonValueKind.Number ? mn.GetDouble() : null;
         long orderSeq = root.TryGetProperty("order_seq", out var os) && os.ValueKind == JsonValueKind.Number && os.TryGetInt64(out var sv) ? sv : 0;
+        // A row without the released walk ends its tail: the next order of that id would be a new one.
+        foreach (var row in _rows)
+            if (_releasedWalks.TryGetValue(row.Name, out var released) && row.Order?.Id != released.Id) _releasedWalks.Remove(row.Name);
         var orders = _rows.Where(r => r.Order is not null).Select(r => r.Order!).ToList();
         if (motionNow is { } now) { _motionSeen = (now, _clock); AdoptOrders(orders, now); }
         _orderSeqSeen = Math.Max(_orderSeqSeen, orderSeq);
@@ -462,6 +476,7 @@ public partial class FigureManager
         _orderExitY.Remove(name);
         _orderEntrySpecs.Remove(name);
         _arrivalReported.Remove(name);
+        _releasedWalks.Remove(name);
     }
 
     /// <summary>
@@ -559,6 +574,12 @@ public partial class FigureManager
                 // A room walk at its goal — or a server walk the server has ended (E3 final review I3: its order stays
                 // published for the tail, and without this the rows could not re-place the figure for 10 s): blended
                 // into the row's rest placement, then the rows place the figure again.
+                if (!order.IsLocal)
+                {
+                    long revision = order.Revision;
+                    if (_rowByName.GetValueOrDefault(name)?.Order is { } rowOrder && rowOrder.Id == order.Id) revision = Math.Max(revision, rowOrder.Revision);
+                    _releasedWalks[name] = (order.Id, revision);
+                }
                 _orderPlayers.Remove(name);
                 _orderShownState.Remove(name);
                 _orderBlends[name] = (fig.Position, _clock);

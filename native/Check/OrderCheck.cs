@@ -40,7 +40,8 @@ namespace AnimaNative.Check;
 ///   R8  avoidance: two walks head-on through r-a keep ≥ 0.3 m between their centres and both arrive before flip + 5;
 ///   R8b the same with two ticks per physics frame: the held answer keeps the meeting (gap within 0.03 m of R8's);
 ///   R16 the loop start holds the entry's last frame while the row still shows the order approaching, the active row
-///       hands over its pose;  R17 an ended server walk lets the figure go at once, a row inside the tail places it again.
+///       hands over its pose;  R17 an ended server walk lets the figure go at once, a row inside the tail places it again
+///       at that poll (the ended order it carries is not adopted again) and a room change there walks locally.
 /// </summary>
 public static partial class OrderCheck
 {
@@ -484,10 +485,10 @@ public static partial class OrderCheck
                  "actors":[{"name":"{{Uli}}","role":"actor","clip_role":"","height_cm":180,"start":{"x":95,"y":0,"z":0,"yaw":0,"room_id":"r-a","level":0},
                             "access":null,"anchor":null,"entry_mode":"","sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}],"reports_arrival":false}]}
                 """)!;
-            JsonObject StrollMap(string status, int revision, double x, double z, double now) => Map(m =>
+            JsonObject StrollMap(string status, int revision, double x, double z, double now, string room = "r-a") => Map(m =>
             {
                 var row = Row(m, Uli);
-                row["room_id"] = "r-a";
+                row["room_id"] = room;
                 row["pos"] = new JsonObject { ["x"] = x, ["z"] = z };
                 row["activity_animation"] = "standing";
                 row["order"] = Stroll(status, revision);
@@ -501,9 +502,21 @@ public static partial class OrderCheck
             r17.Until(3.6 + FigureManager.OrderEndBlendS + 0.1);
             Is("R17 the ended walk lets the figure go", !r17.M.HasLiveOrder(Uli), Seq(r17, Uli));
             await Poll(r17, StrollMap("ended", 2, 97, 2, 104.5));
+            // Right at that poll (E3 re-review): the ended order the row still carries is not adopted again — no live
+            // order, and the rows' goal is set by the poll itself, not by a blend in the frames after it.
+            Is("R17 the tail's row does not adopt the ended walk again", !r17.M.HasLiveOrder(Uli) && r17.M.OrderPlayerOf(Uli) is null,
+               r17.M.OrderPlayerOf(Uli)?.Current?.Id ?? "none");
+            Is("R17 the poll itself sets the rows' goal", Math.Abs(r17.F(Uli).Target.X - 97) <= TolM && Math.Abs(r17.F(Uli).Target.Z - 2) <= TolM,
+               $"target {r17.F(Uli).Target}");
             r17.Until(4.6);
             Is("R17 a row inside the tail places the figure again", Math.Abs(r17.F(Uli).Target.X - 97) <= TolM && Math.Abs(r17.F(Uli).Target.Z - 2) <= TolM,
                $"target {r17.F(Uli).Target}");
+            // Still inside the tail, a room change of the row: a client-local room walk over the navmesh (as R7b), not a blend.
+            await Poll(r17, StrollMap("ended", 2, 104, 2, 105.5, "r-up"));
+            r17.Until(4.6 + 2 * Dt);
+            var tail17 = r17.M.OrderPlayerOf(Uli)?.Current;
+            Is("R17 a room change in the tail walks a client-local order", tail17 is { IsLocal: true, Kind: "walk" } && r17.M.HasLiveOrder(Uli),
+               tail17?.Id ?? "none");
 
             // ---- R8 avoidance (plan E3 Task 11): two walks head-on through r-a pass each other ----
             // README "Orders world" R8: Uli (95, 0) → (99, 0) and Ona (99, 0) → (95, 0), 1.4 m/s, flip = issued + 4 / 1.4 + 0.5.
