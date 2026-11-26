@@ -13314,6 +13314,16 @@ value is the larger of that enclosed spot and the skin lying on the outside of a
 with the shoe at most `SKIN_POKE_M` (3 mm) behind them, opened by a 4 × 4 block (`SKIN_POKE_OPEN_PX`) — a heel through
 the counter whose spot reaches the topline is open to the outside and read 0 as enclosed (the Woman shoes on five of
 eight bodies: 98 – 367 mm² now, every other kept closed fit 0).
+Since fit version 24 the width taper of a closed shoe without a shaft is bounded (`footwear_fit.TAPER_SLOPE_MAX` 0.1
+for the insole middle and the shift toward the foot, `TAPER_SHARE_SLOPE_MAX` 0.2 for the share times the shoe's reach
+from that middle, a majorant that only widens): read per station, the profiles sheared the heel counter until its
+lining came through the outer skin. The cut also records `inside_seen_mm2` (`footwear_cut.inside_seen`): on the same
+four views and raster, the pixels whose nearest face of the outward-wound shoe is turned away from the camera — the
+shoe's inside lying on the outside of its own wall — opened by a 2 × 2 block, the largest spot per side and view under
+`diagnostics.<side>.cut.inside_seen_mm2`, the worst under `gates`, limit `footwear_cut.INSIDE_SEEN_MAX_MM2`; a
+face turned away with nothing turned toward the camera within `SKIN_POKE_M` behind it (the far wall of a one-sheet
+shoe over a low counter) does not count. Auto length answers it with heel room like `skin_seen_mm2`. A split fit (a
+boot) records it with `gating` false: its shaft is judged in bind space, the exact inverse of the leg's skin.
 
 The insole step adds the FOOTBED of a hollow platform sole (`footwear_insole.footbed_fill`, INSOLE_VERSION 12): when the
 mesher left the platform an open box — the rays through the opening meet only the outsole's own skin, the analysis is

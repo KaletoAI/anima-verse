@@ -391,7 +391,12 @@ from app.core.footwear_gates import check_gates
 #: 23 (2026-11-26): ``skin_seen_mm2`` also counts skin lying on the outside of a wall it came through
 #:    (``footwear_cut.SKIN_POKE_M`` block) — a heel through the counter whose spot reaches the topline read 0 as it
 #:    is not enclosed. Every closed fit is judged again; Auto may add heel room where a spot shows. One CPU refit.
-FOOTWEAR_FIT_VERSION = 23
+#: 24 (2026-11-26): the width taper's profiles are bounded (``TAPER_SLOPE_MAX`` / ``TAPER_SHARE_SLOPE_MAX``) — read per
+#:    station they sheared the heel counter until its lining came through the outer skin (the Woman shoes on Kai,
+#:    Tilda and Ylva at Auto heel room: insole-texture flecks on the counter, accepted). The cut of a closed shoe
+#:    gates ``inside_seen_mm2`` (``footwear_cut.INSIDE_SEEN_MAX_MM2``: the shoe's inside seen through its own wall),
+#:    Auto answers it with heel room. Every tapered shoe changes shape slightly. One CPU refit.
+FOOTWEAR_FIT_VERSION = 24
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Ruling A82: the per-piece footwear allowances the Wardrobe offers (percent; ``garment_footwear.ALLOWANCE_KEY``).
@@ -481,6 +486,20 @@ TAPER_BAND_M = 0.004
 #: ``garment_shell.THICKNESS_M`` off the skin. The fit belongs to the item, not to an outfit, so the room is always
 #: there (the assembly takes the stocking into the shoe, ``garment_assembly._into_shoe``).
 TAPER_LAYER_M = 0.004
+#: The taper's shear (fit version 24, 2026-11-26). The map ``z' = c(x) + (z − m(x)) · t(x)`` moves a wall point
+#: across the shoe by ``dz'/dx = c' − m' t + (z − m) t'`` per unit of length. Read per station, the insole's middle
+#: ``m`` (the insole columns on the analysis' grid), the foot's middle (the shift) and the share stepped from one
+#: station to the next: on the Woman shoes on Kai (Auto +6 % heel room) ``m`` by 0.0068 raw over 0.0045 raw
+#: (slope 1.5), the shift by 2.7 and the share by 0.062 a station (``(z − m) t'`` about 2 at the counter). A wall
+#: whose normal leans 45° in the plane is crossed by its own lining at a shear of 2 (the lining moved one wall
+#: thickness through the outer skin): the insole texture showed as flecks on the outside of the heel counter. Every
+#: profile is therefore bounded behind the ball: ``m`` and the shift each by ``TAPER_SLOPE_MAX`` (a backward pass from
+#: the ball, where the shift is 0), the share by the smallest majorant whose ``reach · t'`` stays within
+#: ``TAPER_SHARE_SLOPE_MAX`` (``reach`` = the shoe's farthest point from ``m`` behind the ball) — it only ever widens,
+#: so the foot keeps its room; the share is read after the bounded shift. Together the shear stays at or below 0.4,
+#: a fifth of the crossing shear, and the shoe's inside is judged as well (``footwear_cut.INSIDE_SEEN_MAX_MM2``).
+TAPER_SLOPE_MAX = 0.1
+TAPER_SHARE_SLOPE_MAX = 0.2
 #: The smallest per-fit width cap override.
 WIDTH_CAP_MIN = 1.00
 #: A shoe widened to the foot (``applied_width_cap`` = ``SHOE_WIDTH_CAP``) has its UPPER fitted to the foot's height
@@ -1392,8 +1411,27 @@ def width_taper_at(x: np.ndarray, taper: Optional[Dict[str, Any]]) -> Tuple[np.n
             m + np.interp(x, xs, ce - mid, left=float(ce[0] - mid[0]), right=0.0))
 
 
+def _bounded_back(v: np.ndarray, x: np.ndarray, slope: float) -> np.ndarray:
+    """``v`` over the stations ``x`` with every step at most ``slope`` per unit of x: one pass from the last station
+    backward, each value clipped to its successor's band (the last stays)."""
+    out = np.asarray(v, np.float64).copy()
+    for i in range(len(out) - 2, -1, -1):
+        band = slope * abs(float(x[i + 1] - x[i]))
+        out[i] = min(max(out[i], out[i + 1] - band), out[i + 1] + band)
+    return out
+
+
+def _majorant(v: np.ndarray, x: np.ndarray, slope: float) -> np.ndarray:
+    """The smallest function over the stations ``x`` that is at least ``v`` and changes by at most ``slope`` per unit
+    of x: ``max_j (v_j − slope · |x_i − x_j|)``."""
+    v = np.asarray(v, np.float64)
+    x = np.asarray(x, np.float64)
+    return (v[None, :] - slope * np.abs(x[:, None] - x[None, :])).max(1)
+
+
 def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.ndarray, k: float,
-                width_factor: float, x_ball: float, clearance_m: float) -> Optional[Dict[str, Any]]:
+                width_factor: float, x_ball: float, clearance_m: float,
+                shoe_xz: Optional[np.ndarray] = None) -> Optional[Dict[str, Any]]:
     """A219: the width taper of a closed shoe (``WIDTH_TAPER_MIN``), per station (raw x ``stations``) from the
     insole's edges and the foot's edges there (``(n, 2)`` raw z, NaN where not measured; the foot as placed, its z
     raw = metres / (k · width_factor)). Behind ``x_ball`` the walls are scaled about the insole's middle ``m`` and
@@ -1406,6 +1444,10 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     3. ``share`` = the larger of ``share0`` and what the foot needs with the shift's remainder
        ``(half + |f − m − shift| · k · width_factor + clearance_m) / (insole half · k · width_factor)``, at most 1,
        a running maximum again.
+    Fit version 24 (``TAPER_SLOPE_MAX``): ``m`` and the shift are bounded to ``TAPER_SLOPE_MAX`` per unit of x before
+    step 3, the share after it to the majorant of ``TAPER_SHARE_SLOPE_MAX`` / reach — ``shoe_xz`` (raw ``(n, 2)``
+    x / z of the shoe) gives the reach, the farthest shoe point from ``m`` behind the ball; without it the widest
+    insole half.
     Kept: the stations behind the ball and the first at it (share 1, no shift). None when nothing is taken off
     (``WIDTH_TAPER_MIN``) or nothing is measured."""
     st = np.asarray(stations, np.float64)
@@ -1418,7 +1460,7 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     ok_m = np.isfinite(m)
     if not ok_m.any():
         return None
-    m = np.interp(st, st[ok_m], m[ok_m])
+    m = _bounded_back(np.interp(st, st[ok_m], m[ok_m]), st, TAPER_SLOPE_MAX)
     ih = 0.5 * (il[:, 1] - il[:, 0])
     fh = 0.5 * (fl[:, 1] - fl[:, 0]) * k * width_factor
     f = 0.5 * (fl[:, 0] + fl[:, 1])
@@ -1440,16 +1482,22 @@ def width_taper(stations: np.ndarray, insole_lo_hi: np.ndarray, foot_lo_hi: np.n
     if float(share0.min()) > 1.0 - WIDTH_TAPER_MIN:
         return None
     w = np.clip((1.0 - share0) / max(1.0 - float(share0.min()), 1e-9), 0.0, 1.0)
-    shift = np.where(measured, f - m, 0.0) * w
+    shift = _bounded_back(np.where(behind, np.where(measured, f - m, 0.0) * w, 0.0), st, TAPER_SLOPE_MAX)
     rest = np.abs(np.where(measured, f - m, 0.0) - shift) * k * width_factor
     need1 = np.where(measured, (fh + rest + clearance_m) / np.where(measured, ih * k * width_factor, 1.0), np.nan)
     share = running(np.clip(np.fmax(need1 * width_factor, share0 * width_factor), 1.0, width_factor)) / width_factor
+    reach = float(np.nanmax(np.where(measured, ih, np.nan)))
+    if shoe_xz is not None and len(shoe_xz):
+        sx = np.asarray(shoe_xz, np.float64).reshape(-1, 2)
+        sx = sx[sx[:, 0] < x_ball]
+        if len(sx):
+            reach = max(reach, float(np.abs(sx[:, 1] - np.interp(sx[:, 0], st, m)).max()))
+    share = np.minimum(1.0, _majorant(share, st, TAPER_SHARE_SLOPE_MAX / max(reach, 1e-9)))
     if float(share.min()) > 1.0 - WIDTH_TAPER_MIN:
         return None
     keep = behind.copy()
     if (~behind).any():
         keep[int(np.argmax(~behind))] = True      # the first station at the ball: the full factor from there on
-    shift = np.where(behind, shift, 0.0)
     r6 = lambda a: [round(float(v), 6) for v in a[keep]]  # noqa: E731
     return {"x_raw": r6(st), "share": r6(share), "mid_raw": r6(m), "centre_raw": r6(m + shift),
             "min_factor": round(float(share.min() * width_factor), 6)}
@@ -1875,7 +1923,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                     # the pair: the wider extent of both feet (one shoe geometry for both sides)
                     fl[i] = (np.fmin(fl[i, 0], float(Cr[sel, 2].min())), np.fmax(fl[i, 1], float(Cr[sel, 2].max())))
         x_ball = min(w["xb_final"] for w in work.values())
-        taper = width_taper(gx, il, fl, k, width_factor, x_ball, CLEARANCE_M + TAPER_LAYER_M)
+        taper = width_taper(gx, il, fl, k, width_factor, x_ball, CLEARANCE_M + TAPER_LAYER_M, shoe_xz=Q[:, [0, 2]])
         if taper is not None:
             Q = width_taper_map(Q, taper)[0]
 

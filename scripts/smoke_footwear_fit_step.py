@@ -50,7 +50,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 23, fit_version 23, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 24, fit_version 24, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 12}}; scale.k_m_per_unit 1.023599
@@ -59,6 +59,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      slim_needed 0 (both sides); cut {version 3, sides left + right with foot_joint LeftFoot / RightFoot,
      toe_joint LeftToeBase / RightToeBase}; gates = the ten of footwear_fit.FIT_GATES + CLOSED_GATES (toe_front: the
      wedge's toes end in its toe box) + footwear_cut.CUT_GATES + skin_seen_mm2 (0: the foot is cut away under the shoe)
+     + inside_seen_mm2 (fit version 24; 0: the wedge's inside is never on the outside of its wall)
      (the round-1 ``boot`` gate is gone since fit version 6; a shoe carries no shaft gate), every one ok and
      gating True except deep_outside (gating False: recorded only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``);
      deep_outside / visible_poke / throat_ledge_p95_mm / toe_conform_m 0 (the box foot
@@ -129,7 +130,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
      gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
      default. An older fit reads stale: a pumps record of fit_version 14 (and 13, 12), accepted on the current
-     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20, 21 and 22 too; fit_version 23 -> "accepted").
+     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20, 21, 22 and 23 too; fit_version 24 -> "accepted").
 """
 import hashlib
 import json
@@ -366,13 +367,14 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 23,
-             "fit_version": 23, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 24,
+             "fit_version": 24, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         # fit version 21 (22: the skin spot): a closed shoe's toe_front (footwear_fit.CLOSED_GATES) and the cut's skin_seen_mm2
         gate_names = (list(footwear_fit.FIT_GATES) + list(footwear_fit.CLOSED_GATES)
-                      + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES] + ["skin_seen_mm2"])
+                      + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES] + ["skin_seen_mm2"]
+                      + ["inside_seen_mm2"])  # fit version 24
         check("P1 ten gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
               {k: (True, k != "deep_outside") for k in gate_names})
         check("P1 cut gates at 0 (a shoe: no shaft_poke)", {k: rec["gates"][k]["value"] for k in footwear_cut.CUT_GATES if k in rec["gates"]},
@@ -568,7 +570,8 @@ def main() -> int:
         # the stretch and (fit version 12) the push are recorded, not gating
         check("P5 gates ok except the recorded stretch", {k: (g.get("ok"), g.get("gating")) for k, g in brec["gates"].items()
                                                           if k != "seam_stretch_max"},
-              {k: (True, k not in ("shaft_push_p95_m", "shaft_push_max_m")) for k in brec["gates"] if k != "seam_stretch_max"})
+              {k: (True, k not in ("shaft_push_p95_m", "shaft_push_max_m", "inside_seen_mm2"))
+               for k in brec["gates"] if k != "seam_stretch_max"})  # fit version 24: a split fit records inside_seen_mm2
         check("P5 seam_stretch_max recorded, not gating", (brec["gates"]["seam_stretch_max"]["ok"],
                                                            brec["gates"]["seam_stretch_max"]["gating"], brec["accepted"]),
               (False, False, True))
@@ -655,7 +658,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "stale"), (23, "accepted")):
+        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "stale"), (23, "stale"), (24, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

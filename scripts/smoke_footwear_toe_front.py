@@ -48,7 +48,7 @@ Expected, by hand:
 [T6] The skin gate from the distribution over every stored shoe on every body through the chain (footwear_cut
      comment): SKIN_SEEN_PX_M 1 mm, SKIN_SEEN_EPS_M 0.25 mm, SKIN_SEEN_OPEN_PX 2, SKIN_SEEN_MAX_MM2 8; the 81 mm2
      hole of [T5] is above it, no hole below. Auto answers it with heel room: AUTO_LENGTH_GATES = ("visible_poke",
-     "skin_seen_mm2").
+     "skin_seen_mm2", "inside_seen_mm2") — the last since fit version 24 (scripts/smoke_footwear_inside_seen.py).
 [T7] fit_compute with Auto length, both attempts cut ("replaced"): the first attempt at every step is refused by
      ``toe_front`` alone (whole, only long), the toe box attempt by ``visible_poke`` (the heel through the counter).
      Auto reads both attempts' refusals: ``visible_poke`` is among them, so it tries every heel room step
@@ -296,7 +296,8 @@ def main() -> int:
     check((footwear_cut.SKIN_SEEN_PX_M, footwear_cut.SKIN_SEEN_EPS_M, footwear_cut.SKIN_SEEN_OPEN_PX,
            footwear_cut.SKIN_SEEN_MAX_MM2) == (0.001, 0.00025, 2, 8.0) and 8.0 < 81.0,
           "[T6] 1-mm raster, 0.25-mm tolerance, 2-px opening, limit 8 mm2 (below the [T5] hole)")
-    check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke", "skin_seen_mm2"), "[T6] Auto answers skin_seen_mm2")
+    check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke", "skin_seen_mm2", "inside_seen_mm2"),
+          "[T6] Auto answers skin_seen_mm2 (and inside_seen_mm2)")
 
     print("\n" + ("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))
     return 1 if FAILS else 0

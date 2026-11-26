@@ -136,6 +136,8 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
   // Skin seen through the shoe from the four sides (footwear_cut.skin_seen): a hole of the mesh, a heel out of the counter.
   { key: 'skin_seen_mm2', label: 'Skin seen through the shoe (cut)', scale: 1, unit: 'mm²', digits: 0 },
+  // The shoe's inside (lining, insole) seen from outside through its own wall (footwear_cut.inside_seen, fit version 24).
+  { key: 'inside_seen_mm2', label: 'Shoe inside seen through its wall (cut)', scale: 1, unit: 'mm²', digits: 0 },
   // An open shoe (A189, footwear_fit.OPEN_GATES): the body is not cut, so it carries these instead of the cut gates.
   { key: 'strap_inside_share', label: 'Straps inside the skin', scale: 100, unit: '%', digits: 2 },
   { key: 'strap_push_max_mm', label: 'Straps pushed off the foot (max)', scale: 1, unit: 'mm', digits: 1 },

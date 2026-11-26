@@ -1825,6 +1825,61 @@ def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.Garmen
     return {"mm2": out, "worst_mm2": worst}
 
 
+#: The shoe's INSIDE seen from outside (fit version 24, 2026-11-26): the shoe parts of a side, seen from the four
+#: horizontal views of ``SKIN_SEEN_VIEWS`` and rasterised at ``SKIN_SEEN_PX_M`` (``garment_fit._raster``) once with
+#: every face and once with the faces turned toward the camera only. The mesher's shoe is a closed, outward-wound
+#: surface: from outside, the lining and the insole show their front through the opening, never their back. A pixel
+#: whose nearest face is turned away (no front face within ``SKIN_SEEN_EPS_M`` of it) while the nearest face turned
+#: toward the camera lies at most ``SKIN_POKE_M`` behind it is the shoe's inside lying on the outside of a wall it came
+#: through (the wall's outer skin just behind it) — the insole texture in flecks on a stretched heel counter (the Woman shoes
+#: on Kai, Tilda and Ylva at Auto heel room, fit version 23, a width taper that sheared the wall). A shoe of one sheet
+#: (no wall thickness) shows the back of its far wall over a low counter with nothing turned toward the camera close
+#: behind it — not counted. Opened by a
+#: ``SKIN_SEEN_OPEN_PX`` square, the largest patch per view in mm2. A split fit (a boot) records it without gating
+#: (``garment_footwear``): its shaft's bind-space position is the exact inverse of the leg's skin (``footwear_fit``
+#: step 9), not the stand the figure shows, and the boots read 1 000 – 4 600 mm2 there on code eb64c751b — in the
+#: shaft and band, nothing of it in their renders. Measured through the routes on a world copy (Run all, every stored
+#: shoe on eight bodies, the served fit; ``INSIDE_SEEN_MAX_MM2``).
+INSIDE_SEEN_MAX_MM2 = 8.0
+INSIDE_SEEN_LABEL = ("a spot of the shoe's inside (lining, insole) seen from outside through its own wall from front, "
+                     "back or a side, largest")
+
+
+def inside_seen(parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]], px: float = SKIN_SEEN_PX_M,
+                eps: float = SKIN_SEEN_EPS_M, opening: int = SKIN_SEEN_OPEN_PX,
+                poke: float = SKIN_POKE_M) -> Dict[str, Any]:
+    """The shoe's inside seen from outside (block above): ``{"mm2": {side: {view: largest spot mm2}}, "worst_mm2"}``
+    over the parts of each side (``foot`` and a boot's ``shaft``, bind space, outward-wound)."""
+    from app.core.garment_fit import _raster
+    out: Dict[str, Dict[str, float]] = {}
+    for side, side_parts in parts.items():
+        Xs, Fs, base = [], [], 0
+        for mesh in side_parts.values():
+            X = np.asarray(mesh.positions, np.float64)
+            Xs.append(X)
+            Fs.append(np.asarray(mesh.indices, np.int64).reshape(-1, 3) + base)
+            base += len(X)
+        if not Xs:
+            continue
+        X, F = np.concatenate(Xs), np.concatenate(Fs)
+        N = np.cross(X[F[:, 1]] - X[F[:, 0]], X[F[:, 2]] - X[F[:, 0]])
+        out[side] = {}
+        for view, (order, sign) in SKIN_SEEN_VIEWS.items():
+            Xv = X[:, order]
+            lo = Xv.min(0)[:2] - 4 * px
+            hi = Xv.max(0)[:2] + 4 * px
+            shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
+            facing = sign * N[:, order[2]] > 0.0
+            every = _raster(Xv, F, lo, shape, px, sign)
+            front = _raster(Xv, F[facing], lo, shape, px, sign)
+            with np.errstate(invalid="ignore"):
+                back = (np.isfinite(every) & np.isfinite(front) & (front < every - eps)
+                        & (every - front <= poke))
+            out[side][view] = _largest_mm2(back, opening, px)
+    worst = max((v for views in out.values() for v in views.values()), default=0.0)
+    return {"mm2": out, "worst_mm2": worst}
+
+
 def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]], cut: Dict[str, Any], *,
               joints: Dict[str, np.ndarray], body_before: Prim) -> Dict[str, Any]:
     """The cut's gates (module docstring): ``{"ok", "reasons", "gates": {name: {value, limit, ok}}, "sides": {side:

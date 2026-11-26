@@ -139,8 +139,9 @@ ALLOWANCE_NAMES: Tuple[str, ...] = ("width", "length")
 LONG_ONLY_GATES: Tuple[str, ...] = ("toe_front",)
 #: The refusals Auto answers with heel room: the foot outside the shoe below its rim (``deep_outside`` is reported
 #: only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``) and skin seen through it (2026-11-26,
-#: ``footwear_cut.SKIN_SEEN_MAX_MM2`` — mostly a heel through the counter).
-AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke", "skin_seen_mm2")
+#: ``footwear_cut.SKIN_SEEN_MAX_MM2`` — mostly a heel through the counter) and the shoe's inside seen through its own
+#: wall (fit version 24, ``footwear_cut.INSIDE_SEEN_MAX_MM2`` — another length is another shape of the stretched shoe).
+AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke", "skin_seen_mm2", "inside_seen_mm2")
 
 
 def _only(reasons: List[str], names: Tuple[str, ...]) -> bool:
@@ -1111,6 +1112,21 @@ def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np
             cut_gates["reasons"] = list(cut_gates.get("reasons") or []) + seen_reasons
         for side, views in seen["mm2"].items():
             cut_gates["sides"].setdefault(side, {})["skin_seen_mm2"] = views
+        # the shoe's inside seen through its own wall (``footwear_cut.INSIDE_SEEN_MAX_MM2``, fit version 24); a split
+        # fit (a boot) records it only: its shaft's bind space is the exact inverse of the leg's skin, not its stand
+        inside = footwear_cut.inside_seen(result.parts)
+        split = any("shaft" in side_parts for side_parts in result.parts.values())
+        inside_ok, inside_reasons = check_gates(
+            {"inside_seen_mm2": inside["worst_mm2"]},
+            {"inside_seen_mm2": ("max", footwear_cut.INSIDE_SEEN_MAX_MM2, footwear_cut.INSIDE_SEEN_LABEL)})
+        cut_gates["gates"]["inside_seen_mm2"] = {"value": inside["worst_mm2"],
+                                                 "limit": footwear_cut.INSIDE_SEEN_MAX_MM2,
+                                                 "ok": inside_ok, "gating": not split}
+        if not inside_ok and not split:
+            cut_gates["ok"] = False
+            cut_gates["reasons"] = list(cut_gates.get("reasons") or []) + inside_reasons
+        for side, views in inside["mm2"].items():
+            cut_gates["sides"].setdefault(side, {})["inside_seen_mm2"] = views
     result.record["gates"].update(footwear_fit._r({name: {**gate, "gating": gate.get("gating", True)}
                                                    for name, gate in cut_gates["gates"].items()}))
     for side in footwear_fit.SIDES:
