@@ -299,7 +299,7 @@ the LIST of all that owner's types. The core names no package (R1); the plugin l
 | `signals_of(expr) -> set[str]` | The union of the signals of every registered leaf type |
 | `CAPABILITY`, `KINDS`, `ROLE_KINDS`, `PARAM_TYPES` | `"quest.types"`; the type kinds; `character`, `location`, `room`, `item`; `str`, `text`, `int`, `float`, `bool`, `select`, `role`, `target` (`target` accepts a role key in `role_kinds` or a reachable effect key whose `object_kind` is in `object_kinds`) |
 | `app.core.quest_types.check_binding(kind, binding) -> list[ConditionIssue]` | The issues of one role binding (D6 shapes). RAISES on a storage error; an issue only when the binding is malformed or the entity is definitely gone |
-| `app.core.quest_types.build_context(avatar, run) -> QuestContext \| None` | The evaluation context of an avatar for a run: `avatar` (acting body), `mind`, `profile`, `location_id`, `room_id`, `now` (`GameTime`), `bindings`, `run`. `None` when the profile or the clock cannot be read |
+| `app.core.quest_types.build_context(avatar, run) -> QuestContext \| None` | The evaluation context of an avatar for a run: `avatar` (acting body), `mind`, `profile`, `location_id`, `room_id`, `now` (`GameTime`), `bindings`, `run`, `objects` (effect key → ref of the run's first live object, markers excluded). `None` when the profile, clock or run objects cannot be read |
 
 **Type hooks.** The evaluate hook is called with `(params, ctx)` and returns a `ConditionResult` of
 `app.core.activity_engine` — unavailable, never false, when a read fails. The optional validate hook is called with

@@ -1,4 +1,4 @@
-"""The core's built-in quest types and the evaluation context they read (quest system stage 1).
+"""The core's built-in quest types and the evaluation context they read (quest system stages 1 and 2).
 
 Registered once under the owner ``"core"`` by :func:`register` (the catalog contract of
 ``app/core/quest_catalog.py``). Every type is generic: no stat, item or package is named here; stat keys and
@@ -8,14 +8,21 @@ READ RULE (plan Global Constraints, Review Focus 4): location, room and inventor
 (``QuestContext.avatar``); facts are read for its MIND (``QuestContext.mind`` = ``mind_of(avatar)``), and a bound
 character is compared by ITS mind, so "has spoken with" survives a body swap on either side.
 
-THREE STATES: every ``evaluate`` answers a ``ConditionResult``; it is unavailable (never false) when its role is
-unbound or malformed, or when its read fails: a failed read is not a "no". Reasons are English.
+OBJECTS & TARGETS (stage 2): ``QuestContext.objects`` maps each effect key of the run to the ref of its first live
+object (marker rows excluded). Target parameters (``holds_item``, ``knows_secret``, ``found_item``, ``near_object``)
+resolve a key against ``ctx.bindings`` first and then ``ctx.objects``, answering unavailable when a role is unbound
+or an object is not live yet.
+
+THREE STATES: every ``evaluate`` answers a ``ConditionResult``; it is unavailable (never false) when its role or
+target is unbound, missing or malformed, or when its read fails: a failed read is not a "no". Reasons are English.
 
 The catalog fills declared defaults in and drops an absent parameter without a default before it calls
 ``evaluate`` / ``validate``, so parameters are read with ``params.get``.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,6 +37,13 @@ OWNER = "core"
 STAT_OPS = (">=", "<=", ">", "<", "=")
 #: The fact kind ``spoke_with`` reads (written by the engine on ``utterance.heard``).
 FACT_SPOKE_WITH = "spoke_with"
+#: The fact kind ``found_item`` reads (written by the engine on ``item.discovered``).
+FACT_FOUND = "found"
+
+
+def found_subject(location_id: str, room_id: str, item_id: str) -> str:
+    """Subject string of a ``found`` fact for one room placement."""
+    return f"{location_id}/{room_id}/{item_id}"
 
 
 @dataclass(frozen=True)
@@ -42,32 +56,37 @@ class QuestContext:
     now: GameTime
     bindings: dict         # role key -> binding (D6)
     run: dict              # the run row (started_game_ts for elapsed time)
+    objects: dict = dataclasses.field(default_factory=dict)  # effect_key -> ref of the run's first live object (markers excluded)
 
 
 def build_context(avatar: str, run: dict) -> QuestContext | None:
-    """The context of ``avatar`` for ``run``, read once: the strict profile, its location/room and the strict game
-    clock. None when the profile is unreadable (a missing row included) or the clock cannot be read."""
+    """The context of ``avatar`` for ``run``, read once: the strict profile, its location/room, the strict game
+    clock and the run's live object refs. None when the profile, clock or run objects cannot be read."""
     from app.core.linked_characters import mind_of
     from app.core.timeutils import game_time
     from app.models.character import get_character_profile
+    from app.models.quests import live_object_refs
     name = (avatar or "").strip()
     if not name:
         return None
+    run = run if isinstance(run, dict) else {}
+    run_id = str(run.get("id") or "")
     try:
         profile = get_character_profile(name, strict=True)
         now = game_time(strict=True)
+        objects = live_object_refs(run_id) if run_id else {}
     except Exception as e:  # noqa: BLE001 - an unreadable avatar has no context, the caller skips it
         logger.warning("quest context for %s unavailable: %s", name, e)
         return None
     if not isinstance(profile, dict) or not profile:
         return None
-    run = run if isinstance(run, dict) else {}
     bindings = run.get("bindings")
     return QuestContext(
         avatar=name, mind=mind_of(name), profile=profile,
         location_id=str(profile.get("current_location") or ""),
         room_id=str(profile.get("current_room") or ""),
-        now=now, bindings=bindings if isinstance(bindings, dict) else {}, run=run)
+        now=now, bindings=bindings if isinstance(bindings, dict) else {}, run=run,
+        objects=objects)
 
 
 # --- Bindings ------------------------------------------------------------------------------
@@ -123,6 +142,40 @@ def _bound(ctx: QuestContext, params: dict, param: str,
     return binding, None
 
 
+def _target(ctx: QuestContext, params: dict, param: str,
+            *need: str) -> Tuple[Optional[dict], Optional[ConditionResult]]:
+    """(binding_or_ref, None) for the role or live object named by ``params[param]``, or (None, unavailable)."""
+    key = params.get(param)
+    if not isinstance(key, str) or not key:
+        return None, ConditionResult(False, False, f"'{key}' is not bound or does not exist yet")
+    bindings = ctx.bindings or {}
+    if key in bindings:
+        binding = bindings[key]
+        if not _filled(binding, need):
+            return None, ConditionResult(False, False, f"Role '{key}' is not bound")
+        return binding, None
+    objects = ctx.objects or {}
+    if key in objects:
+        ref = objects[key]
+        if not _filled(ref, need):
+            return None, ConditionResult(False, False, f"Object '{key}' is malformed")
+        return ref, None
+    return None, ConditionResult(False, False, f"'{key}' is not bound or does not exist yet")
+
+
+def _avatar_point(ctx: QuestContext) -> Optional[Tuple[float, float]]:
+    """The avatar's current world point in metres (journey-aware)."""
+    from app.core.timeutils import motion_time
+    from app.core.travel_engine import get_journey, journey_state
+    from app.models.character import get_character_pos
+    journey = get_journey(ctx.avatar, profile=dict(ctx.profile))
+    if journey:
+        x, z = journey_state(journey["waypoints"], journey["started_at_s"], motion_time())["pos"]
+        return float(x), float(z)
+    pos = get_character_pos(ctx.avatar, strict=True)
+    return (pos["x"], pos["z"]) if pos else None
+
+
 # --- Types -----------------------------------------------------------------------------------
 
 def _at_place(params: dict, ctx: QuestContext) -> ConditionResult:
@@ -139,7 +192,7 @@ def _at_place(params: dict, ctx: QuestContext) -> ConditionResult:
 
 def _holds_item(params: dict, ctx: QuestContext) -> ConditionResult:
     from app.models.inventory import get_item_quantity
-    binding, missing = _bound(ctx, params, "item", "item_id")
+    binding, missing = _target(ctx, params, "item", "item_id")
     if missing:
         return missing
     count = params.get("count") or 1
@@ -219,6 +272,74 @@ def _validate_expression(params: dict, bindings: dict | None) -> List[ConditionI
     return validate_condition_expression(expr) if isinstance(expr, str) else []
 
 
+def _knows_secret(params: dict, ctx: QuestContext) -> ConditionResult:
+    from app.core.linked_characters import mind_of
+    from app.models import secrets
+    ref, missing = _target(ctx, params, "secret", "owner", "secret_id")
+    if missing:
+        return missing
+    try:
+        secret = secrets.get_secret(ref["owner"], ref["secret_id"])
+    except Exception as e:  # noqa: BLE001
+        return ConditionResult(False, False, f"Secrets unavailable: {e}")
+    if secret is None:
+        return ConditionResult(False, False, "The secret is gone")
+    if mind_of(ctx.avatar) == mind_of(ref["owner"]) or secrets.knows(secret, ctx.avatar):
+        return ConditionResult(True, True, "")
+    return ConditionResult(True, False, "Does not know the secret")
+
+
+def _found_item(params: dict, ctx: QuestContext) -> ConditionResult:
+    from app.models.quests import has_fact
+    ref, missing = _target(ctx, params, "placement", "location_id", "room_id", "item_id")
+    if missing:
+        return missing
+    subject = found_subject(ref["location_id"], ref["room_id"], ref["item_id"])
+    try:
+        found = has_fact(ctx.mind, FACT_FOUND, subject)
+    except Exception as e:  # noqa: BLE001
+        return ConditionResult(False, False, f"Facts unavailable: {e}")
+    if found:
+        return ConditionResult(True, True, "")
+    return ConditionResult(True, False, "Has not found it")
+
+
+def _near_object(params: dict, ctx: QuestContext) -> ConditionResult:
+    from app.models import world_props
+    ref, missing = _target(ctx, params, "object")
+    if missing:
+        return missing
+    key = params.get("object")
+    if _filled(ref, ("placement_id",)):
+        placement_id = ref["placement_id"]
+        try:
+            rows = world_props.list_world_props()
+        except Exception as e:  # noqa: BLE001
+            return ConditionResult(False, False, f"World props unavailable: {e}")
+        row = next((r for r in rows if r.get("id") == placement_id), None)
+        if row is None:
+            return ConditionResult(False, False, "The object is gone")
+        try:
+            point = _avatar_point(ctx)
+        except Exception as e:  # noqa: BLE001
+            return ConditionResult(False, False, f"Position unavailable: {e}")
+        if point is None:
+            return ConditionResult(True, False, "Has no position on the map")
+        px, pz = point
+        distance = math.hypot(px - row["x"], pz - row["z"])
+        radius = params.get("radius_m")
+        if radius is None:
+            radius = 10
+        if distance <= radius:
+            return ConditionResult(True, True, "")
+        return ConditionResult(True, False, f"{distance:.1f} m away (needs {radius:g} m)")
+    if _filled(ref, ("location_id", "room_id")):
+        if ctx.location_id == ref["location_id"] and ctx.room_id == ref["room_id"]:
+            return ConditionResult(True, True, "")
+        return ConditionResult(True, False, "Not in the room")
+    return ConditionResult(False, False, f"Object '{key}' has no position")
+
+
 def _relationship_at_least(params: dict, ctx: QuestContext) -> ConditionResult:
     from app.models.relationship import get_relationship
     binding, missing = _bound(ctx, params, "character", "name")
@@ -261,7 +382,9 @@ def _builtin_types() -> list:
         QuestType(
             id="holds_item", kind="condition", label="Holds an item",
             description="The avatar carries at least the given number of the bound item.",
-            params=(_role("item", "Item", ["item"], "What the avatar must carry"),
+            params=({"key": "item", "type": "target", "label": "Item",
+                     "description": "What the avatar must carry",
+                     "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
                     {"key": "count", "type": "int", "label": "Count", "description": "How many at least",
                      "default": 1, "min": 1, "step": 1}),
             signals=("inventory.changed",), evaluate=_holds_item),
@@ -294,6 +417,30 @@ def _builtin_types() -> list:
                      "description": "e.g. night AND alone", "required": True},),
             signals=("world_tick", "character.entered_room", "inventory.changed"),
             validate=_validate_expression, evaluate=_expression),
+        QuestType(
+            id="knows_secret", kind="condition", label="Knows a secret",
+            description="The avatar knows the secret a quest effect created (through its mind).",
+            params=({"key": "secret", "type": "target", "label": "Secret",
+                     "description": "Which secret the avatar must know",
+                     "role_kinds": [], "object_kinds": ["secret"], "required": True},),
+            signals=("secret.learned",), evaluate=_knows_secret),
+        QuestType(
+            id="found_item", kind="condition", label="Has found a placement",
+            description="The avatar has discovered the hidden placement a quest effect made (remembered by the mind).",
+            params=({"key": "placement", "type": "target", "label": "Placement",
+                     "description": "Which placement the avatar must find",
+                     "role_kinds": [], "object_kinds": ["room_item"], "required": True},),
+            signals=("item.discovered",), evaluate=_found_item),
+        QuestType(
+            id="near_object", kind="condition", label="Is near an object",
+            description="The avatar is within the radius of a free-standing object the quest created, or in the room of a room object.",
+            params=({"key": "object", "type": "target", "label": "Object",
+                     "description": "Which object the avatar must be near",
+                     "role_kinds": [], "object_kinds": ["world_prop", "room_prop", "room_item"],
+                     "required": True},
+                    {"key": "radius_m", "type": "float", "label": "Radius (m)",
+                     "description": "How close in metres", "min": 1, "max": 200, "default": 10}),
+            signals=("character.entered_room", "world_tick"), evaluate=_near_object),
         QuestType(
             id="relationship_at_least", kind="prerequisite", label="Relationship at least",
             description="The avatar's relationship strength to the bound character is at least the value (0-100).",

@@ -229,7 +229,8 @@ def _apply_entry(
                 all_present = False
         if all_present:
             for row in pending_rows:
-                quests.set_object_status(row["id"], "live")
+                clean_ref = {k: v for k, v in (row.get("ref") or {}).items() if k != "before"}
+                quests.set_object_status(row["id"], "live", ref=clean_ref)
             return ("done", None)
 
     type_id = entry.get("type") if isinstance(entry.get("type"), str) else ""
@@ -237,13 +238,7 @@ def _apply_entry(
     if t is None or t.apply is None:
         return ("waiting", None)
 
-    live_objects: Dict[str, dict] = {}
-    for obj in quests.list_objects(run_id, statuses=("live",)):
-        if obj.get("kind") == "marker":
-            continue
-        ek = obj.get("effect_key")
-        if ek and ek not in live_objects:
-            live_objects[ek] = obj.get("ref") or {}
+    live_objects = quests.live_object_refs(run_id)
 
     permanent = bool(entry.get("permanent")) or position == "reward"
     added_ids: List[int] = []

@@ -126,11 +126,14 @@ positions accept types of kind `condition` and `prerequisite`; steps and the sta
 | Id | Kind | Parameters | Signals |
 |---|---|---|---|
 | `at_place` | condition | `place` (role: location or room) | `character.entered_room` |
-| `holds_item` | condition | `item` (role: item), `count` (int, default 1) | `inventory.changed` |
+| `holds_item` | condition | `item` (target: item role or item object), `count` (int, default 1) | `inventory.changed` |
 | `stat_compare` | condition | `stat` (str), `op` (`>=` `<=` `>` `<` `=`), `value` (int) | `world_tick` |
 | `spoke_with` | condition | `character` (role: character) | `utterance.heard` |
 | `time_elapsed` | condition | `hours` (int, game hours since the run opened); not allowed in a start condition | `world_tick` |
 | `expression` | condition | `expression` (the activity condition grammar) | `world_tick`, `character.entered_room`, `inventory.changed` |
+| `knows_secret` | condition | `secret` (target: secret object) | `secret.learned` |
+| `found_item` | condition | `placement` (target: room_item object) | `item.discovered` |
+| `near_object` | condition | `object` (target: world_prop, room_prop or room_item object), `radius_m` (float, 1–200, default 10) | `character.entered_room`, `world_tick` |
 | `relationship_at_least` | prerequisite | `character` (role: character), `strength` (0–100) | — |
 
 **Read rule.** Location, room and inventory are read for the ACTING BODY; facts are read for its MIND
@@ -148,7 +151,7 @@ A type is a `QuestType` (`app.core.quest_catalog`):
 | `label`, `description` | English UI text; the description is one line (later also the LLM's catalog line) |
 | `params` | Tuple of parameter dicts (D5) |
 | `signals` | The hook events after which the type may have changed its answer. A step is re-read on those signals and on every tick |
-| `evaluate(params, ctx)` | Returns `ConditionResult`; `ctx` is a `QuestContext` (`avatar`, `mind`, `profile`, `location_id`, `room_id`, `now`, `bindings`, `run`). Return unavailable (never false) when a read fails |
+| `evaluate(params, ctx)` | Returns `ConditionResult`; `ctx` is a `QuestContext` (`avatar`, `mind`, `profile`, `location_id`, `room_id`, `now`, `bindings`, `run`, `objects`). Return unavailable (never false) when a read fails |
 | `validate(params, bindings)` | Optional; returns `list[ConditionIssue]`. `bindings` is `None` at template time (check only what needs no world entity) and the run's bindings at start and at every tick |
 | `needs_open_run` | Default `False`. `True` for a type that can only be read once the run has opened (it counts from `started_game_ts`, like `time_elapsed`): `validate_template` refuses it under `start_condition` (code `not_allowed_here`), where a hidden run has not opened and the type would stay unavailable forever. It is refused under `prerequisites.condition` too when the start condition is non-empty, because such a run opens only once its prerequisites pass; with an empty start condition the run is open from the start and the type is allowed there |
 

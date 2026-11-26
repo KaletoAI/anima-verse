@@ -114,6 +114,15 @@ WHAT FOLLOWS BY HAND
        `(R1, b)` has ids 4, 6 (`first_id=4`). Sorting by `(-first_id, id)` yields ids
        `[4, 6, 2, 5, 1, 3]` (group `first_id=4`, then `first_id=2`, then `first_id=1`, each
        preserving ascending `id` inside the effect).
+ (l) Restart reconciliation strips `"before"` from promoted pending grant row:
+     - Ready template with roles `hero` (character -> A) and `thing` (item -> existing item I),
+       setup `[g: give_item item "thing" to "hero"]`; `start_run` -> `"preparing"`.
+     - Simulate crash after inventory write: `add_to_inventory("A", I, 1)` (A held 0 before) and
+       `add_object(run_id, effect_key="g", position="setup", kind="grant",
+       ref={"character": "A", "item_id": I, "quantity": 1, "before": 0}, status="pending")`.
+     - `pass_once()`: `exists` checks `1 >= 0 + 1` -> True, so the entry is NOT re-applied; row is
+       promoted to `"live"` with ref `{"character": "A", "item_id": I, "quantity": 1}` (no
+       `"before"` key), A holds exactly 1, run state is `"open"`.
 """
 import ast
 import json
@@ -798,6 +807,42 @@ def main() -> int:
         check("_cleanup_order across two runs",
               [r["id"] for r in qfx._cleanup_order(sample_rows)],
               [4, 6, 2, 5, 1, 3])
+
+        # (l) ----------------------------------------------------------------------------------
+        section("(l)", "restart reconciliation strips before from promoted pending grant row")
+        l_item = inventory.add_item("Reconcile Token", stackable=True, max_stack=10)["id"]
+        tpl_l = mk_tpl(
+            "Reconcile Grant L",
+            roles=[
+                {"key": "hero", "kind": "character", "description": "recipient"},
+                {"key": "thing", "kind": "item", "description": "token"},
+                {"key": "turnin", "kind": "room", "description": "turn-in room"},
+            ],
+            setup_effects=[{"key": "g", "type": "give_item", "params": {"item": "thing", "to": "hero"}}],
+        )
+        rl = qe.start_run(tpl_l["id"], {
+            "hero": {"name": "A"},
+            "thing": {"item_id": l_item},
+            "turnin": {"location_id": "L1", "room_id": "r2"},
+        })
+        check("run L preparing", rl["state"], "preparing")
+        assert inventory.add_to_inventory("A", l_item, 1)
+        quests.add_object(
+            rl["id"],
+            effect_key="g",
+            position="setup",
+            kind="grant",
+            ref={"character": "A", "item_id": l_item, "quantity": 1, "before": 0},
+            status="pending",
+        )
+        qfx.pass_once()
+        rows_l = [o for o in quests.list_objects(rl["id"]) if o["effect_key"] == "g"]
+        check("promoted to live without before",
+              [(o["status"], o["ref"]) for o in rows_l],
+              [("live", {"character": "A", "item_id": l_item, "quantity": 1})])
+        check("A holds exactly 1 (not paid twice)", inventory.get_item_quantity("A", l_item), 1)
+        check("run L open", quests.get_run(rl["id"])["state"], "open")
+        end_and_clean(rl["id"])
     finally:
         item_images.generate_item_image_sync = orig_gen
         threading.excepthook = orig_excepthook

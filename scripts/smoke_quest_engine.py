@@ -165,12 +165,10 @@ WHAT FOLLOWS BY HAND
     - j. check_bindings with 5th setup entry eff_v -> validate_template == [], check_bindings ==
       [("setup_effects.4.type", "eff_bound")].
     - k. _unregistered: with stubs registered, owed=("setup","step:1","reward") -> []; after unregistering "test"
-      (core stays, so holds_item, give_hint, narrate, give_item, create_item and place_item remain registered while
-      create_prop, near_object and knows_secret are stub-only), owed=() -> ["steps.0.condition.type",
-      "steps.1.condition.type"]; owed=("setup",) -> those 2 + setup_effects.0.type (create_prop is still stub-only;
-      setup_effects.1 create_item, setup_effects.2 place_item and setup_effects.3 give_hint are core -> 3 paths);
-      owed=("step:1",) -> only those 2 (steps.1.on_done.0 narrate is core -> 2 paths); qc.types() still has
-      give_hint, narrate, create_item and place_item with kind "effect".
+      (core stays, so holds_item, near_object, knows_secret, give_hint, narrate, give_item, create_item and
+      place_item remain registered while create_prop is still stub-only), owed=() -> []; owed=("setup",) ->
+      ["setup_effects.0.type"]; owed=("step:1",) -> []; qc.types() still has give_hint, narrate, create_item and
+      place_item with kind "effect".
     - l. After restoring core: validate_template(ERRAND) == [].
  25. Preparing runs in start_run and tick (stage 2, Task 4):
     Stub effect "p_hold" (owner "smoke_p", kind "effect", object_kind "", apply returning []). This smoke never calls
@@ -180,6 +178,24 @@ WHAT FOLLOWS BY HAND
       "bindings.thing" (preparing runs are reference-checked now, D11).
     - A preparing run, then unregister "smoke_p": tick 1 -> still "preparing"; tick 2 -> "broken" with an issue
       ("setup_effects.0.type", "type_not_registered") (owed setup position, ruling c).
+ 26. secret.learned completes knows_secret without a tick (stage 2, Task 7):
+    Ready template with role giver (character), setup [hint: give_hint(holder=giver, text="Under the roots.")],
+    1 step knows_secret(secret="hint"). start_run(giver=N) -> "preparing"; quest_effects.pass_once() -> "open",
+    one live secret row for "hint". No tick(). secrets.add_known_by(owner, sid, "A"); drain() -> run "done",
+    step_log[0].avatar == "A".
+ 27. item.discovered writes found fact and completes found_item (stage 2, Task 7):
+    Ready template with role spot_room (room = L2/s1, where A stands), setup [box: create_item("Tin box", "tool"),
+    spot: place_item(item="box", room="spot_room", hidden=True, difficulty=3)], 1 step found_item(placement="spot").
+    Image render stubbed. start_run -> pass_once -> "open". A's discovery stat (config inventory.discovery_stat) set
+    to 35 (>= 30). placement_visible_to("A", "L2", "s1", placement) -> True; drain() -> has_fact(mind_of("A"),
+    "found", found_subject("L2", "s1", box_id)) True and run "done". Second placement_visible_to -> True, step_log
+    unchanged (len 1).
+ 28. near_object via character.entered_room (stage 2, Task 7):
+    Ready template with role spot_room (room = L1/r1, A stands in L2/s1), setup [box: create_item("Pebble bag",
+    "tool"), spot: place_item(item="box", room="spot_room")], 1 step near_object(object="spot"). Image render
+    stubbed. start_run -> pass_once -> "open". evaluate("A") while in L2/s1 leaves current_step 0. move("A", "L1",
+    "r1") -> drain() -> run "done".
+ 29. "item.discovered" in quest_engine.SIGNALS.
 """
 import os
 import sys
@@ -965,12 +981,11 @@ def main() -> int:
         check("k. _unregistered with stubs",
               qe._unregistered(ROCK, owed=("setup", "step:1", "reward")), [])
         hooks.unregister_owned_providers("test")
-        check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(ROCK)),
-              ["steps.0.condition.type", "steps.1.condition.type"])
+        check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(ROCK)), [])
         check("k. _unregistered owed=(setup,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("setup",))),
-              ["setup_effects.0.type", "steps.0.condition.type", "steps.1.condition.type"])
+              ["setup_effects.0.type"])
         check("k. _unregistered owed=(step:1,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("step:1",))),
-              ["steps.0.condition.type", "steps.1.condition.type"])
+              [])
         core_now = qc.types()
         check("k. core built-ins give_hint, narrate, create_item and place_item stay registered",
               {k: core_now[k].kind for k in ("give_hint", "narrate", "create_item", "place_item") if k in core_now},
@@ -1020,10 +1035,115 @@ def main() -> int:
         hooks.unregister_owned_providers("smoke_p")
         cleanup(*p_runs)
 
+    # 26 ---------------------------------------------------------------------------------------
+    section("[26]", "secret.learned completes knows_secret without a tick")
+    from app.core import config, item_images, quest_effects as qfx
+    from app.core.config_schema import field_default
+    from app.core.keyed_lock import keyed_lock
+    from app.core.linked_characters import mind_of
+    from app.models import secrets as secrets_model
+
+    tpl_26 = quests.create_template(
+        state="ready",
+        title="Secret Step",
+        roles=[{"key": "giver", "kind": "character", "description": "holder"}],
+        setup_effects=[{"key": "hint", "type": "give_hint",
+                        "params": {"holder": "giver", "text": "Under the roots."}}],
+        steps=[{"id": "s1", "text": "Learn the hint.",
+                "condition": {"type": "knows_secret", "params": {"secret": "hint"}}}],
+    )
+    r26 = qe.start_run(tpl_26["id"], {"giver": {"name": "N"}})
+    check("preparing before pass_once", r26["state"], "preparing")
+    qfx.pass_once()
+    check("open after pass_once", run(r26["id"])["state"], "open")
+    hint_rows = [o for o in quests.list_objects(r26["id"]) if o["effect_key"] == "hint" and o["status"] == "live"]
+    check("one live secret row", len(hint_rows), 1)
+    hint_ref = hint_rows[0]["ref"]
+    secrets_model.add_known_by(hint_ref["owner"], hint_ref["secret_id"], "A")
+    check("drain after add_known_by", qe.drain(), True)
+    got26 = run(r26["id"])
+    check("done without tick, by A",
+          (got26["state"], len(got26["step_log"]), got26["step_log"][0]["avatar"] if got26["step_log"] else ""),
+          ("done", 1, "A"))
+    qfx.pass_once()
+
+    # 27 ---------------------------------------------------------------------------------------
+    section("[27]", "item.discovered writes found fact and completes found_item")
+    move("A", "L2", "s1")
+    orig_gen = item_images.generate_item_image_sync
+    item_images.generate_item_image_sync = lambda item_id, overrides=None, *, raise_errors=False: True
+    try:
+        tpl_27 = quests.create_template(
+            state="ready",
+            title="Find Tin Box",
+            roles=[{"key": "spot_room", "kind": "room", "description": "hiding room"}],
+            setup_effects=[
+                {"key": "box", "type": "create_item", "params": {"name": "Tin box", "category": "tool"}},
+                {"key": "spot", "type": "place_item",
+                 "params": {"item": "box", "room": "spot_room", "hidden": True, "difficulty": 3}},
+            ],
+            steps=[{"id": "s1", "text": "Find the tin box.",
+                    "condition": {"type": "found_item", "params": {"placement": "spot"}}}],
+        )
+        r27 = qe.start_run(tpl_27["id"], {"spot_room": {"location_id": "L2", "room_id": "s1"}})
+        qfx.pass_once()
+        check("run 27 open", run(r27["id"])["state"], "open")
+        box_id_27 = {o["effect_key"]: o for o in quests.list_objects(r27["id"])}["box"]["ref"]["item_id"]
+        disc_stat = config.get("inventory.discovery_stat", field_default("inventory", "discovery_stat"))
+        with keyed_lock("character_profile", "A"):
+            prof_a = chars.get_character_profile("A") or {}
+            se_a = dict(prof_a.get("status_effects") or {})
+            se_a[disc_stat] = 35
+            prof_a["status_effects"] = se_a
+            assert chars.save_character_profile("A", prof_a)
+        pl_27 = next(p for p in inventory.get_room_items("L2", "s1") if p.get("item_id") == box_id_27)
+        check("placement_visible_to -> True", inventory.placement_visible_to("A", "L2", "s1", pl_27), True)
+        check("drain after discovery", qe.drain(), True)
+        check("found fact recorded",
+              quests.has_fact(mind_of("A"), qt.FACT_FOUND, qt.found_subject("L2", "s1", box_id_27)), True)
+        got27 = run(r27["id"])
+        check("run 27 done", (got27["state"], len(got27["step_log"])), ("done", 1))
+        check("second placement_visible_to stays True",
+              inventory.placement_visible_to("A", "L2", "s1", pl_27), True)
+        check("drain after second read", qe.drain(), True)
+        got27_b = run(r27["id"])
+        check("unchanged after second read", (got27_b["state"], len(got27_b["step_log"])), ("done", 1))
+        qfx.pass_once()
+
+        # 28 -----------------------------------------------------------------------------------
+        section("[28]", "near_object through character.entered_room")
+        move("A", "L2", "s1")
+        tpl_28 = quests.create_template(
+            state="ready",
+            title="Near Pebble Bag",
+            roles=[{"key": "spot_room", "kind": "room", "description": "target room"}],
+            setup_effects=[
+                {"key": "box", "type": "create_item", "params": {"name": "Pebble bag", "category": "tool"}},
+                {"key": "spot", "type": "place_item",
+                 "params": {"item": "box", "room": "spot_room"}},
+            ],
+            steps=[{"id": "s1", "text": "Reach the pebble bag.",
+                    "condition": {"type": "near_object", "params": {"object": "spot"}}}],
+        )
+        r28 = qe.start_run(tpl_28["id"], {"spot_room": {"location_id": "L1", "room_id": "r1"}})
+        qfx.pass_once()
+        check("run 28 open", run(r28["id"])["state"], "open")
+        qe.evaluate("A")
+        check("elsewhere -> still step 0", run(r28["id"])["current_step"], 0)
+        move("A", "L1", "r1")
+        check("entered room -> done", run(r28["id"])["state"], "done")
+        qfx.pass_once()
+    finally:
+        item_images.generate_item_image_sync = orig_gen
+
+    # 29 ---------------------------------------------------------------------------------------
+    section("[29]", "item.discovered in SIGNALS")
+    check("item.discovered in SIGNALS", "item.discovered" in qe.SIGNALS, True)
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[25]")
+    print("PASS smoke_quest_engine: [1]-[29]")
     return 0
 
 

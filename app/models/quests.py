@@ -559,6 +559,20 @@ def list_objects(run_id: str = "", *,
     return [_object_dict(r) for r in get_connection().execute(sql, params).fetchall()]
 
 
+def live_object_refs(run_id: str) -> dict[str, dict]:
+    """effect_key -> ref of the run's FIRST live object row of that key (rows in id order); marker rows excluded."""
+    if not run_id:
+        return {}
+    out: dict[str, dict] = {}
+    for obj in list_objects(run_id, statuses=("live",)):
+        if obj.get("kind") == "marker":
+            continue
+        key = obj.get("effect_key")
+        if key and key not in out:
+            out[key] = obj.get("ref") or {}
+    return out
+
+
 def objects_to_clean() -> list[dict]:
     """Non-permanent objects of ended runs whose status is ``live``,
     ``pending``, or ``revert_pending``, ordered by object id."""

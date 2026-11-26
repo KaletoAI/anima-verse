@@ -6,7 +6,8 @@ tag ``"quest_engine"``).
 
 THREADING (D11). The hook listeners run in the emitting thread (``play_say`` emits on the event loop), so they do
 nothing but put the event payload on ONE queue; a single daemon worker thread takes it from there: it writes the
-"spoke with" fact, evaluates and runs the tick. :func:`drain` waits until the queue is empty (tests).
+"spoke with" fact on ``utterance.heard`` and the "found" fact on ``item.discovered``, evaluates and runs the tick.
+:func:`drain` waits until the queue is empty (tests).
 
 EVALUATION. :func:`evaluate` looks at one avatar: only a player-controlled character fulfils anything (an NPC
 entering the bound room changes nothing). Steps are sequential: per hidden/open run only the CURRENT expression is
@@ -59,7 +60,7 @@ logger = get_logger("quest_engine")
 
 HOOK_TAG = "quest_engine"
 #: The hook events the engine subscribes to (D9).
-SIGNALS = ("character.entered_room", "inventory.changed", "utterance.heard", "secret.learned", "world_tick")
+SIGNALS = ("character.entered_room", "inventory.changed", "utterance.heard", "secret.learned", "item.discovered", "world_tick")
 #: The run states the engine evaluates.
 LIVE_STATES = ("hidden", "open")
 #: The lock reason when the author left ``locked_text`` empty (D8).
@@ -961,6 +962,30 @@ def _learned(payload: Dict[str, Any]) -> None:
             evaluate(avatar, "secret.learned")
 
 
+def _found(payload: Dict[str, Any]) -> None:
+    """An avatar discovered a hidden room placement: record the ``found`` fact for its mind and evaluate every
+    avatar belonging to that mind."""
+    from app.core.linked_characters import mind_of
+    from app.core.quest_types import FACT_FOUND, found_subject
+    from app.models.account import get_all_avatars
+    from app.models.quests import add_fact
+    character = payload.get("character") or ""
+    location_id = payload.get("location_id") or ""
+    room_id = payload.get("room_id") or ""
+    item_id = payload.get("item_id") or ""
+    if not all(isinstance(v, str) and v for v in (character, location_id, room_id, item_id)):
+        return
+    mind = mind_of(character)
+    try:
+        add_fact(mind, FACT_FOUND, found_subject(location_id, room_id, item_id))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest engine: the found fact %s -> %s/%s/%s was not written: %s",
+                       character, location_id, room_id, item_id, e)
+    for avatar in sorted(get_all_avatars()):
+        if mind_of(avatar) == mind:
+            evaluate(avatar, "item.discovered")
+
+
 def _handle(event: str, payload: Dict[str, Any]) -> None:
     if event == "world_tick":
         tick()
@@ -968,6 +993,8 @@ def _handle(event: str, payload: Dict[str, Any]) -> None:
         _heard(payload)
     elif event == "secret.learned":
         _learned(payload)
+    elif event == "item.discovered":
+        _found(payload)
     elif isinstance(payload.get("character"), str) and payload["character"]:
         evaluate(payload["character"], event)
 
@@ -1008,17 +1035,23 @@ def _on_secret_learned(**payload: Any) -> None:
     _enqueue("secret.learned", payload)
 
 
+def _on_item_discovered(**payload: Any) -> None:
+    _enqueue("item.discovered", payload)
+
+
 def _on_world_tick(**payload: Any) -> None:
     _enqueue("world_tick", payload)
 
 
 def register() -> None:
-    """Subscribe the five signals under the tag ``"quest_engine"`` (idempotent: the hook bus keys by event + tag)."""
+    """Subscribe every event of :data:`SIGNALS` under the tag ``"quest_engine"`` (idempotent: the hook bus keys by
+    event + tag)."""
     from app.core import hooks
     hooks.register("character.entered_room", _on_entered_room, tag=HOOK_TAG)
     hooks.register("inventory.changed", _on_inventory_changed, tag=HOOK_TAG)
     hooks.register("utterance.heard", _on_utterance_heard, tag=HOOK_TAG)
     hooks.register("secret.learned", _on_secret_learned, tag=HOOK_TAG)
+    hooks.register("item.discovered", _on_item_discovered, tag=HOOK_TAG)
     hooks.register("world_tick", _on_world_tick, tag=HOOK_TAG)
 
 
