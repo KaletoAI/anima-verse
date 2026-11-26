@@ -1,0 +1,14 @@
+name: share_secret
+version: "1.0.0"
+description: Tell another character in the same room a secret you own or know
+skills:
+  - skill_id: share_secret
+    always_load: true
+    default_enabled: true
+templates:
+  llm: templates/llm
+config_schema:
+  share_secret:
+    label: ShareSecret
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}

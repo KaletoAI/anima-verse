@@ -8,9 +8,10 @@ character starts with):
 [a] The repo packages declare `default_enabled: true` for exactly
     consume_item, instagram_comment, instagram_reply, interact, setlocation,
     go_to_character, cancel_travel, notify_user, invite_to_party, join_party,
-    leave_party, read_item, send_message, set_pose, sleep, wakeup,
-    image_generation, talk_to, undress, get_dressed, enter_water, dry_off,
-    allow_exposed, require_decency. Niche or setup-bound verbs stay off:
+    leave_party, read_item, send_message, share_secret (share_secret since
+    quest stage 2), set_pose, sleep, wakeup, image_generation, talk_to,
+    undress, get_dressed, enter_water, dry_off, allow_exposed, require_decency.
+    Niche or setup-bound verbs stay off:
     act, instagram, knowledge_extract, knowledge_search, markdown_writer, n8n,
     retrospect, searx.
 [b] A NEW character applied through World Dev gets one skill file with
@@ -33,13 +34,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 REPO_PACKAGES = ("act", "consume_item", "decency_exempt", "instagram", "interact",
                  "knowledge", "markdown_writer", "movement", "n8n", "notify_user",
                  "party", "read_item", "retrospect", "searx", "send_message",
-                 "set_pose", "sleep", "take_photo", "talk_to", "undress", "wet")
+                 "share_secret", "set_pose", "sleep", "take_photo", "talk_to",
+                 "undress", "wet")
 EXPECTED_ON = {"consume_item", "instagram_comment", "instagram_reply", "interact",
                "setlocation", "go_to_character", "cancel_travel", "notify_user",
                "invite_to_party", "join_party", "leave_party", "read_item",
-               "send_message", "set_pose", "sleep", "wakeup", "image_generation",
-               "talk_to", "undress", "get_dressed", "enter_water", "dry_off",
-               "allow_exposed", "require_decency",
+               "send_message", "share_secret", "set_pose", "sleep", "wakeup",
+               "image_generation", "talk_to", "undress", "get_dressed",
+               "enter_water", "dry_off", "allow_exposed", "require_decency",
                "prop_action"}  # set_pose package, default_enabled since 9e8262339
 EXPECTED_OFF = {"act", "instagram", "knowledge_extract", "knowledge_search",
                 "markdown_writer", "n8n", "retrospect", "searx"}

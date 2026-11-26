@@ -52,7 +52,7 @@ _PACKAGE_IDS = (
     "act", "cat", "consume_item", "decency_exempt", "human", "instagram",
     "interact", "knowledge", "markdown_writer", "movement", "n8n",
     "notify_user", "party", "retrospect", "romantic_interests", "rp", "searx",
-    "send_message", "set_pose", "sleep", "take_photo", "talk_to", "undress", "wet",
+    "send_message", "set_pose", "share_secret", "sleep", "take_photo", "talk_to", "undress", "wet",
 )
 (STORAGE / "config.json").write_text(json.dumps({
     "packages": {"enabled": ",".join(_PACKAGE_IDS)},

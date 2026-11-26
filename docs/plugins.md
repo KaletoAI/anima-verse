@@ -1583,6 +1583,7 @@ Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der
 | `rp` | — | Rollenspiel-Paket — RP-Regeln und die RP-Status-Stats |
 | `searx` | `searx` | Websuche über eine selbst gehostete SearX-Instanz |
 | `send_message` | `send_message` | Textnachricht an einen NICHT anwesenden Charakter (optional mit Bildanhang aus demselben Turn) |
+| `share_secret` | `share_secret` | Tell a character in the same room a secret you own or know (records knowledge via `secrets.add_known_by`, which emits `secret.learned`; the ids come from the quest prompt block) |
 | `set_pose` | `set_pose` | Setzt die aktuelle Pose (Katalog-Key + Anzeige-Detail) |
 | `sleep` | `sleep`, `wakeup` | Schlaf-Flag setzen und den Charakter währenddessen von der Karte nehmen |
 | `take_photo` | `image_generation` | Der Charakter macht ein Foto / erzeugt ein Bild (Verb über den Core-Bild-Service) |
