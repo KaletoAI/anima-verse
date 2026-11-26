@@ -927,3 +927,136 @@ eingearbeitet. Abweichungen:
     `NavRoute`, NPC-Pfade über das Navmesh (heute unverändert), die Welt-Map draußen (in E2 nicht angelegt), die
     `access`-Prüfung (Abstand < 0,4 m, Schlussstück ohne Wand) gegen echte Aufträge in `OrderCheck` — E2 prüft sie nur
     an den Fixtures.
+
+- **E3 umgesetzt (2026-11-26, Plan `docs/superpowers/plans/2026-11-25-client-ausfuehrung-e3.md`, Tasks 1–14).**
+  Tasks 4–11 liefen im Worktree `../anima-verse-e3` (Branch `e3-orders`) und landeten in einem Schritt
+  (`5b45e09a4`, merge: E3 orders); Tasks 1–3 und 12–14 im geteilten Baum. Server: `app/core/motion_orders.py`
+  (Form, Schätzung, `seq`, Index, Veröffentlichung, `walk`, `boot`, `heartbeat`), `prop_action_engine` auf
+  Schätz-Timer, `POST /play/order/arrived`, `GET /play/orders`; Client: `native/Core/Orders` (`Order`,
+  `OrderPlayer`, `OrderWalk`, `ILinkRide`, `PoseTransitions`, `AccessAuto`, `AvoidanceClamp`) und
+  `native/Figures/FigureManager.Orders.cs` für alle Figuren; `OrderCheck` (`--check orders`, R1–R13).
+  Gelöscht: Server-Anlaufcode und Owner-Callbacks, `_local_prop_approach`/`_prop_action_entry`, `exit_motions`,
+  `OwnPropMotion`, `NavRoute`, `NpcRoute`, Vertrag A11/C3-`motion`, `client3d/`, `static/client3d/`, die
+  Browser-Smokes; `/play` ist eine Hinweisseite, der Fallback-Figurenpool liegt unter `static/fallback-models/`.
+  Festgehaltene Entscheidungen des Plans:
+  - **Felder pro Beteiligtem (Plan 2):** `access`, `anchor` (mit `root_offset`), `entry_mode`, `sequence` und
+    (nur `cancel`) `stand` stehen in `actors[i]`, nicht oben wie in 5b; jeder Beteiligte hat eigenen Zugang und
+    eigene Phasen. `actors[i].reports_arrival` = genau die spielergesteuerten Figuren. `order_id` ist eine
+    zufällige `ord-…`-Id, nicht die `execution_id` (Nicht-Beteiligte sollen sie nicht erfahren).
+  - **Globale Sequenz (Plan 3):** `seq` aus dem `world_kv`-Zähler `motion_order_seq` (Modul-Lock);
+    `GET /play/orders?since=` liefert sichtbare Aufträge mit `seq > since`, dazu `seq` und `motion_now`; ein
+    In-Prozess-Index `name → order` bedient Worldmap und Route ohne Profil-Parsing pro Zeile.
+  - **Veröffentlichungsende (Plan 6):** live + `ORDER_TAIL_S = 10,0` s nach dem beendenden Ereignis; die
+    Worldmap-Wurzel trägt `order_seq`, gelesen vor dem Zeilenbau; ein fehlendes `order` beendet einen
+    Server-Auftrag nur bei `order_seq ≥ Current.Seq` (Überblendung 0,3 s), einen lokalen (`local:n`) nie.
+  - **Abweichung — Neustart-Verschiebung im Boot statt in `_clock` (Plan 7, weicht von 5g ab):** Weil der Ticker
+    nur noch fällige Runs anfasst, misst `last_motion` die Downtime nicht mehr. Runs speichern absolute
+    Motion-Sekunden (`eta_s`, `flip_s`, `deadline_s`); `motion_orders.heartbeat()` schreibt `motion_alive_s`
+    höchstens alle `HEARTBEAT_S = 5,0` s und nur, solange ein Auftrag lebt (beim Wechsel 0 → ≥ 1 sofort);
+    `boot()` läuft vor AgentLoop, `periodic_jobs` und TravelTicker und verschiebt um
+    `shift = max(0, motion_time() − motion_alive_s)` (fehlt der Wert: 0), idempotent über `boot_alive_s`, mit
+    Revisionserhöhung. `_clock` behält nur die Delta-0-Regel für das Spielzeit-Delta.
+  - **Abweichung — Reaktions-Zeitablauf geht weiter (Plan 8, weicht von 5g ab):** 5g schreibt „Abbruch als neue
+    `order_id`“; das wäre eine Änderung der WAS-Entscheidung (Nicht-Ziel, Abschnitt 2). Nach
+    `REACTION_WAIT_S = 60,0` s gilt die Reaktion wie bisher als gegeben: Revision ohne `awaits`,
+    `flip = jetzt + entry_nominal_s`.
+  - **Abweichung — Raumwechsel-Schätzung über die Raumkette (Plan 9, weicht von 5g ab):** `L = 1,3 · Σ`
+    Luftlinien der waagerechten Beine (Start → Durchgänge → Treppenfuß, Treppenkopf → Ziel) plus 3D-Länge des
+    Treppenlaufs ohne Faktor; die Kette ist eine Breitensuche über die Räume einer Location (keine Gitter, kein
+    Cache). Grund: die reine Luftlinie über die Türpunkte unterschätzt den Treppenweg der Fixture um 8,914 m
+    (6,37 s) und löste Heilregel 2 aus. Ohne Kette gilt Luftlinie × 1,3.
+  - **Abweichung — Raumwechsel schreibt Raum und Zielpunkt sofort (Plan 10, weicht von 5g ab):** eine Position im
+    alten Raum bei neuem `room_id` widerspräche `places.where` und den Regel-Gates; der `walk` ist dann reines
+    Bild mit `flip = eta`, an `flip` wird nur `status = ended` veröffentlicht. Der Setter
+    `save_character_current_room` blieb unverändert (rund 20 Aufrufer ohne Gang); `issue_walk` sitzt an den
+    Entscheidungsstellen `npc_actions`, `routes/chat.py`, `movement_authority`, `periodic_jobs` (Force-Regel).
+    Innerhalb eines Raums und draußen gilt 5g unverändert (Start bis `flip`, dann einmal das Ziel).
+  - **Abweichung — keine Server-Pfadsuche für NPC-Bewegung in Locations (Plan 11):** `walk` im Raum =
+    `visibility_path` auf dem Raumpolygon, Raumwechsel = Raumkette, nur ein `walk` draußen bekommt `hint_route`
+    aus `_bake_route` (Anlass: Vorfall 2026-11-25, Nav-Gitter-A* für Wanderer, 13 min Stillstand). Wächter
+    `scripts/smoke_walk_orders.py` [W6] lässt `nav_grid.route` werfen. Server-`walk` ignoriert
+    `WalkGround.TerrainPace` (`flip = L / speed`, Task-9-Entscheid); `TerrainPace` bleibt für Avatar- und lokale Gänge.
+  - **Bleibt bis E5:** `interaction_engine._walk_to_partner` (Paar-Gang) auf der Punkt-Journey, und damit
+    `travel_engine.start_journey_to_point` mit genau diesem einen Aufrufer (bekommt nur `cancel_for` an der
+    Engstelle). **Bleibt:** die Owner-Mechanik für Party-Trip-Intents (`travel_engine._execution_owner` löst die
+    Party-Provider auf); gelöscht wurde nur die Owner-Registry der Anlauf-Journeys — jede andere eigene Journey
+    endet als `unknown_execution_owner`.
+  - **Klick-Laufen (Plan 12):** ein Boden-Klick ist ein lokaler `walk` (`local:<n>`, nie gesendet); `NavRoute`
+    gelöscht, Verfolgung/Feststecken/Neuplanung/Link-Ritt in `OrderWalk`. Draußen ohne Navmesh bleibt der gerade
+    Klick-Weg (5d). Ein Klick-Gang endet beim zweiten Fehlschlag ohne Fortschritt (`WalkFailures`).
+  - **Links als Fahrtarten (Plan 13):** `kind → ILinkRide` (`stairs`, `lift`) mit Anfrage/Ergebnis/Ende; ein
+    späterer `jump` braucht nur eine `NavLinkSpec`-Art und einen `ILinkRide`, kein neues Auftragsformat.
+    Gemessene Länge der Treppen-Fixture R7/R7b: 20,379 m (Herleitung `native/fixtures/README.md`).
+  - **Fallback-Pool (Plan 15):** `static/client3d/models/` → `static/fallback-models/` (`git mv`) vor dem Löschen.
+  - **`undergrowth.json` (Plan 16, offener E1-Punkt):** C#-Test `native/tests/UndergrowthVectorTests.cs` über alle
+    12 Funktionen (61 Fälle); `UndergrowthMath.Normal` ergänzt.
+  - **Advance nur fällig (Plan 17):** `advance(now, *, due_only)`; der TravelTicker ruft `due_only=True` und
+    `_advance_run` nur für Runs mit `_due_at(run) ≤ jetzt` (`eta_i`, `flip_s`, `deadline_s`, Phasenende,
+    Gauge-Beat, Reaktionsablauf, Einwilligungsfenster); `periodic_jobs` bleibt die volle Runde.
+  - **Ab `loop_started` (Plan 18):** der Auftrag hält nur „keine Umplatzierung“; Pose, Paar-Clip, Szenen-Uhr,
+    Finale und Phase kommen weiter aus der Zeile (bis E5); ein Phasenwechsel ist zusätzlich eine Revision (`phase`).
+  - **Ende eines `prop_action`-Runs (Plan 19):** höchstens ein `cancel` mit neuer Id, nur für wirklich
+    Aufgestandene, je mit eigenem `stand`; gehaltene Mitglieder enden über den Folge-Run oder die Zeile.
+    `status ended` gibt es nur für `walk`.
+  - **`walk`-Engstelle (Plan 20):** `cancel_journey`, `_cancel_journey_for_manual_write`, `start_journey`,
+    `start_journey_to_point`, Interaktionsstart und `prop_action_engine._start` rufen `motion_orders.cancel_for`;
+    `settle_due` schreibt nur bei aktueller `order_id` über `set_character_pos(..., preserve_movement_target=True)`;
+    `motion_orders.walking()` steht an jedem „unterwegs/beschäftigt“-Gate und — bewusst — in der Regelbedingung
+    `activity_engine` („No journey in progress“, [W13]).
+
+  **Vektortabelle (Review K3, in Task 13 Step 1 an den Verbrauchern bestätigt, Stand nach E3 per
+  `command grep -rlna <datei> native scripts packages hud`):**
+
+  | Vektor | Verbraucher nach E3 | Stufe | Grund |
+  |---|---|---|---|
+  | `prop_action_motion.json` | `native/Check/PropActionsCheck.Recovery.cs` | neu hergeleitet in E3 | Tasks 5/6 kürzten die Fälle auf das, was der Auftrag noch braucht; der Server-Anlaufplan ist gelöscht |
+  | `npc_walk.json` | `native/Core/Figures/NpcWalk.cs`, `NpcWalkVectorTests.cs` | E3 geprüft | `NpcRoute` gelöscht (Task 9); `NpcWalk` (Gangart, Bodenhöhe) lebt im `OrderPlayer` weiter |
+  | `npc_placement.json` | `native/Core/Figures/NpcPlacement.cs`, `FigurePlacementVectorTests.cs` | E3 geprüft | Ruheplatzierung aus der Zeile nach Auftragsende (Plan 6) |
+  | `room_spots.json` | `RoomSpots.cs`, `FigureGround.cs`, `FigurePlacementVectorTests.cs` | E3 geprüft | Ruheplatzierung im Raum, vom Auftrag nicht berührt |
+  | `place_poll.json` | `FigureGround.cs`, `FigurePlacementVectorTests.cs` | bleibt bis E4 | Platzierung pro Poll; ändert sich mit der Melderegel |
+  | `poll_schedule.json` | `Core/Overview/PollSchedule.cs`, `PollScheduleVectorTests.cs`, `scripts/smoke_sync_client.mjs`, `packages/player-ui/src/pollCore.ts` | bleibt bis E4 | Poll-Takt; E4 ändert die Meldungen |
+  | `walk_control.json` | `Core/Embody/{ClickMove,Walk,RoomWalk}.cs`, `Core/Scene/Doors.cs`, `WalkControlVectorTests.cs` | bleibt bis E4 | freies Laufen und `/play/pos`-Melden |
+  | `enter.json` | `Core/Embody/EnterLocation.cs`, `EnterVectorTests.cs`; Python `smoke_order_timer.py`, `smoke_prop_action_{api,runs,access}.py` | bleibt bis E4 | Raumeintritt (`RoomEntryChannel` in E4) |
+  | `embody.json` | `Core/Embody/{KeyRouting,Readiness,PosEcho}.cs`, `EmbodyVectorTests.cs`, `hud/src/game/offers.ts` | bleibt bis E4 | Verkörperung und Positions-Echo |
+  | `figure_ground.json` | `FigureGround.cs`, `FigurePlacementVectorTests.cs` | bleibt bis E4 | Bodenhöhe der Platzierung |
+  | `npc_ground.json` | `NpcWalk.cs`, `Doors.cs`, `NpcWalkVectorTests.cs` | bleibt bis E4 | Bodenhöhe fremder Figuren |
+  | `pair_clip_phase.json` | `Core/Figures/PairClip.cs`, `PairVectorTests.cs` | bleibt bis E5 | Paar-Clip läuft bis E5 aus der Zeile (Plan 18) |
+  | `travel.json` | `Core/Figures/{TravelPath,Bridges}.cs`, `TravelVectorTests.cs`, `BridgeVectorTests.cs` | bleibt bis E6 | Überland bleibt Journey bis zum `travel`-Auftrag |
+
+  Alle 13 Vektoren behalten einen nativen Verbraucher; keiner musste nach dem Löschen von `client3d/` neu
+  hergeleitet oder gelöscht werden.
+
+  **E7-Folgepunkt (Game-Admin-Quellen, Review K2):** `client3d` steht nach E3 noch in 41 Dateien, die E3 wegen
+  fremder, nicht committeter Frontend-Edits nicht anfasst: `frontend/vite.config.ts`, `packages/README.md`,
+  `packages/dev-proxy-rule/index.js`, `packages/player-ui/{package.json, src/api.ts, src/panels.css,
+  src/PlayerPhotoDialog.tsx, actionsTree.test.mjs, propActionsPanel.test.mjs, propActionFinale.test.mjs,
+  propActions.test.mjs, questsPanel.test.mjs}`, `packages/scene-render/{package.json, README.md,
+  scripts/smoke_place_geometry.mjs, scripts/smoke_extra_box.mjs}` und `packages/scene-render/src/{surface,
+  clipRetarget, clipGround, scatter, slotMaterials, channelContact, channelReadout, footLock, waterfall, figure,
+  garmentCollision, twoBoneIk, pairFit, placeSlot, worldHeight, figureRuntime, chainBend, index, frameLoop,
+  storeyGround, modelLight, leafPivot, materials, types, figureInspect}.ts`. Ebenfalls E7: der Kopf von
+  `docs/schnittstellen-3d.md` (Zeilen 1–120), der CORS-Default `:5183` in `docs/config-defaults.md`.
+
+  **Testabdeckung, die mit der Browser-Szene ging:** die TypeScript-Kopien in `hud/src/game/*` haben keinen
+  ausführenden Test mehr (die C#-Vektortests prüfen die native Portierung, Herleitung `walk_math.md`);
+  `hud/src/game/offers.ts` verlor `smoke_offer_resolve.mjs` (die `embody`-Fälle laufen nativ); die Messwerkzeuge
+  `check_footwear`, `check_garment_collision`, `check_hair_sim`, `check_partner_collision`,
+  `check_extension_collision` haben noch keinen nativen Ersatz (letzter Stand `f4ee783af`);
+  `native/fixtures/ground_reference.json` und `scatter_reference.json` sind eingefroren (Generatoren gelöscht);
+  `smoke_vector_sources.py` prüft nur noch [V1]/[V3].
+
+  **Offene Übergabepunkte:**
+  - **an E4:** Melderegel (`PositionChannel`, verschlankter `/play/pos`, `RoomEntryChannel`); während der Avatar
+    einem Server-Auftrag folgt, ruht die Raum-Hysterese, Türdurchgänge auf demselben Stockwerk werden nicht gemeldet;
+    ein laufender Run nimmt `/play/pos` an, ab Ankunft und im Einstieg gilt `server_owned`; der Klick-Gang nutzt
+    nur das Navmesh (keine Ablehnungsscheiben, kein `Collide` gegen Figuren während des Auftrags); offen: das
+    Tempo des Klick-Gangs (`NpcWalk.WalkSpeed` 3,4 m/s, Gang-Clip läuft damit 3,4/1,4 ≈ 2,43×; die Referenz 1,4 m/s
+    ist nicht pro Clip gemessen).
+  - **an E5:** `pair`-Aufträge mit gemeinsamem Start; `_walk_to_partner` und `start_journey_to_point` löschen;
+    Paar-Clip, Szenen-Uhr, Finale und Phase aus der Zeile in den Auftrag; Möbel-Paare/-Gruppen sind bis dahin
+    `prop_action`-Aufträge mit mehreren `actors`.
+  - **an E6:** `travel`-Auftrag, Follower-Formation, `DeadReckoning`/`JourneyRoute`/`TravelPath` löschen; ein
+    `walk` draußen nutzt bis dahin `hint_route` aus `_bake_route`; Exit/Einstieg draußen ohne Wasserregeln
+    (`OrderFloorY`).
+  - **Messung:** Anleitung „E3 run“ im Messdokument; erwartet `_validate` in advance/min deutlich unter 37,3 (E0),
+    `/play/orders`/min > 0 nur nach einem Push.

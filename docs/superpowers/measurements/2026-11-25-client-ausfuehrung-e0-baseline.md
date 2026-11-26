@@ -84,3 +84,25 @@ Empty until the user's run appends its section below. Columns as written by the 
 | `_advance_run`/min | 37.3 | 226 | 364 | 420 |
 | `_validate` in advance/min | 37.3 | 226 | 364 | 420 |
 | First step median | n/a | n/a | n/a | 420 |
+
+## E3 run
+
+Same instructions as above, repeated after stage E3 (plan `docs/superpowers/plans/2026-11-25-client-ausfuehrung-e3.md`):
+
+- Preconditions as above, plus: the server runs the E3 state (orders landed in `5b45e09a4`, tasks 12–14 on top),
+  restarted by the user; the native client is the E3 AppImage (`~/claude-out/AnimaNative-latest.AppImage`).
+- Same world clone, same scenario checklist (free walk 60 s then armchair by click; three NPCs to bed one after
+  another; one overland journey running), same 420 s window.
+- Command (only the label differs; the script appends its section below this one):
+
+```bash
+./.venv/bin/python scripts/measure_client_execution.py record --seconds 420 --pid $(cat .pids/main.pid) --client-log <export folder>/logs/native-<time>.log --label "E3 run" --out docs/superpowers/measurements/2026-11-25-client-ausfuehrung-e0-baseline.md
+```
+
+Expected change against the second E0 baseline (2026-11-25T13:12:19):
+
+- `_validate` in advance/min clearly below 37.3: the ticker now advances only due runs (`advance(due_only=True)`),
+  and a furniture approach flips on its estimate timer instead of being validated every beat.
+- `/play/orders`/min > 0 only after a push: the native client fetches `/play/orders` when the `orders` topic
+  signals a change, never on a timer; a window without any order change shows 0.
+- `/play/pos` and `/play/worldmap` are not expected to change in E3 (the reporting rule is E4).
