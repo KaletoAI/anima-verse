@@ -180,11 +180,12 @@ for (const [sa, sb] of [[aA, aB], [aB, aA]]) {
       return { x: anchor.x + r.x * c + r.z * s, z: anchor.z - r.x * s + r.z * c }
     },
     // the vertical half (scene-render pairHeight.ts; hand derivations in scripts/smoke_pair_height.mjs)
-    pairHeightGap: (h, sp, ap, sr, ar) => S.pairHeightGap(h, sp, ap, sr, ar),
-    pairRoleRange: (pose, a) => S.pairRoleRange(pose, a),
+    pairAxisGap: (f) => S.pairAxisGap(f),
+    pairContactFrame: (frames) => S.pairContactFrame(frames),
+    pairRoleClass: (role) => S.pairRoleClass(role),
+    pairRoleRange: (role) => S.pairRoleRange(role),
     ikKnee: (hip, knee, ankle, target) => S.ikKnee(hip, knee, ankle, target),
-    pairHeightOffsets: (wire, scales) => S.pairHeightOffsets(S.pairContactHeightsOf(wire), (r) => scales[r]),
-    pairContactHeightsOf: (wire) => S.pairContactHeightsOf(wire).map((x) => ({ key: x.key, part: x.part, receiver: x.receiver, heightM: x.heightM })),
+    pairHeightOffsets: (input) => S.pairHeightOffsets(input),
   })
   assert.equal(failed, 0, `pair_scale.json: ${failed} failed`)
   ok(`[vector] pair_scale.json: ${passed} cases`)

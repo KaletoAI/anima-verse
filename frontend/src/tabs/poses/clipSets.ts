@@ -62,8 +62,6 @@ export interface ApiClipRow {
   /** Owner decision 2026-11-20 (§ A8a, scene-render `pairScale.ts`): the contact pivot [side, forward] cm in the clip
    *  frame real figure heights scale about (null = the clip frame's origin; null for a solo clip). */
   pair_pivot_cm?: [number, number] | null
-  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights per relation (null = none). */
-  pair_contact_heights?: Record<string, unknown> | null
   origin?: string
   has_sidecar?: boolean
   /** Per-surface corrections in centimetres of the 1.70 m reference figure. */

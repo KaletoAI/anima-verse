@@ -45,24 +45,34 @@ export function pairHeightRigOf(root: Object3D): PairHeightRig | null {
   return { hips, legs }
 }
 
-/** A per-figure poser around `applyPairHeight` for a renderer whose clip may NOT write the hips position every frame
- *  (the Pose library plays in place and drops that track): the hips position it set last frame is put back first when
- *  nothing else wrote it since, so the offset never accumulates. With a clip that writes the hips each frame it is the
- *  plain `applyPairHeight`. An offset of 0 after a non-zero one only puts the hips back; 0 throughout touches nothing. */
+/** A per-figure poser around `applyPairHeight`, called once per frame after the clip pose. A clip does NOT rewrite a
+ *  bone whose value did not change since the last frame (three.js' PropertyMixer writes only a changed value: a held,
+ *  frozen or clamped clip, a static track, the Pose library's dropped hips track). So every bone this routine wrote
+ *  last frame — the hips position and the held legs' thigh, shin and foot rotations — that still holds exactly what it
+ *  wrote is put back to the value it had before, FIRST; only then is this frame's offset applied. Without that the IK
+ *  of the next frame starts from last frame's IK result: a held ankle climbs by the offset every frame. An offset of 0
+ *  after a non-zero one only puts the bones back; 0 throughout touches nothing. */
 export function pairHeightPoser(three: Three, rig: PairHeightRig): (offsetM: number, planted: readonly boolean[]) => void {
-  let set: Vector3 | null = null
-  let base: Vector3 | null = null
+  type Written = { o: Object3D; key: 'position' | 'quaternion'; base: Vector3 | Quaternion; set: Vector3 | Quaternion }
+  let written: Written[] = []
+  const bones = (): Object3D[] => [rig.hips, ...rig.legs.flatMap((l) => (l ? [l.upper, l.lower, l.foot] : []))]
+  const valueOf = (o: Object3D, key: Written['key']) => (key === 'position' ? o.position.clone() : o.quaternion.clone())
   return (offsetM, planted) => {
-    const hips = rig.hips
-    if (set && base && hips.position.equals(set)) {
-      hips.position.copy(base)
-      hips.updateMatrixWorld(true)
+    let restored = false
+    for (const w of written) {
+      const now = w.key === 'position' ? w.o.position : w.o.quaternion
+      if (!(now as { equals(v: unknown): boolean }).equals(w.set)) continue
+      if (w.key === 'position') w.o.position.copy(w.base as Vector3)
+      else w.o.quaternion.copy(w.base as Quaternion)
+      restored = true
     }
-    set = base = null
+    written = []
+    if (restored) rig.hips.updateMatrixWorld(true)
     if (!(offsetM !== 0 && Number.isFinite(offsetM))) return
-    base = hips.position.clone()
+    const before = bones().map((o, i) => ({ o, key: (i === 0 ? 'position' : 'quaternion') as Written['key'] }))
+      .map((b) => ({ ...b, base: valueOf(b.o, b.key) }))
     applyPairHeight(three, rig, offsetM, planted)
-    set = hips.position.clone()
+    written = before.map((b) => ({ ...b, set: valueOf(b.o, b.key) }))
   }
 }
 

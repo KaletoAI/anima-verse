@@ -21,12 +21,12 @@ import {
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   STRAND_RECORD_VERSION, consumerPartnerCapsules, createFigureRuntime, bendLimitsOf, BEND_LIMITS_DEFAULT, rootAngleOf,
   prepareSheerPieces, prepareGlossyPieces, prepareFigureTextures, pairFigureScale, pairPivotOf, scalePairShift,
-  pairContactHeightsOf, pairHeightRigOf, pairHeightPoser,
+  pairHeightRigOf, pairHeightPoser,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   FootPose, HairStrandRecord, StrandHair, CapsuleNow, PartnerSnapshot, ChannelOccupant, ChannelReadout,
   ChannelOccupants, ContactRelation, FigureInspection, FigureRuntime, FrameFigure, BendLimits, RootAngle,
-  PairXZ, PairContactHeight } from '@anima/scene-render';
+  PairXZ, PairLeg } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import { getMaxAnisotropy, getModelEnvironment } from './glbMaterials';
@@ -106,12 +106,8 @@ const clipPairPivots = new WeakMap<THREE.AnimationClip, PairXZ>();
 export function setClipPairPivot(clip: THREE.AnimationClip, wire: unknown): void {
   clipPairPivots.set(clip, pairPivotOf(Array.isArray(wire) ? wire : null));
 }
-/** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): a pair/group clip's contact heights per relation
- *  (`pair_contact_heights` of the listing; none = no vertical compensation). */
-const clipPairContacts = new WeakMap<THREE.AnimationClip, PairContactHeight[]>();
-export function setClipPairContactHeights(clip: THREE.AnimationClip, wire: unknown): void {
-  clipPairContacts.set(clip, pairContactHeightsOf(wire));
-}
+/** One track of a clip bound for a direct sample (`Figure.posePairSample`). */
+interface SampleTrack { binding: { setValue(values: ArrayLike<number>, offset: number): void }; at: { evaluate(t: number): ArrayLike<number> } }
 /** The bend limits of a played clip (the core default when the listing names none). */
 export function clipBendLimitsOf(clip: THREE.AnimationClip | null | undefined): BendLimits {
   return (clip && clipBendLimits.get(clip)) || BEND_LIMITS_DEFAULT;
@@ -926,10 +922,9 @@ export function extractRootPath(clip: THREE.AnimationClip): RootPath {
 }
 
 /** A pair/group half's root as the library keeps it: its horizontal root path and the clip's contact pivot. */
-export interface PairRoot { path: RootPath; pivot: PairXZ; contacts: PairContactHeight[] }
+export interface PairRoot { path: RootPath; pivot: PairXZ }
 function pairRootOf(clip: THREE.AnimationClip): PairRoot {
-  return { path: extractRootPath(clip), pivot: clipPairPivots.get(clip) ?? pairPivotOf(null),
-    contacts: clipPairContacts.get(clip) ?? [] };
+  return { path: extractRootPath(clip), pivot: clipPairPivots.get(clip) ?? pairPivotOf(null) };
 }
 
 type ClipKind = string;   // open vocabulary — the server decides the kinds
@@ -1140,7 +1135,7 @@ export class FigureLibrary {
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean; loopCount?: number | null;
                              rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm; shift?: ClipShiftCm | null;
                              roleTurns?: Record<string, number[]> | null; contacts?: ContactRelation[] | null;
-                             bend?: unknown; rootAngle?: unknown; pivot?: unknown; contactHeights?: unknown }> =
+                             bend?: unknown; rootAngle?: unknown; pivot?: unknown }> =
         serverClips.map((c) => ({
           kind: clipIndexName(c), set: c.set ?? '',
           url: c.url, loop: c.loop, loopCount: c.loop_count,
@@ -1153,7 +1148,6 @@ export class FigureLibrary {
           bend: c.bend_limits?.limits,
           rootAngle: c.root_angle,
           pivot: c.pair_pivot_cm,
-          contactHeights: c.pair_contact_heights,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -1214,7 +1208,6 @@ export class FigureLibrary {
           setClipBendLimits(clip, source.bend);
           setClipRootAngle(clip, source.rootAngle);
           setClipPairPivot(clip, source.pivot);
-          setClipPairContactHeights(clip, source.contactHeights);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1296,7 +1289,6 @@ export class FigureLibrary {
               setClipBendLimits(clip, source.bend_limits?.limits);
               setClipRootAngle(clip, source.root_angle);
               setClipPairPivot(clip, source.pair_pivot_cm);
-              setClipPairContactHeights(clip, source.pair_contact_heights);
             }
           } catch (e) { console.warn('[figures] clip reload not loadable', source.url, e); }
         }
@@ -1476,12 +1468,6 @@ export class FigureLibrary {
     return root ? { ...rootPathAt(root.path, t), pivot: root.pivot } : null;
   }
 
-  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights of pair half `clipName` in the file
-   *  `charName`'s set chain picks (the sidecar is shared by every half of the kind); [] = none stored. */
-  pairContactsOf(clipName: string, charName?: string): PairContactHeight[] {
-    const chain = [...((charName && this.charSets.get(charName)) || []), ''];
-    return pairRootFor(this.pairRoots, clipName, chain)?.contacts ?? [];
-  }
 
   /** Remember a character's set fallback chain (from /play/worldmap). */
   setCharacterSets(charName: string, sets: string[] | undefined) {
@@ -2364,6 +2350,11 @@ export class Figure {
     return clipRoleTurn(this.current?.getClip(), role);
   }
 
+  /** Ruling A139: the contact relations of pair half `clipName` ([] = automatic or not bound). */
+  contactRelationsOf(clipName: string): ContactRelation[] {
+    return clipContactRelationsOf(this.actions.get(clipName)?.getClip());
+  }
+
   /** Ruling A139: the contact relations of the clip playing now ([] = automatic). */
   get contactRelations(): ContactRelation[] {
     return clipContactRelationsOf(this.current?.getClip());
@@ -3105,11 +3096,7 @@ export class Figure {
       this.pairHeightPose?.(0, []);
       return;
     }
-    if (this.pairHeightPose === undefined) {
-      const rig = pairHeightRigOf(this.root);
-      this.pairHeightRig = rig;
-      this.pairHeightPose = rig ? pairHeightPoser(THREE, rig) : null;
-    }
+    if (this.pairHeightPose === undefined) this.pairBodyNow();
     if (!this.pairHeightPose) return;
     this.root.updateMatrixWorld(true);
     const before = Figure.probePairHeight ? this.legPoints() : null;
@@ -3151,10 +3138,68 @@ export class Figure {
     const rig = this.pairHeightRig;
     const det = (o: THREE.Object3D) => +o.matrixWorld.determinant().toExponential(3);
     return { hips: w(hips), head: w(this.head), root: this.root.getWorldPosition(new THREE.Vector3()).toArray(),
-      scale: this.baseScale,
+      scale: this.baseScale, legs: this.legPoints().map((l) => l && { hip: l.hip.toArray(), knee: l.knee.toArray(), ankle: l.ankle.toArray() }),
       rig: rig ? { hips: rig.hips.name, hipsParent: rig.hips.parent?.name ?? null, sameHips: rig.hips === hips, hipsDet: det(rig.hips),
         legs: rig.legs.map((l) => l && { upper: l.upper.name, foot: l.foot.name, ankle: w(l.foot), det: det(l.foot),
           chain: (() => { const n: string[] = []; for (let p: THREE.Object3D | null = l.upper.parent; p && p !== rig.hips; p = p.parent) n.push(p.name); return n; })() }) } : null };
+  }
+
+  /** Owner decision 2026-11-26 (scene-render `pairHeight.ts` WHAT IS MEASURED): the loop sample of a pair half. Every
+   *  local transform under `holder` (the placement root this figure hangs from) is recorded; the returned function puts
+   *  them all back exactly and updates the world matrices — the sampling leaves the frame as it found it, so a clip
+   *  the mixer does not rewrite next frame still shows what it showed. */
+  snapshotPose(holder: THREE.Object3D): () => void {
+    const rows: { o: THREE.Object3D; p: THREE.Vector3; q: THREE.Quaternion; s: THREE.Vector3 }[] = [];
+    holder.traverse((o) => { rows.push({ o, p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() }); });
+    return () => {
+      for (const r of rows) { r.o.position.copy(r.p); r.o.quaternion.copy(r.q); r.o.scale.copy(r.s); }
+      holder.updateMatrixWorld(true);
+    };
+  }
+
+  private sampleTracks = new WeakMap<THREE.AnimationClip, SampleTrack[]>();
+  /** Pose pair half `clipName` at clip time `t` from its own tracks alone — no mixer, no transition, no compensation, no
+   *  secondary motion (the caller holds `snapshotPose`). False when the half is not bound on this rig. */
+  posePairSample(clipName: string, t: number): boolean {
+    const clip = this.actions.get(clipName)?.getClip();
+    if (!clip) return false;
+    let tracks = this.sampleTracks.get(clip);
+    if (!tracks) {
+      const root = this.mixer.getRoot() as THREE.Object3D;
+      // three.js sets `createInterpolant` per track type and `setValue` per binding at runtime (absent from its types)
+      tracks = clip.tracks.map((tr) => ({
+        binding: THREE.PropertyBinding.create(root, tr.name) as unknown as SampleTrack['binding'],
+        at: (tr as unknown as { createInterpolant(): SampleTrack['at'] }).createInterpolant() }));
+      this.sampleTracks.set(clip, tracks);
+    }
+    const time = Math.min(Math.max(t, 0), clip.duration);
+    for (const tr of tracks!) tr.binding.setValue(tr.at.evaluate(time), 0);
+    return true;
+  }
+
+  /** The loaded length of pair half `clipName` (seconds); 0 when not bound. */
+  pairClipDuration(clipName: string): number {
+    return this.actions.get(clipName)?.getClip().duration ?? 0;
+  }
+
+  /** The hips and the legs [left, right] in world metres as the bones stand now (`pairHeightRigOf`); null without a
+   *  rig. The caller has the world matrices current. */
+  pairBodyNow(): { hipsM: number; legs: PairLeg[] } | null {
+    if (this.pairHeightPose === undefined) {
+      const rig = pairHeightRigOf(this.root);
+      this.pairHeightRig = rig;
+      this.pairHeightPose = rig ? pairHeightPoser(THREE, rig) : null;
+    }
+    const rig = this.pairHeightRig;
+    if (!rig) return null;
+    const w = (o: THREE.Object3D): [number, number, number] => o.getWorldPosition(new THREE.Vector3()).toArray();
+    if (rig.legs.some((l) => !l)) return null;
+    return { hipsM: w(rig.hips)[1], legs: rig.legs.map((l) => ({ hip: w(l!.upper), knee: w(l!.lower), ankle: w(l!.foot) })) };
+  }
+
+  /** The op chains STRAIGHT on the current pose (`FigureRuntime.straightChains`), `inspect().chains` order. */
+  straightChains(): { op: string; points: [[number, number, number], [number, number, number]] }[] {
+    return this.runtime.straightChains();
   }
 
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {

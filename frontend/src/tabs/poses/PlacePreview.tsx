@@ -48,9 +48,9 @@ import {
   type AlignPass, type KeyReport, type KeyReason, type RootAngle,
   keyWorstMm, clearAllowM, alignVerdict, deepHolds, alignBlocked, compareCandidates, alignBucket, ALIGN_CLEAR_SLACK_MM, visibleRootDepth,
   lampOf, solveLinear, ALIGN_ROOT_MARGIN_MM, ALIGN_GAIN_SLACK_MM, ALIGN_SUPPORT_SLACK_MM, ALIGN_GAIN_MM, ALIGN_OVERLAP_TOL_MM,
-  overlapExcessMm, keyFrames, normBoneName,
-  pairFigureScale, pairPivotOf, pairContactHeightsOf, pairHeightOffsets, pairHeightRigOf, pairHeightPoser, pairRolePoseCm,
-  type PairHeightSolve,
+  overlapExcessMm,
+  pairFigureScale, pairPivotOf, pairHeightOffsets, pairHeightRigOf, pairHeightPoser, pairRelationFrame, PAIR_HEIGHT_SAMPLES,
+  type PairHeightSolve, type PairHeightInput,
   type ClearCapsule, type ClearFrame, type ClearRow, type AlignCandidate, type AlignDiscard, type AlignBucket, type AlignNote,
   channelReadoutKey, foldReadoutMax, type ChannelReadout, type ChannelReadoutMax,
 } from '@anima/scene-render'
@@ -58,8 +58,6 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { targetWordOf } from './contactWords'
 import { apiGet, apiPatch, apiPost } from '../../lib/api'
 import { loadCharacters } from '../../lib/refs'
-import { anchorFor, declaredPoint, deepestFrame, impliedRelation, posedPoint, type ContactAnchors, type DeclaredAnchor,
-  type Vec3 as AnchorVec3 } from './contactCast'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { rootAt, rootPath, ROLE_COLOR, type RootPath } from './ClipPreview'
 import { ModelTurnHint } from '../../components/ModelTurnHint'
@@ -101,18 +99,7 @@ export interface PlaceClip {
   align_turn?: { deg: number } | null
   /** Owner decision 2026-11-20 (scene-render `pairScale.ts`): the contact pivot [side, forward] cm. */
   pair_pivot_cm?: [number, number] | null
-  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the contact heights per relation. */
-  pair_contact_heights?: Record<string, unknown> | null
 }
-/** One relation of `pair_contact_heights` as stored (cm): the target's height and each role's pose at the deepest frame. */
-export interface PairContactWire { height_cm: number
-  roles: Record<string, { support_cm: number; hips_cm: number; legs: [number, number, number][][] }>
-  /** How it was obtained (`contactCast.ts`): on built figures, or from the declared anchors on the skeleton. */
-  method?: 'measured' | 'anchor' }
-/** What "Store contact heights" hands a scene: the declared anchors and each role's gender (the person's). */
-export interface ContactHeightsOptions { anchors: ContactAnchors; genderOf: Record<string, string> }
-/** A scene's contact heights: per relation key the entry, and the relations it could not give one, with the reason. */
-export interface ContactHeightsRun { heights: Record<string, PairContactWire> | null; missing: { key: string; reason: string }[] }
 /** Pair scene: per channel id (from the collision records) the largest share of the entering chain's length inside
  *  over one clip cycle and how many times the part reached the channel's bottom in that cycle — the clip sidecar's
  *  `channel_profile` (PATCH /assets/animation-clips/{library}/{rel}). */
@@ -418,10 +405,6 @@ export type AutoAlignResult =
        *  frame — the contact target's point at the deepest key frame after the run, the mean over the relations; real
        *  figure heights are scaled about it in the game (null = not measured). */
       pivotCm: [number, number] | null
-      /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): every contact relation's height and the roles' poses
-       *  at its deepest frame in the arrangement the run leaves (the dials it writes, or the base when nothing applied),
-       *  measured at 1.70 m — what Save / "Align all" store as `pair_contact_heights` (null = not measured). */
-      contactHeights: Record<string, PairContactWire> | null
       /** Whether any group of the run was applied (THE VERDICT); none = the dials stay as they were. */
       applied: boolean }
 
@@ -451,9 +434,6 @@ export type AutoAlignRun = ((opts?: AutoAlignOptions) => AutoAlignResult) & { ki
   endPose?: () => EndPose | null
   /** The persons of this scene by role (what "Align all" carries to every clip it opens). */
   cast?: AlignCast
-  /** Owner decision 2026-11-25: the contact heights of the arrangement the dials set now (every relation of the
-   *  scene, 1.70 m) — "Align all"'s "Store contact heights"; null = no pair or no contact. */
-  contactHeights?: (opts?: ContactHeightsOptions) => ContactHeightsRun
   /** No prop has a place this clip fits on: the run only says so (the scene never starts). */
   noPlace?: boolean }
 
@@ -1109,32 +1089,10 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         if (!figs.length) {
           setStatus(!assigned.length || clipFiles.size ? t('Pick a character for a place.') : t('No clip file for this kind in shared/models/clips.'))
         } else setStatus('')
-        // ── Owner decision 2026-11-25 ("Real heights"): the vertical size compensation of the clip's stored contact
-        // heights for the cast's scales (scene-render `pairHeight.ts`); every figure's offset and held legs. ──
+        // Owner decision 2026-11-26 ("Real heights", scene-render `pairHeight.ts`): the solve of the loop sample
+        // (`measureHeights` below, once the scene stands); every figure's offset and held legs.
         let heightSolve: PairHeightSolve | null = null
-        if (realOn && figs.length > 1) {
-          const contacts = pairContactHeightsOf([...clipFiles.values()][0]?.file.pair_contact_heights ?? null)
-          const scaleOfRole = new Map(figs.map((f) => [f.role, f.scale]))
-          if (contacts.length) heightSolve = pairHeightOffsets(contacts, (r) => scaleOfRole.get(r) ?? 1)
-          for (const f of figs) {
-            f.heightOffset = heightSolve?.offsets[f.role] ?? 0
-            f.planted = heightSolve?.planted[f.role] ?? []
-            const rig = f.heightOffset !== 0 ? pairHeightRigOf(f.inst) : null
-            f.poser = rig ? pairHeightPoser(THREE, rig) : null
-          }
-          const mm = (v: number) => Math.round(v * 10000) / 10
-          host.dataset.realHeights = JSON.stringify({ stored: contacts.length,
-            figures: figs.map((f) => ({ letter: f.letter, character: f.character, role: f.role, heightM: f.heightM, scale: f.scale,
-              offsetMm: mm(f.heightOffset), stance: heightSolve?.ranges[f.role]?.stance ?? null,
-              rangeMm: heightSolve?.ranges[f.role] ? [mm(heightSolve.ranges[f.role].down), mm(heightSolve.ranges[f.role].up)] : null })),
-            gapsMm: Object.fromEntries(Object.entries(heightSolve?.gaps ?? {}).map(([k, v]) => [k, mm(v)])),
-            residualsMm: Object.fromEntries(Object.entries(heightSolve?.residuals ?? {}).map(([k, v]) => [k, mm(v)])) })
-          setHeightNote(heightSolve ? figs.filter((f) => f.heightOffset !== 0).map((f) =>
-            `${f.letter} ${f.heightOffset > 0 ? '+' : ''}${(f.heightOffset * 1000).toFixed(0)} mm`).join(' · ')
-            + Object.entries(heightSolve.residuals).filter(([, v]) => Math.abs(v) >= 0.0005).map(([k, v]) =>
-              ` · ${t('{rel} remains {mm} mm').replace('{rel}', k).replace('{mm}', (v * 1000).toFixed(0))}`).join('')
-            : contacts.length ? '' : t('no contact heights stored for this clip — nothing is compensated vertically'))
-        } else {
+        if (!(realOn && figs.length > 1)) {
           delete host.dataset.realHeights
           setHeightNote('')
         }
@@ -1691,142 +1649,69 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const relLabel = (h: Hit) => `${figs[h.e].letter} → ${figs[h.r].letter} (${targetWordOf(t, h.target)})`
         /** A relation's key in "Align all" (part role > receiving role : target) — the per-row mover choice. */
         const relKey = (h: Hit) => `${figs[h.e].role}>${figs[h.r].role}:${h.target}`
-        // ── Owner decision 2026-11-25 (scene-render `pairHeight.ts`): THE CONTACT HEIGHTS of an arrangement — per relation
-        // its deepest key frame (`keyFrames`, over one loop at 60 fps, isolated like Auto-align's passes), there the
-        // target point's height above the stage floor and both roles' hips and leg joints (`pairRolePoseCm`), all at
-        // 1.70 m. The vertical size compensation of both renderers reads them. ──
-        const heightRigs = new Map<Fig, ReturnType<typeof pairHeightRigOf>>()
+        // ── Owner decision 2026-11-26 ("Real heights", scene-render `pairHeight.ts` WHAT IS MEASURED): the loop sampled at
+        // PAIR_HEIGHT_SAMPLES phases as the cast stands at its real heights, without the compensation (isolated like
+        // Auto-align's passes, stage space): per role its ground (the place's height), hips and legs; per contact
+        // relation the part's straight axis and the opening. A figure on a place above the floor (a bed, a seat) is
+        // fixed. Every figure's offset and held legs from the solve; the scene is put back where it was. ──
         const stagePoint = (o: Object3D): [number, number, number] => {
           o.getWorldPosition(scratch).applyMatrix4(stageInv)
           return [scratch.x, scratch.y, scratch.z]
         }
-        const rolePoseOf = (f: Fig) => {
+        const heightRigs = new Map<Fig, ReturnType<typeof pairHeightRigOf>>()
+        const rigOf = (f: Fig) => {
           if (!heightRigs.has(f)) heightRigs.set(f, pairHeightRigOf(f.inst))
-          const rig = heightRigs.get(f)
-          if (!rig) return null
-          const legs = rig.legs.every(Boolean)
-            ? rig.legs.map((l) => ({ hip: stagePoint(l!.upper), knee: stagePoint(l!.lower), ankle: stagePoint(l!.foot) })) : []
-          return pairRolePoseCm(stagePoint(rig.hips), legs, f.place.marker.y_world)
+          return heightRigs.get(f) ?? null
         }
-        const measureContactHeights = (draft: AlignmentDraft, hitsNow: readonly Hit[]): Record<string, PairContactWire> | null => {
-          if (solo || figs.length < 2 || !hitsNow.length || figs.some((f) => f.scale !== 1)) return null
-          const loop = Math.max(8, Math.ceil(duration / step))
-          const per = hitsNow.map(() => [] as AlignSample[])
-          for (const f of figs) f.runtime.reset()
-          for (let i = 0; i < 2 * loop; i++) {
-            const time = (i % loop) * step % duration
-            const res = runAt(time, draft, i >= loop, true)
-            if (!res || i < loop) continue
-            hitsNow.forEach((hit, j) => {
-              const pl = placed.get(figs[hit.e])
-              const s = pl ? sampleAt(res, hit, pl) : null
-              if (s) per[j].push({ ...s, phase: duration > 0 ? time / duration : 0 })
-            })
-          }
-          const out: Record<string, PairContactWire> = {}
-          hitsNow.forEach((hit, j) => {
-            const k = keyFrames(per[j])
-            if (!k) return
-            const deep = per[j][k.deep]
-            runAt((deep.phase ?? 0) * duration, draft, false)
-            const a = rolePoseOf(figs[hit.e]), b = rolePoseOf(figs[hit.r])
-            if (!a || !b) return
-            out[relKey(hit)] = { height_cm: Math.max(0, Math.min(300, Math.round(deep.o[1] * 1000) / 10)),
-              roles: { [figs[hit.e].role]: a, [figs[hit.r].role]: b }, method: 'measured' }
-          })
-          for (const f of figs) f.runtime.reset()
-          return Object.keys(out).length ? out : null
-        }
-        // ── Owner decision 2026-11-25 ("einmal automatisch durchgehen und speichern"): THE DECLARED-ANCHOR FALLBACK
-        // (`contactCast.ts`). A relation whose attached part or channel is built on no figure here is measured on the
-        // skeleton: the part's point (its built chain's tip, else the declared part anchor on its carrier) against the
-        // opening (the built channel / the mouth / the hand, else the declared channel anchor on the receiver) over one
-        // loop, isolated like the measured path; at the frame they come closest, the opening's height above the stage floor
-        // and both roles' poses. Marked "anchor" when a declared anchor was used. ──
-        type AnchorRig = { joints: Record<string, AnchorVec3>
-          bones: Map<string, { bone: Object3D; inv: InstanceType<typeof THREE.Matrix4> }> }
-        const anchorRigs = new Map<Fig, AnchorRig | null>()
-        const anchorRigOf = (f: Fig): AnchorRig | null => {
-          if (anchorRigs.has(f)) return anchorRigs.get(f) ?? null
-          let rig: AnchorRig | null = null
-          f.inst.traverse((o) => {
-            const sk = (o as unknown as { isSkinnedMesh?: boolean
-              skeleton?: { bones: Object3D[]; boneInverses: InstanceType<typeof THREE.Matrix4>[] } }).skeleton
-            if (rig || !(o as unknown as { isSkinnedMesh?: boolean }).isSkinnedMesh || !sk
-              || !sk.bones.some((b) => normBoneName(b.name) === 'hips')) return
-            const joints: Record<string, AnchorVec3> = {}
-            const bones: AnchorRig['bones'] = new Map()
-            sk.bones.forEach((b, i) => {
-              const key = normBoneName(b.name)
-              const inv = sk.boneInverses[i]
-              if (!inv || bones.has(key)) return
-              // The bind joint position in the space the skin binds in (three's 'attached' bind: world at bind).
-              const bind = inv.clone().invert().elements
-              joints[key] = [bind[12], bind[13], bind[14]]
-              bones.set(key, { bone: b, inv })
-            })
-            rig = { joints, bones }
-          })
-          anchorRigs.set(f, rig)
-          return rig
-        }
-        /** A declared anchor on `f`'s skeleton now, stage space (null without the joint or the body frame). */
-        const declaredNow = (f: Fig, a: DeclaredAnchor): AnchorVec3 | null => {
-          const rig = anchorRigOf(f)
-          const p = rig ? declaredPoint(rig.joints, a.bone, a.offset) : null
-          const b = rig?.bones.get(normBoneName(a.bone))
-          if (!p || !b) return null
-          b.bone.updateWorldMatrix(true, false)
-          return toStageP(posedPoint(b.bone.matrixWorld.elements, b.inv.elements, p))
-        }
-        const anchorHeights = (draft: AlignmentDraft, rel: ContactRelation, opts: ContactHeightsOptions):
-          { key: string; entry: PairContactWire | null; reason: string } => {
-          const key = `${rel.part}>${rel.at}:${rel.target}`
-          const e = figs.findIndex((f) => f.role === rel.part), r = figs.findIndex((f) => f.role === rel.at)
-          if (e < 0 || r < 0) return { key, entry: null,
-            reason: t('Role {role} has nobody on a place.').replace('{role}', (e < 0 ? rel.part : rel.at).toUpperCase()) }
-          const partDecl = anchorFor(opts.anchors.parts, opts.genderOf[rel.part] ?? '')
-          const chDecl = anchorFor(opts.anchors.channels, opts.genderOf[rel.at] ?? '')
-          const loop = Math.max(8, Math.ceil(duration / step))
-          const samples: { point: AnchorVec3; o: AnchorVec3; time: number; anchored: boolean }[] = []
-          let why = ''
-          for (const f of figs) f.runtime.reset()
-          for (let i = 0; i < 2 * loop; i++) {
-            const time = (i % loop) * step % duration
-            const res = runAt(time, draft, true, true)
-            if (!res || i < loop) continue
-            const ie = res.figures[e].inspection, ir = res.figures[r].inspection
-            let anchored = false
-            const chain = ie?.chains.find((c) => c.segments.length > 0 && POINT_TARGET_OPS.includes(c.op))
-            let point: AnchorVec3 | null = chain ? toStageP(chain.segments[chain.segments.length - 1].b) : null
-            if (!point && partDecl) { point = declaredNow(figs[e], partDecl); anchored = true }
-            let o: AnchorVec3 | null = null
-            if (rel.target === 'mouth') {
-              const m = ir?.channels.find((c) => c.id === MOUTH_CHANNEL_ID)
-              o = m ? toStageP(m.o) : null
-            } else if (isPointTarget(rel.target)) {
-              const h = ir?.targets.find((x) => x.id === rel.target)
-              o = h ? toStageP(h.o) : null
-            } else {
-              const ch = ir?.channels.find((c) => c.id !== MOUTH_CHANNEL_ID && c.accepts.some((op) => POINT_TARGET_OPS.includes(op)))
-              if (ch) o = toStageP(ch.o)
-              else if (chDecl) { o = declaredNow(figs[r], chDecl); anchored = true }
+        const measureHeights = (): void => {
+          if (!realOn || figs.length < 2) return
+          const draft = draftRef.current
+          for (const f of figs) { f.heightOffset = 0; f.planted = []; f.poser = null; f.runtime.reset() }
+          const t0 = performance.now()
+          const probe = runAt(0, draft, true, true)
+          const hits = probe ? findHits(probe, (draft.contactRelations ?? []).filter((x) => x.target !== 'none')) : []
+          const input: PairHeightInput = { roles: {}, relations: hits.map((h) => ({ key: relKey(h), part: figs[h.e].role,
+            receiver: figs[h.r].role, frames: [] })) }
+          for (const f of figs) input.roles[f.role] = { frames: [], fixed: f.place.marker.y_world > 0.05 }
+          let ok = hits.length > 0 && figs.every((f) => rigOf(f)?.legs.every(Boolean))
+          for (let k = 0; ok && k < PAIR_HEIGHT_SAMPLES; k++) {
+            const res = runAt((k / PAIR_HEIGHT_SAMPLES) * duration, draft, true, true)
+            if (!res) { ok = false; break }
+            for (const f of figs) {
+              const rig = rigOf(f)!
+              input.roles[f.role].frames.push({ groundM: f.place.marker.y_world, hipsM: stagePoint(rig.hips)[1],
+                legs: rig.legs.map((l) => ({ hip: stagePoint(l!.upper), knee: stagePoint(l!.lower), ankle: stagePoint(l!.foot) })) })
             }
-            if (!point) why = partDecl ? t('The attached part’s anchor is not on this skeleton.') : t('No package declares an attached part.')
-            else if (!o) why = rel.target === 'channel' && !chDecl ? t('No package declares a channel.')
-              : t('The contact target is not on this skeleton.')
-            if (point && o) samples.push({ point, o, time, anchored })
+            hits.forEach((h, j) => {
+              const ie = res.figures[h.e].inspection, ir = res.figures[h.r].inspection
+              const straight = figs[h.e].runtime.straightChains()[h.chain]
+              const s = ie && ir && straight ? contactSampleOf(ie, ir, h, [0, 0, 0]) : null
+              input.relations[j].frames.push(s && straight
+                ? pairRelationFrame([toStageP(straight.points[0]), toStageP(straight.points[1])], toStageP(s.o)) : null)
+            })
           }
-          const k = deepestFrame(samples)
           for (const f of figs) f.runtime.reset()
-          if (k < 0) return { key, entry: null, reason: why || t('The clip has no frame to measure.') }
-          const deep = samples[k]
-          runAt(deep.time, draft, false)
-          const a = rolePoseOf(figs[e]), b = rolePoseOf(figs[r])
-          for (const f of figs) f.runtime.reset()
-          if (!a || !b) return { key, entry: null, reason: t('A figure has no hips or legs to read.') }
-          return { key, reason: '', entry: { height_cm: Math.max(0, Math.min(300, Math.round(deep.o[1] * 1000) / 10)),
-            roles: { [rel.part]: a, [rel.at]: b }, method: samples[k].anchored ? 'anchor' : 'measured' } }
+          heightSolve = ok ? pairHeightOffsets(input) : null
+          for (const f of figs) {
+            f.heightOffset = heightSolve?.offsets[f.role] ?? 0
+            f.planted = heightSolve?.planted[f.role] ?? []
+            const rig = f.heightOffset !== 0 ? rigOf(f) : null
+            f.poser = rig ? pairHeightPoser(THREE, rig) : null
+          }
+          runAt(timeRef.current, draft, false)
+          const mm = (v: number) => Math.round(v * 10000) / 10
+          host.dataset.realHeights = JSON.stringify({ sampleMs: +(performance.now() - t0).toFixed(1), relations: hits.length,
+            figures: figs.map((f) => ({ letter: f.letter, character: f.character, role: f.role, heightM: f.heightM, scale: f.scale,
+              offsetMm: mm(f.heightOffset), stance: heightSolve?.ranges[f.role]?.stance ?? null,
+              rangeMm: heightSolve?.ranges[f.role] ? [mm(heightSolve.ranges[f.role].down), mm(heightSolve.ranges[f.role].up)] : null })),
+            contactFrames: heightSolve?.contactFrames ?? {},
+            gapsMm: Object.fromEntries(Object.entries(heightSolve?.gaps ?? {}).map(([k, v]) => [k, mm(v)])),
+            residualsMm: Object.fromEntries(Object.entries(heightSolve?.residuals ?? {}).map(([k, v]) => [k, mm(v)])) })
+          setHeightNote(heightSolve ? figs.filter((f) => f.heightOffset !== 0).map((f) =>
+            `${f.letter} ${f.heightOffset > 0 ? '+' : ''}${(f.heightOffset * 1000).toFixed(0)} mm`).join(' · ')
+            + Object.entries(heightSolve.residuals).filter(([, v]) => Math.abs(v) >= 0.0005).map(([k, v]) =>
+              ` · ${t('{rel} remains {mm} mm').replace('{rel}', k).replace('{mm}', (v * 1000).toFixed(0))}`).join('')
+            : t('no contact found to measure — nothing is compensated vertically'))
         }
         const stageCaps = (insp: NonNullable<NonNullable<ReturnType<typeof placePhaseB>>['figures'][number]['inspection']>): ClearCapsule[] =>
           contactCapsules(insp).map((c) => ({ id: c.id, a: toStageP(c.now.a), b: toStageP(c.now.b), r: c.now.r }))
@@ -2367,13 +2252,11 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
           // The pivot in the clip frame of the receiving figure's place anchor (every role of a clip shares it).
           const recv = figs[hits[0].r]
           const pivotCm = pairPivotCm(pivotRels, recv.anchor, recv.placeYaw)
-          // Owner decision 2026-11-25: every relation's contact height in the arrangement the run leaves.
-          const contactHeights = measureContactHeights(cur0, all)
           const rootAngle = moverRows.find((m) => m.applied && m.rootAngle)?.rootAngle ?? null
           // The other contacts whose part the one root angle turns as well (only a one-relation click can surprise there).
           const rootShared = only && rootAngle ? all.filter((h) => !hits.includes(h) && rootTurns(figs[h.e].role)).map(relLabel) : []
           return { ok: true, ...rows[0], relations: rows, roleShiftCm, roleTurnDeg, movers: moverRows, rootAngle, rootShared, pivotCm,
-            contactHeights, applied: moverRows.some((m) => m.applied) }
+            applied: moverRows.some((m) => m.applied) }
         }
         // ── Ruling A212: the base clip's last frame, for the end clips' join. ──
         const endPose = (): EndPose | null => {
@@ -2393,43 +2276,9 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
         const noPlaceRun = autoAlignOut.current?.current
         if (autoAlignOut.current && scene?.for.startsWith(`${kind}|`) && !(figs.length === 0 && noPlaceRun?.noPlace && noPlaceRun.kind === kind && (noPlaceRun.set ?? '') === (set ?? '')))
           autoAlignOut.current.current = Object.assign(autoAlign, { kind, set, figures: figs.length, endPose,
-            contactHeights: (opts?: ContactHeightsOptions): ContactHeightsRun => {
-              if (solo || figs.length < 2) return { heights: null, missing: [{ key: '', reason: t('Auto-align needs a pair clip on a place.') }] }
-              const declared = draftRef.current.contactRelations ?? []
-              const rels = declared.filter((x) => x.target !== 'none')
-              if (declared.length && !rels.length)
-                return { heights: null, missing: [{ key: '', reason: t('Every contact of this clip is “none”: nothing to align.') }] }
-              // Every relation that makes contact at SOME frame of the loop (scanned in 32 steps from the current
-              // frame): the first frame it is found at names it; measureContactHeights finds its deepest frame itself.
-              const found = new Map<string, Hit>()
-              if (!solo && figs.length > 1) {
-                const steps = 32
-                for (let i = 0; i < steps; i++) {
-                  const probe = runAt((timeRef.current + i * duration / steps) % Math.max(duration, 1e-6), draftRef.current, true)
-                  for (const h of probe ? findHits(probe, draftRef.current.contactRelations ?? []) : [])
-                    if (!found.has(relKey(h))) found.set(relKey(h), h)
-                }
-              }
-              const out: Record<string, PairContactWire> = { ...(measureContactHeights(draftRef.current, [...found.values()]) ?? {}) }
-              const missing: ContactHeightsRun['missing'] = []
-              if (opts) {
-                // What the built figures could not give comes from the declared anchors (the fallback above); a clip
-                // without declared relations and without a detected contact is measured by the implied relation.
-                const wanted = rels.length ? rels
-                  : Object.keys(out).length ? [] : [impliedRelation(figs.map((f) => f.role), opts.genderOf, opts.anchors)]
-                for (const rel of wanted) {
-                  const key = `${rel.part}>${rel.at}:${rel.target}`
-                  if (out[key]) continue
-                  const res = anchorHeights(draftRef.current, rel, opts)
-                  if (res.entry) out[key] = res.entry; else missing.push({ key, reason: res.reason })
-                }
-              } else if (!Object.keys(out).length)
-                missing.push({ key: '', reason: t('No figure here has an attached part that one of the other figure’s channels accepts.') })
-              runAt(timeRef.current, draftRef.current, false)
-              return { heights: Object.keys(out).length ? out : null, missing }
-            },
             cast: castOf(assignRef.current) })
         disposers.push(() => { if (autoAlignOut.current?.current === autoAlign) autoAlignOut.current.current = null })
+        measureHeights()
         tick()
       } catch (e) {
         setStatus(String(e))
@@ -2563,7 +2412,7 @@ export function PlacePreview({ kind, set = '', roles, clips, draftRef, draftSeq,
             ))}
             {!solo && onRealHeights ? (
               <button type="button" className="ga-btn ga-btn-sm" data-testid="place-toggle-realHeights" aria-pressed={realHeights}
-                title={t('Shows the cast at their profile heights with the size compensation the game applies: each root path scaled about the contact pivot, and the vertical gap of every stored contact height closed by the hips (knees bent, or a kneeling figure raised). Off: every figure at 1.70 m, the data Auto-align measures and Save stores — both are off while this is on.')}
+                title={t('Shows the cast at their profile heights with the size compensation the game applies: each root path scaled about the contact pivot, and the vertical gap of every contact, measured on one sampled loop, closed by the hips (knees bent, or a kneeling figure raised). Off: every figure at 1.70 m, the data Auto-align measures and Save stores — both are off while this is on.')}
                 onClick={() => onRealHeights(!realHeights)}>{t('Real heights')}</button>
             ) : null}
             {realHeights && !solo && heightNote ? (

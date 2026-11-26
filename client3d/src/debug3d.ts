@@ -16,7 +16,10 @@
  *   window.__pairHeight3d() every figure playing a pair half: the vertical
  *                         size compensation's solve and offset, the legs
  *                         before / after it (`Figure.probePairHeight`), the
- *                         part tips and channel openings — read-only
+ *                         part tips and channel openings, the loop sample
+ *                         and what it cost — read-only
+ *   window.__pairStep3d(o) a held clip time and switches for a comparison
+ *                         run: {t, rootAngle, bend, height, rootScale, force}
  *
  * [B] `initIsolation` — the ISOLATION panel, opened with **Shift + I**. Where
  * [A] READS the picture, this one takes it apart: twenty numbered switches,
@@ -70,7 +73,7 @@ export function initDebug3d(engine: Engine, residency: Map<string, Resident>,
   // Owner 2026-11-25: the vertical size compensation in the real game, as numbers (see the header).
   Figure.probePairHeight = true;
   (window as unknown as { __pairHeight3d?: unknown }).__pairHeight3d = () => npcs?.pairHeightDebug() ?? [];
-  // A held clip time and the measurement switches (`NpcManager.debugPair`): {t, rootAngle, bend, height, rootScale}.
+  // A held clip time and the measurement switches (`NpcManager.debugPair`): {t, rootAngle, bend, height, rootScale, force}.
   (window as unknown as { __pairStep3d?: unknown }).__pairStep3d = (o: Record<string, unknown>) =>
     npcs ? Object.assign(npcs.debugPair, o) : null;
   const el = document.createElement('pre');

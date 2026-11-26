@@ -18,7 +18,8 @@ import type { PhotoSubject } from '@anima/hud/game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { pickStrandFigures, STRAND_LIMITS, eulerYXZ, fixPivot, fixRoot, roleTurnFix, findContact, contactSampleOf,
-  type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot, pairHeightOffsets } from '@anima/scene-render';
+  type PairFix, type RootAngle, type BendLimits, bendSample, pairFigureScale, scalePairRoot, pairHeightOffsets,
+  pairRelationFrame, PAIR_HEIGHT_SAMPLES, type PairHeightInput, type PairHeightSolve, type ContactTarget } from '@anima/scene-render';
 import { OPENING_BUDGET, runFigureFrame, strandCandidates, type FrameEntry, type FrameLoopState,
   type StrandFigureView } from '@anima/scene-render';
 import { WALK_CLEARANCE_M } from '../game/ground';
@@ -271,10 +272,8 @@ export interface PairPlay {
   members: string[];
   /** every role → its character (`MapInteraction.members`) — the heights the vertical size compensation reads */
   roles: Record<string, string>;
-  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the solved hips offset of this figure for the clip and
-   *  the heights it was solved for (`key`); recomputed only when the clip or a member's height changes. */
-  height?: { key: string; offset: number; planted: boolean[]; gaps: Record<string, number>; residuals: Record<string, number>
-    offsets: Record<string, number> };
+  /** The prop action's own anchor this half was last placed on (`tickInteraction`); undefined = none. */
+  ownAnchor?: PropActionMotion['anchor'];
   /** `<kind>__<role>` — the clip half this figure plays; `<kind>__<role>~<alt>`
    *  when the server names an ALT half (G6) */
   clip: string;
@@ -364,8 +363,22 @@ export class NpcManager {
   /** Debug only (`debug3d.ts`, `window.__pairStep3d`): a held clip time for every pair half (null = the clip clock),
    *  and switches for the attached part's root angle, its chain bend, the vertical size compensation and the
    *  horizontal pair scale — read-only measurement, the defaults are the game. */
-  readonly debugPair: { t: number | null; rootAngle: boolean; bend: boolean; height: boolean; rootScale: boolean } =
-    { t: null, rootAngle: true, bend: true, height: true, rootScale: true };
+  readonly debugPair: { t: number | null; rootAngle: boolean; bend: boolean; height: boolean; rootScale: boolean
+    /** per figure name an offset and held legs used instead of the solve (a comparison run) */
+    force: Record<string, { offset: number; planted: boolean[] }> | null } =
+    { t: null, rootAngle: true, bend: true, height: true, rootScale: true, force: null };
+  /** Owner decision 2026-11-26 (scene-render `pairHeight.ts`): per interaction the loop sample's solve for the
+   *  arrangement `key` (`measurePairHeights`), what it cost (ms) and the clip each member was measured on. */
+  private readonly pairHeights = new Map<string, { key: string; ms: number; retryAt: number; solve: PairHeightSolve | null
+    input: PairHeightInput | null; clips: Record<string, string> }>();
+  private readonly figureSerials = new WeakMap<Figure, number>();
+  private figureSerialNext = 1;
+  /** A number per figure object — a rebuilt model is a new arrangement. */
+  private figureSerial(fig: Figure): number {
+    let n = this.figureSerials.get(fig);
+    if (!n) { n = this.figureSerialNext++; this.figureSerials.set(fig, n); }
+    return n;
+  }
   /** Debug only: the last chain bend per entering figure (its turns as rendered, degrees). */
   private readonly debugBends = new Map<string, { deg: number; turns: number }>();
   /** The channel readouts of the last phase B, named by the receiving figure (`channelReadouts()`), and their
@@ -1553,16 +1566,12 @@ export class NpcManager {
         npc.finale = null;
       }
     }
-    const unscaled = this.figures.pairRootAt(clip, phase, npc.name);
-    if (!unscaled) return false;
-    // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the half's root path was measured for a 1.70 m figure;
-    // this figure's own scale a = height / 1.70 about the clip's contact pivot keeps every contact where it was
-    // (p' = C + a·(p − C)). a = 1 returns the root untouched.
-    const root = scalePairRoot(unscaled, unscaled.pivot, this.debugPair.rootScale ? pairFigureScale(npc.figure.height) : 1);
+    const placed = this.pairTargetAt(npc, clip, phase, ownAnchor);
+    if (!placed) return false;
+    const { target, seat } = placed;
+    it.ownAnchor = ownAnchor;
     // `playPair` also ends a bridge that was still running (getting up out of
     // bed when the handshake came): its height, turn and travel let go with it.
-    const seat = !ownAnchor && it.anchor.placeId
-      ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
     const held = this.debugPair.t !== null;
     if (!npc.figure.playPair(clip, phase, it.rate <= 0 || held, loop, seat?.group, speed)) return false;
     if (held) npc.figure.debugSeekPair(phase);
@@ -1570,22 +1579,17 @@ export class NpcManager {
     // the figure, absolutely, every frame — kept on the instance it would
     // stand the body beside its anchor for the whole interaction.
     if (npc.figure.holdsTravel) npc.figure.takeTravel();
-    const c = Math.cos(it.anchor.yaw);
-    const s = Math.sin(it.anchor.yaw);
-    const x = it.anchor.x + root.x * c + root.z * s;
-    const z = it.anchor.z - root.x * s + root.z * c;
-    const target = { x, y: ownAnchor ? ownAnchor.y : seat ? seat.slots[0].y
-      : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z, yaw: it.anchor.yaw };
     // Seated by a pair clip: the floor under the seat, same rule (P3b).
-    if (seat?.group === 'seat') npc.figure.setFloorY(this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z));
+    if (seat?.group === 'seat') npc.figure.setFloorY(this.roomStandAt(npc.name, target.x, target.z) ?? this.groundY(target.x, target.z));
     const age = it.blend ? (performance.now() - it.blend.at) / 1000 : BLEND_S;
     const shown = it.blend ? pairBlend(it.blend.from, target, age) : target;
     npc.root.position.set(shown.x, shown.y, shown.z);
     // Apply the eased yaw exactly; the ordinary standing yaw ease would lag behind it.
     npc.figure.faceTowards(new THREE.Vector3(Math.sin(shown.yaw), 0, Math.cos(shown.yaw)), true);
     this.applyPairFix(npc, it.base, shown.yaw, it.id);
-    // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the vertical size compensation — this figure's
-    // constant hips offset for the clip, applied in `figure.update` after the clip pose and before phase B.
+    // Owner decision 2026-11-25/26 (scene-render `pairHeight.ts`): the vertical size compensation — this figure's
+    // constant hips offset for the clip as the loop sample solved it (`measurePairHeights`), applied in
+    // `figure.update` after the clip pose and before phase B.
     const height = this.pairHeightOf(npc, clip);
     npc.figure.setPairHeight(clip, this.debugPair.height ? height.offset : 0, height.planted);
     if (age >= BLEND_S) it.blend = undefined;
@@ -1610,10 +1614,26 @@ export class NpcManager {
     return { fix: roleTurnFix(tilt, roll, frame, ownYaw), pivot };
   }
 
-  /** Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the hips offset of `npc` while it plays pair half
-   *  `clip` — solved over the clip's stored contact heights (`pair_contact_heights`) for the members' real heights
-   *  (a = h / 1.70); 0 without stored heights, with a member whose figure (and so its height) is not loaded yet, or
-   *  for equal heights. Cached on the interaction per clip and heights. */
+  /** Where pair half `clip` puts `npc` at clip time `phase`: `anchor + R_y(yaw) · clipRoot(phase)` with this figure's
+   *  own scale about the clip's contact pivot (owner decision 2026-11-20, scene-render `pairScale.ts`: p' = C + a·(p − C),
+   *  a = 1 returns the root untouched), standing on the ground under it, on the seat a place gives, or on a prop
+   *  action's own anchor. Null when the half has no root path for this figure. */
+  private pairTargetAt(npc: Npc, clip: string, phase: number, ownAnchor?: PropActionMotion['anchor']):
+    { target: { x: number; y: number; z: number; yaw: number }; seat: PlaceEntry | undefined } | null {
+    const it = npc.interaction!;
+    const unscaled = this.figures?.pairRootAt(clip, phase, npc.name);
+    if (!unscaled || !npc.figure) return null;
+    const root = scalePairRoot(unscaled, unscaled.pivot, this.debugPair.rootScale ? pairFigureScale(npc.figure.height) : 1);
+    const seat = !ownAnchor && it.anchor.placeId
+      ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
+    const c = Math.cos(it.anchor.yaw);
+    const s = Math.sin(it.anchor.yaw);
+    const x = it.anchor.x + root.x * c + root.z * s;
+    const z = it.anchor.z - root.x * s + root.z * c;
+    return { seat, target: { x, y: ownAnchor ? ownAnchor.y : seat ? seat.slots[0].y
+      : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z, yaw: it.anchor.yaw } };
+  }
+
   /** Debug read (`debug3d.ts` `window.__pairHeight3d`, only with ?debug3d=1): every figure playing a pair half —
    *  its clip, roles, height, the solve (offsets, gaps, residuals), the offset shown now, the leg probe
    *  (`Figure.probePairHeight`), and its attached-part tips and channel openings (world) to measure the contact by. */
@@ -1623,10 +1643,12 @@ export class NpcManager {
       const it = npc.interaction, fig = npc.figure;
       if (!it || !fig) continue;
       const insp = fig.inspect();
-      out.push({ name: npc.name, clip: it.clip, roles: it.roles, height: fig.height, solve: it.height ?? null,
+      const m = this.pairHeights.get(it.id);
+      out.push({ name: npc.name, clip: it.clip, roles: it.roles, height: fig.height, solve: m?.solve ?? null,
+        sampleMs: m?.ms ?? null, sample: m?.input ?? null, straight: fig.straightChains(),
         shown: fig.pairHeightShown, probe: fig.pairHeightProbe, clipT: it.clipT, body: fig.debugBodyPoints(),
         bend: this.debugBends.get(npc.name) ?? null, debug: { ...this.debugPair },
-        contacts: this.figures?.pairContactsOf(it.clip, npc.name) ?? null,
+        anchor: { x: it.anchor.x, z: it.anchor.z, ground: this.roomStandAt(npc.name, it.anchor.x, it.anchor.z) ?? this.groundY(it.anchor.x, it.anchor.z) },
         ground: this.roomStandAt(npc.name, npc.root.position.x, npc.root.position.z)
           ?? this.groundY(npc.root.position.x, npc.root.position.z),
         groundAtLegs: (fig.debugBodyPoints().rig as { legs?: ({ ankle: number[] | null } | null)[] } | null)?.legs?.map((l) =>
@@ -1639,40 +1661,133 @@ export class NpcManager {
     return out;
   }
 
+  /** Owner decision 2026-11-26 (scene-render `pairHeight.ts`): the hips offset of `npc` while it plays pair half `clip`
+   *  — what the loop sample of its interaction solved (`measurePairHeights`); 0 until it is measured. */
   private pairHeightOf(npc: Npc, clip: string): { offset: number; planted: boolean[] } {
     const it = npc.interaction!;
-    const none = { offset: 0, planted: [] as boolean[] };
+    const forced = this.debugPair.force?.[npc.name];
+    if (forced) return forced;
+    const m = this.pairHeights.get(it.id);
     const role = /__([a-e])(?:~|$)/.exec(clip)?.[1];
-    const contacts = role && this.figures ? this.figures.pairContactsOf(clip, npc.name) : [];
-    if (!role || !contacts.length) { it.height = undefined; return none; }
-    const heights: Record<string, number> = {};
-    for (const [r, name] of Object.entries(it.roles)) {
-      const h = name === npc.name ? npc.figure?.height : this.npcs.get(name)?.figure?.height;
-      if (!(typeof h === 'number' && h > 0)) { it.height = undefined; return none; }
-      heights[r] = h;
+    if (!m?.solve || !role || m.clips[npc.name] !== clip) return { offset: 0, planted: [] };
+    return { offset: m.solve.offsets[role] ?? 0, planted: m.solve.planted[role] ?? [] };
+  }
+
+  /** Owner decision 2026-11-26 (scene-render `pairHeight.ts` WHAT IS MEASURED): every running pair/group interaction
+   *  is sampled ONCE per arrangement — its members, their clips and bodies, its anchor — at `PAIR_HEIGHT_SAMPLES` phases of
+   *  one loop, without rendering: each member placed where its half puts it at that phase (`pairTargetAt`, its pair
+   *  turn included) and posed from the clip's own tracks (no compensation, no secondary motion), then its ground,
+   *  hips and legs, the part's straight axis and the receiving figure's opening are read. Everything moved is put
+   *  back (`Figure.snapshotPose`). A furniture place or a prop action's anchor makes the role fixed. Runs after phase
+   *  B; an arrangement whose contact cannot be read yet (the part's chain not built) is tried again after a second. */
+  private measurePairHeights(): void {
+    const groups = new Map<string, Npc[]>();
+    for (const npc of this.npcs.values()) {
+      if (!npc.interaction || !npc.figure) continue;
+      const list = groups.get(npc.interaction.id) ?? [];
+      list.push(npc);
+      groups.set(npc.interaction.id, list);
     }
-    const key = `${clip}|${Object.entries(heights).sort().map(([r, h]) => `${r}:${h}`).join(',')}`;
-    if (it.height?.key !== key) {
-      const solve = pairHeightOffsets(contacts, (r) => pairFigureScale(heights[r]));
-      it.height = { key, offset: solve.offsets[role] ?? 0, planted: solve.planted[role] ?? [], gaps: solve.gaps,
-        residuals: solve.residuals, offsets: solve.offsets };
+    for (const id of [...this.pairHeights.keys()]) if (!groups.has(id)) this.pairHeights.delete(id);
+    const now = performance.now();
+    for (const [id, list] of groups) {
+      if (list.length < 2) continue;
+      const roleOf = (n: Npc) => /__([a-e])(?:~|$)/.exec(this.playedClip(n))?.[1] ?? '';
+      const a = list[0].interaction!.anchor;
+      const key = list.map((n) => `${n.name}:${this.playedClip(n)}:${n.figure!.height}:${this.figureSerial(n.figure!)}`).sort().join('|')
+        + `@${a.x.toFixed(3)},${a.z.toFixed(3)},${a.yaw.toFixed(4)},${a.placeId ?? ''}|${this.debugPair.rootScale}`;
+      const had = this.pairHeights.get(id);
+      if (had && had.key === key && (had.solve || now < had.retryAt)) continue;
+      if (list.some((n) => !roleOf(n) || !(n.figure!.pairClipDuration(this.playedClip(n)) > 0))) continue;
+      const t0 = performance.now();
+      const input = this.samplePairLoop(list, roleOf);
+      const ms = performance.now() - t0;
+      const resolved = !!input && input.relations.some((r) => r.frames.some(Boolean));
+      this.pairHeights.set(id, { key, ms, retryAt: now + 1000,
+        solve: resolved ? pairHeightOffsets(input!) : null, input: Figure.probePairHeight ? input : null,
+        clips: Object.fromEntries(list.map((n) => [n.name, this.playedClip(n)])) });
     }
-    return it.height;
+  }
+
+  /** The clip half `npc` plays (an alt it lacks falls back to the role's own, like `tickInteraction`). */
+  private playedClip(npc: Npc): string {
+    const it = npc.interaction!;
+    return it.base && it.clip !== it.base && !npc.figure?.hasClip(it.clip) ? it.base : it.clip;
+  }
+
+  /** The loop sample of one interaction (`measurePairHeights`); null when a member cannot be posed. */
+  private samplePairLoop(list: Npc[], roleOf: (n: Npc) => string): PairHeightInput | null {
+    const restores = list.map((n) => n.figure!.snapshotPose(n.root));
+    try {
+      const roles: PairHeightInput['roles'] = {};
+      for (const n of list) {
+        const it = n.interaction!;
+        roles[roleOf(n)] = { frames: [], fixed: !!it.ownAnchor || !!it.anchor.placeId };
+      }
+      const rels = list.map((n) => n.figure!.contactRelationsOf(this.playedClip(n))).find((r) => r.length) ?? [];
+      const jobs = rels.length
+        ? rels.filter((r) => r.target !== 'none').map((r) => ({ part: r.part, at: r.at, target: r.target as ContactTarget | undefined }))
+        : list.length === 2 ? [{ part: roleOf(list[0]), at: roleOf(list[1]), target: undefined },
+          { part: roleOf(list[1]), at: roleOf(list[0]), target: undefined }] : [];
+      const relations: PairHeightInput['relations'] = jobs.map((j) => ({ key: `${j.part}>${j.at}:${j.target ?? 'auto'}`,
+        part: j.part, receiver: j.at, frames: [] }));
+      const byRole = new Map(list.map((n) => [roleOf(n), n]));
+      const duration = Math.min(...list.map((n) => n.figure!.pairClipDuration(this.playedClip(n))));
+      for (let k = 0; k < PAIR_HEIGHT_SAMPLES; k++) {
+        const t = (k / PAIR_HEIGHT_SAMPLES) * duration;
+        for (const n of list) {
+          const it = n.interaction!, clip = this.playedClip(n);
+          const placed = this.pairTargetAt(n, clip, t, it.ownAnchor);
+          if (!placed || !n.figure!.posePairSample(clip, t)) return null;
+          n.root.position.set(placed.target.x, placed.target.y, placed.target.z);
+          n.root.quaternion.identity();
+          n.figure!.root.rotation.y = placed.target.yaw;
+          const fixed = this.pairFixed(n, it.base, placed.target.yaw);
+          if (fixed) {
+            n.root.position.add(fixed.delta);
+            n.root.quaternion.copy(fixed.quaternion);
+          }
+          n.root.updateMatrixWorld(true);
+          const body = n.figure!.pairBodyNow();
+          if (!body) return null;
+          roles[roleOf(n)].frames.push({ groundM: placed.target.y, ...body });
+        }
+        for (const [i, j] of jobs.entries()) {
+          const e = byRole.get(j.part), r = byRole.get(j.at);
+          const ie = e?.figure!.inspect(), ir = r?.figure!.inspect();
+          const hit = ie && ir ? findContact(ie, ir, j.target) : null;
+          const straight = hit ? e!.figure!.straightChains()[hit.chain] : undefined;
+          const sample = hit && straight ? contactSampleOf(ie!, ir!, hit, [0, 0, 0]) : null;
+          relations[i].frames.push(sample && straight ? pairRelationFrame(straight.points, sample.o) : null);
+        }
+      }
+      return { roles, relations };
+    } finally {
+      for (const restore of restores) restore();
+    }
   }
 
   private applyPairFix(npc: Npc, base: string, yaw: number, interactionId: string): void {
     const got = this.pairFixOf(npc, base, yaw);
     if (!got) return;
-    const fix = got.fix;
     const rec = [...this.pairBends.values()].find((x) => x.interaction === interactionId && x.entering === npc.name);
     if (rec) rec.pivot = got.pivot;
-    if (!(fix.turn.some((v) => v) || fix.shift.some((v) => v))) return;
+    const fixed = this.pairFixed(npc, base, yaw, got);
+    if (!fixed) return;
+    npc.root.position.add(fixed.delta);
+    npc.root.quaternion.copy(fixed.quaternion);
+    npc.pairFixDelta = fixed.delta;
+  }
+
+  /** The role's pair turn (`pairFixOf`) as a move of the root from where it stands now — the position delta and the
+   *  root's turn; null for none. Moves nothing. */
+  private pairFixed(npc: Npc, base: string, yaw: number, got = this.pairFixOf(npc, base, yaw)):
+    { delta: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+    if (!got || !(got.fix.turn.some((v) => v) || got.fix.shift.some((v) => v))) return null;
     const p = npc.root.position;
-    const r = fixRoot(fix, got.pivot, [p.x, p.y, p.z]);
-    const delta = new THREE.Vector3(r.position[0] - p.x, r.position[1] - p.y, r.position[2] - p.z);
-    p.add(delta);
-    npc.root.quaternion.set(r.quaternion[0], r.quaternion[1], r.quaternion[2], r.quaternion[3]);
-    npc.pairFixDelta = delta;
+    const r = fixRoot(got.fix, got.pivot, [p.x, p.y, p.z]);
+    return { delta: new THREE.Vector3(r.position[0] - p.x, r.position[1] - p.y, r.position[2] - p.z),
+      quaternion: new THREE.Quaternion(r.quaternion[0], r.quaternion[1], r.quaternion[2], r.quaternion[3]) };
   }
 
   private clearPairFix(npc: Npc): void {
@@ -2497,6 +2612,7 @@ export class NpcManager {
     // Ruling A145: the chain bend runs inside phase B, before the openings (frameLoop step 3) — the mouth and the
     // surface open around the part as it is shown, and the next update engages on it.
     runFigureFrame(entries, this.frameState, OPENING_BUDGET, { afterSecondary: () => this.observePairBends() });
+    this.measurePairHeights();
     if (this.readoutsNow.length) this.readoutsNow = [];
     for (const npc of this.npcs.values()) {
       for (const r of npc.figure?.channelReadouts() ?? []) this.readoutsNow.push({ ...r, receiver: npc.name });

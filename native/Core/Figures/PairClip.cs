@@ -186,8 +186,6 @@ public sealed class PairPlay
     public string Base { get; init; } = "";
     /// <summary>role → member name (the interaction's <c>members</c>, this figure included) — the pair height's cast.</summary>
     public IReadOnlyDictionary<string, string> Roles { get; set; } = new Dictionary<string, string>();
-    /// <summary>The pair height solved for this half (<see cref="PairHeight"/>), cached by clip and member heights.</summary>
-    public (string Key, double Offset, bool[] Planted)? Height { get; set; }
 
     public string? ResolveClip(Func<string, bool> usable)
         => ClipLibraryRules.SelectClip(Clip, Base.Length > 0 ? Base : Clip, usable);

@@ -1,50 +1,61 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace AnimaNative.Figures;
 
-/// <summary>One leg at a relation's deepest frame: hip, knee and ankle joints (metres; x/z relative to the role's hips).</summary>
+/// <summary>One leg: hip, knee and ankle joints (world metres).</summary>
 public sealed record PairLeg(V3 Hip, V3 Knee, V3 Ankle);
 
-/// <summary>A role's pose at a relation's deepest frame, at 1.70 m: support height, hips height, legs [left, right].</summary>
-public sealed record PairRolePose(double SupportM, double HipsM, IReadOnlyList<PairLeg> Legs);
+/// <summary>One role at one sampled phase (world metres): the ground under it, its hips height, its legs [left, right].</summary>
+public sealed record PairHeightRoleFrame(double GroundM, double HipsM, IReadOnlyList<PairLeg> Legs);
 
-/// <summary>One contact relation's stored height (<c>pair_contact_heights[key]</c>).</summary>
-public sealed record PairContactHeight(string Key, string Part, string Receiver, double HeightM,
-                                       IReadOnlyDictionary<string, PairRolePose> Roles);
+/// <summary>One role's sampled loop; &lt;see cref="Fixed"/&gt; = it sits on a place (furniture) and takes nothing.</summary>
+public sealed record PairHeightRole(IReadOnlyList<PairHeightRoleFrame> Frames, bool Fixed = false);
 
-/// <summary>The offsets a role may take (metres; <see cref="Down"/> ≤ 0 ≤ <see cref="Up"/>), its stance and its held legs.</summary>
-public sealed record PairHeightRange(double Down, double Up, string Stance, bool[] Planted);
+/// <summary>One relation at one sampled phase: the part's straight axis (root, unit direction, length) and the opening.</summary>
+public sealed record PairHeightRelationFrame(V3 Root, V3 Axis, double LengthM, V3 Opening);
 
-/// <summary>The solve of a clip: per role the hips offset (+ = up), held legs and range; per relation the gap and its residual.</summary>
+/// <summary>One contact relation (&lt;c&gt;&lt;part&gt;&gt;&lt;receiver&gt;:&lt;target&gt;&lt;/c&gt;); per sampled phase a frame or null.</summary>
+public sealed record PairHeightRelation(string Key, string Part, string Receiver, IReadOnlyList<PairHeightRelationFrame?> Frames);
+
+/// <summary>A role's class over its loop: stance, planted legs, held knees.</summary>
+public record PairRoleClass(string Stance, bool[] Planted, bool[] KneeHeld);
+
+/// <summary>The offsets a role may take (metres; &lt;see cref="Down"/&gt; ≤ 0 ≤ &lt;see cref="Up"/&gt;) and its class.</summary>
+public sealed record PairHeightRange(string Stance, bool[] Planted, bool[] KneeHeld, double Down, double Up)
+    : PairRoleClass(Stance, Planted, KneeHeld);
+
+/// <summary>The solve of an interaction: per role the hips offset (+ = up), held legs and range; per relation its contact
+/// phase, the gap there and its residual.</summary>
 public sealed class PairHeightSolve
 {
     public Dictionary<string, double> Offsets { get; } = new();
     public Dictionary<string, bool[]> Planted { get; } = new();
     public Dictionary<string, PairHeightRange> Ranges { get; } = new();
+    public Dictionary<string, int> ContactFrames { get; } = new();
     public Dictionary<string, double> Gaps { get; } = new();
     public Dictionary<string, double> Residuals { get; } = new();
 }
 
 /// <summary>
-/// PAIR HEIGHT — packages/scene-render/src/pairHeight.ts (owner decision 2026-11-25): the VERTICAL half of the pair scale
-/// (<see cref="PairScale"/>). A contact at the stored height h_c (1.70 m) misses by
-/// Δ = (s_p + a_p·(h_c − s_p)) − (s_r + a_r·(h_c − s_r)) for figures of scales a; it closes with a constant hips offset per
-/// figure and clip, o_receiver − o_part = Δ, inside each role's range (furniture, lying/sitting and carried figures take
-/// nothing; a standing figure only lowers by bending its knees; a kneeling/crouching one goes both ways, every planted
-/// ankle held by a two-bone IK). The solve is a projected Gauss–Seidel least squares, figures in the order of their range.
-/// Equal heights give exactly 0 everywhere (nothing applied). Vectors shared/test-vectors/pair_scale.json (cases H[…],
-/// hand derivations scripts/smoke_pair_height.mjs). Every constant and step mirrors the TS twin, operation for operation.
+/// PAIR HEIGHT — packages/scene-render/src/pairHeight.ts (owner decision 2026-11-25, reworked 2026-11-26): nothing is
+/// stored; a renderer samples one loop of the clip as the figures really stand (&lt;see cref="Samples"/&gt; phases, without the
+/// compensation) and hands per role its ground, hips and legs, per relation the part's straight axis and the receiving
+/// opening. The gap of a relation is read at its contact phase (the frame where the opening is nearest the straight
+/// segment): Δ = P_y + λ·u_y − O_y with λ the axis parameter horizontally nearest to O. It closes with a constant hips offset
+/// per figure and clip, o_receiver − o_part = Δ, inside each role's range, decided over the WHOLE loop (planted legs
+/// relative to the figure's lowest joint, with a hysteresis band). The solve is a projected Gauss–Seidel least squares.
+/// Vectors shared/test-vectors/pair_scale.json (cases H[…], hand derivations scripts/smoke_pair_height.mjs). Every
+/// constant and step mirrors the TS twin, operation for operation.
 /// </summary>
 public static class PairHeight
 {
-    public const double FurnitureM = 0.05;
+    public const double DeadbandM = 0.005;
     public const double HipsRestM = 0.22;
-    public const double FootPlantM = 0.16;
-    public const double KneePlantM = 0.13;
+    public const double CarriedM = 0.35;
+    public const double DownFrac = 0.12;
+    public const double UpFrac = 0.22;
     public const double KneeHoldM = 0.02;
     public const double KneeFloorM = 0.06;
     public const double MinBendDeg = 12;
@@ -54,24 +65,61 @@ public static class PairHeight
     public const double MinStepM = 1e-4;
     public const int BisectSteps = 40;
     public const int Sweeps = 64;
-    private const double BoundCm = 300;
+    /// <summary>How many phases of one loop a renderer samples.</summary>
+    public const int Samples = 24;
     private const double Deg = Math.PI / 180;
 
     private static double Dot(V3 a, V3 b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
     private static double Len(V3 a) => Math.Sqrt(Dot(a, a));
     private static V3 Cross(V3 a, V3 b) => new(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
 
-    /// <summary><c>pairHeightGap</c>: the part's height minus the target's, metres.</summary>
-    public static double Gap(double heightM, double partSupportM, double aPart, double recvSupportM, double aRecv)
-        => (aPart - aRecv) * heightM + partSupportM * (1 - aPart) - recvSupportM * (1 - aRecv);
-
-    /// <summary><c>scaleRolePose</c>: x, z → a·x, a·z; y → s + a·(y − s); a == 1 returns the pose itself.</summary>
-    public static PairRolePose ScaleRolePose(PairRolePose pose, double a)
+    private static double Median(IEnumerable<double> xs)
     {
-        if (a == 1) return pose;
-        double s = pose.SupportM;
-        V3 P(V3 v) => new(a * v.X, s + a * (v.Y - s), a * v.Z);
-        return new PairRolePose(s, s + a * (pose.HipsM - s), pose.Legs.Select(l => new PairLeg(P(l.Hip), P(l.Knee), P(l.Ankle))).ToArray());
+        var s = xs.OrderBy(x => x).ToArray();
+        if (s.Length == 0) return 0;
+        return s.Length % 2 == 1 ? s[(s.Length - 1) / 2] : (s[s.Length / 2 - 1] + s[s.Length / 2]) / 2;
+    }
+
+    /// <summary><c>pairRelationFrame</c>: a relation frame from the chain's points (root first, tip last); null when degenerate.</summary>
+    public static PairHeightRelationFrame? RelationFrame(IReadOnlyList<V3> chain, V3 opening)
+    {
+        if (chain.Count < 2) return null;
+        var root = chain[0];
+        var d = chain[^1] - root;
+        double l = Len(d);
+        if (!(l > 1e-6)) return null;
+        return new PairHeightRelationFrame(root, d * (1 / l), l, opening);
+    }
+
+    /// <summary><c>pairAxisDistance</c>: the opening's distance from the straight segment.</summary>
+    public static double AxisDistance(PairHeightRelationFrame f)
+    {
+        double t = Math.Max(0, Math.Min(f.LengthM, Dot(f.Opening - f.Root, f.Axis)));
+        return Len(f.Opening - (f.Root + f.Axis * t));
+    }
+
+    /// <summary><c>pairContactFrame</c>: the frame index of the smallest axis distance; −1 when none resolved.</summary>
+    public static int ContactFrame(IReadOnlyList<PairHeightRelationFrame?> frames)
+    {
+        int best = -1;
+        double d = double.PositiveInfinity;
+        for (int i = 0; i < frames.Count; i++)
+        {
+            if (frames[i] is not { } f) continue;
+            double x = AxisDistance(f);
+            if (x < d) { d = x; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary><c>pairAxisGap</c>: the axis line's height where it is horizontally nearest to the opening, minus the opening's.</summary>
+    public static double AxisGap(PairHeightRelationFrame f)
+    {
+        var u = f.Axis;
+        var o = f.Opening - f.Root;
+        double h2 = u.X * u.X + u.Z * u.Z;
+        double lambda = Math.Max(0, h2 > 1e-6 ? (o.X * u.X + o.Z * u.Z) / h2 : Dot(o, u));
+        return f.Root.Y + lambda * u.Y - f.Opening.Y;
     }
 
     /// <summary><c>ikKnee</c>: the knee the two-bone IK puts down when the hip is at hip and the ankle reaches target (pole = the knee).</summary>
@@ -106,18 +154,59 @@ public static class PairHeight
         return Math.Acos(Math.Max(-1, Math.Min(1, Dot(a, b) / (la * lb)))) / Deg;
     }
 
-    private static bool LegPlanted(PairLeg leg, double s) => leg.Ankle.Y - s <= FootPlantM || leg.Knee.Y - s <= KneePlantM;
+    private static double LegLength(PairLeg l) => Len(l.Knee - l.Hip) + Len(l.Ankle - l.Knee);
 
-    /// <summary><c>pairOffsetAllowed</c>: whether the hips may move by delta with every planted ankle held.</summary>
-    public static bool OffsetAllowed(PairRolePose pose, IReadOnlyList<bool> planted, double delta)
+    /// <summary><c>pairRoleClass</c>: the class of one role over its sampled frames.</summary>
+    public static PairRoleClass RoleClass(PairHeightRole role)
     {
-        if (Math.Abs(delta) > MaxM + 1e-12) return false;
-        double s = pose.SupportM;
-        double cosMin = Math.Cos(MinBendDeg * Deg);
-        for (int i = 0; i < pose.Legs.Count; i++)
+        var frames = role.Frames;
+        int nLegs = frames.Count == 0 ? 0 : frames.Max(f => f.Legs.Count);
+        PairRoleClass None(string stance) => new(stance, new bool[nLegs], new bool[nLegs]);
+        if (role.Fixed) return None("fixed");
+        if (frames.Count == 0 || nLegs == 0) return None("free");
+        var lowest = frames.Select(f => f.Legs.SelectMany(l => new[] { l.Ankle.Y, l.Knee.Y }).Min()).ToArray();
+        if (Median(frames.Select((f, i) => f.HipsM - lowest[i])) < HipsRestM) return None("resting");
+        if (Median(frames.Select((f, i) => lowest[i] - f.GroundM)) > CarriedM) return None("free");
+        var planted = new bool[nLegs];
+        var kneeHeld = new bool[nLegs];
+        for (int i = 0; i < nLegs; i++)
+        {
+            int legDown = 0, legUp = 0, kneeDown = 0, kneeUp = 0;
+            for (int k = 0; k < frames.Count; k++)
+            {
+                if (i >= frames[k].Legs.Count) continue;
+                var l = frames[k].Legs[i];
+                double ll = LegLength(l), low = lowest[k];
+                int State(double y) => y - low <= DownFrac * ll ? 1 : y - low > UpFrac * ll ? -1 : 0;
+                int a = State(l.Ankle.Y), kn = State(l.Knee.Y);
+                int leg = Math.Max(a, kn);
+                if (leg > 0) legDown++; else if (leg < 0) legUp++;
+                if (kn > 0) kneeDown++; else if (kn < 0) kneeUp++;
+            }
+            planted[i] = legDown > legUp;
+            kneeHeld[i] = planted[i] && kneeDown > kneeUp;
+        }
+        if (!planted.Any(x => x)) return new("free", planted, kneeHeld);
+        bool standing = !kneeHeld.Any(x => x);
+        for (int i = 0; standing && i < nLegs; i++)
         {
             if (!planted[i]) continue;
-            var leg = pose.Legs[i];
+            int straight = frames.Count(f => i < f.Legs.Count && LegBendDeg(f.Legs[i]) < StandBendDeg);
+            if (!(straight * 2 > frames.Count)) standing = false;
+        }
+        return new(standing ? "standing" : "bent", planted, kneeHeld);
+    }
+
+    /// <summary><c>pairOffsetAllowed</c>: whether the hips of one frame may move by delta with every planted ankle held.</summary>
+    public static bool OffsetAllowed(PairHeightRoleFrame frame, PairRoleClass cls, double delta)
+    {
+        if (Math.Abs(delta) > MaxM + 1e-12) return false;
+        double s = frame.GroundM;
+        double cosMin = Math.Cos(MinBendDeg * Deg);
+        for (int i = 0; i < frame.Legs.Count; i++)
+        {
+            if (i >= cls.Planted.Length || !cls.Planted[i]) continue;
+            var leg = frame.Legs[i];
             double l1 = Len(leg.Knee - leg.Hip), l2 = Len(leg.Ankle - leg.Knee);
             var up = new V3(0, delta, 0);
             var hip = leg.Hip + up;
@@ -125,58 +214,52 @@ public static class PairHeight
             if (d > Math.Sqrt(l1 * l1 + l2 * l2 + 2 * l1 * l2 * cosMin) + 1e-12) return false;
             if (d < Math.Abs(l1 - l2) + FoldM) return false;
             var knee = IkKnee(hip, leg.Knee + up, leg.Ankle + up, leg.Ankle);
-            if (leg.Knee.Y - s <= KneePlantM && Len(knee - leg.Knee) > KneeHoldM + 1e-12) return false;
+            if (cls.KneeHeld[i] && Len(knee - leg.Knee) > KneeHoldM + 1e-12) return false;
             if (knee.Y < s + Math.Min(leg.Knee.Y - s, KneeFloorM) - 1e-12) return false;
         }
         return true;
     }
 
-    private static double Reach(PairRolePose pose, bool[] planted, double sign)
+    private static double Reach(IReadOnlyList<PairHeightRoleFrame> frames, PairRoleClass cls, double sign)
     {
-        if (OffsetAllowed(pose, planted, sign * MaxM)) return sign * MaxM;
-        if (!OffsetAllowed(pose, planted, sign * MinStepM)) return 0;
+        bool Ok(double m) => frames.All(f => OffsetAllowed(f, cls, sign * m));
+        if (Ok(MaxM)) return sign * MaxM;
+        if (!Ok(MinStepM)) return 0;
         double lo = MinStepM, hi = MaxM;
         for (int k = 0; k < BisectSteps; k++)
         {
             double mid = (lo + hi) / 2;
-            if (OffsetAllowed(pose, planted, sign * mid)) lo = mid; else hi = mid;
+            if (Ok(mid)) lo = mid; else hi = mid;
         }
         return sign * lo;
     }
 
-    /// <summary><c>pairRoleRange</c>: the offsets a role may take for a figure of scale a.</summary>
-    public static PairHeightRange RoleRange(PairRolePose pose, double a)
+    /// <summary><c>pairRoleRange</c>: the offsets a role may take over its sampled frames.</summary>
+    public static PairHeightRange RoleRange(PairHeightRole role)
     {
-        var p = ScaleRolePose(pose, a);
-        double s = p.SupportM;
-        var planted = p.Legs.Select(l => LegPlanted(l, s)).ToArray();
-        if (s > FurnitureM) return new(0, 0, "fixed", new bool[planted.Length]);
-        if (p.HipsM - s < HipsRestM) return new(0, 0, "resting", new bool[planted.Length]);
-        if (!planted.Any(x => x)) return new(0, 0, "free", planted);
-        bool standing = true;
-        for (int i = 0; i < p.Legs.Count; i++)
-        {
-            var l = p.Legs[i];
-            if (planted[i] && !(LegBendDeg(l) < StandBendDeg && l.Knee.Y - s > KneePlantM)) { standing = false; break; }
-        }
-        return new(Reach(p, planted, -1), standing ? 0 : Reach(p, planted, 1), standing ? "standing" : "bent", planted);
+        var c = RoleClass(role);
+        if (c.Stance is "fixed" or "resting" or "free") return new(c.Stance, c.Planted, c.KneeHeld, 0, 0);
+        return new(c.Stance, c.Planted, c.KneeHeld, Reach(role.Frames, c, -1), c.Stance == "standing" ? 0 : Reach(role.Frames, c, 1));
     }
 
-    /// <summary><c>pairHeightOffsets</c>: the offsets of every role of a clip for the figures' scales.</summary>
-    public static PairHeightSolve Offsets(IReadOnlyList<PairContactHeight> relations, Func<string, double> scaleOf)
+    /// <summary><c>pairHeightOffsets</c>: the offsets of every role of an interaction from its sampled loop.</summary>
+    public static PairHeightSolve Offsets(IReadOnlyDictionary<string, PairHeightRole> roleMap, IReadOnlyList<PairHeightRelation> relations)
     {
         var output = new PairHeightSolve();
-        var poses = new Dictionary<string, PairRolePose>();
-        var order0 = new List<string>();
-        foreach (var r in relations)
-            foreach (var role in new[] { r.Part, r.Receiver })
-                if (r.Roles.TryGetValue(role, out var pose) && !poses.ContainsKey(role)) { poses[role] = pose; order0.Add(role); }
-        var usable = relations.Where(r => poses.ContainsKey(r.Part) && poses.ContainsKey(r.Receiver) && r.Part != r.Receiver).ToList();
-        foreach (var r in usable)
-            output.Gaps[r.Key] = Gap(r.HeightM, poses[r.Part].SupportM, scaleOf(r.Part), poses[r.Receiver].SupportM, scaleOf(r.Receiver));
-        var roles = order0.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        var roles = roleMap.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
         var o = output.Offsets;
         foreach (var role in roles) o[role] = 0;
+        var usable = new List<PairHeightRelation>();
+        foreach (var r in relations)
+        {
+            if (r.Part == r.Receiver || !roleMap.ContainsKey(r.Part) || !roleMap.ContainsKey(r.Receiver)) continue;
+            int k = ContactFrame(r.Frames);
+            if (k < 0) continue;
+            double gap = AxisGap(r.Frames[k]!);
+            output.ContactFrames[r.Key] = k;
+            output.Gaps[r.Key] = Math.Abs(gap) < DeadbandM ? 0 : gap;
+            usable.Add(r);
+        }
         if (usable.All(r => output.Gaps[r.Key] == 0))
         {
             foreach (var r in usable) output.Residuals[r.Key] = 0;
@@ -184,7 +267,7 @@ public static class PairHeight
         }
         foreach (var role in roles)
         {
-            output.Ranges[role] = RoleRange(poses[role], scaleOf(role));
+            output.Ranges[role] = RoleRange(roleMap[role]);
             output.Planted[role] = output.Ranges[role].Planted;
         }
         double? Want(string role)
@@ -221,72 +304,6 @@ public static class PairHeight
             if (change < 1e-12) break;
         }
         foreach (var r in usable) output.Residuals[r.Key] = output.Gaps[r.Key] - (o[r.Receiver] - o[r.Part]);
-        return output;
-    }
-
-    // ── the sidecar wire (pair_contact_heights, cm) ──
-
-    private static readonly Regex KeyRx = new(@"^([a-e])>([a-e]):([a-z_]{1,40})\z", RegexOptions.CultureInvariant);
-    // \z, not $: .NET's $ also matches before a final newline, JS's does not.
-    private static readonly Regex RoleRx = new(@"^[a-e]\z", RegexOptions.CultureInvariant);
-
-    private static bool Num(JsonElement e, out double v, double lo = -BoundCm, double hi = BoundCm)
-    {
-        v = 0;
-        return e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out v) && double.IsFinite(v) && v >= lo && v <= hi;
-    }
-
-    private static bool Vec(JsonElement e, out V3 v)
-    {
-        v = V3.Zero;
-        if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != 3) return false;
-        if (!Num(e[0], out var x) || !Num(e[1], out var y) || !Num(e[2], out var z)) return false;
-        v = new V3(x / 100, y / 100, z / 100);
-        return true;
-    }
-
-    private static PairRolePose? RoleOf(JsonElement w)
-    {
-        if (w.ValueKind != JsonValueKind.Object) return null;
-        if (!w.TryGetProperty("support_cm", out var sc) || !Num(sc, out var support, -50)) return null;
-        if (!w.TryGetProperty("hips_cm", out var hc) || !Num(hc, out var hips)) return null;
-        if (!w.TryGetProperty("legs", out var lw) || lw.ValueKind != JsonValueKind.Array || lw.GetArrayLength() > 2) return null;
-        var legs = new List<PairLeg>();
-        foreach (var l in lw.EnumerateArray())
-        {
-            if (l.ValueKind != JsonValueKind.Array || l.GetArrayLength() != 3) return null;
-            if (!Vec(l[0], out var hip) || !Vec(l[1], out var knee) || !Vec(l[2], out var ankle)) return null;
-            legs.Add(new PairLeg(hip, knee, ankle));
-        }
-        return new PairRolePose(support / 100, hips / 100, legs);
-    }
-
-    /// <summary><c>pairContactHeightsOf</c>: the listing's <c>pair_contact_heights</c>, sorted by key; empty for none or
-    /// malformed (a malformed relation is skipped, the others stay).</summary>
-    public static IReadOnlyList<PairContactHeight> ContactHeightsOf(JsonElement wire)
-    {
-        var output = new List<PairContactHeight>();
-        if (wire.ValueKind != JsonValueKind.Object) return output;
-        var entries = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var p in wire.EnumerateObject()) entries[p.Name] = p.Value;
-        foreach (var key in entries.Keys.OrderBy(k => k, StringComparer.Ordinal))
-        {
-            var m = KeyRx.Match(key);
-            var e = entries[key];
-            if (!m.Success || m.Groups[1].Value == m.Groups[2].Value || e.ValueKind != JsonValueKind.Object) continue;
-            if (!e.TryGetProperty("height_cm", out var hc) || !Num(hc, out var height, 0)) continue;
-            if (!e.TryGetProperty("roles", out var rw) || rw.ValueKind != JsonValueKind.Object) continue;
-            var roles = new Dictionary<string, PairRolePose>();
-            bool bad = false;
-            foreach (var rp in rw.EnumerateObject())
-            {
-                var pose = RoleRx.IsMatch(rp.Name) ? RoleOf(rp.Value) : null;
-                if (pose is null) { bad = true; break; }
-                roles[rp.Name] = pose;
-            }
-            if (bad || !roles.ContainsKey(m.Groups[1].Value) || !roles.ContainsKey(m.Groups[2].Value)) continue;
-            output.Add(new PairContactHeight(key, m.Groups[1].Value, m.Groups[2].Value, height / 100, roles));
-        }
         return output;
     }
 }

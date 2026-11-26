@@ -2917,39 +2917,41 @@ des Clips: `p' = C + a·(p − C)` im Clip-Rahmen, danach `anchor + R(yaw)·p'` 
   normiert auf 1,70 m; nur ihr Schalter „Real heights“ (Places-Ansicht) zeigt die Besetzung in Profilgrößen mit
   beiden Ausgleichen — währenddessen sind Auto-align und Speichern aus, weil beide 1,70-m-Daten messen und ablegen.
 
-**Vertikaler Größenausgleich (Owner-Entscheidung 2026-11-25).** Ein Kontakt in der Höhe `h_c` (Zielpunkt über dem
-Boden im 1,70-m-Clip) liegt im Spiel bei der empfangenden Figur auf `s_r + a_r·(h_c − s_r)`, beim Teil der eintretenden
-auf `s_p + a_p·(h_c − s_p)` (s = Stützhöhe der Figur: Boden 0, sonst die Fläche). Die Lücke je Relation ist
-`Δ = (s_p + a_p·(h_c − s_p)) − (s_r + a_r·(h_c − s_r))`, auf dem Boden `(a_p − a_r)·h_c` (1,86 m auf 1,70 m bei
-`h_c` 0,852 m: 80,2 mm). Geschlossen wird sie durch einen KONSTANTEN Hüft-Versatz `o` je Figur und Clip
-(`o_r − o_p = Δ`), den beide Renderer nach der Clip-Pose und vor Phase B anwenden (Hüfte senkrecht um `o`, eine
-Zwei-Knochen-Bein-IK hält jedes aufgesetzte Fußgelenk, der Fuß behält seine Weltdrehung), gewichtet mit dem eigenen
-Gewicht der Paar-Aktion (ihr Überblenden ist der Übergang).
-- Gespeichert als `pair_contact_heights` im `<kind>.json`, je Kontaktrelation
-  `"<Teil-Rolle>><empfangende Rolle>:<Ziel>": {"height_cm": h_c, "roles": {<Rolle>: {"support_cm", "hips_cm",
-  "legs": [[Hüfte, Knie, Fußgelenk] links, … rechts]}}}` (cm, 0,1 cm; x/z der Gelenke relativ zur eigenen Hüfte, y über
-  dem Boden) — gemessen am TIEFSTEN Schlüsselbild der Relation, bei 1,70 m, beider Rollen. Geliefert pro Hälfte in der
-  Listing-Zeile (`null` bei Solo-Clips oder ohne Daten). Validierung `animation_clips.validate_pair_contact_entry`;
-  `PATCH /assets/animation-clips/{library}/{rel}` mit `{"pair_contact_heights": {key: entry | null} | null}` ersetzt die
-  genannten Relationen (null entfernt eine, null für das Feld alle). Geschrieben von Auto-align (Speichern, auch bei
-  „unverändert“), „Align all“ Stufe 2 und „Store contact heights“ im Align-all-Bereich (misst jeden Clip so, wie er
-  gespeichert ist). Ein Orient-Bake mit Tilt, Roll, Höhe oder senkrechter Rollenverschiebung verwirft sie; Yaw und
-  waagrechte Verschiebungen lassen sie stehen.
-- WER NIMMT DIE LÜCKE (`pairRoleRange`, aus den gespeicherten Beinen, mit `a` um die Stütze skaliert): Möbel (Stütze
-  über 5 cm), liegend/sitzend (Hüfte unter 22 cm über der Stütze) und getragen (kein Bein aufgesetzt) nehmen nichts.
-  Ein Bein ist aufgesetzt, wenn sein Fußgelenk ≤ 16 cm oder sein Knie ≤ 13 cm über der Stütze ist. Erlaubt ist ein
-  Versatz, solange jedes aufgesetzte Bein 12° Beugung behält, nicht zuklappt, ein aufgesetztes Knie höchstens 2 cm
-  wandert, kein Knie unter 6 cm über die Stütze sinkt, |o| ≤ 15 cm. STEHEND (jedes aufgesetzte Bein unter 35° gebeugt,
-  kein Knie auf): nur absenken (Knie beugen). Kniend/hockend: beide Richtungen.
-- LÖSUNG (`pairHeightOffsets`): kleinste Quadrate über alle Relationen in den Bereichen, projiziertes Gauß–Seidel; die
-  Figuren in der Reihenfolge ihres Bereichs in der zuerst verlangten Richtung (größter zuerst). Beim Paar nimmt damit
-  die Figur mit dem größeren Bereich die ganze Lücke, die andere nur den Rest. Was bleibt (`residuals`), übernimmt wie
-  bisher die Kettenbiegung.
-- Gleiche Größen: jede Lücke und jeder Versatz exakt 0, nichts wird angewendet (bitgleich). Ohne gespeicherte Höhen
-  wird nichts gerechnet.
-- Rechnung: `packages/scene-render/src/pairHeight.ts` (Anwendung `pairHeightPose.ts`), nativ
-  `native/Core/Figures/PairHeight.cs`; Vektoren `shared/test-vectors/pair_scale.json` (Fälle `H[…]`), Handrechnungen
-  `scripts/smoke_pair_height.mjs`, Server `scripts/smoke_clip_contact_heights.py`.
+**Vertikaler Größenausgleich (Owner-Entscheidung 2026-11-25, neu gefasst 2026-11-26).** Nichts wird gespeichert.
+Beim Start einer Paar-/Gruppen-Interaktion (und wenn sich ihre Anordnung ändert: Mitglieder, Clips, Körper, Anker)
+TASTET der Renderer eine Schleife des Clips ab — `PAIR_HEIGHT_SAMPLES` = 24 Phasen, ohne Rendern, ohne Ausgleich,
+ohne Sekundärbewegung —, mit jeder Figur dort, wo ihre Hälfte sie in dieser Phase hinstellt: auf IHREM Bodenpunkt,
+in ihrer Größe, mit ihrem Körper. Je Phase und Rolle: Bodenhöhe, Hüfte, Beine (Welt). Je Phase und Kontaktrelation:
+die GERADE ACHSE des Teils (die Kette in Bind-Lage am posierten Körper, der Wurzelwinkel des Clips eingerechnet:
+Wurzel P, Richtung u, Länge L) und die ÖFFNUNG O der empfangenden Figur (Kanal, Mund oder Hand, wie der Renderer sie
+auflöst). Gelände, Figurengröße und die Lage der Öffnung an DIESEM Körper stecken damit schon in den Zahlen.
+- KONTAKTPHASE einer Relation: die abgetastete Phase, in der O dem Segment P … P + L·u am nächsten ist. LÜCKE dort:
+  `λ = ⟨(O − P)_xz, u_xz⟩ / |u_xz|²` (λ ≥ 0; eine fast senkrechte Achse nimmt `⟨O − P, u⟩`), `Δ = P_y + λ·u_y − O_y` —
+  wie weit die Achse dort, wo sie waagrecht der Öffnung am nächsten kommt, über ihr vorbeiläuft. |Δ| < 5 mm zählt als 0.
+- Geschlossen durch einen KONSTANTEN Hüft-Versatz `o` je Figur und Clip (`o_r − o_p = Δ`), den beide Renderer nach
+  der Clip-Pose und vor Phase B anwenden (Hüfte senkrecht um `o`, eine Zwei-Knochen-Bein-IK hält jedes aufgesetzte
+  Fußgelenk, der Fuß behält seine Weltdrehung), gewichtet mit dem eigenen Gewicht der Paar-Aktion. Die Pose-Routine
+  setzt vor jedem Frame jeden Knochen zurück, den sie im letzten Frame geschrieben hat (Hüfte UND die Bein-Drehungen),
+  sofern er noch ihren Wert trägt — ein Mixer schreibt einen unveränderten Wert nicht neu (gehaltener, eingefrorener
+  oder geklemmter Clip).
+- WER NIMMT DIE LÜCKE (`pairRoleClass`/`pairRoleRange`, über ALLE abgetasteten Phasen): eine Figur auf einem Platz
+  (Möbel) oder auf dem eigenen Anker einer Möbel-Aktion nimmt nichts. Je Phase das tiefste Gelenk der Figur
+  (Fußgelenke, Knie); ein Gelenk ist UNTEN, wenn es höchstens 12 % seiner Beinlänge darüber liegt, OBEN ab 22 %,
+  dazwischen zählt es nicht (Hysterese). Ein Bein ist aufgesetzt, wenn es in mehr Phasen unten als oben ist; sein Knie
+  gehalten, wenn das Knie es ist. Liegend/sitzend (Median Hüfte unter 22 cm über dem tiefsten Gelenk), getragen
+  (Median tiefstes Gelenk mehr als 35 cm über dem Boden) oder ohne aufgesetztes Bein: nichts. STEHEND (jedes
+  aufgesetzte Bein in den meisten Phasen unter 35° gebeugt, kein Knie gehalten): nur absenken; kniend/hockend: beide
+  Richtungen. Der Bereich ist der kleinste, den JEDE Phase erlaubt (12° Restbeugung, nicht zuklappen, gehaltenes Knie
+  ≤ 2 cm, kein Knie unter 6 cm über den Boden, |o| ≤ 15 cm).
+- LÖSUNG (`pairHeightOffsets`): kleinste Quadrate über alle Relationen in den Bereichen, projiziertes Gauß–Seidel, die
+  Figur mit dem größeren Bereich in der verlangten Richtung zuerst. Was bleibt (`residuals`), übernimmt die
+  Kettenbiegung.
+- Rechnung: `packages/scene-render/src/pairHeight.ts` (Anwendung `pairHeightPose.ts`), Abtastung im 3D-Client
+  `NpcManager.measurePairHeights`, in der Pose-Bibliothek „Real heights“ (`PlacePreview.measureHeights`); nativ
+  dieselbe reine Funktion `native/Core/Figures/PairHeight.cs`, aber noch OHNE Abtastung (keine Partner-Kanäle; die
+  deklarierten Anker aus `GET /assets/contact-anchors` liest er noch nicht) — der native Client gleicht senkrecht
+  bisher nichts aus. Vektoren `shared/test-vectors/pair_scale.json` (Fälle `H[…]`), Handrechnungen
+  `scripts/smoke_pair_height.mjs`.
 - Der Wurzelpfad gehört zur Datei, die die Set-Kette der Figur wählt (Cache pro Kind UND Set, wie der Clip-Index).
 - Rechnung: `packages/scene-render/src/pairScale.ts`; Handrechnungen in `scripts/smoke_pair_scale.mjs`,
   `client3d/scripts/smoke_pair_root_sets.mjs` und `scripts/smoke_clip_pair_pivot.py`. Die Spielzustands-Position

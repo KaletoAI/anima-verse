@@ -629,9 +629,6 @@ export interface ApiClip {
   /** Owner decision 2026-11-20 (§ A8a, scene-render `pairScale.ts`): a pair/group clip's contact pivot [side, forward]
    *  cm in the clip frame — real figure heights scale about it; null/absent = the clip frame's origin. */
   pair_pivot_cm?: [number, number] | null;
-  /** Owner decision 2026-11-25 (§ A8a, scene-render `pairHeight.ts`): the contact heights per relation
-   *  (`{"<part>><receiver>:<target>": {height_cm, roles}}`) the vertical size compensation reads; null/absent = none. */
-  pair_contact_heights?: Record<string, unknown> | null;
   /** How the import treated the root's travel (the sidecar's
    *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
    *  carry the figure along `travel_m` (clip frame: +Z forward, +X the

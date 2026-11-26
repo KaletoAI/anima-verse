@@ -257,6 +257,10 @@ export interface SecondaryMotion {
   /** Ruling A126: every chain with an op (no hair) as last rendered, engaged or not — its links as world segments
    *  (joint → tip, the link's capsule radius r_c, 0 without one), root first. What the auto contact samples. */
   opChains(): { op: string; segments: { a: Vec3; b: Vec3; r: number }[]; raised: number }[]
+  /** The same chains (same order) STRAIGHT on the posed body: the root joint where its parent's current world pose
+   *  puts it at bind (none of the motion's own turns), and the chain's rigid shaft tip at bind carried by it — world
+   *  [root, tip]. The axis a pair clip aims at the opening (`pairHeight.ts`). */
+  straightChains(): { op: string; points: [Vec3, Vec3] }[]
   /** Ruling A145 (`chainBend.ts`): bend chain `index` of `opChains()` as rendered — per joint (a link index) its turn
    *  q [x, y, z, w] relative to its parent link in world axes, applied root-most first about the joint's world
    *  position; the links past it ride along (skinning reads the bones' world matrices at render). Acts on this
@@ -640,6 +644,7 @@ export function createSecondaryMotion(
       contactTips() { return delegate?.contactTips() ?? [] },
       channelOccupants() { return delegate?.channelOccupants() ?? [] },
       opChains() { return delegate?.opChains() ?? [] },
+      straightChains() { return delegate?.straightChains() ?? [] },
       bendChain(index, turns) { delegate?.bendChain(index, turns) },
       reach() { return delegate?.reach() ?? 0 },
       reset() { delegate?.reset() },
@@ -1734,6 +1739,21 @@ export function createSecondaryMotion(
           if (segments.length) rows.push({ partner: state.partner, channel: state.ch.id, w: state.w, segments, channelR: state.ch.r,
             k: state.k, approach })
         }
+      }
+      return rows
+    },
+    straightChains() {
+      const rows: ReturnType<SecondaryMotion['straightChains']> = []
+      const world = new three.Matrix4(), head = new three.Vector3(), tip = new three.Vector3()
+      for (const chain of particles) {
+        const op = chain.paramsTo.op
+        if (chain.chainRoot !== chain || !op || chain.paramsTo.hair || !chain.chainLinks.length) continue
+        const bone = chain.bind.bone
+        world.copy(chain.bind.local)
+        if (bone.parent) world.premultiply(bone.parent.matrixWorld)
+        head.setFromMatrixPosition(world)
+        tip.copy(chain.shaftBind ?? chain.tipLocal).applyMatrix4(world)
+        rows.push({ op, points: [[head.x, head.y, head.z], [tip.x, tip.y, tip.z]] })
       }
       return rows
     },

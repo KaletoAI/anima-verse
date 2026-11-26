@@ -32,8 +32,6 @@ public sealed record ClipSource
     public ClipHeightOffsets HeightOffsets { get; init; }
     /// <summary>The listing's contact pivot of this pair/group half (<c>pair_pivot_cm</c>, <see cref="PairScale"/>).</summary>
     public PairXZ PairPivot { get; init; }
-    /// <summary>The listing's contact heights of this pair/group half (<c>pair_contact_heights</c>, <see cref="PairHeight"/>).</summary>
-    public IReadOnlyList<PairContactHeight> ContactHeights { get; init; } = Array.Empty<PairContactHeight>();
     /// <summary>The listing's renderer-only turn of this file's own role (<c>orientation.role_turn_deg</c>, <see cref="RoleTurn"/>).</summary>
     public RoleTurnDeg RoleTurn { get; init; }
     public required Animation Anim { get; init; }
@@ -335,7 +333,7 @@ public sealed class ClipLibrary
         public void SetFlags(ClipSource clip, ClipSourceEntry source) { /* set at import from the same entry */ }
         public bool IsPair(string kind) => ClipLibraryRules.IsPairName(kind);
         /// <summary>figures.ts <c>pairRootOf</c>: the half's root path (<c>extractRootPath</c>, <see cref="PairRootOf"/>) and its contact pivot.</summary>
-        public object? PairRoot(ClipSource clip) => new PairRoot(PairRootOf(clip), clip.PairPivot) { Turn = clip.RoleTurn, Contacts = clip.ContactHeights };
+        public object? PairRoot(ClipSource clip) => new PairRoot(PairRootOf(clip), clip.PairPivot) { Turn = clip.RoleTurn };
     }
 
     /// <summary>
@@ -389,10 +387,6 @@ public sealed class ClipLibrary
     /// </summary>
     public RoleTurnDeg RoleTurnFor(string clipName, IReadOnlyList<string>? sets = null)
         => Index.PairRootFor(clipName, sets) is PairRoot root ? root.Turn : RoleTurnDeg.None;
-
-    /// <summary>figures.ts <c>pairContactsOf</c>: the contact heights of the file this figure plays for its sets; empty = none.</summary>
-    public IReadOnlyList<PairContactHeight> ContactHeightsFor(string clipName, IReadOnlyList<string>? sets = null)
-        => Index.PairRootFor(clipName, sets) is PairRoot root ? root.Contacts : Array.Empty<PairContactHeight>();
 
     /// <summary><c>clipsFor(name)</c>: per kind the first file along <c>[...sets, '']</c>.</summary>
     public List<ClipSource> ClipsFor(IReadOnlyList<string>? sets)
@@ -530,7 +524,7 @@ public sealed class ClipLibrary
             return new ClipSource
             {
                 Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion, KeepFacing = entry.KeepFacing,
-                HeightOffsets = entry.HeightOffsets, PairPivot = entry.PairPivot, RoleTurn = entry.RoleTurn, ContactHeights = entry.ContactHeights,
+                HeightOffsets = entry.HeightOffsets, PairPivot = entry.PairPivot, RoleTurn = entry.RoleTurn,
                 Anim = anim, Bones = bones, RestRotations = rots, RestPositions = poss,
                 RotationTracks = rot, PositionTracks = pos, HipsMedian = median, Length = anim.Length,
                 RotationKeys = rot.ToDictionary(kv => kv.Key, kv => KeysOf(anim, kv.Value, rotation: true)),

@@ -271,6 +271,17 @@ export class FigureRuntime {
     if (got) this.secondary.bendChain(ci, [{ joint: 0, q: got.q }])
   }
 
+  /** The op chains (`inspect().chains` order) STRAIGHT on the current pose (`SecondaryMotion.straightChains`), the
+   *  clip's root angle turned in on the chain it applies to — world [root, tip]; what `pairHeight.ts` aims. */
+  straightChains(): { op: string; points: [[number, number, number], [number, number, number]] }[] {
+    if (this.disposed) return []
+    const rows = this.secondary.straightChains()
+    const ci = rows.findIndex(c => POINT_TARGET_OPS.includes(c.op))
+    const got = ci >= 0 && this.rootAngle ? rootTurnOf(rows[ci].points, this.bodyFrame(), this.rootAngle) : null
+    if (got) rows[ci] = { op: rows[ci].op, points: [got.points[0], got.points[1]] }
+    return rows
+  }
+
   private bodyBoneRefs: { on: Object3D | null; bones: Map<string, Object3D> } = { on: null, bones: new Map() }
   /** Ruling A158: the body's side/up axes now (world) — what the root angle turns about; Auto-align models a root-angle
    *  change on its samples with them (`pairAlign.ts` `moveSample`). */

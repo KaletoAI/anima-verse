@@ -925,33 +925,13 @@ public partial class FigureManager : Node3D
     }
 
     /// <summary>
-    /// npcs.ts <c>pairHeightOf</c>: the hips offset of <paramref name="fig"/> while it plays pair half <paramref name="clip"/> —
-    /// solved over the clip's stored contact heights for the members' real heights (a = h / 1.70); 0 without stored
-    /// heights, with a member whose figure (and so its height) is not here yet, or for equal heights. Cached on the play.
+    /// npcs.ts <c>pairHeightOf</c>: the hips offset of <paramref name="fig"/> while it plays pair half <paramref name="clip"/>.
+    /// The renderers solve it from ONE SAMPLED LOOP of the running interaction (scene-render pairHeight.ts, <see cref="PairHeight"/>):
+    /// each member posed from the clip at <see cref="PairHeight.Samples"/> phases, the part's straight axis against the
+    /// receiving opening. This client has no loop sampler yet (no partner channels; the declared anchors are not read
+    /// here), so it applies nothing — 0, no held legs.
     /// </summary>
-    private (double Offset, bool[] Planted) PairHeightOf(Figure fig, PairPlay it, string clip)
-    {
-        var none = (0.0, Array.Empty<bool>());
-        var m = System.Text.RegularExpressions.Regex.Match(clip, "__([a-e])(?:~|$)");
-        var contacts = m.Success ? Clips.ContactHeightsFor(clip, fig.Sets) : Array.Empty<PairContactHeight>();
-        if (!m.Success || contacts.Count == 0) { it.Height = null; return none; }
-        var heights = new SortedDictionary<string, double>(StringComparer.Ordinal);
-        foreach (var (role, name) in it.Roles)
-        {
-            double h = name == fig.CharacterName ? fig.BodyHeight : _figures.TryGetValue(name, out var other) ? other.BodyHeight : 0;
-            if (!(h > 0 && double.IsFinite(h))) { it.Height = null; return none; }
-            heights[role] = h;
-        }
-        var key = clip + "|" + string.Join(",", heights.Select(kv => $"{kv.Key}:{kv.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
-        if (it.Height is not { } cached || cached.Key != key)
-        {
-            var solve = PairHeight.Offsets(contacts, r => PairScale.FigureScale(heights.TryGetValue(r, out var h) ? h : null));
-            string own = m.Groups[1].Value;
-            it.Height = (key, solve.Offsets.TryGetValue(own, out var o) ? o : 0,
-                         solve.Planted.TryGetValue(own, out var p) ? p : Array.Empty<bool>());
-        }
-        return (it.Height.Value.Offset, it.Height.Value.Planted);
-    }
+    private static (double Offset, bool[] Planted) PairHeightOf(Figure fig, PairPlay it, string clip) => (0.0, Array.Empty<bool>());
 
     /// <summary>
     /// npcs.ts <c>pairFixOf</c> / <c>applyPairFix</c> (owner decision 2026-11-23): the half's stored role turn

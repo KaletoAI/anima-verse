@@ -76,9 +76,10 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 
 @router.get("/contact-anchors")
 def get_contact_anchors(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """The declared contact anchors of the loaded packages (``collision_channels.declared_contact_anchors``): the
-    Pose library computes a clip's contact height from them on the skeleton when no figure of the world has the
-    attached part or the channel built. Admin-only (the Pose library is)."""
+    """The declared contact anchors of the loaded packages (``collision_channels.declared_contact_anchors``): where
+    the attached part and the channels sit on the skeleton alone — the opening a renderer without built channels
+    samples a pair loop against (packages/scene-render/src/pairHeight.ts). No renderer reads it yet (the native
+    client's loop sampler is not built); admin-only until one does."""
     from app.core.collision_channels import declared_contact_anchors
     return declared_contact_anchors()
 
@@ -211,7 +212,7 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
 
     Body ``{kind?, set?, library?, loop?, loop_count?, role_gender?,
     height_offsets_cm?, contact_target?, bend_limits?, root_angle?, align_range_cm?, align_turn_deg?, align_applied?,
-    align_status?, pair_pivot_cm?, pair_contact_heights?, channel_profile?, overwrite?}``, at least one edit field.
+    align_status?, pair_pivot_cm?, channel_profile?, overwrite?}``, at least one edit field.
     ``align_turn_deg`` (owner decision 2026-11-23) is how far Auto-align may turn the moved role (tilt, roll and yaw,
     each 0..180 degrees from the base arrangement), ``null`` = the default. ``align_status`` is the clip's alignment
     status ``{relations?: {key: {state, reason?, depth_mm?, axis_mm?, root_mm?, support_mm?, mover?, turn_deg?} |
@@ -231,10 +232,6 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     ``null`` = none.
     ``pair_pivot_cm`` (owner decision 2026-11-20, § A8a) is the clip's contact pivot ``[side, forward]`` cm of the clip
     frame (each within ±300) that real figure heights are scaled about, ``null`` = the clip frame's origin.
-    ``pair_contact_heights`` (owner decision 2026-11-25, § A8a) is the clip's contact heights per relation
-    ``{"<part>><receiver>:<target>": {height_cm, roles: {role: {support_cm, hips_cm, legs}}} | null}`` (the named relations
-    are replaced, a ``null`` one removed; ``null`` for the whole field clears them all), the input of the vertical
-    compensation of real figure heights.
     ``contact_target`` (Ruling A139) is the clip's contact relations
     ``[{part, at, target}]`` (target ``channel`` / ``mouth`` / ``hand_left`` /
     ``hand_right`` / ``none``; a bare word = B → A), ``null`` = inherit the package
@@ -275,12 +272,12 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
     if not any(k in body for k in
                ("kind", "set", "library", "loop", "loop_count", "role_gender",
                 "height_offsets_cm", "contact_target", "bend_limits", "root_angle", "align_range_cm", "align_turn_deg",
-                "align_applied", "align_status", "pair_pivot_cm", "pair_contact_heights", "channel_profile")):
+                "align_applied", "align_status", "pair_pivot_cm", "channel_profile")):
         raise HTTPException(
             status_code=400,
             detail="one of kind, set, library, loop, loop_count, role_gender, "
                    "height_offsets_cm, contact_target, bend_limits, root_angle, align_range_cm, align_turn_deg, "
-                   "align_applied, align_status, pair_pivot_cm, pair_contact_heights, channel_profile is required")
+                   "align_applied, align_status, pair_pivot_cm, channel_profile is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -354,9 +351,6 @@ def _patch_animation_clip_sync(library: str, rel: str, body: Any) -> Dict[str, A
         if "pair_pivot_cm" in body:
             from app.core.animation_clips import set_clip_pair_pivot
             clips = set_clip_pair_pivot(library, rel, body["pair_pivot_cm"])
-        if "pair_contact_heights" in body:
-            from app.core.animation_clips import set_clip_pair_contact_heights
-            clips = set_clip_pair_contact_heights(library, rel, body["pair_contact_heights"])
         if "channel_profile" in body:
             clips = set_clip_channel_profile(library, rel, body["channel_profile"])
     except ClipLibraryError as e:

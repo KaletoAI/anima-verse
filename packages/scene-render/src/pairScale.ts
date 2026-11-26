@@ -34,7 +34,7 @@
  * HORIZONTAL components scale about C. The vertical mismatch of two bodies of different size cannot be removed by
  * placement: a contact at height d above the floor in the 1.70 m clip sits at a_A·d on A and a_B·d on B, a gap of
  * (a_B − a_A)·d (1.60 m and 1.85 m at hip height d ≈ 0.90 m: 13.2 cm). `pairHeight.ts` closes it with a constant hips
- * offset per figure and clip (knees bent, a kneeling figure raised) from the clip's stored contact heights.
+ * offset per figure and clip (knees bent, a kneeling figure raised), measured on one sampled loop of the clip.
  *
  * THE OTHER STORED VALUES. Partner B's tilt/roll/yaw are angles and stay as stored; their pivot (`pairFit.fixPivot`)
  * is B's scaled root plus its own bind hips, a length of B's real body — so the turn follows the rule by itself. The

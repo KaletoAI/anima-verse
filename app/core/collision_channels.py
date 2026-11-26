@@ -502,8 +502,9 @@ def _blender_to_frame(offset: List[float]) -> List[float]:
 
 def declared_contact_anchors() -> Dict[str, List[Dict[str, Any]]]:
     """The DECLARED contact anchors of every loaded package, independent of any character or model (owner decision
-    2026-11-25, "Store contact heights" in one click): what a contact height is computed from when no figure of the
-    world has the attached part or the channel BUILT - the skeleton alone carries these points.
+    2026-11-25; 2026-11-26: the opening a renderer without built channels samples a pair loop against, see
+    packages/scene-render/src/pairHeight.ts): where the attached part and the channels sit when no figure has them
+    BUILT - the skeleton alone carries these points.
 
     - ``channels``: every ``kind: channel`` region - ``{id, bone, offset, accepts, genders}``, ``offset`` in the body
       frame [side, up, front] from the joint ``bone`` (the ``declared`` placement of ``resolve_channels``: joint +

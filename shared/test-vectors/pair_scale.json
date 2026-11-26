@@ -11,7 +11,7 @@
       "z": 0.3
     },
     "H_CROUCH": {
-      "supportM": 0,
+      "groundM": 0,
       "hipsM": 0.95,
       "legs": [
         {
@@ -50,8 +50,48 @@
         }
       ]
     },
+    "H_CROUCH_HI": {
+      "groundM": 0,
+      "hipsM": 1,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.93,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.505,
+            0.1479019945774904
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            0.93,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.505,
+            0.1479019945774904
+          ],
+          "ankle": [
+            -0.1,
+            0.08,
+            0
+          ]
+        }
+      ]
+    },
     "H_STAND": {
-      "supportM": 0,
+      "groundM": 0,
       "hipsM": 1.03,
       "legs": [
         {
@@ -91,7 +131,7 @@
       ]
     },
     "H_LYING": {
-      "supportM": 0,
+      "groundM": 0,
       "hipsM": 0.15,
       "legs": [
         {
@@ -131,7 +171,7 @@
       ]
     },
     "H_CARRIED": {
-      "supportM": 0,
+      "groundM": 0,
       "hipsM": 1.2,
       "legs": [
         {
@@ -165,6 +205,86 @@
           "ankle": [
             -0.1,
             0.5,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CROUCH_LIFT24": {
+      "groundM": 0,
+      "hipsM": 0.95,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            1.12,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.72,
+            0.20615528128088303
+          ],
+          "ankle": [
+            -0.1,
+            0.32,
+            0
+          ]
+        }
+      ]
+    },
+    "H_CROUCH_LIFT15": {
+      "groundM": 0,
+      "hipsM": 0.95,
+      "legs": [
+        {
+          "hip": [
+            0.1,
+            0.88,
+            0
+          ],
+          "knee": [
+            0.1,
+            0.48,
+            0.20615528128088303
+          ],
+          "ankle": [
+            0.1,
+            0.08,
+            0
+          ]
+        },
+        {
+          "hip": [
+            -0.1,
+            1.03,
+            0
+          ],
+          "knee": [
+            -0.1,
+            0.63,
+            0.20615528128088303
+          ],
+          "ankle": [
+            -0.1,
+            0.22999999999999998,
             0
           ]
         }
@@ -865,65 +985,367 @@
       "eps": 1e-8
     },
     {
-      "label": "H[1] gap 1.86 on 1.70 at h_c 0.852 = 80.2 mm",
-      "fn": "pairHeightGap",
+      "label": "H[1] gap: level axis 8 cm above the opening",
+      "fn": "pairAxisGap",
       "args": [
-        0.852,
-        0,
-        1.0941176470588236,
-        0,
-        1
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.92,
+            0.15
+          ]
+        }
       ],
-      "expect": 0.08018823529411764,
+      "expect": 0.08,
       "eps": 1e-12
     },
     {
-      "label": "H[1] gap 1.86 on 1.65 at h_c 0.875",
-      "fn": "pairHeightGap",
+      "label": "H[1] gap: tilted axis (0, −0.6, 0.8)",
+      "fn": "pairAxisGap",
       "args": [
-        0.875,
-        0,
-        1.0941176470588236,
-        0,
-        0.9705882352941176
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            -0.6,
+            0.8
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.8,
+            0.2
+          ]
+        }
       ],
-      "expect": 0.10808823529411765,
+      "expect": 0.05,
       "eps": 1e-12
     },
     {
-      "label": "H[1] gap on a bed (supports 0.5) = 0.04",
-      "fn": "pairHeightGap",
+      "label": "H[1] gap: vertical axis",
+      "fn": "pairAxisGap",
       "args": [
-        0.9,
-        0.5,
-        1.1,
-        0.5,
-        1
-      ],
-      "expect": 0.04,
-      "eps": 1e-12
-    },
-    {
-      "label": "H[1] equal scales: gap exactly 0",
-      "fn": "pairHeightGap",
-      "args": [
-        0.852,
-        0,
-        1,
-        0,
-        1
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            -1,
+            0
+          ],
+          "lengthM": 0.4,
+          "opening": [
+            0.01,
+            0.7,
+            0
+          ]
+        }
       ],
       "expect": 0,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[1] gap: opening behind the root (λ = 0)",
+      "fn": "pairAxisGap",
+      "args": [
+        {
+          "root": [
+            0,
+            1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "lengthM": 0.2,
+          "opening": [
+            0,
+            0.9,
+            -0.1
+          ]
+        }
+      ],
+      "expect": 0.1,
+      "eps": 1e-12
+    },
+    {
+      "label": "H[2] contact phase: the frame nearest the segment",
+      "fn": "pairContactFrame",
+      "args": [
+        [
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              0,
+              1
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.6,
+              0.15
+            ]
+          },
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              0,
+              1
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.92,
+              0.15
+            ]
+          },
+          null,
+          {
+            "root": [
+              0,
+              1,
+              0
+            ],
+            "axis": [
+              0,
+              -0.6,
+              0.8
+            ],
+            "lengthM": 0.2,
+            "opening": [
+              0,
+              0.8,
+              0.2
+            ]
+          }
+        ]
+      ],
+      "expect": 1,
       "eps": 0
     },
     {
-      "label": "H[2] crouch range: up = 2l·cos 6° − d, down −MAX",
+      "label": "H[2] contact phase: none resolved",
+      "fn": "pairContactFrame",
+      "args": [
+        [
+          null,
+          null
+        ]
+      ],
+      "expect": -1,
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: crouch over the loop",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "bent",
+        "planted": [
+          true,
+          true
+        ],
+        "kneeHeld": [
+          false,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: standing",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_STAND"
+            },
+            {
+              "$fixture": "H_STAND"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "standing",
+        "planted": [
+          true,
+          true
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: lying rests",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_LYING"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "resting"
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: carried is free",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CARRIED"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "free"
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: furniture is fixed",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ],
+          "fixed": true
+        }
+      ],
+      "expect": {
+        "stance": "fixed",
+        "planted": [
+          false,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: a leg up in 3 of 4 frames is not planted",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT24"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "stance": "bent",
+        "planted": [
+          true,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[3] class: a leg inside the band counts neither way",
+      "fn": "pairRoleClass",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH_LIFT15"
+            },
+            {
+              "$fixture": "H_CROUCH_LIFT15"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "planted": [
+          true,
+          false
+        ]
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[4] range: crouch up = 2l·cos 6° − d, down −MAX",
       "fn": "pairRoleRange",
       "args": [
         {
-          "$fixture": "H_CROUCH"
-        },
-        1
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH"
+            }
+          ]
+        }
       ],
       "expect": {
         "down": -0.15,
@@ -937,7 +1359,65 @@
       "eps": 1e-9
     },
     {
-      "label": "H[2] ikKnee at +0.05",
+      "label": "H[4] range: the smaller up of two frames",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_CROUCH"
+            },
+            {
+              "$fixture": "H_CROUCH_HI"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": -0.15,
+        "up": 0.045069705831445914
+      },
+      "eps": 1e-9
+    },
+    {
+      "label": "H[4] range: standing lowers only",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_STAND"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": -0.15,
+        "up": 0,
+        "stance": "standing"
+      },
+      "eps": 1e-12
+    },
+    {
+      "label": "H[4] range: lying takes nothing",
+      "fn": "pairRoleRange",
+      "args": [
+        {
+          "frames": [
+            {
+              "$fixture": "H_LYING"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "down": 0,
+        "up": 0
+      },
+      "eps": 0
+    },
+    {
+      "label": "H[4] ikKnee at +0.05",
       "fn": "ikKnee",
       "args": [
         [
@@ -969,206 +1449,53 @@
       "eps": 1e-12
     },
     {
-      "label": "H[3] standing range: lowering only",
-      "fn": "pairRoleRange",
-      "args": [
-        {
-          "$fixture": "H_STAND"
-        },
-        1
-      ],
-      "expect": {
-        "down": -0.15,
-        "up": 0,
-        "stance": "standing",
-        "planted": [
-          true,
-          true
-        ]
-      },
-      "eps": 1e-12
-    },
-    {
-      "label": "H[3] standing knee lowered by 80.2 mm",
-      "fn": "ikKnee",
-      "args": [
-        [
-          0.1,
-          0.8798117647058823,
-          0
-        ],
-        [
-          0.1,
-          0.43981176470588235,
-          0.09433981132056604
-        ],
-        [
-          0.1,
-          -0.00018823529411764184,
-          0
-        ],
-        [
-          0.1,
-          0.08,
-          0
-        ]
-      ],
-      "expect": [
-        0.1,
-        0.4799058823529412,
-        0.20633779406477037
-      ],
-      "eps": 1e-12
-    },
-    {
-      "label": "H[4] lying takes nothing",
-      "fn": "pairRoleRange",
-      "args": [
-        {
-          "$fixture": "H_LYING"
-        },
-        1.1
-      ],
-      "expect": {
-        "down": 0,
-        "up": 0,
-        "stance": "resting"
-      },
-      "eps": 0
-    },
-    {
-      "label": "H[4] on a bed takes nothing",
-      "fn": "pairRoleRange",
-      "args": [
-        {
-          "$fixture": "H_CROUCH",
-          "$with": {
-            "supportM": 0.45
-          }
-        },
-        1.1
-      ],
-      "expect": {
-        "down": 0,
-        "up": 0,
-        "stance": "fixed"
-      },
-      "eps": 0
-    },
-    {
-      "label": "H[4] carried takes nothing",
-      "fn": "pairRoleRange",
-      "args": [
-        {
-          "$fixture": "H_CARRIED"
-        },
-        1.1
-      ],
-      "expect": {
-        "down": 0,
-        "up": 0,
-        "stance": "free",
-        "planted": [
-          false,
-          false
-        ]
-      },
-      "eps": 0
-    },
-    {
       "label": "H[5] pair Δ 0.08: b takes it all",
       "fn": "pairHeightOffsets",
       "args": [
         {
-          "b>a:mouth": {
-            "height_cm": 40,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
             }
-          }
-        },
-        {
-          "a": 1,
-          "b": 1.2
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.92,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ],
       "expect": {
@@ -1177,7 +1504,10 @@
           "b": -0.08
         },
         "residuals": {
-          "b>a:mouth": 0
+          "b>a:channel": 0
+        },
+        "contactFrames": {
+          "b>a:channel": 0
         }
       },
       "eps": 1e-12
@@ -1187,95 +1517,49 @@
       "fn": "pairHeightOffsets",
       "args": [
         {
-          "b>a:mouth": {
-            "height_cm": 100,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
             }
-          }
-        },
-        {
-          "a": 1,
-          "b": 1.2
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.8,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ],
       "expect": {
@@ -1284,7 +1568,7 @@
           "b": -0.15
         },
         "residuals": {
-          "b>a:mouth": 0
+          "b>a:channel": 0
         }
       },
       "eps": 1e-12
@@ -1294,95 +1578,49 @@
       "fn": "pairHeightOffsets",
       "args": [
         {
-          "b>a:mouth": {
-            "height_cm": 150,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
             }
-          }
-        },
-        {
-          "a": 1,
-          "b": 1.2
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.7,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ],
       "expect": {
@@ -1391,7 +1629,7 @@
           "b": -0.15
         },
         "residuals": {
-          "b>a:mouth": 0.05493029416855408
+          "b>a:channel": 0.05493029416855408
         }
       },
       "eps": 1e-9
@@ -1401,181 +1639,81 @@
       "fn": "pairHeightOffsets",
       "args": [
         {
-          "b>a:mouth": {
-            "height_cm": 60,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 15,
-                "legs": [
-                  [
-                    [
-                      10,
-                      12,
-                      0
-                    ],
-                    [
-                      10,
-                      12,
-                      45
-                    ],
-                    [
-                      10,
-                      10,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      12,
-                      0
-                    ],
-                    [
-                      -10,
-                      12,
-                      45
-                    ],
-                    [
-                      -10,
-                      10,
-                      0
-                    ]
-                  ]
-                ]
-              }
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_LYING"
+                }
+              ]
+            },
+            "c": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
             }
           },
-          "c>a:channel": {
-            "height_cm": 20,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
+          "relations": [
+            {
+              "key": "b>a:mouth",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
                   ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "c": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
+                  "axis": [
+                    0,
+                    0,
+                    1
                   ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.88,
+                    0.15
                   ]
-                ]
-              }
+                }
+              ]
+            },
+            {
+              "key": "c>a:channel",
+              "part": "c",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.98,
+                    0.15
+                  ]
+                }
+              ]
             }
-          }
-        },
-        {
-          "a": 1,
-          "b": 1.2,
-          "c": 1.1
+          ]
         }
       ],
       "expect": {
@@ -1592,99 +1730,53 @@
       "eps": 1e-12
     },
     {
-      "label": "H[7] equal heights: offsets exactly 0",
+      "label": "H[7] deadband: a 4 mm gap is none",
       "fn": "pairHeightOffsets",
       "args": [
         {
-          "b>a:mouth": {
-            "height_cm": 85.2,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
+          "roles": {
+            "a": {
+              "frames": [
+                {
+                  "$fixture": "H_CROUCH"
+                }
+              ]
+            },
+            "b": {
+              "frames": [
+                {
+                  "$fixture": "H_STAND"
+                }
+              ]
             }
-          }
-        },
-        {
-          "a": 1,
-          "b": 1
+          },
+          "relations": [
+            {
+              "key": "b>a:channel",
+              "part": "b",
+              "receiver": "a",
+              "frames": [
+                {
+                  "root": [
+                    0,
+                    1,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ],
+                  "lengthM": 0.2,
+                  "opening": [
+                    0,
+                    0.996,
+                    0.15
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ],
       "expect": {
@@ -1692,379 +1784,11 @@
           "a": 0,
           "b": 0
         },
-        "residuals": {
-          "b>a:mouth": 0
-        },
         "gaps": {
-          "b>a:mouth": 0
-        }
+          "b>a:channel": 0
+        },
+        "ranges": {}
       },
-      "eps": 0
-    },
-    {
-      "label": "H[8] wire: malformed relations skipped",
-      "fn": "pairContactHeightsOf",
-      "args": [
-        {
-          "b>a:mouth": {
-            "height_cm": 85.2,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
-            }
-          },
-          "c>a:mouth": {
-            "height_cm": 50,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
-            }
-          },
-          "b>a:hand_left": {
-            "height_cm": 400,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
-            }
-          },
-          "b>a:hand_right": {
-            "height_cm": 50,
-            "roles": {
-              "a": {
-                "support_cm": 0,
-                "hips_cm": 95,
-                "legs": [
-                  [
-                    [
-                      10,
-                      88,
-                      0
-                    ],
-                    [
-                      10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      88,
-                      0
-                    ],
-                    [
-                      -10,
-                      48,
-                      20.615528128088304
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "b": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              },
-              "f": {
-                "support_cm": 0,
-                "hips_cm": 103,
-                "legs": [
-                  [
-                    [
-                      10,
-                      96,
-                      0
-                    ],
-                    [
-                      10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      10,
-                      8,
-                      0
-                    ]
-                  ],
-                  [
-                    [
-                      -10,
-                      96,
-                      0
-                    ],
-                    [
-                      -10,
-                      52,
-                      9.433981132056605
-                    ],
-                    [
-                      -10,
-                      8,
-                      0
-                    ]
-                  ]
-                ]
-              }
-            }
-          }
-        }
-      ],
-      "expect": [
-        {
-          "key": "b>a:mouth",
-          "part": "b",
-          "receiver": "a",
-          "heightM": 0.852
-        }
-      ],
-      "eps": 1e-12
-    },
-    {
-      "label": "H[8] wire: none",
-      "fn": "pairContactHeightsOf",
-      "args": [
-        null
-      ],
-      "expect": [],
       "eps": 0
     }
   ]
