@@ -308,7 +308,9 @@ def scope_at(template: dict, where: str) -> quest_catalog.Scope:
             key = entry.get("key")
             if isinstance(key, str) and key and key not in objects:
                 t = known.get(entry.get("type")) if isinstance(entry.get("type"), str) else None
-                objects[key] = t.object_kind if t is not None else ""
+                objects[key] = quest_catalog.entry_object_kind(
+                    t, entry.get("params") if isinstance(entry.get("params"), dict) else {}
+                ) if t is not None else ""
 
     later: set = set()
     for entries in [setup, *step_effects, rewards]:

@@ -735,8 +735,6 @@ async def lifespan(app: FastAPI):
     from app.core import quest_engine, quest_types
     quest_types.register()
     quest_engine.register()
-    from app.core import quest_effects
-    quest_effects.start()
     from app.core.relationship_decay import register_relationship_decay_handler
     register_relationship_decay_handler()
     from app.core.intent_engine import register_intent_handlers
@@ -1044,6 +1042,15 @@ async def lifespan(app: FastAPI):
         start_resumer()
     except Exception as _hr:
         logger.error("Hub-job resumer failed: %s", _hr, exc_info=True)
+
+    # Start the quest effects worker AFTER the hub resumer so a quest prop whose
+    # mesh op outlived the restart already reads as pending (never as failed and
+    # never deleted under a resuming generation).
+    try:
+        from app.core import quest_effects
+        quest_effects.start()
+    except Exception as _qe:
+        logger.error("Quest effects worker not started: %s", _qe, exc_info=True)
 
     # Motion orders BEFORE the AgentLoop, periodic_jobs and the TravelTicker
     # start (plan E3 decision 7c): pre-order approaches cancelled, old approach

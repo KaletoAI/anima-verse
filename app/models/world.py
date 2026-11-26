@@ -1115,6 +1115,57 @@ def append_room_props(location_id: str, room_id: str,
         return False
 
 
+def remove_room_props(location_id: str, room_id: str, place_ids) -> int:
+    """Remove prop placements with matching ``id`` from a room's ``layout.props``.
+
+    Runs under :data:`world_write_lock` and mirrors :func:`append_room_props`:
+    re-sanitizes the layout through its carrier sanitizer (``sanitize_ground_layout``
+    for ``__ground__``, ``_sanitize_room_layout`` otherwise), saves with
+    ``sync_world=True`` and invalidates :mod:`app.core.places`. Returns the
+    number of entries removed; returns 0 without writing when the location,
+    room or layout does not exist or no id matched.
+    """
+    drop = {str(pid) for pid in (place_ids or ()) if isinstance(pid, str) and pid}
+    if not drop:
+        return 0
+    from app.core.world_ops import _sanitize_room_layout, sanitize_ground_layout
+    is_ground = room_id == GROUND_ROOM_ID
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") != location_id:
+                continue
+            for room in loc.get("rooms", []):
+                if room.get("id") != room_id:
+                    continue
+                layout = room.get("layout")
+                if not isinstance(layout, dict):
+                    return 0
+                existing = list(layout.get("props") or [])
+                kept = [p for p in existing if not (isinstance(p, dict) and p.get("id") in drop)]
+                removed = len(existing) - len(kept)
+                if removed == 0:
+                    return 0
+                merged = dict(layout)
+                merged["props"] = kept
+                clean = (sanitize_ground_layout(merged) if is_ground
+                         else _sanitize_room_layout(merged))
+                if is_ground:
+                    if clean:
+                        room["layout"] = clean
+                    else:
+                        room.pop("layout", None)
+                else:
+                    if not clean:
+                        return 0
+                    room["layout"] = clean
+                upsert_location(loc, sync_world=True)
+                from app.core import places; places.invalidate()
+                logger.info("Room %s: %d prop placements removed", room_id, removed)
+                return removed
+        return 0
+
+
 def append_rooms_props(location_id: str,
                        placements_by_room: Dict[str, List[Dict]]) -> Dict[str, bool]:
     """Append a building's kit placements with one save and cache invalidation.

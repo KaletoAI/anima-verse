@@ -87,6 +87,20 @@ class QuestType:
     apply: Callable[[dict, "EffectContext"], list["CreatedObject"]] | None = None
     #: The kind of the first object the effect records, the one a target param resolves to ("" = it records no object).
     object_kind: str = ""
+    #: Optional params -> object kind resolver when the first object's kind depends on the entry's params.
+    object_kind_for: Callable[[dict], str] | None = None
+
+
+def entry_object_kind(t: QuestType, params: dict) -> str:
+    """Resolve the object kind of one effect entry, using ``t.object_kind_for(params)`` when set."""
+    if t.object_kind_for is not None:
+        try:
+            resolved = t.object_kind_for(params)
+            if isinstance(resolved, str):
+                return resolved
+        except Exception:  # noqa: BLE001 - fall back to the static object_kind
+            logger.exception("object_kind_for of quest type %r failed", t.id)
+    return t.object_kind
 
 
 @dataclass(frozen=True)

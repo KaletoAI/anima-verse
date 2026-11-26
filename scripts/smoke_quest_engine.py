@@ -165,10 +165,9 @@ WHAT FOLLOWS BY HAND
     - j. check_bindings with 5th setup entry eff_v -> validate_template == [], check_bindings ==
       [("setup_effects.4.type", "eff_bound")].
     - k. _unregistered: with stubs registered, owed=("setup","step:1","reward") -> []; after unregistering "test"
-      (core stays, so holds_item, near_object, knows_secret, give_hint, narrate, give_item, create_item and
-      place_item remain registered while create_prop is still stub-only), owed=() -> []; owed=("setup",) ->
-      ["setup_effects.0.type"]; owed=("step:1",) -> []; qc.types() still has give_hint, narrate, create_item and
-      place_item with kind "effect".
+      (core stays, so every ROCK type including create_prop and place_prop remains registered while eff_v is
+      stub-only), rock_j with owed=() -> [], owed=("setup",) -> ["setup_effects.4.type"], owed=("step:1",) -> [];
+      qc.types() still has give_hint, narrate, create_item, place_item, create_prop and place_prop with kind "effect".
     - l. After restoring core: validate_template(ERRAND) == [].
  25. Preparing runs in start_run and tick (stage 2, Task 4):
     Stub effect "p_hold" (owner "smoke_p", kind "effect", object_kind "", apply returning []). This smoke never calls
@@ -979,17 +978,17 @@ def main() -> int:
               [("setup_effects.4.type", "eff_bound")])
 
         check("k. _unregistered with stubs",
-              qe._unregistered(ROCK, owed=("setup", "step:1", "reward")), [])
+              qe._unregistered(rock_j, owed=("setup", "step:1", "reward")), [])
         hooks.unregister_owned_providers("test")
-        check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(ROCK)), [])
-        check("k. _unregistered owed=(setup,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("setup",))),
-              ["setup_effects.0.type"])
-        check("k. _unregistered owed=(step:1,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("step:1",))),
+        check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(rock_j)), [])
+        check("k. _unregistered owed=(setup,)", sorted(i["path"] for i in qe._unregistered(rock_j, owed=("setup",))),
+              ["setup_effects.4.type"])
+        check("k. _unregistered owed=(step:1,)", sorted(i["path"] for i in qe._unregistered(rock_j, owed=("step:1",))),
               [])
         core_now = qc.types()
-        check("k. core built-ins give_hint, narrate, create_item and place_item stay registered",
-              {k: core_now[k].kind for k in ("give_hint", "narrate", "create_item", "place_item") if k in core_now},
-              {"give_hint": "effect", "narrate": "effect", "create_item": "effect", "place_item": "effect"})
+        check("k. core built-ins stay registered",
+              {k: core_now[k].kind for k in ("give_hint", "narrate", "create_item", "place_item", "create_prop", "place_prop") if k in core_now},
+              {"give_hint": "effect", "narrate": "effect", "create_item": "effect", "place_item": "effect", "create_prop": "effect", "place_prop": "effect"})
     finally:
         hooks.unregister_owned_providers("test")
         hooks.unregister_owned_providers(qt.OWNER)

@@ -843,11 +843,13 @@ def export_location_to_zip(location_id: str) -> bytes:
         # Referenced props travel as a dependency — a placement without its prop
         # renders as "missing" forever (room_recipe.py:395).
         # Same file set as a single prop export (props.export_files).
-        from app.core.props import _prop_dir
+        from app.core.props import _prop_dir, read_sidecar
         from app.core.props import export_files as prop_export_files
         prop_ids = _referenced_prop_ids(loc)
         bundled_props: List[str] = []
         for pid in prop_ids:
+            if read_sidecar(pid, read_only=True).get("quest_run"):
+                continue
             d = _prop_dir(pid)
             files = prop_export_files(pid) if d else []
             if not files:
@@ -1522,6 +1524,8 @@ def export_prop_to_zip(prop_id: str) -> bytes:
     prop = get_prop(pid)
     if not prop:
         raise ValueError(f"prop not found: {prop_id!r}")
+    if prop.get("quest_run"):
+        raise ValueError(f"prop {pid!r} belongs to a running quest and is not exported")
     src = _prop_dir(pid)
     if src is None or not src.is_dir():
         raise ValueError(f"prop directory missing: {pid!r}")

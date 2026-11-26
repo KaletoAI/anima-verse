@@ -450,7 +450,8 @@ def _geometry(loc: Dict[str, Any], room: Dict[str, Any]) -> Dict[str, Any]:
 def _library() -> Dict[str, Dict[str, Any]]:
     """The prop library keyed by id."""
     from app.core.props import list_props
-    return {p["id"]: p for p in list_props()}
+    # Skip props tagged for a running quest (D17).
+    return {p["id"]: p for p in list_props() if not p.get("quest_run")}
 
 
 def _placements(lay: Dict[str, Any]) -> List[Dict[str, Any]]:

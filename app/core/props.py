@@ -758,7 +758,7 @@ def _slugify(name: str) -> str:
     return slug[:40] or "prop"
 
 
-def _new_prop_id(name: str) -> str:
+def new_prop_id(name: str) -> str:
     """slug(name) + short hash; bumps the hash on the (very unlikely) collision."""
     slug = _slugify(name)
     n = 0
@@ -3077,7 +3077,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
                 depth_m: Any = None, height_m: Any = None,
                 tags: Any = None, description: str = "", prompt: str = "",
                 source: str = "manual", key_areas: Any = None,
-                mount: str = "") -> Dict[str, Any]:
+                mount: str = "", prop_id: str = "",
+                quest_run: str = "") -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
 
@@ -3092,6 +3093,16 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     "unclassified" state the classifier later fills in; an unknown kind is
     ``ValueError``.
 
+    ``prop_id`` lets an idempotent caller (such as a quest setup effect) pass
+    a pre-minted id; it must satisfy ``safe_prop_id(prop_id) == prop_id`` and
+    no sidecar may exist for it yet, else ``ValueError``. When empty, a fresh
+    id is minted with :func:`new_prop_id`.
+
+    ``quest_run`` tags a prop created by a running quest (quest stage 2, D17)
+    so room furnishing and export skip it while non-permanent; stored only
+    when non-empty and cleared via :func:`set_quest_run` when a permanent
+    quest prop joins the library.
+
     Dims: whatever is given is taken, every missing one becomes the LARGEST
     given value (a rough cube); nothing given = 1 m per dim. They land on the
     prop's FIRST VARIANT together with the generation subject, because that is
@@ -3100,7 +3111,13 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     ``dims_estimated``: the mesh's proportions refine it when the model
     arrives."""
     name = (name or "").strip() or "Prop"
-    prop_id = _new_prop_id(name)
+    if prop_id:
+        if safe_prop_id(prop_id) != prop_id:
+            raise ValueError(f"invalid prop id: {prop_id!r}")
+        if read_sidecar(prop_id, read_only=True):
+            raise ValueError(f"prop already exists: {prop_id!r}")
+    else:
+        prop_id = new_prop_id(name)
     dims: Dict[str, float] = {}
     for key, raw in (("width_m", width_m), ("depth_m", depth_m),
                      ("height_m", height_m)):
@@ -3119,6 +3136,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         variant[DESCRIPTION_KEY] = subject
     keys = sanitize_key_areas(key_areas)
     mount_kind = sanitize_mount(mount)
+    quest_run_id = (quest_run or "").strip()
     meta = {
         "name": name,
         "category": (category or "").strip(),
@@ -3140,9 +3158,34 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         meta[KEY_AREAS_KEY] = keys
     if mount_kind:
         meta[MOUNT_KEY] = mount_kind
+    if quest_run_id:
+        meta["quest_run"] = quest_run_id
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s created (%s)", prop_id, name)
     return {"id": prop_id, **meta, "revision": _document_revision(meta), "actions": []}
+
+
+@_author_transaction
+def set_quest_run(prop_id: str, run_id: str) -> bool:
+    """Set or clear a prop's ``quest_run`` sidecar tag (quest stage 2, D17).
+
+    Returns ``False`` when the prop does not exist. When the stored tag already
+    matches ``run_id`` (absent counts as ``""``) returns ``True`` without
+    writing the sidecar; otherwise updates or removes the key and saves.
+    """
+    meta = read_sidecar(prop_id, read_only=True)
+    if not meta:
+        return False
+    want = (run_id or "").strip()
+    current = str(meta.get("quest_run") or "")
+    if current == want:
+        return True
+    if want:
+        meta["quest_run"] = want
+    else:
+        meta.pop("quest_run", None)
+    _write_sidecar(prop_id, meta)
+    return True
 
 
 #: What the PROP record itself still carries — the fields the general section
@@ -6215,6 +6258,7 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
         "marker_capacities": _marker_capacities(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
+        "quest_run": str(meta.get("quest_run") or ""),
         # Every active variant that has a mesh, in payload order:
         # `[{variant: <store index>, tiers: [...], dims: {…},
         # ground_offset_m?, markers?}, …]`, element 0 being the primary one

@@ -6,7 +6,7 @@ world object that a quest run created.
 
 This registry is core-only in stage 2 (not package-extensible); built-in kinds
 registered here: ``event``, ``secret``, ``grant``, ``stat``, ``marker``,
-``item``, ``room_item``.
+``item``, ``room_item``, ``world_prop``, ``room_prop``, ``prop``.
 For ``event``, an absent row whose ``ref["expires_at"]`` has already passed in
 game time still counts as existing (it ran out on schedule rather than breaking).
 
@@ -363,3 +363,180 @@ def _room_item_label(ref: dict) -> str:
 
 
 register_kind("room_item", exists=_room_item_exists, remove=_room_item_remove, label=_room_item_label)
+
+
+# --- Built-in kind: world_prop ----------------------------------------------------------------
+
+def _world_prop_exists(ref: dict) -> Optional[bool]:
+    from app.models import world_props
+    placement_id = str((ref or {}).get("placement_id") or "")
+    if not placement_id:
+        return False
+    try:
+        return any(r.get("id") == placement_id for r in world_props.list_world_props())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _world_prop_remove(ref: dict) -> str:
+    import json
+    from app.models import world_props
+    ref = ref or {}
+    placement_id = str(ref.get("placement_id") or "")
+    if not placement_id:
+        return REMOVE_GONE
+    try:
+        rows = world_props.list_world_props()
+        cur = next((r for r in rows if r.get("id") == placement_id), None)
+        if cur is None:
+            return REMOVE_GONE
+        written = ref.get("written")
+        if isinstance(written, dict) and written:
+            if json.loads(json.dumps(cur)) != json.loads(json.dumps(written)):
+                return REMOVE_GONE
+        if world_props.delete_world_prop(placement_id):
+            return REMOVE_DONE
+        still_there = any(r.get("id") == placement_id for r in world_props.list_world_props())
+        return REMOVE_LATER if still_there else REMOVE_GONE
+    except Exception:  # noqa: BLE001
+        return REMOVE_LATER
+
+
+def _world_prop_label(ref: dict) -> str:
+    from app.core import props
+    ref = ref or {}
+    placement_id = str(ref.get("placement_id") or "")
+    written = ref.get("written") if isinstance(ref.get("written"), dict) else {}
+    prop_id = str(written.get("prop_id") or "")
+    if not prop_id and placement_id:
+        try:
+            from app.models import world_props
+            cur = next((r for r in world_props.list_world_props() if r.get("id") == placement_id), None)
+            prop_id = str((cur or {}).get("prop_id") or "")
+        except Exception:  # noqa: BLE001
+            prop_id = ""
+    meta = props.read_sidecar(prop_id, read_only=True) if prop_id else {}
+    name = str(meta.get("name") or "").strip() or prop_id
+    if name and placement_id:
+        return f"{name} ({placement_id})"
+    return name or placement_id
+
+
+register_kind("world_prop", exists=_world_prop_exists, remove=_world_prop_remove, label=_world_prop_label)
+
+
+# --- Built-in kind: room_prop -----------------------------------------------------------------
+
+def _room_prop_exists(ref: dict) -> Optional[bool]:
+    from app.models import world
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    place_id = str(ref.get("place_id") or "")
+    if not location_id or not room_id or not place_id:
+        return False
+    try:
+        loc = world.get_location_by_id(location_id, strict=True)
+        if loc is None:
+            return False
+        room = world.get_room_by_id(loc, room_id)
+        if room is None:
+            return False
+        layout = room.get("layout")
+        if not isinstance(layout, dict):
+            return False
+        return any(
+            isinstance(p, dict) and p.get("id") == place_id
+            for p in (layout.get("props") or [])
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _room_prop_remove(ref: dict) -> str:
+    from app.models import world
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    place_id = str(ref.get("place_id") or "")
+    if not location_id or not room_id or not place_id:
+        return REMOVE_GONE
+    try:
+        removed = world.remove_room_props(location_id, room_id, [place_id])
+        return REMOVE_DONE if removed >= 1 else REMOVE_GONE
+    except Exception:  # noqa: BLE001
+        return REMOVE_LATER
+
+
+def _room_prop_label(ref: dict) -> str:
+    from app.core import props
+    ref = ref or {}
+    location_id = str(ref.get("location_id") or "")
+    room_id = str(ref.get("room_id") or "")
+    prop_id = str(ref.get("prop_id") or "")
+    meta = props.read_sidecar(prop_id, read_only=True) if prop_id else {}
+    name = str(meta.get("name") or "").strip() or prop_id
+    return f"{name} in {location_id}/{room_id}"
+
+
+register_kind("room_prop", exists=_room_prop_exists, remove=_room_prop_remove, label=_room_prop_label)
+
+
+# --- Built-in kind: prop ----------------------------------------------------------------------
+
+def _prop_exists(ref: dict) -> Optional[bool]:
+    from app.core import props
+    pid = str((ref or {}).get("prop_id") or "")
+    if not pid:
+        return False
+    try:
+        return bool(props.read_sidecar(pid, read_only=True))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prop_remove(ref: dict) -> str:
+    from app.core import props, scene_recipe
+    from app.models import world, world_props
+    pid = str((ref or {}).get("prop_id") or "")
+    if not pid:
+        return REMOVE_GONE
+    try:
+        if props.is_pending(pid):
+            return REMOVE_LATER
+        if not props.read_sidecar(pid, read_only=True):
+            return REMOVE_GONE
+        world_props.delete_world_props_of(pid)
+        for loc in world.list_locations():
+            loc_id = str(loc.get("id") or "")
+            if not loc_id:
+                continue
+            for room in (loc.get("rooms") or []):
+                if not isinstance(room, dict):
+                    continue
+                room_id = str(room.get("id") or "")
+                layout = room.get("layout")
+                if not room_id or not isinstance(layout, dict):
+                    continue
+                place_ids = [
+                    str(p.get("id"))
+                    for p in (layout.get("props") or [])
+                    if isinstance(p, dict) and p.get("prop_id") == pid and p.get("id")
+                ]
+                if place_ids:
+                    world.remove_room_props(loc_id, room_id, place_ids)
+        props.delete_prop(pid)
+        scene_recipe.invalidate_prop_lib_token()
+        return REMOVE_DONE if not props.read_sidecar(pid, read_only=True) else REMOVE_LATER
+    except Exception:  # noqa: BLE001
+        return REMOVE_LATER
+
+
+def _prop_label(ref: dict) -> str:
+    from app.core import props
+    pid = str((ref or {}).get("prop_id") or "")
+    meta = props.read_sidecar(pid, read_only=True) if pid else {}
+    return str(meta.get("name") or "").strip() or pid
+
+
+register_kind("prop", exists=_prop_exists, remove=_prop_remove, label=_prop_label)

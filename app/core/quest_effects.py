@@ -23,20 +23,22 @@ the same entry twice:
         creation order, so dependents such as placements and grants go before the items they
         reference; the rows of one effect in creation order, so e.g. a placement goes before the
         library entry it shows.
+    (4) Untag permanent quest props — clear the ``quest_run`` sidecar tag on every live
+        permanent ``prop`` object whose run has ended (D17), so it joins the prop library.
 
 BUILT-IN EFFECTS (:func:`builtin_effect_types`). Registered under owner ``"core"``:
 ``give_hint``, ``reveal_secret``, ``change_stat``, ``post_news``, ``narrate``, ``give_item``,
-``create_item``, ``place_item``.
+``create_item``, ``place_item``, ``create_prop``, ``place_prop``.
 
 IDEMPOTENCE & RESTART RECONCILIATION. An effect applies at most once per ``(run_id, effect_key)``.
 Before an external write, an effect may call :meth:`EffectContext.record_pending` so a
 ``pending`` object row exists first. After a restart, a ``pending`` row is reconciled with
-``exists(ref)``: ``True`` promotes it to ``live`` without re-running; ``False`` re-applies the
-entry reusing the existing row(s); ``None`` skips the entry for this pass. An effect that
-succeeds without creating any object (empty return and no pending row recorded) gets a durable
-permanent ``marker`` row so it is never applied a second time if a later entry in the same list
-waits or fails. Marker rows are excluded from :attr:`EffectContext.objects` and the admin run
-view.
+``exists(ref)``: ``True`` promotes it to ``live`` without re-running (stripping
+:data:`PENDING_ONLY_KEYS` from its ref); ``False`` re-applies the entry reusing the existing
+row(s); ``None`` skips the entry for this pass. An effect that succeeds without creating any
+object (empty return and no pending row recorded) gets a durable permanent ``marker`` row so it
+is never applied a second time if a later entry in the same list waits or fails. Marker rows are
+excluded from :attr:`EffectContext.objects` and the admin run view.
 
 LOCKS & PUSHES. An effect's ``apply`` and an object kind's ``remove`` run with NO quest lock
 held and take only their own domain locks. This module never imports or calls ``sync_topics``;
@@ -46,6 +48,7 @@ when a pass changes anything it calls ``quest_engine._refresh_live()`` and
 from __future__ import annotations
 
 import json
+import math
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -57,6 +60,8 @@ from app.core.log import get_logger
 logger = get_logger("quest_effects")
 
 PASS_INTERVAL_S = 15.0
+MESH_TIMEOUT_S = 30 * 60
+PENDING_ONLY_KEYS = ("before", "mesh_failed", "mesh_started_at")
 CREATE_ITEM_CATEGORIES = ("tool", "key", "consumable", "evidence", "gift", "quest", "decoration", "document")
 DIFFICULTY_SCALE = 10
 
@@ -65,13 +70,15 @@ class EffectFailed(Exception):
     """Raised by an effect's ``apply`` when it cannot complete.
 
     ``retryable=True`` leaves the payout pending for a later pass with no issue recorded.
-    ``retryable=False`` (the default) marks the payout (or preparing run) failed with ``message``.
+    ``retryable=False`` (the default) marks the payout (or preparing run) failed with ``message``
+    and issue ``code``.
     """
 
-    def __init__(self, message: str, retryable: bool = False):
+    def __init__(self, message: str, retryable: bool = False, code: str = "effect_failed"):
         super().__init__(message)
         self.message = message
         self.retryable = bool(retryable)
+        self.code = str(code or "effect_failed")
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,7 @@ _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _wake_event = threading.Event()
 _warned_unknown_kinds: set = set()
+_untagged_props: set = set()
 
 
 def _loop() -> None:
@@ -173,6 +181,7 @@ def _reset_for_tests() -> None:
         _stop_event.clear()
         _wake_event.clear()
     _warned_unknown_kinds.clear()
+    _untagged_props.clear()
 
 
 # --- Entry application ------------------------------------------------------------------------
@@ -194,10 +203,10 @@ def _apply_entry(
     index: int,
     position: str,
     avatar: str,
-) -> Tuple[str, Optional[str]]:
+) -> Tuple[str, Optional[str], str]:
     """Apply entry ``index`` of ``entries`` for ``run`` at ``position``.
 
-    Returns ``("done", None)``, ``("waiting", None)``, or ``("failed", message)``.
+    Returns ``("done", None, "")``, ``("waiting", None, "")``, or ``("failed", message, code)``.
     """
     from app.models import quests
 
@@ -210,33 +219,33 @@ def _apply_entry(
 
     if rows:
         if all(o.get("status") == "live" for o in rows):
-            return ("done", None)
+            return ("done", None, "")
         pending_rows = [o for o in rows if o.get("status") == "pending"]
         all_present = True
         for row in pending_rows:
             kind_obj = quest_objects.get_kind(str(row.get("kind") or ""))
             if kind_obj is None:
-                return ("waiting", None)
+                return ("waiting", None, "")
             try:
                 present = kind_obj.exists(row.get("ref") or {})
             except Exception as e:  # noqa: BLE001 - unreadable status is not "gone"
                 logger.warning("quest run %s: exists check failed for object %s (%s): %s",
                                run_id, row.get("id"), row.get("kind"), e)
-                return ("waiting", None)
+                return ("waiting", None, "")
             if present is None:
-                return ("waiting", None)
+                return ("waiting", None, "")
             if not present:
                 all_present = False
         if all_present:
             for row in pending_rows:
-                clean_ref = {k: v for k, v in (row.get("ref") or {}).items() if k != "before"}
+                clean_ref = {k: v for k, v in (row.get("ref") or {}).items() if k not in PENDING_ONLY_KEYS}
                 quests.set_object_status(row["id"], "live", ref=clean_ref)
-            return ("done", None)
+            return ("done", None, "")
 
     type_id = entry.get("type") if isinstance(entry.get("type"), str) else ""
     t = quest_catalog.types().get(type_id) if type_id else None
     if t is None or t.apply is None:
-        return ("waiting", None)
+        return ("waiting", None, "")
 
     live_objects = quests.live_object_refs(run_id)
 
@@ -279,11 +288,11 @@ def _apply_entry(
         created = t.apply(params, ctx)
     except EffectFailed as e:
         if e.retryable:
-            return ("waiting", None)
-        return ("failed", str(e.message))
+            return ("waiting", None, "")
+        return ("failed", str(e.message), e.code or "effect_failed")
     except Exception as e:  # noqa: BLE001
         logger.exception("quest run %s: effect %r (%s) raised", run_id, key, type_id)
-        return ("failed", str(e))
+        return ("failed", str(e), "effect_failed")
 
     target_ids = [r["id"] for r in rows] + added_ids
     if not created and not target_ids:
@@ -297,7 +306,7 @@ def _apply_entry(
             permanent=True,
             status="live",
         )
-        return ("done", None)
+        return ("done", None, "")
 
     has_pending = False
     for i, obj in enumerate(created or ()):
@@ -317,7 +326,7 @@ def _apply_entry(
         if obj.status == "pending":
             has_pending = True
 
-    return ("waiting", None) if has_pending else ("done", None)
+    return ("waiting", None, "") if has_pending else ("done", None, "")
 
 
 # --- Pass steps -------------------------------------------------------------------------------
@@ -358,12 +367,12 @@ def _step_setup(payout: dict) -> Tuple[int, Optional[str], int]:
     snap = run.get("template_snapshot") or {}
     entries = snap.get("setup_effects") if isinstance(snap.get("setup_effects"), list) else []
     for j in range(len(entries)):
-        outcome, msg = _apply_entry(run, entries, j, "setup", "")
+        outcome, msg, code = _apply_entry(run, entries, j, "setup", "")
         if outcome == "failed":
             quests.set_run_state(
                 run_id,
                 "preparing",
-                issues=[{"path": f"setup_effects.{j}", "code": "effect_failed", "message": msg or ""}],
+                issues=[{"path": f"setup_effects.{j}", "code": code or "effect_failed", "message": msg or ""}],
                 from_states=("preparing",),
             )
             return (0, None, 1)
@@ -430,11 +439,11 @@ def _step_payout(payout: dict) -> Tuple[int, int]:
 
     avatar = str(payout.get("avatar") or "")
     for j in range(len(entries)):
-        outcome, msg = _apply_entry(run, entries, j, position, avatar)
+        outcome, msg, code = _apply_entry(run, entries, j, position, avatar)
         if outcome == "failed":
             quests.set_payout(
                 run_id, position, "failed",
-                issues=[{"path": f"{path_prefix}.{j}", "code": "effect_failed", "message": msg or ""}],
+                issues=[{"path": f"{path_prefix}.{j}", "code": code or "effect_failed", "message": msg or ""}],
             )
             return (0, 1)
         if outcome != "done":
@@ -491,6 +500,41 @@ def _cleanup_order(rows: list) -> list:
     )
 
 
+def _untag_permanent_props() -> None:
+    """Clear the ``quest_run`` sidecar tag on live permanent props of ended runs (D17)."""
+    from app.core import props
+    from app.models import quests
+
+    try:
+        rows = quests.list_objects(statuses=("live",))
+    except Exception:  # noqa: BLE001
+        logger.exception("quest effects: permanent prop untag scan failed")
+        return
+
+    run_ended: Dict[str, bool] = {}
+    for row in rows:
+        if row.get("kind") != "prop" or not row.get("permanent"):
+            continue
+        pid = str((row.get("ref") or {}).get("prop_id") or "")
+        if not pid or pid in _untagged_props:
+            continue
+        rid = str(row.get("run_id") or "")
+        if rid not in run_ended:
+            try:
+                run = quests.get_run(rid)
+                run_ended[rid] = bool(run and run.get("state") in quests.RUN_ENDED_STATES)
+            except Exception:  # noqa: BLE001
+                logger.exception("quest effects: failed reading run %s for prop untag", rid)
+                run_ended[rid] = False
+        if not run_ended[rid]:
+            continue
+        try:
+            props.set_quest_run(pid, "")
+            _untagged_props.add(pid)
+        except Exception:  # noqa: BLE001
+            logger.exception("quest effects: failed untagging permanent prop %s", pid)
+
+
 def pass_once() -> Dict[str, Any]:
     """Run one serialized pass: (1) setup payouts, (2) step/reward payouts, (3) ended-run cleanup.
 
@@ -539,6 +583,9 @@ def pass_once() -> Dict[str, Any]:
                     reverted += _step_cleanup_row(row)
                 except Exception:  # noqa: BLE001
                     logger.exception("quest effects: cleanup failed for object %s", row.get("id"))
+
+            # (4) Untag permanent quest props of ended runs so they join the library (D17).
+            _untag_permanent_props()
         except Exception:  # noqa: BLE001
             logger.exception("quest effects: pass_once failed")
 
@@ -1002,6 +1049,417 @@ def _apply_place_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
     ]
 
 
+# --- Prop helpers and built-in prop effects ---------------------------------------------------
+
+def _prop_media_problem() -> str:
+    """Return an empty string when media generation and both prop routes are ready, else why not."""
+    from app.imagegen import routing
+    from app.imagegen.base import media_generation_enabled
+
+    try:
+        if not media_generation_enabled():
+            return "Media generation is off: a quest prop needs a 3D model"
+    except Exception as e:  # noqa: BLE001
+        return f"Media generation check failed: {e}"
+    try:
+        routing.resolve_image_route("prop", advance_rotation=False)
+    except Exception as e:  # noqa: BLE001
+        return f"No backend is routed for prop images (Media Generation -> Routing, occasion prop): {e}"
+    try:
+        routing.resolve_image_route("mesh_object", advance_rotation=False)
+    except Exception as e:  # noqa: BLE001
+        return f"No backend is routed for 3D object meshes (Media Generation -> Routing, occasion mesh_object): {e}"
+    return ""
+
+
+def _prop_has_model(prop_id: str) -> bool:
+    """Return True when the prop currently has a published 3D model."""
+    from app.core import props
+    return bool((props.get_prop(prop_id, read_only=True) or {}).get("has_model"))
+
+
+def _mesh_sizes(w: Any, d: Any, h: Any) -> Tuple[int, int]:
+    """Compute ``(face_num, texture_size)`` using the room_furnish sizing rule."""
+    vals: List[float] = []
+    for raw in (w, d, h):
+        if raw is None or isinstance(raw, bool):
+            continue
+        if isinstance(raw, str) and not raw.strip():
+            continue
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            vals.append(v)
+    base = max(vals) if vals else 1.0
+    max_dim = base or 1.0
+    face_num = max(2000, min(20000, int(round(6000 * max_dim))))
+    texture_size = 512 if max_dim <= 0.5 else (1024 if max_dim < 1.5 else 2048)
+    return (face_num, texture_size)
+
+
+def _prop_placement_kind(params: dict) -> str:
+    room = params.get("room") if isinstance(params, dict) else None
+    return "room_prop" if isinstance(room, str) and room.strip() else "world_prop"
+
+
+def _validate_prop_placement(params: dict, bindings: dict | None) -> list:
+    from app.core.activity_engine import ConditionIssue
+
+    has_room = isinstance(params.get("room"), str) and bool(params["room"].strip())
+    has_near = isinstance(params.get("near"), str) and bool(params["near"].strip())
+    if has_room == has_near:
+        return [ConditionIssue("bad_param", "Choose either a room or a place near a location")]
+    return []
+
+
+def _validate_place_prop(params: dict, bindings: dict | None) -> list:
+    from app.core import props
+    from app.core.activity_engine import ConditionIssue
+
+    issues = _validate_prop_placement(params, bindings)
+    raw_id = params.get("prop_id")
+    pid = props.safe_prop_id(str(raw_id or ""))
+    if not pid:
+        issues.append(ConditionIssue("bad_param", f"'{raw_id}' is not a prop id"))
+        return issues
+    if bindings is not None and not props.read_sidecar(pid, read_only=True):
+        issues.append(ConditionIssue("unknown_prop", f"Prop '{pid}' does not exist"))
+    return issues
+
+
+def _is_finite_num(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _check_prop_placement_target(params: dict, ctx: EffectContext) -> Dict[str, Any]:
+    from app.models import world, world_props
+
+    yaw = int(params.get("yaw") or 0) % 360
+    room_key = params.get("room")
+    if isinstance(room_key, str) and room_key.strip():
+        location_id = _role_value(params, ctx, "room", "location_id")
+        room_id = _role_value(params, ctx, "room", "room_id")
+        if not location_id or not room_id:
+            raise EffectFailed(f"Role '{room_key}' is not bound")
+        loc = world.get_location_by_id(location_id)
+        room = world.get_room_by_id(loc, room_id) if loc is not None else None
+        if loc is None or room is None:
+            raise EffectFailed(f"Room '{room_id}' does not exist")
+        if room_id == world.GROUND_ROOM_ID:
+            at = [0.0, 0.0]
+        else:
+            layout = room.get("layout")
+            if not isinstance(layout, dict) or not _is_finite_num(layout.get("w")) or not _is_finite_num(layout.get("d")):
+                raise EffectFailed(f"Room '{room_id}' has no floor plan")
+            at = [round(float(layout["w"]) / 2.0, 3), round(float(layout["d"]) / 2.0, 3)]
+        return {
+            "kind": "room_prop",
+            "location_id": location_id,
+            "room_id": room_id,
+            "at": at,
+            "yaw": yaw,
+        }
+
+    near_key = params.get("near")
+    if not isinstance(near_key, str) or not near_key.strip():
+        raise EffectFailed("Choose either a room or a place near a location")
+    location_id = _role_value(params, ctx, "near", "location_id")
+    if not location_id:
+        raise EffectFailed(f"Role '{near_key}' is not bound")
+    loc = world.get_location_by_id(location_id)
+    if loc is None:
+        raise EffectFailed(f"Location '{location_id}' does not exist")
+    pos_x = loc.get("pos_x")
+    pos_z = loc.get("pos_z")
+    if not _is_finite_num(pos_x) or not _is_finite_num(pos_z):
+        raise EffectFailed(f"Location '{location_id}' has no position on the map")
+    if world_props.count_world_props() >= world_props.MAX_WORLD_PROPS:
+        raise EffectFailed(f"At most {world_props.MAX_WORLD_PROPS} world props per world")
+    offset_x = float(params.get("offset_x") or 0.0)
+    offset_z = float(params.get("offset_z") or 0.0)
+    return {
+        "kind": "world_prop",
+        "location_id": location_id,
+        "x": float(pos_x) + offset_x,
+        "z": float(pos_z) + offset_z,
+        "yaw": yaw,
+    }
+
+
+def _prop_place_label(name: str, target: Dict[str, Any], placement_id: str) -> str:
+    if target["kind"] == "world_prop":
+        return f"{name} ({placement_id})"
+    return f"{name} in {target['location_id']}/{target['room_id']}"
+
+
+def _write_prop_placement(target: Dict[str, Any], pid: str, placement_id: str) -> Dict[str, Any]:
+    from app.models import world, world_props
+
+    if target["kind"] == "world_prop":
+        if world_props.count_world_props() >= world_props.MAX_WORLD_PROPS:
+            raise EffectFailed(f"At most {world_props.MAX_WORLD_PROPS} world props per world")
+        raw = {
+            "id": placement_id,
+            "prop_id": pid,
+            "x": target["x"],
+            "z": target["z"],
+            "yaw_deg": target["yaw"],
+            "offset_y": 0.0,
+        }
+        try:
+            entry = world_props.sanitize_world_prop(raw)
+            world_props.save_world_prop(entry)
+        except ValueError as e:
+            raise EffectFailed(str(e)) from e
+        stored = next((r for r in world_props.list_world_props() if r.get("id") == placement_id), None)
+        if stored is None:
+            raise EffectFailed("The world prop placement was not stored", retryable=True)
+        return {"placement_id": placement_id, "written": stored}
+
+    entry: Dict[str, Any] = {"id": placement_id, "prop_id": pid, "at": target["at"]}
+    if target["yaw"]:
+        entry["yaw"] = target["yaw"]
+    ok = world.append_room_props(target["location_id"], target["room_id"], [entry])
+    if not ok:
+        raise EffectFailed(f"The prop could not be placed in {target['location_id']}/{target['room_id']}")
+    loc = world.get_location_by_id(target["location_id"])
+    room = world.get_room_by_id(loc, target["room_id"]) if loc is not None else None
+    room_props = ((room or {}).get("layout") or {}).get("props") or []
+    if not any(isinstance(p, dict) and p.get("id") == placement_id for p in room_props):
+        raise EffectFailed("The room is full: the prop could not be placed")
+    return {
+        "location_id": target["location_id"],
+        "room_id": target["room_id"],
+        "place_id": placement_id,
+        "prop_id": pid,
+    }
+
+
+def _now_iso() -> str:
+    """Current system time as an ISO UTC string (seconds precision), via ``timeutils.utc_now``."""
+    from app.core import timeutils
+    return timeutils.utc_now().isoformat(timespec="seconds")
+
+
+def _parse_stamp(value: Any) -> Optional[Any]:
+    """Parse a system-time ISO timestamp, returning ``None`` when empty or unparsable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    from app.core import timeutils
+    try:
+        return timeutils.parse_iso(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _apply_create_prop(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core import places_migration, props, timeutils
+    from app.models import quests
+
+    prev = list(ctx.previous)
+    place_row = prev[0] if len(prev) >= 1 else None
+    prop_row = prev[1] if len(prev) >= 2 else None
+
+    name = str(params.get("name") or "").strip() or "Prop"
+    prompt = str(params.get("prompt") or "").strip()
+    width_m = params.get("width_m")
+    depth_m = params.get("depth_m")
+    height_m = params.get("height_m")
+    face_num, texture_size = _mesh_sizes(width_m, depth_m, height_m)
+    quest_run = "" if ctx.run.get("state") in quests.RUN_ENDED_STATES else str(ctx.run.get("id") or "")
+
+    # Fresh run (no prop object row yet).
+    if prop_row is None:
+        problem = _prop_media_problem()
+        if problem:
+            raise EffectFailed(problem)
+        target = _check_prop_placement_target(params, ctx)
+        pid = props.new_prop_id(name)
+        if target["kind"] == "world_prop":
+            existing_id = str(((place_row or {}).get("ref") or {}).get("placement_id") or "")
+            placement_id = existing_id or ctx.mint("wp")
+            pending_place_ref: Dict[str, Any] = {"placement_id": placement_id, "written": {}}
+        else:
+            existing_id = str(((place_row or {}).get("ref") or {}).get("place_id") or "")
+            placement_id = existing_id or places_migration.new_place_id()
+            pending_place_ref = {
+                "location_id": target["location_id"],
+                "room_id": target["room_id"],
+                "place_id": placement_id,
+                "prop_id": pid,
+            }
+        place_label = _prop_place_label(name, target, placement_id)
+        pending_prop_ref: Dict[str, Any] = {
+            "prop_id": pid,
+            "mesh_started_at": _now_iso(),
+        }
+        ctx.record_pending(target["kind"], pending_place_ref, place_label)
+        ctx.record_pending("prop", pending_prop_ref, name)
+        try:
+            props.create_prop(
+                prop_id=pid,
+                name=name,
+                width_m=width_m,
+                depth_m=depth_m,
+                height_m=height_m,
+                description=prompt,
+                prompt=prompt,
+                source="generated",
+                quest_run=quest_run,
+            )
+            props.trigger_generation(pid, face_num=face_num, texture_size=texture_size)
+        except ValueError as e:
+            raise EffectFailed(str(e)) from e
+        return [
+            CreatedObject(target["kind"], pending_place_ref, place_label, status="pending"),
+            CreatedObject("prop", pending_prop_ref, name, status="pending"),
+        ]
+
+    # Resume (prop row exists; placement row answered exists == False).
+    place_ref = dict((place_row or {}).get("ref") or {})
+    prop_ref = dict(prop_row.get("ref") or {})
+    pid = str(prop_ref.get("prop_id") or "")
+    place_kind = str((place_row or {}).get("kind") or _prop_placement_kind(params))
+    place_label = str((place_row or {}).get("label") or name)
+
+    if not props.read_sidecar(pid, read_only=True):
+        problem = _prop_media_problem()
+        if problem:
+            raise EffectFailed(problem)
+        _check_prop_placement_target(params, ctx)
+        fresh_prop_ref: Dict[str, Any] = {
+            "prop_id": pid,
+            "mesh_started_at": _now_iso(),
+        }
+        ctx.record_pending(place_kind, place_ref, place_label)
+        ctx.record_pending("prop", fresh_prop_ref, name)
+        try:
+            props.create_prop(
+                prop_id=pid,
+                name=name,
+                width_m=width_m,
+                depth_m=depth_m,
+                height_m=height_m,
+                description=prompt,
+                prompt=prompt,
+                source="generated",
+                quest_run=quest_run,
+            )
+            props.trigger_generation(pid, face_num=face_num, texture_size=texture_size)
+        except ValueError as e:
+            raise EffectFailed(str(e)) from e
+        return [
+            CreatedObject(place_kind, place_ref, place_label, status="pending"),
+            CreatedObject("prop", fresh_prop_ref, name, status="pending"),
+        ]
+
+    if _prop_has_model(pid):
+        target = _check_prop_placement_target(params, ctx)
+        if target["kind"] == "world_prop":
+            placement_id = str(place_ref.get("placement_id") or "") or ctx.mint("wp")
+        else:
+            placement_id = str(place_ref.get("place_id") or "") or places_migration.new_place_id()
+        final_place_ref = _write_prop_placement(target, pid, placement_id)
+        final_place_label = _prop_place_label(name, target, placement_id)
+        return [
+            CreatedObject(target["kind"], final_place_ref, final_place_label),
+            CreatedObject("prop", {"prop_id": pid}, name),
+        ]
+
+    if props.is_pending(pid):
+        if prop_ref.get("mesh_failed") is True:
+            fresh_prop_ref = {"prop_id": pid, "mesh_started_at": _now_iso()}
+            ctx.record_pending(place_kind, place_ref, place_label)
+            ctx.record_pending("prop", fresh_prop_ref, name)
+            return [
+                CreatedObject(place_kind, place_ref, place_label, status="pending"),
+                CreatedObject("prop", fresh_prop_ref, name, status="pending"),
+            ]
+        raw_started = prop_ref.get("mesh_started_at")
+        anchor_dt = _parse_stamp(raw_started)
+        if anchor_dt is not None:
+            anchor_iso = str(raw_started)
+        else:
+            raw_created = prop_row.get("created_at")
+            anchor_dt = _parse_stamp(raw_created)
+            anchor_iso = str(raw_created) if anchor_dt is not None else ""
+        if anchor_dt is None:
+            logger.warning(
+                "quest run %s: unparsable mesh anchor for prop %s (mesh_started_at=%r, created_at=%r)",
+                ctx.run.get("id"), pid, raw_started, prop_row.get("created_at"),
+            )
+            return [
+                CreatedObject(place_kind, place_ref, place_label, status="pending"),
+                CreatedObject("prop", prop_ref, name, status="pending"),
+            ]
+        if (timeutils.utc_now() - anchor_dt).total_seconds() > MESH_TIMEOUT_S:
+            failed_prop_ref = {"prop_id": pid, "mesh_started_at": anchor_iso, "mesh_failed": True}
+            ctx.record_pending(place_kind, place_ref, place_label)
+            ctx.record_pending("prop", failed_prop_ref, name)
+            raise EffectFailed(
+                f"The 3D model for '{name}' did not finish within 30 minutes",
+                code="mesh_timeout",
+            )
+        return [
+            CreatedObject(place_kind, place_ref, place_label, status="pending"),
+            CreatedObject("prop", prop_ref, name, status="pending"),
+        ]
+
+    # Not pending and no model.
+    if prop_ref.get("mesh_failed") is True:
+        try:
+            props.trigger_generation(pid, face_num=face_num, texture_size=texture_size)
+        except ValueError as e:
+            raise EffectFailed(str(e)) from e
+        fresh_prop_ref = {"prop_id": pid, "mesh_started_at": _now_iso()}
+        ctx.record_pending(place_kind, place_ref, place_label)
+        ctx.record_pending("prop", fresh_prop_ref, name)
+        return [
+            CreatedObject(place_kind, place_ref, place_label, status="pending"),
+            CreatedObject("prop", fresh_prop_ref, name, status="pending"),
+        ]
+
+    anchor_iso = str(prop_ref.get("mesh_started_at") or prop_row.get("created_at") or "")
+    failed_prop_ref = {"prop_id": pid, "mesh_started_at": anchor_iso, "mesh_failed": True}
+    ctx.record_pending(place_kind, place_ref, place_label)
+    ctx.record_pending("prop", failed_prop_ref, name)
+    raise EffectFailed(
+        f"The 3D model for '{name}' could not be generated (see the queue panel); Retry generates it again",
+        code="mesh_failed",
+    )
+
+
+def _apply_place_prop(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core import places_migration, props
+
+    raw_id = params.get("prop_id")
+    pid = props.safe_prop_id(str(raw_id or ""))
+    meta = props.read_sidecar(pid, read_only=True) if pid else {}
+    if not pid or not meta:
+        raise EffectFailed(f"Prop '{raw_id}' does not exist")
+
+    target = _check_prop_placement_target(params, ctx)
+    prev_ref = (ctx.previous[0].get("ref") or {}) if ctx.previous else {}
+    name = str(meta.get("name") or "").strip() or pid
+    if target["kind"] == "world_prop":
+        placement_id = str(prev_ref.get("placement_id") or "") or ctx.mint("wp")
+        pending_ref: Dict[str, Any] = {"placement_id": placement_id, "written": {}}
+    else:
+        placement_id = str(prev_ref.get("place_id") or "") or places_migration.new_place_id()
+        pending_ref = {
+            "location_id": target["location_id"],
+            "room_id": target["room_id"],
+            "place_id": placement_id,
+            "prop_id": pid,
+        }
+    label = _prop_place_label(name, target, placement_id)
+    ctx.record_pending(target["kind"], pending_ref, label)
+    final_ref = _write_prop_placement(target, pid, placement_id)
+    return [CreatedObject(target["kind"], final_ref, label)]
+
+
 def builtin_effect_types() -> list:
     """Return the core's built-in quest effect types (registered under owner ``"core"``)."""
     from app.core.quest_catalog import QuestType
@@ -1158,5 +1616,64 @@ def builtin_effect_types() -> list:
             ),
             apply=_apply_place_item,
             object_kind="room_item",
+        ),
+        QuestType(
+            id="create_prop",
+            kind="effect",
+            label="Create a prop",
+            description="Creates a new 3D prop from a description and places it; the quest waits until its model exists. Removed when the quest ends unless permanent.",
+            params=(
+                {"key": "name", "type": "str", "label": "Name", "required": True},
+                {"key": "prompt", "type": "text", "label": "Prompt",
+                 "description": "What the prop looks like", "required": True},
+                {"key": "width_m", "type": "float", "label": "Width (m)",
+                 "min": 0.1, "max": 20.0, "step": 0.1},
+                {"key": "depth_m", "type": "float", "label": "Depth (m)",
+                 "min": 0.1, "max": 20.0, "step": 0.1},
+                {"key": "height_m", "type": "float", "label": "Height (m)",
+                 "min": 0.1, "max": 20.0, "step": 0.1},
+                {"key": "room", "type": "role", "label": "Room",
+                 "description": "Place inside this room (either Room or Near)",
+                 "role_kinds": ["room"]},
+                {"key": "near", "type": "role", "label": "Near",
+                 "description": "Place outdoors near this location (either Room or Near)",
+                 "role_kinds": ["location"]},
+                {"key": "offset_x", "type": "float", "label": "Offset X (m)",
+                 "min": -200.0, "max": 200.0, "step": 0.5, "default": 0.0},
+                {"key": "offset_z", "type": "float", "label": "Offset Z (m)",
+                 "min": -200.0, "max": 200.0, "step": 0.5, "default": 0.0},
+                {"key": "yaw", "type": "int", "label": "Yaw (deg)",
+                 "min": 0, "max": 359, "step": 1, "default": 0},
+            ),
+            validate=_validate_prop_placement,
+            apply=_apply_create_prop,
+            object_kind="world_prop",
+            object_kind_for=_prop_placement_kind,
+        ),
+        QuestType(
+            id="place_prop",
+            kind="effect",
+            label="Place a prop",
+            description="Places an existing library prop in a room or near a place; removed when the quest ends unless permanent.",
+            params=(
+                {"key": "prop_id", "type": "str", "label": "Prop",
+                 "description": "Library prop id", "required": True},
+                {"key": "room", "type": "role", "label": "Room",
+                 "description": "Place inside this room (either Room or Near)",
+                 "role_kinds": ["room"]},
+                {"key": "near", "type": "role", "label": "Near",
+                 "description": "Place outdoors near this location (either Room or Near)",
+                 "role_kinds": ["location"]},
+                {"key": "offset_x", "type": "float", "label": "Offset X (m)",
+                 "min": -200.0, "max": 200.0, "step": 0.5, "default": 0.0},
+                {"key": "offset_z", "type": "float", "label": "Offset Z (m)",
+                 "min": -200.0, "max": 200.0, "step": 0.5, "default": 0.0},
+                {"key": "yaw", "type": "int", "label": "Yaw (deg)",
+                 "min": 0, "max": 359, "step": 1, "default": 0},
+            ),
+            validate=_validate_place_prop,
+            apply=_apply_place_prop,
+            object_kind="world_prop",
+            object_kind_for=_prop_placement_kind,
         ),
     ]
