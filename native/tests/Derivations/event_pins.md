@@ -1,6 +1,6 @@
 # event_pins
 
-- Origin: `client3d/scripts/smoke_event_pins.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_event_pins.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/OverviewLabelsVectorTests.cs`
 - Vectors: `shared/test-vectors/event_pins.json`
 
@@ -8,9 +8,9 @@
 
 ```text
 /**
- * Smoke check for the event pins of the world map — client3d/src/game/eventPins.ts.
+ * Smoke check for the event pins of the world map — the browser scene's eventPins.ts.
  *
- * Usage:  node client3d/scripts/smoke_event_pins.mjs
+ * Usage:  node the browser scene's deleted smoke_event_pins.mjs
  *
  * Hand derivations (cases in shared/test-vectors/event_pins.json, shared with
  * the native client's C# tests):

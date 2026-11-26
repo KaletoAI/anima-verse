@@ -11,8 +11,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/camera.json against the C# ports <see cref="CameraMath"/> and
-/// <see cref="CameraFraming"/> (hand derivations: client3d/scripts/smoke_camera_math.mjs; TS sources:
-/// client3d/src/scene/cameraMath.ts and cameraFraming.ts).
+/// <see cref="CameraFraming"/> (hand derivations: native/tests/Derivations/camera_math.md; TS sources:
+/// the browser scene's cameraMath.ts and cameraFraming.ts).
 ///
 /// <code>
 ///   TS fn              C#                              shape translation

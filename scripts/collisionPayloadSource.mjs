@@ -1,6 +1,7 @@
 /**
- * Which collision payload a garment check measures with (Ruling B11i) — shared by
- * `check_garment_collision.mjs` and its smoke `smoke_check_collision_payload.mjs`.
+ * Which collision payload a garment check measures with (Ruling B11i) — used by
+ * the garment check `check_garment_collision.mjs` (deleted with the browser 3D scene in plan E3; this
+ * rule stays for the next garment check) and its smoke `smoke_check_collision_payload.mjs`.
  *
  * Order, per model:
  *  1. `--collision PAYLOAD.json` (one model only): exactly that file;

@@ -33,7 +33,7 @@ C) ``npm run <script> [-w <workspace>]`` — the script must exist in the
 
 D) Repository paths — every inline code span and every relative markdown link
    that looks like a repo path must exist on disk. Paths that only appear at
-   runtime (``logs/``, ``models/``, ``client3d/dist/``, …) are exempt by
+   runtime (``logs/``, ``models/``, ``node_modules/``, …) are exempt by
    prefix; anything with a ``<placeholder>``, a brace or a glob is skipped.
 
 E) Route paths — every ``/path`` the README names in a code span must be
@@ -63,7 +63,7 @@ QUEUE_CLI = REPO / "queue_cli.py"
 # checkout. Documenting them is right; requiring them on disk is not.
 RUNTIME_PREFIXES = (
     "logs/", "models/", "voices/", "exports/", "storage/", ".venv/",
-    "client3d/dist/", "plugins/installed/", "node_modules/",
+    "plugins/installed/", "node_modules/",
     # gitignored instance layer; per-character cache dirs inside a world
     "instance/", ".cache/",
     # the default world start.sh creates; untracked since the old demo was

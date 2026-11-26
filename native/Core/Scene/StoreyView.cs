@@ -14,9 +14,9 @@ public readonly record struct LevelButton(int Level, string Label);
 /// <summary>
 /// The storey decisions of the browser's open view that are not yet in a shared vector — the level switch, the
 /// room labels, the door and boundary marks, the per-frame storey gates — ported from the inline code of
-/// client3d/src/scene/sceneRecipe.ts (<c>mountShell</c> steps 16/17), client3d/src/scene/tiles.ts
-/// (<c>applyLevelDisplay</c>, <c>applyTileFade</c>), client3d/src/main.ts (the frame hook, <c>buildDoorMarks</c>)
-/// and client3d/src/game/doors.ts. Task 47 moves the shared lock rules to Embody.Locks. The per-piece rules that ARE vector-checked stay in
+/// the browser scene's sceneRecipe.ts (<c>mountShell</c> steps 16/17), the browser scene's tiles.ts
+/// (<c>applyLevelDisplay</c>, <c>applyTileFade</c>), the browser scene's main.ts (the frame hook, <c>buildDoorMarks</c>)
+/// and the browser scene's doors.ts. Task 47 moves the shared lock rules to Embody.Locks. The per-piece rules that ARE vector-checked stay in
 /// <see cref="SceneView"/> (RoomVisible, StoreyPieceOpacity, WallVisible, BasementHole, DoorMarkTransform,
 /// BoundaryMarkTransform); this class only adds what sits around them. Hand-derived cases: tests/StoreyViewTests.cs.
 /// </summary>

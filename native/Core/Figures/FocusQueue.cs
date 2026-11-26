@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 
 namespace AnimaNative.Figures;
 
-/// <summary>One job of a <see cref="FocusQueue"/> (<c>FocusJob</c> of client3d/src/game/focusQueue.ts).</summary>
+/// <summary>One job of a <see cref="FocusQueue"/> (<c>FocusJob</c> of the browser scene's focusQueue.ts).</summary>
 public sealed record FocusJob(Func<double> Distance, Func<Task> Run, string? Key = null, bool Avatar = false);
 
 /// <summary>

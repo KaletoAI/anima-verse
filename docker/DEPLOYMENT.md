@@ -192,10 +192,10 @@ docker compose logs -f   # follow startup; Ctrl-C to stop following
    call. The one exception is **Server → Allowed CORS origins**, which is read at
    startup: set it (and restart the container) only if something outside this server
    calls the API — for example an optional Vite development server with HMR
-   (`ANIMA_API=http://192.168.8.109:8100 npm run dev -w client3d`). The image includes
-   the built 3D client at `/play`; normal play needs only the Python server, with
-   assets served under `/static/client3d/` and the HUD page under `/static/hud/`. Run `npm run build` from the repo root
-   before building an image to refresh the committed frontend, HUD and 3D assets.
+   (`ANIMA_API=http://192.168.8.109:8100 npm run dev -w hud`). Players use the native
+   client; `/play` is only a hint page, and the HUD page is served under `/static/hud/`.
+   Run `npm run build` from the repo root before building an image to refresh the
+   committed Game-Admin and HUD assets.
 
 > **Embeddings need no configuration.** Pose matching uses the built-in CPU
 > embedding model (`bge-small`, downloaded into the `anima_models` volume). It

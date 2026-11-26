@@ -31,7 +31,7 @@ public sealed class StreamCounters
 }
 
 /// <summary>
-/// The browser's terrain STREAMING (client3d/src/scene/ground.ts — <c>setHeightAnchor</c>, <c>refreshTiles</c>,
+/// The browser's terrain STREAMING (the browser scene's ground.ts — <c>setHeightAnchor</c>, <c>refreshTiles</c>,
 /// <c>takeTiles</c>, <c>evictTiles</c>, <c>fillMissingStats</c>, <c>groundBusy</c>, <c>refreshLayerTiles</c>,
 /// <c>reindexLayers</c>, <c>applyHeight</c>, <c>sync</c>/<c>reload</c>) as a Godot-free state machine:
 ///

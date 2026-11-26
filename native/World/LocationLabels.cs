@@ -8,7 +8,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The location names of the overview (client3d/src/scene/places.ts <c>buildPlace</c>, the <c>.loc-label</c> CSS):
+/// The location names of the overview (the browser scene's places.ts <c>buildPlace</c>, the <c>.loc-label</c> CSS):
 /// one label per known place that is NOT an area location (<c>!map3d.area_model</c> — buildings, nature sites
 /// included), the location's name in a serif, small capitals, 15 px, gold with a dark shadow, centred on the point
 /// <see cref="OverviewLabels.LocationLabelLift"/> above the place's ground datum (its height: measured from the model or

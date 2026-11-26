@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/prop_water.json against the native prop water (hand derivations:
-/// client3d/scripts/smoke_prop_water.mjs; TS sources client3d/src/scene/propWaterMath.ts, client3d/src/game/walk.ts).
+/// scripts/smoke_prop_water.py; TS sources the browser scene's propWaterMath.ts, the browser scene's walk.ts).
 ///
 /// <code>
 ///   TS fn             C#                          shape translation

@@ -7,7 +7,7 @@ using CoreVec3 = AnimaNative.Overview.Vec3;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The prop light pool of the 3D client (client3d/src/scene/lightPool.ts <c>LightPool</c>): SIX permanent OmniLight3D
+/// The prop light pool of the 3D client (the browser scene's lightPool.ts <c>LightPool</c>): SIX permanent OmniLight3D
 /// slots (no shadows), re-assigned by <see cref="PropLights.PickLights"/> at 5 Hz from every registered source, faded
 /// over 0.4 s and flickered per frame, with a night gate; plus one additive halo per source that has a <c>glow_m</c>
 /// (not limited by the pool: a distant lamp still glows). The state is <see cref="LightPoolState"/> (Godot-free,

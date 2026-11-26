@@ -2,7 +2,7 @@
 /**
  * Reference values for the native client's rest-pose correction, computed by
  * the BROWSER'S OWN CODE: `restPoseOf` / `restCorrections` / `bindRelativeValues`
- * of `packages/scene-render/src/clipRetarget.ts` (what client3d's
+ * of `packages/scene-render/src/clipRetarget.ts` (what the browser 3D scene's
  * `figures.fitLibraryAsync` → `adaptExternalClips` runs), on three.js' own
  * loaders, with the same files the native `--check` uses:
  *
@@ -46,7 +46,7 @@ const SAMPLES = [{ clip: 'idle', file: 'shared/models/clips/idle.fbx', times: [0
 async function main() {
   if (!process.env.REST_REFERENCE_BUNDLED) {
     const bundlePath = '/tmp/anima_native_rest_reference_bundled.mjs'
-    const bin = ['client3d/node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+    const bin = ['frontend/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
       .map((rel) => path.join(ROOT, rel)).find((p) => fs.existsSync(p))
     if (!bin) { console.error('esbuild not found (npm install)'); process.exit(1) }
     const built = spawnSync(bin, [__filename, '--bundle', '--platform=node', '--format=esm',

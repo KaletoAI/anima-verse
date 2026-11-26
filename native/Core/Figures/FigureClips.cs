@@ -54,9 +54,9 @@ public sealed record ClipTransition(string From, string To, string Kind, double 
 
 /// <summary>
 /// The figure clip decisions of the browser as pure functions of explicit server tables — a port of
-/// <c>client3d/src/game/walk.ts</c> (poses, movement, transitions, bridge pace) and
-/// <c>client3d/src/scene/clipCoverage.ts</c> (kind chain, kind resolution, procedural gait). Checked against
-/// <c>shared/test-vectors/figure_clips.json</c> (hand derivations: <c>client3d/scripts/smoke_figure_clips.mjs</c>).
+/// the browser scene's <c>walk.ts</c> (poses, movement, transitions, bridge pace) and
+/// the browser scene's <c>clipCoverage.ts</c> (kind chain, kind resolution, procedural gait). Checked against
+/// <c>shared/test-vectors/figure_clips.json</c> (hand derivations: <c>native/tests/Derivations/figure_clips.md</c>).
 ///
 /// The browser keeps the server tables as module state and defaults every argument to it; the native client has
 /// no module state — the clip library owns the tables and hands them in.

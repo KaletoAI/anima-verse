@@ -67,7 +67,7 @@ const require_ = createRequire(import.meta.url);
 const CHARS = join(ROOT, 'frontend/src/tabs/characters');
 
 function esbuildModule() {
-  for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'), join(ROOT, 'client3d/node_modules/esbuild')]) {
+  for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'), join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }

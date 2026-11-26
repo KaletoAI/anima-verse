@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 /// The CPU half of the CDLOD terrain the client builds on top of the vector-checked <see cref="TerrainLod"/>
 /// (<see cref="TerrainField"/>: pyramids, frame, partition, stats; <see cref="TerrainShaderTwin"/>: the vertex stage's
 /// twin; <see cref="TerrainLodGlsl"/>: the printed constants). Expectations are derived by hand in the comments; the
-/// <c>nodeHasWater</c> cases are the hand cases of <c>client3d/scripts/smoke_terrain_lod.mjs</c> § (c) "the gate"
+/// <c>nodeHasWater</c> cases are the hand cases of <c>native/tests/Derivations/terrain_lod.md</c> § (c) "the gate"
 /// (no shared vector exists for that function yet).
 /// </summary>
 public class TerrainFieldTests

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: every clip path of the two renderers dresses a shod figure's clips.
+"""Smoke: every clip path of the Game-Admin renderer dresses a shod figure's clips.
 
 Usage:  ./.venv/bin/python scripts/smoke_foot_pose_call_sites.py
 
@@ -16,9 +16,8 @@ the heel 5 cm under the floor, and nothing says why.
 WHAT IS CHECKED, derived by hand from the source trees
 ---------------------------------------------------------------------------
 The three clip-path primitives are ``bindRelativeClip(``, ``adaptExternalClips(``
-and ``retargetClips(``. Every CALL of one of them under ``client3d/src``,
-``hud/src`` (the HUD page moved there; it holds no call today) and
-``frontend/src`` (definitions, ``export`` lines, comments and docstrings are
+and ``retargetClips(``. Every CALL of one of them under
+``hud/src`` (the HUD page; it holds no call today) and ``frontend/src`` (definitions, ``export`` lines, comments and docstrings are
 not calls) must sit inside a function from the LISTED SET below, and that
 function's body must either call ``applyFootPose(`` itself or forward a
 ``footPose`` / ``shoes`` to the primitive. The set, by file and enclosing
@@ -27,14 +26,6 @@ later ``}`` at the declaration's own indentation — the sources are
 consistently indented; a sibling whose block closed before the call is not
 its enclosing function):
 
-  client3d/src/scene/figures.ts
-    adaptExternalClips   — the library path: calls ``prepareShoes`` → ``applyFootPose``
-                           + ``plantFootPose`` on every surviving clip
-    retargetClips        — the borrow path: the same step, no corrections
-    buildModel           — the model's own embedded clips, the third path
-                           (``prepareShoes`` straight on ``model.clips``)
-    fitLibraryAsync      — calls ``adaptExternalClips`` and forwards ``shoes``
-    loadManifestModels   — calls ``retargetClips`` and forwards ``footPose``
   frontend/src/tabs/characters/Model3DViewer.tsx
     useEffect            — the main viewer's load effect (anonymous; the scan
                            names it after the hook call at the component's
@@ -49,22 +40,18 @@ its enclosing function):
                            there (``applyFootPose`` + ``plantFootPose``)
 
 A NEW call site anywhere else fails [1]; a listed site whose body lost the
-pose fails [2]. [3] pins the definitions themselves: ``adaptExternalClips``
-and ``retargetClips`` in figures.ts contain ``prepareShoes(`` (the one shoe
-step), the step contains ``applyFootPose(``, ``plantFootPose(`` and
-``transplantedRestPose(``, and ``buildModel`` dresses the embedded clips.
-[4] the viewer: both ``bindRelativeClip(`` calls are wrapped by
+pose fails [2]. [3] pinned the browser 3D scene's definitions (figures.ts);
+that scene was deleted in plan E3, so [3] is gone with it. [4] the viewer: both ``bindRelativeClip(`` calls are wrapped by
 ``applyFootPose(`` and followed by ``plantFootPose(``.
 
 FAILS BEFORE / PASSES AFTER — against the sources before Task 19:
 
-    d=$(mktemp -d); git archive a5e6043c client3d/src frontend/src | tar -x -C "$d"
+    d=$(mktemp -d); git archive a5e6043c frontend/src | tar -x -C "$d"
     SMOKE_REPO="$d" ./.venv/bin/python scripts/smoke_foot_pose_call_sites.py
 
-reports 10 failures: [2] for ``fitLibraryAsync`` (no ``shoes`` forwarded, both
-calls) and ``loadManifestModels`` (no pose at all), [3] for both definitions,
-the missing ``prepareShoes`` step and the embedded path, [4] for the plant
-the viewer did not have yet.
+reports 2 failures: [1] only two call sites (the Poses tab's place preview did
+not exist yet) and [4] the plant the viewer did not have yet. (Before plan E3
+the scan also covered the browser 3D scene and reported 10 failures there.)
 """
 from __future__ import annotations
 
@@ -83,14 +70,11 @@ PRIMITIVES = ("bindRelativeClip(", "adaptExternalClips(", "retargetClips(")
 #: sites live in anonymous effect callbacks: their enclosing named scope
 #: is the component itself.
 ALLOWED: dict[str, set[str]] = {
-    "client3d/src/scene/figures.ts": {
-        "adaptExternalClips", "retargetClips", "buildModel", "fitLibraryAsync", "loadManifestModels",
-    },
     "frontend/src/tabs/characters/Model3DViewer.tsx": {"useEffect", "rebuildOverlay"},
     "frontend/src/tabs/poses/PlacePreview.tsx": {"useEffect"},
 }
 
-SCAN_DIRS = ("client3d/src", "hud/src", "frontend/src")
+SCAN_DIRS = ("hud/src", "frontend/src")
 
 _FUNCTION = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(")
 _ARROW = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?:const|let)\s+(?P<name>[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=>")
@@ -188,30 +172,11 @@ def main() -> int:
                     name, start, end = enclosing(lines, n)
                     body = "\n".join(lines[start:end])
                     sites.append((rel, n + 1, prim, name, body_forwards(body)))
-    check("at least the five known call sites exist", len(sites) >= 5, f"{len(sites)} calls found")
+    check("at least the three known call sites exist", len(sites) >= 3, f"{len(sites)} calls found")
     for rel, ln, prim, name, forwards in sites:
         allowed = name in ALLOWED.get(rel, set())
         check(f"{rel}:{ln} {prim[:-1]} in {name or '<module>'} — listed", allowed)
         check(f"{rel}:{ln} {prim[:-1]} in {name or '<module>'} — forwards the pose", forwards)
-
-    print("[3] the definitions: one shoe step, extension + plant")
-    figures = (REPO / "client3d/src/scene/figures.ts").read_text(encoding="utf-8")
-    lines = figures.splitlines()
-
-    def body_of(fn: str) -> str:
-        for i, line in enumerate(lines):
-            d = declaration(line)
-            if d and d[1] == fn:
-                return "\n".join(lines[i:block_end(lines, i, d[0]) + 1])
-        return ""
-
-    for fn in ("adaptExternalClips", "retargetClips"):
-        check(f"figures.ts::{fn} calls prepareShoes(", "prepareShoes(" in body_of(fn))
-    step = body_of("prepareShoes")
-    check("figures.ts::prepareShoes applies the extension", "applyFootPose(" in step)
-    check("figures.ts::prepareShoes bakes the plant", "plantFootPose(" in step)
-    check("figures.ts::prepareShoes carries the transplanted rest", "transplantedRestPose(" in step)
-    check("figures.ts::buildModel dresses the embedded clips", "prepareShoes(" in body_of("buildModel"))
 
     print("[4] the viewer: both bind-relative sites wrapped, the plant behind them")
     viewer = (REPO / "frontend/src/tabs/characters/Model3DViewer.tsx").read_text(encoding="utf-8")

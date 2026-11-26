@@ -12,7 +12,7 @@ of a world — never point it at a running world's files to write anything: it o
   hair vertex count from the record's ``report.vertices.hair``);
 - ``<fit stem>.strands.glb``: the fit GLB with the record's per-vertex binding ``_STRAND_CARD`` / ``_STRAND_U`` on its
   hair primitive (``glb_mesh.add_vertex_attributes``) — what the Hairstyles preview serves (``preview_glb``, Ruling
-  H-R5): a skinned fit body with the hair, the input of ``scripts/check_hair_sim.mjs`` and of a 3D-client check.
+  H-R5): a skinned fit body with the hair, the input of a 3D-client hair check (the browser's ``check_hair_sim.mjs`` was deleted with the browser 3D scene in plan E3).
 
 ``--scales`` = the character's collision region scales as JSON (default ``{}``: the default capsules). The fit body's
 extension capsules (Ruling H-R4) need the character's model sidecar and are not added here. CPU only; no world, no

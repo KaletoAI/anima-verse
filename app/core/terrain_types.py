@@ -103,7 +103,7 @@ SINK_KEYS = ("move_sink_m", "idle_sink_m")
 #: clamp is ten metres — past that no authored water is deep enough to ever
 #: reach the threshold, so the figure would wade across a sea.
 #:
-#: THE NUMBER IS READ BY THE CLIENT ONLY (``client3d/src/game/walk.wadeGate``):
+#: THE NUMBER IS READ BY THE CLIENT ONLY (the browser scene's ``walk.wadeGate``):
 #: passability and pace stay the kind's business, and ``speed_factor`` keeps
 #: counting over the whole area — wading is slow too.
 SWIM_FROM_KEY = "swim_from_m"

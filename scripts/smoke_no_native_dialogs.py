@@ -74,7 +74,6 @@ SCAN_DIRS = [
     "frontend/src",
     "packages/player-ui/src",
     "packages/scene-render/src",
-    "client3d/src",
     "hud/src",
     "static/admin",
 ]

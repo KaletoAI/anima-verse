@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The Godot-free parts of the per-strand hair RUNTIME (stage 4 wiring): the record cache's ETag / retry rules
-/// (client3d/scripts/smoke_strand_record.mjs [a]–[d], ported case for case), the GLB attribute reader with Godot's
+/// (the browser scene's deleted smoke_strand_record.mjs [a]–[d], ported case for case), the GLB attribute reader with Godot's
 /// vertex order (an unreferenced vertex dropped, an interleaved buffer view), the vertex-buffer encoding of the upload
 /// (hand values of Godot's octahedral normal) and <c>withoutHairGroups</c>.
 /// </summary>

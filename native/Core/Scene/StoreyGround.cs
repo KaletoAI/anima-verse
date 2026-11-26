@@ -11,7 +11,7 @@ public readonly record struct DatumStep(double Datum, double Delta);
 
 /// <summary>
 /// WHERE A STOREY-0 PLACEMENT STANDS (§ A16.9), a port of packages/scene-render/src/storeyGround.ts plus
-/// <c>markerLiftPoint</c> (client3d/src/game/placement.ts), checked against shared/test-vectors/scene_models.json
+/// <c>markerLiftPoint</c> (the browser scene's placement.ts), checked against shared/test-vectors/scene_models.json
 /// [G]/[K]. A sampler answers the world height at a world (x, z); a non-finite answer means "nothing to say".
 /// </summary>
 public static class StoreyGround

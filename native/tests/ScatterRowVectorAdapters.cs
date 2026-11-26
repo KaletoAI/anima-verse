@@ -8,7 +8,7 @@ using static AnimaNative.Tests.ScatterVectorAdapters;
 
 namespace AnimaNative.Tests;
 
-/// <summary>Task 39: shape-only twin of client3d/scripts/e4VectorDispatch.mjs. Finite streams throw
+/// <summary>Task 39: shape-only twin of the browser scene's deleted e4VectorDispatch.mjs. Finite streams throw
 /// on exhaustion; unknown keys fail, and occupancy is the production grid shared across operations.</summary>
 internal static class ScatterRowVectorAdapters
 {

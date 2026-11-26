@@ -19,7 +19,7 @@ public readonly record struct RippleSheets((double U, double V) A, (double U, do
                                            (double X, double Z) DirB, (double X, double Z) Axis, double Speed);
 
 /// <summary>
-/// The water numbers and CPU twins of the browser's terrain water variant (client3d/src/scene/waterShade.ts,
+/// The water numbers and CPU twins of the browser's terrain water variant (the browser scene's waterShade.ts,
 /// waterPlaneMath.ts, terrainLod.ts <c>liftedHeight</c>, scene-render materials.ts <c>waveNormalSample</c>). Under
 /// Wasser v2 K-A there is NO water mesh: a terrain vertex is lifted onto <c>max(h, level)</c>, ramped by the shore
 /// gate, and the same pixels are shaded as water. The literals of <c>GroundShader</c>'s water branch come from here.

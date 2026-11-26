@@ -252,8 +252,7 @@ console.log(JSON.stringify({ heeled: play(record(26)), bare: play(undefined), no
 
 def part_clip() -> None:
     print("[5] a clip frame keeps the offset")
-    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild", "client3d/node_modules/.bin/esbuild",
-                                       "frontend/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
+    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild", "frontend/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
     if esbuild is None or shutil.which("node") is None:
         check(False, "[5] esbuild and node available")
         return

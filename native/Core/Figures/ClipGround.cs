@@ -46,10 +46,10 @@ public sealed class ProbeSkin
 }
 
 /// <summary>
-/// WHERE A CLIP PUTS THE BODY over the ground — client3d/src/scene/clipGround.ts on the native probe. The lowest body
+/// WHERE A CLIP PUTS THE BODY over the ground — the browser scene's clipGround.ts on the native probe. The lowest body
 /// point of every clip is measured once on the SKINNING (25 poses × ≤ 1024 strided vertices) against the bind pose's
 /// lowest point; <see cref="GroundOffsetOf"/> is the pure rule. No shared vector: the cases of
-/// client3d/scripts/smoke_clip_ground.mjs [1] are copied into tests/BridgeCoreTests.cs, the measurement is checked on a
+/// the browser scene's deleted smoke_clip_ground.mjs [1] are copied into tests/BridgeCoreTests.cs, the measurement is checked on a
 /// hand-built skinned rig there.
 /// </summary>
 public static class ClipGround

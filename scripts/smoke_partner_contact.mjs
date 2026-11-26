@@ -65,7 +65,7 @@ import assert from 'node:assert/strict'
 if (!process.env.PARTNER_CONTACT_BUNDLED) {
   // The bundle keeps `three` external and lives under scripts/ so that it resolves the repo's own three.
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild']
+  const bin = ['node_modules/esbuild/bin/esbuild']
     .map(rel => join(root, rel)).find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const dir = mkdtempSync(join(root, 'scripts/.smoke-partner-contact-'))

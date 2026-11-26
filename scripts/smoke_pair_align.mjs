@@ -187,7 +187,7 @@ async function loadSR(oldAt = null) {
     const stdin = oldAt
       ? { contents: execFileSync('git', ['show', `${oldAt}:packages/scene-render/src/pairAlign.ts`], { cwd: ROOT, encoding: 'utf8' }),
         resolveDir: join(ROOT, 'packages/scene-render/src'), loader: 'ts' }
-      : { contents: "export * from '@anima/scene-render';", resolveDir: join(ROOT, 'client3d'), loader: 'ts' }
+      : { contents: "export * from '@anima/scene-render';", resolveDir: ROOT, loader: 'ts' }
     const built = await esbuild.build({
       stdin,
       bundle: true, platform: 'node', format: 'esm', write: false,

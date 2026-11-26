@@ -60,13 +60,13 @@ WHAT FOLLOWS BY HAND
      template_preview.py 17, story_arcs.py 9, queue.py 6, ... = 110).
  (f) "/play/story-arcs" is not a route of the real app, and app.core.world_ops has no build_player_story_arcs
      (the player panel reads /play/quests since Task 8).
- (g) Frontend (Task 12). A text scan of frontend/src, packages/player-ui/src and client3d/src for
+ (g) Frontend (Task 12). A text scan of frontend/src and packages/player-ui/src for
      StoryArcsPanel | story-arc | story_arc finds 0 lines and no such file name (before Task 12 it found the panel
      file StoryArcsPanel.tsx — 7 lines in it: the doc comment's three endpoint mentions, the export, the three api
      calls — plus 2 lines in StorytellerTab.tsx: the import and the mount). shared/languages/de.json has 0 keys that
      contain "story arc" case-insensitively (before: "Story arcs", "No story arcs yet.", "Delete story arc" = 3).
- (h) Built bundles (review R11). A byte scan of every file under static/client3d, static/game_admin and static/hud
-     (when present) finds "play/story-arcs" in none of them: the quest book of /play, of Game-Admin and of the native
+ (h) Built bundles (review R11). A byte scan of every file under static/game_admin and static/hud
+     (when present) finds "play/story-arcs" in none of them: the quest book of Game-Admin and of the native
      HUD (static/hud/hud.html) polls /play/quests, and a bundle built from a tree before the removal would poll the
      404 route. The scan is not looking away: it counts >= 1 scanned file per present directory.
 """
@@ -312,7 +312,7 @@ print("(g) frontend sources and de.json")
 import json  # noqa: E402
 
 FRONT_WORDS = re.compile(r"StoryArcsPanel|story-arc|story_arc")
-FRONT_DIRS = ("frontend/src", "packages/player-ui/src", "client3d/src")
+FRONT_DIRS = ("frontend/src", "packages/player-ui/src")
 front_hits = []
 for top in FRONT_DIRS:
     for dirpath, dirnames, filenames in os.walk(ROOT / top):
@@ -334,7 +334,7 @@ check("de.json: no key containing 'story arc'", sorted(k for k in de if "story a
 
 # ── (h) built bundles ─────────────────────────────────────────────────────
 print("(h) built bundles")
-BUNDLE_DIRS = ("static/client3d", "static/game_admin", "static/hud")
+BUNDLE_DIRS = ("static/game_admin", "static/hud")
 bundle_hits = []
 for top in BUNDLE_DIRS:
     base = ROOT / top

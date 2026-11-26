@@ -1,6 +1,6 @@
 # occlusion
 
-- Origin: `client3d/scripts/smoke_occlusion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_occlusion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/OcclusionVectorTests.cs`
 - Vectors: `shared/test-vectors/occlusion.json`
 
@@ -12,7 +12,7 @@
  * patch and the arithmetic that steers it (§ B5a: strings and numbers, no
  * screenshots).
  *
- * Usage:  node client3d/scripts/smoke_occlusion.mjs
+ * Usage:  node the browser scene's deleted smoke_occlusion.mjs
  *         (bundles the client's occlusion + ground modules; needs three)
  *
  * ===========================================================================
@@ -23,7 +23,7 @@
  * way to pick them by raycast without a ledger and a hysteresis per instance.
  * Instead every affected material carries a patch: fragments whose WORLD
  * position lies within 1.5 metres of the segment camera→avatar-chest are thinned
- * out by an ordered dither and discarded (`client3d/src/scene/occlusion.ts`).
+ * out by an ordered dither and discarded (the browser scene's `occlusion.ts`).
  *
  * Two things can silently break, and both are checked here without a GPU:
  *  - the patch is the SECOND writer of `onBeforeCompile` on the scatter

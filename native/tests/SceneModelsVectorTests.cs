@@ -16,7 +16,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scene_models.json against the model-side ports (hand derivations and the JSON
-/// wrapper conventions: client3d/scripts/smoke_scene_models.mjs).
+/// wrapper conventions: native/tests/Derivations/scene_models.md).
 ///
 /// <code>
 ///   TS fn                          C#                                    TS source
@@ -28,14 +28,14 @@ namespace AnimaNative.Tests;
 ///   storeyGroundLift               StoreyGround.Lift                     scene-render storeyGround.ts
 ///   storeyGroundRelift             StoreyGround.Relift
 ///   tileDatumStep                  StoreyGround.TileDatumStep            sampler n → () => n, null → none
-///   markerLiftPoint                StoreyGround.MarkerLiftPoint          client3d game/placement.ts
+///   markerLiftPoint                StoreyGround.MarkerLiftPoint          the browser 3D scene game/placement.ts
 ///   markerLiftPointInvalidAnchor   MarkerLiftPoint(at, (NaN, 2))          (smoke wrapper)
 ///   slotFor                        PlaceSlots.SlotFor                    scene-render placeSlot.ts; 'pair' → null
-///   buildGlyphs                    PlaceSlots.GlyphRows                  client3d scene/placeGlyphs.ts
+///   buildGlyphs                    PlaceSlots.GlyphRows                  the browser 3D scene scene/placeGlyphs.ts
 ///   glyphParameters                PlaceSlots.GlyphParameters
 ///   surfaceHeightAt                SurfaceHeight.At                      scene-render surface.ts
 ///   highestSurfaceAt               SurfaceHeight.Highest
-///   plateLook/wallLook/extraLook   MaterialLooks.*                       client3d scene/materialLooks.ts
+///   plateLook/wallLook/extraLook   MaterialLooks.*                       the browser 3D scene scene/materialLooks.ts
 ///   placeholderLook                MaterialLooks.PlaceholderLook          (payload piece + style → ScenePayload)
 ///   recipeHex                      MaterialLooks.RecipeHex
 ///   neutralizeLook                 MaterialLooks.NeutralizeLook

@@ -14,7 +14,7 @@ public sealed record WaterfallQuad(double[] Positions, (double X, double Z) Bott
 
 /// <summary>
 /// Waterfalls of a drawn water stroke (<c>packages/scene-render/src/waterfall.ts</c> detection,
-/// <c>client3d/src/scene/waterfall.ts</c> <c>waterfallQuad</c>): a run of axis segments steeper than 0.5 that drops
+/// the browser scene's <c>waterfall.ts</c> <c>waterfallQuad</c>): a run of axis segments steeper than 0.5 that drops
 /// more than 1 m is one fall, standing at its arc midpoint, leaning 0.3 × its height down the chord.
 /// </summary>
 public static class Waterfalls
@@ -106,7 +106,7 @@ public static class Waterfalls
         return (a.X + (b.X - a.X) * u, a.Z + (b.Z - a.Z) * u);
     }
 
-    // ── The look of the curtain and the foam (client3d/src/scene/waterfall.ts, view constants) ──
+    // ── The look of the curtain and the foam (the browser scene's waterfall.ts, view constants) ──
     /// <summary><c>WATERFALL_WAVE_M</c>: metres of curtain per tile of the wave normal map.</summary>
     public const double WaveM = 2.5;
     /// <summary><c>WATERFALL_G</c>: free fall, m/s².</summary>

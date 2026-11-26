@@ -1,6 +1,6 @@
 # embody_vectors
 
-- Origin: `client3d/scripts/smoke_embody_vectors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_embody_vectors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/EmbodyVectorTests.cs`
 - Vectors: `shared/test-vectors/embody.json`
 
@@ -9,7 +9,7 @@
 ```text
 /**
  * E7-T1 standalone shared vectors, no live tables, renderer, assets or network.
- * Usage: node client3d/scripts/smoke_embody_vectors.mjs
+ * Usage: node the browser scene's deleted smoke_embody_vectors.mjs
  *
  * embody.json has ONE canonical source: this smoke. The collected hand tables
  * below come from smoke_offer_resolve, smoke_place_lift and smoke_pos_echo.
@@ -51,7 +51,7 @@
  * Smoke: WHICH standing offer the F key answers — `game/offers.nearestOffer`.
  *
  * Usage: direct node call, self-bundling via esbuild (run from anywhere):
- *     node scripts/smoke_offer_resolve.mjs
+ *     node scripts/smoke_offer_resolve.mjs   (deleted in plan E3 with the browser dispatcher it bundled)
  *
  * WHY THIS CHECK EXISTS. Four rules offer the avatar something at the same
  * moment, with reaches of DIFFERENT size: talking reaches TALK_RANGE 2.5 m, a
@@ -88,11 +88,11 @@
  * is the x coordinate itself.
  
  * Smoke check for the two PURE place helpers of the 3D client
- * (`client3d/src/game/placement.ts`): `markerLiftPoint` — WHERE a place
+ * (the browser scene's `placement.ts`): `markerLiftPoint` — WHERE a place
  * marker's storey-0 terrain lift is sampled — and `pickablePlaceFor` — WHICH
  * place a click on a prop mesh opens.
  *
- * Usage:  node client3d/scripts/smoke_place_lift.mjs
+ * Usage:  node the browser scene's deleted smoke_place_lift.mjs
  *
  * Like `scripts/smoke_scene_recipe.py` and `smoke_walk_math.mjs`, every
  * expected number below is derived BY HAND from the contract (§ B5a), never
@@ -204,7 +204,7 @@
  * Arrival cannot make answer 7 valid again (ok, throttled, 409, or network).
  * A cancel reserves 8 while 7 is in flight; only 7 is in the sent ring until
  * its answer settles. Replacement drops reserved 8 rather than cancelling J2.
- * Usage: node client3d/scripts/smoke_pos_echo.mjs
+ * Usage: node the browser scene's deleted smoke_pos_echo.mjs
  * Hand derivation: sent [1,2,3] includes 2, not 9; another session or null
  * origin is foreign. Sending 1..65 to a 64-entry ring evicts only 1, leaving
  * 2..65 (64 numbers). A view switch must publish its revision before fetching;

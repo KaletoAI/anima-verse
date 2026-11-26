@@ -18,7 +18,7 @@ namespace AnimaNative.Check;
 /// <summary>
 /// <c>--check</c>, labels part (Task 11): name tags, speech bubbles, location names and the performance readout on
 /// the fixture world, against values derived BY HAND here (positions from native/fixtures/README.md, rules from
-/// client3d/src/scene/nameTags.ts — the rules themselves are vector-checked in the C# tests).
+/// the browser scene's nameTags.ts — the rules themselves are vector-checked in the C# tests).
 ///
 /// Camera of every case: its own 1600 × 900 viewport, yaw 0 (lens on +Z looking −Z), pitch offset 0, target T =
 /// Bram's feet (64, 4.0675, 132.32). Base pitch at 40 m = 18 + 44·√(39.2/149.2) = 40.55336239889695°

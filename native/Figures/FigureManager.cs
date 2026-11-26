@@ -36,7 +36,7 @@ public sealed class FigureStats
 }
 
 /// <summary>
-/// The figures of <c>GET /play/worldmap</c> on the open map — client3d's <c>FigureLibrary</c> + the model side of
+/// The figures of <c>GET /play/worldmap</c> on the open map — the browser 3D scene's <c>FigureLibrary</c> + the model side of
 /// <c>NpcManager</c>:
 ///
 ///   • which and where: <see cref="FigurePlacement.Plan"/> once a second from the cached map (journeys, free points,

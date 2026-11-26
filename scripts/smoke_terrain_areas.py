@@ -259,7 +259,7 @@ Throwaway storage. Hand-derived expectations:
       scatter's instances are sampled client-side in a camera window, so the
       one formula runs in the renderers over the cell seed
       (`@anima/scene-render scatterVariantIndex`); its numbers are checked in
-      `client3d/scripts/smoke_scatter_math.mjs` section (N).
+      `native/tests/Derivations/scatter_math.md` section (N).
       RED COUNTER-PROBES, EXECUTED, all built from the module's own pieces:
       a "loose URL" mutant (anything containing /assets/props/) hands the
       foreign URL a variants map, a "no tier parameter" mutant builds
@@ -1242,7 +1242,7 @@ check("a fresh read carries neither key (payload only)",
 # instances of a painted scatter are sampled in the client's camera window, so
 # the renderers run the shared formula over the cell seed
 # (`@anima/scene-render scatterVariantIndex`, checked numerically in
-# `client3d/scripts/smoke_scatter_math.mjs` section N). The server's whole job
+# `native/tests/Derivations/scatter_math.md` section N). The server's whole job
 # is the LIST.
 BUSH = make_prop("smoke bush", ["full", "low"], height_m=1.4)
 _bush_v1 = props.add_variant(BUSH)

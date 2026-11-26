@@ -9,7 +9,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The Task 31 core parts without a shared vector, derived by hand here:
-///   • <c>groundOffsetOf</c> — the cases of client3d/scripts/smoke_clip_ground.mjs [1], verbatim;
+///   • <c>groundOffsetOf</c> — the cases of the browser scene's deleted smoke_clip_ground.mjs [1], verbatim;
 ///   • <see cref="ClipGround.Measure"/> on a hand-built skinned rig (one bone, two vertices);
 ///   • the probe sampler (<see cref="RigPose"/>) against three's interpolants (lerp / slerpFlat, clamped);
 ///   • the turn bake of <see cref="FootLockMeasure.Relock"/> on the vector skeleton with a turning pelvis.

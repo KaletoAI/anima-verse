@@ -24,7 +24,7 @@ public sealed record ScatterEntry(
 /// <summary>A type of the catalog; <c>Surface</c> = <c>surfaceOfType</c> (the library id it wears, trimmed + lower-cased, '' = none).</summary>
 public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrowth, double SwayM, string Surface = "")
 {
-    /// <summary><c>swayFor</c>'s clamp of a type's <c>sway_m</c> (client3d ground.ts <c>SWAY_MIN_M</c>/<c>SWAY_MAX_M</c>); the scatter shaders read the same bounds.</summary>
+    /// <summary><c>swayFor</c>'s clamp of a type's <c>sway_m</c> (the browser 3D scene's ground.ts <c>SWAY_MIN_M</c>/<c>SWAY_MAX_M</c>); the scatter shaders read the same bounds.</summary>
     public const double SwayMinM = 0.01, SwayMaxM = 0.5;
 
     /// <summary>
@@ -71,7 +71,7 @@ public sealed record TerrainAreaInfo(string Id, string Kind, List<P2> Polygon, L
 
 public sealed record PropBox(double X, double Z, double YawDeg, double HalfW, double HalfD);
 
-/// <summary><c>GET /play/terrain</c> (client3d <c>TerrainPayload</c>): types, areas bottom to top, prop boxes.</summary>
+/// <summary><c>GET /play/terrain</c> (the browser 3D scene <c>TerrainPayload</c>): types, areas bottom to top, prop boxes.</summary>
 public sealed class TerrainPayload
 {
     public string DefaultKind { get; private set; } = "";

@@ -6,7 +6,7 @@ using System.Linq;
 namespace AnimaNative.Terrain;
 
 /// <summary>
-/// Which fine tiles the client wants (<c>client3d/src/scene/heightTiles.ts</c>) and the tile key rule
+/// Which fine tiles the client wants (the browser scene's <c>heightTiles.ts</c>) and the tile key rule
 /// (<c>tileKeyAt</c>, <c>packages/scene-render/src/worldHeight.ts</c>) — one want set for the height tiles and the
 /// layer mask tiles, checked against <c>shared/test-vectors/height_tiles.json</c>.
 /// </summary>

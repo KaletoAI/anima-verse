@@ -1,6 +1,6 @@
 # bench_math
 
-- Origin: `client3d/scripts/smoke_bench_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_bench_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BenchMathVectorTests.cs`
 - Vectors: `shared/test-vectors/bench_math.json`
 
@@ -8,10 +8,10 @@
 
 ```text
 /**
- * Smoke check for the STATISTICS of the render bench (client3d/src/bench/benchStats.ts
+ * Smoke check for the STATISTICS of the render bench (the browser scene's benchStats.ts
  * — the pure part; the camera drive and the DOM readout need a browser).
  *
- * Usage:  node client3d/scripts/smoke_bench_math.mjs
+ * Usage:  node the browser scene's deleted smoke_bench_math.mjs
  *
  * Hand-derived expectations (§ B5a: numbers, no snapshots):
  * [1] percentile — linear interpolation between ranks (p50 of 1,2,3,4 = 2.5)

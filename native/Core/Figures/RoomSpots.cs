@@ -18,7 +18,7 @@ public sealed record RoomSpotsResult(RoomRect Rect, P2 CentreLocal, Vec3 Centre,
                                      IReadOnlyList<Vec3> Sit, IReadOnlyList<Vec3> Lie, IReadOnlyList<double?> MarkerY);
 
 /// <summary>
-/// THE STANDS OF ONE ROOM — client3d/src/game/roomSpots.ts <c>roomSpotsOf</c> and its rules in game/ground.ts
+/// THE STANDS OF ONE ROOM — the browser scene's roomSpots.ts <c>roomSpotsOf</c> and its rules in game/ground.ts
 /// (<c>polygonCentroid</c>, <c>roomSpotGrid</c>, <c>furnitureUse</c> and the constants), checked against
 /// shared/test-vectors/room_spots.json.
 /// </summary>

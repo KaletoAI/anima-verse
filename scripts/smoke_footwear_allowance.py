@@ -111,7 +111,7 @@ const [root] = process.argv.slice(2);
 const require_ = createRequire(join(root, 'scripts', 'x.js'));
 let esbuild = null;
 for (const cand of ['esbuild', join(root, 'node_modules/esbuild'), join(root, 'frontend/node_modules/esbuild'),
-                    join(root, 'client3d/node_modules/esbuild')]) {
+                    join(root)]) {
   try { esbuild = require_(cand); break } catch { /* next */ }
 }
 if (!esbuild) { console.error('esbuild not found'); process.exit(2) }

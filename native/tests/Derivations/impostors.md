@@ -1,6 +1,6 @@
 # impostors
 
-- Origin: `client3d/scripts/smoke_impostors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_impostors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ImpostorVectorTests.cs`
 - Vectors: `shared/test-vectors/impostors.json`
 
@@ -11,10 +11,10 @@
  * REGRESSION: Existing impostor math and render wiring retain their original baselines.
  * Smoke check for the FAR IMPOSTORS of the ground scatter — the render stage
  * that draws a wood beyond the cull line as billboards
- * (`client3d/src/scene/scatterLod.ts`, the `IMPOSTOR_*` half; the GPU side is
- * `client3d/src/scene/impostors.ts`).
+ * (the browser scene's `scatterLod.ts`, the `IMPOSTOR_*` half; the GPU side is
+ * the browser scene's `impostors.ts`).
  *
- * Usage:  node client3d/scripts/smoke_impostors.mjs
+ * Usage:  node the browser scene's deleted smoke_impostors.mjs
  *
  * Same discipline as `smoke_scatter_math.mjs` and `smoke_occlusion.mjs`: every
  * expected number below is derived BY HAND in this header and never recorded

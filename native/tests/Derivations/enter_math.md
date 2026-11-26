@@ -1,6 +1,6 @@
 # enter_math
 
-- Origin: `client3d/scripts/smoke_enter_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_enter_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/EnterVectorTests.cs`
 - Vectors: `shared/test-vectors/enter.json`
 
@@ -10,11 +10,11 @@
 /**
  * Smoke check for the pure ENTRY maths of the 3D client
  * (plan-freie-weltkarte-e4-3d-client.md task 5; contract v6 "Gebiete") —
- * `client3d/src/game/enterLocation.ts`.
+ * the browser scene's `enterLocation.ts`.
  *
- * Usage:  node client3d/scripts/smoke_enter_math.mjs
+ * Usage:  node the browser scene's deleted smoke_enter_math.mjs
  *
- * Same discipline as `client3d/scripts/smoke_ground_math.mjs` and
+ * Same discipline as the browser scene's deleted `smoke_ground_math.mjs` and
  * `smoke_travel_math.mjs`: every expected number below is derived BY HAND from
  * the contract (§ A1.1, § A1.3 and § B1 Nr. 13 of docs/schnittstellen-3d.md)
  * and from the server's own `app/core/boundary_entry.py`, written out in this
@@ -176,7 +176,7 @@
  * Smoke: the CLIENT's polygon primitives answer exactly what the SERVER's do
  * (contract v6 "Gebiete", § B5a — numbers, never screenshots).
  *
- * Usage:  node client3d/scripts/smoke_polygon_containment.mjs
+ * Usage:  node the browser scene's deleted smoke_polygon_containment.mjs
  *
  * Since v6 a location is a drawn POLYGON: `map3d.boundary` in local metres
  * around the pin, turned by `yaw_deg` (§ A1.1). Both sides of the wire have to

@@ -19,7 +19,7 @@ public sealed record UndergrowthArea(string Id, string Kind, List<P2> Ring, (dou
 }
 
 /// <summary>
-/// The layer nobody authored (§ A9) — port of <c>client3d/src/scene/undergrowth.ts</c>: a window of
+/// The layer nobody authored (§ A9) — port of the browser scene's <c>undergrowth.ts</c>: a window of
 /// 64 m cells within <c>UNDERGROWTH_CELL_RADIUS_M</c> of the anchor, each (area, cell) sampled by the shared
 /// <c>scatterInstances</c> from its own seed <c>terrain:undergrowth:&lt;area&gt;:&lt;cx&gt;,&lt;cz&gt;</c> at
 /// <c>UNDERGROWTH_DENSITY_PER_M2 × meta.undergrowth</c>, one MultiMesh per (cell, area) with per-instance
@@ -420,7 +420,7 @@ public partial class UndergrowthField : Node3D
             // three's v runs up the quad with row 0 of the (unflipped) DataTexture at v = 0; Godot's
             // v = 0 is row 0 of the Image as well, so the uv goes over unchanged.
             uvs[i] = new Vector2(uv[i * 2], uv[i * 2 + 1]);
-            normals[i] = Vector3.Up;
+            normals[i] = new Vector3(UndergrowthMath.Normal[0], UndergrowthMath.Normal[1], UndergrowthMath.Normal[2]);
         }
         // three winds front faces counter-clockwise, Godot clockwise: reverse each triangle. Both windings
         // are in the list anyway (the tuft is double-sided by construction), so this only keeps the order.

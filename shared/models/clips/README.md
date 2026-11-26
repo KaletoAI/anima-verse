@@ -173,7 +173,7 @@ characters that walk on their belly:
    whose soles stand on the ground, so a clip animated on a line of its own —
    a swimmer on a water line — holds the body over that ground. The client
    measures the offset and drops the figure onto the ground while it moves
-   (`client3d/src/scene/clipGround.ts`), which rescues the picture but not the
+   (the browser scene's `clipGround.ts`), which rescues the picture but not the
    intent: the swimmer then wades at the height the clip was authored at.
    Clips that are MEANT to sit above the floor (a sleeper on a bed) are the
    deliberate exception.
@@ -189,7 +189,7 @@ UpLeg/Leg, the foot keeping its world rotation
 clips, CMU and FBX alike (FBX only when the source has toe bones). With
 `foot_lock` each planted run is also pinned horizontally before the travel is
 rebuilt. A foot the actor really lifts (`drinking`) stays up. The client
-repeats the pin per figure model (`client3d/src/scene/legPin.ts`), because a
+repeats the pin per figure model (the browser scene's `legPin.ts`), because a
 figure with other leg lengths than the reference rig would slide again. Clips
 imported before 2026-09-26 carry no `foot_plant` and get the correction only
 on a re-import.

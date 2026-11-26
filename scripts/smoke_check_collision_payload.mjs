@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke check for WHICH capsule set the garment check measures with (Ruling B11i) —
- * `scripts/collisionPayloadSource.mjs`, used by `scripts/check_garment_collision.mjs`.
+ * `scripts/collisionPayloadSource.mjs`, used by the garment check `check_garment_collision.mjs` (deleted with the browser 3D scene in plan E3).
  * The check used to fit the capsules from the GLB alone: no extension capsules (`chest`,
  * `chest_hair` of a `pair_protrusion` body) and no character scales — 10 hair capsules where the
  * client pushes with 12. It now measures the SERVED record by default.

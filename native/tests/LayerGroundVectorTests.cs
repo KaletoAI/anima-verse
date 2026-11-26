@@ -14,8 +14,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/layer_ground.json against <see cref="LayerCut"/> and <see cref="NaturalGround"/> (hand
-/// derivations: client3d/scripts/smoke_layer_cut.mjs; TS sources packages/scene-render/src/layerCut.ts,
-/// client3d/src/scene/naturalGroundMath.ts).
+/// derivations: native/tests/Derivations/layer_cut.md; TS sources packages/scene-render/src/layerCut.ts,
+/// the browser scene's naturalGroundMath.ts).
 ///
 /// <code>
 ///   TS fn            C#                          shape translation

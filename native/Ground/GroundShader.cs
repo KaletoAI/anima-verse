@@ -311,7 +311,7 @@ float fv_amount(vec2 p) {{
 }}
 ";
 
-    // ── The water variant (Wasser v2 K-A: client3d/src/scene/waterShade.ts terrainWaterFragmentGlsl) ──────────
+    // ── The water variant (Wasser v2 K-A: the browser scene's waterShade.ts terrainWaterFragmentGlsl) ──────────
     // The wet pieces' vertices are LIFTED onto the mirror by the vertex stage (TerrainLodGlsl tl_lift, per tap of the
     // morph pair) and hand the depth over the drawn bed out as v_wet (vTlodWet). Every water field is sampled HERE at
     // the pixel's own xz, on the water pyramid's BASE lattice (tl_water_geom, the browser's uTlodWaterGeom): the signed

@@ -9,7 +9,7 @@ namespace AnimaNative.Water;
 
 /// <summary>
 /// Water surfaces inside props and dioramas (scene payload v18, § B2 <c>water.regions[]</c>) — the pure half of
-/// <c>client3d/src/scene/propWaterMath.ts</c> (<c>pointInRegion</c>, <c>waterRegionAt</c>, checked against
+/// the browser scene's <c>propWaterMath.ts</c> (<c>pointInRegion</c>, <c>waterRegionAt</c>, checked against
 /// <c>shared/test-vectors/prop_water.json</c>) and of <c>packages/scene-render/src/propWater.ts</c>
 /// (<c>buildPropWater</c>: one flat sheet per region at <c>y + lift</c>, the shared surface water look, still water).
 /// </summary>

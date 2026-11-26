@@ -1,6 +1,6 @@
 # overview_labels
 
-- Origin: `client3d/scripts/smoke_overview_labels.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_overview_labels.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/OverviewLabelsVectorTests.cs`
 - Vectors: `shared/test-vectors/overview_labels.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Smoke check for the labels over the world map and the overview auto-close of
- * the open view — client3d/src/scene/nameTags.ts and client3d/src/game/openView.ts.
+ * the open view — the browser scene's nameTags.ts and the browser scene's openView.ts.
  *
- * Usage:  node client3d/scripts/smoke_overview_labels.mjs
+ * Usage:  node the browser scene's deleted smoke_overview_labels.mjs
  *
  * Hand derivations (cases in shared/test-vectors/overview_labels.json, shared
  * with the native client's C# tests):

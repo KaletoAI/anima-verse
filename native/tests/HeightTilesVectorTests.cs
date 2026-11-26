@@ -15,8 +15,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/height_tiles.json against the native height ground (hand derivations:
-/// client3d/scripts/smoke_height_tiles.mjs, smoke_world_height.mjs; TS sources client3d/src/scene/heightTiles.ts,
-/// packages/scene-render/src/worldHeight.ts, client3d/src/scene/waterRaster.ts).
+/// native/tests/Derivations/height_tiles.md, smoke_world_height.mjs; TS sources the browser scene's heightTiles.ts,
+/// packages/scene-render/src/worldHeight.ts, the browser scene's waterRaster.ts).
 ///
 /// <code>
 ///   TS fn              C#                                  shape translation

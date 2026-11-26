@@ -294,7 +294,7 @@ public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<doubl
                                        Func<string, double, double, double?> RoomStandY);
 
 /// <summary>
-/// WHICH characters stand on the map and WHERE — client3d/src/main.ts <c>computeNpcPlacements</c> without the avatar's
+/// WHICH characters stand on the map and WHERE — the browser scene's main.ts <c>computeNpcPlacements</c> without the avatar's
 /// own branches (suppressed journey, waiting for its place: E6/E7):
 ///
 ///   1. <b>journey</b> (<c>travellerState</c>): <c>travel</c> with ≥ 2 <c>waypoints</c> AND a <c>progress_m</c> → the

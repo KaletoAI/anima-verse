@@ -13,14 +13,14 @@ namespace AnimaNative.Check;
 /// The bench maths of Task S2 inside <c>--check</c>, with the HAND values of the
 /// browser smokes (no recording of current output):
 ///
-///   • path   — client3d/scripts/smoke_bench_path.mjs: 17 keyframes, duration 20,
+///   • path   — the browser scene's deleted smoke_bench_path.mjs: 17 keyframes, duration 20,
 ///              warm-up 3; t = 0.625 halfway between keyframes 0 and 1 →
 ///              [7.45, 23.6805, 37.9855]; t = 10.625 halfway between keyframes 8
 ///              and 9 → [−2.5, 7.5195, −12.0355]; target [0, 1.5, 0]; clamping at
 ///              t = −1 / 21; plus a quarter point (see below); the nine invalid mutations (NaN → JSON null here,
 ///              which is what <c>JSON.stringify(NaN)</c> writes);
-///   • maths  — client3d/scripts/smoke_bench_math.mjs, numbers verbatim;
-///   • anchor — client3d/scripts/smoke_bench_anchor.mjs, rows and cases verbatim,
+///   • maths  — native/tests/Derivations/bench_math.md, numbers verbatim;
+///   • anchor — the browser scene's deleted smoke_bench_anchor.mjs, rows and cases verbatim,
 ///              height rule h(x, z) = 0.5x − 0.25z.
 /// Plus: the embedded path is byte-identical to the repository file.
 /// </summary>

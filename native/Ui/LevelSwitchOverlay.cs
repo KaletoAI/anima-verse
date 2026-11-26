@@ -7,7 +7,7 @@ using Godot;
 namespace AnimaNative.Ui;
 
 /// <summary>
-/// The in-world storey switch of an open location (client3d/src/scene/sceneRecipe.ts mountShell step 17, the
+/// The in-world storey switch of an open location (the browser scene's sceneRecipe.ts mountShell step 17, the
 /// <c>.level-switch</c> CSS) — scene-owned like the browser's (ruling P3-R8: no bridge message), drawn in screen space
 /// over the world like the CSS2D labels, but taking the pointer:
 ///

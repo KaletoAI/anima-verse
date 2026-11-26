@@ -39,7 +39,7 @@ public readonly record struct StageFrame(GodotLight Sun, GodotLight Fill, GodotL
                                          double SunAngle, double Night);
 
 /// <summary>
-/// The browser engine's light set (client3d/src/scene/engine.ts: the constructor, <c>setGameHour</c>,
+/// The browser engine's light set (the browser scene's engine.ts: the constructor, <c>setGameHour</c>,
 /// <c>applyAmbience</c> and the per-frame sun placement) mapped onto Godot.
 ///
 /// <b>Units — the 1/π mapping.</b> three r185 (physically based, no legacy lights) lights a diffuse surface with

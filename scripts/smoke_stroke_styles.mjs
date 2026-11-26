@@ -148,7 +148,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
-import { rowVectorDispatch } from '../client3d/scripts/e4VectorDispatch.mjs';
+import { rowVectorDispatch } from './e4VectorDispatch.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
@@ -196,7 +196,7 @@ function check(label, actual, expected, eps = 1e-9) {
   }
 }
 /** A fed random stream for the jitter cases of [S14] — the pattern of
- *  `client3d/scripts/smoke_scatter_math.mjs`: it throws when the sampler
+ *  `native/tests/Derivations/scatter_math.md`: it throws when the sampler
  *  draws more numbers than the case derived by hand, so a stream that must
  *  stay closed is fed nothing at all. */
 function stream(values) {

@@ -59,7 +59,7 @@ public readonly record struct SessionState(SessionPhase Phase, bool HudLoaded);
 ///
 /// The character switch. The browser's GameMenu calls <c>markResume()</c> and then <c>location.reload()</c>; the
 /// marker makes the reloaded page's boot skip the title gate, and the reload rebuilds the world for the new avatar
-/// (client3d main.ts <c>RESUME_KEY</c>). Every reload of the HUD page after its first load means exactly that —
+/// (the browser 3D scene's main.ts <c>RESUME_KEY</c>). Every reload of the HUD page after its first load means exactly that —
 /// "resume with the current session" (a take-over, or a re-login that reloads with the marker); inside CEF there is
 /// no other reload path. So the RELOAD is the trigger: the first <c>hud.html</c> load of a session (the handoff's
 /// navigation) only sets <see cref="SessionState.HudLoaded"/>, every later one rebuilds. <c>markResume</c> is only

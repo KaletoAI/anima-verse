@@ -12,7 +12,7 @@ without a single reader, decision E1.3, and kept being written so that a world
 played in the meantime would not start remembering only on the day the new
 veil arrived):
 
-  * the PICTURE — ``client3d/src/scene/fogVeil.ts`` hazes over every cell the
+  * the PICTURE — the browser scene's ``fogVeil.ts`` hazes over every cell the
     avatar has not explored, fetched through ``GET /play/explored`` whenever
     ``explored_sig`` moves;
   * the FILTER — :func:`seen_cells` / :func:`point_explored` drop the FIGURES
@@ -69,7 +69,7 @@ logger = get_logger("exploration")
 #: client spares whole cells out of the veil, and a cell that did not line up
 #: with the tiling would have to be cut out of a quad instead of replacing one.
 #: The automatic undergrowth (``UNDERGROWTH_CELL_M`` = 64 in
-#: ``client3d/src/scene/scatterLod.ts``) still uses it, so the number keeps a
+#: the browser scene's ``scatterLod.ts``) still uses it, so the number keeps a
 #: live twin.
 EXPLORED_CELL_M = 64.0
 

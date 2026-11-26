@@ -8,7 +8,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// ONE import per GLB URL (client3d/src/scene/propAssets.ts <c>leaseGlb</c>: buildings, dioramas, props and
+/// ONE import per GLB URL (the browser scene's propAssets.ts <c>leaseGlb</c>: buildings, dioramas, props and
 /// door/window models share one cache keyed by URL). Every placement gets a <see cref="Node.Duplicate"/> of
 /// the template — meshes and materials are shared resources, exactly like three's <c>clone(true)</c>.
 /// A URL that failed stays failed for the session (the browser retries 3 times, then gives up).
@@ -75,7 +75,7 @@ public sealed class ModelCache
     }
 
     /// <summary>
-    /// client3d/src/scene/glbMaterials.ts <c>neutralizeGltfMaterials</c>, run once per imported GLB (propAssets.ts runs
+    /// the browser scene's glbMaterials.ts <c>neutralizeGltfMaterials</c>, run once per imported GLB (propAssets.ts runs
     /// it on load, before any placement): generated GLBs often leave <c>metallicFactor</c> unset, glTF's default is 1.0,
     /// and an untextured metal without an environment map renders almost black — it is meant as no metal at all.
     /// <see cref="MaterialLooks.NeutralizeLook"/> decides (vector-checked): untextured metalness above 0.5 → 0, a real

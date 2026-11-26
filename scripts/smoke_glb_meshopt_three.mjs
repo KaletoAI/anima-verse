@@ -25,7 +25,7 @@ globalThis.ProgressEvent = class { constructor(type, values) { Object.assign(thi
 
 const root = resolve(import.meta.dirname, '..');
 function checkFactories() {
-  for (const [app, factory] of [['client3d', 'scene/gltfLoader.ts'], ['frontend', 'lib/gltfLoader.ts']]) {
+  for (const [app, factory] of [['frontend', 'lib/gltfLoader.ts']]) {
     const path = join(root, app, 'src', factory);
     const source = readFileSync(path, 'utf8');
     assert.match(source, /setMeshoptDecoder\(MeshoptDecoder\)/);

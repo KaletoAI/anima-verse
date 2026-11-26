@@ -1,6 +1,6 @@
 # travel_math
 
-- Origin: `client3d/scripts/smoke_travel_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_travel_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/TravelVectorTests.cs`
 - Vectors: `shared/test-vectors/travel.json`
 
@@ -43,12 +43,12 @@
  *
  * Smoke check for the pure journey maths of the 3D client
  * (plan-freie-weltkarte-e4-3d-client.md, task 4) —
- * `client3d/src/scene/travelPath.ts`.
+ * the browser scene's `travelPath.ts`.
  *
- * Usage:  node client3d/scripts/smoke_travel_math.mjs
+ * Usage:  node the browser scene's deleted smoke_travel_math.mjs
  *
- * Same discipline as `client3d/scripts/smoke_ground_math.mjs` and
- * `client3d/scripts/smoke_walk_math.mjs`: every expected number below is derived BY
+ * Same discipline as the browser scene's deleted `smoke_ground_math.mjs` and
+ * the browser scene's deleted `smoke_walk_math.mjs`: every expected number below is derived BY
  * HAND from the contract (§ A11 of docs/schnittstellen-3d.md), written out in
  * this header, and NEVER recorded from the current output. A check that only
  * pins today's result proves nothing.
@@ -226,11 +226,11 @@
 
  * Smoke check for the DEAD RECKONING of a fogged traveller (plan-npc-leben-bugs,
  * task 3) — `deadReckonRate` and `deadReckonStep` in
- * `client3d/src/scene/travelPath.ts`.
+ * the browser scene's `travelPath.ts`.
  *
- * Usage:  node client3d/scripts/smoke_travel_reckon.mjs
+ * Usage:  node the browser scene's deleted smoke_travel_reckon.mjs
  *
- * Same discipline as `client3d/scripts/smoke_travel_math.mjs` and
+ * Same discipline as the browser scene's deleted `smoke_travel_math.mjs` and
  * `smoke_walk_math.mjs`: every expected number below is derived BY HAND from
  * the rule, written out in this header, and NEVER recorded from the current
  * output. A check that only pins today's result proves nothing.

@@ -3,12 +3,12 @@ using System;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// The ONE open detail view of the overview (client3d/src/main.ts, "The open detail view: ONE explicit
+/// The ONE open detail view of the overview (the browser scene's main.ts, "The open detail view: ONE explicit
 /// singleton"): exactly one location shows its interior; opening another closes the current one; there
-/// is no auto-reopen. The overview auto-close rule and its numbers are client3d/src/game/openView.ts
+/// is no auto-reopen. The overview auto-close rule and its numbers are the browser scene's openView.ts
 /// (<c>CLOSE_CAM_DIST</c>, <c>CLOSE_TARGET_FOOTPRINTS</c>, <c>CLOSE_TARGET_MIN_M</c>, <c>closeTargetDist</c>,
 /// <c>openViewShouldClose</c>), vector-checked against shared/test-vectors/overview_labels.json [D, C]
-/// (derivations in client3d/scripts/smoke_overview_labels.mjs). The singleton, <c>OPEN_FLY_DIST</c> and the badge
+/// (derivations in native/tests/Derivations/overview_labels.md). The singleton, <c>OPEN_FLY_DIST</c> and the badge
 /// are inline in main.ts; native/tests/PickingTests.cs derives those cases by hand.
 /// </summary>
 public sealed class OpenView

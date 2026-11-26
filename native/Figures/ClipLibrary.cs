@@ -67,7 +67,7 @@ public sealed record SourceTrack(Animation.InterpolationType Interp, double[] Ti
 public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Keys, RootPath? RootPath, string? Digest = null);
 
 /// <summary>
-/// The server's WHOLE clip library on the native side — client3d's <c>FigureLibrary.load</c>:
+/// The server's WHOLE clip library on the native side — the browser 3D scene's <c>FigureLibrary.load</c>:
 ///
 ///   • <b>listing</b> <c>GET /assets/animation-clips</c>: every <c>clips[]</c> entry is a source (a pair half as
 ///     <c>&lt;kind&gt;__&lt;role&gt;</c>, the kind as the server spells it), with its set, its loop flag (missing =
@@ -84,7 +84,7 @@ public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Ke
 /// emits tracks for curves that MOVE and stores the constant value as the node default. The retarget therefore
 /// writes a one-key constant track from that default for every clip bone the target has — the file's track list.
 ///
-/// <b>Retarget</b> (<see cref="Retarget"/>, client3d <c>adaptExternalClips</c>): bones matched by
+/// <b>Retarget</b> (<see cref="Retarget"/>, the browser 3D scene <c>adaptExternalClips</c>): bones matched by
 /// <see cref="NormBone"/>; rotations through the rest correction <c>q = K_p⁻¹·c·K_b</c>
 /// (<see cref="RestCorrections"/>, vectors retarget.json) against the reference rig <c>/assets/animation-rig</c>,
 /// without corrections the hips get <c>hipsRotFix</c>; the hips POSITION through <see cref="HipsTrack.Map"/>
@@ -580,7 +580,7 @@ public sealed class ClipLibrary
 
     /// <summary>
     /// Build <paramref name="clip"/> for the skeleton under <paramref name="modelRoot"/> (track paths relative to it —
-    /// the AnimationPlayer's root node), client3d <c>adaptExternalClips</c> for ONE clip: <see cref="Compute"/> then
+    /// the AnimationPlayer's root node), the browser 3D scene <c>adaptExternalClips</c> for ONE clip: <see cref="Compute"/> then
     /// <see cref="Write"/> on the calling (main) thread. The lazy fit (Task 35b, <see cref="TemplateClips"/>) runs the two
     /// halves apart — the key math on a worker thread, the write on the main thread — with the same result bit for bit.
     /// </summary>

@@ -15,7 +15,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/terrain_lod.json against the native terrain math (hand derivations:
-/// client3d/scripts/smoke_terrain_lod.mjs; TS source client3d/src/scene/terrainLod.ts).
+/// native/tests/Derivations/terrain_lod.md; TS source the browser scene's terrainLod.ts).
 ///
 /// <code>
 ///   TS fn             C#                           shape translation

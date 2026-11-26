@@ -1,6 +1,6 @@
 # camera_math
 
-- Origin: `client3d/scripts/smoke_camera_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_camera_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/CameraVectorTests.cs`
 - Vectors: `shared/test-vectors/camera.json`
 
@@ -8,11 +8,11 @@
 
 ```text
 /**
- * Smoke check for the OVERVIEW camera's arithmetic (`client3d/src/scene/cameraMath.ts`,
- * plus `basePitchDeg` of `client3d/src/scene/cameraFraming.ts`) — the pure part;
+ * Smoke check for the OVERVIEW camera's arithmetic (the browser scene's `cameraMath.ts`,
+ * plus `basePitchDeg` of the browser scene's `cameraFraming.ts`) — the pure part;
  * the input events and the render loop that call it need a browser.
  *
- * Usage:  node client3d/scripts/smoke_camera_math.mjs
+ * Usage:  node the browser scene's deleted smoke_camera_math.mjs
  *
  * Hand-derived expectations (§ B5a: numbers, no snapshots). Constants of the
  * rules: MIN_DIST 0.8, MAX_DIST 150, half FOV 22.5° (sin 22.5° = 0.3826834324),

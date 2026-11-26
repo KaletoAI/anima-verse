@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Smoke check (A204): a SHEER template piece is drawn see-through in both renderers.
+ * Smoke check (A204): a SHEER template piece is drawn see-through in the admin renderer.
  *
  * Usage: node scripts/smoke_sheer_render_a204.mjs [figure.glb]
  *        (with a path, the same checks run on that assembled figure as well)
@@ -12,13 +12,13 @@
  *
  * HAND-DERIVED EXPECTATIONS (three's GLTFLoader: BLEND → transparent true, depthWrite false; doubleSided → side 2;
  * baseColorFactor alpha → opacity; extras → userData):
- *   [1] both loader factories: skirt transparent, depthWrite false, opacity 0.4, side DoubleSide (2);
+ *   [1] the admin loader factory: skirt transparent, depthWrite false, opacity 0.4, side DoubleSide (2);
  *       body transparent false, depthWrite true, side FrontSide (0).
- *   [2] client3d `zeroFigureMetalness` leaves those flags as they are (it only touches metalness).
+ *   [2] (was the browser 3D scene's metalness step; that scene was deleted in plan E3.)
  *   [3] `prepareSheerPieces(root, DoubleSide)` returns 1 (one sheer mesh), sets the skirt's renderOrder to
  *       SHEER_RENDER_ORDER = 2 and keeps transparent / depthWrite false / opacity 0.4; the body keeps renderOrder 0.
  *   [4] `SkeletonUtils.clone` (one figure instance): renderOrder 2 and the shared material survive.
- *   [5] Source: client3d figures.ts and both admin viewers (Model3DViewer, meshSnapshot) call prepareSheerPieces.
+ *   [5] Source: both admin viewers (Model3DViewer, meshSnapshot) call prepareSheerPieces.
  * Before A204 (commit e08e95fdb) `prepareSheerPieces` did not exist — [3] fails there by construction.
  */
 import { spawnSync } from 'child_process'
@@ -87,7 +87,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_sheer_render_a204_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) { console.error('esbuild not found (npm install) — nothing was checked'); process.exit(1) }
     const built = spawnSync(bin, [__filename, '--bundle', '--platform=node', '--format=esm', '--log-level=warning',
@@ -100,9 +100,7 @@ async function main() {
   globalThis.self = globalThis
   const THREE = await import('three')
   const SkeletonUtils = await import('three/addons/utils/SkeletonUtils.js')
-  const { createGLTFLoader: client3dLoader } = await import('../client3d/src/scene/gltfLoader.ts')
   const { createGLTFLoader: adminLoader } = await import('../frontend/src/lib/gltfLoader.ts')
-  const { zeroFigureMetalness } = await import('../client3d/src/scene/figureMaterials.ts')
   const { prepareSheerPieces, SHEER_RENDER_ORDER, inGarment } = await import('../packages/scene-render/src/index.ts')
   const failures = []
   const check = (label, ok, detail = '') => {
@@ -126,7 +124,7 @@ async function main() {
   }
   for (const [name, glb, opacity] of cases) {
     console.log(`[${name}]`)
-    for (const [app, factory] of [['client3d', client3dLoader], ['frontend', adminLoader]]) {
+    for (const [app, factory] of [['frontend', adminLoader]]) {
       const { sheer, body } = split((await factory().parseAsync(glb.slice(0), '')).scene)
       check(`[1] ${app}: ≥1 sheer mesh, ≥1 body mesh`, sheer.length >= 1 && body.length >= 1, `${sheer.length}/${body.length}`)
       check(`[1] ${app}: sheer transparent, no depth write, DoubleSide`, sheer.every((m) =>
@@ -134,10 +132,8 @@ async function main() {
       if (opacity !== null) check(`[1] ${app}: sheer opacity ${opacity}`, sheer.every((m) => near(m.material.opacity, opacity)))
       check(`[1] ${app}: body opaque with depth write`, body.every((m) => !m.material.transparent && m.material.depthWrite))
     }
-    const template = (await client3dLoader().parseAsync(glb.slice(0), '')).scene
-    zeroFigureMetalness(template)
+    const template = (await adminLoader().parseAsync(glb.slice(0), '')).scene
     let { sheer, body } = split(template)
-    check('[2] zeroFigureMetalness keeps the sheer flags', sheer.every((m) => m.material.transparent && !m.material.depthWrite))
     const marked = prepareSheerPieces(template, THREE.DoubleSide)
     check('[3] prepareSheerPieces marks every sheer mesh', marked === sheer.length, `${marked}`)
     check(`[3] sheer renderOrder ${SHEER_RENDER_ORDER} = 2`, SHEER_RENDER_ORDER === 2 && sheer.every((m) => m.renderOrder === 2))
@@ -148,7 +144,7 @@ async function main() {
       && sheer.every((m) => m.renderOrder === 2 && m.material.transparent && !m.material.depthWrite))
   }
   const root = process.cwd()
-  for (const rel of ['client3d/src/scene/figures.ts', 'frontend/src/tabs/characters/Model3DViewer.tsx',
+  for (const rel of ['frontend/src/tabs/characters/Model3DViewer.tsx',
     'frontend/src/tabs/characters/meshSnapshot.ts']) {
     check(`[5] ${rel} calls prepareSheerPieces`, /prepareSheerPieces\(/.test(fs.readFileSync(path.join(root, rel), 'utf8')))
   }

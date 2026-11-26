@@ -88,7 +88,7 @@ async function bundle(contents, resolveDir) {
     await rm(dir, { recursive: true, force: true })
   }
 }
-const S = await bundle("export * from '@anima/scene-render';", join(ROOT, 'client3d'))
+const S = await bundle("export * from '@anima/scene-render';", ROOT)
 const THREE = await import(THREE_URL)
 let n = 0
 const ok = (label) => { n++; console.log('  ok', label) }

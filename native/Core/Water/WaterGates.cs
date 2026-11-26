@@ -23,7 +23,7 @@ public readonly record struct WaterHit(double Y, double BedY, double SwimFromM)
 }
 
 /// <summary>
-/// The water gates of <c>client3d/src/game/walk.ts</c> — the pure rules the underwater ghost and (E5) the swimming
+/// The water gates of the browser scene's <c>walk.ts</c> — the pure rules the underwater ghost and (E5) the swimming
 /// figures share, checked against <c>shared/test-vectors/prop_water.json</c>:
 /// <c>groundScope</c>, <c>groundWaterLevel</c>, <c>wadeGate</c>, <c>swimFrom</c>, <c>propWaterWord</c>,
 /// <c>propWaterCarry</c>, <c>submergedInWater</c>, <c>ghostCutY</c>, <c>ghostWaterLevel</c>.

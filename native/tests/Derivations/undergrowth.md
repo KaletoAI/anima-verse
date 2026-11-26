@@ -1,7 +1,7 @@
 # undergrowth
 
-- Origin: `client3d/scripts/smoke_undergrowth.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
-- Executed by: `client3d/scripts/smoke_undergrowth.mjs` until E3; no C# consumer — E3 decides
+- Origin: the browser scene's deleted `smoke_undergrowth.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Executed by: `native/tests/UndergrowthVectorTests.cs` (since E3; until then only the browser scene's `smoke_undergrowth.mjs`, deleted in E3)
 - Vectors: `shared/test-vectors/undergrowth.json`
 
 ## Derivation
@@ -11,8 +11,8 @@
  * Smoke check for THE AUTOMATIC UNDERGROWTH — the layer nobody authored, as it
  * stands after the camera-local rebuild (plan-undergrowth-rettung.md,
  * 2026-08-16). Two modules, one subject: the numbers in
- * `client3d/src/scene/scatterLod.ts` (`UNDERGROWTH_*`) and everything that is
- * not a plain number in `client3d/src/scene/undergrowth.ts` — the cell raster,
+ * the browser scene's `scatterLod.ts` (`UNDERGROWTH_*`) and everything that is
+ * not a plain number in the browser scene's `undergrowth.ts` — the cell raster,
  * the blade texture, the crossed quads and the field that grows them.
  *
  * E4 SHARED VECTORS: undergrowth.json contains A/B/C/E and finite F/D
@@ -31,7 +31,7 @@
  * rows 58..63 are each empty by D6. Material, field, drift, non-finite and
  * mutation checks stay inline.
  *
- * Usage:  node client3d/scripts/smoke_undergrowth.mjs
+ * Usage:  node the browser scene's deleted smoke_undergrowth.mjs
  *
  * WHERE THESE CASES COME FROM. Sections (E) and part of (C) are the old
  * section (K) of `smoke_scatter_math.mjs`, moved here whole: the layer is no

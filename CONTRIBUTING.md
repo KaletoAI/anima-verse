@@ -72,7 +72,7 @@ Conventions for a new check:
 - 3D findings are argued **numerically**, never from a screenshot.
 
 Documentation claims can be guarded the same way: `scripts/smoke_docs_readme.py`,
-`smoke_docs_config_defaults.py`, `smoke_docs_llm_templates.py` and `smoke_docs_client3d_readme.py`
+`smoke_docs_config_defaults.py` and `smoke_docs_llm_templates.py`
 check that the docs still describe the code.
 
 ---

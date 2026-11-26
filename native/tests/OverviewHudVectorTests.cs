@@ -13,9 +13,9 @@ namespace AnimaNative.Tests;
 /// <summary>
 /// shared/test-vectors/overview_hud.json against the C# ports <see cref="Bubble"/>,
 /// <see cref="BootProgress"/>, <see cref="InfoPanel"/> and <see cref="ScatterPrefs"/>
-/// (hand derivations: client3d/scripts/smoke_walk_math.mjs, sections "Speech bubbles",
+/// (hand derivations: native/tests/Derivations/walk_math.md, sections "Speech bubbles",
 /// "Location info panel", "Scatter detail distances: typing"; TS sources:
-/// client3d/src/game/bubble.ts, boot.ts, infoPanel.ts, prefs.ts).
+/// the browser scene's bubble.ts, boot.ts, infoPanel.ts, prefs.ts).
 ///
 /// <code>
 ///   TS fn               C#                         shape translation

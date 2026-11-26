@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 /// <summary>
 /// The vertex stage's GPU-free twin (<see cref="TerrainShaderTwin"/>, the statement-for-statement copy of
 /// <see cref="TerrainLodGlsl"/>) against the <c>lodVertex</c> cases of shared/test-vectors/terrain_lod.json — the
-/// browser's CPU twin of the same GLSL (hand derivations: client3d/scripts/smoke_terrain_lod.mjs). The case's pyramids
+/// browser's CPU twin of the same GLSL (hand derivations: native/tests/Derivations/terrain_lod.md). The case's pyramids
 /// become the uniforms the client would upload (geometry, level rows, the near rectangle; no frame = the shader's
 /// ±1e6 default; no water, no cap), so the shader's own arithmetic answers the vectors, not only the C# port.
 /// </summary>

@@ -18,7 +18,7 @@
  *
  * Nothing in the path is keyed by the terrain KIND — an entry's seed carries
  * the AREA ID, so two areas of one kind draw two different streams
- * (`client3d/scripts/smoke_scatter_math.mjs`, sections C13 and K4 pin that).
+ * (`native/tests/Derivations/scatter_math.md`, sections C13 and K4 pin that).
  * What went wrong is the BUDGET: the preview drew area after area until it had
  * 4 000 SVG dots and then stopped, so the areas at the end of the list were
  * drawn with no scatter at all.
@@ -538,7 +538,6 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
 const SCATTER_SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
-const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
 /** Bundled and imported — `mapMath` pulls in the workspace package
  *  `@anima/scene-render`, which esbuild resolves and inlines. */
@@ -1395,8 +1394,8 @@ async function main() {
     [at(599).length > 0, scatterWindowDots(roadJobs, ONE_CELL, [], { gameSeconds: 599 })
       .filter((d) => d.entry === 2)].flat(),
     [true, ...client.lamps.map(dot(2))]);
-  // (K5) the order, pinned in both sources
-  const groundSrc = await readFile(GROUND_SRC, 'utf8');
+  // (K5) the order, pinned in the editor's source (the browser 3D scene's
+  // twin, ground.ts, was deleted in plan E3)
   const mathSrc = await readFile(SRC, 'utf8');
   const orderOf = (src) => {
     const i = src.indexOf('strokeStations({');
@@ -1405,9 +1404,7 @@ async function main() {
     const s = src.indexOf('scatterCellInstances({', c);
     return i >= 0 && e > i && c > e && s > c;
   };
-  check('K5 ground.ts calls the samplers along -> edge -> center -> spread',
-    orderOf(groundSrc.slice(groundSrc.indexOf('function buildScatter('))), true);
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     orderOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('))), true);
   // Four sampler calls per file, every one with the cell's grid and the
   // row's clearance as its radius; the two samplers that take an axis
@@ -1429,19 +1426,14 @@ async function main() {
     /areaAxis\(line, (ring|job\.ring), (entry\.sides|sides)\)/.test(src),
     !src.includes('new OccupancyGrid()'),
   ];
-  check('K5 ground.ts hands grid, clearance, tag and axis to every sampler call, from the package helpers',
-    wired(groundSrc), [true, true, true, true, true, true, true, true, true]);
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     wired(mathSrc), [true, true, true, true, true, true, true, true, true]);
   // THE ROW'S PINNED VARIANT (Task 8, 2026-09-10) goes to every one of the
   // four calls — `variant: entry.variant` in the client, `variant: e.variant`
   // in the editor — so a car row on the kerb is one car model on both sides,
   // and the thinned overview hands it to its one box-sampler call as well.
   const pinsOf = (src, re) => (src.match(re) || []).length;
-  check('K5 ground.ts hands the row\'s pinned variant to all four sampler calls',
-    pinsOf(groundSrc.slice(groundSrc.indexOf('function buildScatter(')),
-      /variant: entry\.variant,/g), 4);
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
       mathSrc.indexOf('function scatterThinnedByArea(')), /variant: e\.variant,/g), 4);
   check('K5 …and its thinned overview to its one',
@@ -1452,10 +1444,7 @@ async function main() {
   // `jitterM: entry.spacing_jitter_m` in the client, `jitterM:
   // e.spacing_jitter_m` in the editor; the centre and the spread sampler
   // have no stations to jitter.
-  check('K5 ground.ts hands the spacing jitter to the along and the edge call',
-    pinsOf(groundSrc.slice(groundSrc.indexOf('function buildScatter(')),
-      /jitterM: entry\.spacing_jitter_m,/g), 2);
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
       mathSrc.indexOf('function scatterThinnedByArea(')), /jitterM: e\.spacing_jitter_m,/g), 2);
   // THE SIDES (Task 10, 2026-09-10): the axis is the ROW's, not the
@@ -1465,15 +1454,9 @@ async function main() {
   // the ONLY `areaAxis(` call in each, and the edge call hands the same word
   // to the station walk (`sides: entry.sides` / `sides: e.sides`) — one
   // edge call, one pin. The thinned overview asks it per row as well.
-  const groundBuild = groundSrc.slice(groundSrc.indexOf('function buildScatter('));
-  check('K5 ground.ts asks the axis per row with the row\'s sides and hands sides to the edge call',
-    [pinsOf(groundBuild, /areaAxis\(line, ring, entry\.sides\)/g),
-      pinsOf(groundBuild, /areaAxis\(/g),
-      pinsOf(groundBuild, /const axisAt = axisOfRow\(entry\)/g),
-      pinsOf(groundBuild, /sides: entry\.sides,/g)], [1, 1, 2, 1]);
   const mathWindow = mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
     mathSrc.indexOf('function scatterThinnedByArea('));
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     [pinsOf(mathWindow, /areaAxis\(line, job\.ring, sides\)/g),
       pinsOf(mathWindow, /areaAxis\(/g),
       pinsOf(mathWindow, /sides: e\.sides,/g)], [1, 1, 1]);
@@ -1485,9 +1468,7 @@ async function main() {
   // kerbs (`ribbonSelectedEdges`) as its explicit edge list — one call in
   // each source, the same expression, and NOTHING on a painted polygon
   // (`line` is null there and the word alone decides, as in Task 10).
-  check('K5 ground.ts hands the road sides of a stroke to the edge call',
-    pinsOf(groundBuild, /edges: line \? ribbonSelectedEdges\(ring, entry\.sides\) : undefined,/g), 1);
-  check('K5 …and so does mapMath.ts',
+  check('K5 mapMath.ts',
     pinsOf(mathWindow, /edges: line \? ribbonSelectedEdges\(job\.ring, e\.sides\) : undefined,/g), 1);
   // (K7) …and the preview really runs it: a jittered lamp row's dots are
   // `strokeStations` with the same jitter under the row seed, and they are

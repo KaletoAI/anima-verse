@@ -176,8 +176,8 @@ public sealed record AnchorInfo(double X, double Y, double Z, string? LocationId
 
 /// <summary>
 /// THE bench anchor rule — a line-for-line port of <c>pickBenchAnchor</c>
-/// (client3d/src/bench/benchAnchor.ts, checked by
-/// client3d/scripts/smoke_bench_anchor.mjs; the same cases run in
+/// (the browser scene's benchAnchor.ts, checked by
+/// the browser scene's deleted smoke_bench_anchor.mjs; the same cases run in
 /// <c>--check</c>). The world build (start camera, tile ring) and the bench run
 /// use this one implementation.
 ///

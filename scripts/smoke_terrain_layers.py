@@ -611,7 +611,7 @@ def test_three_regions():
     # texel here was right while a filtered fetch across an id texel's rim drew
     # the kitchen's floor inside the living room. The reconstruction is the
     # renderers' one shared reading and is checked where it lives:
-    # `client3d/scripts/smoke_layer_cut.mjs` [4b].
+    # `native/tests/Derivations/layer_cut.md` [4b].
     stranger = 0
     defects = 0
     interior = 0

@@ -14,7 +14,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The JSON adapters of the seven E3 vector files (terrain_lod, height_tiles, layer_ground, water, sky_light, backdrop,
-/// fog_veil) — the C# twin of <c>client3d/scripts/e3VectorDispatch.mjs</c> / <c>e3VectorSupport.mjs</c>, contract in
+/// fog_veil) — the C# twin of <c>the browser scene's deleted e3VectorDispatch.mjs</c> / <c>e3VectorSupport.mjs</c>, contract in
 /// <c>shared/test-vectors/README.md</c> § "E3 terrain, water and atmosphere". The tags (<c>$map</c>, <c>$set</c>,
 /// <c>$grid</c>, <c>$plane</c>, <c>$pyramid</c>, <c>$capGrid</c>, <c>$layerWindow</c>, <c>$raster</c>, <c>$rng</c>,
 /// <c>$select</c>, <c>$number</c>) are ordinary argument values, decoded here into the C# inputs; a tag that builds

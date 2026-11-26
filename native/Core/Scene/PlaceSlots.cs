@@ -21,7 +21,7 @@ public readonly record struct GlyphParams(int Colour, double InnerRadius, double
 
 /// <summary>
 /// The place slots and their glyph rings — <c>slotFor</c> (packages/scene-render/src/placeSlot.ts) and
-/// <c>glyphRows</c>/<c>glyphParameters</c> (client3d/src/scene/placeGlyphs.ts), checked against
+/// <c>glyphRows</c>/<c>glyphParameters</c> (the browser scene's placeGlyphs.ts), checked against
 /// shared/test-vectors/scene_models.json [S]/[Y].
 /// </summary>
 public static class PlaceSlots

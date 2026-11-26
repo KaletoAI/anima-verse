@@ -62,7 +62,7 @@ import assert from 'node:assert/strict'
 if (!process.env.PARTNER_HAIR_PUSH_BUNDLED) {
   const here = fileURLToPath(import.meta.url)
   const repo = path.resolve(path.dirname(here), '..')
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild']
+  const bin = ['node_modules/esbuild/bin/esbuild']
     .map(rel => path.join(repo, rel)).find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const out = `/tmp/smoke_partner_hair_push.${process.pid}.mjs`

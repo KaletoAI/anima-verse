@@ -30,8 +30,8 @@ the client, which tests a 0.15 m walking lead, was blind to everything the
 server refused between 40° and 69°, and any slope could be climbed by reporting
 0.1 m at a time. Section [1e] is the counter-probe against that older form.
 The predicate is pure (``relief.slope_blocks``) and the CLIENT owns the
-identical one (``client3d/src/game/walk.ts`` ``slopeBlocks``, hand-derived in
-``client3d/scripts/smoke_walk_math.mjs``) — the two are checked against the
+identical one (the browser scene's ``walk.ts`` ``slopeBlocks``, hand-derived in
+``native/tests/Derivations/walk_math.md``) — the two are checked against the
 same table, section [1] below.
 
 THE HEIGHT ITSELF is ``relief.ground_at``, and since "Ein Boden" E5a that is

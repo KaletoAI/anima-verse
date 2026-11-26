@@ -11,7 +11,7 @@ file, ``shared/test-vectors/group_role_points.json``, and checks every x/z
 case against the server's rotation: three roles at yaw 90°, five at yaw 180°.
 No world, no server — ``_rotate`` is pure.
 
-Hand derivation (moved from client3d/scripts/smoke_group_role_points.mjs @ 011cd048aa3cc2937186d7f35d2203af9491db8a),
+Hand derivation (moved from the browser scene's deleted smoke_group_role_points.mjs @ 011cd048aa3cc2937186d7f35d2203af9491db8a),
 word for word; the browser smoke still replays the whole vector, the native
 PairVectorTests do too, this smoke checks the x/z cases against the server:
 
@@ -21,7 +21,7 @@ PairVectorTests do too, this smoke checks the x/z cases against the server:
      * `shared/test-vectors/group_role_points.json`, run through the full
      * `NpcManager` tick (the same adapter as the pair vectors).
      *
-     * Usage: timeout 300 node client3d/scripts/smoke_group_role_points.mjs
+     * Usage: timeout 300 node the browser scene's deleted smoke_group_role_points.mjs
      *
      * THE RULE (§ A8a). Every member plays ITS OWN half `<kind>__<role>` at the ONE
      * anchor of the group; its world point is anchor + R(yaw)·root, with

@@ -78,7 +78,7 @@ public sealed record MotionSkin(int[] JointNodes, Affine[] ToBone, float[] Posit
 /// <summary>
 /// THE SECONDARY MOTION — packages/scene-render/src/secondaryMotion.ts, line by line, on a <see cref="MotionRig"/>.
 /// Vectors: shared/test-vectors/secondary_{particle,angle,params,chain}.json (hand derivations in
-/// client3d/scripts/smoke_secondary_motion.mjs); anchor blend: scripts/smoke_extension_rig_anchor_blend.mjs.
+/// native/tests/Derivations/secondary_motion.md); anchor blend: scripts/smoke_extension_rig_anchor_blend.mjs.
 ///
 /// Built once while the rig is in its BIND pose (<see cref="MotionRig.World"/> = bind world matrices). Then each frame:
 /// the host writes the animated local matrices of every node it animates, calls <see cref="Update"/>, and reads back

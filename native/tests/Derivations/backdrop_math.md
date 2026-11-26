@@ -1,6 +1,6 @@
 # backdrop_math
 
-- Origin: `client3d/scripts/smoke_backdrop_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_backdrop_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BackdropVectorTests.cs`
 - Vectors: `shared/test-vectors/backdrop.json`
 
@@ -9,11 +9,11 @@
 ```text
 /**
  * Smoke check for the pure maths of the FAR BACKDROP (§ A17): the ridge
- * profile of `client3d/src/scene/backdropProfile.ts` — where the mountain
+ * profile of the browser scene's `backdropProfile.ts` — where the mountain
  * silhouette has a peak, how high it stands there, and how the two rings are
  * offset against each other.
  *
- * Usage:  node client3d/scripts/smoke_backdrop_math.mjs
+ * Usage:  node the browser scene's deleted smoke_backdrop_math.mjs
  *
  * Same discipline as `smoke_scatter_math.mjs` and `scripts/smoke_scene_recipe.py`:
  * every expected number below is derived BY HAND in this header and NEVER

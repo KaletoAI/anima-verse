@@ -10,9 +10,9 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The storeys of ONE mounted location — the native twin of the browser's per-frame storey passes (client3d/src/
+/// The storeys of ONE mounted location — the native twin of the browser's per-frame storey passes (the browser 3D scene's sources
 /// scene/tiles.ts <c>applyRoomVisibility</c>, <c>applyLevelDisplay</c>, <c>applyWallCulling</c>' storey half, the
-/// ground-model line of <c>applyTileFade</c>; client3d/src/main.ts the door- and boundary-mark visibility and
+/// ground-model line of <c>applyTileFade</c>; the browser scene's main.ts the door- and boundary-mark visibility and
 /// <c>applyDoorLocks</c>). Every storey is mounted once (<see cref="RecipeMeshes"/>, the indoor specs in their room
 /// groups); <see cref="Apply"/> only flips what shows for the location's <c>levelFilter</c>. The decisions are the
 /// Core's (<see cref="SceneView"/> / <see cref="StoreyView"/>); this class writes them onto nodes, and only when the

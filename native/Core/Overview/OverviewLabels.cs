@@ -49,9 +49,9 @@ public readonly record struct TagBadgeText(string Text, string Title)
 }
 
 /// <summary>
-/// Port of client3d/src/scene/nameTags.ts — the rules behind a character's name tag and a location's name on the
+/// Port of the browser scene's nameTags.ts — the rules behind a character's name tag and a location's name on the
 /// overview map. Vectors: shared/test-vectors/overview_labels.json [V/T/N/A/L] (hand derivations in
-/// client3d/scripts/smoke_overview_labels.mjs). The text runs JS semantics: a falsy <c>starts_in_s</c> is null, 0 or
+/// native/tests/Derivations/overview_labels.md). The text runs JS semantics: a falsy <c>starts_in_s</c> is null, 0 or
 /// NaN; an <c>eta_hhmm</c> is shown when it is a non-empty string.
 /// </summary>
 public static class OverviewLabels

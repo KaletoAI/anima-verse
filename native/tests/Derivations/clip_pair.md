@@ -1,6 +1,6 @@
 # clip_pair
 
-- Origin: `client3d/scripts/smoke_clip_pair.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_clip_pair.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PairVectorTests.cs`
 - Vectors: `shared/test-vectors/pair_clip_geometry.json`
 
@@ -13,7 +13,7 @@
  * FBXLoader, the root path the client extracts from them, and the anchor
  * transformation the server and the client agree on (§ A8a).
  *
- * Usage:  node client3d/scripts/smoke_clip_pair.mjs
+ * Usage:  node the browser scene's deleted smoke_clip_pair.mjs
  *         (needs three, esbuild and the converted clips in shared/models/clips:
  *          greeting-handshake__a.fbx / __b.fbx / greeting-handshake.json — the
  *          animation studio's handshake, anims/greeting-handshake.py)

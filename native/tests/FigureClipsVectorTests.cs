@@ -14,11 +14,11 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/figure_clips.json against <see cref="FigureClips"/> (hand derivations:
-/// client3d/scripts/smoke_figure_clips.mjs).
+/// native/tests/Derivations/figure_clips.md).
 ///
 /// <code>
 ///   TS fn                    C#                                   TS source
-///   resolveMovementPoses     FigureClips.ResolveMovementPoses     client3d game/walk.ts
+///   resolveMovementPoses     FigureClips.ResolveMovementPoses     the browser 3D scene game/walk.ts
 ///   moveClip                 FigureClips.MoveClip
 ///   idleClip                 FigureClips.IdleClip
 ///   standingClipFor          FigureClips.StandingClipFor          null animation = none (smoke wrapper: undefined)
@@ -28,7 +28,7 @@ namespace AnimaNative.Tests;
 ///   resolveClipTransitions   FigureClips.ResolveClipTransitions
 ///   clipTransition           FigureClips.Transition
 ///   bridgePace               FigureClips.BridgePace
-///   clipKindChain            FigureClips.ClipKindChain            client3d scene/clipCoverage.ts
+///   clipKindChain            FigureClips.ClipKindChain            the browser 3D scene scene/clipCoverage.ts
 ///   resolveClipKind          FigureClips.ResolveClipKind
 ///   proceduralGait           FigureClips.ProceduralGait
 /// </code>

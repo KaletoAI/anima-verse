@@ -16,10 +16,10 @@ public readonly record struct AmbienceState(double Daylight, double R, double G,
 public readonly record struct RoomRect(double X, double Z, double W, double D);
 
 /// <summary>
-/// Room ambience and the night clock, a port of client3d/src/scene/ambience.ts (<c>ambienceTarget</c>,
-/// <c>stepAmbience</c>, <c>nightFactorAt</c>) and client3d/src/game/roomAt.ts (<c>roomRectOf</c>, <c>roomAtRects</c>,
+/// Room ambience and the night clock, a port of the browser scene's ambience.ts (<c>ambienceTarget</c>,
+/// <c>stepAmbience</c>, <c>nightFactorAt</c>) and the browser scene's roomAt.ts (<c>roomRectOf</c>, <c>roomAtRects</c>,
 /// <c>corridorAtOutline</c>), checked against shared/test-vectors/ambience.json (hand derivations in
-/// client3d/scripts/smoke_ambience.mjs).
+/// native/tests/Derivations/ambience.md).
 /// </summary>
 public static class Ambience
 {

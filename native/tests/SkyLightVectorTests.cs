@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/sky_light.json against the native light math (hand derivations:
-/// client3d/scripts/smoke_shadow_snap.mjs; TS sources client3d/src/scene/skyLight.ts, fogConstants.ts, shadowSnap.ts,
+/// native/tests/Derivations/shadow_snap.md; TS sources the browser scene's skyLight.ts, fogConstants.ts, shadowSnap.ts,
 /// ambience.ts).
 ///
 /// <code>

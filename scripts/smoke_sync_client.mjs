@@ -1,6 +1,6 @@
 /**
- * B-T4 NEU: client3d guards fail on a241a8aa: its separate timer doubles
- * the core cadence and its fetch applies results before generation checks.
+ * B-T4 NEU: the browser 3D scene's worldmap guards (its separate timer doubled
+ * the core cadence) went with that scene in plan E3; the core guards stay.
  * apply_after_gen: resync during request 1 drops it; only request 2 applies,
  * so the callback count is 1 and the applied result is 2 (hand-derived).
  * All cases NEU: pollCore.ts and syncHub.ts are absent on a241a8aa.
@@ -534,16 +534,6 @@ for (const [key, spec] of Object.entries(S)) await test("sustained_" + key, asyn
   }
   assert.ok(f.starts.length <= Math.ceil(60000 / spec.intervalMs), JSON.stringify(f.starts));
 });
-const main = readFileSync("client3d/src/main.ts", "utf8");
-assert.doesNotMatch(main, /setInterval\([^;]*WORLDMAP_POLL_MS/);
-assert.match(main, /pollCore\(\)\.subscribe\('c3d-worldmap',\s*fetchWorldMap,\s*SYNC_ENDPOINTS\.worldmap3d/);
-assert.equal((main.match(/void pollCore\(\)\.refresh\('c3d-worldmap'\)/g) ?? []).length, 2);
-assert.doesNotMatch(main, /pollWorldMap\s*\(/);
-const fetchBody = main.match(/async function fetchWorldMap\(\)[^{]*\{([\s\S]*?)\n  \}/)?.[1];
-assert.ok(fetchBody, "side-effect-free fetchWorldMap exists");
-assert.doesNotMatch(fetchBody, /applyWorldMap|reconcileAvatarPos|lastMap\s*=|syncLocations/);
-assert.match(main, /if \(user\.username !== username\) \{[\s\S]*?location\.reload\(\);\s*\} else \{\s*syncHub\(\)\.restart\(\);/);
-console.log("PASS client3d_worldmap_guards");
 await new Promise(resolve => setImmediate(resolve));
 assert.deepEqual(unhandled, [], "no unhandledRejection");
 console.log("sync client: all cases passed");

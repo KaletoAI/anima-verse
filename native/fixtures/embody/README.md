@@ -9,8 +9,8 @@ Load this directory through `FixtureSource(dir, native/fixtures)` when the E7
 consumer arrives. `urls.json` reuses the synthetic box from `fidelity/` for
 the room diorama and the normal shared rig/clip mappings. `model3d.json` gives
 both characters null models, so the normal placeholder figure path applies.
-No prop actions are offered or called. Run
-`node client3d/scripts/smoke_embody_fixture.mjs` for the data/geometry checks.
+No prop actions are offered or called. The data/geometry checks ran in the browser scene's
+`smoke_embody_fixture.mjs`, deleted with that scene in plan E3.
 Task 46 does not add a C# write consumer or a `--check embody` mode.
 
 | Element | Authored layout |

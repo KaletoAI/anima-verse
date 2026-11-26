@@ -9,7 +9,7 @@ moves the signature. The converse is deliberately NOT promised: an input that
 only sometimes reaches the payload (a lake forty metres away) may move the
 signature without moving a byte of the payload. A needless remount is cheap, a
 stale scene is not — the 3D client rebuilds a location ONLY when ``signature``
-changes (``client3d/src/scene/sceneRecipe.ts``: ``SceneLibrary.sweep``), so a
+changes (the browser scene's ``sceneRecipe.ts``: ``SceneLibrary.sweep``), so a
 payload change the signature misses is a scene that never updates until the
 page is reloaded.
 

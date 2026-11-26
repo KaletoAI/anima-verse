@@ -21,7 +21,7 @@ public interface IOverlayLabel
 public readonly record struct PlacedLabel(IOverlayLabel Label, Vector2 Screen, Vector2 TopLeft, float DistSq);
 
 /// <summary>
-/// The browser's CSS2D label layer (client3d engine.ts <c>labelRenderer</c>, three's <c>CSS2DRenderer</c> r185) as a
+/// The browser's CSS2D label layer (the browser 3D scene's engine.ts <c>labelRenderer</c>, three's <c>CSS2DRenderer</c> r185) as a
 /// screen-space <see cref="Control"/> over the world — name tags, speech bubbles and location names drawn with
 /// fonts at CSS pixel sizes, not as <c>Label3D</c> (which would scale with distance).
 ///
@@ -120,7 +120,7 @@ public partial class LabelOverlay : Control
 }
 
 /// <summary>
-/// The label CSS of client3d/src/style.css in Godot terms: sizes in px, the colours, the fonts — and the two drawing
+/// The label CSS of the browser scene's style.css in Godot terms: sizes in px, the colours, the fonts — and the two drawing
 /// helpers (a shadowed text line, the bubble box). The browser's fonts are CSS families: <c>system-ui</c> for the
 /// name tags and bubbles, <c>Georgia, 'Times New Roman', serif</c> for the location names; here the same family
 /// lists go to <see cref="SystemFont"/> (fontconfig on Linux picks what the desktop maps them to), with the

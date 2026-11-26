@@ -18,7 +18,7 @@ public sealed record BenchSummary(int Frames, double Seconds, double FpsMean, do
                                   double TrisMedian);
 
 /// <summary>
-/// Port of <c>client3d/src/bench/benchStats.ts</c> (itself from 183d873):
+/// Port of the browser scene's <c>benchStats.ts</c> (itself from 183d873):
 /// seconds are wall time, fps = frames / seconds (not the mean of per-frame
 /// rates), medians/P95 by the linear-interpolated percentile.
 /// </summary>

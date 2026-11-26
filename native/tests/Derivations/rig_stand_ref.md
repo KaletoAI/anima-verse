@@ -1,6 +1,6 @@
 # rig_stand_ref
 
-- Origin: `client3d/scripts/smoke_rig_stand_ref.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_rig_stand_ref.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ClipLibraryVectorTests.cs`
 - Vectors: `shared/test-vectors/hips_tracks.json`
 
@@ -10,10 +10,10 @@
 /**
  * Smoke check for the STANDING REFERENCE of the clip library —
  * `standingHipsRef` / `rigHipsHeight` of `@anima/scene-render` and their
- * consumer `client3d/src/scene/figures.adaptExternalClips` (§ B5a: numbers,
+ * consumer the browser scene's `figures.adaptExternalClips` (§ B5a: numbers,
  * never screenshots).
  *
- * Usage:  node client3d/scripts/smoke_rig_stand_ref.mjs
+ * Usage:  node the browser scene's deleted smoke_rig_stand_ref.mjs
  *         (bundles the client modules itself; reads shared/models/rig/reference.fbx
  *          and the clips `idle` / `get-up-chair` in shared/models/clips — READ ONLY)
  *

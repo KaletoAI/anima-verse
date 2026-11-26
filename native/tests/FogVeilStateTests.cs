@@ -10,7 +10,7 @@ namespace AnimaNative.Tests;
 /// <summary>
 /// The veil's state (Task 26): the cells texture of <c>setFogVeilCells</c>, the A/B crossfade of <c>tickFogVeil</c>, the
 /// strength of <c>pushAlpha</c> and main.ts <c>syncExplored</c> — every expectation derived by hand in the comments from
-/// client3d/src/scene/fogVeil.ts and main.ts (the math under it is vector-checked in <see cref="FogVeilVectorTests"/>).
+/// the browser scene's fogVeil.ts and main.ts (the math under it is vector-checked in <see cref="FogVeilVectorTests"/>).
 /// </summary>
 public class FogVeilStateTests
 {

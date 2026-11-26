@@ -59,7 +59,7 @@ import { existsSync } from 'node:fs'
 import assert from 'node:assert/strict'
 
 if (!process.env.EXT_COLLISION_BUNDLED) {
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild'].find(existsSync)
+  const bin = ['node_modules/esbuild/bin/esbuild'].find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const output = '/tmp/smoke_extension_collision.mjs'
   const built = spawnSync(bin, [fileURLToPath(import.meta.url), '--bundle', '--platform=node', '--format=esm',

@@ -111,7 +111,7 @@ public sealed class RecipeLayers
 
 /// <summary>
 /// The § B primitives of a scene recipe, mounted ONCE per location the way the browser mounts them
-/// (client3d/src/scene/sceneRecipe.ts <c>mountShell</c>): every storey, outdoor pieces off the tile, the interior in
+/// (the browser scene's sceneRecipe.ts <c>mountShell</c>): every storey, outdoor pieces off the tile, the interior in
 /// its own group that the crossfade shows (<see cref="LocationFade"/>) with one sub-group per declared room, the
 /// far-view shell as copies that fade like a roof. Geometry is the Core's <see cref="RecipeGeometry"/> — the ports of
 /// the shared builders (packages/scene-render/src/primitives.ts) and of the three geometry they make, checked against

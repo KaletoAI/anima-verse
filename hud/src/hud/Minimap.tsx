@@ -20,7 +20,7 @@
  * still costs neither.
  *
  * All the arithmetic is in `game/minimap.ts` and hand-checked in
- * `client3d/scripts/smoke_walk_math.mjs`; the shading is `hillshadeImage` of
+ * `native/tests/Derivations/walk_math.md`; the shading is `hillshadeImage` of
  * `@anima/scene-render` (hand-checked in `smoke_hillshade.mjs`, computed in
  * `main.ts` once per field). Nothing here computes a coordinate or a grey of
  * its own — this file only says where the finished picture lands.

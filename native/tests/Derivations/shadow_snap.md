@@ -1,6 +1,6 @@
 # shadow_snap
 
-- Origin: `client3d/scripts/smoke_shadow_snap.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_shadow_snap.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/SkyLightVectorTests.cs`
 - Vectors: `shared/test-vectors/sky_light.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Smoke check for the SHADOW CAMERA'S TEXEL GRID —
- * `client3d/src/scene/shadowSnap.ts`, used by `scene/engine.ts`.
+ * the browser scene's `shadowSnap.ts`, used by `scene/engine.ts`.
  *
- * Usage:  node client3d/scripts/smoke_shadow_snap.mjs
+ * Usage:  node the browser scene's deleted smoke_shadow_snap.mjs
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).
@@ -127,7 +127,7 @@
 
 ## Inline derivations
 
-Comment blocks of `client3d/scripts/smoke_shadow_snap.mjs` after its opening docstring that contain a mark a case label
+Comment blocks of the browser scene's deleted `smoke_shadow_snap.mjs` after its opening docstring that contain a mark a case label
 cites, in file order; line numbers refer to the smoke at a56065e6f003.
 
 Line 187 (cites [1]):

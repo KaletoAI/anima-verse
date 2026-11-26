@@ -126,8 +126,8 @@ process.stdout.write(JSON.stringify(d.points.map(map)));
 
 
 def preview_map(tmp, pivot, fitted, draft, points):
-    esbuild = next((d for d in (ROOT / "node_modules" / "esbuild", ROOT / "frontend" / "node_modules" / "esbuild",
-                                ROOT / "client3d" / "node_modules" / "esbuild") if d.is_dir()), None)
+    esbuild = next((d for d in (ROOT / "node_modules" / "esbuild", ROOT / "frontend" / "node_modules" / "esbuild")
+                   if d.is_dir()), None)
     if esbuild is None:
         print("    esbuild not found (npm install)")
         return None

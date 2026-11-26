@@ -8,7 +8,7 @@ namespace AnimaNative.Sky;
 public readonly record struct FogGrid(double Cx0, double Cz0, double Cols, double Rows);
 
 /// <summary>
-/// The exploration haze's pure math (<c>client3d/src/scene/fogVeilMath.ts</c>, contract § A12): explored cells of
+/// The exploration haze's pure math (the browser scene's <c>fogVeilMath.ts</c>, contract § A12): explored cells of
 /// 64 m anchored at the world origin, their bounding box plus one ring as a texture whose texel centres sit on cell
 /// centres, and the veil's strength from the camera height above its target.
 /// </summary>

@@ -247,8 +247,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_mirror_plane_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild',
-                 'node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
       console.error('esbuild not found (npm install) — nothing was checked')

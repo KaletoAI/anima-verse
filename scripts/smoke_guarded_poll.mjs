@@ -37,7 +37,7 @@ const require_ = createRequire(import.meta.url);
 // esbuild resolves from the workspace (scripts/ has no node_modules of its own; see smoke_cut_build_row_text.mjs)
 function esbuildModule() {
   for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild'), join(ROOT, 'node_modules/esbuild')]) {
+                      join(ROOT), join(ROOT, 'node_modules/esbuild')]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }

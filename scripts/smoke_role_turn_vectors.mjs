@@ -4,7 +4,7 @@
  * the listing's `orientation.role_turn_deg` = { "<role a..e>": [tilt, roll, yaw] } degrees (absent role = no turn).
  * A figure playing the role-r half is turned by role_turn_deg[r] about its bind hips: frame F = eulerYXZ(0, yaw, 0),
  * pivot = fixPivot(root, F, hipsBind), fix = roleTurnFix(tilt, roll, F, yaw), then fixRoot(fix, pivot, root)
- * (packages/scene-render/src/pairFit.ts; client3d npcs.ts applyPairFix; native Core/Figures/RoleTurn.cs).
+ * (packages/scene-render/src/pairFit.ts; the browser 3D scene's npcs.ts applyPairFix; native Core/Figures/RoleTurn.cs).
  * This smoke runs shared/test-vectors/role_turn.json through the TypeScript; native/tests/RoleTurnVectorTests.cs runs
  * it through the C# port. Every expected number is derived BY HAND below (§ B5a), never recorded from a run.
  *

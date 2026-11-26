@@ -7,7 +7,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The exploration veil's shared uniforms (client3d/src/scene/fogVeil.ts: ONE uniform object per value for every veiled
+/// The exploration veil's shared uniforms (the browser scene's fogVeil.ts: ONE uniform object per value for every veiled
 /// material) on Godot: the Godot-free <see cref="FogVeilState{T}"/> holds the two cell textures, the crossfade and the
 /// strength; every ground material (dry, wet, plain — <see cref="GroundShader"/>'s <c>fv_*</c>) is
 /// <see cref="Bind">bound</see> once and then receives each change. Per frame only what moved is written (the alpha

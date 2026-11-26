@@ -9,7 +9,7 @@ using Xunit;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// hud/src/game/stairs.ts on the native world flights — the hand cases of client3d/scripts/smoke_walk_math.mjs
+/// hud/src/game/stairs.ts on the native world flights — the hand cases of native/tests/Derivations/walk_math.md
 /// ("stairChain", "stairY", "stairLegTo / stairLegs", "rideStep"), copied verbatim: no shared vector file carries this
 /// module yet (see the Task 30 report). The flight is the § 0 hand calculation: at [2, −2], dir +x, run 15 · 0.26 =
 /// 3.9, width 1.2; foot landing [1.5, 0.01, −2] on storey 0, head landing [6.4, 3.09, −2] on storey 1.

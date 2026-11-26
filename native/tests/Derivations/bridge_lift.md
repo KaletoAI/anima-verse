@@ -1,6 +1,6 @@
 # bridge_lift
 
-- Origin: `client3d/scripts/smoke_bridge_lift.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_bridge_lift.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/bridge_lift.json`
 
@@ -8,12 +8,12 @@
 
 ```text
 /**
- * Smoke check for THE HEIGHT OF A HOLDING BRIDGE — `client3d/src/scene/bridgeLift.ts`,
+ * Smoke check for THE HEIGHT OF A HOLDING BRIDGE — the browser scene's `bridgeLift.ts`,
  * its measurement in `footLockMeasure.relockRootPaths` and its consumers
  * `figures.Figure` (`beginBridgeLift`, `holdsHeight`) and `npcs.NpcManager.tick`
  * (§ B5a: numbers, never screenshots). Task C5 of plan-bruecken-feinschliff.
  *
- * Usage:  node client3d/scripts/smoke_bridge_lift.mjs
+ * Usage:  node the browser scene's deleted smoke_bridge_lift.mjs
  *         (bundles the client modules itself; part [V] reads the clips
  *          idle, walk, get-up-bed, get-up-chair, the pair half greeting-handshake__a
  *          and the two clips the bridges leave from shared/models/clips —

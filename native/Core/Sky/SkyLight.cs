@@ -40,7 +40,7 @@ public readonly record struct HourLights(double SunAngle, LinearRgb Sun, LinearR
                                          double HemiIntensity, double FillIntensity);
 
 /// <summary>
-/// The game-clock lighting of the browser (<c>client3d/src/scene/skyLight.ts</c> <c>gameHourLights</c>, called by
+/// The game-clock lighting of the browser (the browser scene's <c>skyLight.ts</c> <c>gameHourLights</c>, called by
 /// <c>Engine.setGameHour</c>). The colours stay in three's linear working space — a consumer that hands them to
 /// Godot must treat them as linear (Godot's <c>Color</c> literals are sRGB). The intensities are three's
 /// (physically based lights, divided by π in its BRDF); the Godot energy mapping is the consumer's.

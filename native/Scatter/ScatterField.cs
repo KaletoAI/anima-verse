@@ -18,7 +18,7 @@ public readonly record struct LayerCounts(int Meshes, int Instances, long Triang
 
 /// <summary>
 /// The AUTHORED scatter of the painted areas (trees, bushes, rocks) — a port of the scatter half of
-/// <c>client3d/src/scene/ground.ts</c> (<c>buildScatter</c> → <c>binProp</c> → <c>mountUrl</c>), drawn
+/// the browser scene's <c>ground.ts</c> (<c>buildScatter</c> → <c>binProp</c> → <c>mountUrl</c>), drawn
 /// with one <see cref="MultiMeshInstance3D"/> per (row, model variant, tier):
 ///
 ///   · WHERE: the 64 m cell window of <c>wantedScatterCells</c> around the anchor (k = ceil(cull/64)),
@@ -616,7 +616,7 @@ public partial class ScatterField : Node3D
     }
 
     /// <summary>
-    /// <c>setScatterLod(cfg)</c> of client3d/src/scene/ground.ts: the player's detail distances. A new cull
+    /// <c>setScatterLod(cfg)</c> of the browser scene's ground.ts: the player's detail distances. A new cull
     /// distance is a new cell window (re-sampled when it changed); every placed instance is re-binned against the
     /// camera of the last LOD pass at once, not on the next beat.
     /// </summary>

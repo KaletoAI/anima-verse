@@ -9,7 +9,7 @@ proves no live file still names them. Historical plans/specs under
 docs/superpowers/ are left as they are and are not scanned.
 
 Scanned: app/, scripts/, plugins/ (symlinks followed), frontend/src, packages/,
-hud/src, client3d/src, shared/, static/admin/, docs/*.md (top level only), README.md,
+hud/src, shared/, static/admin/, docs/*.md (top level only), README.md,
 CHAT_PROMPTS.md. This file itself is skipped (it spells the patterns).
 
 Expected, by hand:
@@ -53,7 +53,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SELF = Path(__file__).resolve()
 
 TREES = ["app", "scripts", "plugins", "frontend/src", "packages", "hud/src",
-         "client3d/src", "shared", "static/admin"]
+         "shared", "static/admin"]
 SKIP_DIRS = {"node_modules", "dist", "__pycache__", ".git", "build"}
 TEXT_EXT = {".py", ".ts", ".tsx", ".js", ".mjs", ".css", ".md", ".json",
             ".yaml", ".yml", ".html", ".txt", ".j2"}

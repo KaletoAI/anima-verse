@@ -11,7 +11,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/view_shift.json against the C# port <see cref="ViewShift.For"/>
-/// (hand derivations: client3d/scripts/smoke_view_shift.mjs; TS source: client3d/src/scene/viewShift.ts).
+/// (hand derivations: native/tests/Derivations/view_shift.md; TS source: the browser scene's viewShift.ts).
 ///
 /// <code>
 ///   TS fn          C#               shape translation

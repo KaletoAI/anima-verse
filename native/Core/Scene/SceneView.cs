@@ -26,7 +26,7 @@ public sealed record Footprint(P2 Center, double Yaw, P2[]? Boundary, double Wid
 
 /// <summary>
 /// The pure view decisions of the browser's scene code — what stands, what fades, what turns — ported
-/// from client3d/src/scene/sceneView.ts (and the re-exported storeyDisplay.ts, shellPlan.ts,
+/// from the browser scene's sceneView.ts (and the re-exported storeyDisplay.ts, shellPlan.ts,
 /// game/streamRings.ts, game/polygon.ts), checked against shared/test-vectors/scene_view.json.
 /// </summary>
 public static class SceneView
@@ -75,7 +75,7 @@ public static class SceneView
     public const double OccludedHideAt = 0.95;
 
     /// <summary>
-    /// <c>applyTileOcclusion</c>'s step (client3d/src/scene/tiles.ts, inline there — no vector): three's
+    /// <c>applyTileOcclusion</c>'s step (the browser scene's tiles.ts, inline there — no vector): three's
     /// <c>MathUtils.lerp(occl, hide ? 1 : 0, 1 − e^(−8·dt))</c>, snapped to 0 below 0.02 once nothing hides it;
     /// a tile at 0 that nothing hides stays 0 (the early return).
     /// </summary>

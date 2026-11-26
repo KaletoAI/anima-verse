@@ -57,9 +57,8 @@ node (skipped with a note when esbuild or node is missing).
 [5] The map at assembly (``garment_assembly._roughness_map``): a fit grafted WITHOUT the map + the prepared mesh of
     the same item/fsig carrying N -> the mesh read from the fit gets N; a low tier without the map + a full fit with
     M -> M (the full fit first).
-[6] Viewers (node): the leather graft loads as MeshPhysicalMaterial with clearcoat 0.3; client3d
-    ``zeroFigureMetalness`` on the metal graft keeps the garment's metalness 1 and sets the body's (glTF default
-    1.0, no factor) to 0; Game-Admin ``zeroViewerMetalness`` on a material with a metalness map: zeroed without
+[6] Viewers (node): the leather graft loads as MeshPhysicalMaterial with clearcoat 0.3 through the Game-Admin
+    loader (the browser 3D scene's ``zeroFigureMetalness`` step went with that scene in plan E3); Game-Admin ``zeroViewerMetalness`` on a material with a metalness map: zeroed without
     ``userData.explicit_metallic``, kept (1) with it.
 """
 import io
@@ -324,8 +323,7 @@ def part_fallback(fx, bare, g, M, N, static):
 VIEWER_JS = r"""
 import * as fs from 'fs'
 globalThis.self = globalThis
-const { createGLTFLoader } = await import(%(c3loader)s)
-const { zeroFigureMetalness } = await import(%(figmat)s)
+const { createGLTFLoader } = await import(%(loader)s)
 const { zeroViewerMetalness } = await import(%(modeltex)s)
 const parse = (file) => new Promise((ok, bad) => {
   const b = fs.readFileSync(file)
@@ -339,20 +337,18 @@ const garmentName = Object.keys(m).find((n) => n.startsWith('garment_'))
 const bodyName = Object.keys(m).find((n) => !n.startsWith('garment_'))
 const lg = leather[Object.keys(leather).find((n) => n.startsWith('garment_'))]
 const before = { garment: m[garmentName].metalness, body: m[bodyName].metalness }
-zeroFigureMetalness(metal.scene)
 const fake = (explicit) => ({ isMesh: true, material: { isMeshStandardMaterial: true, metalness: 1, metalnessMap: {},
   userData: explicit ? { explicit_metallic: true } : {} }, traverse(f) { f(this) } })
 const a = fake(false), b = fake(true)
 zeroViewerMetalness(a); zeroViewerMetalness(b)
 console.log(JSON.stringify({ leatherType: lg.type, clearcoat: lg.clearcoat, before,
-  after: { garment: m[garmentName].metalness, body: m[bodyName].metalness },
   admin: { plain: a.material.metalness, explicit: b.material.metalness } }))
 """
 
 
 def part_viewers(tmp, leather, metal):
     print("[6] viewers")
-    esbuild = next((ROOT / p for p in ("client3d/node_modules/.bin/esbuild", "node_modules/.bin/esbuild",
+    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild",
                                        "frontend/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
     if esbuild is None or shutil.which("node") is None:
         print("note esbuild or node missing — viewers not checked")
@@ -363,8 +359,7 @@ def part_viewers(tmp, leather, metal):
     files["metal"].write_bytes(without_images(metal))
     entry = tmp / "viewers.mjs"
     entry.write_text(VIEWER_JS % {
-        "c3loader": json.dumps(str(ROOT / "client3d/src/scene/gltfLoader.ts")),
-        "figmat": json.dumps(str(ROOT / "client3d/src/scene/figureMaterials.ts")),
+        "loader": json.dumps(str(ROOT / "frontend/src/lib/gltfLoader.ts")),
         "modeltex": json.dumps(str(ROOT / "frontend/src/tabs/characters/modelTexture.ts")),
         "leather": json.dumps(str(files["leather"])), "metal": json.dumps(str(files["metal"]))})
     bundle = tmp / "viewers.bundle.mjs"
@@ -385,8 +380,6 @@ def part_viewers(tmp, leather, metal):
     check("leather loads as MeshPhysicalMaterial", got["leatherType"], "MeshPhysicalMaterial")
     near("leather clearcoat", got["clearcoat"], 0.3)
     check("metal garment before", got["before"]["garment"], 1)
-    check("client3d keeps the preset's metalness", got["after"]["garment"], 1)
-    check("client3d zeroes the body", got["after"]["body"], 0)
     check("admin zeroes a plain MR material", got["admin"]["plain"], 0)
     check("admin keeps an explicit one", got["admin"]["explicit"], 1)
 

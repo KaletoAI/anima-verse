@@ -1,6 +1,6 @@
 # bridge_root
 
-- Origin: `client3d/scripts/smoke_bridge_root.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_bridge_root.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/bridge_travel.json`
 
@@ -8,10 +8,10 @@
 
 ```text
 /**
- * Smoke check for BRIDGE CLIPS WITH ROOT MOTION — `client3d/src/scene/bridgeTravel.ts`
+ * Smoke check for BRIDGE CLIPS WITH ROOT MOTION — the browser scene's `bridgeTravel.ts`
  * and its consumer `figures.Figure` (§ B5a: numbers, never screenshots).
  *
- * Usage:  node client3d/scripts/smoke_bridge_root.mjs
+ * Usage:  node the browser scene's deleted smoke_bridge_root.mjs
  *         (bundles the client modules itself; part [B] needs the re-imported
  *          `get-up-chair` / `get-up-bed` in shared/models/clips — READ ONLY)
  *

@@ -9,7 +9,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// THE WATERFALLS (W5, <c>client3d/src/scene/waterfall.ts</c> <c>buildWaterfall</c>, built in ground.ts
+/// THE WATERFALLS (W5, the browser scene's <c>waterfall.ts</c> <c>buildWaterfall</c>, built in ground.ts
 /// <c>rebuildAreas</c> per terrain payload): where a painted water's own flow axis drops faster than water runs
 /// (<see cref="Waterfalls.From"/>, vector-checked), a curtain quad (<see cref="Waterfalls.Quad"/>) hangs from the lip to
 /// the leaning foot and a foam disc lies at the foot. Two draws per fall, no per-frame CPU: the scroll rides Godot's

@@ -1492,7 +1492,7 @@ def _strip_legacy_imagegen_prompt_fields(config: dict) -> bool:
 
 
 # Config fields whose feature was removed: no schema entry, no reader, no
-# writer anywhere in app/ frontend/ client3d/ packages/ plugins/ — they only
+# writer anywhere in app/ frontend/ hud/ packages/ plugins/ — they only
 # sat in the per-world config.json and misled whoever read it. Grouped by
 # section; the strip below is the single place that knows them.
 #   image_generation — ComfyUI era (comfy_default_workflow, comfyui_workflows,

@@ -10,7 +10,7 @@ using Godot;
 namespace AnimaNative.Check;
 
 /// <summary>
-/// <c>--check veil</c> (part of every <c>--check</c>, Task 26): the exploration veil of client3d/src/scene/fogVeil.ts on
+/// <c>--check veil</c> (part of every <c>--check</c>, Task 26): the exploration veil of the browser scene's fogVeil.ts on
 /// the REAL ground shaders and the shared uniforms (<see cref="VeilUniforms"/>), against the hand numbers of
 /// native/fixtures/README.md "Veil":
 ///

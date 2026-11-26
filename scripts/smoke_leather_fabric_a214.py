@@ -24,8 +24,7 @@ Expected values, by hand:
       "Leather (glossy)" / "Leather (rough)" with a note each; de.json "Leder glänzend" / "Leder rau".
   [F] wall: ``LEATHER_WALL`` 1.5 (measured 64.8 s / 46.3 s = 1.40 on Gelina's skirt, rounded up) -> 90 s for both;
       medium stays 60.
-  [G] renderers: scene-render exports ``prepareGlossyPieces`` (glossy fabric list = ["leather_glossy"]); client3d's
-      figure load calls it with the engine's model environment.
+  [G] renderers: scene-render exports ``prepareGlossyPieces`` (glossy fabric list = ["leather_glossy"]).
 """
 import importlib.util
 import json
@@ -157,8 +156,6 @@ fig = (ROOT / "packages/scene-render/src/figure.ts").read_text()
 check("scene-render: glossy list", "export const GLOSSY_FABRICS = ['leather_glossy']" in fig
       and "export function prepareGlossyPieces(" in fig)
 check("scene-render index exports it", "prepareGlossyPieces" in (ROOT / "packages/scene-render/src/index.ts").read_text())
-cf = (ROOT / "client3d/src/scene/figures.ts").read_text()
-check("client3d applies it with the model environment", "prepareGlossyPieces(template, getModelEnvironment())" in cf)
 
 if failures:
     print(f"FAILED: {len(failures)}")

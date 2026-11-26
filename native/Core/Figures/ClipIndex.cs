@@ -8,7 +8,7 @@ using Json = AnimaNative.World.Json;
 namespace AnimaNative.Figures;
 
 /// <summary>
-/// One listing entry as the browser's figure library sees it (<c>ClipSource</c> of client3d/src/game/clipCommit.ts):
+/// One listing entry as the browser's figure library sees it (<c>ClipSource</c> of the browser scene's clipCommit.ts):
 /// the kind (a pair half as <c>&lt;kind&gt;__&lt;role&gt;</c>), its set (<c>""</c> = neutral), the opaque URL, the
 /// loop flag (null = not given = loop) and whether it carries root motion (<c>root_motion.mode</c> other than
 /// <c>strip</c>).
@@ -52,7 +52,7 @@ public readonly record struct ClipHeightOffsets(double Ground = 0, double Seat =
 
 /// <summary>
 /// The committed library: kind → (set → clip) in listing order of the kinds, plus the pair-half roots keyed EXACTLY like
-/// it — kind, then set (client3d clipCommit.ts <c>pairRootsOf</c>): the root always belongs to the very file a figure
+/// it — kind, then set (the browser 3D scene's clipCommit.ts <c>pairRootsOf</c>): the root always belongs to the very file a figure
 /// plays for its set.
 /// </summary>
 public sealed class ClipIndex<C>
@@ -87,9 +87,9 @@ public interface IClipCommitOps<C>
 }
 
 /// <summary>
-/// The library bookkeeping of client3d's figure library as pure functions: <c>commitInListOrder</c>
-/// (client3d/src/game/clipCommit.ts; vectors shared/test-vectors/clip_commit.json, derivations
-/// client3d/scripts/smoke_clip_order.mjs), the per-character set chain (<c>clipsFor</c>, figures.ts) and
+/// The library bookkeeping of the browser 3D scene's figure library as pure functions: <c>commitInListOrder</c>
+/// (the browser scene's clipCommit.ts; vectors shared/test-vectors/clip_commit.json, derivations
+/// native/tests/Derivations/clip_order.md), the per-character set chain (<c>clipsFor</c>, figures.ts) and
 /// the pair-half name test (<c>isPairClipName</c>).
 /// </summary>
 public static class ClipLibraryRules
@@ -249,7 +249,7 @@ public static class ClipLibraryRules
 public enum FigureTier { Full, Low }
 
 /// <summary>
-/// The distance tiers of figures (view state, client3d main.ts <c>FIGURE_TIER_NEAR/FAR</c> + npcs.ts
+/// The distance tiers of figures (view state, the browser 3D scene's main.ts <c>FIGURE_TIER_NEAR/FAR</c> + npcs.ts
 /// <c>tickFigureTiers</c>): evaluated every <see cref="TickS"/>; nearer than <see cref="NearM"/> → full, farther
 /// than <see cref="FarM"/> → low, in between the last wish stays (hysteresis); the player-driven figure is
 /// always full.

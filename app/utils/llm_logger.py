@@ -23,7 +23,7 @@ LOG_DIR = Path("./logs")
 LOG_FILE = LOG_DIR / "llm_calls.jsonl"
 # Pruned entries are appended here, bucketed by their own month:
 # logs/archive/<stem>_<YYYY-MM>.jsonl. Same directory start.sh uses for the
-# rotated main_*.log / client3d_*.log — different naming scheme, no overlap.
+# rotated main_*.log — different naming scheme, no overlap.
 ARCHIVE_DIR = LOG_DIR / "archive"
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 _lock = threading.Lock()

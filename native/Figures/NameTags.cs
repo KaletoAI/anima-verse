@@ -9,7 +9,7 @@ using Godot;
 namespace AnimaNative.Figures;
 
 /// <summary>
-/// The name tags of the overview (client3d/src/scene/npcs.ts: the CSS2D label of every figure, <c>say</c>, the tag
+/// The name tags of the overview (the browser scene's npcs.ts: the CSS2D label of every figure, <c>say</c>, the tag
 /// part of <c>update</c> and <c>tick</c>): per figure a centred column [speech bubble, name, activity] over the head.
 ///
 ///   • TEXT per poll — the name with the travel prefix (<see cref="OverviewLabels.TagName"/>), the activity

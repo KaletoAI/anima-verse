@@ -1,6 +1,6 @@
 # water_shade
 
-- Origin: `client3d/scripts/smoke_water_shade.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_water_shade.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/WaterVectorTests.cs`
 - Vectors: `shared/test-vectors/water.json`
 
@@ -8,10 +8,10 @@
 
 ```text
 /**
- * Smoke check for WATER AS A SHADING OF THE GROUND — `client3d/src/scene/
- * waterShade.ts` (Wasser v2, K-A E4; `recherche-wasser-v2.md` § 3.3, § 4 K-A).
+ * Smoke check for WATER AS A SHADING OF THE GROUND — the browser scene's
+ * `waterShade.ts` (Wasser v2, K-A E4; `recherche-wasser-v2.md` § 3.3, § 4 K-A).
  *
- * Usage:  node client3d/scripts/smoke_water_shade.mjs
+ * Usage:  node the browser scene's deleted smoke_water_shade.mjs
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).
@@ -173,7 +173,7 @@
  * measured from the CLIENT side, and the wade/swim crossover against the LOCAL
  * level.
  *
- * Usage:  node client3d/scripts/smoke_water_plane.mjs
+ * Usage:  node the browser scene's deleted smoke_water_plane.mjs
  *         (transpiles `scene/waterPlaneMath.ts` and `game/walk.ts`; needs esbuild)
  *
  * WHAT LEFT WITH WASSER v2 K-A E5. The water used to be a MESH of its own — a
@@ -679,11 +679,11 @@
  * Smoke check for the WATERFALL ("Ein Wasser-Gesetz" W5) — which segment of a
  * river's own flow axis is a fall, where it stands, and how wide it is.
  *
- * Usage:  node client3d/scripts/smoke_waterfall.mjs
+ * Usage:  node the browser scene's deleted smoke_waterfall.mjs
  *         (transpiles `packages/scene-render/src/waterfall.ts`; needs esbuild)
  *
  * The profile the axis belongs to is checked next door
- * (`client3d/scripts/smoke_water_plane.mjs`, the polyline of W4a); this is the
+ * (the browser scene's deleted `smoke_water_plane.mjs`, the polyline of W4a); this is the
  * ONE question W5 adds to it. Every expected value below is derived BY
  * HAND in this docstring (§ B5a) — nothing here records current output.
  *
@@ -914,7 +914,7 @@
  * ===========================================================================
  * [8] THE 3D HALF, structurally
  * ===========================================================================
- * `client3d/src/scene/waterfall.ts` imports three and cannot be transpiled into
+ * the browser scene's `waterfall.ts` imports three and cannot be transpiled into
  * this process, so what is checked here is what makes it the ARRANGEMENT the
  * plan decided on, plus the two numbers it derives:
  *
@@ -1017,7 +1017,7 @@
 
 ## Inline derivations
 
-Comment blocks of `client3d/scripts/smoke_water_shade.mjs` after its opening docstring that contain a mark a case label
+Comment blocks of the browser scene's deleted `smoke_water_shade.mjs` after its opening docstring that contain a mark a case label
 cites, in file order; line numbers refer to the smoke at a56065e6f003.
 
 Line 1119 (cites [1]):

@@ -70,8 +70,8 @@ Throwaway storage. Hand-derived expectations:
       this depth on the two clips and the two depths of [8]/[8b] apply;
       shallower water is WADED — the figure keeps its own walk/run and
       standing clips, is not sunk at all and stands on the bed (the rule
-      itself is the CLIENT's, `client3d/src/game/walk.wadeGate`, checked in
-      `client3d/scripts/smoke_walk_math.mjs`; the server only carries the
+      itself is the CLIENT's, the browser scene's `walk.wadeGate`, checked in
+      `native/tests/Derivations/walk_math.md`; the server only carries the
       number). It does NOT share the shape rule of the two sinks: 0 IS A
       VALUE here — "swim from the very rim", i.e. the behaviour of every
       water kind before this round — so it clamps like `shore_ramp_m`

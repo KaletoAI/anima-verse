@@ -4,7 +4,7 @@ namespace AnimaNative.Figures;
 
 public readonly record struct PairPose(double X, double Y, double Z, double Yaw);
 
-/// <summary>Pair entry view maths, mirrored in client3d/src/game/pairBlend.ts. Always real seconds.</summary>
+/// <summary>Pair entry view maths, mirrored in the browser scene's pairBlend.ts. Always real seconds.</summary>
 public static class PairBlend
 {
     public const double BlendS = 0.4;

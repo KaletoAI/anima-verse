@@ -166,8 +166,8 @@ ground rule lifts the root only when needed, ignoring tail vertices and the
 paws currently controlled by contact IK. Tail clearance is handled separately,
 with a lift capped at **30°**. Export is **FBX + basecolor PNG** (`generic` rig).
 `app/core/model3d.py` stores metrics and `clips: {take: {loop}}` in model meta;
-the admin viewer and 3D client use those loop flags (`applyEmbeddedClipLoops`
-in `client3d/src/scene/figures.ts`).
+the admin viewer and the native client use those loop flags (`native/Figures/FigureManager.cs`,
+the `model.clips` loop flag per embedded take).
 
 The catalog maps take names to `src` (only `fox`), `action`, `loop` and an
 optional `tail` override mapping the selected mode to the effective mode.
@@ -206,8 +206,8 @@ A dash means no value is listed here.
 
 Known open points: hind hocks rise high during run; Cat 21 floats about 9% of
 its height when sitting. Verification: `scripts/smoke_quadruped_fit.py`,
-`scripts/smoke_quadruped_clips.py` (also `--numpy-only`) and
-`client3d/scripts/smoke_quadruped_takes.mjs`.
+`scripts/smoke_quadruped_clips.py` (also `--numpy-only`); the browser takes smoke
+`smoke_quadruped_takes.mjs` was deleted with the browser scene in plan E3.
 
 ## Hull boundaries
 
@@ -275,7 +275,7 @@ Stored roof models from before 2026-10 retain `roof_only: true`. These GLBs
 use the ordinary gallery placement (width and offsets) and may serve both full
 and low tiers. They are lids over the recipe walls: renderers keep the recipe
 shell visible underneath them and preserve roof fading when entering.
-`scene_recipe`, `client3d` and `packages/scene-render` continue to support this
+`scene_recipe`, the native client and `packages/scene-render` continue to support this
 flag. New parametric buildings use the hull pipeline and `plan_hull: true`.
 
 ## Hull interfaces and checks

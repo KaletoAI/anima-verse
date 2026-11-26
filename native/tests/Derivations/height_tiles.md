@@ -1,6 +1,6 @@
 # height_tiles
 
-- Origin: `client3d/scripts/smoke_height_tiles.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_height_tiles.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/HeightTilesVectorTests.cs`
 - Vectors: `shared/test-vectors/height_tiles.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Smoke check for the height-tile LOADING POLICY —
- * `client3d/src/scene/heightTiles.ts` (§ A16.3).
+ * the browser scene's `heightTiles.ts` (§ A16.3).
  *
- * Usage:  node client3d/scripts/smoke_height_tiles.mjs
+ * Usage:  node the browser scene's deleted smoke_height_tiles.mjs
  *
  * Every number below is counted BY HAND from the tile raster, never recorded
  * from the current output. The question the file answers is "which indexed
@@ -94,7 +94,7 @@
  * Smoke check for the shared WORLD height sampler —
  * `packages/scene-render/src/worldHeight.ts` (§ A16).
  *
- * Usage:  node client3d/scripts/smoke_world_height.mjs
+ * Usage:  node the browser scene's deleted smoke_world_height.mjs
  *
  * TWIN DISCIPLINE. The same field and the same expected numbers are checked
  * against the Python side in `scripts/smoke_heightfield.py`, section [8]. One
@@ -160,7 +160,7 @@
  * (§ A16.1, decision 1), local relief is authored through the map's HEIGHT AREAS,
  * and `reliefLiftAt` became one line — then lost its last caller with the
  * room huddle (T4) and is gone with it. The walk verdict is unchanged
- * (`client3d/src/game/walk.slopeBlocks`), and both are checked against the
+ * (the browser scene's `walk.slopeBlocks`), and both are checked against the
  * field above.
  *
  * (12) THE FLANK, walking east from (−2, 0) to (−1, 0):

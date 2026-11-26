@@ -15,7 +15,7 @@ namespace AnimaNative.Check;
 /// The ground-surface part of <c>--check</c> (Task S3b). The fixture world's build already ran the ground step
 /// (<see cref="WorldBuilder"/> → <see cref="GroundSurfaces"/>); this checks what it produced against numbers
 /// derived BY HAND in <c>fixtures/README.md</c> ("Ground surfaces") and against values the browser's own TS
-/// functions wrote (<c>fixtures/ground_reference.json</c>, from <c>ground_reference.mjs</c>):
+/// functions wrote (<c>fixtures/ground_reference.json</c>, frozen since plan E3 deleted its generator):
 ///
 ///   • requests: the index, then ONE batch with the want set in the browser's order (nearest first);
 ///     surface images: one download per library id that a layer names, a blend and an unused entry never;

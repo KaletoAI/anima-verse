@@ -218,7 +218,7 @@ const require_ = createRequire(import.meta.url);
 function esbuildModule() {
   for (const cand of ['esbuild',
                       join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild')]) {
+                      join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }
@@ -607,7 +607,7 @@ check('[13] panel: start value, the box, a moved slider, the dots helper', [
   /onPreview\(panel\.id, tipPreviewDots\(panel, draft, showDots, off\)\)/.test(tipSrc)], [true, true, true, true]);
 const frontFiles = (dir) => readdirSync(join(ROOT, dir), { recursive: true }).filter((f) => /\.tsx?$/.test(f))
   .map((f) => join(dir, f));
-const namesOverlayStart = ['frontend/src', 'packages/player-ui/src', 'client3d/src'].flatMap(frontFiles)
+const namesOverlayStart = ['frontend/src', 'packages/player-ui/src'].flatMap(frontFiles)
   .filter((f) => !f.endsWith('Model3DViewer.tsx') && /\bextensionBones\b/.test(src(f)));
 check('[13] viewer starts with the grid off, everywhere', [/\bextensionBones = false\b/.test(viewerSrc),
   /const \[bonesOn, setBonesOn\] = useState\(extensionBones\)/.test(viewerSrc), namesOverlayStart], [true, true, []]);

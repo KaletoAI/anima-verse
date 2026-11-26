@@ -10,7 +10,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/bench_math.json against the C# port <see cref="BenchStats"/>
-/// (hand derivations: client3d/scripts/smoke_bench_math.mjs). The dispatch adapters
+/// (hand derivations: native/tests/Derivations/bench_math.md). The dispatch adapters
 /// translate between the vector's JSON (the TS shapes, camelCase keys, null) and the
 /// C# types; they never reinterpret a value.
 /// </summary>

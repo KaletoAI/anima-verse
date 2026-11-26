@@ -21,7 +21,7 @@ public readonly record struct RecipeLook(
 }
 
 /// <summary>
-/// The materials of the scene-recipe primitives (client3d/src/scene/sceneRecipe.ts, "Materials for the shared
+/// The materials of the scene-recipe primitives (the browser scene's sceneRecipe.ts, "Materials for the shared
 /// primitive builders"), as ONE spatial shader in four variants (opaque/translucent × one/both sides):
 ///
 ///   • a texture kind the library has LOADED → the tiled image (white × map, three's <c>map</c> branch of

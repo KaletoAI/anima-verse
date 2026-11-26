@@ -227,8 +227,7 @@ console.log(JSON.stringify(out))
 
 
 def run_node(base_ts: Path, figure_ts: Path):
-    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild", "frontend/node_modules/.bin/esbuild",
-                                       "client3d/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
+    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild", "frontend/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
     if esbuild is None or shutil.which("node") is None:
         check(False, "esbuild and node available")
         return None

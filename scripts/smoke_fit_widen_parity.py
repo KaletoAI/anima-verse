@@ -9,7 +9,7 @@ Usage:
     ./.venv/bin/python scripts/smoke_fit_widen_parity.py
 
 No server, no world, no storage: pure functions only. The TypeScript module is bundled by esbuild (root
-``node_modules``, else ``frontend/`` or ``client3d/``) and run by ``node`` on the same points.
+``node_modules``, else ``frontend/``) and run by ``node`` on the same points.
 
 THE CASES, DERIVED BY HAND (the rule: z' = cz + (z − cz)·s; x' = x + (s − 1)·clip(x − cx, −hw, hw); y' = y)
 --------------------------------------------------------------------------------------------------------------
@@ -81,7 +81,7 @@ const [root, input] = process.argv.slice(2);
 const require_ = createRequire(join(root, 'scripts', 'x.js'));
 let esbuild = null;
 for (const cand of ['esbuild', join(root, 'node_modules/esbuild'), join(root, 'frontend/node_modules/esbuild'),
-                    join(root, 'client3d/node_modules/esbuild')]) {
+                    join(root)]) {
   try { esbuild = require_(cand); break } catch { /* next */ }
 }
 if (!esbuild) { console.error('esbuild not found'); process.exit(2) }

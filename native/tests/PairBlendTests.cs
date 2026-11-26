@@ -7,7 +7,7 @@ using Xunit;
 
 namespace AnimaNative.Tests;
 
-/// <summary>Hand derivations: client3d/scripts/smoke_pair_blend.mjs; same vectors in both apps.</summary>
+/// <summary>Hand derivations: native/tests/Derivations/pair_blend.md; same vectors in both apps.</summary>
 public class PairBlendTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("pair_blend"));

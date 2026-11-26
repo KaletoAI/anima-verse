@@ -2,7 +2,7 @@
 /**
  * Smoke check for the shared BIND-RELATIVE CLIP TRANSPLANT —
  * `packages/scene-render/src/clipRetarget.ts`, the ONE routine both renderers
- * bind a library clip with (`client3d`'s `adaptExternalClips` and the admin's
+ * bind a library clip with (the browser 3D scene's `adaptExternalClips` and the admin's
  * `Model3DViewer`). Numbers, not screenshots (§ B5a).
  *
  * Usage: node scripts/smoke_clip_retarget.mjs
@@ -198,7 +198,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_clip_retarget_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
       console.error('esbuild not found (npm install) — nothing was checked')

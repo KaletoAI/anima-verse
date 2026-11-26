@@ -1,6 +1,6 @@
 # foot_lock_measure
 
-- Origin: `client3d/scripts/smoke_foot_lock_measure.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_foot_lock_measure.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`, `native/tests/BridgeCoreTests.cs`
 - Vectors: `shared/test-vectors/foot_lock_measure.json`
 
@@ -9,13 +9,13 @@
 ```text
 /**
  * Smoke check for the PER-RIG FOOT LOCK of the 3D client
- * (`client3d/src/scene/footLockMeasure.ts`, `relockRootPaths`): a bridge
+ * (the browser scene's `footLockMeasure.ts`, `relockRootPaths`): a bridge
  * clip's imported root travel is rebuilt on each model's OWN skeleton, from
  * the foot bones of a probe clone — the same rule the importer ran on the
  * reference rig (`footLock.ts`, twin of `_root_motion.py`). Numbers only
  * (§ B5a); a SYNTHETIC skeleton, no clip files, no server.
  *
- * Usage:  node client3d/scripts/smoke_foot_lock_measure.mjs
+ * Usage:  node the browser scene's deleted smoke_foot_lock_measure.mjs
  *         (needs esbuild and three from the workspace)
  *
  * ===========================================================================

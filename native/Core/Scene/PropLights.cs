@@ -13,10 +13,10 @@ public sealed record LightSourceView(string Id, Vec3 Pos, double RangeM, string 
 public readonly record struct LightSlotState(string Id, double Gain);
 
 /// <summary>
-/// The pure half of the prop light pool, a port of client3d/src/scene/lightPool.ts (<c>pickLights</c>,
+/// The pure half of the prop light pool, a port of the browser scene's lightPool.ts (<c>pickLights</c>,
 /// <c>flickerFactor</c>, <c>nightLightGain</c>, <c>haloVisible</c>, <c>fireColourMix</c>, <c>stepLightSlot</c>,
 /// <c>lightPositionInFrame</c>), checked against shared/test-vectors/light_pool.json (hand derivations in
-/// client3d/scripts/smoke_light_pool.mjs).
+/// native/tests/Derivations/light_pool.md).
 /// </summary>
 public static class PropLights
 {

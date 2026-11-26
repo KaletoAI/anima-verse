@@ -1,6 +1,6 @@
 # door_swing
 
-- Origin: `client3d/scripts/smoke_door_swing.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_door_swing.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/DoorSwingVectorTests.cs`
 - Vectors: `shared/test-vectors/door_swing.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Smoke check for the DOOR SWING maths of the 3D client (v5 door props,
- * user decision 2026-08-27) — `client3d/src/game/doorSwing.ts`.
+ * user decision 2026-08-27) — the browser scene's `doorSwing.ts`.
  *
- * Usage:  node client3d/scripts/smoke_door_swing.mjs
+ * Usage:  node the browser scene's deleted smoke_door_swing.mjs
  *
  * Like every other check here, each expected number below is derived BY HAND
  * from the contract (§ B5a: numbers, never a screenshot, and never a value

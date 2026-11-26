@@ -14,7 +14,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// Task 25's water beside the vectors: the ripple twin (<c>twRipple</c>; the identities of
-/// client3d/scripts/smoke_water_shade.mjs § [5]/[6] — no shared vector exists for it), the ghost gates (the hand tables
+/// native/tests/Derivations/water_shade.md § [5]/[6] — no shared vector exists for it), the ghost gates (the hand tables
 /// of walk.ts' docstrings), the waterfall look (waterfall.ts constants), the topmost-area mirror (ground.ts
 /// <c>typeAt</c>), the prop water sheet, and the fragment's look rows and flow on the near lattice
 /// (terrainLod.ts <c>buildKindRows</c> / <c>buildFlow</c>). Every expectation is derived by hand in its comment.

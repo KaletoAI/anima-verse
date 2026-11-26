@@ -1,7 +1,7 @@
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of client3d/src/scene/cameraFraming.ts — zoom ranges, pitch curve, eye point and view/body yaw.
+/// Port of the browser scene's cameraFraming.ts — zoom ranges, pitch curve, eye point and view/body yaw.
 /// Task 47 (E7-T2) completes the embodied framing beside the overview curve so both modes use the same
 /// arithmetic; the caller owns camera placement and the FirstPersonZoom instance. Vectors: camera.json.
 /// </summary>

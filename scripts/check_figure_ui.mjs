@@ -5,7 +5,7 @@
  *
  * Usage:  node scripts/check_figure_ui.mjs
  *
- * Self-bundling via esbuild (like scripts/check_footwear.mjs); no server, no world. Exit 1 on the first
+ * Self-bundling via esbuild; no server, no world. Exit 1 on the first
  * mismatch list, 0 when every case holds.
  *
  * ============================================================================
@@ -326,7 +326,7 @@ const require_ = createRequire(import.meta.url);
 function esbuildModule() {
   for (const cand of ['esbuild',
                       join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild')]) {
+                      join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }

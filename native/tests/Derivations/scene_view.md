@@ -1,6 +1,6 @@
 # scene_view
 
-- Origin: `client3d/scripts/smoke_scene_view.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_scene_view.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/SceneViewVectorTests.cs`
 - Vectors: `shared/test-vectors/scene_view.json`
 
@@ -9,7 +9,7 @@
 ```text
 /**
  * Pure scene/interior view oracles, shared with the native client.
- * Usage: node client3d/scripts/smoke_scene_view.mjs
+ * Usage: node the browser scene's deleted smoke_scene_view.mjs
  *
  * Hand derivations for scene_view.json:
  * [O] Opening requires an interior AND building/ground/shell-area. Interior

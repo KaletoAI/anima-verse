@@ -59,7 +59,7 @@ const eq = (label, got, want) => {
 };
 
 function esbuildModule() {
-  for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'), join(ROOT, 'client3d/node_modules/esbuild')]) {
+  for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'), join(ROOT)]) {
     try { return require_(cand); } catch { /* next candidate */ }
   }
   console.error('esbuild not found (npm install) — nothing was checked');

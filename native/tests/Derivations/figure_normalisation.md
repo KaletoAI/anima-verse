@@ -1,6 +1,6 @@
 # figure_normalisation
 
-- Origin: `client3d/scripts/smoke_figure_normalisation.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_figure_normalisation.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PairVectorTests.cs`
 - Vectors: `shared/test-vectors/figure_normalisation.json`
 
@@ -8,7 +8,7 @@
 
 ```text
 /** Hand-derived figure normalisation vectors (no model, config or server).
- * Usage: timeout 300 node client3d/scripts/smoke_figure_normalisation.mjs
+ * Usage: timeout 300 node the browser scene's deleted smoke_figure_normalisation.mjs
  *
  * [N] anchorFigureBind owns pivot position/scale: reset both, measure bind
  * bbox, k = height/(size.y || 1), position = (-cx*k,-minY*k,-cz*k).

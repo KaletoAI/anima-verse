@@ -1,6 +1,6 @@
 # pair_realtime
 
-- Origin: `client3d/scripts/smoke_pair_realtime.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_pair_realtime.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PairVectorTests.cs`
 - Vectors: `shared/test-vectors/pair_clip_phase.json`
 
@@ -8,11 +8,11 @@
 
 ```text
 /**
- * Smoke check for the PAIR-CLIP PHASE — `client3d/src/game/pairClip.ts`, the
+ * Smoke check for the PAIR-CLIP PHASE — the browser scene's `pairClip.ts`, the
  * one place that turns the server's clip clock (§ A8a) into the time the
  * mixer of `scene/figures.ts` `playPair()` is seeked to.
  *
- * Usage: timeout 300 node client3d/scripts/smoke_pair_realtime.mjs
+ * Usage: timeout 300 node the browser scene's deleted smoke_pair_realtime.mjs
  *        (needs three and esbuild; expectations live in pair_clip_phase.json.)
  *
  * Every number below is derived BY HAND in this docstring from the rule of

@@ -53,14 +53,14 @@ internal static class PlacementVectorAdapters
 }
 
 /// <summary>
-/// shared/test-vectors/figure_ground.json (hand derivations: client3d/scripts/smoke_walk_math.mjs).
+/// shared/test-vectors/figure_ground.json (hand derivations: native/tests/Derivations/walk_math.md).
 /// <code>
 ///   TS fn              C#                            TS source
-///   placementOf        FigureGround.PlacementOf      client3d game/placement.ts (absent point = omitted argument)
-///   figureTransition   FigureGround.Transition       client3d game/placement.ts
-///   gateStandY         FigureGround.GateStandY       client3d game/walk.ts (null = the rung is silent)
-///   standY             FigureGround.StandY           client3d game/ground.ts
-///   tileWalkLadder     FigureGround.TileWalkLadder   client3d game/ground.ts
+///   placementOf        FigureGround.PlacementOf      the browser 3D scene game/placement.ts (absent point = omitted argument)
+///   figureTransition   FigureGround.Transition       the browser 3D scene game/placement.ts
+///   gateStandY         FigureGround.GateStandY       the browser 3D scene game/walk.ts (null = the rung is silent)
+///   standY             FigureGround.StandY           the browser 3D scene game/ground.ts
+///   tileWalkLadder     FigureGround.TileWalkLadder   the browser 3D scene game/ground.ts
 /// </code>
 /// </summary>
 public class FigureGroundVectorTests
@@ -103,9 +103,9 @@ public class FigureGroundVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/place_poll.json (hand derivations: client3d/scripts/smoke_places_client.mjs [9]).
+/// shared/test-vectors/place_poll.json (hand derivations: native/tests/Derivations/places_client.md [9]).
 /// <code>
-///   pollIsStale        FigureGround.PollIsStale      client3d game/placement.ts (null = Infinity)
+///   pollIsStale        FigureGround.PollIsStale      the browser 3D scene game/placement.ts (null = Infinity)
 /// </code>
 /// </summary>
 public class PlacePollVectorTests
@@ -128,15 +128,15 @@ public class PlacePollVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/room_spots.json (hand derivations: client3d/scripts/smoke_room_spots.mjs).
+/// shared/test-vectors/room_spots.json (hand derivations: native/tests/Derivations/room_spots.md).
 /// <code>
-///   polygonCentroid     RoomSpots.PolygonCentroid     client3d game/ground.ts
+///   polygonCentroid     RoomSpots.PolygonCentroid     the browser 3D scene game/ground.ts
 ///   roomSpotConstants   RoomSpots.* constants         (smoke wrapper; only the expected keys compared)
 ///   roomSpotGridHead    RoomSpots.Grid                (smoke wrapper: {length, first, firstDist})
 ///   furnitureUse        RoomSpots.FurnitureUse
 ///   roomFloorLadder     FigureGround.RoomFloorLadder  null declared = undefined, {"$number": "NaN"} terrain
 ///   roomStandLadder     FigureGround.RoomStandLadder  null centreY = undefined
-///   roomSpotsOfValue    RoomSpots.Of                  client3d game/roomSpots.ts; samplers as [a, b, c] planes
+///   roomSpotsOfValue    RoomSpots.Of                  the browser 3D scene game/roomSpots.ts; samplers as [a, b, c] planes
 /// </code>
 /// </summary>
 public class RoomSpotsVectorTests
@@ -211,9 +211,9 @@ public class RoomSpotsVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/npc_placement.json (hand derivations: client3d/scripts/smoke_npc_placement.mjs [1]–[5]).
+/// shared/test-vectors/npc_placement.json (hand derivations: native/tests/Derivations/npc_placement.md [1]–[5]).
 /// <code>
-///   huddleOffset           NpcPlacement.HuddleOffset      client3d game/npcPlacement.ts
+///   huddleOffset           NpcPlacement.HuddleOffset      the browser 3D scene game/npcPlacement.ts
 ///   placeAtLocationValue   NpcPlacement.PlaceAtLocation   tile + ctx as JSON; seatOf = PlaceSlots.SlotFor ('pair' → null);
 ///                                                         roomStand planes over tile-local, ground over world metres
 /// </code>

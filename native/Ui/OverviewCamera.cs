@@ -6,7 +6,7 @@ using Godot;
 namespace AnimaNative.Ui;
 
 /// <summary>
-/// The overview camera — the browser's map camera (client3d/src/scene/engine.ts) in Godot. The rules
+/// The overview camera — the browser's map camera (the browser scene's engine.ts) in Godot. The rules
 /// and the numbers live in <see cref="OverviewControl"/> (Godot-free, tested); this node only
 ///
 ///   • turns Godot input into the DOM gestures engine.ts binds (<see cref="_UnhandledInput"/> — what
@@ -142,7 +142,7 @@ public partial class OverviewCamera : Camera3D
     }
 
     /// <summary>
-    /// The frustum shift of client3d/src/scene/viewShift.ts — engine.ts <c>applyViewShift</c>. three.js
+    /// The frustum shift of the browser scene's viewShift.ts — engine.ts <c>applyViewShift</c>. three.js
     /// renders an off-centre cut-out with <c>setViewOffset(w, h, −dx, −dy, w, h)</c>; Godot has no view
     /// offset, so the same off-axis frustum is set directly: <see cref="Camera3D.ProjectionType.Frustum"/>
     /// with <c>size</c> = the near-plane height of the 45° lens and <c>frustum_offset</c> = the shift in

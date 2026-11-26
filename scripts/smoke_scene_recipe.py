@@ -2528,39 +2528,11 @@ def test_threshold_base_y() -> None:
             for m in ({}, {"a": {"width_m": 3.0, "walk_y": 0}})}
     check("a changed walk_y moves the signature", len(sigs) == 2, str(sigs))
 
-    # ── source pin: the client does NOT recompute this any more ─────────
-    # There is no client smoke over `main.ts` (its door tests cover
-    # `game/doors.ts`, the payload reader), so the removal is pinned here: the
-    # two functions that did the recomputing are gone, and the quad hangs in
-    # the tile frame where `base_y` is stated.
-    main_ts = (Path(__file__).resolve().parents[1]
-               / "client3d" / "src" / "main.ts")
-    src = main_ts.read_text(encoding="utf-8") if main_ts.exists() else ""
-    check("client3d/src/main.ts is where it is", bool(src), str(main_ts))
-    check("no doorFloorY/doorMarkY left — nothing recomputes the height",
-          "doorFloorY" not in src and "doorMarkY" not in src)
-    check("...and hangs in the TILE frame, like the walls",
-          "tile.group.add(root)" in src)
-    # Same error class, same pin (review 2026-08-16, re-derived for E5b): a
-    # DECLARED `walk_y_world` is a TILE metre and the spots it places are world
-    # points, so the tile's own height has to be added on the way in. On a tile
-    # whose plateau is 0.05 m the pool's declared 0.12 sank the room centre to
-    # 0.13 instead of 0.17; on a high plateau the old spot filter matched
-    # nothing at all and the declaration was silently dropped. The 6 x 6 ray
-    # raster is gone ("Ein Boden" E5b) and the conversion is the same one: the
-    # rule `datumY + declared` is the pure `ground.roomFloorLadder`
-    # (hand-derived in `client3d/scripts/smoke_room_spots.mjs` [6]); what is
-    # pinned here is that `tiles.ts` hands it the TILE's height as the datum,
-    # because the lookup around it needs a THREE scene.
-    tiles_ts = (Path(__file__).resolve().parents[1]
-                / "client3d" / "src" / "scene" / "tiles.ts")
-    tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
-    check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
-    check("the declared floor enters the derivation as a WORLD height",
-          "roomFloorLadder(tile.center.y, null, floor.declared" in tsrc)
-    check("...and the 6 x 6 ray raster that used to guess it is gone",
-          "sampleRoomWalkables" not in tsrc and "Raycaster" not in tsrc)
-
+    # The browser client's source pins (main.ts: no client recomputation of the
+    # door height; tiles.ts: the declared floor enters as a WORLD height) went
+    # with the browser 3D scene in plan E3. The pure rule `datumY + declared`
+    # stays hand-derived in `native/tests/Derivations/room_spots.md` [6] and
+    # vector-checked against the native client.
 
 def test_elevator() -> None:
     print("\n[5] elevator primitives")
@@ -3457,7 +3429,7 @@ def test_area_room_walk_height() -> None:
 
     That half was always right; the finding was that the number never reached
     a walking figure. TWO holes, both in the client, both pinned below at the
-    source and by hand in ``client3d/scripts/smoke_walk_math.mjs``:
+    source and by hand in ``native/tests/Derivations/walk_math.md``:
 
       1. ``tileWalkY`` knew the drawn plates and the mesh ray and NOTHING
          about a room's declaration — the dial moved the NPC spots
@@ -3532,30 +3504,10 @@ def test_area_room_walk_height() -> None:
           lay == scene_recipe.layout_signature(loc["map3d"], loc["rooms"]),
           lay[:8])
 
-    # ── source pins: the CLIENT rules that consume it ───────────────────
-    # The walking height raycasts a THREE scene, so the pure halves are
-    # hand-derived in `client3d/scripts/smoke_walk_math.mjs`
-    # (`declaredFloorAt`, `plateCeiling`); what is pinned here is that
-    # `tileWalkY` actually ASKS them — the hole the finding was.
-    tiles_ts = (Path(__file__).resolve().parents[1]
-                / "client3d" / "src" / "scene" / "tiles.ts")
-    tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
-    check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
-    check("the walking figure asks the DECLARED floors first",
-          "declaredFloorAt(tile.declaredFloors" in tsrc)
-    check("...then the plates, whatever the display (E5b: the mesh rung that "
-          "the `shell` guard existed for is deleted)",
-          "info.display === 'shell' || !target" not in tsrc)
-    check("...judged by the PLATE ceiling, the storey question",
-          "plateCeiling(info)" in tsrc and "recipeFloorAt(tile.walkPlates" in tsrc)
-    recipe_ts = (Path(__file__).resolve().parents[1]
-                 / "client3d" / "src" / "scene" / "sceneRecipe.ts")
-    rsrc = recipe_ts.read_text(encoding="utf-8") if recipe_ts.exists() else ""
-    check("client3d/src/scene/sceneRecipe.ts is where it is", bool(rsrc))
-    check("the mount fills the declared floors from the payload's own room "
-          "hulls", "tile.declaredFloors.push({ roomId: room.room_id" in rsrc)
-    check("...and drops them with the scene", "tile.declaredFloors = [];" in rsrc)
-
+    # The browser client's source pins (tiles.ts `tileWalkY`, sceneRecipe.ts
+    # declared floors) went with the browser 3D scene in plan E3; the pure
+    # halves (`declaredFloorAt`, `plateCeiling`) stay hand-derived in
+    # `native/tests/Derivations/walk_math.md` and vector-checked natively.
 
 def test_room_and_prop_specs() -> None:
     print("\n[8] diorama and prop specs")

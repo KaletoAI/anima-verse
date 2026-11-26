@@ -8,7 +8,7 @@ namespace AnimaNative.Scatter;
 
 /// <summary>
 /// The scatter and undergrowth materials, with the browser's wind (<c>applySway</c> in
-/// <c>client3d/src/scene/ground.ts</c>) as a Godot spatial vertex shader:
+/// the browser scene's <c>ground.ts</c>) as a Godot spatial vertex shader:
 ///
 ///   swayDir   = normalize(instanceMatrixᵀ · (0.8, 0, 0.6)) / |instanceMatrix col 0|   (world-fixed, metres)
 ///   swayPhase = fract(sin(dot(instance translation xz, (12.9898, 78.233))) · 43758.5453) · 2π

@@ -843,7 +843,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
 >     `placements[].model_tiers` die vorhandenen Stufen.
 >     **Stufen-WAHL ist Sicht-Zustand des Clients** (Etappe 3, 2026-08-03):
 >     welcher Konsument wann `low` fordert, entscheidet jeder Renderer für
->     sich — client3d nimmt Fernsicht-Gebäudemodelle distanzbasiert mit
+>     sich — die (in E3 gelöschte) Browser-Szene nahm Fernsicht-Gebäudemodelle distanzbasiert mit
 >     Hysterese und lädt das Innenleben von `area_detail`-Locations `low`,
 >     solange deren Detail-Ansicht nicht geöffnet ist; die Admin-Vorschau
 >     fordert immer `full`. Der Payload bleibt davon unberührt — `variants`
@@ -919,7 +919,7 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
   gelandet (2026-08-09), und mit **E4/Task 3** (2026-08-09) ist auch die
   früher gegenläufige Szenen-Kette angeglichen: **der Server liefert die
   Yaw-Werte unverändert, das Vorzeichen ist in den RENDERERN gekippt**
-  (`packages/scene-render/src/place.ts`, `client3d/src/scene/sceneRecipe.ts`,
+  (`packages/scene-render/src/place.ts`, Browser-Szene `sceneRecipe.ts` (E3 gelöscht),
   `frontend/src/tabs/characters/Model3DViewer.tsx`,
   `frontend/src/tabs/world/FloorPlanPreview.tsx`). Der eigene Wand-Yaw in
   `primitives.ts` war hergeleitet korrekt und ist bewusst NICHT gekippt
@@ -1329,7 +1329,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   bewegt nie ein Prop, er dreht es an Ort und Stelle. `yaw_deg` wird auf
   [0, 360) normiert, zwei Nachkommastellen, und ohne Modus nicht gespeichert
   (eine Zahl, die auf nichts wirkt); ein unbekannter Modus verliert beide
-  Schlüssel. Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs`
+  Schlüssel. Zahlen von Hand: `native/tests/Derivations/scatter_math.md`
   Abschnitt (Q), Whitelist in `scripts/smoke_terrain_areas.py` [11y].
 - **Achse, Randreihe, Mitte, Fremdabstand und Neuwurf (Nachtrag
   2026-09-10).** Eine Streuung kennt seit diesem Tag drei Platzierungen statt
@@ -1395,7 +1395,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   eine Zeile ohne das Wort liest die Flächenachse wie bisher. Der Server
   speichert das Feld in JEDER Platzierung (wie `variant`), Junk und `"all"`
   verlieren den Schlüssel. Zahlen von Hand:
-  `client3d/scripts/smoke_scatter_math.mjs` (R6, R7), Whitelist
+  `native/tests/Derivations/scatter_math.md` (R6, R7), Whitelist
   `scripts/smoke_terrain_areas.py` [11p]; die Aufrufreihenfolge beider
   Renderer pinnt `scripts/smoke_scatter_preview.mjs` (K5).
 
@@ -1424,7 +1424,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   reichen die Auswahl identisch an den Kantenaufruf durch
   (`edges: line ? ribbonSelectedEdges(ring, sides) : undefined`), gepinnt in
   `scripts/smoke_scatter_preview.mjs` (K5); Zahlen von Hand:
-  `client3d/scripts/smoke_scatter_math.mjs` (R8, U6, X11).
+  `native/tests/Derivations/scatter_math.md` (R8, U6, X11).
 
   **`yaw_mode: "aligned"`** ist der einzige Modus: `yaw = Achse +
   yaw_deg · π/180`, auf [0, 2π) normiert. Damit heißt derselbe Winkel an
@@ -1476,7 +1476,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Reihe ist byte-gleich die gleichmäßige. Der Server speichert das Feld nur
   MIT `place: "edge"` UND `min_spacing_m`, geklemmt auf `0..min_spacing_m`
   mit zwei Nachkommastellen. Zahlen von Hand:
-  `client3d/scripts/smoke_scatter_math.mjs` (U4), Whitelist
+  `native/tests/Derivations/scatter_math.md` (U4), Whitelist
   `scripts/smoke_terrain_areas.py` [11p]. **`density_per_100m2` wirkt hier nicht** (gespeichert wird
   sie trotzdem, ein Moduswechsel verliert also nichts). Je Station EIN Zug
   aus dem Reihen-Strom `scatterSeed(area_id, index, epoche)`, immer und vor
@@ -1506,7 +1506,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   beendet den Lauf); `opposite` → Kante 0: `(3.5, 1)`, dann Kante 2 von
   (10,4) nach (0,4): `s = 3.5` → `(6.5, 4)` → `(6.5, 3)`, Ordinal 1.
   `fehlt`/`"all"` ist der Ringlauf von oben, byte-gleich. Zahlen von Hand:
-  `client3d/scripts/smoke_scatter_math.mjs` (U5, X10).
+  `native/tests/Derivations/scatter_math.md` (U5, X10).
 
   **EIN LAUF JE KETTE, nicht je Kante** (Scatter-Erweiterung 2026-09-10, Task 11). Ein
   Lauf gehört nicht einer Kante, sondern einer KETTE zusammenhängender
@@ -1528,7 +1528,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Lauf je gewählter Kante: „die längste" und „die zwei längsten" benennen
   einzelne Seiten, und zwei zufällig benachbarte sind zwei Seiten, keine
   längere. Zahlen von Hand:
-  `client3d/scripts/smoke_scatter_math.mjs` (U6, X11).
+  `native/tests/Derivations/scatter_math.md` (U6, X11).
 
   **`place: "center"` — die eine Mitte** (`polylabel` +
   `scatterCenterInstance`). Der Punkt ist der **Pol der Unzugänglichkeit**,
@@ -1609,7 +1609,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   des gemalten Rings ein: ein Prop, das niemand zeichnet, darf der nächsten
   Fläche nichts wegnehmen.
 
-  Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs` Abschnitte (Q)
+  Zahlen von Hand: `native/tests/Derivations/scatter_math.md` Abschnitte (Q)
   Drehung, (R) Achse, (T) Pol, (U) Stationen, (V) Belegung, (W) Epoche und
   (X) Rand- und Mitte-Sampler; Whitelist und Migration
   `scripts/smoke_terrain_areas.py` [11y]/[11p]/[11m].
@@ -1729,7 +1729,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Abschnitt (N6)/(X9) desselben Smokes. Der 3D-Client baut daraus **eine
   `InstancedMesh` je (Zeile, Variante)** statt je Zeile
   (`ground.ts buildScatter`); Zahlen von Hand in
-  `client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N). Die
+  `native/tests/Derivations/scatter_math.md` Abschnitt (N). Die
   Karten-Editor-Vorschau bleibt Punkte und fragt gar nicht erst nach Varianten.
 - **Der Server hängt an denselben Eintrag zusätzlich `prop_height_m`** — die
   ECHTE Höhe des Props in Metern aus seinem Bibliotheks-Datensatz
@@ -1881,8 +1881,7 @@ E1 unberührt:
   für jede Rotation, Karte wie Szene. Der SERVER ändert dafür nichts:
   `models[].yaw_deg` und `markers[].facing` kommen unverändert (§ B1); das
   Vorzeichen ist in ALLEN vier Renderstellen gemeinsam gekippt worden
-  (`packages/scene-render/src/place.ts`, `client3d/src/scene/
-  sceneRecipe.ts`, `frontend/src/tabs/characters/Model3DViewer.tsx`,
+  (`packages/scene-render/src/place.ts`, Browser-Szene `sceneRecipe.ts` (E3 gelöscht), `frontend/src/tabs/characters/Model3DViewer.tsx`,
   `frontend/src/tabs/world/FloorPlanPreview.tsx`). Der eigene Wand-Yaw in
   `primitives.ts` wurde geprüft und ist **nicht** gekippt worden — er ist
   hergeleitet korrekt (eine achsparallele Wand hätte gleich AUSGESEHEN,
@@ -2572,8 +2571,8 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   the listing (native `ClipListingDiff.TransitionsChanged`).
 - **Brücke aus einer Paar-Pose** (2026-11-02, Folge-Pose F2,
   plan-folge-pose.md): Nach einem Paar hält ein Renderer die gespielte
-  Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (client3d
-  `Figure.playPair`, native `Figure.PlayPair`: `currentKind = clipName`).
+  Hälfte `<kind>__<role>` als Clip, den die Figur verlässt (native
+  `Figure.PlayPair`: `currentKind = clipName`).
   Eine Regel mit einer Paar-Pose als `from` erscheint in `transition_clips`
   darum als ihre Hälften `<kind>__a` / `<kind>__b` und die Hälften ihres
   Abschluss-Clips (`finale_animation` oder Paket-Automatik) — nie als die
@@ -2606,13 +2605,13 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   geschrieben ins selbe Sidecar wie `loop` und mit derselben Reichweite (Kind
   im Set, beide Hälften, jede Variante). Der Client spielt einen gezählten Loop
   als Three.js `LoopRepeat` mit `repetitions = loop_count` und
-  `clampWhenFinished` (`client3d/src/game/clipLoop.ts`); was DANACH kommt,
+  `clampWhenFinished` (Browser-Szene `clipLoop.ts` (E3 gelöscht)); was DANACH kommt,
   entscheidet der Kontext: eine Pose bleibt stehen (letztes Bild), ein
   Abschluss (§ A8c) gibt an den Clip der Aktion zurück, der Zauber-Pose nimmt
   der Server sie nach `duration_s × loop_count` wieder ab
   (`spell_engine.end_cast_pose_after_clip`, Systemzeit, nur im Prozess).
   Prüfung: `scripts/smoke_clip_loop_count.py`,
-  `client3d/scripts/smoke_clip_loop_count.mjs`.
+  `scripts/smoke_clip_loop_count.py`.
 - **Übergangsclips mit Weg** (2026-09-25, plan-bruecken-root-motion): Der
   Import legt je Solo-Clip fest, was mit dem waagerechten Weg der Wurzel
   geschieht — `root_motion` = `strip` (Default, Hüfte bleibt am Ursprung),
@@ -2664,7 +2663,7 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
       `STAND_ADOPT_M` = 0,25 m davon entfernt (die Rasterweite
       `STAND_GRID_M` der Server-Stehsuche), **behält sie ihren Platz**,
       solange der Server dieselbe Position schickt
-      (`client3d/src/scene/standSettle.ts`); weiter weg läuft sie hin.
+      (Browser-Szene `standSettle.ts` (E3 gelöscht)); weiter weg läuft sie hin.
     - Ein **NPC auf Reise** übernimmt ihn, sobald die Reise läuft UND die
       Brücke vorbei ist. Während der Brücke ruht die Routen-Nachführung (kein
       Schritt, keine Drehung). Der Server startet die Route ohnehin erst
@@ -2697,7 +2696,7 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
     Brücken dessen eigener Weg. Fehlen Fußknochen oder volle Kontakte, gilt
     ebenfalls der importierte Weg.
   - **Danach pinnt der Client die aufgesetzten Füße pro Rig**
-    (`client3d/src/scene/legPin.ts`, im selben Lauf, in den angepassten Clip
+    (Browser-Szene `legPin.ts` (E3 gelöscht), im selben Lauf, in den angepassten Clip
     gebacken): Der Import biegt die Beine für die Proportionen des
     Referenz-Rigs; eine Figur übernimmt nur die Drehungen, also gleiten ihre
     Füße wieder (neuer `get-up-chair` ohne Pin: Test3_mia 3,86 cm, Soldier
@@ -2711,12 +2710,12 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
     Knöchel, der Client den kontaktgewichteten Punkt — die Füße der
     Aufnahmen drehen sich im Stand um 4–9° um die Hochachse, ein gehaltener
     Knöchel schwenkt dann den Ballen. Gemessen am gerenderten Rig mit eigener
-    Kontakterkennung (`client3d/scripts/smoke_bridge_root.mjs` [6], Grenze
+    Kontakterkennung (`native/tests/Derivations/bridge_root.md` [6], Grenze
     1,5 cm für beide Brücken; Stuhl / Bett): Test3_mia 0,58 / 0,70,
     Soldier 1,02 / 1,30, Referenz-Rig 0,64 / 1,11 cm. Ein starrer
     2D-Ausgleich (Kabsch) ist damit nicht nötig.
   - **Die Höhe gehört während einer haltenden Brücke der Figur**
-    (`client3d/src/scene/bridgeLift.ts`): Beim Start setzt der Besitzer die
+    (Browser-Szene `bridgeLift.ts` (E3 gelöscht)): Beim Start setzt der Besitzer die
     Wurzel sofort auf den neuen Boden und gibt die Differenz als Hebung an
     die Figur (`Figure.beginBridgeLift`); sie hält den liegenden oder
     sitzenden Körper damit auf seiner Fläche. Zum ersten vollen Fußkontakt
@@ -2734,7 +2733,7 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
     (`smoke_bridge_lift.mjs`; vorher NPC −32 … −45 cm im Boden, Avatar
     bis +27 cm in der Luft).
   - **Die Drehung einer Brücke gehört der Wurzel**
-    (`client3d/src/scene/bridgeHeading.ts`): `get-up-bed` dreht den Körper
+    (Browser-Szene `bridgeHeading.ts` (E3 gelöscht)): `get-up-bed` dreht den Körper
     beim Aufsetzen auf der Bettkante um ~105°, und diese Drehung steht in der
     Hüftspur — der Clip danach drehte den Körper sofort zurück. Der Client
     misst pro Rig die Beckenrichtung ψ(t) aus dem Quervektor
@@ -2881,7 +2880,7 @@ mit mehr Figuren:
   leiht sich nie die Wurzel einer anderen Rolle.
 - Testvektor `shared/test-vectors/group_role_points.json`: drei Rollen bei
   90°, fünf bei 180°, eine Fünfer-Rolle auf einem Platz. Handrechnung in
-  `client3d/scripts/smoke_group_role_points.mjs`. Gegenprobe gegen den Server
+  `scripts/smoke_group_role_points.py`. Gegenprobe gegen den Server
   in `scripts/smoke_group_role_points.py`.
 - Der Abschluss (§ A8c) einer Gruppe nennt die Rolle des Mitglieds, `a`..`e`.
 - **Leere Rollen (2026-11-08).** Eine Gruppe darf kleiner sein als ihr Clip:
@@ -2959,7 +2958,7 @@ auflöst). Gelände, Figurengröße und die Lage der Öffnung an DIESEM Körper 
   `scripts/smoke_pair_height.mjs`.
 - Der Wurzelpfad gehört zur Datei, die die Set-Kette der Figur wählt (Cache pro Kind UND Set, wie der Clip-Index).
 - Rechnung: `packages/scene-render/src/pairScale.ts`; Handrechnungen in `scripts/smoke_pair_scale.mjs`,
-  `client3d/scripts/smoke_pair_root_sets.mjs` und `scripts/smoke_clip_pair_pivot.py`. Die Spielzustands-Position
+  Browser-Smoke `smoke_pair_root_sets.mjs` (E3 gelöscht) und `scripts/smoke_clip_pair_pivot.py`. Die Spielzustands-Position
   des Servers (`interaction_engine._rotate`) bleibt unskaliert.
 
 **Alt-Hälften (G6, 2026-11-03).** Eine Rolle eines Paars oder einer Gruppe darf
@@ -2997,7 +2996,7 @@ Bewegung derselben Rolle):
   Rolle, schließt die Figur in ihr (`finale.alt`), sonst in der eigenen Hälfte.
 - Testvektor: `pair_clip_geometry.json` [1] (`x__b~wave` ist eine
   Rollen-Datei, `x__b~`, `x~wave` und `x__f~wave` sind keine).
-  `client3d/scripts/smoke_finale_clip.mjs` [9] prüft den Abschluss-Namen,
+  Browser-Smoke `smoke_finale_clip.mjs` (E3 gelöscht) [9] prüft den Abschluss-Namen,
   `scripts/smoke_prop_action_group.py` [11] die Auswahl, die Position und den
   Abschluss.
 
@@ -3124,8 +3123,8 @@ hält sein letztes Bild (`min(Phase, clip_duration_s)`), ein gezählter Loop
 die ersten N−1 Durchläufe und spielt den letzten als Einmal-Clip, damit er nie
 für ein Bild auf den Anfang springt (`pairClip.ts` → `cycling`). Die Spieluhr entscheidet
 also nur, WO der Clip bei einem Poll steht und ob er überhaupt weiterläuft.
-Regel und handgerechnete Zahlen: `client3d/src/game/pairClip.ts` +
-`client3d/scripts/smoke_pair_realtime.mjs` + `client3d/scripts/smoke_pair_clip_tempo.mjs`
+Regel und handgerechnete Zahlen: Browser-Szene `pairClip.ts` (E3 gelöscht) +
+`native/tests/Derivations/pair_realtime.md` + Browser-Smoke `smoke_pair_clip_tempo.mjs` (E3 gelöscht)
 (Server: `scripts/smoke_pose_scene_tempo.py`); native `Core/Figures/PairClip.cs`.
 
 Daneben `place: {id, slot, x, z, facing?, room_id} | null` — der Platz
@@ -3145,7 +3144,7 @@ danach: lokal `+ dt · tempo`, Schnappen über `PAIR_SNAP_S`, Mixer/Player mit
 `tempo` (`pairClip.ts` `adoptHeldClock`/`stepHeldClock` + `Figure.holdClipAt`;
 native `HeldClock` + `Figure.HoldClipAt`). Paar- und Gruppenläufe tragen ihre
 Uhr im `interaction`-Block. Handgerechnet: `scripts/smoke_pose_scene_tempo.py` [6],
-`client3d/scripts/smoke_pair_clip_tempo.mjs` [7], native `PairCheck` T5.
+Browser-Smoke `smoke_pair_clip_tempo.mjs` (E3 gelöscht) [7], native `PairCheck` T5.
 **Nie ausgedünnt** — die Ausdünnung (`_thin`, § A11) schützt Reise-ROUTEN;
 ein Platz (und eine Paar-Interaktion, § A8a) liegt in einem Raum, den die
 Fog-Tore bereits durchgelassen haben (Befund Steinbank 2026-08-31: das Gate
@@ -3197,9 +3196,9 @@ ein „Move", der die Interaktion serverseitig beendet).
 Rollen-Positionen, kein Uhr-Ende, Abbruch-Signale, Payload),
 `scripts/smoke_clip_loop_flag.py` (das Loop-Kennzeichen: Sidecar schlägt
 Messung, Schreiben je Kind und Set),
-`client3d/scripts/smoke_clip_pair.mjs` (echte FBX-Hälften per FBXLoader:
+`native/tests/Derivations/clip_pair.md` (echte FBX-Hälften per FBXLoader:
 Root-Bahn am Ankerframe = Sidecar, Anker-Transformation = Server-Formel),
-`client3d/scripts/smoke_pair_realtime.mjs` (die Echtzeit-Phase: dieselbe Phase
+`native/tests/Derivations/pair_realtime.md` (die Echtzeit-Phase: dieselbe Phase
 bei Faktor 0,5/1/2, Freeze hält sie, Einmal-Clip klemmt, Poll-Schnapp erst über
 0,3 s Abweichung).
 Bekannte Grenze des Piloten: Handkontakt ist nicht garantiert — die Proportionen
@@ -3363,7 +3362,7 @@ und `alt` (`alt_choices`); Zurückhalten per `POST /play/interact/hold {scene_id
   `crawl` verdrängt die Ruhe-Pose auch eine Tätigkeit. Reichweite wie bisher
   (§ A1.5: Wildnis und offene Orte ja, Gebäude und Innenräume nein — dort gilt
   `walk_run`). Der Client bezieht die Antwort aus EINER Stelle für alle
-  Figuren (`client3d/src/game/walk.ts` `moveClip`/`idleClip`). Bestandswelten
+  Figuren (Browser-Szene `walk.ts` (E3 gelöscht) `moveClip`/`idleClip`). Bestandswelten
   stellt eine einmalige Boot-Migration um
   (`app/core/terrain_movement_migration.py`): Wasser mit Clip → `swim`, ein
   abweichender Clip wird Welt-Override der Pose `swimming`/`treading_water`.
@@ -3428,7 +3427,7 @@ und `alt` (`alt_choices`); Zurückhalten per `POST /play/interact/hold {scene_id
   Passierbarkeit und Tempo bleiben Sache der ART: `speed_factor` gilt für die
   ganze Fläche, Waten ist ebenfalls langsam. Der Server trägt die Zahl nur
   (Katalog-Sanitizer), gerechnet wird sie im Client
-  (`client3d/src/game/walk.wadeGate`). Saat: `river` trägt 1,0 neben Tiefe
+  (Browser-Szene `walk.wadeGate` (E3 gelöscht)). Saat: `river` trägt 1,0 neben Tiefe
   1,2 m und Uferrampe 1,0 m; `water`/`deep_water` nennen keinen Schlüssel und
   bekommen damit dieselbe 1,0.
 
@@ -3709,7 +3708,7 @@ beiden Stellen, an denen der jeweilige Verbraucher ohnehin liest:
 
 | Route | Verbraucher |
 |---|---|
-| `GET /play/terrain` → `prop_boxes` | 3D-Client (`client3d/src/scene/ground.ts`) |
+| `GET /play/terrain` → `prop_boxes` | 3D-Client (Browser-Szene `ground.ts` (E3 gelöscht)) |
 | `GET /world/world-props` → `prop_boxes` | Karten-Editor (`frontend/src/tabs/map/MapTab.tsx`) |
 
 | Feld | Typ | Bedeutung |
@@ -3744,7 +3743,7 @@ z = cz − lx·sin(yaw) + lz·cos(yaw)
 Eine achsenparallele Box um ein um 30° gedrehtes Prop wäre an zwei Ecken zu
 groß (kahler Fleck) und an zwei Ecken zu klein (Baum in der Bank) — beides auf
 der Karte sichtbar. Handrechnung dazu in
-`client3d/scripts/smoke_scatter_math.mjs` Abschnitt (P), inkl. rotem
+`native/tests/Derivations/scatter_math.md` Abschnitt (P), inkl. rotem
 Gegenversuch (Mutant mit cos 1 / sin 0).
 
 **Was KEINE Box bekommt:**
@@ -3770,7 +3769,7 @@ Signatur, der Client holt `/play/terrain` neu und sampelt den Wald um sie herum
 neu. Der Karten-Editor braucht das nicht: er lädt `/world/world-props` nach
 jedem Prop-Schreibvorgang ohnehin neu.
 
-**Prüfungen (§ B5a):** `client3d/scripts/smoke_scatter_math.mjs` (P1)–(P6),
+**Prüfungen (§ B5a):** `native/tests/Derivations/scatter_math.md` (P1)–(P6),
 `scripts/smoke_world_props.py` [9].
 
 ## A10. Camera & controls
@@ -4048,7 +4047,7 @@ außerhalb jeder Sichtweite, steht trotzdem mit `pos` im Payload).
 
 **Avatar with its own journey**
 
-The `avatarDrive` state machine runs in every view mode; input and position
+The `avatarDrive` state machine (native: `native/Core/Embody/PositionChannel.cs`; the browser scene's twin was deleted in E3) runs in every view mode; input and position
 reports run only in embodied mode. `SERVER` uses the same target/display route
 as NPCs, suspends position reconciliation and all report paths, and retains the
 existing follow camera. `NO_CANCEL` differs from a legacy journey id `null`.
@@ -4085,7 +4084,7 @@ the avatar and is treated as a foreign correction, counted in `pos corr`.
 **Konsumenten (Stand E5, 2026-08-12): beide migriert.** Die v1-Felder haben
 damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 
-* `client3d` — **P1 Task 3 implemented.** `main.ts` builds an `IncomingRoute`
+* The browser 3D scene (deleted in plan E3; the native client is the consumer now, `native/Core/Figures/TravelPath.cs`) — **P1 Task 3 implemented.** `main.ts` built an `IncomingRoute`
   from `paces_m_s_real`, `progress_m`, `journey_id`, and the map's required
   receipt metadata. `NpcManager` retains separate target/display distances,
   advances them with the import-free helpers in `scene/travelPath.ts`, trims
@@ -4104,7 +4103,7 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
   `progress_cells`/`path` ist **ersatzlos gelöscht**. Gezeichnet wird der
   REST der Route: `waypoints` ab dem Fußpunkt zur gemeldeten Position
   (`nearestOnPolyline` in `mapMath.ts`, Fälle handgerechnet im Docstring) —
-  keine zweite Bogenlängen-Rechnung neben `client3d/src/scene/travelPath.ts`,
+  keine zweite Bogenlängen-Rechnung neben Browser-Szene `travelPath.ts` (E3 gelöscht),
   weil der Server die Position ohnehin liefert. Unter Fog hat nur der Avatar
   `waypoints`, alle anderen zeigen bloß ihren Punkt (§ A12). Mit demselben
   Umbau ist auch der letzte `grid_bounds`-Leser weg: der Kartenrahmen kommt
@@ -4418,7 +4417,7 @@ einer leeren Fläche.
 >    einer für den Avatar unerkundeten Zelle steht, verlässt den
 >    Spieler-Payload. Der Dunst ist kein Vorhang, den ein Client wegziehen
 >    könnte — was darunter liegt, verlässt den Server nicht.
-> 2. **Der Client zeichnet Dunst** (`client3d/src/scene/fogVeil.ts`): ein
+> 2. **Der Client zeichnet Dunst** (Browser-Szene `fogVeil.ts` (E3 gelöscht)): ein
 >    halbtransparenter Schleier über unerkundeten Zellen, dessen Deckkraft mit
 >    der Kamerahöhe wächst (0 in Bodennähe, voll in der Übersicht). Die
 >    Geländeform bleibt lesbar, Props und Bewuchs bleiben gezeichnet — nur die
@@ -4430,7 +4429,7 @@ einer leeren Fläche.
 > Gelände und tragen den Dunst nicht), und eine zweite Aussparungsregel wäre
 > eine zweite Wahrheit darüber, was der Avatar gesehen hat.
 
-Der **Übersichts-Schleier** (nur `client3d`, nur die Übersichts-Kamera; im
+Der **Übersichts-Schleier** (nur der Client, nur die Übersichts-Kamera; im
 verkörperten Nahmodus gab es ohnehin nie einen Schleier) spart seit
 2026-08-16 **zwei** Dinge aus: die Grundflächen der **bekannten Orte** — das
 war er immer — **und** die **erkundeten Zellen**, also den Boden, auf dem der
@@ -4534,7 +4533,7 @@ kann ihn nicht löschen, nur benennen.
   sichtbarste Verhaltensänderung dieses Umbaus.
 - **Für Renderer heißt das:** eine Figur, die in keinem Raum-Umriss liegt,
   steht auf der Grundfläche, nicht „nirgends". Die Raum-Heuristik hat damit
-  ein gültiges Ziel statt eines Lochs (client3d, `groundRoomId` aus dem
+  ein gültiges Ziel statt eines Lochs (Client, `groundRoomId` aus dem
   Payload) — vorher behielt sie den Raum der VORIGEN Location.
 - **Gezeichnet wird eine Figur auf der Grundfläche an ihrem eigenen `pos`**
   (seit 2026-11-07), auf der Bodenhöhe dort. Die Grundfläche hat keinen Umriss
@@ -4544,7 +4543,7 @@ kann ihn nicht löschen, nur benennen.
   Gebäude bzw. der Ring auf dem offenen Platz. Vorher stand JEDE Figur der
   Grundfläche dort, und der Client zeigte zwei Figuren nebeneinander, die der
   Server 25 m auseinander führte: Was man sah, war nicht mehr, wen man
-  ansprechen kann. Leiter und Vektoren: `client3d/src/game/npcPlacement.ts`,
+  ansprechen kann. Leiter und Vektoren: Browser-Szene `npcPlacement.ts` (E3 gelöscht),
   `native/Core/Figures/NpcPlacement.cs`, `shared/test-vectors/npc_placement.json` [6].
 
 ### A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss
@@ -4850,7 +4849,7 @@ je eine Sperre selbst ab.
   ist für alle dieselbe Geometrie. Clients binden ihn zur Render-/
   Interaktionszeit **über die Id**.
 - **Was die Renderer daraus machen** (reiner Sicht-Zustand, bewusst nicht
-  geteilt): client3d zeichnet eine Türschwelle verschlossen, wenn ein Raum
+  geteilt; seit E3 nur noch der native Client, `native/Core/Embody/Locks.cs`): er zeichnet eine Türschwelle verschlossen, wenn ein Raum
   auf der ANDEREN Seite gesperrt ist — die Zuordnung läuft über
   `doorways[].rooms`, und der Raum, in dem der Avatar gerade steht, ist von
   der Beurteilung ausgenommen (eine Regel gegen das Betreten sagt nichts über
@@ -5091,7 +5090,7 @@ niemand etwas modelliert hat, ist es 0 und das Gate vollständig inert.
 > ENTHALTENDE Location MIT Relief gewinnt". Es gibt EIN Feld; lokales Relief
 > autoriert man als Höhenfläche der Karte.
 
-Der Client spiegelt dieselbe Zahl (`main.ts reliefLiftAt` →
+Der Client spiegelt dieselbe Zahl (in der in E3 gelöschten Browser-Szene `main.ts reliefLiftAt` →
 `terrainGround.heightAt`): die BILINEARE Lesung des Feldes, denn dieser
 Spiegel sagt die Server-Antwort voraus und der Server liest das Feld. Ein
 Modell-Raycast kommt dabei nirgends mehr vor — er kannte eine
@@ -5673,7 +5672,7 @@ weiterhin nur die Übersicht.
 
 ### A16.6 CDLOD — Render-LOD ist Sampling-Dichte, nie ein Datenwechsel
 
-`client3d/src/scene/terrainLod.ts` zeichnet das ganze Gelände als EIN
+Browser-Szene `terrainLod.ts` (E3 gelöscht) zeichnet das ganze Gelände als EIN
 instanziertes Patch-Mesh über einen Quadtree:
 
 | Größe | Wert | Bedeutung |
@@ -5912,7 +5911,7 @@ zeichnet. Ein Raum, den der Bake nie gesehen hat (unplatzierte Location), bleibt
 Flächen + der Art-Katalog) bzw. an `layers_sig` (`floors_basis`, die
 Grundrisse). Ein eigener Poll existiert nicht.
 
-**Der Kompositor im Client** (`client3d/src/scene/layerGround.ts`) hängt sich
+**Der Kompositor im Client** (Browser-Szene `layerGround.ts` (E3 gelöscht)) hängt sich
 als LETZTES Patch in die Material-Kette der CDLOD-Fläche (`patchHole` →
 `applyNaturalGround` → **dies**) — und läuft damit als ERSTES im Shader, weil
 jedes Boden-Patch seinen Rumpf direkt hinter `#include <map_fragment>` einsetzt.
@@ -6012,7 +6011,7 @@ am Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
 > `null` wird nie 0 — und der Zonen-Wasser-Vorrang in `typeAt` stirbt mit den
 > Zonen-Wassern.
 
-**Die Zahlen** (`client3d/src/scene/waterPlaneMath.ts`):
+**Die Zahlen** (Browser-Szene `waterPlaneMath.ts` (E3 gelöscht)):
 
 | Größe | Wert | Woher |
 |---|---|---|
@@ -6237,7 +6236,7 @@ zu sagen" (kein Sampler, NaN) hält auch hier das Datum fest: eine aus dem Cache
 gefallene Kachel darf nicht auf die Welt-Null durchsacken. Der Vorgänger dieser
 Prüfung war `main.relevelTiles`; sie ging mit der Bodenplatte („Ein Boden" E3),
 deren Drapierung ihre zweite Klausel überwachte. Handzahlen:
-`client3d/scripts/smoke_walk_math.mjs` § S3.
+`native/tests/Derivations/walk_math.md` § S3.
 
 `offset_y` je Platzierung, `ground_offset_m` je Prop und `model_offset_y` je
 Diorama wirken **unverändert** weiter (Entscheidung 4 des Plans) — nur messen
@@ -6303,7 +6302,7 @@ addiert, wo der Boden eine gezeichnete Fläche ist — und auf den Raum-SPOTS
 Bodenhöhe.
 
 **Raum-Spots kommen aus dem Grundriss** (`scene/tiles.deriveRoomSpots`,
-gefüttert aus `floor_plan`; die reinen Regeln in `client3d/src/game/ground.ts`):
+gefüttert aus `floor_plan`; die reinen Regeln in Browser-Szene `ground.ts` (E3 gelöscht)):
 
 * **Raum-Mitte** = Flächen-**Schwerpunkt** des gezeichneten Rumpfes
   (`polygonCentroid`, Shoelace — nicht der Eckenmittelwert, den eine mit zehn
@@ -6424,25 +6423,25 @@ sie produziert.
 
 | Skript | was es herleitet |
 |---|---|
-| `client3d/scripts/smoke_terrain_lod.mjs` | CDLOD: Stufen-Ranges, Morph-Fenster, `err`-Auswahl gegen `MAX_PIXEL_ERROR`, `h_gpu == h_cpu`, der analytische Klick-Marsch |
-| `client3d/scripts/smoke_world_height.mjs` | EINE Lesung statt zweier — die Zahlen, die der zweite Term nicht mehr erzeugt |
-| `client3d/scripts/smoke_height_tiles.mjs` | die Ladepolitik: Wunschmenge im 560-m-Radius, Batching, Cache-Kappe |
-| `client3d/scripts/smoke_relief_math.mjs` | das Feld-Lesen und die zwei Reiselinien-Ableitungen (auf Weltfeld + Reiselinie zurückgeschnitten) |
-| `client3d/scripts/smoke_layer_cut.mjs` | die Schnitt-Arithmetik (sd-Interpolation, `b = 0`-Kante, `fwidth`-AA), EIN Spiegel-Bauer von beiden Quellen gespeist, und die **Löschungs-Prüfung**: die gestrichenen Drape-/Platten-Namen kommen in den Quellen nicht mehr vor, `rebuildAreas` setzt **gar keine** `position.y` |
-| `client3d/scripts/smoke_water_plane.mjs` | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
-| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Seeufer-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
-| `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
-| `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
-| `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
-| `client3d/scripts/smoke_pair_clip_tempo.mjs` | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge), [7] die Uhr eines Solo-Möbellaufs am `place`-Block |
+| `native/tests/Derivations/terrain_lod.md` | CDLOD: Stufen-Ranges, Morph-Fenster, `err`-Auswahl gegen `MAX_PIXEL_ERROR`, `h_gpu == h_cpu`, der analytische Klick-Marsch |
+| Browser-Smoke `smoke_world_height.mjs` (E3 gelöscht) | EINE Lesung statt zweier — die Zahlen, die der zweite Term nicht mehr erzeugt |
+| `native/tests/Derivations/height_tiles.md` | die Ladepolitik: Wunschmenge im 560-m-Radius, Batching, Cache-Kappe |
+| Browser-Smoke `smoke_relief_math.mjs` (E3 gelöscht) | das Feld-Lesen und die zwei Reiselinien-Ableitungen (auf Weltfeld + Reiselinie zurückgeschnitten) |
+| `native/tests/Derivations/layer_cut.md` | die Schnitt-Arithmetik (sd-Interpolation, `b = 0`-Kante, `fwidth`-AA), EIN Spiegel-Bauer von beiden Quellen gespeist, und die **Löschungs-Prüfung**: die gestrichenen Drape-/Platten-Namen kommen in den Quellen nicht mehr vor, `rebuildAreas` setzt **gar keine** `position.y` |
+| Browser-Smoke `smoke_water_plane.mjs` (E3 gelöscht) | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
+| `native/tests/Derivations/walk_math.md` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Seeufer-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
+| Browser-Smoke `smoke_surface_math.mjs` (E3 gelöscht) | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
+| `native/tests/Derivations/room_spots.md` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
+| `native/tests/Derivations/pair_realtime.md` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `clip_s` wird übernommen, wie es ist, ein Frame addiert `dt · tempo`, Freeze hält die lokale Uhr, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| Browser-Smoke `smoke_pair_clip_tempo.mjs` (E3 gelöscht) | das Szenen-TEMPO (§ A8a/§ A8c): Paar-Uhr `+dt · tempo`, Schnappen nach dem Vorrücken, Klemmen auf [0.2, 1], der Abschluss bei Tempo 0,5 (Clipsekunden, Durchlauf = Cliplänge), [7] die Uhr eines Solo-Möbellaufs am `place`-Block |
 | `scripts/smoke_readout_reports.mjs` | the channel readout reports (§ A8a): one row per key and second, means of the insertion share and part radius, the last rest radius and depth, reach edges across window ends, one send per scene, nothing for a figure outside a scene |
-| `client3d/scripts/smoke_finale_clip.mjs` | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
-| `client3d/scripts/smoke_clip_loop_count.mjs` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
-| `client3d/scripts/smoke_group_role_points.mjs` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
-| `client3d/scripts/smoke_pair_storey.mjs` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
-| `client3d/scripts/smoke_marker_floor.mjs` | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |
-| `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
-| `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
+| Browser-Smoke `smoke_finale_clip.mjs` (E3 gelöscht) | der Abschluss-Clip (§ A8c): einmal pro `id`, von vorn, eigene Uhr; Gruppenrollen [8]; Alt-Hälften [9] (`<kind>__<role>~<alt>`, Rückfall `base`); Durchläufe `loop_count` [10] |
+| `scripts/smoke_clip_loop_count.py` | Wiederholungen eines Loops (§ A8, `loop_count`): Mixer-Modus, echter `AnimationMixer` hält nach N Durchläufen, gezählte Paar-Phase, Moduswechsel im letzten Durchlauf |
+| `scripts/smoke_group_role_points.py` | die Rollenpunkte einer GRUPPE (§ A8a, G3): drei Rollen bei 90°, fünf bei 180°, jede Figur auf `anchor + R(yaw)·root` ihrer eigenen Hälfte, auf einem Platz in Slot-Höhe; Vektor `group_role_points.json`, Server-Gegenprobe `scripts/smoke_group_role_points.py` |
+| `native/tests/Derivations/pair_storey.md` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
+| Browser-Smoke `smoke_marker_floor.mjs` (E3 gelöscht) | die HÖHE eines Raum-Markers im Client (`tiles.deriveRoomSpots`): Raumboden OHNE Diorama-Raster (Deklaration, sonst Gelände) unter der Platzmitte + `offset_y` − Absenkung; die Raummitte bleibt auf dem Raster (Befund 2026-10-20: Tisch in der Raummitte hob den Liegeplatz um 0,69 m) |
+| `native/tests/Derivations/undergrowth.md` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
+| Browser-Smoke `smoke_natural_ground.mjs` (E3 gelöscht) | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
 | `scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
 
 
@@ -6491,7 +6490,7 @@ einem Server-Neustart — die WERTE wirken danach mit dem nächsten Poll.
 Richtungsformel, die Handfälle "N" / "N,S" / "N,NE,NW" / Vollring / Junk, die
 Klemmen und der Payload-Block; rote Gegenprobe mit der gespiegelten
 Grad-Konvention 0 = Nord), Client-Seite in
-`client3d/scripts/smoke_backdrop_math.mjs`.
+`native/tests/Derivations/backdrop_math.md`.
 
 ## A18–A20. Entfällt seit 2026-08-21 — zusammengezogen in § A16
 
@@ -7325,11 +7324,11 @@ gleich zu (Nachtrag „Oberflächen-Raster (v6)").
 
 | # | Befund | Stand |
 |---|---|---|
-| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`) |
+| 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (Browser-Szene `figures.ts BASE_FIGURE_HEIGHT_M`, E3 gelöscht; Payload-Default `1.7`) |
 | 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | **Erledigt — gelöscht 2026-08-28, Task 13 (plan-posen-plaetze.md):** die Funktion ist aus `figures.ts` raus, `npcs.ts` steht bei leerem `activity_animation` auf `idle`; die Pose kommt aus dem Katalog, ein Marker nennt seit v7 keinen Clip mehr |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9) (beide gelöscht 2026-09, plan-rueckbau-2d-karte.md). Weg ist nur die README-Zeile des Clients |
-| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md` (als historisch markiert) sagt selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
+| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `implementierung-3d-pipeline.md` der Browser-Szene (E3 gelöscht) (als historisch markiert) sagt selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar | **Erledigt:** `walk_y` (Meter über Modell-Unterkante) ist Sidecar-Anker mit Admin-Regler; das Rezept rechnet ihn zu `walk_y_world` aus (`app/core/scene_recipe.py`) |
 | 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | **Historisch, erledigt (E4):** § B2a — Diorama skaliert real-size über `width_m` (measure xz), Rechteck-Breite nur noch Fallback; bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe. **Seit v6 Nr. 3 auf Location-Ebene gegenstandslos**: das Gebäude-/Flächen-Modell skaliert nach demselben Gesetz (`width_m`, measure `yawed_xz`), es gibt keinen Füllfaktor mehr |
@@ -7400,7 +7399,7 @@ Fenstersturz. Additiv sind nur zwei Felder:
 - `walls[].lintel` (bool, fehlt = normal): dieses Stück hängt über einer
   BEGEHBAREN Öffnung. Gezeichnet wird es wie jede Wand — beide Renderer
   brauchten dafür keine Zeile —, aber es sperrt nichts im Grundriss. Wer aus
-  `walls` 2D-Kollider ableitet (`client3d/src/game/collide.ts`), überspringt
+  `walls` 2D-Kollider ableitet (Browser-Szene `collide.ts` (E3 gelöscht)), überspringt
   es; ohne das Feld wäre jede Tür zugemauert. Der Fenstersturz trägt das Flag
   NICHT: unter ihm liegt die eigene Brüstung, die dort ohnehin sperrt.
 - `doorways[].height_m`: die lichte Höhe, geklemmt wie `width_m` geklemmt ist.
@@ -7419,7 +7418,7 @@ alte Geometrie bis jemand die Location zufällig speichert.
 | Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
 | `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
 | Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
-| Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |
+| Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `native/tests/Derivations/walk_math.md` |
 
 ### Das TÜRBLATT — eine Tür ist von außen SICHTBAR (§ B1)
 
@@ -7488,7 +7487,7 @@ volle Stücke ins Gelände reichen.
 | Raumwand: Blatt 0,00 / 2,10 / 0,042, ohne `texture_kind`, ROTE PROBE „das Blatt trägt keine Schürze"; ein `passage` bekommt keines | `scripts/smoke_scene_recipe.py` **[3]** |
 | Kontur: Blatt über dem projizierten Loch, gleiche x-Spanne wie der Sturz; weichende Kontur überlässt auch das Blatt der Raumwand | ebenda **[4]** |
 | `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
-| Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |
+| Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `native/tests/Derivations/walk_math.md` |
 
 ### Tür-Props + Slots (v5) (§ B1/B2)
 
@@ -8242,7 +8241,7 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
 | `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
 | `SCENE_RECIPE_VERSION` == 12 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde haben sie die Platz-Typ-Umbenennung und die Kontakt-Höhe des `root_offset` vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
-| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
+| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`native/tests/Derivations/walk_math.md`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
 | Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |
 
@@ -9352,7 +9351,7 @@ durch 3 teilbar, also gehen die Kandidaten 0…5 einer Zelle mit diesem Seed bei
 3 Varianten als **0, 1, 2, 0, 1, 2** los; wird Kandidat 2 von einer
 darübergemalten Fläche verworfen, bleiben **0, 1, 0, 1** — nicht 0, 1, 2, 0.
 Vollständige Ableitung inklusive der Hash-Arithmetik in
-`client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N).
+`native/tests/Derivations/scatter_math.md` Abschnitt (N).
 
 #### Das Quellbild gehört der Variante
 
@@ -9472,7 +9471,7 @@ Alles andere am Spec bleibt das eines Gebäudes — `display: "shell"`, dieselbe
 deklarierter `width_m`. Das Dach blendet beim Reinzoomen aus wie ein Dach, und
 zwar GEMEINSAM mit der Hülle: beide liegen in `roofParts`/`roofMats`.
 
-Drei Stellen im Client, mehr nicht (`client3d/src/scene/sceneRecipe.ts`):
+Drei Stellen im Client, mehr nicht (Browser-Szene `sceneRecipe.ts` (E3 gelöscht)):
 `hasBuildingModel` zählt ein `roof_only`-Spec NICHT mit (sonst entstünde die
 Hülle gar nicht erst), `applySceneBuilding` überspringt `dropFarShell` und
 HÄNGT an `roofParts`/`roofMats` an statt sie zurückzusetzen, und der
@@ -9544,8 +9543,8 @@ EINER Instanz**. Beide werden je Pfad an GENAU EINER Stelle addiert:
 |---|---|---|
 | Platzierung im Raum/Hof (auch Streu-Kopien) | Plattenoberkante + `PROP_CLEARANCE` (+ Relief-Probe) | `scene_recipe._prop_models` → `bottom_y`; das Rezept trägt den Wert je Platzierung (`room_recipe._carry_ground_offset`) |
 | Prop-Marker derselben Platzierung | dieselbe | `scene_recipe`-Markerpfad (`y_world`) |
-| Gemalte Terrain-Streu (§ A9) | `heightAt(x, z)` des Clients | `client3d/src/scene/ground.ts`, `scatterGroundOffset(entry.ground_offset_m)` |
-| Welt-Props (§ A9a) | `heightAt(x, z)` des Clients | `client3d/src/scene/worldProps.ts`, `worldPropBottom()` |
+| Gemalte Terrain-Streu (§ A9) | `heightAt(x, z)` des Clients | Browser-Szene `ground.ts` (E3 gelöscht), `scatterGroundOffset(entry.ground_offset_m)` |
+| Welt-Props (§ A9a) | `heightAt(x, z)` des Clients | Browser-Szene `worldProps.ts` (E3 gelöscht), `worldPropBottom()` |
 
 **Payload-Gesetz (§ A9/§ A9a): fehlt = 0.** Genau wie `sway_factor` reist der
 Wert nur mit, wenn er nicht die Vorgabe ist — auf der Streu-Zeile
@@ -9571,8 +9570,8 @@ doppelt gezählt (die klassische Fehlerform) wäre bottom_y = −0.29
 
 Belegt in `scripts/smoke_scene_recipe.py` [9a],
 `scripts/smoke_terrain_areas.py` [15], `scripts/smoke_world_props.py`
-[3], `client3d/scripts/smoke_scatter_math.mjs` (H8) und
-`client3d/scripts/smoke_world_props.mjs` [2a] — jeweils mit rotem Gegenversuch.
+[3], `native/tests/Derivations/scatter_math.md` (H8) und
+`native/tests/Derivations/world_props.md` [2a] — jeweils mit rotem Gegenversuch.
 
 **Bedienung.** Props-Tab → Prop → „Ground offset (m)". Der Regler bekommt seinen
 Bezug mit (Nutzer-Vorgabe „Maße brauchen Bezug"): eine Seitenansicht mit
@@ -10065,7 +10064,7 @@ nicht 96. Beweise: `scripts/smoke_picture_areas.py` Fixture G (332 Prisma-Faces 
 **Anlass** (User am Ort „Klippen"): „Die Laufhöhe des Avatars ist die Höhe des
 Landes darunter und nicht die Oberfläche des Dioramas (also mit Steinen, Höhen
 und Tiefen) … Das gleiche gilt für Props." Das stimmte: seit E5b liefert **kein
-Mesh eine Höhe**. Die Raycast-Sprosse ist gelöscht (`client3d/src/game/ground.ts`),
+Mesh eine Höhe**. Die Raycast-Sprosse ist gelöscht (Browser-Szene `ground.ts` (E3 gelöscht)),
 `tileWalkY` kannte drei Sprossen, alle aus Daten, Props gar keine — und der
 Server prüfte Schritte allein gegen `relief.ground_at`.
 
@@ -10251,7 +10250,7 @@ den das Modell nicht bedeckt.
 
 #### Vier Sprossen
 
-`tileWalkY` (`client3d/src/scene/tiles.ts`) hat seit v6 eine Sprosse mehr, und
+`tileWalkY` (Browser-Szene `tiles.ts` (E3 gelöscht)) hat seit v6 eine Sprosse mehr, und
 sie steht ganz oben:
 
 | Sprosse | Quelle | Geltung |
@@ -10427,14 +10426,14 @@ Tastendruck im Lageplan-Editor.
 | Die Gründe eines Backens (`ok` / `unreadable` / `no_blender` / `busy` / `failed` / `unstorable`) | `scripts/smoke_model_surface.py` **part 0** (3 Checks) |
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
-| **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
+| **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | Browser-Smoke `smoke_surface_math.mjs` (E3 gelöscht) (15 Checks) |
 | Rezept: `code_version` **11** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch, 10 = Marker `diorama`, 11 = das umbenannte Platz-Typ-Vokabular), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
 | Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
 | Improvements: nur der ausgelegte Raum ist Subject, `apply` backt unter dem bei APPLY neu gelesenen Fix, `is_done` liest frisch zurück, der gedrehte Regler macht den Kandidaten wieder zum Kandidaten, `busy` = `CandidateBusy` (kein Versuch verbraucht), ein Defekt = `RuntimeError`, und das Cache-Vergessen je Subject | `scripts/smoke_improvement_types.py` **[14]** Raum-Modelle (12 Checks), **[15]** Prop-Varianten (5 Checks) |
 | Dass ein Landen den Bake auslöst — mit Attrappe statt Blender, damit die LOD-Kette ohne ihn läuft | `scripts/smoke_model_lod.py` |
-| Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | `client3d/src/scene/sceneRecipe.ts`, `?debug3d=1` |
+| Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | Browser-Szene `sceneRecipe.ts` (E3 gelöscht), `?debug3d=1` |
 | Verify-Zeile `surface_box` daneben: die EXAKTE Box der Fix-Gruppe (outer → yawG → fitG → fix, in Modell-Einheiten vor Yaw und Skala) gegen `box_max − box_min` und `box_min[1]` der Datei, als größte Abweichung der vier Zahlen. `surface_scale` vergleicht nur die größte Seite — ein Mesh, dessen Box in den anderen Achsen oder in der Unterkante abweicht, kommt dort grün durch, während jede Raster-Lesung um genau diese Differenz danebenliegt | ebenda |
 
 ### Prop lights (v17)
@@ -10576,10 +10575,10 @@ bewegen, sonst behielte jeder Client seine alte Szene bis zum nächsten
 Speichern des Ortes. Ein Prop-Marker OHNE `anchor` (eine noch zwischen-
 gespeicherte Szene von vor der Änderung) bekommt im 3D-Client den alten Ring
 zurück, statt gar kein Klickziel zu haben. Handrechnung:
-`client3d/scripts/smoke_place_lift.mjs` [1] (Anker 1,0 / Marker 1,4 / Datum
+Browser-Smoke `smoke_place_lift.mjs` (E3 gelöscht) [1] (Anker 1,0 / Marker 1,4 / Datum
 0,25 → Hebung 0,75 statt 1,15), Payload-Seite
 `scripts/smoke_scene_recipe.py` [9a]/[7i], Ziel-Aufteilung
-`client3d/scripts/smoke_places_client.mjs` [7]/[8].
+`native/tests/Derivations/places_client.md` [7]/[8].
 
 **Nachtrag „Plätze auf Dioramen" (2026-08-29, v10) — `diorama`.** Ein Möbel in
 einem Diorama-Raum ist kein Prop, sondern Teil des EINEN Raum-Meshes: der Platz
@@ -10973,7 +10972,7 @@ der FLÄCHE und den Klemmen von Nr. 1 schon angewendet (`heightfield.water_meta`
 Sie steht neben `water_level_effective`, weil sie dieselbe Art Antwort ist: das
 Ergebnis einer Auflösung, die ein Client sonst ein zweites Mal implementieren
 müsste. Er braucht sie, weil die **Deckkraft** einer Wasserfläche ¾ ihrer
-eigenen Tiefe ist (`client3d/src/scene/waterPlaneMath.waterOpaqueDepthM`,
+eigenen Tiefe ist (Browser-Szene `waterPlaneMath.waterOpaqueDepthM` (E3 gelöscht),
 Vertex-Attribut `aWaterOpaque`): ein 1,2-m-Fluss ist ab 0,9 m Tiefe deckend, ein
 2-m-See erst ab 1,5 m — mit EINER Konstante blieb der schmale Fluss bis zur
 Mitte durchsichtig. Fehlt der Schlüssel (die Fläche hat kein gecarvtes Bett),
@@ -11052,7 +11051,7 @@ nicht.
 |---|---|
 | `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
 | `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, seit W5b mit dem Eckknoten dort, wo die Linie wieder auf 10 fällt: 10/10/**10**/6 bei (239,4 | 300), rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
-| `scripts/smoke_height_bake.py` **[8l]** | **W5b:** die Verdichtung der Achse — eine harte 3-m-Kante bei x = 41 (Höhenfläche mit `falloff_m` 0), ein mit ZWEI Klicks gezeichneter Fluss (0,0)→(100,0), Abtastung alle 2 m ⇒ Achse `[0,3] [40,3] [42,0] [100,0]`, der ganze Abfall in EINEM 2-m-Segment (Gefälle 1,5 ⇒ genau ein Wasserfall), Spiegel 10 m vor der Kante = 3,0 und 10 m danach = 0,0, Bett-Tiefe oberhalb exakt `water_depth_m`; **rote** Gegenproben der Zwei-Knoten-Rampe: 2,07 statt 3,0 (0,93 m unter den eigenen Ufern — „Wasser fast weg", Carve gräbt bis 1,07) und 1,47 statt 0,0 (1,47 m über dem Boden — „Wasserhügel"), Gefälle 0,03 ⇒ kein Fall. Zwillinge: `client3d/scripts/smoke_water_plane.mjs` **[4e]**, `client3d/scripts/smoke_waterfall.mjs` **[9]** |
+| `scripts/smoke_height_bake.py` **[8l]** | **W5b:** die Verdichtung der Achse — eine harte 3-m-Kante bei x = 41 (Höhenfläche mit `falloff_m` 0), ein mit ZWEI Klicks gezeichneter Fluss (0,0)→(100,0), Abtastung alle 2 m ⇒ Achse `[0,3] [40,3] [42,0] [100,0]`, der ganze Abfall in EINEM 2-m-Segment (Gefälle 1,5 ⇒ genau ein Wasserfall), Spiegel 10 m vor der Kante = 3,0 und 10 m danach = 0,0, Bett-Tiefe oberhalb exakt `water_depth_m`; **rote** Gegenproben der Zwei-Knoten-Rampe: 2,07 statt 3,0 (0,93 m unter den eigenen Ufern — „Wasser fast weg", Carve gräbt bis 1,07) und 1,47 statt 0,0 (1,47 m über dem Boden — „Wasserhügel"), Gefälle 0,03 ⇒ kein Fall. Zwillinge: Browser-Smoke `smoke_water_plane.mjs` (E3 gelöscht) **[4e]**, Browser-Smoke `smoke_waterfall.mjs` (E3 gelöscht) **[9]** |
 | `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
 | `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
 | `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
@@ -11136,7 +11135,7 @@ also dieselben Meter pro Sekunde.
 
 **Eine Geometrie ohne das Attribut liest `(0, 0)`** — WebGL lässt ein
 ungebundenes Attribut auf seinem generischen Wert `(0, 0, 0, 1)`, den three nie
-schreibt. Jede Wasserfläche, die keine client3d-Spiegelmasche ist (allen voran
+schreibt. Jede Wasserfläche, die keine Spiegelmasche der (in E3 gelöschten) Browser-Szene war (allen voran
 die Böden der Admin-Vorschau), behält damit exakt ihr Aussehen.
 
 #### 3. Eine Wasserquelle — der Zonen-Lookup ist gelöscht
@@ -11189,15 +11188,15 @@ seitdem nicht mehr.
 
 | Skript | was es herleitet |
 |---|---|
-| `client3d/scripts/smoke_water_plane.mjs` **[1]** | dass das PROFIL die einzige Wasserfrage ist: Mittelniveau allein ist keines, autoriertes Niveau keines, eine Zahl kaputt = kein Profil |
+| Browser-Smoke `smoke_water_plane.mjs` (E3 gelöscht) **[1]** | dass das PROFIL die einzige Wasserfrage ist: Mittelniveau allein ist keines, autoriertes Niveau keines, eine Zahl kaputt = kein Profil |
 | **[4]** | der Fixture-Fluss von Hand: Achse durch den Schwerpunkt (50, −30), `dir = (−1, 0)` aus 270°, `s_min/s_max = ∓30`, `level(x) = 0,08·x + 1,0` an sechs Stellen, beide Klemmen **exakt**, der See als entartete Spanne, der Flow-Vektor |
 | **[5]** | die geneigte Masche: vier Ecken auf 2,6 / 7,4 / 7,4 / 2,6 (4,8 m Gefälle auf 60 m), die Linearität an Hälfte, Viertel und ⅞ der Kante, und der See **bitgleich** flach (`Object.is`) samt `level + 0 == 0 + level` |
 | **[6]** | Schwimmen am lokalen Niveau: Bett `0,08·x`, Tiefe überall 1,0 m, Wurzel/Körper bei x = 26/50/74 — und die **roten** Gegenproben des flachen Mittelniveaus (1,92 m über dem sichtbaren Wasser stromab, Waten stromauf, ein Watet/Schwimmt-Umschlag bei genau x = 55, den es in Wahrheit nirgends gibt) |
 | **[7]** | der Ufer-Shader auf der Schräge: Alpha 20/27 an jedem x — und **rot**, dass die flache Platte oberhalb x = 62,5 negative Tiefe hätte und ganz weggeworfen würde |
-| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen, `SceneFloor.water_level_effective` eingeschlossen — und `map_water` steht an seiner Stelle |
+| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in den Quellen der Browser-Szene (E3 gelöscht) und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen, `SceneFloor.water_level_effective` eingeschlossen — und `map_water` steht an seiner Stelle |
 | **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
-| `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
-| `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |
+| `native/tests/Derivations/layer_cut.md` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
+| Browser-Smoke `smoke_surface_patch.mjs` (E3 gelöscht) | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |
 
 ### Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d (§ A16.3 / § G4)
 
@@ -11266,7 +11265,7 @@ ersetzt, ein Stück, das sie verfehlt oder nur streift, bleibt ganz. Die Stücke
 kacheln die Maske weiterhin exakt, es geht keines verloren, und es gibt keinen
 T-Vertex mehr, weil jede Linie beide Seiten jeder Sehne teilt.
 
-Gemessen (`client3d/scripts/smoke_water_plane.mjs` **[5d]**, 8-m-Fluss mit
+Gemessen (Browser-Smoke `smoke_water_plane.mjs` (E3 gelöscht) **[5d]**, 8-m-Fluss mit
 90°-Knick, 61 Knoten, 15 360 Proben; Metrik ist triangulierungs-UNABHÄNGIG: die
 Ebene durch drei gehobene Ecken eines Stücks gegen `waterLevelAt`):
 
@@ -11483,7 +11482,7 @@ Fragment-MASKE (E4), nie ein Loch im Boden.
 #### 4. Die Fließregel — der Server ist jetzt die Quelle
 
 `water_flow_at(profile, x, z, faktor)` ist die Zeile-für-Zeile-Übernahme von
-`client3d/src/scene/waterPlaneMath.waterFlowAt`: Achsentangente, an jedem Knoten
+Browser-Szene `waterPlaneMath.waterFlowAt` (E3 gelöscht): Achsentangente, an jedem Knoten
 über ein Fenster `min(halbe Vorstrecke, halbe Folgestrecke, 4 m)` kosinus-
 geblendet, am Knoten selbst exakt die normierte Winkelhalbierende. Die Regel
 wandert mit dem Mesh, das sie pro Vertex auswertete; die Zahlen bleiben
@@ -11553,7 +11552,7 @@ AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
 
 #### 7. Client (E2) — Pyramide, Zwilling, Dezimierung
 
-- `client3d/src/scene/waterRaster.ts` hält das Feld je Kachel
+- Browser-Szene `waterRaster.ts` (E3 gelöscht) hält das Feld je Kachel
   (`WaterRaster`), wandelt `null` an der Wire-Grenze EINMAL in `NaN` und liefert
   `rasterLevelAt` / `rasterFlowAt`. Die Leiter hat **keine Übersichts-Sprosse**:
   das Übersichtsgitter trägt kein Wasser, also ist ein Punkt außerhalb der
@@ -11586,7 +11585,7 @@ AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
 #### 7a. Client (E3) — der Vertex-Hub, als ZWEITE Materialvariante
 
 Der Terrain-Vertex landet auf `y = max(h, w_level)`, wo das Raster einen Pegel
-hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
+hat. Vier Entscheidungen, alle in Browser-Szene `terrainLod.ts` (E3 gelöscht):
 
 - **Zwei Programme, nicht eines.** Die Risiko-Regel aus `recherche-wasser-v2.md`
   § 4 K-A ist bindend: trockener Boden darf für das Wasser nichts zahlen. Der
@@ -11638,10 +11637,10 @@ hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
 | Kurveninnenseite: 2 m gegen 1 m gegen 0,5 m | [12d] |
 | Payload additiv, Flussfelder optional | [12e] |
 | Statistik ist höhenrein | [12f] |
-| Client liest die Server-Tabellen zurück, maskierte Mischung | `client3d/scripts/smoke_world_height.mjs` [W1]–[W4] |
-| Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |
-| Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `client3d/scripts/smoke_terrain_lod.mjs` [16] |
-| Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `client3d/scripts/smoke_terrain_lod.mjs` [17] |
+| Client liest die Server-Tabellen zurück, maskierte Mischung | Browser-Smoke `smoke_world_height.mjs` (E3 gelöscht) [W1]–[W4] |
+| Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `native/tests/Derivations/terrain_lod.md` [15] |
+| Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `native/tests/Derivations/terrain_lod.md` [16] |
+| Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `native/tests/Derivations/terrain_lod.md` [17] |
 
 #### 9. Die Wasser-Schattierung im Terrain-Fragment (K-A E4)
 
@@ -11743,12 +11742,12 @@ trockene Programm mitverändern.
 
 | Was | Wo |
 |---|---|
-| Absorption, Schaumband, Randrampe, Tint-Mix (Handtabellen) | `client3d/scripts/smoke_water_shade.mjs` [1]–[3] |
+| Absorption, Schaumband, Randrampe, Tint-Mix (Handtabellen) | `native/tests/Derivations/water_shade.md` [1]–[3] |
 | Look-Tabelle = die Defaults des Spiegels, Packung | ebenda [4] |
 | Flow-Frame: Identität bei Stille, 3:1 stromauf | ebenda [5] |
 | GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
-| Fließvektor im Fragment: `twFlowAt` = Punktmessung auf jeder Stufe, das zurückgebaute Vertex-Blend geht ab Stufe 3 still | `client3d/scripts/smoke_flow_lod.mjs` |
-| Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
+| Fließvektor im Fragment: `twFlowAt` = Punktmessung auf jeder Stufe, das zurückgebaute Vertex-Blend geht ab Stufe 3 still | Browser-Smoke `smoke_flow_lod.mjs` (E3 gelöscht) |
+| Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `native/tests/Derivations/terrain_lod.md` [18] |
 | Tiefen-Varying, `liftedDepth`, und dass es KEIN Flow-Varying mehr gibt | ebenda [17] |
 
 #### 10. Der Rückbau des Spiegels (K-A E5)
@@ -11760,10 +11759,10 @@ allem, was nur sie gebraucht hat:
 
 | Was | Wo es stand |
 |---|---|
-| `buildWaterPlane`, `earcutStrips`, `patchWaterShore`, `WATER_SHORE_CACHE_KEY` | `client3d/src/scene/waterPlane.ts` (Datei gelöscht) |
-| `addMirror`, die Material-Karte je Wasser-Art, die Wasser-Mesh-Liste, der Textur-Preload der Flächen-Stufe, `materialFor` | `client3d/src/scene/ground.ts` |
-| `liftToWaterProfile`, `subdivideRibbonByAxis` (+ `crossNormalAt`, `clipHalfPlane`, `ringSignedArea`, `WATER_STRIP_MAX`, `WaterPoint2`), `waterFlowAt` (+ Blend-Fenster), `waterShoreGlsl`, `waterShoreBody`, `waterAlpha`, `WATER_SHORE_BAND_M`, `WATER_FOAM_ALPHA` | `client3d/src/scene/waterPlaneMath.ts` |
-| `isWaterClass` — die Ausnahme, mit der Natur-Boden und Schleier dem Wasser-Material auswichen | `client3d/src/scene/naturalGroundMath.ts` |
+| `buildWaterPlane`, `earcutStrips`, `patchWaterShore`, `WATER_SHORE_CACHE_KEY` | Browser-Szene `waterPlane.ts` (E3 gelöscht) (Datei gelöscht) |
+| `addMirror`, die Material-Karte je Wasser-Art, die Wasser-Mesh-Liste, der Textur-Preload der Flächen-Stufe, `materialFor` | Browser-Szene `ground.ts` (E3 gelöscht) |
+| `liftToWaterProfile`, `subdivideRibbonByAxis` (+ `crossNormalAt`, `clipHalfPlane`, `ringSignedArea`, `WATER_STRIP_MAX`, `WaterPoint2`), `waterFlowAt` (+ Blend-Fenster), `waterShoreGlsl`, `waterShoreBody`, `waterAlpha`, `WATER_SHORE_BAND_M`, `WATER_FOAM_ALPHA` | Browser-Szene `waterPlaneMath.ts` (E3 gelöscht) |
+| `isWaterClass` — die Ausnahme, mit der Natur-Boden und Schleier dem Wasser-Material auswichen | Browser-Szene `naturalGroundMath.ts` (E3 gelöscht) |
 | Attribute `aWaterFlow` / `aWaterOpaque`, der Ufer-`discard`, `depthWrite: false` und die Transparenz-Sortierung des Wassers | ebenda, mit den Meshes |
 
 **Was bleibt und WARUM:** `waterProfileOf` / `waterLevelAt` (Spielmechanik:
@@ -11841,7 +11840,7 @@ Gemessen auf der Fixture „Fluss durch darüber gemalten Wald"
 | Anteil der nassen Texel des Fensters mit falschem Paar | **alle** (Menge der Ebenen über alle nassen Texel = `{1}`) |
 
 Und was die falsche Zeile kostet, in Zahlen
-(`client3d/scripts/smoke_water_shade.mjs` **[11]**; tiefer See 4 m Bett →
+(`native/tests/Derivations/water_shade.md` **[11]**; tiefer See 4 m Bett →
 `opaque` 3,0 m, `flow_speed` 0; Fluss 1,2 m Bett → `opaque` 0,9 m,
 `flow_speed` 1,0 m/s):
 
@@ -11929,10 +11928,10 @@ doch die oberste gemalte Art ist.
 |---|---|
 | Palette + `kind_idx` von Hand auf einer Zwei-Arten-Fixture (Überlappung, Ring, trockene Texel, Ein-Eintrag-Fenster) | `scripts/smoke_height_bake.py` **[12i]** |
 | Verurteilung „Fluss durch Wald": ID-Paar `(g, g)`, Ebene nicht Wasser, alle nassen Texel betroffen; Raster nennt `river` | ebenda **[12j]** |
-| Client-Zwilling: Draht → Palette/Gitter, `nearestIndex`-Regel, Wechsel an der Texelkante, v9-Kachel, Index außerhalb der Palette | `client3d/scripts/smoke_world_height.mjs` **[W4b]** |
-| Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `client3d/scripts/smoke_water_shade.mjs` **[11]** |
+| Client-Zwilling: Draht → Palette/Gitter, `nearestIndex`-Regel, Wechsel an der Texelkante, v9-Kachel, Index außerhalb der Palette | Browser-Smoke `smoke_world_height.mjs` (E3 gelöscht) **[W4b]** |
+| Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `native/tests/Derivations/water_shade.md` **[11]** |
 | GLSL: Zeile aus `twKindRow`, kein `twIsWater`, kein `uTlodWaterMask` | ebenda **[6]**, **[7]** |
-| Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `client3d/scripts/smoke_terrain_lod.mjs` **[18]** ("the water shading lives in the water program only") |
+| Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `native/tests/Derivations/terrain_lod.md` **[18]** ("the water shading lives in the water program only") |
 
 ---
 
@@ -12124,7 +12123,7 @@ Ring endet — die gemeldeten weißen Ränder UND Ecken. Auf einer gemäanderten
 breit statt der ~3 m, die ein 3-m-Uferrampen-Fluss vorsieht, und **696 von 1968**
 Ringpunkten 3,5–7 m ausserhalb des Umrisses werden gehoben.
 
-**Regel jetzt** (`client3d/src/scene/waterShade.ts`, `waterFoamAt` und ihr
+**Regel jetzt** (Browser-Szene `waterShade.ts` (E3 gelöscht), `waterFoamAt` und ihr
 GLSL-Zwilling): `foam · min(shoreAlpha + foam · WATER_FOAM_MIN_COVER, 1) · rim`.
 `WATER_FOAM_MIN_COVER` = 0,15 ist die Randzahl des Spiegels, wörtlich; die
 Deckung benutzt dieselbe Uferkurve, die die Absorption schon reitet — keine
@@ -12323,10 +12322,10 @@ fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
 | `sd` innen/auf dem Umriss/im Ring, bed_kind unberührt, 6561 Innen-Proben ≥ 0 | `scripts/smoke_height_bake.py` **[12g]** |
 | Nutzlast: gleiche Maske wie `level`, Rundung, Lattice | ebenda **[12g]** |
 | Blur-Radius = Dilatation, Winkel-Tabelle roh/ausgeliefert, keine Re-Normierung, Stillwasser bleibt still, Fenster-Naht | ebenda **[12h]** |
-| Client-Zwilling `rasterSdAt`: bilinear, Sentinel, 1681 Innen-Proben ≥ 0 | `client3d/scripts/smoke_world_height.mjs` **[W4a]** |
-| Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `client3d/scripts/smoke_terrain_lod.mjs` **[16]**, **[17]** |
+| Client-Zwilling `rasterSdAt`: bilinear, Sentinel, 1681 Innen-Proben ≥ 0 | Browser-Smoke `smoke_world_height.mjs` (E3 gelöscht) **[W4a]** |
+| Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `native/tests/Derivations/terrain_lod.md` **[16]**, **[17]** |
 | Deckel misst die getorte Hebung (2 → 1) | ebenda **[18] (e)** |
-| Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `client3d/scripts/smoke_water_shade.mjs` **[7]** |
+| Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `native/tests/Derivations/water_shade.md` **[7]** |
 
 ---
 
@@ -12624,7 +12623,7 @@ and both renderers apply them (the 3D client to the figures on the map, the admi
   motion against its partners' snapshots (`FigureRuntime.updateSecondary`, wrapped by `Figure.updateSecondary`) — so
   the result does not depend on the order the figures are visited in. The per-figure part (secondary motion, garment
   push, strand hair, partner binding, channel openings) is ONE runtime, `packages/scene-render/src/figureRuntime.ts`
-  (Ruling A110); client3d's `Figure` wraps it with the game's own phase A (bridges, travel, lift, first person). A partner's body capsules are exact in the frame;
+  (Ruling A110); the browser scene's `Figure` (deleted in E3) wrapped it with the game's own phase A (bridges, travel, lift, first person). A partner's body capsules are exact in the frame;
   its extension capsules carry that partner's swing of the previous frame. The GPU hair push re-reads the partners on
   their final pose (`setGpuPartners`, after phase B). No partner (`partners` absent or `[]`) is today's frame bit for
   bit and allocates nothing.
@@ -12991,7 +12990,7 @@ and the depth scale k its guidance applied. s(P) = (P − O)·u.
   2 · stretchM; `stretchRatio` = stretchM / R. The skin margin of the opening is not part of it.
 - Engagements of the frame: `FigureRuntime.channelReadouts()` (receiver '' — the owner names it) and
   `inspect().readouts`; `inspectFrame` attaches each one to its engagement (`readout`, receiver filled in). The admin
-  Poses preview prints it under "Channels" with its maxima over the last whole clip loop. client3d collects them after
+  Poses preview prints it under "Channels" with its maxima over the last whole clip loop. The browser scene (deleted in E3) collected them after
   every phase B (`NpcManager.channelReadouts()`, raw) and publishes them on the HUD bus (`setChannelReadouts`,
   `channelReadoutFor`): at most 10 Hz, only while something is engaged, a final null on release (`game/channelReadouts.ts`).
   Nothing is sent to the server. Checks: `scripts/smoke_channel_grows.mjs` [6]–[7], `scripts/smoke_mouth_opening.mjs`
@@ -13137,7 +13136,7 @@ the torso capsule; H-R10: length clamp, leading-run head tether, relative dampin
 word, `RootInertia`; T-U3: a card of a head turned 90° hangs straight down). `scripts/check_hair_sim.mjs --tilt`
 tilts the figure forward, back and sideways by 90° and reports the free chords' world-down component per phase;
 `--game [--snap]` drives the real hair with the client's own turn
-ease and walk speed (`client3d/src/game/npcWalk.ts`) and reports the longest card against its target (stretch) and
+ease and walk speed (Browser-Szene `npcWalk.ts` (E3 gelöscht)) and reports the longest card against its target (stretch) and
 the near-horizontal flyaways.
 
 **The handle and the budget (3D client).** `hairSim.ts::createStrandHair(three, root, record)` binds a record to the
@@ -13289,7 +13288,7 @@ non-matching record):
   about the fit's Foot axis, the forepart held rigid except an upward flex at the ball, the lowest contact put on
   the floor (`figureBox(probe).min.y − rootY`) by a two-bone leg IK — lowered by the foot's weight when it floats,
   raised in full when it pierces. Marked `userData.footPlanted = fsig`.
-- `twoBoneIk.ts` (the leg IK, also used by client3d's leg pin) and `footLock.ts` (the importer's contact rule)
+- `twoBoneIk.ts` (the leg IK, also used by the browser scene's former leg pin) and `footLock.ts` (the importer's contact rule)
   live in the package for that reason.
 - `clipGround.ts` — for a matching record the ground is measured ON THE SOLE (the contacts) over the clip's level
   stance frames and the offset is signed (`soleGroundOffsetOf`); `rootY` = the lift the caller will add.
@@ -13300,7 +13299,7 @@ it by the instance scale (`baseScale` — `root_lift_m` is in the template's met
 convention); the admin preview plays the unscaled model.
 
 **Call-site rule — every clip path of a shod figure, once, right after the retarget / bind-relative step and
-before any measurement:** extension, then plant. client3d: `prepareShoes` (`figures.ts`) runs both on ONE probe
+before any measurement:** extension, then plant. The browser scene (deleted in E3): `prepareShoes` (`figures.ts`) runs both on ONE probe
 clone and is called by `adaptExternalClips` (the library), `retargetClips` (the borrow path, no corrections) and
 `buildModel` (the model's embedded clips); `fitLibraryAsync` and `loadManifestModels` forward the pose;
 `modelFootPose` keeps the record only for a template that carries its shoes. The admin viewer (`Model3DViewer`)
@@ -13331,7 +13330,7 @@ Kneeling, floor sitting and lying are not corrected (spec § 3).
 
 **The proofs (§ B5a).** Hand-derived smokes: `node scripts/smoke_foot_pose.mjs` (bone chain, 28° turn, lift and
 group gating, idempotence, match), `node scripts/smoke_foot_plant.mjs` (level turn, run decay, planted frames, the
-IK reach clamp, pierce), `node scripts/smoke_clip_ground_sole.mjs`, `node client3d/scripts/smoke_foot_pose_client.mjs`
+IK reach clamp, pierce), `node scripts/smoke_clip_ground_sole.mjs`, Browser-Smoke `smoke_foot_pose_client.mjs` (E3 gelöscht)
 (the client chain: posed + planted once, lift per group, `modelFootPose`), `./.venv/bin/python
 scripts/smoke_foot_pose_call_sites.py` (every call of `bindRelativeClip` / `adaptExternalClips` / `retargetClips`
 sits in a listed function that forwards the pose), `./.venv/bin/python scripts/smoke_foot_rest.py` + `node
@@ -13423,7 +13422,7 @@ own analysis passes is never filled.
 
 ### P2 runtime contract: secondary motion
 
-Both `client3d/src/scene/figures.ts` and the admin `Model3DViewer.tsx` use
+Both Browser-Szene `figures.ts` (E3 gelöscht) and the admin `Model3DViewer.tsx` use
 `createSecondaryMotion` from `@anima/scene-render`, with their own injected
 Three namespace and instance state. The admin receives root-level `motion` from the `/characters/{n}/model3d`
 status response through `FieldModel3D`, and its English “Secondary motion” toggle defaults
@@ -13614,7 +13613,7 @@ without dynamics; entering or leaving far LOD resets particles. The shared
 `reset()` API is also available to other owners for LOD/teleport changes.
 The admin uses its own frame delta and applies the solver after its mixer.
 
-Numeric acceptance: `node client3d/scripts/smoke_secondary_motion.mjs`
+Numeric acceptance: `native/tests/Derivations/secondary_motion.md`
 (hand-derived equilibrium, length, volume, independent clamps, gain zero,
 frame partitions, freeze, gaps, resets, live rest blend, response-root motion
 extraction, toggle behavior, numeric consumer parity, oblique stretched chains,

@@ -55,7 +55,7 @@ public sealed class LocationsCache
 }
 
 /// <summary>
-/// The location re-sync of client3d/src/main.ts (<c>syncLocations</c>): the applied ETag and the revision it
+/// The location re-sync of the browser scene's main.ts (<c>syncLocations</c>): the applied ETag and the revision it
 /// names (<see cref="RevOf"/>). A poll whose <c>locations_rev</c> differs from <see cref="Rev"/> syncs
 /// (<see cref="Differs"/>), so does a timer every <see cref="ResyncMs"/>, and a poll that brings a new placeable
 /// location forces it. Data is applied only when forced or when the ETag changed; a failed request keeps the

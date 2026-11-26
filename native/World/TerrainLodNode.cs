@@ -8,7 +8,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The browser's CDLOD terrain in Godot (<c>client3d/src/scene/terrainLod.ts</c> <c>createTerrainLod</c>): ONE patch
+/// The browser's CDLOD terrain in Godot (the browser scene's <c>terrainLod.ts</c> <c>createTerrainLod</c>): ONE patch
 /// mesh of 33 × 33 vertices drawn as two <see cref="MultiMesh"/>es — the dry program and the wet one (the water lift)
 /// — whose instances carry <c>INSTANCE_CUSTOM</c> = (x, z, size, level), the browser's <c>iNode</c>. The CPU work is
 /// <see cref="TerrainField"/> (selection, rings, partition, pyramids — vector-checked in the core); this node only

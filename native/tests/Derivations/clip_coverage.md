@@ -1,6 +1,6 @@
 # clip_coverage
 
-- Origin: `client3d/scripts/smoke_clip_coverage.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_clip_coverage.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ClipLibraryVectorTests.cs`
 - Vectors: `shared/test-vectors/clip_coverage.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Smoke check for the pure clip-coverage rules of the 3D client —
- * `client3d/src/scene/clipCoverage.ts`.
+ * the browser scene's `clipCoverage.ts`.
  *
- * Usage:  node client3d/scripts/smoke_clip_coverage.mjs
+ * Usage:  node the browser scene's deleted smoke_clip_coverage.mjs
  *
  * Same discipline as the other client smokes: every expectation below is
  * derived BY HAND from the rule as written down, never recorded from the
@@ -28,7 +28,7 @@
  * mixamorig:Spine, mixamorig:LeftArm, …). Normalised (prefix and colons
  * dropped, lower-cased) the two skeletons share exactly THREE bones — hips,
  * neck, head — measured from the joint lists of
- * `client3d/public/models/RobotExpressive.glb` against `Soldier.glb` and
+ * the browser scene's `public/models/RobotExpressive.glb` against `Soldier.glb` and
  * `Xbot.glb`. Every library clip therefore kept at most 3 rotation tracks plus
  * one hip position track and died on the 8-track threshold in
  * `adaptExternalClips` — silently, because the caller only logged what it HAD

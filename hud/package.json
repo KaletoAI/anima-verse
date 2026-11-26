@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "The React HUD page (hud.html) of the player: built to static/hud/, loaded by the native client's CEF HUD and imported as a package by the browser 3D scene (client3d).",
+  "description": "The React HUD page (hud.html) of the player: built to static/hud/, loaded by the native client's CEF HUD.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

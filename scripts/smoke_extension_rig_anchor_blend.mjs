@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs'
 import assert from 'node:assert/strict'
 
 if (!process.env.ANCHOR_BLEND_BUNDLED) {
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild'].find(existsSync)
+  const bin = ['node_modules/esbuild/bin/esbuild'].find(existsSync)
   assert.ok(bin, 'esbuild unavailable')
   const output = '/tmp/smoke_extension_anchor_blend.mjs'
   const built = spawnSync(bin, [fileURLToPath(import.meta.url), '--bundle', '--platform=node', '--format=esm', `--outfile=${output}`], { stdio: 'inherit' })

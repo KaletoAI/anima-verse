@@ -11,8 +11,8 @@ using static AnimaNative.Tests.SceneVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// The adapters of client3d/scripts/animalVectorDispatch.mjs (Task 34), mirrored for the native port (hand derivations:
-/// client3d/scripts/smoke_animal_vectors.mjs):
+/// The adapters of the browser scene's deleted animalVectorDispatch.mjs (Task 34), mirrored for the native port (hand derivations:
+/// native/tests/Derivations/animal_vectors.md):
 /// <code>
 ///   TS fn                       C#                              shape translation
 ///   findLegChains               ProceduralGait.FindLegChains    {name, parent|null, position{x,y,z}} ↔ GaitBone,

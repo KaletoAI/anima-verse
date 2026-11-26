@@ -572,7 +572,7 @@ def declared_floor_of(declarations: Iterable[Dict[str, Any]],
                       x: float, z: float) -> Optional[Dict[str, Any]]:
     """The declaration that applies at tile-local (x, z), or None.
 
-    The Python twin of ``declaredFloorAt`` (``client3d/src/game/ground.ts``),
+    The Python twin of ``declaredFloorAt`` (the browser scene's ``ground.ts``),
     tie-break included: where several hulls contain the point the SMALLEST one
     wins — the innermost answer, the same most-specific-first rule the
     footprints use. Rooms are not supposed to overlap, but an always-visible

@@ -1,6 +1,6 @@
 # world_props
 
-- Origin: `client3d/scripts/smoke_world_props.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_world_props.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/WorldPropVectorTests.cs`
 - Vectors: `shared/test-vectors/world_props.json`
 
@@ -12,7 +12,7 @@
  * Smoke: the AUTHORED props of the world plane (§ A9a) on the client side.
  *
  * Usage: direct node call, self-bundling via esbuild:
- *     node client3d/scripts/smoke_world_props.mjs
+ *     node the browser scene's deleted smoke_world_props.mjs
  *
  * Three questions, all of them arithmetic, all expectations derived BY HAND
  * from the contract below (§ B5a — never recorded from a run):

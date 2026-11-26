@@ -56,7 +56,7 @@ const OLD = 'c061f759'
 if (!process.env.HAIR_CONTACT_BUNDLED) {
   const here = fileURLToPath(import.meta.url)
   const repo = path.resolve(path.dirname(here), '..')
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild']
+  const bin = ['node_modules/esbuild/bin/esbuild']
     .map(rel => path.join(repo, rel)).find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const bundle = (entry, output, env = {}) => {

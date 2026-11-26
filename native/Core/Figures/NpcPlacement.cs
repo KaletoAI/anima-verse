@@ -97,7 +97,7 @@ public sealed class RoomPositionDiagnostics(Action<string> log)
 }
 
 /// <summary>
-/// WHERE THE FIGURES OF ONE LOCATION ARE DRAWN — client3d/src/game/npcPlacement.ts (<c>huddleOffset</c>,
+/// WHERE THE FIGURES OF ONE LOCATION ARE DRAWN — the browser scene's npcPlacement.ts (<c>huddleOffset</c>,
 /// <c>placeAtLocation</c>), the room ladder of <c>main.computeNpcPlacements</c>; checked against
 /// shared/test-vectors/npc_placement.json. Rows sorted by <see cref="LocaleCompare"/> (a stable sort, like
 /// <c>Array.sort</c>); per character: in a revealed room seat &gt; sit/lie pool &gt; corridor stand &gt; server

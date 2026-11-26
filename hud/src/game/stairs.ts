@@ -24,7 +24,7 @@
  *
  * Pure like `walk.ts`, `elevator.ts` and `roomwalk.ts`: plain numbers, no
  * Three, no DOM, no module state and no value import — that is what lets
- * `client3d/scripts/smoke_walk_math.mjs` check it with a bare transpile.
+ * `native/tests/Derivations/walk_math.md` check it with a bare transpile.
  */
 
 /** One landing of a flight in WORLD metres: the storey it serves plus the

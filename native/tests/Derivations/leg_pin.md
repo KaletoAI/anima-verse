@@ -1,6 +1,6 @@
 # leg_pin
 
-- Origin: `client3d/scripts/smoke_leg_pin.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_leg_pin.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/leg_pin.json`
 
@@ -9,7 +9,7 @@
 ```text
 /**
  * Smoke check for the PER-RIG LEG PIN of the 3D client
- * (`client3d/src/scene/legPin.ts` with `twoBoneIk` of `@anima/scene-render`,
+ * (the browser scene's `legPin.ts` with `twoBoneIk` of `@anima/scene-render`,
  * used by `footLockMeasure.relockRootPaths`):
  * a bridge clip's planted feet are nailed to their spot on each model's OWN
  * skeleton by a two-bone leg IK, baked into the adapted clip — the client's
@@ -17,7 +17,7 @@
  * `cmu_clip._plant_feet` / `_pin_feet`). Numbers only (§ B5a); a SYNTHETIC
  * skeleton, no clip files, no server.
  *
- * Usage:  node client3d/scripts/smoke_leg_pin.mjs
+ * Usage:  node the browser scene's deleted smoke_leg_pin.mjs
  *         (needs esbuild and three from the workspace)
  *
  * ===========================================================================

@@ -65,9 +65,8 @@
  *     3D preview passes `builtAt`; the New-hairstyle dialog is a createPortal to document.body.
  * [11] Alpha cutoff (strand-hair plan 2026-11-13 Task 3, spec § 4 / § 6.1): the HairDeck preview (the viewer of
  *     `garment.preview_url`) passes the hair GET's `alpha_cutoff` (`alphaCutoff={info.alpha_cutoff}`), and no
- *     client source (frontend/src, client3d/src, packages/<pkg>/src) carries a cutoff of its own: no assignment of a
- *     non-zero number to `alphaTest` and no `alphaCutoff` number literal — except `client3d/src/scene/impostors.ts`
- *     (0.5: the client's own billboard material for distant props, no glTF material and no hair).
+ *     client source (frontend/src, packages/<pkg>/src) carries a cutoff of its own: no assignment of a
+ *     non-zero number to `alphaTest` and no `alphaCutoff` number literal.
  * [12] The New-hairstyle dialog opens with the standard text (Ruling A54). GET …/hairstyles carries
  *     `appearance_hair_text` T = "short black hair, wavy hair with a side parting":
  *       standardHairText({appearance_hair_text: "  short black hair,\n wavy hair with a side parting "}) = T
@@ -130,7 +129,7 @@ const require_ = createRequire(import.meta.url);
 
 function esbuildModule() {
   for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild')]) {
+                      join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }
@@ -325,13 +324,13 @@ const walk = (d) => {
     else if (/\.(ts|tsx|js|mjs)$/.test(name)) sources.push(f);
   }
 };
-for (const d of ['frontend/src', 'client3d/src', ...readdirSync(join(ROOT, 'packages')).map((p) => `packages/${p}/src`)]) {
+for (const d of ['frontend/src', ...readdirSync(join(ROOT, 'packages')).map((p) => `packages/${p}/src`)]) {
   if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
 }
 const hardCoded = sources.filter((f) => {
   const text = readFileSync(f, 'utf8');
   return /alphaTest\s*[:=]\s*(0*\.\d*[1-9]|[1-9])/.test(text) || /alphaCutoff\s*[:=]\s*\d/.test(text);
-}).map((f) => f.slice(ROOT.length)).filter((f) => f !== 'client3d/src/scene/impostors.ts');
+}).map((f) => f.slice(ROOT.length));
 check('[11] no client carries a cutoff of its own', [sources.length > 100, hardCoded], [true, []]);
 
 // [12]

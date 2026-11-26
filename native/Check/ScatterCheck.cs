@@ -16,7 +16,7 @@ namespace AnimaNative.Check;
 /// The scatter part of <c>--check</c> (Task S3):
 ///
 ///   1. the C# sampler against the TS sampler's own output (<c>fixtures/scatter_reference.json</c>, written
-///      by <c>scatter_reference.mjs</c>): every instance x/z/yaw within 1e-6, variants equal, the maxPoints
+///      by the generator plan E3 deleted, frozen since): every instance x/z/yaw within 1e-6, variants equal, the maxPoints
 ///      case a prefix of the full run; seeds, hashes, shades and the blade texture bytes;
 ///   2. the fixture world (<c>terrain.json</c>) through the RUNTIME layers: the window cells, footprints,
 ///      every row's instances before the prop mesh landed (estimated clearance) and after (measured), the

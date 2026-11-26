@@ -8,7 +8,7 @@ idle role's default kind in the game (`shared/config/locomotion_clips.json`).
 The knees stay a little soft (hips median ~110 cm, like the clip it
 replaces) and the thighs unturned: the bridge clips hand over into this
 stance. Largest foot step in the first frame after get-up-chair on the
-reference rig (client3d/scripts/smoke_bridge_root.mjs [B14]): straight legs
+reference rig (native/tests/Derivations/bridge_root.md [B14]): straight legs
 (hips 112.3) 1.61 cm, toes out by hip_rot 6 1.61 cm, this stance 1.25 cm,
 the CMU idle it replaces 1.69 cm.
 """

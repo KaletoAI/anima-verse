@@ -16,7 +16,7 @@ Three steps, deliberately separate:
    points, BILINEARLY. It is the twin of the shared client sampler
    ``packages/scene-render/src/worldHeight.ts`` (``sampleWorldHeight``), and
    the two are checked against the same hand-derived table
-   (``scripts/smoke_heightfield.py`` / ``client3d/scripts/smoke_world_height.mjs``).
+   (``scripts/smoke_heightfield.py`` / the browser scene's deleted ``smoke_world_height.mjs``).
 
 **THE LATTICE IS ANCHORED AT THE WORLD ORIGIN**, never at ``world_bounds``.
 Every grid point sits on a multiple of ``step_m`` counted from (0, 0), so
@@ -390,7 +390,7 @@ _WATER_FLOW_BLUR_MAX_STEPS = 8
 #: most (:func:`water_flow_at`).
 #:
 #: THE SERVER IS THE SOURCE OF THIS SINCE K-A E1. The rule was written in
-#: ``client3d/src/scene/waterPlaneMath.waterFlowAt`` and evaluated per VERTEX
+#: the browser scene's ``waterPlaneMath.waterFlowAt`` and evaluated per VERTEX
 #: of the mirror mesh; the raster evaluates the same rule per lattice point, so
 #: the number moves here with it. The window is ``min(half the incoming
 #: segment, half the outgoing segment, this)``, which is what keeps two
@@ -1228,7 +1228,7 @@ def water_flow_at(profile: WaterProfile, x: float, z: float,
     tangent BLENDED THROUGH EVERY KNOT, or (0, 0) for still water.
 
     THE SERVER OWNS THIS RULE SINCE K-A E1. It was written in
-    ``client3d/src/scene/waterPlaneMath.waterFlowAt`` and evaluated per vertex
+    the browser scene's ``waterPlaneMath.waterFlowAt`` and evaluated per vertex
     of a mirror MESH; the mesh is going away, the rule is not, and it is
     reproduced here line for line so the raster carries exactly the vectors the
     mirror used to interpolate.

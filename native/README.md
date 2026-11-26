@@ -1,7 +1,7 @@
 # Anima Verse — native client (spike)
 
 A Godot 4.7.2 (.NET / C#) client for Phase 2 of `plan-native-client.md`: it
-renders THE SAME world as the browser 3D client (`client3d/`) so both can be
+rendered THE SAME world as the browser 3D client (deleted in plan E3) so both could be
 timed on the same camera drive (`shared/bench/camera_path_v1.json`). Spike
 quality — no game logic. Task S1a covers login, terrain, buildings, recipe
 shells and a free camera; Task S1b adds the figures with idle/walk clips and
@@ -480,7 +480,7 @@ render-frame boundary; they do not prove GPU screenshot pixels.
 
 ## Bench
 
-The same drive as the browser's `client3d/?bench=auto&goto=<loc>`: THE file
+The same drive as the former browser client's `?bench=auto&goto=<loc>`: THE file
 `shared/bench/camera_path_v1.json` (embedded into the assembly from the
 repository at build time — no copy in `native/`), relative to THE same anchor
 (`pickBenchAnchor`: `--goto` exact id beats name substring, position from the
@@ -488,7 +488,7 @@ repository at build time — no copy in `native/`), relative to THE same anchor
 border-clamped, frozen at run start; no goto → the avatar's location → origin),
 the same phase rule (warm-up `warmup` s at keyframe 0, then `duration` s; the
 transition frame establishes t = 0, only later intervals count) and the same
-summary (`summarize`/`percentile` of `client3d/src/bench/benchStats.ts`).
+summary (`summarize`/`percentile` of the browser scene's `benchStats.ts`).
 
 Measuring (on the PC with the GPU; login screen first, the run starts after
 terrain, tiles, buildings and the first poll's figures have loaded):
@@ -644,7 +644,7 @@ it by (1 − f) in linear space — neither is the browser's per-material fog fo
 
 ## CDLOD terrain (Task 23)
 
-Port of `client3d/src/scene/terrainLod.ts` (`createTerrainLod`), contract § A16.6:
+Port of the browser scene's `terrainLod.ts` (`createTerrainLod`), contract § A16.6:
 
 - `Core/Terrain/TerrainLod.cs` — the selection maths (rings from the tile stats' error bounds and the pixel scale,
   `lodLambda`, `selectLodNodes` with parent quadrants, `selectLodFitted` under 4096 pieces, pyramids, the water mip
@@ -667,7 +667,7 @@ of the frame the pieces cover, 1 = no hole).
 
 ## Terrain streaming (Task 24)
 
-Port of the loaders of `client3d/src/scene/ground.ts` (`setHeightAnchor`, `refreshTiles`, `takeTiles`, `evictTiles`,
+Port of the loaders of the browser scene's `ground.ts` (`setHeightAnchor`, `refreshTiles`, `takeTiles`, `evictTiles`,
 `fillMissingStats`, `refreshLayerTiles`, `reindexLayers`, `applyHeight`, `sync`/`reload`) with the want set of
 `heightTiles.ts`:
 
@@ -723,7 +723,7 @@ to the figures line.
 
 ## Exploration veil (Task 26)
 
-Port of `client3d/src/scene/fogVeil.ts` + main.ts `syncExplored` (contract § A12): haze over the 64 m cells the avatar
+Port of the browser scene's `fogVeil.ts` + main.ts `syncExplored` (contract § A12): haze over the 64 m cells the avatar
 has never walked, on the open world's ground only (the CDLOD terrain, dry, wet and plain) — props, scatter, places and
 figures stay as they are (the server already withholds figures on unexplored ground).
 
@@ -746,7 +746,7 @@ memory of nothing — the whole ground hazed in the overview, clear from about 2
 ## Ground surfaces (Task S3b)
 
 The terrain wears ONE Godot spatial shader (`Ground/GroundShader.cs`)
-that is the browser's open-world ground material (`client3d/src/scene/ground.ts`
+that is the browser's open-world ground material (the browser scene's `ground.ts`
 `rebuildBase`), fed from the same requests (`Ground/GroundSurfaces.cs`):
 
 - `GET /play/terrain` — the type catalog: colour (`kindColor`, else `#888888`)
@@ -773,7 +773,7 @@ R16F texture), then the shading normal from the height field (`tlodNormalAt`:
 4 × 4 `texelFetch` of the near pyramid's level 0 at `tile_step_m`, else the overview's),
 lit as three's `MeshStandardMaterial` (roughness 0.85, metalness 0.02, Lambert).
 `Core/Ground/LayerCut.cs` and `Core/Ground/TerrainNormal.cs` are the CPU twins `--check`
-compares with the TS functions (`fixtures/ground_reference.mjs`).
+compares with the frozen output of the TS functions (`fixtures/ground_reference.json`).
 
 Not ported (favours Godot, a little fragment work): the fog-of-war veil
 (`applyFogVeil`) and the basement hole discard (`patchHole`). The water branch
@@ -784,7 +784,7 @@ image that fails only turns its slice into the colour slice, like the browser.
 
 ## Scene content (Task S3c)
 
-What the browser's overview shows of every location, decided like client3d
+What the browser's overview shows of every location, decided like the browser 3D scene
 (`Core/World/LocationView.cs`, `World/RecipeMeshes.cs`, `World/SceneModels.cs`) —
 nothing here is a native choice:
 
@@ -1054,12 +1054,12 @@ Task 98: the standing `pos` rung accepts a server point only inside its authorit
 0.3 m tolerance at walls and door thresholds. A stale point uses the existing room centre; one `[figures] … outside
 room … — placed in the room` line is logged per figure/room/point per scene session. The own avatar's direct arrival
 uses the same rule after its room/storey is revealed. The shared rotated two-room cases in
-`fixtures/placement/stale_positions.json` run in Core/xUnit, `--check placement`, and
-`node client3d/scripts/smoke_room_position.mjs` (including the browser's production arrival and poll closures).
+`fixtures/placement/stale_positions.json` run in Core/xUnit and `--check placement` (the browser's own runner went with
+the browser scene in plan E3).
 
 ### NPC walking (Task 30)
 
-The browser's `NpcManager` walk (`client3d/src/scene/npcs.ts` `update`/`tick`, pure rules `game/npcWalk.ts`), ported
+The browser's `NpcManager` walk (the browser scene's `npcs.ts` `update`/`tick`, pure rules `game/npcWalk.ts`), ported
 to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core/Scene/Doors.cs`, `Core/Scene/Stairs.cs`
 (the stair module by hand, `tests/StairsTests.cs`); the frame is `FigureManager.Tick`:
 - **Once a second** (the placement pass) a NEW goal is adopted; a snap (first sight, a view change) puts the figure on
@@ -1460,7 +1460,7 @@ browser's ground does not read it either (§ A9: the row carries the prop facts)
 - **Where** — `Core/Scatter/ScatterMath.cs` is an exact port of the shared sampler
   `packages/scene-render/src/scatter.ts` (+ `occupancy.ts`): same PRNG, same
   candidate stream, same verdict order. `--check` compares it with vectors the
-  TS function itself wrote (`fixtures/scatter_reference.mjs`) within 1e-6 m.
+  TS function itself wrote (`fixtures/scatter_reference.json`, frozen since plan E3) within 1e-6 m.
 - **Scattered props** (`Scatter/ScatterField.cs`, port of `ground.ts`
   `buildScatter`/`binProp`/`mountUrl`): the 64 m cell window around the camera
   target (k = ceil(120/64)), one occupancy grid per cell, clearance estimated

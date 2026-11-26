@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Smoke: ONE light for a figure — the 3D client and the Game-Admin model views build the same daylight rig, and
+ * Smoke: ONE light for a figure — the Game-Admin model views build the shared daylight rig of `@anima/scene-render`, and
  * figure textures are filtered by `prepareFigureTextures` (figure.ts, its own smoke).
  *
  * Usage: node scripts/smoke_model_light.mjs   (no server, no world; bundles scene-render with esbuild, imports three)
@@ -10,10 +10,10 @@
  * like skin in the game. And fitted gloves streaked: their UV islands are stretched along the arm, an isotropic
  * mip blurs the print along it.
  *
- * EXPECTED VALUES, by hand from the game client's rig (client3d `engine.ts` + `skyLight.ts` as of 5248c8b3f):
+ * EXPECTED VALUES, by hand from the shared rig (`packages/scene-render`; the game-hour clock that fed it lived in the
+ * browser 3D scene, deleted in plan E3 — the native twin is `native/Core/Sky/SkyLight.cs`, vector-checked there):
  *   A  daylightIntensities(1) = (sun .25 + 2, hemi .35 + 1.2, fill .15 + .4) = (2.25, 1.55, 0.55);
- *      daylightIntensities(0) = (0.25, 0.35, 0.15). gameHourLights(12) (sunAngle π/2, day = sin(π/2) = 1) gives the
- *      same three numbers and sunAngle π/2; gameHourLights(12).sun is the noon colour 0xfff2d8.
+ *      daylightIntensities(0) = (0.25, 0.35, 0.15).
  *   B  sunOffset(π/2) = (cos(π/2)·60, max(.08, 1)·80, 25) = (0, 80, 25); sunOffset(0) = (60, 0.08·80 = 6.4, 25).
  *   C  createDaylightRig: hemi sky 0xdfeeff, ground 0x8a9a78, intensity 1.55; sun 0xfff2d8, 2.25 at (0, 80, 25);
  *      fill 0xdde8ff, 0.55 at (-30, 20, -25).
@@ -32,7 +32,7 @@
  *      material without userData: it returns 2; the glossy leather gets the env at GLOSSY_ENV_INTENSITY = 0.3 (was 0.5),
  *      the metal at METAL_ENV_INTENSITY = 1.0 (before the round: no env — a metal with no diffuse colour rendered
  *      black between the highlights), the rough leather and the body none. env null -> 0, nothing set.
- *   F  Call sites (source text): Model3DViewer.tsx, meshSnapshot.ts and client3d engine.ts build the lights through
+ *   F  Call sites (source text): Model3DViewer.tsx and meshSnapshot.ts build the lights through
  *      createDaylightRig and construct no AmbientLight / HemisphereLight / DirectionalLight of their own;
  *      Model3DViewer and meshSnapshot call createModelEnvironment, prepareGlossyPieces and prepareFigureTextures;
  *      no `toneMappingExposure` is left in the two admin files.
@@ -61,8 +61,7 @@ async function bundle(contents, resolveDir, name) {
   }
 }
 
-const SR = await bundle("export * from '@anima/scene-render';", join(ROOT, 'client3d'), 'sr.mjs')
-const SKY = await bundle("export { gameHourLights } from './src/scene/skyLight';", join(ROOT, 'client3d'), 'sky.mjs')
+const SR = await bundle("export * from '@anima/scene-render';", ROOT, 'sr.mjs')
 const THREE = await import('three')
 let n = 0
 const ok = (msg) => { n += 1; console.log('  ok  ', msg) }
@@ -73,11 +72,7 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
   const noon = SR.daylightIntensities(1), night = SR.daylightIntensities(0)
   near(noon.sun, 2.25, 1e-12, 'A noon sun'); near(noon.hemi, 1.55, 1e-12, 'A noon hemi'); near(noon.fill, 0.55, 1e-12, 'A noon fill')
   near(night.sun, 0.25, 1e-12, 'A night sun'); near(night.hemi, 0.35, 1e-12, 'A night hemi'); near(night.fill, 0.15, 1e-12, 'A night fill')
-  const L = SKY.gameHourLights(12)
-  near(L.sunIntensity, 2.25, 1e-9, 'A clock sun'); near(L.hemiIntensity, 1.55, 1e-9, 'A clock hemi')
-  near(L.fillIntensity, 0.55, 1e-9, 'A clock fill'); near(L.sunAngle, Math.PI / 2, 1e-12, 'A clock angle')
-  assert.equal(L.sun.getHex(), 0xfff2d8, 'A noon sun colour')
-  ok('A intensities per day factor; the clock at noon uses them')
+  ok('A intensities per day factor')
 }
 // B
 {
@@ -130,9 +125,8 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
   const src = async (p) => readFile(join(ROOT, p), 'utf8')
   const viewer = await src('frontend/src/tabs/characters/Model3DViewer.tsx')
   const snap = await src('frontend/src/tabs/characters/meshSnapshot.ts')
-  const engine = await src('client3d/src/scene/engine.ts')
   const own = /new THREE\.(AmbientLight|HemisphereLight|DirectionalLight)\(/
-  for (const [name, text] of [['Model3DViewer', viewer], ['meshSnapshot', snap], ['engine', engine]]) {
+  for (const [name, text] of [['Model3DViewer', viewer], ['meshSnapshot', snap]]) {
     assert.ok(text.includes('createDaylightRig(THREE)'), `F ${name} builds the shared rig`)
     assert.ok(!own.test(text), `F ${name} builds no light of its own`)
   }
@@ -142,7 +136,6 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
     }
     assert.ok(!text.includes('toneMappingExposure'), `F ${name}: no dead exposure`)
   }
-  assert.ok(engine.includes('createModelEnvironment('), 'F engine environment')
   ok('F call sites')
 }
 console.log(`${n}/6 checks passed`)

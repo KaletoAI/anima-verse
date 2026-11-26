@@ -620,7 +620,7 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
       dial answers (``core.surface_textures``), so a world tunes all its rivers
       in one place and only the odd torrent says its own number. It reaches the
       renderer as the LENGTH of the per-vertex flow attribute
-      (``client3d/src/scene/waterPlane.ts``), never as a uniform — one material
+      (the browser scene's ``waterPlane.ts``), never as a uniform — one material
       still serves every water of a kind. It changes NOTHING about the bake:
       the carve, the mirror and the flow AXIS are untouched, so it is not part
       of ``heightfield.WaterMeta``.

@@ -5,8 +5,8 @@ using System.Linq;
 namespace AnimaNative.Figures;
 
 /// <summary>
-/// Foot-contact root motion — client3d/src/scene/footLock.ts (the twin of <c>app/blender/scripts/_root_motion.py</c>),
-/// vectors shared/test-vectors/foot_lock.json (hand derivations: client3d/scripts/smoke_foot_lock_math.mjs).
+/// Foot-contact root motion — the browser scene's footLock.ts (the twin of <c>app/blender/scripts/_root_motion.py</c>),
+/// vectors shared/test-vectors/foot_lock.json (hand derivations: native/tests/Derivations/foot_lock_math.md).
 ///
 /// Frame: clip frame, Y up, +Z forward, +X the figure's left, centimetres. Input tracks are IN PLACE (the hips' XZ
 /// stripped) — a foot planted in the world slides backwards here by exactly the travel the path rebuilds. A point in
@@ -163,8 +163,8 @@ public readonly record struct WQuat(double W, double X, double Y, double Z)
 }
 
 /// <summary>
-/// LEG PIN — client3d/src/scene/legPin.ts (the twin of <c>app/blender/scripts/_foot_plant.py</c>), vectors
-/// shared/test-vectors/leg_pin.json (hand derivations: client3d/scripts/smoke_leg_pin.mjs).
+/// LEG PIN — the browser scene's legPin.ts (the twin of <c>app/blender/scripts/_foot_plant.py</c>), vectors
+/// shared/test-vectors/leg_pin.json (hand derivations: native/tests/Derivations/leg_pin.md).
 /// </summary>
 public static class LegPin
 {

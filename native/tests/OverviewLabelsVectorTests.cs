@@ -12,8 +12,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/overview_labels.json against <see cref="OverviewLabels"/> and <see cref="OpenView"/>
-/// (hand derivations: client3d/scripts/smoke_overview_labels.mjs; TS sources client3d/src/scene/nameTags.ts and
-/// client3d/src/game/openView.ts).
+/// (hand derivations: native/tests/Derivations/overview_labels.md; TS sources the browser scene's nameTags.ts and
+/// the browser scene's openView.ts).
 ///
 /// <code>
 ///   TS fn                C#                               shape translation
@@ -87,7 +87,7 @@ public class OverviewLabelsVectorTests
 
 /// <summary>
 /// shared/test-vectors/event_pins.json against <see cref="EventPinRule"/> (hand derivations:
-/// client3d/scripts/smoke_event_pins.mjs; TS source client3d/src/game/eventPins.ts).
+/// native/tests/Derivations/event_pins.md; TS source the browser scene's eventPins.ts).
 /// <code>
 ///   TS fn      C#                      shape translation
 ///   pinGlyph   EventPinRule.PinGlyph   events [{category}] | null → the categories (a non-string or absent

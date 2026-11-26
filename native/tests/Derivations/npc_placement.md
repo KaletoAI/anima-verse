@@ -1,6 +1,6 @@
 # npc_placement
 
-- Origin: `client3d/scripts/smoke_npc_placement.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_npc_placement.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/FigurePlacementVectorTests.cs`
 - Vectors: `shared/test-vectors/npc_placement.json`
 
@@ -11,10 +11,10 @@
  * Smoke check for WHERE THE FIGURES OF ONE LOCATION ARE DRAWN — the pure room
  * ladder `placeAtLocation` (incl. the ground's own point) and the huddle
  * `huddleOffset`
- * (`client3d/src/game/npcPlacement.ts`, extracted from
+ * (the browser scene's `npcPlacement.ts`, extracted from
  * `main.computeNpcPlacements` for the native client, plan Task 29).
  *
- * Usage:  node client3d/scripts/smoke_npc_placement.mjs
+ * Usage:  node the browser scene's deleted smoke_npc_placement.mjs
  *
  * Every number below is derived BY HAND here and never recorded from the
  * current output (§ B5a). The cases run from

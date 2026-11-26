@@ -6,7 +6,7 @@ Usage:  ./.venv/bin/python scripts/smoke_docs_schnittstellen_3d.py [doc.md]
          written out with `git show <rev>:docs/schnittstellen-3d.md`)
 
 The contract is referenced from over two thousand places in `app/`,
-`client3d/`, `packages/`, `scripts/` and `frontend/` — always by its section
+`native/`, `packages/`, `scripts/` and `frontend/` — always by its section
 number ("§ A11a", "§ B1"). Three ways that goes wrong, and this file catches
 all three:
 
@@ -119,7 +119,7 @@ def doc_ids(text):
 def referenced_ids():
     """Every `§ <id>` the repository points at, outside the document itself."""
     import subprocess
-    roots = ["app", "client3d/src", "hud/src", "client3d/scripts", "packages", "scripts",
+    roots = ["app", "hud/src", "native", "packages", "scripts",
              "frontend/src", "shared"]
     hits = {}
     for root in roots:

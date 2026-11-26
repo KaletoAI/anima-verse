@@ -10,7 +10,7 @@ public sealed record PathKey(double T, double[] Pos, double[] Target);
 
 /// <summary>
 /// <c>shared/bench/camera_path_v1.json</c> — THE camera drive of both clients.
-/// Port of <c>client3d/src/bench/benchPath.ts</c> (<c>loadPath</c> with the same
+/// Port of the browser scene's <c>benchPath.ts</c> (<c>loadPath</c> with the same
 /// validation, <c>samplePath</c> piecewise linear with clamping at both ends).
 /// The file is embedded into the assembly from the repository (csproj
 /// <c>EmbeddedResource</c>, logical name <see cref="ResourceName"/>), so the

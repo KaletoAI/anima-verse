@@ -663,7 +663,7 @@ def is_area_location(loc: Dict[str, Any]) -> bool:
     character walks. A lake that should wade says so with the area flag.
 
     Pure math on a location dict, like everything else here — the client
-    twin is ``client3d/src/scene/tiles.isAreaLocation``.
+    twin is the browser scene's ``tiles.isAreaLocation``.
     """
     map3d = loc.get("map3d")
     return bool(isinstance(map3d, dict) and map3d.get("area_model"))

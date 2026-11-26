@@ -1,6 +1,6 @@
 # bridge_heading
 
-- Origin: `client3d/scripts/smoke_bridge_heading.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_bridge_heading.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/bridge_heading.json`
 
@@ -8,14 +8,14 @@
 
 ```text
 /**
- * Smoke check for THE TURN OF A BRIDGE CLIP — `client3d/src/scene/bridgeHeading.ts`
+ * Smoke check for THE TURN OF A BRIDGE CLIP — the browser scene's `bridgeHeading.ts`
  * (the heading of the pelvis per frame), `bridgeTravel.turnAt` (its
  * interpolation) and the bake in `footLockMeasure.relockRootPaths` (the turn
  * moved out of the hips track), Task C2 of plan-bruecken-feinschliff.
  * § B5a: numbers, never screenshots. The whole chain on real rigs is
  * `smoke_bridge_root.mjs` [B12]–[B15].
  *
- * Usage:  node client3d/scripts/smoke_bridge_heading.mjs
+ * Usage:  node the browser scene's deleted smoke_bridge_heading.mjs
  *         (bundles the client modules itself; needs no clip files)
  *
  * Convention (clip frame, +Z forward, +X the figure's LEFT; yaw f means

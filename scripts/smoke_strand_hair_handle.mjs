@@ -116,7 +116,7 @@ import assert from 'node:assert/strict'
 if (!process.env.STRAND_HANDLE_BUNDLED) {
   const here = fileURLToPath(import.meta.url)
   const repo = path.resolve(path.dirname(here), '..')
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild']
+  const bin = ['node_modules/esbuild/bin/esbuild']
     .map(rel => path.join(repo, rel)).find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const out = `/tmp/smoke_strand_hair_handle.${process.pid}.mjs`

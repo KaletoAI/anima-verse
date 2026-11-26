@@ -3,8 +3,8 @@ using System;
 namespace AnimaNative.Scene;
 
 /// <summary>
-/// When a door prop stands open, and how far — a port of client3d/src/game/doorSwing.ts, checked against
-/// shared/test-vectors/door_swing.json (hand derivations in client3d/scripts/smoke_door_swing.mjs). View state: the
+/// When a door prop stands open, and how far — a port of the browser scene's doorSwing.ts, checked against
+/// shared/test-vectors/door_swing.json (hand derivations in native/tests/Derivations/door_swing.md). View state: the
 /// rendered avatar drives proximity in every mode (Task 51 / E7-T6); absent avatars target 0.
 /// </summary>
 public static class DoorSwing

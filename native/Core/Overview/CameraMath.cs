@@ -16,12 +16,12 @@ public readonly record struct BoundsXZ(double MinX, double MaxX, double MinZ, do
 public readonly record struct OrbitState(double TargetYaw, double PitchOffset);
 
 /// <summary>
-/// Port of client3d/src/scene/cameraMath.ts — the OVERVIEW camera's arithmetic: the boot
+/// Port of the browser scene's cameraMath.ts — the OVERVIEW camera's arithmetic: the boot
 /// framing of the world, the wheel zoom and its limits, the pull towards the cursor, the
 /// per-frame easing, the fly-to curve, the orbit drag, the pitch limits and the lens pose.
 /// Same operations in the same order as the TS, so the results agree to the last bit where
 /// the platform's <c>Math</c> does. Vectors: shared/test-vectors/camera.json (hand derivations
-/// in client3d/scripts/smoke_camera_math.mjs).
+/// in native/tests/Derivations/camera_math.md).
 /// </summary>
 public static class CameraMath
 {

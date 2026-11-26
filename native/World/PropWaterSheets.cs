@@ -10,7 +10,7 @@ namespace AnimaNative.World;
 
 /// <summary>
 /// Water surfaces inside props and dioramas (scene payload v18, <c>packages/scene-render/src/propWater.ts</c>
-/// <c>buildPropWater</c>, client3d 7d5ff11e): one flat transparent sheet per region, in the frame of the node the
+/// <c>buildPropWater</c>, the browser 3D scene 7d5ff11e): one flat transparent sheet per region, in the frame of the node the
 /// placement hangs in (a scene placement: its parent, tile-local metres; a world prop: the world), standing at
 /// <c>region.y + lift</c> — the placement's § A16.9 lift, or the ground under a world prop's anchor — and moved with every
 /// re-lift. The look is the shared surface water of <c>surfaceMaterial({ class: 'water', tint })</c>: still water (a

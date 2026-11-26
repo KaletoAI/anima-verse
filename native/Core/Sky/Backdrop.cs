@@ -8,7 +8,7 @@ namespace AnimaNative.Sky;
 public readonly record struct RidgePoint(double AngleDeg, double PeakH, int Layer);
 
 /// <summary>
-/// The mountain backdrop's pure profile (<c>client3d/src/scene/backdropProfile.ts</c>, contract § A17): two rings at
+/// The mountain backdrop's pure profile (the browser scene's <c>backdropProfile.ts</c>, contract § A17): two rings at
 /// 380 m and 440 m around the camera target, the back one 25 % taller, a seeded ridge line per ring in the arcs the
 /// server resolved, tapered over 12° at each arc end. The compass is the figure compass (0° = south, +z).
 /// </summary>

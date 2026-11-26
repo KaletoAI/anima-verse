@@ -31,7 +31,7 @@
  *     2.85 + 0.05 over o z 2.80 at frame 0, the others shallower) with o = world of r = (0.20, 0.10) = (2.10, 0.9, 2.80)
  *     at frame 0 and o one metre off at the others (a wrong pick shows) → (20.0, 10.0). The mean: (16.0, 20.0).
  *     No relation with samples → null.
- * [8] THE GAME PLACEMENT (the numbers of client3d/scripts/smoke_pair_root_sets.mjs [B], here as the pure composition
+ * [8] THE GAME PLACEMENT (the numbers of the browser scene's deleted smoke_pair_root_sets.mjs [B], here as the pure composition
  *     npcs.ts tickInteraction runs: scalePairRoot, then the anchor transform). Root p = (0.3, 0.1), pivot
  *     C = (0.12, 0.30), anchor (10, 22), yaw 90° (x = ax + rx·cos + rz·sin = 10 + rz, z = az − rx·sin + rz·cos = 22 − rx):
  *     no height and 1.70 m → p unchanged → (10.1, 21.7); 1.85 m, a = 37/34: p' = (0.12 + a·0.18, 0.30 − a·0.20) =
@@ -54,7 +54,7 @@ async function loadSR() {
   try {
     const esbuild = await import(join(ROOT, 'node_modules/esbuild/lib/main.js'))
     const built = await esbuild.build({
-      stdin: { contents: "export * from '@anima/scene-render';", resolveDir: join(ROOT, 'client3d'), loader: 'ts' },
+      stdin: { contents: "export * from '@anima/scene-render';", resolveDir: ROOT, loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', write: false,
       outfile: join(dir, 'sr.mjs'), external: ['three', 'three/*'], logLevel: 'error',
     })

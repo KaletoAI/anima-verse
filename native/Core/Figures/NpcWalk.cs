@@ -13,9 +13,9 @@ namespace AnimaNative.Figures;
 public readonly record struct NpcGoalPlan(Vec3 Goal, int Retired, Vec3 Delta, double DistToGoal, double Dist, bool Moving);
 
 /// <summary>
-/// The pure NPC walking and facing arithmetic of client3d/src/game/npcWalk.ts — the step rule, the facing rules and
+/// The pure NPC walking and facing arithmetic of the browser scene's npcWalk.ts — the step rule, the facing rules and
 /// the two eases of every walking figure (npcs.ts <c>tick</c>, figures.ts <c>update</c>) — checked against
-/// shared/test-vectors/npc_walk.json (hand derivations: client3d/scripts/smoke_npc_walk.mjs). Points are world
+/// shared/test-vectors/npc_walk.json (hand derivations: native/tests/Derivations/npc_walk.md). Points are world
 /// metres, time seconds, yaw radians (three's Y rotation: yaw 0 looks along +z).
 /// </summary>
 public static class NpcWalk
@@ -152,9 +152,9 @@ public sealed record GroundMove(string Movement, GroundSink Sink, double? Water,
 public readonly record struct GroundWord(GroundMove Raw, double BedY, GroundWater Word);
 
 /// <summary>
-/// The ground rules of client3d/src/game/walk.ts the walking figure needs beyond <see cref="WaterGates"/>:
+/// The ground rules of the browser scene's walk.ts the walking figure needs beyond <see cref="WaterGates"/>:
 /// <c>terrainPace</c>, <c>groundSink</c>, <c>sinkForState</c>, <c>floatRootY</c> — checked against
-/// shared/test-vectors/npc_ground.json (hand derivations: client3d/scripts/smoke_walk_math.mjs [30]) — and the
+/// shared/test-vectors/npc_ground.json (hand derivations: native/tests/Derivations/walk_math.md [30]) — and the
 /// npcs.ts composition <c>groundWordAt</c>.
 /// </summary>
 public static class WalkGround

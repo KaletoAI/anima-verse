@@ -73,7 +73,7 @@ def tracked(prefix):
 
 #: Paths that are examples rather than files ("<kind>.json", "walk.fbx"), or
 #: directories named with a trailing slash. Only concrete repo paths count.
-PATH_RE = re.compile(r"`((?:app|scripts|shared|client3d|hud|packages|frontend)/"
+PATH_RE = re.compile(r"`((?:app|scripts|shared|hud|packages|frontend)/"
                      r"[A-Za-z0-9_./-]*[A-Za-z0-9_])`")
 
 

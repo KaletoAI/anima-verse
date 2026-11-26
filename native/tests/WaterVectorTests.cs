@@ -13,8 +13,8 @@ using static AnimaNative.Tests.ScatterVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// shared/test-vectors/water.json against the native water (hand derivations: client3d/scripts/smoke_water_shade.mjs,
-/// smoke_water_plane.mjs, smoke_waterfall.mjs, smoke_world_height.mjs; TS sources client3d/src/scene/waterShade.ts,
+/// shared/test-vectors/water.json against the native water (hand derivations: native/tests/Derivations/water_shade.md,
+/// smoke_water_plane.mjs, smoke_waterfall.mjs, smoke_world_height.mjs; TS sources the browser scene's waterShade.ts,
 /// waterPlaneMath.ts, waterRaster.ts, waterfall.ts, packages/scene-render/src/waterfall.ts, materials.ts).
 ///
 /// <code>

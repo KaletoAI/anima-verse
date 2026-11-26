@@ -9,7 +9,7 @@ public readonly record struct ScatterLodCfg(double NearM, double FarM, double Cu
 public readonly record struct ScatterViewCone(double FwdX, double FwdZ, double CosHalf);
 
 /// <summary>
-/// Port of <c>client3d/src/scene/scatterLod.ts</c> — the per-instance LOD of the scatter and the
+/// Port of the browser scene's <c>scatterLod.ts</c> — the per-instance LOD of the scatter and the
 /// undergrowth constants, with its DEFAULT config (<c>SCATTER_LOD_DEFAULTS</c> = 35 / 45 / 120 m).
 /// Task 38 (E4-T3) adds the vectored impostor half beyond the mesh cull line.
 /// </summary>

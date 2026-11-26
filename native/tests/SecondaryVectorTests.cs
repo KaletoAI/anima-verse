@@ -12,7 +12,7 @@ using static AnimaNative.Tests.ScatterVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// The adapters of client3d/scripts/secondaryVectorDispatch.mjs (Task 33), mirrored for the native port:
+/// The adapters of the browser scene's deleted secondaryVectorDispatch.mjs (Task 33), mirrored for the native port:
 /// <code>
 ///   TS fn                   C#                                  shape translation
 ///   stepSecondaryParticle   SecondaryMotion.StepParticle        [x,y,z] arrays ↔ V3, params = the explicit MotionGroup
@@ -102,7 +102,7 @@ internal static class SecondaryVectorAdapters
     };
 }
 
-/// <summary>shared/test-vectors/secondary_particle.json (hand derivations: client3d/scripts/smoke_secondary_motion.mjs S1–S6).</summary>
+/// <summary>shared/test-vectors/secondary_particle.json (hand derivations: native/tests/Derivations/secondary_motion.md S1–S6).</summary>
 public class SecondaryParticleVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("secondary_particle"));

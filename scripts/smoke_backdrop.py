@@ -5,7 +5,7 @@
 Needs no world and no server: the three getters read ``config._CONFIG``
 directly (the ``relief.py`` pattern), and the arc resolution is a pure
 function. What it verifies is the SERVER half of § A17 — the renderer half
-(the ridge profile) is checked in ``client3d/scripts/smoke_backdrop_math.mjs``.
+(the ridge profile) is checked in ``native/tests/Derivations/backdrop_math.md``.
 
 THE COMPASS, hand-derived. Degrees are this contract's figure compass
 (§ A1.8): 0 = South, 90 = East, 180 = North, 270 = West, i.e. a ground

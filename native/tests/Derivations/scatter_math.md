@@ -1,6 +1,6 @@
 # scatter_math
 
-- Origin: `client3d/scripts/smoke_scatter_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_scatter_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ScatterVectorTests.cs`, `native/tests/ScatterRowVectorTests.cs`
 - Vectors: `shared/test-vectors/scatter.json`, `shared/test-vectors/scatter_rows.json`
 
@@ -10,14 +10,14 @@
 /**
  * Smoke check for the pure scatter maths: the sampler shared by the 3D client
  * and the map editor (`packages/scene-render/src/scatter.ts`, sections A-E),
- * the client's display LOD on top of it (`client3d/src/scene/scatterLod.ts`,
+ * the client's display LOD on top of it (the browser scene's `scatterLod.ts`,
  * sections F-I) and the three distances the player may set for it
- * (`client3d/src/game/prefs.ts`, section J). Three modules, one subject —
+ * (the browser scene's `prefs.ts`, section J). Three modules, one subject —
  * where a prop stands and how much of it is drawn are the two halves of the
  * same contract, and splitting them over two files would duplicate this
  * harness and let the halves drift apart.
  *
- * Usage:  node client3d/scripts/smoke_scatter_math.mjs
+ * Usage:  node the browser scene's deleted smoke_scatter_math.mjs
  *
  * Same discipline as `smoke_ground_math.mjs` and `scripts/smoke_scene_recipe.py`:
  * every expected number below is derived BY HAND in this header and NEVER
@@ -38,8 +38,8 @@
  * the automatic UNDERGROWTH, which was a second layer of the same builder and
  * a second user of the same sampler. It is neither any more: the layer has its
  * own 64 m raster, its own per-cell seed and a look of its own
- * (`client3d/src/scene/undergrowth.ts`), so its 59 checks moved whole to
- * `client3d/scripts/smoke_undergrowth.mjs` — 239 checks here became 180. The
+ * (the browser scene's `undergrowth.ts`), so its 59 checks moved whole to
+ * the browser scene's deleted `smoke_undergrowth.mjs` — 239 checks here became 180. The
  * cases that did NOT move are the ones the rebuild deleted: the per-AREA count
  * rule, its 20 000 ceiling and the "capped" report, because a painted shape is
  * not the unit the layer is grown in any more.
@@ -95,7 +95,7 @@
  *
  * (A8) THE DEFAULT TARGET HEIGHT of a scattered model, 2.0 m (finding 1 of the
  *      E8 acceptance round). A scatter entry whose prop has no record no
- *      longer hands `null` in — `client3d/src/scene/ground.ts` passes its
+ *      longer hands `null` in — the browser scene's `ground.ts` passes its
  *      `SCATTER_MODEL_HEIGHT_M`, so "whatever the file says" is never a size
  *      in a world measured in metres. The arithmetic is (A2)'s with a
  *      different target:
@@ -114,7 +114,7 @@
  * Contract v6 "Gebiete": a footprint is the location's DRAWN OUTLINE, and the
  * exclusion is a ray cast over it in WORLD metres — half-open, the very rule
  * of `app/core/world_geometry.point_in_polygon` and
- * `client3d/src/game/polygon.pointInPolygon`. The package knows nothing about
+ * the browser scene's `polygon.pointInPolygon`. The package knows nothing about
  * pins: whoever holds the row turns `map3d.boundary` out of the local frame
  * once per location (§ A1.1) before handing it in.
  *
@@ -827,7 +827,7 @@
  * ============================================================================
  * (E) THE CLIENT'S SCATTER CONSTANTS
  * ============================================================================
- * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
+ * the browser scene's `ground.ts` imports three.js and cannot be loaded here,
  * so the built-in tuft's size (`TUFT_HEIGHT_M` = 0.8, `TUFT_RADIUS_M` = 0.22 —
  * hip-high next to a 1.70 m figure instead of knee-high, finding 2) is pinned
  * by reading the source. The fallback target height moved to `scatterLod.ts`
@@ -839,7 +839,7 @@
  * (F) THE DISPLAY LOD — WHERE IT WENT
  * ============================================================================
  * This section used to check the AREA-WIDE half of
- * `client3d/src/scene/scatterLod.ts`: `scatterTierFor` (one mesh tier per
+ * the browser scene's `scatterLod.ts`: `scatterTierFor` (one mesh tier per
  * painted area), `scatterCountShare` and `scatterVisibleCount` (the tail of a
  * seed-stable list, capped by the area's distance), plus two red mutants for
  * the band and the budget. All three functions are GONE with the caller that
@@ -1634,7 +1634,7 @@
  *      (5, 2) r 1 -> []. A two-point ring -> [].
  *
  * ============================================================================
- * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
+ * (J) THE DETAIL DISTANCES AS A SETTING — the browser scene's `prefs.ts`
  * ============================================================================
  * The three distances are a LOCAL view setting (localStorage), so the same
  * contract as the audio prefs applies: never throw, never return half a

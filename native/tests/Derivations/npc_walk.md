@@ -1,6 +1,6 @@
 # npc_walk
 
-- Origin: `client3d/scripts/smoke_npc_walk.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_npc_walk.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/NpcWalkVectorTests.cs`
 - Vectors: `shared/test-vectors/npc_walk.json`
 

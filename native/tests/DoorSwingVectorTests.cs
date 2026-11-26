@@ -11,7 +11,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/door_swing.json against <see cref="DoorSwing"/> (hand derivations and wrappers:
-/// client3d/scripts/smoke_door_swing.mjs; TS source client3d/src/game/doorSwing.ts). A null distance is +∞ both ways.
+/// native/tests/Derivations/door_swing.md; TS source the browser scene's doorSwing.ts). A null distance is +∞ both ways.
 /// </summary>
 public class DoorSwingVectorTests
 {

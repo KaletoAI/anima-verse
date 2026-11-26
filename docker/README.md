@@ -70,9 +70,8 @@ Together.ai), TTS (XTTS/F5/Magpie), SearX, n8n. None of these run inside the con
 app at them under `/admin/settings`. Embeddings for pose matching run **inside** the container on
 CPU and need no external endpoint.
 
-The image includes the committed 3D client build in `static/client3d/` and the HUD page build in
-`static/hud/`. Open `/play` on the
-Python server; no Vite process is needed. For development with HMR, optionally run
-`ANIMA_API=http://<docker-host>:8100 npm run dev -w client3d` (and add that origin to
-`server.cors_origins`). Rebuild all clients from the repo root with `npm run build` before
-building the image.
+The image includes the committed Game-Admin build in `static/game_admin/` and the HUD page build in
+`static/hud/`. Players use the native client; `/play` on the Python server is only a hint page.
+For HUD development with HMR, optionally run `ANIMA_API=http://<docker-host>:8100 npm run dev -w hud`
+(and add that origin to `server.cors_origins`). Rebuild the web builds from the repo root with
+`npm run build` before building the image.

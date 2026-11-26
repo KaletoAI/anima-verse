@@ -18,7 +18,7 @@ public readonly record struct SurfaceFinishResult(double Roughness, double Metal
 public readonly record struct NeutralizedLook(double Metalness, double? EnvMapIntensity);
 
 /// <summary>
-/// The pure look decisions of the recipe primitives (client3d/src/scene/materialLooks.ts) and the class finish
+/// The pure look decisions of the recipe primitives (the browser scene's materialLooks.ts) and the class finish
 /// of the surface library (<c>surfaceFinish</c>, packages/scene-render/src/materials.ts), checked against
 /// shared/test-vectors/scene_models.json [P]/[W]/[E]/[X]/[F]/[N]. Textures and renderer objects stay with the caller.
 /// </summary>

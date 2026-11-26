@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/backdrop.json against <see cref="Backdrop"/> (hand derivations:
-/// client3d/scripts/smoke_backdrop_math.mjs; TS source client3d/src/scene/backdropProfile.ts).
+/// native/tests/Derivations/backdrop_math.md; TS source the browser scene's backdropProfile.ts).
 ///
 /// <code>
 ///   TS fn                 C#                        shape translation

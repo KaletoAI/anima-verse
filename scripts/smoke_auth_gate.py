@@ -157,9 +157,8 @@ F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
 
      packages/player-ui/src/**            the shared player panels, incl. the
                                           character forms of AvatarSettingsPanel
-     client3d/src/**                      the 3D client (scene)
-     hud/src/**                           the HUD page, embedded by the 3D
-                                          client and loaded by the native one
+     hud/src/**                           the HUD page, loaded by the native
+                                          client
 
    and asserts that none of their URL literals is admin-only under the rules
    of E. Template placeholders (``${...}``) become one opaque segment and a
@@ -731,7 +730,6 @@ REPO = Path(__file__).resolve().parents[1]
 # Every file a logged-in player's browser can execute — see section F.
 PLAYER_TREES = [
     REPO / "packages" / "player-ui" / "src",
-    REPO / "client3d" / "src",
     REPO / "hud" / "src",
 ]
 PLAYER_FILES = []

@@ -3,7 +3,7 @@
 fingerprint instead of a full compose per poll.
 
 ``GET /play/locations/{id}/scene`` is polled by every connected 3D client, once
-a minute per cached location (``client3d/src/scene/sceneRecipe.ts``:
+a minute per cached location (the browser scene's ``sceneRecipe.ts``:
 ``SceneLibrary.sweep``), and the client compares exactly ONE field of the
 answer: ``signature``. That field is built LAST, after the whole composition,
 and the route sent no cache headers at all — so the unchanged case (nearly

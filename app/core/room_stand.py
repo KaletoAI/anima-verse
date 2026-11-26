@@ -430,7 +430,7 @@ def bridge_offset(travel_m: Sequence[float], facing_deg: float,
     ``facing_deg`` (compass: 0 = south +z, 90 = east +x) — the clip's travel
     (+Z forward, +X the figure's left) turned by the facing and scaled to
     the figure. PURE; the client turns its own offset the same way
-    (``client3d/src/scene/bridgeTravel.ts`` ``toWorld``)."""
+    (the browser scene's ``bridgeTravel.ts`` ``toWorld``)."""
     a = math.radians(float(facing_deg or 0.0))
     tx, tz = float(travel_m[0]) * scale, float(travel_m[1]) * scale
     return (tx * math.cos(a) + tz * math.sin(a), -tx * math.sin(a) + tz * math.cos(a))

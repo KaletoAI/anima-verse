@@ -21,16 +21,14 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `rest_reference.json` | the browser's rest-corrected rotations for three rigs — WRITTEN by `rest_reference.mjs` |
 | `rest_reference.mjs` | node script that runs the browser's own `restCorrections` on three's loaders (see below) |
 | `terrain.json` | `GET /play/terrain` (§ A9/§ A9b): one painted wood with two scatter rows, a path painted over it, one prop box |
-| `scatter_reference.json` | the browser's sampler/LOD/undergrowth output for hand-chosen cases and for this fixture world — WRITTEN by `scatter_reference.mjs` |
-| `scatter_reference.mjs` | node script that runs `scatter.ts` / `occupancy.ts` / `scatterLod.ts` / `undergrowth.ts` themselves (see "Scatter") |
+| `scatter_reference.json` | the browser's sampler/LOD/undergrowth output for hand-chosen cases and for this fixture world — written by `scatter_reference.mjs`, FROZEN since plan E3 (see "Scatter") |
 | `terrain_layers.json` | `GET /play/terrain-layers` (§ A16.7) — the index: format, layer table, coarse id mask, tile keys — WRITTEN by `ground_fixture.mjs` |
 | `terrain_layers_tiles.json` | `GET /play/terrain-layers?keys=…` — every tile; the source answers only the requested AND indexed keys — WRITTEN by `ground_fixture.mjs` |
 | `surface_textures.json` | `GET /assets/surface-textures` — the library, a bare array like the server's — WRITTEN by `ground_fixture.mjs` |
 | `explored.json` | `GET /play/explored` (§ A12) — the avatar's exploration memory: two cells and their signature (see "Veil"); no file = 404 |
 | `ground_grass.png` | a 4 × 2 PNG of ONE colour (60, 140, 50, 255) — the `grass` surface image — WRITTEN by `ground_fixture.mjs` |
 | `ground_fixture.mjs` | plain node script that bakes the cut-down masks in the server's encoding (see "Ground surfaces") |
-| `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — WRITTEN by `ground_reference.mjs` |
-| `ground_reference.mjs` | node script that runs `layerCut.ts`, `heightTiles.ts` `wantedTiles`, `naturalGroundMath.ts` and three's `Color` themselves |
+| `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — written by `ground_reference.mjs`, FROZEN since plan E3 (see "Ground surfaces") |
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
@@ -123,8 +121,9 @@ avatar); `cellar` (in view=3d, not in the world map = fogged), `template`
 The bench maths (`Check/BenchMathCheck.cs`) use no fixture file: the path is
 the embedded `shared/bench/camera_path_v1.json` (checked byte-identical to the
 repository file), the numbers are the hand values of
-`client3d/scripts/smoke_bench_path.mjs` / `smoke_bench_math.mjs` /
-`smoke_bench_anchor.mjs` (derivations in their docstrings), plus one quarter
+the browser scene's `smoke_bench_path.mjs` / `smoke_bench_math.mjs` /
+`smoke_bench_anchor.mjs` (deleted in plan E3; the maths derivation lives on in
+`native/tests/Derivations/bench_math.md`), plus one quarter
 point t = 0.3125 → [3.725, 23.84025, 38.99275] (u = 0.25 between keyframes 0
 and 1), which — unlike the midpoints — rejects cosine easing.
 
@@ -475,12 +474,11 @@ Godot's clip value within 0.5° of three's (measured 0°) and the corrected rota
 
 ### Reference vectors (`scatter_reference.json`)
 
-    node native/fixtures/scatter_reference.mjs      # from the repo root; needs npm install
-
-The script bundles itself with esbuild (like `rest_reference.mjs`) and runs the
-browser's own functions. Re-run it when `scatter.ts`, `occupancy.ts`,
-`scatterLod.ts`, `undergrowth.ts`, `terrain.json` or the fixture camera change,
-and commit the JSON. `Check/ScatterCheck.cs` demands every instance (x, z, yaw,
+The generator `scatter_reference.mjs` bundled itself with esbuild (like `rest_reference.mjs`) and ran the
+browser's own functions (`scatter.ts`, `occupancy.ts`, `scatterLod.ts`, `undergrowth.ts`). Plan E3 deleted
+the browser scene and with it the generator, so the JSON is FROZEN: it is the browser's last word, and the
+generator's last state is `git show f4ee783afbe52098c1531253bbb0b780a714b789:native/fixtures/scatter_reference.mjs`. A change to
+the C# port that moves these numbers is a deliberate re-derivation, not a regeneration. `Check/ScatterCheck.cs` demands every instance (x, z, yaw,
 variant) within **1e-6 m** of the TS output:
 
 | case | input | what it exercises |
@@ -498,8 +496,8 @@ Plus `instanceHash`, `undergrowthShade`, FNV-1a seed hashes and the sha256 of th
 
 ### E4 rows and world props (Task 36)
 
-The same `node native/fixtures/scatter_reference.mjs` command writes an `e4`
-section in the reference. Its row input is `e4_terrain.json`: a straight fixture
+The same generator wrote an `e4`
+section in the reference (frozen with it). Its row input is `e4_terrain.json`: a straight fixture
 stroke from (16,30) to (96,30), width 6. Along rows run first, then edge and
 center rows, sharing real cell occupancy. The edge uses ribbon `opposite`,
 aligned yaw 0, offset **0.8 m**, jitter **5 m**, reshuffle **120 game minutes**
@@ -589,8 +587,9 @@ world-prop scene specs, scaled cfg, distances and tiers under `e4.worldProps`.
 ## Ground surfaces (Task S3b)
 
 `node native/fixtures/ground_fixture.mjs` writes the layer bake, the library and the PNG;
-`node native/fixtures/ground_reference.mjs` writes `ground_reference.json` (both deterministic: a re-run is
-byte-identical). `Check/GroundCheck.cs` compares the C# port with the reference (1e-9; pairs, keys, bytes exact)
+`ground_reference.json` was written by `ground_reference.mjs` from the browser scene's own TS functions;
+plan E3 deleted that scene and the generator (last state: `git show f4ee783afbe52098c1531253bbb0b780a714b789:native/fixtures/ground_reference.mjs`),
+so the reference is FROZEN. The fixture script is deterministic: a re-run is byte-identical. `Check/GroundCheck.cs` compares the C# port with the reference (1e-9; pairs, keys, bytes exact)
 and the rest with the numbers below.
 
 **The bake is cut down in ONE place**: `tile_m` = 32 instead of 256 (a 32² id mask and a 64² sd mask per tile;
@@ -1404,7 +1403,7 @@ a bed at 9 → **10**; in a built scope → dry; on the sandbank (topmost area w
 
 ## Veil (Task 26, `Check/VeilCheck.cs`, `--check veil`, fixture `explored.json`)
 
-The exploration haze of `client3d/src/scene/fogVeil.ts` on the three ground shaders and the shared uniforms
+The exploration haze of the browser scene's `fogVeil.ts` on the three ground shaders and the shared uniforms
 (`World/VeilUniforms.cs`); its math (`fogGrid`, `fogTexUv`, `fogHeightAlpha`, …) is vector-checked in `dotnet test`
 (`fog_veil.json`), the state (A/B, crossfade, strength, `syncExplored`) is hand-tested in `FogVeilStateTests`.
 
@@ -1438,7 +1437,7 @@ avatar) → the empty memory, B = the neutral texel (no request), after the fade
 
 ## Walk world (`walk/`, Task 30, `Check/WalkCheck.cs`, `--check walk`)
 
-The browser's NPC walk (`client3d/src/scene/npcs.ts` `tick`, pure rules `game/npcWalk.ts` / `walk.ts` / `doors.ts` /
+The browser's NPC walk (the browser scene's `npcs.ts` `tick`, pure rules `game/npcWalk.ts` / `walk.ts` / `doors.ts` /
 `stairs.ts`; vectors `npc_walk.json`, `npc_ground.json`; the stair module by hand in `tests/StairsTests.cs`). Constants:
 WALK_SPEED 3.4 m/s, run ×1.8 beyond 6 m (+10 m while a station is left, only on `walk_run` ground, never travelling),
 stations retire at 1.5 m (0.4 m while a stair ride runs), standing at ≤ 0.05 m, yaw eased `min(1, 10·dt)`, root height

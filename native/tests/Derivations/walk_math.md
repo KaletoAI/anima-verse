@@ -1,6 +1,6 @@
 # walk_math
 
-- Origin: `client3d/scripts/smoke_walk_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_walk_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/CollideVectorTests.cs`, `native/tests/FigurePlacementVectorTests.cs`, `native/tests/NpcWalkVectorTests.cs`, `native/tests/OverviewHudVectorTests.cs`, `native/tests/BridgeVectorTests.cs`, `native/tests/WalkControlVectorTests.cs`
 - Vectors: `shared/test-vectors/collide.json`, `shared/test-vectors/figure_ground.json`, `shared/test-vectors/npc_ground.json`, `shared/test-vectors/overview_hud.json`, `shared/test-vectors/stairs.json`, `shared/test-vectors/walk_control.json`
 
@@ -9,8 +9,8 @@
 ```text
 /**
  * Smoke check for the pure walking maths of the 3D client (plan-3d-game
- * stage 3, tasks 3 and 4) — `client3d/src/game/walk.ts` and
- * `client3d/src/game/clickmove.ts`.
+ * stage 3, tasks 3 and 4) — the browser scene's `walk.ts` and
+ * the browser scene's `clickmove.ts`.
  *
  * --- ghostCutY: the same gate, and the LINE it answers --------------------
  * WHY IT EXISTS. Every ghost site needs the pair "is it submerged" AND "at
@@ -38,7 +38,7 @@
  * --- Doorways (E3 acceptance "you cannot see the doors", rehung in B3) ---
  *
  * The server renders a door as a GAP in the wall segments, and a gap alone
- * does not read as a door — so `client3d/src/game/doors.ts` says where the
+ * does not read as a door — so the browser scene's `doors.ts` says where the
  * walk-through gaps are and main.ts lays a threshold quad into each.
  *
  * Until B3 this module DERIVED them: it recomputed every room opening
@@ -101,7 +101,7 @@
  * The Value adapters select a property path from the function result.
  * Non-finite inputs use {"$number":"NaN"}; expectations stay finite.
  *
- * Usage:  node client3d/scripts/smoke_walk_math.mjs
+ * Usage:  node the browser scene's deleted smoke_walk_math.mjs
  *
  * Like `scripts/smoke_scene_recipe.py`, every expected number below is derived
  * BY HAND from the contract, never recorded from the current output.
@@ -116,12 +116,12 @@
  * server. The successors are derived by hand further down (`slideBlocked`,
  * the click-walk helpers) and in two other files:
  *   - the SERVER gates: scripts/smoke_play_pos.py
- *   - the ENTRY OFFER in metres: client3d/scripts/smoke_enter_math.mjs
+ *   - the ENTRY OFFER in metres: the browser scene's deleted smoke_enter_math.mjs
  *
 
  * --- walkDir --------------------------------------------------------------
  * The engine's camera forward is `(-sin yaw, 0, -cos yaw)` and its right is
- * `(-fwd.z, 0, fwd.x)` (client3d/src/scene/engine.ts, pan block). The avatar
+ * `(-fwd.z, 0, fwd.x)` (the browser scene's engine.ts, pan block). The avatar
  * has to walk along the SAME vectors, otherwise "forward" means two things.
  *   yaw = 0:      fwd = (-sin 0, -cos 0)      = (0, -1)
  *                 right = (-fwd.z, fwd.x)     = (1, 0)
@@ -304,7 +304,7 @@
  * `groundWaterLevel(level, scope)` is the exact twin of `groundSink`'s reach:
  * a tiled hall standing in a painted lake is a floor, so `'built'` answers
  * `null` and nobody floats inside it. The full shore/plane arithmetic is
- * `client3d/scripts/smoke_water_plane.mjs`.
+ * the browser scene's deleted `smoke_water_plane.mjs`.
  *
  * --- wadeGate: SWIMMING IS A DEPTH, NOT A KIND (W4c, 2026-08-23) ----------
  * The SECOND reach rule of the ground contract. Until now `meta.move_anim:
@@ -561,7 +561,7 @@
  *
  * --- entering a building: MOVED (E4 task 5) -------------------------------
  * `entryOfferNear` speaks metres now and the edge/adjacency rules went with
- * the step. Its derivations live in client3d/scripts/smoke_enter_math.mjs.
+ * the step. Its derivations live in the browser scene's deleted smoke_enter_math.mjs.
  *
 
  * --- the elevator (E3, floors on foot) ------------------------------------
@@ -661,7 +661,7 @@
  * needs no loop to show it.
  *
 
- * --- Audio prefs (stage 4, task 2; `client3d/src/game/prefs.ts`) -----------
+ * --- Audio prefs (stage 4, task 2; the browser scene's `prefs.ts`) -----------
  * The volume prefs are the one part of the audio layer that is pure maths on a
  * string, so they are checked here. Source of the defaults: the task brief —
  *   master 0.8, music 0.5, ambient 0.6, tts 1.0,
@@ -682,7 +682,7 @@
  *   - `savePrefs` is JSON, so `loadPrefs(savePrefs(p))` returns `p` unchanged
  *     for any already-valid `p` (the round trip the settings UI of task 4 does).
  *
- * --- Boot progress (stage 4, task 3; `client3d/src/game/boot.ts`) ----------
+ * --- Boot progress (stage 4, task 3; the browser scene's `boot.ts`) ----------
  * Six stages: world, scenes, tiles, visible, figures, arrival. Step = 100/6.
  * [P1] In order: 0 -> 0/world, 1 -> 17/scenes (16.67 rounds up), 2 -> 33/tiles,
  * 3 -> 50/visible, 4 -> 67/figures, 5 -> 83/arrival, 6 -> 100/ready.
@@ -702,7 +702,7 @@
  * (`{kind:'retry',seconds}` / `{kind:'failed'}`) for the same reason as the
  * label: the vanilla side has no t().
  *
- * --- Speech bubbles (stage 6; `client3d/src/game/bubble.ts`) ---------------
+ * --- Speech bubbles (stage 6; the browser scene's `bubble.ts`) ---------------
  * From the module's constants: BUBBLE_MAX_CHARS = 140, BUBBLE_BASE_MS = 3500,
  * BUBBLE_MS_PER_CHAR = 55, BUBBLE_MAX_MS = 12000, so
  *     bubbleMs(n chars) = clamp(3500 + 55n, 3500, 12000),
@@ -726,7 +726,7 @@
  * [B15] it measures the COLLAPSED length, like bubbleText: ' a \n b ' -> 'a b'
  *       = 3 characters -> 3500 + 165 = 3665.
  *
- * --- Location info panel (`client3d/src/game/infoPanel.ts`) ----------------
+ * --- Location info panel (the browser scene's `infoPanel.ts`) ----------------
  * `infoPanelData(loc, chars, events, roomOf, view?, avatar?)` is a plain copy
  * of what the HUD shows; the fixture is the location Home with the rooms
  * r1 'Kitchen' and r2 'Hall', the characters A (travelling to Harbor, eta
@@ -745,7 +745,7 @@
  *      [I11] no avatar -> travel null.  [I12] a location without pos_x/pos_z
  *      -> travel {distanceM: null} (the button stays, the number goes).
  *
- * --- Scatter detail distances: typing (`client3d/src/game/prefs.ts`) -------
+ * --- Scatter detail distances: typing (the browser scene's `prefs.ts`) -------
  * The stored side of these prefs (defaults, reading) is pinned in
  * `smoke_scatter_math.mjs` section (J); what the menu asks before it stores
  * anything is here, beside the other prefs:
@@ -787,7 +787,7 @@
  * the JSON round trip of the panel data, the NaN input of (J3), the boot
  * STORE (state across calls) and `attributeLongTask` (no C# consumer yet).
  *
- * --- Soundtrack (stage 4, task 5; `client3d/src/game/soundtrack.ts`) -------
+ * --- Soundtrack (stage 4, task 5; the browser scene's `soundtrack.ts`) -------
  * WHICH music and WHICH ambience play. All four rules are pure lookups or a
  * state function, so they belong here and not in a listening session.
  *
@@ -850,7 +850,7 @@
  *   t=12999 'water' -> still ''                (4999 < 5000)
  *   t=13000 'water' -> applied 'water'         (the next one holds too)
  *
- * --- Voiceover (stage 4, task 6; `client3d/src/game/voiceover.ts`) ---------
+ * --- Voiceover (stage 4, task 6; the browser scene's `voiceover.ts`) ---------
  * WHICH lines are read aloud and HOW MANY may wait. Both are pure, so the
  * rules are checkable without a voice.
  *
@@ -1296,7 +1296,7 @@
 
 ## Inline derivations
 
-Comment blocks of `client3d/scripts/smoke_walk_math.mjs` after its opening docstring that contain a mark a case label
+Comment blocks of the browser scene's deleted `smoke_walk_math.mjs` after its opening docstring that contain a mark a case label
 cites, in file order; line numbers refer to the smoke at 87b34ea4dddc.
 
 Line 1482 (cites [B2], [B5], [G1], [G2], [G3]):
@@ -1568,7 +1568,7 @@ Line 4696 (cites [B2]):
 ```text
   /**
    * --- PLACEMENT: where a figure is drawn, and whether it walks there -------
-   * (`client3d/src/game/placement.ts`, acceptance findings B2 + B5)
+   * (the browser scene's `placement.ts`, acceptance findings B2 + B5)
    *
    * [B2] `placementOf(hasTile, pos)`: a tile places the figure; without one the
    * free metre point does; without either there is nothing to draw. THE POINT

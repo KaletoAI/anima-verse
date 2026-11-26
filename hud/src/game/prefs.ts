@@ -11,7 +11,7 @@
  * Pure like `walk.ts` and `proximity.ts`: no DOM, no import, no module state —
  * `loadPrefs` takes the raw string (or null) the store returned and
  * `savePrefs` returns the string to put back. That is what lets
- * `client3d/scripts/smoke_walk_math.mjs` check the whole fallback behaviour with
+ * `native/tests/Derivations/walk_math.md` check the whole fallback behaviour with
  * hand-written cases. The DOM side is two lines in the caller
  * (`localStorage.getItem/setItem`).
  *

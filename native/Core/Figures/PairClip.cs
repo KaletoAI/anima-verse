@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace AnimaNative.Figures;
 
-/// <summary><c>PairClipInput</c> of client3d/src/game/pairClip.ts: the server's clip clock and the local one.</summary>
+/// <summary><c>PairClipInput</c> of the browser scene's pairClip.ts: the server's clip clock and the local one.</summary>
 /// <param name="ClipS">the server's clip clock <c>clip_s</c> (CLIP seconds since the clip began) as of the last poll;
 /// null BETWEEN polls</param>
 /// <param name="Tempo">clip seconds per real second (<c>tempo</c>; <see cref="PairClip.ClipTempo"/> clamps it)</param>
@@ -21,10 +21,10 @@ public readonly record struct PairClipInput(double? ClipS, double Tempo, bool Fr
 public sealed record PairTrack(string Name, float[] Times, float[] Values);
 
 /// <summary>
-/// PAIR CLIPS (§ A8a) — the clip timing of client3d/src/game/pairClip.ts (<c>pairClipPhase</c>, <c>PAIR_SNAP_S</c>), the
+/// PAIR CLIPS (§ A8a) — the clip timing of the browser scene's pairClip.ts (<c>pairClipPhase</c>, <c>PAIR_SNAP_S</c>), the
 /// root path of a half (figures.ts <c>extractRootPath</c>, <c>isPairClipName</c>; the interpolation is
 /// <see cref="BridgeTravel.RootPathAt"/>), the anchor transform and the height rule of npcs.ts <c>tickInteraction</c>.
-/// Vectors shared/test-vectors/pair_clip_phase.json (hand derivations: client3d/scripts/smoke_pair_realtime.mjs),
+/// Vectors shared/test-vectors/pair_clip_phase.json (hand derivations: native/tests/Derivations/pair_realtime.md),
 /// pair_clip_geometry.json (smoke_clip_pair.mjs) and pair_height.json (smoke_pair_storey.mjs).
 /// </summary>
 public static class PairClip
@@ -143,7 +143,7 @@ public sealed record PairInteraction(string Id, string Kind, string Role, IReadO
 public sealed record SoloSceneClock(string SceneId, double ClipS, double Tempo);
 
 /// <summary>
-/// The held clip's local clock of a SOLO furniture scene (client3d/src/game/pairClip.ts <c>HeldClock</c>,
+/// The held clip's local clock of a SOLO furniture scene (the browser scene's pairClip.ts <c>HeldClock</c>,
 /// <c>adoptHeldClock</c> / <c>stepHeldClock</c>): CLIP seconds since the clip began, the tempo, the scene and the poll
 /// stamp it was last reconciled with — the pair rule (<see cref="PairClip.Phase"/>) without a wrap; the figure wraps
 /// against the clip it plays.
@@ -267,9 +267,9 @@ public sealed class PairPlay
 
 /// <summary>
 /// The figure's BIND anchoring — packages/scene-render/src/figure.ts <c>anchorFigureBind</c> and the same centring in
-/// client3d's <c>Figure</c> constructor: the body measured in its bind pose, centred on its bounding box in XZ, its lowest
+/// the browser 3D scene's <c>Figure</c> constructor: the body measured in its bind pose, centred on its bounding box in XZ, its lowest
 /// point on y = 0. Vectors shared/test-vectors/figure_normalisation.json (hand derivations:
-/// client3d/scripts/smoke_figure_normalisation.mjs).
+/// native/tests/Derivations/figure_normalisation.md).
 /// </summary>
 public static class FigureBind
 {

@@ -1,6 +1,6 @@
 # animal_vectors
 
-- Origin: `client3d/scripts/smoke_animal_vectors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_animal_vectors.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/AnimalVectorTests.cs`
 - Vectors: `shared/test-vectors/animal_gait.json`, `shared/test-vectors/animal_legs.json`
 

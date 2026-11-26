@@ -1,6 +1,6 @@
 # view_shift
 
-- Origin: `client3d/scripts/smoke_view_shift.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_view_shift.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ViewShiftVectorTests.cs`
 - Vectors: `shared/test-vectors/view_shift.json`
 
@@ -8,10 +8,10 @@
 
 ```text
 /**
- * Smoke run for `client3d/src/scene/viewShift.ts` — where the 3D client's
+ * Smoke run for the browser scene's `viewShift.ts` — where the 3D client's
  * camera aims when the HUD's chat window covers part of the picture.
  *
- * Usage:  node client3d/scripts/smoke_view_shift.mjs
+ * Usage:  node the browser scene's deleted smoke_view_shift.mjs
  *         (transforms the module with esbuild — a Vite dependency, already
  *          installed; no bundler, no GL context, no server)
  *

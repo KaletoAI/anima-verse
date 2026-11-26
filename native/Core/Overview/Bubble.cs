@@ -3,11 +3,11 @@ using System;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of client3d/src/game/bubble.ts — the two rules behind a speech bubble: how much of a
+/// Port of the browser scene's bubble.ts — the two rules behind a speech bubble: how much of a
 /// line is shown and how long it hangs over the head. Whitespace and lengths follow JS
 /// (<see cref="JsSemantics"/>: the ECMA-262 whitespace set, UTF-16 code units). Vectors:
 /// shared/test-vectors/overview_hud.json [B1..B15] (hand derivations in
-/// client3d/scripts/smoke_walk_math.mjs).
+/// native/tests/Derivations/walk_math.md).
 /// </summary>
 public static class Bubble
 {

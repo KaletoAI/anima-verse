@@ -24,7 +24,7 @@ export default defineConfig(({ command }) => ({
     host: '0.0.0.0',
     port: 5184,
     proxy: {
-      // ONE catch-all context, the same rule as client3d: `dev-proxy-rule.js`
+      // ONE catch-all context, the same rule as the browser 3D scene: `dev-proxy-rule.js`
       // names the few paths VITE owns (its namespaces, the source tree, the
       // HTML entry, `public/`), and everything else is the backend's — a
       // missing prefix would not 404 but answer the API call with Vite's HTML.

@@ -40,7 +40,7 @@ import assert from 'node:assert/strict'
 if (!process.env.HAIR_TODAY_BUNDLED) {
   const here = fileURLToPath(import.meta.url)
   const repo = path.resolve(path.dirname(here), '..')
-  const bin = ['client3d/node_modules/esbuild/bin/esbuild', 'node_modules/esbuild/bin/esbuild']
+  const bin = ['node_modules/esbuild/bin/esbuild']
     .map(rel => path.join(repo, rel)).find(existsSync)
   assert.ok(bin, 'esbuild unavailable (npm install) — nothing was checked')
   const built = spawnSync(bin, [here, '--bundle', '--platform=node', '--format=esm', '--outfile=/tmp/smoke_hair_today_skin.mjs',

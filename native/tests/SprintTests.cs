@@ -8,7 +8,7 @@ using Xunit;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// Shift runs the avatar — the C# half of client3d/scripts/smoke_locomotion_clip.mjs [4], the same hand-derived numbers.
+/// Shift runs the avatar — the C# half of the browser scene's deleted smoke_locomotion_clip.mjs [4], the same hand-derived numbers.
 /// <c>SprintHeld</c>: true only for 'shift' held AND a key direction. <c>NpcWalk.Step(..., sprint)</c> on a goal 1 m away
 /// (dist 1 &lt; RunDistance 6) at dt 0.1, pace 1: walk 3.4 × 0.1 = 0.34 m, run 3.4 × 0.1 × 1.8 = 0.612 m; with the
 /// 2.5× avatar factor 3.4 × 0.1 × 2.5 × 1.8 = 1.53 m, capped at the 1 m goal → 1. Swim and walk-only ground and

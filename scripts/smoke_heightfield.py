@@ -133,7 +133,7 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     warning cannot name a step the world does not have.
 [8] THE SHARED SAMPLER's table, hand-derived on a 3 × 3 field with a single
     5 m peak in the middle — the SAME field and the SAME expectations as
-    ``client3d/scripts/smoke_world_height.mjs``. Twin discipline: one bilinear
+    the browser scene's deleted ``smoke_world_height.mjs``. Twin discipline: one bilinear
     rule, two implementations, one table.
       field: origin (−4,−4), step 4, heights [[0,0,0],[0,5,0],[0,0,0]]
       ( 0, 0) the peak                                  -> 5

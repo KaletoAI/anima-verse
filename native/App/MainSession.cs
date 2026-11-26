@@ -262,7 +262,7 @@ public partial class Main : Node3D
 
     /// <summary>
     /// The menu's "Back to title" (and the top bar's "Log out"): end the shared session,
-    /// back to the login screen. Like the browser (client3d main.ts <c>backToTitle</c>:
+    /// back to the login screen. Like the browser (the browser 3D scene's main.ts <c>backToTitle</c>:
     /// logout, then <c>location.reload()</c>) the world is not taken apart by hand: the
     /// scene reload frees everything Main built (world, figures, scatter, the 1 Hz timer)
     /// and the cancelled token ends the worldmap poll; the HUD overlay, under the root,

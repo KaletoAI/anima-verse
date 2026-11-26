@@ -6,7 +6,7 @@ natively. It holds the hand derivation of every number in those vectors; the C# 
 execute the cases. The rule and the guard are in `shared/test-vectors/README.md` (Rules) and
 `scripts/smoke_vector_sources.py`.
 
-One document per former source smoke (`<basis>.md` for `client3d/scripts/smoke_<basis>.mjs`),
+One document per former source smoke (`<basis>.md` for the browser scene's deleted `smoke_<basis>.mjs`),
 even when that smoke fed several vector files.
 
 ## Format

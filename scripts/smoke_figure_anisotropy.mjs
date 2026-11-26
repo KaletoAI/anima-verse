@@ -27,8 +27,7 @@
  *   [3] maxAnisotropy 8 (a weaker GPU) -> 8; maxAnisotropy 64 -> FIGURE_ANISOTROPY = 16 (capped); 0 / NaN -> 1.
  *   [4] a texture already at 16 is never lowered by a call with 4 (returns 0, stays 16, version unchanged).
  *   [5] a texture without an image gets anisotropy 16 but no needsUpdate (version stays 0: three would warn).
- *   [6] Source: Model3DViewer, meshSnapshot and client3d figures.ts call prepareFigureTextures; client3d engine.ts
- *       hands the renderer's getMaxAnisotropy() over (setMaxAnisotropy).
+ *   [6] Source: Model3DViewer and meshSnapshot call prepareFigureTextures.
  * Before this change (commit 309b0d6fb) `prepareFigureTextures` did not exist — [1] fails there by construction.
  */
 import { spawnSync } from 'child_process'
@@ -43,7 +42,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_figure_anisotropy_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) { console.error('esbuild not found (npm install) — nothing was checked'); process.exit(1) }
     const built = spawnSync(bin, [__filename, '--bundle', '--platform=node', '--format=esm', '--log-level=warning',
@@ -118,12 +117,9 @@ async function main() {
 
   const root6 = process.cwd()   // the bundle runs from /tmp; the run's cwd is the repo root
   const src = (rel) => fs.readFileSync(path.join(root6, rel), 'utf8')
-  for (const rel of ['frontend/src/tabs/characters/Model3DViewer.tsx', 'frontend/src/tabs/characters/meshSnapshot.ts',
-    'client3d/src/scene/figures.ts']) {
+  for (const rel of ['frontend/src/tabs/characters/Model3DViewer.tsx', 'frontend/src/tabs/characters/meshSnapshot.ts']) {
     check(`[6] ${rel} calls prepareFigureTextures`, /prepareFigureTextures\(/.test(src(rel)))
   }
-  check('[6] client3d engine hands getMaxAnisotropy() over',
-    /setMaxAnisotropy\(this\.renderer\.capabilities\.getMaxAnisotropy\(\)\)/.test(src('client3d/src/scene/engine.ts')))
 
   if (failures.length) {
     console.error(`FAILED: ${failures.length}`)

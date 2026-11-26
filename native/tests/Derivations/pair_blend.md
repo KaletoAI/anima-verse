@@ -1,6 +1,6 @@
 # pair_blend
 
-- Origin: `client3d/scripts/smoke_pair_blend.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_pair_blend.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PairBlendTests.cs`
 - Vectors: `shared/test-vectors/pair_blend.json`
 

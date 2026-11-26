@@ -97,7 +97,7 @@
  * no screenshots (§ B5a).
  *
  * Usage:  node packages/scene-render/scripts/smoke_extra_box.mjs
- *         (self-bundles through esbuild like the client3d smokes)
+ *         (self-bundles through esbuild like the other scene-render smokes)
  *
  * THE SAME HAND-DERIVED NUMBERS AS THE SERVER SMOKE (scripts/
  * smoke_scene_recipe.py [5s]), so a drift between the two sides fails here:

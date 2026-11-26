@@ -65,8 +65,8 @@ world slides BACKWARDS in these numbers by exactly the travel.
       [6] stays as derived: both points there are FULL, so the mean of the
       full points is the old mean (path z = 3f).
 [F] SHARED FIXTURE — ``scripts/fixtures/root_motion_cases.json`` is the
-      parity contract with the TypeScript twin (``client3d/src/scene/footLock.ts``,
-      checked by ``client3d/scripts/smoke_foot_lock_math.mjs``). It holds the
+      parity contract with the TypeScript twin (the browser scene's ``footLock.ts``,
+      checked by ``native/tests/Derivations/foot_lock_math.md``). It holds the
       cases [2], [4], [5], [6], [10] and [11] above — the same inputs, the
       paths and drifts derived here by hand (each case names its origin in
       ``"from"``) — plus the constants. This section checks the constants
@@ -273,7 +273,7 @@ near_path("path z = 3f", path, [(0.0, 3.0 * f) for f in range(N)])
 near("travel z = 30", path[-1][1], 30.0)
 
 # ------------------------------------------------------ [F] shared fixture
-print("[F] shared fixture (parity contract with client3d/src/scene/footLock.ts)")
+print("[F] shared fixture (parity contract with the browser scene's footLock.ts)")
 import json  # noqa: E402
 
 fixture = json.loads((ROOT / "scripts/fixtures/root_motion_cases.json").read_text("utf-8"))

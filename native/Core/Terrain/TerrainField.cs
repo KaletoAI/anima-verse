@@ -37,7 +37,7 @@ public sealed record TerrainUniforms(
 public sealed record FlowField(double OriginX, double OriginZ, double Step, int Cols, int Rows, float[] Data);
 
 /// <summary>
-/// The CPU half of the browser's CDLOD terrain (<c>client3d/src/scene/terrainLod.ts</c> <c>createTerrainLod</c>:
+/// The CPU half of the browser's CDLOD terrain (the browser scene's <c>terrainLod.ts</c> <c>createTerrainLod</c>:
 /// <c>setField</c>, <c>setExtent</c>, <c>update</c>) on top of the vector-checked maths of <see cref="TerrainLod"/>:
 ///
 ///   • the FAR pyramid from the overview grid (<c>buildFar</c>: round-to-nearest lattice read, non-finite = 0), the

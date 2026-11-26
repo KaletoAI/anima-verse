@@ -15,7 +15,7 @@ namespace AnimaNative.Tests;
 /// <summary>
 /// The terrain streaming of ground.ts (<see cref="TerrainStream"/>) on simulated camera paths, against a fake server
 /// that answers batches. Every expectation is derived BY HAND in the test's comment from the rules of
-/// client3d/src/scene/ground.ts + heightTiles.ts (want set = indexed tiles whose 256 m square lies within 560 m of the
+/// the browser scene's ground.ts + heightTiles.ts (want set = indexed tiles whose 256 m square lies within 560 m of the
 /// anchor by box distance, nearest first, ties by ordinal key; 64 height keys / 16 mask keys per request; LRU 96 that
 /// never drops a wanted tile; a moved signature drops a batch, re-takes an index or reloads the relief).
 ///

@@ -1,6 +1,6 @@
 # clip_order
 
-- Origin: `client3d/scripts/smoke_clip_order.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_clip_order.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ClipLibraryVectorTests.cs`
 - Vectors: `shared/test-vectors/clip_commit.json`
 
@@ -14,7 +14,7 @@
  * second handshake__a file in the same (neutral) set loses its slot AND its
  * root (h1 stays, not h2); the b-half stays independent. Missing results
  * leave gaps.
- * [2] Sets (2026-11-20 fix, client3d/scripts/smoke_pair_root_sets.mjs [A]):
+ * [2] Sets (2026-11-20 fix, the browser scene's deleted smoke_pair_root_sets.mjs [A]):
  * hug__a in set "female" (f1), in "male" (m1), in "male" again (m2, loses:
  * first wins), hug__b in "" (n1), walk in "" (w1). Roots: hug__a/female =
  * root:f1, hug__a/male = root:m1. `pairRootFor` along a set chain (the

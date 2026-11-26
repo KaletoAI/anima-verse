@@ -111,7 +111,7 @@ seat; its sidecar says how far: ``travel_m`` in the CLIP frame (+Z forward,
 +X the figure's LEFT), metres of the reference rig, ``ref_height_m`` tall.
 The server turns it by the seat's compass facing f (0 = south +z, 90 = east
 +x) with the rotation of the client's ``toWorld``
-(``client3d/src/scene/bridgeTravel.ts``):
+(the browser scene's ``bridgeTravel.ts``):
 
     x' = x·cos f + z·sin f        z' = −x·sin f + z·cos f
 

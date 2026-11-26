@@ -13,12 +13,15 @@ implementations: when both pass the same file, they compute the same numbers.
   (b) a derivation document `native/tests/Derivations/<name>.md` whose numbers the C# vector tests
   execute — for logic that after E3 exists only natively (format: `native/tests/Derivations/README.md`).
   Case labels start with the `[n]` of that derivation.
-- **E1 (2026-11-25) moved every derivation out of `client3d/`**, which E3 deletes with the browser
+- **E3 deleted the browser 3D scene** together with its runners and dispatchers (the JS runners
+  named below as "the browser scene's deleted …" no longer exist; the C# vector tests under
+  `native/tests/` execute every vector file, plus the smokes under `scripts/` that name one).
+- **E1 (2026-11-25) moved every derivation out of the browser 3D scene**, which E3 deletes with the browser
   scene: smokes that test only package code moved to `scripts/`, a vector a Python smoke already
   replays got the derivation in that smoke's docstring, and the rest moved word for word to
   `native/tests/Derivations/`; a browser smoke that stays until E3 keeps a pointer docstring
   (`Derivation moved to <new source>`). `scripts/smoke_vector_sources.py` guards this: `source` is an
-  existing repo file outside `client3d/` that names the vector file literally.
+  existing repo file outside the browser 3D scene that names the vector file literally.
 - **A vector is never edited to match an implementation.** When an implementation disagrees with
   a vector, the implementation is fixed. A vector changes only when the spec (and with it the
   hand derivation in the docstring) changes.
@@ -138,41 +141,41 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 
 | File | Source smoke | Functions |
 |---|---|---|
-| `bench_math.json` | `native/tests/Derivations/bench_math.md` | `percentile`, `summarize` (`client3d/src/bench/benchStats.ts`) |
+| `bench_math.json` | `native/tests/Derivations/bench_math.md` | `percentile`, `summarize` (the browser scene's `benchStats.ts`) |
 | `ground_polygons.json` | `scripts/smoke_ground_math.mjs` | `signedArea`, `polygonArea`, `cleanRing` (`packages/scene-render/src/groundAreas.ts`) |
-| `scatter.json` | `native/tests/Derivations/scatter_math.md` | the C#-ported functions of `packages/scene-render/src/scatter.ts` and `client3d/src/scene/scatterLod.ts` (TS↔C# table in the derivation document). A sampler's `rng` option is a list of numbers, fed in order; drawing past its end throws |
-| `camera.json` | `native/tests/Derivations/camera_math.md` | the overview camera: `fitDistance`, `worldCentreXZ`, `wheelZoom`, `zoomTowardCursor`, `damp`, `flyAdvance`, `flyEase`, `orbitStep`, `clampPitchDeg`, `cameraPose` (`client3d/src/scene/cameraMath.ts`) and `basePitchDeg` (`client3d/src/scene/cameraFraming.ts`). Points are `[x, y, z]` / `[x, z]` lists, a bounds object `{min_x, max_x, min_z, max_z}`; an optional last argument may be omitted |
+| `scatter.json` | `native/tests/Derivations/scatter_math.md` | the C#-ported functions of `packages/scene-render/src/scatter.ts` and the browser scene's `scatterLod.ts` (TS↔C# table in the derivation document). A sampler's `rng` option is a list of numbers, fed in order; drawing past its end throws |
+| `camera.json` | `native/tests/Derivations/camera_math.md` | the overview camera: `fitDistance`, `worldCentreXZ`, `wheelZoom`, `zoomTowardCursor`, `damp`, `flyAdvance`, `flyEase`, `orbitStep`, `clampPitchDeg`, `cameraPose` (the browser scene's `cameraMath.ts`) and `basePitchDeg` (the browser scene's `cameraFraming.ts`). Points are `[x, y, z]` / `[x, z]` lists, a bounds object `{min_x, max_x, min_z, max_z}`; an optional last argument may be omitted |
 | `occlusion.json` | `native/tests/Derivations/occlusion.md` | Task 53 / E7-T8: `occlusionUniforms`, clamped segment/rim hide and Bayer threshold/discard; 47 hand-derived cases |
-| `view_shift.json` | `native/tests/Derivations/view_shift.md` | `viewShiftFor` (`client3d/src/scene/viewShift.ts`); the panel is `{x, y, w, h}` or `null` |
-| `overview_hud.json` | `native/tests/Derivations/walk_math.md` | `bubbleText`, `bubbleMs` (`client3d/src/game/bubble.ts`), `bootProgress` (`hud/src/game/boot.ts`; the finished stages as a LIST), `infoPanelData` (`hud/src/game/infoPanel.ts`; `roomOf` as an object name → room, `null` for an absent view / avatar), `checkScatterPrefs`, `scatterLodCfgOf` (`hud/src/game/prefs.ts`) |
+| `view_shift.json` | `native/tests/Derivations/view_shift.md` | `viewShiftFor` (the browser scene's `viewShift.ts`); the panel is `{x, y, w, h}` or `null` |
+| `overview_hud.json` | `native/tests/Derivations/walk_math.md` | `bubbleText`, `bubbleMs` (the browser scene's `bubble.ts`), `bootProgress` (`hud/src/game/boot.ts`; the finished stages as a LIST), `infoPanelData` (`hud/src/game/infoPanel.ts`; `roomOf` as an object name → room, `null` for an absent view / avatar), `checkScatterPrefs`, `scatterLodCfgOf` (`hud/src/game/prefs.ts`) |
 | `poll_schedule.json` | `scripts/smoke_sync_client.mjs` | `pollIntervalMs`, `nextErrorFactor` (`packages/player-ui/src/pollCore.ts`) |
-| `event_pins.json` | `native/tests/Derivations/event_pins.md` | `pinGlyph`, `pinY` (`client3d/src/game/eventPins.ts`); events are `{category}` objects, `null` = no list |
-| `overview_labels.json` | `native/tests/Derivations/overview_labels.md` | `tagVisible`, `tagTravelling`, `tagName`, `tagAnchorY`, `locationLabelLift` (`client3d/src/scene/nameTags.ts`; `travel` is the `{starts_in_s, eta_hhmm}` block or `null`, `tagAnchorY(null)` = a portrait), `closeTargetDist`, `openViewShouldClose` (`client3d/src/game/openView.ts`) |
+| `event_pins.json` | `native/tests/Derivations/event_pins.md` | `pinGlyph`, `pinY` (the browser scene's `eventPins.ts`); events are `{category}` objects, `null` = no list |
+| `overview_labels.json` | `native/tests/Derivations/overview_labels.md` | `tagVisible`, `tagTravelling`, `tagName`, `tagAnchorY`, `locationLabelLift` (the browser scene's `nameTags.ts`; `travel` is the `{starts_in_s, eta_hhmm}` block or `null`, `tagAnchorY(null)` = a portrait), `closeTargetDist`, `openViewShouldClose` (the browser scene's `openView.ts`) |
 
 | `scene_place.json` | `scripts/smoke_place_rotation.mjs` | Three-free `placeTransform(spec, meshBoxes)`; each mesh box has local `min`/`max` triples and an optional column-major glTF `matrix`. Returns `fixPos`, `fitScale`, scalar `outerScale`, `outerPos`. |
 | `scene_primitives.json` | `scripts/smoke_scene_primitives.mjs` | `wallTransform`, `boxFaceUVs`, `extraCorners` (intrinsic XYZ, unlike model fix YXZ), `plateShape`, `placeholderBox`; aggregate measurement arrays preserve all wall/extra/plate geometry assertions. |
 | `scene_verify.json` | `scripts/smoke_scene_verify.mjs` | `inFrame`, `primitiveRows`, `placementRows`, `wallTargets`. Boxes are `{min:{x,y,z},max:{x,y,z}}`; rows return `{checked,rows}`; wall targets serialize as `{field,target}`. |
 | `scene_view.json` | `native/tests/Derivations/scene_view.md` | Pure `sceneView.ts` decisions and transforms, `storeyPieceOpacity`, `farShellSource`, `ringFor`, `placeDistance`, `detectStyle`; tile frames are `{center:{x,y,z},yaw}` with radians. |
-| `scene_models.json` | `native/tests/Derivations/scene_models.md` | Model variants, hinge/terrain/marker/slot/glyph/surface arithmetic, material looks, cut planes and clip/cutout point predicates. JSON wrappers and dispatch conventions are documented in the runner `client3d/scripts/smoke_scene_models.mjs`. |
-| `light_pool.json` | `native/tests/Derivations/light_pool.md` | `pickLights` (`visibleRooms` as a LIST), `flickerFactor`, `nightLightGain`, `haloVisible`, `fireColourMix`, `stepLightSlot`, `lightPositionInFrame` (column-major frame), `lightPoolSize` (`client3d/src/scene/lightPool.ts`) |
-| `ambience.json` | `native/tests/Derivations/ambience.md` | `ambienceTarget`, `stepAmbience`, `stepAmbienceN` (n steps), `nightFactorAt` (`client3d/src/scene/ambience.ts`), `roomRectOf`, `roomAtRects` (rects as `[id, rect]` pairs), `corridorAtOutline` (`client3d/src/game/roomAt.ts`), `worldToTile` (`{center:{x,z}, yaw}`, tiles.ts → scene-render `worldToLocalXZ`) |
+| `scene_models.json` | `native/tests/Derivations/scene_models.md` | Model variants, hinge/terrain/marker/slot/glyph/surface arithmetic, material looks, cut planes and clip/cutout point predicates. JSON wrappers and dispatch conventions are documented in the runner `native/tests/Derivations/scene_models.md`. |
+| `light_pool.json` | `native/tests/Derivations/light_pool.md` | `pickLights` (`visibleRooms` as a LIST), `flickerFactor`, `nightLightGain`, `haloVisible`, `fireColourMix`, `stepLightSlot`, `lightPositionInFrame` (column-major frame), `lightPoolSize` (the browser scene's `lightPool.ts`) |
+| `ambience.json` | `native/tests/Derivations/ambience.md` | `ambienceTarget`, `stepAmbience`, `stepAmbienceN` (n steps), `nightFactorAt` (the browser scene's `ambience.ts`), `roomRectOf`, `roomAtRects` (rects as `[id, rect]` pairs), `corridorAtOutline` (the browser scene's `roomAt.ts`), `worldToTile` (`{center:{x,z}, yaw}`, tiles.ts → scene-render `worldToLocalXZ`) |
 | `mirror_plane.json` | `scripts/smoke_mirror_plane.mjs` | `planeOfFaces`, `planeOfSquareMix`, `mirrorBudgetRun`, `mirrorRefreshes` (`null` = Infinity), `mirrorPreset` (`packages/scene-render/src/mirrorSurface.ts`); wrappers in the smoke's header |
 | `slot_materials.json` | `scripts/smoke_slot_materials.mjs` | `slotFill`, `glassPreset`, `materialPresets` (`packages/scene-render/src/slotMaterials.ts`) |
-| `door_swing.json` | `native/tests/Derivations/door_swing.md` | `doorConstants`, `doorTargetAngle`, `doorDistance`, `easeAngle`, `doorSwingFrames` (`client3d/src/game/doorSwing.ts`); a `null` distance is Infinity |
-| `figure_clips.json` | `native/tests/Derivations/figure_clips.md` | `resolveMovementPoses`, `moveClip`, `idleClip`, `standingClipFor` (`null` animation = none), `movementOf`, `canRun`, `movementPoseOf`, `resolveClipTransitions`, `clipTransition`, `bridgePace` (`client3d/src/game/walk.ts`), `clipKindChain`, `resolveClipKind`, `proceduralGait` (`client3d/src/scene/clipCoverage.ts`). The server tables are explicit arguments: a pose table is the resolved `{pose: {kind, publicKind}}` form, a transition table the resolved rule list |
-| `prop_water.json` | `scripts/smoke_prop_water.py` | `waterRegionAt`, `pointInRegion` (`client3d/src/scene/propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (`client3d/src/game/walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
+| `door_swing.json` | `native/tests/Derivations/door_swing.md` | `doorConstants`, `doorTargetAngle`, `doorDistance`, `easeAngle`, `doorSwingFrames` (the browser scene's `doorSwing.ts`); a `null` distance is Infinity |
+| `figure_clips.json` | `native/tests/Derivations/figure_clips.md` | `resolveMovementPoses`, `moveClip`, `idleClip`, `standingClipFor` (`null` animation = none), `movementOf`, `canRun`, `movementPoseOf`, `resolveClipTransitions`, `clipTransition`, `bridgePace` (the browser scene's `walk.ts`), `clipKindChain`, `resolveClipKind`, `proceduralGait` (the browser scene's `clipCoverage.ts`). The server tables are explicit arguments: a pose table is the resolved `{pose: {kind, publicKind}}` form, a transition table the resolved rule list |
+| `prop_water.json` | `scripts/smoke_prop_water.py` | `waterRegionAt`, `pointInRegion` (the browser scene's `propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (the browser scene's `walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
 | `graphics_prefs.json` | `scripts/smoke_graphics_prefs.mjs` | `loadGraphicsPrefs` (stored string or `null`), `checkGraphicsPrefs`, `saveGraphicsPrefs` (exact string), `msaaSamplesOf`, `browserAntialias`, `pickBrowserAntiAliasing` (`hud/src/game/prefs.ts`); `graphicsPrefsConstants()` is a smoke adapter → `{key, levels, defaults}` |
 | `audio.json` | `native/tests/Derivations/audio_math.md` | Task 58 / E8-T1: 145 cases for audio prefs, soundtrack decisions, eight-segment equal-power gains, playlist scheduling, stop/volume ramps, seeded shuffle and the browser's waiting-speech queue. Adapter signatures below. |
 
 ## E3 terrain, water and atmosphere
 
-Run `timeout 300 node client3d/scripts/smoke_e3_vectors.mjs` to execute **every**
+Run `timeout 300 node the browser scene's deleted smoke_e3_vectors.mjs` to execute **every**
 case in the seven E3 files. The original smokes also read their migrated cases;
 their shader, integration, invariant and mutation checks remain in place.
 Companion smoke headers were collected into the canonical smoke's opening docstring, which
 moved word for word to the derivation document named as `source` in E1 (the companions keep
 theirs at their original sites). `[20]` and `[21]` labels refer to the additional hand
-derivations in that document. `client3d/scripts/smoke_e3_vectors.mjs` stays the runner until E3.
+derivations in that document. the browser scene's deleted `smoke_e3_vectors.mjs` stays the runner until E3.
 
 | File | Canonical source | Areas |
 |---|---|---|
@@ -185,7 +188,7 @@ derivations in that document. `client3d/scripts/smoke_e3_vectors.mjs` stays the 
 | `fog_veil.json` | `native/tests/Derivations/fog_veil.md` | Cell/key/grid, texture addressing, height/veil alpha, constants |
 
 The native consumer should mirror the adapters in
-`client3d/scripts/e3VectorDispatch.mjs`. These are ordinary JSON argument values,
+the browser scene's deleted `e3VectorDispatch.mjs`. These are ordinary JSON argument values,
 not extensions to the vector loader or comparator:
 
 - `{"$map": [[key, value], ...]}` is a map; `{"$set": [value, ...]}` is a set.
@@ -240,8 +243,8 @@ remain local checks; they are not dropped or silently skipped.
 | `hips_tracks.json` | `native/tests/Derivations/rig_stand_ref.md` | `standingHipsRef`, `clipHipsDrop`, structural `hipsTrackMedian`, `mapHipsTrack`. Tracks are `{name, values}`; matrices are column-major. Mapper outputs typed arrays as ordinary arrays; `rootPath` is null when disabled. The non-finite input probe and real-rig checks stay local. |
 | `retarget.json` | `scripts/smoke_clip_retarget.mjs` | Hand cases [1]–[10] through the pose-data form of `restCorrections`, including heel/toe stance data, quaternion values, driven heads, deformation and counter-probes. The complete adapter contract is in the source smoke and `scripts/retargetVectorDispatch.mjs`; quaternions are `[x,y,z,w]`. Original scene-object/skinning/identity probes also remain. |
 
-Run the four runners with `timeout 300 node <runner>`: `client3d/scripts/smoke_clip_order.mjs`,
-`client3d/scripts/smoke_clip_coverage.mjs`, `client3d/scripts/smoke_rig_stand_ref.mjs` and
+Run the four runners with `timeout 300 node <runner>`: `native/tests/Derivations/clip_order.md`,
+`native/tests/Derivations/clip_coverage.md`, `native/tests/Derivations/rig_stand_ref.md` and
 `scripts/smoke_clip_retarget.mjs`.
 
 ## E5 room placement (Task 29, TypeScript side)
@@ -251,7 +254,7 @@ dispatch (never a non-finite JSON number); other conventions are named per file.
 
 | File | Source | Functions |
 |---|---|---|
-| `npc_placement.json` | `native/tests/Derivations/npc_placement.md` | `huddleOffset`, `placeAtLocationValue` — the room ladder of `computeNpcPlacements` (`client3d/src/game/npcPlacement.ts`): rows, `roomOf` (object), the tile's view state + inventory as JSON (`yaw` in radians, maps as objects, `corridors` as room ids) and a context whose standing heights / huddle ground are `[a, b, c]` planes (tile-local resp. world). The seat point is `slotFor` (`scene_models.json`). Returns one `{name, branch, pos, face, lean, inRoom, interiorShown, hidden, transition}` per row, in `localeCompare` order; `null` = no facing / lean |
+| `npc_placement.json` | `native/tests/Derivations/npc_placement.md` | `huddleOffset`, `placeAtLocationValue` — the room ladder of `computeNpcPlacements` (the browser scene's `npcPlacement.ts`): rows, `roomOf` (object), the tile's view state + inventory as JSON (`yaw` in radians, maps as objects, `corridors` as room ids) and a context whose standing heights / huddle ground are `[a, b, c]` planes (tile-local resp. world). The seat point is `slotFor` (`scene_models.json`). Returns one `{name, branch, pos, face, lean, inRoom, interiorShown, hidden, transition}` per row, in `localeCompare` order; `null` = no facing / lean |
 | `figure_ground.json` | `native/tests/Derivations/walk_math.md` | `placementOf`, `figureTransition` (`game/placement.ts`; an absent point = an omitted argument), `gateStandY` (`game/walk.ts`), `standY`, `tileWalkLadder` (`game/ground.ts`, the rung order of `tiles.tileWalkY`) |
 | `room_spots.json` | `native/tests/Derivations/room_spots.md` | `polygonCentroid`, `roomSpotGridHead` (`roomSpotGrid` → `{length, first, firstDist}`), `roomSpotConstants`, `furnitureUse`, `roomFloorLadder` / `roomStandLadder` (`game/ground.ts`; `null` = undefined for `declared` / `centreY`), `roomSpotsOfValue` (`game/roomSpots.ts`, the core of `tiles.deriveRoomSpots`; samplers as `[a, b, c]` planes over tile-local metres) |
 | `place_poll.json` | `native/tests/Derivations/places_client.md` | `pollIsStale` (`game/placement.ts`); `null` = Infinity | They execute
@@ -260,8 +263,8 @@ These files do not depend on recorded model output or `native/fixtures/rest_refe
 
 ## E5 NPC walking (Task 30, TypeScript side)
 
-Run `timeout 300 node client3d/scripts/smoke_npc_walk.mjs` and
-`timeout 300 node client3d/scripts/smoke_walk_math.mjs`.
+Run `dotnet test native/tests` (derivation `native/tests/Derivations/npc_walk.md`) and
+`dotnet test native/tests` (derivation `native/tests/Derivations/walk_math.md`).
 
 | File | Source | Functions |
 |---|---|---|
@@ -278,7 +281,7 @@ Y easing until E7, as allowed by the Task 30 brief.
 
 ## E5 bridge root motion (Task 31, TypeScript side)
 
-Run `timeout 300 node client3d/scripts/smoke_bridge_vectors.mjs` for all Task 31
+Run `timeout 300 node the browser scene's deleted smoke_bridge_vectors.mjs` for all Task 31
 vectors without real models or live configuration. Each source smoke
 also runs its own JSON; since E1 the hand derivations live in the derivation document
 named in the table (`native/tests/Derivations/`), the smoke keeps a pointer docstring.
@@ -295,7 +298,7 @@ The original real-rig, consumer, mutation and bake-invariance checks stay local.
 | `foot_lock_measure.json` | `native/tests/Derivations/foot_lock_measure.md` | 58 | `relockValue`, `groundValue`, `hasGroundLiftTolerance` |
 | `stairs.json` | `native/tests/Derivations/walk_math.md` | 126 | `stairChain`, `stairsAt`, `stairY`, `stairLegTo`, `stairChainValue`, `stairLegToValue`, `stairLegsValue`, `rideSequenceValue`, `rideWalkValue`, `nearestRoomAt`, `rideArrivalClearsRun`, `constant` |
 
-The native consumer should mirror `client3d/scripts/bridgeVectorDispatch.mjs`.
+The native consumer should mirror the browser scene's deleted `bridgeVectorDispatch.mjs`.
 These are test adapters; no browser production functions were added or changed:
 
 - JSON positions and paths use the production field names. Root paths are
@@ -373,7 +376,7 @@ production implementation; they are not converted into passing vectors.
 ## Pair clips and figure normalisation (Task 32)
 
 `smoke_pair_vectors.mjs` runs all 110 cases without live tables, model files,
-network or a DOM. The smokes `client3d/scripts/smoke_<name>.mjs` also run their own vectors;
+network or a DOM. The browser scene's deleted smokes `smoke_<name>.mjs` also ran their own vectors;
 the table names each vector's `source`:
 
 | JSON | Source | Cases |
@@ -385,7 +388,7 @@ the table names each vector's `source`:
 | `figure_normalisation.json` | `native/tests/Derivations/figure_normalisation.md` | 4 |
 | `group_role_points.json` | `scripts/smoke_group_role_points.py` | 24 |
 
-Since E1 the derivations of the client3d smokes live word for word in
+Since E1 the derivations of the browser 3D scene's smokes live word for word in
 `native/tests/Derivations/` (the smokes keep a pointer docstring); the derivation of
 `group_role_points.json` moved to the Python smoke that replays it against the server. `pairVectorDispatch.mjs` only constructs Three objects,
 executes production functions and selects result fields. A placement fixture
@@ -464,11 +467,11 @@ Unknown function names fail through the shared runner; none are skipped.
 
 ## Secondary motion and extension bones (Task 33)
 
-`timeout 300 node client3d/scripts/smoke_secondary_vectors.mjs` runs 22 cases
+`timeout 300 node the browser scene's deleted smoke_secondary_vectors.mjs` runs 22 cases
 without live config, assets, DOM, network or historical git sources. All four
 JSON files have the single source `native/tests/Derivations/secondary_motion.md`,
 which holds the numbered hand derivations moved word for word from
-`client3d/scripts/smoke_secondary_motion.mjs` (E1). That smoke runs the
+`native/tests/Derivations/secondary_motion.md` (E1). That smoke runs the
 same vectors and retains the integration, historical parity, allocation,
 reset/tier, normal and admin checks.
 
@@ -504,12 +507,12 @@ an explicit parameter name ends in `_deg`):
   distance from the origin). This measures the same two ring pairs as the old
   inline chain cases; no solver formula is duplicated in the adapter.
 
-The adapter is `client3d/scripts/secondaryVectorDispatch.mjs`; unknown functions
+The adapter is the browser scene's deleted `secondaryVectorDispatch.mjs`; unknown functions
 fail through the common runner. No production TypeScript changed for Task 33.
 
 ## Animals and clip-less rigs (Task 34, TypeScript side)
 
-Run `timeout 300 node client3d/scripts/smoke_animal_vectors.mjs`.
+Run `dotnet test native/tests` (derivation `native/tests/Derivations/animal_vectors.md`).
 Both files have the single source `native/tests/Derivations/animal_vectors.md`,
 which derives every expected number (moved word for word from that smoke's docstring in E1). No assets or config are read.
 
@@ -537,7 +540,7 @@ without converting arguments or outputs. Native-facing signatures:
   `"walk"`, `"run"` or null for idle. Phases stay unwrapped; no delta clamping.
 
 Gait selection reuses `proceduralGait` in the unchanged `figure_clips.json`;
-run `timeout 300 node client3d/scripts/smoke_figure_clips.mjs` for those cases.
+run `dotnet test native/tests` (derivation `native/tests/Derivations/figure_clips.md`) for those cases.
 The new smoke additionally exercises the real Figure's bind restoration,
 parent-frame axis, walk/run phase update, bob/scale and no-leg idle fallback.
 Unknown dispatch functions fail through the common vector runner.
@@ -548,10 +551,10 @@ Unknown dispatch functions fail through the common vector runner.
 |---|---|---|
 | `scatter_rows.json` | `native/tests/Derivations/scatter_math.md` | Scatter smoke; stroke smoke also runs its station/decoration subset |
 | `impostors.json` | `native/tests/Derivations/impostors.md` | Impostor smoke; scatter smoke also runs `[W...]` seam cases |
-| `undergrowth.json` | `native/tests/Derivations/undergrowth.md` | Undergrowth smoke |
+| `undergrowth.json` | `native/tests/Derivations/undergrowth.md` | `native/Core/Scatter/UndergrowthMath.cs` + `ScatterLod.Ug*`, executed by `native/tests/UndergrowthVectorTests.cs` (E3) |
 | `world_props.json` | `native/tests/Derivations/world_props.md` | World-prop smoke |
 
-`client3d/scripts/e4VectorDispatch.mjs` supplies the row shape adapters:
+`scripts/e4VectorDispatch.mjs` (moved there in E3) supplies the row shape adapters:
 `areaAxis({line,ring,sides,at})`, sampler `axisFrom:{line,ring,sides}`, finite
 `rng`/`jitterRng` lists that throw on exhaustion, and `occupied:[{x,z,r,tag?}]`.
 `occupancy(ops,routed=false)` runs `{op:'add'|'blocks',x,z,r,tag?}` or
@@ -578,7 +581,7 @@ and `SeedEpochSuffix` functions. `scatter.json` also pins both JS sway ties.
 | `residency.json` | `native/tests/Derivations/residency_gen.md` | 18 |
 
 The travel source collects the reckon and relief/densify hand derivations (moved word for word
-from the opening docstring of `client3d/scripts/smoke_travel_math.mjs` in E1); that smoke runs every case. `smoke_travel_reckon.mjs` consumes the two dead-reckoning
+from the opening docstring of `native/tests/Derivations/travel_math.md` in E1); that smoke runs every case. `smoke_travel_reckon.mjs` consumes the two dead-reckoning
 functions; `smoke_relief_math.mjs` consumes `[15]` (full densified point arrays and its
 midpoint). Their frame/ground integration checks remain inline. Source-import and copy
 identity guards remain in the canonical smoke. `travelVectorDispatch.mjs` transpiles the
@@ -589,7 +592,7 @@ directly, using XZ point pairs, metres, real seconds, and monotonic milliseconds
 and error-window stamps. No live server tables or world content are read.
 
 Residency is asynchronous and uses `residencyScenario(kind, steps)` in
-`residencyVectorDispatch.mjs`. The runner `client3d/scripts/smoke_residency_gen.mjs` awaits each case and compares through
+`residencyVectorDispatch.mjs`. The runner `native/tests/Derivations/residency_gen.md` awaits each case and compares through
 `near` after `resolveArgs`; unknown function/operation names fail. `kind` is `"driver"`
 or `"library"`. Each step is an array of op tuples and yields one state snapshot. There is
 no implicit flush: `['flush']` drains microtasks; `['settled',id]` awaits lifecycle work.
@@ -623,18 +626,18 @@ C# sentinel loader and its test; it adds no travel/residency C# test classes.
 | `embody.json` | `native/tests/Derivations/embody_vectors.md` | 100 | Offer resolution, place picking, driver/answer/suppression, echo ring, readiness, Esc/key routing |
 | `camera.json` (extended) | `native/tests/Derivations/camera_math.md` | 83 (62 existing + 21 E7) | Adds first-person dwell sequence, rest eye/eye height, view/body yaw and zoom floor/ceiling |
 
-Run `node client3d/scripts/smoke_embody_vectors.mjs` for all **436** cases,
+Run `dotnet test native/tests` (derivation `native/tests/Derivations/embody_vectors.md`) for all **436** cases,
 without live config, assets, server or renderer. The source documents
 (`native/tests/Derivations/`, moved word for word from the smokes' docstrings in E1)
 contain the numbered hand derivations; the embodiment source
 collects the offer, place and position smoke headers. The original source
 smokes consume their migrated cases and retain their integration/invariant
 checks. Both first-person smokes consume their camera subset and retain the
-synthetic Figure rig checks. `node client3d/scripts/smoke_embody_fixture.mjs`
+synthetic Figure rig checks. `node the browser scene's deleted smoke_embody_fixture.mjs`
 checks the separate synthetic world and scripted answers in
 `native/fixtures/embody/`; its README derives the path frames and offer probes.
 
-`client3d/scripts/embodyVectorDispatch.mjs` bundles the existing pure production
+the browser scene's deleted `embodyVectorDispatch.mjs` bundles the existing pure production
 modules and provides test adapters only. It contains no expected-value tables.
 All distances are metres, times are seconds except `nowMs`/echo protocol stamps
 in milliseconds, and angles are radians except explicitly degree arguments.
@@ -694,7 +697,7 @@ inert stubs only: no prop-action API or native prop behavior was added.
 
 ## Prop actions (Task 56 / E7-T11; B1 own playback, Task 83)
 
-Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 75 cases in
+Run `dotnet test native/tests` (derivation `native/tests/Derivations/prop_action_motion.md`). The 75 cases in
 `prop_action_motion.json` use `anima-test-vectors/1`; their single canonical
 source is `native/tests/Derivations/prop_action_motion.md`, moved word for word from
 that smoke's opening docstring in E1. The entry-clock and support cases
@@ -705,7 +708,7 @@ and mesh assertions. Task 83 removes the obsolete own-approach catch-up,
 projection and server-lead cases, retaining observer timing. The 26 B1 cases
 exercise the same production motion sampler in both clients.
 
-`client3d/scripts/propActionVectorDispatch.mjs` calls the production exports
+the browser scene's deleted `propActionVectorDispatch.mjs` calls the production exports
 through shape adapters. Native-facing signatures:
 
 - `sampleMotion(plan, elapsedS)` → `{phase,x,y,z,yaw}` on the own client
@@ -749,17 +752,17 @@ the shared sampler cases without VSTest.
 
 The separate synthetic world and route answer table are documented in
 [`native/fixtures/propactions/README.md`](../../native/fixtures/propactions/README.md).
-`node client3d/scripts/smoke_prop_action_fixture.mjs` verifies their consistency
+`node the browser scene's deleted smoke_prop_action_fixture.mjs` verifies their consistency
 and hand arithmetic against production motion helpers; the embody inputs stay
 unchanged.
 
 ## Audio (Task 58 / E8-T1)
 
-Run `node client3d/scripts/smoke_audio_math.mjs`. All 145 cases have one canonical
+Run `dotnet test native/tests` (derivation `native/tests/Derivations/audio_math.md`). All 145 cases have one canonical
 source: the numbered hand derivations in `native/tests/Derivations/audio_math.md`, moved
 word for word from that smoke's opening docstring in E1. The existing walk, voiceover
 and bridge smokes keep their checks. C# consumers arrive in Task 59.
-P3-R31 keeps `client3d/src` and `packages/` unchanged: the smoke transforms the
+P3-R31 keeps the browser 3D scene's sources and `packages/` unchanged: the smoke transforms the
 original modules in a sandbox and exposes private engine functions there.
 It reads the production PRNG functions from `scatter.ts`, without importing
 the renderer. There are no expected-value tables in the dispatch adapters.

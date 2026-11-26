@@ -9,7 +9,7 @@ namespace AnimaNative.Scene;
 
 /// <summary>
 /// One location's § B5a result — the native twin of the browser's <c>VerifyReport</c>
-/// (client3d/src/scene/sceneRecipe.ts, dropped into <c>window.__sceneVerify[loc]</c>): how many numbers were
+/// (the browser scene's sceneRecipe.ts, dropped into <c>window.__sceneVerify[loc]</c>): how many numbers were
 /// checked, the rows beyond <see cref="SceneVerify.Eps"/>, the model specs that did not load, and the
 /// placed/total model count.
 /// </summary>
@@ -43,7 +43,7 @@ public sealed record VerifyReport(string Location, int Checked, IReadOnlyList<Ve
 
 /// <summary>
 /// The accumulating side of the browser's <c>SpecVerifier</c> + <c>Verifier</c> (packages/scene-render/src/verify.ts,
-/// client3d/src/scene/sceneRecipe.ts): it feeds every measurement through the vector-checked cores
+/// the browser scene's sceneRecipe.ts): it feeds every measurement through the vector-checked cores
 /// (<see cref="SceneVerify.PrimitiveRows"/>, <see cref="SceneVerify.PlacementRows"/>) and keeps the counts. The
 /// measuring itself (which box, which frame) is the renderer's; this class only diffs.
 /// </summary>

@@ -15,7 +15,7 @@ public sealed record BenchSettings(CameraPath Path, double Warmup, double Durati
                                    bool Vsync, bool Scatter = false, bool Water = false);
 
 /// <summary>
-/// The bench drive in Godot — the counterpart of <c>client3d/src/bench/bench.ts</c>
+/// The bench drive in Godot — the counterpart of the browser scene's <c>bench.ts</c>
 /// (same path file, same anchor rule, same phase logic, same summary):
 ///
 ///   • warm-up: <see cref="BenchSettings.Warmup"/> s of wall time with the

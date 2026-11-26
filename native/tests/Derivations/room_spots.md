@@ -1,6 +1,6 @@
 # room_spots
 
-- Origin: `client3d/scripts/smoke_room_spots.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_room_spots.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/FigurePlacementVectorTests.cs`
 - Vectors: `shared/test-vectors/room_spots.json`
 
@@ -11,7 +11,7 @@
  * Smoke check for the ROOM SPOTS of "Ein Boden" E5b — the centres, stands and
  * seats that used to be measured against meshes and are read off data now.
  *
- * Usage:  node client3d/scripts/smoke_room_spots.mjs
+ * Usage:  node the browser scene's deleted smoke_room_spots.mjs
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).
@@ -23,8 +23,8 @@
  * floor was a stand. Storey 0 has no plate to ray any more (§ A16.9), so
  * the shape comes from `floor_plan` (§ A16.9) and the height from the one
  * height function at the point being asked about. The rules under test are the
- * pure half of that, `client3d/src/game/ground.ts` and
- * `client3d/src/game/roomSpots.ts`; the lookups around them live in
+ * pure half of that, the browser scene's `ground.ts` and
+ * the browser scene's `roomSpots.ts`; the lookups around them live in
  * `scene/tiles.deriveRoomSpots` / `roomFloorAt` / `roomStandY`.
  *
  * SHARED VECTORS — `shared/test-vectors/room_spots.json` (plan Task 29). The
@@ -197,7 +197,7 @@
  * water fields — water is an ART on the MAP now, and a room that lies in a
  * painted one merely says so in its floor plan (`map_water`, a derived
  * reference). The mirror arithmetic that replaced it is
- * `client3d/scripts/smoke_water_plane.mjs`; what is left here is room GEOMETRY,
+ * the browser scene's deleted `smoke_water_plane.mjs`; what is left here is room GEOMETRY,
  * which W1 did not touch.
  */
 ```

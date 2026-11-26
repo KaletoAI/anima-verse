@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke check: card hair keeps its VERTEX COLOURS and its DOUBLE SIDE through
- * every material step both renderers put a loaded character GLB through.
+ * every material step the admin viewer puts a loaded character GLB through.
  *
  * Usage: node scripts/smoke_client_vertex_colors.mjs
  *
@@ -24,27 +24,18 @@
  *       LOD writes) — three makes a Group (with the extras) holding two meshes.
  *
  * THE STEPS AND WHAT EACH MUST LEAVE (hand-derived from the code paths):
- *   [1] each app's GLTFLoader factory (client3d/src/scene/gltfLoader.ts,
- *       frontend/src/lib/gltfLoader.ts): every hair mesh has a `color`
- *       attribute (itemSize 4 normalized for A, 3 for B), material
- *       vertexColors true, side DoubleSide (2); body vertexColors false,
- *       side FrontSide (0).
- *   [2] client3d `zeroFigureMetalness`: body metalness 1 → 0; every hair
- *       material is the SAME object as before, vertexColors/side unchanged.
- *   [3] client3d `applyFigureTexture` (the FBX texture route): the body gets
- *       a NEW material with map = the texture; the hair keeps its own
- *       material object (map null).
- *   [4] `SkeletonUtils.clone` (one figure instance): the clone's hair mesh
- *       shares that material → vertexColors true, DoubleSide.
- *   [5] `SubmergedGhost` on the instance, water at y = 0.5: one ghost per
- *       mesh (A: 2, B: 3); the hair ghosts have vertexColors true and
- *       DoubleSide, the body ghost vertexColors false and FrontSide.
+ *   [1] the admin's GLTFLoader factory (frontend/src/lib/gltfLoader.ts): every
+ *       hair mesh has a `color` attribute (itemSize 4 normalized for A, 3 for
+ *       B), material vertexColors true, side DoubleSide (2); body vertexColors
+ *       false, side FrontSide (0).
+ *   [2]–[5] were the browser 3D scene's figure steps (metalness, FBX texture,
+ *       clone, underwater ghost); that scene was deleted in plan E3 and the
+ *       native client has its own material path.
  *   [6] frontend `applyViewerTexture` (Model3DViewer's texture route): body
  *       map = texture and colour white; hair map null, vertexColors true,
  *       colour unchanged (its base colour factor 1,1,1 in the fixture).
- *   [7] Source: figures.ts calls applyFigureTexture in both texture paths and
- *       builds no inline textured material; Model3DViewer calls
- *       applyViewerTexture and sets no `mat.map = tex` itself.
+ *   [7] Source: Model3DViewer calls applyViewerTexture and sets no
+ *       `mat.map = tex` itself.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -123,7 +114,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_client_vertex_colors_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild',
+    const bin = ['node_modules/.bin/esbuild',
       'frontend/node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
@@ -143,11 +134,7 @@ async function main() {
 
   globalThis.self = globalThis
   const THREE = await import('three')
-  const SkeletonUtils = await import('three/addons/utils/SkeletonUtils.js')
-  const { createGLTFLoader: client3dLoader } = await import('../client3d/src/scene/gltfLoader.ts')
   const { createGLTFLoader: adminLoader } = await import('../frontend/src/lib/gltfLoader.ts')
-  const { applyFigureTexture, zeroFigureMetalness } = await import('../client3d/src/scene/figureMaterials.ts')
-  const { SubmergedGhost } = await import('../client3d/src/scene/submergedGhost.ts')
   const { applyViewerTexture } = await import('../frontend/src/tabs/characters/modelTexture.ts')
   const { inGarment } = await import('../packages/scene-render/src/figure.ts')
 
@@ -170,8 +157,8 @@ async function main() {
     const size = variant === 'A' ? 4 : 3
     console.log(`[${variant}] hair COLOR_0 ${variant === 'A' ? 'UNSIGNED_BYTE normalized VEC4' : 'FLOAT VEC3, 2 primitives'}`)
 
-    // [1] both loader factories
-    for (const [app, factory] of [['client3d', client3dLoader], ['frontend', adminLoader]]) {
+    // [1] the admin loader factory
+    for (const [app, factory] of [['frontend', adminLoader]]) {
       const gltf = await factory().parseAsync(glb.slice(0), '')
       const { hair, body } = meshesOf(gltf.scene)
       check(`[1] ${app}: ${prims} hair mesh(es), 1 body`, hair.length === prims && body.length === 1,
@@ -187,48 +174,6 @@ async function main() {
         hair.every((m) => m.material.vertexColors === true && m.material.side === THREE.DoubleSide))
       check(`[1] ${app}: body no vertexColors, FrontSide`,
         body[0].material.vertexColors === false && body[0].material.side === THREE.FrontSide)
-    }
-
-    // client3d: the load sequence of figures.ts, then one figure instance
-    {
-      const template = (await client3dLoader().parseAsync(glb.slice(0), '')).scene
-      const before = meshesOf(template).hair.map((m) => m.material)
-      // [2]
-      const log = zeroFigureMetalness(template)
-      const { hair, body } = meshesOf(template)
-      check('[2] metalness zeroed on the body', body[0].material.metalness === 0, log.join(' | '))
-      check('[2] hair materials are the same objects',
-        hair.every((m, i) => m.material === before[i]))
-      check('[2] hair still vertexColors + DoubleSide',
-        hair.every((m) => m.material.vertexColors && m.material.side === THREE.DoubleSide))
-      // [3]
-      const tex = texture()
-      applyFigureTexture(template, tex)
-      check('[3] body got the texture material', body[0].material.map === tex)
-      check('[3] hair keeps its own material, no map',
-        hair.every((m, i) => m.material === before[i] && !m.material.map && m.material.vertexColors
-          && m.material.side === THREE.DoubleSide))
-      // [4]
-      const inst = SkeletonUtils.clone(template)
-      const ih = meshesOf(inst).hair
-      check('[4] clone: hair vertexColors + DoubleSide',
-        ih.length === prims && ih.every((m) => m.isSkinnedMesh && m.material.vertexColors
-          && m.material.side === THREE.DoubleSide))
-      // [5]
-      const ghost = new SubmergedGhost(inst)
-      ghost.set(0.5)
-      const parts = ghost.parts
-      const hairGhosts = parts.filter((g) => inGarment(g.parent))
-      const bodyGhosts = parts.filter((g) => !inGarment(g.parent))
-      check(`[5] ghost parts ${prims + 1}`, parts.length === prims + 1, String(parts.length))
-      check('[5] hair ghosts vertexColors + DoubleSide',
-        hairGhosts.length === prims && hairGhosts.every((g) => g.material.vertexColors === true
-          && g.material.side === THREE.DoubleSide),
-        hairGhosts.map((g) => `vc=${g.material.vertexColors} side=${g.material.side}`).join(', '))
-      check('[5] body ghost no vertexColors, FrontSide',
-        bodyGhosts.length === 1 && bodyGhosts[0].material.vertexColors === false
-          && bodyGhosts[0].material.side === THREE.FrontSide)
-      ghost.dispose()
     }
 
     // [6] frontend viewer texture route
@@ -248,13 +193,7 @@ async function main() {
   // [7] the consumers go through these steps
   {
     const root = process.cwd()   // the bundle runs from /tmp with cwd = repo root
-    const figures = fs.readFileSync(path.join(root, 'client3d/src/scene/figures.ts'), 'utf8')
     const viewer = fs.readFileSync(path.join(root, 'frontend/src/tabs/characters/Model3DViewer.tsx'), 'utf8')
-    const calls = (figures.match(/applyFigureTexture\(template, tex\)/g) || []).length
-    check('[7] figures.ts: applyFigureTexture in both texture paths', calls === 2, String(calls))
-    check('[7] figures.ts: zeroFigureMetalness(template)', /zeroFigureMetalness\(template\)/.test(figures))
-    check('[7] figures.ts: no inline textured material',
-      !/new THREE\.MeshStandardMaterial\(\{\s*map:\s*tex/.test(figures))
     check('[7] Model3DViewer: applyViewerTexture(object, tex)', /applyViewerTexture\(object, tex\)/.test(viewer))
     check('[7] Model3DViewer: no own `mat.map = tex`', !/mat\.map = tex/.test(viewer))
   }

@@ -22,7 +22,7 @@ public sealed record FinalePlay(string Id, string Kind, string? Role, double T, 
     public string? ResolveClip(Func<string, bool> usable) => ClipLibraryRules.SelectClip(Clip, Base, usable);
 }
 
-/// <summary>Pure port of client3d/game/finaleClip.ts; elapsed_s is deliberately never used to seek.</summary>
+/// <summary>Pure port of the browser scene's finaleClip.ts; elapsed_s is deliberately never used to seek.</summary>
 public static class FinaleClip
 {
     /// <summary>§ A8a/A8c: a clip role of a pair or group is <c>a</c>..<c>e</c> (G3); anything else is no role.</summary>

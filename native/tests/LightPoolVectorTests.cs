@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/light_pool.json against <see cref="PropLights"/> (hand derivations and wrappers:
-/// client3d/scripts/smoke_light_pool.mjs; TS source client3d/src/scene/lightPool.ts).
+/// native/tests/Derivations/light_pool.md; TS source the browser scene's lightPool.ts).
 ///
 /// <code>
 ///   TS fn                 C#                               shape translation

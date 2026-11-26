@@ -4,8 +4,9 @@ using System.Collections.Generic;
 namespace AnimaNative.Scatter;
 
 /// <summary>
-/// The pure half of <c>client3d/src/scene/undergrowth.ts</c>: the 64 m cell raster around the anchor,
-/// the per-cell seed, the procedural blade texture, the three-plane star tuft and the colour variation.
+/// The pure half of the undergrowth layer: the 64 m cell raster around the anchor, the per-cell seed, the
+/// procedural blade texture, the three-plane star tuft and the colour variation. Vector-checked against
+/// shared/test-vectors/undergrowth.json (native/tests/UndergrowthVectorTests.cs).
 /// </summary>
 public static class UndergrowthMath
 {
@@ -31,6 +32,8 @@ public static class UndergrowthMath
     private const double ShadeR = 0.24, ShadeG = 0.10, ShadeB = 0.05;
     public static readonly double[] TintA = { 1 + ShadeR, 1 - ShadeG, 1 - ShadeB };
     public static readonly double[] TintB = { 1 - ShadeR, 1 + ShadeG, 1 + ShadeB };
+    /// <summary>The one normal of every tuft vertex: straight up, so a tuft is lit like the ground it stands on.</summary>
+    public static readonly float[] Normal = { 0f, 1f, 0f };
 
     public static string CellKey(int cx, int cz) => $"{cx},{cz}";
 

@@ -3,12 +3,12 @@ using AnimaNative.Hud;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of client3d/src/scene/viewShift.ts — where in the window the camera's aim point lands
+/// Port of the browser scene's viewShift.ts — where in the window the camera's aim point lands
 /// when the chat panel covers a corner: the area-weighted centre of the four free strips around
 /// the panel, capped at <see cref="MaxShiftFraction"/> of the half axis. The scene applies it as
 /// a frustum shift, not a camera turn. <see cref="Dx"/> is to the right, <see cref="Dy"/> DOWN
 /// (screen axes), both in CSS pixels. Vectors: shared/test-vectors/view_shift.json (hand
-/// derivations in client3d/scripts/smoke_view_shift.mjs).
+/// derivations in native/tests/Derivations/view_shift.md).
 /// </summary>
 public readonly record struct ViewShift(double Dx, double Dy)
 {

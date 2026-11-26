@@ -51,7 +51,7 @@ const require_ = createRequire(import.meta.url);
 
 function esbuildModule() {
   for (const cand of ['esbuild', join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild')]) {
+                      join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }

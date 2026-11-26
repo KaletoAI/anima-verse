@@ -2,7 +2,7 @@
 /**
  * Bench of the channel OPENING's frame cost (Ruling A102b): skipping unchanged frames (`ChannelOpeningBinding.changed`,
  * 1 mm / 0.5°) and the per-frame budget (at most one recompute per frame, receivers visited from a rotating start —
- * the rule `NpcManager.tickSecondary` / `Figure.applyChannelOpenings` run in client3d).
+ * the rule `NpcManager.tickSecondary` / `Figure.applyChannelOpenings` run in the browser 3D scene).
  *
  * Usage:  node scripts/bench_channel_opening.mjs [--frames 300]
  *
@@ -32,7 +32,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/bench_channel_opening_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) { console.error('esbuild not found (npm install) — nothing was measured'); process.exit(1) }
     const built = spawnSync(bin, [__filename, '--bundle', '--platform=node', '--format=esm', `--outfile=${bundlePath}`],

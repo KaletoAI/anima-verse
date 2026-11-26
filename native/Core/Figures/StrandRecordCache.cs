@@ -24,7 +24,7 @@ public enum StrandRecordState
 /// under this sha; it, a network error and any other non-2xx stay <see cref="StrandRecordState.Pending"/> and are asked
 /// again after <see cref="RetryMs"/>; a 404 is <see cref="StrandRecordState.None"/> for the session; a 200 with the
 /// matching ETag is the record when its version is <see cref="StrandSim.RecordVersion"/>, else None
-/// (client3d/scripts/smoke_strand_record.mjs [a]–[d]). Godot-free; thread-safe (the fetch may finish on any thread).
+/// (the browser scene's deleted smoke_strand_record.mjs [a]–[d]). Godot-free; thread-safe (the fetch may finish on any thread).
 /// </summary>
 public sealed class StrandRecordCache
 {

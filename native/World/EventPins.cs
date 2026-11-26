@@ -8,10 +8,10 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The event pins of the overview (client3d/src/main.ts <c>updatePins</c> / <c>makePinTexture</c>, the bob in
+/// The event pins of the overview (the browser scene's main.ts <c>updatePins</c> / <c>makePinTexture</c>, the bob in
 /// the frame hook; the rule in <see cref="EventPinRule"/>): one billboard per location with events, 🔥 when
 /// one of them is <c>danger</c>, else ❗, 3 m tall, never hidden by geometry, bobbing; 3.5 m above the top of its
-/// place, measured from the place's ground datum (client3d/src/game/eventPins.ts, vector-checked).
+/// place, measured from the place's ground datum (the browser scene's eventPins.ts, vector-checked).
 ///
 /// THE GLYPH. The browser draws the emoji with the canvas font <c>72px serif</c>, i.e. the system's colour
 /// emoji font (Noto Color Emoji on a Linux desktop). Godot renders colour glyphs (CBDT/COLR via FreeType) when

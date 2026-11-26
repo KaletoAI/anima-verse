@@ -5,7 +5,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// The far backdrop of § A17 (client3d/src/scene/backdrop.ts): two rings of mountain silhouettes at 380 m and 440 m
+/// The far backdrop of § A17 (the browser scene's backdrop.ts): two rings of mountain silhouettes at 380 m and 440 m
 /// around the camera target — scenery only, no shadow, never pickable. The ridge is <see cref="Backdrop.RidgeProfile"/>
 /// (vector-checked), the strips <see cref="BackdropMesh.Ring"/>, the tint <see cref="BackdropLook"/>. The node only ever
 /// TRANSLATES (<see cref="Follow"/>), so north stays north while the target moves. The rings are unlit; the distance fog

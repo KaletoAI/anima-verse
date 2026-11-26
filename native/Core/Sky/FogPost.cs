@@ -43,7 +43,7 @@ public static class FogPost
 
     private static string BuildCode() => $@"shader_type spatial;
 // Anima native: the browser's distance fog (three's linear fog over the VIEW depth, mixed in display space after the
-// sRGB encode; client3d/src/scene/engine.ts + fogConstants.ts) as one pass over the finished picture (Sky/FogPost.cs).
+// sRGB encode; the browser scene's engine.ts + fogConstants.ts) as one pass over the finished picture (Sky/FogPost.cs).
 render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, shadows_disabled, fog_disabled;
 uniform sampler2D screen_tex : hint_screen_texture, filter_nearest, repeat_disable;
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest, repeat_disable;

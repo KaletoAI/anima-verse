@@ -152,7 +152,7 @@ public sealed class BootTracker
 }
 
 /// <summary>
-/// <c>retryBoot</c> of client3d/src/main.ts: run the start's fetch until it succeeds, waiting
+/// <c>retryBoot</c> of the browser scene's main.ts: run the start's fetch until it succeeds, waiting
 /// <see cref="DelayMs"/> between attempts and telling the title screen how long (<c>retry</c> note in whole
 /// seconds, cleared on success). Native difference: an authentication failure is not retried — the session is
 /// gone, the client goes back to its login screen, and this boot ends with that exception.

@@ -7,7 +7,7 @@ using Json = AnimaNative.World.Json;
 namespace AnimaNative.Ground;
 
 /// <summary>
-/// One height tile's water field (Wasser v2 K-A, client3d/src/scene/waterRaster.ts <c>WaterTileField</c>) on
+/// One height tile's water field (Wasser v2 K-A, the browser scene's waterRaster.ts <c>WaterTileField</c>) on
 /// the tile's own lattice: <c>level</c> (NaN = dry), <c>sd</c> (the signed distance to the authored outline,
 /// <see cref="SdDry"/> where dry), the tile's kind palette + per-texel index, and the flow (null = still; NaN where
 /// a texel carries none).

@@ -12,7 +12,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/pair_scale.json against <see cref="PairScale"/> (hand derivations: scripts/smoke_pair_scale.mjs,
-/// [8] = client3d/scripts/smoke_pair_root_sets.mjs [B] as the pure composition).
+/// [8] = the browser scene's deleted smoke_pair_root_sets.mjs [B] as the pure composition).
 /// <code>
 ///   TS fn              C#                                          shape translation
 ///   pairFigureScale    PairScale.FigureScale                       height: number | null | undefined (= null) | NaN

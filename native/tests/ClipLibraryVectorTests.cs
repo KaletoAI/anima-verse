@@ -11,7 +11,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/hips_tracks.json against <see cref="HipsTrack"/> (derivations:
-/// client3d/scripts/smoke_rig_stand_ref.mjs [R1]–[R9]).
+/// native/tests/Derivations/rig_stand_ref.md [R1]–[R9]).
 /// <code>
 ///   standingHipsRef → HipsTrack.StandingRef     clipHipsDrop → HipsTrack.Drop
 ///   hipsTrackMedian → HipsTrack.Median          mapHipsTrack → HipsTrack.Map
@@ -83,7 +83,7 @@ public class HipsTracksVectorTests
 
 /// <summary>
 /// shared/test-vectors/clip_commit.json against <see cref="ClipLibraryRules.CommitInListOrder"/> (derivations:
-/// client3d/scripts/smoke_clip_order.mjs). The ops are the smoke's: flags <c>{loop, rootMotion}</c>, pair = <c>__a/__b</c>,
+/// native/tests/Derivations/clip_order.md). The ops are the smoke's: flags <c>{loop, rootMotion}</c>, pair = <c>__a/__b</c>,
 /// root = <c>"root:" + id</c>, rename = a copy carrying the kind as <c>name</c>; the third argument is the path read
 /// out of <c>{index, pairRoots}</c> — pairRoots keyed kind, then set (<c>pairRootsOf</c>) — or <c>["hasKind", kind]</c> /
 /// <c>["hasPairRoot", kind]</c>. <c>pairRootForValue(sources, results, kind, chain)</c> is
@@ -160,7 +160,7 @@ public class ClipCommitVectorTests
 
 /// <summary>
 /// shared/test-vectors/clip_coverage.json against <see cref="FigureClips"/> (derivations:
-/// client3d/scripts/smoke_clip_coverage.mjs). An omitted pose table is the browser's module default
+/// native/tests/Derivations/clip_coverage.md). An omitted pose table is the browser's module default
 /// (<see cref="PoseClips.Default"/>); <c>animatablePool</c> answers the names of the kept entries.
 /// </summary>
 public class ClipCoverageVectorTests

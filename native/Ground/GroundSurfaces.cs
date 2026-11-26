@@ -35,7 +35,7 @@ public sealed class GroundStats
 
 /// <summary>
 /// The browser's ground SURFACES on the S1a terrain meshes (Task S3b) — port of what
-/// <c>client3d/src/scene/ground.ts</c> (<c>applyLayers</c>, <c>refreshLayerTiles</c>, <c>rebuildBase</c>),
+/// the browser scene's <c>ground.ts</c> (<c>applyLayers</c>, <c>refreshLayerTiles</c>, <c>rebuildBase</c>),
 /// <c>layerGround.ts</c> (<c>setLayerTable</c>, <c>setLayerOverview</c>, <c>setLayerTiles</c>),
 /// <c>naturalGround.ts</c> (<c>setNaturalGroundField</c>) feed into the one ground material, from the same requests
 /// (the CDLOD half of the material — pyramids, rings, the shading normal's lattices — is bound by

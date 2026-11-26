@@ -33,7 +33,7 @@
  * and heel − ball = 0.15·sinθ, so the sole counts as LEVEL (|heel − ball| ≤
  * SOLE_LEVEL_M = 0.01) while |θ| ≤ 3.82°.
  *
- * [1] the pure rules: groundOffsetOf as in client3d/scripts/smoke_clip_ground.mjs
+ * [1] the pure rules: groundOffsetOf as in the browser scene's deleted smoke_clip_ground.mjs
  *     ((0.30, 0) → 0.30; (0, 0) → 0; (−0.05, 0) → 0; (0.30, 0.10) → 0.20;
  *     (0.05, 0.30) → 0; NaN/Infinity → 0); soleGroundOffsetOf is the signed
  *     difference: (−0.02, 0) → −0.02 (a raise), (0.03, 0.01) → 0.02,
@@ -80,7 +80,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_clip_ground_sole_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
       console.error('esbuild not found (npm install) — nothing was checked')

@@ -7,16 +7,16 @@ using AnimaNative.World;
 namespace AnimaNative.Scene;
 
 /// <summary>
-/// One walk-through gap of one storey (client3d/src/game/doors.ts <c>DoorMarker</c>): every field is the payload's
+/// One walk-through gap of one storey (the browser scene's doors.ts <c>DoorMarker</c>): every field is the payload's
 /// <c>doorways[]</c> entry — the clear opening's centre (+ <c>origin</c>), the wall direction, the clear width, the base
 /// height, the rooms it joins (non-empty strings, payload order) and whether it leads outside.
 /// </summary>
 public sealed record DoorMarker(P2 Mid, P2 Along, double Width, double BaseY, IReadOnlyList<string> RoomIds, bool Outside);
 
 /// <summary>
-/// The doorway lookups of client3d/src/game/doors.ts the figure routing walks through (<c>roomDoor</c>,
+/// The doorway lookups of the browser scene's doors.ts the figure routing walks through (<c>roomDoor</c>,
 /// <c>doorwayBetween</c>) — checked against shared/test-vectors/npc_ground.json (hand derivations:
-/// client3d/scripts/smoke_walk_math.mjs [30]). The payload is tile-local; <c>origin</c> only shifts the point, and the
+/// native/tests/Derivations/walk_math.md [30]). The payload is tile-local; <c>origin</c> only shifts the point, and the
 /// 3D client leaves it at 0/0 and turns the result with <see cref="SceneView.TileToWorld"/>.
 /// </summary>
 public static class Doors

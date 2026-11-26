@@ -1,6 +1,6 @@
 # pair_storey
 
-- Origin: `client3d/scripts/smoke_pair_storey.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_pair_storey.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PairVectorTests.cs`
 - Vectors: `shared/test-vectors/pair_height.json`
 
@@ -12,7 +12,7 @@
  * stays on the storey of its room — the upper floor, the cellar, a storey
  * corridor — instead of dropping onto the terrain under the building.
  *
- * Usage:  node client3d/scripts/smoke_pair_storey.mjs
+ * Usage:  node the browser scene's deleted smoke_pair_storey.mjs
  *         (needs three and esbuild; no clips, no models, no server)
  *
  * Hand-derived expectations

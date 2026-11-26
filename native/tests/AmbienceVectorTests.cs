@@ -14,7 +14,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/ambience.json against <see cref="Ambience"/> (hand derivations and wrappers:
-/// client3d/scripts/smoke_ambience.mjs; TS sources client3d/src/scene/ambience.ts, client3d/src/game/roomAt.ts).
+/// native/tests/Derivations/ambience.md; TS sources the browser scene's ambience.ts, the browser scene's roomAt.ts).
 ///
 /// <code>
 ///   TS fn              C#                          shape translation

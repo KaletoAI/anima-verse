@@ -10,14 +10,10 @@
 #                                    config + secrets; default: ./instance)
 #   ./start.sh --stop                Stop the main app
 #   ./start.sh --restart             Restart the main app
-#   ./start.sh --with-3d             Also start optional Vite development with HMR
 #   ./start.sh --status              Show running services
 #
-# Normal play uses the built 3D client at /play on the Python server.
-# For development with HMR, --with-3d starts a separate Vite process.
-# It can also run on another machine with ANIMA_API pointing at this host:
-#   ANIMA_API=http://<this-host>:8000 npm run dev -w client3d
-# The HUD page alone (workspace hud/, port 5184) the same way:
+# Players use the native client; /play on the Python server is only a hint page.
+# The HUD page alone (workspace hud/, port 5184) runs with ANIMA_API pointing at this host:
 #   ANIMA_API=http://<this-host>:8000 npm run dev -w hud
 
 set -euo pipefail
@@ -38,18 +34,6 @@ MAIN_PORT=8000
 # restarts. Used to recover orphan PIDs when the PID file is missing and to
 # kill stragglers when starting fresh.
 MAIN_PATTERN="uvicorn app.server:app"
-
-# ── 3D client development (client3d) ──────────────────────────────────────────────────────
-# Optional Vite process with HMR on its own port, enabled by --with-3d.
-# It uses the backend HTTP API (ANIMA_API), so it can run on another machine.
-# The port and backend target can be overridden through the environment.
-CLIENT3D_PORT="${CLIENT3D_PORT:-5183}"
-CLIENT3D_PID="$PID_DIR/client3d.pid"
-CLIENT3D_LOG="$LOG_DIR/client3d.log"
-# Passing the port explicitly identifies this workspace in the process list;
-# a plain "node .../vite" command would not identify it.
-CLIENT3D_PATTERN="vite --port $CLIENT3D_PORT"
-WITH_CLIENT3D=0
 
 mkdir -p "$PID_DIR" "$LOG_DIR" "$ARCHIVE_DIR"
 
@@ -308,40 +292,6 @@ start_main() {
     echo "[main] Started (PID $pid, log: $MAIN_LOG)"
 }
 
-start_client3d() {
-    if is_running "$CLIENT3D_PID"; then
-        echo "[client3d] Already running (PID $(cat "$CLIENT3D_PID"))"
-        return
-    fi
-    # npm may install Vite in the workspace or hoist it to the root depending
-    # on dependency versions. Check both locations before suggesting npm install
-    # (2026-07-29: upgrading @vitejs/plugin-react removed the hoisted Vite copy).
-    local vite=""
-    for cand in "$SCRIPT_DIR/client3d/node_modules/.bin/vite" \
-                "$SCRIPT_DIR/node_modules/.bin/vite"; do
-        [[ -x "$cand" ]] && { vite="$cand"; break; }
-    done
-    if [[ -z "$vite" ]]; then
-        echo "[client3d] Vite not found — looked in client3d/node_modules/.bin"
-        echo "[client3d] and node_modules/.bin."
-        echo "[client3d] Run 'npm install' in $SCRIPT_DIR once, then try again."
-        return 1
-    fi
-    kill_port "$CLIENT3D_PORT" "client3d" "$CLIENT3D_PATTERN"
-    rotate_log "$CLIENT3D_LOG"
-    # Default to the local backend; preserve an explicit remote ANIMA_API.
-    export ANIMA_API="${ANIMA_API:-http://localhost:$MAIN_PORT}"
-    echo "[client3d] Starting 3D client on port $CLIENT3D_PORT (backend: $ANIMA_API)..."
-    # Run Vite directly so stopping it does not leave an orphan behind npm.
-    cd "$SCRIPT_DIR/client3d"
-    nohup "$vite" --port "$CLIENT3D_PORT" --host 0.0.0.0 \
-        >> "$CLIENT3D_LOG" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$CLIENT3D_PID"
-    cd "$SCRIPT_DIR"
-    echo "[client3d] Started (PID $pid, log: $CLIENT3D_LOG)"
-}
-
 stop_service() {
     local name="$1"
     local pid_file="$2"
@@ -371,11 +321,6 @@ show_status() {
     else
         echo "[main]         Stopped"
     fi
-    if is_running_or_orphan "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"; then
-        echo "[client3d]     Running (PID $(cat "$CLIENT3D_PID"), port $CLIENT3D_PORT)"
-    else
-        echo "[client3d]     Stopped"
-    fi
 }
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
@@ -386,8 +331,6 @@ INSTANCE_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --with-3d|--with-client3d)
-                         WITH_CLIENT3D=1; shift ;;
         --stop)          ACTION="stop"; shift ;;
         --restart)       ACTION="restart"; shift ;;
         --status)        ACTION="status"; shift ;;
@@ -401,24 +344,18 @@ while [[ $# -gt 0 ]]; do
             INSTANCE_ARG="$2"
             shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--stop|--restart|--status] [--with-3d] [--world NAME|--storage PATH] [--instance PATH]"
+            echo "Usage: $0 [--stop|--restart|--status] [--world NAME|--storage PATH] [--instance PATH]"
             echo ""
             echo "  (no flags)       Start the main app (storage: ./worlds/demo)"
             echo "  --world NAME     Use ./worlds/NAME as storage directory"
             echo "  --storage PATH   Use custom storage directory"
             echo "  --instance PATH  Use custom instance directory (server config +"
             echo "                   secrets of this installation; default: ./instance)"
-            echo "  --with-3d        Also start Vite development with HMR (separate process,"
-            echo "                   port \$CLIENT3D_PORT, default $CLIENT3D_PORT)"
-            echo "  --stop           Stop the main app AND the 3D client"
+            echo "  --stop           Stop the main app"
             echo "  --restart        Restart whatever the flags name"
             echo "  --status         Show service status"
             echo ""
-            echo "  Normal play: /play on the Python server (no Vite required)."
-            echo "  For remote Vite development, point ANIMA_API at this backend:"
-            echo "    ANIMA_API=http://<this-host>:$MAIN_PORT npm run dev -w client3d"
-            echo "  Environment: CLIENT3D_PORT (default 5183), ANIMA_API (default"
-            echo "  http://localhost:$MAIN_PORT)"
+            echo "  Players use the native client; /play is a hint page."
             exit 0
             ;;
         *)
@@ -456,30 +393,23 @@ case "$ACTION" in
     start)
         acquire_lock
         start_main
-        [[ "$WITH_CLIENT3D" == "1" ]] && start_client3d
         echo ""
         echo "==> Browser: http://localhost:8000"
         echo "==> Admin:   http://localhost:8000/admin"
-        [[ "$WITH_CLIENT3D" == "1" ]] && echo "==> 3D:      http://localhost:$CLIENT3D_PORT"
         ;;
     stop)
-        # Stop both services, including optional Vite started with --with-3d.
         # A service that is already stopped reports "Not running".
         stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
-        stop_service "client3d" "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"
         ;;
     restart)
         acquire_lock
         echo "[restart] Restarting main app..."
         stop_service "main" "$MAIN_PID" "$MAIN_PORT" "$MAIN_PATTERN"
-        stop_service "client3d" "$CLIENT3D_PID" "$CLIENT3D_PORT" "$CLIENT3D_PATTERN"
         sleep 1
         start_main
-        [[ "$WITH_CLIENT3D" == "1" ]] && start_client3d
         echo ""
         echo "==> Browser: http://localhost:8000"
         echo "==> Admin:   http://localhost:8000/admin"
-        [[ "$WITH_CLIENT3D" == "1" ]] && echo "==> 3D:      http://localhost:$CLIENT3D_PORT"
         ;;
     status)
         show_status

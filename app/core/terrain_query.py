@@ -22,7 +22,7 @@ WILDERNESS question (the footprint of a place replaces the ground for the
 water slows a walker down out in the open and inside an OPEN place (an area
 location, an outdoor room), while a building and a normal interior bring
 their own floor and stay neutral. The client mirrors both functions in
-``client3d/src/game/walk`` (``groundScope`` / ``terrainPace``).
+the browser scene's ``walk`` (``groundScope`` / ``terrainPace``).
 """
 
 import math
@@ -56,7 +56,7 @@ NEUTRAL_SPEED_FACTOR = 1.0
 # HOW FAR THE TERRAIN RULE REACHES — the three places a walking figure can be
 # (user decision 2026-08-13, round 2 of the E8 acceptance). The words are the
 # contract, not the implementation: the client uses the same three
-# (``client3d/src/game/walk.GroundScope``).
+# (the browser scene's ``walk.GroundScope``).
 #: Out between the places — no footprint over the point.
 SCOPE_WILDERNESS = "wilderness"
 #: Inside an OPEN place: the footprint of an area location, or an outdoor
@@ -273,7 +273,7 @@ def ground_scope(place_is_area: Optional[bool],
     itself does not, and a hut inside a village square is dry while the
     square around it is not. Both arguments are the caller's LOOKUP — what
     is derivable is the rule, and only the rule lives here. The client twin
-    is ``client3d/src/game/walk.groundScope``.
+    is the browser scene's ``walk.groundScope``.
     """
     if room_is_outdoor is not None:
         return SCOPE_OPEN if room_is_outdoor else SCOPE_BUILT

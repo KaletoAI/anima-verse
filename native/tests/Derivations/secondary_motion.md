@@ -1,6 +1,6 @@
 # secondary_motion
 
-- Origin: `client3d/scripts/smoke_secondary_motion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_secondary_motion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/SecondaryVectorTests.cs`
 - Vectors: `shared/test-vectors/secondary_angle.json`, `shared/test-vectors/secondary_chain.json`, `shared/test-vectors/secondary_params.json`, `shared/test-vectors/secondary_particle.json`
 
@@ -8,7 +8,7 @@
 
 ```text
 /**
- * Usage: node client3d/scripts/smoke_secondary_motion.mjs
+ * Usage: node the browser scene's deleted smoke_secondary_motion.mjs
  * Hand derivation, metres/seconds, Y-up gravity (0,-9.81,0):
  * omega²=(4*pi)²=157.9136704. With m=2 upright a_g=(0,-9.81,0)
  * gives e_y=-9.81/omega²=-0.06212255072; m=1 gives 0 and m=.5 gives

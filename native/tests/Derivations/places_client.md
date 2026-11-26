@@ -1,6 +1,6 @@
 # places_client
 
-- Origin: `client3d/scripts/smoke_places_client.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_places_client.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/FigurePlacementVectorTests.cs`
 - Vectors: `shared/test-vectors/place_poll.json`
 
@@ -12,7 +12,7 @@
  * numbers, no screenshots — § B5a): the one pure rule the 3D client applies
  * to a seat the SERVER handed it, `packages/scene-render/src/placeSlot.ts`.
  *
- * Usage:  node client3d/scripts/smoke_places_client.mjs
+ * Usage:  node the browser scene's deleted smoke_places_client.mjs
  *         (self-bundles through esbuild like its siblings)
  *
  * WHAT THE CLIENT DOES NOT DECIDE. A character's worldmap row carries

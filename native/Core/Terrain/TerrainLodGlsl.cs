@@ -6,7 +6,7 @@ namespace AnimaNative.Terrain;
 
 /// <summary>
 /// The CDLOD terrain's GPU half as Godot shading language — a port of the browser's GLSL generators in
-/// <c>client3d/src/scene/terrainLod.ts</c>: <c>terrainLodSampleGlsl</c> (the pyramid sampler both stages read),
+/// the browser scene's <c>terrainLod.ts</c>: <c>terrainLodSampleGlsl</c> (the pyramid sampler both stages read),
 /// <c>terrainLodWaterGlsl</c> (the water level, the outline gate and the lift of the wet program,
 /// <c>waterShade.ts waterSdGlsl/waterGateGlsl</c>), <c>terrainLodGlsl</c> (λ, the water mip cap, the block-descent
 /// morph of <c>tlodCompute</c>) and <c>terrainLodNormalGlsl</c> (the fragment's shading normal).

@@ -8,7 +8,7 @@ namespace AnimaNative.Water;
 public readonly record struct WaterKnot(double X, double Z, double S, double Level);
 
 /// <summary>
-/// An area's exact water profile (<c>meta.water_profile</c>, <c>client3d/src/scene/waterPlaneMath.ts</c>
+/// An area's exact water profile (<c>meta.water_profile</c>, the browser scene's <c>waterPlaneMath.ts</c>
 /// <c>WaterProfile</c>): the axis knots and the nine numbers the server resolved. The gameplay reads THIS (wading,
 /// swimming, the submerged ghost), never the rastered render field.
 /// </summary>

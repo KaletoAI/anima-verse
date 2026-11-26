@@ -2,8 +2,7 @@
 /**
  * Smoke check: a GARMENT mesh in a character GLB does not count toward the
  * figure's height — `figureBox` / `anchorFigureBind` in
- * `packages/scene-render/src/figure.ts`, the routine the 3D client
- * (`client3d/src/scene/figures.ts`: model height, figure anchor) and the
+ * `packages/scene-render/src/figure.ts`, the routine the
  * admin viewer (`Model3DViewer`: marker figures through `anchorFigureBind`,
  * the dims overlay) measure a figure with. Numbers, not screenshots (§ B5a).
  * Contract: docs/schnittstellen-3d.md § A3a.
@@ -38,8 +37,8 @@
  *     = 1 (the old measure gave 1.70 / 1.78 = 0.9551), soles on 0.
  * [8] Skinned meshes (what a GLB delivers): body and hair as SkinnedMeshes
  *     bound to one identity bone — old 1.78, figureBox 1.70.
- * [7] Consumers: client3d/src/scene/figures.ts measures its figures with
- *     `figureBox` — no `setFromObject(template)` / `setFromObject(inst)` left.
+ * [7] (was the browser 3D scene's consumer check; that scene was deleted in
+ *     plan E3.)
  * [9] A FOOTWEAR subtree rotated below the floor (footwear plan, Task 18:
  *     the bind measurements ignore garments). Bones, all identity
  *     rotations: Hips (0, 0.10, 0) (root bone, so the root frame is the
@@ -74,7 +73,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_figure_height_garment_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild',
+    const bin = ['node_modules/.bin/esbuild',
       'frontend/node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
@@ -263,13 +262,6 @@ async function main() {
       at(L?.heel, 0.1, 0, -0.05) && at(L?.toe, 0.1, 0, 0.15), `${fmt3(L?.heel)} ${fmt3(L?.toe)}`)
     check('[9] right sole: heel (−0.1, 0, −0.05), toe (−0.1, 0, 0.15)',
       at(R?.heel, -0.1, 0, -0.05) && at(R?.toe, -0.1, 0, 0.15), `${fmt3(R?.heel)} ${fmt3(R?.toe)}`)
-  }
-  // [7]
-  {
-    const src = fs.readFileSync(path.join(process.cwd(), 'client3d/src/scene/figures.ts'), 'utf8')
-    const left = src.match(/setFromObject\((template|inst)\)/g) || []
-    check('[7] figures.ts measures with figureBox', left.length === 0 && /figureBox\(THREE, template\)/.test(src)
-      && /figureBox\(THREE, inst\)/.test(src), left.join(', '))
   }
 
   if (failures.length) {

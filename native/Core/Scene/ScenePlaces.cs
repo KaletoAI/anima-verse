@@ -117,7 +117,7 @@ public sealed class CorridorStand
 public readonly record struct VerticalTarget(string Kind, int Flight);
 
 /// <summary>
-/// THE PLACES DATA OF ONE MOUNTED SCENE — what client3d/src/scene/sceneRecipe.ts <c>mountShell</c> files on the tile for
+/// THE PLACES DATA OF ONE MOUNTED SCENE — what the browser scene's sceneRecipe.ts <c>mountShell</c> files on the tile for
 /// the figures (E5) and the embodied mode (E7): the place markers (<c>tile.roomMarkers</c>, keyed by room id AND name),
 /// the lift stops (<c>tile.elevatorStops</c>), the stair flights (<c>tile.stairs</c>), the vertical targets
 /// (<c>tile.verticalTargets</c>) and the storey corridors' stands (<c>tile.corridors</c> → <c>roomCenters</c>); plus the

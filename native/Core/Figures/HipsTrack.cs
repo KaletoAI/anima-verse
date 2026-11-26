@@ -20,7 +20,7 @@ public sealed record RootPath(float[] Times, float[] Xz);
 /// <summary>
 /// The hips-height side of the clip library, ported from packages/scene-render/src/figure.ts
 /// (<c>standingHipsRef</c>, <c>clipHipsDrop</c>, <c>hipsTrackMedian</c>) and hipsTrack.ts (<c>mapHipsTrack</c>);
-/// vectors shared/test-vectors/hips_tracks.json (hand derivations: client3d/scripts/smoke_rig_stand_ref.mjs).
+/// vectors shared/test-vectors/hips_tracks.json (hand derivations: native/tests/Derivations/rig_stand_ref.md).
 /// </summary>
 public static class HipsTrack
 {

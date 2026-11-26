@@ -1,6 +1,6 @@
 # prop_action_motion
 
-- Origin: `client3d/scripts/smoke_prop_action_motion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_prop_action_motion.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/PropActionMotionVectorTests.cs`
 - Vectors: `shared/test-vectors/prop_action_motion.json`
 - E3 Task 5: the `localApproachPoint` cases ([1], [4]) went with the native NPC approach path they tested.
@@ -11,7 +11,7 @@
 /**
  * Hand derivations for prop_action_motion.json (metres, seconds, compass degrees).
  * No expected value is sampled from production. Run:
- *   node client3d/scripts/smoke_prop_action_motion.mjs
+ *   node the browser scene's deleted smoke_prop_action_motion.mjs
  *
  * [2] Entry fraction = clamp((elapsed + max(age,0)*max(rate,0))/duration,0,1).
  * Original (elapsed,duration,rate,age) values: (2,4,1,0),(1,4,1,1),

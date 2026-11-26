@@ -7,7 +7,7 @@ public readonly record struct LightBasis((double X, double Y, double Z) X, (doub
                                          (double X, double Y, double Z) Z);
 
 /// <summary>
-/// The texel-snapped shadow centre of the browser's sun (<c>client3d/src/scene/shadowSnap.ts</c>): the orthographic
+/// The texel-snapped shadow centre of the browser's sun (the browser scene's <c>shadowSnap.ts</c>): the orthographic
 /// shadow box of ±70 m at 2048² follows the camera target, its centre rounded to whole shadow texels in the light's
 /// plane so the shadow edges do not crawl. Depth is not snapped.
 /// </summary>

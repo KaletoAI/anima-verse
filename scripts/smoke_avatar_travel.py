@@ -39,7 +39,7 @@ Rules every expectation below is derived from BY HAND:
     routes existed for a world of square cells that E1 deleted. Deletion
     test: no source reference left under ``app/`` or ``frontend/src``, no
     such route on the app, and ``/play/scene`` carries no ``neighbors``
-    block any more. (``client3d/`` is E4 and deliberately not swept.)
+    block any more.
 
 The world used below (all grass unless painted):
 

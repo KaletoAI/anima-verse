@@ -14,7 +14,7 @@ using static AnimaNative.Tests.ScatterVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// The adapters of client3d/scripts/bridgeVectorDispatch.mjs (Task 31), mirrored for the native ports. Non-finite
+/// The adapters of the browser scene's deleted bridgeVectorDispatch.mjs (Task 31), mirrored for the native ports. Non-finite
 /// INPUTS are <c>{"$number": "NaN" | "Infinity" | "-Infinity"}</c>; a <c>fields</c> argument is a property path
 /// (<see cref="E3VectorAdapters.Path"/>: keys, indices, <c>length</c>).
 /// </summary>
@@ -102,8 +102,8 @@ internal static class BridgeVectorAdapters
 }
 
 /// <summary>
-/// shared/test-vectors/foot_lock.json (hand derivations: client3d/scripts/smoke_foot_lock_math.mjs; TS
-/// client3d/src/scene/footLock.ts).
+/// shared/test-vectors/foot_lock.json (hand derivations: native/tests/Derivations/foot_lock_math.md; TS
+/// the browser scene's footLock.ts).
 /// <code>
 ///   TS fn          C#                               shape translation
 ///   ramp           FootLock.Ramp
@@ -151,7 +151,7 @@ public class FootLockVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/leg_pin.json (hand derivations: client3d/scripts/smoke_leg_pin.mjs; TS client3d/src/scene/legPin.ts).
+/// shared/test-vectors/leg_pin.json (hand derivations: native/tests/Derivations/leg_pin.md; TS the browser scene's legPin.ts).
 /// <code>
 ///   TS fn            C#                      shape translation
 ///   pinRuns          LegPin.PinRuns
@@ -234,8 +234,8 @@ public class LegPinVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/bridge_lift.json (hand derivations: client3d/scripts/smoke_bridge_lift.mjs; TS
-/// client3d/src/scene/bridgeLift.ts).
+/// shared/test-vectors/bridge_lift.json (hand derivations: native/tests/Derivations/bridge_lift.md; TS
+/// the browser scene's bridgeLift.ts).
 /// <code>
 ///   TS fn         C#                      shape translation
 ///   liftRamp      BridgeLift.LiftRamp     {from, to}
@@ -274,8 +274,8 @@ public class BridgeLiftVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/bridge_travel.json (hand derivations: client3d/scripts/smoke_bridge_root.mjs; TS
-/// client3d/src/scene/bridgeTravel.ts). Paths are <c>{times, xz}</c> (Float32 like the browser's stores).
+/// shared/test-vectors/bridge_travel.json (hand derivations: native/tests/Derivations/bridge_root.md; TS
+/// the browser scene's bridgeTravel.ts). Paths are <c>{times, xz}</c> (Float32 like the browser's stores).
 /// <code>
 ///   TS fn       C#                        shape translation
 ///   rootPathAt  BridgeTravel.RootPathAt   {x, z}
@@ -319,8 +319,8 @@ public class BridgeTravelVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/bridge_heading.json (hand derivations: client3d/scripts/smoke_bridge_heading.mjs; TS
-/// client3d/src/scene/bridgeHeading.ts + bridgeTravel.ts <c>turnAt</c>).
+/// shared/test-vectors/bridge_heading.json (hand derivations: native/tests/Derivations/bridge_heading.md; TS
+/// the browser scene's bridgeHeading.ts + bridgeTravel.ts <c>turnAt</c>).
 /// <code>
 ///   TS fn         C#                           shape translation
 ///   headingTrack  BridgeHeading.HeadingTrack   [[x,y,z]…] twice → a plain array (the browser's Float32Array)
@@ -353,8 +353,8 @@ public class BridgeHeadingVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/stand_settle.json (hand derivations: client3d/scripts/smoke_stand_settle.mjs; TS
-/// client3d/src/scene/standSettle.ts).
+/// shared/test-vectors/stand_settle.json (hand derivations: native/tests/Derivations/stand_settle.md; TS
+/// the browser scene's standSettle.ts).
 /// <code>
 ///   TS fn         C#                        shape translation
 ///   settleOffset  StandSettle.SettleOffset  {x, z} points; null = walk to the point
@@ -389,8 +389,8 @@ public class StandSettleVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/foot_lock_measure.json (hand derivations: client3d/scripts/smoke_foot_lock_measure.mjs; TS
-/// client3d/src/scene/footLockMeasure.ts <c>relockRootPaths</c>).
+/// shared/test-vectors/foot_lock_measure.json (hand derivations: native/tests/Derivations/foot_lock_measure.md; TS
+/// the browser scene's footLockMeasure.ts <c>relockRootPaths</c>).
 /// <code>
 ///   TS fn                   C#                              shape translation
 ///   relockValue             FootLockMeasure.Relock          the adapter's rig: bones {name, parent, position, quaternion?
@@ -514,7 +514,7 @@ public class FootLockMeasureVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/stairs.json (hand derivations: client3d/scripts/smoke_walk_math.mjs; TS
+/// shared/test-vectors/stairs.json (hand derivations: native/tests/Derivations/walk_math.md; TS
 /// hud/src/game/stairs.ts). A flight is <c>{foot, head, run?: {at, dir, runM, widthM}}</c>, a landing
 /// <c>{level, x, y, z}</c>; output flights are the input objects (the TS returns the same objects).
 /// <code>

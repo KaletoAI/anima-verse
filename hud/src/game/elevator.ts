@@ -13,7 +13,7 @@
  * Pure like `walk.ts`, `proximity.ts` and `roomwalk.ts`: plain numbers, no
  * Three, no DOM, no module state and no import BUT one to its own kind —
  * `stairs.ts` is as pure as this file, and the transpile of
- * `client3d/scripts/smoke_walk_math.mjs` follows a `./x` import between the
+ * `native/tests/Derivations/walk_math.md` follows a `./x` import between the
  * modules it loads, exactly as it does for `clickmove.ts` → `walk.ts`.
  */
 import { nearestRoomAt } from './stairs';

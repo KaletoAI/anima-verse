@@ -1,6 +1,6 @@
 # figure_clips
 
-- Origin: `client3d/scripts/smoke_figure_clips.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_figure_clips.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/FigureClipsVectorTests.cs`
 - Vectors: `shared/test-vectors/figure_clips.json`
 
@@ -15,7 +15,7 @@
  * are explicit arguments here; the module-state defaults of game/walk.ts are
  * checked to agree with them at the end.
  *
- * Usage:  node client3d/scripts/smoke_figure_clips.mjs
+ * Usage:  node the browser scene's deleted smoke_figure_clips.mjs
  * Cases:  shared/test-vectors/figure_clips.json (format anima-test-vectors/1).
  *
  * Hand derivations (game/walk.ts, scene/clipCoverage.ts). Pose defaults:

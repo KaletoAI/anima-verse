@@ -32,7 +32,9 @@ Derived by hand from the two consumers of the map:
      ``GET /i18n/translations/<lang>``. Its argument is often a variable fed
      from a label table in the same module (``t(VIEW_LABELS[v])``,
      ``t(field.label)``, ``t(mood)``), so ANY string literal in
-     frontend/src, packages/*/src, client3d/src and hud/src counts as a source.
+     frontend/src, packages/*/src and hud/src counts as a source — and so does
+     every C# literal under native/: the native client hands raw English UI
+     strings to the HUD (``SendUi("toast", message, true)``), which translates them.
   2. Python ``t(en, lang)`` from app/core/i18n.py: the same map, server side.
      Callers pass literals directly and also hand raw English strings to the
      React clients, which then translate them (``t(p.message)``,
@@ -125,8 +127,8 @@ NON_SOURCE_PY = {
 SOURCE_TREES = [
     ("frontend/src", {".ts", ".tsx"}),
     ("packages", {".ts", ".tsx"}),
-    ("client3d/src", {".ts", ".tsx"}),
     ("hud/src", {".ts", ".tsx"}),
+    ("native", {".cs"}),
     ("app", {".py"}),
     ("plugins", {".py", ".yaml", ".yml", ".json"}),
     ("shared/config", {".json"}),
@@ -278,7 +280,7 @@ def source_files():
         for p in sorted(root.rglob("*")):
             if not p.is_file() or p.suffix not in exts:
                 continue
-            if "node_modules" in p.parts or "__pycache__" in p.parts:
+            if {"node_modules", "__pycache__", "bin", "obj", ".godot"} & set(p.parts):
                 continue
             rel = p.relative_to(REPO).as_posix()
             if rel in NON_SOURCE_PY:
@@ -300,7 +302,7 @@ def build_index():
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if path.suffix in (".ts", ".tsx"):
+        if path.suffix in (".ts", ".tsx", ".cs"):
             lits = ts_literals(text)
             haystacks.append((rel, ts_seam_haystack(text)))
         elif path.suffix == ".py":

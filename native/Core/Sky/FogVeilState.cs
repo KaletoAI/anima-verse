@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 namespace AnimaNative.Sky;
 
 /// <summary>
-/// One explored-cells texture as <c>setFogVeilCells</c> (client3d/src/scene/fogVeil.ts) fills it: one R8 texel per
+/// One explored-cells texture as <c>setFogVeilCells</c> (the browser scene's fogVeil.ts) fills it: one R8 texel per
 /// 64 m cell over <see cref="FogVeil.Grid"/>, 255 where the avatar has been, 0 elsewhere (the padding ring included);
 /// no grid = the neutral one zero texel.
 /// </summary>

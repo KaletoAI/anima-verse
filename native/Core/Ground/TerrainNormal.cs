@@ -16,7 +16,7 @@ public sealed class HeightLattice
 
 /// <summary>
 /// The terrain's SHADING NORMAL, per fragment, from the height field — the browser's <c>tlodNormalAt</c>
-/// (<c>client3d/src/scene/terrainLod.ts</c> <c>terrainLodNormalGlsl</c> on <c>terrainLodSampleGlsl</c>):
+/// (the browser scene's <c>terrainLod.ts</c> <c>terrainLodNormalGlsl</c> on <c>terrainLodSampleGlsl</c>):
 ///
 ///   n(x, z) = normalize(−(h(x+s, z) − h(x−s, z)), 2s, −(h(x, z+s) − h(x, z−s)))
 ///

@@ -122,7 +122,7 @@ Hand-derived expectations:
                   the NORMAL turns about the ORIGIN, not the pin:
                           x = 0·0 + 1·1 = 1,  z = −0·1 + 1·0 = 0
                   -> world point (−6.0, 0.0), inward (1.0, 0.0)
-      The very same numbers stand in client3d/scripts/smoke_enter_math.mjs
+      The very same numbers stand in native/tests/Derivations/enter_math.md
       — the client consumes this row verbatim, so both sides check the one
       square. Further cases: a room link travels along (``room``), an
       opening on an index the boundary does not have is dropped, and a

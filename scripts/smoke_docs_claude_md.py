@@ -36,7 +36,7 @@ WHAT IS CHECKED (everything in `backticks`, plus the fenced command block)
 
 4. PYTHON SYMBOLS — three shapes must resolve:
      * a backticked CALL (``foo()``, ``mod.foo(...)``) — the name has to be
-       defined somewhere under app/, plugins/, scripts/, packages/, client3d/,
+       defined somewhere under app/, plugins/, scripts/, packages/,
        hud/ or frontend/ (def/class/assignment/JS function or const);
      * ``<file>.py::<symbol>`` — that file must define that symbol;
      * ``<module>.<name>`` where a file ``<module>.py`` exists in the repo —
@@ -136,7 +136,7 @@ for _p in ALL_FILES:
 
 # Source text of everything a symbol could be defined in, concatenated once.
 SRC_EXT = (".py", ".ts", ".tsx", ".mjs", ".js")
-SRC_ROOTS = ("app", "plugins", "scripts", "packages", "client3d", "hud", "frontend")
+SRC_ROOTS = ("app", "plugins", "scripts", "packages", "hud", "frontend")
 _src_chunks = []
 for _p in ALL_FILES:
     if _p.suffix not in SRC_EXT:
@@ -261,7 +261,7 @@ def scripts_of(rel: str):
 
 
 PKG = {rel: scripts_of(rel) for rel in
-       ("package.json", "frontend/package.json", "hud/package.json", "client3d/package.json")}
+       ("package.json", "frontend/package.json", "hud/package.json")}
 
 npm_checked = 0
 for line in TEXT.splitlines():

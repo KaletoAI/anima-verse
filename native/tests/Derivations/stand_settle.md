@@ -1,6 +1,6 @@
 # stand_settle
 
-- Origin: `client3d/scripts/smoke_stand_settle.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_stand_settle.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/stand_settle.json`
 
@@ -10,11 +10,11 @@
 /**
  * Smoke check: an NPC keeps the spot its bridge clip left it on (plan
  * bruecken-feinschliff, Task C4) — `settleOffset` in
- * `client3d/src/scene/standSettle.ts` and its two call sites in
- * `client3d/src/scene/npcs.ts` (the bridge hand-over in `tick`, the goal write
+ * the browser scene's `standSettle.ts` and its two call sites in
+ * the browser scene's `npcs.ts` (the bridge hand-over in `tick`, the goal write
  * in `update`).
  *
- * Usage:  node client3d/scripts/smoke_stand_settle.mjs
+ * Usage:  node the browser scene's deleted smoke_stand_settle.mjs
  *
  * Every expected number below is derived BY HAND from the rule written out
  * here, never recorded from the current output.

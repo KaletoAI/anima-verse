@@ -5,7 +5,7 @@ using System.Linq;
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// The event pins of the overview (client3d/src/game/eventPins.ts <c>pinGlyph</c>/<c>pinY</c>, main.ts
+/// The event pins of the overview (the browser scene's eventPins.ts <c>pinGlyph</c>/<c>pinY</c>, main.ts
 /// <c>updatePins</c>, <c>makePinTexture</c> and the bob in the frame hook), the decisions without a sprite:
 ///
 ///   • which locations get a pin: every location with at least one event in <c>events_by_location</c>
@@ -18,7 +18,7 @@ namespace AnimaNative.Overview;
 ///     y = ground datum + place height + 3.5 (<see cref="PinY"/>);
 ///   • the bob: <c>bob += dt · 2.2</c> once per frame, then every pin <c>y += sin(bob) · 0.008</c>.
 /// Vectors: shared/test-vectors/event_pins.json (pinGlyph, pinY; derivations in
-/// client3d/scripts/smoke_event_pins.mjs). The rest is inline in main.ts; native/tests/PickingTests.cs derives
+/// native/tests/Derivations/event_pins.md). The rest is inline in main.ts; native/tests/PickingTests.cs derives
 /// its cases by hand.
 /// </summary>
 public static class EventPinRule
@@ -75,7 +75,7 @@ public static class EventPinRule
     }
 
     /// <summary>
-    /// <c>buildPlace</c>'s reading height of a place before a model or far shell measured it (client3d
+    /// <c>buildPlace</c>'s reading height of a place before a model or far shell measured it (the browser 3D scene
     /// src/scene/places.ts): area → 3 for a forest style, else 0.3; a building styled as nature → 3 for a
     /// forest, else 0.6; any other building → 4.
     /// </summary>

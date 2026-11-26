@@ -29,9 +29,9 @@ public sealed record RelockReport
 }
 
 /// <summary>
-/// THE FOOT LOCK PER RIG — client3d/src/scene/footLockMeasure.ts <c>relockRootPaths</c> on a Godot-free probe
+/// THE FOOT LOCK PER RIG — the browser scene's footLockMeasure.ts <c>relockRootPaths</c> on a Godot-free probe
 /// (<see cref="ProbeRig"/> + <see cref="RigPose"/> in place of three's skeleton clone and mixer). Vectors
-/// shared/test-vectors/foot_lock_measure.json (hand derivations: client3d/scripts/smoke_foot_lock_measure.mjs).
+/// shared/test-vectors/foot_lock_measure.json (hand derivations: native/tests/Derivations/foot_lock_measure.md).
 ///
 /// Per clip that carries a travel: the travel rebuilt on the rig's own skeleton (<see cref="FootLock"/>) where it
 /// drifts at least <see cref="RelockMinGainCm"/> less than the import, the planted feet pinned by leg IK

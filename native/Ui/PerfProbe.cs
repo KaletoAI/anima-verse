@@ -8,7 +8,7 @@ using Godot;
 namespace AnimaNative.Ui;
 
 /// <summary>
-/// The HUD performance readout, Godot side (client3d main.ts "Performance readout"): what the native client can
+/// The HUD performance readout, Godot side (the browser 3D scene's main.ts "Performance readout"): what the native client can
 /// measure for <see cref="PerfReadout"/>, with main.ts' cadences — the frame rate and the worst frame every frame,
 /// the vertex walk on the 1 s beat, the readout every 300 ms — and nothing at all while the HUD's <c>perfOn</c> is off.
 ///

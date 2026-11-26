@@ -2,7 +2,7 @@
 """Smoke run for UI-3: the worldmap payload carries each character's MESH
 signature, so the 3D client stops polling the model route per character.
 
-``client3d`` ran a 20-second timer that asked ``GET /characters/<n>/model3d``
+The browser 3D scene ran a 20-second timer that asked ``GET /characters/<n>/model3d``
 for EVERY character of the worldmap, sequentially, only to compare one string:
 ``model.signature``. The worldmap poll (every 3 s) already carries exactly that
 pattern for the world — ``terrain_sig`` / ``height_sig`` — so the signature

@@ -1,6 +1,6 @@
 # audio_math
 
-- Origin: `client3d/scripts/smoke_audio_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_audio_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/AudioVectorTests.cs`
 - Vectors: `shared/test-vectors/audio.json`
 
@@ -9,9 +9,9 @@
 ```text
 /**
  * Task 58 / E8-T1. Canonical hand derivations for audio.json.
- * Run: node client3d/scripts/smoke_audio_math.mjs (no browser/server/audio device).
+ * Run: node the browser scene's deleted smoke_audio_math.mjs (no browser/server/audio device).
  * P3-R31: transform the ORIGINAL prefs, soundtrack, voiceover and audio code;
- * never copy their algorithms or edit client3d/src or packages.
+ * never copy their algorithms or edit the browser 3D scene's sources or packages.
  *
  * [1] Prefs: key av3d.audio.v1; defaults master=.8, music=.5, ambient=.6,
  * tts=1, musicOn=ambientOn=true, ttsOn=auto. Missing/invalid/non-object JSON

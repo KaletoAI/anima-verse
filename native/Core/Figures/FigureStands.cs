@@ -17,7 +17,7 @@ public sealed class RoomFloor
 
 /// <summary>
 /// THE GROUND AND THE STANDS OF ONE MOUNTED LOCATION for its figures — the browser's tile fields the placement reads
-/// (client3d/src/scene/tiles.ts <c>tileGroundY</c>/<c>tileWalkY</c>, <c>bakedFloorAt</c>, <c>roomFloorWorldY</c>,
+/// (the browser scene's tiles.ts <c>tileGroundY</c>/<c>tileWalkY</c>, <c>bakedFloorAt</c>, <c>roomFloorWorldY</c>,
 /// <c>roomBaseFloorY</c>, <c>roomFloorAt</c>, <c>roomStandY</c>, <c>deriveRoomSpots</c>, <c>deriveCorridorCentres</c>)
 /// over the vector-checked rules of <see cref="FigureGround"/> and <see cref="RoomSpots"/>. The lookups are filled by the
 /// mount (surfaces, declared floors, plates, room floors, room levels, the always-visible rooms, the corridors) and the

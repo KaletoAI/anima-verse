@@ -54,7 +54,7 @@ public sealed record LodSelection(List<LodNode> Nodes, List<double> Ranges, int 
 public sealed record LodCapGrid(double X0, double Z0, double Step, int Cols, int Rows, float[] Caps, double Min);
 
 /// <summary>
-/// The pure CDLOD math of the browser's terrain (<c>client3d/src/scene/terrainLod.ts</c>, contract § A16.6), line for
+/// The pure CDLOD math of the browser's terrain (the browser scene's <c>terrainLod.ts</c>, contract § A16.6), line for
 /// line in the same double arithmetic; checked against <c>shared/test-vectors/terrain_lod.json</c>.
 /// </summary>
 public static class TerrainLod

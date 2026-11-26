@@ -13,7 +13,7 @@ using static AnimaNative.Tests.ScatterVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// The adapters of client3d/scripts/pairVectorDispatch.mjs (Task 32), mirrored for the native ports:
+/// The adapters of the browser scene's deleted pairVectorDispatch.mjs (Task 32), mirrored for the native ports:
 /// <code>
 ///   TS fn                   C#                                     shape translation
 ///   pairClipValue           PairClip.Phase                         (PairClipInput, 'clipT' | 'phase')
@@ -176,7 +176,7 @@ internal static class PairVectorAdapters
     };
 }
 
-/// <summary>shared/test-vectors/group_role_points.json (G3; hand derivations: client3d/scripts/smoke_group_role_points.mjs).</summary>
+/// <summary>shared/test-vectors/group_role_points.json (G3; hand derivations: scripts/smoke_group_role_points.py).</summary>
 public class GroupRolePointVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("group_role_points"));
@@ -190,7 +190,7 @@ public class GroupRolePointVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(PairVectorAdapters.Dispatch));
 }
 
-/// <summary>shared/test-vectors/pair_clip_phase.json (hand derivations: client3d/scripts/smoke_pair_realtime.mjs).</summary>
+/// <summary>shared/test-vectors/pair_clip_phase.json (hand derivations: native/tests/Derivations/pair_realtime.md).</summary>
 public class PairClipPhaseVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("pair_clip_phase"));
@@ -204,7 +204,7 @@ public class PairClipPhaseVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(PairVectorAdapters.Dispatch));
 }
 
-/// <summary>shared/test-vectors/pair_clip_geometry.json (hand derivations: client3d/scripts/smoke_clip_pair.mjs).</summary>
+/// <summary>shared/test-vectors/pair_clip_geometry.json (hand derivations: native/tests/Derivations/clip_pair.md).</summary>
 public class PairClipGeometryVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("pair_clip_geometry"));
@@ -218,7 +218,7 @@ public class PairClipGeometryVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(PairVectorAdapters.Dispatch));
 }
 
-/// <summary>shared/test-vectors/pair_height.json (hand derivations: client3d/scripts/smoke_pair_storey.mjs).</summary>
+/// <summary>shared/test-vectors/pair_height.json (hand derivations: native/tests/Derivations/pair_storey.md).</summary>
 public class PairHeightVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("pair_height"));
@@ -232,7 +232,7 @@ public class PairHeightVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(PairVectorAdapters.Dispatch));
 }
 
-/// <summary>shared/test-vectors/figure_normalisation.json (hand derivations: client3d/scripts/smoke_figure_normalisation.mjs).</summary>
+/// <summary>shared/test-vectors/figure_normalisation.json (hand derivations: native/tests/Derivations/figure_normalisation.md).</summary>
 public class FigureNormalisationVectorTests
 {
     private static readonly Lazy<VectorFile> File = new(() => VectorFile.Load("figure_normalisation"));
@@ -358,7 +358,7 @@ public class PairPlayTests
     [Fact]
     public void TheSoloSceneHeldClockRunsOnThePlaceBlock()
     {
-        // Hand-derived (client3d smoke_pair_clip_tempo.mjs [7]): adopt 2.0 at tempo 0.5; dt 1 → 2.5; frozen stays 2.5;
+        // Hand-derived (the browser 3D scene smoke_pair_clip_tempo.mjs [7]): adopt 2.0 at tempo 0.5; dt 1 → 2.5; frozen stays 2.5;
         // the same poll again (clip_s 2.0, 0.5 off) is not reconciled; poll 2: clip_s 2.7 (0.2 off) kept, tempo 0.25;
         // poll 3: clip_s 3.0 (0.5 off) snaps; dt 2 at 0.25 → 3.5; another scene adopts fresh; no block → null.
         using var map = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new { characters = new object[] {

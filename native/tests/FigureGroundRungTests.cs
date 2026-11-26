@@ -8,8 +8,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The three floor rungs of the tile ground ladder that have NO shared vector yet — <c>plateCeiling</c>,
-/// <c>recipeFloorAt</c>, <c>declaredFloorAt</c> (client3d/src/game/ground.ts). Every case below is the hand case of
-/// client3d/scripts/smoke_walk_math.mjs with its numbers copied verbatim (section "ground — ONE floor", "THE
+/// <c>recipeFloorAt</c>, <c>declaredFloorAt</c> (the browser scene's ground.ts). Every case below is the hand case of
+/// native/tests/Derivations/walk_math.md with its numbers copied verbatim (section "ground — ONE floor", "THE
 /// STAIRWELL", "a DECLARED walk height"); the derivations live there. Extracting them into a vector file is the open
 /// follow-up named in the Task 29 report.
 /// </summary>

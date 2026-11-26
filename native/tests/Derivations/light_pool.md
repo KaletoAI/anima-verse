@@ -1,6 +1,6 @@
 # light_pool
 
-- Origin: `client3d/scripts/smoke_light_pool.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_light_pool.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/LightPoolVectorTests.cs`
 - Vectors: `shared/test-vectors/light_pool.json`
 
@@ -8,9 +8,9 @@
 
 ```text
 /**
- * Smoke check for the prop light pool — client3d/src/scene/lightPool.ts.
+ * Smoke check for the prop light pool — the browser scene's lightPool.ts.
  *
- * Usage:  node client3d/scripts/smoke_light_pool.mjs   (from the repo root)
+ * Usage:  node the browser scene's deleted smoke_light_pool.mjs   (from the repo root)
  *
  * Hand derivations (cases in shared/test-vectors/light_pool.json, shared with
  * the native client's C# tests). JSON wrappers: `visibleRooms` is a LIST (the

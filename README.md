@@ -82,14 +82,13 @@ chat, movement, own inventory and outfit, gifts, scene photos, cancelling own ta
   **Media Generation** (*General & defaults · Backends · LoRA library · Scene
   rendering · Reference renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*).
   Saving stays section-wide, the URL hash (`#image_generation/blender`) survives a reload.
-- **3D player client** at **`/play`** (`client3d/`, Three.js; React HUD in `hud/`) — a zoomable
+- **Native 3D player client** (`native/`, Godot 4 / C#; React HUD in `hud/`) — a zoomable
   world map that resolves buildings into walkable floor plans as you zoom in, with chat,
   self/others, inventory, mind, gallery, phone, news, quests and tasks in the HUD.
-  `/` redirects here. FastAPI serves its committed build from `static/client3d/`, so only
-  Python needs to run. Optional development with HMR uses `./start.sh --with-3d` or
-  `npm run dev:client3d` on port 5183. The HUD page is its own workspace `hud/` (`@anima/hud`,
-  built to `static/hud/`, `npm run dev:hud` on port 5184): the browser scene imports it as a
-  package, the native client's CEF HUD loads the built `static/hud/hud.html` from the server. Shared player panels and character forms live in
+  `/play` on the server is a hint page pointing browsers to the native client (the browser
+  3D scene was removed). The HUD page is its own workspace `hud/` (`@anima/hud`,
+  built to `static/hud/`, `npm run dev:hud` on port 5184): the native client's CEF HUD loads
+  the built `static/hud/hud.html` from the server. Shared player panels and character forms live in
   `packages/player-ui`; geometry shared with the admin preview lives in `packages/scene-render`.
 
 **Three nouns, kept distinct:** a **Character** is any entity; an **Agent** is an LLM-driven chat
@@ -581,24 +580,22 @@ chmod 755 start.sh        # first time only
 ./start.sh                  # storage: ./worlds/demo (the default; created empty if missing)
 ./start.sh --world NAME     # open or create worlds/NAME — e.g. --world demo
 ./start.sh --storage /path  # use an arbitrary storage directory
-./start.sh --with-3d        # also start the 3D client as a second process
 
 ./start.sh --stop | --restart | --status
 ./start.sh --help
 ```
 
-`--with-3d` combines with the others; `--stop` always stops both processes. The 3D client's port and
-backend target come from the environment (`CLIENT3D_PORT`, default `5183`; `ANIMA_API`, default
-`http://localhost:8000`).
+Players connect with the native client (`native/`); the server alone serves the API, Game-Admin and the
+admin pages.
 
 | Port  | What                                             |
 |-------|--------------------------------------------------|
 | 8000  | the backend: `/play`, `/game-admin`, `/admin/*`   |
-| 5183  | the 3D client (`--with-3d` or `npm run dev -w client3d`) |
+| 5184  | the HUD page alone (`npm run dev:hud`)            |
 | 5173  | the Vite dev server for the React SPA            |
 
 Logs live in `logs/`: `logs/main.log` (server, rotated into `logs/archive/` on restart),
-`logs/llm_calls.jsonl`, `logs/image_prompts.jsonl`, and `logs/client3d.log` when the 3D client runs.
+`logs/llm_calls.jsonl`, `logs/image_prompts.jsonl` and `logs/tool_calls.jsonl`.
 
 Once running, open `http://<host>:8000/` — it redirects to the Player UI at `/play`.
 
@@ -622,7 +619,7 @@ No line at all means the world already has users.
 
 ### Frontend development
 
-The repository is an npm workspace root (`frontend`, `hud`, `client3d`, `packages/*`) — one `npm install`
+The repository is an npm workspace root (`frontend`, `hud`, `packages/*`) — one `npm install`
 at the top covers all of them. The React app is committed pre-built under `static/game_admin/`, so a
 source checkout runs without Node at all.
 
@@ -633,12 +630,10 @@ npm run dev:admin            # Vite dev server on :5173 (= npm run dev -w fronte
 npm run build:admin          # tsc -b && vite build → static/game_admin/
 npm run dev:hud              # HUD page alone on :5184
 npm run build:hud            # tsc --noEmit && vite build → static/hud/
-npm run dev:client3d         # 3D client on :5183
-npm run build:client3d       # tsc --noEmit && vite build → static/client3d/
-npm run build                # frontend, hud and client3d
+npm run build                # frontend and hud
 
 npm run lint -w frontend     # the only lint script; covers frontend/ and packages/*/src
-ANIMA_API=http://<host>:8000 npm run dev -w client3d   # against a backend elsewhere
+ANIMA_API=http://<host>:8000 npm run dev -w hud        # against a backend elsewhere
 ```
 
 See [`frontend/README.md`](frontend/README.md) and [`packages/README.md`](packages/README.md) for

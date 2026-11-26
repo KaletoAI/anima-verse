@@ -13,7 +13,7 @@ public readonly record struct OverviewPose(Vec3 Position, Vec3 Target, double Pi
 /// <summary>
 /// The OVERVIEW camera's state and its input rules — the Godot-free half of the native overview
 /// camera (<c>native/Ui/OverviewCamera.cs</c> feeds it events and ground hits and applies the pose).
-/// A line-for-line port of the camera part of <c>client3d/src/scene/engine.ts</c> (Engine: the
+/// A line-for-line port of the camera part of the browser scene's <c>engine.ts</c> (Engine: the
 /// fields <c>target/dist/targetDist/yaw/targetYaw/pitchOffset</c>, <c>flyTo</c>, <c>bindInput</c>,
 /// the camera half of <c>frame()</c>). Task 48 (E7-T3) adds follow, bounded zoom and first person;
 /// Task 73 makes every mouse drag orbit in both modes.

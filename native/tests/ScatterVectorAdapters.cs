@@ -12,7 +12,7 @@ namespace AnimaNative.Tests;
 /// Shape adapters between the TS shapes of shared/test-vectors/scatter.json and the C# types of
 /// <see cref="ScatterMath"/> / <see cref="ScatterLod"/>. They translate shapes only and never
 /// reinterpret a value. Conventions (shared/test-vectors/README.md, header of
-/// client3d/scripts/smoke_scatter_math.mjs):
+/// native/tests/Derivations/scatter_math.md):
 /// <list type="bullet">
 /// <item>An omitted trailing argument or option key is JS <c>undefined</c>, JSON <c>null</c> is JS
 /// <c>null</c>; both mean "not given" and become C# <c>null</c>. Where the C# parameter is a

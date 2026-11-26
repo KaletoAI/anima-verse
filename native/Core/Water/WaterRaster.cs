@@ -6,7 +6,7 @@ using AnimaNative.Terrain;
 namespace AnimaNative.Water;
 
 /// <summary>
-/// The world's water as a field — the readers of <c>client3d/src/scene/waterRaster.ts</c> over the loaded tiles'
+/// The world's water as a field — the readers of the browser scene's <c>waterRaster.ts</c> over the loaded tiles'
 /// <see cref="WaterTileField"/>s (Wasser v2 K-A). The level is NaN where dry, the signed distance
 /// <see cref="WaterTileField.SdDry"/>; there is no overview rung, an unloaded tile is dry. <see cref="TileM"/> is the
 /// payload's, the keys <c>"tx,tz"</c> (<see cref="HeightTiles.TileKeyAt"/>).

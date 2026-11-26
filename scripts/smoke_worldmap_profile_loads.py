@@ -2,7 +2,7 @@
 """Smoke run for DATA-7: the worldmap payload loads ONE profile per character.
 
 ``world_ops.build_worldmap_payload`` is polled every 3 seconds by every
-connected client (``client3d/src/main.ts``: ``WORLDMAP_POLL_MS = 3000``). It
+connected client (the browser scene's ``main.ts``: ``WORLDMAP_POLL_MS = 3000``). It
 walks every roster character and used to ask ``get_character_profile`` again
 for almost every field it reports, although it already held the merged profile
 in ``_prof``. This check pins the new bound and proves the payload did not

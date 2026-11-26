@@ -24,7 +24,7 @@ URL such as `/assets/audio/music/day/missing.mp3`.
 Run the vector and fixture checks from the repository root:
 
 ```sh
-node client3d/scripts/smoke_audio_math.mjs
+dotnet test native/tests   # derivation: native/tests/Derivations/audio_math.md
 ```
 
 To regenerate the audio files, install Python 3 and ffmpeg with libmp3lame and

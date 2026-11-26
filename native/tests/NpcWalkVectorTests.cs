@@ -17,8 +17,8 @@ using static AnimaNative.Tests.SceneVectorAdapters;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// shared/test-vectors/npc_walk.json (hand derivations: client3d/scripts/smoke_npc_walk.mjs; TS source
-/// client3d/src/game/npcWalk.ts). Points are <c>{x, y, z}</c>.
+/// shared/test-vectors/npc_walk.json (hand derivations: native/tests/Derivations/npc_walk.md; TS source
+/// the browser scene's npcWalk.ts). Points are <c>{x, y, z}</c>.
 /// <code>
 ///   TS fn            C#                         shape translation
 ///   npcGoal          NpcWalk.Goal               plan ↔ {goal, retired, delta, distToGoal, dist, moving}
@@ -103,8 +103,8 @@ public class NpcWalkVectorTests
 }
 
 /// <summary>
-/// shared/test-vectors/npc_ground.json (hand derivations: client3d/scripts/smoke_walk_math.mjs [30]; TS sources
-/// client3d/src/game/walk.ts, doors.ts, elevator.ts). Non-finite inputs are <c>{"$number": "NaN"}</c>.
+/// shared/test-vectors/npc_ground.json (hand derivations: native/tests/Derivations/walk_math.md [30]; TS sources
+/// the browser scene's walk.ts, doors.ts, elevator.ts). Non-finite inputs are <c>{"$number": "NaN"}</c>.
 /// <code>
 ///   TS fn               C#                           shape translation
 ///   groundScope         WaterGates.ScopeOf           null = undefined; GroundScope ↔ "wilderness" | "open" | "built"

@@ -1,11 +1,8 @@
 # Prop-action fixture (Task 56 / E7-T11)
 
-Synthetic offline input for the Task 57 native consumer. Run the data and
-production-math check from the repository root:
-
-```sh
-node client3d/scripts/smoke_prop_action_fixture.mjs
-```
+Synthetic offline input for the Task 57 native consumer. Its data and
+production-math check ran in the browser scene's `smoke_prop_action_fixture.mjs`,
+deleted with that scene in plan E3; the native consumer reads the fixture as is.
 
 Ruling: use a separate `propactions/` world. The existing `embody/` fixture
 and its checks keep their inputs. No C# consumer or API implementation is
@@ -66,7 +63,7 @@ regression. No client-generated target or stand point is permitted.
 | `worldmap_approach.json` | Own `journey-56-solo`, 6 m remaining, starting at progress 0 |
 | `worldmap_entry.json` | Own entry at access with phase .5 and a distinct body anchor |
 | `worldmap_active.json` | Entry removed; authoritative held place at slot 0 and its XZ/facing/room |
-| `worldmap_pair.json` | Accepted incoming invitation: own avatar journey plus the visible NPC's walk `order` (§ A11b, plan E3 Task 5: start (4, 2), target (5.5, 2), 1 m/s, issued at `motion_now` 0); its `local_approach` stays for `client3d/scripts/smoke_prop_action_fixture.mjs`, the native client no longer reads it |
+| `worldmap_pair.json` | Accepted incoming invitation: own avatar journey plus the visible NPC's walk `order` (§ A11b, plan E3 Task 5: start (4, 2), target (5.5, 2), 1 m/s, issued at `motion_now` 0); its `local_approach` is a leftover (its only reader, the browser scene's fixture smoke, went with that scene in plan E3); the native client does not read it |
 | `worldmap_cancelled.json` | Mid-route cancelled position; no remaining motion projection |
 
 Own travel contains its journey ID and complete polyline. The foreign NPC's

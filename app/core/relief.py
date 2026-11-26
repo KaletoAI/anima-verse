@@ -14,7 +14,7 @@ Three things live here, and they are deliberately separate:
   Boden" E5a it is ``ground_y`` and nothing else: the per-scene 17 x 17 relief
   and its ``scene_ground_lift`` sampler are deleted (user decision 1);
 * :func:`slope_blocks` — the RULE as a pure predicate, so the client mirror
-  (``client3d/src/game/walk.ts`` ``slopeBlocks``) and this side can be checked
+  (the browser scene's ``walk.ts`` ``slopeBlocks``) and this side can be checked
   against the same hand-derived table.
 
 The rule itself, in one sentence: the SLOPE limit (``max_slope_deg``) holds
@@ -52,7 +52,7 @@ _MAX_SLOPE_DEG = 89.0
 #: client walking at 3.4 m/s and reporting ~3 times a second moves about a
 #: metre between two points, so "shorter than one report" is exactly the
 #: length over which a rise is something one has to climb rather than walk up.
-#: Mirrored in ``client3d/src/game/walk.ts``.
+#: Mirrored in the browser scene's ``walk.ts``.
 STEP_DISTANCE_M = 1.0
 
 
@@ -114,7 +114,7 @@ def slope_blocks(dh: float, dist: float, max_step: float,
     PURE — no config, no world, no state. The client owns the identical
     predicate (``slopeBlocks``), and both are checked against the same
     hand-derived table (``scripts/smoke_slope_gate.py``,
-    ``client3d/scripts/smoke_walk_math.mjs``).
+    ``native/tests/Derivations/walk_math.md``).
 
     THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
 

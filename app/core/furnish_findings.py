@@ -15,7 +15,7 @@ Nothing here moves a placement.
 
 WHO SEES THEM. Furnishing findings carry ``scope: "editor"`` — they belong in
 the floor-plan editor's findings list, not in a toast that greets a PLAYER
-entering the location (``client3d`` skips that scope). ``room_unreachable`` is
+entering the location (the browser 3D scene skipped that scope). ``room_unreachable`` is
 a building finding and has no scope.
 
 ONE FINDING PER ROOM AND KIND, with the placements it is about as their own

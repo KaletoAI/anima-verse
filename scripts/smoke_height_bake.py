@@ -1601,7 +1601,7 @@ check("the whole 3 m drop is ONE segment of the axis, 2 m long",
 # THE FALL, read the way `@anima/scene-render.waterfallsFrom` reads it — both
 # thresholds, both strict, on every consecutive pair. Only the middle segment
 # passes, so the client twin draws exactly ONE curtain (its own smoke pins the
-# same axis: `client3d/scripts/smoke_waterfall.mjs`).
+# same axis: the browser scene's deleted `smoke_waterfall.mjs`).
 _segments = [(round(CLIFF.axis[i - 1][3] - CLIFF.axis[i][3], 6),
               round(CLIFF.axis[i][2] - CLIFF.axis[i - 1][2], 6))
              for i in range(1, len(CLIFF.axis))]
@@ -1868,7 +1868,7 @@ print("\n[10e] § G4, RIM HALF — the guarantee is the LIFT's now, not the "
 # pins: the mirror EXISTS wherever the mask says water, at every level a
 # renderer draws, because the decimation is a SUBSET of a piecewise-linear
 # field and a coarse texel is water exactly when its own base texel is
-# (K-A E2, `client3d/src/scene/terrainLod.buildWaterPyramid`). A subset needs
+# (K-A E2, the browser scene's `terrainLod.buildWaterPyramid`). A subset needs
 # no second evaluation — but `water_at` is a pure function of the point, so the
 # subset can be checked against the field itself, which is what makes the
 # statement numeric here instead of on the client.

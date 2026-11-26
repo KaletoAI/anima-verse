@@ -13,7 +13,7 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/fog_veil.json against <see cref="FogVeil"/> (hand derivations:
-/// client3d/scripts/smoke_fog_veil.mjs; TS source client3d/src/scene/fogVeilMath.ts).
+/// native/tests/Derivations/fog_veil.md; TS source the browser scene's fogVeilMath.ts).
 ///
 /// <code>
 ///   TS fn           C#                   shape translation

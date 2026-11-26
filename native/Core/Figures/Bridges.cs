@@ -16,8 +16,8 @@ public sealed record BridgeLiftSpec(double EndLift, double FirstContactS);
 public sealed record RootTurn(float[] Times, float[] Yaw, V3 Pivot);
 
 /// <summary>
-/// THE HEIGHT OF A BRIDGE — client3d/src/scene/bridgeLift.ts, vectors shared/test-vectors/bridge_lift.json (hand
-/// derivations: client3d/scripts/smoke_bridge_lift.mjs). Lifts are metres in the frame of the figure root, times clip
+/// THE HEIGHT OF A BRIDGE — the browser scene's bridgeLift.ts, vectors shared/test-vectors/bridge_lift.json (hand
+/// derivations: native/tests/Derivations/bridge_lift.md). Lifts are metres in the frame of the figure root, times clip
 /// seconds.
 /// </summary>
 public static class BridgeLift
@@ -62,7 +62,7 @@ public static class BridgeLift
 }
 
 /// <summary>
-/// The horizontal TRAVEL and TURN of a clip's root — client3d/src/scene/bridgeTravel.ts, vectors
+/// The horizontal TRAVEL and TURN of a clip's root — the browser scene's bridgeTravel.ts, vectors
 /// shared/test-vectors/bridge_travel.json (smoke_bridge_root.mjs) and bridge_heading.json (<c>turnAt</c>). Frame: the
 /// clip frame (+Z forward, +X the figure's LEFT).
 /// </summary>
@@ -128,8 +128,8 @@ public static class BridgeTravel
 }
 
 /// <summary>
-/// THE HEADING OF A BRIDGE CLIP'S PELVIS — client3d/src/scene/bridgeHeading.ts, vectors
-/// shared/test-vectors/bridge_heading.json (hand derivations: client3d/scripts/smoke_bridge_heading.mjs).
+/// THE HEADING OF A BRIDGE CLIP'S PELVIS — the browser scene's bridgeHeading.ts, vectors
+/// shared/test-vectors/bridge_heading.json (hand derivations: native/tests/Derivations/bridge_heading.md).
 /// </summary>
 public static class BridgeHeading
 {
@@ -168,8 +168,8 @@ public static class BridgeHeading
 }
 
 /// <summary>
-/// WHERE AN NPC STANDS AFTER A BRIDGE CLIP — client3d/src/scene/standSettle.ts, vectors
-/// shared/test-vectors/stand_settle.json (hand derivations: client3d/scripts/smoke_stand_settle.mjs).
+/// WHERE AN NPC STANDS AFTER A BRIDGE CLIP — the browser scene's standSettle.ts, vectors
+/// shared/test-vectors/stand_settle.json (hand derivations: native/tests/Derivations/stand_settle.md).
 /// </summary>
 public static class StandSettle
 {

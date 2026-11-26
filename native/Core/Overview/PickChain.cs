@@ -19,7 +19,7 @@ public enum InfoChange
 public readonly record struct PickOutcome(string? Selected, InfoChange Info, string? InfoLocationId);
 
 /// <summary>
-/// The click chain of the browser's overview (client3d/src/scene/engine.ts <c>pointerup</c> →
+/// The click chain of the browser's overview (the browser scene's engine.ts <c>pointerup</c> →
 /// main.ts <c>engine.pickFigure</c> → object actions → <c>engine.onPick</c>) as one
 /// decision over the two hits the scene computed:
 ///

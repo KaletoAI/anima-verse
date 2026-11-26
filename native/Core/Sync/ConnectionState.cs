@@ -4,7 +4,7 @@ namespace AnimaNative.Sync;
 
 /// <summary>
 /// The HUD's <c>connection</c> and <c>clock</c> fields as <c>applyWorldMap</c> and the poll's error branch of
-/// client3d/src/main.ts write them: a good poll publishes <c>{connection: 'ok', clock}</c> only when either
+/// the browser scene's main.ts write them: a good poll publishes <c>{connection: 'ok', clock}</c> only when either
 /// changed; a failed fetch or apply that is NOT an expired session publishes <c>{connection: 'lost'}</c> once.
 /// An expired session changes nothing here — it opens the login instead.
 /// </summary>

@@ -16,8 +16,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scene_view.json against <see cref="SceneView"/> (hand derivations:
-/// client3d/scripts/smoke_scene_view.mjs; TS sources: client3d/src/scene/sceneView.ts, storeyDisplay.ts,
-/// shellPlan.ts, client3d/src/game/streamRings.ts, polygon.ts).
+/// native/tests/Derivations/scene_view.md; TS sources: the browser scene's sceneView.ts, storeyDisplay.ts,
+/// shellPlan.ts, the browser scene's streamRings.ts, polygon.ts).
 ///
 /// <code>
 ///   TS fn                   C#                                shape translation

@@ -7,7 +7,7 @@ using Godot;
 namespace AnimaNative.World;
 
 /// <summary>
-/// THE UNDERWATER GHOST (<c>client3d/src/scene/submergedGhost.ts</c>, finding H3): the second draw that gives anything
+/// THE UNDERWATER GHOST (the browser scene's <c>submergedGhost.ts</c>, finding H3): the second draw that gives anything
 /// standing in water a body below the waterline. The water surface IS the opaque terrain (Wasser v2 K-A), so whatever
 /// stands under a mirror loses the depth test there and is cut off clean; the ghost draws the object once more with the
 /// depth test INVERTED — only where the normal pass lost — tinted with the water, at 0.4 opacity, writing no depth, and

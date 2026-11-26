@@ -1,6 +1,6 @@
 # foot_lock_math
 
-- Origin: `client3d/scripts/smoke_foot_lock_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_foot_lock_math.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/BridgeVectorTests.cs`
 - Vectors: `shared/test-vectors/foot_lock.json`
 
@@ -13,7 +13,7 @@
  * `app/blender/scripts/_root_motion.py`. Pure numbers (§ B5a), no three, no
  * clips, no server.
  *
- * Usage:  node client3d/scripts/smoke_foot_lock_math.mjs
+ * Usage:  node the browser scene's deleted smoke_foot_lock_math.mjs
  *         (needs esbuild; reads scripts/fixtures/root_motion_cases.json)
  *
  * Hand-derived expectations
@@ -105,7 +105,7 @@
  *       full points is the old mean (path z = 3f).
  * [F] SHARED FIXTURE — ``scripts/fixtures/root_motion_cases.json`` is the
  *       parity contract with the TypeScript twin (``packages/scene-render/src/footLock.ts``,
- *       checked by ``client3d/scripts/smoke_foot_lock_math.mjs``). It holds the
+ *       checked by the browser scene's deleted ``smoke_foot_lock_math.mjs``). It holds the
  *       cases [2], [4], [5], [6], [10] and [11] above — the same inputs, the
  *       paths and drifts derived here by hand (each case names its origin in
  *       ``"from"``) — plus the constants. This section checks the constants

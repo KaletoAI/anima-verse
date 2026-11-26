@@ -116,7 +116,7 @@ Under fix x = 90 (three's Rx: (x,y,z) -> (x, -z, y)): box_min [-1,-1,0], box_max
 node at (x=0.5, z=0.1) -> hits -1(down) 1(up) -> (1 - (-1))*100 = 200.
 
 --- PART 2: the sampler (pure, no Blender) -----------------------------------
-The SAME hand table drives client3d/scripts/smoke_surface_math.mjs — that equality is
+The SAME hand table drives the browser scene's deleted smoke_surface_math.mjs — that equality is
 the proof that client and server compute one height (spec § 6.2).
 
 S1: step 1, origin [-1,-1], cols 3, rows 3, box_min [-1,0,-1], box_max [1,1,1],

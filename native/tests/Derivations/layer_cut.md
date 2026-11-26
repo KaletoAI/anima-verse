@@ -1,6 +1,6 @@
 # layer_cut
 
-- Origin: `client3d/scripts/smoke_layer_cut.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_layer_cut.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/LayerGroundVectorTests.cs`
 - Vectors: `shared/test-vectors/layer_ground.json`
 
@@ -12,7 +12,7 @@
  * arithmetic the terrain material composites its material with, and the proof
  * that the three ladders it replaces are really gone.
  *
- * Usage:  node client3d/scripts/smoke_layer_cut.mjs
+ * Usage:  node the browser scene's deleted smoke_layer_cut.mjs
  *         (transpiles `@anima/scene-render` `layerCut.ts`; needs esbuild)
  *
  * The server half is `scripts/smoke_terrain_layers.py` — the BAKE. This is the
@@ -182,13 +182,13 @@
  * the open world's ground stop looking like wallpaper, and the arithmetic that
  * steers it (§ B5a: strings and numbers, never screenshots).
  *
- * Usage:  node client3d/scripts/smoke_natural_ground.mjs
+ * Usage:  node the browser scene's deleted smoke_natural_ground.mjs
  *         (bundles the client's naturalGround + ground modules; needs three)
  *
  * ===========================================================================
  * WHAT IS UNDER TEST
  * ===========================================================================
- * `client3d/src/scene/naturalGround.ts` patches the OPEN-WORLD ground material
+ * the browser scene's `naturalGround.ts` patches the OPEN-WORLD ground material
  * (the CDLOD terrain of `scene/ground.ts`, and the one water drape left beside
  * it) with three stages:
  *   (1) ANTI-TILE   the ground texture sampled a second time at 0.23× the
@@ -377,7 +377,7 @@
 
 ## Inline derivations
 
-Comment blocks of `client3d/scripts/smoke_layer_cut.mjs` after its opening docstring that contain a mark a case label
+Comment blocks of the browser scene's deleted `smoke_layer_cut.mjs` after its opening docstring that contain a mark a case label
 cites, in file order; line numbers refer to the smoke at a56065e6f003.
 
 Line 425 (cites [1]):

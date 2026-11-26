@@ -23,7 +23,7 @@ public sealed record GroundedPropMesh(ArrayMesh Mesh, Aabb Bounds, Material? Mat
 
 /// <summary>
 /// Prop GLB → the geometry a scatter entry instances (<c>mountUrl</c> + <c>groundedGeometry</c> in
-/// client3d/src/scene/ground.ts):
+/// the browser scene's ground.ts):
 ///
 ///   · the browser takes the FIRST <c>THREE.Mesh</c> of the file in depth-first order — for a glTF mesh
 ///     with several primitives that is its first primitive only — so this takes surface 0 of the first

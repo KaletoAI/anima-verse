@@ -1,11 +1,10 @@
-"""Player UI — its own page under ``/play`` (plan-room-conversation phase 2).
+"""Player routes under ``/play`` (plan-room-conversation phase 2).
 
-Deliberately separate from the Game Admin: the player UI is in-world and
-user-gated (not admin). It shows the *perceived* current room scene of the
-active avatar.
-
-The built 3D shell lives under ``static/client3d/index.html`` and is built
-from the ``client3d/`` workspace.
+Deliberately separate from the Game Admin: the player API is in-world and
+user-gated (not admin). It serves the *perceived* current room scene of the
+active avatar to the native client; ``GET /play`` itself is a plain hint page
+pointing browsers to the native client (the browser 3D scene was deleted in
+plan E3).
 """
 import json
 import threading
@@ -828,10 +827,10 @@ _POS_STEP_FLOOR_M = 5.0
 #: How many times the world's travel speed a free walker may make. Generous on
 #: purpose: this is an ANTI-TELEPORT bound, not a precision anticheat — the
 #: client's own walk is 3.4 m/s (6.12 m/s running with Shift, ``RUN_FACTOR``
-#: 1.8 in ``client3d/src/game/npcWalk.ts``) and every honest report stays below.
+#: 1.8 in the browser scene's ``npcWalk.ts``) and every honest report stays below.
 _POS_STEP_FACTOR = 3.0
 #: The client's own walking pace in REAL metres per second — a mirror of
-#: ``WALK_SPEED`` in ``client3d/src/scene/npcs.ts``, kept here for one reason:
+#: ``WALK_SPEED`` in the browser scene's ``npcs.ts``, kept here for one reason:
 #: a world whose travel speed is set below the client's walking pace would
 #: otherwise refuse an honest free walker with 409s. Both terms count REAL
 #: seconds (movement runs in real time since 2026-11-05); the allowance is the

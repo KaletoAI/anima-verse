@@ -43,7 +43,7 @@ async function load(entry, tag) {
   try {
     const esbuild = await import(join(ROOT, 'node_modules/esbuild/lib/main.js'))
     const built = await esbuild.build({
-      stdin: { contents: `export * from '${entry}';`, resolveDir: join(ROOT, 'client3d'), loader: 'ts' },
+      stdin: { contents: `export * from '${entry}';`, resolveDir: ROOT, loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', write: false,
       outfile: join(dir, 'sr.mjs'), external: ['three', 'three/*'], logLevel: 'error',
     })

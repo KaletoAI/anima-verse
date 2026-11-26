@@ -9,10 +9,10 @@ blocked. Water at 1.5 carries both directions to delta=0, permitting return.
 Usage: ./.venv/bin/python scripts/smoke_prop_water.py
 
 Hand derivation of shared/test-vectors/prop_water.json (moved from
-client3d/scripts/smoke_prop_water.mjs @ 011cd048aa3cc2937186d7f35d2203af9491db8a), word for word; the browser
+the browser scene's deleted smoke_prop_water.mjs @ 011cd048aa3cc2937186d7f35d2203af9491db8a), word for word; the browser
 smoke and the native PropWaterVectorTests replay the same vector:
 
-    /** Prop water, spec §§8–9. Usage: node client3d/scripts/smoke_prop_water.mjs
+    /** Prop water, spec §§8–9. Usage: node the browser scene's deleted smoke_prop_water.mjs
      * Hand derivations (all vector expectations written by hand):
      * [1] SPECS: pool outline [0..4]², hole [1..2]², y=1.5, bed=0,
      * threshold 1; tub [3..5]², y=2, bed=1.5, threshold 1.

@@ -69,7 +69,7 @@
  * [9] snapshotPartner on a stub binding: `update()` called exactly once, the
  *     snapshot holds the capsules AFTER that update (ids, regions, ends),
  *     channels [], interaction passed through; a later update leaves it intact.
- * [10] The constants measured by the plan's Task 9 (scripts/check_partner_collision.mjs):
+ * [10] The constants measured by the plan's Task 9 (check_partner_collision.mjs, since deleted with the browser 3D scene in plan E3):
  *     PARTNER_MAX 4, PARTNER_COLLIDE_MAX 8, PARTNER_PUSH_MAX_M 0.04,
  *     PARTNER_HYST_M 0.0015, PARTNER_RELEASE_DEG_S 90, PARTNER_PREFILTER_SLACK_M 1.0.
  */
@@ -85,7 +85,7 @@ async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/smoke_partner_rules_bundled.mjs'
     const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
+    const bin = ['node_modules/.bin/esbuild']
       .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
     if (!bin) {
       console.error('esbuild not found (npm install) — nothing was checked')

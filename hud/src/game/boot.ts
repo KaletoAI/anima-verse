@@ -14,7 +14,7 @@
  * serialisable bus values while this store owns progress and measurements.
  *
  * The arithmetic is pure and dependency-free; the hand-derived cases live in
- * `client3d/scripts/smoke_walk_math.mjs`.
+ * `native/tests/Derivations/walk_math.md`.
  */
 
 /** One measured checkpoint of `startApp`; completion may be out of order. */

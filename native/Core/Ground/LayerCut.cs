@@ -54,7 +54,7 @@ public readonly record struct LayerSample(int A, int B, double Sd, double SdPush
 /// (<c>lcNoise</c>, <c>lcPushedSd</c>) and the cut (<c>layerWeight</c>). The mask tiles are fetched by the height
 /// tiles' want set (<see cref="Terrain.HeightTiles.WantedTiles"/>).
 /// Same double arithmetic in the same order; <c>Check/GroundCheck.cs</c> compares it with values the TS
-/// functions wrote (<c>fixtures/ground_reference.mjs</c>).
+/// functions wrote (<c>fixtures/ground_reference.json</c>, frozen since plan E3).
 /// </summary>
 public static class LayerCut
 {
@@ -344,7 +344,7 @@ public static class LayerCut
 }
 
 /// <summary>
-/// The pure numbers of the NATURAL GROUND (<c>client3d/src/scene/naturalGroundMath.ts</c>) — the single source of
+/// The pure numbers of the NATURAL GROUND (the browser scene's <c>naturalGroundMath.ts</c>) — the single source of
 /// the literals <see cref="GroundShader"/> prints, like the browser prints its shader out of the TS constants.
 /// Since E3 only stages (2) colour patches and (3) height AO run on the terrain: stage (1) is guarded by
 /// <c>USE_MAP</c>, and the terrain material carries no map (the compositor does its own anti-tile).

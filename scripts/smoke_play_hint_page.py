@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""/play is a hint page for the native client; the fallback model pool lives outside client3d.
+"""/play is a hint page for the native client; the fallback model pool lives in static/fallback-models.
 
 Usage: ./.venv/bin/python scripts/smoke_play_hint_page.py
 
@@ -11,14 +11,15 @@ Expected by hand (plan E3 task 12; spec 8: the browser 3D scene is retired, the 
 only player client):
 
 [P1] GET /play without a session -> 200, text/html, Cache-Control no-cache, and the body says the
-     game runs in the "native client" (it is a plain English page, no 3D shell: no reference to
-     /static/client3d/).
+     game runs in the "native client" (it is a plain English page, no 3D shell: it loads no
+     script at all).
 [P2] GET /static/fallback-models/manifest.json anonymously -> 200 (/static/* is on the anonymous
      allowlist of auth_dependency). The manifest's first model "Soldier.glb" is relative to the
      manifest, so /static/fallback-models/Soldier.glb -> 200 as well (the native FigureManager
      resolves pool URLs against PoolBase = "/static/fallback-models/").
-[P3] The old pool directory static/client3d/models no longer exists in the repository (moved with
-     git mv, no copy left behind that a stale client could still read).
+[P3] No browser 3D bundle is left under static/ (plan E3 deleted the scene and its build output):
+     the only directory under static/ with an index.html is game_admin (the Game-Admin SPA); the
+     pool moved out with git mv before that, so no copy is left that a stale client could read.
 [P4] An anonymous HTML navigation to a player route (/world/locations) still gets 302 to /play with
      its path in ?return= (auth_dependency.login_redirect_target is unchanged; /play is now the
      hint page).
@@ -60,7 +61,7 @@ def main() -> int:
             check("[P1] /play Cache-Control no-cache", r.headers.get("cache-control") == "no-cache",
                   str(r.headers.get("cache-control")))
             check("[P1] /play names the native client", "native client" in r.text, r.text[:200])
-            check("[P1] /play is no 3D shell", "/static/client3d/" not in r.text, r.text[:200])
+            check("[P1] /play is no 3D shell (no script)", "<script" not in r.text.lower(), r.text[:200])
 
             manifest_url = "/static/fallback-models/manifest.json"
             m = client.get(manifest_url)
@@ -71,7 +72,8 @@ def main() -> int:
                       model_url == "/static/fallback-models/Soldier.glb", model_url)
                 check("[P2] first pool model anonymous 200", client.get(model_url).status_code == 200, model_url)
 
-            check("[P3] static/client3d/models is gone", not (ROOT / "static/client3d/models").exists())
+            pages = sorted(p.parent.name for p in (ROOT / "static").glob("*/index.html"))
+            check("[P3] only game_admin carries an index.html under static/", pages == ["game_admin"], str(pages))
 
             r = client.get("/world/locations", headers={"Accept": "text/html"}, follow_redirects=False)
             check("[P4] anonymous navigation 302", r.status_code == 302, str(r.status_code))

@@ -13,7 +13,7 @@ namespace AnimaNative.Scatter;
 /// <summary>
 /// <c>--scatter</c>: both layers the browser bench's <c>&amp;scatter=0</c> hides — the authored scatter
 /// (<see cref="ScatterField"/>) and the undergrowth (<see cref="UndergrowthField"/>) — driven at the
-/// browser's cadence (client3d/src/main.ts):
+/// browser's cadence (the browser scene's main.ts):
 ///
 ///   · the 1 Hz LOD tick: a full LOD pass, then <c>setHeightAnchor(engine.target)</c> (scatter window +
 ///     undergrowth cells);

@@ -81,7 +81,7 @@
  * "The figure sits somewhere else on the prop than the position I set on the
  * prop itself." Three renderers, three laws for the same height:
  *
- *   client3d           anchor the figure in its BIND pose (soles on 0), put
+ *   the browser 3D scene           anchor the figure in its BIND pose (soles on 0), put
  *                      that root on `y_world − root_offset`.
  *   floor-plan preview the same — but by accident: it grounded on the box of
  *                      the POSED figure, and `Box3.setFromObject` ignores
@@ -103,7 +103,7 @@
  * Anchoring the figure in its bind pose is only half the height. Every
  * renderer drops the Mixamo hips POSITION track (it is in centimetres and
  * would fling the body across the room), and the 3D client puts that height
- * BACK, rescaled: `client3d/src/scene/figures.adaptExternalClips` keeps the
+ * BACK, rescaled: the browser scene's `figures.adaptExternalClips` keeps the
  * track relative to the standing reference (`standingHipsRef` of
  * @anima/scene-render: the reference rig's REST hips height since 2026-09-26,
  * the idle clip's hips median before). The admin prop viewer dropped the
@@ -148,7 +148,7 @@ const require_ = createRequire(import.meta.url);
 function esbuildModule() {
   for (const cand of ['esbuild',
                       join(ROOT, 'frontend/node_modules/esbuild'),
-                      join(ROOT, 'client3d/node_modules/esbuild')]) {
+                      join(ROOT)]) {
     try {
       return require_(cand);
     } catch { /* next candidate */ }
@@ -384,7 +384,7 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
 
   // (E4) THE HIPS TRACK OF THE CLIP — the term the prop viewer was missing.
   //
-  // The median rule is `client3d`'s (`figures.hipMedian`), so admin and client
+  // The median rule is the browser 3D scene's (`figures.hipMedian`), so admin and client
   // read the same standing reference off the same file: |y| of every key of
   // the `…hips….position` track, sorted, the element at floor(n/2).
   {

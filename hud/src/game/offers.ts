@@ -26,7 +26,8 @@
  *
  * Pure like `walk.ts`, `proximity.ts` and `stairs.ts`: plain numbers, no
  * Three, no DOM, no module state and no import at all — which is what lets
- * `scripts/smoke_offer_resolve.mjs` check it with hand-derived numbers.
+ * the shared embody vectors (`shared/test-vectors/embody.json`, derivation
+ * `native/tests/Derivations/embody_vectors.md`) check it with hand-derived numbers.
  */
 
 /** The four kinds of offer, in the order that breaks a tie (see below). */

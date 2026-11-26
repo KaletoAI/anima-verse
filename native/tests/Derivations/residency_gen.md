@@ -1,6 +1,6 @@
 # residency_gen
 
-- Origin: `client3d/scripts/smoke_residency_gen.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_residency_gen.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/ResidencyVectorTests.cs`
 - Vectors: `shared/test-vectors/residency.json`
 

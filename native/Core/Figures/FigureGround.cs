@@ -24,12 +24,12 @@ public sealed record WalkPlate(double Top, IReadOnlyList<P2> Outline, IReadOnlyL
 public sealed record DeclaredFloor(string RoomId, double Top, IReadOnlyList<P2> Outline);
 
 /// <summary>
-/// The figure ground rules of the browser, pure — client3d/src/game/placement.ts (<c>placementOf</c>,
+/// The figure ground rules of the browser, pure — the browser scene's placement.ts (<c>placementOf</c>,
 /// <c>figureTransition</c>, <c>pollIsStale</c>), game/walk.ts (<c>gateStandY</c>) and game/ground.ts (<c>standY</c>,
 /// <c>tileWalkLadder</c>, <c>roomFloorLadder</c>, <c>roomStandLadder</c>, <c>recipeFloorAt</c>, <c>declaredFloorAt</c>,
 /// <c>plateCeiling</c>). Checked against shared/test-vectors/figure_ground.json, room_spots.json, place_poll.json; the
 /// three floor rungs (<c>recipeFloorAt</c>, <c>declaredFloorAt</c>, <c>plateCeiling</c>) have no shared vector yet and
-/// are held to the hand cases of client3d/scripts/smoke_walk_math.mjs in tests/FigureGroundRungTests.cs.
+/// are held to the hand cases of native/tests/Derivations/walk_math.md in tests/FigureGroundRungTests.cs.
 /// </summary>
 public static class FigureGround
 {

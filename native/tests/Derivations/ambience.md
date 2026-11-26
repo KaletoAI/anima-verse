@@ -1,6 +1,6 @@
 # ambience
 
-- Origin: `client3d/scripts/smoke_ambience.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_ambience.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/AmbienceVectorTests.cs`
 - Vectors: `shared/test-vectors/ambience.json`
 
@@ -8,10 +8,10 @@
 
 ```text
 /**
- * Smoke check for the room ambience and the night clock — client3d/src/scene/ambience.ts,
- * client3d/src/game/roomAt.ts, and the Engine's applyAmbience (inline below).
+ * Smoke check for the room ambience and the night clock — the browser scene's ambience.ts,
+ * the browser scene's roomAt.ts, and the Engine's applyAmbience (inline below).
  *
- * Usage:  node client3d/scripts/smoke_ambience.mjs   (from the repo root)
+ * Usage:  node the browser scene's deleted smoke_ambience.mjs   (from the repo root)
  *
  * Hand derivations (cases in shared/test-vectors/ambience.json, shared with the
  * native client's C# tests). JSON wrappers: `stepAmbienceN(cur, target, dt, n)`

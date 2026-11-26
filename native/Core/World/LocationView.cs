@@ -6,12 +6,12 @@ using AnimaNative.Scene;
 
 namespace AnimaNative.World;
 
-/// <summary>The streaming ring of a location (client3d/src/game/streamRings.ts).</summary>
+/// <summary>The streaming ring of a location (the browser scene's streamRings.ts).</summary>
 public enum Ring { Near, Far, Gone }
 
 /// <summary>
 /// WHAT THE BROWSER'S OVERVIEW SHOWS OF ONE LOCATION — the decisions alone, without a mesh, ported from
-/// client3d so the native client draws the same parts of every scene recipe (Task S3c):
+/// the browser 3D scene so the native client draws the same parts of every scene recipe (Task S3c):
 ///
 ///   • the streaming ring (<c>streamRings.ringFor</c> over <c>placeDistance</c> to the stream points — the
 ///     avatar's position and the camera focus; the avatar's location and the open one are pinned near). A

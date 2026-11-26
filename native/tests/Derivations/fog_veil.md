@@ -1,6 +1,6 @@
 # fog_veil
 
-- Origin: `client3d/scripts/smoke_fog_veil.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
+- Origin: the browser scene's deleted `smoke_fog_veil.mjs` @ 011cd048aa3cc2937186d7f35d2203af9491db8a
 - Executed by: `native/tests/FogVeilVectorTests.cs`
 - Vectors: `shared/test-vectors/fog_veil.json`
 
@@ -11,7 +11,7 @@
  * Smoke check for the EXPLORATION VEIL — the haze over ground the avatar has
  * never walked (`plan-fog-schleier-v2.md`, § A12).
  *
- * Usage:  node client3d/scripts/smoke_fog_veil.mjs
+ * Usage:  node the browser scene's deleted smoke_fog_veil.mjs
  *         (transpiles `scene/fogVeilMath.ts`; bundles `scene/fogVeil.ts`,
  *          needs three)
  *
@@ -249,7 +249,7 @@
 
 ## Inline derivations
 
-Comment blocks of `client3d/scripts/smoke_fog_veil.mjs` after its opening docstring that contain a mark a case label
+Comment blocks of the browser scene's deleted `smoke_fog_veil.mjs` after its opening docstring that contain a mark a case label
 cites, in file order; line numbers refer to the smoke at a56065e6f003.
 
 Line 382 (cites [1]):

@@ -38,7 +38,7 @@
  *
  * SINCE W4a A DRAWN RIVER FLOWS ALONG ITS OWN LINE ([13]…[15]), and the admin
  * is the THIRD implementation of one function: `heightfield.water_level_at`,
- * `client3d/src/scene/waterPlaneMath.ts` and `mapMath.waterLevelAt` must
+ * the browser scene's `waterPlaneMath.ts` and `mapMath.waterLevelAt` must
  * answer the same number, or the preview draws a river the bake did not carve.
  * The hairpin below is the server smoke's own case
  * (`scripts/smoke_height_bake.py` [8k]) with its numbers re-derived here by

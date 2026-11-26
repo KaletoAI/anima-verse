@@ -13,7 +13,7 @@ namespace AnimaNative.World;
 public sealed record SurfaceEntry(string Kind, string? Url, double SizeM, JsonElement? Material);
 
 /// <summary>
-/// The surface library for the RECIPE primitives (client3d/src/scene/tiles.ts <c>setSurfaceTextures</c> +
+/// The surface library for the RECIPE primitives (the browser scene's tiles.ts <c>setSurfaceTextures</c> +
 /// <c>preloadSurfaceTexture</c> + <c>surfaceFor</c>): kind → image as a tiling texture (mipmaps, anisotropic,
 /// repeat) plus its world tile size (<c>size_m || 3</c>) and its <c>material</c> declaration. Images load once
 /// per kind, on demand (<see cref="PreloadAsync"/> — what <c>mountShell</c> awaits before it builds); a kind

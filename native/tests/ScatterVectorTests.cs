@@ -11,8 +11,8 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// shared/test-vectors/scatter.json against the C# ports <see cref="ScatterMath"/> and
-/// <see cref="ScatterLod"/> (hand derivations: client3d/scripts/smoke_scatter_math.mjs; TS sources:
-/// packages/scene-render/src/scatter.ts and client3d/src/scene/scatterLod.ts). The shape adapters
+/// <see cref="ScatterLod"/> (hand derivations: native/tests/Derivations/scatter_math.md; TS sources:
+/// packages/scene-render/src/scatter.ts and the browser scene's scatterLod.ts). The shape adapters
 /// and the "not given" / <c>rng</c> conventions are in <see cref="ScatterVectorAdapters"/>.
 ///
 /// <code>

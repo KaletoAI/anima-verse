@@ -245,7 +245,7 @@ public sealed class PlacedModel
 /// </summary>
 public sealed partial class WorldBuilder
 {
-    /// <summary><c>HEIGHT_TILE_RADIUS_M</c> = <c>FOG_FAR_M</c> + 40 (client3d/src/scene/heightTiles.ts).</summary>
+    /// <summary><c>HEIGHT_TILE_RADIUS_M</c> = <c>FOG_FAR_M</c> + 40 (the browser scene's heightTiles.ts).</summary>
     public const double TileRadiusM = HeightTiles.RadiusM;
     private const int SceneConcurrency = 4;
     /// <summary>Keyframe 0 of the bench path, relative to the anchor: where the static tiers are measured from.</summary>
