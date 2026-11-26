@@ -151,6 +151,13 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded before the fake package is registered.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager()
 registry.clear_registry()
 registry.register_package(Package(
     id="smoke_species", dir=TMP, manifest={}, apply_to=["human-roleplay"],

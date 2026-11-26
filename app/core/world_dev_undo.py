@@ -673,6 +673,12 @@ def _undo_restore_body_slots(entry: Dict[str, Any], inv: Dict[str, Any]) -> List
                 prof.pop("body_slots", None)
             if not save_character_profile(name, prof):
                 raise RuntimeError(f"profile of {name} was not stored")
+    if touched:
+        # A restored mesh-part switch changes the figure the pieces ask for:
+        # the figure memo must not serve the rolled-back value (memo only,
+        # cheap — no Build, no render).
+        from app.core import figure
+        figure.invalidate()
     if changed:
         raise _Skip(REASON_CHANGED, keys=changed)
     return []
@@ -3085,6 +3091,56 @@ def _skill_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[st
     return lines
 
 
+def _body_slot_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[str]:
+    """The discard lines of the run's ``restore_body_slots`` entries,
+    decided the way :func:`_undo_restore_body_slots` decides them:
+    newest-first over a SIMULATED value per (character, slot, attribute), the
+    stored one first. An attribute the entry wrote whose simulated value
+    differs from what it wrote -> one "was changed since — the discard leaves
+    it alone" line (the undo skips it, ``changed since``); otherwise (and
+    for every attribute of a pending entry, which wrote nothing) the
+    simulated value becomes the entry's ``before``. An attribute put back
+    is no line (nothing goes). A character that is gone, or that the discard
+    deletes itself (DELETED), gets no line. Oldest line first."""
+    from app.models.character import character_row_exists, get_character_profile
+    lines: List[str] = []
+    sim: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for entry in entries:  # newest-first
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_body_slots":
+            continue
+        name = str(inv.get("name") or "")
+        before = inv.get("before") or {}
+        if not name or name in deleted or not before or not character_row_exists(name):
+            continue
+        if name not in sim:
+            vals = (get_character_profile(name) or {}).get("body_slots")
+            vals = vals if isinstance(vals, dict) else {}
+            sim[name] = {slot: dict(attrs) for slot, attrs in vals.items()
+                         if isinstance(attrs, dict)}
+        cur_of = sim[name]
+        written = entry.get("written")
+        w_slots = written.get("slots") if isinstance(written, dict) else None
+        changed: List[str] = []
+        for slot, attrs in before.items():
+            cur = cur_of.setdefault(slot, {})
+            for attr, bval in (attrs or {}).items():
+                if isinstance(w_slots, dict) and attr in (w_slots.get(slot) or {}):
+                    now = cur[attr] if attr in cur else ABSENT
+                    if _norm(now) != _norm(w_slots[slot][attr]):
+                        changed.append(f"{slot}.{attr}")
+                        continue
+                if is_absent(bval):
+                    cur.pop(attr, None)
+                else:
+                    cur[attr] = copy.deepcopy(bval)
+        if changed:
+            lines.append(f'body slots {", ".join(changed)} of "{name}" were changed '
+                         "since — the discard leaves them alone")
+    lines.reverse()
+    return lines
+
+
 def _soul_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[str]:
     """The discard lines of the run's ``restore_soul`` entries, decided the
     way :func:`_undo_restore_soul` decides them: newest-first over a
@@ -3262,6 +3318,9 @@ def discard_preview(run_id: str) -> List[str]:
     row that existed is no line (nothing goes). A skill switch
     (``restore_skill_config``) whose file changed since is one "was changed
     since" line (:func:`_skill_preview_lines`); one put back is no line. A
+    body attribute (``restore_body_slots``) the undo skips because it no
+    longer holds what the step wrote is one ``body slots <slot.attr> of
+    "<name>" were changed since`` line (:func:`_body_slot_preview_lines`). A
     soul section (``restore_soul``) whose raw file text differs from what
     the step wrote is one ``soul <rel> of "<name>" was changed since`` line
     (:func:`_soul_preview_lines`, a line-end-only rewrite included); one put
@@ -3572,6 +3631,7 @@ def discard_preview(run_id: str) -> List[str]:
                         if holders else ""))
     lines.extend(_address_preview_lines(entries))
     lines.extend(_skill_preview_lines(entries, deleted_names))
+    lines.extend(_body_slot_preview_lines(entries, deleted_names))
     lines.extend(_soul_preview_lines(entries, deleted_names))
     lines.extend(_hairstyle_preview_lines(entries, deleted_names))
     if created or removed_rooms:

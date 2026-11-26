@@ -21,7 +21,8 @@ outside the newest KEEP_RESULTS = 4 results becomes
 count among the newest 4.
 
 (0) spec flags: read_manual pinned, describe_template pinned,
-    world_overview not pinned; DEFAULT_MAX_TOKENS_TOTAL == 600000 (D9).
+    world_overview not pinned; DEFAULT_MAX_TOKENS_TOTAL == 2000000 and
+    DEFAULT_MAX_STEPS == 200 (plan 2026-11-25 complete-characters-budget, B2).
 (a) manual(characters) "M1", then world_overview "O1".."O5": 6 results,
     newest 4 = O2..O5, results[:-4] = [M1, O1]. M1 pinned -> whole; O1 ->
     shrunk stub. Contents in order: M1 whole, O1 stub, O2..O5 whole
@@ -55,8 +56,8 @@ count among the newest 4.
     cut) -> the NEWEST surviving copy A2 is restored, A1 stays a stub:
     [superseded, whole A2]. The loop path of both (the _loop call sites pass the parsed args
     and _fail restores) is smoke_world_dev_agent.py (z).
-(g) smoke_world_dev_free_routes.py 2 expects max_tokens_total 600000 and
-    smoke_world_dev_agent.py (u) 40 / 600000 (updated in this task); (k)
+(g) smoke_world_dev_free_routes.py 2 expects max_tokens_total 2000000 and
+    smoke_world_dev_agent.py (u) 200 / 2000000; (k)
     there still shrinks world_overview (not pinned) — run them in the
     regression set.
 (h) manual render (plan docs/superpowers/plans/2026-11-25-world-dev-free-p2-buildings-
@@ -82,7 +83,9 @@ count among the newest 4.
     read_manual{map} with a line of 20000 "x" -> content ==
     "[result read_manual] " (21 characters) + 16000 "x" +
     "\n[cut — 16000 of 20000 characters kept]". A line of 12 399 characters
-    stays whole: content length 21 + 12 399 = 12 420. A non-pinned read
+    stays whole: content length 21 + 12 399 = 12 420. manual_characters.md
+    carries the section "## Filling or checking existing characters" (plan
+    2026-11-25 complete-characters-budget Task 8, C6). A non-pinned read
     (world_overview, 20000 "y") is stored whole (21 + 2 = "[result
     world_overview] " is 24 characters: 24 + 20000 = 20024). Every shipped
     manual section (each of wt.MANUAL_SECTIONS, so a new section is covered
@@ -149,8 +152,9 @@ check("(0) describe_template pinned",
       getattr(wt.TOOLS["describe_template"], "pinned", None) is True)
 check("(0) world_overview not pinned",
       getattr(wt.TOOLS["world_overview"], "pinned", None) is False)
-check("(0) DEFAULT_MAX_TOKENS_TOTAL 600000", wa.DEFAULT_MAX_TOKENS_TOTAL == 600_000,
+check("(0) DEFAULT_MAX_TOKENS_TOTAL 2000000", wa.DEFAULT_MAX_TOKENS_TOTAL == 2_000_000,
       wa.DEFAULT_MAX_TOKENS_TOTAL)
+check("(0) DEFAULT_MAX_STEPS 200", wa.DEFAULT_MAX_STEPS == 200, wa.DEFAULT_MAX_STEPS)
 
 rm = wa.RunManager()
 st = wa._RunState()
@@ -300,6 +304,8 @@ for _section in wt.MANUAL_SECTIONS:
         _len = repr(exc)
     check(f"(i) manual {_section} fits MAX_PINNED_CHARS",
           isinstance(_len, int) and _len <= 16000, _len)
+check("(i) manual characters has the fill checklist section",
+      "## Filling or checking existing characters" in manual("characters"))
 
 print()
 if failures:

@@ -18,10 +18,13 @@ anything except through a tool.
    `map_region` of the area) — never re-read the whole world.
 5. **Finish** — when the task is done, call `check_run{}` first. Fix what it lists for elements
    you CREATED (`wears nothing` and `not placed` are settled only inside `create_character` —
-   afterwards name them in the summary, do not retry). For elements you only changed, name the
-   listed gaps in the summary instead — the list covers only what you changed; never add homes,
-   schedules or clothes to a character the task did not ask you to rework. Then answer with a
-   short summary for the admin (what you built, ids, anything left open) and NO tool call.
+   afterwards name them in the summary, do not retry). For a task that asks to fill, complete or
+   check existing characters, call `check_character` for each of them and fix everything it
+   lists (manual `characters`, section 'Filling or checking existing characters'); otherwise,
+   for elements you only changed, name the listed gaps in the summary instead — the list covers
+   only what you changed; never add homes, schedules or clothes to a character the task did not
+   ask you to rework. Then answer with a short summary for the admin (what you built, ids,
+   anything left open) and NO tool call.
    A reply without a tool call ends your turn.
 
 A tool result that starts with `error:` means the call was refused and NOTHING (or only the part

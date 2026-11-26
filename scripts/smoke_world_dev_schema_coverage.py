@@ -70,9 +70,10 @@ app/core/world_dev_tools.py)
       set_room_layout, furnish_rooms, add_terrain_area, update_terrain_area,
       add_height_area, update_height_area, add_terrain_type,
       place_world_prop, delete_area.
-  (2) 7 read tools exist with write False: describe_template, check_run,
+  (2) 8 read tools exist with write False: describe_template, check_run,
       world_overview, find_locations, get_location, find_characters,
-      get_character.
+      get_character, check_character (plan
+      2026-11-25-world-dev-free-complete-characters-budget, Task 5).
   (3) TOOLS["update_character"].summary names "soul:", "outfits",
       "body_slots" and "schedule"; TOOLS["create_character"].signature
       names "home?", "schedule?" and "known_places?";
@@ -113,14 +114,14 @@ WRITE_TOOLS = ("create_character", "update_character", "create_location",
                "place_world_prop", "delete_area")
 READ_TOOLS = ("describe_template", "check_run", "world_overview",
               "find_locations", "get_location", "find_characters",
-              "get_character")
+              "get_character", "check_character")
 
 check("(1) 14 write tools listed", len(WRITE_TOOLS) == 14)
 for name in WRITE_TOOLS:
     spec = wt.TOOLS.get(name)
     check(f"(1) {name} is a write tool", spec is not None and spec.write is True,
           spec and spec.write)
-check("(2) 7 read tools listed", len(READ_TOOLS) == 7)
+check("(2) 8 read tools listed", len(READ_TOOLS) == 8)
 for name in READ_TOOLS:
     spec = wt.TOOLS.get(name)
     check(f"(2) {name} is a read tool", spec is not None and spec.write is False,

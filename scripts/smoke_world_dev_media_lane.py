@@ -104,6 +104,12 @@ preview line does not count).
   Every producer the lane reaches is a fake: the kinds planned for a
   location (gallery, location_mesh) and a character (portrait, build) map to
   the fakes in PRODUCERS; only the hairstyle is the real adapter (no render).
+  The portrait / build fakes leave no profile image and no base body, so the
+  two output checks of plan() (world_dev_media._portrait_present /
+  _base_body_present, plan 2026-11-25-world-dev-free-complete-characters-
+  budget Task 6) are patched to True: a finished step holds as it does after
+  a real render (the missing-output rule is
+  scripts/smoke_world_dev_media_lost_portrait.py).
 """
 from __future__ import annotations
 
@@ -167,6 +173,13 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded before the fake package is registered.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager()
 registry.clear_registry()
 registry.register_package(Package(
     id="smoke_species", dir=TMP, manifest={}, apply_to=["human-roleplay"],
@@ -237,6 +250,9 @@ def fake_build(ctx, kind, ident, step):
 
 wdm.PRODUCERS.update({"gallery": fake_gallery, "location_mesh": fake_location_mesh,
                       "portrait": fake_portrait, "build": fake_build})
+# The fakes' outputs count as present (docstring).
+wdm._portrait_present = lambda name, profile: True
+wdm._base_body_present = lambda name, profile: True
 _FAKES = {fake_gallery, fake_location_mesh, fake_portrait, fake_build}
 check("every render producer the lane reaches is a fake",
       {k for k, v in wdm.PRODUCERS.items() if v not in _FAKES} == {"mesh", "hairstyle"},

@@ -13,14 +13,14 @@ task. A turn is a text tool loop: the model answers, the FIRST
 as `[result <tool>] <line>`, and so on until a reply carries no tool call.
 
 Turn ends:
-* no tool call (turn >= 2, or turn 1 after at least one step) ->
+* no tool call (turn >= 2, or turn 1 after at least one tool call) ->
   `awaiting_review`, note = the final reply;
-* budget reached (the step or token budget OF THIS TURN, see below) ->
+* budget reached (the tool-call or token budget OF THIS TURN, see below) ->
   `awaiting_review` WITHOUT any undo: the turn's work is kept, the note
   starts "budget reached (" and asks for a follow-up, and the history gets
   one assistant line saying the turn was cut off, so the next turn continues
   where it stopped. Exception: turn 1 that hit a budget before its first
-  step has nothing to keep and is a hard failure;
+  tool call has nothing to keep and is a hard failure;
 * hard failure (LLM error, 3 unparseable calls in a row, turn 1 without any
   tool call, a tool raising a non-refusal exception) or Stop -> the turn's
   writes are undone (`world_dev_undo.undo(run, turn)`); turn 1 then ends
@@ -29,7 +29,13 @@ Turn ends:
 
 Budgets are PER TURN: `max_steps` / `max_tokens_total` of the run row
 bound each turn on its own (start and every follow-up get the full
-budget); the run row keeps the run TOTALS (steps, tokens, cost). The
+budget); the run row keeps the run TOTALS (steps, tokens, cost).
+max_steps = tool calls per turn: the run's `steps` counts every model tool
+call once (`world_dev_runs.count_call`, taken by `_loop` only) — executed
+or refused, however many journal rows it writes; the media lane's rows are
+no model calls and are not counted. The budget notes print tokens in
+thousands (`_k`) — raw counts when the limit is under 1,000 tokens, where
+"0k of 0k" would hide why the turn was cut. The
 per-turn counters are measured against the totals at the turn's start and
 live in memory only — a turn never survives a restart. A follow-up may
 raise the budgets for itself and every later turn, never lower them.
@@ -93,10 +99,18 @@ from app.core.log import get_logger
 logger = get_logger("world_dev_agent")
 
 #: Per-TURN budgets (each turn of a run gets them in full).
-DEFAULT_MAX_STEPS = 60
-DEFAULT_MAX_TOKENS_TOTAL = 600_000
+DEFAULT_MAX_STEPS = 200  # tool calls per turn
+DEFAULT_MAX_TOKENS_TOTAL = 2_000_000
 #: Start of the note of a turn cut off by its budget (work kept).
 BUDGET_NOTE_PREFIX = "budget reached ("
+
+
+def _k(n: int) -> str:
+    """Tokens in thousands for the budget notes, rounded half up (the panel
+    prints the note raw and shows its own counters the same way)."""
+    return f"{(int(n) + 500) // 1000:,}k"
+
+
 #: Consecutive replies with an unparseable tool call that fail the turn.
 MAX_BAD_CALLS = 3
 #: Read results kept whole in the history; older ones become a stub (pinned
@@ -109,6 +123,18 @@ KEEP_RESULTS = 4
 #: step row / panel line keeps the whole text — only the history is capped.
 MAX_PINNED_CHARS = 16000
 BAD_BODY_LINE = "error: body is not a JSON object"
+# The fix a model needs most often: an unescaped quote or a raw line break
+# inside a string. The escapes are the literal two-character sequences the
+# model must type (backslash + quote, backslash + n), never the characters.
+BAD_JSON_HINT = (" — inside a string write a double quote as \\\" and a line break "
+                 "as \\n; split a very long text into several calls")
+
+
+def _bad_json_line(e: json.JSONDecodeError) -> str:
+    """The refused line for an unparseable body: BAD_BODY_LINE stays the exact
+    prefix (panel and smokes key on it), then where json stopped and how to fix it."""
+    return (f"{BAD_BODY_LINE} (JSON error: {e.msg} at line {e.lineno} column {e.colno})"
+            + BAD_JSON_HINT)
 SYSTEM_TEMPLATE = "world_dev_free/system.md"
 
 
@@ -981,7 +1007,7 @@ class RunManager:
     def _over_budget(run: Dict[str, Any], base: Dict[str, int],
                      steps_too: bool) -> Optional[Tuple[str, int, int]]:
         """(kind, used, budget) when THIS TURN has used up its tokens (or,
-        with `steps_too`, its steps), else None."""
+        with `steps_too`, its tool calls), else None."""
         used = _tokens(run) - int(base.get("tokens") or 0)
         if used >= int(run["max_tokens_total"] or 0):
             return "tokens", used, int(run["max_tokens_total"] or 0)
@@ -992,7 +1018,9 @@ class RunManager:
 
     async def _loop(self, run_id: str, st: _RunState, turn: int) -> Tuple[str, str]:
         """("final", reply), ("budget", note) or ("fail", note). A budget hit
-        in turn 1 before its first step is a failure: nothing to keep."""
+        in turn 1 before its first tool call is a failure: nothing to keep.
+        Every reply that asks for a tool is counted once (`wr.count_call`)
+        after the budget check and before the call runs or is refused."""
         pattern = _tag_pattern()
         ctx = wt.ToolCtx(run_id=run_id, turn=turn)
         bad = 0
@@ -1003,11 +1031,19 @@ class RunManager:
 
         def budget(hit: Tuple[str, int, int]) -> Tuple[str, str]:
             kind, used, limit = hit
-            if turn == 1 and int(run["steps"] or 0) == base["steps"]:
-                word = "token" if kind == "tokens" else "step"
-                return "fail", (f"{word} budget exhausted before the first step "
-                                f"({used} of {limit} {kind})")
-            return "budget", (f"{BUDGET_NOTE_PREFIX}{kind}: {used} of {limit} this turn) "
+            fmt = _k if int(limit) >= 1000 else str
+            first = turn == 1 and int(run["steps"] or 0) == base["steps"]
+            if kind == "tokens":
+                if first:
+                    return "fail", ("token budget exhausted before the first tool call "
+                                    f"({fmt(used)} of {fmt(limit)} tokens)")
+                what = f"tokens: {fmt(used)} of {fmt(limit)}"
+            else:
+                if first:
+                    return "fail", ("tool-call budget exhausted before the first tool "
+                                    f"call ({used} of {limit} tool calls)")
+                what = f"tool calls: {used} of {limit}"
+            return "budget", (f"{BUDGET_NOTE_PREFIX}{what} this turn) "
                               "— the turn's work is kept; send a follow-up to continue")
 
         while True:
@@ -1040,6 +1076,13 @@ class RunManager:
             over = self._over_budget(run, base, steps_too=True)
             if over:
                 return budget(over)
+            # One model tool call, counted once whatever follows: executed,
+            # refused by the tool, unparseable or unclosed.
+            await asyncio.to_thread(wr.count_call, run_id)
+            # Tell the panel at once: its per-turn tool-call counter would
+            # otherwise lag one LLM call behind (the budget reads the row).
+            counted = await asyncio.to_thread(self._get, run_id)
+            await self._emit(st, {"type": "usage", **self._usage(run_id, counted, base)})
             if m is None:
                 # A tool tag that never closed: unparseable like a bad body.
                 opened = _TOOL_OPEN.search(reply)
@@ -1050,11 +1093,17 @@ class RunManager:
             else:
                 name, body = m.group(1), m.group(2).strip()
                 st.history.append({"role": "assistant", "content": reply})
+                line = BAD_BODY_LINE
                 try:
                     args = json.loads(body) if body else {}
+                except json.JSONDecodeError as e:
+                    args = None
+                    line = _bad_json_line(e)
                 except ValueError:
                     args = None
-                line = BAD_BODY_LINE
+                else:
+                    if not isinstance(args, dict):
+                        line = f"{BAD_BODY_LINE} (got {type(args).__name__})"
             if not isinstance(args, dict):
                 bad += 1
                 seq = await asyncio.to_thread(self._journal_refused, ctx, name,

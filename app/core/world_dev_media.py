@@ -103,9 +103,23 @@ back (``note_create_undone``, F4) — a rolled-back create of a same-name
 element plans nothing that its first look did not already have. ``plan(run_id)`` is pure
 (no writes) and lists, for a run in review, the due steps per element.
 
+Output presence (plan 2026-11-25-world-dev-free-complete-characters-budget,
+Task 6, C4): a FINISHED step holds only while its output is present — the
+portrait while ``profile_image`` is set and its file exists, the Build while
+the character has a base body (``base_refresh_plan(missing=True)`` reason not
+``missing``); every other step always counts as present. A step whose output
+is missing is due even with an unchanged fingerprint (a portrait a stopped
+row rendered and that was lost later; a character touched without a face
+change that never had one), while a step of a queued/running row is in
+flight and never planned twice. Presence is computed LAZILY, only in
+``plan`` / ``due_step_ids`` (``_missing_outputs``, on the profile the steps
+were built from) — never in ``element_steps``, which ``note_touch`` reaches at
+the first write of every tool; ``schedule`` reads it before the media lock.
+
 Task 5 — the cost gate. Before every step the lane asks ``step_gate``: the
 run's media switch, the media master switch, the character's pause of
-automatic generation, for a Build the world's automatic outfit renders and
+automatic generation, for a Build in the automatic mode only
+(``BUILD_EXPLICIT`` False) the world's automatic outfit renders and
 "Build automatically", then ``route_check`` for EVERY occasion the step routes — an empty chain or a chain without a
 usable entry is a visible skip note, never the empty-chain cheapest (possibly
 paid) pick. A Build's occasions are those of the character's OWN
@@ -116,7 +130,7 @@ the rig occasion of the character's own rig.
 Task 7 — producers and exact capture/removal. ``PRODUCERS`` maps each
 ``StepSpec.producer`` to a thin adapter over the EXISTING entry point (gallery
 core, ``subjects.generate_building_model``, ``npc_assets.render_profile_image`` /
-``render_mesh``, ``figure_build.request`` + ``state``, ``make_hairstyle``). Every
+``render_mesh``, ``figure_build.start`` (manual, ``BUILD_EXPLICIT``) + ``state``, ``make_hairstyle``). Every
 artefact is recorded when it appears: gallery images and the portrait by name
 (size + mtime_ns), the mesh / Build / off-pipeline mesh steps by a before/after
 diff of the element's ``media_roots`` (created files and dirs, modified small
@@ -164,7 +178,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -446,24 +460,33 @@ def _character_steps(name: str, profile: Dict[str, Any]) -> List[StepSpec]:
     return steps
 
 
-def element_steps(kind: str, target_id: str) -> Optional[List[StepSpec]]:
-    """The media steps of an element in run order, None when it does not
-    exist (or is no media kind). Read-only; raises what the readers raise."""
+def _read_element(kind: str, target_id: str) -> Tuple[Optional[List[StepSpec]],
+                                                      Optional[Dict[str, Any]]]:
+    """(steps, profile) of an element: :func:`element_steps` plus the
+    character profile the steps were built from (None for a location), so
+    :func:`plan` checks the outputs on the SAME read (no second load)."""
     if kind == "location":
         from app.models.world import get_location_by_id
         loc = get_location_by_id(str(target_id))
-        return _location_steps(loc) if loc else None
+        return (_location_steps(loc) if loc else None), None
     if kind == "character":
         from app.models.character import (character_row_exists, get_character_profile,
                                           no_config_auto_create)
         if not character_row_exists(str(target_id)):
-            return None
+            return None, None
         # A pure read: the config reader would otherwise save the defaults of
         # a character without a stored config — a write outside the journal
         # (the baseline is read before the tool's own write).
         with no_config_auto_create():
-            return _character_steps(str(target_id), get_character_profile(str(target_id)) or {})
-    return None
+            profile = get_character_profile(str(target_id)) or {}
+            return _character_steps(str(target_id), profile), profile
+    return None, None
+
+
+def element_steps(kind: str, target_id: str) -> Optional[List[StepSpec]]:
+    """The media steps of an element in run order, None when it does not
+    exist (or is no media kind). Read-only; raises what the readers raise."""
+    return _read_element(kind, target_id)[0]
 
 
 def note_touch(run_id: str, kind: str, target_id: Optional[str],
@@ -501,6 +524,68 @@ def note_touch(run_id: str, kind: str, target_id: Optional[str],
             wr.note_baseline(run_id, kind, ident, {})
         except Exception:  # noqa: BLE001
             logger.exception("World Dev media: baseline {} of %s %s not stored", kind, ident)
+
+
+#: The baseline fingerprint of a step whose output a completeness check found
+#: missing (:func:`note_check_touch`): never a real fingerprint, so
+#: :func:`plan` counts the step as due although its inputs are unchanged.
+MISSING_OUTPUT_FP = "missing-output"
+
+
+def note_check_touch(run_id: str, kind: str, target_id: Optional[str],
+                     missing_steps: Set[str]) -> None:
+    """The baseline a completeness check records for an element the run has
+    not touched yet (``check_character`` / ``check_run`` with media on): like
+    :func:`note_touch`, but every step in ``missing_steps`` (its output is
+    missing — no portrait, no base body) is stored as
+    :data:`MISSING_OUTPUT_FP`, so :func:`plan` makes it due. A no-op when the
+    run already has a baseline (the first one wins). Run bookkeeping, not
+    world data: a per-turn rollback leaves it (no journal row), so the lane
+    still renders the missing outputs — on purpose, see
+    ``world_dev_completeness.media_split``. Never raises."""
+    if kind not in MEDIA_KINDS or not target_id or not run_id:
+        return
+    from app.core import world_dev_runs as wr
+    ident = str(target_id)
+    try:
+        if (kind, ident) in wr.baselines(run_id):
+            return
+        steps = element_steps(kind, ident)
+        if steps is None:
+            return
+        wr.note_baseline(run_id, kind, ident,
+                         {s.id: (MISSING_OUTPUT_FP if s.id in missing_steps else s.fp)
+                          for s in steps})
+    except Exception:  # noqa: BLE001 — a check never fails on bookkeeping
+        logger.exception("World Dev media: check baseline of %s %s (run %s) failed — every "
+                         "step counts as due", kind, ident, run_id)
+        try:
+            wr.note_baseline(run_id, kind, ident, {})
+        except Exception:  # noqa: BLE001
+            logger.exception("World Dev media: baseline {} of %s %s not stored", kind, ident)
+
+
+def due_step_ids(run_id: str, kind: str, target_id: str) -> Set[str]:
+    """The ids of the element's steps :func:`plan` counts as due right now
+    (same rule; the run's status and media switch are the caller's
+    business). Empty when the run has no baseline for it, it does not exist
+    or a reader fails (logged) — a caller then promises no render."""
+    from app.core import world_dev_runs as wr
+    ident = str(target_id)
+    try:
+        bases = wr.baselines(run_id)
+        if (kind, ident) not in bases:
+            return set()
+        steps, profile = _read_element(kind, ident)
+        if not steps:
+            return set()
+        missing = _missing_outputs(kind, ident, steps, profile)
+        return {s.id for s in _due_steps(bases[(kind, ident)], steps,
+                                          _held(run_id, kind, ident, missing), missing)}
+    except Exception:  # noqa: BLE001 — no render is promised on a read error
+        logger.exception("World Dev media: due steps of %s %s (run %s) not readable",
+                         kind, ident, run_id)
+        return set()
 
 
 def is_create_inverse(inverse: Any) -> bool:
@@ -596,49 +681,191 @@ def note_item_touch(run_id: str, item_id: Optional[str], inverse: Optional[dict]
         note_touch(run_id, "character", name, None)
 
 
-def _held(run_id: str, kind: str, target_id: str) -> set:
+#: Row statuses whose steps are IN FLIGHT: they hold whether or not the
+#: step's output is present (it has not been rendered yet).
+IN_FLIGHT_ROW_STATUSES = ("queued", "running")
+
+
+def _portrait_present(name: str, profile: Dict[str, Any]) -> bool:
+    """The portrait step's output: ``profile_image`` set and its file in the
+    character's ``images`` dir (read only — no directory is created)."""
+    from app.models.character import get_character_dir
+    image = str(profile.get("profile_image") or "").strip()
+    if not image or Path(image).name != image:
+        return False
+    return (get_character_dir(name) / "images" / image).is_file()
+
+
+def _base_body_present(name: str, profile: Dict[str, Any]) -> bool:
+    """The build step's output: the character has a base body
+    (``base_body.base_refresh_plan(missing=True)`` reason other than
+    ``missing``). May hash the base model. Read only: without a
+    ``model_refs`` directory there is no stored front (the plan's reason
+    would be ``missing``), and asking the plan would create that directory
+    (``model_refs.get_model_refs_dir``) — a write outside the journal."""
+    from app.core import base_body
+    from app.models.character import get_character_dir
+    if not (get_character_dir(name) / "model_refs").is_dir():
+        return False
+    return (base_body.base_refresh_plan(name, profile=profile, missing=True) or {}).get(
+        "reason") != "missing"
+
+
+#: Step id -> name of the presence check of its output, for a character
+#: (decision 12); every other step (hairstyle, the off-pipeline mesh, every
+#: location step) counts as present. Looked up by name at call time.
+_OUTPUT_CHECKS = (("portrait", "_portrait_present"), ("build", "_base_body_present"))
+
+
+def _missing_outputs(kind: str, ident: str, steps: List[StepSpec],
+                     profile: Optional[Dict[str, Any]]) -> Set[str]:
+    """The ids of the element's steps whose OUTPUT is missing (Task 6, C4):
+    for a character the portrait (no ``profile_image`` or its file gone) and
+    the Build (no base body); only ids present in ``steps`` are checked, on
+    the profile ``steps`` were built from. A location and every other step
+    is never missing. A reader error counts as present (logged): never a
+    render on an unread state. Called by :func:`plan` and
+    :func:`due_step_ids` (which promises what ``plan`` does) only — never by
+    ``note_touch`` / ``element_steps``, which every write step reaches."""
+    if kind != "character" or profile is None:
+        return set()
+    ids = {s.id for s in steps}
+    out: Set[str] = set()
+    for step_id, check in _OUTPUT_CHECKS:
+        if step_id not in ids:
+            continue
+        try:
+            if not globals()[check](str(ident), profile):
+                out.add(step_id)
+        except Exception:  # noqa: BLE001 — unread -> present, no render
+            logger.exception("World Dev media: output of step %s of %s %s not readable — "
+                             "counted present", step_id, kind, ident)
+    return out
+
+
+def _held(run_id: str, kind: str, target_id: str,
+          missing_ids: Set[str] = frozenset()) -> set:
     """{(step id, fp)} held by the element's rows of the run: every step of a
     queued/running/done row, and the DONE steps of a cancelled / failed /
     skipped row (Task 8: a row stopped after some steps — a turn start, a
     failure — keeps what it rendered; only what it left open is due again).
-    A removed row holds nothing (its output is gone)."""
+    A removed row holds nothing (its output is gone). A FINISHED step (any
+    step of a done row, a done step of a stopped row) holds only while its
+    output is present: an id in ``missing_ids`` (:func:`_missing_outputs`)
+    is not held. A step of a queued/running row always holds (in flight).
+    The missing-output exemption covers only a step that really RENDERED
+    (:func:`_rendered`): a step a done row skipped or failed, a Build that
+    ended paused, or a done step that left no artefact produced nothing and
+    keeps holding until
+    :func:`retry` clears its fingerprint; otherwise it would be re-queued (and
+    skipped again) at every turn end and at Accept."""
     from app.core import world_dev_runs as wr
     out = set()
     for row in wr.media_rows(run_id, kind=kind, target_id=target_id):
         if row.get("status") == "removed":
             continue
         whole = row.get("status") in HOLDING_ROW_STATUSES
+        in_flight = row.get("status") in IN_FLIGHT_ROW_STATUSES
         for step in row.get("steps") or []:
             if (isinstance(step, dict) and step.get("id")
-                    and (whole or step.get("status") == "done")):
+                    and (whole or step.get("status") == "done")
+                    and (in_flight or not _rendered(step)
+                         or str(step["id"]) not in missing_ids)):
                 out.add((str(step["id"]), str(step.get("fp") or "")))
     return out
 
 
-def plan(run_id: str) -> List[Tuple[str, str, List[StepSpec]]]:
+#: The note prefix of a Build step that ended done but paused — written by
+#: :func:`_produce_build` from this constant: it rendered nothing, like a
+#: skipped step.
+BUILD_PAUSED_NOTE = "Build paused"
+
+
+def _rendered(step: dict) -> bool:
+    """Whether a finished step rendered output: status ``done``, not a Build
+    that ended paused (:data:`BUILD_PAUSED_NOTE`), and not a step the lane
+    recorded with ``output`` False (its producer ended done but left no
+    artefact — a portrait call that wrote no image, a Build that was
+    superseded or had nothing to build). Such a step keeps holding with its
+    output missing, so a producer that keeps writing nothing is not re-run
+    at every schedule; :func:`retry` re-runs it. A step without the field
+    (a row written by hand) counts as rendered."""
+    return (step.get("status") == "done"
+            and step.get("output", True) is not False
+            and not str(step.get("note") or "").startswith(BUILD_PAUSED_NOTE))
+
+
+def _due_steps(base: Optional[dict], steps: List[StepSpec], held: set,
+               missing: Set[str] = frozenset()) -> List[StepSpec]:
+    """The steps whose fingerprint differs from the baseline (every step of a
+    created element, NULL baseline) or whose output is missing, and that no
+    row of the run holds."""
+    return [s for s in steps
+            if (base is None or base.get(s.id) != s.fp or s.id in missing)
+            and (s.id, s.fp) not in held]
+
+
+def _plannable(run: Optional[Dict[str, Any]]) -> bool:
+    return bool(run and run.get("status") in PLAN_STATUSES and run.get("media_enabled"))
+
+
+def _missing_map(run_id: str) -> Dict[Tuple[str, str], Set[str]]:
+    """:func:`_missing_outputs` of every baselined element of the run, for
+    ``schedule`` to compute BEFORE it takes the global media lock (the
+    base-body check can hash a model file). {} when :func:`plan` would
+    plan nothing; an element whose steps cannot be read is left out (then
+    :func:`plan` checks it itself). Read-only."""
+    from app.core import world_dev_runs as wr
+    if not _plannable(wr.get_run(run_id)):
+        return {}
+    out: Dict[Tuple[str, str], Set[str]] = {}
+    for kind, ident in wr.baselines(run_id):
+        try:
+            steps, profile = _read_element(kind, ident)
+        except Exception:  # noqa: BLE001 — plan() reads it again and logs
+            continue
+        if steps:
+            out[(kind, ident)] = _missing_outputs(kind, ident, steps, profile)
+    return out
+
+
+def plan(run_id: str, missing: Optional[Dict[Tuple[str, str], Set[str]]] = None
+         ) -> List[Tuple[str, str, List[StepSpec]]]:
     """The due steps per touched element (pure, no writes): [(kind, id,
     steps)] for every element with at least one due step, in first-touch
     order. A step is due when the element exists, its fingerprint differs from
-    the baseline (always for a created element, NULL baseline) and no
-    queued/running/done row of the run holds that step with that fp. [] when
-    the run's media switch is off or the run is not in review (M15). An
-    element whose steps cannot be read is logged and left out."""
+    the baseline (always for a created element, NULL baseline) OR its output
+    is missing (Task 6, C4: no portrait — ``profile_image`` empty or its file
+    gone —, no base body for the Build; :func:`_missing_outputs`), and no
+    row of the run holds that step with that fp: a queued/running row always
+    holds (in flight), a finished step only while its output is present
+    (:func:`_held`). So a portrait a stopped row rendered and somebody lost
+    is due again, and so is one the run never rendered for an element it
+    touched without changing the face. [] when the run's media switch is off
+    or the run is not in review (M15). An element whose steps cannot be read
+    is logged and left out.
+
+    Presence is computed HERE (and in :func:`due_step_ids`) only, once per
+    element and call, on the profile the steps were built from — never in
+    ``element_steps``, which ``note_touch`` reaches at the first write of every
+    tool. ``missing`` is :func:`_missing_map`'s precomputed answer
+    (``schedule`` computes it outside the media lock); an element missing
+    from it is checked here."""
     from app.core import world_dev_runs as wr
-    run = wr.get_run(run_id)
-    if not run or run.get("status") not in PLAN_STATUSES or not run.get("media_enabled"):
+    if not _plannable(wr.get_run(run_id)):
         return []
     out: List[Tuple[str, str, List[StepSpec]]] = []
     for (kind, ident), base in wr.baselines(run_id).items():
         try:
-            steps = element_steps(kind, ident)
+            steps, profile = _read_element(kind, ident)
         except Exception:  # noqa: BLE001 — one element never blocks the others
             logger.exception("World Dev media: steps of %s %s not readable", kind, ident)
             continue
         if not steps:
             continue
-        held = _held(run_id, kind, ident)
-        due = [s for s in steps
-               if (base is None or base.get(s.id) != s.fp) and (s.id, s.fp) not in held]
+        gone = (missing[(kind, ident)] if missing is not None and (kind, ident) in missing
+                else _missing_outputs(kind, ident, steps, profile))
+        due = _due_steps(base, steps, _held(run_id, kind, ident, gone), gone)
         if due:
             out.append((kind, ident, due))
     return out
@@ -671,11 +898,15 @@ GATE_ONLY_FAILED = ("{name}: only failed steps are left ({labels}) — a manual 
 GATE_PLAN_UNREADABLE = "the Build plan of {name} could not be read ({error})"
 GATE_ROUTE_UNREADABLE = "the route of {occasion} could not be read ({error})"
 
-#: The Build mode of the media lane's ``build`` step: the producer (Task 7) asks for an AUTOMATIC
-#: Build (``figure_build.request``), so the gate reads the plan of the same mode and keeps only the
-#: steps that mode runs (``figure_build.planned_work``). Whoever switches the producer to a manual
-#: Build switches it HERE (and the producer reads it), so the gate follows.
-BUILD_EXPLICIT = False
+#: The Build mode of the media lane's ``build`` step, read by the producer AND the gate so they
+#: agree: True — a MANUAL Build (``figure_build.start(automatic=False)``, what the Figure tab's
+#: Build button runs, the plain body of a character without one included); the run's "Generate
+#: media" switch is the admin's click, so the gate does not apply the two AUTOMATIC-build switches
+#: (world "automatic outfit renders", per-character "Build automatically") — plan
+#: 2026-11-25-world-dev-free-complete-characters-budget, decision 13. False (still selectable) — an
+#: automatic Build (``figure_build.request``), gated by those switches. Either way the gate reads
+#: the plan of the same mode and keeps only the steps that mode runs (``figure_build.planned_work``).
+BUILD_EXPLICIT = True
 
 #: The render occasions each Figure Build step can route (keyed by every
 #: name of ``figure_build.STEP_ORDER``; a step that routes nothing maps to
@@ -844,12 +1075,20 @@ def build_gate(name: str) -> Tuple[Optional[List[str]], Optional[str]]:
     """``(occasions, note)`` of the character's Build in the lane's mode
     (``BUILD_EXPLICIT``): the plan of that mode, cut to the steps it runs
     (``figure_build.planned_work`` — the predicate ``figure_build.start`` uses);
+    (in the explicit mode a manual step — the plain body of a character
+    without a base body — runs, so its occasions are gated instead of a note);
     the occasions are the union of ``BUILD_STEP_OCCASIONS`` over those steps,
     pieces and hair narrowed (``piece_occasions`` / ``hair_occasions``), a
     conditional (step, occasion) only while its setting asks for it. ``note``
     instead when nothing would run: an empty plan "already built"; only manual
     steps left — the first one's own ``manual`` reason; only failed ones —
-    their labels. Raises what the plan raises."""
+    their labels. Those last two notes are reachable only while
+    ``BUILD_EXPLICIT`` is False: a manual Build runs every listed step,
+    cached failures included (``figure_build._runnable``), so in the explicit
+    mode a cached chain failure no longer blocks the gate; the step runs again
+    whenever ``plan()`` makes it due (a stopped row, a missing base body, or
+    Retry) — the run's media switch counts as the admin's click (decision 13).
+    Raises what the plan raises."""
     from app.core import figure_build
     planned, steps = figure_build.planned_work(name, explicit=BUILD_EXPLICIT)
     if not planned:
@@ -920,7 +1159,8 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
     """None = the step may run; else the note it is skipped with (never a
     retry). In order: the run's media switch, the media master switch
     (``image_generation.enabled``), for a character its pause of automatic
-    generation, for a Build the world's automatic outfit renders
+    generation, for a Build in the automatic mode (``BUILD_EXPLICIT`` False
+    only) the world's automatic outfit renders
     (``model_refs.auto_renders_enabled``) and then "Build automatically",
     then ``route_check`` for every occasion of ``step_occasions`` (the first failing one wins; a Build
     with nothing to run gives ``build_gate``'s note). ``run`` is the run dict
@@ -952,7 +1192,7 @@ def step_gate(run: Any, kind: str, target_id: str, step: StepSpec) -> Optional[s
             return GATE_PAUSE_UNREADABLE.format(name=name, error=_err(e))
         if paused:
             return GATE_PAUSED.format(name=name)
-        if step.id == "build":
+        if step.id == "build" and not BUILD_EXPLICIT:
             try:
                 from app.core import model_refs
                 renders = model_refs.auto_renders_enabled()
@@ -1116,6 +1356,10 @@ SIDECAR_MAX_BYTES = 256 * 1024
 GALLERY_META_FILES = frozenset({"gallery_meta.json", "prompts.json"})
 #: The Build producer's trigger name and its wait.
 BUILD_TRIGGER = "world_dev"
+#: The skipped note's text for a manual start status that carries no ``reason`` of its own
+#: (the statuses are listed in ``figure_build.start``'s docstring; any other one without a reason
+#: falls back to "(<status>)").
+BUILD_STATUS_NOTES = {"current": "nothing to build"}
 BUILD_WAIT_S = 6 * 3600
 BUILD_POLL_S = 5.0
 #: Image suffixes of a character image (the gallery readers' set).
@@ -1610,12 +1854,14 @@ def _portrait_artefacts(name: str, raw: List[dict]) -> List[dict]:
 
 
 def _produce_build(ctx: ProduceCtx, kind: str, target_id: str, step: StepSpec) -> Tuple[str, List[dict]]:
-    """The Figure Build in the lane's mode (``BUILD_EXPLICIT`` False: an
-    automatic ``figure_build.request(name, BUILD_TRIGGER)``), then a wait on
+    """The Figure Build in the lane's mode (``BUILD_EXPLICIT`` True: a manual
+    ``figure_build.start(name, reason=BUILD_TRIGGER, automatic=False)``; False:
+    an automatic ``figure_build.request(name, BUILD_TRIGGER)``), then a wait on
     ``figure_build.state`` every ``BUILD_POLL_S`` until nothing runs, is
     queued or deferred (at most ``BUILD_WAIT_S``). The character's media roots
     but ``images`` (``producer_roots``) are the output — no profile key (the
-    Build writes none; a hand-rendered portrait in the window is not the run's). Not started -> skipped; a failed Build step
+    Build writes none; a hand-rendered portrait in the window is not the run's). Not started -> skipped
+    (a manual start's note names its status and reason: base_busy, current, off, failed); a failed Build step
     or the timeout -> failed (with what was written so far)."""
     import time
     from app.core import figure_build
@@ -1623,11 +1869,13 @@ def _produce_build(ctx: ProduceCtx, kind: str, target_id: str, step: StepSpec) -
 
     def run() -> str:
         if BUILD_EXPLICIT:
-            status = (figure_build.start(name, reason=BUILD_TRIGGER, automatic=False) or {}).get("status")
-            started = status in ("started", "queued", "deferred")
-        else:
-            started = bool(figure_build.request(name, BUILD_TRIGGER))
-        if not started:
+            answer = figure_build.start(name, reason=BUILD_TRIGGER, automatic=False) or {}
+            status = answer.get("status")
+            if status not in ("started", "queued", "deferred"):
+                reason = answer.get("reason") or BUILD_STATUS_NOTES.get(str(status), "")
+                raise StepError("skipped", f"the Build of {name} was not started ({status or 'no status'}"
+                                           + (f": {reason}" if reason else "") + ")")
+        elif not figure_build.request(name, BUILD_TRIGGER):
             raise StepError("skipped", f"the Build of {name} was not started (off the pipeline, "
                                        "not automatic, paused or deferred by a running turn)")
         deadline = time.monotonic() + BUILD_WAIT_S
@@ -1643,10 +1891,10 @@ def _produce_build(ctx: ProduceCtx, kind: str, target_id: str, step: StepSpec) -
         if failed:
             raise StepError("failed", "Build failed: " + "; ".join(
                 f"{k}: {v}" for k, v in sorted(failed.items(), key=lambda kv: str(kv[0]))))
-        for key in ("paused", "superseded"):
+        for key, prefix in (("paused", BUILD_PAUSED_NOTE), ("superseded", "Build superseded")):
             if st.get(key):
                 info = st[key] or {}
-                return f"Build {key}: " + str(info.get("note") or info.get("label") or "")
+                return f"{prefix}: " + str(info.get("note") or info.get("label") or "")
         return ""
     return _captured(ctx, kind, name, run, roots=producer_roots(name))
 
@@ -2085,6 +2333,9 @@ def schedule(run_id: str, *, accepting: bool = False) -> List[int]:
     row ids ([] = nothing due or not schedulable)."""
     from app.core import world_dev_runs as wr
     added: List[int] = []
+    # The output presence (the base-body check may hash a model file) is
+    # read before the global media lock: one check per element per schedule.
+    missing = _missing_map(run_id)
     with _media_lock():
         run = wr.get_run(run_id)
         status = (run or {}).get("status")
@@ -2092,7 +2343,7 @@ def schedule(run_id: str, *, accepting: bool = False) -> List[int]:
         if (not run or not schedulable
                 or (run.get("media_state") or "open") != "open" or not run.get("media_enabled")):
             return []
-        for kind, ident, steps in plan(run_id):
+        for kind, ident, steps in plan(run_id, missing):
             added.append(wr.add_media_row(run_id, kind, ident, [_step_dict(s) for s in steps],
                                           scheduled_turn=int(run.get("turn") or 0)))
         if added:
@@ -2200,7 +2451,8 @@ def _run_row(row: Dict[str, Any], live: Optional[Dict[str, Any]] = None) -> str:
             try:
                 fn = PRODUCERS[spec.producer]
                 step_note, arts = fn(ctx, kind, ident, spec)
-                step.update(status="done", note=step_note or "")
+                # ``output``: whether the step left anything behind (_rendered)
+                step.update(status="done", note=step_note or "", output=bool(arts))
             except Exception as e:  # noqa: BLE001 — a step never ends the lane
                 err = _as_step_error(e, [])
                 if not isinstance(e, StepError):
@@ -2595,10 +2847,17 @@ class MediaConflict(RuntimeError):
 SWITCH_OFF_NOTE = "media switched off"
 #: Step statuses a retry makes due again (their fingerprints are cleared).
 RETRY_STEP_STATUSES = ("failed", "skipped")
-#: Rows whose failed/skipped steps a retry clears (a queued/running row is
-#: still working; a cancelled row's undone steps hold nothing anyway; a
-#: removed row holds nothing at all — ``_held``).
-RETRY_ROW_STATUSES = ("done", "failed", "skipped")
+#: Rows whose failed/skipped steps (and done steps that rendered nothing) a
+#: retry supersedes. A queued/running row is still working; a removed row
+#: holds nothing at all (``_held``). A cancelled row is visited too: its
+#: cancelled steps hold nothing anyway, but a done step of it that rendered
+#: nothing (``_rendered``) keeps holding until a retry supersedes it.
+RETRY_ROW_STATUSES = ("done", "failed", "skipped", "cancelled")
+#: The fingerprint a retry gives a superseded step: never a real fingerprint
+#: (like :data:`MISSING_OUTPUT_FP`), so the step no longer holds the
+#: element's current fingerprint — also when that fingerprint is ``""``
+#: (an empty face prompt), which clearing to ``""`` could not supersede.
+SUPERSEDED_FP = "superseded-by-retry"
 _STEP_STATUS_KEYS = ("id", "label", "status", "note")
 
 
@@ -2697,12 +2956,14 @@ def retry(run_id: str) -> List[int]:
     (its media wait for Accept, F1) or closed; KeyError for an unknown
     run; MediaConflict too when the run's media switch is off or its media
     state is not ``open`` — checked under the media lock BEFORE any
-    fingerprint is cleared, since ``schedule`` would add nothing and a
-    cleared fingerprint would make the step due at a later turn end without
+    fingerprint is superseded, since ``schedule`` would add nothing and a
+    superseded fingerprint would make the step due at a later turn end without
     any retry). Under the media lock every failed/skipped STEP of a done / failed /
-    skipped row is superseded: its fingerprint is cleared, the row's status
+    skipped / cancelled row, and every done step that rendered nothing (:func:`_rendered`:
+    a paused Build, no artefact), is superseded: its fingerprint becomes
+    :data:`SUPERSEDED_FP` (a step already superseded is left as it is), the row's status
     and its done steps stay (they keep holding what they rendered). A done
-    row holds all its steps (``_held``), so without the cleared fingerprint
+    row holds all its steps (``_held``), so without the superseded fingerprint
     a step it skipped would never be due again. Then ``schedule`` queues
     what ``plan`` now sees due; returns the new row ids."""
     from app.core import world_dev_runs as wr
@@ -2721,9 +2982,10 @@ def retry(run_id: str) -> List[int]:
             steps = list(row.get("steps") or [])
             changed = False
             for i, step in enumerate(steps):
-                if (isinstance(step, dict) and step.get("status") in RETRY_STEP_STATUSES
-                        and step.get("fp")):
-                    steps[i] = dict(step, fp="")
+                if (isinstance(step, dict) and step.get("fp") != SUPERSEDED_FP
+                        and (step.get("status") in RETRY_STEP_STATUSES
+                             or (step.get("status") == "done" and not _rendered(step)))):
+                    steps[i] = dict(step, fp=SUPERSEDED_FP)
                     changed = True
             if changed:
                 wr.update_media_row(row["id"], steps=steps)

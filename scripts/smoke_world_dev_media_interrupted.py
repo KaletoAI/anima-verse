@@ -84,6 +84,18 @@ media state accepted is not closed):
 Run 7, "Demo Kai":
   (i) awaiting_review control -> schedule(run7) returns 1 id (unchanged
       behaviour), media_status waiting == [].
+  (j) Phase review (retry): run 7 (awaiting_review, media on) gets a hand
+      row for "Demo Retry", status cancelled, steps [portrait done, output
+      False, fp ""] and [mesh cancelled, fp "m"]. _held before the retry
+      (no missing outputs passed) = {("portrait", "")}: a cancelled row holds
+      only its done steps, and a done step that rendered nothing holds
+      regardless of presence. With schedule stubbed to [] (no lane), retry
+      -> steps' fps [SUPERSEDED_FP, "m"] (the cancelled row is visited, the
+      cancelled mesh step is no retry status); a second retry leaves them
+      as they are; _held = {("portrait", SUPERSEDED_FP)}, so the element's
+      real fingerprint "" is no longer held; the row stays cancelled. Before
+      the fix retry skipped cancelled rows and a step whose fp was "" —
+      fps stayed ["", "m"].
 """
 from __future__ import annotations
 
@@ -374,6 +386,34 @@ async def main():
     check("(i) schedule -> 1 id", len(got) == 1, got)
     check("(i) waiting []", (wdm.media_status(run7) or {}).get("waiting") == [],
           (wdm.media_status(run7) or {}).get("waiting"))
+
+    print("(j) retry supersedes an empty fingerprint, also on a cancelled row")
+    row_j = wr.add_media_row(run7, "character", "Demo Retry", [
+        {"id": "portrait", "label": "portrait", "status": "done", "note": "",
+         "fp": "", "output": False},
+        {"id": "mesh", "label": "T-pose + 3D model", "status": "cancelled", "note": "",
+         "fp": "m"}])
+    wr.update_media_row(row_j, status="cancelled")
+    check("(j) before: the empty fp holds",
+          wdm._held(run7, "character", "Demo Retry") == {("portrait", "")},
+          wdm._held(run7, "character", "Demo Retry"))
+    real_schedule = wdm.schedule
+    wdm.schedule = lambda run_id, **_k: []
+    try:
+        wdm.retry(run7)
+        fps1 = [s.get("fp") for s in wr.media_row(row_j)["steps"]]
+        wdm.retry(run7)
+        fps2 = [s.get("fp") for s in wr.media_row(row_j)["steps"]]
+    finally:
+        wdm.schedule = real_schedule
+    check("(j) portrait superseded, the cancelled mesh step untouched",
+          fps1 == [wdm.SUPERSEDED_FP, "m"], fps1)
+    check("(j) a second retry changes nothing", fps2 == fps1, fps2)
+    check("(j) after: nothing holds the empty fp",
+          wdm._held(run7, "character", "Demo Retry") == {("portrait", wdm.SUPERSEDED_FP)},
+          wdm._held(run7, "character", "Demo Retry"))
+    check("(j) row status stays cancelled", wr.media_row(row_j)["status"] == "cancelled",
+          wr.media_row(row_j)["status"])
 
 
 asyncio.run(main())

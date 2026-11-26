@@ -94,7 +94,9 @@ def apply_character(char_data: Dict[str, Any],
                     must_be_new: bool = False,
                     on_claim: Optional[Callable[[], None]] = None,
                     on_item: Optional[Callable[[str], None]] = None,
-                    place_compliance: bool = True) -> Dict[str, Any]:
+                    place_compliance: bool = True,
+                    body_attributes: Optional[Callable[[Any], Dict[str, Dict[str, Any]]]] = None
+                    ) -> Dict[str, Any]:
     """Apply character JSON in-process (profile + soul MD + outfits + config).
 
     Used by the temp-NPC generator (``npc_ops.apply_npc``) and the World Dev
@@ -118,6 +120,11 @@ def apply_character(char_data: Dict[str, Any],
     run through the outfit compliance here — a caller that dresses it
     afterwards (the World Dev free mode's starting outfit) runs it once
     itself, on the outfit actually worn.
+    ``body_attributes(spec)``: which attributes of a body slot ``body_slots``
+    may set — default ``body_slots.llm_fillable_attributes`` (the temp-NPC
+    generator); the free mode passes ``body_slots.editable_attributes`` (it
+    checked the values against that set itself, the mesh-part switch only on
+    the base-body pipeline).
 
     Returns {status, character, template, outfits, warnings, created_items};
     ``created_items`` are the catalog item ids the outfits created via
@@ -321,7 +328,7 @@ def apply_character(char_data: Dict[str, Any],
     # After the profile save: the slots that apply depend on the stored
     # template and gender.
     apply_warnings: List[str] = stat_warnings + _apply_body_slots(
-        char_name, char_data.get("body_slots"))
+        char_name, char_data.get("body_slots"), body_attributes)
     raw_outfits = char_data.get("outfits", []) or []
     if raw_outfits and not _template_has_wardrobe(template):
         apply_warnings.append(
@@ -346,16 +353,21 @@ def apply_character(char_data: Dict[str, Any],
             "created_items": created_items}
 
 
-def _apply_body_slots(char_name: str, raw: Any) -> List[str]:
+def _apply_body_slots(char_name: str, raw: Any,
+                      body_attributes: Optional[Callable[[Any], Dict[str, Dict[str, Any]]]] = None
+                      ) -> List[str]:
     """Stores LLM-proposed body-slot values through the editor setter
     (``character_ops.apply_body_slot_values``, merge per attribute). Only the
-    slots that apply to the character and the attributes offered in the prompt
-    are taken; everything skipped comes back as a warning."""
+    slots that apply to the character and the attributes ``body_attributes``
+    offers (default ``llm_fillable_attributes``, the set of the prompt) are
+    taken; everything skipped comes back as a warning."""
     if not raw:
         return []
     if not isinstance(raw, dict):
         return ["body_slots is not an object — skipped."]
     from app.core.body_slots import llm_fillable_attributes, slots_for_character
+    if body_attributes is None:
+        body_attributes = llm_fillable_attributes
     from app.core.character_ops import apply_body_slot_values
     specs = {spec.id: spec for spec in slots_for_character(char_name)}
     warnings: List[str] = []
@@ -365,7 +377,7 @@ def _apply_body_slots(char_name: str, raw: Any) -> List[str]:
             warnings.append(f"Body slot '{slot_id}' does not apply to "
                             f"{char_name} — skipped.")
             continue
-        allowed = llm_fillable_attributes(spec)
+        allowed = body_attributes(spec)
         clean: Dict[str, str] = {}
         for key, value in values.items():
             decl = allowed.get(key)

@@ -691,9 +691,12 @@ def _stored_base_for(character_name: str, identity: str, profile_image: str,
     (``_carried_front`` with today's ``appearance``), else — a set rendered
     before identities were recorded (no ``base_identity`` key) — the newest
     one whose reference was the current profile image. None when nothing
-    stored fits. Read-only: nothing is renamed or rewritten."""
-    from app.core.model_refs import get_model_refs_dir
-    refs = get_model_refs_dir(character_name)
+    stored fits. Read-only: nothing is renamed or rewritten, and no
+    directory is created (``get_model_refs_dir`` would create
+    ``model_refs`` — a write a pure read such as the World Dev media
+    baseline must not leave)."""
+    from app.models.character import get_character_dir
+    refs = get_character_dir(character_name) / "model_refs"
     try:
         listing = os.listdir(refs)
     except OSError:

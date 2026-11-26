@@ -158,6 +158,18 @@ def llm_fillable_attributes(spec) -> Dict[str, Dict[str, Any]]:
             and decl.get("llm_generable", True) is not False}
 
 
+def editable_attributes(spec) -> Dict[str, Dict[str, Any]]:
+    """The attributes of a slot the character editor offers, minus its LoRA
+    pickers (``lora_select`` — LoRA names come from the backend library, and
+    the editor has its own picker): the ``mesh_part`` switch and what the
+    manifest marks ``llm_generable: false`` included, declaration order
+    kept. The World Dev free mode reads and writes this set (it fills a
+    character the way an admin would in the editor); the temp-NPC generator
+    keeps :func:`llm_fillable_attributes`."""
+    return {key: decl for key, decl in spec.attributes.items()
+            if str(decl.get("type", "select")) != "lora_select"}
+
+
 def _format_conditions(conditions: Dict[str, Any]) -> str:
     """`` (only when gender=male)`` for an ``applies_to`` map, else "".
     An ``attributes.<key>`` condition reads as the sibling attribute's name;

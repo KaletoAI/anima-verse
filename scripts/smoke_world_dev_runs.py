@@ -18,8 +18,11 @@ WHAT IS CHECKED, and where every expected value comes from
           seq 2  turn 1  read   get_location      (no inverse)
           seq 3  turn 1  write  add_terrain_area  pending, no inverse yet
           seq 4  turn 2  write  update_location   inverse restore_location
-      seqs count up per run from 1. ``begin`` increments the run's
-      ``steps`` → 4.
+      seqs count up per run from 1. ``begin`` writes the journal row only
+      (plan 2026-11-25 complete-characters-budget, B1): ``steps`` stays 0.
+      ``steps`` counts model tool calls through ``count_call``: two calls
+      return 1, then 2, ``steps`` → 2; ``count_call("wdr_nope")`` raises
+      KeyError. The journal seqs stay [1, 2, 3, 4].
       ``entries(run, turn=1)`` = writes of turn 1 newest-first = [3, 1].
       ``entries(run)`` = every write newest-first = [4, 3, 1].
       ``steps(run)`` = all 4 rows oldest-first = [1, 2, 3, 4], kinds
@@ -95,7 +98,15 @@ s4 = wr.begin(run, 2, "write", "update_location", {"id": "M"},
               target_kind="location", target_id="M",
               inverse={"op": "restore_location", "id": "M", "before": {"description": "old"}})
 check("(b) seqs 1..4", [s1, s2, s3, s4] == [1, 2, 3, 4])
-check("(b) run.steps == 4", wr.get_run(run)["steps"] == 4)
+check("(b) begin does not count: run.steps == 0", wr.get_run(run)["steps"] == 0)
+check("(b) count_call -> 1, 2", [wr.count_call(run), wr.count_call(run)] == [1, 2])
+check("(b) run.steps == 2", wr.get_run(run)["steps"] == 2)
+try:
+    wr.count_call("wdr_nope")
+    _kerr = False
+except KeyError:
+    _kerr = True
+check("(b) count_call of an unknown run raises KeyError", _kerr)
 check("(b) entries(turn=1) newest-first [3, 1]",
       [e["seq"] for e in wr.entries(run, turn=1)] == [3, 1])
 check("(b) entries() [4, 3, 1]", [e["seq"] for e in wr.entries(run)] == [4, 3, 1])

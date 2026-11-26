@@ -351,21 +351,27 @@ Open points 1-3 of the plan (runs 17-21):
   (ap) body slots (run 26/27), a FAKE package (same declarations as
        smoke_world_dev_body_slots.py: hair color [blonde, red] allow_custom,
        length [short, long], lora lora_select; eyes color [blue, green],
-       shape llm_generable false; facial_hair only gender=male). Demo Slots
+       shape [round, almond] llm_generable false; facial_hair only
+       gender=male). The free mode sets the editor's set (every attribute
+       but lora_select — plan 2026-11-25-world-dev-free-complete-characters-
+       budget.md, Task 3), so shape is listed and settable. Demo Slots
        (female, hair.color red): get_character fields [body_slots] = the
        lines "hair: color=red [blonde|red|other]; length=- [short|long]" and
-       "eyes: color=- [blue|green]" (facial_hair does not apply, lora/shape
-       not fillable); the plain view says 2 attributes unset. Refused,
+       "eyes: color=- [blue|green]; shape=- [round|almond]" (facial_hair does
+       not apply, lora is no editor attribute here); the plain view says 3
+       attributes unset (hair.length, eyes.color, eyes.shape). Refused,
        nothing written: facial_hair (does not apply; the refusal lists
-       "eyes, hair"), hair.lora, hair.length "medium", eyes.shape, eyes.color
-       " ". Accepted: hair {copper-red (custom), long} -> merged; journal
+       "eyes, hair"), hair.lora, hair.length "medium", eyes.shape "oval"
+       (not in [round, almond], no allow_custom), eyes.color " ". Accepted:
+       hair {copper-red (custom), long} -> merged, the line names
+       "eyes.color, eyes.shape" unset; journal
        before {hair: {color: red, length: ABSENT}}, had_key True,
        slots_present [hair], written {hair: {copper-red, long}}. Demo
        Slotless (no body_slots key) with gender male + facial_hair + eyes in
        one patch: facial_hair applies to the profile as it will be.
        create_character with slot "tail" -> refused, no row; "Demo Born"
        with hair.color blonde -> created, line names "hair.length,
-       eyes.color" unset. Undo: complete, every table as before — Demo
+       eyes.color, eyes.shape" unset. Undo: complete, every table as before — Demo
        Slotless female again and WITHOUT a body_slots key. Run 27: eyes.color
        blue, then the admin sets green -> skipped changed since
        ["body_slots.eyes.color"], green stays.
@@ -1946,10 +1952,10 @@ check("(ap) get_character fields [body_slots]: the schema",
       res.ok and res.line.split("\n")[1:] == [
           "body slots (slot: attribute=value [allowed]; - = unset):",
           "hair: color=red [blonde|red|other]; length=- [short|long]",
-          "eyes: color=- [blue|green]"], res.line)
+          "eyes: color=- [blue|green]; shape=- [round|almond]"], res.line)
 res = wt.run_tool(g1, "get_character", {"name": "Demo Slots"})
-check("(ap) get_character: 2 attributes unset (hair.length, eyes.color)",
-      res.ok and "body slots: 2 attribute(s) unset" in res.line, res.line)
+check("(ap) get_character: 3 attributes unset (hair.length, eyes.color, eyes.shape)",
+      res.ok and "body slots: 3 attribute(s) unset" in res.line, res.line)
 dump26 = db_dump()
 for label, body, want in (
         ("(ap) a slot that does not apply (male only) -> refused",
@@ -1959,8 +1965,8 @@ for label, body, want in (
          {"hair": {"lora": "x.safetensors"}}, "attributes: color, length"),
         ("(ap) a value outside the options -> refused",
          {"hair": {"length": "medium"}}, "body_slots.hair.length must be one of: short, long"),
-        ("(ap) a not llm-generable attribute -> refused",
-         {"eyes": {"shape": "round"}}, "attributes: color"),
+        ("(ap) a not llm-generable attribute outside its options -> refused",
+         {"eyes": {"shape": "oval"}}, "body_slots.eyes.shape must be one of: round, almond"),
         ("(ap) an empty value -> refused", {"eyes": {"color": " "}}, "non-empty string")):
     res = wt.run_tool(g1, "update_character", {"name": "Demo Slots", "patch": {"body_slots": body}})
     check(label, not res.ok and not res.wrote and want in res.line, res)
@@ -1972,7 +1978,7 @@ check("(ap) hair merged: copper-red (custom allowed) + long",
       # Task 9: the body_slots group was touched; the eyes slot of the fake
       # package applies to Demo Slots and its color is still unset.
       res.ok and res.line == 'updated character "Demo Slots": body slots hair.color, hair.length'
-      "; missing: body slots unset: eyes.color"
+      "; missing: body slots unset: eyes.color, eyes.shape"
       and get_character_profile("Demo Slots")["body_slots"]
       == {"hair": {"color": "copper-red", "length": "long"}}, res)
 bs_row = wr.entries(run26)[0]
@@ -1999,7 +2005,7 @@ res = wt.run_tool(g1, "create_character", {"data": {
     "character_name": "Demo Born", "gender": "female",
     "body_slots": {"hair": {"color": "blonde"}}}})
 check("(ap) create_character names the unset slots",
-      res.ok and "; body slots unset: hair.length, eyes.color" in res.line
+      res.ok and "; body slots unset: hair.length, eyes.color, eyes.shape" in res.line
       and get_character_profile("Demo Born").get("body_slots") == {"hair": {"color": "blonde"}},
       res)
 rep = wu.undo(run26)

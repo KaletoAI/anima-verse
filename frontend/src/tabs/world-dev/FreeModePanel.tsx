@@ -6,6 +6,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { debounced } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
 import { usePersistentState } from '../../lib/usePersistentState'
+import { kToTokens, posInt, tokensK } from './budget'
 import './FreeModePanel.css'
 
 /**
@@ -201,12 +202,6 @@ function shortTime(iso?: string | null): string {
   return iso ? iso.replace('T', ' ').slice(0, 16) : ''
 }
 
-/** A positive integer from a text field, or undefined (empty / invalid). */
-function posInt(raw: string): number | undefined {
-  const n = parseInt(raw, 10)
-  return Number.isFinite(n) && n > 0 ? n : undefined
-}
-
 export function FreeModePanel({ model, provider, maxTokens, effort }: {
   model: string
   provider: string
@@ -219,8 +214,11 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   const { toast } = useToast()
 
   const [task, setTask] = usePersistentState('worlddev.free.task', '')
-  const [maxSteps, setMaxSteps] = usePersistentState('worlddev.free.maxSteps', '')
-  const [maxTotal, setMaxTotal] = usePersistentState('worlddev.free.maxTotal', '')
+  // Budget fields: empty = the server default (shown as the placeholder,
+  // never written into the persisted value); the token budget is in thousands.
+  const [maxCalls, setMaxCalls] = usePersistentState('worlddev.free.maxCalls', '')
+  const [maxTotalK, setMaxTotalK] = usePersistentState('worlddev.free.maxTotalK', '')
+  const [defaults, setDefaults] = useState<{ max_steps: number | null; max_tokens_total: number | null } | null>(null)
   // The start form's media switch: the server renders what the run builds.
   const [genMedia, setGenMedia] = usePersistentState<boolean>('worlddev.free.media', true)
   const [mediaOpen, setMediaOpen] = usePersistentState<boolean>('worlddev.free.mediaOpen', true)
@@ -239,8 +237,8 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   const [runs, setRuns] = useState<FreeRun[]>([])
   const [busy, setBusy] = useState(false)
   const [followUp, setFollowUp] = useState('')
-  const [followSteps, setFollowSteps] = useState('')
-  const [followTotal, setFollowTotal] = useState('')
+  const [followCalls, setFollowCalls] = useState('')
+  const [followTotalK, setFollowTotalK] = useState('')
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [confirmEmptyAccept, setConfirmEmptyAccept] = useState(false)
   const [discardSkipped, setDiscardSkipped] = useState<SkipEntry[] | null>(null)
@@ -439,13 +437,18 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
 
   useEffect(() => {
     mounted.current = true
+    // The keys of the old budget fields held a copied server default (and
+    // plain tokens) — drop them so an old default can never come back.
+    try {
+      sessionStorage.removeItem('worlddev.free.maxSteps')
+      sessionStorage.removeItem('worlddev.free.maxTotal')
+    } catch { /* storage unavailable */ }
     apiGet<{ max_steps?: number; max_tokens_total?: number }>('/world-dev/free/defaults')
       .then((d) => {
         if (!mounted.current) return
-        setMaxSteps((prev) => prev || String(d.max_steps || ''))
-        setMaxTotal((prev) => prev || String(d.max_tokens_total || ''))
+        setDefaults({ max_steps: d.max_steps || null, max_tokens_total: d.max_tokens_total || null })
       })
-      .catch(() => { /* the fields stay empty — the server applies its defaults */ })
+      .catch(() => { /* no placeholder — the server still applies its defaults */ })
     void loadRuns()
     apiGet<{ run?: FreeRun | null }>('/world-dev/free/open')
       .then((d) => { if (d.run && mounted.current) void attach(d.run.id) })
@@ -506,8 +509,8 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
         task: task.trim(), model, provider,
         max_tokens: Number.isFinite(perReply) ? perReply : undefined,
         effort: effort || undefined,
-        max_steps: posInt(maxSteps),
-        max_tokens_total: posInt(maxTotal),
+        max_steps: posInt(maxCalls),
+        max_tokens_total: kToTokens(maxTotalK),
         generate_media: genMedia,
       })
       rememberEv(d.run_id, 0)
@@ -523,7 +526,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     } finally {
       setBusy(false)
     }
-  }, [attach, effort, genMedia, loadRuns, maxSteps, maxTokens, maxTotal, model, provider, rememberEv, runId, t, task, toast])
+  }, [attach, effort, genMedia, loadRuns, maxCalls, maxTokens, maxTotalK, model, provider, rememberEv, runId, t, task, toast])
 
   const action = useCallback(async (what: 'stop' | 'accept' | 'discard') => {
     if (!runId) return
@@ -574,12 +577,12 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     try {
       await apiPost(`/world-dev/free/${encodeURIComponent(runId)}/message`, {
         text: followUp.trim(),
-        max_steps: posInt(followSteps),
-        max_tokens_total: posInt(followTotal),
+        max_steps: posInt(followCalls),
+        max_tokens_total: kToTokens(followTotalK),
       })
       setFollowUp('')
-      setFollowSteps('')
-      setFollowTotal('')
+      setFollowCalls('')
+      setFollowTotalK('')
       setDiscardSkipped(null)
       setLiveStatus('running')
       // Detail loaded without a live stream: the stored counter may belong
@@ -593,7 +596,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     } finally {
       setBusy(false)
     }
-  }, [connect, followSteps, followTotal, followUp, rememberEv, runId, t, toast])
+  }, [connect, followCalls, followTotalK, followUp, rememberEv, runId, t, toast])
 
   /** Discard: re-read the run first, so the confirmation lists what exists
    *  NOW (a player chat with a created character during a long review). */
@@ -742,14 +745,16 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
           />
           <div className="ga-wd-free-row">
             <label className="ga-wd-free-field">
-              <span>{t('Step budget (per turn)')}</span>
-              <input className="ga-input" inputMode="numeric" value={maxSteps}
-                onChange={(e) => setMaxSteps(e.target.value)} />
+              <span>{t('Tool-call budget (per turn)')}</span>
+              <input className="ga-input" inputMode="numeric" value={maxCalls}
+                placeholder={defaults?.max_steps ? String(defaults.max_steps) : ''}
+                onChange={(e) => setMaxCalls(e.target.value)} />
             </label>
             <label className="ga-wd-free-field">
-              <span>{t('Token budget (per turn)')}</span>
-              <input className="ga-input" inputMode="numeric" value={maxTotal}
-                onChange={(e) => setMaxTotal(e.target.value)} />
+              <span>{t('Token budget per turn (k)')}</span>
+              <input className="ga-input" inputMode="numeric" value={maxTotalK}
+                placeholder={defaults?.max_tokens_total ? String(Math.round(defaults.max_tokens_total / 1000)) : ''}
+                onChange={(e) => setMaxTotalK(e.target.value)} />
             </label>
             <label className="ga-wd-free-check"
               title={t('After each turn the server renders the standard images and 3D models of what the run built; Discard removes them again.')}>
@@ -776,14 +781,14 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
           {c ? (
             <div className="ga-wd-free-counters">
               <span title={t('The budgets apply to each turn; the run total counts every turn')}>
-                <strong>{t('Steps this turn')}</strong>{' '}
+                <strong>{t('Tool calls this turn')}</strong>{' '}
                 {c.turn_steps !== null ? c.turn_steps : '–'} / {c.max_steps}
                 <span className="ga-form-hint"> · {t('run total')} {c.steps}</span>
               </span>
               <span title={t('The budgets apply to each turn; the run total counts every turn')}>
-                <strong>{t('Tokens this turn')}</strong>{' '}
-                {c.turn_tokens !== null ? c.turn_tokens.toLocaleString() : '–'} / {c.max_tokens_total.toLocaleString()}
-                <span className="ga-form-hint"> · {t('run total')} {c.tokens.toLocaleString()}</span>
+                <strong>{t('Tokens this turn (k)')}</strong>{' '}
+                {c.turn_tokens !== null ? tokensK(c.turn_tokens) : '–'} / {tokensK(c.max_tokens_total)}
+                <span className="ga-form-hint"> · {t('run total')} {tokensK(c.tokens)}</span>
               </span>
               <span><strong>{t('Cost')}</strong> {formatUsd(c.cost)}</span>
             </div>
@@ -817,6 +822,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                   + ' — ' + t('{k} change(s) removed').replace('{k}', String(tr.undone))
                 : t('Turn {n} stopped by budget — work kept, send a follow-up to continue')
                   .replace('{n}', String(tr.turn))
+                  + (tr.reason ? ': ' + tr.reason : '')
                   + (tr.writes ? ' (' + t('{k} change(s) kept').replace('{k}', String(tr.writes - tr.undone)) + ')' : '')}
             </div>
           ))}
@@ -970,18 +976,18 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                 placeholder={t('Follow-up for the model (a new turn of this run)…')}
               />
               <label className="ga-wd-free-field">
-                <span>{t('Step budget (per turn)')}</span>
-                <input className="ga-input" inputMode="numeric" value={followSteps}
+                <span>{t('Tool-call budget (per turn)')}</span>
+                <input className="ga-input" inputMode="numeric" value={followCalls}
                   placeholder={String(run.max_steps ?? '')}
                   title={t('Raise the budget for this and every later turn; empty = keep it')}
-                  onChange={(e) => setFollowSteps(e.target.value)} />
+                  onChange={(e) => setFollowCalls(e.target.value)} />
               </label>
               <label className="ga-wd-free-field">
-                <span>{t('Token budget (per turn)')}</span>
-                <input className="ga-input" inputMode="numeric" value={followTotal}
-                  placeholder={String(run.max_tokens_total ?? '')}
+                <span>{t('Token budget per turn (k)')}</span>
+                <input className="ga-input" inputMode="numeric" value={followTotalK}
+                  placeholder={run.max_tokens_total != null ? String(Math.round(run.max_tokens_total / 1000)) : ''}
                   title={t('Raise the budget for this and every later turn; empty = keep it')}
-                  onChange={(e) => setFollowTotal(e.target.value)} />
+                  onChange={(e) => setFollowTotalK(e.target.value)} />
               </label>
               <button className="ga-btn ga-btn-primary" disabled={busy || !followUp.trim()}
                 onClick={() => { void sendFollowUp() }}>
@@ -1003,7 +1009,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                 <th>{t('Task')}</th>
                 <th>{t('Model')}</th>
                 <th>{t('Status')}</th>
-                <th>{t('Steps')}</th>
+                <th>{t('Tool calls')}</th>
                 <th>{t('Time')}</th>
                 <th>{t('Backup')}</th>
               </tr>

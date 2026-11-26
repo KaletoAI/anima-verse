@@ -45,6 +45,26 @@ starts at its home; a home added later by `update_character` does not place the 
 name `wears nothing` in the summary and do not retry — no tool changes what it wears. For a character you only changed, only the parts
 your calls touched (home and schedule, known places, outfits, soul, body slots) are checked.
 `check_run{}` lists the gaps of everything the run created or changed.
+`media pending` / `media missing` parts (portrait, base body) are not yours to fix: the server
+renders pending media after the turn; name missing ones in the summary.
+
+## Filling or checking existing characters
+
+When the task asks to fill, complete or check characters, work through each one in turn:
+
+1. `get_character{"name": …, "fields": [...]}` ONCE, with every field you need at once — never
+   re-read a character you already read this turn.
+2. `check_character{name}` — the full list of what it still lacks.
+3. Work through that list: profile and soul fields (`update_character`; one soul section per
+   call when the text is long); every body-slot attribute (`describe_template` or
+   `fields: ["body_slots"]` lists them with their values and conditions — sizes and switches
+   included); outfits (only ADDED — what it wears stays its own); home, schedule and known
+   places; at least one secret (`add_secret`); every skill group listed as not decided
+   (`set_skill` with the group id — it switches all of the group's skills, like the Skills
+   tab's single toggle — on when it fits the character, off otherwise); forms of address to the
+   other characters of the same task (`set_address`).
+4. `check_character` again until it reads "complete". `media pending` is rendered by the
+   server after the turn — never try to fix it; name `media missing` in the summary.
 
 ## Field values
 
@@ -170,12 +190,15 @@ place or character cannot be removed with `delete_created` — remove the secret
 
 ## Skills
 
-`set_skill{name, skill, enabled}` switches ONE skill of a character on (`true`) or off (`false`) —
-e.g. a guard who never leaves the gate gets the movement skills (`setlocation`,
-`go_to_character`) switched off. `list_catalog{name: "skills"}` lists the skill ids,
+`set_skill{name, skill, enabled}` switches ONE skill group of a character on (`true`) or off
+(`false`) — the toggle the Skills tab shows: several skills of one package form a group and are
+always switched together; `skill` is the group id or any of its skill ids. E.g. a guard who never
+leaves the gate gets the movement skills (`setlocation`, `go_to_character`) switched off.
+`list_catalog{name: "skills"}` lists the skill ids with their `(group <id>)`,
 `get_character{"name": …, "fields": ["skills"]}` shows each skill as on/off and whether that is
-the default or a setting. Switching to the state a skill already has is refused, and so is
-switching on a skill whose package needs another one first (the line says which). Only on/off
+the default or a setting. Storing the default (off for an off-by-default group) is allowed — that
+records a deliberate decision. Refused: a group whose skills already store that value, and
+switching on a group whose package needs another one first (the line says which). Only on/off
 is set here — the settings of a skill stay in the admin's Skills tab, and a character whose skill
 settings cannot be read is refused until it is fixed there.
 
