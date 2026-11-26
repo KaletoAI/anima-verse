@@ -354,7 +354,8 @@ def _extract_characters_from_path(path: str):
 # The allowlist is what an unauthenticated BROWSER needs to reach a login form,
 # plus the two endpoints that carry their own credential:
 #   /                      -> redirect to /play
-#   /play, /game-admin     -> the React shells; both render <AuthGate>, which
+#   /play                  -> the plain hint page that points to the native client
+#   /game-admin            -> the React shell; it renders <AuthGate>, which
 #                             shows the login form itself. A 401 here would
 #                             hand back JSON and no login form could ever load.
 #   /static/*              -> the built bundles + CSS the shells load
@@ -505,7 +506,7 @@ def login_redirect_target(path: str) -> str:
     """Where an anonymous navigation is sent so the user can sign in.
 
     /game-admin's AuthGate honours ``?return=`` after a successful login.
-    /play ignores it because login always starts the game.
+    /play is the hint page for the native client and ignores it.
     """
     from urllib.parse import quote
     base = "/game-admin" if any(_under(path, p) for p in _ADMIN_PREFIXES) else "/play"
