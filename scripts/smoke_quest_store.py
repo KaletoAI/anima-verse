@@ -77,6 +77,20 @@ WHAT IS CHECKED, and where every expected value comes from
       `delete_character("Gone")` → True; facts 1 and 2 are gone, fact 3
       stays (count 1), and the run row still exists with its bindings.
 
+  (l) V14: GIVER_ROLE, SETUP_EFFECTS, REWARDS (stage 2, Task 1).
+      `SCHEMA_VERSION == 14` and `schema_meta['version'] == '14'`.
+      `quest_templates` has column `giver_role` (`TEXT`, notnull 1, default `''`).
+      `TEMPLATE_CONTENT_KEYS` is the exact 11-tuple; `EDITABLE_TEMPLATE_KEYS ==
+      TEMPLATE_CONTENT_KEYS + ("state", "kept")`; every content key is a
+      parameter of `create_template`. `create_template` round-trips `giver_role`,
+      `setup_effects`, `rewards` (defaulting to `""`, `[]`, `[]`).
+      `update_template` writes all three and bumps revision to 2. A fresh
+      template "Old" created with `giver_role="giver"` reads `"giver"`;
+      dropping `giver_role` and calling `db.init_schema()` re-adds the column
+      via `ALTER_MIGRATIONS` with the same type/notnull/default, and "Old"
+      survives with `title == "Old"` and `giver_role == ""` (filled by the
+      column default).
+
 Usage:
     ./.venv/bin/python scripts/smoke_quest_store.py
 """
@@ -332,6 +346,64 @@ check("only the fact naming neither survives", facts == [("Ava", "spoke_with", "
 kept = quests.get_run(run["id"])
 check("run row naming Gone in bindings survives",
       kept is not None and kept["bindings"] == {"giver": {"name": "Gone"}})
+
+print("(l) v14: giver_role, setup_effects, rewards")
+import inspect  # noqa: E402
+from app.core import world_db_schema  # noqa: E402
+
+check("SCHEMA_VERSION == 14", world_db_schema.SCHEMA_VERSION == 14, str(world_db_schema.SCHEMA_VERSION))
+meta_ver = db.get_connection().execute(
+    "SELECT value FROM schema_meta WHERE key='version'").fetchone()
+check("schema_meta version == '14'", meta_ver is not None and meta_ver[0] == "14", str(dict(meta_ver) if meta_ver else None))
+tpl_cols = {c[1]: (c[2], c[3], c[4]) for c in db.get_connection().execute("PRAGMA table_info(quest_templates)")}
+check("quest_templates.giver_role column shape",
+      tpl_cols.get("giver_role") == ("TEXT", 1, "''"), str(tpl_cols.get("giver_role")))
+WANT_CONTENT_KEYS = ("title", "summary", "gm_notes", "giver_role", "roles", "steps",
+                     "start_condition", "prerequisites", "setup_effects", "rewards", "time_limit_s")
+check("TEMPLATE_CONTENT_KEYS exact 11-tuple", quests.TEMPLATE_CONTENT_KEYS == WANT_CONTENT_KEYS,
+      str(quests.TEMPLATE_CONTENT_KEYS))
+check("EDITABLE_TEMPLATE_KEYS derived from TEMPLATE_CONTENT_KEYS",
+      quests.EDITABLE_TEMPLATE_KEYS == quests.TEMPLATE_CONTENT_KEYS + ("state", "kept"),
+      str(quests.EDITABLE_TEMPLATE_KEYS))
+create_params = set(inspect.signature(quests.create_template).parameters)
+check("every content key is a parameter of create_template",
+      set(quests.TEMPLATE_CONTENT_KEYS).issubset(create_params),
+      str(set(quests.TEMPLATE_CONTENT_KEYS) - create_params))
+SETUP = [{"key": "box", "type": "create_item", "params": {"name": "Old tin box"}, "permanent": False}]
+REWARD = [{"key": "charm", "type": "create_item", "params": {"name": "Lucky charm"}, "permanent": True}]
+rock = quests.create_template(title="Rock", giver_role="giver", roles=ROLES, steps=STEPS,
+                              setup_effects=SETUP, rewards=REWARD)
+rock_got = quests.get_template(rock["id"])
+check("create_template round-trips giver_role, setup_effects, rewards",
+      (rock_got["giver_role"], rock_got["setup_effects"], rock_got["rewards"]) == ("giver", SETUP, REWARD),
+      str((rock_got["giver_role"], rock_got["setup_effects"], rock_got["rewards"])))
+plain = quests.create_template(title="Plain")
+plain_got = quests.get_template(plain["id"])
+check("defaults: giver_role '', setup_effects [], rewards []",
+      (plain_got["giver_role"], plain_got["setup_effects"], plain_got["rewards"]) == ("", [], []),
+      str((plain_got["giver_role"], plain_got["setup_effects"], plain_got["rewards"])))
+NEW_REWARD = [{"key": "coin", "type": "create_item", "params": {"name": "Silver coin"}, "permanent": True}]
+rock_upd = quests.update_template(
+    rock["id"], {"giver_role": "", "setup_effects": [], "rewards": NEW_REWARD}, base_revision=1)
+rock_after = quests.get_template(rock["id"])
+check("update_template writes giver_role, setup_effects, rewards -> revision 2",
+      (rock_upd["revision"], rock_after["revision"], rock_after["giver_role"],
+       rock_after["setup_effects"], rock_after["rewards"]) == (2, 2, "", [], NEW_REWARD),
+      str((rock_upd["revision"], rock_after["giver_role"], rock_after["setup_effects"], rock_after["rewards"])))
+old = quests.create_template(title="Old", giver_role="giver", roles=ROLES, steps=STEPS)
+check("Old template reads giver_role 'giver' before drop",
+      quests.get_template(old["id"])["giver_role"] == "giver",
+      str(quests.get_template(old["id"])["giver_role"]))
+with db.transaction() as _c:
+    _c.execute("ALTER TABLE quest_templates DROP COLUMN giver_role")
+db.init_schema()
+tpl_cols_after = {c[1]: (c[2], c[3], c[4]) for c in db.get_connection().execute("PRAGMA table_info(quest_templates)")}
+check("ALTER migration re-adds giver_role with same shape",
+      tpl_cols_after.get("giver_role") == ("TEXT", 1, "''"), str(tpl_cols_after.get("giver_role")))
+old_after = quests.get_template(old["id"])
+check("existing Old row survives with default giver_role ''",
+      old_after is not None and (old_after["title"], old_after["giver_role"]) == ("Old", ""),
+      str((old_after["title"], old_after["giver_role"]) if old_after else None))
 
 print()
 if failures:

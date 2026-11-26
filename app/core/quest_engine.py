@@ -207,12 +207,17 @@ MAX_TIME_LIMIT_S = 2 ** 63 - 1
 
 
 def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
-    """Why a template body cannot be stored as sent, or None: a text field (`title`, `summary`, `gm_notes`)
-    that is not text, or a `time_limit_s` that is not a whole number SQLite can store. Only the keys present are
-    checked. Used by the admin route (400) and the World Dev free mode (a refusal) alike."""
-    for key in ("title", "summary", "gm_notes"):
+    """Why a template body cannot be stored as sent, or None: a text field (`title`, `summary`, `gm_notes`,
+    `giver_role`) that is not text, a container field (`quests.TEMPLATE_CONTAINERS`) that is not its expected list or
+    object type, or a `time_limit_s` that is not a whole number SQLite can store. Only the keys present are checked.
+    Used by the admin route (400) and the World Dev free mode (a refusal) alike."""
+    from app.models import quests
+    for key in ("title", "summary", "gm_notes", "giver_role"):
         if key in body and not isinstance(body[key], str):
             return f"{key} must be text"
+    for key, kind in quests.TEMPLATE_CONTAINERS.items():
+        if key in body and not isinstance(body[key], kind):
+            return f"'{key}' must be {'a list' if kind is list else 'an object'} (leave it out for none)"
     if "time_limit_s" in body:
         limit = body["time_limit_s"]
         if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_TIME_LIMIT_S:
@@ -221,8 +226,9 @@ def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
 
 
 def validate_template(template: dict) -> list[dict]:
-    """Every authoring issue of ``template`` as ``{"path", "code", "message"}`` (paths per D7). No world entity is
-    read; ``check_expression`` already runs each type's ``validate(params, None)``."""
+    """Every authoring issue of ``template`` as ``{"path", "code", "message"}`` (paths per D7), including empty step
+    conditions (D1) and ``giver_role`` (D3). No world entity is read; ``check_expression`` already runs each type's
+    ``validate(params, None)``."""
     if not isinstance(template, dict):
         return [_issue("", "shape", "A quest template must be an object")]
     issues: List[Dict[str, str]] = []
@@ -230,6 +236,7 @@ def validate_template(template: dict) -> list[dict]:
         issues.append(_issue("title", "required", "The quest needs a title"))
     roles = template.get("roles") if isinstance(template.get("roles"), list) else []
     seen_roles: set = set()
+    role_kinds: Dict[str, Any] = {}
     for i, role in enumerate(roles):
         role = role if isinstance(role, dict) else {}
         key = role.get("key")
@@ -239,9 +246,17 @@ def validate_template(template: dict) -> list[dict]:
             issues.append(_issue(f"roles.{i}.key", "duplicate", f"Role key '{key}' is used twice"))
         else:
             seen_roles.add(key)
+            role_kinds[key] = role.get("kind")
         if role.get("kind") not in quest_catalog.ROLE_KINDS:
             issues.append(_issue(f"roles.{i}.kind", "bad_kind",
                                  f"A role kind is one of {', '.join(quest_catalog.ROLE_KINDS)}"))
+    giver = template.get("giver_role", "")
+    if giver is None:
+        giver = ""
+    if giver != "":
+        if not isinstance(giver, str) or role_kinds.get(giver) != "character":
+            issues.append(_issue("giver_role", "unknown_role",
+                                 f"The giver role '{giver}' is not a character role of this quest"))
     steps = _steps(template)
     if not steps:
         issues.append(_issue("steps", "required", "The quest needs at least one step"))
@@ -257,6 +272,9 @@ def validate_template(template: dict) -> list[dict]:
             seen_steps.add(sid)
         if _blank(step.get("text")):
             issues.append(_issue(f"steps.{i}.text", "required", "A step needs a text"))
+        cond = step.get("condition")
+        if not isinstance(cond, dict) or not cond:
+            issues.append(_issue(f"steps.{i}.condition", "required", "A step needs a condition"))
     for path, text in _player_texts(template):
         if not isinstance(text, str):
             continue

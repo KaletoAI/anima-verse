@@ -12,7 +12,8 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, quest_facts)
+SCHEMA_VERSION = 14  # 14: quest_templates.giver_role (quest stage 2)
+#                     13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
 #                     (ALTER only, no bump): world_dev_runs.media_enabled / media_state
@@ -1150,6 +1151,7 @@ SCHEMA_STATEMENTS = [
         title           TEXT NOT NULL DEFAULT '',
         summary         TEXT NOT NULL DEFAULT '',
         gm_notes        TEXT NOT NULL DEFAULT '',
+        giver_role      TEXT NOT NULL DEFAULT '',
         origin          TEXT NOT NULL DEFAULT 'admin'
                         CHECK(origin IN ('admin', 'auto', 'story', 'import')),
         state           TEXT NOT NULL DEFAULT 'draft'
@@ -1410,6 +1412,9 @@ ALTER_MIGRATIONS = [
     # freeze freezes the pairs with it. No backfill — old rows simply never
     # form pairs.
     ("utterances", "game_ts", "TEXT DEFAULT ''"),
+    # quest_templates: the quest giver's role key ('' = none); worlds created
+    # before v14 get it here, a fresh DB already has it from the CREATE.
+    ("quest_templates", "giver_role", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

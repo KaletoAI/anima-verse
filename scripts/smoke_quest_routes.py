@@ -62,6 +62,15 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
     with E; A already stands in L1/r1, so quest_engine.evaluate("A") records it -> GET /quests/runs: that run's row
     has title "Errand for N", binding_labels {"giver": "N", "place": "Front", "thing": "Lamp"}, and its one
     step_log entry carries game_label == GameTime.parse(entry.game_ts).display_label("en") (not empty).
+ 10. Stage 2, Task 1 (giver_role, setup_effects, rewards, empty step condition):
+    - POST Errand with giver_role "giver", setup_effects [box], rewards [] -> 200; GET returns those three unchanged.
+    - Wrong container/text types: POST setup_effects {}, POST rewards "no", POST giver_role 5 -> 400 "bad_request".
+      PUT setup_effects {} on that template -> 400 "bad_request", revision unchanged.
+    - Draft Errand with extra role town (location) and giver_role "town": PUT state "ready" -> 422 "invalid" with
+      ("giver_role", "unknown_role"), still draft and same revision; PUT state "ready" + giver_role "giver" -> 200,
+      state "ready".
+    - Draft Errand with steps[0].condition {} -> PUT state "ready" -> 422 "invalid" with
+      ("steps.0.condition", "required").
 """
 import os
 import sys
@@ -327,6 +336,55 @@ def main() -> int:
         log = row.get("step_log") or [{}]
         want = GameTime.parse(log[0].get("game_ts") or "Y0001-D001T00:00:00").display_label("en")
         check("step log game_label", (log[0].get("game_label"), bool(want)), (want, True))
+
+        print("[10] stage 2 task 1: giver_role, setup_effects, rewards, empty step condition")
+        box = {"key": "box", "type": "create_item", "params": {"name": "Old tin box"}, "permanent": False}
+        resp = call("POST", "/quests/templates",
+                    {**ERRAND, "giver_role": "giver", "setup_effects": [box], "rewards": []})
+        s2 = resp.json() if resp.status_code == 200 else {}
+        check("POST with giver_role/setup_effects/rewards", resp.status_code, 200)
+        got = call("GET", f"/quests/templates/{s2.get('id', 'missing')}").json()
+        check("GET returns giver_role, setup_effects, rewards unchanged",
+              (got.get("giver_role"), got.get("setup_effects"), got.get("rewards")),
+              ("giver", [box], []))
+        resp = call("POST", "/quests/templates", {"title": "x", "setup_effects": {}})
+        check("POST setup_effects dict -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/templates", {"title": "x", "rewards": "no"})
+        check("POST rewards str -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        resp = call("POST", "/quests/templates", {"title": "x", "giver_role": 5})
+        check("POST giver_role int -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        s2_rev = got.get("revision")
+        resp = call("PUT", f"/quests/templates/{s2.get('id', 'missing')}",
+                    {"setup_effects": {}, "base_revision": s2_rev})
+        check("PUT setup_effects dict -> 400", (resp.status_code, code(resp)), (400, "bad_request"))
+        check("PUT bad container changed nothing",
+              call("GET", f"/quests/templates/{s2.get('id', 'missing')}").json().get("revision"), s2_rev)
+        town_errand = {**ERRAND,
+                       "roles": ERRAND["roles"] + [{"key": "town", "kind": "location", "description": "a town"}],
+                       "giver_role": "town"}
+        te = call("POST", "/quests/templates", town_errand).json()
+        te_id, te_rev = te.get("id", "missing"), te.get("revision")
+        resp = call("PUT", f"/quests/templates/{te_id}", {"state": "ready", "base_revision": te_rev})
+        issues = (resp.json().get("detail") or {}).get("issues", []) if resp.status_code == 422 else []
+        check("ready with location giver_role -> 422",
+              (resp.status_code, code(resp), ("giver_role", "unknown_role") in {(i["path"], i["code"]) for i in issues}),
+              (422, "invalid", True))
+        got_te = call("GET", f"/quests/templates/{te_id}").json()
+        check("nothing written on bad giver_role", (got_te.get("state"), got_te.get("revision")), ("draft", te_rev))
+        resp = call("PUT", f"/quests/templates/{te_id}",
+                    {"state": "ready", "giver_role": "giver", "base_revision": te_rev})
+        check("ready with character giver_role -> 200",
+              (resp.status_code, resp.json().get("state") if resp.status_code == 200 else None),
+              (200, "ready"))
+        empty_cond_errand = {**ERRAND, "steps": [{**ERRAND["steps"][0], "condition": {}}, *ERRAND["steps"][1:]]}
+        ec = call("POST", "/quests/templates", empty_cond_errand).json()
+        resp = call("PUT", f"/quests/templates/{ec.get('id', 'missing')}",
+                    {"state": "ready", "base_revision": ec.get("revision")})
+        issues = (resp.json().get("detail") or {}).get("issues", []) if resp.status_code == 422 else []
+        check("ready with empty step condition -> 422",
+              (resp.status_code, code(resp),
+               ("steps.0.condition", "required") in {(i["path"], i["code"]) for i in issues}),
+              (422, "invalid", True))
 
     quest_engine.drain()
     if FAILURES:

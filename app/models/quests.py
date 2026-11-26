@@ -43,10 +43,15 @@ _TEMPLATE_JSON_FIELDS = {
 _RUN_JSON_FIELDS = {
     "bindings": dict, "binding_labels": dict, "template_snapshot": dict, "step_log": list, "issues": list,
 }
+#: The content fields of a quest template (every one is a keyword of ``create_template``).
+TEMPLATE_CONTENT_KEYS = ("title", "summary", "gm_notes", "giver_role", "roles", "steps",
+                         "start_condition", "prerequisites", "setup_effects", "rewards",
+                         "time_limit_s")
+#: The expected container type of each JSON content field on a quest template.
+TEMPLATE_CONTAINERS = {"roles": list, "steps": list, "start_condition": dict,
+                       "prerequisites": dict, "setup_effects": list, "rewards": list}
 #: The keys ``update_template`` accepts; everything else is a ValueError.
-EDITABLE_TEMPLATE_KEYS = ("title", "summary", "gm_notes", "roles", "steps",
-                          "start_condition", "prerequisites", "time_limit_s",
-                          "state", "kept")
+EDITABLE_TEMPLATE_KEYS = TEMPLATE_CONTENT_KEYS + ("state", "kept")
 #: The run fields ``set_run_field`` may write.
 _SETTABLE_RUN_FIELDS = ("news_event_id",)
 
@@ -96,9 +101,12 @@ def _container(value: Any, kind: type) -> Any:
 # ── Templates ────────────────────────────────────────────────────────────
 
 def create_template(*, title: str, summary: str = "", gm_notes: str = "",
-                    roles: list | None = None, steps: list | None = None,
+                    giver_role: str = "", roles: list | None = None,
+                    steps: list | None = None,
                     start_condition: dict | None = None,
-                    prerequisites: dict | None = None, time_limit_s: int = 0,
+                    prerequisites: dict | None = None,
+                    setup_effects: list | None = None,
+                    rewards: list | None = None, time_limit_s: int = 0,
                     origin: str = "admin", state: str = "draft") -> dict:
     """Insert a new template at revision 1. An unknown origin/state is
     refused by the table's CHECK (sqlite3.IntegrityError)."""
@@ -106,13 +114,17 @@ def create_template(*, title: str, summary: str = "", gm_notes: str = "",
     now = utc_now_iso()
     with keyed_lock("quest_template", template_id), transaction() as conn:
         conn.execute(
-            "INSERT INTO quest_templates (id, title, summary, gm_notes, origin, "
-            "state, roles, steps, start_condition, prerequisites, time_limit_s, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (template_id, title or "", summary or "", gm_notes or "", origin, state,
+            "INSERT INTO quest_templates (id, title, summary, gm_notes, "
+            "giver_role, origin, state, roles, steps, start_condition, "
+            "prerequisites, setup_effects, rewards, time_limit_s, created_at, "
+            "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (template_id, title or "", summary or "", gm_notes or "",
+             giver_role or "", origin, state,
              _dump(_container(roles, list)), _dump(_container(steps, list)),
              _dump(_container(start_condition, dict)),
-             _dump(_container(prerequisites, dict)), int(time_limit_s or 0),
+             _dump(_container(prerequisites, dict)),
+             _dump(_container(setup_effects, list)),
+             _dump(_container(rewards, list)), int(time_limit_s or 0),
              now, now))
     return get_template(template_id)
 

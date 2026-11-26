@@ -33,8 +33,7 @@ from app.models import quests
 router = APIRouter(prefix="/quests", tags=["quests"], dependencies=[Depends(require_admin)])
 
 #: The fields `POST /quests/templates` accepts (`create_template`'s content keywords).
-_CREATE_KEYS = ("title", "summary", "gm_notes", "roles", "steps", "start_condition", "prerequisites",
-                "time_limit_s")
+_CREATE_KEYS = quests.TEMPLATE_CONTENT_KEYS
 #: How many ended runs `GET /quests/runs` lists after the open ones.
 _ENDED_RUNS_LIMIT = 50
 #: The largest /quests request body (a template is copied into every run's snapshot; 256 KiB is far above any

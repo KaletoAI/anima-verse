@@ -129,6 +129,16 @@ WHAT FOLLOWS BY HAND
  22. Linked avatar swaps mid-run (review R10b): Kai (avatar of user "demo3") stands in L2/s1, create_linked(Kai,
     Lio). Run [① at_place place] bound to L5/v1. swap_presence(Kai -> Lio): Lio is the player-controlled body now
     and stands where Kai stood. Lio walks into L5/v1 -> "done", step_log[-1] avatar Lio, mind Kai.
+ 23. Empty step conditions (D1) and giver_role (D3) (stage 2, Task 1):
+    - ERRAND with steps[1].condition set to {}, removed, or [] -> validate_template returns exactly
+      [("steps.1.condition", "required")].
+    - ERRAND with start_condition {} and prerequisites {"condition": {}} -> [] ({} stays legal there).
+    - giver_role "giver" (character) or "" -> []; giver_role "place" (room) or "nobody" ->
+      [("giver_role", "unknown_role")].
+    - A template stored ready directly with steps[0].condition {} -> start_run raises QuestRefused whose issues
+      contain ("steps.0.condition", "required").
+    - Proof on the old code (pinned commit cd58910b6): its validate_template accepted ERRAND with
+      steps[1].condition {} (-> []).
 """
 import os
 import sys
@@ -673,10 +683,63 @@ def main() -> int:
     check("done by the new body", (got["state"], {k: got["step_log"][-1][k] for k in ("avatar", "mind")}),
           ("done", {"avatar": "Lio", "mind": "Kai"}))
 
+    # 23 ---------------------------------------------------------------------------------------
+    section("[23]", "empty step conditions and the giver role")
+    import subprocess
+    import types
+
+    def _errand_step1(cond_value, *, omit=False):
+        step1 = {k: v for k, v in ERRAND["steps"][1].items() if not (omit and k == "condition")}
+        if not omit:
+            step1["condition"] = cond_value
+        return {**ERRAND, "steps": [ERRAND["steps"][0], step1, ERRAND["steps"][2]]}
+
+    empty_step1 = _errand_step1({})
+    for label, bad_tpl in (("empty dict", empty_step1),
+                           ("missing key", _errand_step1(None, omit=True)),
+                           ("empty list", _errand_step1([]))):
+        check(f"step 1 condition {label}",
+              [(i["path"], i["code"]) for i in qe.validate_template(bad_tpl)],
+              [("steps.1.condition", "required")])
+    check("empty start_condition and prerequisites.condition stay legal",
+          qe.validate_template({**ERRAND, "start_condition": {}, "prerequisites": {"condition": {}}}), [])
+    check("giver_role character", qe.validate_template({**ERRAND, "giver_role": "giver"}), [])
+    check("giver_role empty", qe.validate_template({**ERRAND, "giver_role": ""}), [])
+    check("giver_role room",
+          [(i["path"], i["code"]) for i in qe.validate_template({**ERRAND, "giver_role": "place"})],
+          [("giver_role", "unknown_role")])
+    check("giver_role unknown",
+          [(i["path"], i["code"]) for i in qe.validate_template({**ERRAND, "giver_role": "nobody"})],
+          [("giver_role", "unknown_role")])
+    bad_ready = quests.create_template(
+        title="Empty step ready", roles=ERRAND["roles"],
+        steps=[{**ERRAND["steps"][0], "condition": {}}, ERRAND["steps"][1], ERRAND["steps"][2]],
+        state="ready")
+    try:
+        qe.start_run(bad_ready["id"], errand_bindings())
+        check("start_run refuses empty step condition", "started", "QuestRefused")
+    except qe.QuestRefused as e:
+        check("start_run refuses empty step condition",
+              ("steps.0.condition", "required") in {(i["path"], i["code"]) for i in e.issues}, True)
+    res = subprocess.run(["git", "show", "cd58910b6:app/core/quest_engine.py"],
+                         cwd=ROOT, capture_output=True, text=True)
+    if res.returncode != 0:
+        print("  skip proof: git show cd58910b6 unavailable")
+    else:
+        mod_name = "quest_engine_cd58910b6"
+        old_mod = types.ModuleType(mod_name)
+        sys.modules[mod_name] = old_mod
+        try:
+            exec(compile(res.stdout, mod_name, "exec"), old_mod.__dict__)
+            old_issues = old_mod.validate_template(empty_step1)
+        finally:
+            sys.modules.pop(mod_name, None)
+        check("old code (cd58910b6) accepted empty step condition", old_issues, [])
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[22]")
+    print("PASS smoke_quest_engine: [1]-[23]")
     return 0
 
 
