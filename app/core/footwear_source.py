@@ -40,6 +40,10 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   gates are not run again: same raw, same mesh) and the hash recorded (``_restore_prepared``, INSOLE_VERSION 7,
   boots plan Ruling 15g: the version-5 cap rule had cut 169 faces out of a sneaker's tongue and 105 out of a
   pump's counter; the version-7 run brings them back). Without ``raw.glb`` the file is measured as it is.
+  A HOLLOW platform sole refused for ``insole_cover`` (the mesher left the platform an open box: no footbed)
+  gets its footbed added to ``prepared.glb`` at the platform's top shelf (``footwear_insole.footbed_fill``,
+  INSOLE_VERSION 12) — only when the filled mesh passes every insole gate; ``insole.json`` keeps
+  ``footbed {added_faces, stations, heel_h_m, toe_h_m}``.
 
 ``record.json`` = ``{steps: {step: {accepted, gates, backend, routing,
 created_at, ...}}}``. A step that is not accepted names why in ``failure``:
@@ -654,24 +658,47 @@ def _restore_prepared(iid: str, ssig: str, d: Path) -> bool:
 
 
 def _strip_cap_of(prepared: Path) -> Tuple[Dict[str, Any], int, Optional[bytes], Any, Any]:
-    """The insole analysis of ``prepared`` with a mesher cap taken off the shaft (``footwear_insole.cap_faces``):
-    ``(analysis, removed faces, stripped GLB bytes or None, positions, faces)`` — the analysis and arrays are the
-    stripped mesh's when a cap was found (the count in ``shaft.cap_removed``), else the file's own. Writes nothing."""
+    """The insole analysis of ``prepared`` with a mesher cap taken off the shaft (``footwear_insole.cap_faces``) and,
+    for a hollow platform sole refused for ``insole_cover``, its footbed added (``footwear_insole.footbed_fill``,
+    INSOLE_VERSION 12 — kept only when the analysis of the filled mesh passes; the face count in
+    ``footbed.added_faces``): ``(analysis, removed cap faces, changed GLB bytes or None, positions, faces)`` — the
+    analysis and arrays are the changed mesh's when something changed, else the file's own. Writes nothing."""
     import numpy as np
     from app.core import footwear_insole, glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared.read_bytes())
-    res = footwear_insole.analyse_arrays(positions, faces)
-    cap = footwear_insole.cap_faces(positions, faces, res)
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    U = np.asarray(uvs, np.float64).reshape(-1, 2)
+    res = footwear_insole.analyse_arrays(P, F)
+    cap = footwear_insole.cap_faces(P, F, res)
     removed = int(cap.sum())
-    if not removed:
+    changed = False
+    if removed:
+        used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
+        P, F, U = P[used], inverse.reshape(-1, 3), U[used]
+        res = footwear_insole.analyse_arrays(P, F)
+        res["shaft"]["cap_removed"] = removed
+        changed = True
+    failed = {r.split(" ")[0] for r in res["gates"].get("reasons") or []}
+    if not res["gates"]["ok"] and "insole_cover" in failed:
+        bed = footwear_insole.footbed_fill(P, F)
+        if bed is not None:
+            from scipy.spatial import cKDTree
+            P2 = np.concatenate([P, bed["positions"]])
+            F2 = np.concatenate([F, bed["faces"] + len(P)])
+            # the footbed takes the texture of the nearest point of the shoe (it lies inside, under the foot)
+            U2 = np.concatenate([U, U[cKDTree(P).query(bed["positions"])[1]]])
+            filled = footwear_insole.analyse_arrays(P2, F2)
+            if filled["gates"]["ok"]:
+                filled["shaft"]["cap_removed"] = removed
+                k = float(filled["nominal"]["k"] or 0.0)
+                filled["footbed"] = {"added_faces": int(len(bed["faces"])), "stations": int(bed["stations"]),
+                                     "heel_h_m": bed["heel_h_raw"] * k, "toe_h_m": bed["toe_h_raw"] * k}
+                res, P, F, U, changed = filled, P2, F2, U2, True
+    if not changed:
         return res, 0, None, positions, faces
-    F = np.asarray(faces, np.int64)
-    used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
-    P2, F2 = np.asarray(positions, np.float64)[used], inverse.reshape(-1, 3)
-    blob = glb_mesh.static_glb(P2, F2, np.asarray(uvs, np.float64)[used], image=image, mime=mime, material=material)
-    res = footwear_insole.analyse_arrays(P2, F2)
-    res["shaft"]["cap_removed"] = removed
-    return res, removed, blob, P2, F2
+    blob = glb_mesh.static_glb(P, F, U, image=image, mime=mime, material=material)
+    return res, removed, blob, P, F
 
 
 def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
@@ -683,12 +710,16 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     restored = _restore_prepared(iid, ssig, d)
     res, removed, stripped, positions, faces = _strip_cap_of(prepared)
     cap_pending = 0
-    if removed:
+    if stripped is not None:
         if res["gates"]["ok"]:
-            # A mesher cap on the shaft: prepared.glb goes on without it (the fit and the viewer read this file;
-            # raw.glb keeps the delivery), measured again as it is served, the count carried over.
+            # A mesher cap on the shaft / the footbed of a hollow platform sole: prepared.glb goes on changed (the
+            # fit and the viewer read this file; raw.glb keeps the delivery), measured again as it is served.
             _write_bytes(prepared, stripped)
-            logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
+            if removed:
+                logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
+            if res.get("footbed"):
+                logger.info("Shoe source %s/%s: hollow platform sole — footbed of %d faces added to prepared.glb",
+                            iid, ssig, res["footbed"]["added_faces"])
         else:
             # 2026-11-25: the cap is cut only after the analysis passes — a refused shoe keeps prepared.glb as the
             # mesh step made it; "Accept anyway" (``accept_step``) cuts the cap then, so the file matches insole.json

@@ -102,7 +102,7 @@ record carries no ``in_body`` and no warnings of its own.
      3, no body cut, no foot pose: from before both — the assembly could not
      graft it) -> accepted_fit(Kira, heels, SHA) is None and
      newest_accepted_fits(..., base_model_sha=SHA) has no "shoe" entry; a
-     record of fit_version 22 (the current FOOTWEAR_FIT_VERSION, the skin spot) under that
+     record of fit_version 23 (the current FOOTWEAR_FIT_VERSION, the skin through the wall) under that
      fsig -> served (the fallback itself stays).
      Ruling R7b (plan 2026-11-12 fit-sdf-speed-drape, replaces the R11 carry
      "an older version is never served"): the same fsig with fit_version 16
@@ -110,7 +110,7 @@ record carries no ``in_body`` and no warnings of its own.
      (``garment_store.footwear_servable``), "shoe" in newest_accepted_fits,
      and resolve(full_w()) makes the heels effective beside the dress (as D8's
      fitted record: effective [dress, heels], missing {}); a refusal recorded
-     for the CURRENT fsig (the refit of version 22 refused) leaves it served.
+     for the CURRENT fsig (the refit of version 23 refused) leaves it served.
      footwear_servable: ``cut.sides`` empty -> False; no ``foot_pose`` -> False. The dress's fallback is untouched: its current-fsig fit removed,
      an accepted clothing record under "0123456789cd" (fit_version
      FIT_VERSION["clothing"], SHA) is served. resolve with the version-3 heels
@@ -426,14 +426,14 @@ def main() -> int:
         print("[D7] an older footwear fit without its cut is never served")
         old_fsig = "0123456789ab"
         write_fit(heels, "footwear", fsig=old_fsig, version=3)
-        check("D7 FIT_VERSION footwear", garment_fit.FIT_VERSION["footwear"], 22)
+        check("D7 FIT_VERSION footwear", garment_fit.FIT_VERSION["footwear"], 23)
         check("D7 version 3 not served", gs.accepted_fit("Kira", heels, base_model_sha=sha), None)
         check("D7 newest: no shoe", "shoe" in gs.newest_accepted_fits("Kira", heels, base_model_sha=sha), False)
         d7 = resolve(full_w())
         check("D7 heels left off", (d7.get("effective"), d7.get("missing")), ([dress], {heels: NMF}))
-        write_fit(heels, "footwear", fsig=old_fsig, version=22)
+        write_fit(heels, "footwear", fsig=old_fsig, version=23)
         served = gs.accepted_fit("Kira", heels, base_model_sha=sha)
-        check("D7 version 21 served (fallback)", served and gs.parse_name(served[0])[1], old_fsig)
+        check("D7 version 23 served (fallback)", served and gs.parse_name(served[0])[1], old_fsig)
         print("[D7b] R7b: an older footwear version with its cut stays served until its refit is accepted")
         graftable = {"cut": {"version": 7, "sides": {"left": {"cap": []}}}, "foot_pose": {"version": 1}}
         write_fit(heels, "footwear", fsig=old_fsig, version=16, extra=graftable)

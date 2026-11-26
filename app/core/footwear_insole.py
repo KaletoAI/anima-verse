@@ -48,6 +48,20 @@ Blender:
   keeps 93.1 % of the heels' columns, x 0.013 … 0.996 L (the round-1 footprint ran 0.004 … 1.0 L), the ball
   station's width unchanged and the median station 2.1 mm (one rim column of rounded sole edge) narrower;
   ``insole_cover`` 0.890 -> 0.929. Every synthetic shoe (pump, clog, sandal, shaft) reads 1.0.
+- **Hollow platform soles** (``footbed_fill``, INSOLE_VERSION 12): a mesher may close a platform sole's silhouette
+  and leave it an open box — the black platform boots (``item_black_platform_boots``, 2026-11-26): every ray down
+  through the opening meets the outsole's own skin (0.4 mm above its underside) and nothing else, the platform's top
+  is only a shelf along the rim (21–26 % L at the heel, 17–19 % L at the toe), so the tracking finds no insole
+  (``insole_cover`` 0.17) and the provisional frame was even flipped by the floor's noise. The footbed of such a
+  sole is its shelf: at least ``FOOTBED_SKIN_SHARE`` of the outsole columns meet the skin first (within AIR of the
+  underside), at least ``FOOTBED_STATION_SHARE`` of those stations have a sheet above the floor on both sides (the
+  outer quarter of the columns, the lower side's median), at least ``FOOTBED_EMPTY_SHARE`` of the middle columns
+  are empty between the floor and the shelf; the footbed is a quadratic in x through the shelf points with
+  outliers trimmed (a lace, an eyelet), spanning the inner walls the station's cross-section crosses at that height
+  (``FOOTBED_INSET_SHARE`` off them), ``FOOTBED_COLUMNS`` points per row. ``footwear_source`` adds it to the
+  prepared mesh only for an analysis refused for ``insole_cover`` and only when the filled mesh passes every gate
+  (the boots: cover 0.88, heel seat 6.5 cm, ball 4.6 cm, not flipped). A shoe whose own analysis passes is never
+  filled.
 - **Shaft block** (``shaft``, INSOLE_VERSION 3 — boots spec § 6.1), measured in the shoe frame:
   ``collar_h_raw`` = the highest topline over the stations behind the THROAT (the first roofed station in the
   front half, ``footwear_cut``'s rule; every station without one) minus the insole at the HEEL SEAT. The
@@ -238,7 +252,11 @@ from app.core.footwear_gates import check_gates
 #:    is a shaft only above ``ONE_WALL_SHAFT_M`` (``has_shaft_of``), and the open seed is searched behind the middle
 #:    of the shoe first
 #:    (``SEED_BEHIND_SHARE``); stored insoles re-run on the CPU.
-INSOLE_VERSION = 11
+#: 12: a HOLLOW platform sole (the mesher left the platform an open box: the floor under the opening is the outsole's
+#:    own skin, the platform's top only a shelf along its rim) gets a footbed at the shelf (``footbed_fill``,
+#:    module docstring "Hollow platform soles") when its analysis is refused for ``insole_cover``; stored insoles
+#:    re-run on the CPU.
+INSOLE_VERSION = 12
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -344,6 +362,18 @@ OPEN_GATES: Dict[str, Tuple[str, Any, str]] = {
     "strap_share": ("min", 0.08, "share of the insole stations with a strap, wall or upper above the insole"),
     "insole_step": ("max", TOL_SHARE, "largest jump of the insole between neighbouring stations, share of the length"),
 }
+#: Hollow platform soles (INSOLE_VERSION 12, module docstring): at least this share of the outsole columns meet the
+#: sole's own skin first (the floor within AIR of the underside) ...
+FOOTBED_SKIN_SHARE = 0.6
+#: ... at least this share of those stations show a shelf on both sides (the platform's top rim) ...
+FOOTBED_STATION_SHARE = 0.6
+#: ... and at least this share of the middle columns is empty between the floor and the footbed.
+FOOTBED_EMPTY_SHARE = 0.8
+#: The quadratic footbed keeps the shelf points within max(2.5 robust spreads, this share of the length).
+FOOTBED_TRIM_SHARE = 0.005
+#: Lateral points per footbed row, and the gap to the inner wall (share of the length).
+FOOTBED_COLUMNS = 16
+FOOTBED_INSET_SHARE = 0.004
 STRAPLESS_REFUSED = "Solid mesh or bare sole: nothing stands above the insole"
 INSOLE_REFUSED = "No insole found in the shoe mesh"
 SOLID_REFUSED = "Solid mesh: no shoe opening found"
@@ -909,6 +939,147 @@ def strip_cap(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) 
         return P.copy(), F.copy(), 0
     used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
     return P[used].copy(), inverse.reshape(-1, 3).astype(np.int64), removed
+
+
+# --- hollow platform soles (INSOLE_VERSION 12) -------------------------------------------------------------------------
+
+def _station_cuts(pf: np.ndarray, F: np.ndarray, s: float, h: float) -> np.ndarray:
+    """The lateral positions (z) where the mesh's cross-section at x = ``s`` crosses the height ``h``: every face
+    the plane cuts gives a segment, every segment that crosses ``h`` one z."""
+    tri = pf[F]
+    d = tri[:, :, 0] - s
+    m = (d.min(1) < 0) & (d.max(1) > 0)
+    T, dd = tri[m], d[m]
+    ends = []
+    for a, b in ((0, 1), (1, 2), (2, 0)):
+        cr = (dd[:, a] < 0) != (dd[:, b] < 0)
+        t = np.where(cr, dd[:, a] / np.where(cr, dd[:, a] - dd[:, b], 1.0), np.nan)
+        ends.append(T[:, a] + t[:, None] * (T[:, b] - T[:, a]))
+    E = np.stack(ends, 1)
+    valid = ~np.isnan(E[:, :, 0])
+    two = valid.sum(1) == 2
+    E, valid = E[two], valid[two]
+    if not len(E):
+        return np.zeros(0)
+    order = np.argsort(~valid, axis=1, kind="stable")[:, :2]
+    seg = np.take_along_axis(E, order[:, :, None], axis=1)
+    y0, y1 = seg[:, 0, 1], seg[:, 1, 1]
+    cr = (y0 - h) * (y1 - h) < 0
+    t = (h - y0[cr]) / (y1[cr] - y0[cr])
+    return seg[cr, 0, 2] + t * (seg[cr, 1, 2] - seg[cr, 0, 2])
+
+
+def footbed_fill(positions: np.ndarray, faces: np.ndarray) -> Optional[Dict[str, Any]]:
+    """The footbed of a HOLLOW platform sole (module docstring, "Hollow platform soles"; INSOLE_VERSION 12), or None
+    when the mesh is no such sole: ``{"positions": (n, 3) mesh coordinates, "faces": (m, 3) indices into them (face
+    up), "heel_h_raw", "toe_h_raw", "stations"}``. Writes nothing; ``footwear_source`` appends it to the prepared mesh
+    only when the analysis of the filled mesh passes."""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if not len(F):
+        return None
+    frame = shoe_frame(P, F)
+    L = frame.length
+    if not L > 0:
+        return None
+    pf = frame.to_frame(P)
+    used = pf[np.unique(F)]
+    gx = np.linspace(0.0, L, STATIONS)
+    zlo, zhi = float(used[:, 2].min()), float(used[:, 2].max())
+    gz = np.linspace(zlo, zhi, max(8, int(STATIONS * (zhi - zlo) / L)))
+    H = vertical_hits(pf, F, gx, gz)
+    hz, hn = H[..., 0], H[..., 1]
+    air = AIR_SHARE * L
+    low = hz[:, :, 0]
+    with np.errstate(invalid="ignore"):
+        sole = ~np.isnan(low) & (hn[:, :, 0] <= DOWN_MAX)
+        # the floor a ray meets first is the sole's own skin: up-facing, within AIR of the underside
+        skin = sole & (hn[:, :, 1] > UP_MIN) & (hz[:, :, 1] - low <= air)
+    n_sole = int(sole.sum())
+    if not n_sole or skin.sum() < FOOTBED_SKIN_SHARE * n_sole:
+        return None
+    floor = np.where(skin, hz[:, :, 1], np.nan)
+
+    def first_sheet(i: int, j: int) -> float:
+        with np.errstate(invalid="ignore"):
+            k = np.nonzero((hz[i, j] > floor[i, j] + air) & (np.abs(hn[i, j]) > UP_MIN))[0]
+        return float(hz[i, j, k[0]]) if len(k) else float("nan")
+
+    shelf = np.full(STATIONS, np.nan)
+    rows = 0
+    for i in range(STATIONS):
+        js = np.nonzero(skin[i])[0]
+        if len(js) < 8:
+            continue
+        rows += 1
+        q = max(2, len(js) // 4)
+        sides = []
+        for cols in (js[:q], js[-q:]):
+            v = [first_sheet(i, j) for j in cols]
+            v = [x for x in v if x == x]
+            if v:
+                sides.append(float(np.median(v)))
+        if len(sides) == 2:
+            shelf[i] = min(sides)
+    idx = np.nonzero(~np.isnan(shelf))[0]
+    if not rows or len(idx) < FOOTBED_STATION_SHARE * rows:
+        return None
+    # one smooth footbed: a quadratic in x through the shelf, outliers (a lace, an eyelet, a strap) trimmed
+    keep = np.ones(len(idx), bool)
+    coef = np.polyfit(gx[idx], shelf[idx], 2)
+    for _ in range(5):
+        coef = np.polyfit(gx[idx][keep], shelf[idx][keep], 2)
+        res = shelf[idx] - np.polyval(coef, gx[idx])
+        spread = 1.4826 * float(np.median(np.abs(res[keep])))
+        keep = np.abs(res) <= max(2.5 * spread, FOOTBED_TRIM_SHARE * L)
+    h = np.polyval(coef, gx[idx])
+    # hollow: the middle columns are empty between the floor and the footbed (a real stack would be hit there)
+    empty, total = 0, 0
+    for n_i, i in enumerate(idx):
+        js = np.nonzero(skin[i])[0]
+        q = max(2, len(js) // 4)
+        for j in js[q:-q]:
+            total += 1
+            with np.errstate(invalid="ignore"):
+                between = (hz[i, j] > floor[i, j] + air) & (hz[i, j] < h[n_i] - air)
+            empty += int(not between.any())
+    if not total or empty < FOOTBED_EMPTY_SHARE * total:
+        return None
+    floor_i = np.array([np.nanmedian(floor[i][skin[i]]) for i in idx])
+    if float(np.median(h - floor_i)) < 2 * air:
+        return None
+    inset = FOOTBED_INSET_SHARE * L
+    rows_v: List[np.ndarray] = []
+    used_st: List[int] = []
+    for n_i, i in enumerate(idx):
+        z = _station_cuts(pf, F, float(gx[i]), float(h[n_i]))
+        js = np.nonzero(skin[i])[0]
+        zc = 0.5 * (gz[js[0]] + gz[js[-1]])
+        left, right = z[z < zc], z[z > zc]
+        if not len(left) or not len(right):
+            continue
+        zl, zr = float(left.max()) + inset, float(right.min()) - inset
+        if zr - zl < 4 * inset:
+            continue
+        rows_v.append(np.stack([np.full(FOOTBED_COLUMNS, gx[i]), np.full(FOOTBED_COLUMNS, h[n_i]),
+                                np.linspace(zl, zr, FOOTBED_COLUMNS)], axis=1))
+        used_st.append(int(i))
+    if len(rows_v) < 2:
+        return None
+    V = np.concatenate(rows_v)
+    M = FOOTBED_COLUMNS
+    tris = []
+    for a in range(len(rows_v) - 1):
+        for m in range(M - 1):
+            p, q2 = a * M + m, (a + 1) * M + m
+            tris += [(p, q2, p + 1), (p + 1, q2, q2 + 1)]
+    T = np.asarray(tris, np.int64)
+    n = np.cross(V[T[:, 1]] - V[T[:, 0]], V[T[:, 2]] - V[T[:, 0]])
+    down = n[:, 1] < 0
+    T[down] = T[down][:, [0, 2, 1]]
+    return {"positions": frame.to_mesh(V), "faces": T, "stations": len(used_st),
+            "heel_h_raw": float(np.polyval(coef, gx[used_st[0]])), "toe_h_raw": float(np.polyval(coef, gx[used_st[-1]])),
+            "length_raw": float(L)}
 
 
 def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray, top: np.ndarray,

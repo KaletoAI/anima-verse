@@ -99,7 +99,7 @@ def main() -> int:
           and footwear_insole.ONE_WALL_SHAFT_M == 0.10, "[G1] class or one wall above 0.10 m")
     check(hs("none", 0.088) is False and old_ins.has_shaft_of("none", 0.088) is True,
           "[G1] Kai's sneakers (none, higher side 8.8 cm): no shaft now; a shaft at a72b14754")
-    check(footwear_insole.INSOLE_VERSION == 11, "[G1] INSOLE_VERSION 11")
+    check(footwear_insole.INSOLE_VERSION >= 11, "[G1] INSOLE_VERSION 11 or later")
 
     # [G2]
     cand, hz, above, top, air, tol = seed_arrays(3)

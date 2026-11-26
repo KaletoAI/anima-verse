@@ -13309,7 +13309,19 @@ worst under `gates`. Since fit version 22 the raster is 1 mm (`SKIN_SEEN_PX_M`) 
 (`SKIN_SEEN_EPS_M`), the enclosed pixels are opened by a 2 × 2 block (`SKIN_SEEN_OPEN_PX`, a one-pixel sliver along a
 topline drops out) and the value is the largest connected spot — the 2-mm raster read the visible counter spots of
 the Sneekers on Lirien and Kira as one pixel, the same as edge noise. The limit `footwear_cut.SKIN_SEEN_MAX_MM2` comes
-from the distribution over every stored shoe on every body through the chain (its comment).
+from the distribution over every stored shoe on every body through the chain (its comment). Since fit version 23 the
+value is the larger of that enclosed spot and the skin lying on the outside of a wall it came through: seen skin pixels
+with the shoe at most `SKIN_POKE_M` (3 mm) behind them, opened by a 4 × 4 block (`SKIN_POKE_OPEN_PX`) — a heel through
+the counter whose spot reaches the topline is open to the outside and read 0 as enclosed (the Woman shoes on five of
+eight bodies: 98 – 367 mm² now, every other kept closed fit 0).
+
+The insole step adds the FOOTBED of a hollow platform sole (`footwear_insole.footbed_fill`, INSOLE_VERSION 12): when the
+mesher left the platform an open box — the rays through the opening meet only the outsole's own skin, the analysis is
+refused for `insole_cover` — a flat sheet is laid at the height of the welt shelf the upper stands on (per station the
+median of the first sheet above the floor in each side's outer quarter of columns, the lower side, smoothed by a
+trimmed quadratic), spanning the upper's inner walls. It is written into `prepared.glb` only when the analysis of the
+filled mesh passes; insole.json records `footbed` = {`added_faces`, `stations`, `heel_h_m`, `toe_h_m`}. A shoe whose
+own analysis passes is never filled.
 
 ### P2 runtime contract: secondary motion
 

@@ -50,10 +50,10 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 22, fit_version 22, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 23, fit_version 23, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
-     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 11}}; scale.k_m_per_unit 1.023599
+     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 12}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 3, sides left + right with foot_joint LeftFoot / RightFoot,
@@ -129,7 +129,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
      gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
      default. An older fit reads stale: a pumps record of fit_version 14 (and 13, 12), accepted on the current
-     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20 and 21 too; fit_version 22 -> "accepted").
+     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20, 21 and 22 too; fit_version 23 -> "accepted").
 """
 import hashlib
 import json
@@ -366,8 +366,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 22,
-             "fit_version": 22, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 23,
+             "fit_version": 23, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         # fit version 21 (22: the skin spot): a closed shoe's toe_front (footwear_fit.CLOSED_GATES) and the cut's skin_seen_mm2
@@ -385,7 +385,7 @@ def main() -> int:
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
             "source": {"ssig": ssig, "empty_sha256": sha(src / "empty.png"),
-                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 11}})
+                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 12}})
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 1.023599, 2e-4)
         for side in ("left", "right"):
@@ -655,7 +655,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "accepted")):
+        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "stale"), (23, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

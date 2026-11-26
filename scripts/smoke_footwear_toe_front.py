@@ -34,6 +34,17 @@ Expected, by hand:
        free pixels are columns 29 .. 37 and rows 25 .. 33 = 9 x 9 = 81 px x 1 mm2 = 81 mm2 of foot seen through
        it (the foot at z 0.005 lies nearer than the front wall behind it); a 9 x 9 square survives the 2 x 2
        opening whole; every other side 0; worst 81.
+[T5b] THROUGH THE WALL (fit version 23): the box shoe without a hole, 0.0505 high (so its top edge lies in the middle
+     of a pixel row), around a box foot x +-0.0255, z -0.002 .. 0.088, y 0.0025 .. 0.08 — its heel 2 mm out through
+     the back wall (z 0) and standing out of the rim. lo = (-0.034, -0.004). From the back (depth -z): the foot's back
+     face (depth 0.002) is nearer than the wall (depth 0), the gap 0.002 <= SKIN_POKE_M 0.003 and more than
+     SKIN_SEEN_EPS_M -> seen and through the wall where both are: columns floor((-0.0255 + 0.034) / 0.001) = 8 ..
+     floor((0.0255 + 0.034) / 0.001) = 59 (52), rows floor((0.0025 + 0.004) / 0.001) = 6 .. floor((0.0505 + 0.004) /
+     0.001) = 54 (49) -> 52 x 49 = 2548 px = 2548 mm2, a rectangle the 4 x 4 opening keeps whole. The foot above the
+     rim hangs together with it and touches empty pixels: the ENCLOSED term reads 0 (so did skin_seen on 0c27b0b70,
+     which had only that term). Front: the front wall (0.10) lies in front of the foot (0.088); the sides: the side
+     walls (0.03) in front of the foot (0.0255); the foot seen above the rim or behind the back wall has no shoe in
+     its pixel -> 0 from every other side.
 [T6] The skin gate from the distribution over every stored shoe on every body through the chain (footwear_cut
      comment): SKIN_SEEN_PX_M 1 mm, SKIN_SEEN_EPS_M 0.25 mm, SKIN_SEEN_OPEN_PX 2, SKIN_SEEN_MAX_MM2 8; the 81 mm2
      hole of [T5] is above it, no hole below. Auto answers it with heel room: AUTO_LENGTH_GATES = ("visible_poke",
@@ -108,8 +119,7 @@ def box_shoe(hole: bool):
     return quads(rects)
 
 
-def box_foot():
-    x, z0, z1, y0, y1 = 0.025, 0.005, 0.095, 0.002, 0.08
+def box_foot(x=0.025, z0=0.005, z1=0.095, y0=0.002, y1=0.08):
     return quads([(0, -x, (y0, y1), (z0, z1)), (0, x, (y0, y1), (z0, z1)),
                   (2, z0, (-x, x), (y0, y1)), (2, z1, (-x, x), (y0, y1)),
                   (1, y0, (-x, x), (z0, z1)), (1, y1, (-x, x), (z0, z1))])
@@ -253,6 +263,34 @@ def main() -> int:
         check(abs(views["back"] - want) < 1e-6 and all(a == 0.0 for a in others.values())
               and abs(seen["worst_mm2"] - want) < 1e-6,
               f"[T5] {'hole' if hole else 'no hole'}: back {views['back']} mm2 (want {want}), others {others}")
+
+    # [T5b]
+    import subprocess
+    import types
+    Pf, Ff = box_foot(x=0.0255, z0=-0.002, z1=0.088, y0=0.0025)
+    body = glb_mesh.Prim(positions=Pf, faces=Ff)
+    X, Z, H = 0.03, 0.10, 0.0505
+    Ps, Fs = quads([(1, 0.0, (-X, X), (0.0, Z)), (0, -X, (0.0, H), (0.0, Z)), (0, X, (0.0, H), (0.0, Z)),
+                    (2, Z, (-X, X), (0.0, H)), (2, 0.0, (-X, X), (0.0, H))])
+    shoe = glb_mesh.GarmentMesh(positions=Ps, normals=None, uvs=np.zeros((len(Ps), 2)), indices=Fs.reshape(-1),
+                                joints=np.zeros((len(Ps), 4), np.int64), weights=np.zeros((len(Ps), 4)),
+                                joint_names=[], image=None, mime=None, material=None)
+    seen = footwear_cut.skin_seen(body, {"left": {"foot": shoe}})
+    views = seen["mm2"]["left"]
+    others = {v: a for v, a in views.items() if v != "back"}
+    check(abs(views["back"] - 2548.0) < 1e-6 and all(a == 0.0 for a in others.values()),
+          f"[T5b] heel 2 mm through the back wall up to the rim: back {views['back']} mm2 (want 2548), others {others}")
+    src = subprocess.run(["git", "-C", str(ROOT), "show", "0c27b0b70:app/core/footwear_cut.py"],
+                         capture_output=True, text=True)
+    if src.returncode == 0:
+        old_cut = types.ModuleType("footwear_cut_0c27b0b70")
+        exec(compile(src.stdout, "footwear_cut@0c27b0b70", "exec"), old_cut.__dict__)
+        was = old_cut.skin_seen(body, {"left": {"foot": shoe}})["mm2"]["left"]["back"]
+        check(was == 0.0, f"[T5b] on 0c27b0b70 (enclosed spots only) the same heel read {was} mm2 (want 0)")
+    else:
+        print("skip [T5b] old-code proof: commit 0c27b0b70 not in this repository")
+    check((footwear_cut.SKIN_POKE_M, footwear_cut.SKIN_POKE_OPEN_PX) == (0.003, 4) and 2548.0 > 8.0,
+          "[T5b] through the wall: 3 mm, 4-px opening; the [T5b] heel is far above the limit 8 mm2")
 
     # [T6]
     check((footwear_cut.SKIN_SEEN_PX_M, footwear_cut.SKIN_SEEN_EPS_M, footwear_cut.SKIN_SEEN_OPEN_PX,

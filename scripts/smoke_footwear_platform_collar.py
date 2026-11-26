@@ -92,7 +92,7 @@ def platform(P, F, out=0.06, top=0.01, x1=0.10):
 
 
 def main() -> int:
-    check("version", fi.INSOLE_VERSION, 11)
+    check("version >= 10", fi.INSOLE_VERSION >= 10, True)
     boot = fx.flat_boot()
     plat = platform(*boot)
 

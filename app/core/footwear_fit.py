@@ -388,7 +388,10 @@ from app.core.footwear_gates import check_gates
 #: 22 (2026-11-26): ``skin_seen_mm2`` is the largest SPOT of skin on a 1-mm raster with a 0.25-mm depth tolerance
 #:    (``footwear_cut.SKIN_SEEN_PX_M`` block) — the 2-mm raster read a visible spot on a counter as one pixel of
 #:    noise. Every closed fit is judged again; Auto may add heel room where a spot shows. One CPU refit.
-FOOTWEAR_FIT_VERSION = 22
+#: 23 (2026-11-26): ``skin_seen_mm2`` also counts skin lying on the outside of a wall it came through
+#:    (``footwear_cut.SKIN_POKE_M`` block) — a heel through the counter whose spot reaches the topline read 0 as it
+#:    is not enclosed. Every closed fit is judged again; Auto may add heel room where a spot shows. One CPU refit.
+FOOTWEAR_FIT_VERSION = 23
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Ruling A82: the per-piece footwear allowances the Wardrobe offers (percent; ``garment_footwear.ALLOWANCE_KEY``).
