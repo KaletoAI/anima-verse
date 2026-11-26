@@ -1719,26 +1719,56 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
 #: out of the counter all the way up to the rim (``visible_poke`` and ``toe_conform_m`` read what is under it). ``visible_poke`` counts foot
 #: vertices under the rim in the cut frame and does not see skin through a hole of the mesh (Kai's Sneakers moved
 #: forward by hand, 2026-11-25: visible_poke 0.0006, the heel seen through the counter from behind).
-#: The limit, measured on every stored closed shoe on every body (fit version 21, copies 2026-11-26): the shoes
-#: that look right on all four sides 0 – 4 mm2 (one pixel: raster noise at an edge); the ones with skin seen in the
-#: renders — the Sneekers' toe box attempts with a pink spot on the counter 36 / 68, Kai's Sneekers moved 4 mm
-#: forward by hand 40 (the heel through the counter), Kira's Woman shoes 320 (the heel out beside the counter),
-#: the refused Sneekers 300 – 1352. A second look (the toe box attempt with heel room, 2026-11-26): Vallerie's
-#: Sneekers at +6 % 16 mm2 — a pink spot of about 4 x 5 mm on the outer counter in the side and back renders.
-#: One pixel (4) stays noise, two (8) are refused: 8 mm2. A closed shoe only — an open shoe shows its foot on purpose.
+#: A SPOT (fit version 22, 2026-11-26): the enclosed pixels are opened with a ``SKIN_SEEN_OPEN_PX`` square (only
+#: pixels inside a fully enclosed 2 x 2 mm block stay) and the value per view is the LARGEST connected patch left, in
+#: mm2. At the 2-mm raster with a 1-mm depth tolerance (fit version 21) the visible spots of the Sneekers on Lirien
+#: (outer counter, side + back renders) and Kira (right counter, back renders) read 4 mm2 — one pixel, the same as
+#: edge noise — and Kira's spot is a heel lying just under 1 mm through the counter, which the tolerance hid. At 1 mm
+#: with 0.25 mm they read 13 and 24 mm2, and the one-pixel-wide sliver along a pump's topline (Lirien's Woman shoes,
+#: 8 mm2 enclosed, no spot in the renders) opens to 0. The limit comes from every stored shoe on every body through
+#: the chain ("Run all" through the routes on a world copy, the kept evaluation of 41 accepted closed fits,
+#: 2026-11-26): 38 read 0, Ylva's Woman shoes 6 (a 2 x 3 mm dot mid-side, not seen in the renders), the two
+#: render-confirmed spots 13 (Lirien's Sneekers) and 24 (Kira's) -> 8 mm2, between the largest clean value and the
+#: smallest seen spot.
+SKIN_SEEN_LABEL = "a spot of skin enclosed by the shoe seen from front, back or a side (a hole or a heel through the counter), largest"
+SKIN_SEEN_PX_M = 0.001
+SKIN_SEEN_EPS_M = 0.00025
+SKIN_SEEN_OPEN_PX = 2
 SKIN_SEEN_MAX_MM2 = 8.0
-SKIN_SEEN_LABEL = "skin enclosed by the shoe seen from front, back or a side (a hole or a heel through the counter), worst"
-SKIN_SEEN_PX_M = 0.002
-SKIN_SEEN_EPS_M = 0.001
 #: The views: name -> (coordinate order put on (col, row, depth), sign: 1 = the camera on the + side).
 SKIN_SEEN_VIEWS: Dict[str, Tuple[Tuple[int, int, int], float]] = {
     "front": ((0, 1, 2), 1.0), "back": ((0, 1, 2), -1.0), "left": ((2, 1, 0), 1.0), "right": ((2, 1, 0), -1.0)}
 
 
-def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]]) -> Dict[str, Any]:
-    """Skin seen through the shoe (``SKIN_SEEN_PX_M`` block): ``{"mm2": {side: {view: mm2}}, "worst_mm2": the
-    largest}`` over the parts of each side (``foot`` and a boot's ``shaft``) on the cut ``body`` (bind space)."""
+def enclosed_spot_mm2(shoe_d: np.ndarray, body_d: np.ndarray, px: float = SKIN_SEEN_PX_M,
+                      eps: float = SKIN_SEEN_EPS_M, opening: int = SKIN_SEEN_OPEN_PX) -> float:
+    """The largest spot (mm2) of one view: ``shoe_d`` / ``body_d`` the nearest depth per pixel (-inf where nothing
+    is) — body pixels with no shoe ``eps`` in front of them, the patches open to an empty pixel or the picture's edge
+    dropped, the rest opened by an ``opening`` square (``SKIN_SEEN_PX_M`` block), the largest connected patch."""
     from scipy import ndimage
+    shoe = np.isfinite(shoe_d)
+    seen = np.isfinite(body_d) & ~(shoe & (shoe_d >= body_d - eps))
+    lab, n = ndimage.label(seen)
+    if not n:
+        return 0.0
+    empty = ~shoe & ~seen
+    # a patch touching an empty pixel or the picture's edge is open to the outside
+    near_empty = ndimage.binary_dilation(empty, structure=np.ones((3, 3), bool))
+    edge = np.zeros(seen.shape, bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    enclosed = seen & ~np.isin(lab, np.unique(lab[(near_empty | edge) & seen]))
+    if opening > 1:
+        enclosed = ndimage.binary_opening(enclosed, structure=np.ones((opening, opening), bool))
+    spots, m = ndimage.label(enclosed)
+    if not m:
+        return 0.0
+    return float(np.bincount(spots.ravel())[1:].max()) * px * px * 1e6
+
+
+def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]]) -> Dict[str, Any]:
+    """Skin seen through the shoe (``SKIN_SEEN_PX_M`` block): ``{"mm2": {side: {view: largest spot mm2}},
+    "worst_mm2": the largest}`` over the parts of each side (``foot`` and a boot's ``shaft``) on the cut ``body``
+    (bind space)."""
     from app.core.garment_fit import _raster
     P = np.asarray(body.positions, np.float64)
     Fb = np.asarray(body.faces, np.int64).reshape(-1, 3)
@@ -1762,22 +1792,8 @@ def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.Garmen
             lo = Xv.min(0)[:2] - 4 * px
             hi = Xv.max(0)[:2] + 4 * px
             shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
-            shoe_d = _raster(Xv, F, lo, shape, px, sign)
-            body_d = _raster(Pv, Fn, lo, shape, px, sign)
-            shoe = np.isfinite(shoe_d)
-            seen = np.isfinite(body_d) & ~(shoe & (shoe_d >= body_d - SKIN_SEEN_EPS_M))
-            empty = ~shoe & ~seen
-            lab, n = ndimage.label(seen)
-            if not n:
-                out[side][view] = 0.0
-                continue
-            # a patch touching an empty pixel or the picture's edge is open to the outside
-            near_empty = ndimage.binary_dilation(empty, structure=np.ones((3, 3), bool))
-            edge = np.zeros(shape, bool)
-            edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
-            open_ids = np.unique(lab[(near_empty | edge) & seen])
-            enclosed = seen & ~np.isin(lab, open_ids)
-            out[side][view] = float(enclosed.sum()) * px * px * 1e6
+            out[side][view] = enclosed_spot_mm2(_raster(Xv, F, lo, shape, px, sign),
+                                                _raster(Pv, Fn, lo, shape, px, sign), px)
     worst = max((v for views in out.values() for v in views.values()), default=0.0)
     return {"mm2": out, "worst_mm2": worst}
 

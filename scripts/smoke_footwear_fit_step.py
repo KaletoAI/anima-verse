@@ -50,7 +50,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 21, fit_version 21, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 22, fit_version 22, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 11}}; scale.k_m_per_unit 1.023599
@@ -75,8 +75,11 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      0.1 mm tolerance, far from the feet) -> "stale", info steps.fit {status stale, freshness reason "Body changed — refit pending"};
      the next run refits (ran ["fit"]) -> accepted on the new sha; fsig unchanged (no base in it).
 [P3] set_width_cap(Demo, heels, 1.02) -> True, profile footwear_width_cap {heels: 1.02}, fsig F2 != F; the run
-     fits F2 with scale.width_factor = min(1.02, 1.0380) = 1.02 and width_cap 1.02, slim_needed 1 - 0.081888 x
-     1.02 / 0.085 = 0.01735 (+-1e-3); F's fit stays on disk. The route: cap 1.2 -> 400, cap "wide" -> 400, cap
+     fits F2 with the total widening min(1.02, 1.0380) = 1.02 and width_cap 1.02, slim_needed 1 - 0.081888 x
+     1.02 / 0.085 = 0.01735 (+-1e-3). At 1.02 the foot's ball stands (0.085 - 0.081888 x 1.02) / 2 = 0.74 mm out of
+     each side wall, more than footwear_cut.SKIN_SEEN_EPS_M 0.25 mm: a skin spot (fit version 22), so Auto adds
+     length; a size step widens the shoe with it, and the cap holds the TOTAL: scale.width_factor x
+     allowance.size = 1.02 (4 places), skin_seen_mm2 ok; F's fit stays on disk. The route: cap 1.2 -> 400, cap "wide" -> 400, cap
      1.02 -> {width_cap 1.02, fsig F2}; cap null -> width cap 1.10, the profile key gone, fsig back to F.
      set_width_cap on a non-footwear item -> ValueError.
 [P4] Mesh mode, outfit body A (its own bytes: the joints renamed "mixamorig:<name>", the Mixamo chain): with the
@@ -126,7 +129,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
      gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
      default. An older fit reads stale: a pumps record of fit_version 14 (and 13, 12), accepted on the current
-     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19 and 20 too; fit_version 21 -> "accepted").
+     base bytes -> fit_state "stale" (16, 17 and 18 too: earlier versions; 19, 20 and 21 too; fit_version 22 -> "accepted").
 """
 import hashlib
 import json
@@ -363,11 +366,11 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 21,
-             "fit_version": 21, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 22,
+             "fit_version": 22, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
-        # fit version 21: a closed shoe's toe_front (footwear_fit.CLOSED_GATES) and the cut's skin_seen_mm2
+        # fit version 21 (22: the skin spot): a closed shoe's toe_front (footwear_fit.CLOSED_GATES) and the cut's skin_seen_mm2
         gate_names = (list(footwear_fit.FIT_GATES) + list(footwear_fit.CLOSED_GATES)
                       + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES] + ["skin_seen_mm2"])
         check("P1 ten gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
@@ -442,8 +445,10 @@ def main() -> int:
         res = garments.run_garment("Demo", heels)
         check("P3 run", (res.get("ok"), res.get("fsig"), res.get("ran")), (True, F2, ["fit"]))
         rec2 = gs.read_record(gs.garment_path("Demo", heels, F2, "fit").with_suffix(".json"))
-        check("P3 width factor / cap", ((rec2.get("scale") or {}).get("width_factor"),
-                                        (rec2.get("scale") or {}).get("width_cap")), (1.02, 1.02))
+        sc2 = rec2.get("scale") or {}
+        check("P3 total width / cap / skin", (round(float(sc2.get("width_factor") or 0) * float(
+            (sc2.get("allowance") or {}).get("size") or 0), 4), sc2.get("width_cap"),
+            ((rec2.get("gates") or {}).get("skin_seen_mm2") or {}).get("ok")), (1.02, 1.02, True))
         near("P3 slim needed left", (rec2.get("scale") or {}).get("slim_needed", {}).get("left"), 0.01735, 1e-3)
         check("P3 old fsig fit kept", fit_path.is_file(), True)
 
@@ -650,7 +655,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "accepted")):
+        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "stale"), (19, "stale"), (20, "stale"), (21, "stale"), (22, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

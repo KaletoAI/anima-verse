@@ -24,18 +24,19 @@ Expected, by hand:
      with ``fit_height=True`` (calls: fit_height False, then True); a first attempt refused by ``ball_placement_mm``
      with ``height_ready`` False gets none (one call); an accepted first attempt gets none (one call).
 [T5] skin_seen on a box shoe (glTF axes: x across, y up, z forward; walls x = +-0.03, z = 0 .. 0.10, y = 0 .. 0.05,
-     a floor at y = 0, open on top) around a box foot (x +-0.025, z 0.005 .. 0.095, y 0.002 .. 0.08 — standing
-     out of the rim like a leg), pixels of 2 mm from 4 px outside the shoe's lower corner:
+     a floor at y = 0, open on top; every face cut into tiles of at most 10 mm) around a box foot (x +-0.025,
+     z 0.005 .. 0.095, y 0.002 .. 0.08 — standing out of the rim like a leg), pixels of SKIN_SEEN_PX_M 1 mm from
+     4 px outside the shoe's lower corner (lo = (-0.034, -0.004)):
      - no hole: 0 mm2 from every side (the foot above the rim hangs together with the empty pixels around it);
-     - a 10 x 10 mm hole in the back wall (x -0.005 .. 0.005, y 0.021 .. 0.031): from the back (camera at -z)
-       the hole's edges lie in the middle of pixel columns 16 / 21 ((-0.005 + 0.038) / 0.002 = 16.5, 21.5) and
-       rows 14 / 19 ((0.021 + 0.008) / 0.002 = 14.5, 19.5); the wall's samples on the edges cover those, so the
-       free pixels are columns 17 .. 20 and rows 15 .. 18 = 4 x 4 = 16 px x 4 mm2 = 64 mm2 of foot seen through
-       it (the foot at z 0.005 lies nearer than the front wall behind it); every other side 0; worst 64.
-[T6] The skin gate from the measured distribution (footwear_cut docstring): right-looking closed shoes 0 - 4 mm2,
-     skin seen in the renders from 16 mm2 on (Vallerie's Sneekers at +6 %: a spot of about 4 x 5 mm on the counter)
-     -> SKIN_SEEN_MAX_MM2 = 8 (two 2-mm pixels refuse, one passes); the 64 mm2 hole of [T5]
-     is above it, no hole below. Auto answers it with heel room: AUTO_LENGTH_GATES = ("visible_poke",
+     - a 10 x 10 mm hole in the back wall (x -0.0055 .. 0.0045, y 0.0205 .. 0.0305): from the back (camera at -z)
+       the hole's edges lie in the middle of pixel columns 28 / 38 ((-0.0055 + 0.034) / 0.001 = 28.5, 38.5) and
+       rows 24 / 34 ((0.0205 + 0.004) / 0.001 = 24.5, 34.5); the wall's samples on the edges cover those, so the
+       free pixels are columns 29 .. 37 and rows 25 .. 33 = 9 x 9 = 81 px x 1 mm2 = 81 mm2 of foot seen through
+       it (the foot at z 0.005 lies nearer than the front wall behind it); a 9 x 9 square survives the 2 x 2
+       opening whole; every other side 0; worst 81.
+[T6] The skin gate from the distribution over every stored shoe on every body through the chain (footwear_cut
+     comment): SKIN_SEEN_PX_M 1 mm, SKIN_SEEN_EPS_M 0.25 mm, SKIN_SEEN_OPEN_PX 2, SKIN_SEEN_MAX_MM2 8; the 81 mm2
+     hole of [T5] is above it, no hole below. Auto answers it with heel room: AUTO_LENGTH_GATES = ("visible_poke",
      "skin_seen_mm2").
 [T7] fit_compute with Auto length, both attempts cut ("replaced"): the first attempt at every step is refused by
      ``toe_front`` alone (whole, only long), the toe box attempt by ``visible_poke`` (the heel through the counter).
@@ -73,18 +74,24 @@ def check(cond, label):
         FAILS.append(label)
 
 
-def quads(rects):
+def quads(rects, tile=0.01):
     """Axis-aligned rectangles -> (positions, faces): each (axis, value, (a0, a1), (b0, b1)) with the two other axes
-    in order."""
+    in order, cut into tiles of at most ``tile`` m (``garment_fit._raster`` samples a triangle at most 64 steps per
+    edge: a 1-mm raster needs edges under 32 mm to leave no pixel without a sample)."""
     P, F = [], []
     for axis, value, (a0, a1), (b0, b1) in rects:
         others = [i for i in range(3) if i != axis]
-        base = len(P)
-        for a, b in ((a0, b0), (a1, b0), (a1, b1), (a0, b1)):
-            v = [0.0, 0.0, 0.0]
-            v[axis], v[others[0]], v[others[1]] = value, a, b
-            P.append(v)
-        F += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
+        na, nb = max(1, int(np.ceil((a1 - a0) / tile - 1e-9))), max(1, int(np.ceil((b1 - b0) / tile - 1e-9)))
+        for i in range(na):
+            for j in range(nb):
+                ta0, ta1 = a0 + (a1 - a0) * i / na, a0 + (a1 - a0) * (i + 1) / na
+                tb0, tb1 = b0 + (b1 - b0) * j / nb, b0 + (b1 - b0) * (j + 1) / nb
+                base = len(P)
+                for a, b in ((ta0, tb0), (ta1, tb0), (ta1, tb1), (ta0, tb1)):
+                    v = [0.0, 0.0, 0.0]
+                    v[axis], v[others[0]], v[others[1]] = value, a, b
+                    P.append(v)
+                F += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
     return np.array(P, np.float64), np.array(F, np.int64)
 
 
@@ -94,8 +101,8 @@ def box_shoe(hole: bool):
              (0, -X, (0.0, H), (0.0, Z)), (0, X, (0.0, H), (0.0, Z)),   # sides (y, z)
              (2, Z, (-X, X), (0.0, H))]              # front (x, y)
     if hole:   # the back wall around a 10 x 10 mm hole
-        rects += [(2, 0.0, (-X, X), (0.0, 0.021)), (2, 0.0, (-X, X), (0.031, H)),
-                  (2, 0.0, (-X, -0.005), (0.021, 0.031)), (2, 0.0, (0.005, X), (0.021, 0.031))]
+        rects += [(2, 0.0, (-X, X), (0.0, 0.0205)), (2, 0.0, (-X, X), (0.0305, H)),
+                  (2, 0.0, (-X, -0.0055), (0.0205, 0.0305)), (2, 0.0, (0.0045, X), (0.0205, 0.0305))]
     else:
         rects += [(2, 0.0, (-X, X), (0.0, H))]
     return quads(rects)
@@ -235,7 +242,7 @@ def main() -> int:
     # [T5]
     Pf, Ff = box_foot()
     body = glb_mesh.Prim(positions=Pf, faces=Ff)
-    for hole, want in ((False, 0.0), (True, 64.0)):
+    for hole, want in ((False, 0.0), (True, 81.0)):
         Ps, Fs = box_shoe(hole)
         shoe = glb_mesh.GarmentMesh(positions=Ps, normals=None, uvs=np.zeros((len(Ps), 2)), indices=Fs.reshape(-1),
                                     joints=np.zeros((len(Ps), 4), np.int64), weights=np.zeros((len(Ps), 4)),
@@ -248,8 +255,9 @@ def main() -> int:
               f"[T5] {'hole' if hole else 'no hole'}: back {views['back']} mm2 (want {want}), others {others}")
 
     # [T6]
-    check(footwear_cut.SKIN_SEEN_MAX_MM2 == 8.0 and 4.0 < footwear_cut.SKIN_SEEN_MAX_MM2 < 16.0,
-          "[T6] SKIN_SEEN_MAX_MM2 8 between 4 and 16")
+    check((footwear_cut.SKIN_SEEN_PX_M, footwear_cut.SKIN_SEEN_EPS_M, footwear_cut.SKIN_SEEN_OPEN_PX,
+           footwear_cut.SKIN_SEEN_MAX_MM2) == (0.001, 0.00025, 2, 8.0) and 8.0 < 81.0,
+          "[T6] 1-mm raster, 0.25-mm tolerance, 2-px opening, limit 8 mm2 (below the [T5] hole)")
     check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke", "skin_seen_mm2"), "[T6] Auto answers skin_seen_mm2")
 
     print("\n" + ("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))

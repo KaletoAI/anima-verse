@@ -13275,6 +13275,13 @@ null); penetration counts every footwear node. Numbers in
 becomes the step's output, the record keeps its gates and gains `user_accepted {at, ssig, gates, reasons, error}`, the
 later steps are dropped and run again from it (insole and fit on the CPU, 0 hub jobs). A re-measured insole (a new
 `INSOLE_VERSION`) that is refused for the same gates, none worse, keeps the acceptance (`user_accepted.carried`).
+Accepting a record an older analysis made (`footwear_source.stale_record`: an insole of another `INSOLE_VERSION`)
+measures the step again first (2026-11-26; a refused mesh whose stored delivery passes today's gates is re-gated,
+A187): passed, nothing is accepted (answer `remeasured` true, `user_accepted` null); refused again, the acceptance
+takes the fresh record. A run that starts at the fit measures an insole of an older version again too
+(`garment_footwear._remeasure_stale_insole`). A persisted failure of a footwear chain records the shoe source it was
+recorded on (`inputs_state` = `footwear_source.state_token`); `garments.cached_failure` lets it go once that changed
+(a step run again, re-measured, accepted or un-accepted), so an acceptance never stays blocked by the failure before it.
 A refused FIT keeps its attempt as before (`fit_attempts`, accepted per body). The shoe's manual adjustment
 (`POST …/footwear/manual`, profile key `footwear_manual` per item: `offset_mm` [forward, up, outward] ≤ 40 mm,
 `rotate_deg` [toe out, toe up, tilt in] ≤ 25°, `scale_pct` −20 … +25) is a map `T` in the fit's cut frame about the
@@ -13296,10 +13303,13 @@ slims the rest — instead of a longer shoe. Auto length answers a heel through 
 room. When no attempt is accepted and the first one was refused for `toe_front` alone, that whole, long shoe is the
 refused attempt kept for the preview and for "Accept anyway" (`garment_footwear.LONG_ONLY_GATES`), never a toe box
 attempt that put the heel through the counter. The record's `scale.toe_front` holds both sides. The cut records `skin_seen_mm2`
-(`footwear_cut.skin_seen`): skin enclosed by the shoe on the four horizontal views (a hole of the mesh, a heel through
-the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the worst under `gates`
-(limit `footwear_cut.SKIN_SEEN_MAX_MM2` 8: one 2-mm pixel is raster noise at an edge, a 16-mm² spot on a counter is
-seen in the renders).
+(`footwear_cut.skin_seen`): the largest spot of skin enclosed by the shoe on the four horizontal views (a hole of the
+mesh, a heel through the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the
+worst under `gates`. Since fit version 22 the raster is 1 mm (`SKIN_SEEN_PX_M`) with a 0.25-mm depth tolerance
+(`SKIN_SEEN_EPS_M`), the enclosed pixels are opened by a 2 × 2 block (`SKIN_SEEN_OPEN_PX`, a one-pixel sliver along a
+topline drops out) and the value is the largest connected spot — the 2-mm raster read the visible counter spots of
+the Sneekers on Lirien and Kira as one pixel, the same as edge noise. The limit `footwear_cut.SKIN_SEEN_MAX_MM2` comes
+from the distribution over every stored shoe on every body through the chain (its comment).
 
 ### P2 runtime contract: secondary motion
 
