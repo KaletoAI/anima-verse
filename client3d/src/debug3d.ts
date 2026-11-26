@@ -65,11 +65,14 @@ interface MeshRow {
 const params = new URLSearchParams(location.search);
 
 export function initDebug3d(engine: Engine, residency: Map<string, Resident>,
-  npcs?: { pairHeightDebug(): Record<string, unknown>[] }): void {
+  npcs?: { pairHeightDebug(): Record<string, unknown>[]; debugPair: Record<string, unknown> }): void {
   if (params.get('debug3d') !== '1') return;
   // Owner 2026-11-25: the vertical size compensation in the real game, as numbers (see the header).
   Figure.probePairHeight = true;
   (window as unknown as { __pairHeight3d?: unknown }).__pairHeight3d = () => npcs?.pairHeightDebug() ?? [];
+  // A held clip time and the measurement switches (`NpcManager.debugPair`): {t, rootAngle, bend, height, rootScale}.
+  (window as unknown as { __pairStep3d?: unknown }).__pairStep3d = (o: Record<string, unknown>) =>
+    npcs ? Object.assign(npcs.debugPair, o) : null;
   const el = document.createElement('pre');
   el.id = 'debug3d';
   el.style.cssText = 'position:fixed;left:4px;top:4px;z-index:9999;'

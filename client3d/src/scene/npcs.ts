@@ -361,6 +361,13 @@ export class NpcManager {
     /** Ruling A139: the interaction this record belongs to (the map key is `<id>|<relation>`). */
     interaction: string
     bend: BendLimits | null }>();
+  /** Debug only (`debug3d.ts`, `window.__pairStep3d`): a held clip time for every pair half (null = the clip clock),
+   *  and switches for the attached part's root angle, its chain bend, the vertical size compensation and the
+   *  horizontal pair scale — read-only measurement, the defaults are the game. */
+  readonly debugPair: { t: number | null; rootAngle: boolean; bend: boolean; height: boolean; rootScale: boolean } =
+    { t: null, rootAngle: true, bend: true, height: true, rootScale: true };
+  /** Debug only: the last chain bend per entering figure (its turns as rendered, degrees). */
+  private readonly debugBends = new Map<string, { deg: number; turns: number }>();
   /** The channel readouts of the last phase B, named by the receiving figure (`channelReadouts()`), and their
    *  throttled publisher onto the HUD bus (`game/channelReadouts.ts`: ≤ 10 Hz, only while engaged, a final null). */
   private readoutsNow: ChannelReadout[] = [];
@@ -1526,6 +1533,8 @@ export class NpcManager {
     // this rig lacks drops the finale, never the action; a missing alt half
     // falls back to the role's own.
     let phase = loopPhase;
+    if (this.debugPair.t !== null && it.clipDuration > 0)
+      phase = ((this.debugPair.t % it.clipDuration) + it.clipDuration) % it.clipDuration;
     let loop = cycling;
     // the mixer's speed between seeks: the scene's tempo, a finale's own
     let speed = it.tempo;
@@ -1549,12 +1558,14 @@ export class NpcManager {
     // Owner decision 2026-11-20 (scene-render `pairScale.ts`): the half's root path was measured for a 1.70 m figure;
     // this figure's own scale a = height / 1.70 about the clip's contact pivot keeps every contact where it was
     // (p' = C + a·(p − C)). a = 1 returns the root untouched.
-    const root = scalePairRoot(unscaled, unscaled.pivot, pairFigureScale(npc.figure.height));
+    const root = scalePairRoot(unscaled, unscaled.pivot, this.debugPair.rootScale ? pairFigureScale(npc.figure.height) : 1);
     // `playPair` also ends a bridge that was still running (getting up out of
     // bed when the handshake came): its height, turn and travel let go with it.
     const seat = !ownAnchor && it.anchor.placeId
       ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
-    if (!npc.figure.playPair(clip, phase, it.rate <= 0, loop, seat?.group, speed)) return false;
+    const held = this.debugPair.t !== null;
+    if (!npc.figure.playPair(clip, phase, it.rate <= 0 || held, loop, seat?.group, speed)) return false;
+    if (held) npc.figure.debugSeekPair(phase);
     // A bridge travel nobody took yet has no meaning here: the ANCHOR places
     // the figure, absolutely, every frame — kept on the instance it would
     // stand the body beside its anchor for the whole interaction.
@@ -1576,7 +1587,7 @@ export class NpcManager {
     // Owner decision 2026-11-25 (scene-render `pairHeight.ts`): the vertical size compensation — this figure's
     // constant hips offset for the clip, applied in `figure.update` after the clip pose and before phase B.
     const height = this.pairHeightOf(npc, clip);
-    npc.figure.setPairHeight(clip, height.offset, height.planted);
+    npc.figure.setPairHeight(clip, this.debugPair.height ? height.offset : 0, height.planted);
     if (age >= BLEND_S) it.blend = undefined;
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;
@@ -1613,7 +1624,15 @@ export class NpcManager {
       if (!it || !fig) continue;
       const insp = fig.inspect();
       out.push({ name: npc.name, clip: it.clip, roles: it.roles, height: fig.height, solve: it.height ?? null,
-        shown: fig.pairHeightShown, probe: fig.pairHeightProbe,
+        shown: fig.pairHeightShown, probe: fig.pairHeightProbe, clipT: it.clipT, body: fig.debugBodyPoints(),
+        bend: this.debugBends.get(npc.name) ?? null, debug: { ...this.debugPair },
+        contacts: this.figures?.pairContactsOf(it.clip, npc.name) ?? null,
+        ground: this.roomStandAt(npc.name, npc.root.position.x, npc.root.position.z)
+          ?? this.groundY(npc.root.position.x, npc.root.position.z),
+        groundAtLegs: (fig.debugBodyPoints().rig as { legs?: ({ ankle: number[] | null } | null)[] } | null)?.legs?.map((l) =>
+          l?.ankle ? this.roomStandAt(npc.name, l.ankle[0], l.ankle[2]) ?? this.groundY(l.ankle[0], l.ankle[2]) : null) ?? null,
+        chainRoots: (insp?.chains ?? []).filter((c) => c.segments.length).map((c) => ({ op: c.op, root: c.segments[0].a,
+          points: [c.segments[0].a, ...c.segments.map((s) => s.b)] })),
         tips: (insp?.chains ?? []).filter((c) => c.segments.length).map((c) => ({ op: c.op, tip: c.segments[c.segments.length - 1].b })),
         openings: (insp?.channels ?? []).map((c) => ({ id: c.id, o: c.o })) });
     }
@@ -2473,7 +2492,7 @@ export class NpcManager {
     const entries: FrameEntry[] = [];
     for (const npc of this.npcs.values()) {
       entries.push({ name: npc.name, interaction: npc.interaction ?? null, figure: npc.figure });
-      npc.figure?.setRootAngle(this.rootAngleOf(npc));
+      npc.figure?.setRootAngle(this.debugPair.rootAngle ? this.rootAngleOf(npc) : null);
     }
     // Ruling A145: the chain bend runs inside phase B, before the openings (frameLoop step 3) — the mouth and the
     // surface open around the part as it is shown, and the next update engages on it.
@@ -2577,6 +2596,8 @@ export class NpcManager {
     // Ruling A145: bend the chain on this frame's bones — at its root when raised, at every joint when resting (on top of
     // the root angle: they compose).
     const b = bendSample(sample, rec.bend).bend;
-    if (b) e.figure!.bendChain(rec.hit.chain, b.turns);
+    if (b) this.debugBends.set(e.name, { turns: b.turns.length, deg: b.turns.reduce((s, x) =>
+      s + 2 * Math.acos(Math.min(1, Math.abs(x.q[3]))) * 180 / Math.PI, 0) });
+    if (b && this.debugPair.bend) e.figure!.bendChain(rec.hit.chain, b.turns);
   }
 }

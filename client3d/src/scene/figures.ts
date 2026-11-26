@@ -3138,6 +3138,25 @@ export class Figure {
       knee: l.lower.getWorldPosition(new THREE.Vector3()), ankle: l.foot.getWorldPosition(new THREE.Vector3()) } : null);
   }
 
+  /** Debug only (`NpcManager.debugPair`): put the running pair half at clip time `t` exactly (no resync tolerance). */
+  debugSeekPair(t: number): void {
+    if (this.current) this.current.time = t;
+  }
+
+  /** Debug only: hips, head and the root (support) in world metres, with this figure's model scale. */
+  debugBodyPoints(): Record<string, unknown> {
+    let hips: THREE.Object3D | null = null;
+    this.root.traverse((o) => { if (!hips && (o as THREE.Bone).isBone && normBoneName(o.name) === 'hips') hips = o; });
+    const w = (o: THREE.Object3D | null) => o ? o.getWorldPosition(new THREE.Vector3()).toArray() : null;
+    const rig = this.pairHeightRig;
+    const det = (o: THREE.Object3D) => +o.matrixWorld.determinant().toExponential(3);
+    return { hips: w(hips), head: w(this.head), root: this.root.getWorldPosition(new THREE.Vector3()).toArray(),
+      scale: this.baseScale,
+      rig: rig ? { hips: rig.hips.name, hipsParent: rig.hips.parent?.name ?? null, sameHips: rig.hips === hips, hipsDet: det(rig.hips),
+        legs: rig.legs.map((l) => l && { upper: l.upper.name, foot: l.foot.name, ankle: w(l.foot), det: det(l.foot),
+          chain: (() => { const n: string[] = []; for (let p: THREE.Object3D | null = l.upper.parent; p && p !== rig.hips; p = p.parent) n.push(p.name); return n; })() }) } : null };
+  }
+
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string, speed = 1): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
