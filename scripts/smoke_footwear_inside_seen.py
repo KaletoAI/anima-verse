@@ -194,7 +194,7 @@ def main() -> int:
     check(sheet["worst_mm2"] == 0.0, f"[I4] one sheet, low back wall: 0 {sheet['mm2']}")
 
     print("[I5] the gate")
-    check(footwear_cut.INSIDE_SEEN_MAX_MM2 == 8.0, "[I5] INSIDE_SEEN_MAX_MM2 8 (the distribution, footwear_cut comment)")
+    check(footwear_cut.INSIDE_SEEN_MAX_MM2 == 16.0, "[I5] INSIDE_SEEN_MAX_MM2 16 (twice the clean maximum 8, below the smallest defect 26; footwear_cut comment)")
     check("inside_seen_mm2" in garment_footwear.AUTO_LENGTH_GATES, "[I5] Auto answers inside_seen_mm2 with heel room")
     src = (ROOT / "app/core/garment_footwear.py").read_text()
     check('{"inside_seen_mm2": ("max", footwear_cut.INSIDE_SEEN_MAX_MM2' in src, "[I5] gated as ('max', limit)")

@@ -1839,8 +1839,14 @@ def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.Garmen
 #: (``garment_footwear``): its shaft's bind-space position is the exact inverse of the leg's skin (``footwear_fit``
 #: step 9), not the stand the figure shows, and the boots read 1 000 – 4 600 mm2 there on code eb64c751b — in the
 #: shaft and band, nothing of it in their renders. Measured through the routes on a world copy (Run all, every stored
-#: shoe on eight bodies, the served fit; ``INSIDE_SEEN_MAX_MM2``).
-INSIDE_SEEN_MAX_MM2 = 8.0
+#: shoe on eight bodies, the served fit; ``INSIDE_SEEN_MAX_MM2``): the closed shoes on fit version 24 read
+#: Sneakers 0 (8 bodies), Woman shoes 0 (8), Black Stilettos 4 – 8 (8; single specks a pixel wide in their renders, the
+#: same spot on every body: the source's own); on fit version 23 (code eb64c751b) the same three read 0 – 165,
+#: 49 – 237 and 0 – 99, the defect's smallest spots 26 – 37 (Woman shoes on Kira and Rosi). The limit lies between:
+#: twice the clean maximum, 16 mm2 (a 4 x 4 mm patch), below the smallest defect. Rerun at 16: Woman shoes unchanged
+#: (0, the same Auto lengths), Black Stilettos on Vallerie took Auto +2 % at 14 mm2 — a seam line where the black upper
+#: meets the yellow sole, in the front view; its renders show nothing.
+INSIDE_SEEN_MAX_MM2 = 16.0
 INSIDE_SEEN_LABEL = ("a spot of the shoe's inside (lining, insole) seen from outside through its own wall from front, "
                      "back or a side, largest")
 
