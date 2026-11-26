@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke: the general footwear rules of 2026-11-25 (part c of the footwear sweep, ``~/claude-out/schuhe-generell``):
 shaft by class, the open seed behind the opening, ``deep_outside`` reported only, the strap push limit from the
-distribution, Auto length on ``visible_poke`` only.
+distribution, Auto length on what is seen (``visible_poke``, and since 2026-11-26 ``skin_seen_mm2``).
 
 Usage:  ./.venv/bin/python scripts/smoke_footwear_general_rules.py
 
@@ -36,7 +36,10 @@ Expected, by hand:
      eight bodies): 25.2 – 27.8 mm accepted at 30, 30.85 / 36.47 / 36.73 / 37.42 / 39.44 / 42.2 mm refused at 30 and
      looking right; 42.2 x 1.2 = 50.64 -> 50 (>= every right-looking value, < 50.64). Every listed value passes 50;
      at a72b14754 the limit was 30 and the six refused.
-[G5] ``garment_footwear.AUTO_LENGTH_GATES`` = ("visible_poke",): Auto adds heel room only for what is seen.
+[G5] ``garment_footwear.AUTO_LENGTH_GATES`` = ("visible_poke", "skin_seen_mm2"): Auto adds heel room only for what
+     is seen — the foot vertices under the rim outside the shoe (2026-11-25) and the skin seen through the shoe from
+     front, back or a side (2026-11-26, ``footwear_cut.SKIN_SEEN_MAX_MM2``: mostly a heel through the counter).
+     ``deep_outside`` (reported only) is in neither. At a72b14754 the tuple was ("visible_poke",).
 """
 import subprocess
 import sys
@@ -158,7 +161,9 @@ def main() -> int:
           "[G4] a72b14754 refused 6 of the 8 right-looking values; 50 accepts all")
 
     # [G5]
-    check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke",), "[G5] Auto length answers visible_poke only")
+    check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke", "skin_seen_mm2"),
+          "[G5] Auto length answers visible_poke and skin_seen_mm2")
+    check("deep_outside" not in garment_footwear.AUTO_LENGTH_GATES, "[G5] deep_outside (reported only) is not in it")
 
     print()
     print(f"{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))

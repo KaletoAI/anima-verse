@@ -134,10 +134,18 @@ ALLOWANCE_KEY = "footwear_allowance"
 #: same result every time).
 AUTO = "auto"
 ALLOWANCE_NAMES: Tuple[str, ...] = ("width", "length")
+#: The refusals of a shoe that is whole and only too long (``fit_compute``): kept as the refused attempt before a
+#: toe box attempt that brought something wrong into the figure.
+LONG_ONLY_GATES: Tuple[str, ...] = ("toe_front",)
 #: The refusals Auto answers with heel room: the foot outside the shoe below its rim (``deep_outside`` is reported
 #: only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``) and skin seen through it (2026-11-26,
 #: ``footwear_cut.SKIN_SEEN_MAX_MM2`` — mostly a heel through the counter).
 AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke", "skin_seen_mm2")
+
+
+def _only(reasons: List[str], names: Tuple[str, ...]) -> bool:
+    """Every refusal in ``reasons`` names a gate of ``names`` (a reason starts with its gate's name)."""
+    return bool(reasons) and all(str(r).split(" ", 1)[0] in names for r in reasons)
 
 
 def allowance(profile: Optional[Dict[str, Any]], item_id: str) -> Dict[str, Any]:
@@ -724,38 +732,52 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     # gates or the cut's — and the shoe has a closed toe box to raise (``scale.height_ready``) or ends the toes short
     # of its toe box (gate ``toe_front``, ``footwear_fit.TOE_FRONT_MAX``), once more with the toes in the toe
     # box and the upper fitted to the foot's height. An accepted first attempt is the whole answer (an accepted look never
-    # changes); the second attempt's outcome stands, a toe box it cannot raise enough names the mesh as the defect.
+    # changes); a refused second attempt stands, a toe box it cannot raise enough names the mesh as the defect.
+    # ``heel_reasons`` (both attempts' refusals) is what Auto answers with heel room, ``long_only`` the first attempt
+    # when ``toe_front`` was its only refusal — whole, only long (``LONG_ONLY_GATES``).
     def attempt(allow: Dict[str, int]) -> Dict[str, Any]:
         att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, allowance=allow,
                                                  manual=manual, force=True), prims, joints, insole)
         first = att["result"].record
+        heel_reasons = list(att.get("reasons") or [])
+        whole = not att["ok"] and "replaced" in att and _only(att.get("reasons") or [], LONG_ONLY_GATES)
+        long_only = att if whole else None
         toe_short = ((first.get("gates") or {}).get("toe_front") or {}).get("ok") is False
         if not att.get("ok") and ((first.get("scale") or {}).get("height_ready") or toe_short):
             att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True,
                                                      allowance=allow, manual=manual, force=True),
                                prims, joints, insole)
+            heel_reasons += list(att.get("reasons") or [])
             flat = footwear_fit.too_flat_reason(att["result"].record)
             if not att["ok"] and flat:
                 att["reasons"] = [flat] + att["reasons"]
                 att["gates"]["reasons"] = [flat] + list(att["gates"].get("reasons") or [])
+        att["heel_reasons"], att["long_only"] = heel_reasons, long_only
         return att
 
     # Ruling A82: the allowances — Width Auto is +0; Length Auto is +0, and when that is refused by an enclosure gate
-    # of the cut, the smallest length step the gates accept (the refusal at +0 stands when none does)
+    # of the cut (in either attempt), the smallest length step the gates accept. When none does, the refusal that is
+    # kept — and that "Accept anyway" takes — is the shoe that is whole and only too long (``long_only``, the
+    # smallest step that has one) before the refusal at +0: a toe box attempt that put the heel through the counter
+    # never replaces a first attempt that was refused for its length alone (2026-11-26, the Sneekers on Rosi).
     settings = allowance or {}
     width = 0 if settings.get("width", AUTO) == AUTO else int(settings["width"])
     auto_length = settings.get("length", AUTO) == AUTO
     length = 0 if auto_length else int(settings["length"])
     att = attempt({"width": width, "length": length})
     tried: List[int] = [length]
+    long_only = att["long_only"]
     if auto_length and not att["ok"] and "replaced" in att and any(
-            str(r).split(" ", 1)[0] in AUTO_LENGTH_GATES for r in att["reasons"]):
+            str(r).split(" ", 1)[0] in AUTO_LENGTH_GATES for r in att["heel_reasons"]):
         for step in (s for s in footwear_fit.ALLOWANCE_STEPS if s > 0):  # Auto only ever adds heel room
             tried.append(step)
             longer = attempt({"width": width, "length": step})
             if longer["ok"]:
                 att = longer
                 break
+            long_only = long_only or longer["long_only"]
+    if not att["ok"] and long_only is not None:
+        att = long_only
     auto_rec = {"width": "auto" if settings.get("width", AUTO) == AUTO else width,
                 "length": "auto" if auto_length else length, "tried_length": tried}
     if len(tried) > 1:

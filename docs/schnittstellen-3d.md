@@ -13287,13 +13287,19 @@ wall stands above 10 cm (`footwear_insole.ONE_WALL_SHAFT_M`), the open seed is s
 shoe, `deep_outside` is recorded but never refuses (`footwear_cut.REPORTED_ONLY`), `strap_push_max_mm` 50, and a
 shaft cap is cut from `prepared.glb` only once the insole passes.
 Since fit version 21 (2026-11-26, `scripts/smoke_footwear_toe_front.py`): a closed shoe carries the gate `toe_front`
-— the insole area in front of the toe tip over (its widest width × the foot length), limit `footwear_fit.TOE_FRONT_MAX`
-0.08 (right-looking shoes 0 – 0.065, the Sneekers 0.128 – 0.192, measured on every stored shoe on every body). A shoe
-refused by it gets the toe box attempt (`fit_height`): the toes end where the forepart in front is
-`TOE_FRONT_TARGET` 0.065, the toe box is raised where it is ready (`HEIGHT_CAP`), the cut slims the rest — instead of a
-longer shoe. The record's `scale.toe_front` holds both sides. The cut records `skin_seen_mm2`
+— the insole area in front of the toe tip over (its widest width × the foot length), read on the foot reaching
+furthest into the shoe (a pair is one size), limit `footwear_fit.TOE_FRONT_MAX` 0.06 (right-looking shoes 0 – 0.048,
+the Sneekers 0.118 – 0.173, measured on every stored shoe on every body). A shoe refused by it gets the toe box attempt
+(`fit_height`): the toes end where the forepart in front is `TOE_FRONT_TARGET` 0.048 (`footwear_fit.toe_box_size`,
+heel room planned behind the foot's own toe station), the toe box is raised where it is ready (`HEIGHT_CAP`), the cut
+slims the rest — instead of a longer shoe. Auto length answers a heel through the counter in either attempt with heel
+room. When no attempt is accepted and the first one was refused for `toe_front` alone, that whole, long shoe is the
+refused attempt kept for the preview and for "Accept anyway" (`garment_footwear.LONG_ONLY_GATES`), never a toe box
+attempt that put the heel through the counter. The record's `scale.toe_front` holds both sides. The cut records `skin_seen_mm2`
 (`footwear_cut.skin_seen`): skin enclosed by the shoe on the four horizontal views (a hole of the mesh, a heel through
-the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the worst under `gates`.
+the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the worst under `gates`
+(limit `footwear_cut.SKIN_SEEN_MAX_MM2` 8: one 2-mm pixel is raster noise at an edge, a 16-mm² spot on a counter is
+seen in the renders).
 
 ### P2 runtime contract: secondary motion
 

@@ -16,9 +16,10 @@ Expected, by hand:
 [T2] front_station(room 1.0) -> the first station with at most 1.0 in front: x = 3; room 0.2 -> x = 5; room 0.25
      -> x = 4 (equal counts); stations 3 and 4 not usable (ok False) with room 1.0 -> x = 5; room -1 -> the
      fallback 9.
-[T3] The limits from the measured distribution (footwear_fit docstring): TOE_FRONT_MAX = 0.08 (0.065 x 1.2 = 0.078,
-     rounded up to 0.08) above every right-looking value 0.065 and below every Sneekers value 0.128;
-     TOE_FRONT_TARGET = 0.065 < TOE_FRONT_MAX; the gate is a closed shoe's ("max", 0.08).
+[T3] The limits from the measured distribution (footwear_fit docstring), read on the foot reaching furthest (the
+     smaller side): TOE_FRONT_MAX = 0.06 (0.048 x 1.2 = 0.0576, rounded up to 0.06) above every right-looking value
+     0.048 and below every Sneekers value 0.118; TOE_FRONT_TARGET = 0.048 < TOE_FRONT_MAX; the gate is a closed
+     shoe's ("max", 0.06).
 [T4] fit_compute: a first attempt refused by ``toe_front`` alone with ``height_ready`` False gets the second attempt
      with ``fit_height=True`` (calls: fit_height False, then True); a first attempt refused by ``ball_placement_mm``
      with ``height_ready`` False gets none (one call); an accepted first attempt gets none (one call).
@@ -32,9 +33,27 @@ Expected, by hand:
        free pixels are columns 17 .. 20 and rows 15 .. 18 = 4 x 4 = 16 px x 4 mm2 = 64 mm2 of foot seen through
        it (the foot at z 0.005 lies nearer than the front wall behind it); every other side 0; worst 64.
 [T6] The skin gate from the measured distribution (footwear_cut docstring): right-looking closed shoes 0 - 4 mm2,
-     skin seen in the renders from 36 mm2 on -> SKIN_SEEN_MAX_MM2 = 20 (five 2-mm pixels); the 64 mm2 hole of [T5]
+     skin seen in the renders from 16 mm2 on (Vallerie's Sneekers at +6 %: a spot of about 4 x 5 mm on the counter)
+     -> SKIN_SEEN_MAX_MM2 = 8 (two 2-mm pixels refuse, one passes); the 64 mm2 hole of [T5]
      is above it, no hole below. Auto answers it with heel room: AUTO_LENGTH_GATES = ("visible_poke",
      "skin_seen_mm2").
+[T7] fit_compute with Auto length, both attempts cut ("replaced"): the first attempt at every step is refused by
+     ``toe_front`` alone (whole, only long), the toe box attempt by ``visible_poke`` (the heel through the counter).
+     Auto reads both attempts' refusals: ``visible_poke`` is among them, so it tries every heel room step
+     2, 4, 6, 8, 10, 12, 15, 20 (``tried_length`` [0, 2, ..., 20], 2 calls per step = 18). None is accepted -> the
+     refusal kept is the first attempt of +0 (its reasons: the ``toe_front`` one alone), never the toe box attempt.
+     When the toe box attempt at +8 is accepted -> that one, ``tried_length`` [0, 2, 4, 6, 8], 10 calls.
+     When the first attempt is refused by ``toe_front`` AND ``visible_poke`` at every step -> no shoe is whole: the
+     refusal of +0's toe box attempt stands (``visible_poke``).
+[T8] toe_box_size on a straight insole (arc_at(x) = x, raw units = metres at k 1, x1 = 0.40) with a toe station that
+     moves with the length it is read for: front_end(L, k) = 0.25 - (L - 0.24) (a longer read leaves more area in
+     front, the station lies further back). Foot 0.24 m, ALLOW_M 0.005, ``_scale``'s answer (0.9, 0.2):
+     - room 0: xw = 0.25 + 0.005 / k, k = 0.245 / xw -> k xw = 0.245 = 0.25 k + 0.005 -> k = 0.96,
+       xw = 0.25 + 0.005 / 0.96 = 0.2552083; the toe tip (0.24 / k from the heel) at 0.25 = the station;
+     - room 0.024 (+10 %): k xw = 0.269 = 0.25 k + 0.005 -> k = 1.056, xw = 0.2547348; the heel room moves the foot
+       forward: its tip at (0.024 + 0.24) / 1.056 = 0.25 — the same station. Read for L + room (0.264) the station
+       would be 0.226 and the tip 24 raw-mm further back;
+     - a station behind ``_scale``'s end (front_end 0.15): (0.9, 0.2) kept.
 """
 import sys
 from pathlib import Path
@@ -104,9 +123,10 @@ def main() -> int:
     check(ff.front_station(gx, front, ok, -1.0, 9) == 9.0, "[T2] none -> fallback")
 
     # [T3]
-    check(ff.TOE_FRONT_MAX == 0.08 and 0.065 < ff.TOE_FRONT_MAX < 0.128, "[T3] TOE_FRONT_MAX 0.08 between 0.065 and 0.128")
-    check(ff.TOE_FRONT_TARGET == 0.065 < ff.TOE_FRONT_MAX, "[T3] TOE_FRONT_TARGET 0.065")
-    check(ff.CLOSED_GATES == {"toe_front": ("max", 0.08)}, "[T3] the closed shoe's gate")
+    check(ff.TOE_FRONT_MAX == 0.06 and 0.048 * 1.2 <= ff.TOE_FRONT_MAX < 0.118,
+          "[T3] TOE_FRONT_MAX 0.06 between 0.0576 and 0.118")
+    check(ff.TOE_FRONT_TARGET == 0.048 < ff.TOE_FRONT_MAX, "[T3] TOE_FRONT_TARGET 0.048")
+    check(ff.CLOSED_GATES == {"toe_front": ("max", 0.06)}, "[T3] the closed shoe's gate")
 
     # [T4]
     class Result:
@@ -144,6 +164,74 @@ def main() -> int:
           "[T4] another refusal, not height ready -> no second attempt")
     check(run({"toe_front": {"value": 0.03, "ok": True}}, True) == [False], "[T4] accepted -> one attempt")
 
+    # [T7]
+    def run_auto(first_reasons, second_ok_at=None):
+        calls = []
+
+        def fake_fit_pair(*a, fit_height=False, allowance=None, **k):
+            calls.append((fit_height, allowance["length"]))
+            gates = {} if fit_height else {"toe_front": {"value": 0.15, "ok": False}}
+            return Result(gates, False)
+
+        def fake_attempt(result, prims, joints, insole=None):
+            fit_height, step = calls[-1]
+            if fit_height:
+                ok_ = step == second_ok_at
+                reasons = [] if ok_ else ["visible_poke 0.04 > 0.005 (...)"]
+            else:
+                ok_, reasons = False, list(first_reasons)
+            out = {"ok": ok_, "result": result, "replaced": {}, "cut_stats": {}, "step": step,
+                   "second": fit_height, "gates": {"ok": ok_, "reasons": reasons}}
+            if not ok_:
+                out["reasons"] = reasons
+            return out
+
+        kept = {}
+
+        def fake_out(att, *a, **k):
+            kept.update(step=att["step"], second=att["second"], reasons=att.get("reasons"))
+            return {"record": att["result"].record}
+
+        with patch.object(glb_mesh, "static_arrays", lambda b: (np.zeros((3, 3)), np.zeros((1, 3), int), None, None,
+                                                                 None, None)), \
+                patch.object(glb_mesh, "body_arrays", lambda b: None), \
+                patch.object(glb_mesh, "joint_bind_matrices", lambda b: {}), \
+                patch.object(glb_mesh, "body_primitive_arrays", lambda b: []), \
+                patch.object(ff, "fit_pair", fake_fit_pair), \
+                patch.object(ff, "too_flat_reason", lambda r: None), \
+                patch.object(garment_footwear, "_fit_attempt", fake_attempt), \
+                patch.object(garment_footwear, "_attempt_out", fake_out):
+            out = garment_footwear.fit_compute(b"", {}, b"", None, "footwear", "i", "f", "/nonexistent",
+                                               allowance={"width": "auto", "length": "auto"})
+        tried = ((out.get("record") or (out.get("attempt") or {}).get("record") or {}).get("scale") or {})
+        return out, calls, kept, ((tried.get("allowance") or {}).get("auto") or {}).get("tried_length")
+
+    toe = ["toe_front 0.15 > 0.06 (...)"]
+    out, calls, kept, tried = run_auto(toe)
+    check(not out["ok"] and len(calls) == 18 and tried == [0, 2, 4, 6, 8, 10, 12, 15, 20],
+          f"[T7] no step accepted: 18 calls ({len(calls)}), tried {tried}")
+    check(kept == {"step": 0, "second": False, "reasons": toe} and out["reasons"] == toe,
+          f"[T7] the kept refusal is the whole first attempt of +0 ({kept})")
+    out, calls, kept, tried = run_auto(toe, second_ok_at=8)
+    check(out["ok"] and len(calls) == 10 and tried == [0, 2, 4, 6, 8] and kept["step"] == 8 and kept["second"],
+          f"[T7] the toe box attempt at +8 accepted ({len(calls)} calls, tried {tried}, {kept})")
+    both = toe + ["visible_poke 0.03 > 0.005 (...)"]
+    out, calls, kept, tried = run_auto(both)
+    check(not out["ok"] and kept == {"step": 0, "second": True, "reasons": ["visible_poke 0.04 > 0.005 (...)"]},
+          f"[T7] no whole shoe: +0's toe box attempt stands ({kept})")
+
+    # [T8]
+    arc = lambda x: x  # noqa: E731
+    station = lambda L, k: 0.25 - (L - 0.24)  # noqa: E731
+    k, xw = ff.toe_box_size(arc, station, 0.40, 0.24, 0.0, 0.9, 0.2)
+    check(abs(k - 0.96) < 1e-9 and abs(xw - (0.25 + 0.005 / 0.96)) < 1e-9 and abs(0.24 / k - 0.25) < 1e-9,
+          f"[T8] room 0: k {k:.6f}, x_end {xw:.7f}, tip {0.24 / k:.6f}")
+    k, xw = ff.toe_box_size(arc, station, 0.40, 0.24, 0.024, 0.9, 0.2)
+    check(abs(k - 1.056) < 1e-9 and abs(xw - (0.25 + 0.005 / 1.056)) < 1e-9 and abs(0.264 / k - 0.25) < 1e-9,
+          f"[T8] room 0.024: k {k:.6f}, x_end {xw:.7f}, tip {0.264 / k:.6f} on the same station")
+    check(ff.toe_box_size(arc, lambda L, k: 0.15, 0.40, 0.24, 0.0, 0.9, 0.2) == (0.9, 0.2),
+          "[T8] a station behind _scale's end keeps (0.9, 0.2)")
+
     # [T5]
     Pf, Ff = box_foot()
     body = glb_mesh.Prim(positions=Pf, faces=Ff)
@@ -160,8 +248,8 @@ def main() -> int:
               f"[T5] {'hole' if hole else 'no hole'}: back {views['back']} mm2 (want {want}), others {others}")
 
     # [T6]
-    check(footwear_cut.SKIN_SEEN_MAX_MM2 == 20.0 and 4.0 < footwear_cut.SKIN_SEEN_MAX_MM2 < 36.0,
-          "[T6] SKIN_SEEN_MAX_MM2 20 between 4 and 36")
+    check(footwear_cut.SKIN_SEEN_MAX_MM2 == 8.0 and 4.0 < footwear_cut.SKIN_SEEN_MAX_MM2 < 16.0,
+          "[T6] SKIN_SEEN_MAX_MM2 8 between 4 and 16")
     check(garment_footwear.AUTO_LENGTH_GATES == ("visible_poke", "skin_seen_mm2"), "[T6] Auto answers skin_seen_mm2")
 
     print("\n" + ("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}"))

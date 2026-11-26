@@ -1723,8 +1723,10 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
 #: that look right on all four sides 0 – 4 mm2 (one pixel: raster noise at an edge); the ones with skin seen in the
 #: renders — the Sneekers' toe box attempts with a pink spot on the counter 36 / 68, Kai's Sneekers moved 4 mm
 #: forward by hand 40 (the heel through the counter), Kira's Woman shoes 320 (the heel out beside the counter),
-#: the refused Sneekers 300 – 1352. Five pixels: 20 mm2. A closed shoe only — an open shoe shows its foot on purpose.
-SKIN_SEEN_MAX_MM2 = 20.0
+#: the refused Sneekers 300 – 1352. A second look (the toe box attempt with heel room, 2026-11-26): Vallerie's
+#: Sneekers at +6 % 16 mm2 — a pink spot of about 4 x 5 mm on the outer counter in the side and back renders.
+#: One pixel (4) stays noise, two (8) are refused: 8 mm2. A closed shoe only — an open shoe shows its foot on purpose.
+SKIN_SEEN_MAX_MM2 = 8.0
 SKIN_SEEN_LABEL = "skin enclosed by the shoe seen from front, back or a side (a hole or a heel through the counter), worst"
 SKIN_SEEN_PX_M = 0.002
 SKIN_SEEN_EPS_M = 0.001

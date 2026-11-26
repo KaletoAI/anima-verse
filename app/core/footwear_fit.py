@@ -330,7 +330,7 @@ disagrees with its own image (``footwear_gates.image_agreement``); otherwise the
 """
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -380,8 +380,9 @@ from app.core.footwear_gates import check_gates
 #:    factor (1.25: a 10 mm gap a side at the heel). A shoe whose heel needs the full factor comes out as at v19.
 #: 21 (2026-11-26): the gate ``toe_front`` (``TOE_FRONT_MAX``) and the toe box attempt (``TOE_FRONT_TARGET``) — a
 #:    closed shoe whose toes stop short of its toe box is refused and fitted again with the toes in it instead of
-#:    being lengthened (Kai's Sneekers 378 -> 353 mm); an accepted first attempt keeps its geometry (a new fsig),
-#:    the record carries ``scale.toe_front``. The cut of a closed shoe gates ``skin_seen_mm2``
+#:    being lengthened (Kai's Sneekers 378 -> 346 mm), heel room planned behind the foot's own toe station
+#:    (``toe_box_size``); an accepted first attempt keeps its geometry (a new fsig), the record carries
+#:    ``scale.toe_front``. The cut of a closed shoe gates ``skin_seen_mm2``
 #:    (``footwear_cut.SKIN_SEEN_MAX_MM2``: skin seen through a hole or a heel through the counter), Auto answers it
 #:    with heel room. One CPU refit.
 FOOTWEAR_FIT_VERSION = 21
@@ -531,21 +532,25 @@ FIT_GATES: Dict[str, Tuple[str, Any]] = {
     "stand_floor_mm": ("range", (-3.0, 3.0)),
 }
 #: 2026-11-26: the forepart in front of the toes — the insole's area ahead of the foot's toe tip over (its widest width x
-#: the foot's length), the worse side. A closed shoe is scaled so the toes end where its toe box still holds them
+#: the foot's length), read on the foot that reaches furthest into the shoe (the smaller side's value: a pair is one
+#: size, the other foot's shortfall is the body's own asymmetry — Vallerie's toe box attempt 0.061 / 0.090, Dario's
+#: 0.064 / 0.098). A closed shoe is scaled so the toes end where its toe box still holds them
 #: (``_scale``); a toe box the mesher made LOW ends them early and the shoe grows long for it: the toes stop in the
 #: wide forepart with the whole toe cap in front of them (Kai's Sneekers 378 mm on a 307-mm foot). A pointed toe
 #: in front of the toes is long but narrow, a round one wide but short — the area tells both from a shoe too long.
 #: The shoe's length over the foot's alone does not: the knee boots' heel block makes theirs 1.24 – 1.29, the
 #: Sneekers' 1.22 – 1.33. Measured on every stored shoe on every body (first attempt, 64 closed fits, copies
-#: 2026-11-26): the shoes that look right 0.000 – 0.065 (Black Stilettos 0.004 – 0.037, Woman shoes 0.016 – 0.059,
-#: ankle boots 0.000 – 0.053, knee boots 0.022 – 0.065), the Sneekers 0.128 – 0.192. The limit: the largest
-#: right-looking value with 20 % room, 0.065 x 1.2 = 0.078 -> 0.08. A refused closed shoe gets the toe box attempt
-#: (``garment_footwear.fit_compute``'s second attempt, ``fit_height``): the toes end where the forepart in front of
-#: them is ``TOE_FRONT_TARGET``, a toe box ready for it is raised (``HEIGHT_CAP``), the cut slims the rest and the
-#: gates judge — instead of a longer shoe. A shoe that cannot take that keeps the refusal with its reason.
-TOE_FRONT_MAX = 0.08
+#: 2026-11-26, the smaller side): the shoes that look right 0.000 – 0.048 (Black Stilettos 0.003 – 0.028, Woman
+#: shoes 0.016 – 0.043, ankle boots 0.000 – 0.033, knee boots 0.018 – 0.048), the Sneekers 0.118 – 0.173. The limit: the largest right-looking value with 20 % room, 0.048 x 1.2 = 0.0576 -> 0.06. A
+#: refused closed shoe gets the toe box attempt (``garment_footwear.fit_compute``'s second attempt, ``fit_height``):
+#: the toes end where the forepart in front of them is ``TOE_FRONT_TARGET`` (``toe_box_size``), a toe box ready for
+#: it is raised (``HEIGHT_CAP``), the cut slims the rest and the gates judge — instead of a longer shoe. Auto adds
+#: heel room to it when the heel comes through the counter. A shoe that cannot take that keeps the refusal with its
+#: reason; when the first attempt was refused for ``toe_front`` alone, that whole, long shoe is the one kept
+#: (``garment_footwear.LONG_ONLY_GATES``).
+TOE_FRONT_MAX = 0.06
 #: Where the toe box attempt ends the toes: the largest right-looking value measured (above).
-TOE_FRONT_TARGET = 0.065
+TOE_FRONT_TARGET = 0.048
 #: The gates of a closed shoe only (an open shoe's toes lie on its whole sole, ``OPEN_GATES``).
 CLOSED_GATES: Dict[str, Tuple[str, Any]] = {
     "toe_front": ("max", TOE_FRONT_MAX),
@@ -637,7 +642,7 @@ GATE_LABELS = {
     "ball_placement_mm": "the posed ball contact vs the shoe's ball point, worse side",
     "lift_asymmetry_mm": "difference of the two sides' lifts",
     "slim_needed": "share of the ball width the forefoot slimming must take off, worse side",
-    "toe_front": "insole area in front of the toes over widest width x foot length (toes stop short of the toe box), worse side",
+    "toe_front": "insole area in front of the toes over widest width x foot length (toes stop short of the toe box), the foot reaching furthest",
     "stand_floor_mm": "lowest shoe point in the shod stand above the floor",
     "shaft_push_p95_m": "p95 push of the shaft and band off the shin, worse side",
     "shaft_push_max_m": "largest push of the shaft and band off the shin, worse side",
@@ -1020,6 +1025,22 @@ def front_station(gx: np.ndarray, front: np.ndarray, ok: np.ndarray, room: float
     when none is."""
     hit = np.nonzero((np.asarray(front) <= room) & np.asarray(ok, bool))[0]
     return float(gx[hit[0]]) if len(hit) else float(fallback)
+
+
+def toe_box_size(arc_at: Callable[[float], float], front_end: Callable[[float, float], float], x1: float,
+                 length: float, room: float, k0: float, x0: float) -> Tuple[float, float]:
+    """``(k, x_end)`` of the toe box attempt (``TOE_FRONT_TARGET``) for a foot of ``length`` with ``room`` of heel
+    room behind it: the toe TIP onto ``front_end(length, k)`` — the station of the foot's OWN length —, the cavity end
+    ``ALLOW_M`` in front of it, ``k = (length + room + ALLOW_M) / arc(x_end)`` (a fixed point in k); the heel room
+    lies behind the heel and moves the foot forward by itself. ``(k0, x0)`` (``_scale``'s answer) when that would
+    end the toes no further in. Read for ``length + room`` the forepart left in front grew with the heel room and
+    the toe box attempt with heel room was refused for ``toe_front`` again (2026-11-26: Tilda's worse side 0.071 at
+    +0, 0.077 at +6 %, 0.082 at +12 %)."""
+    kw, xw = k0, x0
+    for _ in range(SCALE_ITERATIONS):
+        xw = min(x1, front_end(length, kw) + ALLOW_M / kw)
+        kw = (length + room + ALLOW_M) / arc_at(xw)
+    return (kw, xw) if xw > x0 else (k0, x0)
 
 
 def _frame_matrix(insole: Dict[str, Any]) -> np.ndarray:
@@ -1597,18 +1618,14 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     def _front_end(length: float, kk: float) -> float:
         return front_station(gx, front_area, ins.ok, TOE_FRONT_TARGET * float(iw.max()) * length / kk, ins.x1)
 
-    def _size(length: float) -> Tuple[float, float]:
+    def _size(length: float, room: float = 0.0) -> Tuple[float, float]:
+        """``(k, x_end)`` for a foot of ``length`` with ``room`` of heel room behind it."""
         if open_kind:
-            return (length + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
-        k_, x_ = _scale(ins, length, toe_h, forced)
+            return (length + room + OPEN_ALLOW_M) / ins.arc_at(ins.x1), ins.x1
+        k_, x_ = _scale(ins, length + room, toe_h, forced)
         if not toe_box_attempt:
             return k_, x_
-        # the toe TIP onto that station: the cavity end lies ALLOW_M in front of it (a fixed point in k)
-        kw, xw = k_, x_
-        for _ in range(SCALE_ITERATIONS):
-            xw = min(ins.x1, _front_end(length, kw) + ALLOW_M / kw)
-            kw = (length + ALLOW_M) / ins.arc_at(xw)
-        return (kw, xw) if xw > x_ else (k_, x_)
+        return toe_box_size(ins.arc_at, _front_end, ins.x1, length, room, k_, x_)
     k, x_end = _size(foot_len)
     # Ruling A82 (``ALLOWANCE_STEPS``): the length allowance is heel room — the scale of the longer foot, the heel
     # contact that much further in; ``size`` = the scale ratio the width factor is divided by
@@ -1616,7 +1633,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     heel_room = foot_len * length_share
     k0 = k
     if heel_room != 0.0:  # A174: a negative length step is a shorter shoe (less heel room)
-        k, x_end = _size(foot_len + heel_room)
+        k, x_end = _size(foot_len, heel_room)
     size = k / k0
     heel_edge = OPEN_EDGE_M if open_kind else 0.0
 
@@ -1787,7 +1804,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                                       "roof_mm": float(ins.cav[i]) * k * 1000.0, "need_mm": need * k * 1000.0,
                                       "foot_mm": foot * k * 1000.0, "foot_raw_mm": top * k * 1000.0}
         height_needed[side] = worst
-    # the forepart in front of the toe tip (``TOE_FRONT_MAX``), the worse side; a closed shoe
+    # the forepart in front of the toe tip (``TOE_FRONT_MAX``) per side, the gate reads the smaller; a closed shoe
     toe_front = ({s: float(np.interp(w["toe_x_raw"], gx, front_area, left=float(front_area[0]), right=0.0)) * k
                   / (float(iw.max()) * w["fm"].length_m) for s, w in work.items()}
                  if not open_kind and iw.max() > 0.0 else None)
@@ -2181,7 +2198,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     }
     table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()}
     if toe_front is not None:
-        metrics["toe_front"] = max(toe_front.values())
+        metrics["toe_front"] = min(toe_front.values())
         table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in CLOSED_GATES.items()})
     if any_split:
         # the worse side: the largest value, except the knee margin (the smaller one)
