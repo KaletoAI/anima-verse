@@ -45,6 +45,7 @@ import contextlib
 import copy
 import json
 import math
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -1757,6 +1758,50 @@ def _get_location(step: _Step, args: Dict[str, Any]) -> str:
 
 #: Longest furniture_kits line of list_catalog (cut at whole room types).
 _KIT_LINE_CHARS = 500
+#: Read budget for ``list_catalog quest_types``: the whole catalog must reach
+#: the model in one call; it grows with registered types.
+MAX_QUEST_TYPES_CHARS = 5000
+
+_QUEST_TYPES_HEADER = (
+    'Conditions go into steps[].condition and start_condition, prerequisite '
+    'types into prerequisites.condition; an effect is an entry '
+    '{"key", "type", "params", "permanent"?} of setup_effects, '
+    'steps[].on_done or rewards.',
+    "* = required. role[k] takes a role key of kind k. target[...] takes a "
+    "role key of the listed kind or the key of an EARLIER effect that makes "
+    "the listed object kind: a step condition reaches setup_effects and the "
+    "on_done of earlier steps; an on_done entry also the earlier entries of "
+    "its own list; a reward every effect key; a setup entry the earlier setup "
+    "entries; start_condition and prerequisites setup keys only.",
+)
+
+
+def _quest_param_text(p: Dict[str, Any]) -> str:
+    key = f"{p.get('key')}{'*' if p.get('required') else ''}"
+    ptype = str(p.get("type") or "")
+    if ptype == "role":
+        kinds = "|".join(str(k) for k in (p.get("role_kinds") or []))
+        if kinds and p.get("avatar_default"):
+            ttext = f"role[{kinds}; empty = the avatar]"
+        elif kinds:
+            ttext = f"role[{kinds}]"
+        elif p.get("avatar_default"):
+            ttext = "role[empty = the avatar]"
+        else:
+            ttext = "role"
+    elif ptype == "target":
+        parts: List[str] = []
+        if p.get("role_kinds"):
+            parts.append("|".join(str(k) for k in p["role_kinds"]) + " role")
+        if p.get("object_kinds"):
+            parts.append("|".join(str(k) for k in p["object_kinds"]) + " effect key")
+        ttext = f"target[{' or '.join(parts)}]" if parts else "target"
+    elif ptype == "select":
+        choices = "|".join(str(c) for c in (p.get("choices") or []))
+        ttext = f"select[{choices}]" if choices else "select"
+    else:
+        ttext = ptype
+    return f"{key}:{ttext}"
 
 #: The value lists list_catalog answers (the refusals that list values read
 #: the same sources).
@@ -1830,11 +1875,17 @@ def _catalog_lines(name: str) -> List[str]:
                 + [f"severity {k} = {v}" for k, v in sorted(SEVERITY_LABELS.items())])
     if name == "quest_types":
         from app.core.quest_catalog import catalog_payload
-        out = []
+        out = list(_QUEST_TYPES_HEADER)
         for group in catalog_payload().values():
             for t in group:
-                params = ", ".join(f"{p.get('key')}:{p.get('type')}" for p in t.get("params") or [])
-                out.append(f"{t.get('id')} ({t.get('kind')}) — {t.get('label')}: params "
+                obj_kind = t.get("object_kind") or ""
+                makes = ""
+                if obj_kind:
+                    makes = f", makes {obj_kind}"
+                    for param, kind2 in t.get("object_kind_when") or []:
+                        makes += f" / {kind2} with {param}"
+                params = ", ".join(_quest_param_text(p) for p in t.get("params") or [])
+                out.append(f"{t.get('id')} ({t.get('kind')}{makes}) — {t.get('label')}: params "
                            + (params or "(none)"))
         return out
     if name == "quest_roles":
@@ -1867,7 +1918,11 @@ def _list_catalog(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, {"name"}, "list_catalog")
     name = _str(args, "name", required=True)
     lines = _catalog_lines(name)
-    return "\n".join(_cap_lines(lines)) if lines else f"{name}: (none)"
+    if not lines:
+        return f"{name}: (none)"
+    capped = (_cap_lines(lines, budget=MAX_QUEST_TYPES_CHARS, max_lines=len(lines))
+              if name == "quest_types" else _cap_lines(lines))
+    return "\n".join(capped)
 
 
 @_tool("map_region", False, "map_region{min_x, min_z, max_x, max_z, polygons?}",
@@ -6782,40 +6837,58 @@ def _event_refs(loc_id: str) -> List[str]:
 #: route's body cap, routes/quests._MAX_BODY_BYTES: a template is copied into
 #: every run's snapshot).
 MAX_QUEST_TEMPLATE_BYTES = 256 * 1024
-#: The content keys create_quest_template takes, and the container type of
-#: the structured ones (create_template turns any other value into an empty
-#: container — a rewrite, so it is refused here).
-_QUEST_KEYS = ("title", "summary", "gm_notes", "roles", "steps", "start_condition",
-               "prerequisites", "time_limit_s")
-_QUEST_CONTAINERS = {"roles": list, "steps": list, "start_condition": dict, "prerequisites": dict}
+#: Authoring issue codes that refuse create_quest_template anywhere in the
+#: template (target/kind mistakes, also in step conditions).
+_QUEST_BLOCKING_CODES = ("unknown_target", "wrong_kind", "not_yet_created")
+_QUEST_ON_DONE_RE = re.compile(r"^steps\.\d+\.on_done")
+
+
+def _quest_issue_blocks(issue: Dict[str, str]) -> bool:
+    """Whether an authoring issue from ``validate_template`` refuses
+    ``create_quest_template`` instead of being kept as a draft warning.
+
+    A draft may be incomplete (the admin finishes it), but a wrong effect list,
+    giver role, or target/kind reference is a mistake the model can and must
+    fix itself.
+    """
+    path = str(issue.get("path") or "")
+    if (path == "giver_role"
+            or path.startswith("setup_effects")
+            or path.startswith("rewards")
+            or _QUEST_ON_DONE_RE.match(path) is not None):
+        return True
+    return str(issue.get("code") or "") in _QUEST_BLOCKING_CODES
 
 
 @_tool("create_quest_template", True,
-       "create_quest_template{title, summary?, gm_notes?, roles?, steps?, start_condition?, "
-       "prerequisites?, time_limit_s?}",
+       "create_quest_template{title, summary?, gm_notes?, giver_role?, roles?, steps?, "
+       "start_condition?, prerequisites?, setup_effects?, rewards?, time_limit_s?}",
        "a DRAFT quest template (roles instead of fixed characters/places, steps as catalog "
-       "conditions — list_catalog quest_types / quest_roles); the admin readies it")
+       "conditions, setup_effects / steps[].on_done / rewards as effect lists — list_catalog "
+       "quest_types / quest_roles); the admin readies it")
 def _create_quest_template(step: _Step, args: Dict[str, Any]) -> str:
-    """Plan p3 Task 7 (E9). One draft template through
+    """Plan p3 Task 7 (E9) + quest stage 2 Task 13. One draft template through
     ``quests.create_template(origin="admin", state="draft")`` (the writer the
     admin route calls). The field check is the route's own
     (``quest_engine.check_template_fields``); every value the writer would
-    rewrite (a non-container roles/steps/conditions) is refused, so the stored
-    template is the sent one. Authoring issues (``validate_template``) are
-    warnings: a draft may be incomplete. Inverse
+    rewrite (a non-container roles/steps/conditions/effects) is refused, so the
+    stored template is the sent one. Effect-list, giver-role, and target/kind
+    issues (``_quest_issue_blocks``) refuse the call before anything is stored
+    so the model can fix them; other authoring issues (``validate_template``)
+    stay warnings because a draft may be incomplete. Inverse
     ``delete_quest_template{id}`` (world_dev_undo); delete_created removes
     one only in the same turn (E2) — the writer mints a new id and
     created_at, so no exact re-creation exists."""
     from app.core import quest_engine
     from app.models import quests
-    _only_keys(args, set(_QUEST_KEYS), "create_quest_template")
+    _only_keys(args, set(quests.TEMPLATE_CONTENT_KEYS), "create_quest_template")
     msg = quest_engine.check_template_fields(args)
     if msg:
         raise ToolRefusal(msg)
     title = args.get("title")
     if not isinstance(title, str) or not title.strip():
         raise ToolRefusal("'title' is required (the quest's name, a non-empty string)")
-    for key, kind in _QUEST_CONTAINERS.items():
+    for key, kind in quests.TEMPLATE_CONTAINERS.items():
         if key in args and not isinstance(args[key], kind):
             raise ToolRefusal(f"'{key}' must be {'a list' if kind is list else 'an object'} "
                               "(leave it out for none)")
@@ -6823,7 +6896,14 @@ def _create_quest_template(step: _Step, args: Dict[str, Any]) -> str:
     if size > MAX_QUEST_TEMPLATE_BYTES:
         raise ToolRefusal(f"the template is {size // 1024} KiB — at most "
                           f"{MAX_QUEST_TEMPLATE_BYTES // 1024} KiB")
-    fields = {k: copy.deepcopy(args[k]) for k in _QUEST_KEYS if k in args}
+    fields = {k: copy.deepcopy(args[k]) for k in quests.TEMPLATE_CONTENT_KEYS if k in args}
+    blocking = [f"{i.get('path')}: {i.get('message')}"
+                for i in quest_engine.validate_template(fields)
+                if _quest_issue_blocks(i)]
+    if blocking:
+        prefix = "the quest template has errors to fix — nothing was stored: "
+        raise ToolRefusal(prefix + "; ".join(
+            _cap_lines(blocking, "fix these and send the template again", used=len(prefix))))
     step.prepare()
     ids_before = {str(t.get("id")) for t in quests.list_templates()}
     step.begin("quest_template", None, None)

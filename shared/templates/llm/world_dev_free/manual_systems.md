@@ -70,19 +70,38 @@ Quests, makes it ready and starts it — you cannot do either.
 
 A quest names ROLES instead of fixed characters, places or items: `roles` is a list of
 `{"key": "<role key>", "kind": "<kind>"}` with a kind from `list_catalog quest_roles`. Who or what
-fills a role is decided when the admin starts the quest. Steps are done one after another; each is
-`{"id": "<step id>", "text": "<what the player is told>", "hint"?: "<a nudge>",
-"condition": {"type": "<type id>", "params": {...}}}` with a condition type from
-`list_catalog quest_types` (its params are listed there; a `role` param takes a role key).
-`{role_key}` in the title, summary and step texts is replaced by the role's name in play.
-`gm_notes` are for the admin only and never reach the player. `time_limit_s` is a limit in
-seconds (0 = none).
+fills a role is decided when the admin starts the quest. `giver_role` is the key of a character role
+who hands the quest out (that character mentions it in play); leave it out for none. Steps are done
+one after another; each is `{"id": "<step id>", "text": "<what the player is told>",
+"hint"?: "<a nudge>", "condition": {"type": "<type id>", "params": {...}}, "on_done"?: [effects]}`.
+Condition and effect types and their params come from `list_catalog quest_types` (it marks required
+params with `*` and says what a `role[...]` or `target[...]` param takes). `{role_key}` in the
+title, summary, step texts and effect texts is replaced by the role's name in play. `gm_notes` are
+for the admin only and never reach the player. `time_limit_s` is a limit in seconds (0 = none).
+
+Effects are entries `{"key": "<effect key>", "type": "<effect id>", "params": {...},
+"permanent"?: true|false}`: `setup_effects` run when the admin starts the quest (before it opens),
+`steps[].on_done` when that step is done, and `rewards` when the whole quest is done. An effect key
+starts with a lowercase letter followed by lowercase letters, digits or `_` (at most 40 characters),
+and must be unique across all effect keys and role keys. A `target` param names a role key or the
+key of an EARLIER effect (the exact reachability rule is in the `list_catalog quest_types` header).
+Everything a quest made disappears when its run ends unless the effect sets `"permanent": true`;
+`rewards` are always permanent (leave `permanent` out or set it `true`, never `false`).
+
+For hints, use `give_hint` to give a character role a secret (`holder`, `text`); a later step with
+`knows_secret` naming that effect key is done once the avatar learns it — from the holder in
+conversation, or through a `reveal_secret` effect. Prefer `place_prop` (a library prop id) over
+`create_prop`: `create_prop` renders an image and a 3D model and holds the run in preparing for
+minutes. At most 3 `create_prop` per quest and at most 20 effects per list.
 
 - The lost mill: `{"title": "The lost mill", "summary": "{miller} has lost the mill wheel.",
   "gm_notes": "The apprentice took it.", "roles": [{"key": "miller", "kind": "character"}],
   "steps": [{"id": "s1", "text": "Speak with {miller}.", "condition": {"type": "spoke_with",
   "params": {"character": "miller"}}}]}`.
+- The tin box: `{"title": "The tin box", "summary": "{giver} lost a tin box.", "giver_role": "giver", "roles": [{"key": "giver", "kind": "character"}, {"key": "glade", "kind": "room"}], "setup_effects": [{"key": "box", "type": "create_item", "params": {"name": "Old tin box", "category": "tool"}}, {"key": "box_spot", "type": "place_item", "params": {"item": "box", "room": "glade", "hidden": true, "difficulty": 3}}, {"key": "hint", "type": "give_hint", "params": {"holder": "giver", "text": "The box lies hidden in {glade}."}}], "steps": [{"id": "s1", "text": "Find out where the box is.", "condition": {"type": "knows_secret", "params": {"secret": "hint"}}}, {"id": "s2", "text": "Find the tin box in {glade}.", "condition": {"type": "found_item", "params": {"placement": "box_spot"}}, "on_done": [{"key": "told", "type": "narrate", "params": {"text": "Under the roots lies the box."}}]}], "rewards": [{"key": "coin", "type": "create_item", "permanent": true, "params": {"name": "Silver coin", "category": "gift"}}, {"key": "coin_given", "type": "give_item", "permanent": true, "params": {"item": "coin"}}]}`.
 
-The result line lists what the draft still lacks under `issues:`. To fix them, remove the draft
-with `delete_created` in the same turn and create it again; otherwise name them in your summary —
-the admin finishes the draft. The run can delete only its own templates, and only in the turn that created them.
+An effect list or reference error refuses the whole call (nothing is stored — fix it and send the
+template again). Other issues are listed in the result line under `issues:`. To fix them, remove the
+draft with `delete_created` in the same turn and create it again; otherwise name them in your
+summary — the admin finishes the draft. The run can delete only its own templates, and only in the
+turn that created them.
