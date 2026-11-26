@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
-import { cancelRun, fetchRuns, questError } from './api'
+import { cancelRun, fetchRuns, questError, retryRun } from './api'
 import type { RunRow } from './api'
 import { RUN_OPEN_STATES, RUN_STATES, questErrorText, stepProgress } from './questsModel'
 
@@ -23,6 +23,42 @@ function stateClass(state: string): string {
   if (state === 'open' || state === 'done') return 'ga-tag ga-status-ok'
   if (state === 'failed' || state === 'broken') return 'ga-tag ga-tag-missing'
   return 'ga-tag ga-status-paused'
+}
+
+const OBJECT_STATUS_LABELS: Record<string, string> = {
+  live: 'Live',
+  pending: 'Pending',
+  revert_pending: 'Removal pending',
+  reverted: 'Removed',
+  gone: 'Gone',
+}
+
+const PAYOUT_STATE_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  applied: 'Applied',
+  failed: 'Failed',
+}
+
+function objectStatusClass(status: string): string {
+  if (status === 'live') return 'ga-tag ga-status-ok'
+  if (status === 'gone') return 'ga-tag ga-tag-missing'
+  return 'ga-tag ga-status-paused'
+}
+
+function payoutStateClass(state: string): string {
+  if (state === 'applied') return 'ga-tag ga-status-ok'
+  if (state === 'failed') return 'ga-tag ga-tag-missing'
+  return 'ga-tag ga-status-paused'
+}
+
+function payoutPositionLabel(position: string, t: (s: string) => string): string {
+  if (position === 'setup') return t('Setup')
+  if (position === 'reward') return t('Rewards')
+  if (position.startsWith('step:')) {
+    const n = Number(position.slice(5))
+    if (Number.isFinite(n)) return t('Step {n}').replace('{n}', String(n + 1))
+  }
+  return position
 }
 
 /** One binding (D6) as a single readable value: the label frozen at start (a name), else the raw ids. */
@@ -95,6 +131,16 @@ export function RunsView() {
     await reload()
   }
 
+  const doRetry = async (run: RunRow) => {
+    try {
+      const res = await retryRun(run.id)
+      toast(res.ok ? t('Retry started') : t('Nothing to retry'), res.ok ? 'success' : 'info')
+    } catch (e) {
+      toast(t('Error') + ': ' + questErrorText(questError(e), t), 'error')
+    }
+    await reload()
+  }
+
   return (
     <div className="ga-page-scroll">
       <div className="ga-form-row ga-quest-runs-bar">
@@ -128,6 +174,9 @@ export function RunsView() {
             {runs.map((run) => {
               const isOpen = expanded.has(run.id)
               const canCancel = RUN_OPEN_STATES.includes(run.state)
+              const objects = run.objects || []
+              const payouts = run.payouts || []
+              const canRetry = payouts.some((p) => p.state === 'failed') || (run.state === 'preparing' && run.issues.length > 0)
               return (
                 <Fragment key={run.id}>
                   <tr>
@@ -146,7 +195,11 @@ export function RunsView() {
                     </td>
                     <td>{run.started_game_label || '—'}</td>
                     <td>{run.expires_label || '—'}</td>
-                    <td>
+                    <td className="ga-quest-run-actions">
+                      {canRetry ? (
+                        <button type="button" className="ga-btn ga-btn-sm"
+                          onClick={() => { void doRetry(run) }}>{t('Retry')}</button>
+                      ) : null}
                       {canCancel ? (
                         <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
                           onClick={() => setPendingCancel(run)}>{t('Cancel run')}</button>
@@ -176,6 +229,36 @@ export function RunsView() {
                             ))}
                           </ul>
                         ) : <p className="ga-form-hint">{t('No step done yet.')}</p>}
+                        <strong>{t('Objects')}</strong>
+                        {objects.length ? (
+                          <ul>
+                            {objects.map((o, n) => (
+                              <li key={n}>
+                                {o.label || '—'}{' '}<code>{o.kind}</code>{' '}
+                                <span className={objectStatusClass(o.status)}>{t(OBJECT_STATUS_LABELS[o.status] || o.status)}</span>
+                                {o.permanent ? <>{' '}<span className="ga-tag">{t('permanent')}</span></> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p className="ga-form-hint">{t('No objects.')}</p>}
+                        <strong>{t('Payouts')}</strong>
+                        {payouts.length ? (
+                          <ul>
+                            {payouts.map((p, n) => (
+                              <li key={n}>
+                                {payoutPositionLabel(p.position, t)}{' '}
+                                <span className={payoutStateClass(p.state)}>{t(PAYOUT_STATE_LABELS[p.state] || p.state)}</span>
+                                {(p.issues || []).length ? (
+                                  <ul>
+                                    {p.issues.map((i, k) => (
+                                      <li key={k}><code>{i.path || '—'}</code> {i.message}</li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p className="ga-form-hint">{t('No payouts.')}</p>}
                         {run.issues.length ? (
                           <div className="ga-quest-error" role="alert">
                             <ul>{run.issues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {i.message}</li>)}</ul>

@@ -3543,10 +3543,13 @@ select.ga-input optgroup {
 .ga-quest-cond-child > .ga-quest-cond { align-self: stretch; }
 .ga-quest-cond .ga-form-row > select { width: auto; max-width: 320px; }
 .ga-quest-params > .ga-field { flex: 0 1 220px; }
-.ga-quest-step {
+.ga-quest-step,
+.ga-quest-effect {
   display: flex; flex-direction: column; gap: 8px; width: 100%;
   padding: 8px 0; border-bottom: 1px solid var(--border, #30363d);
 }
+.ga-quest-effects { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.ga-quest-json { font-family: var(--font-mono, monospace); font-size: 12px; }
 .ga-quest-key { width: 110px; }
 .ga-quest-num { width: 90px; }
 .ga-quest-role > .ga-field:nth-child(3) { flex: 0 1 360px; }
@@ -3567,6 +3570,8 @@ select.ga-input optgroup {
 .ga-quest-runs-bar { margin-bottom: 8px; align-items: center; }
 .ga-quest-runs-bar > select { width: auto; }
 .ga-quest-run-detail ul { margin: 2px 0 6px; padding-left: 18px; }
+.ga-quest-run-actions { white-space: nowrap; }
+.ga-quest-run-actions > .ga-btn + .ga-btn { margin-left: 4px; }
 .ga-quest-start { max-width: 560px; }
 .ga-quest-start .ga-form-row > select { flex: 1 1 0; min-width: 0; }
 .ga-subtabs .ga-tag-missing { margin-left: 6px; }

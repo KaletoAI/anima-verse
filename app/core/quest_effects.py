@@ -63,6 +63,8 @@ PASS_INTERVAL_S = 15.0
 MESH_TIMEOUT_S = 30 * 60
 PENDING_ONLY_KEYS = ("before", "mesh_failed", "mesh_started_at")
 CREATE_ITEM_CATEGORIES = ("tool", "key", "consumable", "evidence", "gift", "quest", "decoration", "document")
+# Literal choice labels so the admin client can translate them; same order as CREATE_ITEM_CATEGORIES.
+CREATE_ITEM_CATEGORY_LABELS = ("Tool", "Key", "Consumable", "Evidence", "Gift", "Quest", "Decoration", "Document")
 DIFFICULTY_SCALE = 10
 
 
@@ -1575,7 +1577,7 @@ def builtin_effect_types() -> list:
                 {"key": "description", "type": "text", "label": "Description"},
                 {"key": "category", "type": "select", "label": "Category",
                  "choices": list(CREATE_ITEM_CATEGORIES),
-                 "choice_labels": [c.capitalize() for c in CREATE_ITEM_CATEGORIES],
+                 "choice_labels": list(CREATE_ITEM_CATEGORY_LABELS),
                  "default": "quest"},
                 {"key": "consumable", "type": "bool", "label": "Consumable", "default": False},
                 {"key": "effects", "type": "text", "label": "Effects (JSON)",
@@ -1648,7 +1650,7 @@ def builtin_effect_types() -> list:
             validate=_validate_prop_placement,
             apply=_apply_create_prop,
             object_kind="world_prop",
-            object_kind_for=_prop_placement_kind,
+            object_kind_when=(("room", "room_prop"),),
         ),
         QuestType(
             id="place_prop",
@@ -1674,6 +1676,6 @@ def builtin_effect_types() -> list:
             validate=_validate_place_prop,
             apply=_apply_place_prop,
             object_kind="world_prop",
-            object_kind_for=_prop_placement_kind,
+            object_kind_when=(("room", "room_prop"),),
         ),
     ]

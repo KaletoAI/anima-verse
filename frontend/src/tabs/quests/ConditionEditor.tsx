@@ -1,7 +1,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
-import { QuestParamForm } from './QuestParamForm'
-import { defaultParams, isEmptyExpr, issuesAt } from './questsModel'
-import type { CatalogType, Expr, Issue, Role } from './questsModel'
+import { QuestLeafEditor } from './QuestLeafEditor'
+import { defaultParams, isEmptyExpr } from './questsModel'
+import type { CatalogType, Expr, Issue, ParamSpec, Role } from './questsModel'
 
 type Mode = 'true' | 'leaf' | 'all' | 'any' | 'not'
 
@@ -36,7 +36,7 @@ function exactly(issues: Issue[], ...paths: string[]): Issue[] {
  * issues it holds instead of showing them under the wrong entry).
  */
 export function ConditionEditor({
-  expr, types, roles, issues, path, onChange, onStructureChange,
+  expr, types, roles, issues, path, onChange, onStructureChange, targets, placeholders,
 }: {
   expr: Expr
   types: CatalogType[]
@@ -45,6 +45,8 @@ export function ConditionEditor({
   path: string
   onChange: (next: Expr) => void
   onStructureChange?: () => void
+  targets?: (p: ParamSpec) => string[]
+  placeholders?: string
 }) {
   const { t } = useI18n()
   const mode = modeOf(expr)
@@ -68,29 +70,19 @@ export function ConditionEditor({
   let body = null
   if (mode === 'leaf') {
     const leaf = expr as { type: string; params?: Record<string, unknown> }
-    const type = types.find((x) => x.id === leaf.type)
-    // Issues of a parameter the type does not declare have no field to stand under: shown at the leaf.
-    const declared = new Set((type?.params || []).map((p) => path + '.params.' + p.key))
-    const stray = issuesAt(issues, path + '.params').filter((i) => ![...declared].some((d) => i.path === d || i.path.startsWith(d + '.')))
     body = (
-      <>
-        <div className="ga-form-row">
-          <select className="ga-input" aria-label={t('Condition type')} value={leaf.type}
-            onChange={(e) => {
-              const picked = types.find((x) => x.id === e.target.value)
-              onChange({ type: e.target.value, params: defaultParams(picked) })
-            }}>
-            {!type ? <option value={leaf.type}>{leaf.type} ({t('not registered')})</option> : null}
-            {types.map((x) => <option key={x.id} value={x.id}>{t(x.label)}</option>)}
-          </select>
-        </div>
-        {type?.description ? <p className="ga-form-hint">{t(type.description)}</p> : null}
-        {stray.map((i, n) => <p key={n} className="ga-hint" role="alert">{i.message}</p>)}
-        {type ? (
-          <QuestParamForm spec={type.params} values={leaf.params || {}} roles={roles} issues={issues}
-            path={path + '.params'} onChange={(params) => onChange({ type: leaf.type, params })} />
-        ) : null}
-      </>
+      <QuestLeafEditor
+        leaf={{ type: leaf.type, params: leaf.params || {} }}
+        types={types}
+        roles={roles}
+        issues={issues}
+        path={path}
+        onChange={(next) => onChange(next)}
+        targets={targets}
+        placeholders={placeholders}
+        setup={false}
+        typeLabel={t('Condition type')}
+      />
     )
   } else if (mode === 'all' || mode === 'any') {
     const children = (expr as Record<string, Expr[]>)[mode]
@@ -101,7 +93,7 @@ export function ConditionEditor({
           <div key={i} className="ga-quest-cond-child">
             <ConditionEditor expr={child} types={types} roles={roles} issues={issues}
               path={`${path}.${mode}.${i}`} onChange={(next) => put(children.map((c, j) => (j === i ? next : c)))}
-              onStructureChange={onStructureChange} />
+              onStructureChange={onStructureChange} targets={targets} placeholders={placeholders} />
             <button type="button" className="ga-btn ga-btn-sm" disabled={children.length <= 1}
               title={children.length <= 1 ? t('A group needs at least one entry') : undefined}
               onClick={() => { onStructureChange?.(); put(children.filter((_, j) => j !== i)) }}>{t('Remove')}</button>
@@ -117,7 +109,8 @@ export function ConditionEditor({
     body = (
       <div className="ga-quest-cond-children">
         <ConditionEditor expr={inner} types={types} roles={roles} issues={issues} path={path + '.not'}
-          onChange={(next) => onChange({ not: next })} onStructureChange={onStructureChange} />
+          onChange={(next) => onChange({ not: next })} onStructureChange={onStructureChange}
+          targets={targets} placeholders={placeholders} />
       </div>
     )
   }
@@ -130,7 +123,7 @@ export function ConditionEditor({
           {(Object.keys(MODE_LABELS) as Mode[]).map((m) => <option key={m} value={m}>{t(MODE_LABELS[m])}</option>)}
         </select>
       </div>
-      {own.map((i, n) => <p key={n} className="ga-hint" role="alert">{i.message}</p>)}
+      {own.map((i, n) => <p key={n} className="ga-hint" role="alert">{t(i.message)}</p>)}
       {body}
     </div>
   )

@@ -114,6 +114,17 @@ WHAT IS CHECKED, and where every expected value comes from
       X="thing" → [("wrong_kind", ".params.obj")] (role_kinds empty → no role accepted).
       public_descriptor(mk_item)["object_kind"] == "item" and json.dumps succeeds;
       "target" in PARAM_TYPES.
+
+  (h) DECLARATIVE object_kind_when (stage 2, Task 11). Effect stub "when_prop"
+      with object_kind="world_prop", object_kind_when=(("room", "room_prop"),):
+        15. entry_object_kind(when_prop, {"room": "glade"}) → "room_prop"
+        16. entry_object_kind(when_prop, {"room": "  "}) → "world_prop" (blank ignored)
+        17. entry_object_kind(when_prop, {}) → "world_prop"
+        18. public_descriptor(when_prop)["object_kind_when"] == [["room", "room_prop"]]
+            and json.dumps succeeds
+        19. Effect stub "both_prop" with both object_kind_for=lambda p: "custom_kind"
+            and object_kind_when=(("room", "room_prop"),) resolves {"room": "glade"}
+            to "custom_kind" (object_kind_for takes precedence).
 """
 import json
 import logging
@@ -185,7 +196,8 @@ except TypeError:
     ok = False
 check("payload is JSON-safe", ok)
 check("descriptor keys", set(qc.public_descriptor(qc.get("a_two"))) ==
-      {"id", "kind", "label", "description", "params", "signals", "needs_open_run", "object_kind"})
+      {"id", "kind", "label", "description", "params", "signals", "needs_open_run", "object_kind",
+       "object_kind_when"})
 check("needs_open_run defaults to False", qc.public_descriptor(qc.get("a_two"))["needs_open_run"] is False)
 check("descriptor signals is a list", qc.public_descriptor(qc.get("a_two"))["signals"] == ["s.a"])
 
@@ -509,6 +521,40 @@ except TypeError:
 check("public_descriptor of mk_item is JSON-safe", desc_json_ok)
 check("'target' in PARAM_TYPES", "target" in qc.PARAM_TYPES)
 hooks.unregister_owned_providers("test")
+
+# --- (h) declarative object_kind_when -----------------------------------------------
+print("(h) declarative object_kind_when")
+qc.register("test_when", lambda: [
+    stub("when_prop", kind="effect", object_kind="world_prop",
+         object_kind_when=(("room", "room_prop"),)),
+    stub("both_prop", kind="effect", object_kind="world_prop",
+         object_kind_for=lambda _p: "custom_kind",
+         object_kind_when=(("room", "room_prop"),)),
+])
+wp = qc.get("when_prop")
+bp = qc.get("both_prop")
+check("15. object_kind_when matches non-blank param",
+      qc.entry_object_kind(wp, {"room": "glade"}) == "room_prop",
+      qc.entry_object_kind(wp, {"room": "glade"}))
+check("16. object_kind_when ignores blank param",
+      qc.entry_object_kind(wp, {"room": "  "}) == "world_prop",
+      qc.entry_object_kind(wp, {"room": "  "}))
+check("17. object_kind_when falls back when absent",
+      qc.entry_object_kind(wp, {}) == "world_prop",
+      qc.entry_object_kind(wp, {}))
+wp_desc = qc.public_descriptor(wp)
+try:
+    json.dumps(wp_desc)
+    wp_json_ok = True
+except TypeError:
+    wp_json_ok = False
+check("18. public_descriptor exposes object_kind_when as JSON-safe pairs",
+      wp_desc.get("object_kind_when") == [["room", "room_prop"]] and wp_json_ok,
+      str(wp_desc))
+check("19. object_kind_for takes precedence over object_kind_when",
+      qc.entry_object_kind(bp, {"room": "glade"}) == "custom_kind",
+      qc.entry_object_kind(bp, {"room": "glade"}))
+hooks.unregister_owned_providers("test_when")
 
 print()
 if failures:

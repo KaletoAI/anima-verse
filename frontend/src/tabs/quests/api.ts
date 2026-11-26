@@ -47,6 +47,12 @@ export function deleteTemplate(id: string): Promise<unknown> {
  *  stamp as a finished server label. */
 export interface StepLogEntry { step: number; avatar: string; mind?: string; game_ts?: string; game_label?: string }
 
+/** One created world object tracked for a quest run. */
+export interface RunObject { kind: string; label: string; permanent: boolean; status: string }
+
+/** One payout batch of a quest run (`setup`, `step:<i>` or `reward`). */
+export interface RunPayout { position: string; state: string; issues: Issue[] }
+
 /** A row of `GET /quests/runs` (`_run_row` in app/routes/quests.py); the labels are finished server strings. */
 export interface RunRow {
   id: string
@@ -61,6 +67,8 @@ export interface RunRow {
   issues: Issue[]
   started_game_label: string
   expires_label: string
+  objects: RunObject[]
+  payouts: RunPayout[]
 }
 
 /** Runs, every not yet ended one first; `state` ('' = all) narrows to one state. */
@@ -74,6 +82,11 @@ export async function fetchRuns(state: string, lang: string): Promise<RunRow[]> 
 /** End a not yet ended run as cancelled; `ok` is false when it had already ended. */
 export function cancelRun(id: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>(`/quests/runs/${encodeURIComponent(id)}/cancel`, {})
+}
+
+/** Re-arm failed payouts of a run (and clear a preparing run's issues); `ok` is false when nothing is pending retry. */
+export function retryRun(id: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/quests/runs/${encodeURIComponent(id)}/retry`, {})
 }
 
 /** Start a run of a ready template; a refusal is 422 `refused` with issues. */

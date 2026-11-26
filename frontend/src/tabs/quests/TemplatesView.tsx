@@ -12,7 +12,7 @@ import {
   createTemplate, deleteTemplate, fetchCatalog, fetchTemplate, fetchTemplates, questError, updateTemplate,
 } from './api'
 import type { TemplateListRow, TemplateRow } from './api'
-import { canSave, draftToRow, emptyDraft, questErrorText, rowToDraft } from './questsModel'
+import { canSave, clientIssues, draftToRow, emptyDraft, questErrorText, rowToDraft } from './questsModel'
 import type { Catalog, Issue, TemplateDraft } from './questsModel'
 
 /** The guard of the open pane: run `fn` now, or after the admin agreed to drop unsaved edits. */
@@ -189,6 +189,11 @@ export function TemplatesView({ onGuard, onStarted }: {
 
   if (rows === null || catalog === null) return <div className="ga-loading">{t('Loading…')}</div>
 
+  const serverIssuePaths = new Set(issues.map((i) => i.path))
+  const allIssues = draft
+    ? [...issues, ...clientIssues(draft).filter((i) => !serverIssuePaths.has(i.path))]
+    : issues
+
   return (
     <div className="ga-twocol">
       <ListPane id="quest-templates" label={t('Quest templates')}>
@@ -242,18 +247,18 @@ export function TemplatesView({ onGuard, onStarted }: {
                 </button>
               }
             />
-            {error || (!stale && issues.length) ? (
+            {error || (!stale && allIssues.length) ? (
               <div className="ga-hint ga-quest-error" role="alert">
                 {error ? <p>{error}</p> : null}
                 {stale ? (
                   <button type="button" className="ga-btn ga-btn-sm" onClick={reloadOpen}>{t('Reload')}</button>
                 ) : null}
-                {!stale && issues.length ? (
-                  <ul>{issues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {i.message}</li>)}</ul>
+                {!stale && allIssues.length ? (
+                  <ul>{allIssues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {t(i.message)}</li>)}</ul>
                 ) : null}
               </div>
             ) : null}
-            <TemplateForm draft={draft} catalog={catalog} issues={issues}
+            <TemplateForm draft={draft} catalog={catalog} issues={allIssues}
               onChange={(next) => setDraft(next)} onStructureChange={() => {
                 setIssues([])
                 setError((e) => (e === invalidMessage ? '' : e))

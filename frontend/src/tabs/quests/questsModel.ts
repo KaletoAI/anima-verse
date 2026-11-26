@@ -11,10 +11,13 @@ export type RoleKind = 'character' | 'location' | 'room' | 'item'
 export interface Role { key: string; kind: RoleKind; description: string }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` IS the "always true" expression (D7)
 export type Expr = {} | { type: string; params: Record<string, unknown> } | { all: Expr[] } | { any: Expr[] } | { not: Expr }
-export interface Step { id: string; text: string; hint: string; condition: Expr }
+export interface EffectEntry { key: string; type: string; params: Record<string, unknown>; permanent: boolean }
+export interface Step { id: string; text: string; hint: string; condition: Expr; on_done: EffectEntry[] }
 export interface TemplateDraft {
   id: string; revision: number; title: string; summary: string; gm_notes: string
-  state: 'draft' | 'ready'; roles: Role[]; steps: Step[]; start_condition: Expr
+  giver_role: string
+  state: 'draft' | 'ready'; roles: Role[]; setup_effects: EffectEntry[]; steps: Step[]; rewards: EffectEntry[]
+  start_condition: Expr
   prerequisites: { condition: Expr; locked_text: string }; time_limit_h: number
 }
 export interface Issue { path: string; code: string; message: string }
@@ -22,7 +25,7 @@ export interface Issue { path: string; code: string; message: string }
 /** One parameter of a catalog type (D5: the config_schema field vocabulary plus `key`). */
 export interface ParamSpec {
   key: string
-  type: 'str' | 'text' | 'int' | 'float' | 'bool' | 'select' | 'role' | string
+  type: 'str' | 'text' | 'int' | 'float' | 'bool' | 'select' | 'role' | 'target' | string
   label?: string
   description?: string
   default?: unknown
@@ -33,6 +36,9 @@ export interface ParamSpec {
   choice_labels?: string[]
   required?: boolean
   role_kinds?: RoleKind[]
+  object_kinds?: string[]
+  placeholders?: boolean
+  avatar_default?: boolean
 }
 /** A public type descriptor of `GET /quests/catalog`. */
 export interface CatalogType {
@@ -42,6 +48,9 @@ export interface CatalogType {
   description: string
   params: ParamSpec[]
   signals?: string[]
+  object_kind?: string
+  object_kind_when?: [string, string][]
+  needs_open_run?: boolean
 }
 export interface Catalog {
   conditions: CatalogType[]
@@ -66,6 +75,29 @@ function copyExpr(value: unknown): Expr {
   return isObject(value) ? (JSON.parse(JSON.stringify(value)) as Expr) : {}
 }
 
+function copyParams(value: unknown): Record<string, unknown> {
+  return isObject(value) ? (JSON.parse(JSON.stringify(value)) as Record<string, unknown>) : {}
+}
+
+function readEffects(raw: unknown): EffectEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((entry) => {
+    if (!isObject(entry)) return { key: '', type: '', params: {}, permanent: false }
+    return {
+      key: str(entry.key),
+      type: str(entry.type),
+      params: copyParams(entry.params),
+      permanent: entry.permanent === true,
+    }
+  })
+}
+
+function writeEffect(e: EffectEntry): Record<string, unknown> {
+  const out: Record<string, unknown> = { key: e.key, type: e.type, params: copyParams(e.params) }
+  if (e.permanent === true) out.permanent = true
+  return out
+}
+
 /** The editor draft of a template row (`GET /quests/templates/{id}`); `time_limit_s` becomes game hours. A row
  *  without an id (a new template) gets `id: ''` and revision 0. */
 export function rowToDraft(row: unknown): TemplateDraft {
@@ -80,15 +112,24 @@ export function rowToDraft(row: unknown): TemplateDraft {
     title: str(r.title),
     summary: str(r.summary),
     gm_notes: str(r.gm_notes),
+    giver_role: str(r.giver_role),
     state: r.state === 'ready' ? 'ready' : 'draft',
     roles: roles.map((role) => {
       const o = isObject(role) ? role : {}
       return { key: str(o.key), kind: str(o.kind) as RoleKind, description: str(o.description) }
     }),
+    setup_effects: readEffects(r.setup_effects),
     steps: steps.map((step) => {
       const o = isObject(step) ? step : {}
-      return { id: str(o.id), text: str(o.text), hint: str(o.hint), condition: copyExpr(o.condition) }
+      return {
+        id: str(o.id),
+        text: str(o.text),
+        hint: str(o.hint),
+        condition: copyExpr(o.condition),
+        on_done: readEffects(o.on_done),
+      }
     }),
+    rewards: readEffects(r.rewards),
     start_condition: copyExpr(r.start_condition),
     prerequisites: { condition: copyExpr(prerequisites.condition), locked_text: str(prerequisites.locked_text) },
     time_limit_h: seconds / SECONDS_PER_HOUR,
@@ -104,8 +145,15 @@ export function draftToRow(d: TemplateDraft): Record<string, unknown> {
     title: d.title,
     summary: d.summary,
     gm_notes: d.gm_notes,
+    giver_role: d.giver_role,
     roles: d.roles.map((r) => ({ key: r.key, kind: r.kind, description: r.description })),
-    steps: d.steps.map((s) => ({ id: s.id, text: s.text, hint: s.hint, condition: copyExpr(s.condition) })),
+    setup_effects: d.setup_effects.map(writeEffect),
+    steps: d.steps.map((s) => {
+      const step: Record<string, unknown> = { id: s.id, text: s.text, hint: s.hint, condition: copyExpr(s.condition) }
+      if (s.on_done.length > 0) step.on_done = s.on_done.map(writeEffect)
+      return step
+    }),
+    rewards: d.rewards.map(writeEffect),
     start_condition: copyExpr(d.start_condition),
     prerequisites: prereqEmpty ? {} : { condition: copyExpr(d.prerequisites.condition), locked_text: d.prerequisites.locked_text },
     time_limit_s: Math.max(0, Math.round((Number.isFinite(d.time_limit_h) ? d.time_limit_h : 0) * SECONDS_PER_HOUR)),
@@ -245,4 +293,183 @@ export function questErrorText(err: { code: string; message: string }, t: (s: st
   const text = ERROR_CODE_TEXTS[err.code]
   if (!text) return err.message
   return err.code === 'bad_request' && err.message ? `${t(text)} ${err.message}` : t(text)
+}
+
+/** Resolve the object kind of one effect entry, mirroring `quest_catalog.entry_object_kind` (declarative part). */
+export function entryObjectKind(type: CatalogType | undefined, params: Record<string, unknown>): string {
+  if (!type) return ''
+  for (const [key, kind] of type.object_kind_when || []) {
+    const val = params[key]
+    if (typeof val === 'string' && val.trim()) return kind
+  }
+  return type.object_kind || ''
+}
+
+function parseNonNeg(text: string, where: string): number {
+  if (!/^\d+$/.test(text)) throw new Error(`Unknown scope position: ${where}`)
+  return Number(text)
+}
+
+/** Reachable roles and effect objects at template position `where`, mirroring `quest_engine.scope_at` (D4). */
+export function scopeAt(
+  draft: TemplateDraft,
+  where: string,
+  effectTypes: CatalogType[],
+): { roles: Record<string, string>; objects: Record<string, string>; later: string[] } {
+  const setup = draft.setup_effects || []
+  const stepEffects = (draft.steps || []).map((s) => s.on_done || [])
+  const rewards = draft.rewards || []
+
+  let reachable: EffectEntry[]
+  if (where === 'start' || where === 'prereq') {
+    reachable = [...setup]
+  } else if (where.startsWith('step:')) {
+    const parts = where.split(':')
+    if (parts.length !== 2) throw new Error(`Unknown scope position: ${where}`)
+    const idx = parseNonNeg(parts[1], where)
+    reachable = [...setup]
+    for (let s = 0; s < Math.min(idx, stepEffects.length); s += 1) reachable.push(...stepEffects[s])
+  } else if (where.startsWith('on_done:')) {
+    const parts = where.split(':')
+    if (parts.length !== 3) throw new Error(`Unknown scope position: ${where}`)
+    const idx = parseNonNeg(parts[1], where)
+    const j = parseNonNeg(parts[2], where)
+    reachable = [...setup]
+    for (let s = 0; s < Math.min(idx, stepEffects.length); s += 1) reachable.push(...stepEffects[s])
+    if (idx < stepEffects.length) reachable.push(...stepEffects[idx].slice(0, j))
+  } else if (where.startsWith('setup:')) {
+    const parts = where.split(':')
+    if (parts.length !== 2) throw new Error(`Unknown scope position: ${where}`)
+    const j = parseNonNeg(parts[1], where)
+    reachable = setup.slice(0, j)
+  } else if (where.startsWith('reward:')) {
+    const parts = where.split(':')
+    if (parts.length !== 2) throw new Error(`Unknown scope position: ${where}`)
+    const j = parseNonNeg(parts[1], where)
+    reachable = [...setup]
+    for (const entries of stepEffects) reachable.push(...entries)
+    reachable.push(...rewards.slice(0, j))
+  } else {
+    throw new Error(`Unknown scope position: ${where}`)
+  }
+
+  const roles: Record<string, string> = {}
+  for (const r of draft.roles || []) {
+    if (r.key.trim() && !(r.key in roles)) roles[r.key] = r.kind || ''
+  }
+
+  const byId = new Map(effectTypes.map((t) => [t.id, t]))
+  const objects: Record<string, string> = {}
+  for (const entry of reachable) {
+    if (entry.key && !(entry.key in objects)) {
+      objects[entry.key] = entryObjectKind(byId.get(entry.type), entry.params || {})
+    }
+  }
+
+  const later: string[] = []
+  const seenLater = new Set<string>()
+  for (const list of [setup, ...stepEffects, rewards]) {
+    for (const entry of list) {
+      if (entry.key && !(entry.key in objects) && !seenLater.has(entry.key)) {
+        seenLater.add(entry.key)
+        later.push(entry.key)
+      }
+    }
+  }
+
+  return { roles, objects, later }
+}
+
+/** Reachable target keys for `param` at `where`: fitting role keys first, then fitting reachable effect keys. */
+export function targetOptions(
+  draft: TemplateDraft,
+  where: string,
+  param: ParamSpec,
+  effectTypes: CatalogType[],
+): string[] {
+  const scope = scopeAt(draft, where, effectTypes)
+  const allowedRoles = param.role_kinds || []
+  const allowedObjects = param.object_kinds || []
+  const out: string[] = []
+  if (allowedRoles.length) {
+    for (const [key, kind] of Object.entries(scope.roles)) {
+      if (allowedRoles.includes(kind as RoleKind)) out.push(key)
+    }
+  }
+  if (allowedObjects.length) {
+    for (const [key, kind] of Object.entries(scope.objects)) {
+      if (!(key in scope.roles) && kind && allowedObjects.includes(kind)) out.push(key)
+    }
+  }
+  return out
+}
+
+/** Client-side authoring issues (D1: a step without a condition). */
+export function clientIssues(draft: TemplateDraft): Issue[] {
+  const out: Issue[] = []
+  draft.steps.forEach((step, i) => {
+    if (!isObject(step.condition) || isEmptyExpr(step.condition)) {
+      out.push({ path: `steps.${i}.condition`, code: 'required', message: 'A step needs a condition' })
+    }
+  })
+  return out
+}
+
+function walkLeaves(expr: Expr, visit: (leaf: { type: string; params: Record<string, unknown> }) => void): void {
+  if (!isObject(expr)) return
+  if ('type' in expr && typeof expr.type === 'string') {
+    visit({ type: expr.type, params: isObject(expr.params) ? expr.params : {} })
+    return
+  }
+  if ('all' in expr && Array.isArray(expr.all)) {
+    for (const child of expr.all) walkLeaves(child, visit)
+  } else if ('any' in expr && Array.isArray(expr.any)) {
+    for (const child of expr.any) walkLeaves(child, visit)
+  } else if ('not' in expr && isObject(expr.not)) {
+    walkLeaves(expr.not as Expr, visit)
+  }
+}
+
+/** Non-blocking authoring hints: e.g. a `found_item` condition pointing at a non-hidden or zero-difficulty placement. */
+export function draftWarnings(draft: TemplateDraft): Issue[] {
+  const byKey = new Map<string, EffectEntry>()
+  for (const entry of draft.setup_effects || []) {
+    if (entry.key && !byKey.has(entry.key)) byKey.set(entry.key, entry)
+  }
+  for (const step of draft.steps || []) {
+    for (const entry of step.on_done || []) {
+      if (entry.key && !byKey.has(entry.key)) byKey.set(entry.key, entry)
+    }
+  }
+  const out: Issue[] = []
+  draft.steps.forEach((step, i) => {
+    walkLeaves(step.condition, (leaf) => {
+      if (leaf.type !== 'found_item') return
+      const key = typeof leaf.params.placement === 'string' ? leaf.params.placement : ''
+      if (!key) return
+      const entry = byKey.get(key)
+      if (!entry) return
+      const hiddenOk = entry.type === 'place_item' && entry.params.hidden === true && Number(entry.params.difficulty) > 0
+      if (!hiddenOk) {
+        out.push({
+          path: `steps.${i}.condition`,
+          code: 'not_hidden',
+          message: 'This placement is not hidden: the avatar sees it without searching. Use a hidden "Place an item" with a difficulty above 0.',
+        })
+      }
+    })
+  })
+  return out
+}
+
+/** The first free effect key of the form `e<n>`, counting from 1, avoiding all role keys and effect keys. */
+export function newEffectKey(draft: TemplateDraft): string {
+  const taken = new Set<string>()
+  for (const r of draft.roles || []) if (r.key) taken.add(r.key)
+  for (const e of draft.setup_effects || []) if (e.key) taken.add(e.key)
+  for (const s of draft.steps || []) for (const e of s.on_done || []) if (e.key) taken.add(e.key)
+  for (const e of draft.rewards || []) if (e.key) taken.add(e.key)
+  let n = 1
+  while (taken.has('e' + n)) n += 1
+  return 'e' + n
 }

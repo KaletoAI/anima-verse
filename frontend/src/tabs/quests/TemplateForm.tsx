@@ -3,15 +3,19 @@ import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SortableList } from '../../components/SortableList'
 import { ConditionEditor } from './ConditionEditor'
-import { ROLE_KINDS, issuesAt, moveItem, newStepId, placeholderList } from './questsModel'
+import { EffectListEditor } from './EffectListEditor'
+import {
+  ROLE_KINDS, draftWarnings, issuesAt, moveItem, newStepId, placeholderList, rolesOfKinds, targetOptions,
+} from './questsModel'
 import type { Catalog, Expr, Issue, Role, RoleKind, Step, TemplateDraft } from './questsModel'
 
-type Section = 'basics' | 'roles' | 'steps' | 'start'
+type Section = 'basics' | 'roles' | 'steps' | 'effects' | 'start'
 
 const SECTIONS: { id: Section; label: string; paths: string[] }[] = [
-  { id: 'basics', label: 'Basics', paths: ['title', 'time_limit_s', 'summary'] },
+  { id: 'basics', label: 'Basics', paths: ['title', 'giver_role', 'time_limit_s', 'summary'] },
   { id: 'roles', label: 'Roles', paths: ['roles'] },
   { id: 'steps', label: 'Steps', paths: ['steps'] },
+  { id: 'effects', label: 'Setup & rewards', paths: ['setup_effects', 'rewards'] },
   { id: 'start', label: 'Start & requirements', paths: ['start_condition', 'prerequisites'] },
 ]
 
@@ -41,7 +45,8 @@ function HoursInput({ value, onCommit }: { value: number; onCommit: (hours: numb
 }
 
 function Alerts({ issues }: { issues: Issue[] }) {
-  return <>{issues.map((i, n) => <p key={n} className="ga-hint" role="alert">{i.message}</p>)}</>
+  const { t } = useI18n()
+  return <>{issues.map((i, n) => <p key={n} className="ga-hint" role="alert">{t(i.message)}</p>)}</>
 }
 
 /**
@@ -68,7 +73,10 @@ export function TemplateForm({
 
   const conditionTypes = catalog.conditions
   const prerequisiteTypes = [...catalog.conditions, ...catalog.prerequisites]
+  const effectTypes = catalog.effects
   const roleKinds = catalog.role_kinds.length ? catalog.role_kinds : ROLE_KINDS
+  const characterRoles = rolesOfKinds(draft.roles, ['character']).filter((r) => r.key)
+  const warnings = draftWarnings(draft)
 
   const setRole = (i: number, patch: Partial<Role>) =>
     set('roles', draft.roles.map((r, j) => (j === i ? { ...r, ...patch } : r)))
@@ -98,6 +106,18 @@ export function TemplateForm({
             <option value="draft">{t('Draft')}</option>
             <option value="ready">{t('Ready')}</option>
           </select>
+        </Field>
+        <Field label={t('Quest giver')} compact
+          tip={t('The character who hands out the quest; their prompt mentions it.')}>
+          <select className="ga-input" value={draft.giver_role}
+            onChange={(e) => set('giver_role', e.target.value)}>
+            <option value="">{t('— none —')}</option>
+            {draft.giver_role && !characterRoles.some((r) => r.key === draft.giver_role) ? (
+              <option value={draft.giver_role}>{draft.giver_role} ({t('not a fitting role')})</option>
+            ) : null}
+            {characterRoles.map((r) => <option key={r.key} value={r.key}>{r.key}</option>)}
+          </select>
+          <Alerts issues={issuesAt(issues, 'giver_role')} />
         </Field>
         <Field label={t('Time limit (game hours)')} compact tip={t('0 = no time limit')}>
           <HoursInput value={draft.time_limit_h} onCommit={(hours) => set('time_limit_h', hours)} />
@@ -190,17 +210,70 @@ export function TemplateForm({
             <Field label={t('Done when')}>
               <ConditionEditor expr={step.condition} types={conditionTypes} roles={draft.roles} issues={issues}
                 path={`steps.${index}.condition`} onChange={(condition: Expr) => setStep(index, { condition })}
-                onStructureChange={onStructureChange} />
+                onStructureChange={onStructureChange}
+                targets={(p) => targetOptions(draft, `step:${index}`, p, effectTypes)}
+                placeholders={placeholders} />
+              {warnings.filter((w) => w.path === `steps.${index}.condition`).map((w, n) => (
+                <p key={n} className="ga-field-warn">{t(w.message)}</p>
+              ))}
+            </Field>
+            <Field label={t('On done')}>
+              <EffectListEditor
+                effects={step.on_done}
+                draft={draft}
+                effectTypes={effectTypes}
+                issues={issues}
+                path={`steps.${index}.on_done`}
+                where={(j) => `on_done:${index}:${j}`}
+                placeholders={placeholders}
+                onChange={(on_done) => setStep(index, { on_done })}
+                onStructureChange={onStructureChange}
+              />
             </Field>
           </div>
         )}
       />
       <div>
         <button type="button" className="ga-btn ga-btn-sm"
-          onClick={() => set('steps', [...draft.steps, { id: newStepId(draft.steps), text: '', hint: '', condition: {} }])}>
+          onClick={() => set('steps', [...draft.steps, { id: newStepId(draft.steps), text: '', hint: '', condition: {}, on_done: [] }])}>
           {t('+ Add step')}
         </button>
       </div>
+    </div>
+  )
+
+  const effects = (
+    <div className="ga-form">
+      <Field label={t('Setup')}
+        hint={t('Put into the world when a run starts; the run stays in Preparing until they exist. Removed when the run ends unless permanent.')}>
+        <EffectListEditor
+          effects={draft.setup_effects}
+          draft={draft}
+          effectTypes={effectTypes}
+          issues={issues}
+          path="setup_effects"
+          where={(j) => `setup:${j}`}
+          setup
+          placeholders={placeholders}
+          onChange={(setup_effects) => set('setup_effects', setup_effects)}
+          onStructureChange={onStructureChange}
+        />
+      </Field>
+      <Field label={t('Rewards')}
+        hint={t('Given to the avatar who finishes the last step; rewards always stay.')}>
+        <EffectListEditor
+          effects={draft.rewards}
+          draft={draft}
+          effectTypes={effectTypes}
+          issues={issues}
+          path="rewards"
+          where={(j) => `reward:${j}`}
+          reward
+          placeholders={placeholders}
+          onChange={(rewards) => set('rewards', rewards)}
+          onStructureChange={onStructureChange}
+        />
+      </Field>
     </div>
   )
 
@@ -210,14 +283,18 @@ export function TemplateForm({
         hint={t('The quest opens for the player once this holds; until then it stays hidden.')}>
         <ConditionEditor expr={draft.start_condition} types={conditionTypes} roles={draft.roles} issues={issues}
           path="start_condition" onChange={(start_condition) => set('start_condition', start_condition)}
-          onStructureChange={onStructureChange} />
+          onStructureChange={onStructureChange}
+          targets={(p) => targetOptions(draft, 'start', p, effectTypes)}
+          placeholders={placeholders} />
       </Field>
       <Field label={t('Requirements')}
         hint={t('A player who does not meet them sees the quest locked, with the text below as the reason.')}>
         <ConditionEditor expr={draft.prerequisites.condition} types={prerequisiteTypes} roles={draft.roles} issues={issues}
           path="prerequisites.condition"
           onChange={(condition) => set('prerequisites', { ...draft.prerequisites, condition })}
-          onStructureChange={onStructureChange} />
+          onStructureChange={onStructureChange}
+          targets={(p) => targetOptions(draft, 'prereq', p, effectTypes)}
+          placeholders={placeholders} />
       </Field>
       <Field label={t('Locked text')}
         hint={<>{t('Empty: "You do not meet the requirements."')}{placeholderHint ? <><br />{placeholderHint}</> : null}</>}>
@@ -242,7 +319,7 @@ export function TemplateForm({
           )
         })}
       </nav>
-      {section === 'basics' ? basics : section === 'roles' ? roles : section === 'steps' ? steps : start}
+      {section === 'basics' ? basics : section === 'roles' ? roles : section === 'steps' ? steps : section === 'effects' ? effects : start}
     </div>
   )
 }
