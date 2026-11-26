@@ -95,6 +95,8 @@ INVENTORY.update({
 INVENTORY["app/models/chat_stat_evaluations.py"] = ["commit_evaluation"]
 # Plan E3 task 4: every order publication pushes "orders" (sync_topics.order_changed).
 INVENTORY["app/core/motion_orders.py"] = ["publish"]
+# World Dev media lane (plan 2026-11-25-world-dev-free-media, Task 8): row state changes push "generation" to the admins.
+INVENTORY["app/core/world_dev_media.py"] = ["_notify_generation"]
 INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag", "write_placement"]
 
 

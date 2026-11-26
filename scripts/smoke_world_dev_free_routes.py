@@ -33,8 +33,11 @@ Start state: world not frozen, no run.
     GET free/defaults, POST free/start, GET free/runs, GET free/open,
     GET free/{run_id}, POST free/{run_id}/message, POST free/{run_id}/stop,
     POST free/{run_id}/accept, POST free/{run_id}/discard,
-    GET free/{run_id}/events — all under /world-dev. A removed route that
-    comes back fails here.
+    GET free/{run_id}/events — all under /world-dev; plus the three media
+    routes of plan 2026-11-25-world-dev-free-media Task 10: GET
+    free/{run_id}/media, POST free/{run_id}/media-switch, POST
+    free/{run_id}/media/retry (17 in all). A removed route that comes back
+    fails here.
  2. GET /world-dev/free/defaults (admin) -> {"max_steps": 60,
     "max_tokens_total": 600000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
     of world_dev_agent).
@@ -115,6 +118,41 @@ The unfreeze race (finding 2):
     unfreeze_world's check and its write. POST /world/unfreeze -> 409 with
     that run's id, and the world is frozen again (the re-check after the
     thaw re-freezes). Unwrapped, the race run closed: unfreeze -> 200.
+
+Run 4 — the media routes (plan 2026-11-25-world-dev-free-media, Task 10).
+The lane is stubbed (world_dev_media._ensure_lane_locked -> False): no lane
+task is submitted, no producer runs, rows stay where the smoke puts them.
+Turn 1 creates "Demo R4" with the rooms Main and Back.
+26. (a) start with generate_media false -> run.media_enabled False; GET
+    .../media -> enabled False, state "open", elements [] (the turn-end
+    schedule queued nothing: the switch is off). generate_media "yes" (not a
+    bool) -> 400 before the manager is called.
+27. (c) media-switch {enabled: true} in review -> 200, one queued row (the
+    created place is due). Its steps, counted by hand from _location_steps:
+    building-front, day:, night:, day:<Main>, night:<Main>, day:<Back>,
+    night:<Back>, mesh = 8. media-switch {enabled: false} -> that row
+    cancelled with the note "media switched off", run.media_enabled False;
+    on again -> one NEW queued row (a cancelled row's undone steps hold
+    nothing, so all 8 are due again).
+28. (b) that row set done with every step done (wr.update_media_row) ->
+    GET .../media: elements == one element {kind location, id = the place's
+    id, name "Demo R4", row_id = the new row, status done, note "", 8 steps
+    each {id, label, status, note} (no fp), produced 0}.
+29. (d) the row set skipped (every step skipped) -> retry -> 200 with ONE new
+    row id; that row is queued with the 8 steps. Then a done row whose mesh
+    step alone is skipped (the others done): retry clears the skipped step's
+    fingerprint (the done row would otherwise hold it) -> one new row with
+    exactly the step "mesh"; the done steps are not re-queued.
+29b. retry refused (409, nothing cleared or added) BEFORE any fingerprint is
+    cleared when the media switch is off or the media state is closed (the
+    discard window); switch-on 409 in that window too, the switch stays off.
+30. (f) wr.set_status(run, "running") -> retry 409 and switch-on 409 (both
+    with run_id, nothing queued, media_enabled unchanged True); switch-off
+    200 (media_enabled False, the queued row cancelled).
+31. (e) a player session -> 403 on GET media, media-switch and media/retry;
+    an unknown run -> 404 on all three.
+32. status back to awaiting_review, discard -> 200; on the closed run
+    media-switch (on and off) and retry -> 409; GET media still 200.
 """
 import json
 import os
@@ -187,6 +225,8 @@ SCRIPTS = [
     ["GATE:g1", create("Demo R1"), "Built R1."],
     [create("Demo R2"), "Built R2.", "GATE:g2", "Never read."],
     ["GATE:g3", "Done."],
+    ['<tool name="create_location">{"data": {"name": "Demo R4", '
+     '"rooms": [{"name": "Main"}, {"name": "Back"}]}}</tool>', "Built R4."],
 ]
 
 
@@ -274,11 +314,14 @@ def main(c):
             ("POST", "/world-dev/free/{run_id}/stop"),
             ("POST", "/world-dev/free/{run_id}/accept"),
             ("POST", "/world-dev/free/{run_id}/discard"),
-            ("GET", "/world-dev/free/{run_id}/events")}
+            ("GET", "/world-dev/free/{run_id}/events"),
+            ("GET", "/world-dev/free/{run_id}/media"),
+            ("POST", "/world-dev/free/{run_id}/media-switch"),
+            ("POST", "/world-dev/free/{run_id}/media/retry")}
     have = {(m, rt.path) for rt in world_dev_route.router.routes
             for m in (getattr(rt, "methods", None) or ()) if m != "HEAD"}
-    check("1 the router's (method, path) set is exactly the 14 kept routes",
-          len(kept) == 14 and have == kept,
+    check("1 the router's (method, path) set is exactly the 17 kept routes",
+          len(kept) == 17 and have == kept,
           {"extra": sorted(have - kept), "missing": sorted(kept - have)})
 
     r = c.get("/world-dev/free/defaults", headers=ADMIN)
@@ -396,6 +439,7 @@ def main(c):
     run2(c, body)
     run3(c, body)
     race(c)
+    run4(c, body)
 
 
 def run2(c, body):
@@ -439,10 +483,17 @@ def run2(c, body):
           detail.get("remaining_writes"))
 
     r = c.post(f"/world-dev/free/{run_id}/discard", headers=ADMIN)
+    rep22 = dict((r.json() if r.status_code == 200 else {}).get("report") or {})
+    media22 = rep22.pop("media", None)
     check("22 discard -> 200 with the report",
-          r.status_code == 200 and r.json() == {
-              "ok": True, "report": {"reversed": [1], "skipped": [], "complete": True}},
+          r.status_code == 200 and r.json().get("ok") is True
+          and rep22 == {"reversed": [1], "skipped": [], "complete": True},
           r.text)
+    # The media part (plan 2026-11-25-world-dev-free-media Task 9): the empty
+    # temp instance routes nothing, so the run produced no media to remove.
+    check("22 the report's media part: nothing removed or kept",
+          isinstance(media22, dict) and media22.get("removed") == []
+          and media22.get("kept") == [], media22)
     check("22 rolled_back", wr.get_run(run_id)["status"] == "rolled_back",
           wr.get_run(run_id)["status"])
     names = location_names()
@@ -493,6 +544,172 @@ def race(c):
         wr.set_status(race_id, "rolled_back")
     r = c.post("/world/unfreeze", headers=ADMIN)
     check("25 race run closed: unfreeze -> 200", r.status_code == 200, r.text)
+
+
+def run4(c, body):
+    from app.core import world_dev_media as wm
+    wm._ensure_lane_locked = lambda: False  # no lane task, no producer
+    set_world_frozen(False)
+
+    r = c.post("/world-dev/free/start", headers=ADMIN, json={**body, "generate_media": "yes"})
+    check("26 generate_media not a bool -> 400", r.status_code == 400, r.text)
+    check("26 no open run after the refusal", wr.open_run() is None)
+    r = c.post("/world-dev/free/start", headers=ADMIN, json={**body, "generate_media": False})
+    run_id = r.json().get("run_id", "") if r.status_code == 200 else ""
+    check("26 start with generate_media false -> 200", bool(run_id), r.text)
+    detail = settle(c, run_id)
+    run = detail.get("run") or {}
+    check("26 awaiting_review, media_enabled False",
+          run.get("status") == "awaiting_review" and run.get("media_enabled") is False, run)
+    loc_id = next((loc.get("id") for loc in __import__("app.models.world", fromlist=["x"])
+                   .list_locations() if loc.get("name") == "Demo R4"), None)
+    check("26 Demo R4 exists", bool(loc_id), loc_id)
+    r = c.get(f"/world-dev/free/{run_id}/media", headers=ADMIN)
+    check("26 GET media -> enabled False, state open, elements []",
+          r.status_code == 200 and r.json() == {"enabled": False, "state": "open",
+                                                "elements": []}, r.text)
+
+    url = f"/world-dev/free/{run_id}"
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": "on"})
+    check("27 media-switch with a non-bool -> 400", r.status_code == 400, r.text)
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": True})
+    rows = wr.media_rows(run_id)
+    check("27 switch on in review -> 200, one queued row",
+          r.status_code == 200 and r.json().get("enabled") is True
+          and r.json().get("queued") == [rows[0]["id"] if rows else None]
+          and [x["status"] for x in rows] == ["queued"], (r.text, rows))
+    want_ids = ["building-front", "day:", "night:"]
+    loc = __import__("app.models.world", fromlist=["x"]).get_location_by_id(loc_id) or {}
+    room_ids = {rm.get("name"): rm.get("id") for rm in loc.get("rooms") or []}
+    for nm in ("Main", "Back"):
+        want_ids += [f"day:{room_ids.get(nm)}", f"night:{room_ids.get(nm)}"]
+    want_ids.append("mesh")
+    check("27 the row's 8 steps", rows and [s["id"] for s in rows[0]["steps"]] == want_ids,
+          rows and [s["id"] for s in rows[0]["steps"]])
+    first = rows[0]["id"] if rows else None
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": False})
+    row = wr.media_row(first) if first else {}
+    check("27 switch off -> 200, the queued row cancelled",
+          r.status_code == 200 and r.json().get("enabled") is False
+          and r.json().get("cancelled") == 1 and row.get("status") == "cancelled"
+          and row.get("note") == "media switched off", (r.text, row))
+    check("27 run.media_enabled False", wr.get_run(run_id)["media_enabled"] is False)
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": True})
+    rows = wr.media_rows(run_id)
+    second = rows[-1]["id"] if rows else None
+    check("27 on again -> one NEW queued row",
+          r.status_code == 200 and r.json().get("queued") == [second] and second != first
+          and [x["status"] for x in rows] == ["cancelled", "queued"], (r.text, rows))
+
+    steps = [dict(s, status="done") for s in wr.media_row(second)["steps"]]
+    wr.update_media_row(second, status="done", steps=steps)
+    r = c.get(url + "/media", headers=ADMIN)
+    els = r.json().get("elements") if r.status_code == 200 else None
+    el = (els or [{}])[0]
+    check("28 one element, the newest row", r.status_code == 200 and len(els or []) == 1
+          and el.get("row_id") == second, r.text)
+    check("28 element fields", {k: el.get(k) for k in ("kind", "id", "name", "status",
+                                                        "note", "produced")}
+          == {"kind": "location", "id": loc_id, "name": "Demo R4", "status": "done",
+              "note": "", "produced": 0}, el)
+    check("28 8 steps {id, label, status, note}, all done",
+          len(el.get("steps") or []) == 8
+          and all(set(s) == {"id", "label", "status", "note"} and s["status"] == "done"
+                  for s in el.get("steps") or [])
+          and [s["id"] for s in el.get("steps") or []] == want_ids, el.get("steps"))
+    check("28 the run's state", r.json().get("enabled") is True
+          and r.json().get("state") == "open", r.text)
+
+    steps = [dict(s, status="skipped", note="stub") for s in steps]
+    wr.update_media_row(second, status="skipped", steps=steps)
+    r = c.post(url + "/media/retry", headers=ADMIN)
+    new = (r.json() if r.status_code == 200 else {}).get("queued") or []
+    third = wr.media_row(new[0]) if len(new) == 1 else {}
+    check("29 retry on a skipped row -> one new id",
+          r.status_code == 200 and len(new) == 1 and third.get("status") == "queued"
+          and [s["id"] for s in third.get("steps") or []] == want_ids, (r.text, third))
+    check("29 the skipped row keeps its status", wr.media_row(second)["status"] == "skipped")
+    steps = [dict(s, status="skipped" if s["id"] == "mesh" else "done")
+             for s in third.get("steps") or []]
+    wr.update_media_row(new[0], status="done", steps=steps)
+    r = c.post(url + "/media/retry", headers=ADMIN)
+    new2 = (r.json() if r.status_code == 200 else {}).get("queued") or []
+    fourth = wr.media_row(new2[0]) if len(new2) == 1 else {}
+    check("29 retry on a done row with a skipped step -> a row with only that step",
+          r.status_code == 200 and len(new2) == 1
+          and [s["id"] for s in fourth.get("steps") or []] == ["mesh"], (r.text, fourth))
+    check("29 the done row keeps its status and its done steps' fps",
+          wr.media_row(new[0])["status"] == "done"
+          and all(s.get("fp") for s in wr.media_row(new[0])["steps"] if s["id"] != "mesh"),
+          wr.media_row(new[0]))
+
+    # 29b: a retry that schedule would turn into nothing is refused BEFORE any
+    # fingerprint is cleared — else the cleared step became due at the next
+    # turn end without a retry. A skipped step with an fp is put on the done
+    # row for the probe and taken back afterwards.
+    probe_row = new[0] if new else None
+    saved = list(wr.media_row(probe_row)["steps"]) if probe_row else []
+    wr.update_media_row(probe_row, steps=[dict(s, fp="fp-probe") if s["id"] == "mesh" else s
+                                          for s in saved])
+    snap = lambda: [(x["id"], x["status"], json.dumps(x.get("steps"), sort_keys=True))
+                    for x in wr.media_rows(run_id)]
+    wr.set_media_enabled(run_id, False)
+    before = snap()
+    r = c.post(url + "/media/retry", headers=ADMIN)
+    check("29b retry with the switch off -> 409 with run_id, no fp cleared, no row",
+          r.status_code == 409 and r.json().get("run_id") == run_id and snap() == before,
+          r.text)
+    wr.set_media_enabled(run_id, True)
+    wr.set_media_state(run_id, "closed")
+    before = snap()
+    r = c.post(url + "/media/retry", headers=ADMIN)
+    check("29b retry with media closed (discard window) -> 409, no fp cleared",
+          r.status_code == 409 and r.json().get("run_id") == run_id and snap() == before,
+          r.text)
+    wr.set_media_enabled(run_id, False)
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": True})
+    check("29b switch-on with media closed -> 409, the switch stays off",
+          r.status_code == 409 and r.json().get("run_id") == run_id
+          and wr.get_run(run_id)["media_enabled"] is False and snap() == before, r.text)
+    wr.set_media_state(run_id, "open")
+    wr.set_media_enabled(run_id, True)
+    wr.update_media_row(probe_row, steps=saved)
+
+    wr.set_status(run_id, "running")
+    n_rows = len(wr.media_rows(run_id))
+    r = c.post(url + "/media/retry", headers=ADMIN)
+    check("30 retry while running -> 409 with run_id",
+          r.status_code == 409 and r.json().get("run_id") == run_id, r.text)
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": True})
+    check("30 switch-on while running -> 409 with run_id",
+          r.status_code == 409 and r.json().get("run_id") == run_id, r.text)
+    check("30 nothing queued, the switch unchanged",
+          len(wr.media_rows(run_id)) == n_rows and wr.get_run(run_id)["media_enabled"] is True)
+    r = c.post(url + "/media-switch", headers=ADMIN, json={"enabled": False})
+    check("30 switch-off while running -> 200, the queued row cancelled",
+          r.status_code == 200 and wr.get_run(run_id)["media_enabled"] is False
+          and wr.media_row(new2[0])["status"] == "cancelled" if new2 else False, r.text)
+
+    for method, path, payload in (("get", "/media", None),
+                                  ("post", "/media-switch", {"enabled": True}),
+                                  ("post", "/media/retry", None)):
+        kw = {"json": payload} if payload is not None else {}
+        r = getattr(c, method)(url + path, headers=USER, **kw)
+        check(f"31 player {method.upper()} {path} -> 403", r.status_code == 403, r.status_code)
+        r = getattr(c, method)("/world-dev/free/wdr_unknown" + path, headers=ADMIN, **kw)
+        check(f"31 unknown run {method.upper()} {path} -> 404", r.status_code == 404,
+              r.status_code)
+
+    wr.set_status(run_id, "awaiting_review")
+    r = c.post(url + "/discard", headers=ADMIN)
+    check("32 discard -> 200", r.status_code == 200, r.text)
+    for path, payload in (("/media-switch", {"enabled": True}),
+                          ("/media-switch", {"enabled": False}), ("/media/retry", None)):
+        r = c.post(url + path, headers=ADMIN, **({"json": payload} if payload else {}))
+        check(f"32 closed run {path} {payload} -> 409",
+              r.status_code == 409 and r.json().get("run_id") == run_id, r.text)
+    r = c.get(url + "/media", headers=ADMIN)
+    check("32 GET media on the closed run -> 200", r.status_code == 200, r.text)
 
 
 with TestClient(app, follow_redirects=False) as client:

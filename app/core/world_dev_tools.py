@@ -7086,15 +7086,54 @@ def _delete_area(step: _Step, args: Dict[str, Any]) -> str:
 
 def _location_media(loc_id: str) -> List[str]:
     """The media directories delete_location removes with a place (its
-    gallery and building models) that hold anything."""
+    gallery and building models) that hold a file. Empty sub dirs do not
+    count, nor the gallery's meta files (``world_dev_media.GALLERY_META_FILES``)
+    while no other file is left beside them: they describe images, and with
+    none left (the run's own media are removed first, Task 9 of plan
+    2026-11-25-world-dev-free-media) they describe nothing a re-creation
+    would miss. The snapshot does not hold them, so a rollback that
+    re-creates the place does not bring them back — deliberately: they can
+    only describe the run's own removed images (the place was created by
+    the run), which are regenerable derivatives, not world data."""
+    import os
     from app.core.paths import get_storage_dir
+    from app.core.world_dev_media import GALLERY_META_FILES
     storage = get_storage_dir()
     out = []
     for sub in ("world_gallery", "locations"):
         d = storage / sub / loc_id
-        if d.is_dir() and any(d.iterdir()):
-            out.append(f"{sub}/{loc_id}")
+        if not d.is_dir():
+            continue
+        for dirpath, _dirs, files in os.walk(str(d)):
+            top = os.path.abspath(dirpath) == os.path.abspath(str(d))
+            if any(not (sub == "world_gallery" and top and f in GALLERY_META_FILES)
+                   for f in files):
+                out.append(f"{sub}/{loc_id}")
+                break
     return out
+
+
+def _remove_earlier_media(step: _Step, kind: str, ident: str) -> int:
+    """Cross-turn delete_created of a location / character (Task 9 of plan
+    2026-11-25-world-dev-free-media): remove the media the run's lane
+    produced for the element BEFORE its snapshot — media are regenerable
+    derivatives (a rollback that re-creates the element re-plans them), and
+    the snapshot then holds only world data. A render of the element still
+    running after the bounded wait is refused (its output would land after
+    the snapshot). Returns the number of files removed."""
+    from app.core import world_dev_media
+    rows = wr.media_rows(step.ctx.run_id, kind=kind, target_id=ident)
+    if not rows:
+        return 0
+    dirs = {str(a.get("path")) for r in rows for a in r.get("produced") or []
+            if isinstance(a, dict) and a.get("type") == "dir"}
+    rep = world_dev_media.remove_element_media(step.ctx.run_id, kind, ident)
+    if rep.get("pending"):
+        raise ToolRefusal(f"{_kind_label(kind)} {ident}: a render of it is still running "
+                          f"({', '.join(str(p.get('step')) for p in rep['pending'])}) — "
+                          "try again when it has ended")
+    return sum(1 for p in rep.get("removed") or []
+               if not str(p).startswith("profile ") and str(p) not in dirs)
 
 
 def _character_delete_blockers(name: str) -> List[str]:
@@ -7143,7 +7182,19 @@ def _delete_earlier(step: _Step, kind: str, ident: str,
     if kind == "location":
         from app.models.world import (delete_location, get_location_by_id,
                                       world_write_lock)
+        # The refusals first (re-checked under the lock below), then the
+        # run's media of the place go — never while holding the writer
+        # lock: the removal may wait for a running render.
+        if get_location_by_id(ident) is None:
+            raise ToolRefusal(f"location {ident} does not exist any more")
+        refs = _references_to_location(ident) + [
+            f"{n} (stands there)" for n, _room in wu.standing_in(ident)]
+        if refs:
+            raise ToolRefusal(f"location {ident} is still named by: " + "; ".join(refs))
         step.prepare()
+        n_media = _remove_earlier_media(step, "location", ident)
+        if n_media:
+            line += f"; its media removed ({n_media} files)"
         with world_write_lock:  # re-entrant; delete_location takes it again
             row = get_location_by_id(ident)
             if row is None:
@@ -7203,7 +7254,24 @@ def _delete_earlier(step: _Step, kind: str, ident: str,
     # character
     from app.core.keyed_lock import keyed_lock
     from app.models.character import character_row_exists, delete_character
+    # The refusals first (re-checked under the lock below), then the run's
+    # media of the character go — outside the profile lock: the removal
+    # takes it itself (profile keys) and may wait for a running render.
+    if not character_row_exists(ident):
+        raise ToolRefusal(f"character {ident!r} does not exist any more")
+    refs = _references_to_character(ident)
+    if refs:
+        raise ToolRefusal(f"character {ident!r} is still named by: " + "; ".join(refs)
+                          + " — delete or change those first")
+    blockers = _character_delete_blockers(ident)
+    if blockers:
+        raise ToolRefusal(f"character {ident!r} cannot be deleted in a later turn "
+                          "— a re-creation could not restore it exactly: "
+                          + "; ".join(blockers))
     step.prepare()
+    n_media = _remove_earlier_media(step, "character", ident)
+    if n_media:
+        line += f"; its media removed ({n_media} files)"
     with keyed_lock("character_profile", ident):
         if not character_row_exists(ident):
             raise ToolRefusal(f"character {ident!r} does not exist any more")

@@ -513,6 +513,16 @@ def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
     return [s for s in steps if explicit or not (s.failed or s.manual)]
 
 
+def planned_work(character_name: str, *, explicit: bool,
+                 profile: Optional[Dict[str, Any]] = None) -> Tuple[List[Step], List[Step]]:
+    """``(planned, work)`` of a Build in the given mode: ``plan`` and the
+    steps of it that would run (the predicate ``start`` applies). For callers
+    that predict what a Build spends without starting it (the World Dev media
+    gate). Read-only; raises what ``plan`` raises."""
+    planned = plan(character_name, profile=profile, explicit=explicit)
+    return planned, _runnable(planned, explicit)
+
+
 #: The steps that render views (Ruling FR-I3: a refused view makes them a cached failure).
 VIEW_STEPS = frozenset({"shape"})
 #: ``Step.failed`` of a view step whose view was refused for its inputs (Ruling FR-I3).

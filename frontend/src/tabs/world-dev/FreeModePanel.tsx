@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { syncHub } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { debounced } from '../../lib/guardedPoll'
 import { useToast } from '../../lib/Toast'
 import { usePersistentState } from '../../lib/usePersistentState'
 import './FreeModePanel.css'
@@ -21,6 +23,47 @@ import './FreeModePanel.css'
 
 const OPEN_STATUSES = ['running', 'awaiting_review', 'interrupted']
 const REVIEW_STATUSES = ['awaiting_review', 'interrupted']
+
+/** Media job row/step statuses (world_dev_runs.MEDIA_STATUSES) → label. */
+const MEDIA_STATUS_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+  cancelled: 'Cancelled',
+  removed: 'Removed',
+}
+/** A burst of "generation" pushes (one per step change) reads the media once. */
+const MEDIA_PUSH_DEBOUNCE_MS = 400
+
+/** One media step of an element (GET /free/{id}/media). */
+interface MediaStep {
+  id: string
+  label: string
+  status: string
+  note: string
+}
+
+/** One element the run created or changed, with its newest media job row. */
+interface MediaElement {
+  kind: 'location' | 'character' | string
+  id: string
+  name: string
+  row_id: number
+  status: string
+  note: string
+  steps: MediaStep[]
+  produced: number
+}
+
+/** The run's media (plan 2026-11-25-world-dev-free-media, Tasks 10/11): the
+ *  run switch, the media state (open · accepted · closed) and the elements. */
+interface MediaStatus {
+  enabled: boolean
+  state: string
+  elements: MediaElement[]
+}
 
 interface FreeRun {
   id: string
@@ -168,6 +211,9 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   const [task, setTask] = usePersistentState('worlddev.free.task', '')
   const [maxSteps, setMaxSteps] = usePersistentState('worlddev.free.maxSteps', '')
   const [maxTotal, setMaxTotal] = usePersistentState('worlddev.free.maxTotal', '')
+  // The start form's media switch: the server renders what the run builds.
+  const [genMedia, setGenMedia] = usePersistentState<boolean>('worlddev.free.media', true)
+  const [mediaOpen, setMediaOpen] = usePersistentState<boolean>('worlddev.free.mediaOpen', true)
   // The last SSE event number seen, per run — a reopened tab resumes the
   // stream behind it instead of replaying the whole buffer.
   const [lastEv, setLastEv] = usePersistentState<{ run: string; ev: number }>(
@@ -188,6 +234,8 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [confirmEmptyAccept, setConfirmEmptyAccept] = useState(false)
   const [discardSkipped, setDiscardSkipped] = useState<SkipEntry[] | null>(null)
+  const [media, setMedia] = useState<{ run: string; status: MediaStatus } | null>(null)
+  const [mediaBusy, setMediaBusy] = useState(false)
 
   const streamRef = useRef<AbortController | null>(null)
   // The run on screen. Stream events and detail reads of any other run are
@@ -215,7 +263,20 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     }
   }, [])
 
+  /** The run's media status — read on every detail read and on every
+   *  "generation" push while a run is shown; never polled. */
+  const loadMedia = useCallback(async (id: string) => {
+    try {
+      const d = await apiGet<MediaStatus>(`/world-dev/free/${encodeURIComponent(id)}/media`)
+      if (mounted.current && runIdRef.current === id) setMedia({ run: id, status: d })
+    } catch {
+      // An older server without the media routes, or a passing error: the
+      // section keeps its last view; the next push or status change re-reads.
+    }
+  }, [])
+
   const loadDetail = useCallback(async (id: string): Promise<FreeDetail | null> => {
+    void loadMedia(id)
     try {
       const d = await apiGet<FreeDetail>(`/world-dev/free/${encodeURIComponent(id)}`)
       if (!mounted.current || runIdRef.current !== id) return d
@@ -230,7 +291,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
       toast(t('Loading the run failed') + ': ' + (e as Error).message, 'error')
       return null
     }
-  }, [t, toast])
+  }, [loadMedia, t, toast])
 
   /** A status change: re-read the detail (and the runs list) once, coalesced
    *  — a replayed stream can carry several status events in a row. */
@@ -437,6 +498,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
         effort: effort || undefined,
         max_steps: posInt(maxSteps),
         max_tokens_total: posInt(maxTotal),
+        generate_media: genMedia,
       })
       rememberEv(d.run_id, 0)
       await attach(d.run_id)
@@ -451,7 +513,7 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     } finally {
       setBusy(false)
     }
-  }, [attach, effort, loadRuns, maxSteps, maxTokens, maxTotal, model, provider, rememberEv, runId, t, task, toast])
+  }, [attach, effort, genMedia, loadRuns, maxSteps, maxTokens, maxTotal, model, provider, rememberEv, runId, t, task, toast])
 
   const action = useCallback(async (what: 'stop' | 'accept' | 'discard') => {
     if (!runId) return
@@ -555,6 +617,53 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
     setDiscardSkipped(null)
   }, [])
 
+  // Live media status: every media row/step change pushes "generation" to
+  // the admins; re-read this run's media on it while the run is shown.
+  useEffect(() => {
+    if (!runId) return
+    const onPush = debounced(() => { void loadMedia(runId) }, MEDIA_PUSH_DEBOUNCE_MS)
+    const off = syncHub().onTopics(['generation'], onPush)
+    return () => { off(); onPush.cancel() }
+  }, [loadMedia, runId])
+
+  /** The run's media switch: off cancels the queued jobs (a running one ends
+   *  after its step); on queues what is due — only while the run is in review. */
+  const switchMedia = useCallback(async (enabled: boolean) => {
+    if (!runId) return
+    setMediaBusy(true)
+    try {
+      await apiPost(`/world-dev/free/${encodeURIComponent(runId)}/media-switch`, { enabled })
+    } catch (e) {
+      toast(t('Media switch failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      if (mounted.current) setMediaBusy(false)
+      void loadMedia(runId)
+    }
+  }, [loadMedia, runId, t, toast])
+
+  /** Retry what failed or was skipped (a paused character, an empty chain
+   *  configured since): the server re-plans and queues what is due. */
+  const retryMedia = useCallback(async () => {
+    if (!runId) return
+    setMediaBusy(true)
+    try {
+      const d = await apiPost<{ queued?: number[] }>(
+        `/world-dev/free/${encodeURIComponent(runId)}/media/retry`, {})
+      const n = (d.queued || []).length
+      toast(n ? t('{n} media job(s) queued').replace('{n}', String(n)) : t('Nothing to retry'))
+    } catch (e) {
+      toast(t('Media retry failed') + ': ' + (e as Error).message, 'error')
+    } finally {
+      if (mounted.current) setMediaBusy(false)
+      void loadMedia(runId)
+    }
+  }, [loadMedia, runId, t, toast])
+
+  const mediaView = media && media.run === runId ? media.status : null
+  const mediaRetryable = !!mediaView && mediaView.elements.some((el) => (
+    el.status === 'failed' || el.status === 'skipped'
+    || el.steps.some((s) => s.status === 'failed' || s.status === 'skipped')))
+
   const c = counters
 
   return (
@@ -624,6 +733,12 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
               <input className="ga-input" inputMode="numeric" value={maxTotal}
                 onChange={(e) => setMaxTotal(e.target.value)} />
             </label>
+            <label className="ga-wd-free-check"
+              title={t('After each turn the server renders the standard images and 3D models of what the run built; Discard removes them again.')}>
+              <input type="checkbox" checked={genMedia}
+                onChange={(e) => setGenMedia(e.target.checked)} />
+              <span>{t('Generate media')}</span>
+            </label>
             <button className="ga-btn ga-btn-primary" disabled={busy || !task.trim() || !model}
               onClick={() => { void start() }}>
               {t('Start')}
@@ -687,6 +802,70 @@ export function FreeModePanel({ model, provider, maxTokens, effort }: {
                   + (tr.writes ? ' (' + t('{k} change(s) kept').replace('{k}', String(tr.writes - tr.undone)) + ')' : '')}
             </div>
           ))}
+
+          {mediaView ? (
+            <div className="ga-wd-free-media">
+              <div className="ga-wd-free-media-head">
+                <button type="button" className="ga-wd-free-media-toggle"
+                  aria-expanded={mediaOpen} onClick={() => setMediaOpen(!mediaOpen)}>
+                  <span aria-hidden="true">{mediaOpen ? '▾' : '▸'}</span>
+                  <span className="ga-form-section-label">{t('Media')}</span>
+                  <span className="ga-form-hint">({mediaView.elements.length})</span>
+                </button>
+                <label className="ga-wd-free-check"
+                  title={running && !mediaView.enabled
+                    ? t('Media can be switched on again once the turn has ended')
+                    : t('After each turn the server renders the standard images and 3D models of what the run built; Discard removes them again.')}>
+                  <input type="checkbox" checked={mediaView.enabled}
+                    disabled={mediaBusy || !isOpen || (running && !mediaView.enabled)}
+                    onChange={(e) => { void switchMedia(e.target.checked) }} />
+                  <span>{t('Generate media')}</span>
+                </label>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  disabled={mediaBusy || !inReview || !mediaView.enabled || !mediaRetryable}
+                  onClick={() => { void retryMedia() }}>
+                  {t('Retry failed/skipped')}
+                </button>
+              </div>
+              {mediaOpen ? (
+                mediaView.elements.length === 0 ? (
+                  <div className="ga-form-hint">{t('No media jobs yet.')}</div>
+                ) : (
+                  <div className="ga-wd-free-media-grid">
+                    {mediaView.elements.map((el) => (
+                      <div key={`${el.kind}:${el.id}`} className="ga-wd-free-media-row">
+                        <span className="ga-wd-free-media-name" title={el.id}>
+                          {el.kind === 'location' ? t('location') : el.kind === 'character' ? t('character') : el.kind} &quot;{el.name || el.id}&quot;
+                        </span>
+                        <span className={`ga-wd-free-chip ga-wd-free-chip-${el.status}`}
+                          title={el.note || undefined}>
+                          {t(MEDIA_STATUS_LABELS[el.status] || el.status)}
+                        </span>
+                        <span className="ga-wd-free-media-steps">
+                          {el.steps.map((s) => (
+                            <span key={s.id}
+                              className={`ga-wd-free-chip ga-wd-free-chip-sm ga-wd-free-chip-${s.status}`}
+                              title={(t(MEDIA_STATUS_LABELS[s.status] || s.status))
+                                + (s.note ? ' — ' + s.note : '')}>
+                              {s.label}
+                            </span>
+                          ))}
+                          {el.produced ? (
+                            <span className="ga-form-hint">
+                              {t('{n} file(s)').replace('{n}', String(el.produced))}
+                            </span>
+                          ) : null}
+                        </span>
+                        {el.note ? (
+                          <span className="ga-form-hint ga-wd-free-media-note">{el.note}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )
+              ) : null}
+            </div>
+          ) : null}
 
           {run.note && !running ? (
             <pre className="ga-wd-free-note">{run.note}</pre>

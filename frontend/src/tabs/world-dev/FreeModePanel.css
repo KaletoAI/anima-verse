@@ -107,3 +107,53 @@
 .ga-wd-free-table tbody tr:hover { background: rgba(110, 118, 129, 0.12); }
 .ga-wd-free-current { background: rgba(31, 111, 235, 0.12); }
 .ga-wd-free-path { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The run's media (plan 2026-11-25-world-dev-free-media, Task 11): switch,
+   retry and one grid row per element — label, status chip, step chips. */
+.ga-wd-free-check { display: flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; }
+.ga-wd-free-media {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ga-wd-free-media-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ga-wd-free-media-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.ga-wd-free-media-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) max-content 1fr;
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.ga-wd-free-media-row { display: contents; }
+.ga-wd-free-media-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ga-wd-free-media-steps { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ga-wd-free-media-note { grid-column: 2 / -1; white-space: pre-wrap; word-break: break-word; }
+.ga-wd-free-chip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-container, #161b22);
+  white-space: nowrap;
+}
+.ga-wd-free-chip-sm { font-size: 11px; padding: 0 5px; }
+.ga-wd-free-chip-queued { color: #8b949e; }
+.ga-wd-free-chip-running { color: #d29922; border-color: #d29922; }
+.ga-wd-free-chip-done { color: #3fb950; }
+.ga-wd-free-chip-failed { color: #f85149; border-color: #f85149; }
+.ga-wd-free-chip-skipped { color: #d29922; }
+.ga-wd-free-chip-cancelled,
+.ga-wd-free-chip-removed { color: #8b949e; text-decoration: line-through; }

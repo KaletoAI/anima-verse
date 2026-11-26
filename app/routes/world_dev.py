@@ -170,6 +170,16 @@ def _opt_int(raw: Any, field: str, positive: bool = True) -> Optional[int]:
     return value
 
 
+def _opt_bool(raw: Any, field: str, default: bool) -> bool:
+    """An optional boolean field: None -> default; anything but a JSON bool
+    -> 400 (explicit admin input is refused, not guessed)."""
+    if raw is None:
+        return default
+    if not isinstance(raw, bool):
+        raise HTTPException(status_code=400, detail=f"{field} must be true or false")
+    return raw
+
+
 async def _free_body(request: Request) -> Dict[str, Any]:
     try:
         data = await request.json()
@@ -217,12 +227,15 @@ async def free_start(request: Request, user: Dict[str, Any] = Depends(require_ad
     if effort and effort not in EFFORT_LEVELS:
         raise HTTPException(status_code=400, detail=(
             f"unknown effort {effort!r} (allowed: {', '.join(EFFORT_LEVELS)})"))
+    # The run's media switch (world_dev_media): default on, a non-bool refused.
+    media_enabled = _opt_bool(data.get("generate_media"), "generate_media", default=True)
     try:
         run_id = await get_run_manager().start(
             str(data.get("task") or ""), model, str(data.get("provider") or ""),
             str((user or {}).get("id") or ""),
             max_tokens=max_tokens if max_tokens and max_tokens > 0 else None,
-            max_steps=max_steps, max_tokens_total=max_total, effort=effort)
+            max_steps=max_steps, max_tokens_total=max_total, effort=effort,
+            media_enabled=media_enabled)
     except RunOpenError as e:
         return _run_conflict(e.run_id, str(e))
     except ValueError as e:
@@ -325,6 +338,52 @@ async def free_discard(run_id: str):
         report = await get_run_manager().discard(run_id)
         return {"ok": True, "report": report}
     return await _free_action(run_id, _go)
+
+
+# ── Media lane (plan 2026-11-25-world-dev-free-media, Task 10) ──
+# Thin adapters over app.core.world_dev_media; row state changes push
+# "generation" to the admins from there.
+
+async def _media_action(run_id: str, fn, *args):
+    from app.core.world_dev_media import MediaConflict
+    try:
+        return await asyncio.to_thread(fn, run_id, *args)
+    except MediaConflict as e:
+        return _run_conflict(run_id, str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+
+
+@router.get("/free/{run_id}/media")
+async def free_media(run_id: str) -> Dict[str, Any]:
+    """The run's media switch and state, and per element its newest job row."""
+    from app.core import world_dev_media as wm
+    status = await asyncio.to_thread(wm.media_status, run_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    return status
+
+
+@router.post("/free/{run_id}/media-switch")
+async def free_media_switch(run_id: str, request: Request):
+    """{enabled}: off on any open run (queued rows cancelled, a running one
+    stops after its step); on only in review (409 while a turn runs), then
+    what is due is queued. 409 on a closed run."""
+    from app.core import world_dev_media as wm
+    data = await _free_body(request)
+    if not isinstance(data.get("enabled"), bool):
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    return await _media_action(run_id, wm.set_run_switch, data["enabled"])
+
+
+@router.post("/free/{run_id}/media/retry")
+async def free_media_retry(run_id: str):
+    """Retry the failed/skipped steps; only in review (409 otherwise)."""
+    from app.core import world_dev_media as wm
+    result = await _media_action(run_id, wm.retry)
+    if isinstance(result, JSONResponse):
+        return result
+    return {"queued": result}
 
 
 @router.get("/free/{run_id}/events")

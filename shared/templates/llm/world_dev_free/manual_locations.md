@@ -70,8 +70,9 @@ The value lists come from `list_catalog{name}` (`stats`, `event_categories`, `ev
 
 `delete_created{kind: "location", id}` removes a place THIS run created — in this turn or an
 earlier one; a place that existed before the run is never deleted. Refused while a character
-lives there, knows it, has it in the schedule or stands there; in an earlier turn also while the
-place has images or 3D models.
+lives there, knows it, has it in the schedule or stands there. In an earlier turn the images and
+models the server rendered for it in this run go with it; it is refused while it has other images
+or 3D models.
 
 ## NPC slots
 
@@ -161,4 +162,6 @@ item that reveals a secret is refused.
 ## Image prompts are ALWAYS English
 
 Every `image_prompt_*` is English, even when the world speaks another language ("village
-square", not "Dorfplatz"). Proper names may stay.
+square", not "Dorfplatz"). Proper names may stay. The server renders the building front view,
+the day and night pictures of the place and its rooms and the building model from these prompts
+after your turn (system prompt, *Images and 3D models*).

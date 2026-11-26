@@ -70,10 +70,21 @@ These parts of a world have no tool here — the admin builds them in Game-Admin
 - recurring happenings (a weekly market) — describe them in the place description instead;
 - rule types other than an access block;
 - access for residents only (a private house) — a rule condition cannot read a character's home;
-- images, 3D models, building hulls, LLM furnishing.
+- building hulls, LLM furnishing.
 
 When the task asks for any of these, build the rest and name every requested part from this
 list under *left open* in your summary — never drop it silently.
+
+## Images and 3D models
+
+You never render. After each turn the server renders, for every place and character you created
+or changed in a visible way: the building front view, day and night pictures of the place and its
+rooms, the building model; the hairstyle, the portrait and the 3D figure of a character. Write
+image prompts and appearance fields with that in mind. Not generated automatically: room models,
+expressions, item images, prop meshes, surface textures — name them under *left open* when the
+task asks for them. A picture or model is skipped when its routing is empty or unusable or when
+the media switch is off; the run view names every skipped one, so never claim in your summary
+that a picture or model exists.
 
 ## Calling a tool
 

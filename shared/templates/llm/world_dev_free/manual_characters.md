@@ -59,7 +59,9 @@ your calls touched (home and schedule, known places, outfits, soul, body slots) 
 - A season-day field takes `"<season>:<day>"` of this world's calendar (e.g. `"spring:14"`).
 - `character_appearance`, `face_appearance`, `body_appearance` are ENGLISH comma-separated
   attribute lists for image generation, never a sentence with the name ("young woman, slim, long
-  blonde hair"). With body slots, hair/eyes/skin/build go into `body_slots`.
+  blonde hair"). With body slots, hair/eyes/skin/build go into `body_slots`. The server renders
+  the hairstyle, the portrait and the 3D figure from these fields after your turn
+  (system prompt, *Images and 3D models*).
 - Personality and other prose are written in the character's language, without the name as the
   sentence opener.
 

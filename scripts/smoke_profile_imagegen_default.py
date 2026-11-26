@@ -168,7 +168,7 @@ def route_target(name: str, **request_data) -> dict:
 
 def job_target(name: str) -> dict:
     SERVICE.inputs.clear()
-    na._render_profile_image(name)
+    na.render_profile_image(name)
     return _target(SERVICE.inputs[-1])
 
 

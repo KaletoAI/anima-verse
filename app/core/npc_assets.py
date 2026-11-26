@@ -319,7 +319,7 @@ def _delivered_image(result: str) -> bool:
     return "/" in text
 
 
-def _render_profile_image(name: str) -> str:
+def render_profile_image(name: str) -> str:
     """Render the NPC's portrait through the ordinary image service.
 
     Returns what went WRONG ("" = the service delivered), so the caller can
@@ -361,7 +361,7 @@ def _render_profile_image(name: str) -> str:
     return result[:200] or "the image service answered nothing"
 
 
-def _render_mesh(name: str) -> str:
+def render_mesh(name: str) -> str:
     """T-pose reference, then the mesh for the worn outfit. Blocking.
 
     Returns what went WRONG ("" = both were happy). ``generate_for_current_
@@ -531,12 +531,12 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
     notes: List[str] = []
     if "profile_image" in missing:
         logger.info("NPC '%s': rendering the profile image", name)
-        note = _render_profile_image(name)
+        note = render_profile_image(name)
         if note:
             notes.append(f"profile image: {note}")
     if "model3d" in missing:
         logger.info("NPC '%s': rendering the T-pose and the mesh", name)
-        note = _render_mesh(name)
+        note = render_mesh(name)
         if note:
             notes.append(note)
     if "expression" in missing:

@@ -379,6 +379,29 @@ def media_rows(run_id: str, kind: Optional[str] = None,
     return [_media_dict(r) for r in rows]
 
 
+def media_row(row_id: int) -> Optional[Dict[str, Any]]:
+    """One media row by id (steps/produced JSON-decoded), None when unknown."""
+    with _Db() as conn:
+        row = conn.execute("SELECT * FROM world_dev_media WHERE id=?", (int(row_id),)).fetchone()
+    return _media_dict(row) if row is not None else None
+
+
+def media_rows_with_status(statuses: Tuple[str, ...]) -> List[Dict[str, Any]]:
+    """The media rows of ALL runs in the given statuses, oldest first (the
+    lane's boot reset). ValueError on an unknown status."""
+    statuses = tuple(statuses)
+    bad = [s for s in statuses if s not in MEDIA_STATUSES]
+    if bad:
+        raise ValueError(f"unknown media status: {bad[0]!r}")
+    if not statuses:
+        return []
+    with _Db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM world_dev_media WHERE status IN ({','.join('?' * len(statuses))}) "
+            "ORDER BY id ASC", statuses).fetchall()
+    return [_media_dict(r) for r in rows]
+
+
 def update_media_row(row_id: int, *, status: Optional[str] = None,
                      steps: Optional[List[dict]] = None,
                      produced: Optional[List[dict]] = None,

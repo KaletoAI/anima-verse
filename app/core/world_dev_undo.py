@@ -117,7 +117,13 @@ Inverse ops (``inverse["op"]``):
   text of ``skills/<skill>.json`` or ABSENT), had_dir (the ``skills/``
   directory existed before the step)} (set_skill; written = the raw text
   after the write; a differing text is ``changed since`` with keys [skill],
-  else ``before`` is written back verbatim or the file removed)
+  else ``before`` is written back verbatim or the file removed) ·
+  remove_hairstyle{name, item_id (None until the lane's hairstyle is minted),
+  before:{base_hairstyle, equipped_mesh_pieces: value or ABSENT}} (the media
+  lane's hairstyle, ``world_dev_media.make_hairstyle``, tool ``media:hairstyle``;
+  written = {"item": :func:`item_row`, "keys": the two keys re-read}; keys
+  changed since are left alone, the item stays while such a key still names
+  it — :func:`_undo_remove_hairstyle`)
 
 Written shapes: restore_location / restore_home_schedule — the written map of
 :func:`diff_keys`; restore_position — ``{x, z, yaw}`` (:func:`position_of`);
@@ -1899,6 +1905,206 @@ def simulated_places(entries: List[Dict[str, Any]], foreign: set
     return places
 
 
+
+# ── The lane's hairstyle (world_dev_media.make_hairstyle) ────────────────
+
+def _hairstyle_key_names() -> Tuple[str, str]:
+    from app.core.garment_hair import BASE_HAIRSTYLE_KEY
+    return (BASE_HAIRSTYLE_KEY, "equipped_mesh_pieces")
+
+
+def _references(value: Any, item_id: str) -> bool:
+    """Whether a hairstyle key's value names the item (the plain body's id,
+    or a slot of ``equipped_mesh_pieces``)."""
+    if isinstance(value, dict) and not is_absent(value):
+        return any(v == item_id for v in value.values())
+    return value == item_id
+
+
+def _hairstyle_pending_value(key: str, before: Dict[str, Any], item_id: str) -> Any:
+    """What ``garment_hair._claim_first`` writes into ``key`` for a first
+    hairstyle ``item_id`` when the profile held ``before``: the plain body's
+    id = the item; ``equipped_mesh_pieces`` = the previous dict (or {}) with
+    "hair" = the item. Used for a pending row, which recorded no written keys."""
+    from app.core.garment_hair import BASE_HAIRSTYLE_KEY, HAIR_KIND
+    if key == BASE_HAIRSTYLE_KEY:
+        return item_id
+    prev = before.get(key, ABSENT)
+    worn = dict(prev) if isinstance(prev, dict) and not is_absent(prev) else {}
+    worn[HAIR_KIND] = item_id
+    return worn
+
+
+def _hairstyle_decision(entry: Dict[str, Any], inv: Dict[str, Any],
+                        now: Optional[Dict[str, Any]],
+                        item_now: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the undo of a ``remove_hairstyle`` row does — ONE decision for
+    :func:`_undo_remove_hairstyle` and the discard preview. ``now`` = the two
+    keys as stored (value or ABSENT), None when the character is gone;
+    ``item_now`` = :func:`item_row` of the hairstyle. Returns ``{"restore": {key:
+    before}, "changed": [keys], "item": "delete" | "gone" | "kept", "item_keys":
+    [keys]}``: a key equal to what the step wrote goes back to ``before``, a
+    differing one is left alone (changed); the item is
+    deleted when its row still equals what the step wrote (a pending row: when
+    it exists) AND no key left unrestored still names it — else kept, with the
+    naming keys (or ["item"] for an edited row).
+
+    A PENDING row (``ensure_hairstyle`` minted the item, then raised; the id
+    was attached, nothing was recorded as written) does not restore blindly:
+    the step may have stopped before or after its profile write, so a key
+    goes back to ``before`` only while it equals ``before`` itself or the
+    value the step would have written (:func:`_hairstyle_pending_value` —
+    ``_claim_first``'s write: base = the item, worn = before plus "hair" =
+    the item); anything else is a hand edit since and is left alone
+    (changed), exactly like a written row."""
+    iid = str(inv.get("item_id") or "")
+    written = entry.get("written") if isinstance(entry.get("written"), dict) else None
+    wkeys = written.get("keys") if written is not None else None
+    before = inv.get("before") or {}
+    restore: Dict[str, Any] = {}
+    changed: List[str] = []
+    for key in _hairstyle_key_names() if now is not None else ():
+        cur = now.get(key, ABSENT)
+        if isinstance(wkeys, dict):
+            ours = [wkeys.get(key, ABSENT)]
+        else:
+            ours = [before.get(key, ABSENT), _hairstyle_pending_value(key, before, iid)]
+        if any(_norm(cur) == _norm(v) for v in ours):
+            restore[key] = before.get(key, ABSENT)
+        else:
+            changed.append(key)
+    if item_now is None:
+        return {"restore": restore, "changed": changed, "item": "gone", "item_keys": []}
+    if written is not None and _norm(item_now) != _norm(written.get("item")):
+        return {"restore": restore, "changed": changed, "item": "kept", "item_keys": ["item"]}
+    naming = [k for k in changed if _references((now or {}).get(k, ABSENT), iid)]
+    return {"restore": restore, "changed": changed,
+            "item": "kept" if naming else "delete", "item_keys": naming}
+
+
+def _undo_remove_hairstyle(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse the lane's hairstyle (``make_hairstyle``) under ``garment_item`` ->
+    ``character_profile`` (the order every hairstyle writer takes): the two keys
+    still equal to what the step wrote go back to ``before`` (ABSENT removes),
+    differing ones are skipped ``changed since`` (those keys); then the item is
+    deleted through the public deleter ``hairstyle_delete.delete_hairstyle`` when
+    :func:`_hairstyle_decision` says so (``HairstyleBusy`` -> ``changed since``
+    keys ["busy"], an item no longer the character's -> ``already gone``), else
+    ``changed since`` with the keys still naming it (it would otherwise clear
+    values the handler just left alone). Item gone -> ``already gone``. A
+    pending row without an item id -> ``not written``.
+
+    Side effect, documented: a restored key that named the item (the hair was
+    worn / the plain body's) is an outfit change of the character —
+    ``garment_assembly.schedule`` and ``figure_build.request(name,
+    "outfit_change")`` are called after the locks, the same calls
+    ``delete_hairstyle`` makes when it unclaims a worn hairstyle (it finds the
+    keys restored already). During a Discard both are still deferred
+    (``release_all`` runs after the undo) and recorded as suppressed; they are
+    replayed for characters that still exist, so a pre-existing character's
+    figure is rebuilt to its restored, hair-less state through the ordinary
+    path, and a character the same undo deletes has nothing to replay."""
+    from app.core import hairstyle_delete
+    from app.core.world_dev_tools import _template_fields
+    from app.models.character import (_STATE_META_KEYS, character_row_exists,
+                                      get_character_profile, remove_state_meta_key,
+                                      save_character_profile)
+    name = str(inv.get("name") or "")
+    iid = str(inv.get("item_id") or "")
+    if not iid:
+        raise _Skip(REASON_NOT_WRITTEN)
+    skips: List[_Skip] = []
+    released = False
+    with keyed_lock("garment_item", name), keyed_lock("character_profile", name):
+        exists = bool(name) and character_row_exists(name)
+        prof = (get_character_profile(name) or {}) if exists else {}
+        now = ({k: (copy.deepcopy(prof[k]) if k in prof else ABSENT)
+                for k in _hairstyle_key_names()} if exists else None)
+        plan = _hairstyle_decision(entry, inv, now, item_row(iid))
+        apply = {k: v for k, v in plan["restore"].items() if _norm(now[k]) != _norm(v)}
+        if apply:
+            for key, value in apply.items():
+                if is_absent(value):
+                    prof.pop(key, None)
+                else:
+                    prof[key] = copy.deepcopy(value)
+            # Soul values are injected on read; they never go back through a
+            # profile save.
+            for key, field in _template_fields(str(prof.get("template") or "")).items():
+                if field.get("source_file"):
+                    prof.pop(key, None)
+            if not save_character_profile(name, prof):
+                raise RuntimeError(f"could not save the profile of {name}")
+            # equipped_mesh_pieces lives in character_state.meta, which a
+            # profile save merges: leaving the key out does not remove it.
+            for key, value in apply.items():
+                if (is_absent(value) and key in _STATE_META_KEYS
+                        and not remove_state_meta_key(name, key)):
+                    raise RuntimeError(f"{key} of {name} was not removed")
+            released = any(_references(now[k], iid) for k in apply)
+        if plan["changed"]:
+            skips.append(_Skip(REASON_CHANGED, keys=list(plan["changed"])))
+        if plan["item"] == "gone":
+            skips.append(_Skip(REASON_GONE, hairstyle=iid))
+        elif plan["item"] == "kept":
+            skips.append(_Skip(REASON_CHANGED, keys=list(plan["item_keys"]), hairstyle=iid))
+        else:
+            try:
+                hairstyle_delete.delete_hairstyle(name, iid)
+            except hairstyle_delete.HairstyleBusy as e:
+                skips.append(_Skip(REASON_CHANGED, keys=["busy"], hairstyle=iid, error=str(e)))
+            except LookupError:
+                skips.append(_Skip(REASON_GONE, hairstyle=iid))
+    if released:
+        try:
+            from app.core import garment_assembly
+            garment_assembly.schedule(name)
+        except Exception as e:  # noqa: BLE001 — the restored profile stands
+            logger.warning("world-dev undo: garment assembly schedule for %s failed: %s", name, e)
+        try:
+            from app.core import figure_build
+            figure_build.request(name, "outfit_change")
+        except Exception as e:  # noqa: BLE001 — the restored profile stands
+            logger.warning("world-dev undo: Build request for %s failed: %s", name, e)
+    return skips
+
+
+def _hairstyle_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[str]:
+    """The discard lines of the run's ``remove_hairstyle`` rows, decided by
+    :func:`_hairstyle_decision` (the handler's own decision): a hairstyle the
+    undo deletes is ``hairstyle <id> of "<name>"`` — no line when the character
+    itself goes (DELETED; the handler, reached first, deletes the item); keys
+    left alone are one "<keys> was changed since — the discard leaves it
+    alone" line; an item kept is one "was changed since — the discard leaves it
+    alone" line. A pending row without an item id, or an item already gone,
+    gets no line. Oldest line first."""
+    from app.models.character import character_row_exists, get_character_profile
+    lines: List[str] = []
+    for entry in entries:  # newest-first
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "remove_hairstyle" or not inv.get("item_id"):
+            continue
+        name = str(inv.get("name") or "")
+        iid = str(inv["item_id"])
+        now = None
+        if name and character_row_exists(name):
+            prof = get_character_profile(name) or {}
+            now = {k: (prof[k] if k in prof else ABSENT) for k in _hairstyle_key_names()}
+        plan = _hairstyle_decision(entry, inv, now, item_row(iid))
+        head = f'hairstyle {iid} of "{name}"'
+        out: List[str] = []
+        if plan["changed"]:
+            out.append(f"{head}: {', '.join(plan['changed'])} was changed since — the discard "
+                       "leaves it alone")
+        if plan["item"] == "kept":
+            out.append(f"{head} was changed since — the discard leaves it alone")
+        elif plan["item"] == "delete" and name not in deleted:
+            out.append(head)
+        lines.extend(reversed(out))
+    lines.reverse()
+    return lines
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = {
     "delete_location": _undo_delete_location,
     "restore_location": _undo_restore_location,
@@ -1933,6 +2139,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "delete_quest_template": _undo_delete_quest_template,
     "restore_placement": _undo_restore_placement,
     "restore_skill_config": _undo_restore_skill_config,
+    "remove_hairstyle": _undo_remove_hairstyle,
 }
 
 
@@ -2200,6 +2407,7 @@ _TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "delete_quest_template": ("quest_template", ("id",)),
     "restore_placement": ("character", ("name",)),
     "restore_skill_config": ("character", ("name",)),
+    "remove_hairstyle": ("character", ("name",)),
 }
 
 
@@ -2780,7 +2988,11 @@ def discard_preview(run_id: str) -> List[str]:
     row changed since is one "was changed since" line; a key put back on a
     row that existed is no line (nothing goes). A skill switch
     (``restore_skill_config``) whose file changed since is one "was changed
-    since" line (:func:`_skill_preview_lines`); one put back is no line. A
+    since" line (:func:`_skill_preview_lines`); one put back is no line. The
+    media lane's hairstyle (``remove_hairstyle``) follows
+    :func:`_hairstyle_preview_lines`: ``hairstyle <id> of "<name>"`` when the
+    undo deletes it (no line when the character itself goes), "was changed
+    since — the discard leaves it alone" exactly where the handler skips. A
     secret the run added
     (``delete_secret``) is ``secret <id> of "<owner>" (<category>)``, or one
     "was changed since — the discard leaves it alone" line when it differs
@@ -2820,7 +3032,12 @@ def discard_preview(run_id: str) -> List[str]:
     target place or ``character``) still goes
     with the discard without a line, and that row keeps a dangling name
     (the tool's own ``delete_created`` refuses in that case; during a run
-    the world is frozen, so a foreign secret write is unlikely)."""
+    the world is frozen, so a foreign secret write is unlikely). Last, the
+    run's media (``world_dev_media.media_preview_lines``, Task 9 of plan
+    2026-11-25-world-dev-free-media): per element what the discard removes,
+    a render still running, and every artefact it keeps (changed since,
+    modified and not restored) — the same decision ``remove_run_media``
+    takes. The discard removes them BEFORE the journal undo."""
     from app.core.world_dev_tools import _kind_label, _short
     from app.models.character import character_row_exists
     from app.models.chat import count_messages_involving
@@ -3076,6 +3293,7 @@ def discard_preview(run_id: str) -> List[str]:
                         if holders else ""))
     lines.extend(_address_preview_lines(entries))
     lines.extend(_skill_preview_lines(entries, deleted_names))
+    lines.extend(_hairstyle_preview_lines(entries, deleted_names))
     if created or removed_rooms:
         # Where everybody stands once the undo has put the run's placements
         # back (it reaches them before the older location/room writes).
@@ -3090,4 +3308,11 @@ def discard_preview(run_id: str) -> List[str]:
                              f'"{removed_rooms[lid][room]}" ({room}) of location '
                              f"{lid}, which the undo removes — stays there, "
                              "place them anew")
+    # The run's media (plan 2026-11-25-world-dev-free-media Task 9): exactly
+    # what the discard's remove_run_media removes / keeps / leaves pending.
+    from app.core import world_dev_media
+    try:
+        lines.extend(world_dev_media.media_preview_lines(run_id))
+    except Exception as e:  # noqa: BLE001 — the preview never raises for the media
+        lines.append(f"media — could not be read ({e}); the discard will report it")
     return lines

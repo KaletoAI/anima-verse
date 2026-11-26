@@ -98,6 +98,11 @@ Step order of an element (world_dev_media.element_steps):
       for exactly Wearer and Hairdo, none for Bare; item_wearers sorts them
       ["Demo Hairdo", "Demo Wearer"]. With the create-inverse delete_items in
       a fourth run -> no character baseline at all (a new item has no wearer).
+  (m) the gate of the ("shape", "outfit_side_draft") occasion is
+      _side_views_on, which reads base_body.side_views_dressed(): the world
+      setting base_body.dressed_side_views, shipped default False
+      (config_schema). Unset -> False, False -> False, True -> True, and none
+      of the three raises (the call named a function base_body never had).
 """
 from __future__ import annotations
 
@@ -388,6 +393,30 @@ wr.set_status(run_l, "accepted")
 run_l2 = wr.create_run("build", "m", "p", "u", 80, 300000)
 wdm.note_item_touch(run_l2, "item_demo_coat", {"op": "delete_items", "ids": ["item_demo_coat"]})
 check("(l) create-inverse touches nobody", wr.baselines(run_l2) == {}, wr.baselines(run_l2))
+
+# (m)
+print("(m) the dressed-side-views gate reads the real setting")
+from app.core import config as _config  # noqa: E402
+from app.core.config_schema import field_default  # noqa: E402
+
+_gate = wdm.CONDITIONAL_OCCASIONS[("shape", "outfit_side_draft")]
+check("(m) the gate is _side_views_on", _gate is wdm._side_views_on, _gate)
+check("(m) shipped default is off", field_default("base_body", "dressed_side_views") is False,
+      field_default("base_body", "dressed_side_views"))
+_bb = _config._CONFIG.setdefault("base_body", {})
+_had, _old = "dressed_side_views" in _bb, _bb.get("dressed_side_views")
+try:
+    _bb.pop("dressed_side_views", None)
+    check("(m) unset -> False (no raise)", wdm._side_views_on("x") is False)
+    _bb["dressed_side_views"] = False
+    check("(m) off -> False", wdm._side_views_on("x") is False)
+    _bb["dressed_side_views"] = True
+    check("(m) on -> True", wdm._side_views_on("x") is True)
+finally:
+    if _had:
+        _bb["dressed_side_views"] = _old
+    else:
+        _bb.pop("dressed_side_views", None)
 
 print("FAIL: " + ", ".join(failures) if failures else "ALL OK")
 sys.exit(1 if failures else 0)

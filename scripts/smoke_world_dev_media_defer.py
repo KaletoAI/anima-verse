@@ -42,20 +42,25 @@ outfit of two NEW pieces is valid.
       armed entry's timer IS the running thread) -> ``_fire_kinds`` NOT
       called (0 calls), recorded as "model_refs._fire_kind:pose".
   (c) with ``figure_build.on_pipeline`` / ``auto_build_on`` patched to True and
-      ``generation_pause.hold_build`` to False: ``release_turn(R)`` returns
-      ["Demo Defer"]; its replay re-issues each suppressed trigger ONCE per
-      (name, trigger) — the request of (b) (and any request the create made,
-      same key) is one entry, so ``start`` is called exactly once, with
-      ("Demo Defer", reason "outfit_change", automatic True). Afterwards
-      ``is_deferred`` is False and a direct ``request`` calls ``start`` again
-      -> 2 calls in total. ``release_turn(R)`` again -> [] and no further
-      start (the deferral and its record are gone): still 2.
+      ``generation_pause.hold_build`` to False: ``release_all(R, replay=True)``
+      (the discard's release, Task 9) returns ["Demo Defer"]; its replay
+      re-issues each suppressed trigger ONCE per (name, trigger) — the
+      request of (b) (and any request the create made, same key) is one
+      entry, so ``start`` is called exactly once, with ("Demo Defer", reason
+      "outfit_change", automatic True). Afterwards ``is_deferred`` is False
+      and a direct ``request`` calls ``start`` again -> 2 calls in total.
+      ``release_all(R, replay=True)`` again -> [] and no further start (the
+      deferral and its record are gone): still 2.
+  (c0) ``release_turn`` (every turn end, Task 9) replays NOTHING: Demo Defer
+      deferred again, a suppressed request -> release_turn returns
+      ["Demo Defer"], still 2 start calls, the record is dropped (a later
+      release_all replays nothing either).
   (d) a character NOT touched by any run ("Demo Other", saved directly):
       ``schedule_outfit_render`` arms timers as before (>= 1, "pose" among
       them); ``cancel_character_timers`` disarms them (0 left).
   (e) a character deferred and then deleted before the release (``defer``
       "Demo Gone" under run R2, a suppressed request, the row deleted):
-      ``release_all(R2)`` returns ["Demo Gone"] but replays nothing — 0 new
+      ``release_all(R2, replay=True)`` returns ["Demo Gone"] but replays nothing — 0 new
       start calls (a gone character gets no render).
   (f) ``defer`` of one name by a second run moves it: ``release_turn`` of the
       first run returns [] for it, the second run's returns it.
@@ -67,30 +72,31 @@ outfit of two NEW pieces is valid.
   (i) the replay of a swallowed timer body re-arms ONLY that kind: "Demo
       Other" deferred under "run-i", a started "pose" timer body swallowed ->
       the suppressed triggers are exactly ["model_refs._fire_kind:pose"];
-      ``release_all("run-i")`` -> the armed timers are exactly {"pose"} (a
+      ``release_all("run-i", replay=True)`` -> the armed timers are exactly {"pose"} (a
       schedule_outfit_render replay would also arm the T-pose or the Build
       timer, (d)).
-  (h) the agent releases at EVERY turn end (RunManager with a scripted
-      FakeLLM as in smoke_world_dev_agent; the (c) patches stay, so a replayed
-      Build request reaches the start recorder). A character's outfit render
-      is armed as in (d) ("pose" among the timers) once it is released.
+  (h) the agent releases at EVERY turn end WITHOUT a replay and schedules
+      the run's media instead (Task 9; RunManager with a scripted FakeLLM as
+      in smoke_world_dev_agent; ``world_dev_media.schedule`` is replaced by a
+      recorder, so no lane task is queued; the (c) patches stay).
       h1 final turn [create_character "Demo H1" + outfit, (probe), "Done."]:
          the probe, run inside the 2nd LLM call (= still in the turn), sees
-         H1 deferred and no timer armed -&gt; awaiting_review; afterwards H1 is
-         not deferred and "pose" is armed (the replay).
+         H1 deferred and no timer armed -> awaiting_review; afterwards H1 is
+         not deferred, NO timer is armed (no replay) and schedule was called
+         for the run.
       The run starts with max_steps=1 (per turn): a final reply after one
       step still ends the turn normally (smoke_world_dev_agent (t)/(e)).
       h2 budget cut: [create_character "Demo H2", create_character "Demo H2b"]
-         -&gt; the turn is cut after H2 (awaiting_review, H2b never written);
-         H2 not deferred, "pose" armed.
-      h3 failed turn [create_character "Demo H3", RuntimeError("down")] -&gt;
+         -> the turn is cut after H2 (awaiting_review, H2b never written);
+         H2 not deferred, no timer, schedule called again.
+      h3 failed turn [create_character "Demo H3", RuntimeError("down")] ->
          turn 3 rolled back (awaiting_review), H3 gone, not deferred, no
-         timer armed (a gone character gets no replay).
+         timer armed, schedule called (the rollback re-plans).
       h4 _interrupt: wr.set_status raises once for "awaiting_review":
-         [create_character "Demo H4", "ok"] -&gt; interrupted; H4 not deferred,
-         "pose" armed.
+         [create_character "Demo H4", "ok"] -> interrupted; H4 not deferred,
+         no timer, schedule called.
       h5 _close: "Demo Other" deferred by hand under the run, then discard
-         -&gt; rolled_back, "Demo Other" no longer deferred (release_all), H1,
+         -> rolled_back, "Demo Other" no longer deferred (release_all), H1,
          H2 and H4 gone and none of them has a timer left.
 """
 from __future__ import annotations
@@ -217,6 +223,9 @@ async def agent_cases():
     fake = FakeLLM([])
     rm.llm_factory = lambda model, provider, max_tokens: (fake, None)
     seen = {}
+    scheduled = []
+    real_schedule = wdm.schedule
+    wdm.schedule = lambda run_id_: scheduled.append(run_id_) or []
 
     def probe():
         seen["deferred"] = wdm.is_deferred("Demo H1")
@@ -231,7 +240,8 @@ async def agent_cases():
     check("(h1) deferred during the turn", seen.get("deferred") is True, seen)
     check("(h1) no timer during the turn", seen.get("armed") == set(), seen)
     check("(h1) released after the turn", not wdm.is_deferred("Demo H1"))
-    check("(h1) replay armed the outfit render", "pose" in armed("Demo H1"), armed("Demo H1"))
+    check("(h1) no replay at the turn end", armed("Demo H1") == set(), armed("Demo H1"))
+    check("(h1) the turn end scheduled the media", scheduled == [rid], scheduled)
 
     # h2
     fake.replies = [make_char("Demo H2"), make_char("Demo H2b")]
@@ -241,7 +251,8 @@ async def agent_cases():
           and "budget reached" in (run["note"] or ""), run)
     check("(h2) H2b never written", not character_row_exists("Demo H2b"))
     check("(h2) released", not wdm.is_deferred("Demo H2"))
-    check("(h2) replay armed", "pose" in armed("Demo H2"), armed("Demo H2"))
+    check("(h2) no replay", armed("Demo H2") == set(), armed("Demo H2"))
+    check("(h2) scheduled", scheduled == [rid] * 2, scheduled)
 
     # h3
     fake.replies = [make_char("Demo H3"), RuntimeError("down")]
@@ -252,6 +263,7 @@ async def agent_cases():
     check("(h3) H3 gone", not character_row_exists("Demo H3"))
     check("(h3) released", not wdm.is_deferred("Demo H3"))
     check("(h3) no replay for a gone character", armed("Demo H3") == set(), armed("Demo H3"))
+    check("(h3) the rollback re-planned", scheduled == [rid] * 3, scheduled)
 
     # h4
     orig_set_status = wr.set_status
@@ -272,7 +284,9 @@ async def agent_cases():
         wr.set_status = orig_set_status
     check("(h4) interrupted", run["status"] == "interrupted", run)
     check("(h4) released", not wdm.is_deferred("Demo H4"))
-    check("(h4) replay armed", "pose" in armed("Demo H4"), armed("Demo H4"))
+    check("(h4) no replay", armed("Demo H4") == set(), armed("Demo H4"))
+    check("(h4) scheduled", scheduled == [rid] * 4, scheduled)
+    wdm.schedule = real_schedule
 
     # h5
     wdm.defer("Demo Other", rid)
@@ -338,15 +352,24 @@ try:
     figure_build.on_pipeline = lambda *a, **kw: True
     figure_build.auto_build_on = lambda *a, **kw: True
     generation_pause.hold_build = lambda *a, **kw: False
-    released = wdm.release_turn(run)
-    check("(c) release_turn returns the name", released == ["Demo Defer"], released)
+    released = wdm.release_all(run, replay=True)
+    check("(c) release_all returns the name", released == ["Demo Defer"], released)
     check("(c) replay starts the Build exactly once",
           starts == [("Demo Defer", "outfit_change", True)], starts)
     check("(c) no longer deferred", not wdm.is_deferred("Demo Defer"))
     figure_build.request("Demo Defer", "outfit_change")
     check("(c) a direct request starts again", len(starts) == 2, starts)
     check("(c) a second release replays nothing",
-          wdm.release_turn(run) == [] and len(starts) == 2, starts)
+          wdm.release_all(run, replay=True) == [] and len(starts) == 2, starts)
+    model_refs.cancel_character_timers("Demo Defer")
+
+    # (c0)
+    wdm.defer("Demo Defer", run)
+    figure_build.request("Demo Defer", "outfit_change")
+    check("(c0) release_turn names it", wdm.release_turn(run) == ["Demo Defer"])
+    check("(c0) release_turn replays nothing", len(starts) == 2, starts)
+    check("(c0) the record is dropped",
+          wdm.release_all(run, replay=True) == [] and len(starts) == 2, starts)
     model_refs.cancel_character_timers("Demo Defer")
 
     # (d)
@@ -370,7 +393,7 @@ try:
     delete_character("Demo Gone")
     check("(e) row gone", not character_row_exists("Demo Gone"))
     n = len(starts)
-    rel = wdm.release_all(run2)
+    rel = wdm.release_all(run2, replay=True)
     check("(e) release_all names it", rel == ["Demo Gone"], rel)
     check("(e) a gone character gets no replay", len(starts) == n, starts[n:])
 
@@ -391,7 +414,7 @@ try:
           wdm.suppress_if_deferred("Demo Nobody", "figure_build.request", ("x",)) is True)
     check("(g) recorded", wdm.suppressed_triggers("Demo Nobody") == ["figure_build.request"],
           wdm.suppressed_triggers("Demo Nobody"))
-    wdm.release_all("run-g")
+    wdm.release_all("run-g", replay=False)
 
     # (i)
     model_refs.cancel_character_timers("Demo Other")
@@ -400,7 +423,7 @@ try:
     check("(i) only the timer body recorded",
           wdm.suppressed_triggers("Demo Other") == ["model_refs._fire_kind:pose"],
           wdm.suppressed_triggers("Demo Other"))
-    wdm.release_all("run-i")
+    wdm.release_all("run-i", replay=True)
     check("(i) replay re-armed only that kind", armed("Demo Other") == {"pose"},
           armed("Demo Other"))
     model_refs.cancel_character_timers("Demo Other")

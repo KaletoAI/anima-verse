@@ -747,6 +747,9 @@ async def lifespan(app: FastAPI):
     register_npc_spawn_handler()
     from app.core.npc_assets import register_npc_assets_handler
     register_npc_assets_handler()
+    # World Dev free mode: the ONE global media lane (plan 2026-11-25-world-dev-free-media, Task 8).
+    from app.core.world_dev_media import register_world_dev_media_handler
+    register_world_dev_media_handler()
     from app.core.pose_animation import register as _reg_pose_anim
     _reg_pose_anim()
     from app.core.pose_transition import register as _reg_pose_transition
@@ -1068,6 +1071,19 @@ async def lifespan(app: FastAPI):
     from app.core.task_queue import get_task_queue
     get_task_queue().start()
     logger.info("Task-Queue Worker gestartet")
+
+    # World Dev media lane: rows left running by the last process are queued
+    # again and the one lane task is ensured. AFTER the queue started — a
+    # submit before start() would auto-start the workers before every
+    # handler is registered, and start() has turned the old lane task (if
+    # any) back to pending, so no duplicate is made.
+    try:
+        from app.core.world_dev_media import reset_on_boot as _wdm_reset
+        _wdm_reset_counts = _wdm_reset()
+        if any(_wdm_reset_counts.values()):
+            logger.info("World Dev media lane at boot: %s", _wdm_reset_counts)
+    except Exception as _wdme:
+        logger.error("World Dev media lane boot reset failed: %s", _wdme, exc_info=True)
 
     # Startup event: packages hook one-time bootstrap here (e.g. the
     # attraction package's romantic-interests extraction). Core names only

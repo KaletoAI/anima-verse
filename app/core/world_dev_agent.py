@@ -41,6 +41,20 @@ From `awaiting_review` a follow-up `message` starts the next turn;
 the ONE terminal transition: status + ended_at, then the freeze state the
 world had before the run.
 
+Media (plan docs/superpowers/plans/2026-11-25-world-dev-free-media.md,
+Task 9): a follow-up turn's start cancels the run's queued media rows
+(`world_dev_media.cancel_queued`, "turn N started"); every turn end that
+leaves the run in review (final, budget cut, a rolled-back later turn) or
+interrupted releases the turn's deferral WITHOUT a replay and queues the
+media of every touched element (`world_dev_media.schedule`, which re-plans
+what a cancel left open). Discard closes and removes the run's media BEFORE
+the journal undo (`close_run_media`: the run's characters deferred again,
+a running render waited for at most `DISCARD_WAIT_S`, then `pending`),
+and after it sweeps the orphan dirs and replays the triggers the undo
+suppressed (`finish_closed_run`); the report gains `media` {removed,
+kept, pending, swept} — media never make the rollback incomplete. Accept
+cancels nothing (`finish_accepted_run`: the lane keeps rendering).
+
 A rolled-back later turn leaves the in-memory history truthful: every
 entry of that turn after its user message is dropped and one note says the
 turn was rolled back (and which steps could not be reversed), so the next
@@ -339,10 +353,14 @@ class RunManager:
         return run
 
     async def _close(self, run_id: str, status: str, note: Optional[str] = None,
-                     restore_freeze: bool = True) -> None:
+                     restore_freeze: bool = True,
+                     media_closed: bool = False) -> Dict[str, List]:
         """THE terminal transition: status + ended_at, then the world's
         pre-run freeze state (skipped with `restore_freeze=False`: a start
-        that failed before it recorded that state)."""
+        that failed before it recorded that state), then the run's media
+        (`_close_media`; `media_closed` = the caller already ran
+        `world_dev_media.close_run_media` before its journal undo). Returns
+        the orphan sweep of a non-accepted close (`{"removed", "kept"}`)."""
         from app.models.world import set_world_frozen
         run = await asyncio.to_thread(self._get, run_id)
         await asyncio.to_thread(wr.set_status, run_id, status, note)
@@ -353,7 +371,7 @@ class RunManager:
                 logger.error("world-dev %s: restoring the freeze state failed: %s",
                              run_id, e, exc_info=True)
         logger.info("world-dev run %s closed: %s", run_id, status)
-        await self._release_media(run_id, closing=True)
+        swept = await self._close_media(run_id, status, media_closed)
         st = self._state(run_id)
         await self._emit(st, {"type": "status", "status": status,
                               "note": note if note is not None else run.get("note") or ""})
@@ -362,17 +380,77 @@ class RunManager:
         st.history, st.llm, st.llm_instance, st.system = [], None, None, ""
         if self._states.get(run_id) is st:
             self._states.pop(run_id, None)
+        return swept
 
-    async def _release_media(self, run_id: str, *, closing: bool = False) -> None:
-        """Lift the run's deferral of automatic renders (``world_dev_media``,
-        plan 2026-11-25-world-dev-free-media Task 2): at every turn end
-        (``release_turn``) and when the run closes (``release_all``). Never
-        raises — the run's transition stands either way."""
+    async def _release_media(self, run_id: str) -> None:
+        """Lift the turn's deferral of automatic renders (``world_dev_media``,
+        plan 2026-11-25-world-dev-free-media Tasks 2/9) at every turn end —
+        without a replay: the turn-end `_schedule_media` renders instead.
+        Never raises — the run's transition stands either way."""
         try:
-            await asyncio.to_thread(wdm.release_all if closing else wdm.release_turn, run_id)
+            await asyncio.to_thread(wdm.release_turn, run_id)
         except Exception as e:  # noqa: BLE001
             logger.error("world-dev %s: releasing the media deferral failed: %s",
                          run_id, e, exc_info=True)
+
+    async def _schedule_media(self, run_id: str, st: _RunState) -> None:
+        """A turn returned the run to review (or left it interrupted): queue
+        the media of every element the run touched (``world_dev_media.schedule``
+        re-plans ALL of them, so rows a turn start cancelled come back by
+        themselves). A failure is logged and shown as one text event; the
+        turn's outcome stands."""
+        try:
+            await asyncio.to_thread(wdm.schedule, run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("world-dev %s: scheduling the media failed: %s", run_id, e,
+                         exc_info=True)
+            await self._emit(st, {"type": "text", "text": f"[media scheduling failed: {e}]"})
+
+    @staticmethod
+    async def _media_closing(run_id: str) -> Dict[str, List]:
+        """Discard / terminal rollback before the journal undo
+        (``world_dev_media.close_run_media``). Never raises: a failure is one
+        `kept` record — media are derived, they never make a rollback
+        incomplete (M9). `defer_run` runs first in its own try, so the
+        journal undo's automatic triggers are still recorded (and replayed
+        by the close) when `close_run_media` fails before its own
+        `defer_run` (e.g. in `set_media_state`); a second `defer_run`
+        inside it is a no-op."""
+        try:
+            await asyncio.to_thread(wdm.defer_run, run_id)
+        except Exception as e:  # noqa: BLE001 — close_run_media tries again
+            logger.error("world-dev %s: deferring the run's characters failed: %s",
+                         run_id, e, exc_info=True)
+        try:
+            return await asyncio.to_thread(wdm.close_run_media, run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("world-dev %s: removing the run's media failed: %s", run_id, e,
+                         exc_info=True)
+            return {"removed": [], "pending": [],
+                    "kept": [{"item": "media", "reason": f"could not be removed ({e})"}]}
+
+    async def _close_media(self, run_id: str, status: str,
+                           media_closed: bool) -> Dict[str, List]:
+        """The media side of `_close` (Task 9). Accepted: media state
+        ``accepted``, the deferral released without a replay, the lane keeps
+        running. Otherwise (discard, terminal rollback, a failed start): the
+        run's media are closed and removed first unless the caller did it
+        before its undo (`media_closed`), then the orphan dirs are swept and
+        the deferral released WITH the replay of the triggers the undo
+        suppressed. Never raises; returns the sweep (`{"removed", "kept"}`)."""
+        try:
+            if status == "accepted":
+                await asyncio.to_thread(wdm.finish_accepted_run, run_id)
+                return {"removed": [], "kept": []}
+            if not media_closed:
+                closed = await self._media_closing(run_id)
+                if closed.get("pending") or closed.get("kept"):
+                    logger.info("world-dev %s: media closed with %s", run_id, closed)
+            return await asyncio.to_thread(wdm.finish_closed_run, run_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("world-dev %s: closing the run's media failed: %s", run_id, e,
+                         exc_info=True)
+            return {"removed": [], "kept": [{"item": "media", "reason": f"could not be swept ({e})"}]}
 
     def _spawn(self, run_id: str, st: _RunState, text: str) -> None:
         st.stop = False
@@ -385,11 +463,12 @@ class RunManager:
                     max_tokens: Optional[int] = None,
                     max_steps: int = DEFAULT_MAX_STEPS,
                     max_tokens_total: int = DEFAULT_MAX_TOKENS_TOTAL,
-                    effort: str = "") -> str:
+                    effort: str = "", media_enabled: bool = True) -> str:
         """Start a run; ValueError (nothing changed) when the task is empty,
         the effort unknown or the model cannot be resolved, RunOpenError when
         a run is open. `effort` is stored on the run (EFFORT_LEVELS, '' =
-        the model's default)."""
+        the model's default), `media_enabled` is the run's media switch
+        (world_dev_media)."""
         from app.models.world import is_world_frozen, set_world_frozen
         task = (task or "").strip()
         if not task:
@@ -402,7 +481,8 @@ class RunManager:
         run_id = await asyncio.to_thread(
             wr.create_run, task, model, provider, user_id,
             int(max_steps or DEFAULT_MAX_STEPS),
-            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens, effort)
+            int(max_tokens_total or DEFAULT_MAX_TOKENS_TOTAL), max_tokens, effort,
+            bool(media_enabled))
         st = self._state(run_id)
         async with st.lock:
             recorded = False  # was_frozen holds the world's real pre-run state
@@ -461,6 +541,15 @@ class RunManager:
                                                    run.get("effort") or "")
                 st.history = await asyncio.to_thread(self._rebuilt_history, run)
             await asyncio.to_thread(wr.set_status, run_id, "running", "")
+            # The rows still queued would render a state the new turn may
+            # change: cancelled (a running row finishes its current step);
+            # the turn end re-plans every touched element (Task 9).
+            try:
+                await asyncio.to_thread(wdm.cancel_queued, run_id,
+                                        f"turn {int(run.get('turn') or 0) + 1} started")
+            except Exception as e:  # noqa: BLE001 — the turn starts either way
+                logger.error("world-dev %s: cancelling the queued media failed: %s",
+                             run_id, e, exc_info=True)
             await self._emit(st, {"type": "status", "status": "running", "note": ""})
             self._spawn(run_id, st, text)
 
@@ -503,6 +592,10 @@ class RunManager:
             if run["status"] not in ("awaiting_review", "interrupted"):
                 raise RunStateError(f"run is {run['status']}, cannot discard", run_id)
             report: Dict[str, Any] = {"reversed": [], "skipped": [], "complete": False}
+            # Media first (Task 9): closed, the run's characters deferred
+            # again, every produced artefact removed (bounded wait for a
+            # running row) — then the journal undo.
+            media = await self._media_closing(run_id)
             try:
                 report = await asyncio.to_thread(wu.undo, run_id)
             except Exception as e:  # noqa: BLE001 — close the run anyway
@@ -519,7 +612,15 @@ class RunManager:
                     except Exception as e:  # noqa: BLE001 — the close must still run
                         logger.error("world-dev %s: recording the skipped steps failed: %s",
                                      run_id, e, exc_info=True)
-                await self._close(run_id, "rolled_back" if complete else "rollback_incomplete")
+                swept = await self._close(run_id,
+                                          "rolled_back" if complete else "rollback_incomplete",
+                                          media_closed=True)
+                # Media never make the rollback incomplete (M9): own key.
+                report["media"] = {
+                    "removed": list(media.get("removed") or []),
+                    "kept": list(media.get("kept") or []) + list(swept.get("kept") or []),
+                    "pending": list(media.get("pending") or []),
+                    "swept": list(swept.get("removed") or [])}
             return report
 
     async def subscribe(self, run_id: str, after: int = 0) -> AsyncIterator[Dict[str, Any]]:
@@ -607,8 +708,13 @@ class RunManager:
                         status_ev = await self._cut_by_budget(run_id, st, turn, note)
                     else:
                         status_ev = await self._fail(run_id, st, turn, note, mark)
-                    # After the turn's undo (a failed turn), before the status event.
+                    # After the turn's undo (a failed turn), before the status
+                    # event: release the deferral (no replay), then queue the
+                    # media of the run's elements when the run is back in
+                    # review (status_ev None = _fail closed the run).
                     await self._release_media(run_id)
+                    if status_ev is not None:
+                        await self._schedule_media(run_id, st)
                     st.busy = False
                     if status_ev:
                         await self._emit(st, status_ev)
@@ -637,6 +743,7 @@ class RunManager:
             run = await asyncio.to_thread(wr.get_run, run_id)
             if run is not None and run["status"] == "running":
                 await asyncio.to_thread(wr.set_status, run_id, "interrupted", note)
+                await self._schedule_media(run_id, st)
                 await self._emit(st, {"type": "status", "status": "interrupted",
                                       "note": note})
         except Exception as e:  # noqa: BLE001 — the boot sweep is the backstop

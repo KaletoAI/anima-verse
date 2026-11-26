@@ -106,6 +106,19 @@ def _model_dir(owner_id: str, *, create: bool = False) -> Path:
     return d
 
 
+def model_dir(location_id: str) -> Path:
+    """The building-model directory of a location (``locations/<id>/model3d``),
+    never created. The id resolves like every other reader here; a location
+    that no longer resolves (its row was deleted) keeps its raw id when that
+    is a safe key, so the leftovers of a deleted place can still be found.
+    ValueError for an id that is neither."""
+    from app.core.media_cleanup import safe_key
+    owner = _owner_id(location_id) or safe_key(str(location_id or ""))
+    if not owner:
+        raise ValueError(f"not a location id: {location_id!r}")
+    return _model_dir(owner)
+
+
 def _gallery(owner_id: str, room_id: str = "") -> ModelGallery:
     """The shared gallery for one subject (location building or one room)."""
     return ModelGallery(_model_dir(owner_id), _stem(room_id))
