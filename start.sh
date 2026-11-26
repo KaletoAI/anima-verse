@@ -15,6 +15,7 @@
 # Players use the native client; /play on the Python server is only a hint page.
 # The HUD page alone (workspace hud/, port 5184) runs with ANIMA_API pointing at this host:
 #   ANIMA_API=http://<this-host>:8000 npm run dev -w hud
+# A file .autopull in the repo root makes start/restart run git pull --ff-only first (production hosts only).
 
 set -euo pipefail
 
@@ -252,11 +253,22 @@ render_group_to_add() {
     done
 }
 
+autopull_code() {
+    [[ -f "$SCRIPT_DIR/.autopull" ]] || return 0
+    echo "[update] Pulling latest code (git pull --ff-only)..."
+    if ! git -C "$SCRIPT_DIR" pull --ff-only; then
+        echo "[update] WARNING: git pull failed — starting with the code on disk"
+        return 0
+    fi
+    echo "[update] Code at $(git -C "$SCRIPT_DIR" log --oneline -1)"
+}
+
 start_main() {
     if is_running "$MAIN_PID"; then
         echo "[main] Already running (PID $(cat "$MAIN_PID"))"
         return
     fi
+    autopull_code
     # Fully stop the old process before rotating its log.
     kill_port "$MAIN_PORT" "main" "$MAIN_PATTERN"
     rotate_log "$MAIN_LOG"
@@ -356,6 +368,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --status         Show service status"
             echo ""
             echo "  Players use the native client; /play is a hint page."
+            echo "  A file .autopull in the repo root makes start/restart run git pull --ff-only first (production hosts only)."
             exit 0
             ;;
         *)
