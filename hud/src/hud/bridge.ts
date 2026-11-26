@@ -56,7 +56,7 @@ const gameNames = ['avatarChanging', 'pairFacing', 'infoAction', 'closeInfo', 'c
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
   'applyGraphicsPrefs', 'clearClientCache', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
-const uiNames = ['openChat', 'openScreenshotPhoto', 'toast', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
+const uiNames = ['openChat', 'openScreenshotPhoto', 'toast', 'propReason', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
 function reject(msg: unknown): void { console.warn('[hud bridge] Dropped invalid message', msg); }
 function valid(msg: unknown): msg is ToHud | FromHud {
   return !!msg && typeof msg === 'object' && 'v' in msg && msg.v === HUD_BRIDGE_VERSION && 'kind' in msg;

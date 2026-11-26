@@ -86,6 +86,12 @@ public sealed class OrderPlayer
 
     public OrderState State => _frozen && _state is not (OrderState.Idle or OrderState.Abort) ? OrderState.Frozen : _state;
 
+    /// <summary>The chain's own state, the world freeze NOT folded in (<see cref="State"/> reports every live state as Frozen).</summary>
+    public OrderState RunState => _state;
+
+    /// <summary>The length the running exit or entry was given at its start (its clip's seconds, else the nominal ones).</summary>
+    public double PhaseDuration => _phaseDur;
+
     public double IssuedLocal { get; private set; }
 
     /// <summary>The horizontal metres walked in the current order (a late seek included).</summary>
@@ -94,11 +100,41 @@ public sealed class OrderPlayer
     /// <summary>Where the current walk leads (null before the walk phase).</summary>
     public Vec3? WalkGoal => _walkTarget;
 
+    /// <summary>The path the current order's walk was first planned on (null before its walk); a replan keeps it.</summary>
+    public NavPlan? WalkPlan { get; private set; }
+
     /// <summary>The pose kind of the running phase; an exit names the kind it leaves.</summary>
     public string? PhasePoseKind => _poseKind;
 
+    /// <summary>
+    /// The current walk's failures to make progress (its stuck count plus its blockades, both kept over replans; 0
+    /// without a walk). The avatar's click walk ends at the second (plan E3 Task 10, final review E2 I-2).
+    /// </summary>
+    public int WalkFailures => _walk is { } w ? w.StuckCount + w.Blockades : 0;
+
+    /// <summary>
+    /// The current walk stands at a link whose ride is requested (the answer is still out) or running
+    /// (<see cref="OrderWalk.Riding"/>); the avatar's click walk holds input and position corrections meanwhile.
+    /// </summary>
+    public bool WalkRiding => _walk is { Riding: true };
+
     /// <summary>The reason of the last refusal.</summary>
     public string? RefusalReason { get; private set; }
+
+    /// <summary>
+    /// The avoidance's answer handed to the walk's next step (<see cref="OrderWalk.Avoidance"/>, plan E3 Task 11): the
+    /// desired velocity the agent reported and its safe velocity. Consumed by the next walk step; null = none.
+    /// </summary>
+    public (P2 Desired, P2 Safe)? Avoidance { get; set; }
+
+    /// <summary>The wall clamp of an avoided step (<see cref="OrderWalk.Walls"/>); null = none.</summary>
+    public Func<P2, P2, P2>? Walls { get; set; }
+
+    /// <summary>The storey height of the navmesh clamp of an avoided step (<see cref="OrderWalk.StoreyHeightM"/>).</summary>
+    public double StoreyHeightM { get; set; } = 3;
+
+    /// <summary>The walk's velocity of the last tick before the avoidance (m/s, horizontal); 0 outside a walking step.</summary>
+    public P2 DesiredVelocity { get; private set; }
 
     public bool Accept(Order order, double clientNow, double motionNow, Vec3 shownPos, double shownYawDeg)
     {
@@ -167,9 +203,11 @@ public sealed class OrderPlayer
     public OrderFrame Tick(double clientNow, IPathProvider? nav)
     {
         double c = ChainTime(clientNow);
+        DesiredVelocity = default;
         if (Current is not null && _state is not (OrderState.Idle or OrderState.Abort))
             Advance(c, nav);
         double phaseTime = _state is OrderState.Idle or OrderState.Abort ? 0 : Math.Max(0, c - _phaseStart);
+        Avoidance = null; // an answer no walk step took is stale by the next tick
         var frame = new OrderFrame(State, _pos, _yaw, _phaseStep, _poseKey, phaseTime, _pending.ToArray());
         _pending.Clear();
         if (_state == OrderState.Abort)
@@ -463,7 +501,9 @@ public sealed class OrderPlayer
             AfterArrive(_walkC);
             return true;
         }
-        var map = nav is { Ready: true } ? nav : StraightPath.Instance;
+        // Out in the open (no navmesh) a walk follows the server's terrain route (plan E3 Task 9, § A11b hint_route).
+        IPathProvider map = nav is { Ready: true } ? nav
+            : Current!.HintRoute.Count >= 2 ? new HintRoutePath(Current.HintRoute) : StraightPath.Instance;
         double speed = Current!.SpeedMS;
         if (!(speed > 0))
         {
@@ -486,6 +526,7 @@ public sealed class OrderPlayer
                 _pending.Add("no_path");
                 return false;
             }
+            WalkPlan = plan;
             _walk = new OrderWalk(plan, target, speed, _rides, _name);
             if (_late)
             {
@@ -504,7 +545,12 @@ public sealed class OrderPlayer
             }
         }
         _walk.SpeedMS = speed; // a revision may change speed_m_s / gait mid-walk
+        _walk.Avoidance = Avoidance;
+        Avoidance = null;
+        _walk.Walls = Walls;
+        _walk.StoreyHeightM = StoreyHeightM;
         var s = _walk.Step(_pos, c - _walkC, map);
+        DesiredVelocity = _walk.DesiredVelocity;
         _walkC = c;
         WalkedM += NavRoutePlanner.Horizontal(_pos, s.Pos);
         _pos = s.Pos;
@@ -541,7 +587,7 @@ public sealed class OrderPlayer
     /// The navmesh path to the map's closest point of <paramref name="target"/> (the final piece to the target itself is
     /// the walk's). A start already at that point gets a one-segment plan; no path → null.
     /// </summary>
-    /// <summary>The storey tolerance of <see cref="NavRoutePlanner"/> (its private OtherStoreyM; NavRoute.cs stays unchanged until Task 10).</summary>
+    /// <summary>The storey tolerance of <see cref="NavRoutePlanner"/> (its private OtherStoreyM).</summary>
     private const double OtherStoreyM = 1.5;
 
     private static NavPlan? PlanTo(IPathProvider map, Vec3 from, Vec3 target)

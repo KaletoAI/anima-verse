@@ -93,6 +93,10 @@ const REASONS: Record<string, string> = {
   approach_timeout: "It took too long to reach the furniture",
   journey_owner_mismatch: "This journey no longer belongs to the action",
   room_mismatch: "A participant is in a different room",
+  // The client's own furniture walk (plan E3 Task 6): no way there, stopped short, an order the server forgot.
+  no_path: "There is no way to this furniture from here",
+  arrive_too_far: "You did not get close enough to the furniture",
+  order_unknown: "This movement is no longer known; try again",
   ended: "The action ended",
   phases_completed: "The action completed successfully",
   awake: "The participant woke up",

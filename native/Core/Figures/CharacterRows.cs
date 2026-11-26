@@ -23,9 +23,15 @@ public sealed record CharacterRow(
     /// <summary><c>badges</c>: ordered name icons; absent or malformed input clears them on the next poll.</summary>
     public IReadOnlyList<CharacterBadge> Badges { get; init; } = Array.Empty<CharacterBadge>();
 
-    /// <summary>Task 57: public geometry only; absent projections clear on the next poll.</summary>
-    public JsonObject? LocalApproach { get; init; }
-    public JsonObject? PropActionEntry { get; init; }
+    /// <summary>
+    /// <c>order</c> (§ A11b): the order this figure plays (plan E3); null when the row carries none or it does not parse
+    /// (<see cref="AnimaNative.Orders.OrderParse.From"/>). A row without one ends a server order only through the root
+    /// <c>order_seq</c> (decision 6).
+    /// </summary>
+    public AnimaNative.Orders.Order? Order { get; init; }
+
+    /// <summary>The row carries an <c>order</c> that does not parse: not a row without order (it ends nothing).</summary>
+    public bool OrderUnreadable { get; init; }
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
     /// <summary>Optional authoritative facing in radians; older servers do not publish it.</summary>
     public double? Yaw { get; init; }
@@ -121,13 +127,14 @@ public sealed record CharacterRow(
                 : sl.ValueKind == JsonValueKind.Number ? (int)sl.GetDouble() : 0;
             place = new PlaceRef(pid, slot);
         }
+        var order = c.TryGetProperty("order", out var orderEl) ? AnimaNative.Orders.OrderParse.From(orderEl) : null;
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
             Yaw = Json.NumOrNull(c, "yaw"),
             Badges = ParseBadges(c),
-            LocalApproach = c.TryGetProperty("local_approach",out var la) && la.ValueKind==JsonValueKind.Object ? JsonNode.Parse(la.GetRawText())!.AsObject() : null,
-            PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
+            Order = order,
+            OrderUnreadable = order is null && c.TryGetProperty("order", out var od) && od.ValueKind != JsonValueKind.Null,
             ActivityAnimation = Json.Str(c, "activity_animation"),
             AnimationSets = sets,
             ModelRev = rev,
@@ -273,21 +280,18 @@ public sealed record FigurePlan(string Name, Vec3 Pos, string Rule, bool Snap, b
 {
     /// <summary>The actual marker or selected fallback surface; ground without one.</summary>
     public string SurfaceGroup { get; init; } = "ground";
-    /// <summary>A real room change was routed this pass (<c>transition === 'route'</c>): a climb left from before ends.</summary>
-    public bool Routed { get; init; }
-    /// <summary>The stations of that route (doors, landings, lift stops; npcs.ts <c>st.via</c>); null = none.</summary>
-    public IReadOnlyList<Vec3>? Via { get; init; }
-    /// <summary>The stair legs of that route (the NPC's guided climb, unarmed); empty = no ride.</summary>
-    public IReadOnlyList<Scene.StairLeg> Legs { get; init; } = Array.Empty<Scene.StairLeg>();
+    /// <summary>
+    /// A real room change this pass (<c>transition === 'route'</c>): without a server order the figure walks a
+    /// client-local <c>walk</c> over the location's navmesh to <see cref="FigurePlan.Pos"/> (plan E3 Task 9).
+    /// </summary>
+    public bool RoomChange { get; init; }
+    /// <summary>The room the figure was drawn in before that change (the local walk's start room); null = the ground.</summary>
+    public string? FromRoom { get; init; }
 }
 
 /// <summary>What a location's BUILT tile hands the placement (main.ts <c>residency.get(loc).tile</c> + its lookups).</summary>
 public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<double, double, double> GroundY,
-                                       Func<string, double, double, double?> RoomStandY)
-{
-    /// <summary>The doors, stairs and lift of the mounted scene for a room change (null = no routing: straight line).</summary>
-    public RouteTile? Route { get; init; }
-}
+                                       Func<string, double, double, double?> RoomStandY);
 
 /// <summary>
 /// WHICH characters stand on the map and WHERE — client3d/src/main.ts <c>computeNpcPlacements</c> without the avatar's
@@ -360,15 +364,12 @@ public static class FigurePlacement
                 // main.ts: the room the figure was drawn in is read BEFORE the new placement is filed — the start of the walk.
                 var prevRoom = shown.TryGetValue(f.Row.Name, out var prev) ? prev.Room : null;
                 if (f.Transition != FigureTransition.Stay) shown[f.Row.Name] = new ShownPlacement(f.InRoom, f.InteriorShown);
-                NpcRoutePlan? route = f.Transition == FigureTransition.Route && loc.Route is { } rt
-                    ? NpcRoute.Plan(rt, prevRoom, f.InRoom) : null;
                 plans.Add(new FigurePlan(f.Row.Name, f.Pos, f.Branch == "huddle" ? "tile" : f.Branch,
                                          f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom)
                 {
                     SurfaceGroup = f.SurfaceGroup,
-                    Routed = f.Transition == FigureTransition.Route,
-                    Via = route is { Via.Count: > 0 } ? route.Via : null,
-                    Legs = route?.Legs ?? (IReadOnlyList<Scene.StairLeg>)Array.Empty<Scene.StairLeg>(),
+                    RoomChange = f.Transition == FigureTransition.Route,
+                    FromRoom = prevRoom,
                 });
             }
         }

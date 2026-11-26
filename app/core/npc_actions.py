@@ -14,8 +14,8 @@ which one it gets (spec-npc-heimat-zeitfenster § E3):
   ``npc_home`` and stands at a free metre point, usually outside every
   location. There is no room to pick, so the turn answers ONE question: what
   it is doing. The MOVEMENT is not asked at all — the tick draws the next
-  point of the home area itself (``npc_home.random_point``) and starts an
-  ordinary point journey to it. Asking a model for coordinates would only
+  point of the home area itself (``npc_home.random_point``) and issues a
+  walk order to it (``motion_orders.issue_walk``, plan E3 Task 9). Asking a model for coordinates would only
   invite hallucinated ones.
 
 Three properties make it cheap enough to run forever:
@@ -298,6 +298,7 @@ def present_partners(name: str) -> List[Dict[str, str]]:
     from app.models.character import (get_character_profile,
                                       get_effective_activity,
                                       is_character_sleeping, is_temporary_npc)
+    from app.core.motion_orders import walking
     from app.core.perception import addressable_for
     names = addressable_for(name)
     out: List[Dict[str, str]] = []
@@ -305,7 +306,8 @@ def present_partners(name: str) -> List[Dict[str, str]]:
         if other == name or not is_temporary_npc(other):
             continue
         prof = get_character_profile(other) or {}
-        if is_character_sleeping(other) or prof.get("journey") or _is_busy(other, prof) or not action_available(other):
+        if (is_character_sleeping(other) or prof.get("journey") or walking(other, profile=prof)
+                or _is_busy(other, prof) or not action_available(other)):
             continue
         out.append({"name": other,
                     "role": str(prof.get("npc_slot_role") or "").strip(),
@@ -469,6 +471,7 @@ def candidates() -> List[str]:
     """
     if not _enabled():
         return []
+    from app.core.motion_orders import walking
     from app.models.character import (get_character_current_location,
                                       get_character_profile,
                                       get_character_status,
@@ -504,8 +507,9 @@ def candidates() -> List[str]:
                 continue
             if profile.get("is_sleeping"):
                 continue
-            if profile.get("journey"):
-                # ON THE ROAD. During a journey `current_location` is whatever
+            if profile.get("journey") or walking(name, profile=profile):
+                # ON THE ROAD (a journey, or a walk order until its flip —
+                # plan E3 decision 20: no new stroll or room change before). During a journey `current_location` is whatever
                 # transit cell the travel ticker last wrote, so this NPC would
                 # be asked to pick a room of a place it is only passing
                 # through — and the write would land on a character the ticker
@@ -548,6 +552,7 @@ def _with_action_context(name: str, variables: Dict[str, Any]) -> Dict[str, Any]
 def _apply_solo_action(name: str, answer: Dict[str, Any],
                        variables: Dict[str, Any]) -> Dict[str, Any]:
     """Packages handle explicit solo actions independently of room speech."""
+    from app.core import motion_orders
     from app.core.keyed_lock import keyed_lock
     from app.models.character import (get_character_profile, get_character_status,
                                       get_character_current_location,
@@ -558,6 +563,7 @@ def _apply_solo_action(name: str, answer: Dict[str, Any],
         with keyed_lock("character_profile", name):
             profile = get_character_profile(name) or {}
             if (not profile or get_character_status(name) or profile.get("journey")
+                    or motion_orders.walking(name, profile=profile)
                     or (get_character_current_location(name, profile=profile) or "") != variables["location_id"]
                     or (get_character_current_room(name, profile=profile) or "") != variables["current_room_id"]
                     or profile.get("npc_home") != variables["_home_origin"]):
@@ -757,8 +763,8 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
     ``walking``: such a turn ends in the walk below, so the walker is walking
     by construction and its sentence is never handed to the resolver.
     """
+    from app.core.motion_orders import issue_walk
     from app.core.npc_home import random_point
-    from app.core.travel_engine import start_journey_to_point
     from app.models.character import (force_set_status, get_character_pos,
                                       get_character_profile)
 
@@ -814,7 +820,9 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
         logger.info("npc_action(%s): nowhere to walk in its home area right "
                     "now — it stays where it is", name)
     else:
-        _journey, reason = start_journey_to_point(name, point[0], point[1])
+        # A walk order, not a journey (plan E3 decision 11): the server
+        # estimates and flips, the clients walk it.
+        _order, reason = issue_walk(name, point[0], point[1], reason="npc_roam")
         moved = reason == "ok"
         if not moved:
             logger.info("npc_action(%s): cannot walk to %s (%s)", name, point,
@@ -966,13 +974,19 @@ def run_action_for(name: str, *,
         _record_outcome("error", solo)
         return None
 
+    from app.core import motion_orders
     from app.models.character import force_set_status
+    # A room change is a walk order (plan E3 decision 10): the start is read
+    # BEFORE the setter writes the new room and its stand point.
+    walk_start = motion_orders.start_of(name) if moved else None
     written = force_set_status(name, room=room if moved else None,
                                activity=activity or None,
                                pose=pose or None)
     if not written:
         _record_outcome("error", "status write failed")
         return None
+    if moved:
+        motion_orders.walk_room_change(name, walk_start, reason="npc_action")
     talk = {} if solo.get("handled") else _apply_talk(name, answer, variables, moved=moved)
     logger.debug("npc_action(%s): %s%s%s", name,
                  f"-> {room} " if moved else "",

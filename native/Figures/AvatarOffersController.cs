@@ -43,10 +43,15 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private bool CanUse => !Suspended && _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven && !_figures.ServerDriven;
     private bool CanEnter => CanUse && !RoomRequestInFlight() && !_steering.PendingSnap && !_steering.SeatWritePending
-        && !_steering.AvatarSeated && _steering.VerticalRide is null && _steering.WalkIn is null && _steering.Correction is null;
+        && !_steering.AvatarSeated && !_steering.Riding && _steering.WalkIn is null && _steering.Correction is null;
     public Func<bool> RoomRequestInFlight { get; set; }=()=>false;
     public IReadOnlyDictionary<string,string> LockedLocations { get; set; }=new Dictionary<string,string>();
     public Action<string>? Toast { get; set; }
+    /// <summary>
+    /// A furniture refusal by its code (and the server's own words, when it sent any): the HUD turns the code into the
+    /// player's sentence (propActionReasons.ts). Unset, the code goes to <see cref="Toast"/> as it is.
+    /// </summary>
+    public Action<string,string>? ReasonToast { get; set; }
     public Action<string>? OpenLocation { get; set; }
     public Action? RefreshMap { get; set; }
     public Task? PendingEntry { get; private set; }
@@ -119,7 +124,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         ClearHover();
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
-        if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is { Paused:false }) _=RefreshSemanticOffersAsync(false); }
+        if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(false); }
     }
     public void Tick()
     {

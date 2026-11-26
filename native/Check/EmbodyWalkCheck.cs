@@ -19,7 +19,7 @@ namespace AnimaNative.Check;
 /// keeps the centre at X&lt;=5.75 while northward motion continues. The party door at Z=2 passes.
 /// The rock starts at X=8; its diagonal approach keeps Z motion. Height rises 1 m from X=9 to 10,
 /// so the 45 degree ramp fails the world's .4 m / 40 degree gate. Inside the hall a click behind its north wall is a
-/// navmesh route (plan E2 Task 6); outside every footprint a straight walk into the hall's footprint has zero progress:
+/// walk order over the navmesh (plan E2 Task 6, E3 Task 10: the avatar's local walk order); outside every footprint a straight walk into the hall's footprint has zero progress:
 /// frame 19 keeps the goal and frame 20 removes both goal and marker (fixtures/README.md "Embody checks on the navmesh").
 /// Poll and cached placement tests deliberately supply the original avatar position after local walking.
 /// </summary>
@@ -105,16 +105,34 @@ public static class EmbodyWalkCheck
             Near("W5 metre step blocks", fig.Position.X, 9);
             At(-3,-3.75f); steering.RoomId = "r-a";
             // Plan E2 Task 6: inside the hall a click behind the north wall no longer walks into it — the navmesh plans the
-            // way out through the outside door (case 2 of NavRoutePlanner); the route's end goal stays the click.
-            Is("W6 nav: a click behind the wall plans a navmesh route", steering.WalkTo(new(-3,-8)) && steering.NavRoute is not null);
+            // way out through the outside door (case 2 of NavRoutePlanner); the walk's end goal stays the click. Plan E3
+            // Task 10: that walk is the avatar's local walk order.
+            Is("W6 nav: a click behind the wall starts a walk order on the navmesh", steering.WalkTo(new(-3,-8)) && steering.WalkOrderId is not null);
             Is("W6 nav: Route is the end goal", steering.Route is { X: -3, Z: -8 });
+            // Review Task 10 (I-2): the order walks the navmesh to the outside door's outer point only; the straight walk
+            // with its gates (Blocked, walls, navmesh clamp, loading hold, terrain pace, 20-frame stall) takes the rest.
+            var w6Door = steering.WalkGoal;
+            var w6Doors = builder.FootprintAt(-3, -3.75) is { } w6Hall ? builder.NavOutsideDoors(w6Hall) : Array.Empty<P2>();
+            Is($"W6 nav: the order's goal ({w6Door?.X:0.###}, {w6Door?.Z:0.###}) is an outside door's outer point",
+               w6Door is { } wd && System.Linq.Enumerable.Any(w6Doors, o => double.Hypot(o.X - wd.X, o.Z - wd.Z) <= 1e-6));
+            int w6 = 0;
+            for (; w6 < 600 && steering.WalkOrderId is not null; w6++) Frame(none);
+            Frame(none);
+            Is("W6 nav: at the door the straight walk takes the rest", steering.WalkOrderId is null && steering.Route is { X: -3, Z: -8 }
+               && manager.OrderPlayerOf(fig.CharacterName) is null);
+            for (; w6 < 1200 && steering.Route is not null; w6++) Frame(none);
+            // The hall's only outside door is the south one (outer point (3, 3.65)); planner case 2 then goes straight to
+            // (-3, -8), back across the hall. The straight walk's gates hold it at the north wall (z -3.65 on the eroded
+            // mesh, the wall at z -4) and its 20-frame stall ends it there — it never passes the wall.
+            Is($"W6 nav: the straight walk is held inside by the north wall and stalls ({fig.Position.X:0.###}, {fig.Position.Z:0.###}) after {w6} frames",
+               steering.Route is null && manager.WalkTarget is not { Visible: true } && fig.Position.Z > -3.7 && fig.Position.Z < -3.5);
             steering.CancelRoute();
             // The straight walk keeps its 20-frame stall: outside every footprint (no navigation) behind the hall, the click
             // on its far side (-3, 8) walks into the hall's footprint, which is foreign with an authored opening → blocked;
             // the first lead (-3, -3.95) is already inside it, so every frame's target is the start (zero progress).
             At(-3,-4.1f); steering.RoomId = "";
             // Object actions retain their approach planner, route and marker.
-            Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,8)) && steering.NavRoute is null);
+            Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,8)) && steering.WalkOrderId is null);
             Is("W6 marker visible", manager.WalkTarget is { Visible: true });
             for (int i=0; i<19; i++) Frame(none);
             Is("W6 frame19 retains route", steering.Route is not null);
@@ -252,9 +270,27 @@ public static class EmbodyWalkCheck
             fig.Play(idle);
             Is("stop remembers walking source",fig.Bridging && fig.BridgeFrom==walking);
             var stopStart=fig.Position;
-            Is("object approach planned while stop holds",steering.WalkTo(new(fig.Position.X+1,fig.Position.Z)));
+            // Plan E3 Task 10: a click inside the hall is the avatar's local walk order; the order draws the figure from its
+            // first frame on and lets the stop bridge go at once (as renewed keys do) instead of waiting for it.
+            Is("click walk planned while stop holds",steering.WalkTo(new(fig.Position.X+1,fig.Position.Z)) && steering.WalkOrderId is not null);
             Frame(none);
-            Is("object approach does not cancel stop",fig.Bridging && fig.Position.DistanceTo(stopStart)<1e-5);
+            // (The order plays the walking clip; a start rule idle → walking may open its bridge then — the order moves on.)
+            Is("click walk order lets the stop go and walks",fig.BridgeFrom!=walking && fig.Position.X>stopStart.X && steering.WalkOrderId is not null);
+            // Review Task 11 I1: the click walk (3.4 m/s, NpcWalk.WalkSpeed) keeps the key walk's clip pace, never 3.4 / 1.4 ≈ 2.4×.
+            if (fig.Bridging) fig.CancelBridge(); // the start bridge holds the clip's pace; the walk's own frame follows
+            Frame(none);
+            GD.Print($"[embody] click walk clip: bridging {fig.Bridging} scale {fig.Player?.SpeedScale} pace {fig.CurrentPace}");
+            Is("click walk clip at the key walk's pace",!fig.Bridging && fig.Player is { } cwp && Math.Abs(cwp.SpeedScale-fig.CurrentPace)<1e-6);
+            steering.CancelRoute();
+            Is("cancel ends the click walk order",steering.WalkOrderId is null && !manager.HasLiveOrder(fig.CharacterName) && manager.OrderPlayerOf(fig.CharacterName) is null);
+            // The stop bridge again, for the keys (the start bridge the order's walking clip opened let go first).
+            if (fig.Bridging) fig.CancelBridge();
+            fig.Transitions=Array.Empty<ClipTransition>();
+            fig.Play(walking); fig.Target=fig.Position;
+            fig.Transitions=new[] { new ClipTransition(walking,idle,"stop",0), new ClipTransition(idle,walking,"get-up",0) };
+            fig.Play(idle);
+            Is("stop remembers walking source again",fig.Bridging && fig.BridgeFrom==walking);
+            stopStart=fig.Position;
             Frame(d);
             Is("renewed keys cancel stop in same frame",!fig.Bridging && fig.Position.X>stopStart.X);
             Is("stop source cleared and walk crossfades",fig.BridgeFrom is null && fig.CurrentKind==walking && fig.CurrentClip==walking);

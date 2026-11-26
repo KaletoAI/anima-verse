@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Set
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from pydantic import BaseModel, StrictStr
 
 from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
@@ -606,10 +607,7 @@ def _travel_block(name: str, lang: str = "en"):
         from app.core.travel_engine import get_journey, journey_eta, journey_state
         from app.models.world import get_location_name
         j = get_journey(name)
-        # A walk to a seat in the same room is the prop action's approach, not
-        # a trip: no journey bar, no "cancel journey", no hidden scene tile.
-        # The motion itself still comes from the worldmap block.
-        if not j or j.get("execution_kind") == "prop_action":
+        if not j:
             return None
         st = journey_state(j["waypoints"], j["started_at_s"], motion_time())
         target_id = j.get("target") or ""
@@ -1107,25 +1105,23 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "message": t("You are part of a party and your leader takes you "
                          "along — you cannot move on your own.", lang)})
 
-    # A furniture run that has the avatar APPROACHING (the walk and the entry)
-    # moves the figure itself: a report in that window is a client that has
-    # not yet seen the run — an NPC's consent starts it between two state
-    # polls — not the player walking off, which goes through the run's own
-    # cancel. Taken as "nothing written", like the throttle; writing it would
-    # cancel the run (reason "position") before the pose ever started
-    # (2026-11-03).
-    from app.core import prop_action_store as _runs
-    _held = _runs.held(_runs.person_key(avatar))
-    _run = _runs.get(_held) if _held else None
-    if _run and _run["status"] == "approaching":
-        return {"ok": False, "server_owned": True}
-
     try:
         x, z = float(body.get("x")), float(body.get("z"))
     except (TypeError, ValueError, OverflowError):
         raise HTTPException(status_code=400, detail="x/z must be numbers")
     if not (math.isfinite(x) and math.isfinite(z)):
         raise HTTPException(status_code=400, detail="x/z must be finite")
+    # Plan E3 Task 7: while a furniture run has the avatar APPROACHING, the
+    # player walks its own figure to the access, so a report in the target
+    # room is written WITHOUT ending the run ("quiet"). Once it has arrived
+    # (POST /play/order/arrived) or the entry plays, the server holds the
+    # figure exactly on its access and the report is dropped ("owned"). A
+    # report from another room before the arrival ends the run (reason
+    # "position") through the ordinary write below.
+    from app.core import prop_action_engine as _engine
+    _mode = _engine.pos_report_mode(avatar, x, z)
+    if _mode == "owned":
+        return {"ok": False, "server_owned": True}
     # The facing in radians (view vector (sin, 0, cos) in world x/z), stored
     # with the point so a restart shows the avatar looking the same way. A
     # report without one keeps the stored facing.
@@ -1461,8 +1457,10 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                    t("That step is too high to climb.", lang) if step else
                    t("That slope is too steep to climb.", lang))
 
-    written = set_character_pos(avatar, x, z,
-                                origin=(session, seq) if session is not None else None, yaw=yaw)
+    from contextlib import nullcontext
+    with (_engine.quiet_report() if _mode == "quiet" else nullcontext()):
+        written = set_character_pos(avatar, x, z,
+                                    origin=(session, seq) if session is not None else None, yaw=yaw)
     if entry_room:
         save_character_current_room(avatar, entry_room)
     # DISCOVERY BY SIGHT (E6): walking past a place reveals it, the same rule
@@ -4014,6 +4012,52 @@ def play_worldmap(user=Depends(get_current_user),
         **timings,
     })
     return response
+
+
+@router.get("/play/orders")
+def play_orders(user=Depends(get_current_user), since: int = Query(0)):
+    """Motion orders published after ``since`` (plan E3, contract § "Order").
+
+    Read-only and default-deny like every play route (no admin prefix). The
+    lens is the worldmap's: the active avatar, else a released avatar's
+    character; without one there is nothing to see. Every order passes
+    ``motion_orders.visible`` — the same row gates as the worldmap — and a
+    non-participant gets the movement fields only. Answers
+    ``{orders, seq, motion_now}``; the client asks again with ``since=seq``
+    after the next ``orders`` push.
+    """
+    from app.models.account import get_active_character
+    from app.core import motion_orders
+    avatar = (get_active_character() or "").strip()
+    released = bool((user.get("settings") or {}).get("avatar_released"))
+    lens = avatar or (_spectator_lens(user) if released else "")
+    return _json_off_loop(motion_orders.orders_since(lens, int(since)))
+
+
+class OrderArrivedBody(BaseModel):
+    order_id: StrictStr
+    x: float
+    z: float
+    yaw: float = 0.0
+    room_id: StrictStr
+
+
+@router.post("/play/order/arrived")
+def play_order_arrived(body: OrderArrivedBody, user=Depends(get_current_user)):
+    """The avatar's figure reports that it stands at its access (plan E3
+    Task 7): ``{"ok": true}``, or 409 with ``{status: "refused", reason}`` —
+    ``order_unknown``, ``arrive_too_far``, ``room_mismatch`` or the run's own
+    check (``prop_action_engine.arrived``). The actor is the session's avatar
+    (409 ``no_avatar`` without one)."""
+    from app.core import prop_action_engine
+    from app.models.account import get_active_character_for_user
+    avatar = get_active_character_for_user(user["id"])
+    if not avatar:
+        raise HTTPException(status_code=409, detail={"status": "refused", "reason": "no_avatar"})
+    result = prop_action_engine.arrived(avatar, body.order_id, body.x, body.z, body.yaw, body.room_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result)
+    return result
 
 
 @router.get("/play/terrain")

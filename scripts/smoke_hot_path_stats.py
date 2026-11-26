@@ -40,7 +40,8 @@ Hand-derived expectations
      t["model_sig"] <= t["characters"] + 0.5 (both are summed INSIDE the
      character loop; 0.5 ms timer tolerance). The payload built WITH timings
      equals the one built without (everything but the ``sync`` block, whose
-     clock age is a stopwatch): measuring changes no field.
+     clock age is a stopwatch, and ``motion_now``, the motion clock read at
+     each build): measuring changes no field.
 [H8] sync_topics.notify("presence", to=Avatar("A")) from the function
      ``fire`` of this script (module ``__main__``) with ONE connection bound
      to avatar A -> counter lines
@@ -198,8 +199,10 @@ def h6():
     check("H6 one character in the payload",
           [c["name"] for c in with_t["characters"]], ["hp_npc"])
     without = build_worldmap_payload(show_all=True)
-    a = {k: v for k, v in with_t.items() if k != "sync"}
-    b = {k: v for k, v in without.items() if k != "sync"}
+    # sync and motion_now are clock reads of the build itself (the motion
+    # clock runs between the two builds), not what measuring could change.
+    a = {k: v for k, v in with_t.items() if k not in ("sync", "motion_now")}
+    b = {k: v for k, v in without.items() if k not in ("sync", "motion_now")}
     check("H6 payload unchanged by measuring", a == b, True)
 
 

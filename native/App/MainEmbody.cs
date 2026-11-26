@@ -298,12 +298,14 @@ public partial class Main
                     AdoptRoom = room => _avatarPosition?.AdoptRoom(room),
                     AutoOpen = id => { if (id is null) CloseOpenLocation(); else OpenLocation(id); }
                 };
-            // Plan E2 Task 6: a navmesh route rides its stairs and lift links through the rooms controller.
-            _playerSteering.RideLink = owner => _avatarRooms?.RideLinkAsync(owner) ?? Task.FromResult(false);
+            // Plan E3 Tasks 6/10: the avatar's order walks (furniture and click walks) ask the server for the room behind a
+            // link before they ride it.
+            _figures.AvatarLinkRide = kind => _avatarRooms?.OrderLinkRide(kind);
             if (_hud is { } offerHud)
                 _avatarOffers = new AvatarOffersController(_figures, _builder, _playerSteering, _source!, offerHud, _avatarPosition)
                 {
                     Toast = EmbodyToast,
+                    ReasonToast = (code, text) => _hud?.SendUi("propReason", code, text),
                     OpenLocation = OpenLocation,
                     RefreshMap = RefreshOffersMap,
                     RefreshPropWorld = RefreshPropWorldAsync,

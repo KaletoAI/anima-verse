@@ -8,6 +8,7 @@ using AnimaNative.Api;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
 using AnimaNative.Nav;
+using AnimaNative.Orders;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
@@ -149,14 +150,14 @@ public sealed class AvatarRoomsController : IDisposable
                 lv=>FloorRoomIds.TryGetValue(lv,out string? id) && tile.Stands.RoomLevels.ContainsKey(id) ? Unlocked(id) : "");
             Channel.Walk(room,p,rooms,ownLevel ?? tile.LevelFilter);
         }
-        if(!CanUse || _steering.VerticalRide is not null) { ClearOffers(); Picking.Clear(); }
+        if(!CanUse || _steering.Riding) { ClearOffers(); Picking.Clear(); }
         else if(_clock()>=_nextOffers) { _nextOffers=_clock()+1000; UpdateOffers(); }
     }
 
     public void UpdateOffers()
     {
         var tile=Tile;
-        if(!CanUse || tile?.Open!=true || Avatar is not { } f || _steering.VerticalRide is not null || Room(tile) is not { } room)
+        if(!CanUse || tile?.Open!=true || Avatar is not { } f || _steering.Riding || Room(tile) is not { } room)
         { ClearOffers(); return; }
         var p=new P2(f.Position.X,f.Position.Z); int level=Level(tile,room) ?? 0;
         var rooms=Rooms(tile);
@@ -194,51 +195,112 @@ public sealed class AvatarRoomsController : IDisposable
         return RideAsync(tile,Elevator.TargetRoom(level,Stops(tile),Rooms(tile)),level,stop,null);
     }
 
-    /// <summary>
-    /// Plan E2 Task 6: ride one link of the avatar's navmesh route (owner ids of decision 13). Stairs: to the end of the
-    /// flight that is not on the current storey, as <see cref="RideStairsAsync"/> does; lift hop: to its other stop, as
-    /// <see cref="RideElevatorAsync"/> without the picker. Both keep the route (<c>keepNavRoute</c>) and send the
-    /// unchanged enter-room request. An unknown owner, or a storey the link does not touch → false.
-    /// </summary>
-    public Task<bool> RideLinkAsync(ulong owner)
+    /// <summary>The room, storey and landing one link of the avatar's route leads to (stairs or a lift hop); null when none.</summary>
+    private (string? Room,int Level,Vec3 Goal,StairRide? Stair)? LinkTarget(LocationSlot tile,ulong owner)
     {
-        if(!CanUse || Tile is not { } tile) return Task.FromResult(false);
         int level=Level(tile,Room(tile)) ?? 0;
         if(NavLinkOwner.TryStairs(owner,out int flight))
         {
-            if(flight<0 || flight>=tile.Places.Stairs.Count) return Task.FromResult(false);
+            if(flight<0 || flight>=tile.Places.Stairs.Count) return null;
             var s=tile.Places.Stairs[flight];
             var dest=s.Foot.Level!=level ? s.Foot : s.Head;
-            if(dest.Level==level) return Task.FromResult(false);
-            string? target=Elevator.NearestRoomAt(dest.Level,new(dest.Pos.X,dest.Pos.Z),Rooms(tile));
+            if(dest.Level==level) return null;
             var leg=Stairs.LegTo(new[]{s},dest);
-            return RideAsync(tile,target,dest.Level,dest.Pos,leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true },keepNavRoute:true);
+            return (Elevator.NearestRoomAt(dest.Level,new(dest.Pos.X,dest.Pos.Z),Rooms(tile)),dest.Level,dest.Pos,
+                    leg is null ? null : new StairRide { Legs=new[]{leg},Leg=0,Armed=true });
         }
         if(NavLinkOwner.TryElevator(owner,out int lower))
         {
             // The hop runs between the stop of its lower storey and the next stop of the same list (NavSource.Build).
             var stops=tile.Places.ElevatorStops.ToList();
             int i=stops.FindIndex(p=>p.Key==lower);
-            if(i<0 || i+1>=stops.Count) return Task.FromResult(false);
+            if(i<0 || i+1>=stops.Count) return null;
             int upper=stops[i+1].Key;
             int to=level==lower ? upper : level==upper ? lower : int.MinValue;
-            if(to==int.MinValue || !tile.Places.ElevatorStops.TryGetValue(to,out var stop)) return Task.FromResult(false);
-            _hud.SetState("elevatorOpen",false);
-            return RideAsync(tile,Elevator.TargetRoom(to,Stops(tile),Rooms(tile)),to,stop,null,keepNavRoute:true);
+            if(to==int.MinValue || !tile.Places.ElevatorStops.TryGetValue(to,out var stop)) return null;
+            return (Elevator.TargetRoom(to,Stops(tile),Rooms(tile)),to,stop,null);
         }
-        return Task.FromResult(false);
+        return null;
+    }
+
+    /// <summary>
+    /// Plan E3 Task 6: the avatar's ride over a link of its ORDER walk (<see cref="FigureManager.AvatarLinkRide"/>). The
+    /// order owns the motion (a furniture order and the click walk alike, plan E3 Task 10); this asks the server for the
+    /// room behind the link first (the unchanged enter-room request) and adopts it on the answer, before the ride moves
+    /// the figure. Null for another kind.
+    /// </summary>
+    public ILinkRide? OrderLinkRide(string kind) => kind switch
+    {
+        "stairs" => new AvatarLinkRide(this,new NpcStairsRide(()=>Tile?.Places.Stairs ?? (IReadOnlyList<StairLink>)Array.Empty<StairLink>())),
+        "lift" => new AvatarLinkRide(this,new NpcLiftRide()),
+        _ => null,
+    };
+
+    /// <summary>
+    /// The room entry of an order's link ride: true once the server took the avatar into the room behind it. The room is
+    /// adopted only while the ride still waits for this answer (<paramref name="alive"/>): a ride stopped meanwhile (a
+    /// correction, the end of embodiment, a new order) leaves the figure at the link foot, so the client keeps its room
+    /// and the next position poll reconciles the server's.
+    /// </summary>
+    private async Task<bool> EnterLinkRoomAsync(ulong owner,Func<bool> alive)
+    {
+        if(Suspended || !_active || _disposed || Tile is not { } tile || LinkTarget(tile,owner) is not { } link
+           || link.Room is not { } target || Channel.Rejected(target)) return false;
+        int generation=_generation;
+        if(!await Channel.EnterAsync(target,true) || generation!=_generation || _disposed) return false;
+        if(!alive()) { Log?.Invoke($"[pos] order link ride to room={target} ended before the answer; room not adopted"); return false; }
+        _steering.RoomId=target; AdoptRoom?.Invoke(target);
+        _world.SetLevel(tile.Loc.Id,link.Level); _followedLevel=link.Level;
+        Channel.Idle(); ClearOffers(); Picking.Clear();
+        Log?.Invoke($"[pos] order link ride entered room={target} level={link.Level}");
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="ILinkRide"/> of the avatar: <see cref="Begin"/> asks for the room (<see cref="LinkRideState.Requested"/>);
+    /// <see cref="Poll"/> holds at the link foot until the answer, then <see cref="LinkRideState.Refused"/> (event
+    /// <c>link_refused</c>, no room change) or the ride of <paramref name="inner"/>. One instance per kind of the avatar.
+    /// </summary>
+    private sealed class AvatarLinkRide(AvatarRoomsController rooms,ILinkRide inner) : ILinkRide
+    {
+        private Task<bool>? _entry;
+        private NavLink? _link;
+        /// <summary>The request of the ride now waiting; <see cref="Abort"/> and a new <see cref="Begin"/> retire it.</summary>
+        private object? _request;
+        private string _actor="";
+        public string Kind=>inner.Kind;
+        public LinkRideState Begin(string actor,NavLink link)
+        {
+            inner.Abort();
+            _actor=actor; _link=link;
+            var request=new object(); _request=request;
+            _entry=rooms.EnterLinkRoomAsync(link.Owner,()=>ReferenceEquals(_request,request));
+            return LinkRideState.Requested;
+        }
+        public LinkRideState Poll(ref Vec3 pos,double dt,double speedMS)
+        {
+            if(_entry is { } entry)
+            {
+                if(!entry.IsCompleted) return LinkRideState.Requested;
+                _entry=null; _request=null;
+                if(!entry.IsCompletedSuccessfully || !entry.Result || _link is not { } link) { _link=null; return LinkRideState.Refused; }
+                var started=inner.Begin(_actor,link);
+                if(started!=LinkRideState.Riding) return started;
+            }
+            return inner.Poll(ref pos,dt,speedMS);
+        }
+        public void Abort() { _entry=null; _link=null; _request=null; inner.Abort(); }
     }
 
     /// <summary>
     /// Capture identity/generation before await; exit, remount or a foreign footprint cannot revive a ride. True once the
-    /// vertical ride is set, false at every refusal. <paramref name="keepNavRoute"/> (a navmesh link ride) clears only the
-    /// straight route state, so the navmesh route continues after the ride.
+    /// vertical ride is set, false at every refusal.
     /// </summary>
-    private async Task<bool> RideAsync(LocationSlot tile,string? target,int level,Vec3 goal,StairRide? stair,bool keepNavRoute=false)
+    private async Task<bool> RideAsync(LocationSlot tile,string? target,int level,Vec3 goal,StairRide? stair)
     {
-        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.VerticalRide is not null) return false;
+        if(target is null || Avatar is not { } f || Channel.InFlight || Channel.Rejected(target) || _steering.Riding) return false;
         int generation=_generation;
-        if(keepNavRoute) _steering.CancelStraightRoute(); else _steering.CancelRoute();
+        _steering.CancelRoute();
         if(!await Channel.EnterAsync(target,true) || generation!=_generation || !CanUse || Avatar!=f || Tile!=tile
             || !_world.Slots.TryGetValue(tile.Loc.Id,out var mounted) || mounted!=tile) return false;
         _steering.RoomId=target; AdoptRoom?.Invoke(target);
@@ -263,7 +325,7 @@ public sealed class AvatarRoomsController : IDisposable
     }
     private IEnumerable<VerticalTarget> UsableTargets(LocationSlot tile)
     {
-        if(!CanUse || tile!=Tile || !tile.Open || _steering.VerticalRide is not null || Room(tile) is not { } room) return Array.Empty<VerticalTarget>();
+        if(!CanUse || tile!=Tile || !tile.Open || _steering.Riding || Room(tile) is not { } room) return Array.Empty<VerticalTarget>();
         return tile.Places.VerticalTargets.Where(t=>Stand(tile,Level(tile,room) ?? 0,t) is not null);
     }
 

@@ -243,40 +243,6 @@ export interface MapTravel {
   gait?: 'walk' | 'run';
 }
 
-/** Visibility-filtered remaining motion, never another character's full journey. */
-export interface MapLocalApproach {
-  floor_y?: number | null;
-  journey_id: string;
-  room_id: string;
-  waypoints: [number, number][];
-  progress_m: number;
-  walked_m: number;
-  remaining_m: number;
-  paces_m_s_real: (number | null)[] | null;
-  starts_in_s: number | null;
-}
-
-/** Public physical entry only; no execution, consent, or target identity. */
-export interface MapPropActionEntry {
-  kind: string;
-  pose_key: string;
-  access: { x: number; y: number; z: number; yaw: number };
-  anchor: { x: number; y: number; z: number; yaw: number };
-  /** Authoritative body-root offset in metres; anchor.y already subtracts it. */
-  root_offset: number;
-  /** The entry clip's REAL length, and the real seconds already played as of
-   *  this poll — entries run on the server's motion clock (real time,
-   *  independent of the game-speed factor, § A11). */
-  duration_s: number;
-  elapsed_s: number;
-  /** Entry seconds per real second: 1 while it plays, 0 frozen/paused. */
-  clock_rate: number;
-  height_cm: number;
-  role: string | null;
-  /** Motion-clock second the entry began — identity only, never timing. */
-  started_s: number;
-}
-
 export interface MapCharacter {
   name: string;
   location_id: string;
@@ -302,8 +268,6 @@ export interface MapCharacter {
   movement_target_name?: string;
   /** running journey (§ A11); null/absent when the character is not travelling */
   travel?: MapTravel | null;
-  local_approach?: MapLocalApproach | null;
-  prop_action_entry?: MapPropActionEntry | null;
   /** running PAIR interaction (§ A8a); null/absent when there is none */
   interaction?: MapInteraction | null;
   /** this character's closing clip inside its running action (§ A8c):

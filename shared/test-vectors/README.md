@@ -694,11 +694,12 @@ inert stubs only: no prop-action API or native prop behavior was added.
 
 ## Prop actions (Task 56 / E7-T11; B1 own playback, Task 83)
 
-Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 98 cases in
+Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 75 cases in
 `prop_action_motion.json` use `anima-test-vectors/1`; their single canonical
 source is `native/tests/Derivations/prop_action_motion.md`, moved word for word from
-that smoke's opening docstring in E1. All 24 original local-route,
-entry-clock and support cases retain their hand-derived inputs and values.
+that smoke's opening docstring in E1. The entry-clock and support cases
+retain their hand-derived inputs and values; E3 Task 5 removed the 23
+`localApproachPoint` local-route cases ([1], [4]) with the native NPC path.
 The format guard includes this file. The smoke retains 27 inline lifecycle
 and mesh assertions. Task 83 removes the obsolete own-approach catch-up,
 projection and server-lead cases, retaining observer timing. The 26 B1 cases
@@ -713,8 +714,6 @@ through shape adapters. Native-facing signatures:
   before renderer clearance. A null per-leg pace is timeless; a null pace
   array holds after departure. Entry samples hold access while the renderer
   plays the measured bridge, then finish at the exact server anchor.
-- `localApproachPoint(path, ageS)` → `[x,z]`; path has `waypoints`, nullable
-  segment `paces_m_s_real`, `progress_m`, optional `starts_in_s`.
 - `entryPhase(entry, ageS)` → fraction; `entryClipSample(entry, ageS)` →
   `{phase,clip_s}`, multiplying by the entry argument's `clip_duration_s`.
   The original `height_cm` input remains to document that timing is independent.

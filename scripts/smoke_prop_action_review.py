@@ -174,17 +174,6 @@ class Review(unittest.TestCase):
             A._commit(run, ('start', 'active'))
         self.assertEqual(notify.call_args.args[0][name]['changes']['run_energy'], dict(old=50, new=62))
 
-    def test_failed_restart_profile_save_preserves_clock(self):
-        name, target, _ = S.setup_run()
-        result = S.request(name, target)
-        run = R.get(result['execution_id'])
-        run['data']['process'] = 'previous-process'
-        before = deepcopy(run['data'])
-        with patch.object(F.C, 'save_character_profile', return_value=False):
-            with self.assertRaises(RuntimeError):
-                A._clock(run, F.game_time() + GameDuration.of(seconds=100))
-        self.assertEqual(run['data'], before)
-
     def test_recent_state_skips_decoding_old_history(self):
         name, target, _ = S.setup_run()
         result = S.request(name, target)
@@ -222,11 +211,11 @@ class Review(unittest.TestCase):
         with patch.object(places._GeometryQuery, 'room_places', with_room_marker):
             result = S.request(name, target)
             self.assertEqual(result['status'], 'approaching', result)
-            # The ticker's revalidation of the walk reads the same inventory;
-            # it used to raise there and cancel the approach on its first step.
+            # The run's step revalidates with the same inventory; it used to
+            # raise there and cancel the approach on its first step.
             S.tick(1)
         self.assertEqual(R.get(result['execution_id'])['status'], 'approaching')
-        self.assertEqual(F.C.get_character_profile(name)['journey']['execution_ref'], result['execution_id'])
+        self.assertEqual(R.get(result['execution_id'])['data']['order']['target']['execution_id'], result['execution_id'])
 
     def test_other_action_while_seated_stands_up_and_goes(self):
         # Seated in one action, choosing another one: the offer is open, the

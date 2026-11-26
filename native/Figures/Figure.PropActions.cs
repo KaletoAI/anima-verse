@@ -8,7 +8,6 @@ namespace AnimaNative.Figures;
 
 public partial class Figure
 {
-    public PropEntryPlayback? PropEntry { get; internal set; }
     public bool PropEntryBlocked { get; internal set; }
     internal bool PropCommitPending { get; set; }
     internal string PropCommitKey { get; set; } = "";

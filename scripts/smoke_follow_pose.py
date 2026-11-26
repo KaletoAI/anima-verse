@@ -192,7 +192,10 @@ class FollowPose(unittest.TestCase):
                                         (before[person]["x"], before[person]["z"])), .05)
             slots.add(anchor["slot"])
         self.assertEqual(slots, {0, 1})
-        self.assertFalse(old["data"].get("exit_motions"))
+        # Nobody stood up, so the end published no cancel order (decision 19).
+        from app.core import motion_orders as MO
+        for person in (name, partner):
+            self.assertNotEqual((MO.index_get(person) or {}).get("kind"), "cancel")
 
     def test_4_one_seat_keeps_one(self):
         name, partner, target, pid, run = active_pair(shared=True)
@@ -202,7 +205,11 @@ class FollowPose(unittest.TestCase):
         self.assertEqual([r["actor"] for r in follows], [first])
         self.assertEqual(follows[0]["status"], "active")
         self.assertIsNone(F.C.get_character_profile(second).get("place"))
-        self.assertIn(second, R.get(run["execution_id"])["data"].get("exit_motions", {}))
+        # The one who got up carries the end's cancel order, alone in it.
+        from app.core import motion_orders as MO
+        order = MO.index_get(second) or {}
+        self.assertEqual(order.get("kind"), "cancel", order)
+        self.assertEqual([a["name"] for a in order["actors"]], [second])
 
     def test_5_walking_off_and_replacement_have_no_follow(self):
         name, partner, target, pid, run = active_pair()

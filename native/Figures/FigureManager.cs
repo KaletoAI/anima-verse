@@ -40,8 +40,8 @@ public sealed class FigureStats
 /// <c>NpcManager</c>:
 ///
 ///   • which and where: <see cref="FigurePlacement.Plan"/> once a second from the cached map (journeys, free points,
-///     the room ladder of every mounted location — Task 29), a real room change routed through doors, stairs or the
-///     lift (<see cref="NpcRoute"/>);
+///     the room ladder of every mounted location — Task 29), a real room change walked as an order: the server's
+///     <c>walk</c>, else a client-local one over the location's navmesh (plan E3 Task 9, <see cref="StartRoomWalk"/>);
 ///   • how it gets there: every frame the browser's NPC walk (<see cref="Tick"/>, Task 30) — 3.4 m/s, running beyond
 ///     6 m, stations retired at 1.5 m, the yaw eased ×10/s, the root height ×4/s, the ground word deciding swim / crawl
 ///     / treading and the float over water, the underwater ghost, the stair ride;
@@ -327,6 +327,9 @@ public partial class FigureManager : Node3D
         _rowByName = _rows.GroupBy(r => r.Name).ToDictionary(g => g.Key, g => g.Last());
         _mapPlaces = MapPlace.ParsePlaced(root);
         var plans = Place();
+        // Orders first: a poll that brings a new order must not re-place (or snap) the figure through ApplyPlan before
+        // the order holds its placement; a figure created by this poll gets its order parked and accepted at its first frame.
+        AdoptRowOrders(root);
         var loads = new List<Task>();
         foreach (var row in _rows)
         {
@@ -339,8 +342,7 @@ public partial class FigureManager : Node3D
                 fig = new Figure(row.Name);
                 _figures[row.Name] = fig;
                 AddChild(fig);
-            }
-            // Finale adoption precedes placement ownership, including the seated own B1 avatar.
+            }            // Finale adoption precedes placement ownership, including the seated own B1 avatar.
             AdoptFinale(fig!, row);
             // A solo furniture scene's clip clock rides on the place (§ A8a): per poll; when it goes, the clip's own pace.
             bool hadHeld = fig!.Held is not null;
@@ -353,6 +355,9 @@ public partial class FigureManager : Node3D
             fig.AvatarUrl = row.AvatarUrl;
             fig.IsAvatar = row.Name == AvatarName;
             ApplyPlan(fig, plan, fresh);
+            // The order of a figure this poll created was parked by AdoptRowOrders above: accepted now, from the point
+            // the first placement put it on, on this poll's clock.
+            if (fresh) AcceptParked(fig);
             if (fresh && fig.IsAvatar)
             {
                 if (row.Place is null && row.Interaction is null && row.Yaw is { } yaw && double.IsFinite(yaw))
@@ -379,6 +384,7 @@ public partial class FigureManager : Node3D
             _figures[gone].QueueFree();
             _figures.Remove(gone);
             _shown.Remove(gone);
+            ForgetOrders(gone);
         }
         UpdateStats();
         PositionMapApplied?.Invoke(root, _source.ReceiptOf(root)?.PolledAt ?? _source.MonotonicMs);
@@ -418,10 +424,7 @@ public partial class FigureManager : Node3D
             if (slots is null || locId.Length == 0 || !slots.TryGetValue(locId, out var slot)) return null;
             if (!IsInstanceValid(slot.Group)) return null;
             var stands = slot.Stands;
-            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY)
-            {
-                Route = slot.RouteView(),
-            };
+            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY);
         }
         var plans = FigurePlacement.Plan(_rows, TileOf, _height.GroundAt, _shown,
             id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null,
@@ -441,14 +444,29 @@ public partial class FigureManager : Node3D
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         if (PhotoMode && fig.CharacterName == AvatarName && !fresh) return;
-        if (fig.CharacterName == AvatarName && OwnPropMotion is not null) return;
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
         // Seed a new node before pair adoption captures the position it will first render at.
         if (fresh) fig.SnapTo(new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z));
         AdoptInteraction(fig);
+        // Plan E3 decision 18: an NPC playing an order (or blending out of one) is never re-placed by a poll; the row
+        // still hands it its interaction, visibility and — from the loop on, through the branches of StepFigure — its pose.
+        if (HoldsOrderPlacement(fig))
+        {
+            fig.Route = null;
+            fig.Travelling = false;
+            fig.SetHidden(plan.Hidden);
+            return;
+        }
         if (AdoptPropEntry(fig, plan)) return;
+        // Plan E3 Task 9: a room change without a server order walks a client-local order over the navmesh, never a
+        // straight line through the walls.
+        if (!fresh && plan.RoomChange && StartRoomWalk(fig, plan))
+        {
+            fig.SetHidden(plan.Hidden);
+            return;
+        }
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
         bool arrived = AdoptRoute(fig);
@@ -470,15 +488,7 @@ public partial class FigureManager : Node3D
         }
         else if (!fresh && fig.Route is null)
         {
-            // main.ts: a routed room change ends whatever climb the figure was on (the avatar's own climb excepted), and
-            // a climb over stairs becomes the ride — unarmed, the figure is still a room away.
-            if (plan.Routed && fig.CharacterName != AvatarName) fig.Ride = null;
-            if (plan.Legs.Count > 0) fig.Ride = new Scene.StairRide { Legs = plan.Legs };
-            if (fig.Target != goal)
-            {
-                fig.Waypoints.Clear();
-                if (plan.Via is { } via) fig.Waypoints.AddRange(via.Select(v => new Vector3((float)v.X, (float)v.Y, (float)v.Z)));
-            }
+            if (fig.Target != goal) fig.Waypoints.Clear();
             if (plan.Snap)
             {
                 if (fig.Position.DistanceTo(goal) > 0.5f) Stats.PlaceSnaps++;
@@ -520,7 +530,6 @@ public partial class FigureManager : Node3D
     /// </summary>
     private bool AdoptRoute(Figure fig)
     {
-        if (_rowByName.TryGetValue(fig.CharacterName, out var propRow) && AdoptExactPropRoute(fig, propRow)) return false;
         var tr = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Travel : null;
         // Task 50: cancellation suppresses this journey in the E6 route branch, including cached placement.
         if (fig.CharacterName == AvatarName && SuppressAvatarJourney?.Invoke(tr?.JourneyId) == true) tr = null;
@@ -680,6 +689,9 @@ public partial class FigureManager : Node3D
         foreach (var fig in all)
             if (!PhotoMode || fig.CharacterName != AvatarName)
                 StepFigure(fig, dt, faceTo.TryGetValue(fig, out var n) ? n : null, camDist);
+        // Plan E3 Task 11: every agent reports where its figure stands and where it wants to go; the navigation server
+        // answers the safe velocities at its next step, the walks take them in the next tick.
+        SyncAvoidance(dt);
         AfterTick?.Invoke();
     }
 
@@ -710,7 +722,6 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void StepRoute(Figure fig, JourneyRoute r, double dt, double camDist)
     {
-        if (r.ExactPath is not null) { StepExactPropRoute(fig, r, dt, camDist); return; }
         if (fig.Travelling && fig.Player is not null && !fig.Bridging && fig.HoldsTravel) ApplyBridgeTravel(fig);
         r.ShownM = TravelPath.StepShown(r.Points, r.Paces, r.ShownM, r.TargetM, dt);
         r.TargetM = TravelPath.AdvanceAlongPaces(r.Points, r.Paces, r.TargetM, dt);
@@ -750,7 +761,8 @@ public partial class FigureManager : Node3D
         fig.ClearPairFix();
         // A solo scene's clip clock runs whatever path draws the figure (npcs.ts tick: stepHeldClock).
         if (fig.Held is { } heldClip) fig.Held = heldClip.Step(dt, WorldFrozen);
-        if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
+        // Plan E3 Tasks 5/6: a figure's order draws it from exit up to the loop's start pose (FigureManager.Orders.cs).
+        if (TickOrder(fig, dt, camDist)) return;
         if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
         {
             // Retry lazy held-pose fitting without ever opening an ordinary entry bridge at the anchor.
@@ -759,7 +771,6 @@ public partial class FigureManager : Node3D
             return;
         }
         if (fig.PropEntryBlocked) return;
-        if (fig.PropEntry is not null) { TickPropEntry(fig); return; }
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
         if (fig.Pair is not null && TickPair(fig, dt)) return;
         if (fig.Route is { } route) { StepRoute(fig, route, dt, camDist); return; }
@@ -1184,6 +1195,7 @@ public partial class FigureManager : Node3D
     public override void _ExitTree()
     {
         _clipsStopped = true;
+        ReleaseAvoidance();
         foreach (var task in _templates.Values)
         {
             if (!task.IsCompletedSuccessfully) continue;
@@ -2066,6 +2078,10 @@ public partial class FigureManager : Node3D
         // the box itself (scaled, before that shift — `findLegChains(inst, box)`) and `model.height` feed the gait.
         V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
+        // Plan E3 Task 11: an animal's avoidance radius is half the larger side of its scaled footprint.
+        fig.AvoidanceRadiusM = t.BindBox is { } fb
+            ? AnimaNative.Orders.AvoidanceClamp.RadiusOf(info.Rig, (fb.Max.X - fb.Min.X) * scale, (fb.Max.Z - fb.Min.Z) * scale)
+            : AnimaNative.Orders.AvoidanceClamp.HumanRadiusM;
         fig.CollidePrimitives = t.Collide;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
                     box, t.RawHeight * scale, fitClip: fitClip, refreshClipKinds: () => t.Kinds);

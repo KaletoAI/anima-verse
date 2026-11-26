@@ -310,7 +310,9 @@ class ApiContracts(unittest.TestCase):
             'SELECT count(*) FROM prop_action_runs WHERE actor=? AND request_id=?',
             (name, 'concurrent-once')).fetchone()[0], 1)
         self.assertEqual(len(R.claims(ref)), 2)
-        self.assertEqual(F.E.get_journey(name)['execution_ref'], ref)
+        # One order for the one run, no journey (plan E3 Task 7).
+        self.assertEqual(R.get(ref)['data']['order']['target']['execution_id'], ref)
+        self.assertIsNone(F.E.get_journey(name))
 
     def test_player_request_costs_refusals_and_pair_consent(self):
         from app.core import stat_rules
@@ -513,7 +515,11 @@ class ApiContracts(unittest.TestCase):
             return next(row for row in response.json()['current'] if row['execution_id'] == ref)
 
         self.assertEqual(current()['phase_label'], '')
-        S.tick(30)
+        # The avatar's figure reports its arrival at the access (8, 7) itself
+        # (plan E3 Task 7); the 2 s entry then flips two seconds later.
+        arrived = owner.post('/play/order/arrived', json=dict(
+            order_id=R.get(ref)['data']['order']['order_id'], x=8, z=7, yaw=0, room_id='hall'))
+        self.assertEqual(arrived.status_code, 200, arrived.text)
         self.assertEqual(current()['phase'], 'entry')
         self.assertEqual(current()['phase_label'], '')
         S.tick(2)
@@ -750,263 +756,6 @@ class ApiContracts(unittest.TestCase):
             F.C.save_character_profile(name, profile)
             S.tick(1)
             self.assertEqual(R.get(next_run['execution_id'])['status'], 'failed')
-
-    def test_worldmap_entry_uses_live_clock_freeze_and_stable_origin_for_self_and_observer(self):
-        # The entry clip runs in REAL seconds on the motion clock (pinned
-        # utc_now, the real clock): 2 s clip; +.25/+.25 -> elapsed .25/.5;
-        # +.5 and a tick -> 1.0; frozen: rate 0, 2 h change nothing; thawed at
-        # game factor 3, +.25 -> 1.25 (NOT 1.75: the factor never scales a
-        # movement), rate 1; +.75 and a tick -> 2.0 >= 2 -> active.
-        from app.core import timeutils
-        clock = [timeutils.utc_now()]
-        with patch.object(timeutils, 'utc_now', side_effect=lambda: clock[0]), F.real_motion_clock():
-            try:
-                F.set_game_factor(1)
-                name, target, _ = S.setup_run()
-                observer = F.actor(target['location_id'], at=(2, 5))
-                owner, viewer = client(name), client(observer)
-                requested = owner.post('/play/prop-actions/request', json=payload(target))
-                self.assertEqual(requested.status_code, 200, requested.text)
-                ref = requested.json()['execution_id']
-                clock[0] += timedelta(seconds=30)
-                F.E.advance_all_journeys()
-                A.advance(F.game_time())
-                self.assertEqual(R.get(ref)['phase'], 'entry')
-                origin = round(timeutils.motion_time(), 3)
-
-                def row(session):
-                    response = session.get('/play/worldmap')
-                    self.assertEqual(response.status_code, 200, response.text)
-                    return next(person for person in response.json()['characters'] if person['name'] == name)
-
-                public = row(viewer)
-                entry = public['prop_action_entry']
-                self.assertEqual(entry, row(owner)['prop_action_entry'])
-                self.assertEqual(set(entry), {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
-                    'duration_s', 'elapsed_s', 'clock_rate',
-                    'height_cm', 'role', 'started_s'})
-                self.assertEqual(entry['kind'], 'run-enter')
-                self.assertEqual(entry['pose_key'], 'sitting')
-                self.assertEqual(entry['access'], dict(x=8, y=0, z=7, yaw=180))
-                self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
-                self.assertEqual((entry['anchor']['x'], entry['anchor']['z'], entry['anchor']['yaw']), (8, 5, 0))
-                # The real stool-style half-metre cushion uses the catalog's
-                # measured seat drop: root is .112 m, not floor or surface. The
-                # piece stands on the floor + PROP_CLEARANCE (.01, § B), so its
-                # seat is at .51 and the root .51 - .398.
-                self.assertAlmostEqual(entry['root_offset'], .398)
-                self.assertAlmostEqual(entry['anchor']['y'], .112)
-                self.assertAlmostEqual(entry['anchor']['y'] + entry['root_offset'], .51)
-                self.assertEqual(entry['duration_s'], 2)
-                # Stored stamps are motion seconds rounded to the millisecond
-                # (prop_action_engine._motion_now); the payload reads the
-                # unrounded clock, so elapsed may carry < 1 ms of that rounding.
-                self.assertAlmostEqual(entry['elapsed_s'], 0, places=3)
-                self.assertEqual(entry['clock_rate'], 1)
-                self.assertEqual(entry['height_cm'], 170)
-                self.assertIsNone(entry['role'])
-                self.assertEqual(entry['started_s'], origin)
-                self.assertIsNone(public['place'])
-                self.assertIsNone(public['local_approach'])
-                self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
-                self.assertNotIn(ref, json.dumps(entry))
-                for elapsed in (.25, .5):
-                    clock[0] += timedelta(seconds=.25)
-                    polled = row(viewer)['prop_action_entry']
-                    self.assertAlmostEqual(polled['elapsed_s'], elapsed, places=3)
-                    self.assertEqual(polled['started_s'], origin)
-                clock[0] += timedelta(seconds=.5)
-                A.advance(F.game_time())
-                F.W.set_world_frozen(True)
-                frozen = row(viewer)['prop_action_entry']
-                self.assertEqual(frozen['elapsed_s'], 1)
-                self.assertEqual(frozen['clock_rate'], 0)
-                clock[0] += timedelta(hours=2)
-                A.advance(F.game_time())
-                self.assertEqual(row(viewer)['prop_action_entry'], frozen)
-                F.W.set_world_frozen(False)
-                F.set_game_factor(3)
-                clock[0] += timedelta(seconds=.25)
-                faster = row(viewer)['prop_action_entry']
-                self.assertAlmostEqual(faster['elapsed_s'], 1.25, places=3)
-                self.assertEqual(faster['clock_rate'], 1)
-                self.assertEqual(faster['started_s'], origin)
-                clock[0] += timedelta(seconds=.25)
-                A.advance(F.game_time())
-                self.assertEqual(R.get(ref)['status'], 'approaching', 'factor 3 must not shorten the clip')
-                clock[0] += timedelta(seconds=.5)
-                A.advance(F.game_time())
-                self.assertEqual(R.get(ref)['status'], 'active')
-                self.assertIsNone(row(viewer)['prop_action_entry'])
-                self.assertIsNone(row(owner)['prop_action_entry'])
-                self.assertIsNotNone(row(viewer)['place'])
-            finally:
-                F.W.set_world_frozen(False)
-                F.set_game_factor(0)
-
-    def test_worldmap_entry_withdraws_on_room_profile_claim_and_terminal_ownership_loss(self):
-        name, target, _ = S.setup_run()
-        observer = F.actor(target['location_id'], at=(2, 5))
-        viewer = client(observer)
-        requested = S.request(name, target)
-        ref = requested['execution_id']
-        S.tick(30)
-        saved = F.C.get_character_profile(name)['prop_action_entry']
-
-        def projection():
-            response = viewer.get('/play/worldmap')
-            self.assertEqual(response.status_code, 200, response.text)
-            return next(person for person in response.json()['characters'] if person['name'] == name)['prop_action_entry']
-
-        self.assertIsNotNone(projection())
-        F.C.save_character_current_room(observer, 'adjacent')
-        self.assertIsNone(projection())
-        F.C.save_character_current_room(observer, 'hall')
-        self.assertIsNotNone(projection())
-        run = R.get(ref)
-        run['phase'] = ''
-        with R.transaction() as conn:
-            R.save(conn, run)
-        self.assertIsNone(projection(), 'an entry profile alone is not live entry authority')
-        run['phase'] = 'entry'
-        with R.transaction() as conn:
-            R.save(conn, run)
-        for corrupt in (None, dict(saved, execution_id='not-the-owned-run'),
-                        dict(saved, access=dict(saved['access'], x=1000))):
-            profile = F.C.get_character_profile(name)
-            profile['prop_action_entry'] = corrupt
-            F.C.save_character_profile(name, profile)
-            self.assertIsNone(projection())
-        profile['prop_action_entry'] = saved
-        F.C.save_character_profile(name, profile)
-        self.assertIsNotNone(projection())
-        with R.transaction() as conn:
-            conn.execute('DELETE FROM prop_action_claims WHERE claim_key=?', (R.person_key(name),))
-        self.assertIsNone(projection())
-        A.cancel(name, ref)
-        # A durable stale profile cannot resurrect a cancelled entry.
-        profile = F.C.get_character_profile(name)
-        profile['prop_action_entry'] = saved
-        F.C.save_character_profile(name, profile)
-        self.assertIsNone(projection())
-
-    def test_worldmap_pair_entry_reveals_physical_role_but_no_invitation_or_target_identity(self):
-        name, partner, target, _ = S.authored_pair()
-        for who, gender in ((name, 'female'), (partner, 'male')):
-            profile = F.C.get_character_profile(who)
-            profile['gender'] = gender
-            F.C.save_character_profile(who, profile)
-        path = F.ROOT / 'clips/run-pair.json'
-        meta = json.loads(path.read_text())
-        meta['role_gender'] = {'a': 'male', 'b': 'female'}
-        path.write_text(json.dumps(meta))
-        observer = F.actor(target['location_id'], at=(3, 5))
-        viewer = client(observer)
-        requested = S.request(name, target, members=[partner])
-        ref = requested['execution_id']
-        before = viewer.get('/play/worldmap').json()['characters']
-        self.assertTrue(all(row['prop_action_entry'] is None for row in before))
-        accepted = client(partner).post('/play/prop-actions/respond', json=dict(execution_id=ref, accept=True))
-        self.assertEqual(accepted.status_code, 200, accepted.text)
-        S.tick(30)
-        response = viewer.get('/play/worldmap')
-        self.assertEqual(response.status_code, 200, response.text)
-        rows = {row['name']: row for row in response.json()['characters']}
-        self.assertEqual(rows[name]['prop_action_entry']['role'], 'b')
-        self.assertEqual(rows[partner]['prop_action_entry']['role'], 'a')
-        for who, x in ((name, 8.3), (partner, 7.7)):
-            entry = rows[who]['prop_action_entry']
-            self.assertEqual(entry['access']['x'], x)
-            self.assertEqual(entry['anchor']['x'], x)
-            self.assertEqual(entry['height_cm'], 170)
-            self.assertTrue(set(entry) <= {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
-                'duration_s', 'elapsed_s', 'clock_rate',
-                'height_cm', 'role', 'started_s'})
-            self.assertEqual(set(entry['access']), {'x', 'y', 'z', 'yaw'})
-            self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
-            serialized = json.dumps(entry)
-            for private in (ref, name, partner, target['location_id'], target['placement_id'], target['variant_uid']):
-                self.assertNotIn(private, serialized)
-        self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
-        S.tick(2)
-        rows = {row['name']: row for row in viewer.get('/play/worldmap').json()['characters']}
-        self.assertIsNone(rows[name]['prop_action_entry'])
-        self.assertIsNone(rows[partner]['prop_action_entry'])
-
-    def test_worldmap_entry_origin_and_progress_survive_process_reanchor(self):
-        name, target, _ = S.setup_run()
-        observer = F.actor(target['location_id'], at=(2, 5))
-        viewer = client(observer)
-        ref = S.request(name, target)['execution_id']
-        S.tick(30)
-        S.tick(1)
-
-        def projection():
-            response = viewer.get('/play/worldmap')
-            self.assertEqual(response.status_code, 200, response.text)
-            return next(row for row in response.json()['characters'] if row['name'] == name)['prop_action_entry']
-
-        before = projection()
-        self.assertEqual(before['elapsed_s'], 1)
-        with patch.object(A, '_PROCESS', 'restarted-entry-owner'):
-            F.set_game_time(F.game_time() + S.GameDuration.of(hours=4))
-            paused = projection()
-            self.assertEqual(paused['started_s'], before['started_s'])
-            self.assertEqual(paused['elapsed_s'], 1)
-            self.assertEqual(paused['clock_rate'], 0)
-            A.advance(F.game_time())
-            resumed = projection()
-            self.assertEqual(resumed['started_s'], before['started_s'])
-            self.assertEqual(resumed['elapsed_s'], 1)
-            S.tick(1)
-            self.assertEqual(R.get(ref)['status'], 'active')
-            self.assertIsNone(projection())
-
-    def test_local_motion_projection_withdraws_without_foreign_route_or_consent(self):
-        from app.core.world_ops import _local_prop_approach
-        name, target, _ = S.setup_run()
-        observer = F.actor(target['location_id'], at=(2, 5))
-        location = F.W.get_location_by_id(target['location_id'])
-        furniture = next(room for room in location['rooms'] if room['id'] == 'hall')['layout']['props']
-        for ident, x, z, depth in (('bend-one', 3, 4, 6), ('bend-two', 5, 7, 4)):
-            pid = F.furniture_prop(ident, width=1, depth=depth, height=1)
-            furniture.append(dict(id=ident, prop_id=pid, at=[x, z]))
-        F.W.upsert_location(location, sync_world=True)
-        asked = S.request(name, target)
-        journey = F.E.get_journey(name)
-        def view(visible=None, own=None, trip=None):
-            return _local_prop_approach(name, observer, F.C.get_character_profile(name),
-                own or F.C.get_character_profile(observer), trip or journey,
-                {name} if visible is None else visible, F.timeutils.motion_time(), 1.0)
-        local = view()
-        self.assertTrue(local['waypoints'])
-        self.assertTrue(set(local) <= {'journey_id', 'room_id', 'floor_y', 'waypoints', 'progress_m', 'walked_m', 'remaining_m', 'paces_m_s_real', 'starts_in_s'})
-        # The walked floor travels with the motion so a client never guesses the storey.
-        self.assertEqual(local['floor_y'], journey['floor_y'])
-        self.assertIsNone(view(visible=set()))
-        own = dict(F.C.get_character_profile(observer), current_room='adjacent')
-        self.assertIsNone(view(own=own))
-        self.assertIsNone(view(trip=dict(journey, execution_kind='party')))
-        self.assertEqual(R.get(asked['execution_id'])['status'], 'approaching')
-        viewer = client(observer)
-        response = viewer.get('/play/worldmap')
-        self.assertEqual(response.status_code, 200, response.text)
-        public = next(row for row in response.json()['characters'] if row['name'] == name)
-        self.assertGreaterEqual(len(public['local_approach']['waypoints']), 4)
-        self.assertIsNone(public['travel']['waypoints'])
-        self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
-        remote = F.actor(target['location_id'], room='adjacent', at=(14, 5))
-        remote_journey, reason = F.E.start_journey_to_point(remote, 15, 5)
-        self.assertIsNotNone(remote_journey, reason)
-        distant = next((row for row in viewer.get('/play/worldmap').json()['characters'] if row['name'] == remote), None)
-        if distant is not None:
-            self.assertIsNone(distant['local_approach'])
-            self.assertIsNone(distant['travel']['waypoints'])
-        F.C.save_character_current_room(observer, 'adjacent')
-        withdrawn = next(row for row in viewer.get('/play/worldmap').json()['characters'] if row['name'] == name)
-        self.assertIsNone(withdrawn['local_approach'])
-        self.assertIsNone(withdrawn['travel']['waypoints'])
-
 
 def startup_scenario():
     """Exercise the exact production startup preparation against raw legacy data."""

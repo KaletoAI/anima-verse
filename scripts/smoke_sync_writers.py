@@ -93,6 +93,8 @@ INVENTORY.update({
     "app/core/quest_engine.py": ["_quests_changed"],
 })
 INVENTORY["app/models/chat_stat_evaluations.py"] = ["commit_evaluation"]
+# Plan E3 task 4: every order publication pushes "orders" (sync_topics.order_changed).
+INVENTORY["app/core/motion_orders.py"] = ["publish"]
 INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag", "write_placement"]
 
 

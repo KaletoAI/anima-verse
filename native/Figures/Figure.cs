@@ -39,6 +39,11 @@ public partial class Figure : Node3D
     /// <summary>A load failed transiently and a retry is scheduled (30 s, the browser's <c>setTimeout</c>).</summary>
     public bool RetryPending { get; set; }
     public double HeightM { get; set; } = FigureManager.DefaultHeightM;
+    /// <summary>
+    /// The radius of the figure's avoidance agent (plan E3 Task 11, <see cref="AnimaNative.Orders.AvoidanceClamp.RadiusOf"/>):
+    /// a human 0.25 m, an animal half the larger side of its footprint, set when its model is placed.
+    /// </summary>
+    public double AvoidanceRadiusM { get; set; } = AnimaNative.Orders.AvoidanceClamp.HumanRadiusM;
     /// <summary>The character's set chain (<c>animation_sets</c>, the last non-empty one, like <c>setCharacterSets</c>).</summary>
     public IReadOnlyList<string> Sets { get; set; } = Array.Empty<string>();
     /// <summary>The wanted distance tier (view state) and the tier/URL of the body on screen.</summary>
@@ -612,6 +617,8 @@ public partial class Figure : Node3D
 
     /// <summary>Exact action availability along this figure's set chain; finales never use a stand-in.</summary>
     public bool HasClip(string kind) => HasAction(kind);
+    /// <summary>The length of a bound clip in seconds; null when the figure has no such clip (plan E3: the order's real durations).</summary>
+    public double? ClipSeconds(string kind) => AnimOf(kind) is { Length: > 0 } a ? a.Length : null;
 
     private bool _finaleClip;
 
@@ -874,6 +881,15 @@ public partial class Figure : Node3D
             p.Seek(want, false);
         }
         p.SpeedScale = frozen ? 0 : (float)speed;
+    }
+
+    /// <summary>
+    /// The playing clip runs at its pace times <paramref name="rate"/> (an order walk's gait scaled to its tempo, plan E3
+    /// Task 11); call it after <see cref="Play"/>, which sets the pace each frame. Nothing while a bridge holds the body.
+    /// </summary>
+    public void ScaleClip(double rate)
+    {
+        if (Player is { } p && !Bridging && CurrentClip.Length > 0) p.SpeedScale = (float)(CurrentPace * rate);
     }
 
     /// <summary>The time the figure's player stands at (the action's own clock), for the check; NaN without a clip.</summary>

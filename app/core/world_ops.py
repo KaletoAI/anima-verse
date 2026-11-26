@@ -399,138 +399,6 @@ def _fog_inputs() -> Dict[str, dict]:
     return out
 
 
-def _local_prop_approach(name, observer, profile, observer_profile, journey, visible,
-                         now_s, rate):
-    """Public motion only, withdrawn on room/sight/ownership loss.
-
-    No target, execution/consent identity, foreign room or overland segment.
-    Remaining waypoints start at the actual current interpolated room point.
-    """
-    if (not observer or name == observer or name not in visible or not journey
-            or journey.get("execution_kind") != "prop_action"):
-        return None
-    from app.core import places
-    room = places.where(name, profile=profile)
-    if not all(room) or room != places.where(observer, profile=observer_profile):
-        return None
-    target = journey.get("approach_target") or {}
-    if (target.get("location_id"), target.get("room_id")) != room:
-        return None
-    from app.core.prop_action_engine import _own_journey
-    from app.core.prop_action_store import get
-    run = get(journey.get("execution_ref", ""))
-    if not run or run["status"] != "approaching" or not _own_journey(run, name, journey):
-        return None
-    from app.core.travel_engine import journey_state, segment_paces_m_s_real
-    from app.core.room_stand import room_geometry
-    from app.core.prop_action_paths import _Space
-    state = journey_state(journey["waypoints"], journey["started_at_s"], now_s)
-    if state["arrived"]:
-        return None
-    remaining = [list(state["pos"])] + [list(point[:2]) for point in journey["waypoints"][state["seg"] + 1:]]
-    geometry = room_geometry(*room)
-    if not geometry:
-        return None
-    space = _Space(*geometry)
-    # The departure legs (seat -> stand, stand -> step-out) leave the furniture
-    # and cross it by design; the travel engine checks them by its own rule
-    # (travel_engine._advance_approach). Sight applies to the walk behind them.
-    escape = (1 if journey.get("departure_seat") else 0) + (1 if journey.get("step_out") else 0)
-    if not all(space.visible(tuple(a), tuple(b))
-               for i, (a, b) in enumerate(zip(remaining, remaining[1:]))
-               if state["seg"] + i + 1 > escape):
-        return None
-    # Motion-clock seconds are real seconds: the wait IS the countdown.
-    pending = max(0.0, float(journey["started_at_s"]) - now_s)
-    paces = segment_paces_m_s_real(journey["waypoints"], rate) if rate > 0 and not pending else None
-    return dict(journey_id=journey.get("journey_id"), room_id=room[1], floor_y=journey.get("floor_y"),
-                waypoints=remaining, progress_m=0, walked_m=state["progress_m"],
-                remaining_m=round(max(0, state["total_m"] - state["progress_m"]), 2),
-                paces_m_s_real=paces[state["seg"]:] if paces else None,
-                starts_in_s=round(pending, 3) if pending and rate > 0 else None)
-
-
-def _prop_action_entry(name, observer, profile, observer_profile, visible,
-                       now_s, cm):
-    """Only the live owned entry's render geometry, never its private identity.
-
-    Both y values are body-root heights (access is the floor); yaw retains
-    Core's compass degrees. The persisted entry origin is a clock timestamp,
-    not an execution identifier or a poll-relative reconstruction.
-    """
-    entry = profile.get("prop_action_entry")
-    if (not observer or (name != observer and name not in visible)
-            or not isinstance(entry, dict)):
-        return None
-    from app.core import places, prop_action_engine as engine, prop_action_store as store
-    room = places.where(name, profile=profile)
-    if not all(room) or room != places.where(observer, profile=observer_profile):
-        return None
-    ref = entry.get("execution_id")
-    if not isinstance(ref, str) or not ref:
-        return None
-    try:
-        with engine._lock(ref):
-            run = store.get(ref)
-            if (not run or run["status"] != "approaching" or run["phase"] != "entry"
-                    or name not in store.people(run)
-                    or room != (run["target"]["location_id"], run["target"]["room_id"])):
-                return None
-            data = run["data"]
-            plan, spec = data["plans"][name], data["entries"][name]
-            access, anchor = plan["access"], plan["entry_anchor"]
-            if (name not in data["arrived"] or profile.get("journey")
-                    or profile.get("place") or profile.get("interaction") or profile.get("is_sleeping")
-                    or entry != dict(execution_id=ref, **spec, access=access, anchor=anchor)
-                    or store.held(store.person_key(name)) != ref
-                    or store.held(store.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != ref):
-                return None
-            pos = engine.C.get_character_pos(name)
-            if not pos or math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) > .05:
-                return None
-            # The entry clip runs in REAL seconds on the motion clock, like
-            # every movement — the game clock's factor plays no part.
-            duration = float(spec["duration_s"])
-            elapsed = float(data["entry_elapsed"])
-            started = float(data["entry_started_s"])
-            rate = 1.0
-            # Match the executor: downtime and frozen ticks earn no entry
-            # progress. A restart stays paused until its owner reanchors.
-            if data["process"] != engine._PROCESS:
-                rate = 0.0
-            elif not engine.is_world_frozen():
-                elapsed += max(0.0, now_s - float(data["last_motion"]))
-            else:
-                rate = 0.0
-            # An unspecified character height uses the measured rig at scale
-            # one in _entry_spec. Publish that same effective height.
-            if cm is None:
-                from app.core.animation_clips import clip_ref_height_m
-                reference = clip_ref_height_m(spec["kind"])
-                cm = reference * 100 if reference else None
-            public_access = {key: float(access[key]) for key in ("x", "y", "z", "yaw")}
-            public_anchor = {key: float(anchor[key]) for key in ("x", "y", "z")}
-            root_offset = float(anchor.get("root_offset", 0))
-            public_anchor["y"] -= root_offset
-            public_anchor["yaw"] = float(anchor.get("yaw") or 0)
-            if (not all(math.isfinite(value) for value in (
-                    duration, elapsed, started, rate, cm, root_offset,
-                    *public_access.values(), *public_anchor.values()))
-                    or duration <= 0 or elapsed < 0 or started < 0 or rate < 0 or cm <= 0):
-                return None
-            role = next((role for role, member in data.get("clip_roles", {}).items()
-                         if role in ("a", "b") and member == name), None)
-            if run["definition"]["ability"] == "pair" and role is None:
-                return None
-            return dict(kind=spec["kind"], pose_key=spec["pose_key"], access=public_access,
-                        anchor=public_anchor, root_offset=root_offset, duration_s=duration,
-                        elapsed_s=min(duration, elapsed), clock_rate=rate,
-                        height_cm=cm, role=role, started_s=started)
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        logger.debug("prop entry payload failed for %s: %s", name, exc)
-        return None
-
-
 def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     """The existing off-map, sight, location and explored-ground gates."""
     if not loc_id and pos is None:
@@ -547,6 +415,99 @@ def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     if name != avatar and under_veil(loc_id, pos):
         return False
     return True
+
+
+def row_visibility_ctx(observer: str, *, show_all: bool = False,
+                       observer_profile: Optional[Dict[str, Any]] = None,
+                       avatar_snap: Optional[Dict[str, Any]] = None,
+                       block: Optional["LocationBlock"] = None) -> tuple:
+    """The context of the character-row gates (:func:`_visible_row`) for
+    ``observer``: ``(avatar, fogged, visible_ids, in_sight, under_veil)``.
+
+    ``visible_ids`` are the locations the observer's fog lets through (every
+    location without a filter; an unplaced one always passes, it hides
+    nothing; without an avatar nothing placed passes). Built ONCE per request
+    — by the worldmap (which hands in the profile, position snapshot and
+    location block it read anyway) and by ``GET /play/orders``
+    (``motion_orders.orders_since``), so an order never passes a gate its
+    figure's row would not."""
+    from app.core.discovery import get_discovery_range_m
+    from app.core.exploration import point_explored, seen_cells
+    from app.models.character import (get_avatar_sync_snapshot, get_character_current_location,
+                                      get_character_profile)
+    avatar = (observer or "").strip()
+    fogged = not show_all
+    if observer_profile is None:
+        observer_profile = get_character_profile(avatar) if avatar else {}
+    if avatar_snap is None and avatar:
+        avatar_snap = get_avatar_sync_snapshot(avatar)
+    if block is None:
+        block = _location_block()
+    # The fog predicate runs once per placed location on a 3-second poll —
+    # read the avatar's known_locations/inventory ONCE and hand them to the
+    # predicate instead of letting it re-read them per location.
+    vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
+    visible_ids = set()
+    for loc, entry in block.rows:
+        if (fogged and loc.get("pos_x") is not None and loc.get("pos_z") is not None
+                and not (avatar and location_visible_to_character(avatar, loc, context=vis_ctx))):
+            continue
+        visible_ids.add(entry["id"])
+
+    # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
+    # SAME number that discovers a place by coming close to it
+    # (app/core/discovery.py) — one "how far do I see outdoors" setting, not a
+    # second one beside it; 0 switches sight off. Read once per request, like
+    # the avatar's own point the distance is measured from.
+    sight_m = get_discovery_range_m(avatar) if (fogged and avatar) else 0.0
+    # The avatar's own point — read whenever there IS an avatar and a filter,
+    # because the veil gate below needs it too (its near view), not only the
+    # sight rule. `in_sight` therefore says out loud that a range of 0 is no
+    # sight line instead of leaning on a `None` point to mean it.
+    avatar_pos = avatar_snap["pos"] if (fogged and avatar_snap) else None
+
+    def in_sight(p: Optional[Dict[str, float]]) -> bool:
+        """Is a metre point within the avatar's sight range? False without a
+        range (0 = off), without the avatar's own point, and for a character
+        the map does not place — none of the three is a sight line."""
+        if sight_m <= 0 or not (avatar_pos and p):
+            return False
+        return math.hypot(float(p["x"]) - float(avatar_pos["x"]),
+                          float(p["z"]) - float(avatar_pos["z"])) <= sight_m
+
+    # THE VEIL HIDES FIGURES, TOO (plan-fog-schleier-v2.md § 2). The 3D client
+    # hazes over every 64 m cell the avatar has not explored — and a figure
+    # drawn crisply on hazed ground would be exactly the leak the haze is
+    # there to prevent, so the SERVER decides it: a character standing in an
+    # unexplored cell does not reach the player payload at all. It is the
+    # same knowledge filter as the rest of § A12, one step finer — where
+    # `known_locations` says which PLACES the avatar knows, the exploration
+    # memory says which GROUND it has seen.
+    #
+    # Three exceptions, and there are no others:
+    #   * the avatar itself (it is never hidden from itself),
+    #   * anybody in the avatar's own location — a room-mate is not seen
+    #     across the map but stood next to, and the veil is a map effect,
+    #   * a character the map does not place (no point): nothing to haze.
+    # The near view rides in through `seen_cells` — see there for why the
+    # stored memory alone would blink.
+    seen: Optional[set] = None
+    avatar_loc = ""
+    if fogged and avatar:
+        seen = seen_cells(avatar, avatar_pos)
+        avatar_loc = get_character_current_location(avatar, profile=observer_profile) or ""
+
+    def under_veil(loc_id: str, p: Optional[Dict[str, float]]) -> bool:
+        """Is this character's ground still unexplored — and is it therefore
+        under the haze? Always False without a filter or without an avatar;
+        those two views have no veil to be under."""
+        if seen is None:
+            return False
+        if loc_id and loc_id == avatar_loc:
+            return False
+        return not point_explored(seen, p)
+
+    return (avatar, fogged, visible_ids, in_sight, under_veil)
 
 
 class LocationBlock(NamedTuple):
@@ -820,9 +781,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
     )
-    from app.core.discovery import get_discovery_range_m
     from app.core import pose_scene as _pose_scene
-    from app.core.exploration import explored_sig, point_explored, seen_cells
+    from app.core.exploration import explored_sig
     from app.core.backdrop import get_backdrop
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
@@ -840,39 +800,26 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _lap("world_props", _t)
 
     avatar = (avatar_name or "").strip()
-    fogged = not show_all
-    # The fog predicate runs once per placed location on a 3-second poll —
-    # read the avatar's known_locations/inventory ONCE and hand them to the
-    # predicate instead of letting it re-read them per location.
-    _vis_ctx = visibility_context(avatar) if (fogged and avatar) else None
-
-    def _visible(loc: Dict[str, Any]) -> bool:
-        """Fog predicate. An unplaced location (no metre position) is not on
-        the map at all — template placeholders always pass, they hide
-        nothing."""
-        if not fogged:
-            return True
-        if loc.get("pos_x") is None or loc.get("pos_z") is None:
-            return True
-        if not avatar:
-            return False
-        return location_visible_to_character(avatar, loc, context=_vis_ctx)
-
-    locations = []
-    visible_ids = set()
     _t = _pc()
     _blk_key, _block = _location_block_keyed()
     _lap("locations_read", _t)
+    # The avatar's profile and position snapshot are read ONCE here and handed
+    # to every avatar-only reader below (language, badge language, own
+    # location, the row gates) instead of each of them loading it again.
+    from app.models.character import get_character_profile
+    _observer_profile = get_character_profile(avatar) if avatar else {}
+    _avatar_snap = get_avatar_sync_snapshot(avatar) if avatar else None
     _t = _pc()
+    # The row gates' context (fog, sight, veil), shared with GET /play/orders
+    # (``row_visibility_ctx``). The block is shared and built BEFORE the fog
+    # filter (world_bounds keeps the map's extent however much of it is still
+    # dark); only the filter runs per request, and the shared entry dicts go
+    # into a NEW list.
+    _row_ctx = row_visibility_ctx(avatar, show_all=show_all, observer_profile=_observer_profile,
+                                  avatar_snap=_avatar_snap, block=_block)
+    fogged, visible_ids = _row_ctx[1], _row_ctx[2]
     name_by_id = _block.name_by_id
-    # The block is shared and built BEFORE the fog filter (world_bounds keeps
-    # the map's extent however much of it is still dark); only the filter
-    # runs per request, and the shared entry dicts go into a NEW list.
-    for loc, entry in _block.rows:
-        if not _visible(loc):
-            continue
-        visible_ids.add(entry["id"])
-        locations.append(entry)
+    locations = [entry for _loc, entry in _block.rows if entry["id"] in visible_ids]
     _lap("locations", _t)
     world_bounds = _block.world_bounds
     areas, areas_key = _block.areas, _blk_key[2]
@@ -897,74 +844,26 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # The avatar's profile is read ONCE here and handed to every avatar-only
     # reader below (language, badge language, own location) instead of each
     # of them loading it again.
-    from app.models.character import get_character_profile
-    _observer_profile = get_character_profile(avatar) if avatar else {}
     _lang = (get_character_language(avatar, profile=_observer_profile)
              if avatar else "") or "en"
-    from app.core.perception import addressable_for
-    _local_visible = set(addressable_for(avatar)) if avatar else set()
-
-    # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
-    # SAME number that discovers a place by coming close to it
-    # (app/core/discovery.py) — one "how far do I see outdoors" setting, not a
-    # second one beside it; 0 switches sight off. Read once per request, like
-    # the avatar's own point the distance is measured from.
-    _sight_m = get_discovery_range_m(avatar) if (fogged and avatar) else 0.0
-    # The avatar's own point — read whenever there IS an avatar and a filter,
-    # because the veil gate below needs it too (its near view), not only the
-    # sight rule. `_in_sight` therefore says out loud that a range of 0 is no
-    # sight line instead of leaning on a `None` point to mean it.
-    _avatar_snap = get_avatar_sync_snapshot(avatar) if avatar else None
-    _avatar_pos = _avatar_snap["pos"] if (fogged and _avatar_snap) else None
-
-    def _in_sight(p: Optional[Dict[str, float]]) -> bool:
-        """Is a metre point within the avatar's sight range? False without a
-        range (0 = off), without the avatar's own point, and for a character
-        the map does not place — none of the three is a sight line."""
-        if _sight_m <= 0 or not (_avatar_pos and p):
-            return False
-        return math.hypot(float(p["x"]) - float(_avatar_pos["x"]),
-                          float(p["z"]) - float(_avatar_pos["z"])) <= _sight_m
-
-    # THE VEIL HIDES FIGURES, TOO (plan-fog-schleier-v2.md § 2). The 3D client
-    # hazes over every 64 m cell the avatar has not explored — and a figure
-    # drawn crisply on hazed ground would be exactly the leak the haze is
-    # there to prevent, so the SERVER decides it: a character standing in an
-    # unexplored cell does not reach the player payload at all. It is the
-    # same knowledge filter as the rest of § A12, one step finer — where
-    # `known_locations` says which PLACES the avatar knows, the exploration
-    # memory says which GROUND it has seen.
-    #
-    # Three exceptions, and there are no others:
-    #   * the avatar itself (it is never hidden from itself),
-    #   * anybody in the avatar's own location — a room-mate is not seen
-    #     across the map but stood next to, and the veil is a map effect,
-    #   * a character the map does not place (no point): nothing to haze.
-    # The near view rides in through `seen_cells` — see there for why the
-    # stored memory alone would blink.
-    _seen: Optional[set] = None
-    _avatar_loc = ""
-    if fogged and avatar:
-        _seen = seen_cells(avatar, _avatar_pos)
-        _avatar_loc = get_character_current_location(
-            avatar, profile=_observer_profile) or ""
-
-    def _under_veil(loc_id: str, p: Optional[Dict[str, float]]) -> bool:
-        """Is this character's ground still unexplored — and is it therefore
-        under the haze? Always False without a filter or without an avatar;
-        those two views have no veil to be under."""
-        if _seen is None:
-            return False
-        if loc_id and loc_id == _avatar_loc:
-            return False
-        return not point_explored(_seen, p)
 
     _t_chars = _pc()
     _pos = {r["name"]: {"x": r["x"], "z": r["z"]}
             for r in list_character_positions()}
     _fog = _fog_inputs() if fogged else {}
     _fog.pop(avatar, None)  # The avatar position and journey come from one snapshot.
-    _row_ctx = (avatar, fogged, visible_ids, _in_sight, _under_veil)
+    # Decision 6 (plan E3): the highest order seq, read BEFORE the rows — an
+    # order published while they are built may sit on its row, but is never
+    # covered by ``order_seq`` without being on it.
+    from app.core import motion_orders as _motion_orders
+    _order_seq = _motion_orders.current_seq()
+    # The avatar's place, read once from the profile already held, and the
+    # per-build memo "this participant stands in that place and its row
+    # passed the gates" — filled from each row as it is built, so an order on
+    # a row costs no profile load (decision 3: the index serves the rows
+    # without per-row profile parsing).
+    _order_here = _motion_orders.observer_place(avatar, profile=_observer_profile)
+    _order_seen: Dict[str, bool] = {}
     # Icons behind the name tag (``name_badges``), titled in the avatar's
     # language — the same badges the chat's address chips show.
     from app.core.name_badges import badges_for as _badges_for
@@ -990,6 +889,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 _j = None
                 logger.debug("journey read failed for %s: %s", name, e)
             if not _visible_row(name, loc_id, pos, _j, _row_ctx):
+                _order_seen[name] = False
                 continue
         try:
             from app.models.character import get_character_profile as _gcp
@@ -1007,7 +907,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             _j = None
             logger.debug("journey read failed for %s: %s", name, e)
         if not _visible_row(name, loc_id, pos, _j, _row_ctx):
+            _order_seen[name] = False
             continue
+        # The row passes the gates: whether it stands in the avatar's place
+        # decides the visibility of its order (``motion_orders.visible``).
+        _order_seen[name] = (_motion_orders.observer_place(name, profile=_prof)
+                              == _order_here)
         config = get_character_config(name, profile=_prof)
         mt = get_movement_target(name, profile=_prof) or ""
         prof = get_character_profile_image(name, profile=_prof) or ""
@@ -1182,12 +1087,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "movement_target_id": mt,
             "movement_target_name": target_name,
             "travel": travel,
-            "local_approach": _local_prop_approach(
-                name, avatar, _prof, _observer_profile, _j, _local_visible,
-                _now_s, _rate),
-            "prop_action_entry": _prop_action_entry(
-                name, avatar, _prof, _observer_profile, _local_visible,
-                _now_s, cm),
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.
@@ -1220,6 +1119,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             **({"badges": _badges} if (_badges := _badges_for(
                 name, profile=_prof, lang=_badge_lang)) else {}),
             "model_rev": _model_rev,
+            # The figure's motion order (plan E3, contract § "Order"), as the
+            # avatar may see it (``motion_orders.for_observer``); absent when it
+            # carries none or the avatar may not see it.
+            **({"order": _row_order} if (_row_order := _motion_orders.for_observer(
+                avatar, _o, _row_ctx, here=_order_here, seen=_order_seen)
+                if (_o := _motion_orders.index_get(name)) else None) else {}),
             "motion": _timed_motion(motion_payload, name, _prof),
             # The `travel_speed` rule factor the AVATAR moves with
             # (`travel_engine.travel_pace_factor`, a party leader's is its
@@ -1274,6 +1179,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # Clients display it, they never derive a game hour themselves.
         "game_time": _now_game.to_dict(_lang),
         "game_rate": _factor,
+        # The MOTION clock this payload was built at (real seconds the world
+        # ran unfrozen) — the clock every order's times are on.
+        "motion_now": round(_now_s, 3),
+        # The highest order seq handed out, read before the rows (decision 6).
+        "order_seq": _order_seq,
         "world_bounds": world_bounds,
         # Signature of the painted terrain (areas + world type rows), read
         # ONCE per payload: when it changes, clients refetch /play/terrain.

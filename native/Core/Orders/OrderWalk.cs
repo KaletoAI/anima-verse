@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AnimaNative.Nav;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
 
 namespace AnimaNative.Orders;
 
@@ -16,8 +18,8 @@ public sealed record WalkStep(Vec3 Pos, double YawDeg, bool Arrived, bool Stuck,
                               bool LinkRefused);
 
 /// <summary>
-/// Follows a <see cref="NavPlan"/> frame by frame for an order (spec 5c/5d) — the order-side successor of
-/// <see cref="NavRoute"/> (which stays for the click walk until plan E3 Task 10). The figure moves exactly
+/// Follows a <see cref="NavPlan"/> frame by frame for an order (spec 5c/5d) — the successor of the E2 walk player
+/// <c>NavRoute</c>, deleted in plan E3 Task 10 (the click walk is a local <c>walk</c> order too). The figure moves exactly
 /// <c>speed · dt</c> per frame along the corners and lands on a corner without overshoot. Each step on a walk section
 /// is clamped onto the map (<see cref="IPathProvider.ClosestOnVertical"/>) when the clamp is a small correction
 /// (≤ <see cref="NavRoutePlanner.OnMeshM"/>); the clamp pushing the step back is a blockade. After the plan's goal
@@ -29,11 +31,20 @@ public sealed record WalkStep(Vec3 Pos, double YawDeg, bool Arrived, bool Stuck,
 /// A figure held within <see cref="OrderPlayer.ArriveTolM"/> of the access counts as arrived. Links are ridden through
 /// the <see cref="ILinkRide"/> of their kind; while a ride runs neither stuck time nor deviation counts.
 /// A step with <c>dt ≤ 0</c> is neutral.
+/// Avoidance (plan E3 Task 11, spec 5d): every step reports the velocity of its path step (<see cref="DesiredVelocity"/>);
+/// the RVO answer to an earlier report (<see cref="Avoidance"/>: that desired velocity and its safe velocity) adds its
+/// change of velocity to the next path step, clamped by <see cref="AvoidanceClamp.Step"/>. The final piece to the access
+/// takes no answer: it is walked as planned (review Task 11 M1).
+/// Without an answer, or with one equal to its desire (no neighbour), the walk is exactly the path walk above.
 /// </summary>
 public sealed class OrderWalk
 {
     /// <summary>Half height of the vertical clamp query.</summary>
     public const double ClampHalfHeightM = 1.0;
+    /// <summary>How far a step may lie off the mesh before it counts as pushed back (float noise of the mesh edges).</summary>
+    public const double ClampNoiseM = 1e-3;
+    /// <summary>A link's ride begins this close to its start (3D): the stair ride's arrival radius.</summary>
+    public const double LinkArriveM = AnimaNative.Scene.Stairs.RideArriveM;
 
     private const double Eps = 1e-6;
 
@@ -79,11 +90,34 @@ public sealed class OrderWalk
     /// <summary>How often the walk failed to make progress so far.</summary>
     public int StuckCount => _stuckCount;
 
+    /// <summary>
+    /// How often a blockade (the clamp holding the figure longer than <see cref="OrderPlayer.ReplanBlockedS"/>) asked for a
+    /// replan so far; like <see cref="StuckCount"/> it survives <see cref="Replan"/>. The walk itself never gives up on
+    /// it (an NPC order keeps replanning until its heal rule); the avatar's click walk ends at its second failure
+    /// (<see cref="OrderPlayer.WalkFailures"/>, plan E3 Task 10).
+    /// </summary>
+    public int Blockades { get; private set; }
+
     /// <summary>The unused part of the last step's dt when it arrived (the arrival lies that far before the frame).</summary>
     public double LeftoverS { get; private set; }
 
     /// <summary>A link ride is requested or running.</summary>
     public bool Riding => _ride is not null;
+
+    /// <summary>
+    /// The avoidance's answer for the next step: the desired velocity the agent reported and the safe velocity it got
+    /// back (m/s, horizontal). Consumed by the next <see cref="Step"/>; null = none (the path step as it is).
+    /// </summary>
+    public (P2 Desired, P2 Safe)? Avoidance { get; set; }
+
+    /// <summary>The wall clamp of an avoided step, (from, to) → to; null = no walls (out in the open).</summary>
+    public Func<P2, P2, P2>? Walls { get; set; }
+
+    /// <summary>The storey height of the navmesh clamp of an avoided step (<see cref="NavClamp.Step"/>).</summary>
+    public double StoreyHeightM { get; set; } = 3;
+
+    /// <summary>The velocity of the last step's path step, before the avoidance (m/s, horizontal; 0 standing, riding, arrived).</summary>
+    public P2 DesiredVelocity { get; private set; }
 
     /// <summary>A new plan from where the figure stands (stuck count and clock are kept); not during a ride.</summary>
     public void Replan(NavPlan plan, Vec3? access = null)
@@ -123,6 +157,9 @@ public sealed class OrderWalk
     public WalkStep Step(Vec3 pos, double dt, IPathProvider nav)
     {
         LeftoverS = 0;
+        var avoid = Avoidance;
+        Avoidance = null;
+        DesiredVelocity = default;
         if (_refused)
             return Make(pos, linkRefused: true);
         if (_arrived)
@@ -157,7 +194,7 @@ public sealed class OrderWalk
             }
         }
 
-        if (!_final && Current is NavWalk w && SegmentDistance(pos, w.Points[_corner - 1], w.Points[_corner]) > OrderPlayer.ReplanDeviationM)
+        if (!_final && _corner >= 1 && Current is NavWalk w && SegmentDistance(pos, w.Points[_corner - 1], w.Points[_corner]) > OrderPlayer.ReplanDeviationM)
         {
             _stuckTime = _blockedTime = 0;
             _last = pos;
@@ -181,6 +218,11 @@ public sealed class OrderWalk
             _stuckTime = 0;
             return Make(q, atLink: true);
         }
+        DesiredVelocity = new P2((q.X - pos.X) / dt, (q.Z - pos.Z) / dt);
+        // The final piece is walked as planned (review Task 11 M1): it ends inside the furniture's erosion on purpose, so
+        // an avoided step there could not be clamped and a passing neighbour would push the figure into the furniture.
+        if (avoid is { } a && !_final)
+            q = Avoided(pos, q, a, dt, nav);
 
         bool slow = _last is { } before && NavRoutePlanner.Horizontal(q, before) / dt < OrderPlayer.StuckSpeedMS;
         _last = q;
@@ -214,6 +256,7 @@ public sealed class OrderWalk
             if (_blockedTime > OrderPlayer.ReplanBlockedS)
             {
                 _blockedTime = 0;
+                Blockades++;
                 return Make(q, needsReplan: true);
             }
         }
@@ -229,7 +272,9 @@ public sealed class OrderWalk
     private void Reset()
     {
         _step = 0;
-        _corner = 1;
+        // Corner 0 first: a start off the mesh walks onto the path's first point (the server counts that piece too, plan
+        // E3 Task 5, README "Orders world" — 0.10 m off the stool); on the mesh it is the start itself and costs nothing.
+        _corner = 0;
         _final = _plan.Steps.Count == 0;
     }
 
@@ -259,7 +304,7 @@ public sealed class OrderWalk
             }
             if (Current is NavLink link)
             {
-                if (Distance3(p, link.Start) <= NavRoute.LinkArriveM)
+                if (Distance3(p, link.Start) <= LinkArriveM)
                 {
                     if (clamp is null)
                     {
@@ -306,9 +351,15 @@ public sealed class OrderWalk
                 // Assumes a frame's step (speed · dt) stays well below OnMeshM: every corner of a navmesh path lies on
                 // the mesh, so only a short step can leave it, and a push up to OnMeshM is a correction. A step longer
                 // than that (a frame hitch) could be clamped into a gap or onto the far side of a thin hole.
+                // A step that does not take the figure further off the mesh than it already stood is not clamped: the
+                // piece from an off-mesh start onto the mesh (a seat, a stand inside a furniture's erosion) is walked at
+                // the order's speed like the server's path length counts it (plan E3 Task 5, README "Orders world"),
+                // and mesh-edge float noise (ClampNoiseM) near a corner on the boundary is no block that ends the walk early.
                 var on = clamp.ClosestOnVertical(next, ClampHalfHeightM);
                 double push = NavRoutePlanner.Horizontal(on, next);
-                if (push > Eps && push <= NavRoutePlanner.OnMeshM)
+                // The second query (how far off the figure already stood) only when the step would be clamped at all.
+                if (push > ClampNoiseM && push <= NavRoutePlanner.OnMeshM
+                    && push > NavRoutePlanner.Horizontal(clamp.ClosestOnVertical(p, ClampHalfHeightM), p) + ClampNoiseM)
                 {
                     blocked = true;
                     next = on;
@@ -321,6 +372,36 @@ public sealed class OrderWalk
         if (mx * mx + mz * mz > 1e-12)
             _yaw = Math.Atan2(mx, mz) * 180 / Math.PI;
     }
+
+    /// <summary>
+    /// The path step <paramref name="q"/> plus the avoidance's change of velocity (safe − desired) · dt, clamped
+    /// (<see cref="AvoidanceClamp.Step"/>; never called on the final piece); the facing follows the avoided step.
+    /// </summary>
+    private Vec3 Avoided(Vec3 pos, Vec3 q, (P2 Desired, P2 Safe) a, double dt, IPathProvider nav)
+    {
+        double dx = (a.Safe.X - a.Desired.X) * dt, dz = (a.Safe.Z - a.Desired.Z) * dt;
+        if (dx * dx + dz * dz <= 1e-12)
+            return q;
+        var c = AvoidanceClamp.Step(new P2(pos.X, pos.Z), new P2(q.X + dx, q.Z + dz), pos.Y, StoreyHeightM, nav,
+                                    Walls ?? NoWalls, _final);
+        double mx = c.X - pos.X, mz = c.Z - pos.Z;
+        if (mx * mx + mz * mz > 1e-12)
+            _yaw = Math.Atan2(mx, mz) * 180 / Math.PI;
+        return new Vec3(c.X, q.Y, c.Z);
+    }
+
+    private static readonly Func<P2, P2, P2> NoWalls = (_, to) => to;
+
+    /// <summary>The slowest and fastest rate of the gait clip on an order walk.</summary>
+    public const double MinClipRate = 0.25, MaxClipRate = 3.0;
+
+    /// <summary>
+    /// The rate of the walking clip of a figure moving at <paramref name="speedMS"/> on an order (spec 5d: the gait clip is
+    /// scaled to the order's tempo): the clip at its own pace walks <see cref="LocalOrders.DefaultSpeedMS"/> (1.4 m/s, the
+    /// orders' walking speed), so the rate is speed / 1.4, held within [<see cref="MinClipRate"/>, <see cref="MaxClipRate"/>].
+    /// </summary>
+    public static double ClipRate(double speedMS)
+        => double.IsFinite(speedMS) ? Math.Clamp(speedMS / LocalOrders.DefaultSpeedMS, MinClipRate, MaxClipRate) : 1;
 
     private void BeginRide(NavLink link)
     {
@@ -385,6 +466,74 @@ public sealed class OrderWalk
     }
 }
 
+/// <summary>
+/// The path of the avatar's click walk inside a building (plan E3 Task 10): the click planner of E2
+/// (<see cref="NavRoutePlanner.Plan"/> with the slot's footprint, its outside doors and the ground height there) as the
+/// <see cref="IPathProvider"/> the <see cref="OrderPlayer"/> plans and clamps the click's local <c>walk</c> order on.
+/// Inside the footprint it is the map (<paramref name="nav"/>, read at every call: a rebake swaps it); outside every point
+/// is on it (no clamp — out in the open the map has no say), and a query to a target outside goes out through the
+/// nearest reachable outside door and then straight (planner case 2). A query between two points outside is the straight
+/// line. A query from inside to outside without a reachable door has no points (the player then has no path).
+/// </summary>
+public sealed class ClickWalkPath(Func<IPathProvider?> nav, Func<double, double, bool> insideFootprint,
+                                  IReadOnlyList<AnimaNative.Scatter.P2> outsideDoors, Func<double, double, double> groundY) : IPathProvider
+{
+    public bool Ready => nav() is { Ready: true };
+
+    public NavPath Query(Vec3 from, Vec3 to)
+    {
+        var map = nav();
+        bool fromInside = insideFootprint(from.X, from.Z), toInside = insideFootprint(to.X, to.Z);
+        if (map is null || (!fromInside && !toInside))
+            return StraightPath.Instance.Query(from, to);
+        if (toInside)
+            return map.Query(from, to);
+        return NavRoutePlanner.Plan(map, from, to, insideFootprint, outsideDoors, groundY(to.X, to.Z)) is { } plan
+            ? Flatten(plan)
+            : new NavPath(Array.Empty<Vec3>(), Array.Empty<ulong>(), 0);
+    }
+
+    public Vec3 Closest(Vec3 p) => insideFootprint(p.X, p.Z) && nav() is { } map ? map.Closest(p) : p;
+
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight)
+        => insideFootprint(p.X, p.Z) && nav() is { } map ? map.ClosestOnVertical(p, halfHeight) : p;
+
+    /// <summary>
+    /// A plan's sections back into one path: the walks' corners in order (a section's first corner is the previous
+    /// one's last and appears once), a link's owner on its start point, its end the next walk's first corner.
+    /// </summary>
+    private static NavPath Flatten(NavPlan plan)
+    {
+        var points = new List<Vec3>();
+        var owners = new List<ulong>();
+        void Add(Vec3 p)
+        {
+            if (points.Count > 0 && Same(points[^1], p))
+                return;
+            points.Add(p);
+            owners.Add(0);
+        }
+        foreach (var step in plan.Steps)
+        {
+            if (step is NavWalk w)
+            {
+                foreach (var p in w.Points) Add(p);
+            }
+            else if (step is NavLink l)
+            {
+                Add(l.Start);
+                owners[^1] = l.Owner;
+                points.Add(l.End);
+                owners.Add(0);
+            }
+        }
+        return new NavPath(points, owners, plan.Length);
+    }
+
+    private static bool Same(Vec3 a, Vec3 b)
+        => Math.Abs(a.X - b.X) < 1e-9 && Math.Abs(a.Y - b.Y) < 1e-9 && Math.Abs(a.Z - b.Z) < 1e-9;
+}
+
 /// <summary>A map without obstacles: the straight line, every point is on it (an order walked with no navmesh).</summary>
 internal sealed class StraightPath : IPathProvider
 {
@@ -401,4 +550,44 @@ internal sealed class StraightPath : IPathProvider
     public Vec3 Closest(Vec3 p) => p;
 
     public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => p;
+}
+
+/// <summary>
+/// A walk out in the open along the server's <c>hint_route</c> (plan E3 Task 9, § A11b): the query answers the route's
+/// inner points between the walk's own start and goal (the heights interpolated between the two; the foot height is the
+/// renderer's ground anyway). Every point counts as on the map: the server baked the route around water and slopes.
+/// </summary>
+internal sealed class HintRoutePath(IReadOnlyList<AnimaNative.Scatter.P2> route) : IPathProvider
+{
+    public bool Ready => true;
+
+    public NavPath Query(Vec3 from, Vec3 to)
+    {
+        var points = new List<Vec3> { from };
+        double total = 0;
+        var inner = route.Skip(1).Take(Math.Max(0, route.Count - 2)).ToList();
+        var flat = new List<(double X, double Z)> { (from.X, from.Z) };
+        flat.AddRange(inner.Select(p => (p.X, p.Z)));
+        flat.Add((to.X, to.Z));
+        double length = 0;
+        for (int i = 1; i < flat.Count; i++) length += Math.Sqrt(Sq(flat[i].X - flat[i - 1].X) + Sq(flat[i].Z - flat[i - 1].Z));
+        foreach (var p in inner)
+        {
+            var last = points[^1];
+            total += Math.Sqrt(Sq(p.X - last.X) + Sq(p.Z - last.Z));
+            double f = length > 0 ? total / length : 0;
+            points.Add(new Vec3(p.X, from.Y + (to.Y - from.Y) * f, p.Z));
+        }
+        points.Add(to);
+        double dist = 0;
+        for (int i = 1; i < points.Count; i++)
+            dist += Math.Sqrt(Sq(points[i].X - points[i - 1].X) + Sq(points[i].Y - points[i - 1].Y) + Sq(points[i].Z - points[i - 1].Z));
+        return new NavPath(points, new ulong[points.Count], dist);
+    }
+
+    public Vec3 Closest(Vec3 p) => p;
+
+    public Vec3 ClosestOnVertical(Vec3 p, double halfHeight) => p;
+
+    private static double Sq(double v) => v * v;
 }

@@ -1,0 +1,166 @@
+{
+ "avatar": "Nia Nav",
+ "current_location_id": "loc-nav",
+ "locations": [
+  {
+   "id": "loc-nav",
+   "name": "Navhaus",
+   "pos_x": 100,
+   "pos_z": 0,
+   "yaw_deg": 0,
+   "plan_width_m": 12,
+   "boundary": [
+    [
+     -6,
+     -7
+    ],
+    [
+     6,
+     -7
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "world_props": [],
+ "world_props_sig": "nav",
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": -100,
+  "min_z": -40,
+  "max_x": 120,
+  "max_z": 80
+ },
+ "height_sig": "walk-flat",
+ "fogged": false,
+ "characters": [
+  {
+   "name": "Nia Nav",
+   "location_id": "loc-nav",
+   "room_id": "r-a",
+   "pos": {
+    "x": 97,
+    "z": -1
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  },
+  {
+   "name": "Ona Order",
+   "location_id": "loc-nav",
+   "room_id": "r-b",
+   "pos": {
+    "x": 102.6,
+    "z": 0.4
+   },
+   "height_cm": 168,
+   "activity_animation": "",
+   "travel": null,
+   "order": {
+    "order_id": "ord-o1",
+    "revision": 1,
+    "seq": 1,
+    "kind": "prop_action",
+    "issued_motion_s": 100,
+    "eta_motion_s": 103.696489,
+    "flip_motion_s": 106.096489,
+    "deadline_motion_s": 113.696489,
+    "status": "approaching",
+    "awaits": "",
+    "gait": "walk",
+    "speed_m_s": 1.4,
+    "target": {
+     "location_id": "loc-nav",
+     "room_id": "r-b",
+     "level": 0,
+     "floor_y": 0,
+     "placement_id": "bed",
+     "slot": 0
+    },
+    "hint_route": [],
+    "snap": false,
+    "actors": [
+     {
+      "name": "Ona Order",
+      "role": "sleeper",
+      "clip_role": "a",
+      "height_cm": 168,
+      "start": {
+       "x": 101.6,
+       "y": 0,
+       "z": -0.8,
+       "yaw": 0,
+       "room_id": "r-b",
+       "level": 0
+      },
+      "access": {
+       "x": 103,
+       "y": 0,
+       "z": 1.2,
+       "yaw": 80
+      },
+      "anchor": {
+       "x": 104,
+       "y": 0.5,
+       "z": 1.5,
+       "yaw": 90,
+       "root_offset": 0
+      },
+      "entry_mode": "bridge",
+      "sequence": [
+       {
+        "step": "exit",
+        "pose_kind": "seat",
+        "pose_key": "sitting",
+        "nominal_s": 1.2
+       },
+       {
+        "step": "walk",
+        "pose_kind": "",
+        "pose_key": "",
+        "nominal_s": 0
+       },
+       {
+        "step": "entry",
+        "pose_kind": "lie",
+        "pose_key": "laying",
+        "nominal_s": 2.4
+       },
+       {
+        "step": "loop",
+        "pose_kind": "lie",
+        "pose_key": "laying",
+        "nominal_s": 0
+       }
+      ],
+      "reports_arrival": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "Uli Up",
+   "location_id": "loc-nav",
+   "room_id": "r-a",
+   "pos": {
+    "x": 97,
+    "z": -1
+   },
+   "height_cm": 180,
+   "activity_animation": "",
+   "travel": null
+  }
+ ],
+ "motion_now": 100,
+ "order_seq": 1,
+ "game_rate": 1
+}

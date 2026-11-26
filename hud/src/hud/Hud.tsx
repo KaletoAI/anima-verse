@@ -35,7 +35,7 @@ import {
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
   CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR,
-  type ScreenshotPhoto, type SceneData, type SceneLine, type IconName,
+  type ScreenshotPhoto, type SceneData, type SceneLine, type IconName, propActionReason,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
 import { ChatPortraits } from './ChatPortraits';
@@ -834,7 +834,9 @@ export function Hud({ avatar, username, role }: {
     // arrive localized already and must not be looked up a second time.
     uiActions.toast = (msg: string, translate?: boolean) =>
       toast(translate ? t(msg) : msg, 'error');
-    return () => { uiActions.toast = undefined; };
+    uiActions.propReason = (code: string, text?: string) =>
+      toast(propActionReason(code, t, text || undefined), 'error');
+    return () => { uiActions.toast = undefined; uiActions.propReason = undefined; };
   }, [toast, t]);
 
   // Talking (E3-T5): F next to a character — and the plaque's Talk button —

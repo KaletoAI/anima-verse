@@ -1467,28 +1467,25 @@ ground word there is `walk_run`, dry.
   standing pose `stand-relaxed`, dry (no drop, no ghost).
 Frame 0.25 s: Lia's root 0.6 + 0.9·1 = **1.5**.
 
-**W2 — poll 2** (`worldmap_poll2.json`). Dora → r-b (103, 1): a ROUTE (room change, interior shown both times):
-`doorwayBetween(r-a, r-b)` → stations **[(100, 0, 2)]**. Sam → r-up (no pos → its centre (100, 3.03, 0), hidden on
-storey 1): no shared doorway → leave by `roomDoor(r-a)` (its only doorway, the party wall) (100, 0, 2), storey 0 → 1 by
-the stair chain [foot, head], no door into r-up → stations **[(100, 0, 2), (100, 0.01, −2), (103.5, 3.01, −2)]** and the
-ride (one leg, UNARMED). Rex → (−70, 60), Lia → (46.8, 0). Frames of 0.25 s:
+**W2 — poll 2** (`worldmap_poll2.json`). Dora → r-b (103, 1) and Sam → r-up (no pos → its centre (100, 3.03, 0),
+hidden on storey 1) are real room changes WITHOUT a server order: since plan E3 Task 9 each walks a client-local `walk`
+(`local:<n>`, `FigureManager.StartRoomWalk`) over the hall's navmesh at `LocalOrders.DefaultSpeedMS` 1.4 m/s — the
+old door/stair stations and the guided ride of the room routing are gone (no waypoint, no ride on the figure). The
+walk world's navmesh bakes the floors only (no party wall), so Dora's path is the straight **6 m** from (97, 1) to
+(103, 1) and rides no link; Sam's path rides exactly **one** link section (the flight). Both end on their row's point
+— Dora **(103, 0.01, 1)**, Sam **(100, 3.03, 0)** — after the 0.3 s blend into the rest placement; the door gap of a
+real party wall is checked in the orders world (OrderCheck R7). Rex → (−70, 60), Lia → (46.8, 0), frames of 0.25 s:
 
-| frame | Dora | Sam | Rex | Lia |
-|---|---|---|---|---|
-| F1 | door 3.162 away (+10) → run 1.53 along (3, 1)/√10 → **(98.451485, 0, 1.483828)** (y eased to the door's 0) | door 3 → run → (98.53, 0, 2) | 10 > 6 → run → **−78.47** | swim 0.85 (no run on `swim`) → **40.85**, root max(0.35, 1.5) = 1.5, **breast-stroke**, drop 0.35, ghost 1.5 |
-| F2 | door 1.632 ≥ 1.5 → run 1.53 → **(99.902971, 0, 1.967657)** — the door is still ahead (straight to the goal would keep z = 1) | 1.47 → **(100, 0, 2)** | 8.47 → run → −76.94 | |
-| F3 | door 0.102 < 1.5 → retired; goal (103, 0.01, 1) 3.2447 ≤ 6 → **walk** 0.85 → **(100.714291, 0.01, 1.714163)** | door 0 < 0.4 → retired; stair foot 4 (+10) → run → (100, 0.01, 0.47) | 6.94 > 6 → run → **−75.41** | |
-| F4 | 2.3947 left | 2.47 → run → (100, 0.01, −1.06) | 5.41 ≤ 6 → **walk** → **−74.56** | |
-| F5 | 1.5447 left | 0.94 → **(100, 0.01, −2)**: the foot landing (3D 0 < 0.4) ARMS the ride; `stairY` t = 0 → 0.01 | | |
-| F6 | 0.6947 → **(103, 0.01, 1)** | foot retired; head 3.5 (+10) → run → x 101.53; `stairY` t = 1.03/2.5 = 0.412 → **1.246** | | |
-| F7 | | head 1.97 → run 1.53 → x 103.06; t = 2.56/2.5 → 1 → **3.01** | | 7·0.85 → **45.95** |
-| F8 | | head 0.44 ≥ 0.4 → 0.44 → **(103.5, 3.01, −2)**; the ride ends there (3D 0 < 0.4) | | 0.85 → **46.8** |
-| F9 | | head retired (1.5 m again); goal r-up 4.0311 ≤ 6 → walk along (−3.5, 2)/4.0311 → **(102.761993, 3.03, −1.578282)** | | |
-| F10 | | 2.3311 left | 0.31 → **−70** | |
-| F13 | | 3.1811 − 3·0.85 = 0.6311 → **(100, 3.03, 0)** | | |
+| frame | Rex | Lia |
+|---|---|---|
+| F1 | 10 > 6 → run → **−78.47** | swim 0.85 (no run on `swim`) → **40.85**, root max(0.35, 1.5) = 1.5, **breast-stroke**, drop 0.35, ghost 1.5 |
+| F3 | 6.94 > 6 → run → **−75.41** | |
+| F4 | 5.41 ≤ 6 → **walk** → **−74.56** | |
+| F7 | | 7·0.85 → **45.95** |
+| F8 | | 0.85 → **46.8** |
+| F10 | 0.31 → **−70** | |
 
-Clips: Dora runs `run` (the run pose's kind) at F1, walks `mob1-walk` from F3; Rex walks `mob1-walk` from F4; Sam walks
-`mob1-walk` from F9 and stands in `stand-relaxed` at F14. F14: everyone stands; Lia treads water again (drop 1.3), her
+Clips: Rex walks `mob1-walk` from F4. After both room walks: everyone stands; Lia treads water again (drop 1.3), her
 root stays at max(0 + 1.3, 1.5) = **1.5**.
 
 ## Bridges world (`bridges/`, Task 31, `Check/BridgeCheck.cs`, `--check bridges`)
@@ -1933,53 +1930,73 @@ The source fingerprint is the cache key (16 entries, memory only); every bake lo
 **`--check nav`, avatar part (Task 6, `NavCheck.AvatarAsync`):** the nav world again, built and opened (`SetOpen`, fade 1),
 physics frames until `NavFor(slot)` is set; then a real `FigureManager` (`GroundYAt = FigureGroundY`), `PlayerSteering` in
 `r-a`, a real `AvatarRoomsController` whose clock stays 0 (the walk-in hold of 1500 ms never falls due, so the only enter-room
-request is the link ride's) and `steering.RideLink = rooms.RideLinkAsync`. One frame = `Step(dt, keys, yaw 0)` +
-`manager.Tick(dt)` + `rooms.Tick()`, dt 0.25 (A7: 1/60); at dt 0.25 a walking step is 3.4·0.25 = 0.85 m. `At(x, z)` snaps
-the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks (−sin 0, −cos 0) = (0, −1), `s` walks (0, +1).
+request is the link ride's) and `manager.AvatarLinkRide = rooms.OrderLinkRide`. One frame = `Step(dt, keys, yaw 0)` +
+`manager.Tick(dt)` + `rooms.Tick()`, dt 0.25 for the keys of A2 (a walking step is 3.4·0.25 = 0.85 m) and 1/60 for the
+click walks and A7. Plan E3 Task 10: a click walk on the navigation is the avatar's local `walk` order
+(`FigureManager.StartClickWalk`) on the click planner's path (`ClickWalkPath`), played by its `OrderPlayer` at the avatar's
+3.4 m/s = 0.0567 m per frame (the order walk's clamp holds only steps well below 0.3 m, hence 1/60); it lands on every corner
+and on its goal (no 0.2 m early arrival). `At(x, z)` snaps the avatar onto `PlayerFloorY`. The key `w` at yaw 0 walks
+(−sin 0, −cos 0) = (0, −1), `s` walks (0, +1).
 
 - **A0** the ground click through `Main.TryGroundWalk(builder, steering, avatar, o, d)` (the code `MainHud.PickAt` runs), ray
   o (98, 10, 5), d (0, −10, −6) of `tests/NavClickTests.cs`, avatar (97, −1). Storey view 0: plane y = datum 0 + `FloorY(0)` 0 →
   t 1 → (98, −1), inside the footprint → `WalkTo((98, −1), 0)` → on the mesh (planner case 1) → `Route` (98, −1) ± 0.01. Storey
   view 1: plane y 3 → t 0.7 → (98, 0.8), inside → `WalkTo(…, 1)`, target y 3 (storey 1 of the source): the nearest mesh point is
-  the loft's eroded edge (100.35, 3, 0.8) (horizontal 2.35 < 3 to the floor below) → planner case 3 → `NavRoute.Final`
-  (100.35, 3, 0.8) ± 0.05.
-- **A1** `WalkTo((103, −1))` → P1: the route's corners include (99.65, 1.8) and (100.35, 1.8) (± 0.05; the polygon path also has
-  edge points between them), `Route` = (103, −1) (the end goal, review W5); arrival within 0.2 of (103, 0, −1) in ≤ 40 frames
-  (8.41 m / 0.85 ≈ 10, measured 12). Crossing x 100: the door opening is z 1.55…2.45 (W5 ends at 1.55, W6 starts at 2.45). A
-  corner counts as reached 0.2 m before it (`NavRoute.CornerArriveM` = `ClickMove.GoalArriveM`), so the step to (100.35, 1.8) may
-  start up to 0.2 m short of (99.65, 1.8): the lowest crossing is 1.8 − 0.2·0.35/0.7 = **1.70** (the plan's 1.75 assumed exact
-  corners; measured 1.748). Bound z ∈ [1.70, 2.25] — through the door, 0.15 m clear of W5's end.
+  the loft's eroded edge (100.35, 3, 0.8) (horizontal 2.35 < 3 to the floor below) → planner case 3 → the walk order's goal
+  `steering.WalkGoal` (100.35, 3, 0.8) ± 0.05.
+- **A1** `WalkTo((103, −1))` → a walk order whose plan is P1: length 8.410 ± 0.05, corners include (99.65, 1.8) and
+  (100.35, 1.8) (± 0.05; the polygon path also has edge points between them), `Route` = (103, −1) (the end goal, review W5).
+  8.410 m at 3.4 m/s = 2.474 s: the frame that lands on the goal is ⌈2.474·60⌉ = **149** (± 6 frames = ± 0.1 s), within 0.05 of
+  (103, 0, −1); the order then ends (`WalkOrderId` null). Crossing x 100: the door opening is z 1.55…2.45 (W5 ends at 1.55, W6
+  starts at 2.45); the walk lands on every corner, so it crosses on the segment (99.65, 1.8) → (100.35, 1.8): z **1.8** ± 0.05.
+  (E2's `NavRoute` reached a corner 0.2 m early, lowest crossing 1.70.)
 - **A2** keys `w` from (97, −1), 8 frames: frame 1 asks (97, −1.85), inside the eroded armchair; the clamp slides to its nearest
   mesh point (97, −1.35) (0.50 away against 0.65 / 0.80). Frame 2 asks (97, −2.2), whose nearest mesh point is the FAR edge
   (97, −2.65) (0.45 against 0.85): a slide longer than the 0.85 m step is the far side of the obstacle, so the avatar stays
   (`PlayerSteering.ClampToNav`; at 60 Hz a 0.15 m step never gets there). z never < −1.36, end z −1.35 ± 0.02. **A2b** from
   (97, −1.8) (in the eroded chair, off the mesh by 0.45) keys `s`: (97, −0.95) is on the mesh → passes → z > −1.35.
 - **A3** `WalkTo((97, −1.9))` from (97, −0.5): inside the box, off the mesh → planner case 3 → goal = the nearest edge point
-  (97, −1.35) (0.55 away; x 96.35 / 97.65 are 0.65, z −2.65 is 0.75) ± 0.02, arrival within 0.2. The plan's (97, −2) is the box
+  (97, −1.35) (0.55 away; x 96.35 / 97.65 are 0.65, z −2.65 is 0.75) ± 0.02, arrival within 0.05 (the order walk lands on its
+  goal). The plan's (97, −2) is the box
   centre, 0.65 from all four eroded edges — a tie the map decides (measured (97.65, −2)), so the click moved 0.1 m north.
 - **A4** `SetLocks({r-b: ""} in loc-nav, avatar room r-a)` → T0 off (N7) → after Ready `WalkTo((103, −1))` → the path ends ≥ 0.5 short
   → no plan, start and goal inside the footprint → false; four frames later the avatar has not moved (≤ 1e-4). `LockState.None`
   → after Ready → true.
-- **A5** scenario `nav-up`; `WalkTo((104, 2), level: 1)` (target y 3) → P2 over the stairs: exactly one link section, owner 65536.
-  At the foot (within 0.4 of (101, 0, −3.3)) the route asks `RideLink(65536)` → `RideLinkAsync`: flight 0, current storey 0 (room
-  r-a) → the head (104.5, 3, −3.3) on storey 1, target room `NearestRoomAt(1, …)` = r-up, leg foot → head, ride like
-  `RideStairsAsync` with `keepNavRoute` (only the straight state is cleared) → one `POST /play/enter-room {room_id: r-up}`
-  (200) → `VerticalRide` set, `RoomId` r-up; the route stays alive through the ride, `LinkFinished` once `VerticalRide` is null
-  again, then walks (104.5, −3.3) → (104, 2). End: `NavRoute` null, within 0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up.
+- **A5** scenario `nav-up`; `WalkTo((104, 2), level: 1)` (target y 3) → a walk order whose plan is P2 over the stairs: length
+  19.630 ± 0.05, exactly one link section, owner 65536 (kind `stairs`). At the foot (within 0.4 of (101, 0, −3.3)) the order walk
+  begins the avatar's ride (`AvatarRoomsController.OrderLinkRide("stairs")`): flight 0, current storey 0 (room r-a) → the head
+  (104.5, 3, −3.3) on storey 1, target room `NearestRoomAt(1, …)` = r-up → one `POST /play/enter-room {room_id: r-up}` (200),
+  `RoomId` r-up BEFORE the ride moves the figure (`Requested` holds it at the foot), then the NPC stair ride up the flight inside
+  the order (no `VerticalRide`), then (104.5, −3.3) → (104, 2). End: the order over, within 0.05 of (104, 2) horizontally and
+  0.25 of (104, `PlayerFloorY(r-up)`, 2), `RoomId` r-up. Frames: 19.630 m less the flight's climb the ride does not walk
+  (√(3.5² + 3²) − 3.5 = 1.110 m) = 18.52 m / 3.4 = 5.45 s ≈ 327 frames, plus the frames of the room answer (measured 328).
 - **A5b** scenario `nav-up-rejected` (same request → 409): back to (97, −1), room r-a, view 0; the same click walks to the foot,
-  the ride is refused (`RideAsync` → false) → `LinkResult(false)` → `Abort` → `CancelRoute`: `NavRoute` and `Route` null,
-  `VerticalRide` null, y < 0.1, within 0.5 of (101, 0, −3.3) (`LinkArriveM` 0.4); exactly one request.
+  the ride is refused (`Refused` → `link_refused`, the order aborted) → the click walk ends where it stands: `WalkOrderId`,
+  `Route` and `VerticalRide` null, no order player left, y < 0.1, within 0.05 of the foot (101, 0, −3.3), room r-a; exactly one
+  request.
+- **A5c** (review E3 Task 10, I-1) scenario `nav-up` with the fixture's `RoomGate` set (the enter-room answer waits): the A5
+  click walks to the stair foot (within `LinkArriveM` 0.4 of (101, 0, −3.3)), where the order's ride is requested
+  (`PlayerSteering.LinkRiding`, room still r-a, one request). Ten frames of key `w`: the order goes on, the figure holds
+  (≤ 1e-4), and `WalkTo((97, −1))` is refused. The gate opens; with `w` held while `LinkRiding` (released after the ride)
+  the walk rides the flight and ends in the loft like A5: within 0.05 of (104, 2), room r-up, one request (measured 328 frames,
+  as A5 — the held key changes nothing).
+- **A5d** the same with the walk ended during the request (`CancelRoute()`, as a correction or the end of embodiment would):
+  the answer (200) arrives after the ride was aborted → `EnterLinkRoomAsync` adopts nothing; room r-a, y < 0.1, no walk.
 - **A6** `PropActionDriven` → `WalkTo((97, −2))` false and four frames move nothing (the prop action's own motion path, decision 12).
 - **A7** keys `w` at 1/60 from (97, −3): the step lead max(3.4/60, `MinLead` 0.15) = 0.15 m < the erosion 0.25 m. The avatar passes
   T1 (x 96.8…97.2 at z −4: it walks x 97), the yard (z < −4.4) and the yard's eroded edge −7.05 / the boundary −7 (z < −7.1:
   `FootprintAt` null, no clamp outside); no frame without movement while the key is held (measured 73 frames).
-- **A8** (final review E2, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the footprint → planner case 2:
-  the path to T1's outer point (97, −4.35), then straight north to (97, 6) — back through T1 into `r-a`, where the eroded
-  armchair (x 96.35…97.65, z −2.65…−1.35) and behind it W2 (eroded z 3.65) hold the clamped avatar. Held 2 s
-  (`NavRoute.StuckSeconds`) → Replan from `r-a` (out through T1 again) → held again → Abort, because the replanned route
-  takes the stuck count over (`NavRoute(plan, StuckCount)`). One cycle at dt 0.25: ≤ 8 m at 3.4 m/s (≤ 10 frames) + 8 stuck
-  frames → the walk ends within 120 frames with `NavRoute` and `Route` null, at least two route instances seen, the avatar
-  never near z 6 (measured 29 frames, 2 routes). Before the fix every replan started at count 0 and the walk never ended.
+- **A8** (final review E2, I-2; review E3 Task 10, I-2) `WalkTo((97, 6))` from (97, −1): (97, 6) lies north of W2, outside the
+  footprint → planner case 2: the navmesh path to T1's outer point (97, −4.35), then straight north to (97, 6). The click's walk
+  order takes the navmesh part only: `DoorOf` picks the outer point nearest to the plan's corner before the click (within
+  `UnreachableM` 0.5) → order goal (97, ground, −4.35), its `ClickWalkPath` restricted to that door; `Route` stays (97, 6),
+  `WalkGoal` the door point. At the door (within `HandoffM` = 0.15 + 0.2 of the order goal, no failure) the order is let go
+  and the next step hands the rest to the straight walk (`Route` (97, 6), marker on, no order player). Straight north from
+  (97, −4.35) leads back through T1 into `r-a`, where the eroded armchair (x 96.35…97.65, z −2.65…−1.35) makes the navmesh
+  clamp of every step hold → zero progress → the 20-frame stall ends the walk at (97, −2.65) ± 0.05, never near z 6. Frames:
+  the order's navmesh path around the armchair to the door is not derived by hand (≥ the straight 3.35 m → ≥ 59 frames;
+  measured 69, the check bounds it only by its 1800-frame budget); the straight walk 1.7 m at
+  3.4/60 m per frame = 30 frames + 20 stall frames = 50 (measured 49, the first frame counted with the handoff).
 
 **O1 the F9 overlay (Task 7, `NavCheck.OverlayAsync`, run in the avatar world right after the first navigation is swapped in;
 `loc-nav` is the open location).** `NavOverlayVisible = true` → one `NavOverlay` node, visible, one `ArrayMesh` of three
@@ -2004,8 +2021,12 @@ eroded edges 0.35 from a wall line):
 - **W2** (5.7, 1) in r-b is off the mesh (east wall face 5.9 → edge 5.65); keys `d` at yaw π/4 push east (wall collision keeps
   x ≤ 5.75) and north. The clamp holds a step that goes deeper, then tries its axis parts (larger first, like `SlideBlocked`):
   the z part keeps x and is not deeper → the avatar slides north as before (z < −0.5 after 1 s, x ≤ 5.75).
-- **W6** a click behind the hall from (−3, −3.75) is now a navmesh route out through the outside door (planner case 2), `Route`
-  (−3, −8). The straight walk's 20-frame stall is checked where no navigation applies: from (−3, −4.1), outside every footprint,
+- **W6** a click behind the hall from (−3, −3.75) is now a walk order on the navmesh (plan E3 Task 10: the avatar's local walk
+  order, `WalkOrderId` set) out through the outside door (planner case 2), `Route` (−3, −8). The hall's only outside door is
+  the south one, outer point (3, 3.65) (`NavOutsideDoors`): the order's goal is exactly that point (review E3 Task 10, I-2);
+  there the straight walk takes the rest (`Route` (−3, −8), no order player), straight back across the hall, where its gates
+  hold it at the north wall's eroded edge (z −3.65, wall line −4, edge 0.35) until the 20-frame stall ends it (route and marker
+  gone, z within −3.7…−3.5; it never passes the wall). The straight walk's 20-frame stall is also checked where no navigation applies: from (−3, −4.1), outside every footprint,
   the click (−3, 8) on the far side walks into the hall's footprint (foreign, with an authored opening → `PlayerBlocked`); the
   first lead (−3, −3.95) is already inside it, so every target is the start: frame 19 keeps the route, frame 20 drops it and the marker.
 - **W "upper-floor object approach"** (−2.01, 0) at y 3.01 in r-up: on the loft mesh → case 1 → `Route` = the click, X −2.01 unchanged.
@@ -2034,3 +2055,130 @@ measurement of the winner, one line per fixture:
 - No expected times: the check only requires every fixture to bake and its map to become ready; the times are recorded
   in the measurement document (all four below 0.1 ms on the reference machine, against the 300 ms disk-cache threshold
   of spec 8).
+
+## Orders world (`orders/`, E3, `Check/OrderCheck.cs`, `--check orders`)
+
+Plan E3 Task 5: NPC furniture approaches played from motion orders (§ A11b) on the real navigation. The world is the
+nav world (`heightfield.json`, `locations.json`, `terrain.json`, `urls.json` copied from `nav/`) with the scene
+signature `orders-house` and one more model: the **stool** of Task 1 O1 (`id stool`, room r-b, tile-local anchor
+(1.5, −1) → world (101.5, −1), 0.5 × 0.5 × 0.45). Every figure is a portrait (`model3d.json` answers null), so every
+phase runs on its nominal seconds. `animation_clips.json` = the fallback library plus the server's pose rules
+(`@seat → standing: get-up-chair`, `walking → @lie: lie-down`; groups sitting → seat, laying → lie).
+
+| File | What it is |
+| --- | --- |
+| `worldmap.json` | root `motion_now` 100, `order_seq` 1, `game_rate` 1; **Ona Order** (r-b, row pos (101.5, −1), 168 cm, sitting) with order **O1**; **Uli Up** (r-a, (97, −1), 180 cm, no order) |
+| `worldmap_poll2.json` | the same O1 (same id, revision 1) with other position fields: row pos (102.6, 0.4), actor start (101.6, −0.8) yaw 0, access (103.0, 1.2) yaw 80 |
+| `orders.json` | `GET /play/orders`: `{orders: [O1], seq: 1, motion_now: 100}` |
+
+**O1** (`ord-o1`, prop_action, seq 1): issued 100, eta 103.696489, flip 106.096489, deadline 113.696489, approaching,
+walk at 1.4 m/s, target the bed (r-b, slot 0). Actor Ona: start (101.9, 0, −1) yaw 90, access (103.15, 0, 1.5) yaw 90,
+anchor (104, 0.5, 1.5) yaw 90, entry_mode bridge; sequence exit (seat/sitting, 1.2 s), walk, entry (lie/laying, 2.4 s),
+loop (lie/laying).
+
+**The client path of Ona.** The start (101.9, −1) lies in the stool's erosion (x 101.0 … 102.0); the walk goes onto the
+mesh at (102.0, −1): **0.10**. Then (102, −1) → Closest(access) = (103.05, 1.5) (the bed's erosion edge, 0.10 before the
+access): √(1.05² + 2.5²) = √(1.1025 + 6.25) = **2.711549** (the navmesh path's bend (102.299, −0.286) lies on that line).
+The final piece to the access: **0.10**. Total **2.911549 m** (measured 2.906, inside 0.05: the mesh's own corner sits
+at 103.0469). Chain with nominal durations: exit 1.2 + walk 2.911549 / 1.4 = 2.079678 + entry 2.4 = **5.679678 s**
+(measured 5.683 at frame step 1/60). Server flip − issued = 6.096489 → deviation **0.416811 s ≤ 1.5**.
+Client walk rule this pins (`OrderWalk`): the walk starts at the path's corner 0 (the piece from an off-mesh start is
+walked, not jumped), and a step is pushed back onto the mesh only when it lies further off the mesh than the figure
+already stood (plus 1 mm edge noise) — before that the start piece was skipped and an edge push 0.15 m before the
+access ended the walk early (chain 5.483, 0.196 s short).
+
+Cases (frames of 1/60 s, a real `FigureManager` fed through `Apply`; position 0.05 m, length ± 0.05, time ± 0.1 s):
+
+- **R1** O1 from t = 0, `worldmap_poll2.json` polled at t = 1.0 / 3.0 / 5.0 (same id + revision = no-op): Exit → Walk →
+  Entry → Loop, each once; Exit from the first frame; Loop at 5.679678 ± 0.1; |5.68 − 6.096489| ≤ 1.5; Ona on the bed slot
+  (104, 1.5) at the anchor height **0.5**, on the surface **lie** (the row names no place marker, so the group is the
+  order's loop pose kind lie — not the ground's height correction); a poll after the loop moves nothing (≤ 0.1 mm).
+- **R1b** the row without order (`order_seq` 0), the `orders` topic pulled twice: `since` 0, then 1 (the answer's seq);
+  the same order twice starts nothing again.
+- **R3** `motion_now` 102.5 (lag 2.5 > 2): the first frame is Walk at (2.5 − 1.2) · 1.4 = **1.82 m** walked.
+- **R3b** status active: Loop on the slot (104, 1.5) at once, height 0.5, surface lie.
+- **R4** revision 2 at t = 2.0 (+30 s on every time, `motion_now` 102): states stay Exit → Walk, IssuedLocal unchanged.
+  At t = 3.0 the new id `ord-cancel` (kind cancel): Abort at 3.0 (± 2 frames), then Idle.
+- **R5** awaits reaction, no flip: WaitAccess at the access (103.15, 1.5) (reached at 5.68 − 2.4 = 3.28 < 4); the revision
+  without awaits at t = 4.0 starts the entry at 4.0 (± 2 frames). `OrderArrivedAtAccess` fires exactly once, for `ord-o1`,
+  at exit 1.2 + 2.911549 / 1.4 = **3.279678 s** (± 0.1).
+- **R9** the three fixture orders: every access ≤ 0.4 m from the mesh (Ona's: 0.103),
+  the final piece Closest(access) → access crosses no wall of storey 0, every link end within the map's connection radius.
+- **R10** Ona + Uli in one active order (Uli's slot (104, 0.5, 1.0)), both rows with the pair `pair-1` (clip_s 2.5): both
+  Loop, both adopt `pair-1` on clip_s **2.5** exactly (± 1e-6: the portraits have no rig, so `TickPair` returns before it
+  advances the pair clock — with a rig it would read 2.5 + 0.5 = 3.0; PairCheck owns that clock), both on their slots; a
+  poll with other row positions moves neither (≤ 0.1 mm).
+- **R11** active (revision 1) then revision 2 with a `phase` step (seat/sitting) and the row's activity sitting: still the
+  one Loop, PhasePoseKind seat, figure activity sitting, surface seat, IssuedLocal unchanged, on the slot.
+- **R12** the same phase-2 order entered late (`motion_now` 130): Loop at once with the phase-2 pose.
+- **R13** active O1, then a row without order: with `order_seq` 0 (< 1, **R13b**) nothing ends; with `order_seq` 1 the order
+  ends and the figure blends in 0.3 s from the slot (104, 1.5) to the row's rest (103.6, 1.5): the first frame still at
+  x 104 ± 0.05, from t + 0.3 on at (103.6, 1.5).
+- **R13c** a local order `local:1` walks Uli (97, −1) → (99, 0): √(2² + 1²) = 2.236 m, 1.597 s; a row without order
+  (`order_seq` 9) at t = 0.5 does not end it; arrival at (99, 0).
+- **R7** (plan E3 Task 9) a server `walk` `ord-r7` for Uli r-a (97, −1) → r-up (104, 3, 2), issued 100, flip = eta =
+  100 + 24.0573666 / 1.4 + 0.5 = **117.683833** (the server's room-chain estimate, Task 1 O2), delivered by the second poll
+  at t = 0.5 together with the new room. The client walks its own navmesh path: in this world the bed narrows r-b, so
+  the path bends there — corners (97, 0, −1) (98.367, 0, 0.445) (99.649, 0, 1.8) (100.351, 0, 1.8) (100.721, 0, 1.283)
+  (102, 0, −0.5) (102, 0, −1.5) (101, 0, −3.3), the flight (101, 0, −3.3) → (104.5, 3, −3.3) √(3.5² + 3²) = 4.610,
+  then (104.376, 3, −1.988) (104, 3, 2): 1.989 + 1.866 + 0.702 + 0.636 + 2.194 + 1 + 2.059 + 4.610 + 1.318 + 4.006 =
+  **20.379 m** (the nav world's P2 19.630 has no bed in its way); it crosses x = 100 at z 1.8 (in T0), exactly ONE link
+  section (owner 65536); horizontally 20.379 − (4.610 − 3.5) = 19.269 m at 1.4 m/s (the NPC ride keeps the pace) →
+  the loop on the goal at 0.5 + 13.76 ≈ **14.28 s**, long before flip + 5 = 22.68 s; no `healed` event.
+- **R7b** the same room change as a row WITHOUT order (poll 2 at t = 0.5: room r-up, pos (104, 2)) → a client-local
+  `walk` (`local:<n>`) over the same mesh: path length **20.379 ± 0.05**, every walk point on the mesh (≤ 0.05 m from
+  `Closest`); at the goal it blends into the row's point (104, 3, 2) and the rows place the figure again.
+- **R14** the pair, then a follow order `ord-follow` for Uli alone (sequence loop only): no exit for Uli; a cancel for Ona
+  alone (exit lie/laying 1.0 s, stand (103.05, 1.5)) plays exactly one exit, for Ona.
+- **R15** the world freeze (`game_rate` 0). The R10 pair accepted frozen: both shown Frozen, yet the chain's own state is
+  the loop, so the row's branches run — both on their slots (Ona at height 0.5) with `pair-1` adopted (the order no
+  longer swallows the frame). **R15b** O1 from t = 0, a poll with `game_rate` 0 at t = 2.0 (in the walk: 2.0 − 1.2 = 0.8 s
+  of it) and one with `game_rate` 1 at t = 3.0: the figure stands still from 2.0 to 3.0 (≤ 0.1 mm); states Exit → Walk →
+  Frozen → Walk → Entry → Loop; the frozen 1.0 s delays the chain end to 5.679678 + 1.0 = **6.679678 s** (± 0.1); on the
+  bed slot.
+- **R8** (plan E3 Task 11, avoidance) two server `walk` orders head-on through r-a, both issued 100 at `motion_now` 100:
+  `ord-r8u` Uli (95, 0) → (99, 0) and `ord-r8o` Ona (99, 0) → (95, 0), 1.4 m/s; the line z = 0 lies inside the eroded r-a
+  (x 94.35…99.65) and clear of the armchair (z ≤ −1.35) and the rug (no obstacle), so each path is the straight 4 m:
+  4 / 1.4 = 2.857 s, flip = issued + 2.857143 + 0.5 = **103.357143** (relative 3.357). The ticks wait for a real physics
+  frame each (the navigation server answers the agents' velocities there; RVO is not deterministic). Expected: the
+  smallest centre distance during the meeting **≥ 0.3 m** (ideal 0.25 + 0.25 = 0.5; 0.3 separates "avoided" from "walked
+  through" — without avoidance the two meet at x 97 with a gap of one frame step, measured 0.013), both on the loop before
+  flip + 5 = **8.357 s** and on their goals (± 0.05), both agents of the location's map while walking and in the loop
+  (static, velocity 0). The earlier runs' figures leave the map first (`ReleaseAvoidance`), else R13c's Uli would stand
+  as an agent on (99, 0). Measured on the reference machine: gap 0.5, both arrivals 3.033 s.
+- **R8b** (review Task 11 I2, frame-rate parity) the same meeting (`ord-R8bu` / `ord-R8bo`, seq 8/9) with **two ticks of
+  1/120 s per physics frame** — a client drawing at twice the physics rate. The navigation server still answers once per
+  physics frame; the answer is held (`HeldAvoidance`, at most 2 physics frames old) and applied by both ticks with their
+  own dt, so the sideways velocity per second is the same as in R8. Expected: the R8 bounds (gap ≥ 0.3, arrivals before
+  8.357 s, on the goals) and a gap within **0.03 m** of R8's (RVO varies by ≤ 0.005 m run to run). Measured before the
+  hold (answer used once): gap 0.444 against R8's 0.498, arrivals 3.192 / 3.325 s; with the hold: 0.499 against 0.499,
+  arrivals 3.042 / 3.033 s.
+
+**The avatar's orders (plan E3 Task 6, `Check/OrderCheck.Avatar.cs`).** R2–R2c run on the propactions world through the
+real offers controller (`fixture-avatar` at (−3, −2); bench-56: slot (2, 0.129, 0), the actor's access (2, −1); no
+navigation → the straight walk; the local order's speed 1.4 m/s; frames of 1/60 s):
+
+- **R2** a click, the refusal `no_free_slot` at t = 0.8 s: 0.8 × 1.4 = 1.12 m along (5, 1)/√26 →
+  (−3 + 1.12·0.980581, −2 + 1.12·0.196116) = **(−1.901750, −1.780350)**; states Walk → Abort (the hand-back lets go of the
+  aborted order, so no Idle frame and no further phase); the avatar is the player's again and faces away from the slot:
+  atan2(−1.901750 − 2, −1.780350 − 0) = **−114.527°** (± 1°).
+- **R2b** the answer held back 30 frames: the first frame moves 1.4/60 = **0.023333 m**; after 30 frames 0.7 m →
+  **(−2.313594, −1.862719)**; after the answer the access (2, −1) at √26/1.4 = **3.642157 s**, waiting there (WaitAccess).
+- **R2c** a second bench B (`bench-57`: slot (−1, 2), access (−1, 1)) clicked after 10 frames while A's request runs. A's
+  answer (approaching `run-a`) comes after the switch to `local:2`: the calls are exactly request A, cancel run-a,
+  request B (409 `request_in_progress`), request B (retry, approaching `run-b`); no toast; reserved = {run-b}; by 8 s the
+  avatar waits at **(−1, 1)**.
+- **R2d** on the orders world: Nia Nav walks a local walk order from (97, −1) to the loft point (100.35, 3, 0.8) (NavCheck
+  A0) over stairs 1 (foot (101, 0, −3.3), head (104.5, 3, −3.3)). The ride asks `/play/enter-room` r-up
+  (`pos_answers.json`, copied from the nav world): `nav-up-rejected` (409) → `link_refused`, the figure at the stair
+  foot **(101, −3.3)** on storey 0, the room stays r-a, one request; `nav-up` (200) → the room is r-up while the figure is
+  still below y 3 − 0.05 (before the ride ends), the walk ends on **(100.35, 3, 0.8)**.
+- **R6 / R6x / R6b** (plan E3 Task 7) on the propactions world: the request's answer carries the run's order `run-r6`
+  (`PropActionsCheck.OwnOrder`: fixture-avatar `reports_arrival`, access (2, −1), entry `seat` nominal 2 s), adopted
+  in place of the local order. The avatar reaches the access at √26/1.4 = **3.642157 s** and sends
+  `/play/order/arrived` **once** (`run-r6`, r-props, at (2, −1) ± 0.05) while its entry starts in the same frame —
+  no WaitAccess. R6: the answer `{"ok": true}` → states Walk → Entry (**3.642 s**) → Loop by 7 s. R6b: the count of
+  `/play/pos` attempts at `arrived_access` equals the one at `loop_started` (none in between). R6x: the answer is a
+  409 `arrive_too_far` → states Walk → Entry → Abort at **3.642 s** (the faulted answer is read in the same frame),
+  the avatar stands at the access (2, −1), the run is cancelled (`cancel:run-r6`), the HUD gets the code
+  `arrive_too_far` and the avatar is the player's again.

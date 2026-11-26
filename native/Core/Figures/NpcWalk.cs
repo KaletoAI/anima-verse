@@ -210,4 +210,29 @@ public static class WalkGround
 
     /// <summary>The scope the sink is cut by: a prop water region is open water whatever the place (npcs.ts).</summary>
     public static GroundScope SinkScope(GroundMove raw) => raw.PropWater is not null ? GroundScope.Open : raw.Scope;
+
+    /// <summary>
+    /// The ground rules of one frame of an order walk out in the open (plan E3 Task 9, review I1): the composition the
+    /// route tick (<c>FigureManager.StepRoute</c>) applies to a journey — the gated movement word decides the clip (wade
+    /// = walk, swim = the swim pose, crawl), the state's sink, the floated root height and the underwater ghost's cut.
+    /// The PACE stays the order's (its flip is the server's <c>L / speed</c>) and the slope rule is the server route's
+    /// (the nav grid refuses a too-steep cell with the same <c>slope_blocks</c> rule as <see cref="AnimaNative.Embody.Walk.SlopeBlocks"/>).
+    /// </summary>
+    public static OpenGroundFrame OrderFrame(GroundWord ground, bool moving, PoseClips poses)
+    {
+        var raw = ground.Raw;
+        string movement = ground.Word.Movement;
+        string idle = FigureClips.IdleClip(movement, poses);
+        double sink = GroundSink(SinkForState(moving, idle, ground.Word.Sink), SinkScope(raw));
+        string clip = moving ? FigureClips.MoveClip(movement, false, poses)
+            : idle.Length > 0 ? idle : FigureClips.PoseKind(FigureClips.Standing, poses);
+        return new OpenGroundFrame(clip, movement, moving || idle.Length > 0, sink, FloatRootY(ground.BedY, ground.Word.Water, sink),
+                                   WaterGates.GhostCutY(ground.BedY, WaterGates.GroundWaterLevel(raw.Water, raw.Scope)));
+    }
 }
+
+/// <summary>
+/// One open-ground order frame (<see cref="WalkGround.OrderFrame"/>): the clip, the movement word, whether the clip is the
+/// ground's (a terrain clip), the sink, the root height and the underwater ghost's cut (null = dry).
+/// </summary>
+public readonly record struct OpenGroundFrame(string Clip, string Movement, bool TerrainClip, double Sink, double RootY, double? GhostCutY);

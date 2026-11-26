@@ -1015,8 +1015,9 @@ def _settle_wanderer(name: str) -> bool:
     from app.models.character import (get_character_current_location,
                                       get_character_profile,
                                       save_character_profile)
+    from app.core.motion_orders import walking
     profile = get_character_profile(name) or {}
-    if profile.get("journey"):
+    if profile.get("journey") or walking(name, profile=profile):
         return False                      # still on the road
     if _in_chat(name):
         logger.info("Wanderer '%s' stays: an avatar is talking to it", name)

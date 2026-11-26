@@ -686,18 +686,21 @@ check("and carries no room list",
 check("the answer shape is spelled out in the system prompt",
       '{"activity"' in LLM.calls[0]["system"], True)
 
-journey = (get_character_profile(D) or {}).get("journey") or {}
-check("a point journey is running", bool(journey), True)
-check("with no location target", journey.get("target"), "")
-tp = journey.get("target_point") or {}
-check_true("the goal is a point", bool(tp), f"{tp}")
+# Plan E3 Task 9: the stroll is a walk order, not a point journey.
+from app.core import motion_orders
+check("no point journey runs", (get_character_profile(D) or {}).get("journey"), None)
+walk = motion_orders.index_get(D) or {}
+check("a walk order is running", (walk.get("kind"), motion_orders.walking(D)), ("walk", True))
+check("with no location target", (walk.get("target") or {}).get("location_id"), "")
+tp = walk.get("target") or {}
+check_true("the goal is a point", tp.get("x") is not None and tp.get("z") is not None, f"{tp}")
 if tp:
     check("and it lies inside the home circle",
           npc_home.contains(CLEARING_HOME, tp.get("x"), tp.get("z")), True)
 check("no room was written", get_character_current_room(D), "")
 
-print("(d) the journey guard keeps the next tick away")
-isolate(D)                   # cooldown removed — the journey is the only bar
+print("(d) the walk guard keeps the next tick away")
+isolate(D)                   # cooldown removed — the walk is the only bar
 check("not a candidate while walking", D in npc_actions.candidates(), False)
 
 # ── (e) nobody in a party roams ─────────────────────────────────────────────

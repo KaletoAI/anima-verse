@@ -90,7 +90,7 @@ public static partial class PropActionsCheck
             Is("walking budget <=20 offers +20 state per 60s",walking.Offers<=20 && walking.State<=20);
             Is("own motion stays at normal polling cadence",peak<=4);
             Is("normal polling continues after own mutation",buckets[17]+buckets[18]+buckets[19]<=2);
-            Is("release remains steerable",!offers.PropActions!.Paused && !steering.PropActionDriven);
+            Is("release remains steerable",!offers.PropActions!.Preparation.Pending && !steering.PropActionDriven);
             offers.PropPollPeriod=()=>6000;
             var pushed=await Window(false);
             GD.Print($"POLL-MEASURE native pushed 60s offers={pushed.Offers} state={pushed.State}");
@@ -132,12 +132,11 @@ public static partial class PropActionsCheck
             source.PendingState=null;
             held.SetResult(JsonDocument.Parse("{\"current\":[{\"execution_id\":\"stale\",\"status\":\"active\"}],\"outgoing\":[]}"));
             await Task.WhenAll(first,second);
-            Is("changed read revalidates once after the old read",source.StateRequests==reads+1 && control.OwnedRun is null && !control.Paused);
-            offers.PropActions!.PrepareWrites=()=>Task.CompletedTask;
-            await offers.PropActions.PrepareAsync("disconnected-hud");
+            Is("changed read revalidates once after the old read",source.StateRequests==reads+1 && control.OwnedRun is null && !control.Preparation.Pending);
+            await offers.PropActions!.PrepareAsync("disconnected-hud");
             now+=10000; reads=source.StateRequests;
             offers.Tick(); await offers.PendingPropAction!;
-            Is("lease expiry uses one canonical state read",source.StateRequests==reads+1 && !offers.PropActions.Paused);
+            Is("lease expiry uses one canonical state read",source.StateRequests==reads+1 && !offers.PropActions.Preparation.Pending);
             // Room entry may spend one read outside the normal timer, including during a slow old-room read.
             source.PendingOffers=new TaskCompletionSource<JsonDocument>();
             var oldRoomOffers=source.PendingOffers;

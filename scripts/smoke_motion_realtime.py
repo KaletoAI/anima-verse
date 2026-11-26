@@ -38,9 +38,9 @@ the motion instant S of the pinned real instant R0.
       remain -> ``journey_eta`` = game now + 6 × 4 = game now + 24 s; at
       factor 1 -> game now + 6 s. While frozen at factor 4 the projection
       keeps the configured factor: game now + 24 s.
-  [7] The approach start of a prop action (``_approach_start``) and the
-      departure delay are real seconds: exit clip 2.23 s -> start =
-      motion now + 2.23 at factor 1 AND factor 10; no clip -> + 0.3 s lead.
+  [7] The departure delay is real seconds: exit clip 2.23 s -> start =
+      motion now + 2.23 at factor 1 AND factor 10. (A prop action's approach
+      walks no journey since plan E3; its exit is the order's ``exit`` step.)
 """
 import sys
 import tempfile
@@ -169,13 +169,11 @@ st = T.journey_state(WPS, s, timeutils.motion_time())
 check("frozen at factor 4: eta keeps the configured factor",
       (T.journey_eta(st) - timeutils.game_time()).seconds, 24.0)
 
-print("[7] departure and approach delays are the clip's real seconds")
+print("[7] the departure delay is the clip's real seconds")
 for factor in (1.0, 10.0):
     reset(factor)
     m = timeutils.motion_time()
     check(f"factor {factor}: exit 2.23 s", T._departure_start(2.23) - m, 2.23, tol=1e-3)
-    check(f"factor {factor}: approach, no clip -> 0.3 s lead", T._approach_start(0.0) - m, 0.3, tol=1e-3)
-    check(f"factor {factor}: approach, clip 2.23 s", T._approach_start(2.23) - m, 2.23, tol=1e-3)
 
 print()
 if FAILS:

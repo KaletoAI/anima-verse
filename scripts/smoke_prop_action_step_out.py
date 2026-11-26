@@ -7,9 +7,11 @@ Expected values BY HAND: the fixture chair is 1 x 1 m at (8, 5). With
 BODY_R_M=.3 its closed keepout is [7.2, 8.8] x [4.2, 5.8]. From (8.3, 5),
 the first free .05 m ring is radius .55 (radius .50 touches the boundary).
 Angle zero wins, so the sampled nearest free point is (8.85, 5). The route
-must start (8.3, 5), (8.85, 5); its first leg is .55 m and contributes
-.55 / speed seconds. At .1 m/s, one and two seconds give x=8.4 and
-8.5 respectively, both still inside the keepout. A 6 x 6 m obstruction centred on the start extends
+must start (8.3, 5), (8.85, 5); its first leg is .55 m. The run walks no
+journey any more (plan E3 Task 7): it arrives at its estimated eta = issued
++ L / 1.4 + .5 (L the plan's polyline length), and the arrival on the
+access must pass the run's checks although the walk began inside the
+keepout. A 6 x 6 m obstruction centred on the start extends
 3.3 m in every axis, so no point within 1.5 m is free. A U room with a
 .1 m notch has a free point across the wall within 1.5 m, but no legal
 segment there; other reachable free points are more than 1.5 m away.
@@ -20,9 +22,9 @@ is free, so it walks on to the point a plain stand-up picks there
 (room_stand.pick_stand, 0.25 m grid, body radius .3 around the chair): the
 grid points (8, 5.75) and (7.75/8.25, 5.75) lie in [7.2, 8.8] x [4.2, 5.8],
 so the nearest free one is (8, 6.0), 0.5 m away ((7.75, 6.0) is .559 m).
-Waypoints: seat (8, 5), stand (8, 5.5), escape (8, 6.0). At .1 m/s the
-escape leg is 5 s; one and two seconds in the figure is at (8, 5.6) and
-(8, 5.7), still inside the keepout, and the journey must go on. A
+Waypoints: stand (8, 5.5), escape (8, 6.0) (the seat (8, 5) is the plan's
+departure_seat, the order's exit step). The run's arrival at its eta must
+pass its checks as well. A
 .4 x .4 m box at (8, 5.8) has the keepout [7.5, 8.5] x [5.3, 6.3], which
 holds (8, 5.5) with the chair exempt too, so that seat still answers
 start_not_walkable.
@@ -87,7 +89,7 @@ class StepOut(unittest.TestCase):
 
     def test_c_seated_unchanged(self):
         name, target, _ = S.setup_run()
-        F.Ownership.seat_actor(self, name)
+        F.seat_actor(self, name)
         plan = F.N.plan_approach(name, target, 'actor')
         self.assertEqual(plan['status'], 'ok', plan)
         self.assertEqual(plan['departure_seat'], [8, 5])
@@ -97,7 +99,7 @@ class StepOut(unittest.TestCase):
     def short_exit(self, name):
         from app.core import animation_clips as clips
         before = clips.world_transitions()
-        F.Ownership.seat_actor(self, name)
+        F.seat_actor(self, name)
         # seat_actor's world layer holds only its exit; keep the entry rules.
         clips._write_world_transitions(before + clips.world_transitions())
         (F.ROOT / "clips" / "path-rise.json").write_text(S.json.dumps({
@@ -126,28 +128,41 @@ class StepOut(unittest.TestCase):
         query.room_geometry = geometry
         self.assertEqual(F.N.plan_approach(name, target, 'actor', _query=query)['reason'], 'start_not_walkable')
 
-    def test_c4_seated_step_out_journey_survives_revalidation(self):
-        # Legs: seat -> stand is the zero-time exit leg (seg 0), stand ->
-        # escape the walk out of the chair's keepout (seg 1).
+    def arrive_at_eta(self, name, eid):
+        """Just before the run's eta still walking, at it in the entry: the
+        arrival on the access passes the run's checks."""
+        eta = S.R.get(eid)['data']['eta_s'][name]
+        F.MOTION[0] = eta - .05
+        A.advance(F.game_time())
+        self.assertEqual(S.R.get(eid)['phase'], '', S.R.get(eid)['reason'])
+        F.MOTION[0] = eta
+        A.advance(F.game_time())
+        self.assertEqual(S.R.get(eid)['phase'], 'entry', S.R.get(eid)['reason'])
+
+    def test_c4_seated_step_out_arrives(self):
         name, target, _ = S.setup_run()
         self.short_exit(name)
-        with patch.object(F.E, "get_travel_speed_m_s", return_value=.1):
-            result = S.request(name, target)
+        result = S.request(name, target)
         self.assertEqual(result['status'], 'approaching', result)
-        journey = F.E.get_journey(name)
-        self.assertEqual([p[:2] for p in journey['waypoints'][:2]], [[8, 5], [8, 5.5]])
-        lead = journey['started_at_s'] - F.timeutils.motion_time()
-        F.elapse(lead + 1)
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name).get('last_journey_result'))
-        pos = F.C.get_character_pos(name)
-        self.assertEqual((pos['x'], pos['z']), (8, 5.6))
-        F.E._approach_validation_cache.clear()
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name).get('last_journey_result'))
-        pos = F.C.get_character_pos(name)
-        self.assertEqual((pos['x'], pos['z']), (8, 5.7))
+        run = S.R.get(result['execution_id'])
+        plan = run['data']['plans'][name]
+        self.assertEqual(plan['waypoints'][:2], [[8, 5.5], [8, 6.0]])
+        self.assertEqual(plan['departure_seat']['seat'], [8, 5])
+        self.arrive_at_eta(name, result['execution_id'])
+
+    def test_plan_includes_step_out_and_arrives(self):
+        name, target, _ = S.setup_run()
+        F.C.set_character_pos(name, 8.3, 5)
+        plan = F.N.plan_approach(name, target, 'actor')
+        result = S.request(name, target)
+        self.assertEqual(result['status'], 'approaching', result)
+        run = S.R.get(result['execution_id'])
+        self.assertEqual(run['data']['plans'][name]['waypoints'], plan['waypoints'])
+        self.assertEqual(plan['waypoints'][:2], [[8.3, 5], [8.85, 5]])
+        length = sum(math.dist(a, b) for a, b in zip(plan['waypoints'], plan['waypoints'][1:]))
+        self.assertAlmostEqual(run['data']['eta_s'][name], run['data']['issued_s'] + length / 1.4 + .5, places=3)
+        self.arrive_at_eta(name, result['execution_id'])
+        self.assertIsNone(F.E.get_journey(name))
 
     def test_d_specific_marker_reason_in_check_and_offers(self):
         name, target, _ = two_markers()
@@ -157,35 +172,6 @@ class StepOut(unittest.TestCase):
         self.assertEqual(checked, dict(enabled=False, reason='start_not_walkable'))
         with patch.object(F.places, '_GeometryQuery', return_value=query):
             self.assertEqual(P.offers(name)[0]['reason'], 'start_not_walkable')
-
-    def test_journey_includes_step_out_and_arrives(self):
-        name, target, _ = S.setup_run()
-        F.C.set_character_pos(name, 8.3, 5)
-        plan = F.N.plan_approach(name, target, 'actor')
-        with patch.object(F.E, "get_travel_speed_m_s", return_value=.1):
-            result = S.request(name, target)
-        self.assertEqual(result['status'], 'approaching', result)
-        journey = F.E.get_journey(name)
-        self.assertEqual([p[:2] for p in journey['waypoints']], plan['waypoints'])
-        self.assertAlmostEqual(journey['waypoints'][1][2], .55 / journey['speed_m_s'])
-        length = sum(math.dist(a, b) for a, b in zip(plan['waypoints'], plan['waypoints'][1:]))
-        self.assertAlmostEqual(journey['waypoints'][-1][2], length / journey['speed_m_s'])
-        # The approach starts after a poll lead (travel_engine._approach_start);
-        # the legs count from that start.
-        lead = journey['started_at_s'] - F.timeutils.motion_time()
-        F.elapse(lead + 1)
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name))
-        self.assertEqual(F.C.get_character_pos(name)['x'], 8.4)
-        # A fresh process/cache miss must revalidate from inside the first leg.
-        F.E._approach_validation_cache.clear()
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
-        F.E.advance_all_journeys()
-        self.assertEqual(F.C.get_character_pos(name)['x'], 8.5)
-        F.set_game_time(F.game_time() + F.GameDuration.of(minutes=1))
-        F.E.advance_all_journeys()
-        self.assertIsNone(F.E.get_journey(name))
-        self.assertEqual(S.R.get(result['execution_id'])['phase'], 'entry')
 
     def test_offer_label(self):
         name, _, pid = S.setup_run()

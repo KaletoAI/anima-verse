@@ -79,8 +79,6 @@ Hand-derived expectations
     Row fields added after 718322ce, hand-derived from the seed:
       yaw                 null on every row — like pos_origin it is the
                           avatar's reported facing, and nobody reported one.
-      local_approach,     null on every row — no profile holds a prop
-      prop_action_entry   approach or a prop-action entry.
       finale              null on every row — nobody runs an action.
       travel_speed_factor null on every row of the admin view (no avatar);
                           in the fogged view the avatar npc_lead's row holds
@@ -90,6 +88,11 @@ Hand-derived expectations
                           stamina<30 -> 0.7) does not fire — neither has a
                           stamina stat, and ``modifiers.factor`` counts a
                           missing stat as not met. Every other row: null.
+    Root fields added after 718322ce (plan E3 task 4): ``motion_now`` = the
+    pinned motion clock MOTION_NOW, rounded to 3 places; ``order_seq`` = 0,
+    because nothing in this seed publishes a motion order (the world_kv
+    counter ``motion_order_seq`` is unset). No row carries ``order``: the field
+    is absent on a row whose figure carries no order.
     And npc_walker's ``travel``: 718322ce reads ``started_at_game``, the
     journey format before 9b920eaa0, so for today's ``started_at_s`` journey
     it reports null. The row it would have to show is derived instead. The
@@ -106,6 +109,22 @@ Hand-derived expectations
       fogged  npc_walker is foreign to npc_lead: everything route-shaped is
               null — target_id MARKET and gait "walk" stay, and journey_id is
               null (not the avatar's journey).
+
+[4] Orders on the rows cost no profile load (plan E3 decision 3, review of
+    task 4). Two orders are published by hand after [3]: one for npc_seated
+    alone, one for npc_still + npc_sleeper together; each with
+    target {location_id: H, room_id: "lounge", execution_id: "exec-smoke"}.
+    The avatar npc_lead stands in H/lounge, and so do all three participants,
+    whose rows pass the fogged gates (they are on the fogged payload of [1]).
+    So in the fogged build:
+      npc_seated, npc_still, npc_sleeper carry ``order`` — the public view
+      (no participant is the avatar): its order_id, no target.execution_id;
+      npc_lead and npc_walker carry none.
+    The row already holds the figure's profile, place and gate result; the
+    avatar's place comes from the profile read at the top. Hence the bound of
+    [1] holds unchanged: fogged total <= 9. (Before the fix every visible
+    order re-read the avatar's location and room — two loads — and its
+    participant once: measured 8 + 3 * 3 = 17 > 9, so this case fails there.)
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_profile_loads.py
 """
@@ -424,10 +443,10 @@ def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
     for c in old["characters"]:
         name = c["name"]
         # P1's origin and the avatar's facing: nobody reported a position.
-        # No profile holds a prop approach or entry, nobody runs an action.
-        # The avatar's travel_speed_factor: no shipped travel_speed rule fires.
-        c = dict(c, pos_origin=None, yaw=None, local_approach=None,
-                 prop_action_entry=None, finale=None,
+        # Nobody runs an action. The avatar's travel_speed_factor: no shipped
+        # travel_speed rule fires. (Since plan E3 Task 8 the rows carry no
+        # furniture approach or entry field, just as 718322ce had none.)
+        c = dict(c, pos_origin=None, yaw=None, finale=None,
                  travel_speed_factor=1.0 if name == avatar else None)
         if name in journeys:
             if c["travel"] is None:
@@ -443,6 +462,9 @@ def align_to_baseline(old_payload, new_payload, *, avatar, fogged, journeys):
         rows.append(c)
     old["characters"] = rows
     old["_unreadable_journeys"] = unreadable
+    # Plan E3 task 4: the motion clock and the order counter (none published).
+    old["motion_now"] = round(MOTION_NOW, 3)
+    old["order_seq"] = 0
     # Measured ages depend on execution time, not profile-read behavior.
     # Require both age keys but exclude their values; retain any other
     # sync keys so an unexpected addition still fails strict comparison.
@@ -557,6 +579,35 @@ def main() -> int:
               f"now {secs * 1000:.1f} ms)")
         check("the new build loads strictly fewer profiles",
               calls < old_calls, True)
+
+    print("\n[4] orders on the rows load no profile")
+    from app.core import motion_orders
+    orders = {}
+    for names in (["npc_seated"], ["npc_still", "npc_sleeper"]):
+        order = motion_orders.new_order(
+            "prop_action", issued_s=MOTION_NOW, eta_s=MOTION_NOW + 1, flip_s=MOTION_NOW + 2,
+            deadline_s=MOTION_NOW + 12, speed_m_s=1.0, gait="walk", status="active",
+            target={"location_id": HOUSE, "room_id": "lounge", "execution_id": "exec-smoke"},
+            actors=[motion_orders.actor_row(n, "actor", "", 170, {
+                "x": -3.5, "y": 0, "z": -3.5, "yaw": 0, "room_id": "lounge", "level": 0})
+                for n in names])
+        published = motion_orders.publish(order, names=names, locations=[HOUSE])
+        for n in names:
+            orders[n] = published["order_id"]
+    try:
+        fog_o, fog_o_calls, _ = build_counted(
+            world_ops.build_worldmap_payload, "npc_lead", False)
+        for name in NAMES:
+            got = row(fog_o, name).get("order")
+            check(f"{name} order_id on its row", (got or {}).get("order_id"), orders.get(name))
+            if got:
+                check(f"{name} order is the public view",
+                      "execution_id" in (got.get("target") or {}), False)
+        check_bound("get_character_profile calls per fogged build with orders",
+                    fog_o_calls, 9)
+    finally:
+        with motion_orders._INDEX_LOCK:
+            motion_orders._INDEX.clear()
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

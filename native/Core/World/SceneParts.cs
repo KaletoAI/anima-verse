@@ -45,6 +45,8 @@ public sealed record SceneMarker(
     /// compass yaw in degrees, tile-local like every payload angle. Empty when the payload names none.
     /// </summary>
     public IReadOnlyDictionary<string, SceneMarkerAccess> Access { get; init; } = new Dictionary<string, SceneMarkerAccess>();
+    /// <summary>`placement_id` of a prop marker: the placed furniture the place belongs to; "" for a room marker.</summary>
+    public string PlacementId { get; init; } = "";
 }
 
 /// <summary>One role's access point of a marker, as the payload states it (tile-local, floor height, compass yaw).</summary>
@@ -177,6 +179,7 @@ public static class SceneJson
         RootOffset = Json.NumOrNull(m, "root_offset"), Facing = Json.NumOrNull(m, "facing"),
         Tilt = Json.NumOrNull(m, "tilt"), Roll = Json.NumOrNull(m, "roll"),
         Anchor = PtOrNull(m, "anchor"), Diorama = Json.Bool(m, "diorama"), Access = MarkerAccess(m),
+        PlacementId = Json.Str(m, "placement_id"),
     };
 
     /// <summary>

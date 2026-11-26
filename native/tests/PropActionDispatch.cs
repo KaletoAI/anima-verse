@@ -15,7 +15,6 @@ internal static class PropActionDispatch
     private static string S(JsonNode? n) => n?.GetValue<string>() ?? "";
     public static Dictionary<string,Func<JsonArray,JsonNode?>> Create() => new()
     {
-        ["localApproachPoint"]=a=> { var p=PropActionMotion.LocalApproachPoint(a[0]!,N(a[1])); return new JsonArray(p.X,p.Z); },
         ["sampleMotion"]=a=>PropActionMotion.SampleMotion(a[0]!,N(a[1])),
         ["entryPhase"]=a=>JsonValue.Create(PropActionMotion.EntryPhase(a[0]!,N(a[1]))),
         ["entrySupportLift"]=a=>JsonValue.Create(PropActionMotion.EntrySupportLift(N(a[0]),N(a[1]),N(a[2]),N(a[3]),N(a[4]),N(a[5]))),

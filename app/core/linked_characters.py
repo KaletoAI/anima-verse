@@ -274,7 +274,9 @@ def swap_refusal(name: str) -> str:
     from app.models.character import get_character_profile, is_character_sleeping
     profile = get_character_profile(name) or {}
     from app.core.travel_engine import get_journey
-    if get_journey(name, profile=profile) or str(profile.get("movement_target") or "").strip():
+    from app.core.motion_orders import walking
+    if (get_journey(name, profile=profile) or str(profile.get("movement_target") or "").strip()
+            or walking(name, profile=profile)):
         return "journey"
     if is_character_sleeping(name, profile=profile):
         return "sleeping"

@@ -474,8 +474,13 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                     # (see ``_move_avatar_room`` above). Not nested with the
                     # avatar's: that write follows this one, it does not sit
                     # inside it — two narrow spans, never two locks at once.
+                    # A room change of the agent is a walk order (plan E3
+                    # decision 10): the start is read BEFORE the setter.
+                    from app.core import motion_orders
+                    walk_start = motion_orders.start_of(agent_name)
                     with keyed_lock("avatar_state", agent_name):
                         save_character_current_room(agent_name, room_id)
+                    motion_orders.walk_room_change(agent_name, walk_start, reason="chat")
                     _move_avatar_room(room_id)
                     logger.info("Room %s: %s -> %s (%s)", agent_name, old_room, room_id, new_name)
                     return {"name": new_name, "room": room_id, "location_id": old_loc}

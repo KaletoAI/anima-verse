@@ -216,10 +216,11 @@ bad = []
 for p in sorted(list(pathlib.Path("app").rglob("*.py")) + list(pathlib.Path("plugins").rglob("*.py"))):
     bad += unstamped_pos_writes(p.read_text(encoding="utf-8"), str(p))
 check("lint pos origin columns", bad, [])
-# A furniture run APPROACHING owns the avatar (A15 row 1a, 2026-11-03: an
-# NPC's consent started the run between two state polls, the client's next
-# report cancelled it with "position"). A run row holding demo's person claim
-# with status approaching, avatar at (40, 40), report (40.5, 40) -> 200
+# A furniture run APPROACHING owns the avatar once it has ARRIVED (plan E3
+# Task 7: the server holds the figure exactly on its access; before the
+# arrival the player walks it there itself, smoke_order_arrival.py [A5]).
+# A run row holding demo's person claim with status approaching and demo in
+# its "arrived", avatar at (40, 40), report (40.5, 40) -> 200
 # {ok: false, server_owned: true}, the stored point stays (40, 40); the run
 # gone -> the same report is written.
 from app.core import prop_action_store as runs
@@ -229,7 +230,8 @@ with transaction() as conn:
     conn.execute(
         "INSERT INTO prop_action_runs (execution_id, actor, members, request_fingerprint, action_id, "
         "definition_revision, status, target, definition, data, created_at, updated_at) "
-        "VALUES ('run1', 'demo', '[\"npc_other\"]', 'f', 'a', 'r', 'approaching', '{}', '{}', '{}', 't', 't')")
+        "VALUES ('run1', 'demo', '[\"npc_other\"]', 'f', 'a', 'r', 'approaching', '{}', '{}', "
+            "'{\"arrived\": [\"demo\"]}', 't', 't')")
     conn.execute("INSERT INTO prop_action_claims VALUES (?, 'run1', 'person', ?)",
                  (runs.person_key("demo"), json.dumps({"name": "demo"})))
 moved = dict(x=before["x"] + 0.5, z=before["z"])

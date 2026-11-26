@@ -1,0 +1,77 @@
+{
+ "sig": "walk",
+ "default_kind": "grass",
+ "types": [
+  {
+   "kind": "grass",
+   "name": "Grass",
+   "color": "#6f9a4a",
+   "passable": true,
+   "speed_factor": 1.0,
+   "meta": {}
+  },
+  {
+   "kind": "lake",
+   "name": "Lake",
+   "color": "#3f7fb8",
+   "passable": true,
+   "speed_factor": 0.4,
+   "meta": {
+    "movement": "swim",
+    "move_sink_m": 0.35,
+    "idle_sink_m": 1.3,
+    "swim_from_m": 1.0
+   }
+  }
+ ],
+ "areas": [
+  {
+   "id": "lake",
+   "kind": "lake",
+   "polygon": [
+    [
+     20,
+     -20
+    ],
+    [
+     60,
+     -20
+    ],
+    [
+     60,
+     20
+    ],
+    [
+     20,
+     20
+    ]
+   ],
+   "meta": {
+    "water_profile": {
+     "axis": [
+      [
+       20,
+       0,
+       0,
+       1.5
+      ],
+      [
+       60,
+       0,
+       40,
+       1.5
+      ]
+     ],
+     "level_up": 1.5,
+     "level_down": 1.5,
+     "axis_x": 20,
+     "axis_z": 0,
+     "dir_x": 1,
+     "dir_z": 0,
+     "s_min": 0,
+     "s_max": 40
+    }
+   }
+  }
+ ]
+}

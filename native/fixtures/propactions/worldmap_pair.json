@@ -132,7 +132,61 @@
         ],
         "starts_in_s": null
       },
-      "prop_action_entry": null
+      "prop_action_entry": null,
+      "order": {
+        "order_id": "ord-56-invite-npc",
+        "revision": 1,
+        "seq": 1,
+        "kind": "walk",
+        "issued_motion_s": 0,
+        "eta_motion_s": 1.5,
+        "flip_motion_s": 1.5,
+        "deadline_motion_s": 11.5,
+        "status": "approaching",
+        "awaits": "",
+        "gait": "walk",
+        "speed_m_s": 1.0,
+        "target": {
+          "location_id": "loc-props",
+          "room_id": "r-props",
+          "level": 0,
+          "x": 5.5,
+          "y": 0,
+          "z": 2
+        },
+        "hint_route": [],
+        "snap": false,
+        "actors": [
+          {
+            "name": "fixture-npc",
+            "role": "",
+            "clip_role": "",
+            "height_cm": 170,
+            "start": {
+              "x": 4,
+              "y": 0,
+              "z": 2,
+              "yaw": 90,
+              "room_id": "r-props",
+              "level": 0
+            },
+            "access": null,
+            "anchor": null,
+            "entry_mode": "",
+            "sequence": [
+              {
+                "step": "walk",
+                "pose_kind": "",
+                "pose_key": "",
+                "nominal_s": 0
+              }
+            ],
+            "reports_arrival": false
+          }
+        ]
+      }
     }
-  ]
+  ],
+  "motion_now": 0,
+  "order_seq": 1
 }

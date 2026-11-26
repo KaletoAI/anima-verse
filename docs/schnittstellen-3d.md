@@ -141,6 +141,7 @@ user acceptance; the proxy smoke checks forwarding configuration only.
   - [A10. Kamera & Steuerung (Referenz, unverändert)](#a10-kamera-steuerung-referenz-unverändert)
   - [A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline](#a11-reise-payload-server-autoritative-bewegung-als-meter-polyline)
   - [A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll](#a11a-model_sig-die-modell-signatur-reist-im-worldmap-poll)
+  - [A11b. Auftrag (`order`) — Bewegungsaufträge (E3)](#a11b-auftrag-order-bewegungsaufträge-e3)
   - [A12. Fog of War im Worldmap-Payload](#a12-fog-of-war-im-worldmap-payload)
   - [A13. Die Grundfläche ist ein Raum](#a13-die-grundfläche-ist-ein-raum)
   - [A14. Der Sperr-Zustand kommt vom Server](#a14-der-sperr-zustand-kommt-vom-server)
@@ -978,11 +979,12 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 `characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
 `locations_rev` · `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
+`motion_now` · `order_seq` (both § A11b) ·
 `sync` (§ A11, "Required root field `sync`") ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Achtzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Zwanzig feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -1000,6 +1002,8 @@ gebautes Payload hält.
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, von dem die `eta_*`-Projektion der Reisen ausgeht (die Reisen selbst laufen seit 2026-11-05 auf der Bewegungsuhr, § A11). Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `label_display`/`time_display` (dasselbe mit der Uhrzeit im **eingestellten Anzeigeformat**, `server.time_format`: `24h` `14:23` · `24h_seconds` · `12h` `2:23 PM` · `12h_seconds` — **Clients zeigen diese beiden**; `label`/`time` bleiben 24h, weil Prompts und Logs sie lesen), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `game_rate` | `float` | Effective game seconds per real second, read from the world clock; clients use this factor for motion timing between polls. |
+| `motion_now` | `float` | The **motion clock** (`timeutils.motion_time()`, real seconds the unfrozen world has run) this payload was built at, 3 decimals — the clock every order's times are on (§ A11b). Never fogged. |
+| `order_seq` | `int` | The highest order `seq` handed out, read **before** the character rows are built (§ A11b, "Rows without `order`"). `0` while no order was ever published. |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
@@ -1080,15 +1084,16 @@ Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `yaw`, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
-`travel`, `local_approach`, `prop_action_entry` (beide: Prop-Aktionen, "Own motion"),
+`travel`,
 `interaction` (§ A8a), `finale` (§ A8c), `place` (§ A8a), `avatar_url`,
-**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`, `badges` (nur wenn vorhanden),
+**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `order` (§ A11b, nur wenn vorhanden), `motion`, `badges` (nur wenn vorhanden),
 `travel_speed_factor`, `locomotion` (nur wenn vorhanden).
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
+| `order` | `object` (optional) | The figure's current **motion order** as the avatar may see it (§ A11b): the whole order for a participant, the movement fields for anybody else who sees the row. **Absent** when the figure carries no published order or the avatar may not see it. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
 | `travel_speed_factor` | `float \| null` | The `travel_speed` rule factor the **avatar** moves with (`travel_engine.travel_pace_factor`: the product of every matching `modify` rule, clamped 0.1–5; a party LEADER gets the minimum over itself and its followers, the quantity's "a party uses its slowest member"). The client multiplies its avatar's own walking AND running pace by it (`WALK_SPEED × factor`, the run boost on top), and `POST /play/pos` judges the avatar's reports with the very same number (§ A15 Nr. 5). **Only on the avatar row**; `null` on every other row — a server journey already carries its pace (§ A11), and someone else's speed is fog knowledge (§ A12). Always present. The worldmap is built fresh on every poll (no ETag), and `modifiers.factor` keys its cache on the character's active condition names, so gaining or losing a condition reaches the client with the next poll |
 | `locomotion` | `{walk?: str, run?: str}` (optional) | Move clips the character's active **states** replace (`prompt_filters.collect_locomotion`; edited in Game-Admin → States as "Walk/Run animation override"). Each value is a clip KIND of the shared library. A state applies when it is enabled and triggered (its id as an active condition, or its condition expression); per slot the first such state by ascending id that fills it wins, so two states may contribute one slot each. **Absent** when no state overrides anything. The client plays the override instead of the WALK/RUN pose's clip whenever the figure moves on foot — server journeys (`travel.gait`) and the avatar alike — and falls back to the normal clip when the figure's set has no clip of that kind. The **ground keeps precedence**: swimming and crawling are what the terrain says (`walk.moveClip`), an override never replaces them |
@@ -3795,6 +3800,11 @@ Room preview starts at distance 22, pitch offset +28°, targeting the tile centr
 
 ## A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline
 
+> **Furniture approaches are orders, not journeys** (§ A11b, plan E3): a
+> prop-action run walks on its published order and never as `travel`; the row
+> fields `local_approach` and `prop_action_entry` are gone. `travel` below
+> carries the remaining journeys (location trips, free points, party trips).
+
 Ein Charakter wechselt die Location nicht schlagartig, sondern **läuft eine
 Polylinie in Welt-Metern ab**. `GET /play/worldmap` liefert dafür pro
 Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
@@ -4146,6 +4156,185 @@ nie ein verpasstes Modell.
 **Nicht ausgedünnt.** Eine Mesh-Signatur ist ein opaker Cache-Schlüssel: sie
 nennt keinen Ort und keine Route, und die Zeile, an der sie hängt, hat die drei
 Sichtbarkeits-Tore des Fogs (§ A12) bereits passiert.
+
+---
+
+## A11b. Auftrag (`order`) — Bewegungsaufträge (E3)
+
+**Since plan E3 task 4 (2026-11-25).** A motion order tells every client how a
+figure moves from where it stands to where the server wants it. The server
+decides WHAT (action, furniture, slot, partner, consent) and only ESTIMATES
+WHEN, on the motion clock; the client plans the real path on its navmesh and
+picks the concrete clips (spec `docs/superpowers/specs/2026-11-25-client-ausfuehrung-design.md`
+§ 5b, plan E3 decisions 2–6, 18, 19). A furniture run walks no journey: the
+order is the only thing that moves its members (the row fields
+`local_approach`/`prop_action_entry` and the answers' `motion` were removed in
+E3 task 8), and its times are the server's estimate (below).
+
+**Fields** (`motion_orders.new_order`; numbers rounded to 3 decimals):
+
+| Field | Meaning |
+|---|---|
+| `order_id` | `ord-<hex>`, new for every new order (a furniture run keeps its id across revisions; a follow pose, a replacement or a `cancel` is a NEW id). Not the execution id — that is private to the participants (`target.execution_id`) |
+| `revision` | 1 for a new order, + 1 for every change of THIS order |
+| `seq` | global publication number (world_kv `motion_order_seq`), new for every publication (start, revision, cancel) |
+| `kind` | `prop_action` · `walk` (task 9: a room change or a stroll, below) · `cancel` |
+| `issued_motion_s`, `eta_motion_s`, `flip_motion_s`, `deadline_motion_s` | motion-clock seconds: issued, estimated arrival at the access point, estimated state flip (end of the entry), latest second the server waits. `flip_motion_s` is **absent** while `awaits` is set |
+| `status` | `approaching` · `waiting` · `entering` · `active` · `ended` (informative for the client) |
+| `awaits` | `""` or `reaction` (a react pair waits for the partner's reaction) |
+| `gait`, `speed_m_s` | gait and pace (m per real second); a `cancel` carries 0 |
+| `target` | `location_id`, `room_id`, `level`, `floor_y`; a `walk` adds the goal `x`, `y`, `z` (world metres; `location_id` `""` out in the open); a `prop_action` adds `placement_id`, `marker_id`, `place_id`, `slot` (the initiator's) and `execution_id` |
+| `hint_route` | rough server waypoints `[[x, z], …]` in world metres: a `walk` out in the open carries the terrain route the server baked (start … target); empty inside a location and on every other kind |
+| `snap` | only `cancel` after a teleport |
+| `phase` | only a `combined` action: the id of its running phase |
+| `actors[]` | per participant: `name`, `role` (actor/partner), `clip_role` (a..e or ""), `height_cm`, `start` {x, y, z, yaw, room_id, level}, `access` {x, y, z, yaw} (floor point the path leads to), `anchor` {x, y, z, yaw, root_offset} (`y` is the body root after the measured pose-root offset; support height = `y + root_offset`), `entry_mode` (`bridge`/`direct`), `sequence[]`, `reports_arrival` (true exactly for a player-controlled figure), and on a `cancel` `stand` {x, y, z, yaw} |
+
+`sequence[]` names phases, never clips: `{step, pose_kind, pose_key, nominal_s}` with
+`step` `exit` · `walk` · `entry` · `loop` (· `phase` · `finale` later). A
+furniture run: `exit` only when the figure sat or lay when the run started
+(pose kind = the catalog group of the pose it left, `nominal_s` = its exit
+bridge), `walk` when it walks, `entry` (the target pose, `nominal_s` = the
+catalog length of the entry clip, 0 for `direct`), `loop`. A switch in place
+and a follow pose have no `exit` and no `walk`. A `cancel` has one `exit`
+per actor (the pose it left) and the actor's `stand`. Yaws are compass
+degrees.
+
+**Times since task 7** (no journey any more: the server estimates and the run
+flips on its own timer). Per member `eta_i = issued + exit_s + L_i / speed + 0.5`
+(`L_i` = the length of the member's planned path to its access, `speed` frozen
+at the start), `eta = max(eta_i)`, `flip = eta + the longest entry`,
+`deadline = eta + max(10, 0.5 · (eta − issued))`. An NPC member counts as
+arrived at its own `eta_i` (its position is written onto the access); a member
+with `reports_arrival` only through `POST /play/order/arrived` (below). Once all
+have arrived the entry begins (`status entering`, `flip` = the latest arrival +
+the longest entry) and the run becomes active at `flip`. The deadline counts only
+while somebody has not arrived (`approach_timeout`). A run that ends while a
+member is still on the way gives that member a `cancel` row without steps whose
+`stand` is where its order has it by then: the point on its planned path after
+`(now − issued − exit_s) · speed` metres (at the earliest the path's first point,
+at the latest the access), also written as its position. Without a walk (a switch in
+place, a follow pose) issued = eta = the publication second. The runs keep these
+times as absolute motion seconds; a server restart shifts every live order by
+its downtime (world_kv `motion_alive_s`, written at most every 5 s while orders
+live), so nothing flips during the downtime. A shifted order carries
+`boot_alive_s` (the stamp the downtime was measured from; it keeps a second boot
+from shifting it twice), a field clients ignore.
+
+**Revisions** (spec 5b, two cases). (1) A NEW `order_id` for the same figure
+replaces the running chain; the client continues from its current picture
+(out of `walk` straight into a new path, out of `entry`/`loop` through an exit
+only when the new order lists the figure and its sequence starts with
+`exit`, or it is a `cancel` for it). (2) The same `order_id` with a higher
+`revision` changes the order in place and never rewinds. A furniture run is
+revised when its entry begins (`status entering`, `awaits ""`, `flip` = entry
+start + the longest entry clip), when it becomes active (`status active`), when
+a `combined` phase changes (`phase`), when all have arrived but the reaction is
+still missing (`status waiting`, `awaits reaction`, no `flip`) and when the
+reaction comes before the arrival (`awaits ""`, `flip = eta + entry`). Its end is
+**never** an `ended` revision: the run's order stays published for
+`ORDER_TAIL_S` = 10 s more, and only the members that really got up get ONE
+`cancel` order (new id) with their own `stand`. Members kept seated (keep for
+a replacing run, a follow pose, a switch in place) are not in it. Pose, pair
+clip, scene clock, finale and the phase pose after `loop` began keep coming
+from the row as before (decision 18).
+
+**Transport.** (1) The row field `order` (§ A1.4) carries the figure's current
+order. (2) Every publication sends the topic `orders`
+(`sync_topics.order_changed`) to `AtLocation` of the order's location and to
+`Avatars` of its participants — no data, never `Everyone`. (3)
+`GET /play/orders?since=<seq>` (default-deny, no admin prefix, read-only)
+answers `{orders: [...], seq, motion_now}`: every visible order with `seq >
+since` (one per `order_id`, oldest first), `seq` = the highest number handed
+out, read before the scan; the client asks again with `since = seq` after the
+next push. (4) The answers of `POST /play/prop-actions/request` and
+`/respond` carry the whole `order` when the avatar is a participant. (5)
+`POST /play/order/arrived` `{order_id, x, z, yaw, room_id}` (default-deny, the
+session's avatar is the actor; yaw in radians as `/play/pos`): the avatar reached
+its access. Accepted (`{"ok": true}`) when the point is within 0.5 m of the
+member's `access`, the avatar stands in the target room and the run is still
+valid; the position is then written exactly onto the access. Otherwise 409 with
+the refusal object (`reason` `order_unknown` · `arrive_too_far` ·
+`room_mismatch` · the run's own reason, which fails the run). The client plays
+the entry without waiting for the answer and aborts on a refusal. The native
+client sends no `/play/pos` for the whole order (from the click to the loop's
+end, the walk included): the server's position of a walking avatar is the plan's
+(see the cancel `stand` above). For a client that does report while it walks, a
+`/play/pos` report inside the target room is written without interrupting the
+run; one from elsewhere interrupts it as before and stays written — the cancel's
+`stand` of a member whose OWN position, room or location write ended the run is
+that written point, never its walk point; once the avatar has arrived (and in
+the entry) it is `server_owned`.
+
+**Visibility** (`motion_orders.visible` / `for_observer`, decision 4). A
+participant sees the whole order. Anybody else sees it only when a
+participant stands in the observer's own room (out in the open: the open
+world, location `""`) AND that participant's row passes the worldmap row
+gates for the observer (fog, sight, veil — `world_ops._visible_row` with the
+context `world_ops.row_visibility_ctx(observer)`, built once per request).
+Out in the open that means sight, never "everybody outdoors". A
+non-participant gets the movement fields only: `order_id`, `revision`,
+`seq`, `kind`, the four times, `status`, `gait`, `speed_m_s`, `target`
+without `execution_id` and `slot`, `hint_route`, `snap`, `phase`, and per
+actor `name`, `start`, `access`, `anchor`, `entry_mode`, `sequence`,
+`stand` — never `awaits`, roles or the execution id.
+An order needs an observer: the admin overview (`show_all`, no avatar)
+carries no `order` on any row, and `GET /play/orders` without a lens lists
+none. The worldmap reads no extra profile for a row's order — the observer's
+place is read once per build and a participant's place and gate result come
+from the row just built (`for_observer(..., here=, seen=)`).
+
+**Rows without `order`** (decision 6). An order stands in row and route while
+its run lives, then until its end + `ORDER_TAIL_S` (a `cancel`/`ended` order:
+`flip` + `ORDER_TAIL_S`). The worldmap root carries `order_seq`, read
+BEFORE the rows: an order published while the rows are built may sit on its
+row, but `order_seq` never covers an order that is missing from its row. A
+client whose figure runs a SERVER order and whose row carries none ends that
+order with a 0.3 s blend into the row's rest placement when `order_seq ≥` the
+order's `seq`, and ignores the missing field when `order_seq` is lower (that
+poll was built before the publication). A client-local order (`local:n`) is
+never ended by a row.
+
+**Walk orders** (`kind walk`, plan E3 task 9, decisions 9–11 and 20). Two
+cases, both inside ONE place: a walk never enters or leaves a location (that
+is a journey, § A11; `issue_walk` answers `no_route`).
+(1) A **room change** inside a location at a decision point (NPC action turn,
+`movement_authority.move_character`, the chat room change of an agent, a
+force rule): the room setter writes the new room and its stand point AT ONCE;
+the order is only the picture of the way there (`start` read before the
+setter, `target` = the new room and point) and its flip writes nothing. The
+plain setter (admin, teleport, spawn, the scheduler's arrival room, belonging)
+issues no walk. (2) A **stroll** (an NPC roaming its home area, a walk inside
+one room): the position stays where it is until the flip, which writes the
+target once.
+Times: `eta = flip = issued + exit_s + L / speed + 0.5`, no entry; `L` is
+the room chain (rooms + doorways + stairs flights, the horizontal part × 1.3)
+for a room change, the straight visibility path around the room's furniture
+inside one room, and the baked terrain route (`hint_route`) in the open —
+the server runs no path search inside a location; the client walks its own
+navmesh path, and out in the open follows `hint_route` at the order's pace
+with the ground's wade/swim clip, sink, height and underwater ghost (the
+slope rule is the route's; no terrain pace: the flip is `L / speed`).
+`sequence` = `[exit?] + [walk]`, the `exit` of a held pose (a stroll first
+frees a plain seat, or lets go a held pose that needs an exit). At the flip the order is revised to
+`status ended` (same id, revision + 1) and stays published for
+`ORDER_TAIL_S`. A position write, a teleport (`snap: true`), a journey,
+a pair start, a furniture run (quietly, its own order replaces the walk), a
+party join end a live walk through ONE choke point (`motion_orders.cancel_for`)
+with a `cancel` order whose `stand` is the written point. A live walk is
+"on the way" for the NPC action turn, NPC scenes, wanderer settling, linked
+swaps and the condition `travelling`; a pair is held off only by a stroll.
+The order is persisted on the profile (field `order`) and shifted on a
+server start like the runs. A row without an order that changes room lets
+the native client walk a client-local order (`local:n`) to the new point.
+Checked by `scripts/smoke_walk_orders.py` (W1–W16) and
+`scripts/smoke_walk_outdoor.py` (O1–O4).
+
+**Server start.** `motion_orders.boot()` runs in the lifespan before the
+AgentLoop, `periodic_jobs` and the TravelTicker and rebuilds the index from
+the live runs (`data.order`); a `cancel` is not persisted and does not
+survive a restart (its tail is 10 s).
+
+Checked by `scripts/smoke_orders_route.py` (R1–R11).
 
 ---
 
@@ -8274,7 +8463,7 @@ and each enters at its clip role point instead of the slot position: the place
 centre plus the role's `anchor_xz_m` turned by `pair_yaw`
 (`interaction_engine.role_point`, roles `a`..`e`), the same point both renderers draw the
 pair half at (`pairPoints`). The planner passes it as `point` with the pinned
-slot (`plan_approach`, the journey's `approach_target`); automatic access is
+slot (`plan_approach`, the run's plan); automatic access is
 measured back from it; every revalidation recomputes it
 (`prop_action_engine._entry_point`). The editor's access preview
 (`prop_action_access.preview_access`) lists only that slot, with each role's
@@ -8455,47 +8644,30 @@ Door-zone corners enter the graph only as useful obstacle geometry. This is not
 a new internal-wall schema or cross-room navigation. Floor/access Y retains the
 existing scene datum; support height belongs only to the body anchor.
 
-`travel_engine.start_approach_journey(actor, target, role, *, execution_kind,
-execution_ref, journey_id='') -> (journey, reason)` replans and persists an
-authoritative game-time polyline. An existing journey is never overwritten.
-Departure from a held seat uses the existing measured exit transition and its
-delay/zero-time seat leg, not raster relocation. The complete seat-to-exit
-bridge is checked against walls, door zones and all unrelated grown furniture;
-only the actually occupied departing placement can be exempted, never another
-copy of the same prop. Its placement identity is retained on the journey and
-the bridge is rechecked on large ticks too. The target is pinned to the
-selected marker/slot. Each tick revalidates provenance and every promised
-walking segment before any position write; changed geometry cancels in place.
-Intermediate and arrival position writes compare the complete current journey
-snapshot (including ID/kind/ref) and commit under the same character-profile
-write lock used by cancellation. Accepted cancellation cannot be followed by a
-stale tick's position write. Owner callbacks remain outside that lock.
-A still-current journey whose point no longer derives its location (for example,
-because a smaller overlapping boundary was inserted) is cancelled after releasing
-the profile lock with `approach_location_boundary_changed`. A stale snapshot
-never cancels or moves its replacement; boundary rejection does not leave a
-permanently active approach or suppress the owner's cancellation callback.
+A furniture approach is NOT a journey (plan E3). `prop_action_engine._start`
+takes the plan's polyline (`plan_approach`, pinned to the selected marker/slot),
+checks once that each member still stands where the plan starts
+(`actor_moved`), is in the target room, walks no journey and holds no
+interaction, then frees its seat in ONE profile write (`place` None, pose
+empty) after recording the departure (`departure_seat`: seat, pose, exit
+seconds) in the plan, and publishes the run's order (§ A11b). Departure from a
+held seat is the order's `exit` step, not raster relocation. The server writes
+no intermediate positions: an NPC member is written exactly onto its floor
+access at its own estimated arrival, a player-controlled member when it
+reports its arrival (`POST /play/order/arrived`, within `ARRIVE_TOL_M` of the
+access); the entry and the activation follow the order's `flip_motion_s`.
 Arrival is exactly at floor access, not at the body anchor or a new stand point.
 
-`register_execution_owner(kind, *, guard, validate_arrival, arrived, cancelled)`
-registers a real typed owner. Guard returns a context manager yielding bool;
-arrival validation returns `(allowed, reason)` for the actual arrival room.
-Callbacks are `arrived(actor, journey)` and `cancelled(actor, journey, reason)`.
-The guard must check the exact run/journey/actor and serialize its execution.
-Callbacks run outside profile locks, possibly inside the owner's guard; owner
-locking must therefore support that re-entry. Identical registration is
-idempotent; replacing an owner or registering reserved `party_intent` fails.
-`prop_action_engine.register_owner()` installs the real internal `prop_action`
-owner; request/advance invoke it explicitly. Importing travel, places or the
-periodic scheduler does not register it or activate user-world actions.
-
-`party_intent` dispatch dynamically uses the existing party single-providers,
-without replacing them. A persisted `execution_ref` without a kind is normalized
-once to `party_intent`; ordinary journeys remain ownerless. An unavailable or
-unknown typed owner is visibly cancelled (`last_journey_result`, state event,
-log). `cancel_journey` accepts exact `journey_id`, `execution_kind` and
-`execution_ref` selectors; all supplied selectors must match. Server lifespan
-registers the prop owner before jobs start; final client cutover is still required.
+Owned journeys (`execution_kind`/`execution_ref`) remain only for party trip
+intents: `party_intent` dispatch dynamically uses the existing party
+single-providers (`journey_execution_context`, `journey_arrival_validate`),
+without replacing them. A persisted `execution_ref` without a kind is
+normalized once to `party_intent`; ordinary journeys remain ownerless. Any
+other or unavailable owner is visibly cancelled (`unknown_execution_owner`:
+`last_journey_result`, state event, log); a journey left over from the furniture
+approaches of before E3 is cancelled at boot (`motion_orders.boot`).
+`cancel_journey` accepts exact `journey_id`, `execution_kind` and
+`execution_ref` selectors; all supplied selectors must match.
 
 ### Durable prop executions
 
@@ -8532,17 +8704,15 @@ bind the exact execution/invitee and expire after 300 online game seconds.
 The accept path accrues that clock and checks expiry under its acquisition
 guard before taking any person/slot claim, even if the periodic tick is late.
 
-The typed journey owner uses reentrant per-execution locks. Both participants
-must arrive at their own exact floor access; `last_journey_result` is checked
-by journey ID/kind/ref and actual persisted position after a crash between
-Core arrival and its callback. Missing/replaced journeys never become arrival
-proof. The approach deadline is the longest actual timed way (including its
-departure delay) plus 60 game seconds. Every terminal path releases only its
-own claims and matching journeys; durable pending cleanup is replayable without
-reopening the terminal state or touching a replacement journey.
+Runs use reentrant per-execution locks. Every member must arrive at its own
+exact floor access (§ A11b: an NPC at its own estimated arrival, a
+player-controlled member through its arrival report); the approach deadline is
+the order's `deadline_motion_s`. Every terminal path releases only its own
+claims; durable pending cleanup is replayable without reopening the terminal
+state.
 `character.release_prop_action_state(name, execution_id)` compares ownership
 under location-place/profile write authority and a final SQL identity guard.
-Removal of its own place/pose/entry, canonical awake flag bookkeeping and the
+Removal of its own place/pose, canonical awake flag bookkeeping and the
 derived stand position share one transaction. No later unconditional pose,
 position or wake setter can erase a replacement execution. Owned pair end
 defers both this cleanup and its exact-execution interruption until **all**
@@ -8564,9 +8734,9 @@ Its segment is checked against the room, doors and unrelated furniture; only
 the actual entered placement can be exempted. Missing/mismatched/blocked
 representation yields `missing_entry_transition`, `entry_transition_mismatch`
 or `entry_transition_blocked`, not an invented clip or a position fallback.
-During entry the persisted figure stays at floor access. Its private profile
-`prop_action_entry` retains execution ownership, while the public worldmap
-projects only the sanitized visible motion described below. Only after this
+During entry the persisted figure stays at floor access. No profile field
+carries the entry: the run's order (§ A11b, revised to `status entering` with
+its `flip_motion_s`) tells every client what plays. Only after this
 entry interval does Core bind the exact slot and authoritative body position;
 neither client derives semantic success from a clip ending.
 
@@ -8615,19 +8785,13 @@ so it cannot recursively cancel another invitation or an unrelated new way.
 
 Offline policy: a process identity and the last game and motion stamps
 (`last_game`, `last_motion`) are persisted. The
-first tick in a new process reanchors live execution and owned journey clocks,
-credits zero offline duration, and preserves only previously persisted active
-progress. Freeze pauses the game clock and the motion clock. The approach
-deadline and the entry clip count MOTION (real) seconds, phases, gauges and the
-invitation GAME seconds.
-Clock stamps and newly accrued active progress are committed together; an
-interrupted journey reanchor carries its own durable stamp to avoid shifting
-the same offline interval twice if another crash precedes the run write.
-Every indoor movement commit persists `journey.position_checkpoint_game`
-atomically with its actual position (or exact arrival receipt/removal).
-Restart reanchoring uses that **journey** checkpoint and its reanchor stamp,
-not the slower run scheduler stamp; already committed walking cannot rewind
-when TravelTicker advanced independently before process death.
+first tick in a new process credits zero offline duration and preserves only
+previously persisted active progress. The downtime of the absolute motion
+seconds of a run and its order (arrival, flip, deadline) is shifted out once at
+boot (`motion_orders.boot`, § A11b). Freeze pauses the game clock and the
+motion clock. The approach deadline and the entry clip count MOTION (real)
+seconds, phases, gauges and the invitation GAME seconds.
+Clock stamps and newly accrued active progress are committed together.
 Existing sleep regeneration remains owned by the sleep mechanic; this executor
 invents no bed rate.
 
@@ -8686,7 +8850,8 @@ Controller verification: `scripts/smoke_prop_action_runs.py` reuses the Task3
 real DB/profile/published-variant/scene/way fixture, copies complete shipped
 catalogs into private storage for authoring, and forbids external processing.
 `--scenario-dir NEW_DIRECTORY` runs separate actual Core processes, stops after
-the durable arrival write before its owner callback, stops again mid-prepare,
+the durable arrival write (position on the access, then the name in `arrived`)
+before the entry begins, stops again mid-prepare,
 then recovers receipts/progress, checks terminal restart and removed-variant
 claim release. Its `execution.json` contains actual stored states, not mock
 arrival echoes. These fixtures do not claim playable FBX/3D-client verification.
@@ -8778,8 +8943,8 @@ Player routes require the authenticated user's current authorized avatar:
   in offers and planning. `ask` ends nothing before the partner's "yes" (a "no"
   keeps them running); `react` and solo requests end them at once. When every
   participant is already active on the very piece, the new run begins in place:
-  no walk, no entry clip — the answer is `active` with `motion: null`, and the
-  seat or pair arrives with the next worldmap row. An open invitation survives
+  no walk, no entry clip — the answer is `active`, and the seat or pair
+  arrives with the next worldmap row. An open invitation survives
   a position, pose or journey change of either person; the "yes" checks and
   plans everything anew.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
@@ -8795,11 +8960,10 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
-  Terminal `recent_results` rows include participant-specific `motion`:
-  `{seat:[x,z], stand:[x,z], stand_yaw_deg, exit_clip, exit_s}` for a participant released
-  from a place, otherwise `null` (including a participant kept seated).
-  This persisted departure is identical to the cancel answer's `motion`.
-  Clients play it once per execution id across state and cancel answers.
+  Rows carry no motion. A participant released from a place stands up through
+  the `cancel` order of the run's end (§ A11b: exit step at the seat, then the
+  stand point and yaw), read from its worldmap row or `GET /play/orders`; a
+  participant kept seated gets no `cancel` order.
 
   Rows contain `execution_id,action_id,definition_revision,label,target,actor,
   members,viewer,roles,status,phase,phase_label,reason,can_respond,can_cancel,own_role,
@@ -8809,8 +8973,7 @@ Player routes require the authenticated user's current authorized avatar:
   name: `clip` `{a..e: name}`, `access` `{name: actor|partner}` (clip role A
   enters at the `actor` access, every other role at `partner`). `consent` is
   `ask`/`react` (empty for a solo run); `consents` `{name: pending|yes}` while the
-  run waits — `can_respond` is true for an invitee still `pending`. A row's
-  `motion.role` is the viewer's clip role `a`..`e` (`null` solo). Incoming is only for
+  run waits — `can_respond` is true for an invitee still `pending`. Incoming is only for
   the exact recipient; outgoing is only the initiator's; current is participant
   only. Own terminal rows/effect results disappear after 30 **system** minutes.
   `phase` remains the machine ID (which may be a UUID); `phase_label` comes
@@ -8820,58 +8983,25 @@ Player routes require the authenticated user's current authorized avatar:
   No foreign consent or overland destination is projected. Core equivalent:
   `prop_action_engine.state_for(actor)`. Sync invalidation targets only those
   participants' `self`/`scene` topics, not a public invitation payload.
-  Each `current` row also carries the caller's own `motion` (below; null
-  unless that run is approaching and has started the caller's walk).
 
-**Own motion — the server decides and plans, the own client plays (B1,
-2026-10-30).** The answers of `request` and `respond` carry `motion`: the
-caller's OWN approach exactly as the server runs it, or `null` (refused,
-awaiting consent, no walk of the caller's own). `prop_action_engine.motion_for`
-builds it from a snapshot taken when the approach journey starts:
-
-```ts
-motion: {
-  execution_id: string, journey_id: string, room_id: string,
-  floor_y: number | null,              // world Y of the walked floor
-  waypoints: [number, number][],       // world XZ, the persisted polyline
-  paces_m_s_real: (number | null)[] | null, // per segment; null = timeless
-  departure: null | {                  // leaving a held seat first
-    seat: [x, z], stand: [x, z],       // waypoints[0], waypoints[1]: zero-time leg
-    exit_clip: string, exit_s: number  // "" / 0 = stand up without a clip
-  },
-  access: {x, y, z, yaw},              // floor access = last waypoint
-  anchor: {x, y, z, yaw, root_offset, place_id, slot},
-  entry: null | {mode: "bridge" | "direct", kind: string, pose_key: string,
-                 duration_s: number},  // clip length in REAL seconds
-  height_cm: number | null, role: "a" | "b" | null
-} | null
-```
-
-`anchor` follows the `prop_action_entry` convention (`y` is the body root,
-support height = `y + root_offset`); after activation the server's `place`
-is exactly `(anchor.place_id, anchor.slot)` and its position is `anchor`
-`(x, z)`. The requesting client plays this plan **at once on its own clock**:
-turn towards the first walked segment, walk the waypoints at the given paces
-(after `exit_clip` when `departure` is set), play `entry.kind` at `access` and
-end on `anchor` — it does not wait for `travel.starts_in_s`, does not cap its
-progress at the server clock and does not seat itself on a locally computed
-slot. The server keeps its own journey (observers, NPC parity, per-tick
-revalidation, arrival, entry, activation, effects); the two meet at the same
-anchor, the server a few hundred milliseconds ahead or behind. A run that
-ends early (`cancelled`/`failed` in `/state`) hands the figure back to the
+**Own run — the order (plan E3).** The answers of `request` and `respond`
+carry `order` (§ A11b) when the caller takes part in the run: the run's whole
+motion order, which the caller's client plays at once on its own clock — the
+same order every participant reads from its row and `GET /play/orders`. The
+answers carry no `motion` field (removed in E3 task 8, without alias). A run
+that ends early (`cancelled`/`failed` in `/state`) hands the figure back to the
 player at its rendered point. Only the own run's end does that: a refused or
 failed `request`/`respond` (409 included), a declined invitation and the
 cancel of another execution (a withdrawn invitation) say nothing about the
 own run — the server keeps the current action on a refusal and ends it only
 when a new request replaced it — so the client re-reads `/state` and releases
-the figure only if that run is terminal there. Observers and NPCs are unchanged
-(`local_approach`, `prop_action_entry`).
+the figure only if that run is terminal there. Observers see the same run
+through the order on the figure's row.
 
-The `cancel` answer carries `motion` for a participant that was seated or
-lying when it ended: `{seat:[x,z], stand:[x,z], stand_yaw_deg, exit_clip, exit_s}` — the
-stand-up its own client plays at once (`exit_clip` is the pose's exit
-transition to walking, else to standing; `stand` is where the server put the
-figure; `stand_yaw_deg` is the persisted end heading in degrees). `null` when the cancel moved nobody (e.g. a walk was stopped).
+The `cancel` answer is the plain result. Whoever the end really stood up
+(and whoever was still on the way) gets ONE `cancel` order with a new id
+(§ A11b, decision 19): its `exit` step plays the exit clip of the pose it left,
+`actors[i].stand` is where the server put the figure.
 
 Prop-action entry bridges use the pose transition table described above:
 `walking -> @seat` covers every target pose whose catalog `group` is `seat`,
@@ -9028,53 +9158,11 @@ markers/free body poses remain. Implicit chat marker/context adoption does not
 interrupt an explicitly owned semantic action. Explicit tools, movement and stop
 retain their normal interruption authority.
 
-`worldmap.characters[].local_approach` is nullable public **motion**, not consent:
-only an actually addressable/visible same-room observer receives a foreign owned
-prop approach. It contains `journey_id`, current `room_id`, `floor_y` (world Y of the
-walked floor, nullable), remaining world-XZ
-`waypoints` starting at the current interpolated point, `progress_m:0` relative
-to that trimmed path, `walked_m`, `remaining_m`, remaining `paces_m_s_real`, and
-optional departure `starts_in_s`. No target/execution/partner/foreign room is
-included. Every published segment is checked against the same current room
-geometry, except the departure legs (seat -> stand, stand -> step-out), which
-leave the furniture by design and are checked by the travel engine's own rule. Loss of room, sight, ownership or route returns null; clients must
-delete their cached local path. Existing foreign overland travel stays thinned.
-
-`worldmap.characters[].prop_action_entry` projects the actual measured entry
-while a visible same-room character, including self, still owns its live entry:
-
-```ts
-{
-  kind: string, pose_key: string,
-  access: {x: number, y: number, z: number, yaw: number},
-  anchor: {x: number, y: number, z: number, yaw: number},
-  duration_s: number, elapsed_s: number,
-  clock_rate: number, height_cm: number, root_offset: number,
-  role: "a" | "b" | null, started_s: number
-} | null
-```
-
-Positions are world metres, yaw is compass degrees. `access.y` is floor height;
-`anchor.y` is the final body-root height after the measured pose-root offset.
-`root_offset` is that actual measured offset; the support height is
-`anchor.y + root_offset`. Do not subtract it from `anchor.y` a second time.
-`height_cm` follows Core's actual bridge scaling, including reference-rig height
-when character height is unset. The stable motion-clock origin `started_s` is
-not an execution identity (identity only, never timing). No target IDs, partner, invitation, consent or execution ID is public.
-Actual phase/profile/position/claim ownership and same-room visibility gate
-the projection; activation, cancellation or visibility loss removes it.
-**Since 2026-11-05 the entry runs in REAL time** (plan-bewegung-echtzeit.md):
-`duration_s` is the clip's own real length and `elapsed_s` the real seconds
-played as of the poll, both on the server's motion clock (`timeutils.motion_time`
-— real seconds the world has run unfrozen; the game-speed factor plays no part).
-`clock_rate` is 1 while the entry plays and 0 while frozen or paused after a
-restart; clients project `(elapsed_s + age × clock_rate) / duration_s`. (Until
-then: `duration_game_s` = clip × max(1, factor), `elapsed_game_s`,
-`game_seconds_per_real_second`, `started_game_s` — removed without alias.)
-Clients map that fraction onto the measured clip duration, play the
-entry once **at access**, and adopt Core's committed body anchor without a
-second entry transition. Missing clip readiness must be reported, not replaced
-with a fabricated intro or long position correction.
+A visible same-room observer sees a foreign furniture approach and entry
+through the figure's row `order` (§ A11b): the movement fields only — no
+target, execution, partner or consent identity. The row fields
+`local_approach` and `prop_action_entry` were removed in E3 task 8 (no alias);
+clients play the order and adopt Core's committed `place` after its flip.
 
 The browser host uses HUD bridge **v3** as a clean cutover.
 Old browser protocol versions are rejected; no browser furniture-pose alias remains.
@@ -9082,7 +9170,7 @@ Besides `pickPropAction` (its sixth argument `members` carries the people picked
 action — then `partner` is unset; a host requests with `members`, else `[partner]`), v3 carries `closePlaceMenu`,
 `pickRoomPose`, `respondPropAction(executionId,accept)` and
 `cancelPropAction(executionId)`. The bidirectional `prop-actions-changed`
-notification invalidates own action state and motion after a mutation attempt
+notification invalidates own action state and order after a mutation attempt
 (success or refusal) without echoing across the iframe boundary. Own incoming/outgoing/
 current/recent state remains session-private; visible NPC motion is not consent.
 
@@ -9097,9 +9185,9 @@ acknowledgement; preparation errors/timeouts do not execute it. Finally
 so the host can refresh before releasing that barrier. Ordinary lifecycle
 invalidation carries no ID and must not release a different pending mutation.
 For B1, the same notification also carries the optional mutation `result`
-(the complete answer, including `motion`) and `source:"request"|"respond"|"cancel"`.
+(the complete answer, including the caller's `order`) and `source:"request"|"respond"|"cancel"`.
 The world host consumes that answer immediately, before refreshing state;
-a detached HUD must not discard the motion plan. Status-only invalidations
+a detached HUD must not discard the order. Status-only invalidations
 remain possible without a result. This uses the existing bridge version.
 This transport correlation is neither a Core execution identity nor a server
 request nonce. Disconnection clears pending HUD waits; preparation has a

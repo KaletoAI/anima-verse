@@ -66,12 +66,15 @@ regression. No client-generated target or stand point is permitted.
 | `worldmap_approach.json` | Own `journey-56-solo`, 6 m remaining, starting at progress 0 |
 | `worldmap_entry.json` | Own entry at access with phase .5 and a distinct body anchor |
 | `worldmap_active.json` | Entry removed; authoritative held place at slot 0 and its XZ/facing/room |
-| `worldmap_pair.json` | Accepted incoming invitation: own avatar journey plus visible NPC `local_approach` |
+| `worldmap_pair.json` | Accepted incoming invitation: own avatar journey plus the visible NPC's walk `order` (§ A11b, plan E3 Task 5: start (4, 2), target (5.5, 2), 1 m/s, issued at `motion_now` 0); its `local_approach` stays for `client3d/scripts/smoke_prop_action_fixture.mjs`, the native client no longer reads it |
 | `worldmap_cancelled.json` | Mid-route cancelled position; no remaining motion projection |
 
-Own travel contains its journey ID and complete polyline. The foreign public
-local approach contains only journey/room/motion fields, with no action,
-execution, target, partner or consent data. Private execution identity and
+Own travel contains its journey ID and complete polyline. The foreign NPC's
+public order (plan E3 Task 5; it replaced the native client's `local_approach`
+playback) carries geometry and clocks only, with no execution, partner or
+consent data. Every snapshot carries the root `order_seq` 1 as the server
+does once that order exists: a later snapshot without the NPC's `order` ends
+it (decision 6) and the row places the NPC again. Private execution identity and
 consent remain solely in `/play/prop-actions/state`. Journeys do not encode
 execution IDs. A successful mutation alone never synthesizes seating.
 
@@ -108,3 +111,14 @@ always has `incoming`, `outgoing`, `current`, `recent_results`; each execution
 carries the immutable action/target/revision, participants, semantic and
 physical roles, phase label, reason and permission flags. Terminal rows
 include empty effect receipts because these fixture definitions have no effects.
+
+## The own run on orders (plan E3 Task 6, `PropActionsCheck.CheckOwnOrders`)
+
+The avatar no longer plays the answer's `motion` plan: a click starts the local order `local:<n>` from (-3,-2) to the
+marker's actor access (2,-1) at 1.4 m/s on the straight line (no navigation in this world), length √(5² + 1²) =
+√26 = 5.099020 m, reached after √26 / 1.4 = 3.642157 s. After 0.25 s the avatar stands 0.35 m along (5,1)/√26:
+(-2.656796, -1.931359). The server's order (`OwnOrder` in the check: access (2,-1) yaw 180, anchor (2,0.129,0),
+entry nominal 2 s, seq above every map's `order_seq`) adopts the local order in place (same kind, location and anchor),
+so the local clock keeps running. Under the journey server the avatar waits at the access until the revision
+`entering`; the entry of 2 s ends on the slot (2, 0.129, 0). The run's end hands the avatar back once the order lets go
+or at the latest after `OwnPairEndHoldS` = 3 s.

@@ -568,7 +568,6 @@ class Effects(unittest.TestCase):
         replacement = S.request(name, target)['execution_id']
         journey = F.E.get_journey(name)
         A.cancel(name, ref)
-        A._cancelled(name, {'execution_ref': ref, 'journey_id': 'old', 'execution_kind': 'prop_action'}, 'cancelled')
         self.assertEqual(F.E.get_journey(name), journey)
         self.assertEqual(R.get(replacement)['status'], 'approaching')
         self.assertTrue(R.claims(replacement))

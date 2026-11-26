@@ -256,6 +256,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "orders")
+            {
+                var alone = await OrderCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "navcompare")
             {
                 // A measurement, not part of the full run (plan E2 Task 5): the nav bake per fixture.
@@ -377,6 +383,7 @@ public static class CheckRunner
             var placement = await PlacementCheck.RunAsync(host, dir);
             var walk = await WalkCheck.RunAsync(host, dir);
             var nav = await NavCheck.RunAsync(host, dir);
+            var orders = await OrderCheck.RunAsync(host, dir);
             var embody = await EmbodyCheck.RunAsync(host, dir);
             var photo = await PhotoCheck.RunAsync(host, dir);
             var audio = await AudioCheck.RunAsync(host, dir);
@@ -404,7 +411,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {resume} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {nav} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | {graphics} | hud {hud} | {ground} | {s3c} | {launcher} | {loginLook} | {update} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {nav} | {orders} | {travel} | {residency} | {embody} | {photo} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

@@ -10,15 +10,16 @@ using AnimaNative.Embody;
 namespace AnimaNative.Props;
 
 /// <summary>
-/// Task 57 / E7-T12: main.ts ownedPropRun/preparePropAction/refreshPropMotion/releaseOwnedProp orchestration.
-/// Correlation is local transport metadata, never an execution identity or server nonce. Scene owns this object;
-/// Dispose invalidates late continuations. Public rows never receive the private state held here.
+/// Task 57 / E7-T12: the own furniture run's reservation lifecycle — request/respond/cancel answers, the state reads
+/// that confirm them, the HUD's prepare/changed correlation and the manual release. Plan E3 Task 6: the avatar walks
+/// on its own order from the click on, so nothing here pauses input or pre-flushes the position any more, and no
+/// motion plan is read (the order of an answer is the controller's). Correlation is local transport metadata, never
+/// an execution identity or server nonce. Scene owns this object; Dispose invalidates late continuations.
 /// </summary>
 public sealed class PropActionControl(IWorldSource source,Func<double> clock) : IDisposable
 {
     public PropPreparationBarrier Preparation { get; }=new();
     public ManualPropGate ManualGate { get; }=new();
-    private readonly HashSet<string> _cancelMotions=new(StringComparer.Ordinal);
     private readonly HashSet<string> _endedOwn=new(StringComparer.Ordinal);
     private readonly HashSet<string> _released=new(StringComparer.Ordinal);
     private JsonObject _state=new() { ["incoming"]=new JsonArray(),["current"]=new JsonArray(),["outgoing"]=new JsonArray(),["recent_results"]=new JsonArray() };
@@ -27,12 +28,10 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public int Generation=>_epoch;
     private long _refreshSerial;
     private Task? _refreshTask;
-    private bool _uncertain=true,_disposed;
+    private bool _disposed;
     private long _sequence;
     private readonly string _session=Guid.NewGuid().ToString("N");
-    public bool Paused=>Preparation.Pending || _uncertain || ManualGate.Pending;
     public JsonObject State=>(JsonObject)_state.DeepClone();
-    public Func<Task> PrepareWrites { get; set; }=()=>Task.CompletedTask;
     public Func<Task>? RefreshOffers { get; set; }
     public Action<string>? Log { get; set; }
     private string _offeredOwnKey="";
@@ -47,10 +46,10 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public event Action<string,string>? MutationRejected;
     /// <summary>The own run the client tracks or plays ("" = none).</summary>
     public string OwnExecutionId=>PropActionMotion.Text((_trackedRun ?? OwnedRun)?["execution_id"]);
-    public event Action<JsonObject,string,string>? MotionReceived;
     private string OwnStateKey => OwnedRun is { } run ? $"{PropActionMotion.Text(run["execution_id"])}|{PropActionMotion.Text(run["status"])}|{PropActionMotion.Text(run["phase"])}" : "";
     public Func<Task> RefreshWorld { get; set; }=()=>Task.CompletedTask;
-    public event Action? PauseChanged;
+    /// <summary>The state, the preparation or the tracked run changed (the controller republishes its snapshot).</summary>
+    public event Action? Changed;
     public event Action<string?>? NotifyChanged;
     /// <summary>Task 67 #5: reconciliation errors are observable without replacing the mutation verdict.</summary>
     public event Action<string>? RefreshFailed;
@@ -58,19 +57,20 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         .FirstOrDefault(r=>!_released.Contains(PropActionMotion.Text(r["execution_id"])) && PropActionMotion.Text(r["status"]) is "approaching" or "active")
         ?? (_state["outgoing"] as JsonArray ?? new()).OfType<JsonObject>()
         .FirstOrDefault(r=>!_released.Contains(PropActionMotion.Text(r["execution_id"])) && PropActionMotion.Text(r["status"])=="approaching");
-    public async Task PrepareAsync(string id)
+    /// <summary>The HUD is about to mutate: the next state read must come after this epoch.</summary>
+    public Task PrepareAsync(string id)
     {
         ObjectDisposedException.ThrowIf(_disposed,this);
-        Preparation.Begin(id,clock()); _uncertain=true; _epoch++; PauseChanged?.Invoke();
-        await PrepareWrites();
+        Preparation.Begin(id,clock()); _epoch++; Changed?.Invoke();
+        return Task.CompletedTask;
     }
     public Task ChangedAsync(string? id)
     {
         if(_disposed) return Task.CompletedTask;
         bool knownFailure=_knownFailedEpoch==_epoch;
-        Preparation.Changed(id); _uncertain=!knownFailure; _epoch++;
+        Preparation.Changed(id); _epoch++;
         if(knownFailure) { Preparation.AdoptFreshState(); _knownFailedEpoch=-1; }
-        PauseChanged?.Invoke();
+        Changed?.Invoke();
         return RefreshAsync();
     }
     public Task RefreshAsync()
@@ -103,20 +103,23 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         _trackedRun ??= OwnedRun?.DeepClone().AsObject();
         _state=fresh; _requestedRun=null;
         bool ended=ReconcileRun();
-        if(OwnedRun is { } owned) ConsumeMotion(owned,"state");
-        PauseChanged?.Invoke();
+        Changed?.Invoke();
         string key=OwnStateKey;
         if(key!=_offeredOwnKey && RefreshOffers is { } refresh) { await refresh(); _offeredOwnKey=key; }
         if(!ended) await RefreshWorld();
         if(_disposed || epoch!=_epoch || serial!=_refreshSerial) return;
-        _uncertain=false; Preparation.AdoptFreshState(); PauseChanged?.Invoke();
+        Preparation.AdoptFreshState(); Changed?.Invoke();
     }
-    public void ConsumeMotion(JsonObject answer,string source)
+    /// <summary>
+    /// One mutation answer (a request, a response, a cancel — also the HUD's own): a refusal of the own run ends it, any
+    /// other refusal only undoes the click; an approaching answer becomes the tracked run until a state read confirms it.
+    /// </summary>
+    public void ConsumeAnswer(JsonObject answer,string source)
     {
         if(_disposed) return;
         string id=PropActionMotion.Text(answer["execution_id"]),status=PropActionMotion.Text(answer["status"]);
         bool own=id.Length>0 && id==OwnExecutionId;
-        if(source=="cancel") { ConsumeCancel(answer,id,status,own); return; }
+        if(source=="cancel") { ConsumeCancel(id,status,own); return; }
         if(status is "failed" or "refused") {
             string reason=PropActionMotion.Text(answer["reason"]);
             if(own) { _trackedRun??=OwnedRun?.DeepClone().AsObject(); EndRun(status,reason); }
@@ -124,24 +127,21 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
             return;
         }
         if(_released.Contains(id) || status=="cancelled") return;
-        if(source!="state" && status=="approaching") { _requestedRun=(JsonObject)answer.DeepClone(); _trackedRun=(JsonObject)answer.DeepClone(); }
-        if(answer["motion"] is JsonObject motion) MotionReceived?.Invoke((JsonObject)motion.DeepClone(),source,id);
+        if(status=="approaching") { _requestedRun=(JsonObject)answer.DeepClone(); _trackedRun=(JsonObject)answer.DeepClone(); }
     }
-    private void ConsumeCancel(JsonObject answer,string id,string status,bool own,bool terminal=false)
+    private void ConsumeCancel(string id,string status,bool own)
     {
-        if(!terminal && status is "refused" or "failed") return;
+        if(status is "refused" or "failed") return;
         _released.Add(id);
-        _uncertain=false; Preparation.AdoptFreshState();
+        Preparation.AdoptFreshState();
         // Withdrawing an invitation or stopping another row leaves the own run alone.
         if(!own && !_endedOwn.Contains(id)) return;
         _endedOwn.Add(id);
         if(own) _trackedRun=_requestedRun=null;
-        if(answer["motion"] is JsonObject motion && _cancelMotions.Add(id))
-            MotionReceived?.Invoke((JsonObject)motion.DeepClone(),"cancel",id);
     }
     private void RejectMutation(string status,string reason)
     {
-        _uncertain=false; _knownFailedEpoch=_epoch;
+        _knownFailedEpoch=_epoch;
         MutationRejected?.Invoke(status,reason);
     }
     public async Task<JsonDocument> MutateAsync(Func<Task<JsonDocument>> mutation,string source="request")
@@ -152,11 +152,7 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
             var answer=await mutation();
             if(_disposed) return answer;
             var answerNode=JsonNode.Parse(answer.RootElement.GetRawText())!.AsObject();
-            ConsumeMotion(answerNode,source);
-            if(answer.RootElement.TryGetProperty("status",out var status) && status.GetString()=="approaching" && !_released.Contains(PropActionMotion.Text(answerNode["execution_id"]))) {
-                _requestedRun=JsonNode.Parse(answer.RootElement.GetRawText())!.AsObject();
-                _trackedRun=(JsonObject)_requestedRun.DeepClone();
-            }
+            ConsumeAnswer(answerNode,source);
             return answer;
         }
         catch
@@ -189,7 +185,6 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
                 RunSuperseded?.Invoke(id,nextId);
                 return false;
             }
-            if(row?["motion"] is JsonObject) { ConsumeCancel(row,id,status,own:true,terminal:true); return true; }
             EndRun(status.Length>0 ? status : "cancelled",row is null ? "approach_withdrawn" : PropActionMotion.Text(row["reason"])); return true;
         }
         else if(OwnedRun is { } owned) _trackedRun=(JsonObject)owned.DeepClone();
@@ -201,7 +196,7 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         _endedOwn.Add(PropActionMotion.Text(_trackedRun["execution_id"]));
         _released.Add(PropActionMotion.Text(_trackedRun["execution_id"]));
         _trackedRun=_requestedRun=null;
-        _uncertain=false; Preparation.AdoptFreshState();
+        Preparation.AdoptFreshState();
         Log?.Invoke($"run ended without approach: status={status} reason={reason}");
         RunEnded?.Invoke(status,reason);
     }
@@ -219,10 +214,10 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
                 string status=result.RootElement.TryGetProperty("status",out var s) ? s.GetString() ?? "" : "";
                 if(status is "refused" or "failed") throw new InvalidOperationException(result.RootElement.GetProperty("reason").GetString());
                 if(_disposed) return;
-                ConsumeCancel(JsonNode.Parse(result.RootElement.GetRawText())!.AsObject(),executionId,status,own:true);
+                ConsumeCancel(executionId,status,own:true);
                 release();
             } finally {
-                if(!_disposed) { _uncertain=false; Preparation.Changed(requestId); Preparation.AdoptFreshState(); PauseChanged?.Invoke(); }
+                if(!_disposed) { Preparation.Changed(requestId); Preparation.AdoptFreshState(); Changed?.Invoke(); }
             }
         });
     public async Task<bool> ExpireAsync()

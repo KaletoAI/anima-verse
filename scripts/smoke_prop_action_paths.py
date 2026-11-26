@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Deterministic indoor geometry and typed journey-owner regressions.
+"""Deterministic indoor geometry (plan_approach) and journey-owner regressions.
 
 Run: ./.venv/bin/python scripts/smoke_prop_action_paths.py
 Fixtures use private storage AND instance roots before world imports; no media,
-network, real world or prop execution engine is used. --observe-dir DIR retains
-an isolated movement scenario and writes route.html for browser inspection.
+network, real world or prop execution engine is used. Since plan E3 Task 8 a
+furniture approach walks no journey, so the former approach-journey scenarios
+(and the --observe-dir route recording built on them) are gone; the owned
+journeys left are party trip intents (Ownership).
 """
 import argparse
 from contextlib import contextmanager
@@ -15,25 +17,20 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-from threading import Event, RLock, Thread
+from threading import RLock
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 PARSER = argparse.ArgumentParser()
-PARSER.add_argument("--observe-dir", type=Path)
 ARGS, REST = PARSER.parse_known_args()
 RESUME_ROOT = os.environ.get("PROP_ACTION_SMOKE_RESUME_ROOT", "")
 # A single root binding keeps the default temp path visible to the lint;
-# retained observation/restart roots still require explicit private scenarios.
-TEMP = None if RESUME_ROOT or ARGS.observe_dir else tempfile.TemporaryDirectory(prefix="prop-paths-")
-ROOT = (Path(RESUME_ROOT).resolve() if RESUME_ROOT else
-        ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name))
-if RESUME_ROOT:
-    if not (ROOT / ".prop-action-scenario").is_file():
-        raise ValueError("resume root is not an explicitly created private action scenario")
-elif ARGS.observe_dir:
-    ROOT.mkdir(parents=True, exist_ok=False)
+# a retained restart root still requires an explicit private scenario.
+TEMP = None if RESUME_ROOT else tempfile.TemporaryDirectory(prefix="prop-paths-")
+ROOT = Path(RESUME_ROOT).resolve() if RESUME_ROOT else Path(TEMP.name)
+if RESUME_ROOT and not (ROOT / ".prop-action-scenario").is_file():
+    raise ValueError("resume root is not an explicitly created private action scenario")
 os.environ["STORAGE_DIR"] = str(ROOT / "world")
 os.environ["INSTANCE_DIR"] = str(ROOT / "instance")
 os.environ.update(ANIMATION_CLIPS_DIR=str(ROOT / "clips"),
@@ -374,43 +371,40 @@ class Paths(unittest.TestCase):
                           [{"at": [8, 5], "yaw": 90, "width_m": 3, "depth_m": 2}], zones)
 
 
-class ScenarioOwner:
-    """Separate real execution owner, NOT a pretend prop_action implementation."""
-    def __init__(self):
-        self.runs = {}
-        self.lock = RLock()
-        self.cancellation_started = None
-
-    @contextmanager
-    def guard(self, name, journey):
-        with self.lock:
-            row = self.runs.get(journey["execution_ref"])
-            allowed = bool(row and row["actor"] == name and row["journey_id"] == journey["journey_id"]
-                           and row["status"] == "approaching")
-            yield allowed
-
-    def validate(self, name, journey, room):
-        row = self.runs.get(journey["execution_ref"])
-        return bool(row and row["actor"] == name and row["room"] == room), "scenario_owner_mismatch"
-
-    def arrived(self, name, journey):
-        with self.lock:
-            self.runs[journey["execution_ref"]]["status"] = "arrived"
-
-    def cancelled(self, name, journey, reason):
-        if self.cancellation_started is not None:
-            self.cancellation_started.set()
-        with self.lock:
-            self.runs[journey["execution_ref"]].update(status="cancelled", reason=reason)
+def seat_actor(test, name):
+    """Seat ``name`` on the fixture seat with a measured exit clip (path-rise,
+    1 m forward); the clip table is restored when ``test`` cleans up."""
+    from app.core import animation_clips as A
+    clip_dir = ROOT / "clips"
+    clip_dir.mkdir(exist_ok=True)
+    (clip_dir / "path-rise.fbx").write_bytes(b"private deterministic exit fixture")
+    A._clear_entries_cache()
+    (clip_dir / "path-rise.json").write_text(json.dumps({
+        "kind": "path-rise", "duration_s": 2, "loop": False,
+        "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0, 1], "ref_height_m": 1.7}}}))
+    previous = A.world_transitions()
+    A._write_world_transitions([{"from": "sitting", "to": "walking", "kind": "path-rise", "accel": 0}])
+    test.addCleanup(A._write_world_transitions, previous)
+    profile = C.get_character_profile(name)
+    profile["height"] = 170
+    # Seed an already persisted historical seat to exercise departure
+    # geometry, not the removed raw-pose furniture allocation API.
+    loc, room = places.where(name, profile=profile)
+    place = next(p for p in places.room_places(loc, room) if p["id"] == "device/body")
+    C.set_character_pos(name, *place["slots"][0])
+    profile = C.get_character_profile(name)
+    profile.update(height=170, pose_key="sitting",
+                   place={"id": place["id"], "slot": 0, "room_id": room})
+    C.save_character_profile(name, profile)
 
 
 class Ownership(unittest.TestCase):
+    """The owned journeys left after plan E3 are party trip intents. A furniture
+    approach is no journey any more (the run walks on its order), so an owned
+    journey of any other kind — a "prop_action" one from before E3 included —
+    has no owner and is cancelled visibly."""
     @classmethod
     def setUpClass(cls):
-        cls.owner = ScenarioOwner()
-        E.register_execution_owner("path_scenario", guard=cls.owner.guard,
-                                   validate_arrival=cls.owner.validate,
-                                   arrived=cls.owner.arrived, cancelled=cls.owner.cancelled)
         prompt_templates.register_package_template_dirs([
             Path(__file__).resolve().parents[1] / "plugins/party/templates/llm"])
         # Execute the real package on_load boundary as declared in plugin.yaml;
@@ -418,312 +412,36 @@ class Ownership(unittest.TestCase):
         from plugins.party import register as party_registration
         T.register()
 
-    def start(self):
-        name, target, _ = fixture()
-        plan = N.plan_approach(name, target, "actor")
-        ref = "run-" + name
-        jid = "journey-" + name
-        self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
-        journey, reason = E.start_approach_journey(name, target, "actor", execution_kind="path_scenario",
-                                                 execution_ref=ref, journey_id=jid)
-        self.assertEqual(reason, "")
-        self.assertIsNotNone(journey)
-        return name, target, plan, journey
-
     def tearDown(self):
         assert_no_external_work()
 
-    def test_overlapping_location_boundary_cancels_halfway_and_arrival_then_allows_retry(self):
-        for elapsed in (2, 60):
-            with self.subTest(arrival=elapsed == 60):
-                name, target, _, journey = self.start()
+    def owned_point_journey(self, kind):
+        """A real point journey of a fresh actor (1, 5) -> (4, 5), stamped
+        with an execution owner of ``kind``."""
+        name, _, _ = fixture()
+        journey, reason = E.start_journey_to_point(name, 4, 5)
+        self.assertTrue(journey, reason)
+        profile = C.get_character_profile(name)
+        profile["journey"].update(execution_kind=kind, execution_ref="run-" + name)
+        self.assertTrue(C.save_character_profile(name, profile))
+        return name
+
+    def test_unknown_owner_cancels_visibly_without_reaching_goal(self):
+        for kind in ("missing_owner", "prop_action"):
+            with self.subTest(kind=kind):
+                name = self.owned_point_journey(kind)
                 before = C.get_character_pos(name)
-                overlap = W.add_location("Temporary boundary intrusion", "Private boundary regression")
-                # Smaller than the real room's location, contains both access
-                # (8,7) and the 2s walking point (~3.69,5.77), not origin (1,5).
-                overlap.update(pos_x=0, pos_z=0, map3d={"plan_width_m": 12,
-                               "boundary": [[2, 5], [9, 5], [9, 8], [2, 8]]})
-                W.upsert_location(overlap, sync_world=True)
-                set_game_time(game_time() + GameDuration.of(seconds=elapsed))
+                set_game_time(game_time() + GameDuration.of(seconds=2))
                 E.advance_all_journeys()
                 self.assertIsNone(E.get_journey(name))
                 self.assertEqual(C.get_character_pos(name), before)
-                self.assertEqual(C.get_character_current_location(name), target["location_id"])
-                self.assertEqual(self.owner.runs[journey["execution_ref"]]["status"], "cancelled")
-                self.assertEqual(self.owner.runs[journey["execution_ref"]]["reason"],
-                                 "approach_location_boundary_changed")
-                receipt = C.get_character_profile(name)["last_journey_result"]
-                self.assertEqual((receipt["journey_id"], receipt["execution_kind"], receipt["execution_ref"]),
-                                 (journey["journey_id"], "path_scenario", journey["execution_ref"]))
-                self.assertEqual(receipt["status"], "cancelled")
-                E.advance_all_journeys()
-                self.assertEqual(C.get_character_pos(name), before)
-                self.assertTrue(W.delete_location(overlap["id"]))
-                ref, jid = journey["execution_ref"] + "-retry", journey["journey_id"] + "-retry"
-                self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
-                retry, reason = E.start_approach_journey(name, target, "actor",
-                                execution_kind="path_scenario", execution_ref=ref, journey_id=jid)
-                self.assertEqual(reason, "")
-                self.assertIsNotNone(retry)
-                set_game_time(game_time() + GameDuration.of(minutes=1))
-                E.advance_all_journeys()
-                self.assertEqual(self.owner.runs[ref]["status"], "arrived")
-                self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (8, 7))
+                pos = C.get_character_pos(name)
+                self.assertNotEqual((pos["x"], pos["z"]), (4, 5))  # the goal
+                self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"],
+                                 "unknown_execution_owner")
 
-    def seat_actor(self, name):
-        from app.core import animation_clips as A
-        clip_dir = ROOT / "clips"
-        clip_dir.mkdir(exist_ok=True)
-        (clip_dir / "path-rise.fbx").write_bytes(b"private deterministic exit fixture")
-        A._clear_entries_cache()
-        (clip_dir / "path-rise.json").write_text(json.dumps({
-            "kind": "path-rise", "duration_s": 2, "loop": False,
-            "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0, 1], "ref_height_m": 1.7}}}))
-        previous = A.world_transitions()
-        A._write_world_transitions([{"from": "sitting", "to": "walking", "kind": "path-rise", "accel": 0}])
-        self.addCleanup(A._write_world_transitions, previous)
-        profile = C.get_character_profile(name)
-        profile["height"] = 170
-        # Seed an already persisted historical seat to exercise departure
-        # geometry, not the removed raw-pose furniture allocation API.
-        loc, room = places.where(name, profile=profile)
-        place = next(p for p in places.room_places(loc, room) if p["id"] == "device/body")
-        C.set_character_pos(name, *place["slots"][0])
-        profile = C.get_character_profile(name)
-        profile.update(height=170, pose_key="sitting",
-                       place={"id": place["id"], "slot": 0, "room_id": room})
-        C.save_character_profile(name, profile)
-
-    def obstruct_departure(self, target):
-        pid = furniture_prop("Unrelated thin exit obstruction", width=.1, depth=.1, height=1)
-        location = W.get_location_by_id(target["location_id"])
-        next(r for r in location["rooms"] if r["id"] == "hall")["layout"]["props"].append(
-            {"id": "exit-obstruction", "prop_id": pid, "at": [8, 5.6]})
-        W.upsert_location(location, sync_world=True)
-
-    def test_seat_exit_crossing_unrelated_furniture_blocks_without_position_write(self):
-        name, target, _ = fixture()
-        self.seat_actor(name)
-        before = C.get_character_pos(name)
-        self.obstruct_departure(target)
-        # Obstruction grown to z=5.95: endpoint (8,6) is free, but the
-        # measured bridge (8,5)->(8,6) crosses its entire narrow footprint.
-        result = N.plan_approach(name, target, "actor")
-        self.assertEqual((result["status"], result["reason"], result["waypoints"]),
-                         ("blocked", "departure_not_walkable", []))
-        journey, reason = E.start_approach_journey(name, target, "actor",
-                            execution_kind="path_scenario", execution_ref="blocked-seat")
-        self.assertIsNone(journey)
-        self.assertEqual(reason, "departure_not_walkable")
-        self.assertEqual(C.get_character_pos(name), before)
-        self.assertIsNone(E.get_journey(name))
-
-    def test_new_seat_exit_obstruction_cancels_before_large_tick(self):
-        name, target, _ = fixture()
-        self.seat_actor(name)
-        before = C.get_character_pos(name)
-        ref, jid = "blocked-after-start-" + name, "seat-journey-" + name
-        self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
-        journey, reason = E.start_approach_journey(name, target, "actor",
-                            execution_kind="path_scenario", execution_ref=ref, journey_id=jid)
-        self.assertFalse(reason)
-        self.assertIsNotNone(journey)
-        self.obstruct_departure(target)
-        set_game_time(game_time() + GameDuration.of(minutes=1))
-        E.advance_all_journeys()
-        self.assertIsNone(E.get_journey(name))
-        self.assertEqual(C.get_character_pos(name), before)
-        self.assertEqual(self.owner.runs[ref]["reason"], "departure_not_walkable")
-
-    def test_positions_freeze_arrival_and_foreign_cancel(self):
-        name, target, plan, j = self.start()
-        origin = C.get_character_pos(name)
-        E.cancel_journey(name, journey_id=j["journey_id"], execution_kind="party_intent", execution_ref=j["execution_ref"])
-        self.assertIsNotNone(E.get_journey(name))
-        set_game_time(game_time() + GameDuration.of(seconds=2))
-        E.advance_all_journeys()
-        midway = C.get_character_pos(name)
-        self.assertNotEqual(midway, origin)
-        self.assertNotEqual((midway["x"], midway["z"]), (plan["entry_anchor"]["x"], plan["entry_anchor"]["z"]))
-        self.assertLess(math.dist((midway["x"], midway["z"]), (8, 7)), math.dist((origin["x"], origin["z"]), (8, 7)))
-        W.set_world_frozen(True)
-        E.advance_all_journeys()
-        self.assertEqual(C.get_character_pos(name), midway)
-        W.set_world_frozen(False)
-        set_game_time(game_time() + GameDuration.of(minutes=1))
-        E.advance_all_journeys()
-        self.assertIsNone(E.get_journey(name))
-        self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (8, 7))
-        self.assertEqual(C.get_character_current_room(name), "hall")
-        self.assertEqual(self.owner.runs[j["execution_ref"]]["status"], "arrived")
-
-    def test_accepted_cancel_prevents_halfway_and_arrival_position_commit(self):
-        # The real cancel removes the journey under the profile lock, then its
-        # callback blocks on the tick's owner guard. Resume that exact window:
-        # no part of the cancelled snapshot may commit another position.
-        for elapsed in (2, 60):
-            with self.subTest(arrival=elapsed == 60):
-                name, _, _, journey = self.start()
-                before = C.get_character_pos(name)
-                set_game_time(game_time() + GameDuration.of(seconds=elapsed))
-                tick_ready, release_tick, cancel_removed = Event(), Event(), Event()
-                self.owner.cancellation_started = cancel_removed
-                errors = []
-                original = N._plan_approach
-
-                def paused_plan(*args, **kwargs):
-                    result = original(*args, **kwargs)
-                    tick_ready.set()
-                    if not release_tick.wait(10):
-                        raise AssertionError("cancel-versus-tick release timed out")
-                    return result
-
-                def run(fn):
-                    try:
-                        fn()
-                    except BaseException as exc:
-                        errors.append(exc)
-
-                tick = Thread(target=lambda: run(E.advance_all_journeys))
-                cancel = Thread(target=lambda: run(lambda: E.cancel_journey(
-                    name, journey_id=journey["journey_id"], execution_kind="path_scenario",
-                    execution_ref=journey["execution_ref"], reason="race_cancel")))
-                with patch.object(N, "_plan_approach", side_effect=paused_plan):
-                    try:
-                        tick.start()
-                        self.assertTrue(tick_ready.wait(10), "real tick must reach completed geometry planning")
-                        cancel.start()
-                        self.assertTrue(cancel_removed.wait(10), "real cancellation must remove journey before its callback")
-                        self.assertNotIn("journey", C.get_character_profile(name))
-                        self.assertEqual(C.get_character_pos(name), before)
-                    finally:
-                        release_tick.set()
-                        tick.join(10)
-                        if cancel.ident is not None:
-                            cancel.join(10)
-                        self.owner.cancellation_started = None
-                self.assertFalse(tick.is_alive())
-                self.assertFalse(cancel.is_alive())
-                self.assertEqual(errors, [])
-                self.assertEqual(C.get_character_pos(name), before)
-                self.assertNotIn("journey", C.get_character_profile(name))
-                self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"], "race_cancel")
-                self.assertEqual(self.owner.runs[journey["execution_ref"]]["status"], "cancelled")
-
-    def test_existing_measured_seat_exit_precedes_polyline_without_early_move(self):
-        name, target, _ = fixture()
-        self.seat_actor(name)
-        seat = C.get_character_pos(name)
-        self.assertEqual((seat["x"], seat["z"]), (8, 5))
-        plan = N.plan_approach(name, target, "actor")
-        self.assertEqual(plan["status"], "ok", plan)
-        self.assertEqual(plan["waypoints"][0], [8, 6])
-        ref, jid = "seat-" + name, "seat-journey-" + name
-        self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
-        journey, reason = E.start_approach_journey(name, target, "actor", execution_kind="path_scenario",
-                                                 execution_ref=ref, journey_id=jid)
-        self.assertFalse(reason)
-        self.assertEqual(journey["waypoints"][:2], [[8, 5, 0], [8, 6, 0]])
-        self.assertEqual(C.get_character_pos(name), seat)
-        set_game_time(game_time() + GameDuration.of(seconds=1))
-        E.advance_all_journeys()
-        self.assertEqual(C.get_character_pos(name), seat)
-        set_game_time(game_time() + GameDuration.of(seconds=1))
-        E.advance_all_journeys()
-        self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (8, 6))
-        set_game_time(game_time() + GameDuration.of(seconds=1))
-        E.advance_all_journeys()
-        self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (8, 7))
-        self.assertEqual(self.owner.runs[ref]["status"], "arrived")
-
-    def test_no_prop_owner_is_activated_and_existing_journey_cannot_be_replaced(self):
-        name, target, _, journey = self.start()
-        result, reason = E.start_approach_journey(name, target, "actor",
-                                                execution_kind="prop_action", execution_ref="not-a-run")
-        self.assertIsNone(result)
-        self.assertEqual(reason, "unknown_execution_owner")
-        result, reason = E.start_approach_journey(name, target, "actor",
-                                                execution_kind="path_scenario", execution_ref="other")
-        self.assertIsNone(result)
-        self.assertEqual(reason, "journey_already_active")
-        for kind, ref in (("", ""), ("path_scenario", "")):
-            result, reason = E.start_approach_journey(name, {}, "actor",
-                                                    execution_kind=kind, execution_ref=ref)
-            self.assertIsNone(result)
-            self.assertEqual(reason, "invalid_execution_owner")
-        self.assertEqual(E.get_journey(name), journey)
-
-    def test_freeze_excludes_real_elapsed_time_without_catchup(self):
-        clock = [datetime(2040, 1, 1, tzinfo=timezone.utc)]
-        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]), real_motion_clock():
-            set_game_factor(1)
-            set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
-            name, _, _, j = self.start()
-            clock[0] += timedelta(seconds=2)
-            E.advance_all_journeys()
-            midway = C.get_character_pos(name)
-            frozen_at = game_time()
-            W.set_world_frozen(True)
-            clock[0] += timedelta(hours=5)
-            E.advance_all_journeys()
-            self.assertEqual(game_time(), frozen_at)
-            self.assertEqual(C.get_character_pos(name), midway)
-            W.set_world_frozen(False)
-            self.assertEqual(game_time(), frozen_at)
-            clock[0] += timedelta(seconds=1)
-            E.advance_all_journeys()
-            self.assertNotEqual(C.get_character_pos(name), midway)
-            self.assertEqual(self.owner.runs[j["execution_ref"]]["status"], "approaching")
-            set_game_factor(0)
-
-    def test_changed_room_geometry_cancels_before_large_tick_crosses_blocker(self):
-        name, target, _, j = self.start()
-        before = C.get_character_pos(name)
-        blocker = furniture_prop("New obstruction", width=1, depth=2, height=2)
-        location = W.get_location_by_id(target["location_id"])
-        next(r for r in location["rooms"] if r["id"] == "hall")["layout"]["props"].append(
-            {"id": "barrier", "prop_id": blocker, "at": [4, 5.86]})
-        W.upsert_location(location, sync_world=True)
-        set_game_time(game_time() + GameDuration.of(hours=1))
-        E.advance_all_journeys()
-        self.assertIsNone(E.get_journey(name))
-        self.assertEqual(C.get_character_pos(name), before)
-        self.assertEqual(self.owner.runs[j["execution_ref"]]["reason"], "approach_route_changed")
-
-    def test_manual_move_cancels_only_owned_run_and_stale_tick_does_not_restore(self):
-        name, _, _, j = self.start()
-        cached = next(row for row in C.list_active_journeys() if row["name"] == name)
-        C.set_character_pos(name, 2, 3)
-        self.assertEqual(self.owner.runs[j["execution_ref"]]["status"], "cancelled")
-        with patch.object(C, "list_active_journeys", return_value=[cached]):
-            E.advance_all_journeys()
-        self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (2, 3))
-        self.assertIsNone(E.get_journey(name))
-
-    def test_empty_owned_polyline_is_cancelled_without_origin_fallback(self):
-        name, _, _, _ = self.start()
-        before = C.get_character_pos(name)
-        profile = C.get_character_profile(name)
-        profile["journey"]["waypoints"] = []
-        C.save_character_profile(name, profile)
-        E.advance_all_journeys()
-        self.assertNotIn("journey", C.get_character_profile(name))
-        self.assertEqual(C.get_character_pos(name), before)
-        self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"], "invalid_journey_geometry")
-
-    def test_unknown_owner_cancels_visibly_without_reaching_goal(self):
-        name, _, _, j = self.start()
-        before = C.get_character_pos(name)
-        profile = C.get_character_profile(name)
-        profile["journey"]["execution_kind"] = "missing_owner"
-        C.save_character_profile(name, profile)
-        E.advance_all_journeys()
-        self.assertIsNone(E.get_journey(name))
-        self.assertEqual(C.get_character_pos(name), before)
-        self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"], "unknown_execution_owner")
-
-    def test_party_provider_and_separate_owner_and_ordinary_journey_coexist(self):
-        name, home, _, j = self.start()
+    def test_party_provider_and_ordinary_journey_coexist(self):
+        _name, home, _ = fixture()
         party_provider = hooks.get_provider("journey_execution_context")
         away = W.add_location("Scenario destination", "Throwaway destination", rooms=[{"id": "hall", "name": "Hall"}])
         away.update(pos_x=100, pos_z=0, map3d={"plan_width_m": 10,
@@ -753,110 +471,22 @@ class Ownership(unittest.TestCase):
         profile["journey"].pop("execution_kind")
         C.save_character_profile(lead, profile)
         self.assertEqual(E.get_journey(lead)["execution_kind"], "party_intent")
-        E.cancel_journey(name, journey_id=party_j["journey_id"], execution_ref=party_j["execution_ref"], execution_kind="party_intent")
-        self.assertIsNotNone(E.get_journey(name))
+        # The party selectors never remove an ordinary journey.
+        E.cancel_journey(ordinary, journey_id=party_j["journey_id"], execution_ref=party_j["execution_ref"],
+                         execution_kind="party_intent")
+        self.assertIsNotNone(E.get_journey(ordinary))
         set_game_time(game_time() + GameDuration.of(seconds=2))
         E.advance_all_journeys()
-        self.assertGreater(C.get_character_pos(name)["x"], 1)
         self.assertIsNotNone(E.get_journey(lead))
         set_game_time(game_time() + GameDuration.of(hours=1))
         E.advance_all_journeys()
         hooks.emit("world_tick")
-        self.assertEqual(self.owner.runs[j["execution_ref"]]["status"], "arrived")
         self.assertEqual(I.get_intent(intent["id"])["status"], "done")
         self.assertEqual(C.get_character_current_location(ordinary), away["id"])
 
 
-def observe_movement():
-    """Run actual Core writes/ticks and render their recorded route, not a mock."""
-    name, target, _ = fixture(yaw=90, support=True, floor_y=.4)
-    owner = ScenarioOwner()
-    E.register_execution_owner("path_observation", guard=owner.guard, validate_arrival=owner.validate,
-                               arrived=owner.arrived, cancelled=owner.cancelled)
-    ref, jid = "observed-run", "observed-journey"
-    owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
-    plan = N.plan_approach(name, target, "actor")
-    assert plan["status"] == "ok", plan
-    clock = [datetime(2040, 1, 1, tzinfo=timezone.utc)]
-    snapshots = []
-    with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]), real_motion_clock():
-        set_game_factor(1)
-        set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
-        journey, reason = E.start_approach_journey(name, target, "actor",
-                            execution_kind="path_observation", execution_ref=ref, journey_id=jid)
-        assert journey and not reason, reason
-
-        def record(label):
-            pos = C.get_character_pos(name)
-            snapshots.append(dict(label=label, game=game_time().canonical(), x=pos["x"], z=pos["z"],
-                                  status=owner.runs[ref]["status"], frozen=W.is_world_frozen()))
-
-        record("departure")
-        for i in range(2):
-            clock[0] += timedelta(seconds=1)
-            E.advance_all_journeys()
-            record(f"walking {i + 1}s")
-        W.set_world_frozen(True)
-        frozen = C.get_character_pos(name)
-        clock[0] += timedelta(minutes=30)
-        E.advance_all_journeys()
-        assert C.get_character_pos(name) == frozen
-        record("after 30 real minutes frozen")
-        W.set_world_frozen(False)
-        for i in range(60):
-            clock[0] += timedelta(seconds=1)
-            E.advance_all_journeys()
-            record(f"resumed {i + 1}s")
-            if not E.get_journey(name):
-                break
-        assert owner.runs[ref]["status"] == "arrived", owner.runs[ref]
-        assert (snapshots[-1]["x"], snapshots[-1]["z"]) == (plan["access"]["x"], plan["access"]["z"])
-        set_game_factor(0)
-    poly, boxes, zones = S.room_geometry(target["location_id"], target["room_id"])
-    data = dict(actor=name, target=target, plan=plan, journey=journey, polygon=poly,
-                furniture=[S.footprint_corners(b) for b in boxes],
-                grown=[S.footprint_corners(b, .3) for b in boxes], zones=zones, snapshots=snapshots)
-    assert_no_external_work()
-    (ROOT / "movement.json").write_text(json.dumps(data, indent=2))
-    # Every displayed position was read back from real character_state writes.
-    # The slider only selects records; this HTML does not simulate the executor.
-    html = """<!doctype html><meta charset="utf-8"><title>Recorded indoor approach</title>
-<style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;background:#fafafa;color:#222}
-svg{width:100%;height:600px;border:1px solid #777}pre{white-space:pre-wrap}input{width:100%}</style>
-<h1>Recorded authoritative indoor approach</h1>
-<p>Black: room wall. Grey: furniture. Dashed red: grown body footprint.
-Blue: actual stored polyline. Green: floor access. Purple: body anchor (not the walking goal).
-Orange: real persisted figure position. A door never grants an outside-room shortcut.</p>
-<svg id="view" viewBox="-1 -1 14 12" xmlns="http://www.w3.org/2000/svg"></svg>
-<label for="frame">Recorded movement / Freeze / arrival</label><input id="frame" type="range" min="0" value="0">
-<pre id="record"></pre><p>Source: movement.json; this viewer selects observed records, not interpolated fake positions.</p>
-<script>const d=DATA;const svg=document.querySelector('#view'), slider=document.querySelector('#frame');
-const ns='http://www.w3.org/2000/svg';function shape(tag, attrs){const e=document.createElementNS(ns,tag);
-for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);svg.appendChild(e);return e;}
-const points=p=>p.map(v=>v[0]+','+v[1]).join(' ');
-shape('polygon',{points:points(d.polygon),fill:'white',stroke:'black','stroke-width':.05});
-for(const p of d.zones)shape('polygon',{points:points(p),fill:'#ffe5a8',stroke:'#af7600','stroke-width':.02});
-for(const p of d.furniture)shape('polygon',{points:points(p),fill:'#bbb',stroke:'#555','stroke-width':.03});
-for(const p of d.grown)shape('polygon',{points:points(p),fill:'none',stroke:'#b22','stroke-width':.02,'stroke-dasharray':'.1 .08'});
-shape('polyline',{points:points(d.journey.waypoints),fill:'none',stroke:'#1674b6','stroke-width':.06});
-shape('circle',{cx:d.plan.access.x,cy:d.plan.access.z,r:.14,fill:'green'});
-shape('circle',{cx:d.plan.entry_anchor.x,cy:d.plan.entry_anchor.z,r:.14,fill:'purple'});
-const figure=shape('circle',{r:.3,fill:'#ed9312','fill-opacity':.8,stroke:'#833','stroke-width':.025});
-slider.max=d.snapshots.length-1;function show(){const s=d.snapshots[Number(slider.value)];
-figure.setAttribute('cx',s.x);figure.setAttribute('cy',s.z);document.querySelector('#record').textContent=
-JSON.stringify({frame:Number(slider.value),...s,access_y:d.plan.access.y,body_y:d.plan.entry_anchor.y},null,2);}
-slider.addEventListener('input',show);show();</script>"""
-    (ROOT / "route.html").write_text(html.replace("DATA", json.dumps(data)))
-    print(f"Recorded movement: {ROOT / 'movement.json'}")
-    print(f"Visual route: {(ROOT / 'route.html').as_uri()}")
-
-
 if __name__ == "__main__":
-    if ARGS.observe_dir:
-        observe_movement()
-        assert_no_external_work()
-    else:
-        result = unittest.main(argv=[sys.argv[0], *REST], exit=False).result
-        assert_no_external_work()
-        if not result.wasSuccessful():
-            sys.exit(1)
+    result = unittest.main(argv=[sys.argv[0], *REST], exit=False).result
+    assert_no_external_work()
+    if not result.wasSuccessful():
+        sys.exit(1)

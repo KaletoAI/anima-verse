@@ -30,11 +30,17 @@ From anchor (8,5), the 1.30m ring touches the closed keepout; 1.35m
 is the first free ring. Angle zero wins: direct goal (9.35,5).
 The old planner at explicit commit 5d34a4e5 refuses all three scenarios
 (a), (b .2m), (c), with access_not_walkable. Earlier legs must still
-avoid full .3m keepouts. Removing either final-space revalidation or its
-split would cancel the exercised mid-final-leg journey.
+avoid full .3m keepouts. Since plan E3 Task 7 the server walks no journey:
+the client walks the plan, the run reaches its access at its estimated eta
+(motion clock) and its checks (_validate) must accept the relaxed access
+inside the own keepout there (d, j). (c) from (10,5) to (9.35,5):
+L = .65, eta = issued + .65/1.4 + .5 = issued + .964286, a direct entry
+lasts 0 s, so one second later the run is active on (8,5).
 Additional hand-derived guards: wall margin is .35m; door growth remains
 .30m. Step-out starts (8.3,5)->(8.85,5) as in the reused step-out smoke.
-A new 1m table centred at access encloses that endpoint and must cancel it.
+A new 1m table centred at access encloses that endpoint and the bridge to
+the seat: at its arrival (eta) the run's entry check finds the bridge
+blocked and fails it (entry_transition_blocked).
 The imported fixture calls paths.init(tempdir) before world-DB imports.
 """
 import json
@@ -98,35 +104,33 @@ class Relax(unittest.TestCase):
         self.assertEqual(plan['waypoints'][-1], [9.35, 5])
         result = S.request(name, target)
         self.assertEqual(result['status'], 'approaching', result)
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=30))
-        F.E.advance_all_journeys()
+        run = S.R.get(result['execution_id'])
+        self.assertAlmostEqual(run['data']['eta_s'][name] - run['data']['issued_s'], .964286, places=3)
+        F.elapse(1)
+        A.advance(F.game_time())
         run = S.R.get(result['execution_id'])
         self.assertEqual(run['status'], 'active', run)
-        profile = F.C.get_character_profile(name)
-        self.assertFalse(profile.get('prop_action_entry'))
         pos = F.C.get_character_pos(name)
         self.assertEqual((pos['x'], pos['z']), (8, 5))
 
-    def test_d_final_leg_revalidation(self):
+    def arrive_at_eta(self, name, eid):
+        """One full round just before the run's eta (still walking), then one
+        at it: the arrival at the relaxed access must pass the run's checks."""
+        eta = S.R.get(eid)['data']['eta_s'][name]
+        F.MOTION[0] = eta - .05
+        A.advance(F.game_time())
+        self.assertEqual(S.R.get(eid)['phase'], '', S.R.get(eid)['reason'])
+        F.MOTION[0] = eta
+        A.advance(F.game_time())
+        self.assertEqual(S.R.get(eid)['phase'], 'entry', S.R.get(eid)['reason'])
+        self.assertIsNone(F.E.get_journey(name))
+
+    def test_d_relaxed_access_arrival(self):
         name, target = scenario()
-        with patch.object(F.E, 'get_travel_speed_m_s', return_value=.1):
-            result = S.request(name, target)
+        result = S.request(name, target)
         self.assertEqual(result['status'], 'approaching', result)
-        journey = F.E.get_journey(name)
-        duration = journey['waypoints'][-1][2]
-        # The approach starts after a poll lead (travel_engine._approach_start);
-        # count the legs from that start, not from the request.
-        lead = journey['started_at_s'] - F.timeutils.motion_time()
-        F.elapse(lead + int(duration) - 1)
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name))
-        F.E._approach_validation_cache.clear()
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name))
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
-        F.E.advance_all_journeys()
-        self.assertEqual(S.R.get(result['execution_id'])['phase'], 'entry')
+        self.assertAlmostEqual(S.R.get(result['execution_id'])['data']['plans'][name]['access']['z'], 5.6)
+        self.arrive_at_eta(name, result['execution_id'])
 
     def test_e_earlier_legs_full_rules(self):
         name, target = scenario((1, 3, [10, 5]))
@@ -199,9 +203,12 @@ class Relax(unittest.TestCase):
         self.assertEqual(run['data']['plans'][name]['entry_mode'], 'direct', run)
         self.assertEqual(run['data']['plans'][partner]['entry_mode'], 'bridge', run)
         F.set_game_time(F.game_time() + F.GameDuration.of(seconds=30))
-        F.E.advance_all_journeys()
-        self.assertFalse(F.C.get_character_profile(name).get('prop_action_entry'))
-        self.assertTrue(F.C.get_character_profile(partner).get('prop_action_entry'))
+        A.advance(F.game_time())
+        run = S.R.get(result['execution_id'])
+        self.assertEqual(run['phase'], 'entry', run)
+        # The entry each role plays (the profile no longer carries it, plan E3 Task 7).
+        self.assertEqual(run['data']['entries'][name]['duration_s'], 0)
+        self.assertEqual(run['data']['entries'][partner]['kind'], 'run-enter')
         S.tick(3)
         self.assertEqual(S.R.get(result['execution_id'])['status'], 'active')
 
@@ -219,20 +226,11 @@ class Relax(unittest.TestCase):
     def test_j_step_out_then_relaxed_final_leg(self):
         name, target = scenario()
         F.C.set_character_pos(name, 8.3, 5)
-        with patch.object(F.E, 'get_travel_speed_m_s', return_value=.1):
-            result = S.request(name, target)
-        journey = F.E.get_journey(name)
-        self.assertEqual([p[:2] for p in journey['waypoints'][:2]], [[8.3, 5], [8.85, 5]])
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=int(journey['waypoints'][-1][2]) - 1))
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name))
-        F.E._approach_validation_cache.clear()
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
-        F.E.advance_all_journeys()
-        self.assertIsNotNone(F.E.get_journey(name))
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=2))
-        F.E.advance_all_journeys()
-        self.assertEqual(S.R.get(result['execution_id'])['phase'], 'entry')
+        result = S.request(name, target)
+        self.assertEqual(result['status'], 'approaching', result)
+        waypoints = S.R.get(result['execution_id'])['data']['plans'][name]['waypoints']
+        self.assertEqual([p[:2] for p in waypoints[:2]], [[8.3, 5], [8.85, 5]])
+        self.arrive_at_eta(name, result['execution_id'])
 
     def test_k_new_final_obstruction_cancels(self):
         name, target = scenario()
@@ -242,9 +240,10 @@ class Relax(unittest.TestCase):
         loc['rooms'][0]['layout']['props'].append(dict(id='table', prop_id=table, at=[8, 5.6]))
         F.W.upsert_location(loc, sync_world=True)
         F.set_game_time(F.game_time() + F.GameDuration.of(seconds=30))
-        F.E.advance_all_journeys()
+        A.advance(F.game_time())
         self.assertIsNone(F.E.get_journey(name))
-        self.assertEqual(S.R.get(result['execution_id'])['reason'], 'approach_route_changed')
+        run = S.R.get(result['execution_id'])
+        self.assertEqual((run['status'], run['reason']), ('failed', 'entry_transition_blocked'))
 
 
 class Access(unittest.TestCase):
