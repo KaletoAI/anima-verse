@@ -3429,8 +3429,9 @@ def _furnish_skipped(skipped: List[Dict[str, Any]],
 
 
 @_tool("furnish_rooms", True, "furnish_rooms{location_id, kit}",
-       "furnish the empty rooms of a place from a furniture kit (rooms need room_type "
-       "and a floor plan) — read_manual layout first")
+       "furnish the empty rooms of a place from a furniture kit (whole kits of library "
+       "props; rooms need room_type and a floor plan — use place_room_prop for a single "
+       "prop) — read_manual layout first")
 def _furnish_rooms(step: _Step, args: Dict[str, Any]) -> str:
     from app.core import furniture_kits
     from app.core.furnish_kit_building import furnish_location
@@ -3508,6 +3509,222 @@ def _furnish_rooms(step: _Step, args: Dict[str, Any]) -> str:
                 + (f"; missing roles: {missing}" if missing else "")
                 + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
         line = _cut(line)
+        step.complete(w, line)
+    return line
+
+
+#: Maximum manual prop placements stored per room (world_ops._sanitize_props).
+_MAX_ROOM_PROPS = 100
+
+
+def _room_for_prop(loc: Dict[str, Any], room_arg: str) -> Dict[str, Any]:
+    """Resolve a regular room of ``loc`` by id or exact name; refuse ground/corridor
+    rooms and missing rooms with a hint."""
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
+    lid = str(loc.get("id") or "")
+    if room_arg == GROUND_ROOM_ID or is_floor_room(room_arg):
+        raise ToolRefusal(
+            f"room {room_arg!r} is the ground or a storey corridor — place_room_prop "
+            "places props in a regular room with a floor plan (use place_world_prop "
+            "for open ground)")
+    regular = [r for r in (loc.get("rooms") or [])
+               if isinstance(r, dict)
+               and str(r.get("id") or "") != GROUND_ROOM_ID
+               and not is_floor_room(str(r.get("id") or ""))]
+    by_id = next((r for r in regular if r.get("id") == room_arg), None)
+    if by_id is not None:
+        return by_id
+    named = [r for r in regular if str(r.get("name") or "") == room_arg]
+    if len(named) == 1:
+        return named[0]
+    if named:
+        raise ToolRefusal(
+            f"{len(named)} rooms in location {lid} are named {room_arg!r} — use the id: "
+            + ", ".join(str(r.get("id")) for r in named))
+    ids = ", ".join(f'{r.get("id")} "{r.get("name") or ""}"' for r in regular)
+    raise ToolRefusal(f"location {lid} has no room {room_arg!r} — rooms: {ids or 'none'}")
+
+
+def _check_room_prop_fit(room: Dict[str, Any], prop: Dict[str, Any],
+                         x: float, z: float, yaw: float,
+                         offset_y: Optional[float]) -> List[Dict[str, Any]]:
+    """Verify the room has a floor plan, is below the 100-prop cap, keeps the
+    prop's turned footprint inside w×d and does not collide with an existing
+    non-underlay placement. Returns the room's current placements list."""
+    from app.core import furnish_geometry as fg
+    from app.core.furnish_solver import UNDERLAY_MAX_H
+    from app.core.props import MOUNT_KEY, get_prop
+    rid = str(room.get("id") or "")
+    rname = str(room.get("name") or "")
+    lay = room.get("layout")
+    if not isinstance(lay, dict) or not all(k in lay for k in ("x", "y", "w", "d")):
+        raise ToolRefusal(f'room {rid} "{rname}" has no floor plan — set_room_layout first')
+    try:
+        w = float(lay["w"])
+        d = float(lay["d"])
+    except (TypeError, ValueError):
+        raise ToolRefusal(f'room {rid} "{rname}" has no usable floor plan — set_room_layout first')
+    if w <= 0 or d <= 0:
+        raise ToolRefusal(f'room {rid} "{rname}" has no usable floor plan — set_room_layout first')
+    existing = [p for p in (lay.get("props") or []) if isinstance(p, dict)]
+    if len(existing) >= _MAX_ROOM_PROPS:
+        raise ToolRefusal(f'room {rid} "{rname}" already holds its limit of '
+                          f"{_MAX_ROOM_PROPS} prop placements — no more can be placed")
+    pid = str(prop.get("id") or "")
+    pname = str(prop.get("name") or pid)
+    pw = max(0.0, float(prop.get("width_m") or 0.0))
+    pd = max(0.0, float(prop.get("depth_m") or 0.0))
+    ph = max(0.0, float(prop.get("height_m") or 0.0))
+    ex, ez = fg.aabb_extents(pw, pd, yaw)
+    hx, hz = ex / 2.0, ez / 2.0
+    tol = 1e-6
+    if ex > w + tol or ez > d + tol:
+        raise ToolRefusal(
+            f'prop {pid} "{pname}" ({_g(round(ex, 2))}×{_g(round(ez, 2))} m at yaw '
+            f'{_g(yaw + 0.0)}) does not fit in room {rid} "{rname}" '
+            f"({_g(w)}×{_g(d)} m)")
+    if x < hx - tol or x > w - hx + tol or z < hz - tol or z > d - hz + tol:
+        raise ToolRefusal(
+            f'prop {pid} "{pname}" at ({_g(x + 0.0)}, {_g(z + 0.0)}) reaches outside '
+            f'room {rid} "{rname}" ({_g(w)}×{_g(d)} m) — allowed '
+            f"x: {_g(round(hx, 2))}…{_g(round(w - hx, 2))}, "
+            f"z: {_g(round(hz, 2))}…{_g(round(d - hz, 2))}")
+    new_mount = str(prop.get(MOUNT_KEY) or "floor").strip().lower() or "floor"
+    new_underlay = new_mount == "floor" and ph <= UNDERLAY_MAX_H
+    if not new_underlay and pw > 0 and pd > 0:
+        new_corners = fg.rect_corners(x, z, pw, pd, yaw)
+        y0 = float(prop.get("ground_offset_m") or 0.0) + (0.0 if offset_y is None else offset_y)
+        y1 = y0 + ph
+        for other in existing:
+            if other.get("on"):
+                continue
+            eat = other.get("at")
+            if not isinstance(eat, (list, tuple)) or len(eat) != 2:
+                continue
+            opid = str(other.get("prop_id") or "")
+            oprop = get_prop(opid, read_only=True) if opid else None
+            if not oprop:
+                continue
+            ow = max(0.0, float(oprop.get("width_m") or 0.0))
+            od = max(0.0, float(oprop.get("depth_m") or 0.0))
+            oh = max(0.0, float(oprop.get("height_m") or 0.0))
+            if ow <= 0 or od <= 0:
+                continue
+            omount = str(oprop.get(MOUNT_KEY) or "floor").strip().lower() or "floor"
+            if omount == "floor" and oh <= UNDERLAY_MAX_H:
+                continue
+            try:
+                ox, oz = float(eat[0]), float(eat[1])
+                oyaw = float(other.get("yaw") or 0.0)
+                ooff = float(other.get("offset_y") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            oy0 = float(oprop.get("ground_offset_m") or 0.0) + ooff
+            oy1 = oy0 + oh
+            if not fg.spans_overlap(y0, y1, oy0, oy1):
+                continue
+            ocorners = fg.rect_corners(ox, oz, ow, od, oyaw)
+            if fg.rects_overlap(new_corners, ocorners):
+                oname = str(oprop.get("name") or opid)
+                oid = str(other.get("id") or "")
+                raise ToolRefusal(
+                    f'prop {pid} "{pname}" at ({_g(x + 0.0)}, {_g(z + 0.0)}) overlaps '
+                    f'existing placement {oid} {opid} "{oname}" at '
+                    f"({_g(ox + 0.0)}, {_g(oz + 0.0)})")
+    return existing
+
+
+@_tool("place_room_prop", True,
+       "place_room_prop{location_id, room_id, prop_id, x, z, yaw?, offset_y?, label?}",
+       "stand ONE library prop in a room of a place (metres from the room's min corner) "
+       "— a statue, a rug, a bench; find_props lists them")
+def _place_room_prop(step: _Step, args: Dict[str, Any]) -> str:
+    from app.core.places_migration import new_place_id
+    from app.core.props import get_prop, read_sidecar, safe_prop_id
+    from app.models.world import append_room_props, get_location_by_id, world_write_lock
+    _only_keys(args, {"location_id", "room_id", "prop_id", "x", "z", "yaw",
+                      "offset_y", "label"}, "place_room_prop")
+    loc = _resolve_location(_str(args, "location_id", required=True))
+    lid = str(loc["id"])
+    room_arg = _str(args, "room_id", required=True)
+    prop_id = _str(args, "prop_id", required=True)
+    x = _coord(args, "x", required=True)
+    z = _coord(args, "z", required=True)
+    yaw_arg = _num(args, "yaw")
+    offset_y = _num(args, "offset_y")
+    label = _str(args, "label")
+    if offset_y is not None and (offset_y < -5.0 or offset_y > 5.0):
+        raise ToolRefusal("'offset_y' must be between -5 and 5 metres")
+    if label is not None and len(label) > 60:
+        raise ToolRefusal("'label' must be at most 60 characters")
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid, read_only=True) if pid and pid == prop_id else {}
+    if not meta:
+        raise ToolRefusal(f"unknown prop {_shown(prop_id)} — find_props lists the props")
+    if meta.get("quest_run"):
+        raise ToolRefusal(f"prop {_shown(prop_id)} belongs to a running quest — find_props lists the props")
+    prop = get_prop(pid, read_only=True)
+    if not prop:
+        raise ToolRefusal(f"unknown prop {_shown(prop_id)} — find_props lists the props")
+    yaw_val = 0.0 if yaw_arg is None else float(yaw_arg)
+    # Cheap pre-checks before the backup: a refused first write copies nothing.
+    room = _room_for_prop(loc, room_arg)
+    _check_room_prop_fit(room, prop, x, z, yaw_val, offset_y)
+    step.prepare()
+    with world_write_lock:
+        cur = get_location_by_id(lid)
+        if cur is None:
+            raise ToolRefusal(f"no location {lid!r} — use find_locations")
+        room = _room_for_prop(cur, room_arg)
+        rid = str(room["id"])
+        rname = str(room.get("name") or "")
+        existing = _check_room_prop_fit(room, prop, x, z, yaw_val, offset_y)
+        existing_ids = {str(p.get("id") or "") for p in existing}
+        place_id = new_place_id()
+        while place_id in existing_ids:
+            place_id = new_place_id()
+        entry: Dict[str, Any] = {
+            "id": place_id,
+            "prop_id": pid,
+            "at": [x, z],
+            "yaw": yaw_val,
+        }
+        if offset_y is not None:
+            entry["offset_y"] = offset_y
+        if label:
+            entry["label"] = label
+        before = copy.deepcopy(cur)
+        step.begin("location", lid, {"op": "restore_location", "id": lid,
+                                     "before": before})
+
+        def reconcile():
+            b, w = wu.diff_keys(before, get_location_by_id(lid))
+            if not b:
+                return None
+            return lid, {"op": "restore_location", "id": lid, "before": b}, w
+
+        with step.writing(reconcile):
+            if not append_room_props(lid, rid, [entry]):
+                raise ValueError(f"room {rid} did not accept prop {pid}")
+        after = get_location_by_id(lid) or {}
+        b, w = wu.diff_keys(before, after)
+        if not b:
+            msg = f"prop {pid} was not stored in room {rid}"
+            step.complete(None, f"error: {msg}", kind="refused")
+            raise ToolRefusal(msg)
+        step.attach(lid, {"op": "restore_location", "id": lid, "before": b},
+                    before=b)
+        stored_room = next((r for r in after.get("rooms") or []
+                            if isinstance(r, dict) and r.get("id") == rid), {})
+        stored_props = ((stored_room.get("layout") or {}).get("props")) or []
+        stored = next((p for p in reversed(stored_props)
+                       if isinstance(p, dict) and p.get("id") == place_id), None)
+        sx, sz = (stored or entry)["at"]
+        syaw = float((stored or entry).get("yaw") or 0.0)
+        pname = str(prop.get("name") or pid)
+        line = (f'placed prop {pid} "{_short(pname, 60)}" in room {rid} '
+                f'"{_short(rname, 60)}" of {lid} at ({_g(sx + 0.0)}, {_g(sz + 0.0)}) '
+                f"yaw {_g(syaw + 0.0)}")
         step.complete(w, line)
     return line
 
@@ -4180,8 +4397,10 @@ def _prop_line(rec: Dict[str, Any]) -> str:
 
 
 @_tool("find_props", False, "find_props{query?, category?, tag?, mount?}",
-       "props of the library — id, size in metres, mount, tags and the model URL that "
-       "scatter, along rows and place_world_prop take")
+       "3D props of the library (furniture, statues, rugs, wall art, lamps, plants) — "
+       "id, size in metres, mount, tags and model URL for furnish_rooms, "
+       "place_room_prop, place_world_prop, scatter and along rows; if a needed prop is "
+       "missing, name it under left open instead of creating an item")
 def _find_props(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.props import MOUNT_KEY, MOUNT_KINDS, list_props
     _only_keys(args, {"query", "category", "tag", "mount"}, "find_props")
@@ -4252,8 +4471,9 @@ def _world_prop_warnings(x: float, z: float) -> List[str]:
 
 
 @_tool("place_world_prop", True, "place_world_prop{prop_id, x, z, yaw?, offset_y?, variant?}",
-       "stand ONE library prop on open ground outside any place (world metres) — a well, "
-       "a signpost, a rock")
+       "stand ONE library prop (3D object from find_props) on open ground outside any "
+       "place (world metres) — a well, a signpost, a rock; for a room use "
+       "place_room_prop")
 def _place_world_prop(step: _Step, args: Dict[str, Any]) -> str:
     from app.models import world_props as wp
     _only_keys(args, set(_WORLD_PROP_ARGS), "place_world_prop")
@@ -4404,7 +4624,9 @@ def _whole_arg(args: Dict[str, Any], key: str, lo: int, hi: int, default: int,
 @_tool("create_item", True,
        "create_item{name, category, description?, prompt_fragment?, image_prompt?, "
        "stackable?, max_stack?, consumable?, transferable?, portable?, rarity?}",
-       "add a NEW non-clothing item to the world catalog (clothing comes with outfits)")
+       "add a NEW non-clothing item: a thing characters can pick up, carry, use or own "
+       "(never furniture or decoration that stands in a room — that is a prop; missing "
+       "props go under left open)")
 def _create_item(step: _Step, args: Dict[str, Any]) -> str:
     """One catalog item through inventory.add_item. The id is minted UP FRONT
     (as place_world_prop does), so the journal row is begun with its exact
@@ -4594,7 +4816,8 @@ def _stored_difficulty(entry: Optional[Dict[str, Any]]) -> int:
 @_tool("add_room_item", True,
        "add_room_item{location_id, room_id, item_id, quantity?, hidden?, "
        "discovery_difficulty?, note?}",
-       "lay a catalog item in a room (more of it when it already lies there)")
+       "lay a pickupable catalog item in a room (more of it when it already lies there "
+       "— never for 3D props like furniture, statues or rugs; use place_room_prop)")
 def _add_room_item(step: _Step, args: Dict[str, Any]) -> str:
     """inventory.add_item_to_room; the journal holds the room's WHOLE items
     value before (the list, or ABSENT when the room had no key), so the

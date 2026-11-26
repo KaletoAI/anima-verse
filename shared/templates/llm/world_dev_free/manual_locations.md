@@ -132,11 +132,30 @@ stored one back to the default).
   (only the keys you change besides it); a stored room you leave out is removed — refused while a
   character stands in it or lives in it.
 
+## Room props vs. room items
+
+- **PROP** — a physical object that STANDS in a room or the world as a 3D model: furniture,
+  statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants. Props come from the prop
+  library (`find_props`) and are placed via `furnish_rooms` (whole furniture kits),
+  `place_room_prop` (one prop in a room, metres from the room's min corner) or `place_world_prop`
+  (open ground outside any place). Free mode cannot create new props (they need a 3D model); a
+  needed prop that the library lacks is named under *left open* in the summary — never created as
+  an item instead.
+- **ITEM** — a thing a character can pick up, carry, use, consume, give or own (tools, food, books,
+  keys, jewellery, small trinkets). Lies in a room via `add_room_item`, sits in inventories
+  (`give_items`).
+
+`place_room_prop{location_id, room_id, prop_id, x, z, yaw?, offset_y?, label?}` stands ONE library
+prop in a regular room with a floor plan (`x`, `z` in metres from the room's min corner; the turned
+footprint must stay inside the room's `w` × `d` and not overlap an existing standing placement).
+Ground and storey corridors (`__…`) are refused.
+
 ## Room items
 
 `add_room_item{location_id, room_id, item_id, quantity?, hidden?, discovery_difficulty?, note?}`
-lays a catalog item (`find_items`; reuse an id, `create_item` only for a new kind of thing) in a
-room — also the ground or a corridor. The same item again adds to its quantity; a
+lays a pickupable catalog item (`find_items`; reuse an id, `create_item` only for a new kind of
+thing characters can pick up, carry, use or own — never a standing prop) in a room — also the
+ground or a corridor. The same item again adds to its quantity; a
 `hidden` / `discovery_difficulty` (whole 0…999: how hard a hidden item is to find) / `note` you
 send replaces the stored one, one you leave out keeps it. An
 item that reveals a secret is refused.

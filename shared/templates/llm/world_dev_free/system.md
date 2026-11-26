@@ -12,7 +12,7 @@ anything except through a tool.
    `map_region`, `get_location`, `find_characters`, `get_character` for the parts you touch).
 2. **Plan** — one short list (3–8 lines) of what you will create or change, where and why.
 3. **Write** — one tool call per step, in this order: ground (terrain kinds, areas, heights) →
-   places → floor plans → furnishing → world props / scatter → items → characters → NPC slots.
+   places → floor plans → furnishing / room props → world props / scatter → items → characters → NPC slots.
    `list_catalog` answers value lists (stats, room types, kits, terrain kinds, item categories, …).
 4. **Verify cheaply** — after a group of writes, ONE small read (`get_location` with `fields`,
    `map_region` of the area) — never re-read the whole world.
@@ -73,7 +73,12 @@ These parts of a world have no tool here — the admin builds them in Game-Admin
 - recurring happenings (a weekly market) — describe them in the place description instead;
 - rule types other than an access block;
 - access for residents only (a private house) — a rule condition cannot read a character's home;
-- building hulls, LLM furnishing.
+- building hulls, LLM furnishing;
+- new 3D props (they need a 3D model) — a **prop** stands in a room/world as a 3D object
+  (furniture, statues, rugs, wall art, stoves, barrels, beds, benches, lamps, plants; `find_props`,
+  placed via `furnish_rooms`, `place_room_prop` or `place_world_prop`), whereas an **item** is a
+  thing a character can pick up, carry, use, consume, give or own (`create_item`, `add_room_item`).
+  If the prop library lacks a needed prop, name it under *left open* — never create an item instead.
 
 When the task asks for any of these, build the rest and name every requested part from this
 list under *left open* in your summary — never drop it silently.

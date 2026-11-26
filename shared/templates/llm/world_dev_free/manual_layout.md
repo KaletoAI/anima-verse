@@ -8,7 +8,7 @@ connect and where one walks onto the plot. Get the room ids first with
 The plan is written as a whole, but only for the rooms it names: a room you omit keeps what it
 had. A room you name gets its layout REPLACED by the one you send (send its whole layout, not a
 patch) — only its geometry: the furniture, figure spots and model anchor other editors placed in
-it (`props`, `markers`, `model_at`, `model_offset_y`) stay, and a plan may not send them. A plan never removes a room — use `update_location` for that.
+it (`props`, `markers`, `model_at`, `model_offset_y`) stay, and a plan may not send them (place single props with `place_room_prop`, whole kits with `furnish_rooms`). A plan never removes a room — use `update_location` for that.
 
 ## Coordinates
 
@@ -153,4 +153,7 @@ image or model generation. A room is furnished only when it has:
 The call is refused when no room qualifies; the refusal names every room with its reason. The
 result names the furnished rooms with their piece count, the roles the kit had no piece for, and
 the rooms it skipped. Call it once per place after its floor plan stands. There is no LLM
-furnishing and no hull here — the building panel does those.
+furnishing and no hull here — the building panel does those. To stand ONE library prop in a room (a
+statue, a rug, a bench — even in a room that already has furniture), use `place_room_prop`
+(`find_props` lists the library; name missing props under *left open*, never create an item
+instead).
