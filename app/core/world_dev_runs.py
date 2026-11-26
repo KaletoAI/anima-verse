@@ -455,15 +455,14 @@ def begin(run_id: str, turn: int, kind: str, tool: str, args: Any,
           target_kind: Optional[str] = None, target_id: Optional[str] = None,
           inverse: Optional[dict] = None) -> int:
     """Insert a ``pending`` step (BEFORE the write) and return its seq.
-    Increments the run's ``steps`` counter in the same transaction."""
+    The journal row only; the call counter is `count_call`."""
     if kind not in KINDS:
         raise ValueError(f"unknown journal kind: {kind!r}")
     if target_kind is not None and target_kind not in TARGET_KINDS:
         raise ValueError(f"unknown target kind: {target_kind!r}")
     with _Db(immediate=True) as conn:
-        cur = conn.execute("UPDATE world_dev_runs SET steps=steps+1 WHERE id=?",
-                           (run_id,))
-        if cur.rowcount == 0:
+        if conn.execute("SELECT 1 FROM world_dev_runs WHERE id=?",
+                        (run_id,)).fetchone() is None:
             raise KeyError(f"unknown world-dev run: {run_id}")
         seq = int(conn.execute(
             "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM world_dev_journal "
@@ -475,6 +474,20 @@ def begin(run_id: str, turn: int, kind: str, tool: str, args: Any,
             (run_id, seq, int(turn), kind, tool or "", _dump(args if args is not None else {}),
              target_kind, target_id, _dump(inverse), utc_now_iso()))
     return seq
+
+
+def count_call(run_id: str) -> int:
+    """Count one model tool call of the run (executed or refused) and return
+    the new count. The run's ``steps`` column holds that count — it is the
+    per-turn budget's measure; journal rows are not counted (one call can
+    write several, the media lane writes rows no model asked for)."""
+    with _Db(immediate=True) as conn:
+        cur = conn.execute("UPDATE world_dev_runs SET steps=steps+1 WHERE id=?",
+                           (run_id,))
+        if cur.rowcount == 0:
+            raise KeyError(f"unknown world-dev run: {run_id}")
+        return int(conn.execute("SELECT steps FROM world_dev_runs WHERE id=?",
+                                (run_id,)).fetchone()["steps"])
 
 
 def _update_entry(run_id: str, seq: int, sql_set: str, params: tuple) -> None:

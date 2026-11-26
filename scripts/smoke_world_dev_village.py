@@ -60,9 +60,11 @@ check_run):
        schedule [{0 sleep}, {6 Demo Bakery "baking"}, {12 Demo Square
                  "market"}, {20 Demo Cottage "evening"}]
        known_places [Demo Square]
-     -> line ends "; complete" (home placed, placed at it, two outfits, one
-     worn, schedule, every soul field, both hair attributes, knows more than
-     its home).
+     -> line ends "; missing: no secret (add_secret)" (home placed, placed
+     at it, two outfits, one worn, schedule, every soul field, both hair
+     attributes, knows more than its home — only the secret of plan
+     2026-11-25-world-dev-free-complete-characters-budget Task 5 is missing;
+     the skill manager's list is emptied, so no skill group is open).
   4. create_character Demo Weaver likewise:
        data: gender female, importance 2, courage 40, all soul fields,
              hair {blonde, short}, outfits Day (Demo Wool Dress on top+bottom,
@@ -71,9 +73,16 @@ check_run):
        home Demo Cottage / Room
        schedule [{0 sleep}, {9 Demo Square "weaving"}]
        known_places [Demo Bakery]
-     -> "; complete".
-  5. check_run{} -> exactly ["5 of 5 elements complete"] (3 created places,
-     2 created characters, nothing missing).
+     -> "; missing: no secret (add_secret)" (as Demo Miller).
+  5. check_run{} -> exactly
+       'character "Demo Miller": missing: no secret (add_secret) · media pending:
+        no portrait; no base body'   (one line; the run's media is on —
+        create_run's default — and temp storage holds no profile image and no
+        base body for these humanoid human-roleplay characters on the
+        base-body pipeline),
+       the same line for Demo Weaver,
+       "3 of 5 elements complete"   (3 created places complete, the 2 created
+       characters lack their secret).
 
 Assertions after the run:
   (a) Demo Miller current_location == Cottage id, current_room == the id of
@@ -199,6 +208,15 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded first, and its list is emptied: the skill-group gap is covered by
+# smoke_world_dev_completeness, this village has none.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager().skills[:] = []
+
 # The world's own packages (rp) stay; the fake species package comes in addition.
 for _pkg in loader.declared_packages():
     registry.register_package(_pkg)
@@ -315,7 +333,9 @@ res = call(2, "create_character", {
                  {"hour": 12, "location": "Demo Square", "role": "market"},
                  {"hour": 20, "location": "Demo Cottage", "role": "evening"}],
     "known_places": ["Demo Square"]})
-check("3 Demo Miller -> complete", res.ok and res.line.endswith("; complete"), res.line)
+NO_SECRET = "; missing: no secret (add_secret)"
+check("3 Demo Miller -> only the secret missing", res.ok and res.line.endswith(NO_SECRET),
+      res.line)
 
 # ── 4. Demo Weaver, one call ────────────────────────────────────────────
 weaver = {"name": "Demo Weaver", "gender": "female", "importance": 2, "courage": 40,
@@ -330,12 +350,15 @@ res = call(2, "create_character", {
     "schedule": [{"hour": 0, "sleep": True},
                  {"hour": 9, "location": SQUARE, "role": "weaving"}],
     "known_places": ["Demo Bakery"]})
-check("4 Demo Weaver -> complete", res.ok and res.line.endswith("; complete"), res.line)
+check("4 Demo Weaver -> only the secret missing", res.ok and res.line.endswith(NO_SECRET),
+      res.line)
 
 # ── 5. check_run ────────────────────────────────────────────────────────
 res = call(3, "check_run", {})
-check("5 check_run: 5 of 5 complete",
-      res.ok and res.line.splitlines() == ["5 of 5 elements complete"], res.line)
+check("5 check_run: 3 of 5 complete", res.ok and res.line.splitlines() == [
+    f'character "{who}": missing: no secret (add_secret) · media pending: '
+    "no portrait; no base body" for who in ("Demo Miller", "Demo Weaver")]
+    + ["3 of 5 elements complete"], res.line)
 
 # ── (a) position ────────────────────────────────────────────────────────
 check("(a) Miller stands in the Cottage",

@@ -1906,6 +1906,23 @@ def skill_option_source(source: str) -> List[Dict[str, str]]:
     return []
 
 
+def skill_effective_enabled(skill: Any, character_name: str,
+                            config: Optional[Dict[str, Any]]) -> bool:
+    """The on/off state the Skills tab shows for one loaded skill: the stored
+    ``enabled`` of the character's skill config, else the default — the SAME
+    rule the runtime filter applies (skill_manager): the skill's own
+    ``default_enabled_for`` when it has one, else ALWAYS_LOAD skills start
+    disabled, others on."""
+    if config and "enabled" in config:
+        return bool(config["enabled"])
+    default_for = getattr(skill, "default_enabled_for", None)
+    try:
+        return (bool(default_for(character_name)) if default_for
+                else not getattr(skill, 'ALWAYS_LOAD', False))
+    except Exception:
+        return not getattr(skill, 'ALWAYS_LOAD', False)
+
+
 def build_available_skills(character_name: str) -> Dict[str, Any]:
     """Returns all globally loaded skills with per-character enabled state and config fields."""
     from app.core.dependencies import get_skill_manager
@@ -1926,18 +1943,7 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
         if not skill_id:
             continue
         config = get_character_skill_config(character_name, skill_id)
-        # Default without a character setting — the SAME rule the runtime
-        # filter applies (skill_manager): the skill's own default_enabled_for
-        # when it has one, else ALWAYS_LOAD skills start disabled, others on.
-        _default_for = getattr(skill, "default_enabled_for", None)
-        try:
-            default_enabled = (bool(_default_for(character_name)) if _default_for
-                               else not getattr(skill, 'ALWAYS_LOAD', False))
-        except Exception:
-            default_enabled = not getattr(skill, 'ALWAYS_LOAD', False)
-        enabled = default_enabled
-        if config and "enabled" in config:
-            enabled = bool(config["enabled"])
+        enabled = skill_effective_enabled(skill, character_name, config)
 
         # Config fields with defaults, types, and current values
         config_fields = skill.get_config_fields()

@@ -38,8 +38,8 @@ Start state: world not frozen, no run.
     free/{run_id}/media, POST free/{run_id}/media-switch, POST
     free/{run_id}/media/retry (17 in all). A removed route that comes back
     fails here.
- 2. GET /world-dev/free/defaults (admin) -> {"max_steps": 60,
-    "max_tokens_total": 600000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
+ 2. GET /world-dev/free/defaults (admin) -> {"max_steps": 200,
+    "max_tokens_total": 2000000} (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL
     of world_dev_agent).
  3. player POST /world-dev/free/start -> 403 (router-wide require_admin);
     anonymous -> 401 (default-deny gate). Nothing frozen, no open run.
@@ -327,7 +327,7 @@ def main(c):
 
     r = c.get("/world-dev/free/defaults", headers=ADMIN)
     check("2 defaults", r.status_code == 200
-          and r.json() == {"max_steps": 60, "max_tokens_total": 600000}, r.text)
+          and r.json() == {"max_steps": 200, "max_tokens_total": 2000000}, r.text)
 
     body = {"task": "build a pond", "model": "fake-model", "provider": "fake"}
     r = c.post("/world-dev/free/start", headers=USER, json=body)

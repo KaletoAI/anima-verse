@@ -25,8 +25,9 @@ The plugin registry holds one species with a hair body slot (as
 smoke_world_dev_media_lifecycle), so a humanoid with hair in its body slot
 is on the base-body pipeline with hair text. ``figure_build.planned_work``
 is pinned to one runnable "shape" step (a fresh world has no plain body, so
-the real automatic plan would be the manual "No base body yet" step and the
-gate would skip the Build with that note).
+the real explicit plan — the lane's Build is a manual one, BUILD_EXPLICIT —
+would be the plain body, whose base_front/base_view occasions this smoke
+does not need to route).
 
   (a) turn 1 [create_location "Demo Mill" (room "Loft"), create_character
       "Demo Mira" (female, hair black / long), "Built."] -&gt; awaiting_review,
@@ -112,6 +113,13 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded before the fake package is registered.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager()
 registry.clear_registry()
 registry.register_package(Package(
     id="smoke_species", dir=TMP, manifest={}, apply_to=["human-roleplay"],
@@ -150,10 +158,9 @@ def fake_route_check(occasion, character="", *, chain_only=False):
 
 
 wdm.route_check = fake_route_check
-# A fresh temp world has no plain body, so the REAL automatic plan is only the
-# manual "No base body yet" step and the gate would skip the Build. The plan
-# the gate reads is pinned to one runnable step ("shape", as on a stored plain
-# body); the Build itself is the fake producer below.
+# A fresh temp world has no plain body, so the REAL explicit plan would be the
+# plain body step. The plan the gate reads is pinned to one runnable step
+# ("shape", as on a stored plain body); the Build itself is the fake producer below.
 _SHAPE = figure_build.Step(name="shape", label="Shape", jobs=1)
 figure_build.planned_work = lambda *_a, **_k: ([_SHAPE], [_SHAPE])
 

@@ -9,7 +9,7 @@ The REAL producer adapters of ``world_dev_media.PRODUCERS`` run; only the ENTRY
 POINT each one wraps is replaced by a fake that writes real files into the
 element's real roots (``world_ops.generate_gallery_image_core``,
 ``subjects.generate_building_model``, ``npc_assets.render_profile_image`` /
-``render_mesh``, ``figure_build.request`` / ``state``, ``make_hairstyle``).
+``render_mesh``, ``figure_build.start`` / ``state``, ``make_hairstyle``).
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_media_capture.py
@@ -75,11 +75,14 @@ template_front}`` (``world_dev_media.media_roots``).
   (i) mesh with a producer note ("mesh: smoke failure") -> StepError status
       "failed", note carried, the written glb is in its artefacts (capture
       survives the failure).
-  (j) build: request is called with (name, "world_dev"); the fake state says
+  (j) build: the lane's Build is a manual one (BUILD_EXPLICIT, plan
+      2026-11-25-world-dev-free-complete-characters-budget Task 7): start is
+      called with (name, reason "world_dev", automatic False); the fake state says
       running twice, then idle -> 3 polls, note "", the file written during
       the Build is an artefact. A Build whose state lists a failed step ->
-      StepError "failed" naming it, artefacts kept. request False ->
-      StepError "skipped".
+      StepError "failed" naming it, artefacts kept. start answering
+      {"status": "off", "reason": "off the pipeline"} -> StepError "skipped"
+      whose note carries that reason.
   (k) hairstyle: make_hairstyle ("done", "") -> ("", []); ("skipped", "no
       hairstyle needed") -> StepError "skipped" with that note.
   (l) MEDIA_PROFILE_KEYS == ("profile_image",) and no tool writes it (the
@@ -486,13 +489,13 @@ REQ = []
 STATE = {"polls": 0, "failed": {}}
 
 
-def fake_request(name, trigger):
-    REQ.append((name, trigger))
+def fake_start(name, *, reason, automatic=False):
+    REQ.append((name, reason, automatic))
     d = get_character_dir(name) / "model3d"
     d.mkdir(parents=True, exist_ok=True)
     (d / "built.glb").write_bytes(b"built")
     STATE["polls"] = 0
-    return True
+    return {"status": "started"}
 
 
 def fake_state(name):
@@ -502,10 +505,10 @@ def fake_state(name):
             "skipped": [], "paused": None, "superseded": None}
 
 
-figure_build.request = fake_request
+figure_build.start = fake_start
 figure_build.state = fake_state
 note, arts_j = wdm.PRODUCERS["build"](ctx, "character", "Demo C", mesh_step("build"))
-check("(j) request(name, 'world_dev')", REQ == [("Demo C", "world_dev")], REQ)
+check("(j) start(name, reason 'world_dev', automatic False)", REQ == [("Demo C", "world_dev", False)], REQ)
 check("(j) polled until idle", STATE["polls"] == 3, STATE)
 check("(j) done, file captured", note == "" and [a["path"] for a in arts_j if a["type"] == "file"]
       == [rel(get_character_dir("Demo C") / "model3d" / "built.glb")], (note, arts_j))
@@ -517,11 +520,12 @@ if err is not None:
     check("(j) failed keeps the capture", len([a for a in err.artefacts if a["type"] == "file"]) == 1,
           err.artefacts)
     wdm.remove_artefacts(err.artefacts)
-figure_build.request = lambda name, trigger: False
+figure_build.start = lambda name, **_k: {"status": "off", "reason": "off the pipeline"}
 err = expect_error(lambda: wdm.PRODUCERS["build"](ctx, "character", "Demo C", mesh_step("build")),
                    "(j) not started")
 if err is not None:
-    check("(j) not started = skipped", err.status == "skipped", (err.status, err.note))
+    check("(j) not started = skipped with its reason",
+          err.status == "skipped" and "off the pipeline" in err.note, (err.status, err.note))
 
 # ── (k) hairstyle ────────────────────────────────────────────────────────
 print("(k) hairstyle")
@@ -597,7 +601,7 @@ print("(o) concurrent writer")
 cimg = get_character_dir("Demo C") / "images"
 
 
-def fake_request_o(name, trigger):
+def fake_start_o(name, *, reason, automatic=False):
     d = get_character_dir(name)
     (d / "model3d").mkdir(parents=True, exist_ok=True)
     (d / "model3d" / "o.glb").write_bytes(b"o")
@@ -608,12 +612,12 @@ def fake_request_o(name, trigger):
         prof["profile_image"] = "hand.png"
         save_character_profile(name, prof)
     STATE["polls"] = 0
-    return True
+    return {"status": "started"}
 
 
 STATE["failed"] = {}
 (get_character_dir("Demo C") / "model3d").mkdir(parents=True, exist_ok=True)  # (j)'s removal took it
-figure_build.request = fake_request_o
+figure_build.start = fake_start_o
 _, arts_o = wdm.PRODUCERS["build"](ctx, "character", "Demo C", mesh_step("build"))
 o_glb = rel(get_character_dir("Demo C") / "model3d" / "o.glb")
 check("(o) build: only its own glb", [(a["type"], a["path"]) for a in arts_o] == [("file", o_glb)], arts_o)

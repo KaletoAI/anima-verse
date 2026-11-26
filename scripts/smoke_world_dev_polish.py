@@ -15,8 +15,11 @@ WHAT IS CHECKED, and where every expected value comes from
 
   (a) ``step_gate`` never raises. The run is the dict {"media_enabled": True}
       (the run switch passes), ``media_generation_enabled`` -> True and
-      ``generation_pause.is_paused`` -> False (both pass), so the first check
-      that can answer is the Build's world switch:
+      ``generation_pause.is_paused`` -> False (both pass), and
+      ``BUILD_EXPLICIT`` is pinned False (the automatic lane mode — in the
+      explicit mode, the default since complete-characters-budget Task 7,
+      these two switches are not read), so the first check that can answer
+      is the Build's world switch:
       - ``model_refs.auto_renders_enabled`` stubbed False -> the gate of the
         "build" step of "Demo Ada" is exactly
         "automatic outfit renders are off for this world" (checked BEFORE the
@@ -148,11 +151,16 @@ orig = {
     "auto": figure_build.auto_build_on,
     "route": wdm.route_check,
     "renders": getattr(model_refs, "auto_renders_enabled", None),
+    "explicit": wdm.BUILD_EXPLICIT,
 }
 imagegen_base.media_generation_enabled = lambda: True
 generation_pause.is_paused = lambda name: False
 figure_build.auto_build_on = lambda name, **kw: auto_calls.append(name) or True
 try:
+    # The world/character switches gate only the AUTOMATIC lane mode (the
+    # lane's Build is explicit since plan 2026-11-25 complete-characters-budget
+    # Task 7, decision 13); that mode stays selectable, so it is pinned here.
+    wdm.BUILD_EXPLICIT = False
     model_refs.auto_renders_enabled = lambda: False
     check("(a) auto renders off", gate(BUILD) == "automatic outfit renders are off for this world",
           gate(BUILD))
@@ -174,6 +182,7 @@ finally:
     generation_pause.is_paused = orig["paused"]
     figure_build.auto_build_on = orig["auto"]
     wdm.route_check = orig["route"]
+    wdm.BUILD_EXPLICIT = orig["explicit"]
     if orig["renders"] is not None:
         model_refs.auto_renders_enabled = orig["renders"]
     else:

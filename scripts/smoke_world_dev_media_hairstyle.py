@@ -28,6 +28,9 @@ makes it worn (equipped_mesh_pieces["hair"]) and the plain body's
       the item exists, equipped_mesh_pieces["hair"] == its id; the newest
       journal row has tool "media:hairstyle", kind "write", inverse op
       "remove_hairstyle" with that item id and before = ABSENT for both keys.
+      The run's ``steps`` (the model's tool-call counter, plan 2026-11-25
+      complete-characters-budget B1) is the same before and after: the
+      media lane's journal row is no model call.
   (b) discard_preview(R1) has the 'character "Demo Hair"' line and NO line
       starting with "hairstyle" (the character goes; the handler deletes its
       unchanged item first — the newer row is undone first); undo(R1) is
@@ -130,6 +133,13 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded before the fake package is registered.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager()
 registry.clear_registry()
 registry.register_package(Package(
     id="smoke_species", dir=TMP, manifest={}, apply_to=["human-roleplay"],
@@ -193,7 +203,10 @@ check("(a) before: no hairstyle keys",
       KEY not in profile("Demo Hair") and "equipped_mesh_pieces" not in profile("Demo Hair"),
       {k: profile("Demo Hair").get(k) for k in (KEY, "equipped_mesh_pieces")})
 review(r1)
+steps_before = wr.get_run(r1)["steps"]
 out = wdm.make_hairstyle(r1, "Demo Hair")
+check("(a) the media row is no tool call: run.steps unchanged",
+      wr.get_run(r1)["steps"] == steps_before, (steps_before, wr.get_run(r1)["steps"]))
 check("(a) done", out == ("done", ""), out)
 worn = (profile("Demo Hair").get("equipped_mesh_pieces") or {}).get("hair")
 check("(a) the item exists and is worn", bool(worn) and get_item(worn) is not None, worn)

@@ -117,6 +117,18 @@ Step order of an element (world_dev_media.element_steps):
       build fp, the wanted figure, does not read it).
       Deploy note: an open run whose baseline was taken WITH modifiers sees
       its portrait due once after the change (harmless, one render).
+
+OUTPUT PRESENCE (plan 2026-11-25-world-dev-free-complete-characters-budget,
+Task 6): a portrait / Build step whose OUTPUT is missing is due whatever its
+fingerprint. A temp world has no profile image and no base body, so every
+character's portrait and build would be due here; the cases above are about
+FINGERPRINTS, so the two presence checks (world_dev_media._portrait_present
+/ _base_body_present) are patched to True for the whole smoke, except:
+  (c') the same run in review with the REAL checks: "Demo Plain" (no
+      profile_image, no stored base front -> base_refresh_plan(missing=True)
+      reason "missing") -> due ["portrait", "build"] although nothing of it
+      changed. The missing-output rule itself is
+      scripts/smoke_world_dev_media_lost_portrait.py.
 """
 from __future__ import annotations
 
@@ -154,6 +166,11 @@ image_service.get_image_service = _no_render
 
 from app.core import figure_build  # noqa: E402
 from app.core import world_dev_media as wdm  # noqa: E402
+
+# Outputs present for the fingerprint cases (docstring, OUTPUT PRESENCE).
+_REAL_PRESENCE = (wdm._portrait_present, wdm._base_body_present)
+wdm._portrait_present = lambda name, profile: True
+wdm._base_body_present = lambda name, profile: True
 from app.core import world_dev_runs as wr  # noqa: E402
 from app.core import world_dev_tools as wt  # noqa: E402
 from app.models.character import save_character_profile  # noqa: E402
@@ -172,6 +189,13 @@ def check(label, cond, detail=None):
         failures.append(label)
 
 
+# The skill manager loads (and re-registers) the packages on its first use;
+# the completeness line of a character write asks it for the skill groups
+# (plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5), so it
+# is loaded before the fake package is registered.
+from app.core.dependencies import get_skill_manager  # noqa: E402
+
+get_skill_manager()
 registry.clear_registry()
 registry.register_package(Package(
     id="smoke_species", dir=TMP, manifest={}, apply_to=["human-roleplay"],
@@ -279,6 +303,14 @@ check("(c) baseline is a dict", isinstance(wr.baselines(run).get(("character", "
       wr.baselines(run).get(("character", "Demo Plain")))
 review(run)
 check("(c) nothing due", due(run, "character", "Demo Plain") == [], due(run, "character", "Demo Plain"))
+wdm._portrait_present, wdm._base_body_present = _REAL_PRESENCE
+try:
+    check("(c') real presence: missing outputs due",
+          due(run, "character", "Demo Plain") == ["portrait", "build"],
+          due(run, "character", "Demo Plain"))
+finally:
+    wdm._portrait_present = lambda name, profile: True
+    wdm._base_body_present = lambda name, profile: True
 running(run)
 
 # (d)

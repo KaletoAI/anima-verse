@@ -1841,8 +1841,23 @@ def _catalog_lines(name: str) -> List[str]:
         from app.core.quest_catalog import ROLE_KINDS
         return list(ROLE_KINDS)
     if name == "skills":
-        return [f"{s.SKILL_ID} — {_label(getattr(s, 'name', '') or s.SKILL_ID, 60)}"
-                for s in _loaded_skills()]
+        # The capability group (the Skills tab's toggle) a verb belongs to —
+        # set_skill takes either id and always switches the whole group.
+        from app.plugins.registry import package_of_skill
+
+        def group_of(sid: str) -> str:
+            try:
+                pkg = package_of_skill(sid)
+            except Exception:  # noqa: BLE001 — a listing never fails on it
+                return ""
+            return str(pkg.id) if pkg is not None and pkg.capability_label else ""
+
+        out = []
+        for s in _loaded_skills():
+            group = group_of(s.SKILL_ID)
+            out.append(f"{s.SKILL_ID} — {_label(getattr(s, 'name', '') or s.SKILL_ID, 60)}"
+                       + (f" (group {group})" if group else ""))
+        return out
     raise ToolRefusal(f"no catalog {name!r} — catalogs: " + ", ".join(CATALOG_NAMES))
 
 
@@ -2330,7 +2345,7 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
             if key == "body_slots":
                 # The schema of the package-declared slots, not the raw blob:
                 # what can be set, to what, and what is set now.
-                lines = _body_schema(prof)
+                lines = _body_schema(prof, name)
                 schema = (["body slots (slot: attribute=value [allowed]; - = unset):"]
                           + lines if lines else
                           ["body slots: none — the template declares none for this "
@@ -2413,7 +2428,7 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     n_secrets = len(list_secrets(name))
     if n_secrets:
         out.append(f"secrets: {n_secrets}" + ' — get_character{"fields": ["secrets"]} lists them')
-    if _body_specs(prof):
+    if _body_specs(prof, name):
         missing = _missing_body_attrs(name)
         out.append("body slots: " + (f"{len(missing)} attribute(s) unset" if missing
                                      else "all set")
@@ -5010,15 +5025,46 @@ def _check_outfit_refs_reveal(outfits: Any) -> None:
 MAX_BODY_SCHEMA_CHARS = 4000
 
 
-def _body_specs(profile: Dict[str, Any]) -> List[Tuple[Any, Dict[str, Dict[str, Any]]]]:
-    """(spec, llm-fillable attributes) of every body slot that applies to a
-    character with this profile and has at least one fillable attribute —
+def _on_base_pipeline(profile: Dict[str, Any], name: str = "") -> bool:
+    """Whether a character with this profile is on the base-body pipeline
+    (``base_body.is_base_pipeline``). ``name`` "" = a draft that is not
+    stored yet (describe_template, create_character): the check then reads
+    the profile only — no per-character config exists, and a temporary-NPC
+    template is refused by those tools anyway."""
+    from app.core import base_body
+    return bool(base_body.is_base_pipeline(name, profile=profile))
+
+
+def _mesh_part_switch(spec) -> Optional[str]:
+    """The attribute that switches the slot's separately built mesh part, if
+    the slot declares one."""
+    return spec.mesh_part.switch if getattr(spec, "mesh_part", None) else None
+
+
+def _body_specs(profile: Dict[str, Any],
+                name: str = "") -> List[Tuple[Any, Dict[str, Dict[str, Any]]]]:
+    """(spec, settable attributes) of every body slot that applies to a
+    character with this profile and has at least one settable attribute —
     the package declarations (body_slots.slots_for_character), never a
-    hard-coded slot list."""
-    from app.core.body_slots import llm_fillable_attributes, slots_for_character
+    hard-coded slot list. Settable = what the character editor shows
+    (``body_slots.editable_attributes``); a slot's mesh-part switch only for
+    a character on the base-body pipeline: there a switch only marks the
+    figure due (the run's Build builds it), off it the switch would start a
+    mesh regeneration no journal row can take back. The schema, the check
+    and the completeness gaps all read this one set. ``name`` is the stored
+    character, "" for a draft (see :func:`_on_base_pipeline`)."""
+    from app.core.body_slots import editable_attributes, slots_for_character
+    specs = slots_for_character("", profile=profile)
+    on_pipeline: Optional[bool] = None
     out = []
-    for spec in slots_for_character("", profile=profile):
-        attrs = llm_fillable_attributes(spec)
+    for spec in specs:
+        attrs = editable_attributes(spec)
+        switch = _mesh_part_switch(spec)
+        if switch in attrs:
+            if on_pipeline is None:
+                on_pipeline = _on_base_pipeline(profile, name)
+            if not on_pipeline:
+                attrs = {k: v for k, v in attrs.items() if k != switch}
         if attrs:
             out.append((spec, attrs))
     return out
@@ -5038,14 +5084,18 @@ def _attr_applies(decl: Dict[str, Any], slot_vals: Dict[str, Any],
     return True
 
 
-def _check_body_slots(raw: Any, profile: Dict[str, Any], template: str) -> Dict[str, Dict[str, str]]:
+def _check_body_slots(raw: Any, profile: Dict[str, Any], template: str,
+                      name: str = "") -> Dict[str, Dict[str, str]]:
     """Validate a body_slots draft/patch against the slots that apply to a
     character with ``profile``; every invalid slot, attribute or value is
     REFUSED (before any write) instead of skipped. Returns the clean
-    {slot: {attribute: value}} (values stripped)."""
+    {slot: {attribute: value}} (values stripped). A mesh-part switch off the
+    base-body pipeline gets its own refusal (it is no settable attribute
+    there, see :func:`_body_specs`). ``name``: the stored character, ""
+    for a draft."""
     if not isinstance(raw, dict):
         raise ToolRefusal("'body_slots' must be an object {slot: {attribute: value}}")
-    specs = {spec.id: (spec, attrs) for spec, attrs in _body_specs(profile)}
+    specs = {spec.id: (spec, attrs) for spec, attrs in _body_specs(profile, name)}
     if raw and not specs:
         raise ToolRefusal(f"template {template!r} has no body slots for this character")
     clean: Dict[str, Dict[str, str]] = {}
@@ -5058,8 +5108,16 @@ def _check_body_slots(raw: Any, profile: Dict[str, Any], template: str) -> Dict[
             raise ToolRefusal(f"body_slots.{slot_id} must be a non-empty object "
                               "{attribute: value}")
         out: Dict[str, str] = {}
+        switch = _mesh_part_switch(spec)
         for key, value in values.items():
             decl = attrs.get(key)
+            if decl is None and key == switch:
+                # Before the generic refusal: off the pipeline the switch is
+                # not in the settable set, and "cannot be set here" would not
+                # say why.
+                raise ToolRefusal(f"body_slots.{slot_id}.{key} switches a separately "
+                                  "built part — only for a character on the "
+                                  "base-body pipeline")
             if decl is None:
                 raise ToolRefusal(f"body_slots.{slot_id}: attribute {key!r} cannot be "
                                   "set here — attributes: " + ", ".join(sorted(attrs)))
@@ -5077,14 +5135,14 @@ def _check_body_slots(raw: Any, profile: Dict[str, Any], template: str) -> Dict[
 
 
 def _missing_body_attrs(name: str) -> List[str]:
-    """"slot.attribute" of every applicable, fillable attribute of a stored
+    """"slot.attribute" of every applicable, settable attribute of a stored
     character that has no value (attribute conditions that do not hold are
     left out)."""
     from app.models.character import get_character_profile
     prof = get_character_profile(name) or {}
     vals = prof.get("body_slots") if isinstance(prof.get("body_slots"), dict) else {}
     out = []
-    for spec, attrs in _body_specs(prof):
+    for spec, attrs in _body_specs(prof, name):
         slot_vals = vals.get(spec.id) if isinstance(vals.get(spec.id), dict) else {}
         for key, decl in attrs.items():
             if _attr_applies(decl, slot_vals, prof) and not str(slot_vals.get(key) or "").strip():
@@ -5092,12 +5150,13 @@ def _missing_body_attrs(name: str) -> List[str]:
     return out
 
 
-def _body_schema(prof: Dict[str, Any]) -> List[str]:
-    """One line per applicable slot: every fillable attribute with its
-    current value ("-" = unset) and what it takes."""
+def _body_schema(prof: Dict[str, Any], name: str = "") -> List[str]:
+    """One line per applicable slot: every settable attribute with its
+    current value ("-" = unset) and what it takes. ``name``: the stored
+    character, "" for a draft."""
     vals = prof.get("body_slots") if isinstance(prof.get("body_slots"), dict) else {}
     lines = []
-    for spec, attrs in _body_specs(prof):
+    for spec, attrs in _body_specs(prof, name):
         slot_vals = vals.get(spec.id) if isinstance(vals.get(spec.id), dict) else {}
         parts = []
         for key, decl in attrs.items():
@@ -5457,6 +5516,7 @@ def _refuse_foreign_sweep_rows(name: str) -> None:
        "known_places = further places it may travel to")
 def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.core.character_name import validate_character_name
+    from app.core.body_slots import editable_attributes
     from app.core.world_dev_apply import (_get_generable_fields,
                                           _template_has_wardrobe, apply_character)
     from app.models.character import character_row_exists
@@ -5599,7 +5659,8 @@ def _create_character(step: _Step, args: Dict[str, Any]) -> str:
     with step.writing(reconcile):
         result = apply_character(draft, created_by="world_dev", must_be_new=True,
                                  on_claim=on_claim, on_item=on_item,
-                                 place_compliance=False)
+                                 place_compliance=False,
+                                 body_attributes=editable_attributes)
         # An explicit chat_mode is written here, after the apply's
         # rp_first default, so it wins.
         _write_char_fields(name, extra_prof, extra_cfg, extra_stats)
@@ -5762,7 +5823,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                     if isinstance(merged[str(slot_id)], dict):
                         merged[str(slot_id)].update(values)
         would_be["body_slots"] = merged
-        body_clean = _check_body_slots(body_raw, would_be, template)
+        body_clean = _check_body_slots(body_raw, would_be, template, name)
         if not body_clean:
             raise ToolRefusal("'body_slots' must not be empty")
     known_ids = (_check_known_places(home_data.pop("known_places"))
@@ -7026,23 +7087,46 @@ def _skill_config_obj(name: str, skill: str) -> Tuple[Optional[str], Dict[str, A
     return text, obj
 
 
-def _skill_state(name: str, skill: str) -> Optional[bool]:
-    """The effective on/off state of one skill for a character — read through
-    ``character_ops.build_available_skills`` (the stored setting, else the
-    skill's default). None when the skill is not loaded."""
+def _skill_toggle_states(name: str) -> List[Dict[str, Any]]:
+    """The loaded skills as the Skills tab lists them, in loader order — only
+    the fields the tools need: ``skill_id``, ``name``, ``enabled`` (the
+    tab's rule, ``character_ops.skill_effective_enabled``) and the capability
+    group (``capability_id``/``capability_label``, set only for a package
+    with a capability label, as in ``build_available_skills``). Cheaper than
+    the tab payload: no dependency blocks, option sources or locations."""
     from app.core import character_ops
-    for s in character_ops.build_available_skills(name).get("skills") or []:
-        if s.get("skill_id") == skill:
-            return bool(s.get("enabled"))
-    return None
+    from app.core.dependencies import get_skill_manager
+    from app.models.character import get_character_skill_config
+    try:
+        from app.plugins.registry import package_of_skill
+    except Exception:
+        package_of_skill = None
+    out: List[Dict[str, Any]] = []
+    for skill in get_skill_manager().skills:
+        sid = skill.SKILL_ID
+        if not sid:
+            continue
+        config = get_character_skill_config(name, sid)
+        cap_pkg = None
+        if package_of_skill is not None:
+            try:
+                p = package_of_skill(sid)
+                if p is not None and p.capability_label:
+                    cap_pkg = p
+            except Exception:
+                cap_pkg = None
+        out.append({"skill_id": sid, "name": skill.name,
+                    "enabled": character_ops.skill_effective_enabled(skill, name, config),
+                    "capability_id": cap_pkg.id if cap_pkg else "",
+                    "capability_label": cap_pkg.capability_label if cap_pkg else ""})
+    return out
 
 
 def _skill_lines(name: str) -> List[str]:
     """``<id> on|off (default|set)`` per loaded skill (from
-    ``build_available_skills``; "set" = the config file stores ``enabled``)."""
-    from app.core import character_ops
+    :func:`_skill_toggle_states`; "set" = the config file stores ``enabled``)."""
     out: List[str] = []
-    for s in character_ops.build_available_skills(name).get("skills") or []:
+    for s in _skill_toggle_states(name):
         sid = str(s.get("skill_id") or "")
         try:
             _text, obj = _skill_config_obj(name, sid)
@@ -7053,22 +7137,102 @@ def _skill_lines(name: str) -> List[str]:
     return out
 
 
+def _skill_groups(name: str) -> List[Dict[str, Any]]:
+    """The skill toggles the Skills tab shows for a character (plan
+    2026-11-25-world-dev-free-complete-characters-budget, decision 9): ONE
+    group per non-empty ``capability_id`` (every verb of the package), a skill
+    without one is its own group. From :func:`_skill_toggle_states`
+    in loader order, a group at its first member's position:
+    ``{"id": capability id or skill id, "label", "members": [skill ids],
+    "on": every member effectively enabled}`` — the tab's toggle is on only
+    then. Generic: no skill or package is named here."""
+    groups: List[Dict[str, Any]] = []
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for s in _skill_toggle_states(name):
+        sid = str(s.get("skill_id") or "")
+        if not sid:
+            continue
+        cap = str(s.get("capability_id") or "")
+        key = ("capability", cap) if cap else ("skill", sid)
+        group = by_key.get(key)
+        if group is None:
+            label = (s.get("capability_label") if cap else s.get("name")) or cap or sid
+            group = {"id": cap or sid, "label": str(label), "members": [], "on": True}
+            by_key[key] = group
+            groups.append(group)
+        group["members"].append(sid)
+        group["on"] = group["on"] and bool(s.get("enabled"))
+    return groups
+
+
+def _skill_group_text(group: Dict[str, Any]) -> str:
+    """``id`` for a one-member group, ``id (m1+m2)`` otherwise."""
+    members = group.get("members") or []
+    if len(members) <= 1:
+        return str(group.get("id") or "")
+    return f"{group.get('id')} ({'+'.join(members)})"
+
+
+def _stored_enabled(name: str, skill: str) -> Optional[bool]:
+    """The ``enabled`` value a skill config file STORES (None = not stored,
+    not a real bool, or the file is not readable) — the same judgement as
+    set_skill, which counts a member as decided only for an exact bool."""
+    try:
+        _text, obj = _skill_config_obj(name, skill)
+    except ToolRefusal:
+        return None
+    value = obj.get("enabled")
+    return value if isinstance(value, bool) else None
+
+
+def _open_skill_decisions(name: str) -> List[Dict[str, Any]]:
+    """The skill groups of a character nobody has decided yet: a group is
+    DECIDED when it is on (the Skills tab shows it on) or when every member
+    stores ``enabled`` with one common value; otherwise — a default-off
+    group, a mixed or partly stored one — it is open. Each entry is the
+    group of :func:`_skill_groups` plus ``text`` (:func:`_skill_group_text`)."""
+    out: List[Dict[str, Any]] = []
+    for group in _skill_groups(name):
+        if group["on"]:
+            continue
+        stored = [_stored_enabled(name, m) for m in group["members"]]
+        if stored and None not in stored and len(set(stored)) == 1:
+            continue
+        out.append({**group, "text": _skill_group_text(group)})
+    return out
+
+
 @_tool("set_skill", True, "set_skill{name, skill, enabled}",
-       "switch ONE skill of a character on or off (skill ids: list_catalog skills); "
+       "switches a skill group (the toggle the Skills tab shows) on or off for a "
+       "character — also to store a deliberate off for a group that is off by "
+       "default; skill = a group id or any member's skill id (list_catalog skills); "
        "the skill's settings stay in the admin's Skills tab")
 def _set_skill(step: _Step, args: Dict[str, Any]) -> str:
-    """Plan p3 Task 9 (E6). Only the ``enabled`` key of the character's
+    """Plan p3 Task 9 (E6), widened to capability groups by plan
+    2026-11-25-world-dev-free-complete-characters-budget, Task 4 (decision 9).
+    ``skill`` names a group (capability id) or any member's skill id; both
+    switch the WHOLE group (:func:`_skill_groups`), as the Skills tab's
+    toggle does. Only the ``enabled`` key of each member's
     ``skills/<skill>.json`` changes (through ``save_character_skill_config``,
     the writer the toggle route uses), the other keys are kept. Refused up
-    front: an unknown character, a skill the skill manager has not loaded, a
-    non-boolean ``enabled``, a config file that does not parse as a JSON
-    object, an enable the F9 dependency check blocks
-    (``character_ops.skill_dependency_block``) and the effective state it
-    already has. Under ``keyed_lock("skill_config", name)`` the RAW text of
-    the file (or ABSENT) is journaled and the checks are asked again.
-    Inverse ``restore_skill_config`` (world_dev_undo): the text written back
-    verbatim, or the file removed (and the ``skills/`` directory when it did
-    not exist before and is empty)."""
+    front, before any journal row: an unknown character, an unknown skill or
+    group, a non-boolean ``enabled``, a member config file that does not
+    parse as a JSON object, an enable the F9 dependency check blocks for any
+    member this call would WRITE (``character_ops.skill_dependency_block`` —
+    the first reason refuses the call; a member that already stores true is
+    not written and not asked), and a group whose every member already STORES the
+    requested value. Storing the value a member has by default is allowed:
+    that is how a deliberate decision is recorded.
+    Under ONE ``keyed_lock("skill_config", name)`` the checks are asked
+    again; then every member whose stored ``enabled`` differs (absent
+    included) gets its own journal row in group order (the multi-row pattern
+    of update_character) with the RAW text of its file (or ABSENT).
+    Inverse ``restore_skill_config`` (world_dev_undo) per row: the text
+    written back verbatim, or the file removed. ``had_dir`` is the real
+    value on the FIRST written member and True on every later one (that
+    first write created the directory), so the reverse-order undo drops a
+    ``skills/`` directory this call created exactly once, with the first
+    member."""
     from app.core import character_ops
     from app.core.keyed_lock import keyed_lock
     from app.models.character import (character_row_exists, character_skills_dir_exists,
@@ -7085,55 +7249,94 @@ def _set_skill(step: _Step, args: Dict[str, Any]) -> str:
     # Before any read (the reads are side-effect free; recorded so the undo
     # drops a skills/ directory this step created).
     had_dir = character_skills_dir_exists(name)
-    if skill not in {s.SKILL_ID for s in _loaded_skills()}:
-        raise ToolRefusal(f"no skill {skill!r} — list_catalog{{\"name\": \"skills\"}} "
-                          "lists them")
     word = "on" if enabled else "off"
 
-    def check() -> Tuple[Optional[str], Dict[str, Any]]:
-        text, obj = _skill_config_obj(name, skill)
+    def resolve() -> Dict[str, Any]:
+        groups = _skill_groups(name)
+        group = (next((g for g in groups if skill in g["members"]), None)
+                 or next((g for g in groups if g["id"] == skill), None))
+        if group is None:
+            raise ToolRefusal(f"no skill or skill group {skill!r} — "
+                              f"list_catalog{{\"name\": \"skills\"}} lists the skill "
+                              "ids and their group ids")
+        return group
+
+    def check() -> Tuple[Dict[str, Any], List[Tuple[str, Optional[str], Dict[str, Any]]]]:
+        group = resolve()
+        configs = [(m, *_skill_config_obj(name, m)) for m in group["members"]]
+        todo = [(m, text, obj) for m, text, obj in configs if obj.get("enabled") is not enabled]
+        if not todo:
+            raise ToolRefusal(f"skill {group['id']} of {name} is already {word}")
         if enabled:
-            reason = character_ops.skill_dependency_block(name, skill)
-            if reason:
-                raise ToolRefusal(f"cannot switch {skill} on for {name}: {reason}")
-        if _skill_state(name, skill) is enabled:
-            raise ToolRefusal(f"skill {skill} of {name} is already {word}")
-        return text, obj
+            # Only the members this call writes: a member that already
+            # stores true is not touched, so its dependencies are not asked.
+            for m, _text, _obj in todo:
+                reason = character_ops.skill_dependency_block(name, m)
+                if reason:
+                    raise ToolRefusal(f"cannot switch {group['id']} on for {name}: {reason}")
+        return group, todo
 
     check()
     step.prepare()
+    rows: List[_Step] = []
     with keyed_lock("skill_config", name):
-        before, obj = check()
-        inverse = {"op": "restore_skill_config", "name": name, "skill": skill,
-                   "before": wu.ABSENT if before is None else before,
-                   "had_dir": had_dir}
-        step.begin("character", name, inverse)
+        group, todo = check()
+        was_on = bool(group["on"])
+        multi = len(group["members"]) > 1
+        for member, before, obj in todo:
+            # The call's own step first, then one more row per further member.
+            mstep = step if not rows else _Step(step.ctx, step.tool, step.args)
+            inverse = {"op": "restore_skill_config", "name": name, "skill": member,
+                       "before": wu.ABSENT if before is None else before,
+                       "had_dir": had_dir if not rows else True}
+            rows.append(mstep)
+            mstep.begin("character", name, inverse)
 
-        def reconcile():
-            try:
-                now = read_character_skill_config_text(name, skill)
-            except UnicodeDecodeError:
-                now = ""
-            if now == before:
-                return None
-            return name, inverse, now
+            def reconcile(member=member, before=before, inverse=inverse):
+                try:
+                    now = read_character_skill_config_text(name, member)
+                except UnicodeDecodeError:
+                    now = ""
+                if now == before:
+                    return None
+                return name, inverse, now
 
-        with step.writing(reconcile):
-            save_character_skill_config(name, skill, {**obj, "enabled": enabled})
-            written = read_character_skill_config_text(name, skill)
-            stored = json.loads(written) if written is not None else None
-            if not isinstance(stored, dict) or stored.get("enabled") is not enabled:
-                raise ValueError(f"the skill config of {name} for {skill} was not stored")
-    line = f"skill {skill} of {name}: {word}"
-    step.complete(written, line)
-    return line
+            with mstep.writing(reconcile):
+                save_character_skill_config(name, member, {**obj, "enabled": enabled})
+                written = read_character_skill_config_text(name, member)
+                stored = json.loads(written) if written is not None else None
+                if not isinstance(stored, dict) or stored.get("enabled") is not enabled:
+                    raise ValueError(f"the skill config of {name} for {member} was not stored")
+            mstep.complete(written, f"skill {member} of {name}: {word}"
+                           + ("" if multi or was_on is not enabled else " (decided)"))
+    head = (f"skill group {_skill_group_text(group)}" if multi
+            else f"skill {group['id']}")
+    return f"{head} of {name}: {word}" + (" (decided)" if was_on is enabled else "")
 
 
-# ── check_run ────────────────────────────────────────────────────────────
+# ── check_run / check_character ──────────────────────────────────────────
+
+@_tool("check_character", False, "check_character{name}",
+       "everything a character still lacks, in full (profile, soul, body slots, outfits, "
+       "home, secrets, skills) and its pending media — use it when filling or checking "
+       "existing characters")
+def _check_character(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan 2026-11-25-world-dev-free-complete-characters-budget, Task 5
+    (C1): world_dev_completeness.check_character_lines — the full gap list,
+    whatever the run touched, plus the media gaps (with the run's media on
+    it records the character's media baseline, run bookkeeping only)."""
+    from app.models.character import character_row_exists
+    _only_keys(args, {"name"}, "check_character")
+    name = _str(args, "name", required=True)
+    if not character_row_exists(name):
+        raise ToolRefusal(f"no character {name!r} — use find_characters")
+    return "\n".join(completeness.check_character_lines(step.ctx.run_id, name))
+
 
 @_tool("check_run", False, "check_run{}",
        "what the elements this run created or changed still lack (call it before "
-       "the summary)")
+       "the summary; for an updated character only what the run changed — "
+       "check_character lists everything)")
 def _check_run(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, set(), "check_run")
     lines, complete, total = completeness.check_run_lines(step.ctx.run_id)

@@ -48,8 +48,14 @@ config routing[occasion] if present else default_chain else [].
       enabled True, paused (task queue set_character_paused) ->
       "automatic generation of Demo Gate is paused — Retry media after Resume";
       not paused -> the route note of "profile" ((a)'s text).
-      A build StepSpec with the profile's figure_auto_build False ->
-      "Build automatically is off for Demo Gate" (before any route check).
+      A build StepSpec with the profile's figure_auto_build False, in the
+      AUTOMATIC Build mode (wdm.BUILD_EXPLICIT patched False) ->
+      "Build automatically is off for Demo Gate" (before any route check); in
+      the lane's mode (BUILD_EXPLICIT True, plan 2026-11-25-world-dev-free-
+      complete-characters-budget decision 13) the switch does not apply: the
+      real plan of a character without a base body runs the plain body
+      (explicit plan), whose first occasion base_front has no chain ->
+      the no-chain note of base_front.
       A location step (building-front, occasions ("location",)) ignores the
       character checks: switch on, enabled -> the "location" route note.
   (d) drift guard: the occasion literals the plan's grep finds
@@ -85,7 +91,12 @@ config routing[occasion] if present else default_chain else [].
       "Demo Gate: " + PART_MANUAL + " (Characters → Figure)". A failed step
       (ruling 7a: an automatic Build skips it): X = mesh_footwear, plan
       [pieces(boots, failed), assemble] -> None; plan [pieces(boots, failed)]
-      alone -> the only-failed note naming its label. An empty plan ->
+      alone -> the only-failed note naming its label. (The manual-pendant and
+      failed-step cases run in the AUTOMATIC mode, BUILD_EXPLICIT patched
+      False; in the lane's explicit mode the manual pendant and the failed
+      piece run — figure_build._runnable keeps them — so plan [pendant(manual)]
+      alone -> "note jewellery_mesh" and plan [pieces(boots, failed)] alone ->
+      "note mesh_footwear".) An empty plan ->
       "the figure is already built". An unknown piece kind (item "nope") ->
       "the Build plan of Demo Gate could not be read (...)", never the union. face_retexture (in plain_body only while
       model3d.face_before_rig_planned is True — CONDITIONAL_OCCASIONS): plan
@@ -110,15 +121,19 @@ config routing[occasion] if present else default_chain else [].
       -> None, face on -> its note.
       REAL plan (figure_build.plan and route_check unpatched, routing empty):
       Demo Gate is a fresh humanoid on the base-body pipeline without a base
-      body -> ruling 8a: plan(explicit=False) is [plain_body] with manual
-      BASE_MISSING, which an automatic Build does not run -> step_gate(build)
+      body -> ruling 8a: in the AUTOMATIC mode (BUILD_EXPLICIT False)
+      plan(explicit=False) is [plain_body] with manual BASE_MISSING, which an
+      automatic Build does not run -> step_gate(build)
       == "Demo Gate: No base body yet — Build to create (Characters → Figure)"
       (literal, hand-derived; also == figure.BASE_MISSING's text), NOT
-      "the figure is already built".
+      "the figure is already built". In the lane's explicit mode the plain
+      body runs; its first occasion base_front has no chain (no routing
+      config) -> the no-chain note of base_front.
       Never raises: generation_pause.is_paused raising -> "the pause of
       automatic generation of Demo Gate could not be read (boom)";
-      auto_build_on raising -> "the "Build automatically" switch of Demo Gate
-      could not be read (boom)".
+      auto_build_on raising (AUTOMATIC mode) -> "the "Build automatically"
+      switch of Demo Gate could not be read (boom)"; in the explicit mode it is
+      not read -> the no-chain note of base_front.
       Off-pipeline mesh (character_mesh_occasions): a humanoid (rig mixamo,
       no extra views — humanoids default off — face off) ->
       ["tpose", "mesh_humanoid", "rig_humanoid"]; rig patched "generic" ->
@@ -241,8 +256,13 @@ g = wdm.step_gate(run, "character", NAME, portrait)
 check("(c) then the route note", g == no_chain("profile"), g)
 save_character_profile(NAME, {"name": NAME, "template": "human-roleplay", "gender": "female",
                               "age": 30, figure_build.AUTO_BUILD_KEY: False})
+wdm.BUILD_EXPLICIT = False
 g = wdm.step_gate(run, "character", NAME, build)
-check("(c) Build automatically off", g == f"Build automatically is off for {NAME}", g)
+check("(c) automatic mode: Build automatically off", g == f"Build automatically is off for {NAME}", g)
+wdm.BUILD_EXPLICIT = True
+g = wdm.step_gate(run, "character", NAME, build)
+check("(c) explicit mode: the switch does not apply -> the plain body's route note",
+      g == no_chain("base_front"), g)
 g = wdm.step_gate(run, "location", "loc_x", front)
 check("(c) a location step: its route note", g == no_chain("location"), g)
 
@@ -351,6 +371,7 @@ plan_of(S("template", "t", 0, item_id="i1"), S("cut_texture", "c", 2, item_id="i
 g = gate()
 check("(f) plan with cut_texture -> its note", g == "note garment_cut_texture", g)
 only("jewellery_mesh")
+wdm.BUILD_EXPLICIT = False  # the automatic mode: manual and failed steps do not run
 plan_of(S("pendant", "p", 1, item_id="i2", manual=figure_build.PART_MANUAL), S("assemble", "a", 0))
 g = gate()
 check("(f) manual pendant + assemble -> None (only assemble runs)", g is None, g)
@@ -391,6 +412,13 @@ g = gate()
 check("(f) failed pieces alone -> only-failed note",
       g == (f"{NAME}: only failed steps are left (Own mesh · Demo Boots — failed — Retry) — a manual "
             f"Build retries them (Characters → Figure)"), g)
+wdm.BUILD_EXPLICIT = True  # the lane's mode: both run
+g = gate()
+check("(f) explicit: failed pieces alone run -> their note", g == "note mesh_footwear", g)
+only("jewellery_mesh")
+plan_of(S("pendant", "p", 1, item_id="i2", manual=figure_build.PART_MANUAL))
+g = gate()
+check("(f) explicit: manual pendant alone runs -> its note", g == "note jewellery_mesh", g)
 plan_of(S("pieces", "Own mesh · ?", 3, item_id="nope"))
 g = gate()
 check("(f) unknown piece kind -> plan-unreadable note",
@@ -471,9 +499,14 @@ check("(f) default upscale chain passes chain_only", g is None, g)
 
 # The REAL plan of a fresh character (ruling 8a).
 model3d.face_before_rig_planned = real_face
+wdm.BUILD_EXPLICIT = False
 g = gate()
-check("(f) real plan, no base body -> the plain body's manual note",
+check("(f) automatic mode, real plan, no base body -> the plain body's manual note",
       g == "Demo Gate: No base body yet — Build to create (Characters → Figure)", g)
+wdm.BUILD_EXPLICIT = True
+g = gate()
+check("(f) explicit mode, real plan, no base body -> the plain body runs: base_front's route note",
+      g == no_chain("base_front"), g)
 from app.core import figure  # noqa: E402
 check("(f) ... which is figure.BASE_MISSING", figure.BASE_MISSING == "No base body yet — Build to create",
       figure.BASE_MISSING)
@@ -492,9 +525,13 @@ g = gate()
 check("(f) is_paused raising -> a note", g == f"the pause of automatic generation of {NAME} could not be read (boom)", g)
 generation_pause.is_paused = real_paused
 figure_build.auto_build_on = boom
+wdm.BUILD_EXPLICIT = False
 g = gate()
-check("(f) auto_build_on raising -> its own note",
+check("(f) automatic mode: auto_build_on raising -> its own note",
       g == f'the "Build automatically" switch of {NAME} could not be read (boom)', g)
+wdm.BUILD_EXPLICIT = True
+g = gate()
+check("(f) explicit mode: auto_build_on not read", g == no_chain("base_front"), g)
 figure_build.auto_build_on = real_auto
 
 real_rig = model3d.required_rig

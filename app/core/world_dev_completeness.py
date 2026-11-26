@@ -25,10 +25,28 @@ run made it again; the rows before that delete widen nothing.
 An element counts (in ``check_run``'s "k of n") only when the run created it
 or one of its live rows after the last such delete changed something, so a
 no-op update or a deleted element does not inflate n.
+
+"Complete" is what the character editor shows (plan
+2026-11-25-world-dev-free-complete-characters-budget, Task 5, C1): besides
+the groups above, at least one secret (group ``secrets``; secrets are
+journaled under target kind ``secret``, so only a created character or
+``check_character`` reports it) and a decision on every skill GROUP that is
+not on (group ``skills``, widened by a run's set_skill). The read tool
+``check_character`` always checks in full.
+
+Media gaps (no portrait, no base body) are not agent gaps: the agent has no
+tool for them, so they never make an element incomplete; they are listed
+apart (:func:`media_gaps`), in ``check_run`` also on the line of a complete
+character. With the run's media on, a check records the baseline of a
+character the run has not touched yet with its missing outputs marked due
+(:func:`media_split`) and says "pending" only for a gap whose step is due in
+the run's media plan, so the lane really renders what the line promises;
+with media off the line says nothing will be rendered.
 """
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 #: Inverse op of a journal row -> the gap group of a character it touches.
@@ -39,6 +57,9 @@ GROUP_OF_OP = {
     "remove_outfits": "outfits",
     "restore_soul": "soul",
     "restore_body_slots": "body_slots",
+    # A set_skill row is never a no-op (it is refused otherwise), so it has
+    # no _CHANGE_KEYS entry.
+    "restore_skill_config": "skills",
 }
 
 #: Inverse ops of a location write that make an UPDATED location's
@@ -83,8 +104,9 @@ def _soul_without_content(text: Optional[str]) -> bool:
 def character_gaps(name: str, scope: Optional[Set[str]] = None) -> List[str]:
     """The gaps of a stored character, in a fixed order. ``scope`` None = all
     (a character this run created); otherwise only the gaps of these groups
-    (``home``, ``known``, ``outfits``, ``soul``, ``body_slots``;
-    ``known`` reports only ``knows only its home``)."""
+    (``home``, ``known``, ``outfits``, ``soul``, ``body_slots``,
+    ``secrets``, ``skills``; ``known`` reports only ``knows only its
+    home``). Media gaps are not here (:func:`media_gaps`)."""
     from app.core import soul_writer
     from app.core.world_dev_apply import _template_has_wardrobe
     from app.core.world_dev_tools import _missing_body_attrs, _template_fields
@@ -138,7 +160,140 @@ def character_gaps(name: str, scope: Optional[Set[str]] = None) -> List[str]:
         known = set(get_known_locations(name))
         if known <= {str(home.get("id"))}:
             gaps.append("knows only its home")
+    # The secrets and skills readers run after a write too (create_character's
+    # line, update_character's suffix): a reader error is logged and is no gap,
+    # never a tool error for a write that already happened.
+    if wanted("secrets"):
+        try:
+            from app.models.secrets import list_secrets
+            if not list_secrets(name):
+                gaps.append("no secret (add_secret)")
+        except Exception as exc:  # noqa: BLE001
+            _log().warning("gaps of %s: secrets not readable: %s", name, exc)
+    if wanted("skills"):
+        try:
+            from app.core.world_dev_tools import _open_skill_decisions
+            open_groups = _open_skill_decisions(name)
+        except Exception as exc:  # noqa: BLE001
+            _log().warning("gaps of %s: skill decisions not readable: %s", name, exc)
+            open_groups = []
+        if open_groups:
+            gaps.append("skills not decided (set_skill on or off): "
+                        + ", ".join(str(g["text"]) for g in open_groups))
     return gaps
+
+
+def _log():
+    from app.core.log import get_logger
+    return get_logger("world_dev_completeness")
+
+
+#: :func:`media_gaps` text -> the media step (``world_dev_media``) that renders it.
+MEDIA_GAP_STEPS = {"no portrait": "portrait", "no base body": "build"}
+
+
+def media_gaps(name: str) -> List[str]:
+    """What the media lane renders for a character and it does not have yet:
+    ``no portrait`` (no ``profile_image``, or its file is gone) and
+    ``no base body`` (on the base-body pipeline, no base body stored —
+    ``world_dev_media._base_body_present``). Read-only — no directory is
+    created and no default config saved (callers wrap it in
+    ``no_config_auto_create``); a reader error is no gap (logged)."""
+    from app.core.log import get_logger
+    from app.models.character import get_character_dir, get_character_profile
+    log = get_logger("world_dev_completeness")
+    gaps: List[str] = []
+    try:
+        prof = get_character_profile(name) or {}
+    except Exception as exc:  # noqa: BLE001 — a read error is no gap
+        log.warning("media gaps of %s: profile not readable: %s", name, exc)
+        return gaps
+    try:
+        image = str(prof.get("profile_image") or "").strip()
+        if (not image or Path(image).name != image
+                or not (get_character_dir(name) / "images" / image).is_file()):
+            gaps.append("no portrait")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("media gaps of %s: portrait check failed: %s", name, exc)
+    try:
+        from app.core import base_body
+        from app.core.world_dev_media import _base_body_present
+        if (base_body.is_base_pipeline(name, profile=prof)
+                and not _base_body_present(name, prof)):
+            gaps.append("no base body")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("media gaps of %s: base body check failed: %s", name, exc)
+    return gaps
+
+
+def _media_enabled(run_id: str) -> bool:
+    from app.core import world_dev_runs as wr
+    run = wr.get_run(run_id)
+    return bool(run and run.get("media_enabled"))
+
+
+def media_split(run_id: str, name: str, media: List[str]) -> Tuple[List[str], List[str]]:
+    """(pending, not due) of a character's media gaps with the run's media
+    on. A character the run has not touched yet gets its media baseline
+    here, its missing outputs marked due
+    (``world_dev_media.note_check_touch`` — run bookkeeping, not world data;
+    never raises), otherwise ``world_dev_media.plan`` would never see a
+    character the run only checked. A gap is pending only when its step is
+    due in the run's media plan (``due_step_ids``, which counts a missing
+    output as due — world_dev_media Task 6); a gap whose step a queued or
+    running row of the run already holds (or whose step the plan otherwise
+    does not list) gets it under "not due" — no promise the lane does not
+    keep.
+
+    The recorded baseline OUTLIVES a per-turn rollback on purpose: it is no
+    journal row, so ``world_dev_undo.undo`` never sees it (like the baseline
+    a write step's ``note_touch`` records), and the lane then renders after
+    the next turn exactly what the check found missing — what a run with
+    media on is meant to do anyway; the world itself carries no trace of the
+    rolled-back turn."""
+    from app.core import world_dev_media
+    steps = {gap: MEDIA_GAP_STEPS.get(gap) for gap in media}
+    world_dev_media.note_check_touch(run_id, "character", name,
+                                     {s for s in steps.values() if s})
+    due = world_dev_media.due_step_ids(run_id, "character", name)
+    pending = [gap for gap in media if steps[gap] and steps[gap] in due]
+    return pending, [gap for gap in media if gap not in pending]
+
+
+#: Line texts of the media gaps of ``check_character`` (one line each).
+MEDIA_PENDING = "media pending (rendered after the turn): "
+MEDIA_NOT_DUE = "media missing (not due in this run's media plan — not rendered): "
+MEDIA_OFF = "media missing (Generate media is off for this run — not rendered): "
+#: The shorter suffixes ``check_run`` hangs on a character's line.
+RUN_MEDIA_PENDING = " · media pending: "
+RUN_MEDIA_NOT_DUE = " · media missing (not due — not rendered): "
+RUN_MEDIA_OFF = " · media missing (Generate media is off): "
+
+
+def check_character_lines(run_id: str, name: str) -> List[str]:
+    """The read tool ``check_character``: every gap of a stored character in
+    full scope, then its media gaps — with the run's media on split into
+    pending and not due (:func:`media_split`, which records the baseline of
+    a character the run only checked), with it off one "not rendered"
+    line. A pure read: a character without a stored config is read with
+    its defaults in memory (``no_config_auto_create``), never saved — a
+    write outside the journal that Discard could not take back."""
+    from app.models.character import no_config_auto_create
+    with no_config_auto_create():
+        gaps = character_gaps(name)
+        media = media_gaps(name)
+    lines = [f'character "{name}": ' + (("missing: " + "; ".join(gaps)) if gaps
+                                        else "complete")]
+    if media:
+        if _media_enabled(run_id):
+            pending, not_due = media_split(run_id, name, media)
+            if pending:
+                lines.append(MEDIA_PENDING + "; ".join(pending))
+            if not_due:
+                lines.append(MEDIA_NOT_DUE + "; ".join(not_due))
+        else:
+            lines.append(MEDIA_OFF + "; ".join(media))
+    return lines
 
 
 def _has_floor_plan(loc: Dict[str, Any]) -> bool:
@@ -283,14 +438,19 @@ def _exists(kind: str, ident: str) -> Optional[Dict[str, Any]]:
 def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
     """(one line per element with gaps, complete count, element count) of
     every element the run created or changed that still exists."""
+    from app.models.character import no_config_auto_create
     lines: List[str] = []
     total = complete = 0
+    media_on: Optional[bool] = None
     for kind, ident, scope in run_elements(run_id):
         row = _exists(kind, ident)
         if row is None:
             continue
         if kind == "character":
-            gaps = character_gaps(ident, scope)
+            # A pure read (see check_character_lines).
+            with no_config_auto_create():
+                gaps = character_gaps(ident, scope)
+                media = media_gaps(ident)
             label = f'character "{ident}"'
         elif kind == "location":
             gaps = location_gaps(row, scope is None or "position" in scope,
@@ -305,8 +465,28 @@ def check_run_lines(run_id: str) -> Tuple[List[str], int, int]:
         else:
             gaps, label = [], f"{kind} area {ident}"
         total += 1
+        line = f"{label}: missing: " + "; ".join(gaps) if gaps else f"{label}: complete"
+        if gaps and kind == "character" and scope is not None:
+            line += " (only what this run changed — check_character lists all)"
+        media_suffix = ""
+        if kind == "character":
+            if media:
+                if media_on is None:
+                    media_on = _media_enabled(run_id)
+                if media_on:
+                    pending, not_due = media_split(run_id, ident, media)
+                    if pending:
+                        media_suffix += RUN_MEDIA_PENDING + "; ".join(pending)
+                    if not_due:
+                        media_suffix += RUN_MEDIA_NOT_DUE + "; ".join(not_due)
+                else:
+                    media_suffix = RUN_MEDIA_OFF + "; ".join(media)
         if gaps:
-            lines.append(f"{label}: missing: " + "; ".join(gaps))
+            lines.append(line + media_suffix)
         else:
+            # Media gaps never lower "complete" (the agent cannot fix them), but a
+            # complete character still shows them.
             complete += 1
+            if media_suffix:
+                lines.append(line + media_suffix)
     return lines, complete, total

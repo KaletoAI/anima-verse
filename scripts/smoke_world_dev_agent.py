@@ -34,7 +34,8 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     accepted and still frozen. Second run [create "Demo B2", final] ->
     discard -> rolled_back, "Demo B2" gone, still frozen.
 (c) [bad JSON, world_overview{}, final] -> awaiting_review (one bad body is
-    answered "error: body is not a JSON object", the run goes on; the bad
+    answered "error: body is not a JSON object (JSON error: …" — the
+    position and fix hint of case (y2) follow the prefix), the run goes on; the bad
     call is journaled as a "refused" step -> steps(run) has 2 rows; the two
     step events carry seq 1 (refused) and 2 (the read), in that order).
     [bad, bad, bad] -> 3 in a row = hard failure in turn 1 -> rolled_back,
@@ -56,14 +57,14 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     [create E1, E2, E3, E4]: calls 1-3 write E1-E3 (turn steps 1, 2, 3); the
     4th reply asks for create E4, but the check after the call finds 3 >= 3
     -> the turn is CUT, not rolled back: awaiting_review, note starts
-    "budget reached (steps: 3 of 3 this turn)" and names the follow-up,
+    "budget reached (tool calls: 3 of 3 this turn)" and names the follow-up,
     4 LLM calls, E1-E3 exist with 3 write rows none undone, E4 never written,
     world frozen. Follow-up "continue" [create E4, create E5, "E5 done."]:
-    turn 2 measures from its own start (3 steps) -> 1, 2, final ->
+    turn 2 measures from its own start (3 calls) -> 1, 2, final ->
     awaiting_review "E5 done.", run total steps 5 while max_steps stays 3
     (a cumulative budget would have refused turn 2's first call). Turn 2's
     first LLM call (call 5) carries the assistant line "[turn 1 was cut off:
-    budget reached (steps..." and never names "Demo E4" (the refused reply
+    budget reached (tool calls..." and never names "Demo E4" (the refused reply
     was not kept). turn_summaries = [turn 1 cut_by_budget, reason = the note,
     3 writes, 0 undone; turn 2 kept, 2 writes]. discard -> E1-E5 gone.
     Real failure + foreign edit: [update_location P description "agent",
@@ -102,7 +103,7 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     200 characters (= 50 tokens at 4 characters a token), so the check after
     the first call stops turn 1 before its tool runs; turn 1 has no step yet,
     nothing to keep -> a hard failure -> rolled_back, note names "token
-    budget" and "before the first step", "Demo N1" never written.
+    budget" and "before the first tool call", "Demo N1" never written.
 (o) RunStateError: on the rolled_back run of (n) accept, discard, message
     and stop each raise RunStateError, and the status stays rolled_back.
 (p) restart follow-up: start with max_tokens=1234 -> the run row stores
@@ -133,16 +134,22 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
 (y) estimate_cost patched to 100 tokens a call, max_tokens_total=150:
     [create Y1, create Y2]. Call 1 -> 100 < 150, Y1 written; call 2 -> 200
     >= 150 and the reply asks for a tool -> turn 1 cut (it has 1 step):
-    awaiting_review, note "budget reached (tokens: 200 of 150 this turn)...",
+    awaiting_review, note "budget reached (tokens: 200 of 150 this turn)..."
+    (a limit under 1,000 tokens prints raw counts: in thousands both would
+    read "0k" — _k(200) = 700 // 1000 = 0, _k(150) = 650 // 1000 = 0),
     Y1 kept, Y2 never written. Follow-up [create Y2, "Y2 done."]: turn 2
     counts from 200 -> call 3: turn 100 (total 300) < 150, Y2 written; call 4:
     turn 200 (total 400), final -> awaiting_review "Y2 done.". Turn-2 usage
-    events carry (turn_tokens, total) = (100, 300), (200, 400); turn_usage =
+    events carry (turn_tokens, total, turn_steps) = (100, 300, 0) after LLM
+    call 3, (100, 300, 1) emitted at once when call 3's tool call is counted
+    (count_call: one more step, tokens unchanged), (200, 400, 1) after LLM
+    call 4 (the final reply, no tool call, no count); turn_usage =
     {turn 2, steps 1, tokens 200}; run total 400.
-(u) defaults 60 / 600000 (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL, plan
-    2026-11-25 E15); message(max_steps=5, max_tokens_total=1000) keeps
-    (60, 600000) = max of each; message(max_steps=70) -> (70, 600000) — the
-    raise must exceed the default 60 to prove raising.
+(u) defaults 200 / 2000000 (DEFAULT_MAX_STEPS / DEFAULT_MAX_TOKENS_TOTAL, plan
+    2026-11-25 complete-characters-budget B2); message(max_steps=10,
+    max_tokens_total=1000) keeps (200, 2000000) = max of each;
+    message(max_steps=250) -> (250, 2000000) — the raise must exceed the
+    default 200 to prove raising.
 (v) world frozen before; set_was_frozen raises "disk full" right after
     create_run -> start raises it, the newest run is rolled_back with
     "disk full" in its note, no LLM call, the world stays frozen (the
@@ -167,6 +174,53 @@ Fixture: place P "Demo Pond" (description "calm", room Shore).
     its LLM call holds exactly two read_manual results again, both whole,
     none "superseded" (_fail restored the turn-1 copy whose newer copy was
     cut away).
+The budget counts MODEL TOOL CALLS (plan 2026-11-25
+complete-characters-budget Task 1, its cases (w), (x), (z) — named (w2),
+(x2), (z2) here because (w), (x), (z) were taken):
+(w2) one call, several rows: max_steps=2, [create_character "Demo Rows"
+     (human-roleplay, no outfits: one write row), update_character{Demo
+     Rows, patch {soul:character_presence "Text A", age 30}} (two groups:
+     restore_soul + restore_character = two write rows, as in
+     smoke_world_dev_tools (ae)), world_overview{}]: call 1 -> used 1,
+     call 2 -> used 1 < 2 runs -> used 2; the 3rd reply finds 2 >= 2 -> cut,
+     note starts "budget reached (tool calls: 2 of 2 this turn)", run.steps
+     2, 3 write rows (create + 2 groups). On 8962e4d04 begin counted journal
+     rows: after call 2 the counter read 3 (1 + 2 rows), the note said
+     "steps: 3 of 2".
+(x2) refusals count: ['<tool name="get_character">bad json</tool>',
+     '<tool name="no_such_tool">{}</tool>', "done"] -> both calls refused
+     (bad body; unknown tool), the final reply ends turn 1 ->
+     awaiting_review, run.steps == 2, 2 refused journal rows.
+(z2) token note in k: _k(2_000_123) = (2000123 + 500) // 1000 = 2000 ->
+     "2,000k"; _k(1_499) = 1999 // 1000 = 1 -> "1k"; _k(1_500) = 2000 //
+     1000 = 2 -> "2k"; _k(0) = 500 // 1000 = 0 -> "0k". estimate_cost
+     patched to 600 + 400 = 1000 tokens a call, max_tokens_total=1500,
+     [create Z1, create Z2, create Z3]: top check 0 < 1500 -> call 1 -> 1000,
+     1000 < 1500 -> Z1 written; top check 1000 < 1500 -> call 2 -> 2000, the
+     reply asks for a tool and 2000 >= 1500 -> cut (the plan text said "the
+     third reply"; by this arithmetic it is the second) -> 2 LLM calls,
+     note == "budget reached (tokens: 2k of 2k this turn) — the turn's work
+     is kept; send a follow-up to continue" (2000 -> "2k", 1500 -> "2k"),
+     Z1 kept, Z2 never written.
+(y2) a refused JSON body tells the model how to fix it (plan 2026-11-25
+    complete-characters-budget Task 8, C6 — its case (y), named (y2) here
+    because (y) was taken): turn 1 [update_character with
+    the body {"name": "X", "patch": {"soul:a": "he said "hi""}}, the body
+    [1], "done"] -> awaiting_review, two refused rows. Column by hand: the
+    prefix {"name": "X", "patch": {"soul:a": "he said " is 1 + 6 ("name")
+    + 2 (": ") + 3 ("X") + 2 (", ") + 7 ("patch") + 2 + 1 ({) + 8
+    ("soul:a") + 2 + 10 ("he said ") = 44 characters, so the stray h sits
+    at 0-based position 44 = column 45; json names it "Expecting ','
+    delimiter". Row 1's line == 'error: body is not a JSON object (JSON
+    error: Expecting ',' delimiter at line 1 column 45) — inside a string
+    write a double quote as \\" and a line break as \\n; split a very long
+    text into several calls' — the two-character sequences backslash+quote
+    and backslash+n, never a real line break. Row 2 (parses, not an
+    object): 'error: body is not a JSON object (got list)'. On 8962e4d04
+    both rows read the bare "error: body is not a JSON object".
+    The rendered system prompt names check_character (tool list) and the
+    step-5 sentence "For a task that asks to fill, complete or check
+    existing characters, call `check_character` for each of them".
 Last: every LLM-queue registration was closed (active == done).
 """
 import asyncio
@@ -361,7 +415,8 @@ async def main():
     steps = wr.steps(run_id)
     check("(c) bad call journaled refused + one read", [s["kind"] for s in steps]
           == ["refused", "read"], [(s["kind"], s["line"]) for s in steps])
-    check("(c) bad line", steps and steps[0]["line"] == "error: body is not a JSON object",
+    check("(c) bad line", steps and steps[0]["line"].startswith(
+              "error: body is not a JSON object (JSON error: "),
           steps and steps[0]["line"])
     c_evs = [e async for e in rm.subscribe(run_id, 0) if e["type"] == "step"]
     check("(c) refused + read step events carry their journal seq",
@@ -425,8 +480,8 @@ async def main():
     note1 = run["note"] or ""
     check("(e) awaiting_review, not rolled back", run["status"] == "awaiting_review",
           (run["status"], run["note"]))
-    check("(e) note: budget reached (steps: 3 of 3 this turn)",
-          note1.startswith("budget reached (steps: 3 of 3 this turn)")
+    check("(e) note: budget reached (tool calls: 3 of 3 this turn)",
+          note1.startswith("budget reached (tool calls: 3 of 3 this turn)")
           and "follow-up" in note1, note1)
     check("(e) 4 LLM calls", len(fake.calls) == 4, len(fake.calls))
     check("(e) E1/E2/E3 kept, E4 never written",
@@ -448,7 +503,7 @@ async def main():
     first2 = fake.calls[4] if len(fake.calls) > 4 else []
     check("(e) turn 2 history says turn 1 was cut off",
           any(m["role"] == "assistant"
-              and m["content"].startswith("[turn 1 was cut off: budget reached (steps")
+              and m["content"].startswith("[turn 1 was cut off: budget reached (tool calls")
               for m in first2), [m["content"][:80] for m in first2])
     check("(e) the call the budget refused is not in the history",
           not any("Demo E4" in m["content"] for m in first2),
@@ -636,14 +691,15 @@ async def main():
     check("(m) M1 gone", not by_name("Demo M1"))
     check("(m) unfrozen", not is_world_frozen())
 
-    print("(n) token budget hit in turn 1 before the first step")
+    print("(n) token budget hit in turn 1 before the first tool call")
     rm, _ = manager([create("Demo N1"), "x"])
     run_id = await start(rm, max_tokens_total=50)
     run = await settle(rm, run_id)
     check("(n) rolled_back", run["status"] == "rolled_back", (run["status"], run["note"]))
     check("(n) note names the token budget", "token budget" in (run["note"] or ""),
           run["note"])
-    check("(n) note says before the first step", "before the first step" in (run["note"] or ""),
+    check("(n) note says before the first tool call",
+          "before the first tool call" in (run["note"] or ""),
           run["note"])
     check("(n) N1 never written", not by_name("Demo N1")
           and not [s for s in wr.steps(run_id) if s["kind"] == "write"])
@@ -797,9 +853,13 @@ async def main():
           (run["status"], run["note"]))
     check("(y) run total 400 tokens", run["tokens_in"] + run["tokens_out"] == 400,
           (run["tokens_in"], run["tokens_out"]))
-    check("(y) turn-2 usage: turn_tokens 100, 200 against totals 300, 400",
-          [(e["turn_tokens"], e["tokens_in"] + e["tokens_out"]) for e in y_evs]
-          == [(100, 300), (200, 400)], y_evs)
+    # By hand: LLM call 1 of turn 2 -> 100 turn tokens (300 total), 0 calls;
+    # its tool call is counted -> a usage event at once, turn_steps 1, tokens
+    # unchanged; LLM call 2 (the final reply) -> 200 (400 total), still 1.
+    check("(y) turn-2 usage: (turn_tokens, total, turn_steps) per event",
+          [(e["turn_tokens"], e["tokens_in"] + e["tokens_out"], e["turn_steps"])
+           for e in y_evs]
+          == [(100, 300, 0), (100, 300, 1), (200, 400, 1)], y_evs)
     check("(y) turn_usage of the newest turn", rm.turn_usage(run_id)
           == {"turn": 2, "steps": 1, "tokens": 200}, rm.turn_usage(run_id))
     await rm.discard(run_id)
@@ -808,15 +868,15 @@ async def main():
     rm, fake = manager([create("Demo U1"), "U1 done.", "ok.", "ok."])
     run_id = await start(rm)
     await settle(rm, run_id)
-    await rm.message(run_id, "lower", max_steps=5, max_tokens_total=1000)
+    await rm.message(run_id, "lower", max_steps=10, max_tokens_total=1000)
     run = await settle(rm, run_id)
-    check("(u) lowering keeps 60 / 600000",
-          (run["max_steps"], run["max_tokens_total"]) == (60, 600000),
+    check("(u) lowering keeps 200 / 2000000",
+          (run["max_steps"], run["max_tokens_total"]) == (200, 2000000),
           (run["max_steps"], run["max_tokens_total"]))
-    await rm.message(run_id, "raise", max_steps=70)
+    await rm.message(run_id, "raise", max_steps=250)
     run = await settle(rm, run_id)
-    check("(u) raising steps -> 70 / 600000",
-          (run["max_steps"], run["max_tokens_total"]) == (70, 600000),
+    check("(u) raising steps -> 250 / 2000000",
+          (run["max_steps"], run["max_tokens_total"]) == (250, 2000000),
           (run["max_steps"], run["max_tokens_total"]))
     await rm.discard(run_id)
 
@@ -950,6 +1010,88 @@ async def main():
           len(z3) == 2 and all(c.startswith("[result read_manual] # Manual") for c in z3),
           [c[:60] for c in z3])
     await rm.discard(run_id)
+
+    print("(w2) one call with several journal rows counts once")
+    rows_create = call("create_character", '{"data": {"character_name": "Demo Rows", '
+                       '"template": "human-roleplay"}}')
+    rows_update = call("update_character", '{"name": "Demo Rows", "patch": '
+                       '{"soul:character_presence": "Text A", "age": 30}}')
+    rm, fake = manager([rows_create, rows_update, call("world_overview", "{}")])
+    run_id = await start(rm, max_steps=2)
+    run = await settle(rm, run_id)
+    w_writes = [s for s in wr.steps(run_id) if s["kind"] == "write"]
+    check("(w2) cut: budget reached (tool calls: 2 of 2 this turn)",
+          run["status"] == "awaiting_review"
+          and (run["note"] or "").startswith("budget reached (tool calls: 2 of 2 this turn)"),
+          (run["status"], run["note"]))
+    check("(w2) run.steps == 2", run["steps"] == 2, run["steps"])
+    check("(w2) 3 write rows (create + 2 groups)", len(w_writes) == 3,
+          [(s["tool"], (s.get("inverse") or {}).get("op")) for s in w_writes])
+    check("(w2) 3 LLM calls", len(fake.calls) == 3, len(fake.calls))
+    await rm.discard(run_id)
+
+    print("(x2) refused calls count")
+    rm, fake = manager(['<tool name="get_character">bad json</tool>',
+                        '<tool name="no_such_tool">{}</tool>', "done"])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    check("(x2) awaiting_review", run["status"] == "awaiting_review",
+          (run["status"], run["note"]))
+    check("(x2) run.steps == 2", run["steps"] == 2, run["steps"])
+    check("(x2) 2 refused journal rows",
+          [s["kind"] for s in wr.steps(run_id)] == ["refused", "refused"],
+          [(s["kind"], s["line"]) for s in wr.steps(run_id)])
+    await rm.discard(run_id)
+
+    print("(z2) token note in thousands")
+    check("(z2) _k by hand",
+          [wa._k(2_000_123), wa._k(1_499), wa._k(1_500), wa._k(0)]
+          == ["2,000k", "1k", "2k", "0k"],
+          [wa._k(n) for n in (2_000_123, 1_499, 1_500, 0)])
+    llm_cost.estimate_cost = lambda *a, **k: (600, 400, 0.0)
+    try:
+        rm, fake = manager([create("Demo Z1"), create("Demo Z2"), create("Demo Z3")])
+        run_id = await start(rm, max_tokens_total=1500)
+        run = await settle(rm, run_id)
+    finally:
+        llm_cost.estimate_cost = real_estimate
+    check("(z2) note in k", run["note"] == ("budget reached (tokens: 2k of 2k this turn) "
+                                           "— the turn's work is kept; send a follow-up "
+                                           "to continue"), run["note"])
+    check("(z2) 2 LLM calls, Z1 kept, Z2 never written",
+          len(fake.calls) == 2 and len(by_name("Demo Z1")) == 1 and not by_name("Demo Z2"),
+          (len(fake.calls), by_name("Demo Z2")))
+    await rm.discard(run_id)
+
+    print("(y2) a bad JSON body carries the parse position and the escape hint")
+    rm, fake = manager([call("update_character",
+                             '{"name": "X", "patch": {"soul:a": "he said "hi""}}'),
+                        call("update_character", "[1]"), "done"])
+    run_id = await start(rm)
+    run = await settle(rm, run_id)
+    y_rows = [s for s in wr.steps(run_id) if s["kind"] == "refused"]
+    y_lines = [s.get("line") or "" for s in y_rows]
+    check("(y2) awaiting_review, 2 refused rows",
+          run["status"] == "awaiting_review" and len(y_rows) == 2,
+          (run["status"], y_lines))
+    y1 = y_lines[0] if y_lines else ""
+    check("(y2) row 1: JSON error position",
+          y1.startswith("error: body is not a JSON object (JSON error: Expecting ',' "
+                        "delimiter at line 1 column 45)"), y1)
+    check("(y2) row 1: exact hint", y1 == (
+        "error: body is not a JSON object (JSON error: Expecting ',' delimiter at "
+        "line 1 column 45) — inside a string write a double quote as \\\" and a "
+        "line break as \\n; split a very long text into several calls"), y1)
+    check("(y2) row 1: literal backslash escapes, no real line break",
+          '\\"' in y1 and '\\n' in y1 and "\n" not in y1, y1)
+    check("(y2) row 2: not an object", len(y_lines) == 2
+          and y_lines[1] == "error: body is not a JSON object (got list)", y_lines)
+    await rm.discard(run_id)
+    system = wa._render_system()
+    check("(y2) system prompt lists check_character", "check_character{name}" in system)
+    check("(y2) system prompt step 5 names check_character for fill tasks",
+          "For a task that asks to fill, complete or check existing characters, call "
+          "`check_character` for each of them" in " ".join(system.split()))
 
     check("every LLM registration closed", COUNTS["active"] == COUNTS["done"]
           and COUNTS["active"] > 0, COUNTS)
