@@ -490,8 +490,14 @@ def known_about_others_block(character_name: str) -> str:
 
 
 def build_secrets_prompt_section(character_name: str) -> str:
-    """Build own secrets and a bounded list of recently learned secrets."""
-    own_secrets = [s for s in list_secrets(character_name) if not is_record(s)]
+    """Build own secrets and a bounded list of recently learned secrets.
+
+    Quest hints (``source == "quest"``) are excluded because they are shown by
+    the per-turn quest block (``app/core/quest_prompt.py``), never in this
+    cached section.
+    """
+    own_secrets = [s for s in list_secrets(character_name)
+                   if not is_record(s) and s.get("source") != "quest"]
     known_block = known_about_others_block(character_name)
     parts = []
 

@@ -43,6 +43,7 @@
                               needs the pose keys, and changing WHAT IT DOES is
                               not one of the initiatives this turn holds back.
      known_secrets_block       — Knowledge about others (same limits as chat)
+     quest_block               — quest giver wishes and hints you may tell (app/core/quest_prompt.py)
      skill_context_blocks   — self-contained sections contributed by the
                               character's active skills (e.g. "Places you can
                               go"). The SAME block agent_thought.md renders:
@@ -152,6 +153,11 @@ SetActivity is only a free body pose or room-owned marker; furniture actions are
 {% endif %}
 {% if known_secrets_block %}
 {{ known_secrets_block }}
+{% endif %}
+{% if quest_block is defined and quest_block %}
+
+=== Quests you are part of ===
+{{ quest_block }}
 {% endif %}
 {% if tools_hint %}
 

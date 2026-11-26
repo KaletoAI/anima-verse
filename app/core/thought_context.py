@@ -144,6 +144,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
+        "quest_block": _build_quest_block(character_name),
         "skill_context_blocks": "",  # joined package contributions
         # Additional context — currently rendered in agent_thought_in_chat.md.
         # Agent_thought.md ignores them silently (no template reference).
@@ -700,6 +701,12 @@ def _outfit_decision_hint(character_name: str) -> str:
     except Exception as e:
         logger.debug("outfit-decision block failed for %s: %s", character_name, e)
         return ""
+
+
+def _build_quest_block(character_name: str) -> str:
+    """Quest giver wishes and quest hints (app/core/quest_prompt.py), "" when none."""
+    from app.core.quest_prompt import block_for
+    return block_for(character_name)
 
 
 def _build_retrospective_block(character_name: str) -> str:

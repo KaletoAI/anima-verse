@@ -21,7 +21,8 @@ on the last user turn, BEHIND the history. Derived expectations:
         self_wearing, partner_wearing, partner_state_lines, partner_address,
         present_characters, present_details, inventory_carrying_section,
         inventory_room_section, focused_items, known_activities,
-        events_section, assignment_section, recent_activity_section,
+        events_section, assignment_section, quest_section,
+        recent_activity_section,
         memory_section, relationships_section, away_block, reply_shape_section,
         addressed_to_me, addressed_names, winding_down, respond_opportunity
     Changing these facts must not change either stable system prompt.
@@ -43,8 +44,8 @@ on the last user turn, BEHIND the history. Derived expectations:
 
 [5] Order inside the scene state, the moment's most binding facts last:
         [SCENE STATE < SITUATION < SELFSTATE < NOTE < PRESENT < PLACES
-        < MEMORY < RELATIONS < AWAYLINE < "spoke to YOU directly" < This moment:
-        < SKIP < [END OF SCENE STATE]
+        < ASSIGNLINE < QUESTLINE < RECENTLINE < MEMORY < RELATIONS < AWAYLINE
+        < "spoke to YOU directly" < This moment: < SKIP < [END OF SCENE STATE]
     (winding_down on: its SKIP line is the last rule before the end marker.)
 
 [6] attach_moment(messages, moment):
@@ -77,6 +78,13 @@ on the last user turn, BEHIND the history. Derived expectations:
     IDENTITY ===" and before TOOLS_A, in both reply templates; per-turn
     changes still leave the system prompt untouched; without the variable
     (or with "") no such line.
+
+[12] Quest block in chat_moment.md (quest stage 2, D15):
+    - _moment(quest_section="") omits "Quests you are part of:";
+    - _moment() (with quest_section="- QUESTLINE") contains "Quests you are part of:"
+      exactly once;
+    - rendering chat/chat_moment.md without the key quest_section at all does
+      not raise under StrictUndefined and omits "Quests you are part of:".
 
 [7] build_prompt_section(volatile=...) with four fields in template order
         a: plain                                   -> stable
@@ -120,7 +128,8 @@ PER_TURN = {
     "self_wearing", "partner_wearing", "partner_state_lines",
     "present_characters", "present_details", "inventory_carrying_section",
     "inventory_room_section", "focused_items", "known_activities",
-    "events_section", "assignment_section", "recent_activity_section",
+    "events_section", "assignment_section", "quest_section",
+    "recent_activity_section",
     "memory_section", "relationships_section", "away_block", "reply_shape_section",
     "addressed_to_me", "addressed_names", "winding_down", "respond_opportunity",
     "partner_address",
@@ -172,7 +181,7 @@ check("[4] world part shared up to the language line",
 
 
 # [5]
-def _moment(**over):
+def _moment_ctx(**over):
     ctx = dict(
         character_name="Rosi", partner_mode="room", partner_name="Kai",
         partner_state_lines=[], partner_address="", present_characters="Kai, Liesa",
@@ -180,16 +189,22 @@ def _moment(**over):
         self_state_lines=["SELFSTATE"], condition_reminder="", moment_notes=["NOTE"],
         self_wearing="", partner_wearing="", inventory_carrying_section="",
         inventory_room_section="", focused_items="", known_activities="PLACES",
-        events_section="", assignment_section="", recent_activity_section="",
+        events_section="", assignment_section="ASSIGNLINE",
+        quest_section="- QUESTLINE", recent_activity_section="RECENTLINE",
         memory_section="MEMORY", relationships_section="RELATIONS", away_block="- AWAYLINE",
         reply_shape_section="- brief", moment_facts=[], addressed_to_me=True, addressed_names="",
         respond_opportunity=False, winding_down=True)
     ctx.update(over)
-    return render("chat/chat_moment.md", **ctx)
+    return ctx
+
+
+def _moment(**over):
+    return render("chat/chat_moment.md", **_moment_ctx(**over))
 
 
 m = _moment()
 morder = ["[SCENE STATE", "SITUATION", "SELFSTATE", "NOTE", "PRESENT", "PLACES",
+          "ASSIGNLINE", "QUESTLINE", "RECENTLINE",
           "MEMORY", "RELATIONS", "AWAYLINE", "spoke to YOU directly", "This moment:",
           "reply with exactly: SKIP", "[END OF SCENE STATE]"]
 mpos = [m.find(s) for s in morder]
@@ -286,6 +301,18 @@ for template in ("chat/chat_stream.md", "chat/npc_talk.md"):
                             **{name: f"CHANGED_{name}" for name in PER_TURN}), True)
     check(f"[11] {template}: no line when unlinked",
           "You are also" in _stream(template, linked_leader=""), False)
+
+
+# [12]
+check("[12] empty quest_section omits header",
+      "Quests you are part of:" in _moment(quest_section=""), False)
+check("[12] non-empty quest_section renders header once",
+      _moment().count("Quests you are part of:"), 1)
+_ctx_no_quest = _moment_ctx()
+del _ctx_no_quest["quest_section"]
+_rendered_no_quest = render("chat/chat_moment.md", **_ctx_no_quest)
+check("[12] missing quest_section key renders without header",
+      "Quests you are part of:" in _rendered_no_quest, False)
 
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")

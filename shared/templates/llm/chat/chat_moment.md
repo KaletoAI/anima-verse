@@ -28,6 +28,7 @@
        the chat LLM calls tools itself, a plain name list (no ids, no syntax)
        when it does not (prop_actions_executable false, the rp_first reply)
      events_section, assignment_section, recent_activity_section
+     quest_section — quest giver wishes and quest hints this character may tell (app/core/quest_prompt.py::block_for; "- " bullets, empty = none)
      memory_section, relationships_section
      away_block — people named in this prompt or the answered line who are out
        of the world (avatar-only presence, uncontrolled), "- <name> <away note>"
@@ -113,6 +114,11 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 {% if assignment_section %}
 
 {{ assignment_section }}
+{% endif %}
+{% if quest_section is defined and quest_section %}
+
+Quests you are part of:
+{{ quest_section }}
 {% endif %}
 {% if recent_activity_section %}
 

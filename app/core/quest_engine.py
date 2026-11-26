@@ -596,6 +596,11 @@ def _has_live_runs() -> bool:
     return (_refresh_live() if known is None else known) > 0
 
 
+def has_live_runs() -> bool:
+    """Whether any run is hidden or open (cached count; the cheap early-out of prompt builders)."""
+    return _has_live_runs()
+
+
 # --- Push and side effects (always outside locks and transactions) -------------------------------
 
 def _quests_changed() -> None:

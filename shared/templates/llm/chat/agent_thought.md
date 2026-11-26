@@ -41,6 +41,7 @@
      needs_urgent, needs_felt   — active need strings, ordered by stat field
      rhythm_sleep_now          — True only when the current rhythm block is sleep
      tracker_block             — carried tracker-items revealing target locations
+     quest_block               — quest giver wishes and hints you may tell (app/core/quest_prompt.py)
      recent_thoughts           — how this character's OWN last thoughts ENDED,
                                  short closing excerpts (private — never another
                                  character's, never in a chat prompt)
@@ -179,6 +180,11 @@ If this turn starts something you will only carry out LATER, record it with a ma
 
 === Tracker ===
 {{ tracker_block }}
+{% endif %}
+{% if quest_block is defined and quest_block %}
+
+=== Quests you are part of ===
+{{ quest_block }}
 {% endif %}
 {% if retrospective_block %}
 

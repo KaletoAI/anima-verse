@@ -1242,6 +1242,10 @@ def _build_chat_prompt(character_name: str,
         from app.models.intents import build_intents_prompt_section
         assignment_section = build_intents_prompt_section(character_name) or ""
 
+    # ---- Quest giver / hint lines (per turn: scene state only, never the system prompt) ----
+    from app.core.quest_prompt import block_for as _quest_block_for
+    quest_section = _quest_block_for(character_name)
+
     # ---- Current situation block --------------------------------------
     current_location_id = get_character_current_location(character_name)
     current_location = get_location_name(current_location_id) if current_location_id else ""
@@ -1685,6 +1689,7 @@ def _build_chat_prompt(character_name: str,
         known_activities=known_activities,
         events_section=events_section,
         assignment_section=assignment_section,
+        quest_section=quest_section,
         recent_activity_section=recent_activity_section,
         memory_section=memory_section,
         relationships_section=relationships_section,
