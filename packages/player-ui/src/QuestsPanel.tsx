@@ -10,6 +10,7 @@
  * (the server's order). A card shows title, summary, the done steps (who
  * fulfilled each and when) and the current one, the time left, and — when the
  * avatar does not meet the quest's requirements — a lock with the author's reason.
+ * A done quest also shows the reward items it gave this avatar.
  *
  * `QuestBook` is the pure rendering (tests render it with fixtures);
  * `QuestsPanel` polls the endpoint. The quest engine pushes `notices` to the
@@ -43,6 +44,8 @@ export interface QuestBookEntry {
   locked?: string
   /** Ended quest: when it ended, a finished game-time label. */
   ended_label?: string
+  /** Done quest: the reward items this avatar received, a finished server string. */
+  rewards_label?: string
 }
 
 export interface QuestBookResp {
@@ -96,6 +99,9 @@ function QuestCard({ quest }: { quest: QuestBookEntry }) {
             )
           })}
         </ol>
+      ) : null}
+      {quest.rewards_label ? (
+        <div className="player-quest-reward">{`${t('Reward')}: ${quest.rewards_label}`}</div>
       ) : null}
       {!ended && quest.time_left_label ? (
         <div className="player-quest-time">{`${t('Time left')}: ${quest.time_left_label}`}</div>

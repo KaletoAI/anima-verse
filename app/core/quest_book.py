@@ -17,8 +17,10 @@ Texts (title, summary, step text, the author's lock text) go through ``quest_eng
 placeholder becomes the label frozen on the run at start. A label is not a spoiler; ids and hints still are.
 
 Labels are finished server strings in ``lang`` (D14): ``done_label`` / ``ended_label`` through
-``GameTime.parse(...).display_label(lang)``, ``time_left_label`` through :func:`_time_left_label`. ``locked`` is
-the author's lock text from ``quest_engine.avatar_view`` (D8); the engine's English fallback is translated.
+``GameTime.parse(...).display_label(lang)``, ``time_left_label`` through :func:`_time_left_label`, and
+``rewards_label`` (done quests only: the reward items given to THIS avatar, names only — never ids or other
+effect details) through :func:`reward_items_label`. ``locked`` is the author's lock text from
+``quest_engine.avatar_view`` (D8); the engine's English fallback is translated.
 """
 from __future__ import annotations
 
@@ -34,6 +36,44 @@ CHRONICLE_SIZE = 10
 QUEST_FIELDS = ("id", "title", "summary", "state")
 #: The fields of one listed step.
 STEP_FIELDS = ("text", "state")
+#: The optional entry keys, each added only when it applies (open: time_left_label, locked; ended: ended_label; done: rewards_label).
+OPTIONAL_FIELDS = ("time_left_label", "locked", "ended_label", "rewards_label")
+
+
+def reward_items_label(run_id: str, avatar: str, lang: str = "en") -> str:
+    """Finished label of reward items granted to ``avatar`` in ``run_id``, in first-seen order.
+
+    Returns ``""`` when empty or on any read failure (never raises; never exposes item ids).
+    """
+    if not run_id or not avatar:
+        return ""
+    from app.core.i18n import localized
+    from app.models import inventory, quests
+    try:
+        totals: Dict[str, int] = {}
+        for obj in quests.list_objects(run_id, statuses=("live",)):
+            if obj.get("position") != "reward" or obj.get("kind") != "grant":
+                continue
+            ref = obj.get("ref") or {}
+            if ref.get("character") != avatar:
+                continue
+            item_id = ref.get("item_id")
+            if not item_id:
+                continue
+            totals[item_id] = totals.get(item_id, 0) + int(ref.get("quantity") or 1)
+        parts: List[str] = []
+        for item_id, qty in totals.items():
+            item = inventory.get_item(item_id)
+            if not item:
+                continue
+            name = str(localized(item, "name", lang) or "").strip()
+            if not name:
+                continue
+            parts.append(name if qty == 1 else f"{qty} \u00d7 {name}")
+        return ", ".join(parts)
+    except Exception as e:  # noqa: BLE001 - never break book or payout notice
+        logger.warning("reward_items_label for run %s / %s failed: %s", run_id, avatar, e)
+        return ""
 
 
 def _label(canonical: str, lang: str) -> str:
@@ -115,6 +155,10 @@ def _entry(run: Dict[str, Any], avatar: str, lang: str, now) -> Dict[str, Any]:
         label = _label(run.get("ended_game_ts") or "", lang)
         if label:
             entry["ended_label"] = label
+        if run.get("state") == "done":
+            rewards = reward_items_label(run.get("id") or "", avatar, lang)
+            if rewards:
+                entry["rewards_label"] = rewards
     return entry
 
 

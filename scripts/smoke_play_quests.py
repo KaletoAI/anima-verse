@@ -46,6 +46,22 @@ WHAT FOLLOWS BY HAND
     now is exactly that limit -> time_left_label "1 d 2 h" / "1 h 30 min" / "20 min"; R has none.
  8. Route: "/play/quests" is a registered GET path; the player GET -> 200 and the body equals
     build_player_quests("A", "en") (A's language is en).
+ 9. Preparing: a ready template "Staging" (Errand roles/steps) with a setup create_item starts in state
+    "preparing". Without running pass_once, its id is in no book entry and "Staging" appears nowhere in
+    json.dumps(book). Cancelled while preparing -> still absent (it never opened); one pass_once cleans up.
+10. Reward label + notice: template "Prize" (Errand roles, one step at_place, rewards all permanent: charm
+    create_item "Lucky charm" tool, charm_given give_item charm, coin create_item "Coin", coin_given give_item
+    coin qty 3, npc_gift give_item charm to giver). Started -> open; step 0 recorded for A -> done + pending
+    reward payout with avatar A; pass_once -> payout applied. By hand: A received charm x1 and coin x3 in
+    first-seen order -> "Lucky charm, 3 × Coin"; N received charm x1 -> "Lucky charm". A's book entry has
+    exact keys {id, title, summary, state, steps, ended_label, rewards_label} and rewards_label ==
+    "Lucky charm, 3 × Coin". A's quest notifications for this run are ["Reward: Lucky charm, 3 × Coin"]
+    (no per-item "You received ..." notices); a second pass_once adds none; t("Reward: {items}", "de") ==
+    "Belohnung: {items}". Spoilers: json.dumps(book) contains none of charm/coin item ids, "charm_given",
+    "npc_gift", "grant", "quest_run", "payout".
+11. Whitelist: quest_book.OPTIONAL_FIELDS == ("time_left_label", "locked", "ended_label", "rewards_label");
+    every entry in the final book has keys within QUEST_FIELDS + ("steps",) + OPTIONAL_FIELDS; no open or
+    cancelled entry has "rewards_label".
 """
 import json
 import os
@@ -94,13 +110,13 @@ def main() -> int:
     import app
     assert Path(app.__file__).resolve().is_relative_to(ROOT), app.__file__
     from app.server import app as server_app
-    from app.core import auth_dependency, quest_book, quest_engine, quest_types
+    from app.core import auth_dependency, item_images, quest_book, quest_effects, quest_engine, quest_types
     from app.core.db import init_schema
     from app.core.game_time import GameDuration, GameTime
     from app.core.i18n import t
     from app.core.timeutils import set_game_time
     from app.core.users import create_user, get_user_by_id, update_user
-    from app.models import character as chars, inventory, quests, world
+    from app.models import character as chars, inventory, notifications, quests, world
     from fastapi.testclient import TestClient
     import logging
     logging.disable(logging.INFO)
@@ -228,6 +244,99 @@ def main() -> int:
         check("player GET 200", resp.status_code, 200)
         check("body is the book", resp.json() if resp.status_code == 200 else None,
               quest_book.build_player_quests("A", "en"))
+
+    orig_gen = item_images.generate_item_image_sync
+    item_images.generate_item_image_sync = lambda item_id, overrides=None, *, raise_errors=False: True
+    try:
+        print("[9] preparing")
+        staging_tid = template(
+            title="Staging",
+            setup_effects=[{"key": "box", "type": "create_item", "params": {"name": "Staging box"}}],
+        )
+        staging = start(staging_tid)
+        check("Staging is preparing", staging.get("state"), "preparing")
+        payload = quest_book.build_player_quests("A", "en")
+        check("preparing run absent", staging["id"] in entries(payload), False)
+        check("Staging nowhere", "Staging" in json.dumps(payload), False)
+        check("cancel preparing", quest_engine.cancel_run(staging["id"]), True)
+        payload = quest_book.build_player_quests("A", "en")
+        check("cancelled preparing run absent", staging["id"] in entries(payload), False)
+        quest_effects.pass_once()
+
+        print("[10] reward label + notice")
+        prize_tid = template(
+            title="Prize",
+            steps=[{"id": "s1", "text": "Go to the place.", "hint": "",
+                    "condition": {"type": "at_place", "params": {"place": "place"}}}],
+            rewards=[
+                {"key": "charm", "type": "create_item", "permanent": True,
+                 "params": {"name": "Lucky charm", "category": "tool"}},
+                {"key": "charm_given", "type": "give_item", "permanent": True,
+                 "params": {"item": "charm"}},
+                {"key": "coin", "type": "create_item", "permanent": True,
+                 "params": {"name": "Coin"}},
+                {"key": "coin_given", "type": "give_item", "permanent": True,
+                 "params": {"item": "coin", "quantity": 3}},
+                {"key": "npc_gift", "type": "give_item", "permanent": True,
+                 "params": {"item": "charm", "to": "giver"}},
+            ],
+        )
+        prize = start(prize_tid)
+        check("Prize is open", prize.get("state"), "open")
+        prize_done = quests.record_step_done(prize["id"], 0, avatar="A", mind="A")
+        check("Prize is done", (prize_done or {}).get("state"), "done")
+        payouts_before = [p for p in quests.list_payouts(states=("pending",), run_id=prize["id"])
+                          if p.get("position") == "reward"]
+        check("pending reward payout for A",
+              [(p.get("position"), p.get("avatar"), p.get("state")) for p in payouts_before],
+              [("reward", "A", "pending")])
+        quest_effects.pass_once()
+        payouts_after = [p for p in quests.list_payouts(states=(), run_id=prize["id"])
+                         if p.get("position") == "reward"]
+        check("reward payout applied", [p.get("state") for p in payouts_after], ["applied"])
+
+        payload = quest_book.build_player_quests("A", "en")
+        prize_entry = entries(payload).get(prize["id"], {})
+        check("Prize entry keys", sorted(prize_entry),
+              sorted(["id", "title", "summary", "state", "steps", "ended_label", "rewards_label"]))
+        check("Prize rewards_label", prize_entry.get("rewards_label"), "Lucky charm, 3 \u00d7 Coin")
+        reward_fn = getattr(quest_book, "reward_items_label", None)
+        check("N reward_items_label",
+              reward_fn(prize["id"], "N", "en") if callable(reward_fn) else None,
+              "Lucky charm")
+
+        def run_quest_notices(run_id):
+            return [
+                n["content"]
+                for n in notifications.get_notifications(character_whitelist=["A"])
+                if n.get("type") == "quest" and (n.get("metadata") or {}).get("run_id") == run_id
+            ]
+
+        check("A reward notice only", run_quest_notices(prize["id"]), ["Reward: Lucky charm, 3 \u00d7 Coin"])
+        quest_effects.pass_once()
+        check("second pass_once adds no notice", run_quest_notices(prize["id"]),
+              ["Reward: Lucky charm, 3 \u00d7 Coin"])
+        check("de translation for Reward: {items}", t("Reward: {items}", "de"), "Belohnung: {items}")
+
+        obj_by_key = {o["effect_key"]: o["ref"] for o in quests.list_objects(prize["id"])}
+        charm_id = obj_by_key.get("charm", {}).get("item_id", "")
+        coin_id = obj_by_key.get("coin", {}).get("item_id", "")
+        check("charm and coin ids present", bool(charm_id) and bool(coin_id), True)
+        book_dump = json.dumps(payload)
+        for needle in (charm_id, coin_id, "charm_given", "npc_gift", "grant", "quest_run", "payout"):
+            check(f"no spoiler {needle!r}", needle in book_dump, False)
+
+        print("[11] whitelist")
+        opt_fields = getattr(quest_book, "OPTIONAL_FIELDS", None)
+        check("OPTIONAL_FIELDS", opt_fields, ("time_left_label", "locked", "ended_label", "rewards_label"))
+        allowed_keys = set(quest_book.QUEST_FIELDS) | {"steps"} | set(opt_fields or ())
+        check("all entry keys within whitelist",
+              all(set(q.keys()) <= allowed_keys for q in payload["quests"]), True)
+        check("no open or cancelled entry has rewards_label",
+              any("rewards_label" in q for q in payload["quests"] if q.get("state") in ("open", "cancelled")),
+              False)
+    finally:
+        item_images.generate_item_image_sync = orig_gen
 
     quest_engine.drain()
     if FAILURES:

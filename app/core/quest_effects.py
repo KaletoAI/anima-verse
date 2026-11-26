@@ -451,7 +451,16 @@ def _step_payout(payout: dict) -> Tuple[int, int]:
         if outcome != "done":
             return (0, 0)
 
-    quests.set_payout(run_id, position, "applied")
+    if quests.set_payout(run_id, position, "applied") and position == "reward" and avatar:
+        from app.core import quest_book
+        from app.models.character import get_character_language
+        try:
+            lang = get_character_language(avatar) or ""
+        except Exception:  # noqa: BLE001
+            lang = ""
+        items = quest_book.reward_items_label(run_id, avatar, lang)
+        if items:
+            _notify(avatar, "Reward: {items}", run, "reward", items=items)
     return (1, 0)
 
 
@@ -868,16 +877,18 @@ def _apply_give_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
         )
     if not ok:
         raise EffectFailed(f"{to} could not receive {name}: the inventory is full or the write failed")
-    try:
-        lang = get_character_language(to) or ""
-    except Exception:  # noqa: BLE001
-        lang = ""
-    item_label = localized(item, "name", lang) or item_id
-    if quantity == 1:
-        _notify(to, "You received {item}.", ctx.run, ctx.effect_key, item=item_label)
-    else:
-        _notify(to, "You received {quantity} × {item}.", ctx.run, ctx.effect_key,
-                quantity=quantity, item=item_label)
+    # Reward grants to the fulfilling avatar are summarized once by the reward payout notice.
+    if not (ctx.position == "reward" and to == ctx.avatar):
+        try:
+            lang = get_character_language(to) or ""
+        except Exception:  # noqa: BLE001
+            lang = ""
+        item_label = localized(item, "name", lang) or item_id
+        if quantity == 1:
+            _notify(to, "You received {item}.", ctx.run, ctx.effect_key, item=item_label)
+        else:
+            _notify(to, "You received {quantity} × {item}.", ctx.run, ctx.effect_key,
+                    quantity=quantity, item=item_label)
     return [CreatedObject("grant", {"character": to, "item_id": item_id, "quantity": quantity}, f"{name} -> {to}")]
 
 

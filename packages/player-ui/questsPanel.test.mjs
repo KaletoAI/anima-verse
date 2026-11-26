@@ -6,6 +6,8 @@
 //  - a quest with "locked" shows the lock reason text visibly (not only in a hint);
 //  - the "Completed" divider appears only when an ended quest (state != open) is in the list;
 //  - an ended quest shows its ended_label and its state word (cancelled -> "Cancelled");
+//  - a done quest with rewards_label renders class "player-quest-reward" with "Reward: <rewards_label>",
+//    while an open quest without rewards_label renders neither;
 //  - an empty list renders "No quests yet";
 //  - German: every t() literal of QuestsPanel.tsx has a de.json entry, and "Time left" reads "Verbleibend".
 import assert from 'node:assert/strict';
@@ -58,6 +60,8 @@ assert.match(textNodes(html), /Run an errand for someone\./);
 assert.match(textNodes(html), /Time left: 1 d 4 h/);
 assert.doesNotMatch(html, /Completed/, 'no divider without an ended quest');
 assert.doesNotMatch(html, /player-quest-locked/, 'no lock without "locked"');
+assert.doesNotMatch(html, /player-quest-reward/, 'no reward line without rewards_label');
+assert.doesNotMatch(textNodes(html), /\bReward\b/, 'no Reward label on open quest');
 console.log('PASS open quest: done and current steps, time left, no divider');
 
 const locked = { ...open, id: 'r2', steps: [{ text: 'Talk to the giver.', state: 'current' }],
@@ -81,6 +85,14 @@ assert.match(afterDivider, /Cancelled/);
 assert.match(afterDivider, /Day 2, 18:30/);
 assert.match(both, /player-quest-done/);
 console.log('PASS ended quest under "Completed" with its state and end label');
+
+const rewarded = { id: 'r4', title: 'Prize', summary: 'Won.', state: 'done', steps: [],
+  ended_label: 'Day 4, 08:00', rewards_label: 'Lucky charm, 3 × Coin' };
+const rewardedHtml = render({ avatar: 'Mira', quests: [rewarded] });
+const rewardMatch = rewardedHtml.match(/<div\b[^>]*class="player-quest-reward"[^>]*>([^<]*)<\/div>/);
+assert.ok(rewardMatch, 'done quest renders player-quest-reward');
+assert.equal(rewardMatch[1], 'Reward: Lucky charm, 3 × Coin');
+console.log('PASS done quest renders reward line');
 
 const empty = render({ avatar: 'Mira', quests: [] });
 assert.match(empty, /No quests yet/);

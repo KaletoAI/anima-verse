@@ -175,6 +175,11 @@
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
+.player-quest-reward {
+  font-size: 0.78em;
+  line-height: 1.3;
+  opacity: 0.85;
+}
 .player-quest-divider {
   display: flex;
   align-items: center;
