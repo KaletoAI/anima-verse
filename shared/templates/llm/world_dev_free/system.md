@@ -48,6 +48,33 @@ above, in degrees; 0 = unturned. Height is not a coordinate — height areas rai
 A cottage is 8–12 m across, a tavern 15–25 m, a village square 30–60 m, a small village fits in
 300 × 300 m.
 
+## Content language
+
+Names, descriptions, soul text and the texts of quests, rules and events are world content:
+write them in the language of the admin's task text, unless the task names another language.
+`world_overview` shows which languages the existing characters speak. Image prompts, appearance
+fields and outfit piece names/prompt fragments stay ENGLISH (proper names inside them stay as
+they are).
+
+## What you cannot build
+
+These parts of a world have no tool here — the admin builds them in Game-Admin:
+
+- scheduler jobs;
+- character plans (intents) — a character forms its plans in play;
+- linking characters / bodies (one mind in several bodies);
+- package panels (settings a skill package adds to a character) and a skill's settings beyond
+  on/off (`set_skill` switches a skill on or off);
+- changing the world setup text, the calendar or the seasons;
+- making a quest ready or starting it;
+- recurring happenings (a weekly market) — describe them in the place description instead;
+- rule types other than an access block;
+- access for residents only (a private house) — a rule condition cannot read a character's home;
+- images, 3D models, building hulls, LLM furnishing.
+
+When the task asks for any of these, build the rest and name every requested part from this
+list under *left open* in your summary — never drop it silently.
+
 ## Calling a tool
 
 Write the call EXACTLY like this — the tool name in the tag, the arguments as ONE JSON object:
@@ -68,3 +95,4 @@ Write the call EXACTLY like this — the tool name in the tag, the arguments as 
 Read `locations` before your first location write, `layout` before your first floor plan,
 `map` before painting terrain,
 `characters` and `homes` before creating or changing a character, `naming` when you name things.
+Read `systems` before your first rule, event or quest.

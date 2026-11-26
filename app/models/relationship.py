@@ -709,7 +709,7 @@ class AddressTextError(ValueError):
     """A form-of-address note violates the field contract."""
 
 
-def _clean_address(text: Any) -> str:
+def clean_address(text: Any) -> str:
     """Normalise + validate a form-of-address note.
 
     Blank clears the field. Control characters (newlines included) are
@@ -743,6 +743,154 @@ def _address_keys(speaker: str, addressee: str) -> Tuple[str, str]:
     return "address_b_to_a", "address_a_to_b"
 
 
+def address_key(speaker: str, addressee: str) -> str:
+    """The meta key of *speaker*'s own direction toward *addressee* (the
+    outgoing key of :func:`_address_keys`)."""
+    return _address_keys(speaker, addressee)[0]
+
+
+def pair_key(a: str, b: str) -> str:
+    """``"<a>|<b>"`` in ``_sort_pair`` order — one string naming the pair
+    (character names never contain ``|``, see ``app.core.character_name``)."""
+    first, second = _sort_pair(a, b)
+    return f"{first}|{second}"
+
+
+def pair_row(a: str, b: str) -> Optional[Dict[str, Any]]:
+    """The newest stored row of the pair, merged as :func:`get_relationship`
+    merges it (content + meta, ``character_a`` / ``character_b`` from the
+    columns) but WITHOUT the reader's defaults (a missing ``id`` would get a
+    new random one on every read), plus ``_db_id`` and the row's ``_ts``.
+    None when the pair has no row. A comparison read: two calls on an
+    unchanged row return equal dicts; DB/JSON errors propagate."""
+    first, second = _sort_pair(a, b)
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT * FROM relationships
+        WHERE (from_char=? AND to_char=?) OR (from_char=? AND to_char=?)
+        ORDER BY id DESC LIMIT 1
+    """, (first, second, second, first)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    content = json.loads(d.get("content") or "{}")
+    meta = json.loads(d.get("meta") or "{}")
+    out = {**(content if isinstance(content, dict) else {}),
+           **(meta if isinstance(meta, dict) else {})}
+    out["character_a"] = d.get("from_char", "")
+    out["character_b"] = d.get("to_char", "")
+    out["_db_id"] = d.get("id")
+    out["_ts"] = d.get("ts")
+    return out
+
+
+def delete_pair_row(row_id: int) -> bool:
+    """Delete ONE relationship row by its id; True when it was deleted. The
+    two characters of the row get the same push as a save
+    (``_save_relationship``)."""
+    with transaction() as conn:
+        row = conn.execute("SELECT from_char, to_char FROM relationships WHERE id=?",
+                           (int(row_id),)).fetchone()
+        if row is None:
+            return False
+        conn.execute("DELETE FROM relationships WHERE id=?", (int(row_id),))
+    a, b = row[0], row[1]
+    try:
+        from app.core import sync_topics
+        sync_topics.avatars([a, b], ("self", "presence"))
+    except Exception as e:
+        logger.debug("relationship sync failed: %s", e)
+    return True
+
+
+def raw_pair_row(row_id: int) -> Optional[Dict[str, Any]]:
+    """The stored columns of ONE relationship row as they are —
+    ``{"from_char", "to_char", "content", "ts", "meta"}`` (content and meta
+    the raw JSON TEXT) — or None when the row does not exist. What
+    :func:`restore_pair_row` writes back byte-for-byte."""
+    row = get_connection().execute(
+        "SELECT from_char, to_char, content, ts, meta FROM relationships WHERE id=?",
+        (int(row_id),)).fetchone()
+    if row is None:
+        return None
+    return {k: row[k] for k in ("from_char", "to_char", "content", "ts", "meta")}
+
+
+def restore_pair_row(row_id: int, raw: Dict[str, Any]) -> bool:
+    """Write the columns of :func:`raw_pair_row` back onto row *row_id*
+    unchanged (no merge, no defaults); True when the row existed. The two
+    characters get the same push as a save (``_save_relationship``)."""
+    cols = [raw.get(k) for k in ("from_char", "to_char", "content", "ts", "meta")]
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT from_char, to_char, content, ts, meta FROM relationships WHERE id=?",
+            (int(row_id),)).fetchone()
+        if row is None:
+            return False
+        if [row[k] for k in ("from_char", "to_char", "content", "ts", "meta")] == cols:
+            # Already the stored columns: no write, no push (as
+            # _save_relationship skips an unchanged row).
+            return True
+        conn.execute("""
+            UPDATE relationships SET from_char=?, to_char=?, content=?, ts=?, meta=?
+            WHERE id=?
+        """, (*cols, int(row_id)))
+    try:
+        from app.core import sync_topics
+        sync_topics.avatars([str(cols[0] or ""), str(cols[1] or "")], ("self", "presence"))
+    except Exception as e:
+        logger.debug("relationship sync failed: %s", e)
+    return True
+
+
+_CONTENT_KEYS = ("character_a", "character_b", "type", "strength",
+                 "sentiment_a_to_b", "sentiment_b_to_a", "romantic_tension",
+                 "interaction_count")
+
+
+def set_pair_row_meta_key(row_id: int, key: str, value: Any = None, *,
+                          remove: bool = False) -> bool:
+    """Set (or, with *remove*, pop) ONE key of the meta blob of row *row_id*
+    and leave every other column as stored — no merge, no reader defaults.
+    Only the meta TEXT is rewritten, serialised the way
+    :func:`_save_relationship` serialises it, so on a row that writer wrote
+    only the key's entry changes. A core content key (``type``,
+    ``strength``, ...) is not a meta key -> ValueError. False when the row
+    does not exist or its meta is not a JSON object (the caller falls back
+    to the merging writer). The two characters get the same push as a save,
+    and only when the meta changed."""
+    if key in _CONTENT_KEYS:
+        raise ValueError(f"{key!r} is a content column key, not a meta key")
+    with transaction() as conn:
+        row = conn.execute("SELECT from_char, to_char, meta FROM relationships WHERE id=?",
+                           (int(row_id),)).fetchone()
+        if row is None:
+            return False
+        try:
+            meta = json.loads(row["meta"] or "{}")
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(meta, dict):
+            return False
+        if remove:
+            if key not in meta:
+                return True
+            meta.pop(key)
+        else:
+            if key in meta and meta[key] == value:
+                return True
+            meta[key] = value
+        conn.execute("UPDATE relationships SET meta=? WHERE id=?",
+                     (json.dumps(meta, ensure_ascii=False), int(row_id)))
+        a, b = row["from_char"], row["to_char"]
+    try:
+        from app.core import sync_topics
+        sync_topics.avatars([str(a or ""), str(b or "")], ("self", "presence"))
+    except Exception as e:
+        logger.debug("relationship sync failed: %s", e)
+    return True
+
+
 def get_address(speaker: str, addressee: str) -> str:
     """How *speaker* addresses *addressee*. Empty string when unset.
 
@@ -770,7 +918,7 @@ def set_address(speaker: str, addressee: str, text: Any) -> bool:
     """
     if not speaker or not addressee or _one_family(speaker, addressee):
         return False
-    value = _clean_address(text)
+    value = clean_address(text)
     mind = _mind_of(speaker)
     created = mind != speaker and get_relationship(mind, addressee) is None
     speaker = mind

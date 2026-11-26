@@ -569,10 +569,10 @@ def _warn(out: List[Dict[str, str]], code: str, ref: str, message: str) -> None:
     out.append({"code": code, "ref": ref, "message": message})
 
 
-def _box_union(a: Optional[Dict[str, Any]],
-               b: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+def box_union(a: Optional[Dict[str, Any]],
+              b: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
     """The smallest box containing both, or whichever one exists."""
-    boxes = [x for x in (a, b) if _valid_box(x)]
+    boxes = [x for x in (a, b) if valid_box(x)]
     if not boxes:
         return None
     return {"min_x": min(float(x["min_x"]) for x in boxes),
@@ -581,7 +581,8 @@ def _box_union(a: Optional[Dict[str, Any]],
             "max_z": max(float(x["max_z"]) for x in boxes)}
 
 
-def _valid_box(box: Any) -> bool:
+def valid_box(box: Any) -> bool:
+    """A dict with four finite numbers min_x/min_z/max_x/max_z, min <= max."""
     if not isinstance(box, dict):
         return False
     vals = [_finite(box.get(k)) for k in ("min_x", "min_z", "max_x", "max_z")]
@@ -590,7 +591,8 @@ def _valid_box(box: Any) -> bool:
     return vals[0] <= vals[2] and vals[1] <= vals[3]
 
 
-def _outside(box: Dict[str, float], x: float, z: float) -> bool:
+def point_outside(box: Dict[str, float], x: float, z: float) -> bool:
+    """Whether (x, z) lies outside ``box`` — the box edge itself is inside."""
     return (x < box["min_x"] or x > box["max_x"]
             or z < box["min_z"] or z > box["max_z"])
 
@@ -817,8 +819,8 @@ def sanitize_map_layout(data: Any, *,
         raise ValueError("map layout must be an object")
 
     warnings: List[Dict[str, str]] = []
-    proposed = data.get("bounds") if _valid_box(data.get("bounds")) else None
-    box = _box_union(bounds, proposed)
+    proposed = data.get("bounds") if valid_box(data.get("bounds")) else None
+    box = box_union(bounds, proposed)
 
     # ── terrain areas ──
     areas: List[Dict[str, Any]] = []
@@ -892,7 +894,7 @@ def sanitize_map_layout(data: Any, *,
                   f"'{name}': the outline crosses itself — the painted area "
                   f"will look inverted where it does.")
         if box:
-            outliers = [p for p in polygon if _outside(box, p[0], p[1])]
+            outliers = [p for p in polygon if point_outside(box, p[0], p[1])]
             if outliers:
                 _warn(warnings, "out_of_bounds", ref,
                       f"'{name}': {len(outliers)} of {len(polygon)} points lie "
@@ -932,7 +934,7 @@ def sanitize_map_layout(data: Any, *,
             _warn(warnings, "self_intersecting", ref,
                   f"'{name}': the outline crosses itself.")
         if box:
-            outliers = [p for p in polygon if _outside(box, p[0], p[1])]
+            outliers = [p for p in polygon if point_outside(box, p[0], p[1])]
             if outliers:
                 _warn(warnings, "out_of_bounds", ref,
                       f"'{name}': {len(outliers)} of {len(polygon)} points lie "
@@ -1044,7 +1046,7 @@ def sanitize_map_layout(data: Any, *,
             entry["why"] = why
         placed.append(entry)
 
-        if box and _outside(box, entry["pos_x"], entry["pos_z"]):
+        if box and point_outside(box, entry["pos_x"], entry["pos_z"]):
             _warn(warnings, "out_of_bounds", ref,
                   f"'{entry['name']}' stands outside the agreed map bounds.")
 

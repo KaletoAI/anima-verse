@@ -5276,9 +5276,13 @@ def _toggle_character_skill_sync(character_name: str, skill_name: str,
                     status_code=409,
                     detail=f"Cannot enable '{skill_name}': {reason}")
 
-        config = get_character_skill_config(character_name, skill_name)
-        config["enabled"] = bool(enabled)
-        save_character_skill_config(character_name, skill_name, config)
+        # The read-modify-write of the config file under its lock (the
+        # World Dev set_skill tool and its undo take the same one).
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("skill_config", character_name):
+            config = get_character_skill_config(character_name, skill_name)
+            config["enabled"] = bool(enabled)
+            save_character_skill_config(character_name, skill_name, config)
         return {"status": "success", "skill": skill_name, "enabled": bool(enabled)}
     except HTTPException as e:
         raise e
@@ -5320,15 +5324,17 @@ def _update_character_skill_config_route_sync(character_name: str,
         user_id = data.get("user_id", "")
         config = data.get("config", {})
         if not isinstance(config, dict):
-            raise HTTPException(status_code=400, detail="config muss ein Objekt sein")
+            raise HTTPException(status_code=400, detail="config must be an object")
 
-        # Merge supplied fields into the existing configuration
-        existing = get_character_skill_config(character_name, skill_name)
-        if existing:
-            existing.update(config)
-            config = existing
-
-        save_character_skill_config(character_name, skill_name, config)
+        # Merge supplied fields into the existing configuration — one
+        # read-modify-write under the config file's lock.
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("skill_config", character_name):
+            existing = get_character_skill_config(character_name, skill_name)
+            if existing:
+                existing.update(config)
+                config = existing
+            save_character_skill_config(character_name, skill_name, config)
         return {
             "status": "success",
             "character": character_name,

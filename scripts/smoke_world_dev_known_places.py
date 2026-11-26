@@ -53,10 +53,10 @@ Turn 2 (c): update_character{Demo Old, patch: {known_places: [B, "Demo
 Turn 3 (d): update Demo Keyless known_places [B] -> [B], inverse had_key
       False; undo(run, 3) -> complete; the config has no known_locations
       key again (None in wu.home_schedule_state).
-Turn 4 (h): models.character.save_character_config is replaced by one that
-      returns False when the config it is handed lists C in known_locations
-      (that is only the known-places write: no home or schedule is sent, so
-      the apply writes no known_locations). create_character{"Demo Failer",
+Turn 4 (h): models.character.write_known_locations (the one writer of the
+      known places the tools use; it patches only that config key) is
+      replaced by one that returns False when the list it is handed
+      contains C. create_character{"Demo Failer",
       known_places: ["Demo Market"]} -> not ok; the journal line starts with
       "failed:" and names "known places"; the inverse is delete_character,
       claimed. undo(run, 4) -> complete, no "Demo Failer" row.
@@ -267,21 +267,22 @@ check("(d) no known_locations key again",
       get_character_config(KEYLESS))
 
 # ── (h) failed save ────────────────────────────────────────────────────
-_real_save_cfg = mchar.save_character_config
+_real_write_known = mchar.write_known_locations
 
 
-def _fail_on_c(name, cfg, *a, **k):
-    if C in (cfg.get("known_locations") or []):
+def _fail_on_c(name, value, *a, **k):
+    # The known-places writer the tools use (patches only that config key).
+    if C in (value or []):
         return False
-    return _real_save_cfg(name, cfg, *a, **k)
+    return _real_write_known(name, value, *a, **k)
 
 
-mchar.save_character_config = _fail_on_c
+mchar.write_known_locations = _fail_on_c
 try:
     res = call(4, "create_character", {"data": {"name": "Demo Failer"},
                                        "known_places": ["Demo Market"]})
 finally:
-    mchar.save_character_config = _real_save_cfg
+    mchar.write_known_locations = _real_write_known
 check("(h) create not ok", not res.ok, res)
 row = newest()
 check("(h) journal line failed: ... known places",
@@ -294,11 +295,11 @@ rep = wu.undo(run, turn=4)
 check("(h) undo complete", rep["complete"], rep)
 check("(h) no Demo Failer row", not character_row_exists("Demo Failer"))
 
-mchar.save_character_config = _fail_on_c
+mchar.write_known_locations = _fail_on_c
 try:
     res = call(5, "update_character", {"name": OLD, "patch": {"known_places": [C]}})
 finally:
-    mchar.save_character_config = _real_save_cfg
+    mchar.write_known_locations = _real_write_known
 check("(h) update not ok", not res.ok and "known places" in res.line, res)
 check("(h) update: known stays [A]", get_known_locations(OLD) == [A],
       get_known_locations(OLD))
@@ -315,13 +316,13 @@ combo_before = wu.home_schedule_state(COMBO)
 check("(j) fixture: no home, no known_locations key",
       combo_before["known_locations"] is None
       and wu.is_absent(combo_before["home_location"]), combo_before)
-mchar.save_character_config = _fail_on_c
+mchar.write_known_locations = _fail_on_c
 try:
     res = call(6, "update_character", {"name": COMBO,
                                        "patch": {"home": "Demo Hut",
                                                  "known_places": ["Demo Market"]}})
 finally:
-    mchar.save_character_config = _real_save_cfg
+    mchar.write_known_locations = _real_write_known
 check("(j) not ok, line names known places",
       not res.ok and "known places" in res.line, res)
 rows6 = [e for e in wr.steps(run) if e.get("turn") == 6]  # oldest-first, refused rows too

@@ -1,7 +1,8 @@
 # Manual: map (terrain and height)
 
 The world is one flat plane in metres: `x` east, `z` south, a point is `[x, z]`.
-`world_overview{}` names the world bounds and the terrain kinds that exist, each as
+`world_overview{}` names the built extent (`extent:`), this run's build box (`build bounds:`) and
+the terrain kinds that exist, each as
 `<kind> "<name>"` plus the flags that differ from plain ground: `impassable` (nobody can walk
 there), `water`, `speed ×<f>` (walking pace). `map_region{min_x, min_z, max_x, max_z}` shows
 what already lies in a box (add `"polygons": true` for outlines): a terrain line ends
@@ -143,7 +144,12 @@ relief.
 
 ## Composition
 
-- Stay inside the world bounds.
+- In an empty world call `set_build_bounds{min_x, min_z, max_x, max_z}` first (a small village:
+  300 × 300 m, e.g. -150 … 150 on both axes; each side 50 … 20 000 m); every later write warns
+  when it leaves that box (`… lie outside the build bounds`) — a warning, never a refusal. In a
+  built world the extent is shown and the box is optional. Calling it again replaces the box and
+  counts what already lies outside; it is not world data — neither the discard nor a rolled-back
+  turn resets it (`world_overview` shows the current box).
 - Compose, do not tile: a handful of large, well-placed shapes reads better than fifty small ones.
 - Use water, rock or a dense forest belt as the world's edge.
 - A meadow is terrain, not a location — create a place only where the task asks for one.

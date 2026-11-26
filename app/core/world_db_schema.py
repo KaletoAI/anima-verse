@@ -14,6 +14,7 @@ Conventions:
 
 SCHEMA_VERSION = 13  # 13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
+#                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -1184,6 +1185,10 @@ ALTER_MIGRATIONS = [
     # model's default; world_dev_agent.EFFORT_LEVELS), so a follow-up after a
     # restart resolves the model with the same thinking depth.
     ("world_dev_runs", "effort", "TEXT NOT NULL DEFAULT ''"),
+    # world_dev_runs: the run's build box as JSON {min_x, min_z, max_x, max_z}
+    # (NULL = none set; world_dev_runs.set_bounds). Run metadata, not world
+    # data: out-of-box writes only warn, and the undo never touches it.
+    ("world_dev_runs", "bounds", "TEXT"),
     ("chat_upload_owners", "purpose", "TEXT NOT NULL DEFAULT 'chat'"),
     ("chat_upload_owners", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("user_sessions", "ttl_hours", "INTEGER"),

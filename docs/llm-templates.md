@@ -348,10 +348,11 @@ of the templates `create_character` offers):
 | `system.md` | Agent system prompt |
 | `manual_locations.md` | Location and room fields, position, outline |
 | `manual_map.md` | Terrain areas, strokes, height areas, composition |
-| `manual_characters.md` | create/update_character, template fields, soul sections, outfits |
-| `manual_homes.md` | Home, home room and daily schedule spellings and values |
+| `manual_characters.md` | create/update_character, template fields, soul sections, outfits; skills on/off (`set_skill`) |
+| `manual_homes.md` | Home, home room and daily schedule spellings and values; placing an existing character (`place_character`) and its refusals |
 | `manual_layout.md` | set_room_layout: floor plan, openings, plot openings, stairs, storey height |
 | `manual_naming.md` | Naming rules |
+| `manual_systems.md` | Access rules (`add_block_rule`): when a rule fits, the condition grammar, what cannot be built; world events (`add_event`): one-off happenings, TTL in game hours, global vs place; quests (`create_quest_template`): draft templates, roles instead of fixed entities, steps as catalog conditions, `{role_key}` placeholders, `gm_notes` stay with the admin |
 
 ## Loader API
 

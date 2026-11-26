@@ -40,8 +40,6 @@ _ENDED_RUNS_LIMIT = 50
 #: The largest /quests request body (a template is copied into every run's snapshot; 256 KiB is far above any
 #: hand-written quest).
 _MAX_BODY_BYTES = 256 * 1024
-#: The largest `time_limit_s` SQLite can store (a signed 64-bit integer).
-_MAX_INT = 2 ** 63 - 1
 #: What the store raises for a value it cannot write — a 400, never a 500 (e.g. a JSON value nested deeper than
 #: SQLite's `json_valid` accepts fails the table's CHECK as an IntegrityError).
 _STORE_REFUSALS = (TypeError, ValueError, OverflowError, sqlite3.Error)
@@ -66,17 +64,6 @@ async def _json(request: Request) -> Any:
         return json.loads(raw)
     except (ValueError, RecursionError):
         raise HTTPException(400, {"code": "bad_json", "message": "the body is not valid JSON"})
-
-
-def _check_fields(body: Dict[str, Any]) -> None:
-    """400 for a text field that is not text and a `time_limit_s` that is not a whole number SQLite can store."""
-    for key in ("title", "summary", "gm_notes"):
-        if key in body and not isinstance(body[key], str):
-            raise _bad(f"{key} must be text")
-    if "time_limit_s" in body:
-        limit = body["time_limit_s"]
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= _MAX_INT:
-            raise _bad("time_limit_s is a whole number of seconds, 0 or more")
 
 
 def _body_dict(body: Any) -> Dict[str, Any]:
@@ -166,7 +153,9 @@ def _create_template_sync(body: Any) -> Dict[str, Any]:
         raise _bad(f"not a quest template field: {', '.join(unknown)}")
     if not isinstance(body.get("title"), str) or not body["title"].strip():
         raise _bad("title is required")
-    _check_fields(body)
+    msg = quest_engine.check_template_fields(body)
+    if msg:
+        raise _bad(msg)
     try:
         template = quests.create_template(**body)
     except _STORE_REFUSALS as e:
@@ -195,7 +184,9 @@ def _update_template_sync(template_id: str, body: Any) -> Dict[str, Any]:
         raise _bad(f"not editable on a quest template: {', '.join(unknown)}")
     if "state" in body and body["state"] not in ("draft", "ready"):
         raise _bad("state is draft or ready")
-    _check_fields(body)
+    msg = quest_engine.check_template_fields(body)
+    if msg:
+        raise _bad(msg)
     current = quests.get_template(template_id)
     if current is None:
         raise _not_found("Quest template", template_id)

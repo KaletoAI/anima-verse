@@ -11,6 +11,7 @@ from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
 from app.core import read_scope
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import copy
 import json
 import math
 import threading
@@ -1543,6 +1544,61 @@ def set_known_locations(character_name: str, location_ids: List[str]) -> List[st
     return known
 
 
+def _stored_config_dict(conn, character_name: str) -> Dict[str, Any]:
+    """The stored ``config_json`` of a character as it is — no defaults, no
+    injected fields, no auto-create. ``""``/NULL/``"{}"`` read as ``{}``; a
+    missing row is a LookupError, a blob that is no JSON object a ValueError."""
+    row = _read_config_json_row(conn, character_name)
+    if row is None:
+        raise LookupError(f"no character {character_name!r}")
+    cfg = json.loads(row[0]) if row[0] else {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"the config of {character_name} is not an object")
+    return cfg
+
+
+def stored_known_locations(character_name: str) -> Tuple[bool, Any]:
+    """``(key present, value as stored)`` of the ``known_locations`` key in
+    the STORED config — read without :func:`get_character_config`, which
+    fills in the defaults and auto-creates a whole default config for an
+    empty one (a write a mere read must not do where the caller journals
+    exact inverses: World Dev). The value is returned as it is stored (a
+    list normally; ``None`` when the key is missing) — the caller decides
+    what a value that is no list means. A read error propagates."""
+    cfg = _stored_config_dict(get_connection(), character_name)
+    if "known_locations" not in cfg:
+        return False, None
+    return True, copy.deepcopy(cfg["known_locations"])
+
+
+def write_known_locations(character_name: str, value: Optional[List[Any]]) -> bool:
+    """Patch ONLY the ``known_locations`` key of the stored config (``None``
+    removes the key) — every other key, the defaults NOT stored and
+    ``updated_at`` stay as they are, so the World Dev undo of an add gives
+    back the same bytes (the config is re-serialised the way
+    :func:`save_character_config` writes it; an empty object is ``"{}"``,
+    the column default). Under ``keyed_lock("character_profile", name)``
+    (the caller may already hold it). Returns False when nothing was stored
+    (unknown character, a blob that is no object, a failed write)."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        try:
+            with transaction() as conn:
+                cfg = _stored_config_dict(conn, character_name)
+                if value is None:
+                    cfg.pop("known_locations", None)
+                else:
+                    cfg["known_locations"] = list(value)
+                conn.execute("UPDATE characters SET config_json=? WHERE name=?",
+                             (json.dumps(cfg, ensure_ascii=False) if cfg else "{}",
+                              character_name))
+            return True
+        except Exception as e:
+            logger.error("write_known_locations failed for %s: %s", character_name, e,
+                         exc_info=True)
+            return False
+
+
 def _schedule_background_variant(character_name: str) -> None:
     """Warm the worn outfit's set-local expression without activity variants."""
     if not character_name:
@@ -1988,6 +2044,185 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # safe brake. Only on a real location change.
     if location_changed and not _party_drag:
         _drag_party_followers_to_location(character_name, location)
+
+
+#: The profile keys of a setup placement (World Dev ``place_character``) —
+#: all of them ``character_state`` columns.
+PLACEMENT_KEYS = ("current_location", "current_room", "location_changed_at",
+                  "pose_key", "pose_flavor")
+#: The marker of a placement value that is not stored (the column is NULL or
+#: the character has no ``character_state`` row) — the plain dict
+#: ``world_dev_undo.ABSENT`` is.
+_PLACEMENT_ABSENT = {"$absent": True}
+
+
+def read_placement(character_name: str) -> Dict[str, Any]:
+    """The stored placement of a character, read in ONE query:
+    ``{"profile": {key: value or {"$absent": True}}, "pos": {"x", "z", "yaw",
+    "session", "seq"} | None, "row": bool}`` — the five :data:`PLACEMENT_KEYS`
+    and the five position columns of ``character_state``, stored raw (a
+    NULL column is None) so that writing them back is exact. ``pos`` is None
+    only when ALL five position columns are NULL. ``row`` says whether the
+    character has a ``character_state`` row at all (write_placement inserts
+    one; :func:`drop_bare_placement_row` removes it again). A read error
+    propagates — it is never read as "absent"."""
+    row = get_connection().execute(
+        "SELECT current_location, current_room, location_changed_at, pose_key, "
+        "pose_flavor, pos_x, pos_z, pos_yaw, pos_session, pos_seq "
+        "FROM character_state WHERE character_name=?", (character_name,)).fetchone()
+    if row is None:
+        return {"profile": {k: dict(_PLACEMENT_ABSENT) for k in PLACEMENT_KEYS},
+                "pos": None, "row": False}
+    profile = {k: (dict(_PLACEMENT_ABSENT) if row[i] is None else row[i])
+               for i, k in enumerate(PLACEMENT_KEYS)}
+    x, z, yaw, session, seq = row[5:10]
+    pos = (None if all(v is None for v in (x, z, yaw, session, seq)) else
+           {"x": None if x is None else float(x), "z": None if z is None else float(z),
+            "yaw": None if yaw is None else float(yaw),
+            "session": session, "seq": seq})
+    return {"profile": profile, "pos": pos, "row": True}
+
+
+#: The character_state columns a setup placement owns (write_placement).
+_PLACEMENT_COLUMNS = PLACEMENT_KEYS + ("pos_x", "pos_z", "pos_yaw", "pos_session", "pos_seq")
+
+
+def _sql_default(text: Optional[str]) -> Any:
+    """The value of a column default as PRAGMA table_info names it (only the
+    literal forms the schema uses: NULL, a quoted string, a number)."""
+    if text is None or text.upper() == "NULL":
+        return None
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+
+def drop_bare_placement_row(character_name: str) -> bool:
+    """The inverse of the row INSERT of :func:`write_placement`: deletes the
+    character's ``character_state`` row ONLY while it holds nothing — every
+    placement column NULL and every other column still at its schema default
+    (what that INSERT left). A row someone else has written into meanwhile is
+    kept (its NULL placement reads as "absent", like no row). Runs under
+    ``keyed_lock("character_profile", name)``. True = no row is left."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        conn = get_connection()
+        info = conn.execute("PRAGMA table_info(character_state)").fetchall()
+        cols = [str(c[1]) for c in info if str(c[1]) != "character_name"]
+        row = conn.execute(
+            "SELECT " + ", ".join(cols) + " FROM character_state WHERE character_name=?",
+            (character_name,)).fetchone()
+        if row is None:
+            return True
+        defaults = {str(c[1]): _sql_default(c[4]) for c in info}
+        for i, col in enumerate(cols):
+            want = None if col in _PLACEMENT_COLUMNS else defaults.get(col)
+            if row[i] != want:
+                return False
+        try:
+            with transaction() as tx:
+                tx.execute("DELETE FROM character_state WHERE character_name=?",
+                           (character_name,))
+        finally:
+            # The placement is part of the profile read (read_scope).
+            read_scope.clear()
+        return True
+
+
+def write_placement(character_name: str, profile_values: Dict[str, Any],
+                    pos: Optional[Dict[str, Any]]) -> bool:
+    """The setup placement of World Dev — NOT an arrival; see
+    :func:`save_character_current_location` for one.
+
+    Writes only the given :data:`PLACEMENT_KEYS` (a value
+    ``{"$absent": True}`` makes the column NULL again) and the five position
+    columns (``pos`` None clears them all) — ONE UPDATE (an INSERT when the
+    character has no ``character_state`` row) in ONE transaction, so the
+    placement is stored whole or not at all. Nothing else: no profile blob
+    or config rewrite, no movement trace, no state history, no discovery, no
+    outfit compliance, no flag lifecycle, no party drag, no background-variant
+    job, no journey change. The values take the casts of the profile save
+    (``pose_key``/``pose_flavor`` a string, the text columns ``value or ""``).
+    A dormant linked member (not its family's placement owner, see
+    ``linked_characters.placement_owner``) never gets a location or room of
+    its own: such a write is refused (False). Runs under
+    ``keyed_lock("character_profile", name)``; the pushes (``sync_topics``
+    and the prop-presence push) are queued with ``_after_locks``, so they
+    fire after the OUTERMOST lock — also when the World Dev undo calls this
+    inside its own profile lock. Returns False when nothing was stored
+    (unknown character, the dormant rule, a failed write)."""
+    from app.core import sync_topics
+    from app.core.keyed_lock import _after_locks, keyed_lock
+    unknown = set(profile_values) - set(PLACEMENT_KEYS)
+    if unknown:
+        raise ValueError(f"write_placement: not a placement key: {sorted(unknown)}")
+    with keyed_lock("character_profile", character_name):
+        if not character_row_exists(character_name):
+            logger.warning("write_placement: no character %r — nothing stored",
+                           character_name)
+            return False
+        sets: Dict[str, Any] = {}
+        for key in PLACEMENT_KEYS:  # fixed column order; names from PLACEMENT_KEYS only
+            if key not in profile_values:
+                continue
+            value = profile_values[key]
+            if value == _PLACEMENT_ABSENT:
+                sets[key] = None
+            elif key in ("pose_key", "pose_flavor"):
+                sets[key] = value if isinstance(value, str) else ""
+            else:
+                sets[key] = value or ""
+        if sets.get("current_location") or sets.get("current_room"):
+            from app.core.linked_characters import placement_owner
+            if placement_owner(character_name) != character_name:
+                logger.warning("write_placement: %s is a dormant linked member — "
+                               "it stands nowhere of its own", character_name)
+                return False
+        old = read_placement(character_name)["profile"]
+        pos = pos or {}
+        cols = list(sets) + ["pos_x", "pos_z", "pos_yaw", "pos_session", "pos_seq"]
+        vals = list(sets.values()) + [pos.get("x"), pos.get("z"), pos.get("yaw"),
+                                      pos.get("session"), pos.get("seq")]
+        try:
+            with transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE character_state SET " + ", ".join(f"{c}=?" for c in cols)
+                    + " WHERE character_name=?", (*vals, character_name))
+                if cur.rowcount == 0:
+                    conn.execute(
+                        "INSERT INTO character_state (character_name, " + ", ".join(cols)
+                        + ") VALUES (?" + ", ?" * len(cols) + ")",
+                        (character_name, *vals))
+        except Exception as e:
+            logger.error("write_placement DB error for %s: %s", character_name, e,
+                         exc_info=True)
+            return False
+        finally:
+            # The placement is part of the profile read: a read scope of this
+            # context must not serve the old one (read_scope).
+            read_scope.clear()
+        new = read_placement(character_name)["profile"]
+
+    def _text(values: Dict[str, Any], key: str) -> str:
+        value = values.get(key)
+        return value if isinstance(value, str) else ""
+
+    old_loc, new_loc = _text(old, "current_location"), _text(new, "current_location")
+    old_room, new_room = _text(old, "current_room"), _text(new, "current_room")
+    if old_loc != new_loc:
+        _after_locks(lambda: sync_topics.moved(character_name, old_loc, new_loc))
+    else:
+        _after_locks(lambda: sync_topics.changed_at(character_name, new_loc))
+    if (old_loc, old_room) != (new_loc, new_room):
+        _notify_prop_presence(old_loc, old_room)
+        _notify_prop_presence(new_loc, new_room)
+    return True
 
 
 def get_character_pos(character_name: str = "", *, strict: bool = False) -> Optional[Dict[str, float]]:
@@ -4390,9 +4625,10 @@ def get_character_skills_dir(character_name: str) -> Path:
 
 
 def get_character_skill_config(character_name: str, skill_name: str) -> Dict[str, Any]:
-    """Load per-character skill configuration."""
-    skills_dir = get_character_skills_dir(character_name)
-    config_path = skills_dir / f"{skill_name}.json"
+    """Load per-character skill configuration (``{}`` for an absent or
+    unparsable file). Side-effect free: a read never creates the
+    ``skills/`` directory."""
+    config_path = _skill_config_path(character_name, skill_name)
 
     if config_path.exists():
         try:
@@ -4427,9 +4663,86 @@ def save_character_skill_config(character_name: str, skill_name: str, config: Di
         logger.warning("save_character_skill_config: Character '%s' existiert nicht — "
                        "kein Skill-Config-Save", character_name)
         return
-    skills_dir = get_character_skills_dir(character_name)
-    config_path = skills_dir / f"{skill_name}.json"
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
+    # Every writer of a skill config file serializes on this key (RLock:
+    # callers that already hold it — the skill routes, world-dev set_skill —
+    # nest freely).
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("skill_config", character_name):
+        skills_dir = get_character_skills_dir(character_name)
+        config_path = skills_dir / f"{skill_name}.json"
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2))
+
+
+def _skill_config_path(character_name: str, skill_name: str) -> Path:
+    """The path of one skill config file — no directory is created."""
+    return get_character_dir(character_name) / "skills" / f"{skill_name}.json"
+
+
+def character_skills_dir_exists(character_name: str) -> bool:
+    """Whether the character's ``skills/`` directory exists (side-effect free)."""
+    return (get_character_dir(character_name) / "skills").is_dir()
+
+
+def read_character_skill_config_text(character_name: str, skill_name: str) -> Optional[str]:
+    """The RAW text of a character's skill config file; None = no file.
+
+    Side-effect free, like :func:`get_character_skill_config`, which
+    however answers ``{}`` for an absent AND an unparsable file. Read as bytes and decoded as UTF-8, so the
+    text is exact (no newline translation); a file that is no UTF-8 raises
+    ``UnicodeDecodeError``, any other read error propagates — never read as
+    "absent"."""
+    try:
+        data = _skill_config_path(character_name, skill_name).read_bytes()
+    except FileNotFoundError:
+        return None
+    return data.decode("utf-8")
+
+
+def write_character_skill_config_text(character_name: str, skill_name: str,
+                                      text: str) -> bool:
+    """Write TEXT verbatim as the character's skill config file (atomic:
+    temp file + rename in the same directory). Only for an existing character
+    directory; the ``skills/`` directory is created when missing. Callers
+    hold ``keyed_lock("skill_config", name)``. Returns True when written."""
+    import os
+    import tempfile
+    base = get_character_dir(character_name)
+    if not base.is_dir():
+        logger.warning("write_character_skill_config_text: no directory for '%s'",
+                       character_name)
+        return False
+    skills_dir = base / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(skills_dir), prefix=f".{skill_name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+        os.replace(tmp, skills_dir / f"{skill_name}.json")
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def remove_character_skill_config(character_name: str, skill_name: str,
+                                  drop_empty_dir: bool = False) -> bool:
+    """Remove the character's ``skills/<skill>.json`` when present; with
+    DROP_EMPTY_DIR also the ``skills/`` directory when it is empty
+    afterwards. Callers hold ``keyed_lock("skill_config", name)``. True
+    when the file is gone afterwards."""
+    path = _skill_config_path(character_name, skill_name)
+    path.unlink(missing_ok=True)
+    if drop_empty_dir:
+        skills_dir = path.parent
+        try:
+            if skills_dir.is_dir() and not any(skills_dir.iterdir()):
+                skills_dir.rmdir()
+        except OSError as e:
+            logger.warning("remove_character_skill_config: %s kept: %s", skills_dir, e)
+    return not path.exists()
 
 
 # --- Per-Character Scheduler Storage ---

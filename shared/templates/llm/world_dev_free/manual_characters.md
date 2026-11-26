@@ -40,9 +40,9 @@ Every `create_character` / `update_character` result ends with `; complete` or
 schedule places). For a character you created, all of these are listed — fix them with
 `update_character`, except two that only `create_character` can settle: `wears nothing`
 (give `outfits` there — it wears the first one) and `not placed` (give `home` there — it
-starts at its home; a home added later by `update_character` does not place the character).
-On a character that already exists, name these two in the summary and do not retry — no tool
-changes what it wears or where it stands. For a character you only changed, only the parts
+starts at its home; a home added later by `update_character` does not place the character —
+`place_character` puts it somewhere, `read_manual homes`). On a character that already exists,
+name `wears nothing` in the summary and do not retry — no tool changes what it wears. For a character you only changed, only the parts
 your calls touched (home and schedule, known places, outfits, soul, body slots) are checked.
 `check_run{}` lists the gaps of everything the run created or changed.
 
@@ -137,6 +137,45 @@ MORE of a stackable item it already holds, up to `max_stack` in total. A non-sta
 already holds, a sum above `max_stack` and an item that reveals a secret are refused.
 `delete_created{kind: "item", id}` removes an item this run created in THIS turn and that
 nobody holds; an item of an earlier turn stays until the run is discarded.
+
+## Forms of address
+
+`set_address{speaker, addressee, text}` sets how ONE character addresses another — one
+direction per call; the other direction is its own call (the smith calls the apprentice "lad",
+the apprentice calls the smith "Master"). `text` is one line of at most 120 characters, no line
+breaks, no leading or trailing blanks, in the content language ("calls him Master", "formal,
+uses her title"); `""` clears it. Setting the value it already has is refused. A linked body
+speaks with its leader's mind: its direction is stored on the leader, and members of one linked
+family have no form of address between them. `get_character{"name": …, "fields":
+["addresses"]}` lists both directions of every pair.
+
+## Secrets
+
+`add_secret{name, content, category?, severity?, known_by?, related_characters?,
+related_location?, consequences?}` gives a character a secret it KEEPS ("He broke the anvil.",
+"Owes the miller money."): `name` is the keeper, `content` one to 1000 characters in the
+content language, without leading or trailing blanks. `category` (default `personal`) and
+`severity` (a whole number, default 2) come from `list_catalog{name: "secret_categories"}`; a
+value outside those lists is refused, never rounded. `known_by` lists the characters who ALREADY
+know it, `related_characters` those it is about — existing characters, each once, never the
+keeper or its linked family; for a linked body name its leader in `known_by` (a body knows what
+its leader knows). `related_location` is an existing location id, `consequences` (at most 500
+characters) what happens if it comes out. A body's secret is stored on its leader.
+`get_character{"name": …, "fields": ["secrets"]}` lists the secrets a character keeps.
+`delete_created{kind: "secret", id}` removes a secret this run added in THIS turn; one of an
+earlier turn stays until the run is discarded. While a secret names a place or a character, that
+place or character cannot be removed with `delete_created` — remove the secret first.
+
+## Skills
+
+`set_skill{name, skill, enabled}` switches ONE skill of a character on (`true`) or off (`false`) —
+e.g. a guard who never leaves the gate gets the movement skills (`setlocation`,
+`go_to_character`) switched off. `list_catalog{name: "skills"}` lists the skill ids,
+`get_character{"name": …, "fields": ["skills"]}` shows each skill as on/off and whether that is
+the default or a setting. Switching to the state a skill already has is refused, and so is
+switching on a skill whose package needs another one first (the line says which). Only on/off
+is set here — the settings of a skill stay in the admin's Skills tab, and a character whose skill
+settings cannot be read is refused until it is fixed there.
 
 ## delete_created
 

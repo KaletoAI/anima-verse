@@ -37,3 +37,15 @@ many places a character knows.
 
 Every place a schedule names must exist. A place that is still some character's home, known
 place or schedule slot cannot be removed with `delete_created`.
+
+## Placing a character
+
+`place_character{name, location_id, room?}` puts an EXISTING character somewhere NOW — the guard
+at the gate, the smith at his forge. A home is where it goes back to; the placement is where it
+stands at the start. `room` is a room name or id of that place (default: the room one arrives
+in). The character stands there at once (no walk, no story line), the place becomes known to it,
+and its clothes are NOT checked against the place — dress it for the place with its outfits.
+Refused: a player's character, a temporary NPC, a character out of the world, one in a party,
+seated, travelling, in a pair or furniture action, asleep, with forbidden clothing slots or a
+place-bound state (end those in Game-Admin first, or leave the placement open), an unplaced
+target (`place_location` first) and "already there".

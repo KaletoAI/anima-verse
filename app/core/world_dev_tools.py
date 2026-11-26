@@ -63,7 +63,7 @@ MAX_LIST_LINES = 30
 
 #: Manual sections read_manual offers (templates
 #: shared/templates/llm/world_dev_free/manual_<section>.md, Task 7).
-MANUAL_SECTIONS = ("locations", "layout", "map", "characters", "homes", "naming")
+MANUAL_SECTIONS = ("locations", "layout", "map", "characters", "homes", "naming", "systems")
 
 
 class ToolRefusal(Exception):
@@ -224,7 +224,12 @@ _KEPT_HINTS = {"location": ("location", "update_location"),
                "character": ("character", "update_character"),
                "world_prop": ("world prop", ""),
                "terrain_type": ("terrain kind", ""),
-               "item": ("item", "")}
+               "item": ("item", ""),
+               "relationship": ("form of address", "set_address"),
+               "secret": ("secret", ""),
+               "rule": ("rule", ""),
+               "event": ("event", ""),
+               "quest_template": ("quest template", "")}
 
 
 def _kind_label(kind: str) -> str:
@@ -249,11 +254,46 @@ def _error_text(exc: BaseException) -> str:
     return " ".join(text.split())
 
 
+# The deepest nesting a tool's arguments may have. The deepest legitimate
+# argument (a quest condition tree, a room list with openings) stays far
+# below it; the cap keeps the journal's json.dumps and the tools' deepcopy
+# from hitting Python's recursion limit (about 1000 frames) on hostile input.
+MAX_ARG_DEPTH = 64
+
+
+def _arg_depth_exceeds(value: Any, limit: int = MAX_ARG_DEPTH) -> bool:
+    """True when VALUE nests dicts/lists deeper than LIMIT levels (the
+    top-level object is level 1). Iterative, so it never recurses."""
+    stack = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, (list, tuple)):
+            children = node
+        else:
+            continue
+        if depth > limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 def run_tool(ctx: ToolCtx, name: str, args: Any) -> ToolResult:
     """Run ONE tool call as one journal step; see the module docstring."""
     spec = TOOLS.get(name)
-    step = _Step(ctx, name, args if isinstance(args, dict) else {"_raw": args})
+    too_deep = _arg_depth_exceeds(args)
+    if too_deep:
+        # The journal row must not carry the arguments: dumping them is what
+        # would overflow the stack.
+        step = _Step(ctx, name, {"_raw": f"<arguments nested deeper than "
+                                         f"{MAX_ARG_DEPTH} levels>"})
+    else:
+        step = _Step(ctx, name, args if isinstance(args, dict) else {"_raw": args})
     try:
+        if too_deep:
+            raise ToolRefusal(f"the arguments are nested too deeply (more than "
+                              f"{MAX_ARG_DEPTH} levels of objects/lists)")
         if spec is None:
             raise ToolRefusal(f"unknown tool {name!r} — tools: "
                               + ", ".join(sorted(TOOLS)))
@@ -1213,10 +1253,96 @@ def _kind_text(kind: str, entry: Dict[str, Any], catalog: Dict[str, Dict[str, An
             + (f" ({', '.join(flags)})" if flags else ""))
 
 
+#: The world_overview setup line's cut; the full text is in the system prompt.
+SETUP_LINE_CHARS = 200
+
+
+def _setup_line(text: str) -> str:
+    """The setup line, cut at SETUP_LINE_CHARS; a cut line points at the
+    system prompt, which carries the whole setup text."""
+    whole = " ".join(str(text or "").split())
+    if not whole:
+        return "setup: (none)"
+    if len(whole) <= SETUP_LINE_CHARS:
+        return f"setup: {whole}"
+    return (f"setup: {whole[:SETUP_LINE_CHARS - 1].rstrip()} … "
+            "(full text in your instructions)")
+
+
+def _calendar_line() -> str:
+    """The world calendar (seasons, year label, week days) and the current
+    game time — read only; the calendar is not the builder's to change."""
+    from app.core.game_time import get_calendar
+    from app.core.timeutils import game_time
+    cal = get_calendar()
+    seasons = ", ".join(f'{s.key} "{s.name}" {s.days} d' for s in cal.seasons)
+    week = ", ".join(cal.week_days) or "none"
+    return (f"calendar: {len(cal.seasons)} seasons — {seasons}; "
+            f'year label "{cal.year_label}"; week days: {week}; '
+            f'now {game_time().label("en")}')
+
+
+def _content_language_line(roster: List[str]) -> str:
+    """The content-language rule plus the languages characters speak — the
+    RAW stored profile key (get_character_language answers a default for
+    an unset key, which would invent a language nobody chose). The roster
+    is every character row, out-of-world ones included — the same roster
+    the counts line counts."""
+    from app.models.character import get_character_profile
+    counts: Dict[str, int] = {}
+    for name in roster:
+        lang = str((get_character_profile(name) or {}).get("language") or "").strip()
+        if lang:
+            counts[lang] = counts.get(lang, 0) + 1
+    line = "content language: the language of your task text"
+    if counts:
+        line += "; characters speak " + ", ".join(
+            f"{lang} ×{n}" for lang, n in sorted(counts.items(),
+                                                 key=lambda kv: (-kv[1], kv[0])))
+    return line
+
+
+def _linked_line(name: str) -> Optional[str]:
+    """One line on a linked family (one mind in several bodies), or None
+    for an unlinked character."""
+    from app.core.linked_characters import bodies_of, leader_of
+    from app.models.character import get_character_status, is_out_of_world
+    leader = leader_of(name)
+    if leader:
+        status = get_character_status(name)
+        return (f"linked: body of {leader} "
+                f"({status if is_out_of_world(status) else 'in the world'})")
+    bodies = bodies_of(name)
+    if not bodies:
+        return None
+    family = [name] + bodies
+    out = {m: is_out_of_world(get_character_status(m)) for m in family}
+    # ONE predicate for both: the present member is the first one NOT out of
+    # the world (present_member() only means "not dormant" — a pooled member
+    # would be in the world and in the outside list at once).
+    present = next((m for m in family if not out[m]), None)
+
+    def who(member: str) -> str:
+        # The card is the leader's own: it is "this character", not a name.
+        return "this character" if member == name else member
+
+    outside = [who(m) for m in family if out[m]]
+    if not present:
+        where = "all of them stand outside the world"
+    elif not outside:
+        where = f"{who(present)} is in the world"
+    else:
+        listed = (outside[0] if len(outside) == 1
+                  else ", ".join(outside[:-1]) + " and " + outside[-1])
+        verb = "stands" if len(outside) == 1 else "stand"
+        where = f"{listed} {verb} outside the world while {who(present)} is in it"
+    return f"linked: leads {', '.join(bodies)} ({where})"
+
+
 @_tool("world_overview", False, "world_overview{}",
-       "world setup, compass, bounds, terrain kinds, counts, places")
+       "world setup, compass, calendar, content language, built extent, build bounds, "
+       "terrain kinds, counts, places")
 def _world_overview(step: _Step, args: Dict[str, Any]) -> str:
-    from app.core.map_layout_apply import current_world_bounds
     from app.core.terrain_types import effective_catalog
     from app.models.character import list_available_characters
     from app.models.heightfield import list_height_areas
@@ -1226,18 +1352,28 @@ def _world_overview(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, set(), "world_overview")
     locs = list_locations()
     placed = [l for l in locs if l.get("pos_x") is not None and l.get("pos_z") is not None]
-    box = current_world_bounds()
+    # Every character row (pooled + dormant too): the language line and the
+    # counts line read the same roster, the counts line names how many of
+    # them stand outside the world.
+    roster = list_available_characters(include_pooled=True)
+    outside = len(roster) - len(list_available_characters())
+    extent = _built_extent()
+    build = _run_bounds(step.ctx.run_id)
     catalog = effective_catalog()
     kinds = [_kind_text(kind, entry, catalog) for kind, entry in sorted(catalog.items())]
     head = [
-        f"setup: {_short(get_world_setup_text(), 200) or '(none)'}",
+        _setup_line(get_world_setup_text()),
         "compass: x = east, z = south, metres",
-        ("bounds: none yet" if not box else
-         f"bounds: x {_g(box['min_x'])}…{_g(box['max_x'])}, "
-         f"z {_g(box['min_z'])}…{_g(box['max_z'])}"),
+        _calendar_line(),
+        _content_language_line(roster),
+        "extent: " + (_box_text(extent) if extent else "none yet"),
+        "build bounds: " + (_box_text(build) if build else
+                            "none — set_build_bounds{min_x, min_z, max_x, max_z} first "
+                            "in an empty world"),
         "terrain kinds: " + (", ".join(kinds) or "none"),
         (f"counts: {len(locs)} locations ({len(placed)} placed), "
-         f"{len(list_available_characters())} characters, "
+         f"{len(roster)} characters"
+         + (f" ({outside} out of the world)" if outside else "") + ", "
          f"{len(list_areas())} terrain areas, {len(list_height_areas())} height areas"),
         "locations:",
     ]
@@ -1247,6 +1383,132 @@ def _world_overview(step: _Step, args: Dict[str, Any]) -> str:
     # whole result goes through the cut as well.
     return _cut("\n".join(head + (_cap_lines(body, "use find_locations", used=used)
                                   or ["(none)"])))
+
+
+#: Shortest and longest side of a run's build box (E3): a smaller side is a
+#: typo, a larger one a runaway number.
+BUILD_BOUNDS_MIN_SIDE_M = 50.0
+BUILD_BOUNDS_MAX_SIDE_M = 20000.0
+_BOX_KEYS = ("min_x", "min_z", "max_x", "max_z")
+
+
+def _box_text(box: Dict[str, Any]) -> str:
+    return (f"x {_g(box['min_x'])}…{_g(box['max_x'])}, "
+            f"z {_g(box['min_z'])}…{_g(box['max_z'])}")
+
+
+def _run_bounds(run_id: str) -> Optional[Dict[str, float]]:
+    """The run's build box (world_dev_runs.set_bounds), or None."""
+    from app.core.map_layout_apply import valid_box
+    box = (wr.get_run(run_id) or {}).get("bounds")
+    return box if valid_box(box) else None
+
+
+def _place_points(loc_like: Dict[str, Any], x: Any, z: Any,
+                  yaw: Any) -> List[Tuple[float, float]]:
+    """The pin plus the world outline of a place standing at (x, z, yaw) —
+    its drawn boundary, else the seed square (the outline every placement
+    check judges a place by, _placement_entry)."""
+    from app.core.world_geometry import boundary_world_points
+    entry = _placement_entry(loc_like, x, z, yaw)
+    outline = boundary_world_points({
+        "pos_x": entry["pos_x"], "pos_z": entry["pos_z"], "yaw_deg": entry["yaw_deg"],
+        "map3d": {"boundary": entry["boundary"]}}) or []
+    return ([(entry["pos_x"], entry["pos_z"])]
+            + [(float(px), float(pz)) for px, pz in outline])
+
+
+def _polygon_points(polygon: Any) -> List[Tuple[float, float]]:
+    out: List[Tuple[float, float]] = []
+    for pt in polygon or []:
+        try:
+            out.append((float(pt[0]), float(pt[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def _built_places() -> List[List[Tuple[float, float]]]:
+    """The points (pin + outline) of every placed place."""
+    from app.models.world import list_locations
+    return [_place_points(l, l["pos_x"], l["pos_z"], l.get("yaw_deg"))
+            for l in list_locations()
+            if l.get("pos_x") is not None and l.get("pos_z") is not None]
+
+
+def _built_extent() -> Optional[Dict[str, float]]:
+    """The built extent: map_layout_apply.current_world_bounds (drawn place
+    outlines and painted ground) plus every placed place's pin and seed
+    square — a place without a drawn outline is built too."""
+    from app.core.map_layout_apply import box_union, current_world_bounds
+    box = current_world_bounds()
+    for pts in _built_places():
+        box = box_union(box, {"min_x": round(min(p[0] for p in pts), 2),
+                              "min_z": round(min(p[1] for p in pts), 2),
+                              "max_x": round(max(p[0] for p in pts), 2),
+                              "max_z": round(max(p[1] for p in pts), 2)})
+    return box
+
+
+def _bounds_warnings(points: List[Tuple[float, float]], what: str,
+                     run_id: str) -> List[str]:
+    """Out-of-box WARNINGS against the run's build box (E3 — never a
+    refusal); [] without a box or when every point lies inside. One point
+    reads "<what> (x,z) lies outside …", several "<what>: k of n points lie
+    outside …" ("1 of n points lies outside …" when exactly one is out)."""
+    from app.core.map_layout_apply import point_outside
+    box = _run_bounds(run_id)
+    if box is None or not points:
+        return []
+    outside = [p for p in points if point_outside(box, p[0], p[1])]
+    if not outside:
+        return []
+    if len(points) == 1:
+        x, z = points[0]
+        return [f"{what} ({_g(x + 0.0)},{_g(z + 0.0)}) lies outside the build bounds"]
+    verb = "lies" if len(outside) == 1 else "lie"
+    return [f"{what}: {len(outside)} of {len(points)} points {verb} outside the build bounds"]
+
+
+def _count_outside(box: Dict[str, float]) -> int:
+    """How many placed places, terrain areas and height areas have a point
+    outside the box.
+
+    Cost: one pass over every placed place (seed or drawn outline), terrain
+    area and height area, on each set_build_bounds and world_overview (like
+    _built_extent). Fine at village scale; if it ever gets slow, cache by the
+    world/terrain generation counters or test polygon bounding boxes first."""
+    from app.core.map_layout_apply import point_outside
+    from app.models.heightfield import list_height_areas
+    from app.models.terrain import list_areas
+    shapes = _built_places() + [_polygon_points(a.get("polygon"))
+                                for a in list(list_areas()) + list(list_height_areas())]
+    return sum(1 for pts in shapes if any(point_outside(box, x, z) for x, z in pts))
+
+
+@_tool("set_build_bounds", False, "set_build_bounds{min_x, min_z, max_x, max_z}",
+       "the box (world metres) this run builds in — later writes warn when they leave it")
+def _set_build_bounds(step: _Step, args: Dict[str, Any]) -> str:
+    """Run metadata, not world data (E3): stored on the run row, journaled as
+    a read, never undone. Each side 50 … 20 000 m."""
+    _only_keys(args, set(_BOX_KEYS), "set_build_bounds")
+    box = {k: _coord(args, k, required=True) for k in _BOX_KEYS}
+    for axis in ("x", "z"):
+        lo, hi = box[f"min_{axis}"], box[f"max_{axis}"]
+        if lo >= hi:
+            raise ToolRefusal(f"min_{axis} {_g(lo)} must be below max_{axis} {_g(hi)}")
+        side = hi - lo
+        if side < BUILD_BOUNDS_MIN_SIDE_M or side > BUILD_BOUNDS_MAX_SIDE_M:
+            raise ToolRefusal(f"the {axis} side is {_g(side)} m — each side must be "
+                              f"{_g(BUILD_BOUNDS_MIN_SIDE_M)} … "
+                              f"{_g(BUILD_BOUNDS_MAX_SIDE_M)} m (a small village: 300)")
+    wr.set_bounds(step.ctx.run_id, box)
+    line = "build bounds of this run: " + _box_text(box)
+    outside = _count_outside(box)
+    if outside:
+        line += (f"; warning: {outside} places / areas lie outside — they stay, "
+                 f"the box only guides new writes")
+    return line
 
 
 @_tool("find_locations", False, "find_locations{query?, near?:[x,z], radius?}",
@@ -1306,6 +1568,10 @@ def _get_location(step: _Step, args: Dict[str, Any]) -> str:
     rooms = [f'{r.get("name") or "?"} ({r.get("id")})' for r in _real_rooms(loc)]
     shown = {"id", "name", "description", "rooms", "pos_x", "pos_z", "yaw_deg",
              "indoor", "danger_level"}
+    from app.models.rules import block_rules_at, rule_action
+    block_rules = [f'{r.get("id")} "{_short(r.get("name"), 40)}" ({rule_action(r)}'
+                   + (f', when {_short(r.get("condition"), 60)}' if r.get("condition") else "")
+                   + ")" for r in block_rules_at(str(loc.get("id") or ""))]
     other = sorted(k for k, v in loc.items()
                    if k not in shown and v not in (None, "", [], {}))
     out = [
@@ -1315,6 +1581,8 @@ def _get_location(step: _Step, args: Dict[str, Any]) -> str:
         "rooms: " + (", ".join(rooms) or "(none)"),
         "other fields: " + (", ".join(other) or "(none)"),
     ]
+    if block_rules:
+        out.append("rules: " + "; ".join(block_rules))
     return _cut("\n".join(out))
 
 
@@ -1325,7 +1593,8 @@ _KIT_LINE_CHARS = 500
 #: the same sources).
 CATALOG_NAMES = ("stats", "event_categories", "event_settings", "room_types",
                  "furniture_kits", "surface_kinds", "door_props", "terrain_kinds",
-                 "item_categories")
+                 "item_categories", "secret_categories", "quest_types", "quest_roles",
+                 "skills")
 
 
 def _catalog_lines(name: str) -> List[str]:
@@ -1386,6 +1655,25 @@ def _catalog_lines(name: str) -> List[str]:
         return [_kind_text(k, e, catalog_) for k, e in sorted(catalog_.items())]
     if name == "item_categories":
         return _item_categories()
+    if name == "secret_categories":
+        from app.models.secrets import SEVERITY_LABELS, VALID_CATEGORIES
+        return ([f"category {c}" for c in VALID_CATEGORIES]
+                + [f"severity {k} = {v}" for k, v in sorted(SEVERITY_LABELS.items())])
+    if name == "quest_types":
+        from app.core.quest_catalog import catalog_payload
+        out = []
+        for group in catalog_payload().values():
+            for t in group:
+                params = ", ".join(f"{p.get('key')}:{p.get('type')}" for p in t.get("params") or [])
+                out.append(f"{t.get('id')} ({t.get('kind')}) — {t.get('label')}: params "
+                           + (params or "(none)"))
+        return out
+    if name == "quest_roles":
+        from app.core.quest_catalog import ROLE_KINDS
+        return list(ROLE_KINDS)
+    if name == "skills":
+        return [f"{s.SKILL_ID} — {_label(getattr(s, 'name', '') or s.SKILL_ID, 60)}"
+                for s in _loaded_skills()]
     raise ToolRefusal(f"no catalog {name!r} — catalogs: " + ", ".join(CATALOG_NAMES))
 
 
@@ -1732,7 +2020,10 @@ def _find_characters(step: _Step, args: Dict[str, Any]) -> str:
        "fields come whole (shared budget of 12000 characters, at most 30 "
        "fields; soul fields as the raw text soul:<field> takes, also readable "
        "under that spelling); "
-       "fields [\"body_slots\"] = its body slots with values and allowed values")
+       "fields [\"body_slots\"] = its body slots with values and allowed values; "
+       "[\"addresses\"] = the forms of address of its pairs, both directions; "
+       "[\"secrets\"] = the secrets it keeps; "
+       "[\"skills\"] = its skills, on/off and whether set or the default")
 def _get_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import (character_row_exists, get_character_config,
                                       get_character_profile)
@@ -1755,6 +2046,9 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
         items: List[Tuple[str, Optional[str], bool]] = []
         missing: Dict[str, str] = {}
         schema: List[str] = []
+        addresses: List[str] = []
+        secret_block: List[str] = []
+        skill_block: List[str] = []
         seen: set = set()
         for key in fields:
             if key.startswith("soul:"):
@@ -1774,6 +2068,21 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
                 # is answered once, not charged to the budget twice.
                 continue
             seen.add(key)
+            if key == "addresses":
+                # Both directions of every pair with a form of address set.
+                lines = _address_lines(name)
+                addresses = (["forms of address:"] + lines if lines
+                             else ["forms of address: none set"])
+                continue
+            if key == "secrets":
+                lines = _secret_lines(name)
+                secret_block = (["secrets:"] + lines if lines else ["secrets: none"])
+                continue
+            if key == "skills":
+                lines = _skill_lines(name)
+                skill_block = (["skills (id on|off (default|set)):"] + lines if lines
+                               else ["skills: none loaded"])
+                continue
             if key == "body_slots":
                 # The schema of the package-declared slots, not the raw blob:
                 # what can be set, to what, and what is set now.
@@ -1816,6 +2125,12 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
             block = "\n".join(_cap_lines(schema, "too many slots",
                                           budget=MAX_BODY_SCHEMA_CHARS))
             text += "\n" + block
+        if addresses:
+            text += "\n" + "\n".join(_cap_lines(addresses, "too many pairs"))
+        if secret_block:
+            text += "\n" + "\n".join(_cap_lines(secret_block, "too many secrets"))
+        if skill_block:
+            text += "\n" + "\n".join(_cap_lines(skill_block, "too many skills"))
         return text
 
     def nonempty(d: Dict[str, Any]) -> List[str]:
@@ -1836,6 +2151,11 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
         f'home: {cfg.get("home_location") or "(none)"}'
         + (f' / {cfg.get("home_room")}' if cfg.get("home_room") else ""),
         _known_places_line(cfg),
+    ]
+    linked = _linked_line(name)
+    if linked:
+        out.append(linked)
+    out += [
         "profile fields: " + (", ".join(prof_keys) or "(none)"),
         "config fields: " + (", ".join(nonempty(cfg)) or "(none)"),
     ]
@@ -1845,6 +2165,10 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
         out.append("outfits: " + (", ".join(n for n in names if n) or "(none)"))
     else:
         out.append("outfits: (template without outfit system)")
+    from app.models.secrets import list_secrets
+    n_secrets = len(list_secrets(name))
+    if n_secrets:
+        out.append(f"secrets: {n_secrets}" + ' — get_character{"fields": ["secrets"]} lists them')
     if _body_specs(prof):
         missing = _missing_body_attrs(name)
         out.append("body slots: " + (f"{len(missing)} attribute(s) unset" if missing
@@ -1875,7 +2199,12 @@ def _read_manual(step: _Step, args: Dict[str, Any]) -> str:
 # ── Location writes ──────────────────────────────────────────────────────
 
 def _references_to_location(loc_id: str) -> List[str]:
-    """Characters naming loc_id as home, known place or schedule slot."""
+    """Characters naming loc_id as home, known place or schedule slot,
+    secrets whose ``related_location`` is loc_id (``secret <id> of <owner>``),
+    world rules whose target place is loc_id (``rule <id> "<name>"``) and
+    active events at loc_id (``event <id>``)."""
+    from app.models.rules import rules_naming
+    from app.models.secrets import secrets_naming
     from app.models.character import (get_character_config,
                                       get_character_daily_schedule,
                                       list_available_characters)
@@ -1892,6 +2221,9 @@ def _references_to_location(loc_id: str) -> List[str]:
             why.append("schedule")
         if why:
             out.append(f"{name} ({', '.join(why)})")
+    out += _secret_refs(secrets_naming(location=loc_id))
+    out += _rule_refs(rules_naming(location=loc_id))
+    out += _event_refs(loc_id)
     return out
 
 
@@ -2103,6 +2435,9 @@ def _create_location(step: _Step, args: Dict[str, Any]) -> str:
     body["create_new"] = True
     placement = (_check_placement(_placement_entry(body, x, z, yaw))
                  if x is not None else [])
+    if x is not None:
+        placement += _bounds_warnings(_place_points(body, x, z, yaw), f'place "{name}"',
+                                      step.ctx.run_id)
 
     step.prepare()
     with world_write_lock:  # re-entrant; the writers take it again
@@ -2387,6 +2722,9 @@ def _place_location(step: _Step, args: Dict[str, Any]) -> str:
     placement = _check_placement(
         _placement_entry(stored, x, z, yaw if yaw is not None else stored.get("yaw_deg")),
         exclude_id=lid, pin_kept=kept)
+    placement += _bounds_warnings(
+        _place_points(stored, x, z, yaw if yaw is not None else stored.get("yaw_deg")),
+        f'place "{stored.get("name") or lid}"', step.ctx.run_id)
     step.prepare()
     with world_write_lock:
         cur = get_location_by_id(lid)
@@ -2817,13 +3155,18 @@ def _furnish_rooms(step: _Step, args: Dict[str, Any]) -> str:
 
 def _sanitize_layout(key: str, raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     """One area through sanitize_map_layout with the real world context;
-    refused (with the warning texts) when the sanitizer drops it."""
+    refused (with the warning texts) when the sanitizer drops it.
+
+    ``bounds=None`` on purpose (E3): in free mode an area is judged only
+    against the run's build box (:func:`_bounds_warnings`), never against
+    the built extent — that extent grows with every write, so judging
+    against it would flag every second area in an empty world."""
     from app.core.map_layout_apply import sanitize_map_layout
     from app.core.world_dev_apply import _map_world_context
-    catalog, locations_by_id, bounds, default_kind = _map_world_context()
+    catalog, locations_by_id, _extent, default_kind = _map_world_context()
     normalized, warnings = sanitize_map_layout(
         {key: [raw]}, catalog=catalog, locations_by_id=locations_by_id,
-        bounds=bounds, default_kind=default_kind)
+        bounds=None, default_kind=default_kind)
     texts = [str(w.get("message") or w.get("code") or "") for w in warnings]
     if not normalized.get(key):
         raise ToolRefusal("; ".join(t for t in texts if t) or "area dropped")
@@ -3095,6 +3438,8 @@ def _add_terrain_area(step: _Step, args: Dict[str, Any]) -> str:
     _check_area_row(row, args)
     if flows:
         warnings = warnings + [_FLOW_DEFAULT_NOTE]
+    warnings = warnings + _bounds_warnings(_polygon_points(row.get("polygon")),
+                                           f"terrain area {aid}", step.ctx.run_id)
     inverse = {"op": "delete_terrain_area", "id": aid}
     step.prepare()
     box = _union_box(row.get("polygon"))
@@ -3147,13 +3492,18 @@ def _update_terrain_area(step: _Step, args: Dict[str, Any]) -> str:
     pre = get_area(aid)
     if pre is None:
         raise ToolRefusal(f"no terrain area {aid!r} — use map_region")
-    _terrain_update_row(pre, args, kind, label, z_order, new_geom)
+    pre_row, _ = _terrain_update_row(pre, args, kind, label, z_order, new_geom)
+    # Only a call that sends a new outline is judged against the build box.
+    out_of_box = (_bounds_warnings(_polygon_points(pre_row.get("polygon")),
+                                   f"terrain area {aid}", step.ctx.run_id)
+                  if new_geom else [])
     step.prepare()
     stored = get_area(aid)
     if stored is None:
         raise ToolRefusal(f"no terrain area {aid!r} — use map_region")
     before = copy.deepcopy(stored)
     row, warnings = _terrain_update_row(stored, args, kind, label, z_order, new_geom)
+    warnings = warnings + out_of_box
     inverse = {"op": "restore_terrain_area", "row": before}
     box = _union_box(before.get("polygon"), row.get("polygon"))
     grounds = _pin_grounds_before(box)
@@ -3277,6 +3627,8 @@ def _add_height_area(step: _Step, args: Dict[str, Any]) -> str:
     aid = _new_id("ha", lambda i: _height_area(i) is not None)
     row = copy.deepcopy(area)
     row["id"] = aid
+    warnings = warnings + _bounds_warnings(_polygon_points(row.get("polygon")),
+                                           f"height area {aid}", step.ctx.run_id)
     inverse = {"op": "delete_height_area", "id": aid}
     step.prepare()
     step.begin("height", aid, inverse)
@@ -3311,8 +3663,15 @@ def _update_height_area(step: _Step, args: Dict[str, Any]) -> str:
         raise ToolRefusal("nothing to change — give polygon, height_m, falloff_m or label")
     # Backup first, then one read = merge base and "before" (see
     # update_terrain_area).
-    if _height_area(aid) is None:  # cheap pre-check before the backup
+    pre = _height_area(aid)
+    if pre is None:  # cheap pre-check before the backup
         raise ToolRefusal(f"no height area {aid!r} — use map_region")
+    # Only a call that sends a new outline is judged against the build box,
+    # on the outline the CALLER sent — it does not depend on the stored row,
+    # so no second read and no extra sanitizer pass feed the warning.
+    out_of_box = (_bounds_warnings(_polygon_points(polygon), f"height area {aid}",
+                                   step.ctx.run_id)
+                  if polygon is not None else [])
     step.prepare()
     stored = _height_area(aid)
     if stored is None:
@@ -3322,8 +3681,7 @@ def _update_height_area(step: _Step, args: Dict[str, Any]) -> str:
            "height_m": height if height is not None else stored.get("height_m"),
            "falloff_m": falloff if falloff is not None else stored.get("falloff_m")}
     norm, warnings = _sanitize_layout("height_areas", raw)
-    if polygon is None:
-        warnings = []
+    warnings = (warnings + out_of_box) if polygon is not None else []
     row = copy.deepcopy(stored)
     if polygon is not None:
         row["polygon"] = norm["polygon"]
@@ -3560,7 +3918,9 @@ def _place_world_prop(step: _Step, args: Dict[str, Any]) -> str:
             for k in _WORLD_PROP_ARGS if args.get(k) is not None}
     _refuse_rewritten("place_world_prop", sent,
                       {k: entry[key] for k, key in _WORLD_PROP_ARGS.items()})
-    warnings = _world_prop_warnings(entry["x"], entry["z"])
+    warnings = (_world_prop_warnings(entry["x"], entry["z"])
+                + _bounds_warnings([(entry["x"], entry["z"])], f"world prop {wid}",
+                                   step.ctx.run_id))
     inverse = {"op": "delete_world_prop", "id": wid}
     step.prepare()
     step.begin("world_prop", wid, inverse)
@@ -4586,30 +4946,43 @@ def _check_known_places(value: Any) -> List[str]:
     return ids
 
 
+def _stored_known_ids(name: str) -> List[str]:
+    """The character's known place ids as STORED (the str view of
+    models.character.get_known_locations) — read through
+    ``stored_known_locations``, never the defaulting config reader, which
+    auto-creates a whole default config for an empty one (a write no
+    journal row records)."""
+    from app.models.character import stored_known_locations
+    raw = stored_known_locations(name)[1]
+    return [str(v) for v in raw if v] if isinstance(raw, list) else []
+
+
 def _add_known_places(name: str, ids: List[str]) -> Tuple[List[str], List[str]]:
     """Add ids to the character's known places (add-only, stored order kept,
     the new ones appended in the order given) — the tool's own locked
     read-modify-write: models.character.add_known_location is unlocked and
-    ignores the save result. A failed save, or an id missing when read back,
-    is a ValueError. Returns the stored list as read back and the ids this
-    call added (those not known before, in the order given)."""
+    ignores the save result. Reads and writes ONLY the stored
+    ``known_locations`` key (``character.stored_known_locations`` /
+    ``write_known_locations``): the rest of the stored config, its absent
+    defaults and ``updated_at`` stay as they are, so the undo
+    (remove_known_places) gives back the same bytes. A failed save, or an id
+    missing when read back, is a ValueError. Returns the stored list as read
+    back and the ids this call added (those not known before, in the order
+    given)."""
     from app.core.keyed_lock import keyed_lock
-    from app.models.character import (get_character_config, get_known_locations,
-                                      save_character_config)
+    from app.models.character import stored_known_locations, write_known_locations
     with keyed_lock("character_profile", name):
-        cfg = copy.deepcopy(get_character_config(name) or {})
-        existing = cfg.get("known_locations")
+        existing = stored_known_locations(name)[1]
         known = [str(v) for v in existing if v] if isinstance(existing, list) else []
         missing = [i for i in ids if i not in known]
         if missing:
             # Appended to the stored list AS IT IS (membership on the str
             # view): the undo removes exactly the added ids, so a normalised
             # copy would change entries the journal does not record.
-            cfg["known_locations"] = (list(existing) if isinstance(existing, list)
-                                      else []) + missing
-            if not save_character_config(name, cfg):
+            if not write_known_locations(name, (list(existing) if isinstance(existing, list)
+                                                else []) + missing):
                 raise ValueError(f"the known places of {name} were not stored")
-        stored = get_known_locations(name)
+        stored = _stored_known_ids(name)
     if any(i not in stored for i in ids):
         raise ValueError(f"the known places of {name} were not stored")
     return stored, missing
@@ -5002,7 +5375,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
     from app.models.character import (character_row_exists, get_character_config,
                                       get_character_outfits, get_character_profile,
                                       get_known_locations, save_character_config,
-                                      save_character_profile)
+                                      save_character_profile, stored_known_locations)
     _only_keys(args, {"name", "patch"}, "update_character")
     name = _str(args, "name", required=True)
     patch = args.get("patch")
@@ -5425,7 +5798,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             # inverse removes exactly the places this call added. Still under
             # the keyed_lock("character_profile") taken above.
             kstep = group_step()
-            k_raw = (get_character_config(name) or {}).get("known_locations")
+            k_raw = stored_known_locations(name)[1]
             k_had_key = isinstance(k_raw, list)
             k_known = [str(v) for v in k_raw if v] if k_had_key else []
             k_missing = [i for i in known_ids if i not in k_known]
@@ -5435,7 +5808,7 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
                         "ids": list(added), "had_key": k_had_key}
 
             def added_now() -> List[str]:
-                now = get_known_locations(name)
+                now = _stored_known_ids(name)
                 return [i for i in k_missing if i in now]
 
             # Until the write is done the inverse names every place the call
@@ -5463,6 +5836,989 @@ def _update_character(step: _Step, args: Dict[str, Any]) -> str:
             + completeness.character_suffix(step.ctx.run_id, name))
 
 
+# ── Forms of address ─────────────────────────────────────────────────────
+
+@_tool("set_address", True, "set_address{speaker, addressee, text}",
+       "how speaker addresses addressee — ONE direction, one line of at most "
+       "120 characters (\"calls him Master\"); \"\" clears it")
+def _set_address(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 3 (E11). The writer (``relationship.set_address``) strips
+    and validates the text: every value it would rewrite is refused here, so
+    the stored text is the sent one. A linked body's direction lands on its
+    mind (the writer's rule; the line says "stored on <mind>"). A stored
+    value the writer would refuse or rewrite is refused up front (no exact
+    inverse). The writer fills the reader's defaults (id, history,
+    strength, ...) into a sparse row that existed; the inverse therefore
+    carries that row's raw columns (``raw``) and the undo writes them back
+    (a pending step too: the inverse carries the sent ``text`` and the
+    existing row's id up front).
+    The writer has no lock of its own; the run freezes the world (accepted
+    residual).
+    Inverse ``restore_address`` (world_dev_undo)."""
+    from app.core.linked_characters import family_of, mind_of
+    from app.models import relationship as rel
+    from app.models.character import character_row_exists
+    _only_keys(args, {"speaker", "addressee", "text"}, "set_address")
+    speaker = _str(args, "speaker", required=True)
+    addressee = _str(args, "addressee", required=True)
+    for who in (speaker, addressee):
+        if not character_row_exists(who):
+            raise ToolRefusal(f"no character {who!r} — use find_characters")
+    if speaker.lower() == addressee.lower():
+        raise ToolRefusal("speaker and addressee are the same character")
+    if addressee.lower() in {m.lower() for m in family_of(speaker)}:
+        raise ToolRefusal(f"{speaker} and {addressee} are one linked family (one "
+                          "mind) — there is no form of address between them")
+    text = args.get("text")
+    if not isinstance(text, str):
+        raise ToolRefusal("'text' is required (a string; \"\" clears the form of "
+                          "address)")
+    try:
+        clean = rel.clean_address(text)
+    except rel.AddressTextError as exc:
+        raise ToolRefusal(str(exc)) from None
+    if clean != text:
+        raise ToolRefusal("the text would be stored as "
+                          + json.dumps(clean, ensure_ascii=False)
+                          + " — send it exactly that way")
+    mind = mind_of(speaker)
+    key = rel.address_key(mind, addressee)
+    pair = rel.pair_key(mind, addressee)
+    before_row = rel.pair_row(mind, addressee)
+    stored = before_row.get(key, "") if before_row is not None else ""
+    if stored not in ("", None):
+        # The undo puts the key back through the same writer: a stored value
+        # the writer would refuse or rewrite (a hand-edited or foreign row)
+        # has no exact inverse.
+        try:
+            stored_ok = rel.clean_address(stored) == stored
+        except rel.AddressTextError:
+            stored_ok = False
+        if not stored_ok:
+            raise ToolRefusal(f"the stored form of address of {speaker} toward "
+                              f"{addressee} ({json.dumps(stored, ensure_ascii=False)}) "
+                              "is not a valid one-line text — it cannot be restored "
+                              "exactly; fix it in Game-Admin → Characters → Relationships")
+    if stored == text:
+        raise ToolRefusal(f"already set: {speaker} addresses {addressee} "
+                          + (json.dumps(text, ensure_ascii=False) if text
+                             else "without a form of address"))
+    step.prepare()
+    before = (before_row.get(key, wu.ABSENT) if before_row is not None
+              else wu.ABSENT)
+    inverse = {"op": "restore_address", "speaker": mind, "addressee": addressee,
+               "pair": pair, "key": key, "before": before, "text": text,
+               "row_created": before_row is None,
+               # A row that existed keeps its id; a created one gets it at
+               # attach / reconcile.
+               "row_id": (before_row.get("_db_id") if before_row is not None
+                          else None),
+               # The stored columns of a row that existed: the writer merges
+               # the reader's defaults into a sparse row, the undo writes
+               # these back.
+               "raw": (rel.raw_pair_row(int(before_row["_db_id"]))
+                       if before_row is not None else None)}
+    step.begin("relationship", pair, inverse)
+
+    def written_of(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {"value": row.get(key, wu.ABSENT), "row": row}
+
+    def reconcile():
+        row = rel.pair_row(mind, addressee)
+        if row is None or (before_row is not None
+                           and wu._norm(row) == wu._norm(before_row)):
+            return None
+        return pair, {**inverse, "row_id": row.get("_db_id")}, written_of(row)
+
+    with step.writing(reconcile):
+        # The ORIGINAL speaker: the writer marks a leader row a body
+        # created as ``mind_only``.
+        if not rel.set_address(speaker, addressee, text):
+            raise ToolRefusal("the form of address was not stored")
+    row = rel.pair_row(mind, addressee)
+    if row is None:
+        raise RuntimeError(f"set_address stored no row for {pair}")
+    inverse["row_id"] = row.get("_db_id")
+    step.attach(pair, inverse)
+    line = (f"{speaker} addresses {addressee}: "
+            + (json.dumps(text, ensure_ascii=False) if text
+               else "form of address cleared")
+            + (f" (stored on {mind})" if mind != speaker else ""))
+    step.complete(written_of(row), line)
+    return line
+
+
+def _address_lines(name: str) -> List[str]:
+    """``<a> → <b>: "<text>"`` per pair of *name* with a direction set (both
+    directions, the mind's rows included for a linked body)."""
+    from app.core.linked_characters import family_of, mind_of
+    from app.models.relationship import get_address, get_character_relationships
+    family = {m.lower() for m in family_of(name)}
+    others: List[str] = []
+    for who in {name, mind_of(name)}:
+        for r in get_character_relationships(who):
+            for other in (str(r.get("character_a") or ""), str(r.get("character_b") or "")):
+                if other and other.lower() not in family and other not in others:
+                    others.append(other)
+    out: List[str] = []
+    for other in sorted(others, key=str.lower):
+        for a, b in ((name, other), (other, name)):
+            text = get_address(a, b)
+            if text:
+                out.append(f"{a} → {b}: " + json.dumps(text, ensure_ascii=False))
+    return out
+
+
+# ── Secrets ──────────────────────────────────────────────────────────────
+
+#: Longest secret text and consequence text the builder may send (E12: a
+#: prompt block, not a novel).
+MAX_SECRET_CHARS = 1000
+MAX_SECRET_CONSEQUENCE_CHARS = 500
+
+
+def _secret_names(args: Dict[str, Any], key: str, owner: str,
+                  family: set) -> List[str]:
+    """A list of existing character names other than the owner's family,
+    no duplicates — refused otherwise (nothing is rewritten)."""
+    from app.models.character import character_row_exists
+    value = args.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(n, str) for n in value):
+        raise ToolRefusal(f"'{key}' must be a list of character names")
+    seen: set = set()
+    for n in value:
+        if not n or n != n.strip():
+            raise ToolRefusal(f"'{key}': {n!r} is no character name (no empty names, no "
+                              "leading or trailing blanks)")
+        if n.lower() in seen:
+            raise ToolRefusal(f"'{key}' names {n} twice")
+        seen.add(n.lower())
+        if not character_row_exists(n):
+            raise ToolRefusal(f"'{key}': no character {n!r} — use find_characters")
+        if n.lower() in family:
+            raise ToolRefusal(f"'{key}': {n} is {owner} or one of its linked family — "
+                              "the keeper of a secret is never listed there")
+    return list(value)
+
+
+@_tool("add_secret", True,
+       "add_secret{name, content, category?, severity?, known_by?, related_characters?, "
+       "related_location?, consequences?}",
+       "a secret the character keeps (categories and severities: list_catalog "
+       "secret_categories)")
+def _add_secret(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 4 (E12). The writer (``secrets.add_secret``) clamps the
+    severity, rewrites an unknown category, strips the texts and stores the
+    knowers as minds: every value it would rewrite is refused here, so the
+    stored secret is the sent one. The secret is stored under the owner's
+    MIND (a linked body is recorded as its ``body``). Inverse
+    ``delete_secret{owner (the mind), id}`` (world_dev_undo); delete_created
+    removes one only in the same turn (E2). Accepted residual (like the rules layer's
+    ``save_rules``): the writer (``secrets._save_secrets``) re-serialises
+    every secret of the mind on each add and delete, so a FOREIGN legacy or
+    sparse secret row of the same mind may come back with the reader's
+    defaults filled in (meta ``id``, ``category``, ``severity``,
+    ``known_by``/``discovered_by``, ...; ``visibility`` rewritten) — same
+    meaning; byte-for-byte holds for the run's own row. The admin's own add
+    and delete do the same today."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.linked_characters import family_of, mind_of
+    from app.models import secrets as sec
+    from app.models.character import character_row_exists
+    from app.models.world import get_location_by_id
+    allowed = {"name", "content", "category", "severity", "known_by",
+               "related_characters", "related_location", "consequences"}
+    _only_keys(args, allowed, "add_secret")
+    name = _str(args, "name", required=True)
+    if not character_row_exists(name):
+        raise ToolRefusal(f"no character {name!r} — use find_characters")
+    content = args.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ToolRefusal("'content' is required (the secret, a non-empty string)")
+    if content != content.strip():
+        raise ToolRefusal("'content' must not start or end with blanks (it would be "
+                          "stored stripped)")
+    if len(content) > MAX_SECRET_CHARS:
+        raise ToolRefusal(f"'content' is {len(content)} characters — at most "
+                          f"{MAX_SECRET_CHARS}")
+    category = args.get("category", "personal")
+    if category not in sec.VALID_CATEGORIES:
+        raise ToolRefusal(f"'category' {category!r} is none of: "
+                          + ", ".join(sec.VALID_CATEGORIES))
+    severity = args.get("severity", 2)
+    if (isinstance(severity, bool) or not isinstance(severity, int)
+            or severity not in sec.SEVERITY_LABELS):
+        raise ToolRefusal("'severity' must be a whole number "
+                          + ", ".join(f"{k} ({v})" for k, v in sorted(sec.SEVERITY_LABELS.items())))
+    family = {m.lower() for m in family_of(name)} | {name.lower()}
+    known_by = _secret_names(args, "known_by", name, family)
+    for n in known_by:
+        if mind_of(n) != n:
+            raise ToolRefusal(f"'known_by': name the leader {mind_of(n)} instead of {n} — "
+                              "a body knows what its leader knows")
+    related = _secret_names(args, "related_characters", name, family)
+    related_location = args.get("related_location")
+    if related_location is not None:
+        if not isinstance(related_location, str) or not related_location.strip():
+            raise ToolRefusal("'related_location' must be a location id")
+        if get_location_by_id(related_location) is None:
+            raise ToolRefusal(f"'related_location': no location {related_location!r} — "
+                              "use find_locations")
+    consequences = args.get("consequences", "")
+    if not isinstance(consequences, str):
+        raise ToolRefusal("'consequences' must be a string")
+    if consequences != consequences.strip():
+        raise ToolRefusal("'consequences' must not start or end with blanks (it would be "
+                          "stored stripped)")
+    if len(consequences) > MAX_SECRET_CONSEQUENCE_CHARS:
+        raise ToolRefusal(f"'consequences' is {len(consequences)} characters — at most "
+                          f"{MAX_SECRET_CONSEQUENCE_CHARS}")
+    mind = mind_of(name)
+    # A strict read before prepare: a broken stored row of the mind is a
+    # clear refusal here, not an error after the step was prepared.
+    try:
+        sec.list_secrets(mind, strict=True)
+    except Exception as exc:
+        raise ToolRefusal(f"a stored secret of {mind} cannot be read ({exc}) — "
+                          "fix or delete that row in Game-Admin first") from exc
+    step.prepare()
+    # The writer's own lock (re-entrant): nothing foreign lands between the
+    # id read, the write and the reconcile.
+    with keyed_lock("secrets", mind):
+        ids_before = {str(s.get("id")) for s in sec.list_secrets(mind, strict=True)}
+        step.begin("secret", None, None)
+
+        def new_row() -> Optional[Dict[str, Any]]:
+            return next((s for s in sec.list_secrets(mind, strict=True)
+                         if str(s.get("id")) not in ids_before
+                         and s.get("content") == content), None)
+
+        def reconcile():
+            row = new_row()
+            if row is None:
+                return None
+            sid_ = str(row.get("id"))
+            return sid_, {"op": "delete_secret", "owner": mind, "id": sid_}, row
+
+        with step.writing(reconcile):
+            made = sec.add_secret(name, content, category=category, severity=severity,
+                                  related_characters=related or None,
+                                  related_location=related_location,
+                                  consequences_if_revealed=consequences,
+                                  source="manual", known_by=known_by or None)
+            sid = str(made.get("id") or "")
+            # The writer logs and swallows a failed save: read it back.
+            if not sid or sec.get_secret(mind, sid) is None:
+                raise RuntimeError("the secret was not stored")
+        inverse = {"op": "delete_secret", "owner": mind, "id": sid}
+        step.attach(sid, inverse)
+        row = sec.get_secret(mind, sid)
+    line = (f"added secret {sid} of {name} ({category}, severity {severity} "
+            f"{sec.SEVERITY_LABELS[severity]}), known by "
+            + (", ".join(known_by) or "nobody")
+            + (f" (stored on {mind})" if mind != name else ""))
+    step.complete(row, line)
+    return line
+
+
+def _secret_lines(name: str) -> List[str]:
+    """``<id> <category>/<severity>: <content> — known by …`` per secret of
+    *name*'s mind."""
+    from app.models.secrets import list_secrets
+    out = []
+    for s in list_secrets(name):
+        out.append(f"{s.get('id')} {s.get('category')}/{s.get('severity')}: "
+                   + _short(s.get("content"), 80) + " — known by "
+                   + (", ".join(str(k) for k in s.get("known_by") or []) or "nobody"))
+    return out
+
+
+def _secret_refs(secret_rows: List[Dict[str, Any]]) -> List[str]:
+    """``secret <id> of <owner>`` (+ why) per row of
+    ``secrets.secrets_naming``."""
+    return [f"secret {r['secret'].get('id')} of {r['owner']}"
+            + (f" ({', '.join(w for w in r['why'] if w != 'location')})"
+               if any(w != "location" for w in r["why"]) else "")
+            for r in secret_rows]
+
+
+def _references_to_character(name: str) -> List[str]:
+    """What still names *name* outside its own rows (which delete_character
+    removes with it and a re-creation brings back): secrets of OTHER minds
+    that list it as a knower or a related character. Both delete_created
+    paths refuse while any is left — never a dangling reference. Deliberately
+    not in ``_character_delete_blockers`` (the same-turn path never calls
+    those). World rules whose ``character`` is it or whose condition names
+    it (``rule <id> "<name>"``) are listed too."""
+    from app.models.rules import rules_naming
+    from app.models.secrets import secrets_naming
+    return (_secret_refs([r for r in secrets_naming(name=name) if r["owner"] != name])
+            + _rule_refs(rules_naming(character=name)))
+
+
+# ── Access rules ─────────────────────────────────────────────────────────
+
+#: Longest rule name and block message the builder may send (plan p3 Task 5).
+MAX_RULE_NAME_CHARS = 80
+MAX_RULE_MESSAGE_CHARS = 200
+#: The directions an access block guards (``rules.rule_action``).
+RULE_ACTIONS = ("enter", "leave")
+
+
+def _rule_rooms_arg(args: Dict[str, Any], loc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The ``rooms`` argument resolved to rooms of *loc* (an id, or a name
+    when exactly one room carries it). Unknown, ambiguous or repeated rooms
+    are refused, listing the place's rooms."""
+    value = args.get("rooms")
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ToolRefusal("'rooms' must be a list of room ids or names")
+    real = _real_rooms(loc)
+    listing = ", ".join(f'{r.get("name") or "?"} ({r.get("id")})' for r in real) or "none"
+    out: List[Dict[str, Any]] = []
+    for ident in value:
+        room = next((r for r in real if r.get("id") == ident), None)
+        if room is None:
+            named = [r for r in real if r.get("name") == ident]
+            if len(named) > 1:
+                raise ToolRefusal(f"{len(named)} rooms of {loc.get('id')} are named {ident!r} — "
+                                  f"use the id; rooms: {listing}")
+            room = named[0] if named else None
+        if room is None:
+            raise ToolRefusal(f"no room {ident!r} in {loc.get('id')} — rooms: {listing}")
+        if any(r.get("id") == room.get("id") for r in out):
+            raise ToolRefusal(f"'rooms' names {room.get('name') or room.get('id')} twice")
+        out.append(room)
+    return out
+
+
+def _rule_condition_arg(args: Dict[str, Any]) -> str:
+    """The required condition, checked by the editor's own validators: a
+    grammar issue or an unresolved reference refuses (a rule without a
+    condition never blocks — check_access only blocks when it passes). It is
+    stored exactly as sent; surrounding blanks refuse instead of being
+    stripped."""
+    from app.core.activity_engine import (validate_condition_expression,
+                                          validate_condition_references)
+    condition = args.get("condition")
+    if not isinstance(condition, str) or not condition.strip():
+        raise ToolRefusal("'condition' is required — a block without a condition never "
+                          "bites (read_manual systems lists the condition grammar)")
+    if condition != condition.strip():
+        # Stored as sent, like the other text fields of the plan (secret
+        # content, address text): nothing is rewritten.
+        raise ToolRefusal("'condition' must not start or end with blanks")
+    issues = validate_condition_expression(condition)
+    if issues:
+        raise ToolRefusal("'condition': " + "; ".join(i.message for i in issues)
+                          + " — read_manual systems lists the condition grammar")
+    warnings = validate_condition_references(condition)
+    if warnings:
+        raise ToolRefusal("'condition': " + "; ".join(warnings))
+    return condition
+
+
+@_tool("add_block_rule", True,
+       "add_block_rule{name, message, location_id, rooms?, action?, condition, character?}",
+       "an access rule: blocks entering (or leaving) a place or some of its rooms while "
+       "the condition holds (read_manual systems first)")
+def _add_block_rule(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 5 (E8). A world-layer block rule in the RulesTab shape
+    (``target: {scope: "location", location, action, rooms?}``), written by
+    ``rules.add_rule(target_dir="world")`` under ``rules.layer_lock()``
+    (re-entrant; the id choice, the write and the read-back see no foreign
+    rule write). Inverse ``delete_rule{id}`` (world_dev_undo); delete_created
+    removes one only in the same turn (E2). Accepted residual (plan Review
+    focus 1): ``save_rules`` re-serialises every world rule on each add and
+    delete, so a FOREIGN legacy row may come back normalised (``id`` set,
+    ``message``/``type`` filled from the columns) — same meaning;
+    byte-for-byte holds for the run's own row and rows written by add_rule."""
+    from app.models import rules as rules_mod
+    from app.models.character import character_row_exists
+    allowed = {"name", "message", "location_id", "rooms", "action", "condition", "character"}
+    _only_keys(args, allowed, "add_block_rule")
+    name = _str(args, "name", required=True)
+    if len(name) > MAX_RULE_NAME_CHARS:
+        raise ToolRefusal(f"'name' is {len(name)} characters — at most {MAX_RULE_NAME_CHARS}")
+    message = _str(args, "message", required=True)
+    if len(message) > MAX_RULE_MESSAGE_CHARS:
+        raise ToolRefusal(f"'message' is {len(message)} characters — at most "
+                          f"{MAX_RULE_MESSAGE_CHARS}")
+    loc = _resolve_location(_str(args, "location_id", required=True))
+    loc_id = str(loc.get("id") or "")
+    rooms = _rule_rooms_arg(args, loc)
+    action = _str(args, "action") or "enter"
+    if action not in RULE_ACTIONS:
+        raise ToolRefusal(f"'action' {action!r} is none of: " + ", ".join(RULE_ACTIONS))
+    condition = _rule_condition_arg(args)
+    character = _str(args, "character")
+    if character is not None:
+        if not character or not character_row_exists(character):
+            raise ToolRefusal(f"'character': no character {character!r} — use find_characters")
+    target: Dict[str, Any] = {"scope": "location", "location": loc_id, "action": action}
+    if rooms:
+        target["rooms"] = [str(r.get("id")) for r in rooms]
+    # A strict read before prepare: a broken stored layer is a clear refusal
+    # here, not an error after the step was prepared.
+    try:
+        rules_mod.load_rules(strict=True)
+    except Exception as exc:
+        raise ToolRefusal(f"the stored rules cannot be read ({exc}) — fix that in "
+                          "Game-Admin → Rules first") from exc
+    step.prepare()
+    with rules_mod.layer_lock():
+        taken = {str(r.get("id") or "") for r in rules_mod.load_rules(strict=True)}
+        rid = f"wdrule_{secrets.token_hex(4)}"
+        while rid in taken:
+            rid = f"wdrule_{secrets.token_hex(4)}"
+        rule: Dict[str, Any] = {"id": rid, "name": name, "type": "block", "target": target,
+                                "condition": condition, "message": message}
+        if character:
+            rule["character"] = character
+        inverse = {"op": "delete_rule", "id": rid}
+        step.begin("rule", rid, inverse)
+
+        def reconcile():
+            row_ = rules_mod.world_rule(rid)
+            return None if row_ is None else (rid, inverse, row_)
+
+        with step.writing(reconcile):
+            rules_mod.add_rule(copy.deepcopy(rule), target_dir="world")
+            if rules_mod.world_rule(rid) is None:
+                raise RuntimeError("the rule was not stored")
+        row = rules_mod.world_rule(rid)
+    place = f'"{loc.get("name") or loc_id}" ({loc_id})'
+    if rooms:
+        place += " / " + ", ".join(str(r.get("name") or r.get("id")) for r in rooms)
+    line = (f'added rule {rid} "{name}": blocks {action} of {place} when {condition}'
+            + (f" (only for {character})" if character else ""))
+    if rooms and len(rooms) == len(_real_rooms(loc)):
+        line += (" — note: this names every room, but corridors and grounds stay open; "
+                 "omit 'rooms' to block the whole place")
+    step.complete(row, line)
+    return line
+
+
+def _rule_refs(rule_rows: List[Dict[str, Any]]) -> List[str]:
+    """``rule <id> "<name>"`` per row of ``rules.rules_naming``."""
+    return [f'rule {r.get("id")} "{r.get("name") or ""}"' for r in rule_rows]
+
+
+# ── World events ─────────────────────────────────────────────────────────
+
+#: Longest event text the builder may send, and the longest lifetime in GAME
+#: hours (plan p3 E10: 720 = 30 game days; 0 = never expires, the writer's rule).
+MAX_EVENT_CHARS = 500
+MAX_EVENT_TTL_HOURS = 720
+
+
+@_tool("add_event", True, "add_event{text, location_id?, category?, ttl_hours?}",
+       "a one-off happening at a place (or everywhere without location_id); lasts "
+       "ttl_hours GAME hours (categories: list_catalog event_categories)")
+def _add_event(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 6 (E10). One event through ``events.add_event`` (the
+    writer the admin route calls). The writer strips the text and stores any
+    category string: every value it would rewrite is refused here, so the
+    stored event is the sent one. Inverse ``delete_event{id}``
+    (world_dev_undo); delete_created removes one only in the same turn (E2) —
+    the writer stamps a new id and created_at, so no exact re-creation exists."""
+    from app.models import events as ev
+    from app.models.world import get_location_by_id
+    _only_keys(args, {"text", "location_id", "category", "ttl_hours"}, "add_event")
+    text = args.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ToolRefusal("'text' is required (the happening, a non-empty string)")
+    if text != text.strip():
+        raise ToolRefusal("'text' must not start or end with blanks (it would be stored "
+                          "stripped)")
+    if len(text) > MAX_EVENT_CHARS:
+        raise ToolRefusal(f"'text' is {len(text)} characters — at most {MAX_EVENT_CHARS}")
+    loc_id = args.get("location_id")
+    loc: Optional[Dict[str, Any]] = None
+    if loc_id is not None:
+        if not isinstance(loc_id, str) or not loc_id.strip():
+            raise ToolRefusal("'location_id' must be a location id (leave it out for an "
+                              "event everywhere)")
+        loc = get_location_by_id(loc_id)
+        if loc is None:
+            raise ToolRefusal(f"no location {loc_id!r} — use find_locations")
+    category = args.get("category")
+    if category is None:
+        category = ""
+    cats = _event_categories()
+    if not isinstance(category, str) or (category and category not in cats):
+        raise ToolRefusal(f"'category' {category!r} is none of: " + ", ".join(cats)
+                          + " (or leave it out)")
+    ttl = args.get("ttl_hours")
+    if ttl is None:
+        ttl = ev.DEFAULT_TTL_HOURS
+    elif not _whole_in(ttl, 0, MAX_EVENT_TTL_HOURS):
+        raise ToolRefusal(f"'ttl_hours' must be a whole number of GAME hours 0…"
+                          f"{MAX_EVENT_TTL_HOURS} (0 = never expires)")
+    ttl = int(ttl)
+    step.prepare()
+    ids_before = {str(e.get("id")) for e in ev.get_all_events()}
+    step.begin("event", None, None)
+
+    def new_row() -> Optional[Dict[str, Any]]:
+        return next((e for e in ev.get_all_events()
+                     if str(e.get("id")) not in ids_before and e.get("text") == text), None)
+
+    def reconcile():
+        row_ = new_row()
+        if row_ is None:
+            return None
+        eid_ = str(row_.get("id"))
+        return eid_, {"op": "delete_event", "id": eid_}, row_
+
+    with step.writing(reconcile):
+        made = ev.add_event(text, location_id=loc_id, ttl_hours=ttl, category=category)
+        eid = str(made.get("id") or "")
+        # The writer logs and swallows a failed insert: read it back.
+        if not eid or ev.get_event(eid) is None:
+            raise RuntimeError("the event was not stored")
+    step.attach(eid, {"op": "delete_event", "id": eid})
+    row = ev.get_event(eid)
+    place = f'"{loc.get("name") or loc_id}" ({loc_id})' if loc else "everywhere"
+    life = (f"{ttl} game hour{'s' if ttl != 1 else ''}" if ttl
+            else "never expires")
+    line = (f"added event {eid} at {place} ({category or 'uncategorized'}, {life}): "
+            f'"{_short(text, 80)}"')
+    step.complete(row, line)
+    return line
+
+
+def _event_refs(loc_id: str) -> List[str]:
+    """``event <id>`` per active event whose place is loc_id.
+
+    Only ACTIVE events count (``get_all_events``): an expired event the
+    periodic cleanup has not removed yet no longer blocks the delete and keeps
+    naming the deleted place until the cleanup runs. That is harmless — the
+    event is invisible, and undo still removes the run's own event. A read
+    error refuses the delete (``get_all_events_strict`` raises; never read
+    as "no events")."""
+    from app.models.events import get_all_events_strict
+    try:
+        events = get_all_events_strict()
+    except Exception as e:
+        raise ToolRefusal(f"the events could not be read ({e}) — the place stays") from e
+    return [f"event {e.get('id')}" for e in events
+            if str(e.get("location_id") or "") == loc_id]
+
+
+# ── Quest templates ──────────────────────────────────────────────────────
+
+#: The largest template the builder may send, as serialized JSON (the admin
+#: route's body cap, routes/quests._MAX_BODY_BYTES: a template is copied into
+#: every run's snapshot).
+MAX_QUEST_TEMPLATE_BYTES = 256 * 1024
+#: The content keys create_quest_template takes, and the container type of
+#: the structured ones (create_template turns any other value into an empty
+#: container — a rewrite, so it is refused here).
+_QUEST_KEYS = ("title", "summary", "gm_notes", "roles", "steps", "start_condition",
+               "prerequisites", "time_limit_s")
+_QUEST_CONTAINERS = {"roles": list, "steps": list, "start_condition": dict, "prerequisites": dict}
+
+
+@_tool("create_quest_template", True,
+       "create_quest_template{title, summary?, gm_notes?, roles?, steps?, start_condition?, "
+       "prerequisites?, time_limit_s?}",
+       "a DRAFT quest template (roles instead of fixed characters/places, steps as catalog "
+       "conditions — list_catalog quest_types / quest_roles); the admin readies it")
+def _create_quest_template(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 7 (E9). One draft template through
+    ``quests.create_template(origin="admin", state="draft")`` (the writer the
+    admin route calls). The field check is the route's own
+    (``quest_engine.check_template_fields``); every value the writer would
+    rewrite (a non-container roles/steps/conditions) is refused, so the stored
+    template is the sent one. Authoring issues (``validate_template``) are
+    warnings: a draft may be incomplete. Inverse
+    ``delete_quest_template{id}`` (world_dev_undo); delete_created removes
+    one only in the same turn (E2) — the writer mints a new id and
+    created_at, so no exact re-creation exists."""
+    from app.core import quest_engine
+    from app.models import quests
+    _only_keys(args, set(_QUEST_KEYS), "create_quest_template")
+    msg = quest_engine.check_template_fields(args)
+    if msg:
+        raise ToolRefusal(msg)
+    title = args.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ToolRefusal("'title' is required (the quest's name, a non-empty string)")
+    for key, kind in _QUEST_CONTAINERS.items():
+        if key in args and not isinstance(args[key], kind):
+            raise ToolRefusal(f"'{key}' must be {'a list' if kind is list else 'an object'} "
+                              "(leave it out for none)")
+    size = len(json.dumps(args, ensure_ascii=False).encode("utf-8"))
+    if size > MAX_QUEST_TEMPLATE_BYTES:
+        raise ToolRefusal(f"the template is {size // 1024} KiB — at most "
+                          f"{MAX_QUEST_TEMPLATE_BYTES // 1024} KiB")
+    fields = {k: copy.deepcopy(args[k]) for k in _QUEST_KEYS if k in args}
+    step.prepare()
+    ids_before = {str(t.get("id")) for t in quests.list_templates()}
+    step.begin("quest_template", None, None)
+
+    def reconcile():
+        row_ = next((t for t in quests.list_templates()
+                     if str(t.get("id")) not in ids_before and t.get("title") == title), None)
+        if row_ is None:
+            return None
+        qid_ = str(row_.get("id"))
+        return qid_, {"op": "delete_quest_template", "id": qid_}, row_
+
+    with step.writing(reconcile):
+        made = quests.create_template(**fields, origin="admin", state="draft")
+        qid = str((made or {}).get("id") or "")
+        if not qid or quests.get_template(qid) is None:
+            raise RuntimeError("the quest template was not stored")
+    step.attach(qid, {"op": "delete_quest_template", "id": qid})
+    row = quests.get_template(qid)
+    roles = fields.get("roles") or []
+    steps = fields.get("steps") or []
+    line = (f'created draft quest template {qid} "{_short(title, 80)}" '
+            f"({_plural(len(roles), 'role')}, {_plural(len(steps), 'step')})")
+    issues = [f"{i.get('path')}: {i.get('message')}"
+              for i in quest_engine.validate_template(row or {})]
+    if issues:
+        line += "; issues: " + "; ".join(
+            _cap_lines(issues, "the admin sees all of them in Game-Admin → Quests",
+                       used=len(line)))
+    step.complete(row, line)
+    return line
+
+
+# ── Placing a character (setup placement, E5) ───────────────────────────
+
+#: What the refusals of a runtime state say the builder can do.
+_PLACE_STATE_HINT = " — end it in Game-Admin first, or leave the placement open"
+
+
+def _in_furniture_action(name: str) -> bool:
+    """Whether a live furniture action (prop action run) holds the character."""
+    try:
+        from app.core import prop_action_store as store
+    except ImportError:
+        return False
+    return any(name in store.people(r) for r in store.live_runs())
+
+
+def _placement_state_refusal(name: str, prof: Dict[str, Any]) -> Optional[str]:
+    """Why a runtime state of the character forbids a setup placement now, or
+    None. Every state here can change while the tool runs (other code sets
+    it), so place_character asks twice: up front and again under the profile
+    lock right before the write. Sleep, forbidden slots and location-reset
+    flags are state an arrival would clear (save_character_current_location),
+    which a setup placement must not leave stale; the flags come from the
+    package declarations (registry.flag_specs), no flag name is known here."""
+    from app.core.interaction_engine import get_interaction
+    from app.core.party_engine import is_in_party
+    from app.models.character import OFFMAP_SLEEP_SENTINEL, is_character_sleeping
+    from app.plugins import registry
+    if str(prof.get("current_location") or "") == OFFMAP_SLEEP_SENTINEL:
+        return f"{name} sleeps off the map" + _PLACE_STATE_HINT
+    if is_character_sleeping(name, profile=prof):
+        return f"{name} is asleep" + _PLACE_STATE_HINT
+    if isinstance(prof.get("journey"), dict) or str(prof.get("movement_target") or "").strip():
+        return f"{name} is travelling" + _PLACE_STATE_HINT
+    if prof.get("place"):
+        return f"{name} is seated on a piece of furniture" + _PLACE_STATE_HINT
+    if get_interaction(name, profile=prof):
+        return f"{name} is in a pair interaction" + _PLACE_STATE_HINT
+    if _in_furniture_action(name):
+        return f"{name} is in a furniture action" + _PLACE_STATE_HINT
+    if is_in_party(name):
+        return (f"{name} is in a party — party members move with their leader"
+                + _PLACE_STATE_HINT)
+    intent = prof.get("outfit_intent")
+    slots = intent.get("forbidden_slots") if isinstance(intent, dict) else None
+    if slots:
+        return (f"{name} has forbidden clothing slots ({', '.join(str(s) for s in slots)})"
+                + _PLACE_STATE_HINT)
+    flags = [s.flag for s in registry.flag_specs()
+             if s.reset_on_location_change and prof.get(s.flag)]
+    if flags:
+        return (f"{name} has a place-bound state ({', '.join(flags)})" + _PLACE_STATE_HINT)
+    return None
+
+
+def _room_label(loc: Dict[str, Any], room_id: str) -> str:
+    room = next((r for r in loc.get("rooms") or []
+                 if isinstance(r, dict) and r.get("id") == room_id), None)
+    return str((room or {}).get("name") or room_id or "-")
+
+
+def _placeable_refusal(name: str) -> Optional[str]:
+    """Why place_character may not place this character at all (None = it
+    may): played by a player, a temporary NPC, not in the world. Asked up
+    front and again under the profile lock."""
+    from app.models.account import is_player_controlled
+    from app.models.character import get_character_status, is_out_of_world, is_temporary_npc
+    if is_player_controlled(name):
+        return f"{name} is played by a player — the player moves it"
+    if is_temporary_npc(name):
+        return f"{name} is a temporary NPC — its slot places it"
+    if is_out_of_world(get_character_status(name)):
+        return (f"{name} is not in the world (pooled or a dormant linked body) "
+                "— it cannot be placed")
+    return None
+
+
+@_tool("place_character", True, "place_character{name, location_id, room?}",
+       "put an EXISTING character somewhere now (a setup placement, not a walk); "
+       "room = a room name or id, default the arrival room")
+def _place_character(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 8 (E5). Writes ONLY the placement (the five
+    ``character.PLACEMENT_KEYS`` and the position columns, through
+    ``character.write_placement``) plus the target in the known places — no
+    trace, history, discovery, compliance, flag lifecycle or party drag.
+    Refused up front: an unknown character, every refusal of
+    :func:`_placeable_refusal` (player-controlled, temporary, out of the
+    world), every runtime state of :func:`_placement_state_refusal`, stored
+    known places that are no list, an unplaced target, an unknown room and
+    "already there". All but the target checks are asked again under the
+    profile lock inside ``step.writing``, so a state set meanwhile (a player
+    taking the character over included) ends the step refused with nothing
+    written. Inverse ``restore_placement`` (world_dev_undo)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.core.room_stand import free_stand_point
+    from app.core.timeutils import utc_now_iso
+    from app.core.world_dev_apply import _resolve_room_id
+    from app.models.character import (character_row_exists, get_character_profile,
+                                      list_character_places, read_placement,
+                                      stored_known_locations, write_placement)
+    from app.models.world import get_arrival_room_id
+    _only_keys(args, {"name", "location_id", "room"}, "place_character")
+    name = _str(args, "name", required=True)
+    lid_arg = _str(args, "location_id", required=True)
+    room_arg = _str(args, "room")
+    if not character_row_exists(name):
+        raise ToolRefusal(f"no character {name!r} — use find_characters")
+    refusal = _placeable_refusal(name)
+    if refusal:
+        raise ToolRefusal(refusal)
+    loc = _resolve_location(lid_arg)
+    lid = str(loc["id"])
+    if loc.get("pos_x") is None or loc.get("pos_z") is None:
+        raise ToolRefusal(f"location {lid} has no place on the map — place the location "
+                          "first (place_location)")
+    if room_arg:
+        room = _resolve_room_id(loc, room_arg)
+        if not room:
+            names = [str(r.get("name")) for r in loc.get("rooms") or []
+                     if isinstance(r, dict) and r.get("name")]
+            raise ToolRefusal(f"location {lid} has no room {room_arg!r} — its rooms: "
+                              + (", ".join(names) if names else "none"))
+    else:
+        room = get_arrival_room_id(loc)
+    prof = get_character_profile(name) or {}
+    refusal = _placement_state_refusal(name, prof)
+    if refusal:
+        raise ToolRefusal(refusal)
+    had_key, raw_known = stored_known_locations(name)
+    if had_key and not isinstance(raw_known, list):
+        # The inverse (remove_known_places) restores a list, or removes the
+        # key when there was none — a stored value of another type could not
+        # be restored exactly (the update_character rule).
+        raise ToolRefusal(f"the stored known places of {name!r} are no list — "
+                          "it cannot be placed here")
+    seen_loc = str(prof.get("current_location") or "")
+    if seen_loc == lid and str(prof.get("current_room") or "") == room:
+        raise ToolRefusal(f"{name} is already there ({loc.get('name') or lid} / "
+                          f"{_room_label(loc, room)})")
+    point = free_stand_point(lid, room, near=(float(loc["pos_x"]), float(loc["pos_z"])),
+                             exclude=name)
+    x, z = (point if point is not None else (float(loc["pos_x"]), float(loc["pos_z"])))
+    values: Dict[str, Any] = {"current_location": lid, "current_room": room,
+                              "location_changed_at": utc_now_iso()}
+    if seen_loc != lid:
+        # The arrival rule: the pose belonged to the old place.
+        values["pose_key"] = ""
+        values["pose_flavor"] = ""
+    pos = {"x": float(x), "z": float(z), "yaw": None, "session": None, "seq": None}
+    step.prepare()
+    with keyed_lock("character_profile", name):
+        before = read_placement(name)
+        had_key, raw_known = stored_known_locations(name)
+        cfg_known = ([str(v) for v in raw_known if v] if isinstance(raw_known, list)
+                     else [])
+        # A pending row names the place it was about to add (the
+        # remove_known_places rule): not known before, so removing it is exact.
+        planned = [] if lid in cfg_known else [lid]
+        inverse = {"op": "restore_placement", "name": name, "before": before,
+                   "known_added": planned, "had_known_key": had_key}
+        step.begin("character", name, inverse)
+
+        def reconcile():
+            now = read_placement(name)
+            added = [i for i in planned if i in _stored_known_ids(name)]
+            if wu._norm(now) == wu._norm(before) and not added:
+                return None
+            return (name, {**inverse, "known_added": added},
+                    {"placement": now, "known": added})
+
+        with step.writing(reconcile):
+            # The re-check under the lock: who controls the character, whether
+            # it stands in the world, the runtime states other code can set
+            # meanwhile, the stored known places and the place the up-front
+            # checks read.
+            now_prof = get_character_profile(name) or {}
+            refusal = _placeable_refusal(name) or _placement_state_refusal(name, now_prof)
+            if refusal:
+                raise ToolRefusal(refusal)
+            if had_key and not isinstance(raw_known, list):
+                raise ToolRefusal(f"the stored known places of {name!r} are no list — "
+                                  "it cannot be placed here")
+            if str(now_prof.get("current_location") or "") != seen_loc:
+                raise ToolRefusal(f"{name} was moved meanwhile — read it again")
+            if not write_placement(name, values, pos):
+                raise ValueError(f"the placement of {name} was not stored")
+            _stored, added = _add_known_places(name, [lid])
+        inverse["known_added"] = added
+        step.attach(name, inverse)
+        written = {"placement": read_placement(name), "known": added}
+        others = sorted(n for n, (l, r) in list_character_places().items()
+                        if l == lid and r == room and n != name)
+    line = (f"placed {name} in {loc.get('name') or lid} / {_room_label(loc, room)} "
+            f"at ({_g(round(x, 2))},{_g(round(z, 2))}) — now in that room: "
+            + (", ".join(others[:8]) + (" …" if len(others) > 8 else "")
+               if others else "nobody else")
+            + (f"; {lid} is now a known place" if added else ""))
+    step.complete(written, line)
+    return line
+
+
+# ── Skills ───────────────────────────────────────────────────────────────
+
+def _loaded_skills() -> List[Any]:
+    """The skills of the loaded skill manager (those with a SKILL_ID)."""
+    from app.core.dependencies import get_skill_manager
+    return [s for s in get_skill_manager().skills if getattr(s, "SKILL_ID", "")]
+
+
+def _skill_config_obj(name: str, skill: str) -> Tuple[Optional[str], Dict[str, Any]]:
+    """The raw text of a character's skill config file (None = no file) and
+    the object it holds (``{}`` for no file). A file that is no UTF-8 or
+    does not parse as a JSON object is refused: its text could not be
+    merged, and the Skills tab is where it gets fixed."""
+    from app.models.character import read_character_skill_config_text
+    try:
+        text = read_character_skill_config_text(name, skill)
+        obj = {} if text is None else json.loads(text)
+    except (UnicodeDecodeError, ValueError):
+        obj = None
+        text = ""
+    if not isinstance(obj, dict):
+        raise ToolRefusal(f"the skill config of {name} for {skill} is not readable — fix it "
+                          "in the Skills tab (Game-Admin → Characters)")
+    return text, obj
+
+
+def _skill_state(name: str, skill: str) -> Optional[bool]:
+    """The effective on/off state of one skill for a character — read through
+    ``character_ops.build_available_skills`` (the stored setting, else the
+    skill's default). None when the skill is not loaded."""
+    from app.core import character_ops
+    for s in character_ops.build_available_skills(name).get("skills") or []:
+        if s.get("skill_id") == skill:
+            return bool(s.get("enabled"))
+    return None
+
+
+def _skill_lines(name: str) -> List[str]:
+    """``<id> on|off (default|set)`` per loaded skill (from
+    ``build_available_skills``; "set" = the config file stores ``enabled``)."""
+    from app.core import character_ops
+    out: List[str] = []
+    for s in character_ops.build_available_skills(name).get("skills") or []:
+        sid = str(s.get("skill_id") or "")
+        try:
+            _text, obj = _skill_config_obj(name, sid)
+            how = "set" if "enabled" in obj else "default"
+        except ToolRefusal:
+            how = "config not readable"
+        out.append(f"{sid} {'on' if s.get('enabled') else 'off'} ({how})")
+    return out
+
+
+@_tool("set_skill", True, "set_skill{name, skill, enabled}",
+       "switch ONE skill of a character on or off (skill ids: list_catalog skills); "
+       "the skill's settings stay in the admin's Skills tab")
+def _set_skill(step: _Step, args: Dict[str, Any]) -> str:
+    """Plan p3 Task 9 (E6). Only the ``enabled`` key of the character's
+    ``skills/<skill>.json`` changes (through ``save_character_skill_config``,
+    the writer the toggle route uses), the other keys are kept. Refused up
+    front: an unknown character, a skill the skill manager has not loaded, a
+    non-boolean ``enabled``, a config file that does not parse as a JSON
+    object, an enable the F9 dependency check blocks
+    (``character_ops.skill_dependency_block``) and the effective state it
+    already has. Under ``keyed_lock("skill_config", name)`` the RAW text of
+    the file (or ABSENT) is journaled and the checks are asked again.
+    Inverse ``restore_skill_config`` (world_dev_undo): the text written back
+    verbatim, or the file removed (and the ``skills/`` directory when it did
+    not exist before and is empty)."""
+    from app.core import character_ops
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (character_row_exists, character_skills_dir_exists,
+                                      read_character_skill_config_text,
+                                      save_character_skill_config)
+    _only_keys(args, {"name", "skill", "enabled"}, "set_skill")
+    name = _str(args, "name", required=True)
+    skill = _str(args, "skill", required=True)
+    enabled = args.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ToolRefusal("'enabled' must be true or false")
+    if not character_row_exists(name):
+        raise ToolRefusal(f"no character {name!r} — use find_characters")
+    # Before any read (the reads are side-effect free; recorded so the undo
+    # drops a skills/ directory this step created).
+    had_dir = character_skills_dir_exists(name)
+    if skill not in {s.SKILL_ID for s in _loaded_skills()}:
+        raise ToolRefusal(f"no skill {skill!r} — list_catalog{{\"name\": \"skills\"}} "
+                          "lists them")
+    word = "on" if enabled else "off"
+
+    def check() -> Tuple[Optional[str], Dict[str, Any]]:
+        text, obj = _skill_config_obj(name, skill)
+        if enabled:
+            reason = character_ops.skill_dependency_block(name, skill)
+            if reason:
+                raise ToolRefusal(f"cannot switch {skill} on for {name}: {reason}")
+        if _skill_state(name, skill) is enabled:
+            raise ToolRefusal(f"skill {skill} of {name} is already {word}")
+        return text, obj
+
+    check()
+    step.prepare()
+    with keyed_lock("skill_config", name):
+        before, obj = check()
+        inverse = {"op": "restore_skill_config", "name": name, "skill": skill,
+                   "before": wu.ABSENT if before is None else before,
+                   "had_dir": had_dir}
+        step.begin("character", name, inverse)
+
+        def reconcile():
+            try:
+                now = read_character_skill_config_text(name, skill)
+            except UnicodeDecodeError:
+                now = ""
+            if now == before:
+                return None
+            return name, inverse, now
+
+        with step.writing(reconcile):
+            save_character_skill_config(name, skill, {**obj, "enabled": enabled})
+            written = read_character_skill_config_text(name, skill)
+            stored = json.loads(written) if written is not None else None
+            if not isinstance(stored, dict) or stored.get("enabled") is not enabled:
+                raise ValueError(f"the skill config of {name} for {skill} was not stored")
+    line = f"skill {skill} of {name}: {word}"
+    step.complete(written, line)
+    return line
+
+
 # ── check_run ────────────────────────────────────────────────────────────
 
 @_tool("check_run", False, "check_run{}",
@@ -5486,7 +6842,16 @@ _CREATE_OPS = {"location": ("delete_location", "id"),
                "world_prop": ("delete_world_prop", "id"),
                "terrain_type": ("delete_terrain_type", "kind"),
                # The key names a LIST of ids (create_item journals one).
-               "item": ("delete_items", "ids")}
+               "item": ("delete_items", "ids"),
+               "secret": ("delete_secret", "id"),
+               "rule": ("delete_rule", "id"),
+               "event": ("delete_event", "id"),
+               "quest_template": ("delete_quest_template", "id")}
+
+#: Kinds delete_created removes only in the turn that created them (E2): no
+#: writer of theirs can re-create a row exactly (a new created_at / row
+#: order / id), so a cross-turn delete would have no exact inverse.
+_SAME_TURN_ONLY = {"item", "secret", "rule", "event", "quest_template"}
 
 
 def _creating_entry(run_id: str, kind: str, ident: str,
@@ -5504,8 +6869,10 @@ def _creating_entry(run_id: str, kind: str, ident: str,
 
 @_tool("delete_created", True, "delete_created{kind, id}",
        "remove something THIS run created, in this or an earlier turn "
-       "(kind location|terrain|height|character|world_prop|terrain_type|item; id = the name "
-       "for a character, the kind for a terrain kind)")
+       "(kind location|terrain|height|character|world_prop|terrain_type|item|secret|rule|"
+       "event|quest_template; id = the name for a character, the kind for a terrain kind; "
+       "an item, a secret, a rule, an event or a quest template only in the turn that "
+       "created it)")
 def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
     _only_keys(args, {"kind", "id"}, "delete_created")
     kind = _str(args, "kind", required=True)
@@ -5518,13 +6885,13 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
         if earlier is None:
             raise ToolRefusal(f"{_kind_label(kind)} {ident!r} was not created by this run (or is "
                               "already removed) — only those can be deleted")
-        if kind == "item":
-            # No exact re-creation exists for a catalog item (the writer
-            # stamps a new created_at), so a turn rollback could not bring
-            # it back: only the same turn deletes one.
-            raise ToolRefusal(f"item {ident} was created in an earlier turn — it cannot be "
-                              "deleted now (a rollback of this turn could not re-create it "
-                              "exactly); the discard of the run removes it")
+        if kind in _SAME_TURN_ONLY:
+            # No exact re-creation exists for these (the writers stamp a new
+            # created_at / id / row order), so a turn rollback could not
+            # bring one back: only the same turn deletes one.
+            raise ToolRefusal(f"{_kind_label(kind)} {ident} was created in an earlier turn — "
+                              "it cannot be deleted now (a rollback of this turn could not "
+                              "re-create it exactly); the discard of the run removes it")
         return _delete_earlier(step, kind, ident, earlier)
     if kind == "item":
         from app.models.inventory import find_item_location
@@ -5541,11 +6908,21 @@ def _delete_created(step: _Step, args: Dict[str, Any]) -> str:
             raise ToolRefusal(f"item {ident} is the knowledge item of location "
                               + ", ".join(named) + " — change that place first "
                               "(undo of that step) or keep it")
+        from app.models.rules import rules_naming
+        rule_refs = _rule_refs(rules_naming(item=ident))
+        if rule_refs:
+            raise ToolRefusal(f"item {ident} is still named by: " + "; ".join(rule_refs)
+                              + " — delete or change those first")
     if kind == "location":
         refs = _references_to_location(ident) + [
             f"{n} (stands there)" for n, _room in wu.standing_in(ident)]
         if refs:
             raise ToolRefusal(f"location {ident} is still named by: " + "; ".join(refs))
+    if kind == "character":
+        refs = _references_to_character(ident)
+        if refs:
+            raise ToolRefusal(f"character {ident!r} is still named by: " + "; ".join(refs)
+                              + " — delete or change those first")
     if kind == "terrain_type":
         # The undo of the creating step would skip a kind still in use
         # (changed since, in use) — refused here for the same reason.
@@ -5695,12 +7072,8 @@ def _character_delete_blockers(name: str) -> List[str]:
         out.append("in a party")
     if get_interaction(name, profile=prof):
         out.append("in a pair interaction")
-    try:
-        from app.core import prop_action_store as store
-        if any(name in store.people(r) for r in store.live_runs()):
-            out.append("in a furniture action")
-    except ImportError:
-        pass
+    if _in_furniture_action(name):
+        out.append("in a furniture action")
     chats = count_messages_involving(name)
     if chats:
         out.append(f"{chats} chat messages")
@@ -5786,6 +7159,10 @@ def _delete_earlier(step: _Step, kind: str, ident: str,
     with keyed_lock("character_profile", ident):
         if not character_row_exists(ident):
             raise ToolRefusal(f"character {ident!r} does not exist any more")
+        refs = _references_to_character(ident)
+        if refs:
+            raise ToolRefusal(f"character {ident!r} is still named by: " + "; ".join(refs)
+                              + " — delete or change those first")
         blockers = _character_delete_blockers(ident)
         if blockers:
             raise ToolRefusal(f"character {ident!r} cannot be deleted in a later turn "

@@ -91,7 +91,33 @@ Inverse ops (``inverse["op"]``):
   quantity or ABSENT}} (give_items; written = {item id: re-read entry}) ·
   restore_room_items{location_id, room_id, before: the room's whole ``items``
   list or ABSENT} (add_room_item; written = the room's items value after,
-  :func:`room_items_value`)
+  :func:`room_items_value`) · restore_address{speaker (the mind), addressee,
+  pair (``relationship.pair_key``), key (``relationship.address_key``), before
+  (the key's value or ABSENT), text (what the step sent; "" clears),
+  row_created, row_id (the row that existed, else the created one once
+  attached), raw (``relationship.raw_pair_row`` of a row that existed,
+  else None)} (set_address; written =
+  {"value": the key's value or ABSENT, "row": ``relationship.pair_row``}) ·
+  delete_secret{owner (the mind), id} (add_secret; written = the re-read
+  secret, ``secrets.get_secret``) · delete_rule{id} (add_block_rule; written =
+  the world-layer row as stored, ``rules.world_rule``) · delete_event{id}
+  (add_event; written = the re-read event, ``events.get_event``) ·
+  delete_quest_template{id} (create_quest_template; written = the re-read
+  template, ``quests.get_template``; the delete skips a template whose
+  revision moved on — keys ["revision"] — or that has a run — keys ["runs"])
+  · restore_placement{name, before (``character.read_placement``: {profile:
+  {the five PLACEMENT_KEYS: value or ABSENT}, pos: {x, z, yaw, session, seq}
+  or None}), known_added (place ids the step added to the known places;
+  pending: the one it was about to add), had_known_key} (place_character;
+  written = {"placement": read_placement after the write, "known": the ids
+  added}; the placement is one unit — any key differing is ``changed since``
+  with those keys and nothing of it is written; the added known place stays,
+  key "known_places" in the same skip, while the character still stands in
+  the placed location) · restore_skill_config{name, skill, before (the RAW
+  text of ``skills/<skill>.json`` or ABSENT), had_dir (the ``skills/``
+  directory existed before the step)} (set_skill; written = the raw text
+  after the write; a differing text is ``changed since`` with keys [skill],
+  else ``before`` is written back verbatim or the file removed)
 
 Written shapes: restore_location / restore_home_schedule — the written map of
 :func:`diff_keys`; restore_position — ``{x, z, yaw}`` (:func:`position_of`);
@@ -838,9 +864,10 @@ def _undo_remove_known_places(entry: Dict[str, Any], inv: Dict[str, Any]) -> Lis
     was a no-op (the place was already known), so the undo still removes it
     — an add-only list carries no provenance. The ``known_locations`` key
     goes only when it did not exist before (``had_key`` False) and the list
-    is empty again."""
-    from app.models.character import (character_row_exists, get_character_config,
-                                      save_character_config)
+    is empty again. Only that key is written (``character.write_known_locations``):
+    the rest of the stored config and ``updated_at`` are left as they are."""
+    from app.models.character import (character_row_exists, stored_known_locations,
+                                      write_known_locations)
     name = str(inv.get("name") or "")
     ids = {str(i) for i in inv.get("ids") or [] if i}
     with keyed_lock("character_profile", name):
@@ -848,18 +875,15 @@ def _undo_remove_known_places(entry: Dict[str, Any], inv: Dict[str, Any]) -> Lis
             raise _Skip(REASON_GONE)
         if not ids:
             return []
-        cfg = copy.deepcopy(get_character_config(name) or {})
-        raw = cfg.get("known_locations")
+        # Only the stored key, never the defaulting config reader (it would
+        # write a whole default config for an empty one).
+        raw = stored_known_locations(name)[1]
         if not isinstance(raw, list):
             return []
         keep = [v for v in raw if str(v) not in ids]
         if len(keep) == len(raw):
             return []
-        if keep or inv.get("had_key"):
-            cfg["known_locations"] = keep
-        else:
-            cfg.pop("known_locations", None)
-        if not save_character_config(name, cfg):
+        if not write_known_locations(name, keep if (keep or inv.get("had_key")) else None):
             raise RuntimeError(f"config of {name} was not stored")
     return []
 
@@ -1459,6 +1483,417 @@ def _undo_restore_room_items(entry: Dict[str, Any], inv: Dict[str, Any]) -> List
     return []
 
 
+def _undo_restore_address(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse set_address. The pair row gone -> already gone; the key's
+    value differs from what the step wrote -> changed since [key]. A row the
+    step CREATED is deleted when, apart from the key, it still is the row the
+    step wrote; when somebody changed the rest of it since, only the key is
+    cleared and the row stays (changed since ["row"] — it is theirs now).
+    Otherwise, when the row is still the one the step wrote apart from the
+    key (a pending step: the key still holds the ``text`` it sent), its
+    journaled raw columns (``raw``) are written back byte-for-byte (the
+    writer filled the reader's defaults into a sparse row); when the rest
+    changed since, only the key's meta entry gets its before value back
+    (ABSENT pops it) through ``relationship.set_pair_row_meta_key`` — every
+    other stored column stays as it is, no reader defaults are added — and
+    the meta keys the step itself added (:func:`_address_added_keys`) are
+    popped while they still hold what it wrote; one that cannot go (a
+    content column, a foreign value) -> changed since ["row"]. The
+    cleared key of a created row that changed goes the same way. :func:`discard_preview` simulates the same
+    branches (:func:`_address_preview_lines`). The writer has no lock to
+    share (world frozen during a run — accepted residual)."""
+    from app.models import relationship as rel
+    speaker = str(inv.get("speaker") or "")
+    addressee = str(inv.get("addressee") or "")
+    key = str(inv.get("key") or "")
+    if not speaker or not addressee or not key:
+        raise RuntimeError("restore_address without its pair or key")
+    row = rel.pair_row(speaker, addressee)
+    if row is None:
+        raise _Skip(REASON_GONE)
+    written = entry.get("written")
+    if isinstance(written, dict) and (_norm(row.get(key, ABSENT))
+                                      != _norm(written.get("value", ABSENT))):
+        raise _Skip(REASON_CHANGED, keys=[key])
+    wrow = written.get("row") if isinstance(written, dict) else None
+
+    def rest(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: v for k, v in r.items() if k != key}
+    if inv.get("row_created"):
+        if wrow is None or _norm(rest(row)) == _norm(rest(wrow)):
+            # A pending step (no written) is the run's own unreported write.
+            if not rel.delete_pair_row(int(row["_db_id"])) and \
+                    rel.pair_row(speaker, addressee) is not None:
+                raise _Skip(REASON_REFUSED)
+            return []
+        if not rel.set_pair_row_meta_key(int(row["_db_id"]), key, remove=True):
+            rel.set_address(speaker, addressee, "")
+        raise _Skip(REASON_CHANGED, keys=["row"])
+    raw = inv.get("raw")
+    if isinstance(written, dict):
+        own = wrow is not None and _norm(rest(row)) == _norm(rest(wrow))
+    else:
+        # A pending step (crash between the write and complete): the row is
+        # still the one it wrote when the key holds the text it sent (world
+        # frozen during a run, like the created-row branch above).
+        own = ("text" in inv and _norm(row.get(key, ABSENT))
+               == _norm(inv.get("text") or ABSENT))
+    if (own and isinstance(raw, dict)
+            and row.get("_db_id") == inv.get("row_id")
+            and rel.restore_pair_row(int(row["_db_id"]), raw)):
+        return []
+    # The rest of the row changed since: only the key's meta entry goes back,
+    # every other stored column stays as it is (the merging writer only when
+    # the meta is not a JSON object).
+    before = inv.get("before", ABSENT)
+    if not rel.set_pair_row_meta_key(int(row["_db_id"]), key,
+                                     None if is_absent(before) else before,
+                                     remove=is_absent(before)):
+        rel.set_address(speaker, addressee, "" if is_absent(before) else before)
+    # The reader defaults the step's own write put into a sparse row (meta
+    # ``id``, ``history``, ...) go too while they still hold what it wrote;
+    # one that cannot go (a content column, a foreign value, an unreadable
+    # journal) leaves the row not as before -> changed since ["row"].
+    added = _address_added_keys(raw, wrow, key) if isinstance(written, dict) else {}
+    if added is None:
+        raise _Skip(REASON_CHANGED, keys=["row"])
+    for k, v in added.items():
+        if _norm(row.get(k, ABSENT)) != _norm(v):
+            continue
+        try:
+            rel.set_pair_row_meta_key(int(row["_db_id"]), k, remove=True)
+        except ValueError:
+            pass  # a content column key: not popped, counted below
+    if added:
+        now = rel.pair_row(speaker, addressee)
+        if now is not None and any(k in now for k in added):
+            raise _Skip(REASON_CHANGED, keys=["row"])
+    return []
+
+
+def _address_added_keys(raw: Any, wrow: Any, key: str) -> Optional[Dict[str, Any]]:
+    """The keys set_address added to a row that existed, with the value it
+    wrote: present in the written row (``written["row"]``, a
+    :func:`relationship.pair_row` view), absent from the journaled raw
+    columns (content and meta), apart from the address *key* itself, the
+    column names and the ``_``-prefixed bookkeeping. {} without a written
+    row; None when the raw columns cannot be read (the undo cannot tell)."""
+    if not isinstance(wrow, dict):
+        return {}
+    if not isinstance(raw, dict):
+        return None
+    try:
+        content = json.loads(raw.get("content") or "{}")
+        meta = json.loads(raw.get("meta") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(content, dict) or not isinstance(meta, dict):
+        return None
+    had = set(content) | set(meta)
+    return {k: v for k, v in wrow.items()
+            if k != key and not k.startswith("_")
+            and k not in ("character_a", "character_b") and k not in had}
+
+
+def secret_row(owner: str, secret_id: str) -> Optional[Dict[str, Any]]:
+    """The stored secret *secret_id* of *owner*'s mind, or None. A read
+    error propagates (never read as "absent")."""
+    from app.models.secrets import list_secrets
+    return next((s for s in list_secrets(owner, strict=True)
+                 if str(s.get("id")) == secret_id), None)
+
+
+def _undo_delete_secret(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse add_secret: under the writer's own lock (re-entrant) the
+    secret gone -> already gone; differing from what the step wrote ->
+    changed since (the keys that differ); else it is deleted. A pending
+    step (no written) is the run's own unreported write (world frozen).
+    Accepted residual (like the rules layer's
+    ``save_rules``): the writer (``secrets._save_secrets``) re-serialises
+    every secret of the mind on each add and delete, so a FOREIGN legacy or
+    sparse secret row of the same mind may come back with the reader's
+    defaults filled in (meta ``id``, ``category``, ``severity``,
+    ``known_by``/``discovered_by``, ...; ``visibility`` rewritten) — same
+    meaning; byte-for-byte (gone again) holds for the run's own row. The admin's own add
+    and delete do the same today."""
+    from app.models.secrets import delete_secret
+    owner = str(inv.get("owner") or "")
+    sid = str(inv.get("id") or "")
+    if not owner or not sid:
+        raise RuntimeError("delete_secret without its owner or id")
+    with keyed_lock("secrets", owner):
+        cur = secret_row(owner, sid)
+        if cur is None:
+            raise _Skip(REASON_GONE)
+        written = entry.get("written")
+        if written is not None and _norm(cur) != _norm(written):
+            b, _w = diff_keys(written, cur)
+            raise _Skip(REASON_CHANGED, keys=sorted(b))
+        delete_secret(owner, sid)
+        # The writer returns True even when its save logged and swallowed a
+        # DB error: read the row back whatever it returned.
+        if secret_row(owner, sid) is not None:
+            raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _undo_delete_rule(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse add_block_rule: under ``rules.layer_lock()`` (re-entrant; the
+    writers take it too) the world-layer row gone -> already gone; differing
+    from what the step wrote -> changed since (the keys that differ); else
+    it is deleted from the world layer and read back. Accepted residual
+    (plan p3 Review focus 1): ``save_rules`` re-serialises every world rule
+    on the delete, so a FOREIGN legacy row may come back normalised with the
+    same meaning; rows written by ``add_rule`` stay byte-for-byte."""
+    from app.models import rules
+    rid = str(inv.get("id") or "")
+    if not rid:
+        raise RuntimeError("delete_rule without its id")
+    with rules.layer_lock():
+        cur = rules.world_rule(rid)
+        if cur is None:
+            raise _Skip(REASON_GONE)
+        written = entry.get("written")
+        if written is not None and _norm(cur) != _norm(written):
+            b, _w = diff_keys(written, cur)
+            raise _Skip(REASON_CHANGED, keys=sorted(b))
+        rules.delete_rule(rid, target_dir="world")
+        if rules.world_rule(rid) is not None:
+            raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _event_row_strict(eid: str) -> Optional[Dict[str, Any]]:
+    """The event's row, None only when it is really gone. ``get_event``
+    alone reads a failed table read as "gone"; ``event_exists`` asks first
+    and a read error raises instead (as in ``_exists``)."""
+    from app.models import events
+    found = events.event_exists(eid)
+    if found is None:
+        raise RuntimeError(f"event {eid}: the events table could not be read")
+    if not found:
+        return None
+    row = events.get_event(eid)
+    if row is None:
+        raise RuntimeError(f"event {eid}: the event row could not be read")
+    return row
+
+
+def _undo_delete_event(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse add_event: under ``keyed_lock("world_event", id)`` (the lock
+    the event writers take around their read-modify-write) the event gone ->
+    already gone; differing from what the step wrote -> changed since (an
+    attempt, a stat hit, a resolution or an image all change the row); else
+    it is deleted and read back strictly (a failed table read raises instead
+    of counting as deleted). The writer's cascade also removes rules bound to
+    the event (``delete_rules_by_event``) and its image files
+    (``remove_event_images``) unchecked against the journal; a run's own
+    event has neither — only ``random_events`` binds rules, to its own
+    events, and a rendered image sets ``image_path`` on the row, which is a
+    changed-since skip before the delete."""
+    from app.models import events
+    eid = str(inv.get("id") or "")
+    if not eid:
+        raise RuntimeError("delete_event without its id")
+    with keyed_lock("world_event", eid):
+        cur = _event_row_strict(eid)
+        if cur is None:
+            raise _Skip(REASON_GONE)
+        written = entry.get("written")
+        if written is not None and _norm(cur) != _norm(written):
+            b, _w = diff_keys(written, cur)
+            raise _Skip(REASON_CHANGED, keys=sorted(b))
+        events.delete_event(eid)
+        if _event_row_strict(eid) is not None:
+            raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _quest_template_changed(cur: Dict[str, Any], written: Optional[Dict[str, Any]]
+                            ) -> Optional[List[str]]:
+    """Why a quest template the run created may not go any more, as the skip
+    keys, or None: its revision moved on (an admin edit — every editable key
+    goes through ``update_template``, which raises the revision) -> ["revision"];
+    a run of it exists (open or ended — the run's snapshot names the template
+    id) -> ["runs"]. Shared by the undo and :func:`discard_preview`."""
+    from app.models import quests
+    if written is not None and int(cur.get("revision") or 0) != int(written.get("revision") or 0):
+        return ["revision"]
+    if quests.count_runs(quests.RUN_OPEN_STATES + quests.RUN_ENDED_STATES,
+                         template_id=str(cur.get("id") or "")) > 0:
+        return ["runs"]
+    return None
+
+
+def _undo_delete_quest_template(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """Reverse create_quest_template: under ``keyed_lock("quest_template", id)``
+    (the template writers' own lock, re-entrant for ``delete_template``) the
+    template gone -> already gone; edited since or run -> changed since
+    (:func:`_quest_template_changed`); else the one row is deleted by id."""
+    from app.models import quests
+    qid = str(inv.get("id") or "")
+    if not qid:
+        raise RuntimeError("delete_quest_template without its id")
+    with keyed_lock("quest_template", qid):
+        cur = quests.get_template(qid)
+        if cur is None:
+            raise _Skip(REASON_GONE)
+        keys = _quest_template_changed(cur, entry.get("written"))
+        if keys:
+            raise _Skip(REASON_CHANGED, keys=keys)
+        quests.delete_template(qid)
+        if quests.get_template(qid) is not None:
+            raise _Skip(REASON_REFUSED)
+    return []
+
+
+def _undo_restore_placement(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """place_character: the placement is ONE unit. Under the profile lock the
+    stored placement (the five profile keys and the position as one key
+    ``pos``) is compared with what the step wrote; all equal -> the ``before``
+    placement is written back through ``character.write_placement``; any key
+    differs -> nothing of it is written (restoring some keys could leave a
+    room that is not in the location), skipped ``changed since`` with the
+    differing keys. A pending entry (no ``written``) is restored
+    unconditionally. The known place the step added goes with an applied
+    restore; with a skipped one it goes only when the character no longer
+    stands in the placed location — whoever stands there must know it (the
+    rule of save_character_current_location), so it is KEPT and named in the
+    same skip (key ``known_places``).
+
+    A character place_character would refuse outright now
+    (``world_dev_tools._placeable_refusal``: a player took it over, it left
+    the world …) is skipped ``changed since`` with the key ``state`` even
+    when the six match. When the step INSERTed the ``character_state`` row
+    (``before.row`` False), an applied restore removes it again through
+    ``character.drop_bare_placement_row`` — kept only when someone else has
+    written into it meanwhile.
+
+    Accepted residual: the applied path does not ask the runtime states of
+    ``_placement_state_refusal`` (asleep, seated, a journey, a party …). A
+    state that began after the placement and left all six untouched does not
+    stop the restore — the run keeps the world frozen, so nothing but a
+    player or an admin can start one meanwhile."""
+    from app.core.world_dev_tools import _placeable_refusal
+    from app.models.character import (PLACEMENT_KEYS, character_row_exists,
+                                      drop_bare_placement_row, read_placement,
+                                      write_placement)
+    name = str(inv.get("name") or "")
+    before = inv.get("before") or {}
+    written = entry.get("written")
+    added = [str(i) for i in inv.get("known_added") or [] if i]
+    remove = {"op": "remove_known_places", "name": name, "ids": added,
+              "had_key": bool(inv.get("had_known_key"))}
+    with keyed_lock("character_profile", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        if written is None:
+            changed: List[str] = []
+        else:
+            cur = _norm(read_placement(name))
+            want = _norm(written.get("placement") or {})
+            changed = [k for k in PLACEMENT_KEYS
+                       if (cur.get("profile") or {}).get(k)
+                       != (want.get("profile") or {}).get(k)]
+            if cur.get("pos") != want.get("pos"):
+                changed.append("pos")
+        if not changed and _placeable_refusal(name):
+            changed = ["state"]
+        if not changed:
+            if not write_placement(name, dict(before.get("profile") or {}),
+                                   before.get("pos")):
+                raise RuntimeError(f"restoring the placement of {name} was not stored")
+            if before.get("row") is False:
+                drop_bare_placement_row(name)
+            _undo_remove_known_places(entry, remove)
+            return []
+        placed = ((written or {}).get("placement") or {}).get("profile") or {}
+        now = (read_placement(name).get("profile") or {}).get("current_location")
+        if added and now == placed.get("current_location"):
+            raise _Skip(REASON_CHANGED, keys=changed + ["known_places"])
+        _undo_remove_known_places(entry, remove)
+    raise _Skip(REASON_CHANGED, keys=changed)
+
+
+def _undo_restore_skill_config(entry: Dict[str, Any], inv: Dict[str, Any]) -> List["_Skip"]:
+    """set_skill: under ``keyed_lock("skill_config", name)`` the file's current
+    raw text is compared with the text the step wrote; a difference is
+    ``changed since`` (keys [skill]) and nothing is written. Otherwise the
+    ``before`` text is written back VERBATIM
+    (``character.write_character_skill_config_text``), or — before ABSENT —
+    the file is removed, and with it the ``skills/`` directory when it did
+    not exist before the step (``had_dir`` False) and is empty now. A
+    pending entry (no ``written``) is restored unconditionally. Character
+    gone -> already gone."""
+    from app.models.character import (character_row_exists,
+                                      read_character_skill_config_text,
+                                      remove_character_skill_config,
+                                      write_character_skill_config_text)
+    name = str(inv.get("name") or "")
+    skill = str(inv.get("skill") or "")
+    before = inv.get("before", ABSENT)
+    written = entry.get("written")
+    with keyed_lock("skill_config", name):
+        if not name or not character_row_exists(name):
+            raise _Skip(REASON_GONE)
+        if not skill:
+            raise RuntimeError("restore_skill_config without its skill")
+        if written is not None:
+            try:
+                now = read_character_skill_config_text(name, skill)
+            except UnicodeDecodeError:
+                now = None
+            if now != written:
+                raise _Skip(REASON_CHANGED, keys=[skill])
+        if before is None or is_absent(before):
+            if not remove_character_skill_config(name, skill,
+                                                 drop_empty_dir=not inv.get("had_dir")):
+                raise RuntimeError(f"the skill config {skill} of {name} was not removed")
+        elif not write_character_skill_config_text(name, skill, str(before)):
+            raise RuntimeError(f"the skill config {skill} of {name} was not restored")
+    return []
+
+
+def simulated_places(entries: List[Dict[str, Any]], foreign: set
+                     ) -> Dict[str, Tuple[str, str]]:
+    """For :func:`discard_preview`: ``{name: (location, room)}`` of the roster
+    as the undo leaves it — ``list_character_places()``, then the run's
+    not-undone ``restore_placement`` entries walked newest-first the way
+    :func:`_undo_restore_placement` decides: an entry whose written placement
+    equals the SIMULATED placement of that character (all five keys and the
+    position — not the stored one, so two chained placements unwind step by
+    step) moves it to its ``before`` placement; a pending entry does so
+    unconditionally; one that does not match, or whose character
+    ``world_dev_tools._placeable_refusal`` refuses now, leaves it (changed
+    since)."""
+    from app.core.world_dev_tools import _placeable_refusal
+    from app.models.character import list_character_places, read_placement
+    places = dict(list_character_places())
+    sims: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:  # newest-first, as undo() walks them
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_placement":
+            continue
+        name = str(inv.get("name") or "")
+        if not name or ("character", name) in foreign or name not in places:
+            continue
+        if name not in sims:
+            sims[name] = _norm(read_placement(name))
+        written = entry.get("written")
+        want = _norm(written.get("placement") or {}) if written is not None else None
+        if want is not None and (want.get("profile"), want.get("pos")) != (
+                sims[name].get("profile"), sims[name].get("pos")):
+            continue
+        if _placeable_refusal(name):
+            continue
+        sims[name] = _norm(inv.get("before") or {})
+        prof = sims[name].get("profile") or {}
+        loc, room = prof.get("current_location"), prof.get("current_room")
+        places[name] = (loc if isinstance(loc, str) else "",
+                        room if isinstance(room, str) else "")
+    return places
+
+
 _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = {
     "delete_location": _undo_delete_location,
     "restore_location": _undo_restore_location,
@@ -1486,6 +1921,13 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any], Dict[str, Any]], List[_Skip]]] = 
     "delete_items": _undo_delete_items,
     "restore_inventory": _undo_restore_inventory,
     "restore_room_items": _undo_restore_room_items,
+    "restore_address": _undo_restore_address,
+    "delete_secret": _undo_delete_secret,
+    "delete_rule": _undo_delete_rule,
+    "delete_event": _undo_delete_event,
+    "delete_quest_template": _undo_delete_quest_template,
+    "restore_placement": _undo_restore_placement,
+    "restore_skill_config": _undo_restore_skill_config,
 }
 
 
@@ -1643,6 +2085,13 @@ _TARGET_KEYS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "delete_items": ("item", ("ids",)),
     "restore_inventory": ("character", ("name",)),
     "restore_room_items": ("location", ("location_id",)),
+    "restore_address": ("relationship", ("pair",)),
+    "delete_secret": ("secret", ("id",)),
+    "delete_rule": ("rule", ("id",)),
+    "delete_event": ("event", ("id",)),
+    "delete_quest_template": ("quest_template", ("id",)),
+    "restore_placement": ("character", ("name",)),
+    "restore_skill_config": ("character", ("name",)),
 }
 
 
@@ -1683,6 +2132,25 @@ def _exists(target: Tuple[str, str]) -> bool:
         return terrain_type_row(ident) is not None
     if kind == "item":
         return item_row(ident) is not None
+    if kind == "relationship":
+        from app.models.relationship import pair_row
+        return pair_row(*ident.split("|", 1)) is not None
+    if kind == "secret":
+        from app.models.secrets import secret_exists
+        return secret_exists(ident)
+    if kind == "rule":
+        from app.models.rules import world_rule
+        return world_rule(ident) is not None
+    if kind == "event":
+        from app.models.events import event_exists
+        found = event_exists(ident)
+        if found is None:
+            # A read error is never "absent".
+            raise RuntimeError(f"event {ident}: the events table could not be read")
+        return found
+    if kind == "quest_template":
+        from app.models.quests import get_template
+        return get_template(ident) is not None
     from app.models.character import character_row_exists
     return character_row_exists(ident)
 
@@ -2012,6 +2480,125 @@ def _order_preview_line(sim: _OrderSim, op: str, inv: Dict[str, Any]) -> Optiona
     return f"{label} {aid} comes back, but not at its old place in the paint order"
 
 
+def _address_preview_lines(entries: List[Dict[str, Any]]) -> List[str]:
+    """The discard lines of the run's ``restore_address`` entries, decided
+    the way :func:`_undo_restore_address` decides them: newest-first over a
+    SIMULATED pair row per pair (the real one first). Row gone -> nothing.
+    The key differs from what the step wrote -> "was changed since" (the
+    undo skips it). A row the step created that is, apart from the key, the
+    row it wrote -> it goes (one line); the rest changed -> "was changed
+    since", the key is cleared and the row stays. Otherwise the key gets its
+    before value back (a raw restore writes back the before row exactly; the
+    key alone stands in for it here — no other key of a row is compared
+    except by a creating entry, whose row the later steps' raw restores
+    bring back to what it wrote). When the undo takes its key-only branch
+    (the rest of a row that existed changed since), the meta keys the step
+    added go from the simulated row as the undo pops them; one left -> one
+    "was changed since" line. Oldest line first."""
+    from app.models import relationship as rel
+    lines: List[str] = []
+    sim: Dict[str, Optional[Dict[str, Any]]] = {}
+    for entry in entries:  # newest-first
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_address":
+            continue
+        speaker = str(inv.get("speaker") or "")
+        addressee = str(inv.get("addressee") or "")
+        key = str(inv.get("key") or "")
+        if not speaker or not addressee or not key:
+            continue
+        pair = rel.pair_key(speaker, addressee)
+        if pair not in sim:
+            sim[pair] = rel.pair_row(speaker, addressee)
+        row = sim[pair]
+        if row is None:
+            continue
+        written = entry.get("written")
+        if isinstance(written, dict) and (_norm(row.get(key, ABSENT))
+                                          != _norm(written.get("value", ABSENT))):
+            lines.append(f"form of address {speaker} → {addressee} was changed "
+                         "since — the discard leaves it alone")
+            continue
+        wrow = written.get("row") if isinstance(written, dict) else None
+
+        def rest(r: Dict[str, Any]) -> Dict[str, Any]:
+            return {k: v for k, v in r.items() if k != key}
+        if inv.get("row_created"):
+            if wrow is None or _norm(rest(row)) == _norm(rest(wrow)):
+                lines.append(f"form of address {pair} (created by the run)")
+                sim[pair] = None
+            else:
+                lines.append(f"form of address {pair}: the relationship row was "
+                             "changed since — the discard clears "
+                             f"{speaker} → {addressee} and leaves the row")
+                sim[pair] = rest(row)
+            continue
+        before = inv.get("before", ABSENT)
+        new = rest(row) if is_absent(before) else {**row, key: before}
+        if isinstance(written, dict):
+            own = wrow is not None and _norm(rest(row)) == _norm(rest(wrow))
+        else:
+            own = ("text" in inv and _norm(row.get(key, ABSENT))
+                   == _norm(inv.get("text") or ABSENT))
+        raw = inv.get("raw")
+        if not (own and isinstance(raw, dict) and row.get("_db_id") == inv.get("row_id")):
+            # The undo's key-only branch: the step's own added meta keys go
+            # while they hold what it wrote; any left -> changed since.
+            added = _address_added_keys(raw, wrow, key) if isinstance(written, dict) else {}
+            left = added is None
+            for k, v in (added or {}).items():
+                if (k not in rel._CONTENT_KEYS and k in new
+                        and _norm(new[k]) == _norm(v)):
+                    new.pop(k)
+                if k in new:
+                    left = True
+            if left:
+                lines.append(f"form of address {speaker} → {addressee}: the relationship "
+                             "row was changed since — the discard puts the form of address "
+                             "back and leaves the rest of the row")
+        sim[pair] = new
+    lines.reverse()
+    return lines
+
+
+def _skill_preview_lines(entries: List[Dict[str, Any]], deleted: set) -> List[str]:
+    """The discard lines of the run's ``restore_skill_config`` entries,
+    decided the way :func:`_undo_restore_skill_config` decides them:
+    newest-first over a SIMULATED file text per (character, skill), the real
+    one first. A text that differs from what the step wrote -> one "was
+    changed since — the discard leaves it alone" line (the undo skips it);
+    otherwise the simulated text becomes the entry's ``before``. A switch put
+    back is no line (nothing goes). A character that is gone, or that the
+    discard deletes itself (DELETED), gets no line. Oldest line first."""
+    from app.models.character import (character_row_exists,
+                                      read_character_skill_config_text)
+    lines: List[str] = []
+    sim: Dict[Tuple[str, str], Optional[str]] = {}
+    for entry in entries:  # newest-first
+        inv = entry.get("inverse") or {}
+        if inv.get("op") != "restore_skill_config":
+            continue
+        name = str(inv.get("name") or "")
+        skill = str(inv.get("skill") or "")
+        if not name or not skill or name in deleted or not character_row_exists(name):
+            continue
+        key = (name, skill)
+        if key not in sim:
+            try:
+                sim[key] = read_character_skill_config_text(name, skill)
+            except UnicodeDecodeError:
+                sim[key] = None
+        written = entry.get("written")
+        if written is not None and sim[key] != written:
+            lines.append(f"{name}: skill {skill} was changed since — the discard "
+                         "leaves it alone")
+            continue
+        before = inv.get("before", ABSENT)
+        sim[key] = None if before is None or is_absent(before) else str(before)
+    lines.reverse()
+    return lines
+
+
 def discard_preview(run_id: str) -> List[str]:
     """One line per element the run created that still exists (oldest
     first); a created character also names its chat rows and the other
@@ -2043,9 +2630,45 @@ def discard_preview(run_id: str) -> List[str]:
     still in use). A deleted area the discard re-creates whose old rowid was
     taken meanwhile by a sibling of the same paint-order stamp gets one
     "comes back, but not at its old place in the paint order" line — the undo
-    reports it as inexact (paint order)."""
-    from app.core.world_dev_tools import _kind_label
-    from app.models.character import character_row_exists, list_character_places
+    reports it as inexact (paint order). Forms of address
+    (``restore_address``) follow :func:`_address_preview_lines`: a pair row
+    the run created and the undo deletes is one going line, a direction or
+    row changed since is one "was changed since" line; a key put back on a
+    row that existed is no line (nothing goes). A skill switch
+    (``restore_skill_config``) whose file changed since is one "was changed
+    since" line (:func:`_skill_preview_lines`); one put back is no line. A
+    secret the run added
+    (``delete_secret``) is ``secret <id> of "<owner>" (<category>)``, or one
+    "was changed since — the discard leaves it alone" line when it differs
+    from what the step wrote (the undo skips it, changed since). A foreign
+    sparse secret row of the same mind that the undo's re-save normalises
+    (accepted residual, see ``_undo_delete_secret``) is no line — its
+    meaning stays. A world block rule the run added (``delete_rule``) is
+    ``rule <id> "<name>"``, or one "was changed since — the discard leaves it
+    alone" line when its stored row differs from what the step wrote (the
+    undo skips it, changed since). An event the run added (``delete_event``) is
+    ``event <id> "<text, 60 characters>"``, or one "was changed since — the
+    discard leaves it alone" line when its stored row differs from what the
+    step wrote; the event writer's cascade (event-bound rules, image files)
+    gets no line — a run's own event has neither (only ``random_events``
+    binds rules, and an image changes the row, so it is left alone). A quest
+    template the run created (``delete_quest_template``) is
+    ``quest template <id> "<title>"``, or one "was changed since — the discard
+    leaves it alone" line when its revision moved on or a run of it exists
+    (:func:`_quest_template_changed`, the undo's own test). The occupant
+    lines read where everybody stands once the undo has put the run's
+    placements back (:func:`simulated_places`, ``restore_placement``) — a
+    character the run placed into a created place or added room gets no line
+    unless that placement was changed since (then the undo leaves it there).
+    Accepted residual: a run-created location or character
+    that ANOTHER session's secret or rule came to name meanwhile
+    (``related_location``, ``known_by``, ``related_characters``, a rule's
+    target place or ``character``) still goes
+    with the discard without a line, and that row keeps a dangling name
+    (the tool's own ``delete_created`` refuses in that case; during a run
+    the world is frozen, so a foreign secret write is unlikely)."""
+    from app.core.world_dev_tools import _kind_label, _short
+    from app.models.character import character_row_exists
     from app.models.chat import count_messages_involving
     from app.models.memory import count_other_memories_naming
     from app.models.terrain import get_area
@@ -2139,7 +2762,8 @@ def discard_preview(run_id: str) -> List[str]:
             continue
         if op in ("delete_location", "delete_terrain_area", "delete_height_area",
                   "delete_character", "delete_world_prop", "delete_terrain_type",
-                  "delete_items"):
+                  "delete_items", "delete_secret", "delete_rule", "delete_event",
+                  "delete_quest_template"):
             # A target created, deleted and created again by this run has
             # several creating entries: one line.
             if target in listed:
@@ -2162,6 +2786,57 @@ def discard_preview(run_id: str) -> List[str]:
             prop = world_prop_row(str(inv.get("id") or ""))
             if prop:
                 lines.append(f"world prop {prop['id']} ({prop.get('prop_id')})")
+        elif op == "delete_secret":
+            sid = str(inv.get("id") or "")
+            owner = str(inv.get("owner") or "")
+            try:
+                srow = secret_row(owner, sid) if owner and sid else None
+            except Exception:
+                # _undo_delete_secret reports the same read error as
+                # "undo failed" and leaves the secret alone.
+                lines.append(f'secret {sid} of "{owner}" — its keeper\'s secrets cannot '
+                             "be read; the discard will report it")
+                srow = None
+            if srow:
+                written = entry.get("written")
+                if written is not None and _norm(srow) != _norm(written):
+                    # _undo_delete_secret leaves a secret changed since alone.
+                    lines.append(f"secret {sid} was changed since — the discard "
+                                 "leaves it alone")
+                else:
+                    lines.append(f'secret {sid} of "{owner}" ({srow.get("category")})')
+        elif op == "delete_rule":
+            from app.models.rules import world_rule
+            rid = str(inv.get("id") or "")
+            rrow = world_rule(rid) if rid else None
+            if rrow is not None:
+                written = entry.get("written")
+                if written is not None and _norm(rrow) != _norm(written):
+                    # _undo_delete_rule leaves a rule changed since alone.
+                    lines.append(f"rule {rid} was changed since — the discard leaves it alone")
+                else:
+                    lines.append(f'rule {rid} "{rrow.get("name") or ""}"')
+        elif op == "delete_event":
+            eid = str(inv.get("id") or "")
+            erow = _event_row_strict(eid) if eid else None
+            if erow is not None:
+                written = entry.get("written")
+                if written is not None and _norm(erow) != _norm(written):
+                    # _undo_delete_event leaves an event changed since alone.
+                    lines.append(f"event {eid} was changed since — the discard leaves it alone")
+                else:
+                    lines.append(f'event {eid} "{_short(erow.get("text"), 60)}"')
+        elif op == "delete_quest_template":
+            from app.models.quests import get_template
+            qid = str(inv.get("id") or "")
+            qrow = get_template(qid) if qid else None
+            if qrow is not None:
+                if _quest_template_changed(qrow, entry.get("written")):
+                    # _undo_delete_quest_template leaves it alone (changed since).
+                    lines.append(f"quest template {qid} was changed since — the discard "
+                                 "leaves it alone")
+                else:
+                    lines.append(f'quest template {qid} "{_short(qrow.get("title"), 80)}"')
         elif op == "delete_items":
             for iid in inv.get("ids") or []:
                 irow = item_row(str(iid or ""))
@@ -2210,8 +2885,12 @@ def discard_preview(run_id: str) -> List[str]:
         lines[at] = (f'item {iid} "{iname}"'
                      + (" is still held by " + ", ".join(holders) + " — stays"
                         if holders else ""))
+    lines.extend(_address_preview_lines(entries))
+    lines.extend(_skill_preview_lines(entries, deleted_names))
     if created or removed_rooms:
-        for name, (lid, room) in sorted(list_character_places().items()):
+        # Where everybody stands once the undo has put the run's placements
+        # back (it reaches them before the older location/room writes).
+        for name, (lid, room) in sorted(simulated_places(entries, foreign).items()):
             if name in deleted_names:
                 continue
             if lid in created:

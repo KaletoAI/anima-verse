@@ -1,8 +1,22 @@
 """World rules: configurable blocks, forced actions, discovery and modifiers.
 
 Conditions use the activity expression syntax. Rules are stored in world.db
-with a shared baseline from shared/rules/rules.json."""
+with a shared baseline from shared/rules/rules.json.
+
+LAYER LOCK. Every read-modify-write of a rule layer (``add_rule``,
+``update_rule``, ``delete_rule``, ``delete_rules_by_event``,
+``ensure_default_rules``, and ``save_rules`` itself) runs under one
+re-entrant module lock. Other modules reach it ONLY through the context
+manager :func:`layer_lock` (``with rules.layer_lock(): …``) — e.g. the World
+Dev undo compares and deletes a rule inside it. It is a leaf lock: nothing
+inside calls out except ``_rules_changed``, which only pushes. That call
+runs under the lock, so ``modifiers.invalidate_cache`` and
+``sync_topics.notify`` must stay leaf calls (each takes only its own short
+internal lock, never a profile, place or rule lock, and never blocks on I/O)."""
+import contextlib
+import functools
 import json
+import threading
 import uuid
 import os
 import tempfile
@@ -14,6 +28,26 @@ from app.core.db import get_connection, transaction
 from app.core.i18n import localized
 
 logger = get_logger("rules")
+
+#: The rule-layer lock (see the module docstring). Private: use layer_lock().
+_LAYER_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def layer_lock():
+    """Hold the rule-layer lock (re-entrant) around a read-compare-write of
+    the rule layers, so no writer of this module lands in between."""
+    with _LAYER_LOCK:
+        yield
+
+
+def _layer_locked(fn):
+    """Run *fn* (a layer read-modify-write) under the rule-layer lock."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LAYER_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 class RuleValidationError(ValueError):
@@ -201,6 +235,7 @@ def load_rules(*, strict: bool = False) -> List[Dict[str, Any]]:
     return _normalize_modifiers(list(by_id.values()))
 
 
+@_layer_locked
 def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
     """Save rules to the world DB or the shared baseline.
 
@@ -278,6 +313,7 @@ def _load_default_rules() -> List[Dict[str, Any]]:
         return []
 
 
+@_layer_locked
 def ensure_default_rules() -> int:
     """Ensure default sleep/wake rules exist in the shared baseline.
 
@@ -303,6 +339,7 @@ def ensure_default_rules() -> int:
         return 0
 
 
+@_layer_locked
 def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
     """Upsert a rule by ID into the world or shared layer.
 
@@ -328,6 +365,7 @@ def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
     return rule
 
 
+@_layer_locked
 def update_rule(rule_id: str, updates: Dict[str, Any],
                 target_dir: str = "world") -> Optional[Dict[str, Any]]:
     """Update a rule in the requested layer.
@@ -366,6 +404,7 @@ def update_rule(rule_id: str, updates: Dict[str, Any],
     return None
 
 
+@_layer_locked
 def delete_rule(rule_id: str, target_dir: str = "") -> bool:
     """Delete a rule from the requested layer.
 
@@ -427,6 +466,7 @@ def add_event_rule(event_id: str,
     return add_rule(rule, target_dir="world")
 
 
+@_layer_locked
 def delete_rules_by_event(event_id: str) -> int:
     """Delete event-bound rules and return the number deleted."""
     if not event_id:
@@ -448,6 +488,75 @@ def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
         if r.get("id") == rule_id:
             return r
     return None
+
+
+def world_rule(rule_id: str) -> Optional[Dict[str, Any]]:
+    """The WORLD-layer row *rule_id* exactly as stored (its meta object, no
+    ``_origin``, no reader defaults), or None. A read error propagates —
+    never read as "absent"."""
+    row = get_connection().execute(
+        "SELECT meta FROM rules WHERE id=?", (rule_id,)).fetchone()
+    if row is None:
+        return None
+    meta = json.loads(row[0] or "{}")
+    if not isinstance(meta, dict):
+        raise ValueError(f"Rule metadata is not an object: {rule_id}")
+    return meta
+
+
+def rules_naming(*, location: Optional[str] = None,
+                 character: Optional[str] = None,
+                 item: Optional[str] = None) -> List[Dict[str, Any]]:
+    """World-layer rules that name *location* as their target place (either
+    target schema), *character* as the one character they apply to or in a
+    condition atom (``present:`` / ``relationship:`` / ``romantic:``), or
+    the item id *item* in a condition atom (``has_item:`` /
+    ``room_has_item:``, by id or by a name that resolves to it). Atoms are
+    parsed by ``activity_engine.condition_references`` (the parser behind
+    validate_condition_references). Strict read: a broken layer or item
+    catalog raises.
+
+    The casefolded matches are deliberately conservative: check_access /
+    check_leave / check_force_rules compare ``rule.character`` exactly, so a
+    rule that differs only by case never applies, yet it still counts here —
+    a delete path is refused too often, never too rarely."""
+    from app.core.activity_engine import condition_references
+    char_cf = character.strip().casefold() if character is not None else None
+    item_cf = item.strip().casefold() if item is not None else None
+
+    def names_item(token: str) -> bool:
+        if token.casefold() == item_cf:
+            return True
+        from app.models.inventory import resolve_item_id
+        return resolve_item_id(token, strict=True) == item
+
+    out = []
+    for rule in _load_world_rules(strict=True):
+        target = rule.get("target") if isinstance(rule.get("target"), dict) else {}
+        if location is not None and _rule_location_rooms(target)[0] == location:
+            out.append(rule)
+            continue
+        if char_cf is not None and str(rule.get("character") or "").strip().casefold() \
+                == char_cf:
+            out.append(rule)
+            continue
+        refs = condition_references(str(rule.get("condition") or "")) \
+            if char_cf is not None or item_cf is not None else []
+        if any((char_cf is not None and fam in ("present", "relationship", "romantic")
+                and tok.casefold() == char_cf)
+               or (item_cf is not None and fam in ("item", "room_item") and names_item(tok))
+               for fam, tok in refs):
+            out.append(rule)
+    return out
+
+
+def block_rules_at(location_id: str) -> List[Dict[str, Any]]:
+    """The effective block rules (both layers) whose target place is
+    *location_id* — what an editor lists for a place."""
+    return [r for r in load_rules()
+            if r.get("type") == "block"
+            and _rule_location_rooms(r.get("target") if isinstance(r.get("target"), dict)
+                                     else {})[0] == location_id]
 
 
 # ============================================================

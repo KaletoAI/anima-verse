@@ -42,7 +42,7 @@ TERMINAL_STATUSES = ("accepted", "rolled_back", "rollback_incomplete")
 STATUSES = OPEN_STATUSES + TERMINAL_STATUSES
 KINDS = ("read", "write", "refused")
 TARGET_KINDS = ("location", "terrain", "height", "character", "world_prop", "terrain_type",
-                "item")
+                "item", "relationship", "secret", "rule", "event", "quest_template")
 
 
 class RunOpenError(RuntimeError):
@@ -117,6 +117,8 @@ def _run_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
     d = dict(row)
     d["was_frozen"] = bool(d.get("was_frozen"))
     d["skipped"] = _load(d.get("skipped_json")) or []
+    bounds = _load(d.get("bounds"))
+    d["bounds"] = bounds if isinstance(bounds, dict) else None
     return d
 
 
@@ -242,6 +244,14 @@ def set_budgets(run_id: str, max_steps: int, max_tokens_total: int) -> None:
 
 def set_skipped(run_id: str, skipped: List[Any]) -> None:
     _update_run(run_id, "skipped_json=?", (_dump(list(skipped or [])),))
+
+
+def set_bounds(run_id: str, box: Dict[str, float]) -> None:
+    """Store the run's build box {min_x, min_z, max_x, max_z} (metres) —
+    run metadata, not world data: the undo and the discard never touch it.
+    The caller validates the numbers; this only stores them as floats."""
+    clean = {k: float(box[k]) for k in ("min_x", "min_z", "max_x", "max_z")}
+    _update_run(run_id, "bounds=?", (_dump(clean),))
 
 
 def set_backup(run_id: str, path: str) -> None:

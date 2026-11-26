@@ -18,7 +18,7 @@ moves a place on the map.
   value is refused.
 - `swim_allowed` — true only where swimming fits (beach, pool, lake shore).
 - `style_hint` — optional soft English style word ("cozy rustic", "neon nightclub").
-- `activity_hint` — free text in the world's language: what characters typically do here.
+- `activity_hint` — free text in the content language: what characters typically do here.
 - `image_prompt_day`, `image_prompt_night` — ENGLISH prompts for the background image, no
   people, no text. Set both.
 - `image_prompt_building` — ENGLISH three-quarter exterior view of the whole building, neutral

@@ -89,11 +89,11 @@ INVENTORY.update({
     "app/models/thought_store.py": ["add_thought"],
     "app/models/memory.py": "save_memories add_memory delete_memory clear_memories record_mood".split(),
     "app/models/diary.py": ["_save_stored"],
-    "app/models/relationship.py": ["_save_relationship"],
+    "app/models/relationship.py": ["_save_relationship", "delete_pair_row", "restore_pair_row", "set_pair_row_meta_key"],
     "app/core/quest_engine.py": ["_quests_changed"],
 })
 INVENTORY["app/models/chat_stat_evaluations.py"] = ["commit_evaluation"]
-INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag"]
+INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag", "write_placement"]
 
 
 # Rows 10 and 15 inherit the location/publication writers rather than adding

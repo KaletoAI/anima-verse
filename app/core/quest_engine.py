@@ -202,6 +202,24 @@ def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...]]]:
     return out
 
 
+#: The largest `time_limit_s` SQLite can store (a signed 64-bit integer).
+MAX_TIME_LIMIT_S = 2 ** 63 - 1
+
+
+def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
+    """Why a template body cannot be stored as sent, or None: a text field (`title`, `summary`, `gm_notes`)
+    that is not text, or a `time_limit_s` that is not a whole number SQLite can store. Only the keys present are
+    checked. Used by the admin route (400) and the World Dev free mode (a refusal) alike."""
+    for key in ("title", "summary", "gm_notes"):
+        if key in body and not isinstance(body[key], str):
+            return f"{key} must be text"
+    if "time_limit_s" in body:
+        limit = body["time_limit_s"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= MAX_TIME_LIMIT_S:
+            return "time_limit_s is a whole number of seconds, 0 or more"
+    return None
+
+
 def validate_template(template: dict) -> list[dict]:
     """Every authoring issue of ``template`` as ``{"path", "code", "message"}`` (paths per D7). No world entity is
     read; ``check_expression`` already runs each type's ``validate(params, None)``."""

@@ -344,6 +344,16 @@ def get_all_events() -> List[Dict[str, Any]]:
     return _active_events(_load_events())
 
 
+def get_all_events_strict() -> List[Dict[str, Any]]:
+    """All active events, read from the DB only: a read error raises —
+    never the JSON fallback or an empty list. For callers that would read
+    "no events" as "nothing refers to it" (a delete path)."""
+    rows = get_connection().execute(
+        "SELECT id, ts, game_ts, payload FROM events "
+        "WHERE kind='world_event' ORDER BY ts ASC").fetchall()
+    return _active_events([_row_to_event(r) for r in rows])
+
+
 RESOLVED_TTL_HOURS = 2  # a resolved event stays visible for 2 more GAME hours
 
 
@@ -356,10 +366,15 @@ def resolve_event(event_id: str,
 
 
 def add_stat_hit(event_id: str, name: str) -> bool:
-    """Atomically persist a character's first immediate-effects claim."""
+    """Atomically persist a character's first immediate-effects claim.
+
+    Under ``keyed_lock("world_event", id)`` like the other event writers, so
+    a compare-then-delete that holds the lock (World Dev undo of add_event)
+    never deletes a claim that landed in between."""
     if not name:
         return False
-    with transaction() as conn:
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("world_event", event_id), transaction() as conn:
         row_id = _row_id_for(conn, event_id)
         if row_id is None:
             return False
