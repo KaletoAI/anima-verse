@@ -25,6 +25,7 @@ namespace AnimaNative.Check;
 ///
 ///   R1  Ona → bed: Exit → Walk → Entry → Loop, each once, through three polls of the same order with other position
 ///       fields; chain end 5.68 ± 0.1, |end − (flip − issued)| ≤ 1.5;          R3 lag 2.5 → Walk at 1.82 m;
+///   R3c the same walk on a rigged Ona under a holding start rule standing → walking: the gait plays, no bridge is held;
 ///   R3b status active → Loop on the slot;  R4 revision 2 (+30 s) restarts nothing, a new cancel id aborts the walk;
 ///   R5  awaits reaction → WaitAccess, the revision without it starts the entry at 4.0;
 ///   R9  every orders fixture: access ≤ 0.4 m from the mesh, final piece through no wall, links within the radius;
@@ -189,6 +190,43 @@ public static partial class OrderCheck
             r3.Until(Dt);
             Is("R3 starts in Walk", r3.Of(Ona).FirstOrDefault() == OrderState.Walk, Seq(r3, Ona));
             Near("R3 walked 1.82 m", r3.M.OrderPlayerOf(Ona)?.WalkedM, (2.5 - 1.2) * 1.4, TolM);
+
+            // ---- R3c an NPC's order walk shows its gait under a holding start rule standing → walking ----
+            // (user report 2026-11-26: the walk frame ended the start bridge in the standing pose, so the rule opened it again in
+            // every frame and the figure slid along in the bridge's first frame). Ona gets a rig of three clips; from 1.82 m
+            // of 2.91 m the walk has 0.78 s (47 frames) left, 30 of them are counted.
+            var r3c = await Start(Map(m => m["motion_now"] = 102.5));
+            {
+                var fig = r3c.F(Ona);
+                var body = new Node3D(); var player = new AnimationPlayer(); body.AddChild(player);
+                var library = new AnimationLibrary();
+                string idle = FigureClips.PoseKind("standing", fig.Poses), walking = FigureClips.PoseKind("walking", fig.Poses);
+                library.AddAnimation(idle, new Animation { Length = 1, LoopMode = Animation.LoopModeEnum.Linear });
+                library.AddAnimation(walking, new Animation { Length = 1, LoopMode = Animation.LoopModeEnum.Linear });
+                library.AddAnimation("get-up", new Animation { Length = 1.7 });
+                player.AddAnimationLibrary("", library);
+                fig.SetBody(body, true, null, player, new[] { idle, walking, "get-up" }, bodyHeight: 1.7);
+                fig.BaseScale = 1;
+                fig.Clock = () => r3c.M.Clock;
+                fig.Play(idle);
+                fig.Transitions = new[] { new ClipTransition(idle, walking, "get-up", 0) };
+                r3c.Until(Dt);
+                int bridging = 0, gait = 0;
+                var from = fig.Position;
+                for (int i = 0; i < 30; i++)
+                {
+                    r3c.Until(r3c.M.Clock + Dt);
+                    if (fig.Bridging) bridging++;
+                    if (fig.CurrentKind == walking && fig.CurrentClip == walking) gait++;
+                }
+                string got = $"bridging {bridging}/30 gait {gait}/30 clip {fig.CurrentClip} t {fig.ClipTime:0.###} moved {fig.Position.DistanceTo(from):0.###} ({Seq(r3c, Ona)})";
+                GD.Print($"[orders] R3c npc order walk: {got}");
+                Is("R3c still in Walk", r3c.Of(Ona).LastOrDefault() == OrderState.Walk, got);
+                Is("R3c the order walk is held in no bridge (≤ 1 frame)", bridging <= 1, got);
+                Is("R3c the order walk plays the gait (≥ 29 of 30 frames)", gait >= 29, got);
+                Is("R3c the gait clip runs on (> 0.2 s)", fig.ClipTime > 0.2, got);
+                Is("R3c the figure moves meanwhile (30 · 1.4 / 60 = 0.7 m)", Math.Abs(fig.Position.DistanceTo(from) - 0.7) <= TolM, got);
+            }
 
             // ---- R3b status active → the loop on the slot at once ----
             var r3b = await Start(Map(m => OrderOf(m)["status"] = "active"));

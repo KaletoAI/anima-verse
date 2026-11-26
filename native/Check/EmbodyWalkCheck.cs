@@ -272,13 +272,25 @@ public static class EmbodyWalkCheck
             var stopStart=fig.Position;
             // Plan E3 Task 10: a click inside the hall is the avatar's local walk order; the order draws the figure from its
             // first frame on and lets the stop bridge go at once (as renewed keys do) instead of waiting for it.
-            Is("click walk planned while stop holds",steering.WalkTo(new(fig.Position.X+1,fig.Position.Z)) && steering.WalkOrderId is not null);
+            Is("click walk planned while stop holds",steering.WalkTo(new(fig.Position.X+3,fig.Position.Z)) && steering.WalkOrderId is not null);
             Frame(none);
             // (The order plays the walking clip; a start rule idle → walking may open its bridge then — the order moves on.)
             Is("click walk order lets the stop go and walks",fig.BridgeFrom!=walking && fig.Position.X>stopStart.X && steering.WalkOrderId is not null);
             // Review Task 11 I1: the click walk (3.4 m/s, NpcWalk.WalkSpeed) keeps the key walk's clip pace, never 3.4 / 1.4 ≈ 2.4×.
-            if (fig.Bridging) fig.CancelBridge(); // the start bridge holds the clip's pace; the walk's own frame follows
-            Frame(none);
+            // The click walk shows the gait (user report 2026-11-26: it slid in the standing pose): the order's walk frame ends
+            // any bridge into the frame's pose, so the start rule idle → walking opens no bridge again in every frame.
+            int bridgingFrames=0, gaitFrames=0; var clickStart=fig.Position;
+            for (int i=0; i<30; i++)
+            {
+                Frame(none);
+                if (fig.Bridging) bridgingFrames++;
+                if (fig.CurrentKind==walking && fig.CurrentClip==walking) gaitFrames++;
+            }
+            GD.Print($"[embody] click walk gait: bridging {bridgingFrames}/30 gait {gaitFrames}/30 clip {fig.CurrentClip} t {fig.ClipTime:F3} dx {fig.Position.X-clickStart.X:F3}");
+            Is($"click walk is not held in a bridge: {bridgingFrames}/30 frames",bridgingFrames<=1);
+            Is($"click walk plays the gait: {gaitFrames}/30 frames, clip {fig.CurrentClip}",gaitFrames>=29);
+            Is($"click walk gait clip runs on: t {fig.ClipTime:R}",fig.ClipTime>.2);
+            Is("click walk moves meanwhile",fig.Position.X-clickStart.X>.5 && steering.WalkOrderId is not null);
             GD.Print($"[embody] click walk clip: bridging {fig.Bridging} scale {fig.Player?.SpeedScale} pace {fig.CurrentPace}");
             Is("click walk clip at the key walk's pace",!fig.Bridging && fig.Player is { } cwp && Math.Abs(cwp.SpeedScale-fig.CurrentPace)<1e-6);
             steering.CancelRoute();

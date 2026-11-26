@@ -646,17 +646,29 @@ public partial class FigureManager
             case OrderState.Walk:
             case OrderState.WaitAccess:
             {
-                // The exit's stand-up bridge is over once the walk runs: let it go into the standing pose.
-                if (fig.Bridging) fig.FinishPropEntry(FigureClips.PoseKind("standing", fig.Poses));
                 double dx = p.X - before.X, dz = p.Z - before.Z;
                 moving = frame.State == OrderState.Walk && dx * dx + dz * dz > 1e-12;
+                bool inOpen = player.Current!.LocationId.Length == 0;
+                OpenGroundFrame? openFrame = inOpen ? WalkGround.OrderFrame(WordAt(p.X, p.Z), moving, fig.Poses) : null;
+                // A bridge (the exit's stand-up, or the start rule standing → walking) is over once the walk runs: let it
+                // go into THIS frame's pose (the gait while moving, the open ground's clip out in the open). Ending it in
+                // the standing pose made the start rule open its bridge again in every frame — the click walk slid along
+                // in the bridge's first frame and never showed its gait (user report 2026-11-26).
+                if (fig.Bridging)
+                {
+                    string want = openFrame?.Clip is { Length: > 0 } oc ? oc
+                        : FigureClips.PoseKind(moving ? "walking" : "standing", fig.Poses);
+                    want = want.ToLowerInvariant();
+                    var action = FigureClips.ResolveClipKind(want, fig.ClipKinds, fig.Poses);
+                    fig.FinishPropEntry(action.Length > 0 ? action : want);
+                }
                 var yaw = frame.YawDeg * Math.PI / 180;
                 fig.FaceTowards(new Vector3((float)Math.Sin(yaw), 0, (float)Math.Cos(yaw)));
-                if (player.Current!.LocationId.Length == 0)
+                if (inOpen)
                 {
                     // Out in the open (plan E3 Task 9, review I1): the ground rules of the route tick — wade/swim/crawl
                     // clip, sink, floated root height, underwater ghost — on the order's own position and pace.
-                    var open = WalkGround.OrderFrame(WordAt(p.X, p.Z), moving, fig.Poses);
+                    var open = openFrame!.Value;
                     if (fig.Portrait is null) fig.SetSubmerged(open.GhostCutY);
                     fig.Position = new Vector3((float)p.X, (float)EaseRootY(fig, before.Y, open.RootY, dt), (float)p.Z);
                     fig.SetMotion(moving, false, open.Movement);
