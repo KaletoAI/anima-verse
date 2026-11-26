@@ -55,6 +55,24 @@ Hand-derived expectations:
   [m] update_inventory_entry(Mira, pebble, {"quantity": 3}) on a stored 3 ->
       3 - 3 = 0 -> no event. The same update to 2 with the DB transaction
       raising -> False and no event; quantity stays 3.
+
+  Stage 2, Task 5 (secret.learned and secrets persistence contract):
+  Owner Mira gets a secret via secrets.add_secret("Mira", "Hidden ledger",
+  source="quest", source_ref="quest_run:qr_test").
+  [n] add_known_by("Mira", sid, "Wren") -> True; exactly one secret.learned
+      {owner: "Mira", secret_id: sid, knower: "Wren", discovered: False,
+      source_ref: "quest_run:qr_test"}; secrets.knows(get_secret(...), "Wren") True.
+  [o] The same add_known_by call again -> True, no new event.
+  [p] add_known_by("Mira", sid, "Osric") with secrets.transaction patched to
+      raise -> False, no event, and Osric is not among known_by afterwards.
+  [q] add_known_by("Mira", sid, "Osric", discovered=True) inside
+      keyed_lock("character_profile", "Wren"): no event while the lock is held,
+      arrives on exit with thread lock depth 0 and discovered=True.
+  [r] add_secret("Mira", "Fixed id", secret_id="sec_fixedid1") -> returned id
+      "sec_fixedid1" and get_secret("Mira", "sec_fixedid1") is not None;
+      VALID_SOURCES contains "quest" and the [n] secret's stored source is "quest".
+  [s] delete_secret with secrets.transaction patched to raise -> False, secret
+      still exists afterwards.
 """
 import os
 import sys
@@ -90,7 +108,7 @@ def main() -> int:
     from app.core.keyed_lock import keyed_lock
     from app.core.perception import STORYTELLER_SPEAKER, record_utterance
     from app.core.users import create_user, update_user
-    from app.models import character as chars, inventory, world
+    from app.models import character as chars, inventory, secrets, world
 
     world.upsert_location({"id": "inn", "name": "Inn", "entry_room": "hall",
                            "rooms": [{"id": "hall", "name": "Hall"},
@@ -272,10 +290,78 @@ def main() -> int:
     check("failed update emits nothing", inv_events, [])
     check("quantity unchanged", quantity("Mira", pebble), 3)
 
+    learned_events, learned_timeline = [], []
+
+    def on_secret_learned(**kw):
+        learned_events.append(kw)
+        learned_timeline.append("event")
+        kw["_depth"] = getattr(kl._LOCAL, "depth", 0)
+
+    hooks.register("secret.learned", on_secret_learned, tag="smoke")
+    sec = secrets.add_secret("Mira", "Hidden ledger", source="quest",
+                             source_ref="quest_run:qr_test")
+    sid = sec["id"]
+
+    SECTION[0] = "[n]"
+    print("[n] add_known_by emits secret.learned for new knower")
+    learned_events.clear()
+    check("add_known_by returns True", secrets.add_known_by("Mira", sid, "Wren"), True)
+    check("events", [strip(e) for e in learned_events], [{
+        "owner": "Mira", "secret_id": sid, "knower": "Wren",
+        "discovered": False, "source_ref": "quest_run:qr_test",
+    }])
+    check("knows", secrets.knows(secrets.get_secret("Mira", sid), "Wren"), True)
+
+    SECTION[0] = "[o]"
+    print("[o] repeat learner emits no new event")
+    learned_events.clear()
+    check("repeat add_known_by returns True", secrets.add_known_by("Mira", sid, "Wren"), True)
+    check("no new event", learned_events, [])
+
+    SECTION[0] = "[p]"
+    print("[p] failed save in add_known_by returns False and emits nothing")
+    learned_events.clear()
+    with patch.object(secrets, "transaction", broken_transaction):
+        check("failed add_known_by returns False",
+              secrets.add_known_by("Mira", sid, "Osric"), False)
+    check("no event on failure", learned_events, [])
+    check("Osric not in known_by",
+          "Osric" in (secrets.get_secret("Mira", sid) or {}).get("known_by", []), False)
+
+    SECTION[0] = "[q]"
+    print("[q] secret.learned deferred until outer lock exits")
+    learned_events.clear()
+    learned_timeline.clear()
+    with keyed_lock("character_profile", "Wren"):
+        check("add_known_by returns True",
+              secrets.add_known_by("Mira", sid, "Osric", discovered=True), True)
+        check("no event while lock held", len(learned_events), 0)
+        learned_timeline.append("returned under lock")
+    check("timeline", learned_timeline, ["returned under lock", "event"])
+    check("listener lock depth", [e["_depth"] for e in learned_events], [0])
+    check("events", [strip(e) for e in learned_events], [{
+        "owner": "Mira", "secret_id": sid, "knower": "Osric",
+        "discovered": True, "source_ref": "quest_run:qr_test",
+    }])
+
+    SECTION[0] = "[r]"
+    print("[r] pre-minted secret_id and VALID_SOURCES 'quest'")
+    fixed = secrets.add_secret("Mira", "Fixed id", secret_id="sec_fixedid1")
+    check("returned id", fixed["id"], "sec_fixedid1")
+    check("get_secret finds fixed id", secrets.get_secret("Mira", "sec_fixedid1") is not None, True)
+    check("quest in VALID_SOURCES", "quest" in secrets.VALID_SOURCES, True)
+    check("stored source of [n] secret", (secrets.get_secret("Mira", sid) or {}).get("source"), "quest")
+
+    SECTION[0] = "[s]"
+    print("[s] failed save in delete_secret returns False and keeps secret")
+    with patch.object(secrets, "transaction", broken_transaction):
+        check("failed delete_secret returns False", secrets.delete_secret("Mira", sid), False)
+    check("secret still exists", secrets.get_secret("Mira", sid) is not None, True)
+
     if FAILURES:
         print(f"FAIL smoke_quest_signals: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_signals: [a]-[m]")
+    print("PASS smoke_quest_signals: [a]-[s]")
     return 0
 
 

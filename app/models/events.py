@@ -191,13 +191,15 @@ def add_event(text: str,
     ttl_hours: Optional[int] = None,
     category: str = "",
     escalation_of: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    metadata: Optional[Dict[str, Any]] = None,
+    event_id: str = "") -> Dict[str, Any]:
     """Creates a new event.
 
     location_id=None -> global event.
     category: ambient, social, disruption, danger (empty = uncategorized)
     escalation_of: event id of the preceding event (escalation chain)
     metadata: optional dict for extra event data (e.g. secret-hint info).
+    event_id: optional pre-minted id (overrides the generated ``evt_<hex>`` when non-empty).
 
     ``ttl_hours`` are GAME hours: how long the happening lasts *in the world*.
     """
@@ -206,7 +208,7 @@ def add_event(text: str,
     now = utc_now()
     started = game_time()
     event = {
-        "id": f"evt_{uuid.uuid4().hex[:8]}",
+        "id": event_id or f"evt_{uuid.uuid4().hex[:8]}",
         "text": text.strip(),
         "location_id": location_id or None,
         "category": category or "",

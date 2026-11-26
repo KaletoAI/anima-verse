@@ -23,12 +23,13 @@ once and a leaf naming one evaluates as "type not registered" (unavailable).
 PARAMETERS (D5) are a list of dicts in the ``config_schema`` field vocabulary plus ``key``:
 ``key, type, label, description, default, min, max, step, choices, choice_labels, required``; ``type`` is one of
 :data:``PARAM_TYPES``. A ``role`` field holds a role KEY of the template (never a world entity id) and may restrict the
-role's kind with ``role_kinds``. A ``target`` field (stage 2, D4) holds either a role key (its kind in ``role_kinds``)
-or a reachable effect key (its type's ``object_kind`` in ``object_kinds``), checked against a :class:``Scope`` built
-for that position. A ``text`` parameter accepts ``{role_key}`` placeholders unless its spec sets
-``"placeholders": False`` (for JSON-valued text parameters). :func:``check_expression`` and :func:``check_effects`` do
-the generic checks; a type's own ``validate`` runs only on a leaf that passed them, with ``bindings=None`` at template
-time (D4).
+role's kind with ``role_kinds``; an optional ``role`` field on an effect may also set ``"avatar_default": True`` to
+mean "empty defaults to the avatar who fulfilled the step" (refused when left empty in ``setup_effects``). A ``target``
+field (stage 2, D4) holds either a role key (its kind in ``role_kinds``) or a reachable effect key (its type's
+``object_kind`` in ``object_kinds``), checked against a :class:``Scope`` built for that position. A ``text`` parameter
+accepts ``{role_key}`` placeholders unless its spec sets ``"placeholders": False`` (for JSON-valued text parameters).
+:func:``check_expression`` and :func:``check_effects`` do the generic checks; a type's own ``validate`` runs only on a
+leaf that passed them, with ``bindings=None`` at template time (D4).
 
 EVALUATION is three-state (``ConditionResult(available, passed, reason)`` of ``app.core.activity_engine``): unavailable
 is contagious through ``all`` / ``any`` / ``not``, which evaluate EVERY child (the strict rule of
@@ -348,10 +349,11 @@ def check_expression(expr: dict, scope: Scope, *, allowed_kinds: Tuple[str, ...]
 
 
 def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str, reward: bool,
-                  props_before: int = 0) -> List[Dict[str, str]]:
+                  props_before: int = 0, setup: bool = False) -> List[Dict[str, str]]:
     """Every issue of one effect list (D2), with absolute paths built from ``path`` (e.g. ``setup_effects.1.key``).
     ``scope_for(i)`` answers the reachable :class:`Scope` of entry ``i``; ``reward=True`` refuses ``permanent=False``;
-    ``props_before`` is how many ``create_prop`` entries earlier lists of the same template already used."""
+    ``props_before`` is how many ``create_prop`` entries earlier lists of the same template already used;
+    ``setup=True`` refuses leaving any ``avatar_default`` parameter empty (a setup has no acting avatar)."""
     if not isinstance(effects, list):
         return [_issue(path, "shape", "An effect list must be a list")]
     known = types()  # one catalog snapshot for the whole check
@@ -388,8 +390,21 @@ def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str,
             issues.append(_issue(f"{p}.key", "duplicate", f"Effect key '{key}' is used twice"))
         else:
             seen_keys.add(key)
-        issues.extend(_check_leaf(p, {"type": entry["type"], "params": entry.get("params") or {}},
+        entry_params = entry.get("params") or {}
+        issues.extend(_check_leaf(p, {"type": entry["type"], "params": entry_params},
                                   scope, ("effect",), known))
+        if setup:
+            t = known.get(entry["type"])
+            if t is not None:
+                for spec in t.params:
+                    if spec.get("avatar_default"):
+                        pkey = spec.get("key")
+                        if _absent(entry_params.get(pkey)):
+                            issues.append(_issue(
+                                f"{p}.params.{pkey}",
+                                "required",
+                                "The setup has no avatar: choose a character",
+                            ))
         if entry["type"] == CREATE_PROP_TYPE:
             prop_count += 1
             if prop_count > MAX_CREATE_PROP:

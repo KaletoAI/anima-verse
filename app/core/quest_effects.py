@@ -25,9 +25,11 @@ IDEMPOTENCE & RESTART RECONCILIATION. An effect applies at most once per ``(run_
 Before an external write, an effect may call :meth:`EffectContext.record_pending` so a
 ``pending`` object row exists first. After a restart, a ``pending`` row is reconciled with
 ``exists(ref)``: ``True`` promotes it to ``live`` without re-running; ``False`` re-applies the
-entry reusing the existing row(s); ``None`` skips the entry for this pass. Effects without
-objects are covered by the payout row and by checking whether any later entry in the same list
-already recorded an object.
+entry reusing the existing row(s); ``None`` skips the entry for this pass. An effect that
+succeeds without creating any object (empty return and no pending row recorded) gets a durable
+permanent ``marker`` row so it is never applied a second time if a later entry in the same list
+waits or fails. Marker rows are excluded from :attr:`EffectContext.objects` and the admin run
+view.
 
 LOCKS & PUSHES. An effect's ``apply`` and an object kind's ``remove`` run with NO quest lock
 held and take only their own domain locks. This module never imports or calls ``sync_topics``;
@@ -219,13 +221,6 @@ def _apply_entry(
             for row in pending_rows:
                 quests.set_object_status(row["id"], "live")
             return ("done", None)
-    else:
-        later_keys = {
-            e.get("key") for e in entries[index + 1:]
-            if isinstance(e, dict) and isinstance(e.get("key"), str) and e.get("key")
-        }
-        if later_keys and any(o.get("effect_key") in later_keys for o in all_objects):
-            return ("done", None)
 
     type_id = entry.get("type") if isinstance(entry.get("type"), str) else ""
     t = quest_catalog.types().get(type_id) if type_id else None
@@ -234,6 +229,8 @@ def _apply_entry(
 
     live_objects: Dict[str, dict] = {}
     for obj in quests.list_objects(run_id, statuses=("live",)):
+        if obj.get("kind") == "marker":
+            continue
         ek = obj.get("effect_key")
         if ek and ek not in live_objects:
             live_objects[ek] = obj.get("ref") or {}
@@ -284,6 +281,19 @@ def _apply_entry(
         return ("failed", str(e))
 
     target_ids = [r["id"] for r in rows] + added_ids
+    if not created and not target_ids:
+        quests.add_object(
+            run_id,
+            effect_key=key,
+            position=position,
+            kind="marker",
+            ref={"effect_key": key},
+            label=key,
+            permanent=True,
+            status="live",
+        )
+        return ("done", None)
+
     has_pending = False
     for i, obj in enumerate(created or ()):
         if i < len(target_ids):
@@ -547,3 +557,348 @@ def retry(run_id: str) -> bool:
     if changed:
         wake()
     return changed
+
+
+# --- Built-in effect helpers ------------------------------------------------------------------
+
+def _role_value(params: dict, ctx: EffectContext, key: str, field: str) -> str:
+    role = params.get(key)
+    binding = ctx.bindings.get(role) if isinstance(role, str) else None
+    val = binding.get(field) if isinstance(binding, dict) else None
+    return val.strip() if isinstance(val, str) else ""
+
+
+def _recipient(params: dict, ctx: EffectContext) -> str:
+    to = params.get("to")
+    if isinstance(to, str) and to.strip():
+        name = _role_value(params, ctx, "to", "name")
+        if not name:
+            raise EffectFailed(f"Role '{to}' is not bound")
+        return name
+    if ctx.avatar:
+        return ctx.avatar
+    raise EffectFailed("No character to receive this: the setup has no avatar")
+
+
+def _target_ref(params: dict, ctx: EffectContext, key: str) -> Optional[dict]:
+    val = params.get(key)
+    if not isinstance(val, str) or not val:
+        return None
+    if val in ctx.bindings and isinstance(ctx.bindings[val], dict):
+        return ctx.bindings[val]
+    if val in ctx.objects and isinstance(ctx.objects[val], dict):
+        return ctx.objects[val]
+    return None
+
+
+def _notify(character: str, en_text: str, run: dict, effect_key: str, **values: Any) -> None:
+    try:
+        from app.core.i18n import t
+        from app.models import account
+        from app.models.character import get_character_language
+        from app.models.notifications import create_notification
+
+        if not account.is_player_controlled(character):
+            return
+        try:
+            lang = get_character_language(character) or ""
+        except Exception:  # noqa: BLE001
+            lang = ""
+        text = t(en_text, lang)
+        for k, v in values.items():
+            text = text.replace("{" + k + "}", str(v))
+        if not create_notification(
+            character,
+            text,
+            notification_type="quest",
+            metadata={"run_id": run["id"], "effect": effect_key},
+        ):
+            logger.warning("quest run %s: notification for %s (%s) was not stored",
+                           run.get("id"), character, effect_key)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest run %s: notification for %s (%s) failed: %s",
+                       run.get("id"), character, effect_key, e)
+
+
+# --- Built-in effect types --------------------------------------------------------------------
+
+def _apply_give_hint(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core.linked_characters import mind_of
+    from app.models import secrets
+
+    holder_key = params.get("holder")
+    holder = _role_value(params, ctx, "holder", "name")
+    if not holder:
+        raise EffectFailed(f"Role '{holder_key}' is not bound")
+    owner = mind_of(holder)
+    sid = (ctx.previous[0].get("ref") or {}).get("secret_id") if ctx.previous else ""
+    if not sid:
+        sid = ctx.mint("sec")
+    ref = {"owner": owner, "secret_id": sid}
+    text = str(params.get("text") or "")
+    label = text[:80]
+    ctx.record_pending("secret", ref, label)
+    secrets.add_secret(
+        holder,
+        text,
+        category="personal",
+        severity=1,
+        source="quest",
+        source_ref=f"quest_run:{ctx.run['id']}",
+        secret_id=sid,
+    )
+    if secrets.get_secret(owner, sid) is None:
+        raise EffectFailed("The hint was not stored", retryable=True)
+    return [CreatedObject("secret", ref, label)]
+
+
+def _apply_reveal_secret(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.models import secrets
+
+    secret_key = params.get("secret")
+    ref = _target_ref(params, ctx, "secret")
+    owner = str((ref or {}).get("owner") or "")
+    secret_id = str((ref or {}).get("secret_id") or "")
+    if not ref or not owner or not secret_id:
+        raise EffectFailed(f"The secret '{secret_key}' does not exist yet")
+    to = _recipient(params, ctx)
+    sec = secrets.get_secret(owner, secret_id)
+    if sec is None:
+        raise EffectFailed(f"The secret '{secret_key}' is gone")
+    if not secrets.add_known_by(owner, secret_id, to):
+        raise EffectFailed("The secret could not be told", retryable=True)
+    _notify(to, "You learned something: {content}", ctx.run, ctx.effect_key,
+            content=sec.get("content") or "")
+    return []
+
+
+def _apply_change_stat(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import adjust_status_effects, get_character_profile
+
+    to = _recipient(params, ctx)
+    stat = str(params.get("stat") or "")
+    delta = int(params.get("delta") or 0)
+    # Hold the profile lock through the read-back so success is decided atomically
+    # with the write; otherwise a concurrent writer can make a stored delta look
+    # failed and cause the next pass to apply it a second time.
+    with keyed_lock("character_profile", to):
+        profile = get_character_profile(to) or {}
+        status = profile.get("status_effects") or {}
+        if stat not in status:
+            raise EffectFailed(f"{to} has no stat {stat}")
+        old = int(status[stat])
+        want = max(0, min(100, old + delta))
+        changes = adjust_status_effects(to, {stat: delta}, source=f"quest:{ctx.run['id']}")
+        after_profile = get_character_profile(to) or {}
+        after_status = after_profile.get("status_effects") or {}
+        if stat not in after_status or int(after_status[stat]) != want:
+            raise EffectFailed("The stat change was not stored", retryable=True)
+    ref = {"character": to, "changes": changes}
+    label = f"{stat} {delta:+d}"
+    if changes:
+        _notify(to, "Your {stat} changed by {delta}.", ctx.run, ctx.effect_key,
+                stat=stat, delta=f"{delta:+d}")
+    return [CreatedObject("stat", ref, label)]
+
+
+def _apply_post_news(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.models import events
+
+    place_key = params.get("place")
+    if isinstance(place_key, str) and place_key.strip():
+        location: Optional[str] = _role_value(params, ctx, "place", "location_id")
+        if not location:
+            raise EffectFailed(f"Role '{place_key}' is not bound")
+    else:
+        location = None
+    eid = (ctx.previous[0].get("ref") or {}).get("event_id") if ctx.previous else ""
+    if not eid:
+        eid = ctx.mint("evt")
+    ref = {"event_id": eid}
+    text = str(params.get("text") or "")
+    label = text[:80]
+    ctx.record_pending("event", ref, label)
+    category = str(params.get("category") or "social")
+    ttl_hours = int(params["ttl_hours"]) if params.get("ttl_hours") is not None else 24
+    evt = events.add_event(
+        text,
+        location_id=location,
+        ttl_hours=ttl_hours,
+        category=category,
+        metadata={"quest_run": ctx.run["id"]},
+        event_id=eid,
+    )
+    if events.event_exists(eid) is not True:
+        raise EffectFailed("The news line was not stored", retryable=True)
+    final_ref = {"event_id": eid, "expires_at": evt["expires_at"]} if evt.get("expires_at") else ref
+    return [CreatedObject("event", final_ref, label)]
+
+
+def _apply_narrate(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core import perception
+    from app.models.character import get_character_current_location, get_character_current_room
+
+    to = _recipient(params, ctx)
+    loc = get_character_current_location(to) or None
+    room = get_character_current_room(to) or None
+    uid = perception.record_utterance(
+        speaker=perception.STORYTELLER_SPEAKER,
+        content=str(params.get("text") or ""),
+        location_id=loc,
+        room_id=room,
+        source="quest",
+        anchor=to,
+        perception_meta={"display_only": True, "quest": True},
+    )
+    if uid is None:
+        raise EffectFailed("The line was not recorded", retryable=True)
+    return []
+
+
+def _apply_give_item(params: dict, ctx: EffectContext) -> List[CreatedObject]:
+    from app.core.i18n import localized
+    from app.core.keyed_lock import keyed_lock
+    from app.models import inventory
+    from app.models.character import get_character_language
+
+    item_key = params.get("item")
+    ref = _target_ref(params, ctx, "item")
+    item_id = str((ref or {}).get("item_id") or "")
+    if not item_id:
+        raise EffectFailed(f"The item '{item_key}' does not exist yet")
+    item = inventory.get_item(item_id)
+    if item is None:
+        raise EffectFailed(f"The item '{item_key}' is gone")
+    to = _recipient(params, ctx)
+    quantity = int(params.get("quantity") or 1)
+    name = str(item.get("name") or "").strip() or item_id
+    with keyed_lock("character_profile", to):
+        ok = inventory.add_to_inventory(
+            to,
+            item_id,
+            quantity,
+            obtained_from=f"quest:{ctx.run['id']}",
+            obtained_method="quest_reward",
+        )
+    if not ok:
+        raise EffectFailed(f"{to} could not receive {name}: the inventory is full or the write failed")
+    try:
+        lang = get_character_language(to) or ""
+    except Exception:  # noqa: BLE001
+        lang = ""
+    item_label = localized(item, "name", lang) or item_id
+    if quantity == 1:
+        _notify(to, "You received {item}.", ctx.run, ctx.effect_key, item=item_label)
+    else:
+        _notify(to, "You received {quantity} × {item}.", ctx.run, ctx.effect_key,
+                quantity=quantity, item=item_label)
+    return [CreatedObject("grant", {"character": to, "item_id": item_id, "quantity": quantity}, f"{name} -> {to}")]
+
+
+def builtin_effect_types() -> list:
+    """Return the core's built-in quest effect types (registered under owner ``"core"``)."""
+    from app.core.quest_catalog import QuestType
+
+    return [
+        QuestType(
+            id="give_hint",
+            kind="effect",
+            label="Give a hint",
+            description="A character learns a hint as their own secret and may tell it to an adventurer who asks.",
+            params=(
+                {"key": "holder", "type": "role", "label": "Holder",
+                 "description": "Who knows the hint", "role_kinds": ["character"], "required": True},
+                {"key": "text", "type": "text", "label": "Hint",
+                 "description": "What the holder knows", "required": True},
+            ),
+            apply=_apply_give_hint,
+            object_kind="secret",
+        ),
+        QuestType(
+            id="reveal_secret",
+            kind="effect",
+            label="Reveal a secret",
+            description="A character learns a secret this quest created.",
+            params=(
+                {"key": "secret", "type": "target", "label": "Secret",
+                 "description": "The key of a hint effect",
+                 "role_kinds": [], "object_kinds": ["secret"], "required": True},
+                {"key": "to", "type": "role", "label": "To",
+                 "description": "Who learns it; empty = the avatar who did the step",
+                 "role_kinds": ["character"], "avatar_default": True},
+            ),
+            apply=_apply_reveal_secret,
+            object_kind="",
+        ),
+        QuestType(
+            id="change_stat",
+            kind="effect",
+            label="Change a stat",
+            description="Adds a value to a character's stat; never undone.",
+            params=(
+                {"key": "stat", "type": "str", "label": "Stat",
+                 "description": "The stat key", "required": True},
+                {"key": "delta", "type": "int", "label": "Change",
+                 "description": "-100 to 100", "min": -100, "max": 100, "step": 1, "required": True},
+                {"key": "to", "type": "role", "label": "Character",
+                 "description": "Whose stat; empty = the avatar who did the step",
+                 "role_kinds": ["character"], "avatar_default": True},
+            ),
+            apply=_apply_change_stat,
+            object_kind="stat",
+        ),
+        QuestType(
+            id="post_news",
+            kind="effect",
+            label="Post news",
+            description="Posts a news line, everywhere or at one place.",
+            params=(
+                {"key": "text", "type": "text", "label": "Text",
+                 "description": "The news line", "required": True},
+                {"key": "place", "type": "role", "label": "Place",
+                 "description": "Where it happens; empty = everywhere", "role_kinds": ["location"]},
+                {"key": "category", "type": "select", "label": "Category",
+                 "choices": ["ambient", "social", "disruption", "danger"],
+                 "choice_labels": ["Ambient", "Social", "Disruption", "Danger"],
+                 "default": "social"},
+                {"key": "ttl_hours", "type": "int", "label": "Lasts (game hours)",
+                 "description": "0 = until the quest ends", "min": 0, "max": 720, "step": 1, "default": 24},
+            ),
+            apply=_apply_post_news,
+            object_kind="event",
+        ),
+        QuestType(
+            id="narrate",
+            kind="effect",
+            label="Narrate",
+            description="A storyteller line next to a character that only players see.",
+            params=(
+                {"key": "text", "type": "text", "label": "Text",
+                 "description": "The line", "required": True},
+                {"key": "to", "type": "role", "label": "Next to",
+                 "description": "Who the line appears next to; empty = the avatar who did the step",
+                 "role_kinds": ["character"], "avatar_default": True},
+            ),
+            apply=_apply_narrate,
+            object_kind="",
+        ),
+        QuestType(
+            id="give_item",
+            kind="effect",
+            label="Give an item",
+            description="Puts an item into a character's inventory; taken back when the quest ends unless permanent.",
+            params=(
+                {"key": "item", "type": "target", "label": "Item",
+                 "description": "An item role or the key of an item effect",
+                 "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+                {"key": "to", "type": "role", "label": "To",
+                 "description": "Who receives it; empty = the avatar who did the step",
+                 "role_kinds": ["character"], "avatar_default": True},
+                {"key": "quantity", "type": "int", "label": "Quantity",
+                 "min": 1, "max": 20, "step": 1, "default": 1},
+            ),
+            apply=_apply_give_item,
+            object_kind="grant",
+        ),
+    ]

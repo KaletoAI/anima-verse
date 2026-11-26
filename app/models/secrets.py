@@ -32,7 +32,7 @@ SEVERITY_LABELS = {
 }
 
 VALID_CATEGORIES = ("personal", "relationship", "location", "criminal")
-VALID_SOURCES = ("manual", "generated", "discovered", "event", "conversation", "record")
+VALID_SOURCES = ("manual", "generated", "discovered", "event", "conversation", "record", "quest")
 
 KNOWN_PER_OWNER = 3
 KNOWN_TOTAL = 8
@@ -119,8 +119,11 @@ def _load_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str
         return []
 
 
-def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
-    """Save all secrets of a character's MIND to the DB."""
+def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]) -> bool:
+    """Save all secrets of a character's MIND to the DB.
+
+    Returns True after the transaction committed, False when it raised.
+    """
     character_name = mind_of(character_name)
     try:
         with transaction() as conn:
@@ -170,8 +173,10 @@ def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
                         "VALUES (?, ?, ?, ?)",
                         (character_name, secret.get("content", ""), visibility, meta_str),
                     )
+        return True
     except Exception as e:
         logger.error("_save_secrets DB error for %s: %s", character_name, e)
+        return False
 
 
 def list_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str, Any]]:
@@ -197,9 +202,14 @@ def add_secret(character_name: str,
     consequences_if_revealed: str = "",
     source: str = "manual",
     known_by: Optional[List[str]] = None,
-    source_ref: str = "") -> Dict[str, Any]:
+    source_ref: str = "",
+    secret_id: str = "") -> Dict[str, Any]:
     """Create a secret for a character — stored under its mind; a linked
-    body is recorded as the secret's ``body``."""
+    body is recorded as the secret's ``body``.
+
+    ``secret_id`` overrides the generated ``sec_<hex>`` id when non-empty
+    (used by idempotent writers such as quest effects that pre-mint the id).
+    """
     actor = character_name
     character_name = mind_of(actor)
     with keyed_lock("secrets", character_name):
@@ -213,7 +223,7 @@ def add_secret(character_name: str,
         now = utc_now_iso()
 
         secret = {
-            "id": f"sec_{uuid.uuid4().hex[:8]}",
+            "id": secret_id or f"sec_{uuid.uuid4().hex[:8]}",
             "content": content.strip(),
             "category": category,
             "severity": severity,
@@ -269,13 +279,14 @@ def update_secret(character_name: str,
 
 
 def delete_secret(character_name: str, secret_id: str) -> bool:
-    """Delete a secret by id."""
+    """Delete a secret by id. Returns True only when a row matched and the save succeeded."""
     character_name = mind_of(character_name)
     with keyed_lock("secrets", character_name):
         secrets = _load_secrets(character_name)
         new_secrets = [s for s in secrets if s.get("id") != secret_id]
         if len(new_secrets) < len(secrets):
-            _save_secrets(character_name, new_secrets)
+            if not _save_secrets(character_name, new_secrets):
+                return False
             logger.info("Secret deleted: %s", secret_id)
             return True
         return False
@@ -289,6 +300,9 @@ def add_known_by(character_name: str,
 
     discovered=True marks independent discovery. The owner and the knower
     are both taken as their minds (a body learns for its leader).
+    Returns False when the secret does not exist or the save failed.
+    When the knower was newly added and the save succeeded, emits
+    ``secret.learned`` once the emitting thread releases all locks.
     """
     character_name = mind_of(character_name)
     knower_name = mind_of(knower_name)
@@ -297,7 +311,8 @@ def add_known_by(character_name: str,
         for s in secrets:
             if s.get("id") == secret_id:
                 known_by = s.get("known_by", [])
-                if knower_name not in known_by:
+                newly_learned = knower_name not in known_by
+                if newly_learned:
                     known_by.append(knower_name)
                     s["known_by"] = known_by
                     s.setdefault("known_at", {})[knower_name] = game_time().canonical()
@@ -308,7 +323,26 @@ def add_known_by(character_name: str,
                         s["discovered_by"] = discovered_by
                     if not s.get("discovered_at"):
                         s["discovered_at"] = utc_now_iso()
-                _save_secrets(character_name, secrets)
+                if not _save_secrets(character_name, secrets):
+                    return False
+                if newly_learned:
+                    from app.core.hooks import emit
+                    from app.core.keyed_lock import _after_locks
+                    _owner = character_name
+                    _sid = secret_id
+                    _knower = knower_name
+                    _disc = bool(discovered)
+                    _ref = s.get("source_ref") or ""
+                    _after_locks(
+                        lambda _o=_owner, _s=_sid, _k=_knower, _d=_disc, _r=_ref: emit(
+                            "secret.learned",
+                            owner=_o,
+                            secret_id=_s,
+                            knower=_k,
+                            discovered=_d,
+                            source_ref=_r,
+                        )
+                    )
                 logger.info("Secret %s: %s knows it now (discovered=%s)",
                             secret_id, knower_name, discovered)
                 return True

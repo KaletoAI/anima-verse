@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Smoke: the quest effects worker (`app/core/quest_effects.py`) and object registry (`app/core/quest_objects.py`).
 
-Quest system stage 2, Task 4 (D8-D12, rulings a-e). Throwaway storage (`paths.init(<tmpdir>)` BEFORE any world-DB
-module), no server, no LLM, no media. `quest_engine.register()` is NOT called (the smoke drives `evaluate`, `tick`
-and `pass_once` directly, except in (k) which starts the `quest-effects` thread).
+Quest system stage 2, Tasks 4 & 5 (D5, D8-D13, rulings a-e, marker fix, 6 real effects). Throwaway storage
+(`paths.init(<tmpdir>)` BEFORE any world-DB module), no server, no LLM, no media. `quest_engine.register()` is NOT
+called until the final section (t) (all earlier sections drive `evaluate`, `tick` and `pass_once` directly, except
+(k) which starts the `quest-effects` thread).
 
 Usage:
     ./.venv/bin/python scripts/smoke_quest_effects.py
@@ -93,6 +94,62 @@ WHAT FOLLOWS BY HAND (plan D8-D12, Task 4 brief)
      - Start a setup run -> within 5 s (without calling pass_once) it becomes "open".
      - quest_effects.stop() -> thread is no longer alive.
  (static) app/server.py source contains "quest_effects.start()" and "quest_effects.stop()".
+ (l) Marker fix: setup `[o: t.once, b: t.busy]` with BUSY on:
+     - 3 passes -> t.once calls == 1, run "preparing", issues [], rows [("o", "marker", "live", True)].
+     - retry -> False; 1 more pass -> t.once calls still 1.
+     - BUSY off; pass -> state "open", t.once calls still 1, rows [("o","marker","live",True), ("b","marker","live",True)].
+     - cancel; pass -> both marker rows stay "live" (permanent).
+ (m) give_hint: setup `[hint: give_hint holder "giver" text "The box lies in {place}."]` (giver N, place L1/r1 "Front"):
+     - pass -> open; 1 row ("hint", "secret", "live") ref owner "N"; get_secret has content "The box lies in Front.",
+       source "quest", source_ref "quest_run:<id>", severity 1, category "personal".
+     - cancel; pass -> row "reverted", get_secret -> None.
+ (n) reveal_secret + secret.learned: setup `[hint: give_hint holder "giver" text "Under the roots."]`,
+     steps [s1 at_place L1/r2 on_done [tell: reveal_secret secret "hint"], s2 at_place L1/r1]:
+     - pass opens run; A to L1/r2, evaluate("A") -> step 0 done; pass -> payout step:0 "applied",
+       secrets.knows(get_secret("N", sid), "A") True, 1 secret.learned event {owner "N", secret_id sid, knower "A",
+       discovered False, source_ref "quest_run:<id>"}, rows for "tell" == [("tell", "marker")], quest notification
+       "You learned something: Under the roots.". Another pass -> no second event.
+ (o) change_stat:
+     - (1) reward `[boost: change_stat stat "focus" delta 5]` for A (focus 40) -> focus 45, row ("boost","stat","live",
+       True) ref {"character":"A","changes":{"focus":{"old":40,"new":45}}}, quest notification "Your focus changed by +5.".
+     - (2) reward `[boost: change_stat stat "nostat" delta 5]` -> payout "failed" with issue
+       {"path": "rewards.0", "code": "effect_failed", "message": "A has no stat nostat"}.
+     - (3) setup `[st: change_stat stat "focus" delta -3 to "giver"]` (N focus 10) -> N focus 7, open; cancel; pass ->
+       row "reverted", N focus still 7 (never undone).
+ (p) post_news: setup `[g: post_news text "Fair in the land"]`,
+     `[l: post_news text "Fair at {town}" place "town" category "danger" ttl_hours 0]` (town L2 "Yard"):
+     - g: location_id None, category "social", ttl_hours 24, expires_at == game_ts + 24h, metadata {"quest_run": id}.
+     - l: location_id "L2", category "danger", expires_at None, text "Fair at Yard".
+     - cancel; pass -> both "reverted", event_exists False for both.
+ (q) narrate: step 0 on_done `[line: narrate text "You remember the hollow."]`:
+     - pass -> payout applied; 1 utterance in L1/r2 with speaker "Storyteller", content "You remember the hollow.",
+       meta display_only True and quest True; no utterance.heard event; rows for "line" == [("line", "marker")].
+ (r) give_item:
+     - (1) step 0 on_done `[gift: give_item item "thing"]` (Lamp): pass -> qty 1, 1 inventory.changed delta +1,
+       row ("gift","grant","live") ref {"character":"A","item_id":lamp_id,"quantity":1}, quest notification
+       "You received Lamp."; cancel; pass -> "reverted", qty 0, 1 inventory.changed delta -1.
+     - (2) Full NPC (20 distinct items), setup `[gift: give_item item "thing" to "giver"]` -> run stays "preparing"
+       with issue {"path": "setup_effects.0", "code": "effect_failed",
+       "message": "Full could not receive Lamp: the inventory is full or the write failed"}.
+ (s) validation (validate_template):
+     - setup give_item without "to" -> 1 issue ("setup_effects.0.params.to", "required"); same in steps[0].on_done or
+       rewards (permanent True) -> no issue at that path.
+     - setup reveal_secret without "to" -> ("setup_effects.1.params.to", "required"); with "to": "giver" -> none.
+ (t) engine listens: "secret.learned" in qe.SIGNALS; monkeypatch qe.evaluate, qe.register(), add_secret + add_known_by
+     for A, qe.drain() -> recorder got ("A", "secret.learned").
+ (u) change_stat atomicity with a concurrent stat writer:
+     - reset A focus to 40; monkeypatch adjust_status_effects so the first "quest:" call spawns a concurrent
+       thread calling the original adjust_status_effects("A", {"focus": 1}, source="test") and waits 0.5 s for it.
+     - reward `[boost: change_stat stat "focus" delta 5]` on A -> pass_once(), join thread:
+       writer_done_inside is False (concurrent writer blocked until lock released); A focus == 46 (40 + 5 + 1);
+       boost row == [("boost", "stat", "live", True, {"character": "A", "changes": {"focus": {"old": 40, "new": 45}}})];
+       payouts == [("reward", "applied")]; extra pass_once() -> focus still 46, still 1 "boost" row.
+ (v) post_news that expires on schedule does not break its quest:
+     - setup `[g: post_news text "Short fair" ttl_hours 1]` (step s1 at_place L1/r2 while A is at L2/s1):
+       pass_once() -> state "open", g row ref == {"event_id": v_eid, "expires_at": game_ts + 1h}.
+     - advance game clock to game_ts + 2h -> expire_events() >= 1, event_exists(v_eid) is False.
+     - two qe.tick() calls -> (state, issues) == ("open", []), g row status stays "live".
+     - cancel_run + pass_once() -> g row status == "gone" (already absent when cleaned up).
 """
 import os
 import sys
@@ -132,9 +189,10 @@ def main() -> int:
     from app.core import db, hooks, quest_book, quest_catalog as qc, quest_effects as qfx
     from app.core import quest_engine as qe, quest_objects as qo, quest_types as qt
     from app.core.game_time import GameDuration, GameTime
+    from app.core.keyed_lock import keyed_lock
     from app.core.timeutils import set_game_time
     from app.core.users import create_user, update_user
-    from app.models import character as chars, events, inventory, quests, world
+    from app.models import character as chars, events, inventory, notifications, perception_store, quests, secrets, world
 
     db.init_schema()
     qt.register()
@@ -149,6 +207,13 @@ def main() -> int:
     for name in ("A", "N", "Gil"):
         assert chars.save_character_profile(
             name, {"current_location": "L2", "current_room": "s1"}, create_new=True), name
+    for name, focus_val in (("A", 40), ("N", 10)):
+        with keyed_lock("character_profile", name):
+            prof = chars.get_character_profile(name)
+            prof["status_effects"] = {"focus": focus_val}
+            if name == "A":
+                prof["language"] = "en"
+            assert chars.save_character_profile(name, prof), name
     uid = create_user("demo", "smoke-password", allowed_characters=["A"])
     update_user(uid, settings={"active_character": "A"})
     lamp_id = inventory.add_item("Lamp")["id"]
@@ -159,6 +224,8 @@ def main() -> int:
     CALLS = []
     SLOW = {"done": False, "calls": 0}
     FAIL = {"on": True, "calls": 0}
+    ONCE = {"calls": 0}
+    BUSY = {"on": True}
 
     qo.register_kind(
         "t_slow",
@@ -182,6 +249,15 @@ def main() -> int:
             raise qfx.EffectFailed("stub failure")
         return []
 
+    def _apply_once(params, ctx):
+        ONCE["calls"] += 1
+        return []
+
+    def _apply_busy(params, ctx):
+        if BUSY["on"]:
+            raise qfx.EffectFailed("busy", retryable=True)
+        return []
+
     STUBS = [
         qc.QuestType(
             id="t.make", kind="effect", label="Make event", description="stub make",
@@ -195,6 +271,14 @@ def main() -> int:
         qc.QuestType(
             id="t.fail", kind="effect", label="Fail effect", description="stub fail",
             params=(), apply=_apply_fail, object_kind="",
+        ),
+        qc.QuestType(
+            id="t.once", kind="effect", label="Once effect", description="stub once",
+            params=(), apply=_apply_once, object_kind="",
+        ),
+        qc.QuestType(
+            id="t.busy", kind="effect", label="Busy effect", description="stub busy",
+            params=(), apply=_apply_busy, object_kind="",
         ),
     ]
     qc.register("test", lambda: STUBS)
@@ -593,6 +677,474 @@ def main() -> int:
         server_src = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
         check("server calls quest_effects.start()", "quest_effects.start()" in server_src, True)
         check("server calls quest_effects.stop()", "quest_effects.stop()" in server_src, True)
+        end_and_clean(rk["id"])
+
+        # (l) ----------------------------------------------------------------------------------
+        section("(l)", "marker fix prevents re-applying objectless effects")
+        ONCE["calls"] = 0
+        BUSY["on"] = True
+        tpl_l = mk_tpl("Marker L", setup_effects=[
+            {"key": "o", "type": "t.once", "params": {}},
+            {"key": "b", "type": "t.busy", "params": {}},
+        ])
+        rl = qe.start_run(tpl_l["id"], mk_bindings())
+        qfx.pass_once()
+        qfx.pass_once()
+        qfx.pass_once()
+        rl_mid = quests.get_run(rl["id"])
+        rows_l1 = [(o["effect_key"], o["kind"], o["status"], bool(o["permanent"]))
+                   for o in quests.list_objects(rl["id"])]
+        check("after 3 passes: once==1, preparing, issues [], marker row for o",
+              (ONCE["calls"], rl_mid["state"], rl_mid["issues"], rows_l1),
+              (1, "preparing", [], [("o", "marker", "live", True)]))
+        check("retry returns False (nothing failed)", qfx.retry(rl["id"]), False)
+        qfx.pass_once()
+        check("once still 1 after extra pass", ONCE["calls"], 1)
+        BUSY["on"] = False
+        qfx.pass_once()
+        rows_l2 = [(o["effect_key"], o["kind"], o["status"], bool(o["permanent"]))
+                   for o in quests.list_objects(rl["id"])]
+        check("after busy off: open, once==1, both markers live",
+              (quests.get_run(rl["id"])["state"], ONCE["calls"], rows_l2),
+              ("open", 1, [("o", "marker", "live", True), ("b", "marker", "live", True)]))
+        qe.cancel_run(rl["id"])
+        qfx.pass_once()
+        check("markers stay live after cancel cleanup",
+              [o["status"] for o in quests.list_objects(rl["id"])], ["live", "live"])
+
+        # (m) ----------------------------------------------------------------------------------
+        section("(m)", "give_hint creates a quest secret and reverts it on cancel")
+        tpl_m = mk_tpl("Hint M", setup_effects=[
+            {"key": "hint", "type": "give_hint",
+             "params": {"holder": "giver", "text": "The box lies in {place}."}},
+        ])
+        rm = qe.start_run(tpl_m["id"], mk_bindings(place=("L1", "r1"), giver="N"))
+        qfx.pass_once()
+        objs_m = quests.list_objects(rm["id"])
+        check("run open and 1 live secret row",
+              (quests.get_run(rm["id"])["state"],
+               [(o["effect_key"], o["kind"], o["status"]) for o in objs_m],
+               objs_m[0]["ref"].get("owner") if objs_m else None),
+              ("open", [("hint", "secret", "live")], "N"))
+        m_sid = objs_m[0]["ref"]["secret_id"]
+        m_sec = secrets.get_secret("N", m_sid)
+        check("stored secret fields",
+              (m_sec["content"], m_sec["source"], m_sec["source_ref"], m_sec["severity"], m_sec["category"]),
+              ("The box lies in Front.", "quest", f"quest_run:{rm['id']}", 1, "personal"))
+        qe.cancel_run(rm["id"])
+        qfx.pass_once()
+        check("reverted and secret deleted",
+              ([o["status"] for o in quests.list_objects(rm["id"])], secrets.get_secret("N", m_sid)),
+              (["reverted"], None))
+
+        # (n) ----------------------------------------------------------------------------------
+        section("(n)", "reveal_secret tells the avatar, emits secret.learned, and notifies")
+        tpl_n = mk_tpl(
+            "Reveal N",
+            roles=ROLES + [{"key": "place2", "kind": "room", "description": "other"}],
+            setup_effects=[
+                {"key": "hint", "type": "give_hint",
+                 "params": {"holder": "giver", "text": "Under the roots."}},
+            ],
+            steps=[
+                {"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                 "on_done": [{"key": "tell", "type": "reveal_secret", "params": {"secret": "hint"}}]},
+                {"id": "s2", "text": "Go front.",
+                 "condition": {"type": "at_place", "params": {"place": "place2"}}},
+            ],
+        )
+        rn = qe.start_run(tpl_n["id"], mk_bindings(
+            place=("L1", "r2"), giver="N", extra={"place2": {"location_id": "L1", "room_id": "r1"}}))
+        qfx.pass_once()
+        n_sid = [o for o in quests.list_objects(rn["id"]) if o["effect_key"] == "hint"][0]["ref"]["secret_id"]
+        move_a("L1", "r2")
+        qe.evaluate("A")
+        check("step 0 done", quests.get_run(rn["id"])["current_step"], 1)
+
+        n_events = []
+        n_active = [True]
+
+        def _on_n_learned(**kw):
+            if n_active[0]:
+                n_events.append(kw)
+
+        hooks.register("secret.learned", _on_n_learned, tag="smoke_fx")
+        try:
+            qfx.pass_once()
+            pays_n = {p["position"]: p["state"] for p in quests.list_payouts(states=(), run_id=rn["id"])}
+            check("step:0 payout applied", pays_n.get("step:0"), "applied")
+            check("A knows secret", secrets.knows(secrets.get_secret("N", n_sid), "A"), True)
+            check("secret.learned payload", n_events, [{
+                "owner": "N", "secret_id": n_sid, "knower": "A",
+                "discovered": False, "source_ref": f"quest_run:{rn['id']}",
+            }])
+            tell_rows = [(o["effect_key"], o["kind"]) for o in quests.list_objects(rn["id"])
+                         if o["effect_key"] == "tell"]
+            check("tell marker row", tell_rows, [("tell", "marker")])
+            notifs_n = [n["content"] for n in notifications.get_notifications(character_whitelist=["A"])
+                        if n.get("type") == "quest"
+                        and (n.get("metadata") or {}).get("run_id") == rn["id"]
+                        and (n.get("metadata") or {}).get("effect") == "tell"]
+            check("reveal notification", notifs_n, ["You learned something: Under the roots."])
+            qfx.pass_once()
+            check("no second event on extra pass", len(n_events), 1)
+        finally:
+            n_active[0] = False
+        move_a("L2", "s1")
+        end_and_clean(rn["id"])
+
+        # (o) ----------------------------------------------------------------------------------
+        section("(o)", "change_stat updates, validates missing stat, and is never undone")
+        tpl_o1 = mk_tpl(
+            "Stat O1",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE}],
+            rewards=[{"key": "boost", "type": "change_stat",
+                      "params": {"stat": "focus", "delta": 5}, "permanent": True}],
+        )
+        ro1 = qe.start_run(tpl_o1["id"], mk_bindings(place=("L1", "r2")))
+        move_a("L1", "r2")
+        qe.evaluate("A")
+        check("o1 done", quests.get_run(ro1["id"])["state"], "done")
+        qfx.pass_once()
+        check("A focus is 45", chars.get_character_profile("A")["status_effects"]["focus"], 45)
+        objs_o1 = quests.list_objects(ro1["id"])
+        check("boost stat row",
+              [(o["effect_key"], o["kind"], o["status"], bool(o["permanent"]), o["ref"]) for o in objs_o1],
+              [("boost", "stat", "live", True, {"character": "A", "changes": {"focus": {"old": 40, "new": 45}}})])
+        notifs_o1 = [n["content"] for n in notifications.get_notifications(character_whitelist=["A"])
+                     if n.get("type") == "quest"
+                     and (n.get("metadata") or {}).get("run_id") == ro1["id"]
+                     and (n.get("metadata") or {}).get("effect") == "boost"]
+        check("stat notification", notifs_o1, ["Your focus changed by +5."])
+
+        tpl_o2 = mk_tpl(
+            "Stat O2",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE}],
+            rewards=[{"key": "boost", "type": "change_stat",
+                      "params": {"stat": "nostat", "delta": 5}, "permanent": True}],
+        )
+        ro2 = qe.start_run(tpl_o2["id"], mk_bindings(place=("L1", "r2")))
+        qe.evaluate("A")
+        qfx.pass_once()
+        pays_o2 = quests.list_payouts(states=(), run_id=ro2["id"])
+        check("o2 reward failed with missing stat issue",
+              [(p["position"], p["state"], p["issues"]) for p in pays_o2],
+              [("reward", "failed", [{"path": "rewards.0", "code": "effect_failed", "message": "A has no stat nostat"}])])
+        move_a("L2", "s1")
+
+        tpl_o3 = mk_tpl(
+            "Stat O3",
+            setup_effects=[{"key": "st", "type": "change_stat",
+                            "params": {"stat": "focus", "delta": -3, "to": "giver"}}],
+        )
+        ro3 = qe.start_run(tpl_o3["id"], mk_bindings(giver="N"))
+        qfx.pass_once()
+        check("o3 open and N focus 7",
+              (quests.get_run(ro3["id"])["state"], chars.get_character_profile("N")["status_effects"]["focus"]),
+              ("open", 7))
+        qe.cancel_run(ro3["id"])
+        qfx.pass_once()
+        check("o3 reverted but N focus still 7",
+              ([o["status"] for o in quests.list_objects(ro3["id"])],
+               chars.get_character_profile("N")["status_effects"]["focus"]),
+              (["reverted"], 7))
+
+        # (p) ----------------------------------------------------------------------------------
+        section("(p)", "post_news global + local events and cleanup")
+        tpl_p = mk_tpl(
+            "News P",
+            roles=ROLES + [{"key": "town", "kind": "location", "description": "town"}],
+            setup_effects=[
+                {"key": "g", "type": "post_news", "params": {"text": "Fair in the land"}},
+                {"key": "l", "type": "post_news",
+                 "params": {"text": "Fair at {town}", "place": "town", "category": "danger", "ttl_hours": 0}},
+            ],
+        )
+        rp = qe.start_run(tpl_p["id"], mk_bindings(extra={"town": {"location_id": "L2"}}))
+        qfx.pass_once()
+        objs_p = {o["effect_key"]: o for o in quests.list_objects(rp["id"])}
+        g_eid = objs_p["g"]["ref"]["event_id"]
+        l_eid = objs_p["l"]["ref"]["event_id"]
+        g_ev = events.get_event(g_eid)
+        l_ev = events.get_event(l_eid)
+        want_g_exp = (GameTime.parse(g_ev["game_ts"]) + GameDuration.of(hours=24)).canonical()
+        check("global news fields",
+              (g_ev["location_id"], g_ev["category"], g_ev["ttl_hours"], g_ev["expires_at"], g_ev["metadata"]),
+              (None, "social", 24, want_g_exp, {"quest_run": rp["id"]}))
+        check("local news fields",
+              (l_ev["location_id"], l_ev["category"], l_ev["expires_at"], l_ev["text"]),
+              ("L2", "danger", None, "Fair at Yard"))
+        qe.cancel_run(rp["id"])
+        qfx.pass_once()
+        check("both news reverted and deleted",
+              ([o["status"] for o in quests.list_objects(rp["id"])],
+               events.event_exists(g_eid), events.event_exists(l_eid)),
+              (["reverted", "reverted"], False, False))
+
+        # (q) ----------------------------------------------------------------------------------
+        section("(q)", "narrate writes display_only storyteller utterance without utterance.heard")
+        tpl_q = mk_tpl(
+            "Narrate Q",
+            roles=ROLES + [{"key": "place2", "kind": "room", "description": "other"}],
+            steps=[
+                {"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                 "on_done": [{"key": "line", "type": "narrate", "params": {"text": "You remember the hollow."}}]},
+                {"id": "s2", "text": "Go front.",
+                 "condition": {"type": "at_place", "params": {"place": "place2"}}},
+            ],
+        )
+        rq = qe.start_run(tpl_q["id"], mk_bindings(
+            place=("L1", "r2"), extra={"place2": {"location_id": "L1", "room_id": "r1"}}))
+        q_heard = []
+        q_active = [True]
+
+        def _on_q_heard(**kw):
+            if q_active[0]:
+                q_heard.append(kw)
+
+        hooks.register("utterance.heard", _on_q_heard, tag="smoke_fx")
+        try:
+            move_a("L1", "r2")
+            qe.evaluate("A")
+            qfx.pass_once()
+            pays_q = {p["position"]: p["state"] for p in quests.list_payouts(states=(), run_id=rq["id"])}
+            check("step:0 payout applied", pays_q.get("step:0"), "applied")
+            utts = [u for u in perception_store.get_room_utterances("L1", "r2")
+                    if u.get("speaker") == "Storyteller" and u.get("content") == "You remember the hollow."]
+            check("exactly one storyteller utterance with display_only & quest meta",
+                  (len(utts), (utts[0]["meta"].get("display_only") if utts else None),
+                   (utts[0]["meta"].get("quest") if utts else None)),
+                  (1, True, True))
+            check("no utterance.heard event", q_heard, [])
+            line_rows = [(o["effect_key"], o["kind"]) for o in quests.list_objects(rq["id"])
+                         if o["effect_key"] == "line"]
+            check("line marker row", line_rows, [("line", "marker")])
+        finally:
+            q_active[0] = False
+        move_a("L2", "s1")
+        end_and_clean(rq["id"])
+
+        # (r) ----------------------------------------------------------------------------------
+        section("(r)", "give_item grants, notifies, reclaims on cancel, and fails on full inventory")
+        tpl_r1 = mk_tpl(
+            "Give R1",
+            roles=ROLES + [{"key": "place2", "kind": "room", "description": "other"}],
+            steps=[
+                {"id": "s1", "text": "Go back.", "condition": AT_PLACE,
+                 "on_done": [{"key": "gift", "type": "give_item", "params": {"item": "thing"}}]},
+                {"id": "s2", "text": "Go front.",
+                 "condition": {"type": "at_place", "params": {"place": "place2"}}},
+            ],
+        )
+        rr1 = qe.start_run(tpl_r1["id"], mk_bindings(
+            place=("L1", "r2"), thing=lamp_id, extra={"place2": {"location_id": "L1", "room_id": "r1"}}))
+        r_inv = []
+        r_active = [True]
+
+        def _on_r_inv(**kw):
+            if r_active[0]:
+                r_inv.append(kw)
+
+        hooks.register("inventory.changed", _on_r_inv, tag="smoke_fx")
+        try:
+            move_a("L1", "r2")
+            qe.evaluate("A")
+            qfx.pass_once()
+            check("A holds 1 Lamp", inventory.get_item_quantity("A", lamp_id), 1)
+            check("inventory.changed +1", r_inv, [{"character": "A", "item_id": lamp_id, "delta": 1}])
+            objs_r1 = quests.list_objects(rr1["id"])
+            check("grant row",
+                  [(o["effect_key"], o["kind"], o["status"], o["ref"]) for o in objs_r1],
+                  [("gift", "grant", "live", {"character": "A", "item_id": lamp_id, "quantity": 1})])
+            notifs_r1 = [n["content"] for n in notifications.get_notifications(character_whitelist=["A"])
+                         if n.get("type") == "quest"
+                         and (n.get("metadata") or {}).get("run_id") == rr1["id"]
+                         and (n.get("metadata") or {}).get("effect") == "gift"]
+            check("gift notification", notifs_r1, ["You received Lamp."])
+            r_inv.clear()
+            qe.cancel_run(rr1["id"])
+            qfx.pass_once()
+            check("reclaimed on cancel",
+                  ([o["status"] for o in quests.list_objects(rr1["id"])],
+                   inventory.get_item_quantity("A", lamp_id), r_inv),
+                  (["reverted"], 0, [{"character": "A", "item_id": lamp_id, "delta": -1}]))
+        finally:
+            r_active[0] = False
+        move_a("L2", "s1")
+
+        assert chars.save_character_profile(
+            "Full", {"current_location": "L2", "current_room": "s1"}, create_new=True), "Full"
+        with keyed_lock("character_profile", "Full"):
+            for idx in range(20):
+                jid = inventory.add_item(f"Junk {idx}")["id"]
+                assert inventory.add_to_inventory("Full", jid, 1), f"Junk {idx}"
+        tpl_r2 = mk_tpl(
+            "Give R2",
+            setup_effects=[{"key": "gift", "type": "give_item", "params": {"item": "thing", "to": "giver"}}],
+        )
+        rr2 = qe.start_run(tpl_r2["id"], mk_bindings(thing=lamp_id, giver="Full"))
+        qfx.pass_once()
+        rr2_after = quests.get_run(rr2["id"])
+        check("full inventory leaves preparing with effect_failed issue",
+              (rr2_after["state"], rr2_after["issues"]),
+              ("preparing", [{"path": "setup_effects.0", "code": "effect_failed",
+                              "message": "Full could not receive Lamp: the inventory is full or the write failed"}]))
+        end_and_clean(rr2["id"])
+
+        # (s) ----------------------------------------------------------------------------------
+        section("(s)", "validation refuses avatar_default left empty in setup_effects")
+        base_tpl = {
+            "title": "Val S",
+            "roles": ROLES,
+            "steps": [{"id": "s1", "text": "Go.", "condition": AT_PLACE}],
+        }
+        iss_s1 = qe.validate_template({
+            **base_tpl,
+            "setup_effects": [{"key": "gift", "type": "give_item", "params": {"item": "thing"}}],
+        })
+        check("setup give_item without to -> 1 required issue",
+              [(i["path"], i["code"]) for i in iss_s1],
+              [("setup_effects.0.params.to", "required")])
+        iss_s2 = qe.validate_template({
+            **base_tpl,
+            "steps": [{"id": "s1", "text": "Go.", "condition": AT_PLACE,
+                       "on_done": [{"key": "gift", "type": "give_item", "params": {"item": "thing"}}]}],
+        })
+        check("on_done give_item without to -> no issue", iss_s2, [])
+        iss_s3 = qe.validate_template({
+            **base_tpl,
+            "rewards": [{"key": "gift", "type": "give_item", "params": {"item": "thing"}, "permanent": True}],
+        })
+        check("reward give_item without to -> no issue", iss_s3, [])
+        iss_s4 = qe.validate_template({
+            **base_tpl,
+            "setup_effects": [
+                {"key": "hint", "type": "give_hint", "params": {"holder": "giver", "text": "x"}},
+                {"key": "tell", "type": "reveal_secret", "params": {"secret": "hint"}},
+            ],
+        })
+        check("setup reveal_secret without to -> required issue",
+              [(i["path"], i["code"]) for i in iss_s4],
+              [("setup_effects.1.params.to", "required")])
+        iss_s5 = qe.validate_template({
+            **base_tpl,
+            "setup_effects": [
+                {"key": "hint", "type": "give_hint", "params": {"holder": "giver", "text": "x"}},
+                {"key": "tell", "type": "reveal_secret", "params": {"secret": "hint", "to": "giver"}},
+            ],
+        })
+        check("setup reveal_secret with to -> no issue", iss_s5, [])
+
+        # (t) ----------------------------------------------------------------------------------
+        section("(t)", "quest_engine listens to secret.learned")
+        check("secret.learned in SIGNALS", "secret.learned" in qe.SIGNALS, True)
+        recorded_evals = []
+        orig_eval = qe.evaluate
+        try:
+            qe.evaluate = lambda avatar, signal="": recorded_evals.append((avatar, signal)) or []
+            qe.register()
+            t_sid = secrets.add_secret("N", "Engine secret")["id"]
+            secrets.add_known_by("N", t_sid, "A")
+            qe.drain()
+        finally:
+            qe.evaluate = orig_eval
+        check("engine evaluated A on secret.learned", recorded_evals, [("A", "secret.learned")])
+
+        # (u) ----------------------------------------------------------------------------------
+        section("(u)", "change_stat is decided atomically with a concurrent stat writer")
+        cur = chars.get_character_profile("A")["status_effects"]["focus"]
+        if cur != 40:
+            chars.adjust_status_effects("A", {"focus": 40 - cur})
+        check("A focus reset to 40", chars.get_character_profile("A")["status_effects"]["focus"], 40)
+
+        orig_adjust = chars.adjust_status_effects
+        writer_done = threading.Event()
+        writer_state = {"spawned": False, "thread": None, "done_inside": None}
+
+        def _wrapped_adjust(*args, **kwargs):
+            res = orig_adjust(*args, **kwargs)
+            src = kwargs.get("source", "")
+            if not src and len(args) >= 3:
+                src = args[2] or ""
+            if not writer_state["spawned"] and isinstance(src, str) and src.startswith("quest:"):
+                writer_state["spawned"] = True
+
+                def _concurrent_writer():
+                    orig_adjust("A", {"focus": 1}, source="test")
+                    writer_done.set()
+
+                t = threading.Thread(target=_concurrent_writer)
+                writer_state["thread"] = t
+                t.start()
+                writer_state["done_inside"] = writer_done.wait(0.5)
+            return res
+
+        chars.adjust_status_effects = _wrapped_adjust
+        try:
+            tpl_u = mk_tpl(
+                "Stat U",
+                steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE}],
+                rewards=[{"key": "boost", "type": "change_stat",
+                          "params": {"stat": "focus", "delta": 5}, "permanent": True}],
+            )
+            ru = qe.start_run(tpl_u["id"], mk_bindings(place=("L1", "r2")))
+            move_a("L1", "r2")
+            qe.evaluate("A")
+            qfx.pass_once()
+            if writer_state["thread"] is not None:
+                writer_state["thread"].join(5.0)
+            check("concurrent writer blocked inside lock", writer_state["done_inside"], False)
+            check("A focus is 46 (40 + 5 + 1)", chars.get_character_profile("A")["status_effects"]["focus"], 46)
+            objs_u = quests.list_objects(ru["id"])
+            check("boost stat row",
+                  [(o["effect_key"], o["kind"], o["status"], bool(o["permanent"]), o["ref"]) for o in objs_u],
+                  [("boost", "stat", "live", True, {"character": "A", "changes": {"focus": {"old": 40, "new": 45}}})])
+            pays_u = quests.list_payouts(states=(), run_id=ru["id"])
+            check("reward payout applied",
+                  [(p["position"], p["state"]) for p in pays_u],
+                  [("reward", "applied")])
+            qfx.pass_once()
+            check("A focus still 46 after extra pass",
+                  chars.get_character_profile("A")["status_effects"]["focus"], 46)
+            check("still one boost row after extra pass",
+                  len([o for o in quests.list_objects(ru["id"]) if o["effect_key"] == "boost"]), 1)
+        finally:
+            chars.adjust_status_effects = orig_adjust
+            if writer_state["thread"] is not None and writer_state["thread"].is_alive():
+                writer_state["thread"].join(5.0)
+            move_a("L2", "s1")
+
+        # (v) ----------------------------------------------------------------------------------
+        section("(v)", "post_news that expires on schedule does not break its quest")
+        tpl_v = mk_tpl(
+            "News V",
+            steps=[{"id": "s1", "text": "Go back.", "condition": AT_PLACE}],
+            setup_effects=[{"key": "g", "type": "post_news",
+                            "params": {"text": "Short fair", "ttl_hours": 1}}],
+        )
+        rv = qe.start_run(tpl_v["id"], mk_bindings(place=("L1", "r2")))
+        qfx.pass_once()
+        check("run open", quests.get_run(rv["id"])["state"], "open")
+        objs_v = {o["effect_key"]: o for o in quests.list_objects(rv["id"])}
+        v_eid = objs_v["g"]["ref"]["event_id"]
+        ev_v = events.get_event(v_eid)
+        want_v_exp = (GameTime.parse(ev_v["game_ts"]) + GameDuration.of(hours=1)).canonical()
+        check("g row ref carries event_id and expires_at",
+              objs_v["g"]["ref"], {"event_id": v_eid, "expires_at": want_v_exp})
+        set_game_time(GameTime.parse(ev_v["game_ts"]) + GameDuration.of(hours=2))
+        check("expire_events swept >= 1", events.expire_events() >= 1, True)
+        check("event_exists is False after expiry", events.event_exists(v_eid), False)
+        qe.tick()
+        qe.tick()
+        rv_after = quests.get_run(rv["id"])
+        check("run stays open with no issues after two ticks",
+              (rv_after["state"], rv_after.get("issues") or []), ("open", []))
+        check("g row still live",
+              {o["effect_key"]: o["status"] for o in quests.list_objects(rv["id"])}.get("g"), "live")
+        qe.cancel_run(rv["id"])
+        qfx.pass_once()
+        check("g row gone after cancel cleanup",
+              {o["effect_key"]: o["status"] for o in quests.list_objects(rv["id"])}.get("g"), "gone")
     finally:
         qfx._reset_for_tests()
         hooks.unregister_owned_providers("test")

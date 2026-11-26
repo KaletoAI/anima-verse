@@ -250,6 +250,7 @@ def _role(key: str, label: str, kinds: List[str], description: str) -> Dict[str,
 
 
 def _builtin_types() -> list:
+    from app.core import quest_effects
     from app.core.quest_catalog import QuestType
     return [
         QuestType(
@@ -300,6 +301,7 @@ def _builtin_types() -> list:
                     {"key": "strength", "type": "int", "label": "Strength", "description": "0 to 100",
                      "min": 0, "max": 100, "step": 1, "required": True}),
             evaluate=_relationship_at_least),
+        *quest_effects.builtin_effect_types(),
     ]
 
 

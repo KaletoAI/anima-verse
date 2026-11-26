@@ -59,7 +59,7 @@ logger = get_logger("quest_engine")
 
 HOOK_TAG = "quest_engine"
 #: The hook events the engine subscribes to (D9).
-SIGNALS = ("character.entered_room", "inventory.changed", "utterance.heard", "world_tick")
+SIGNALS = ("character.entered_room", "inventory.changed", "utterance.heard", "secret.learned", "world_tick")
 #: The run states the engine evaluates.
 LIVE_STATES = ("hidden", "open")
 #: The lock reason when the author left ``locked_text`` empty (D8).
@@ -444,6 +444,7 @@ def validate_template(template: dict) -> list[dict]:
             path=prefix,
             reward=(position == "reward"),
             props_before=props_before,
+            setup=(position == "setup"),
         ))
         props_before += sum(1 for e in entries if isinstance(e, dict)
                             and e.get("type") == quest_catalog.CREATE_PROP_TYPE)
@@ -948,11 +949,25 @@ def _heard(payload: Dict[str, Any]) -> None:
         evaluate(avatar, "utterance.heard")
 
 
+def _learned(payload: Dict[str, Any]) -> None:
+    """A mind learned a secret: evaluate every avatar belonging to that mind."""
+    from app.core.linked_characters import mind_of
+    from app.models.account import get_all_avatars
+    knower = payload.get("knower") or ""
+    if not isinstance(knower, str) or not knower:
+        return
+    for avatar in sorted(get_all_avatars()):
+        if mind_of(avatar) == knower:
+            evaluate(avatar, "secret.learned")
+
+
 def _handle(event: str, payload: Dict[str, Any]) -> None:
     if event == "world_tick":
         tick()
     elif event == "utterance.heard":
         _heard(payload)
+    elif event == "secret.learned":
+        _learned(payload)
     elif isinstance(payload.get("character"), str) and payload["character"]:
         evaluate(payload["character"], event)
 
@@ -989,16 +1004,21 @@ def _on_utterance_heard(**payload: Any) -> None:
     _enqueue("utterance.heard", payload)
 
 
+def _on_secret_learned(**payload: Any) -> None:
+    _enqueue("secret.learned", payload)
+
+
 def _on_world_tick(**payload: Any) -> None:
     _enqueue("world_tick", payload)
 
 
 def register() -> None:
-    """Subscribe the four signals under the tag ``"quest_engine"`` (idempotent: the hook bus keys by event + tag)."""
+    """Subscribe the five signals under the tag ``"quest_engine"`` (idempotent: the hook bus keys by event + tag)."""
     from app.core import hooks
     hooks.register("character.entered_room", _on_entered_room, tag=HOOK_TAG)
     hooks.register("inventory.changed", _on_inventory_changed, tag=HOOK_TAG)
     hooks.register("utterance.heard", _on_utterance_heard, tag=HOOK_TAG)
+    hooks.register("secret.learned", _on_secret_learned, tag=HOOK_TAG)
     hooks.register("world_tick", _on_world_tick, tag=HOOK_TAG)
 
 

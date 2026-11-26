@@ -96,6 +96,7 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
         {"kind": o.get("kind"), "label": o.get("label") or "", "permanent": bool(o.get("permanent")),
          "status": o.get("status")}
         for o in quests.list_objects(run_id)
+        if o.get("kind") != "marker"
     ]
     payouts = [
         {"position": p.get("position"), "state": p.get("state"), "issues": p.get("issues") or []}
