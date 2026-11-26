@@ -139,8 +139,9 @@ def main() -> int:
         return (r.available, r.passed)
 
     def issues(type_id, kinds=("condition",), **params):
+        scope = qc.Scope({r["key"]: r["kind"] for r in roles}, {})
         return [(i["code"], i["path"]) for i in
-                qc.check_expression({"type": type_id, "params": params}, roles, allowed_kinds=kinds)]
+                qc.check_expression({"type": type_id, "params": params}, scope, allowed_kinds=kinds)]
 
     SECTION[0] = "[0]"
     print("[0] registration")

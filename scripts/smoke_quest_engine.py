@@ -139,6 +139,36 @@ WHAT FOLLOWS BY HAND
       contain ("steps.0.condition", "required").
     - Proof on the old code (pinned commit cd58910b6): its validate_template accepted ERRAND with
       steps[1].condition {} (-> []).
+ 24. "The big rock" — effect lists, target scope, placeholders, bindings, _unregistered (stage 2, Task 2):
+    Test stubs registered under owner "test" ahead of core (create_prop, create_item, place_item, give_hint, narrate,
+    give_item, eff_v; near_object, knows_secret, holds_item). Reference quest ROCK (roles giver/wood/glade; setup
+    rock/box/box_spot/hint; steps s1 near_object rock, s2 knows_secret hint + on_done told, s3 holds_item box; rewards
+    charm, charm_given):
+    - a. validate_template(ROCK) == [] (all targets reachable with accepted kinds; stat_bonuses has placeholders=False;
+      {glade}, {giver}, {wood} are roles).
+    - b. setup order rock, box_spot, box, hint -> [("setup_effects.1.params.item", "not_yet_created")] (box is created
+      at index 2, after box_spot at index 1; steps still see all setup keys).
+    - c. s1 condition object "hint" -> [("steps.0.condition.params.object", "wrong_kind")] (hint is a secret,
+      near_object accepts world_prop/room_prop/room_item).
+    - d. on_done key "told" renamed "rock" -> [("steps.1.on_done.0.key", "duplicate")] (cross-list duplicate).
+    - e. give_hint text "In {cave}." -> [("setup_effects.3.params.text", "unknown_role")].
+    - f. steps[1].on_done = "x" -> [("steps.1.on_done", "shape")]; setup_effects = {} -> [("setup_effects", "shape"),
+      ("steps.0.condition.params.object", "unknown_target"), ("steps.1.condition.params.secret", "unknown_target"),
+      ("steps.2.condition.params.item", "unknown_target")] (no setup key exists; rewards still see charm).
+    - g. 3 extra create_prop setup entries r2, r3, r4 -> rock+r2+r3 allowed (3), r4 is 4th ->
+      [("setup_effects.6.type", "too_many")].
+    - h. scope_at(ROCK, "step:1"): objects={rock:world_prop, box:item, box_spot:room_item, hint:secret},
+      later={told, charm, charm_given}; "step:2" adds told:"" (5 keys); "setup:2" has {rock, box}; "reward:1" has
+      4 setup + told + charm (6 keys) and later={charm_given}; "start".roles == {giver:character, wood:location,
+      glade:room}; "nonsense" raises ValueError.
+    - i. effect_positions(ROCK) -> [("setup_effects", "setup"), ("steps.1.on_done", "step:1"), ("rewards", "reward")].
+    - j. check_bindings with 5th setup entry eff_v -> validate_template == [], check_bindings ==
+      [("setup_effects.4.type", "eff_bound")].
+    - k. _unregistered: with stubs registered, owed=("setup","step:1","reward") -> []; after unregistering "test"
+      (core stays, so holds_item is registered), owed=() -> ["steps.0.condition.type", "steps.1.condition.type"];
+      owed=("setup",) -> those 2 + setup_effects.0..3.type (6 paths); owed=("step:1",) -> those 2 +
+      steps.1.on_done.0.type (3 paths).
+    - l. After restoring core: validate_template(ERRAND) == [].
 """
 import os
 import sys
@@ -731,15 +761,217 @@ def main() -> int:
         sys.modules[mod_name] = old_mod
         try:
             exec(compile(res.stdout, mod_name, "exec"), old_mod.__dict__)
+            old_mod.quest_catalog = types.SimpleNamespace(**{
+                **qc.__dict__,
+                "check_expression": lambda expr, roles, *, allowed_kinds: qc.check_expression(
+                    expr,
+                    qc.Scope({str(r["key"]): str(r["kind"]) for r in (roles or [])
+                              if isinstance(r, dict) and r.get("key")}, {}),
+                    allowed_kinds=allowed_kinds,
+                ),
+            })
             old_issues = old_mod.validate_template(empty_step1)
         finally:
             sys.modules.pop(mod_name, None)
         check("old code (cd58910b6) accepted empty step condition", old_issues, [])
 
+    # 24 ---------------------------------------------------------------------------------------
+    section("[24]", "The big rock — effect lists, target scope, bindings, _unregistered")
+    import copy
+    from app.core.activity_engine import ConditionIssue
+
+    def _s(tid, kind, params=(), **kw):
+        return qc.QuestType(id=tid, kind=kind, label=tid, description=f"stub {tid}", params=params, **kw)
+
+    ROCK_STUBS = [
+        _s("create_prop", "effect", object_kind="world_prop", params=(
+            {"key": "name", "type": "str", "required": True},
+            {"key": "prompt", "type": "text", "required": True},
+            {"key": "width_m", "type": "float", "min": 0.1, "max": 20},
+            {"key": "depth_m", "type": "float", "min": 0.1, "max": 20},
+            {"key": "height_m", "type": "float", "min": 0.1, "max": 20},
+            {"key": "room", "type": "role", "role_kinds": ["room"]},
+            {"key": "near", "type": "role", "role_kinds": ["location"]},
+            {"key": "offset_x", "type": "float", "min": -200, "max": 200},
+            {"key": "offset_z", "type": "float", "min": -200, "max": 200},
+            {"key": "yaw", "type": "int", "min": 0, "max": 359},
+        )),
+        _s("create_item", "effect", object_kind="item", params=(
+            {"key": "name", "type": "str", "required": True},
+            {"key": "description", "type": "text"},
+            {"key": "category", "type": "str"},
+            {"key": "consumable", "type": "bool"},
+            {"key": "effects", "type": "text", "placeholders": False},
+            {"key": "stat_bonuses", "type": "text", "placeholders": False},
+            {"key": "bonus_when", "type": "select", "choices": ["equipped", "carried"]},
+            {"key": "image_prompt", "type": "text"},
+        )),
+        _s("place_item", "effect", object_kind="room_item", params=(
+            {"key": "item", "type": "target", "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+            {"key": "room", "type": "role", "role_kinds": ["room"], "required": True},
+            {"key": "quantity", "type": "int", "min": 1, "max": 20, "default": 1},
+            {"key": "hidden", "type": "bool"},
+            {"key": "difficulty", "type": "int", "min": 0, "max": 10, "default": 0},
+            {"key": "note", "type": "str"},
+        )),
+        _s("give_hint", "effect", object_kind="secret", params=(
+            {"key": "holder", "type": "role", "role_kinds": ["character"], "required": True},
+            {"key": "text", "type": "text", "required": True},
+        )),
+        _s("narrate", "effect", object_kind="", params=(
+            {"key": "text", "type": "text", "required": True},
+            {"key": "to", "type": "role", "role_kinds": ["character"]},
+        )),
+        _s("give_item", "effect", object_kind="grant", params=(
+            {"key": "item", "type": "target", "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+            {"key": "to", "type": "role", "role_kinds": ["character"]},
+            {"key": "quantity", "type": "int", "min": 1, "max": 20, "default": 1},
+        )),
+        _s("eff_v", "effect", object_kind="",
+           validate=lambda params, bindings: [ConditionIssue("eff_bound", "bound check")] if bindings is not None else []),
+        _s("near_object", "condition", params=(
+            {"key": "object", "type": "target", "role_kinds": [],
+             "object_kinds": ["world_prop", "room_prop", "room_item"], "required": True},
+            {"key": "radius_m", "type": "float", "min": 1, "max": 200, "default": 10},
+        )),
+        _s("knows_secret", "condition", params=(
+            {"key": "secret", "type": "target", "role_kinds": [], "object_kinds": ["secret"], "required": True},
+        )),
+        _s("holds_item", "condition", params=(
+            {"key": "item", "type": "target", "role_kinds": ["item"], "object_kinds": ["item"], "required": True},
+            {"key": "count", "type": "int", "min": 1, "default": 1},
+        )),
+    ]
+
+    ROCK = {
+        "title": "The big rock", "summary": "{giver} lost something near {wood}.", "gm_notes": "GM ONLY",
+        "giver_role": "giver",
+        "roles": [{"key": "giver", "kind": "character", "description": "who asks"},
+                  {"key": "wood", "kind": "location", "description": "the wood"},
+                  {"key": "glade", "kind": "room", "description": "where the box lies"}],
+        "setup_effects": [
+            {"key": "rock", "type": "create_prop", "params": {"name": "Big rock", "prompt": "a large mossy boulder",
+              "height_m": 2.0, "near": "wood", "offset_x": 12, "offset_z": -4}},
+            {"key": "box", "type": "create_item", "params": {"name": "Old tin box", "category": "tool"}},
+            {"key": "box_spot", "type": "place_item", "params": {"item": "box", "room": "glade", "hidden": True, "difficulty": 3}},
+            {"key": "hint", "type": "give_hint", "params": {"holder": "giver", "text": "The box lies hidden in {glade}."}}],
+        "steps": [
+            {"id": "s1", "text": "Find the big rock near {wood}.", "hint": "",
+             "condition": {"type": "near_object", "params": {"object": "rock", "radius_m": 15}}},
+            {"id": "s2", "text": "Find out where the box is.", "hint": "",
+             "condition": {"type": "knows_secret", "params": {"secret": "hint"}},
+             "on_done": [{"key": "told", "type": "narrate", "params": {"text": "You remember the hollow under the roots."}}]},
+            {"id": "s3", "text": "Bring the tin box.", "hint": "",
+             "condition": {"type": "holds_item", "params": {"item": "box", "count": 1}}}],
+        "rewards": [
+            {"key": "charm", "type": "create_item", "permanent": True,
+             "params": {"name": "Lucky charm", "category": "tool", "stat_bonuses": "{\"focus\": 5}", "bonus_when": "carried"}},
+            {"key": "charm_given", "type": "give_item", "permanent": True, "params": {"item": "charm"}}],
+        "start_condition": {}, "prerequisites": {}, "time_limit_s": 0,
+    }
+
+    def _pc(issues_list):
+        return sorted((i["path"], i["code"]) for i in issues_list)
+
+    hooks.unregister_owned_providers(qt.OWNER)
+    qc.register("test", lambda: ROCK_STUBS)
+    qt.register()
+    try:
+        check("a. valid ROCK", qe.validate_template(ROCK), [])
+
+        rock_b = copy.deepcopy(ROCK)
+        rock_b["setup_effects"][1], rock_b["setup_effects"][2] = rock_b["setup_effects"][2], rock_b["setup_effects"][1]
+        check("b. setup forward ref", _pc(qe.validate_template(rock_b)),
+              [("setup_effects.1.params.item", "not_yet_created")])
+
+        rock_c = copy.deepcopy(ROCK)
+        rock_c["steps"][0]["condition"]["params"]["object"] = "hint"
+        check("c. wrong_kind in condition", _pc(qe.validate_template(rock_c)),
+              [("steps.0.condition.params.object", "wrong_kind")])
+
+        rock_d = copy.deepcopy(ROCK)
+        rock_d["steps"][1]["on_done"][0]["key"] = "rock"
+        check("d. cross-list duplicate key", _pc(qe.validate_template(rock_d)),
+              [("steps.1.on_done.0.key", "duplicate")])
+
+        rock_e = copy.deepcopy(ROCK)
+        rock_e["setup_effects"][3]["params"]["text"] = "In {cave}."
+        check("e. effect text placeholder unknown_role", _pc(qe.validate_template(rock_e)),
+              [("setup_effects.3.params.text", "unknown_role")])
+
+        rock_f1 = copy.deepcopy(ROCK)
+        rock_f1["steps"][1]["on_done"] = "x"
+        check("f1. on_done not a list", _pc(qe.validate_template(rock_f1)), [("steps.1.on_done", "shape")])
+
+        rock_f2 = copy.deepcopy(ROCK)
+        rock_f2["setup_effects"] = {}
+        check("f2. setup_effects not a list", _pc(qe.validate_template(rock_f2)), [
+            ("setup_effects", "shape"),
+            ("steps.0.condition.params.object", "unknown_target"),
+            ("steps.1.condition.params.secret", "unknown_target"),
+            ("steps.2.condition.params.item", "unknown_target"),
+        ])
+
+        rock_g = copy.deepcopy(ROCK)
+        for k in ("r2", "r3", "r4"):
+            rock_g["setup_effects"].append(
+                {"key": k, "type": "create_prop", "params": {"name": "R", "prompt": "a rock", "room": "glade"}})
+        check("g. 4th create_prop too_many", _pc(qe.validate_template(rock_g)),
+              [("setup_effects.6.type", "too_many")])
+
+        sc_s1 = qe.scope_at(ROCK, "step:1")
+        check("h. step:1 objects", sc_s1.objects,
+              {"rock": "world_prop", "box": "item", "box_spot": "room_item", "hint": "secret"})
+        check("h. step:1 later", sc_s1.later, frozenset({"told", "charm", "charm_given"}))
+        sc_s2 = qe.scope_at(ROCK, "step:2")
+        check("h. step:2 objects", sc_s2.objects,
+              {"rock": "world_prop", "box": "item", "box_spot": "room_item", "hint": "secret", "told": ""})
+        check("h. setup:2 objects", qe.scope_at(ROCK, "setup:2").objects, {"rock": "world_prop", "box": "item"})
+        sc_r1 = qe.scope_at(ROCK, "reward:1")
+        check("h. reward:1 objects", sc_r1.objects,
+              {"rock": "world_prop", "box": "item", "box_spot": "room_item", "hint": "secret",
+               "told": "", "charm": "item"})
+        check("h. reward:1 later", sc_r1.later, frozenset({"charm_given"}))
+        check("h. start roles", qe.scope_at(ROCK, "start").roles,
+              {"giver": "character", "wood": "location", "glade": "room"})
+        try:
+            qe.scope_at(ROCK, "nonsense")
+            check("h. nonsense raises ValueError", "no error", "ValueError")
+        except ValueError:
+            check("h. nonsense raises ValueError", True, True)
+
+        check("i. effect_positions", [(p, pos) for p, _l, pos in qe.effect_positions(ROCK)],
+              [("setup_effects", "setup"), ("steps.1.on_done", "step:1"), ("rewards", "reward")])
+
+        rock_j = copy.deepcopy(ROCK)
+        rock_j["setup_effects"].append({"key": "v", "type": "eff_v", "params": {}})
+        check("j. validate_template with eff_v", qe.validate_template(rock_j), [])
+        check("j. check_bindings runs effect validator",
+              _pc(qe.check_bindings(rock_j, {"giver": {"name": "N"}, "wood": {"location_id": "L1"},
+                                             "glade": {"location_id": "L1", "room_id": "r1"}})),
+              [("setup_effects.4.type", "eff_bound")])
+
+        check("k. _unregistered with stubs",
+              qe._unregistered(ROCK, owed=("setup", "step:1", "reward")), [])
+        hooks.unregister_owned_providers("test")
+        check("k. _unregistered owed=()", sorted(i["path"] for i in qe._unregistered(ROCK)),
+              ["steps.0.condition.type", "steps.1.condition.type"])
+        check("k. _unregistered owed=(setup,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("setup",))),
+              ["setup_effects.0.type", "setup_effects.1.type", "setup_effects.2.type", "setup_effects.3.type",
+               "steps.0.condition.type", "steps.1.condition.type"])
+        check("k. _unregistered owed=(step:1,)", sorted(i["path"] for i in qe._unregistered(ROCK, owed=("step:1",))),
+              ["steps.0.condition.type", "steps.1.condition.type", "steps.1.on_done.0.type"])
+    finally:
+        hooks.unregister_owned_providers("test")
+        hooks.unregister_owned_providers(qt.OWNER)
+        qt.register()
+
+    check("l. ERRAND still valid after restore", qe.validate_template(ERRAND), [])
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[23]")
+    print("PASS smoke_quest_engine: [1]-[24]")
     return 0
 
 

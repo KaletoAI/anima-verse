@@ -1,4 +1,4 @@
-"""The quest type catalog — the types a quest expression is made of, on the provider registry.
+"""The quest type catalog — the types a quest expression or effect list is made of, on the provider registry.
 
 A quest template's conditions (steps, start condition) and prerequisites are EXPRESSIONS (plan D7)::
 
@@ -8,18 +8,27 @@ A quest template's conditions (steps, start condition) and prerequisites are EXP
     {"any": [expr, ...]}
     {"not": expr}
 
-A TYPE is a :class:``QuestType``. The core names no package (R1): a package (and the core's own built-ins,
-``app/core/quest_types.py``) registers ONE contributor per owner with :func:``register`` — a function that answers the
-list of ALL that owner's types (the provider registry keeps one contributor per (capability, owner); the pattern of
-``app/core/view_postprocess.py``). The loader's ``unregister_owned_providers(<package id>)`` removes them; :func:``types``
-is rebuilt from the registry on EVERY call (the provider registry has no change counter to cache against), so an
-unloaded package's types are gone at once and a leaf naming one evaluates as "type not registered" (unavailable).
+A template's ``setup_effects``, ``steps[i].on_done`` and ``rewards`` are EFFECT LISTS (stage 2, plan D2), each entry::
+
+    {"key": str, "type": <type id>, "params": {...}, "permanent": bool}  # permanent defaults to False
+
+A TYPE is a :class:``QuestType`` of one of three kinds (``KINDS``: ``condition``, ``prerequisite``, ``effect``). The
+core names no package (R1): a package (and the core's own built-ins, ``app/core/quest_types.py``) registers ONE
+contributor per owner with :func:``register`` — a function that answers the list of ALL that owner's types (the
+provider registry keeps one contributor per (capability, owner); the pattern of ``app/core/view_postprocess.py``). The
+loader's ``unregister_owned_providers(<package id>)`` removes them; :func:``types`` is rebuilt from the registry on
+EVERY call (the provider registry has no change counter to cache against), so an unloaded package's types are gone at
+once and a leaf naming one evaluates as "type not registered" (unavailable).
 
 PARAMETERS (D5) are a list of dicts in the ``config_schema`` field vocabulary plus ``key``:
 ``key, type, label, description, default, min, max, step, choices, choice_labels, required``; ``type`` is one of
 :data:``PARAM_TYPES``. A ``role`` field holds a role KEY of the template (never a world entity id) and may restrict the
-role's kind with ``role_kinds``. :func:``check_expression`` does the generic checks; a type's own ``validate`` runs only on
-a leaf that passed them, with ``bindings=None`` at template time (D4).
+role's kind with ``role_kinds``. A ``target`` field (stage 2, D4) holds either a role key (its kind in ``role_kinds``)
+or a reachable effect key (its type's ``object_kind`` in ``object_kinds``), checked against a :class:``Scope`` built
+for that position. A ``text`` parameter accepts ``{role_key}`` placeholders unless its spec sets
+``"placeholders": False`` (for JSON-valued text parameters). :func:``check_expression`` and :func:``check_effects`` do
+the generic checks; a type's own ``validate`` runs only on a leaf that passed them, with ``bindings=None`` at template
+time (D4).
 
 EVALUATION is three-state (``ConditionResult(available, passed, reason)`` of ``app.core.activity_engine``): unavailable
 is contagious through ``all`` / ``any`` / ``not``, which evaluate EVERY child (the strict rule of
@@ -28,6 +37,7 @@ not a ``ConditionResult`` is unavailable — never passed.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -40,7 +50,14 @@ logger = get_logger("quest_catalog")
 CAPABILITY = "quest.types"
 KINDS = ("condition", "prerequisite", "effect")
 ROLE_KINDS = ("character", "location", "room", "item")
-PARAM_TYPES = ("str", "text", "int", "float", "bool", "select", "role")
+PARAM_TYPES = ("str", "text", "int", "float", "bool", "select", "role", "target")
+
+EFFECT_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+MAX_EFFECTS = 20
+MAX_CREATE_PROP = 3
+#: The core's own built-in effect type id (D2 per-template limit).
+CREATE_PROP_TYPE = "create_prop"
+EFFECT_ENTRY_KEYS = ("key", "type", "params", "permanent")
 
 #: The payload key of each kind in :func:``catalog_payload``.
 _PAYLOAD_KEYS = {"condition": "conditions", "prerequisite": "prerequisites", "effect": "effects"}
@@ -65,6 +82,24 @@ class QuestType:
     #: True for a type that can only be read once the run has opened (it counts from ``started_game_ts``): it is
     #: refused in a start condition, where a hidden run has not opened yet and the type would stay unavailable.
     needs_open_run: bool = False
+    #: An effect type's apply runs on the effects worker (a later task).
+    apply: Callable[[dict, "EffectContext"], list["CreatedObject"]] | None = None
+    #: The kind of the first object the effect records, the one a target param resolves to ("" = it records no object).
+    object_kind: str = ""
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Role keys and effect keys reachable at one template position (D4).
+
+    ``roles`` maps each role key to its role kind; ``objects`` maps each reachable effect key to its type's
+    ``object_kind`` (``""`` for an effect that records no object or has an unknown type); ``later`` holds effect keys
+    defined by the template that are not reachable at this position, so a ``target`` naming one reports
+    ``not_yet_created`` instead of ``unknown_target``.
+    """
+    roles: Dict[str, str]
+    objects: Dict[str, str]
+    later: frozenset = frozenset()
 
 
 # --- Registry -------------------------------------------------------------------------
@@ -112,7 +147,8 @@ def public_descriptor(t: QuestType) -> Dict[str, Any]:
     """The JSON-safe part of a type (no callable): the admin form and, later, the LLM prompt read it."""
     return {"id": t.id, "kind": t.kind, "label": t.label, "description": t.description,
             "params": [{k: v for k, v in dict(p).items() if not callable(v)} for p in t.params],
-            "signals": list(t.signals), "needs_open_run": bool(t.needs_open_run)}
+            "signals": list(t.signals), "needs_open_run": bool(t.needs_open_run),
+            "object_kind": t.object_kind}
 
 
 def catalog_payload() -> Dict[str, List[Dict[str, Any]]]:
@@ -194,7 +230,7 @@ def _absent(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _check_param(path: str, spec: dict, value: Any, roles: Dict[str, str]) -> Optional[Dict[str, str]]:
+def _check_param(path: str, spec: dict, value: Any, scope: Scope) -> Optional[Dict[str, str]]:
     """The generic check of one present parameter value against its spec (D5); None = fine."""
     key, ptype = spec.get("key"), spec.get("type", "str")
     label = spec.get("label") or key
@@ -216,22 +252,43 @@ def _check_param(path: str, spec: dict, value: Any, roles: Dict[str, str]) -> Op
         if value not in (spec.get("choices") or []):
             return _issue(path, "bad_param", f"{label} must be one of {list(spec.get('choices') or [])}")
     elif ptype == "role":
-        if not isinstance(value, str) or value not in roles:
+        if not isinstance(value, str) or value not in scope.roles:
             return _issue(path, "unknown_role", f"{label}: '{value}' is not a role of this quest")
         allowed = spec.get("role_kinds") or []
-        if allowed and roles[value] not in allowed:
+        if allowed and scope.roles[value] not in allowed:
             return _issue(path, "wrong_role_kind",
-                          f"{label}: role '{value}' is a {roles[value]}, expected {' or '.join(allowed)}")
+                          f"{label}: role '{value}' is a {scope.roles[value]}, expected {' or '.join(allowed)}")
+    elif ptype == "target":
+        if not isinstance(value, str):
+            return _issue(path, "bad_param", f"{label} must be a key")
+        if value in scope.roles:
+            allowed_roles = spec.get("role_kinds") or []
+            if scope.roles[value] not in allowed_roles:
+                expected = " or ".join(allowed_roles) if allowed_roles else "none"
+                return _issue(path, "wrong_kind",
+                              f"{label}: role '{value}' is a {scope.roles[value]}, expected {expected}")
+        elif value in scope.objects:
+            allowed_objects = spec.get("object_kinds") or []
+            if scope.objects[value] not in allowed_objects:
+                actual = scope.objects[value] or "no object"
+                expected = " or ".join(allowed_objects) if allowed_objects else "none"
+                return _issue(path, "wrong_kind",
+                              f"{label}: '{value}' is {actual}, expected {expected}")
+        elif value in scope.later:
+            return _issue(path, "not_yet_created", f"{label}: '{value}' is created only later")
+        else:
+            return _issue(path, "unknown_target",
+                          f"{label}: '{value}' is neither a role nor an effect key of this quest")
     else:
         return _issue(path, "bad_param", f"{label}: the type declares an unknown parameter type '{ptype}'")
     return None
 
 
-def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tuple[str, ...],
+def _check_leaf(path: str, leaf: dict, scope: Scope, allowed_kinds: Tuple[str, ...],
                 known: Dict[str, QuestType]) -> List[Dict[str, str]]:
     t = known.get(leaf["type"])
     if t is None:
-        return [_issue(path + ".type", "unknown_type", f"Unknown condition type '{leaf['type']}'")]
+        return [_issue(path + ".type", "unknown_type", f"Unknown {allowed_kinds[0]} type '{leaf['type']}'")]
     if t.kind not in allowed_kinds:
         return [_issue(path + ".type", "wrong_kind",
                        f"'{t.label}' is a {t.kind}, not allowed here (allowed: {', '.join(allowed_kinds)})")]
@@ -248,7 +305,7 @@ def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tup
                 issues.append(_issue(f"{path}.params.{key}", "missing_param",
                                      f"{spec.get('label') or key} is required"))
             continue
-        bad = _check_param(f"{path}.params.{key}", spec, value, roles)
+        bad = _check_param(f"{path}.params.{key}", spec, value, scope)
         if bad:
             issues.append(bad)
     if issues or t.validate is None:
@@ -261,14 +318,13 @@ def _check_leaf(path: str, leaf: dict, roles: Dict[str, str], allowed_kinds: Tup
         return [_issue(path + ".type", "bad_param", f"'{t.label}' could not check its parameters: {e}")]
 
 
-def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str, ...]) -> List[Dict[str, str]]:
+def check_expression(expr: dict, scope: Scope, *, allowed_kinds: Tuple[str, ...]) -> List[Dict[str, str]]:
     """Every issue of ``expr`` as ``{"path", "code", "message"}``; paths relative to ``expr`` (D7: "" = the root, the
-    caller prefixes its own position). ``roles`` are the template's role dicts (``key``, ``kind``); ``allowed_kinds`` the
-    type kinds this position accepts. Codes: shape, unknown_type, wrong_kind, missing_param, bad_param,
-    unknown_role, wrong_role_kind — plus whatever code a type's own ``validate`` names (reported at ``.type``)."""
+    caller prefixes its own position). ``scope`` names the roles and reachable effect objects at this position;
+    ``allowed_kinds`` the type kinds this position accepts. Codes: shape, unknown_type, wrong_kind, missing_param,
+    bad_param, unknown_role, wrong_role_kind, unknown_target, not_yet_created — plus whatever code a type's own
+    ``validate`` names (reported at ``.type``)."""
     known = types()  # one catalog snapshot for the whole check
-    role_kinds = {str(r.get("key")): str(r.get("kind")) for r in (roles or [])
-                  if isinstance(r, dict) and r.get("key")}
     issues: List[Dict[str, str]] = []
 
     def rec(path: str, node: Any, depth: int) -> None:
@@ -282,12 +338,69 @@ def check_expression(expr: dict, roles: List[dict], *, allowed_kinds: Tuple[str,
         if not node:
             return
         if _is_leaf(node):
-            issues.extend(_check_leaf(path, node, role_kinds, tuple(allowed_kinds), known))
+            issues.extend(_check_leaf(path, node, scope, tuple(allowed_kinds), known))
             return
         for sub, child in _children(node):
             rec(path + sub, child, depth + 1)
 
     rec("", expr, 0)
+    return issues
+
+
+def check_effects(effects: Any, scope_for: Callable[[int], Scope], *, path: str, reward: bool,
+                  props_before: int = 0) -> List[Dict[str, str]]:
+    """Every issue of one effect list (D2), with absolute paths built from ``path`` (e.g. ``setup_effects.1.key``).
+    ``scope_for(i)`` answers the reachable :class:`Scope` of entry ``i``; ``reward=True`` refuses ``permanent=False``;
+    ``props_before`` is how many ``create_prop`` entries earlier lists of the same template already used."""
+    if not isinstance(effects, list):
+        return [_issue(path, "shape", "An effect list must be a list")]
+    known = types()  # one catalog snapshot for the whole check
+    issues: List[Dict[str, str]] = []
+    if len(effects) > MAX_EFFECTS:
+        issues.append(_issue(path, "too_many", f"At most {MAX_EFFECTS} effects per list"))
+    allowed_entry_keys = set(EFFECT_ENTRY_KEYS)
+    seen_keys: set[str] = set()
+    prop_count = props_before
+    for i, entry in enumerate(effects):
+        p = f"{path}.{i}"
+        if not isinstance(entry, dict):
+            issues.append(_issue(p, "shape", "An effect must be an object"))
+            continue
+        if not set(entry) <= allowed_entry_keys:
+            issues.append(_issue(p, "shape", "An effect may only have key, type, params, permanent"))
+            continue
+        if "params" in entry and not isinstance(entry["params"], dict):
+            issues.append(_issue(f"{p}.params", "shape", "'params' must be an object"))
+            continue
+        if not isinstance(entry.get("type"), str) or not entry["type"]:
+            issues.append(_issue(f"{p}.type", "shape", "'type' must be a type id"))
+            continue
+        scope = scope_for(i)
+        key = entry.get("key")
+        if _absent(key):
+            issues.append(_issue(f"{p}.key", "required", "An effect needs a key"))
+        elif not isinstance(key, str) or not EFFECT_KEY_PATTERN.match(key):
+            issues.append(_issue(f"{p}.key", "bad_key",
+                                 "A key is a-z, 0-9 and _, starting with a letter, at most 40 characters"))
+        elif key in scope.roles:
+            issues.append(_issue(f"{p}.key", "duplicate", f"Effect key '{key}' is already used by a role"))
+        elif key in seen_keys:
+            issues.append(_issue(f"{p}.key", "duplicate", f"Effect key '{key}' is used twice"))
+        else:
+            seen_keys.add(key)
+        issues.extend(_check_leaf(p, {"type": entry["type"], "params": entry.get("params") or {}},
+                                  scope, ("effect",), known))
+        if entry["type"] == CREATE_PROP_TYPE:
+            prop_count += 1
+            if prop_count > MAX_CREATE_PROP:
+                issues.append(_issue(f"{p}.type", "too_many",
+                                     f"At most {MAX_CREATE_PROP} {CREATE_PROP_TYPE} effects per quest"))
+        if "permanent" in entry:
+            perm = entry["permanent"]
+            if not isinstance(perm, bool):
+                issues.append(_issue(f"{p}.permanent", "bad_value", "'permanent' must be yes or no"))
+            elif reward and perm is False:
+                issues.append(_issue(f"{p}.permanent", "not_allowed_here", "A reward is always permanent"))
     return issues
 
 

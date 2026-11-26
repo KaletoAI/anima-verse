@@ -130,12 +130,31 @@ def _scan_text(text: str) -> List[Tuple[str, str]]:
 
 
 def _player_texts(template: dict) -> List[Tuple[str, Any]]:
-    """(D7 path, value) of every text a player may read and that may carry role placeholders (``gm_notes`` never)."""
+    """(D7 path, value) of every text a player may read and that may carry role placeholders (``gm_notes`` never),
+    including effect ``text`` parameters whose spec does not declare ``"placeholders": False``."""
     out: List[Tuple[str, Any]] = [("title", template.get("title")), ("summary", template.get("summary"))]
     for i, step in enumerate(_steps(template)):
         if isinstance(step, dict):
             out += [(f"steps.{i}.text", step.get("text")), (f"steps.{i}.hint", step.get("hint"))]
     out.append(("prerequisites.locked_text", _prerequisites(template).get("locked_text")))
+    positions = effect_positions(template)
+    if positions:
+        known = quest_catalog.types()
+        for prefix, entries, _position in positions:
+            for j, entry in enumerate(entries):
+                if not isinstance(entry, dict) or not isinstance(entry.get("type"), str):
+                    continue
+                t = known.get(entry["type"])
+                if t is None:
+                    continue
+                params = entry.get("params")
+                if not isinstance(params, dict):
+                    continue
+                for spec in t.params:
+                    if spec.get("type") == "text" and spec.get("placeholders") is not False:
+                        key = spec.get("key")
+                        if key in params:
+                            out.append((f"{prefix}.{j}.params.{key}", params[key]))
     return out
 
 
@@ -190,15 +209,119 @@ def _binding_labels(template: dict, bindings: dict) -> Dict[str, str]:
 
 # --- Template and binding checks --------------------------------------------------------------
 
-def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...]]]:
-    """(path, expression, allowed type kinds) of every expression position of a template (D7)."""
-    out: List[Tuple[str, Any, Tuple[str, ...]]] = []
+def effect_positions(template: dict) -> List[Tuple[str, list, str]]:
+    """``(path prefix, entry list, payout position)`` for every non-empty effect list of ``template`` in position
+    order: ``setup_effects`` (``"setup"``), ``steps.<i>.on_done`` (``"step:<i>"``), ``rewards`` (``"reward"``).
+    Non-list values are skipped here (:func:`validate_template` reports them)."""
+    if not isinstance(template, dict):
+        return []
+    out: List[Tuple[str, list, str]] = []
+    setup = template.get("setup_effects")
+    if isinstance(setup, list) and setup:
+        out.append(("setup_effects", setup, "setup"))
     for i, step in enumerate(_steps(template)):
         if isinstance(step, dict):
-            out.append((f"steps.{i}.condition", step.get("condition") or {}, ("condition",)))
-    out.append(("start_condition", template.get("start_condition") or {}, ("condition",)))
+            on_done = step.get("on_done")
+            if isinstance(on_done, list) and on_done:
+                out.append((f"steps.{i}.on_done", on_done, f"step:{i}"))
+    rewards = template.get("rewards")
+    if isinstance(rewards, list) and rewards:
+        out.append(("rewards", rewards, "reward"))
+    return out
+
+
+def _parse_nonneg(text: str, where: str) -> int:
+    if not text.isascii() or not text.isdigit():
+        raise ValueError(f"Unknown scope position: {where!r}")
+    return int(text)
+
+
+def scope_at(template: dict, where: str) -> quest_catalog.Scope:
+    """The reachable :class:`quest_catalog.Scope` at template position ``where`` (D4): ``"start"``, ``"prereq"``,
+    ``"step:<i>"``, ``"on_done:<i>:<j>"``, ``"setup:<j>"``, or ``"reward:<j>"``. Raises ``ValueError`` for any other
+    position string. One catalog read per call."""
+    tpl = template if isinstance(template, dict) else {}
+    setup = tpl.get("setup_effects") if isinstance(tpl.get("setup_effects"), list) else []
+    step_effects = [step.get("on_done") if isinstance(step, dict) and isinstance(step.get("on_done"), list) else []
+                    for step in _steps(tpl)]
+    rewards = tpl.get("rewards") if isinstance(tpl.get("rewards"), list) else []
+
+    if where in ("start", "prereq"):
+        reachable = list(setup)
+    elif isinstance(where, str) and where.startswith("step:"):
+        parts = where.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Unknown scope position: {where!r}")
+        idx = _parse_nonneg(parts[1], where)
+        reachable = list(setup)
+        for s_idx in range(min(idx, len(step_effects))):
+            reachable.extend(step_effects[s_idx])
+    elif isinstance(where, str) and where.startswith("on_done:"):
+        parts = where.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Unknown scope position: {where!r}")
+        idx = _parse_nonneg(parts[1], where)
+        j = _parse_nonneg(parts[2], where)
+        reachable = list(setup)
+        for s_idx in range(min(idx, len(step_effects))):
+            reachable.extend(step_effects[s_idx])
+        if idx < len(step_effects):
+            reachable.extend(step_effects[idx][:j])
+    elif isinstance(where, str) and where.startswith("setup:"):
+        parts = where.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Unknown scope position: {where!r}")
+        j = _parse_nonneg(parts[1], where)
+        reachable = list(setup[:j])
+    elif isinstance(where, str) and where.startswith("reward:"):
+        parts = where.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Unknown scope position: {where!r}")
+        j = _parse_nonneg(parts[1], where)
+        reachable = list(setup)
+        for entries in step_effects:
+            reachable.extend(entries)
+        reachable.extend(rewards[:j])
+    else:
+        raise ValueError(f"Unknown scope position: {where!r}")
+
+    roles: Dict[str, str] = {}
+    raw_roles = tpl.get("roles") if isinstance(tpl.get("roles"), list) else []
+    for role in raw_roles:
+        if isinstance(role, dict):
+            key = role.get("key")
+            if not _blank(key) and key not in roles:
+                roles[key] = str(role.get("kind") or "")
+
+    known = quest_catalog.types()
+    objects: Dict[str, str] = {}
+    for entry in reachable:
+        if isinstance(entry, dict):
+            key = entry.get("key")
+            if isinstance(key, str) and key and key not in objects:
+                t = known.get(entry.get("type")) if isinstance(entry.get("type"), str) else None
+                objects[key] = t.object_kind if t is not None else ""
+
+    later: set = set()
+    for entries in [setup, *step_effects, rewards]:
+        for entry in entries:
+            if isinstance(entry, dict):
+                key = entry.get("key")
+                if isinstance(key, str) and key and key not in objects:
+                    later.add(key)
+
+    return quest_catalog.Scope(roles=roles, objects=objects, later=frozenset(later))
+
+
+def _expressions(template: dict) -> List[Tuple[str, Any, Tuple[str, ...], str]]:
+    """(path, expression, allowed type kinds, scope position) of every expression position of a template (D7)."""
+    out: List[Tuple[str, Any, Tuple[str, ...], str]] = []
+    for i, step in enumerate(_steps(template)):
+        if isinstance(step, dict):
+            out.append((f"steps.{i}.condition", step.get("condition") or {}, ("condition",), f"step:{i}"))
+    out.append(("start_condition", template.get("start_condition") or {}, ("condition",), "start"))
     out.append(("prerequisites.condition", _prerequisites(template).get("condition") or {},
-                ("condition", "prerequisite")))
+                ("condition", "prerequisite"), "prereq"))
     return out
 
 
@@ -225,9 +348,18 @@ def check_template_fields(body: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _effect_scope_where(position: str, index: int) -> str:
+    if position == "setup":
+        return f"setup:{index}"
+    if position == "reward":
+        return f"reward:{index}"
+    return f"on_done:{position.split(':', 1)[1]}:{index}"
+
+
 def validate_template(template: dict) -> list[dict]:
     """Every authoring issue of ``template`` as ``{"path", "code", "message"}`` (paths per D7), including empty step
-    conditions (D1) and ``giver_role`` (D3). No world entity is read; ``check_expression`` already runs each type's
+    conditions (D1), ``giver_role`` (D3), and effect lists ``setup_effects`` / ``steps[i].on_done`` / ``rewards``
+    (D2, D4). No world entity is read; ``check_expression`` and ``check_effects`` already run each type's
     ``validate(params, None)``."""
     if not isinstance(template, dict):
         return [_issue("", "shape", "A quest template must be an object")]
@@ -286,8 +418,38 @@ def validate_template(template: dict) -> list[dict]:
         for kind, key in parts:
             if kind == "role" and key not in seen_roles:
                 issues.append(_issue(path, "unknown_role", f"'{{{key}}}' is not a role of this quest"))
-    for path, expr, kinds in _expressions(template):
-        issues.extend(_prefixed(path, quest_catalog.check_expression(expr, roles, allowed_kinds=kinds)))
+    for path, expr, kinds, where in _expressions(template):
+        issues.extend(_prefixed(path, quest_catalog.check_expression(
+            expr, scope_at(template, where), allowed_kinds=kinds)))
+    for field in ("setup_effects", "rewards"):
+        if field in template and template[field] is not None and not isinstance(template[field], list):
+            issues.append(_issue(field, "shape", f"'{field}' must be a list"))
+    for i, step in enumerate(steps):
+        if isinstance(step, dict) and "on_done" in step and step["on_done"] is not None \
+                and not isinstance(step["on_done"], list):
+            issues.append(_issue(f"steps.{i}.on_done", "shape", "'on_done' must be a list"))
+    props_before = 0
+    earlier_keys: set = set()
+    for prefix, entries, position in effect_positions(template):
+        issues.extend(quest_catalog.check_effects(
+            entries,
+            lambda j, pos=position: scope_at(template, _effect_scope_where(pos, j)),
+            path=prefix,
+            reward=(position == "reward"),
+            props_before=props_before,
+        ))
+        props_before += sum(1 for e in entries if isinstance(e, dict)
+                            and e.get("type") == quest_catalog.CREATE_PROP_TYPE)
+        list_keys: set = set()
+        for j, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("key")
+            if isinstance(key, str) and key and key not in seen_roles:
+                if key not in list_keys and key in earlier_keys:
+                    issues.append(_issue(f"{prefix}.{j}.key", "duplicate", f"Effect key '{key}' is used twice"))
+                list_keys.add(key)
+        earlier_keys.update(list_keys)
     known = quest_catalog.types()
     start = template.get("start_condition") or {}
     for leaf_path, leaf in quest_catalog.walk(start):
@@ -316,8 +478,8 @@ def validate_template(template: dict) -> list[dict]:
 
 def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> list[dict]:
     """The issues of ``bindings`` for ``template``: every role bound in its D6 shape to an entity that exists
-    (``quest_types.check_binding``, path ``bindings.<role key>``), and each leaf type's ``validate(params,
-    bindings)`` (path of the leaf, ending in ``.type``). A type that is not registered adds nothing here
+    (``quest_types.check_binding``, path ``bindings.<role key>``), and each expression leaf and effect entry's
+    ``validate(params, bindings)`` (path ending in ``.type``). A type that is not registered adds nothing here
     (:func:`validate_template` and the tick report it).
 
     RAISES on a storage error: a failed read is not a missing entity, so the caller must not turn it into an issue.
@@ -338,7 +500,7 @@ def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> l
         for found in quest_types.check_binding(str(role.get("kind") or ""), bindings[key]):
             issues.append(_issue(f"bindings.{key}", str(found.code), str(found.message)))
     known = quest_catalog.types()
-    for path, expr, _kinds in _expressions(template):
+    for path, expr, _kinds, _where in _expressions(template):
         for leaf_path, leaf in quest_catalog.walk(expr):
             t = known.get(leaf["type"])
             if t is None or t.validate is None:
@@ -352,17 +514,50 @@ def check_bindings(template: dict, bindings: dict, *, strict: bool = False) -> l
                     raise
                 logger.exception("validate of quest type %r failed", t.id)
                 issues.append(_issue(where, "bad_param", f"'{t.label}' could not check its parameters: {e}"))
+    for prefix, entries, _position in effect_positions(template):
+        for j, entry in enumerate(entries):
+            if not isinstance(entry, dict) or not isinstance(entry.get("type"), str):
+                continue
+            t = known.get(entry["type"])
+            if t is None or t.validate is None:
+                continue
+            where = f"{prefix}.{j}.type"
+            params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+            try:
+                own = t.validate(quest_catalog._with_defaults(t, params), bindings) or []
+                issues.extend(_issue(where, str(i.code), str(i.message)) for i in own)
+            except Exception as e:  # noqa: BLE001 - a package's validator never breaks the check
+                if strict:
+                    raise
+                logger.exception("validate of quest type %r failed", t.id)
+                issues.append(_issue(where, "bad_param", f"'{t.label}' could not check its parameters: {e}"))
     return issues
 
 
-def _unregistered(template: dict) -> List[Dict[str, str]]:
-    """One issue per leaf whose type is not registered now (an unloaded package, Review Focus 5). Reads the catalog
-    strictly: a contributor that raises raises here (the tick skips that run), it is not read as "type gone"."""
+def _unregistered(template: dict, *, owed: Iterable[str] = ()) -> List[Dict[str, str]]:
+    """One issue per expression leaf whose type is not registered now, plus one per effect entry whose payout
+    position is in ``owed`` (an effect type matters only while its position is still owed: setup of a preparing run,
+    an unapplied payout — wired by a later task). Reads the catalog strictly: a contributor that raises raises here
+    (the tick skips that run), it is not read as "type gone"."""
     known = quest_catalog.types(strict=True)
-    return [_issue(f"{path}{leaf_path}.type", "type_not_registered",
-                   f"Quest type '{leaf['type']}' is not registered")
-            for path, expr, _kinds in _expressions(template if isinstance(template, dict) else {})
-            for leaf_path, leaf in quest_catalog.walk(expr) if leaf["type"] not in known]
+    tpl = template if isinstance(template, dict) else {}
+    issues = [_issue(f"{path}{leaf_path}.type", "type_not_registered",
+                     f"Quest type '{leaf['type']}' is not registered")
+              for path, expr, _kinds, _where in _expressions(tpl)
+              for leaf_path, leaf in quest_catalog.walk(expr) if leaf["type"] not in known]
+    owed_set = set(owed)
+    if owed_set:
+        for prefix, entries, position in effect_positions(tpl):
+            if position not in owed_set:
+                continue
+            for j, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    continue
+                type_id = entry.get("type")
+                if isinstance(type_id, str) and type_id and type_id not in known:
+                    issues.append(_issue(f"{prefix}.{j}.type", "type_not_registered",
+                                         f"Quest type '{type_id}' is not registered"))
+    return issues
 
 
 # --- How many runs are live ----------------------------------------------------------------------

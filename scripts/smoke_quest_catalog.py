@@ -78,6 +78,42 @@ WHAT IS CHECKED, and where every expected value comes from
   (f) signals_of. T declares ("s.one",), F ("s.two",), U ("s.one", "s.three")
       → signals_of({"all": [T, {"not": F}, {"any": [U]}]}) ==
       {"s.one", "s.two", "s.three"} (the union); an unknown type adds nothing.
+
+  (g) EFFECTS & TARGET PARAM (stage 2, Task 2; D2, D4, D12). Owner "test" registers
+      effect stubs mk_item (object_kind "item", param name: str req), put
+      (object_kind "room_item", param item: target role_kinds [item] object_kinds
+      [item] req), create_prop (object_kind "world_prop", param name: str req);
+      condition stubs g_cond (no params) and g_near (param obj: target role_kinds []
+      object_kinds [world_prop] req). Roles: giver=character, thing=item.
+      check_effects (path "setup_effects", reward False unless noted):
+        1. [mk_item key "giver"] (role namespace clash)   → [("duplicate", "setup_effects.0.key")]
+        2. [mk_item key "Box"] (uppercase violates regex) → [("bad_key", "setup_effects.0.key")]
+        3. [type "nope" key "a"]                          → [("unknown_type", "setup_effects.0.type")]
+                                                            with "Unknown effect type" in message
+        4. [g_cond key "a"] (condition in effect list)    → [("wrong_kind", "setup_effects.0.type")]
+        5. [put "p" item="b", mk_item "b"] (forward ref)  → [("not_yet_created", "setup_effects.0.params.item")]
+        6. [create_prop "pr", put "p" item="pr"] (kind)   → [("wrong_kind", "setup_effects.1.params.item")]
+        7. [put "p" item="thing"] (item role accepted)    → []
+        8. [put "p" item="giver"] (character role wrong)  → [("wrong_kind", "setup_effects.0.params.item")]
+        9. [put "p" item="ghost"] (nowhere in scope)      → [("unknown_target", "setup_effects.0.params.item")]
+       10. reward=True path "rewards" permanent=False     → [("not_allowed_here", "rewards.0.permanent")];
+           same with reward=False path "setup_effects"    → [];
+           reward=True permanent omitted                  → [];
+           permanent="yes" (reward=False)                 → [("bad_value", "setup_effects.0.permanent")]
+       11. 21 mk_item entries e0..e20 (> MAX_EFFECTS 20)  → [("too_many", "setup_effects")]
+       12. 4 create_prop p0..p3 (> MAX_CREATE_PROP 3)     → [("too_many", "setup_effects.3.type")];
+           1 create_prop with props_before=3              → [("too_many", "setup_effects.0.type")]
+       13. [mk_item "a", mk_item "a"] (same-list dup)     → [("duplicate", "setup_effects.1.key")]
+       14. ["x"]                                          → [("shape", "setup_effects.0")];
+           [mk_item "a" + extra key "foo"]                → [("shape", "setup_effects.0")];
+           [mk_item without "key"]                        → [("required", "setup_effects.0.key")];
+           {} (not a list)                                → [("shape", "setup_effects")]
+      Target in a condition: check_expression(g_near(obj=X), Scope(roles, {pr:world_prop, it:item}, {zz}),
+      allowed_kinds=("condition",)): X="pr" → []; X="it" → [("wrong_kind", ".params.obj")];
+      X="zz" → [("not_yet_created", ".params.obj")]; X="nope" → [("unknown_target", ".params.obj")];
+      X="thing" → [("wrong_kind", ".params.obj")] (role_kinds empty → no role accepted).
+      public_descriptor(mk_item)["object_kind"] == "item" and json.dumps succeeds;
+      "target" in PARAM_TYPES.
 """
 import json
 import logging
@@ -149,7 +185,7 @@ except TypeError:
     ok = False
 check("payload is JSON-safe", ok)
 check("descriptor keys", set(qc.public_descriptor(qc.get("a_two"))) ==
-      {"id", "kind", "label", "description", "params", "signals", "needs_open_run"})
+      {"id", "kind", "label", "description", "params", "signals", "needs_open_run", "object_kind"})
 check("needs_open_run defaults to False", qc.public_descriptor(qc.get("a_two"))["needs_open_run"] is False)
 check("descriptor signals is a list", qc.public_descriptor(qc.get("a_two"))["signals"] == ["s.a"])
 
@@ -196,12 +232,15 @@ ROLES = [{"key": "giver", "kind": "character"}, {"key": "place", "kind": "room"}
 COND = ("condition",)
 
 
+ROLE_SCOPE = qc.Scope({r["key"]: r["kind"] for r in ROLES}, {})
+
+
 def at(**params):
     return {"type": "at", "params": params}
 
 
 def codes(expr, kinds=COND):
-    return [(i["code"], i["path"]) for i in qc.check_expression(expr, ROLES, allowed_kinds=kinds)]
+    return [(i["code"], i["path"]) for i in qc.check_expression(expr, ROLE_SCOPE, allowed_kinds=kinds)]
 
 
 TABLE = [
@@ -239,7 +278,7 @@ try:
 except RecursionError:
     deep = "RecursionError"
 check("1200 nested nots → the same one issue, no RecursionError", deep == [("shape", ".not" * 17)], str(deep)[:80])
-for issue in qc.check_expression(at(place="ghost"), ROLES, allowed_kinds=COND):
+for issue in qc.check_expression(at(place="ghost"), ROLE_SCOPE, allowed_kinds=COND):
     check("issue has path/code/message", set(issue) == {"path", "code", "message"} and issue["message"])
 hooks.unregister_owned_providers("C")
 
@@ -351,6 +390,125 @@ print("(f) signals_of")
 got = qc.signals_of({"all": [leaf("T"), {"not": leaf("F")}, {"any": [leaf("U"), leaf("nope")]}]})
 check("union of nested signals", got == {"s.one", "s.two", "s.three"}, str(got))
 hooks.unregister_owned_providers("E")
+
+# --- (g) effects and target param ---------------------------------------------------
+print("(g) effects and target param")
+G_ROLES = {"giver": "character", "thing": "item"}
+G_KINDS = {"mk_item": "item", "put": "room_item", "create_prop": "world_prop"}
+qc.register("test", lambda: [
+    stub("mk_item", kind="effect", object_kind="item",
+         params=({"key": "name", "type": "str", "label": "Name", "required": True},)),
+    stub("put", kind="effect", object_kind="room_item",
+         params=({"key": "item", "type": "target", "label": "Item",
+                  "role_kinds": ["item"], "object_kinds": ["item"], "required": True},)),
+    stub("create_prop", kind="effect", object_kind="world_prop",
+         params=({"key": "name", "type": "str", "label": "Name", "required": True},)),
+    stub("g_cond", kind="condition"),
+    stub("g_near", kind="condition",
+         params=({"key": "obj", "type": "target", "label": "Obj",
+                  "role_kinds": [], "object_kinds": ["world_prop"], "required": True},)),
+])
+
+
+def _scope_for(entries):
+    def _at(i):
+        objects = {}
+        for e in entries[:i]:
+            if isinstance(e, dict) and isinstance(e.get("key"), str) and e["key"] and e["key"] not in objects:
+                objects[e["key"]] = G_KINDS.get(e.get("type"), "")
+        later = frozenset(
+            e["key"] for e in entries[i:]
+            if isinstance(e, dict) and isinstance(e.get("key"), str) and e["key"] and e["key"] not in objects
+        )
+        return qc.Scope(G_ROLES, objects, later)
+    return _at
+
+
+def eff_codes(entries, *, path="setup_effects", reward=False, props_before=0):
+    sf = _scope_for(entries) if isinstance(entries, list) else (lambda _i: qc.Scope(G_ROLES, {}))
+    return sorted((i["code"], i["path"]) for i in
+                  qc.check_effects(entries, sf, path=path, reward=reward, props_before=props_before))
+
+
+def mk_item(key, **extra):
+    return {"key": key, "type": "mk_item", "params": {"name": "Box"}, **extra}
+
+
+def put(key, item, **extra):
+    return {"key": key, "type": "put", "params": {"item": item}, **extra}
+
+
+def mk_prop(key, **extra):
+    return {"key": key, "type": "create_prop", "params": {"name": "Rock"}, **extra}
+
+
+check("1. key collides with role", eff_codes([mk_item("giver")]) == [("duplicate", "setup_effects.0.key")],
+      str(eff_codes([mk_item("giver")])))
+check("2. bad_key uppercase", eff_codes([mk_item("Box")]) == [("bad_key", "setup_effects.0.key")],
+      str(eff_codes([mk_item("Box")])))
+unk_issues = qc.check_effects([{"key": "a", "type": "nope", "params": {}}],
+                              _scope_for([{"key": "a", "type": "nope", "params": {}}]),
+                              path="setup_effects", reward=False)
+check("3. unknown effect type",
+      sorted((i["code"], i["path"]) for i in unk_issues) == [("unknown_type", "setup_effects.0.type")]
+      and "Unknown effect type" in unk_issues[0]["message"],
+      str(unk_issues))
+check("4. condition in effect list",
+      eff_codes([{"key": "a", "type": "g_cond", "params": {}}]) == [("wrong_kind", "setup_effects.0.type")])
+check("5. forward ref not_yet_created",
+      eff_codes([put("p", "b"), mk_item("b")]) == [("not_yet_created", "setup_effects.0.params.item")])
+check("6. wrong object_kind",
+      eff_codes([mk_prop("pr"), put("p", "pr")]) == [("wrong_kind", "setup_effects.1.params.item")])
+check("7. role key of accepted kind passes", eff_codes([put("p", "thing")]) == [])
+check("8. role key of wrong kind",
+      eff_codes([put("p", "giver")]) == [("wrong_kind", "setup_effects.0.params.item")])
+check("9. unknown target",
+      eff_codes([put("p", "ghost")]) == [("unknown_target", "setup_effects.0.params.item")])
+check("10a. reward permanent=False refused",
+      eff_codes([mk_item("a", permanent=False)], path="rewards", reward=True)
+      == [("not_allowed_here", "rewards.0.permanent")])
+check("10b. setup permanent=False ok", eff_codes([mk_item("a", permanent=False)]) == [])
+check("10c. reward permanent omitted ok", eff_codes([mk_item("a")], path="rewards", reward=True) == [])
+check("10d. permanent non-bool bad_value",
+      eff_codes([mk_item("a", permanent="yes")]) == [("bad_value", "setup_effects.0.permanent")])
+check("11. >20 effects too_many",
+      eff_codes([mk_item(f"e{i}") for i in range(21)]) == [("too_many", "setup_effects")])
+check("12a. 4 create_prop too_many",
+      eff_codes([mk_prop(f"p{i}") for i in range(4)]) == [("too_many", "setup_effects.3.type")])
+check("12b. props_before=3 + 1 create_prop too_many",
+      eff_codes([mk_prop("p0")], props_before=3) == [("too_many", "setup_effects.0.type")])
+check("13. same-list duplicate key",
+      eff_codes([mk_item("a"), mk_item("a")]) == [("duplicate", "setup_effects.1.key")])
+check("14a. non-dict entry shape", eff_codes(["x"]) == [("shape", "setup_effects.0")])
+check("14b. extra entry key shape",
+      eff_codes([{**mk_item("a"), "foo": 1}]) == [("shape", "setup_effects.0")])
+check("14c. missing key required",
+      eff_codes([{"type": "mk_item", "params": {"name": "Box"}}]) == [("required", "setup_effects.0.key")])
+check("14d. non-list effects shape", eff_codes({}) == [("shape", "setup_effects")])
+
+g_scope = qc.Scope({"giver": "character", "thing": "item"}, {"pr": "world_prop", "it": "item"}, frozenset({"zz"}))
+for target_val, want in (
+    ("pr", []),
+    ("it", [("wrong_kind", ".params.obj")]),
+    ("zz", [("not_yet_created", ".params.obj")]),
+    ("nope", [("unknown_target", ".params.obj")]),
+    ("thing", [("wrong_kind", ".params.obj")]),
+):
+    got_t = sorted((i["code"], i["path"]) for i in
+                   qc.check_expression({"type": "g_near", "params": {"obj": target_val}}, g_scope,
+                                       allowed_kinds=("condition",)))
+    check(f"condition target {target_val!r} → {want}", got_t == want, str(got_t))
+
+desc = qc.public_descriptor(qc.get("mk_item"))
+check("public_descriptor has object_kind", desc.get("object_kind") == "item", str(desc))
+try:
+    json.dumps(desc)
+    desc_json_ok = True
+except TypeError:
+    desc_json_ok = False
+check("public_descriptor of mk_item is JSON-safe", desc_json_ok)
+check("'target' in PARAM_TYPES", "target" in qc.PARAM_TYPES)
+hooks.unregister_owned_providers("test")
 
 print()
 if failures:
