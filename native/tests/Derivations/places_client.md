@@ -12,7 +12,7 @@
  * numbers, no screenshots — § B5a): the one pure rule the 3D client applies
  * to a seat the SERVER handed it, `packages/scene-render/src/placeSlot.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_places_client.mjs
+ * Usage:  node smoke_places_client.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (self-bundles through esbuild like its siblings)
  *
  * WHAT THE CLIENT DOES NOT DECIDE. A character's worldmap row carries

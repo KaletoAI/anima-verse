@@ -14,7 +14,7 @@
  * serialisable bus values while this store owns progress and measurements.
  *
  * The arithmetic is pure and dependency-free; the hand-derived cases live in
- * `native/tests/Derivations/walk_math.md`.
+ * `native/tests/Derivations/walk_math.md` — the C# vector tests under `native/tests/` execute those cases against the native port; this TypeScript copy has no executing test since E3 deleted the browser scene's JS runners.
  */
 
 /** One measured checkpoint of `startApp`; completion may be out of order. */

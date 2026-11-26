@@ -13,7 +13,7 @@
  * `figures.Figure` (`beginBridgeLift`, `holdsHeight`) and `npcs.NpcManager.tick`
  * (§ B5a: numbers, never screenshots). Task C5 of plan-bruecken-feinschliff.
  *
- * Usage:  node the browser scene's deleted smoke_bridge_lift.mjs
+ * Usage:  node smoke_bridge_lift.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client modules itself; part [V] reads the clips
  *          idle, walk, get-up-bed, get-up-chair, the pair half greeting-handshake__a
  *          and the two clips the bridges leave from shared/models/clips —

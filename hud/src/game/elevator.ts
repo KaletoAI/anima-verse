@@ -12,9 +12,8 @@
  *
  * Pure like `walk.ts`, `proximity.ts` and `roomwalk.ts`: plain numbers, no
  * Three, no DOM, no module state and no import BUT one to its own kind —
- * `stairs.ts` is as pure as this file, and the transpile of
- * `native/tests/Derivations/walk_math.md` follows a `./x` import between the
- * modules it loads, exactly as it does for `clickmove.ts` → `walk.ts`.
+ * `stairs.ts` is as pure as this file. The hand-derived cases live in
+ * `native/tests/Derivations/walk_math.md`; the C# vector tests under `native/tests/` execute those cases against the native port; this TypeScript copy has no executing test since E3 deleted the browser scene's JS runners.
  */
 import { nearestRoomAt } from './stairs';
 

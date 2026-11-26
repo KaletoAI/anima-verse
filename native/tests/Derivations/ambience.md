@@ -11,7 +11,7 @@
  * Smoke check for the room ambience and the night clock — the browser scene's ambience.ts,
  * the browser scene's roomAt.ts, and the Engine's applyAmbience (inline below).
  *
- * Usage:  node the browser scene's deleted smoke_ambience.mjs   (from the repo root)
+ * Usage:  node smoke_ambience.mjs   (historical; the runner was deleted with the browser scene in E3)   (from the repo root)
  *
  * Hand derivations (cases in shared/test-vectors/ambience.json, shared with the
  * native client's C# tests). JSON wrappers: `stepAmbienceN(cur, target, dt, n)`

@@ -75,7 +75,7 @@ def build_reversed(anim, sha):
         bad.append('kind/loop/pair')
     # Measured as the client renders an entry: it raises the root by the
     # surface height in proportion to the hips' own descent (entrySupportLift,
-    # the browser scene's scene). The unbaked support is that surface, so frame i
+    # formerly in the browser 3D scene, deleted in E3). The unbaked support is that surface, so frame i
     # stands support * p(i) higher than the file says.
     support = float(meta['geometry'].get('support_unbaked_cm') or 0.0)
     h0, h1 = frames[0]['Hips'][1], frames[-1]['Hips'][1]

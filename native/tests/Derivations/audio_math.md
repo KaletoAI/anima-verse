@@ -9,7 +9,7 @@
 ```text
 /**
  * Task 58 / E8-T1. Canonical hand derivations for audio.json.
- * Run: node the browser scene's deleted smoke_audio_math.mjs (no browser/server/audio device).
+ * Run: node smoke_audio_math.mjs   (historical; the runner was deleted with the browser scene in E3) (no browser/server/audio device).
  * P3-R31: transform the ORIGINAL prefs, soundtrack, voiceover and audio code;
  * never copy their algorithms or edit the browser 3D scene's sources or packages.
  *

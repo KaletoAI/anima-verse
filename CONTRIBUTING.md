@@ -22,7 +22,6 @@ pip install -e .
 ./fetch_models.sh            # u2net + the built-in embedding model
 
 ./start.sh --world demo      # backend on :8000, logs in logs/main.log
-./start.sh --with-3d         # plus the 3D client on :5183
 ./start.sh --stop | --restart | --status
 ```
 
@@ -30,12 +29,12 @@ The first start of a world without users logs a random bootstrap admin password 
 `grep "BOOTSTRAP ADMIN" logs/main.log`.
 
 Frontend work needs one `npm install` at the repository root (it is an npm workspace root covering
-`frontend`, `client3d` and `packages/*`):
+`frontend`, `hud` and `packages/*`):
 
 ```bash
 npm run dev:admin            # Vite on :5173
 npm run build:admin          # → static/game_admin/ (the built assets are committed)
-npm run dev:client3d         # 3D client on :5183
+npm run dev -w hud           # HUD page alone on :5184
 npm run lint -w frontend     # the only lint script; covers frontend/ and packages/*/src
 ```
 
@@ -152,7 +151,7 @@ feat!: remove the Telegram channel
 
 Common types: `feat`, `fix`, `perf`, `refactor`, `chore`, `build`, `docs`; `!` marks a breaking
 change. Scopes in use include `llm`, `chat`, `world`, `character`, `imagegen`, `queue`, `sim`,
-`admin`, `ui`, `frontend`, `client3d`, `3d`, `data`, `security`.
+`admin`, `ui`, `frontend`, `hud`, `native`, `3d`, `data`, `security`.
 
 Before opening a pull request:
 

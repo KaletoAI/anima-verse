@@ -19,8 +19,8 @@
  * picture actually changes. So one notification means one redraw, and standing
  * still costs neither.
  *
- * All the arithmetic is in `game/minimap.ts` and hand-checked in
- * `native/tests/Derivations/walk_math.md`; the shading is `hillshadeImage` of
+ * All the arithmetic is in `game/minimap.ts`, its hand-derived cases in
+ * `native/tests/Derivations/walk_math.md` (no JS runner since E3); the shading is `hillshadeImage` of
  * `@anima/scene-render` (hand-checked in `smoke_hillshade.mjs`, computed in
  * `main.ts` once per field). Nothing here computes a coordinate or a grey of
  * its own — this file only says where the finished picture lands.

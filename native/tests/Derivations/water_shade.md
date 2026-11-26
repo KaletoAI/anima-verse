@@ -11,7 +11,7 @@
  * Smoke check for WATER AS A SHADING OF THE GROUND — the browser scene's
  * `waterShade.ts` (Wasser v2, K-A E4; `recherche-wasser-v2.md` § 3.3, § 4 K-A).
  *
- * Usage:  node the browser scene's deleted smoke_water_shade.mjs
+ * Usage:  node smoke_water_shade.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).
@@ -173,7 +173,7 @@
  * measured from the CLIENT side, and the wade/swim crossover against the LOCAL
  * level.
  *
- * Usage:  node the browser scene's deleted smoke_water_plane.mjs
+ * Usage:  node smoke_water_plane.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (transpiles `scene/waterPlaneMath.ts` and `game/walk.ts`; needs esbuild)
  *
  * WHAT LEFT WITH WASSER v2 K-A E5. The water used to be a MESH of its own — a
@@ -679,7 +679,7 @@
  * Smoke check for the WATERFALL ("Ein Wasser-Gesetz" W5) — which segment of a
  * river's own flow axis is a fall, where it stands, and how wide it is.
  *
- * Usage:  node the browser scene's deleted smoke_waterfall.mjs
+ * Usage:  node smoke_waterfall.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (transpiles `packages/scene-render/src/waterfall.ts`; needs esbuild)
  *
  * The profile the axis belongs to is checked next door

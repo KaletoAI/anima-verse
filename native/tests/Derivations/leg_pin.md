@@ -17,7 +17,7 @@
  * `cmu_clip._plant_feet` / `_pin_feet`). Numbers only (§ B5a); a SYNTHETIC
  * skeleton, no clip files, no server.
  *
- * Usage:  node the browser scene's deleted smoke_leg_pin.mjs
+ * Usage:  node smoke_leg_pin.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (needs esbuild and three from the workspace)
  *
  * ===========================================================================

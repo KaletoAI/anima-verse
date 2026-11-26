@@ -11,7 +11,7 @@
  * Smoke check for the EXPLORATION VEIL — the haze over ground the avatar has
  * never walked (`plan-fog-schleier-v2.md`, § A12).
  *
- * Usage:  node the browser scene's deleted smoke_fog_veil.mjs
+ * Usage:  node smoke_fog_veil.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (transpiles `scene/fogVeilMath.ts`; bundles `scene/fogVeil.ts`,
  *          needs three)
  *

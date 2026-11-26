@@ -9,7 +9,7 @@
 ```text
 /**
  * E7-T1 standalone shared vectors, no live tables, renderer, assets or network.
- * Usage: node the browser scene's deleted smoke_embody_vectors.mjs
+ * Usage: node smoke_embody_vectors.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * embody.json has ONE canonical source: this smoke. The collected hand tables
  * below come from smoke_offer_resolve, smoke_place_lift and smoke_pos_echo.
@@ -92,7 +92,7 @@
  * marker's storey-0 terrain lift is sampled — and `pickablePlaceFor` — WHICH
  * place a click on a prop mesh opens.
  *
- * Usage:  node the browser scene's deleted smoke_place_lift.mjs
+ * Usage:  node smoke_place_lift.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Like `scripts/smoke_scene_recipe.py` and `smoke_walk_math.mjs`, every
  * expected number below is derived BY HAND from the contract (§ B5a), never
@@ -204,7 +204,7 @@
  * Arrival cannot make answer 7 valid again (ok, throttled, 409, or network).
  * A cancel reserves 8 while 7 is in flight; only 7 is in the sent ring until
  * its answer settles. Replacement drops reserved 8 rather than cancelling J2.
- * Usage: node the browser scene's deleted smoke_pos_echo.mjs
+ * Usage: node smoke_pos_echo.mjs   (historical; the runner was deleted with the browser scene in E3)
  * Hand derivation: sent [1,2,3] includes 2, not 9; another session or null
  * origin is foreign. Sending 1..65 to a 64-entry ring evicts only 1, leaving
  * 2..65 (64 numbers). A view switch must publish its revision before fetching;

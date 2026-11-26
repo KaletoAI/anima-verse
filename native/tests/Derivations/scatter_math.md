@@ -17,7 +17,7 @@
  * same contract, and splitting them over two files would duplicate this
  * harness and let the halves drift apart.
  *
- * Usage:  node the browser scene's deleted smoke_scatter_math.mjs
+ * Usage:  node smoke_scatter_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as `smoke_ground_math.mjs` and `scripts/smoke_scene_recipe.py`:
  * every expected number below is derived BY HAND in this header and NEVER

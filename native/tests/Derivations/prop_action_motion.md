@@ -11,7 +11,7 @@
 /**
  * Hand derivations for prop_action_motion.json (metres, seconds, compass degrees).
  * No expected value is sampled from production. Run:
- *   node the browser scene's deleted smoke_prop_action_motion.mjs
+ *   node smoke_prop_action_motion.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * [2] Entry fraction = clamp((elapsed + max(age,0)*max(rate,0))/duration,0,1).
  * Original (elapsed,duration,rate,age) values: (2,4,1,0),(1,4,1,1),

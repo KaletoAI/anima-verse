@@ -8,7 +8,7 @@
 
 ```text
 /**
- * Usage: node the browser scene's deleted smoke_secondary_motion.mjs
+ * Usage: node smoke_secondary_motion.mjs   (historical; the runner was deleted with the browser scene in E3)
  * Hand derivation, metres/seconds, Y-up gravity (0,-9.81,0):
  * omega²=(4*pi)²=157.9136704. With m=2 upright a_g=(0,-9.81,0)
  * gives e_y=-9.81/omega²=-0.06212255072; m=1 gives 0 and m=.5 gives

@@ -133,7 +133,8 @@ nothing. **Fixed (Task 9 fix 2, fit version 9 / ``CUT_VERSION`` 4)**: the range 
 gaps 115–270°) × k 0.3111 = **0.1741 m** in the frame (bind 0.1640 / 0.1674) — and the same material reads
 ``shaft_poke`` **0 / 0** (33 / 41 shin vertices), the fit ACCEPTED, its shaft geometry byte-identical to version 8
 (``shaft_sha`` deebfd6b…). The same fit assembled with the stand-in trousers (four boot nodes,
-``scripts/check_footwear.mjs --bare``): seam gap 0.0000 mm and leg follow 0.00° in still / idle / walk / sit,
+``scripts/check_footwear.mjs --bare``, a browser measuring tool deleted with the browser scene in E3; last version at f4ee783af — the
+``check_footwear.mjs`` numbers in this module are historical): seam gap 0.0000 mm and leg follow 0.00° in still / idle / walk / sit,
 ``open_loops_above_split`` 0, penetration 1.6–1.7 % per side (round 1: 2.7–3.6), walk strike 1.6–3.7 / off
 −1.1–1.6 mm, seat floor 3.1–7.4 mm, thigh in shaft 0 %, and ``shaft_poke`` **0.00 %** in every frame (version 3:
 76–85 %; the collar range alone still read 55–70 % — the script's boot volume had no lid on a shell mesh, fixed

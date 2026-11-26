@@ -11,7 +11,7 @@
  * Smoke check for the SHADOW CAMERA'S TEXEL GRID —
  * the browser scene's `shadowSnap.ts`, used by `scene/engine.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_shadow_snap.mjs
+ * Usage:  node smoke_shadow_snap.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).

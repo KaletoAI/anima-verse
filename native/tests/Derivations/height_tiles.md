@@ -11,7 +11,7 @@
  * Smoke check for the height-tile LOADING POLICY —
  * the browser scene's `heightTiles.ts` (§ A16.3).
  *
- * Usage:  node the browser scene's deleted smoke_height_tiles.mjs
+ * Usage:  node smoke_height_tiles.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is counted BY HAND from the tile raster, never recorded
  * from the current output. The question the file answers is "which indexed
@@ -94,7 +94,7 @@
  * Smoke check for the shared WORLD height sampler —
  * `packages/scene-render/src/worldHeight.ts` (§ A16).
  *
- * Usage:  node the browser scene's deleted smoke_world_height.mjs
+ * Usage:  node smoke_world_height.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * TWIN DISCIPLINE. The same field and the same expected numbers are checked
  * against the Python side in `scripts/smoke_heightfield.py`, section [8]. One

@@ -284,7 +284,8 @@ OUTER_MIN_SLICE_VERTICES = 4
 
 #: SHOULDER_MEASURED (2026-11-12, plan 2026-11-12-hairdeck-spring-chains Task 6, Ruling H3 revised; read-only copies
 #: of Kira's base 20d5701a and Rosi's base ed6cab12 with their HairDeck fits — Kira seeds 42/44, Rosi 42 — and the
-#: chains' motion payload, ``scripts/check_garment_collision.mjs --motion … --area LeftShoulder,RightShoulder``,
+#: chains' motion payload, ``scripts/check_garment_collision.mjs --motion … --area LeftShoulder,RightShoulder`` (historical; the tool was
+#: deleted with the browser scene in E3, last version at f4ee783af),
 #: 8 samples, hair ``excess`` after the push = share > 5 mm inside beyond the bind depth, worst sample; the AREA =
 #: the hair over shoulder-dominated body vertices): Shoulder-dominant vertices 418–453, distance to the segment
 #: p50 4.2–4.5, p75 5.2–5.5, p95 6.2–6.9 cm (segment 10.7–11.1 cm) → r 6.8–7.5 cm. Without → with the pair,

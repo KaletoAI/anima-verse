@@ -13,7 +13,7 @@
  * `app/blender/scripts/_root_motion.py`. Pure numbers (§ B5a), no three, no
  * clips, no server.
  *
- * Usage:  node the browser scene's deleted smoke_foot_lock_math.mjs
+ * Usage:  node smoke_foot_lock_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (needs esbuild; reads scripts/fixtures/root_motion_cases.json)
  *
  * Hand-derived expectations

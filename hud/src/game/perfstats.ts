@@ -6,7 +6,8 @@
  * in the picture said whether a tier does anything at all. These are the four
  * figures that answer that, and this module is the arithmetic behind them —
  * pure like `walk.ts` and `prefs.ts`: no DOM, no `three`, no module state, so
- * `native/tests/Derivations/walk_math.md` can hand-check every case.
+ * every case can be hand-checked (`native/tests/Derivations/walk_math.md`; no
+ * JS runner executes this TypeScript copy since E3 deleted the browser scene).
  *
  * WHAT COMES FROM WHERE, and why two of the figures cannot come from
  * `renderer.info`:

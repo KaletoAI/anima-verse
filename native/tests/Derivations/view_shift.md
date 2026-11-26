@@ -11,7 +11,7 @@
  * Smoke run for the browser scene's `viewShift.ts` — where the 3D client's
  * camera aims when the HUD's chat window covers part of the picture.
  *
- * Usage:  node the browser scene's deleted smoke_view_shift.mjs
+ * Usage:  node smoke_view_shift.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (transforms the module with esbuild — a Vite dependency, already
  *          installed; no bundler, no GL context, no server)
  *

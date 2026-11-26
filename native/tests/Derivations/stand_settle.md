@@ -14,7 +14,7 @@
  * the browser scene's `npcs.ts` (the bridge hand-over in `tick`, the goal write
  * in `update`).
  *
- * Usage:  node the browser scene's deleted smoke_stand_settle.mjs
+ * Usage:  node smoke_stand_settle.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every expected number below is derived BY HAND from the rule written out
  * here, never recorded from the current output.

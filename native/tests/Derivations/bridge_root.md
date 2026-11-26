@@ -11,7 +11,7 @@
  * Smoke check for BRIDGE CLIPS WITH ROOT MOTION — the browser scene's `bridgeTravel.ts`
  * and its consumer `figures.Figure` (§ B5a: numbers, never screenshots).
  *
- * Usage:  node the browser scene's deleted smoke_bridge_root.mjs
+ * Usage:  node smoke_bridge_root.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client modules itself; part [B] needs the re-imported
  *          `get-up-chair` / `get-up-bed` in shared/models/clips — READ ONLY)
  *

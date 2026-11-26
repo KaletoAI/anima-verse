@@ -10,7 +10,7 @@
 /**
  * Smoke check for the prop light pool — the browser scene's lightPool.ts.
  *
- * Usage:  node the browser scene's deleted smoke_light_pool.mjs   (from the repo root)
+ * Usage:  node smoke_light_pool.mjs   (historical; the runner was deleted with the browser scene in E3)   (from the repo root)
  *
  * Hand derivations (cases in shared/test-vectors/light_pool.json, shared with
  * the native client's C# tests). JSON wrappers: `visibleRooms` is a LIST (the

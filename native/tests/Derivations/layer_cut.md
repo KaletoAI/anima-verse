@@ -12,7 +12,7 @@
  * arithmetic the terrain material composites its material with, and the proof
  * that the three ladders it replaces are really gone.
  *
- * Usage:  node the browser scene's deleted smoke_layer_cut.mjs
+ * Usage:  node smoke_layer_cut.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (transpiles `@anima/scene-render` `layerCut.ts`; needs esbuild)
  *
  * The server half is `scripts/smoke_terrain_layers.py` — the BAKE. This is the
@@ -182,7 +182,7 @@
  * the open world's ground stop looking like wallpaper, and the arithmetic that
  * steers it (§ B5a: strings and numbers, never screenshots).
  *
- * Usage:  node the browser scene's deleted smoke_natural_ground.mjs
+ * Usage:  node smoke_natural_ground.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client's naturalGround + ground modules; needs three)
  *
  * ===========================================================================

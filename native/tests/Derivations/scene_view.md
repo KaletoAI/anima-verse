@@ -9,7 +9,7 @@
 ```text
 /**
  * Pure scene/interior view oracles, shared with the native client.
- * Usage: node the browser scene's deleted smoke_scene_view.mjs
+ * Usage: node smoke_scene_view.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Hand derivations for scene_view.json:
  * [O] Opening requires an interior AND building/ground/shell-area. Interior

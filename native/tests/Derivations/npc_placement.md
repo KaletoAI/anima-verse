@@ -14,7 +14,7 @@
  * (the browser scene's `npcPlacement.ts`, extracted from
  * `main.computeNpcPlacements` for the native client, plan Task 29).
  *
- * Usage:  node the browser scene's deleted smoke_npc_placement.mjs
+ * Usage:  node smoke_npc_placement.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is derived BY HAND here and never recorded from the
  * current output (§ B5a). The cases run from

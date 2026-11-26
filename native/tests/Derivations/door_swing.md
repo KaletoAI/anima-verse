@@ -11,7 +11,7 @@
  * Smoke check for the DOOR SWING maths of the 3D client (v5 door props,
  * user decision 2026-08-27) — the browser scene's `doorSwing.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_door_swing.mjs
+ * Usage:  node smoke_door_swing.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Like every other check here, each expected number below is derived BY HAND
  * from the contract (§ B5a: numbers, never a screenshot, and never a value

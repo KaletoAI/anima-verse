@@ -14,7 +14,7 @@
  * (the browser scene's `scatterLod.ts`, the `IMPOSTOR_*` half; the GPU side is
  * the browser scene's `impostors.ts`).
  *
- * Usage:  node the browser scene's deleted smoke_impostors.mjs
+ * Usage:  node smoke_impostors.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as `smoke_scatter_math.mjs` and `smoke_occlusion.mjs`: every
  * expected number below is derived BY HAND in this header and never recorded

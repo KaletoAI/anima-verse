@@ -14,7 +14,7 @@ implementations: when both pass the same file, they compute the same numbers.
   execute — for logic that after E3 exists only natively (format: `native/tests/Derivations/README.md`).
   Case labels start with the `[n]` of that derivation.
 - **E3 deleted the browser 3D scene** together with its runners and dispatchers (the JS runners
-  named below as "the browser scene's deleted …" no longer exist; the C# vector tests under
+  and dispatchers named below as "deleted in E3" / "until E3" no longer exist; the C# vector tests under
   `native/tests/` execute every vector file, plus the smokes under `scripts/` that name one).
 - **E1 (2026-11-25) moved every derivation out of the browser 3D scene**, which E3 deletes with the browser
   scene: smokes that test only package code moved to `scripts/`, a vector a Python smoke already
@@ -169,13 +169,13 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 
 ## E3 terrain, water and atmosphere
 
-Run `timeout 300 node the browser scene's deleted smoke_e3_vectors.mjs` to execute **every**
-case in the seven E3 files. The original smokes also read their migrated cases;
+Until E3, `smoke_e3_vectors.mjs` (deleted with the browser scene) executed **every**
+case in the seven E3 files; since E3 the C# vector tests under `native/tests/` do. The original smokes also read their migrated cases;
 their shader, integration, invariant and mutation checks remain in place.
 Companion smoke headers were collected into the canonical smoke's opening docstring, which
 moved word for word to the derivation document named as `source` in E1 (the companions keep
 theirs at their original sites). `[20]` and `[21]` labels refer to the additional hand
-derivations in that document. the browser scene's deleted `smoke_e3_vectors.mjs` stays the runner until E3.
+derivations in that document.
 
 | File | Canonical source | Areas |
 |---|---|---|
@@ -187,8 +187,8 @@ derivations in that document. the browser scene's deleted `smoke_e3_vectors.mjs`
 | `backdrop.json` | `native/tests/Derivations/backdrop_math.md` | Radius/height/clamp, compass, explicit-random and seeded ridge profiles |
 | `fog_veil.json` | `native/tests/Derivations/fog_veil.md` | Cell/key/grid, texture addressing, height/veil alpha, constants |
 
-The native consumer should mirror the adapters in
-the browser scene's deleted `e3VectorDispatch.mjs`. These are ordinary JSON argument values,
+The native consumer mirrors the adapters of the former
+`e3VectorDispatch.mjs` (deleted with the browser scene in E3). These are ordinary JSON argument values,
 not extensions to the vector loader or comparator:
 
 - `{"$map": [[key, value], ...]}` is a map; `{"$set": [value, ...]}` is a set.
@@ -281,8 +281,8 @@ Y easing until E7, as allowed by the Task 30 brief.
 
 ## E5 bridge root motion (Task 31, TypeScript side)
 
-Run `timeout 300 node the browser scene's deleted smoke_bridge_vectors.mjs` for all Task 31
-vectors without real models or live configuration. Each source smoke
+Until E3, `smoke_bridge_vectors.mjs` (deleted with the browser scene) ran all Task 31
+vectors without real models or live configuration; since E3 the C# vector tests do. Each source smoke
 also runs its own JSON; since E1 the hand derivations live in the derivation document
 named in the table (`native/tests/Derivations/`), the smoke keeps a pointer docstring.
 The original real-rig, consumer, mutation and bake-invariance checks stay local.
@@ -298,7 +298,7 @@ The original real-rig, consumer, mutation and bake-invariance checks stay local.
 | `foot_lock_measure.json` | `native/tests/Derivations/foot_lock_measure.md` | 58 | `relockValue`, `groundValue`, `hasGroundLiftTolerance` |
 | `stairs.json` | `native/tests/Derivations/walk_math.md` | 126 | `stairChain`, `stairsAt`, `stairY`, `stairLegTo`, `stairChainValue`, `stairLegToValue`, `stairLegsValue`, `rideSequenceValue`, `rideWalkValue`, `nearestRoomAt`, `rideArrivalClearsRun`, `constant` |
 
-The native consumer should mirror the browser scene's deleted `bridgeVectorDispatch.mjs`.
+The native consumer mirrors the former `bridgeVectorDispatch.mjs` (deleted in E3).
 These are test adapters; no browser production functions were added or changed:
 
 - JSON positions and paths use the production field names. Root paths are
@@ -376,7 +376,7 @@ production implementation; they are not converted into passing vectors.
 ## Pair clips and figure normalisation (Task 32)
 
 `smoke_pair_vectors.mjs` runs all 110 cases without live tables, model files,
-network or a DOM. The browser scene's deleted smokes `smoke_<name>.mjs` also ran their own vectors;
+network or a DOM. Until E3 the browser scene's smokes `smoke_<name>.mjs` (deleted) also ran their own vectors;
 the table names each vector's `source`:
 
 | JSON | Source | Cases |
@@ -467,7 +467,7 @@ Unknown function names fail through the shared runner; none are skipped.
 
 ## Secondary motion and extension bones (Task 33)
 
-`timeout 300 node the browser scene's deleted smoke_secondary_vectors.mjs` runs 22 cases
+Until E3, `smoke_secondary_vectors.mjs` (deleted with the browser scene) ran these 22 cases
 without live config, assets, DOM, network or historical git sources. All four
 JSON files have the single source `native/tests/Derivations/secondary_motion.md`,
 which holds the numbered hand derivations moved word for word from
@@ -507,8 +507,8 @@ an explicit parameter name ends in `_deg`):
   distance from the origin). This measures the same two ring pairs as the old
   inline chain cases; no solver formula is duplicated in the adapter.
 
-The adapter is the browser scene's deleted `secondaryVectorDispatch.mjs`; unknown functions
-fail through the common runner. No production TypeScript changed for Task 33.
+The adapter was `secondaryVectorDispatch.mjs` (deleted in E3); unknown functions
+failed through the common runner. No production TypeScript changed for Task 33.
 
 ## Animals and clip-less rigs (Task 34, TypeScript side)
 
@@ -633,12 +633,12 @@ contain the numbered hand derivations; the embodiment source
 collects the offer, place and position smoke headers. The original source
 smokes consume their migrated cases and retain their integration/invariant
 checks. Both first-person smokes consume their camera subset and retain the
-synthetic Figure rig checks. `node the browser scene's deleted smoke_embody_fixture.mjs`
-checks the separate synthetic world and scripted answers in
+synthetic Figure rig checks. Until E3, `smoke_embody_fixture.mjs` (deleted with the browser scene)
+checked the separate synthetic world and scripted answers in
 `native/fixtures/embody/`; its README derives the path frames and offer probes.
 
-the browser scene's deleted `embodyVectorDispatch.mjs` bundles the existing pure production
-modules and provides test adapters only. It contains no expected-value tables.
+The former `embodyVectorDispatch.mjs` (deleted in E3) bundled the pure production
+modules and provided test adapters only. It contained no expected-value tables.
 All distances are metres, times are seconds except `nowMs`/echo protocol stamps
 in milliseconds, and angles are radians except explicitly degree arguments.
 There is one `source` per JSON file. C# consumers for the new functions arrive
@@ -708,7 +708,7 @@ and mesh assertions. Task 83 removes the obsolete own-approach catch-up,
 projection and server-lead cases, retaining observer timing. The 26 B1 cases
 exercise the same production motion sampler in both clients.
 
-the browser scene's deleted `propActionVectorDispatch.mjs` calls the production exports
+The former `propActionVectorDispatch.mjs` (deleted in E3) called the production exports
 through shape adapters. Native-facing signatures:
 
 - `sampleMotion(plan, elapsedS)` → `{phase,x,y,z,yaw}` on the own client
@@ -752,7 +752,7 @@ the shared sampler cases without VSTest.
 
 The separate synthetic world and route answer table are documented in
 [`native/fixtures/propactions/README.md`](../../native/fixtures/propactions/README.md).
-`node the browser scene's deleted smoke_prop_action_fixture.mjs` verifies their consistency
+Until E3, `smoke_prop_action_fixture.mjs` (deleted with the browser scene) verified their consistency
 and hand arithmetic against production motion helpers; the embody inputs stay
 unchanged.
 

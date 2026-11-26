@@ -12,7 +12,7 @@
  * Smoke: the AUTHORED props of the world plane (§ A9a) on the client side.
  *
  * Usage: direct node call, self-bundling via esbuild:
- *     node the browser scene's deleted smoke_world_props.mjs
+ *     node smoke_world_props.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Three questions, all of them arithmetic, all expectations derived BY HAND
  * from the contract below (§ B5a — never recorded from a run):

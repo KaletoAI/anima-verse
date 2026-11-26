@@ -10,9 +10,9 @@
  *
  * Pure like `walk.ts` and `proximity.ts`: no DOM, no import, no module state —
  * `loadPrefs` takes the raw string (or null) the store returned and
- * `savePrefs` returns the string to put back. That is what lets
- * `native/tests/Derivations/walk_math.md` check the whole fallback behaviour with
- * hand-written cases. The DOM side is two lines in the caller
+ * `savePrefs` returns the string to put back. That is what lets the whole
+ * fallback behaviour be pinned with hand-written cases
+ * (`native/tests/Derivations/walk_math.md`; the C# vector tests under `native/tests/` execute those cases against the native port; this TypeScript copy has no executing test since E3 deleted the browser scene's JS runners). The DOM side is two lines in the caller
  * (`localStorage.getItem/setItem`).
  *
  * `loadPrefs` must never throw and never return a half-filled object: the

@@ -31,7 +31,7 @@
  * rows 58..63 are each empty by D6. Material, field, drift, non-finite and
  * mutation checks stay inline.
  *
- * Usage:  node the browser scene's deleted smoke_undergrowth.mjs
+ * Usage:  node smoke_undergrowth.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * WHERE THESE CASES COME FROM. Sections (E) and part of (C) are the old
  * section (K) of `smoke_scatter_math.mjs`, moved here whole: the layer is no

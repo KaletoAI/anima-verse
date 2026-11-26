@@ -676,8 +676,9 @@ export async function getAnimationClips(): Promise<ApiClipLibrary> {
 /** Music and ambience the server has on disk (`app/routes/game_audio.py`).
  *  Empty when the route is missing or the request fails — audio is decoration,
  *  and a client that throws its start away because a folder is empty would be
- *  the worse bug. The shape is validated by `readManifest` (pure, checked in
- *  native/tests/Derivations/walk_math.md), so callers always get two music buckets and a
+ *  the worse bug. The shape is validated by `readManifest` (pure; hand-derived
+ *  cases in native/tests/Derivations/walk_math.md, executed only against the
+ *  native port since E3), so callers always get two music buckets and a
  *  plain terrain map. */
 export async function getAudioManifest(): Promise<AudioManifest> {
   try {

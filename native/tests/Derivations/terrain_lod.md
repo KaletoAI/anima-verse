@@ -12,7 +12,7 @@
  * (plan-ein-boden.md § G2, decision 5.3) and the analytic click march in
  * `packages/scene-render/src/worldHeight.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_terrain_lod.mjs
+ * Usage:  node smoke_terrain_lod.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).

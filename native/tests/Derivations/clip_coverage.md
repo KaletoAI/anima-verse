@@ -11,7 +11,7 @@
  * Smoke check for the pure clip-coverage rules of the 3D client —
  * the browser scene's `clipCoverage.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_clip_coverage.mjs
+ * Usage:  node smoke_clip_coverage.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as the other client smokes: every expectation below is
  * derived BY HAND from the rule as written down, never recorded from the

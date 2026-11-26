@@ -5,7 +5,9 @@
  * `game/audio.ts` plays URLs and has no opinion about them, `api.ts` talks to
  * `/tts/speak`; this module is the opinion and the queue between the two. The
  * choosing part is pure (no DOM, no imports beyond a type), so every rule below
- * is checked with hand-written cases in `native/tests/Derivations/walk_math.md` — the
+ * has hand-written cases in `native/tests/Derivations/walk_math.md` (executed by
+ * the C# vector tests against the native port; this TypeScript copy has no
+ * executing test since E3 deleted the browser scene's JS runners) — the
  * only reason a "the narrator is read aloud" bug can be found without listening
  * to a whole conversation. The driver takes its three side effects as
  * parameters for the same reason: it is the queue that is worth checking, not

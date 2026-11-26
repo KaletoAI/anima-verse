@@ -12,7 +12,7 @@
  * plus `basePitchDeg` of the browser scene's `cameraFraming.ts`) — the pure part;
  * the input events and the render loop that call it need a browser.
  *
- * Usage:  node the browser scene's deleted smoke_camera_math.mjs
+ * Usage:  node smoke_camera_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Hand-derived expectations (§ B5a: numbers, no snapshots). Constants of the
  * rules: MIN_DIST 0.8, MAX_DIST 150, half FOV 22.5° (sin 22.5° = 0.3826834324),

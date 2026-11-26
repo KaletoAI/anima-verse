@@ -13,7 +13,7 @@
  * FBXLoader, the root path the client extracts from them, and the anchor
  * transformation the server and the client agree on (§ A8a).
  *
- * Usage:  node the browser scene's deleted smoke_clip_pair.mjs
+ * Usage:  node smoke_clip_pair.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (needs three, esbuild and the converted clips in shared/models/clips:
  *          greeting-handshake__a.fbx / __b.fbx / greeting-handshake.json — the
  *          animation studio's handshake, anims/greeting-handshake.py)

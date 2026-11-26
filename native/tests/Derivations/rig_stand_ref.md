@@ -13,7 +13,7 @@
  * consumer the browser scene's `figures.adaptExternalClips` (§ B5a: numbers,
  * never screenshots).
  *
- * Usage:  node the browser scene's deleted smoke_rig_stand_ref.mjs
+ * Usage:  node smoke_rig_stand_ref.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client modules itself; reads shared/models/rig/reference.fbx
  *          and the clips `idle` / `get-up-chair` in shared/models/clips — READ ONLY)
  *

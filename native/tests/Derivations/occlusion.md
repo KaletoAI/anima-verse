@@ -12,7 +12,7 @@
  * patch and the arithmetic that steers it (§ B5a: strings and numbers, no
  * screenshots).
  *
- * Usage:  node the browser scene's deleted smoke_occlusion.mjs
+ * Usage:  node smoke_occlusion.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client's occlusion + ground modules; needs three)
  *
  * ===========================================================================

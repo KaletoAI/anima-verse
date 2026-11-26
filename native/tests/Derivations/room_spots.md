@@ -11,7 +11,7 @@
  * Smoke check for the ROOM SPOTS of "Ein Boden" E5b — the centres, stands and
  * seats that used to be measured against meshes and are read off data now.
  *
- * Usage:  node the browser scene's deleted smoke_room_spots.mjs
+ * Usage:  node smoke_room_spots.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Every number below is derived BY HAND in this docstring and never recorded
  * from the current output (§ B5a: numbers, not screenshots).

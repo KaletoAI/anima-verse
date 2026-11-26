@@ -434,7 +434,7 @@ CONTRACT_DONOR_MIN = 0.5
 # 10-15 mm 7258 (mean share 0.76), 15-20 mm 702 (0.46), 20-30 mm 144 (0.46), 30-40 mm 19 (0.20), none beyond 40 mm
 # — twice the clearance (``CLEAR_M``) keeps every fitted layer whole. Contract-only weights left the chest jiggling
 # under a static blazer: run clip with the secondary motion, 21 % of the covered chest skin in front of the fabric on
-# average, 44 % at the worst sample (``scripts/check_garment_collision.mjs --motion``); the capsule push changed none.
+# average, 44 % at the worst sample (``scripts/check_garment_collision.mjs --motion``, deleted in E3 — historical numbers); the capsule push changed none.
 EXTENSION_FULL_M = 0.025
 EXTENSION_ZERO_M = 0.05
 # Skinned transfer (clothing): a bone gets its own rigid transform from its RIGID CORE — the body vertices carrying

@@ -11,7 +11,7 @@
  * Smoke check for the STATISTICS of the render bench (the browser scene's benchStats.ts
  * — the pure part; the camera drive and the DOM readout need a browser).
  *
- * Usage:  node the browser scene's deleted smoke_bench_math.mjs
+ * Usage:  node smoke_bench_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Hand-derived expectations (§ B5a: numbers, no snapshots):
  * [1] percentile — linear interpolation between ranks (p50 of 1,2,3,4 = 2.5)

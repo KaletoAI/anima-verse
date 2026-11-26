@@ -11,7 +11,7 @@
  * Smoke check for the labels over the world map and the overview auto-close of
  * the open view — the browser scene's nameTags.ts and the browser scene's openView.ts.
  *
- * Usage:  node the browser scene's deleted smoke_overview_labels.mjs
+ * Usage:  node smoke_overview_labels.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Hand derivations (cases in shared/test-vectors/overview_labels.json, shared
  * with the native client's C# tests):

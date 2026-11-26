@@ -12,7 +12,7 @@
  * (plan-freie-weltkarte-e4-3d-client.md task 5; contract v6 "Gebiete") —
  * the browser scene's `enterLocation.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_enter_math.mjs
+ * Usage:  node smoke_enter_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as the browser scene's deleted `smoke_ground_math.mjs` and
  * `smoke_travel_math.mjs`: every expected number below is derived BY HAND from
@@ -176,7 +176,7 @@
  * Smoke: the CLIENT's polygon primitives answer exactly what the SERVER's do
  * (contract v6 "Gebiete", § B5a — numbers, never screenshots).
  *
- * Usage:  node the browser scene's deleted smoke_polygon_containment.mjs
+ * Usage:  node smoke_polygon_containment.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Since v6 a location is a drawn POLYGON: `map3d.boundary` in local metres
  * around the pin, turned by `yaw_deg` (§ A1.1). Both sides of the wire have to

@@ -4,9 +4,12 @@
  *
  * `game/audio.ts` plays URL lists and has no opinion about them; this module
  * is the opinion, and it is pure: manifest in, string list out. No DOM, no
- * imports beyond a type, no module state — every rule below is checked with
- * hand-computed cases in `native/tests/Derivations/walk_math.md`, which is the only
- * reason a "the music flickers at dusk" bug can be found without listening.
+ * imports beyond a type, no module state — every rule below has hand-computed
+ * cases in `native/tests/Derivations/walk_math.md` (the C# vector tests under
+ * `native/tests/` execute them against the native port; this TypeScript copy
+ * has no executing test since E3 deleted the browser scene's JS runners). Those
+ * cases are the only reason a "the music flickers at dusk" bug can be found
+ * without listening.
  *
  * The two decisions that need more than a lookup:
  *

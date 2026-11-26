@@ -15,7 +15,7 @@
  * reference rig (`footLock.ts`, twin of `_root_motion.py`). Numbers only
  * (§ B5a); a SYNTHETIC skeleton, no clip files, no server.
  *
- * Usage:  node the browser scene's deleted smoke_foot_lock_measure.mjs
+ * Usage:  node smoke_foot_lock_measure.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (needs esbuild and three from the workspace)
  *
  * ===========================================================================

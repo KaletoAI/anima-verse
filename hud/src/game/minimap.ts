@@ -26,8 +26,9 @@ import { FOG_FAR_M } from '../scene/fogConstants';
  * top. Terrain is never withheld — it is the ground, and only locations hide.
  *
  * PURE like `walk.ts` and `soundtrack.ts`: no `three`, no DOM, no
- * module state, and only type-only imports. That is what lets
- * `native/tests/Derivations/walk_math.md` derive every number below by hand — the canvas
+ * module state, and only type-only imports. That is what lets every number
+ * below be derived by hand (`native/tests/Derivations/walk_math.md`; no JS runner
+ * executes this TypeScript copy since E3 deleted the browser scene) — the canvas
  * in `hud/Minimap.tsx` only strokes what these functions return, and `main.ts`
  * only publishes the inputs.
  */

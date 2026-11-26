@@ -119,7 +119,7 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    height in BIND space: the placement maps the frame's up onto the body's up (``P4``'s basis ``[d, UP, ±right]``,
    ``d`` horizontal), so a frame height h stands at ``Pf · (0, h, 0)`` everywhere, and above the band the bind
    position IS the posed one (Leg / UpLeg stand in the bind pose). ``footwear_cut.cut_gates`` reads ``shaft_poke``
-   up to ``collar_m``; the hem (``garment_layers``) and ``scripts/check_footwear.mjs`` (the shaft node's extras
+   up to ``collar_m``; the hem (``garment_layers``) and the former ``scripts/check_footwear.mjs`` (deleted with the browser scene in E3; last version at f4ee783af; the shaft node's extras
    ``collar_bind_m``, contract ``docs/schnittstellen-3d.md``) read ``collar_bind_m``. The shaft part's highest
    vertex is no longer read as its top: on the P2 Work Shoes it is the back pull tab, 2.9 cm above the collar,
    and every shin vertex between the two read as a poke (``footwear_cut`` module docstring).
@@ -140,8 +140,8 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    boot than the image) and ``knee_margin_m`` ≥ ``KNEE_MARGIN_M`` — a guard of the clip, true by construction for
    every collar it leaves (an ankle boot reads its whole margin, ~30 cm on the fixture). The record's ``shaft``
    summary carries the worse sides' ``clip_m`` / ``knee_margin_m``. Fixture numbers: ``scripts/smoke_footwear_split.py``
-   [B8] / [B9]; the seated check (``seat_thigh_in_shaft`` ≤ 2 % per frame) is ``scripts/check_footwear.mjs``'s, not a
-   fit gate.
+   [B8] / [B9]; the seated check (``seat_thigh_in_shaft`` ≤ 2 % per frame) was ``scripts/check_footwear.mjs``'s (deleted in
+   E3, no native replacement yet), not a fit gate.
 
 Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the

@@ -101,7 +101,7 @@
  * The Value adapters select a property path from the function result.
  * Non-finite inputs use {"$number":"NaN"}; expectations stay finite.
  *
- * Usage:  node the browser scene's deleted smoke_walk_math.mjs
+ * Usage:  node smoke_walk_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Like `scripts/smoke_scene_recipe.py`, every expected number below is derived
  * BY HAND from the contract, never recorded from the current output.

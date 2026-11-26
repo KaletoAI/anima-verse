@@ -10,7 +10,7 @@
 /**
  * Smoke check for the event pins of the world map — the browser scene's eventPins.ts.
  *
- * Usage:  node the browser scene's deleted smoke_event_pins.mjs
+ * Usage:  node smoke_event_pins.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Hand derivations (cases in shared/test-vectors/event_pins.json, shared with
  * the native client's C# tests):

@@ -33,7 +33,7 @@ Derived by hand from the two consumers of the map:
      from a label table in the same module (``t(VIEW_LABELS[v])``,
      ``t(field.label)``, ``t(mood)``), so ANY string literal in
      frontend/src, packages/*/src and hud/src counts as a source — and so does
-     every C# literal under native/: the native client hands raw English UI
+     every C# literal under native/ outside native/tests/: the native client hands raw English UI
      strings to the HUD (``SendUi("toast", message, true)``), which translates them.
   2. Python ``t(en, lang)`` from app/core/i18n.py: the same map, server side.
      Callers pass literals directly and also hand raw English strings to the
@@ -138,6 +138,10 @@ SOURCE_TREES = [
     ("shared/items", {".json"}),
 ]
 PACK_EXTS = {".py", ".yaml", ".yml", ".json", ".ts", ".tsx"}
+
+# Test code under a source tree is no UI: a literal in a test must not keep a
+# de.json key alive.
+NON_SOURCE_DIRS = ("native/tests/",)
 
 # Keys whose only source the scan cannot see. Each entry names the real call
 # site, is re-checked by hand when it is added, and stays SHORT — a long
@@ -283,7 +287,7 @@ def source_files():
             if {"node_modules", "__pycache__", "bin", "obj", ".godot"} & set(p.parts):
                 continue
             rel = p.relative_to(REPO).as_posix()
-            if rel in NON_SOURCE_PY:
+            if rel in NON_SOURCE_PY or rel.startswith(NON_SOURCE_DIRS):
                 continue
             files.append((rel, p))
     if PACKS.exists():

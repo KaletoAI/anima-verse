@@ -15,7 +15,7 @@
  * § B5a: numbers, never screenshots. The whole chain on real rigs is
  * `smoke_bridge_root.mjs` [B12]–[B15].
  *
- * Usage:  node the browser scene's deleted smoke_bridge_heading.mjs
+ * Usage:  node smoke_bridge_heading.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (bundles the client modules itself; needs no clip files)
  *
  * Convention (clip frame, +Z forward, +X the figure's LEFT; yaw f means

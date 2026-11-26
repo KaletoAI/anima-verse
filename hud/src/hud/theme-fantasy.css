@@ -14,7 +14,7 @@
  * - No external assets and no webfonts: system serif (Georgia) for headings,
  *   system-ui for body text, everything else is gradients, layered
  *   box-shadows, a gradient border-image and font-variant.
- * - Nothing under the browser scene's scene/ or packages/scene-render is touched;
+ * - No 3D rendering code (packages/scene-render, the native client) is touched;
  *   the 3D rendering freeze binds.
  *
  * LOOK: aged vellum in lamplight rather than bright parchment — a bright

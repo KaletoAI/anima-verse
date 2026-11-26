@@ -12,7 +12,7 @@
  * stays on the storey of its room — the upper floor, the cellar, a storey
  * corridor — instead of dropping onto the terrain under the building.
  *
- * Usage:  node the browser scene's deleted smoke_pair_storey.mjs
+ * Usage:  node smoke_pair_storey.mjs   (historical; the runner was deleted with the browser scene in E3)
  *         (needs three and esbuild; no clips, no models, no server)
  *
  * Hand-derived expectations

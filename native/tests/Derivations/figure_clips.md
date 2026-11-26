@@ -15,7 +15,7 @@
  * are explicit arguments here; the module-state defaults of game/walk.ts are
  * checked to agree with them at the end.
  *
- * Usage:  node the browser scene's deleted smoke_figure_clips.mjs
+ * Usage:  node smoke_figure_clips.mjs   (historical; the runner was deleted with the browser scene in E3)
  * Cases:  shared/test-vectors/figure_clips.json (format anima-test-vectors/1).
  *
  * Hand derivations (game/walk.ts, scene/clipCoverage.ts). Pose defaults:

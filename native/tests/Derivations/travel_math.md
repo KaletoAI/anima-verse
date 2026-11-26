@@ -45,7 +45,7 @@
  * (plan-freie-weltkarte-e4-3d-client.md, task 4) —
  * the browser scene's `travelPath.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_travel_math.mjs
+ * Usage:  node smoke_travel_math.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as the browser scene's deleted `smoke_ground_math.mjs` and
  * the browser scene's deleted `smoke_walk_math.mjs`: every expected number below is derived BY
@@ -228,7 +228,7 @@
  * task 3) — `deadReckonRate` and `deadReckonStep` in
  * the browser scene's `travelPath.ts`.
  *
- * Usage:  node the browser scene's deleted smoke_travel_reckon.mjs
+ * Usage:  node smoke_travel_reckon.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * Same discipline as the browser scene's deleted `smoke_travel_math.mjs` and
  * `smoke_walk_math.mjs`: every expected number below is derived BY HAND from

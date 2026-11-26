@@ -12,7 +12,7 @@
  * one place that turns the server's clip clock (§ A8a) into the time the
  * mixer of `scene/figures.ts` `playPair()` is seeked to.
  *
- * Usage: timeout 300 node the browser scene's deleted smoke_pair_realtime.mjs
+ * Usage: timeout 300 node smoke_pair_realtime.mjs   (historical; the runner was deleted with the browser scene in E3)
  *        (needs three and esbuild; expectations live in pair_clip_phase.json.)
  *
  * Every number below is derived BY HAND in this docstring from the rule of

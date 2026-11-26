@@ -8,7 +8,7 @@
 
 ```text
 /** Hand-derived figure normalisation vectors (no model, config or server).
- * Usage: timeout 300 node the browser scene's deleted smoke_figure_normalisation.mjs
+ * Usage: timeout 300 node smoke_figure_normalisation.mjs   (historical; the runner was deleted with the browser scene in E3)
  *
  * [N] anchorFigureBind owns pivot position/scale: reset both, measure bind
  * bbox, k = height/(size.y || 1), position = (-cx*k,-minY*k,-cz*k).
