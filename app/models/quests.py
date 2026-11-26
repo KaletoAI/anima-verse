@@ -1,8 +1,8 @@
-"""Quest storage — templates, runs and facts (world.db).
+"""Quest storage — templates, runs, facts, run objects and payouts (world.db).
 
 Storage only: no engine logic, no effects, no notifications. Tables are
 declared in ``world_db_schema`` (``quest_templates``, ``quest_runs``,
-``quest_facts``).
+``quest_facts``, ``quest_run_objects``, ``quest_run_payouts``).
 
 A **template** refers to roles; its editable fields carry an integer
 ``revision`` (``update_template`` compares ``base_revision`` inside the
@@ -17,6 +17,12 @@ canonical) and ``ended_at`` (SYSTEM time).
 
 A **fact** is what a MIND did (``linked_characters.mind_of`` of the acting
 avatar — the caller resolves it): ``(mind, kind, subject)``, written once.
+
+A **run object** (``quest_run_objects``) records a world entity created for
+a run at a position (``setup``, ``step:<i>``, ``reward``); objects created
+at ``reward`` are always stored as permanent. A **payout**
+(``quest_run_payouts``) records an effect position owed by a run, written in
+the same transaction as the run creation or step completion that owes it.
 
 Locks: ``keyed_lock("quest_run", run_id)`` / ``keyed_lock("quest_template",
 template_id)`` are innermost — nothing here takes another lock or calls out.
@@ -43,6 +49,8 @@ _TEMPLATE_JSON_FIELDS = {
 _RUN_JSON_FIELDS = {
     "bindings": dict, "binding_labels": dict, "template_snapshot": dict, "step_log": list, "issues": list,
 }
+_OBJECT_JSON_FIELDS = {"ref": dict}
+_PAYOUT_JSON_FIELDS = {"issues": list}
 #: The content fields of a quest template (every one is a keyword of ``create_template``).
 TEMPLATE_CONTENT_KEYS = ("title", "summary", "gm_notes", "giver_role", "roles", "steps",
                          "start_condition", "prerequisites", "setup_effects", "rewards",
@@ -92,6 +100,18 @@ def _template_dict(row) -> Optional[Dict[str, Any]]:
 
 def _run_dict(row) -> Optional[Dict[str, Any]]:
     return None if row is None else _decode(row, _RUN_JSON_FIELDS)
+
+
+def _object_dict(row) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    d = _decode(row, _OBJECT_JSON_FIELDS)
+    d["permanent"] = bool(d.get("permanent"))
+    return d
+
+
+def _payout_dict(row) -> Optional[Dict[str, Any]]:
+    return None if row is None else _decode(row, _PAYOUT_JSON_FIELDS)
 
 
 def _container(value: Any, kind: type) -> Any:
@@ -202,23 +222,41 @@ def create_run(*, template: dict, bindings: dict, state: str, started_by: str = 
     ``binding_labels`` (role key -> display label, frozen at start: a rename
     later never changes what the quest book says).
 
-    A run created ``open`` gets ``started_game_ts`` stamped here; a
-    ``hidden``/``preparing`` run gets it from ``open_run``. An unknown
-    state is refused by the table's CHECK (sqlite3.IntegrityError).
+    When the template's ``setup_effects`` is a non-empty list, the run is
+    created in state ``preparing`` (regardless of ``state``) with empty
+    ``started_game_ts`` and ``expires_at``, and a pending ``setup`` payout
+    row is inserted in the same transaction. Otherwise, a run created
+    ``open`` gets ``started_game_ts`` stamped here; a ``hidden``/``preparing``
+    run gets it from ``open_run`` / ``finish_preparing``. An unknown state is
+    refused by the table's CHECK (sqlite3.IntegrityError).
     """
     run_id = "qr_" + uuid.uuid4().hex[:12]
-    started = game_time().canonical() if state == "open" else ""
     now = utc_now_iso()
     snapshot = dict(template or {})
+    setup_effects = snapshot.get("setup_effects")
+    has_setup = isinstance(setup_effects, list) and len(setup_effects) > 0
+    if has_setup:
+        run_state = "preparing"
+        started = ""
+        run_expires = ""
+    else:
+        run_state = state
+        started = game_time().canonical() if state == "open" else ""
+        run_expires = expires_at or ""
     with keyed_lock("quest_run", run_id), transaction() as conn:
         conn.execute(
             "INSERT INTO quest_runs (id, template_id, state, bindings, "
             "binding_labels, template_snapshot, started_by, started_game_ts, "
             "expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, str(snapshot.get("id") or ""), state,
+            (run_id, str(snapshot.get("id") or ""), run_state,
              _dump(_container(bindings, dict)),
              _dump(_container(binding_labels, dict)), _dump(snapshot), started_by or "",
-             started, expires_at or "", now, now))
+             started, run_expires, now, now))
+        if has_setup:
+            conn.execute(
+                "INSERT INTO quest_run_payouts (run_id, position, avatar, state, "
+                "issues, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (run_id, "setup", "", "pending", "[]", now, now))
     return get_run(run_id)
 
 
@@ -278,6 +316,23 @@ def open_run(run_id: str, *, started_game_ts: str, expires_at: str = "") -> bool
         return cur.rowcount > 0
 
 
+def finish_preparing(run_id: str, *, to_state: str, started_game_ts: str,
+                     expires_at: str) -> bool:
+    """``preparing`` → ``hidden`` or ``open`` with the given stamps.
+
+    Raises ValueError if ``to_state`` is not ``hidden`` or ``open`` (before
+    any write). Any current state other than ``preparing`` is refused (False).
+    """
+    if to_state not in ("hidden", "open"):
+        raise ValueError(f"finish_preparing target must be 'hidden' or 'open', got {to_state!r}")
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        cur = conn.execute(
+            "UPDATE quest_runs SET state=?, started_game_ts=?, expires_at=?, "
+            "updated_at=? WHERE id=? AND state='preparing'",
+            (to_state, started_game_ts, expires_at, utc_now_iso(), run_id))
+        return cur.rowcount > 0
+
+
 def set_run_state(run_id: str, state: str, *, issues: list | None = None,
                   from_states: tuple[str, ...] = ()) -> bool:
     """Move a run to ``state`` (optionally only from ``from_states``).
@@ -333,7 +388,11 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
     ``open`` and its ``current_step`` is ``step_index`` — a second avatar
     fulfilling the same step, or a stale signal, writes nothing. Otherwise
     the step log gets ``{step, avatar, mind, game_ts}`` and the run advances,
-    or ends ``done`` after the snapshot's last step. Returns the updated run.
+    or ends ``done`` after the snapshot's last step. In the same transaction,
+    pending payouts are inserted for ``step:<step_index>`` (when that step's
+    ``on_done`` is a non-empty list) and ``reward`` (on the last step when
+    the snapshot's ``rewards`` is a non-empty list), both carrying ``avatar``.
+    Returns the updated run.
 
     The read is not part of the write's transaction (autocommit SELECT) and
     ``expire_runs`` takes no run lock, so the UPDATE repeats the
@@ -341,31 +400,50 @@ def record_step_done(run_id: str, step_index: int, *, avatar: str,
     the run ended or moved on in between — is a refusal (None).
     """
     game_stamp = game_time().canonical()
+    idx = int(step_index)
     with keyed_lock("quest_run", run_id), transaction() as conn:
         run = _run_dict(conn.execute(
             "SELECT * FROM quest_runs WHERE id=?", (run_id,)).fetchone())
-        if run is None or run["state"] != "open" or int(run["current_step"]) != int(step_index):
+        if run is None or run["state"] != "open" or int(run["current_step"]) != idx:
             return None
         log = list(run["step_log"])
-        log.append({"step": int(step_index), "avatar": avatar, "mind": mind,
+        log.append({"step": idx, "avatar": avatar, "mind": mind,
                     "game_ts": game_stamp})
         steps = run["template_snapshot"].get("steps")
         total = len(steps) if isinstance(steps, list) else 0
         now = utc_now_iso()
-        if int(step_index) + 1 >= total:
+        is_last = idx + 1 >= total
+        if is_last:
             cur = conn.execute(
                 "UPDATE quest_runs SET step_log=?, current_step=?, state='done', "
                 "ended_game_ts=?, ended_at=?, updated_at=? "
                 "WHERE id=? AND state='open' AND current_step=?",
-                (_dump(log), int(step_index) + 1, game_stamp, now, now, run_id,
-                 int(step_index)))
+                (_dump(log), idx + 1, game_stamp, now, now, run_id, idx))
         else:
             cur = conn.execute(
                 "UPDATE quest_runs SET step_log=?, current_step=?, updated_at=? "
                 "WHERE id=? AND state='open' AND current_step=?",
-                (_dump(log), int(step_index) + 1, now, run_id, int(step_index)))
+                (_dump(log), idx + 1, now, run_id, idx))
         if cur.rowcount == 0:
             return None
+        if isinstance(steps, list) and 0 <= idx < len(steps):
+            step_obj = steps[idx]
+            if isinstance(step_obj, dict):
+                on_done = step_obj.get("on_done")
+                if isinstance(on_done, list) and len(on_done) > 0:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO quest_run_payouts "
+                        "(run_id, position, avatar, state, issues, created_at, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (run_id, f"step:{idx}", avatar or "", "pending", "[]", now, now))
+        if is_last:
+            rewards = run["template_snapshot"].get("rewards")
+            if isinstance(rewards, list) and len(rewards) > 0:
+                conn.execute(
+                    "INSERT OR IGNORE INTO quest_run_payouts "
+                    "(run_id, position, avatar, state, issues, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (run_id, "reward", avatar or "", "pending", "[]", now, now))
     return get_run(run_id)
 
 
@@ -411,3 +489,143 @@ def delete_facts_about(name: str) -> int:
         cur = conn.execute("DELETE FROM quest_facts WHERE mind=? OR subject=?",
                            (name, name))
         return cur.rowcount
+
+
+# ── Run Objects ──────────────────────────────────────────────────────────
+
+def add_object(run_id: str, *, effect_key: str, position: str, kind: str,
+               ref: dict, label: str = "", permanent: bool = False,
+               status: str = "live") -> int:
+    """Record one world object created for ``run_id``; returns the new row id.
+
+    Objects at position ``reward`` are always stored with ``permanent=1``
+    regardless of the passed flag. An unknown ``status`` is refused by the
+    table's CHECK (sqlite3.IntegrityError).
+    """
+    perm = 1 if (permanent or position == "reward") else 0
+    now = utc_now_iso()
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        cur = conn.execute(
+            "INSERT INTO quest_run_objects (run_id, effect_key, position, "
+            "kind, ref, label, permanent, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (run_id, effect_key, position, kind,
+             _dump(_container(ref, dict)), label or "", perm, status,
+             now, now))
+        return int(cur.lastrowid)
+
+
+def set_object_status(object_id: int, status: str, *,
+                      ref: dict | None = None) -> bool:
+    """Update ``status`` (and ``ref`` when given) of one object row.
+
+    Returns False for an unknown id; an unknown ``status`` is refused by the
+    table's CHECK (sqlite3.IntegrityError).
+    """
+    row = get_connection().execute(
+        "SELECT run_id FROM quest_run_objects WHERE id=?",
+        (object_id,)).fetchone()
+    if row is None:
+        return False
+    run_id = row[0]
+    now = utc_now_iso()
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        if ref is not None:
+            cur = conn.execute(
+                "UPDATE quest_run_objects SET status=?, ref=?, updated_at=? "
+                "WHERE id=?",
+                (status, _dump(_container(ref, dict)), now, object_id))
+        else:
+            cur = conn.execute(
+                "UPDATE quest_run_objects SET status=?, updated_at=? WHERE id=?",
+                (status, now, object_id))
+        return cur.rowcount > 0
+
+
+def list_objects(run_id: str = "", *,
+                 statuses: tuple[str, ...] = ()) -> list[dict]:
+    """Recorded run objects ordered by id, optionally filtered by run and status."""
+    where, params = [], []
+    if run_id:
+        where.append("run_id=?")
+        params.append(run_id)
+    if statuses:
+        where.append("status IN (%s)" % ",".join("?" * len(statuses)))
+        params.extend(statuses)
+    sql = "SELECT * FROM quest_run_objects"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id"
+    return [_object_dict(r) for r in get_connection().execute(sql, params).fetchall()]
+
+
+def objects_to_clean() -> list[dict]:
+    """Non-permanent objects of ended runs whose status is ``live``,
+    ``pending``, or ``revert_pending``, ordered by object id."""
+    states = RUN_ENDED_STATES
+    sql = (
+        "SELECT o.*, r.state AS run_state "
+        "FROM quest_run_objects o "
+        "JOIN quest_runs r ON r.id = o.run_id "
+        "WHERE r.state IN (%s) "
+        "AND o.status IN ('live', 'pending', 'revert_pending') "
+        "AND o.permanent = 0 "
+        "ORDER BY o.id"
+        % ",".join("?" * len(states))
+    )
+    return [_object_dict(r) for r in get_connection().execute(sql, states).fetchall()]
+
+
+# ── Run Payouts ──────────────────────────────────────────────────────────
+
+def list_payouts(*, states: tuple[str, ...] = ("pending",),
+                 run_id: str = "") -> list[dict]:
+    """Payout rows whose state is in ``states`` (empty = all), optionally
+    filtered by ``run_id``, ordered by creation time."""
+    where, params = [], []
+    if states:
+        where.append("state IN (%s)" % ",".join("?" * len(states)))
+        params.extend(states)
+    if run_id:
+        where.append("run_id=?")
+        params.append(run_id)
+    sql = "SELECT * FROM quest_run_payouts"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at, rowid"
+    return [_payout_dict(r) for r in get_connection().execute(sql, params).fetchall()]
+
+
+def set_payout(run_id: str, position: str, state: str, *,
+               issues: list | None = None) -> bool:
+    """Update ``state`` (and ``issues`` when given) of one payout row.
+
+    Returns False for an unknown ``(run_id, position)``; an unknown ``state``
+    is refused by the table's CHECK (sqlite3.IntegrityError).
+    """
+    now = utc_now_iso()
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        if issues is not None:
+            cur = conn.execute(
+                "UPDATE quest_run_payouts SET state=?, issues=?, updated_at=? "
+                "WHERE run_id=? AND position=?",
+                (state, _dump(_container(issues, list)), now, run_id, position))
+        else:
+            cur = conn.execute(
+                "UPDATE quest_run_payouts SET state=?, updated_at=? "
+                "WHERE run_id=? AND position=?",
+                (state, now, run_id, position))
+        return cur.rowcount > 0
+
+
+def rearm_payout(run_id: str, position: str) -> bool:
+    """Reset a ``failed`` payout back to ``pending`` with empty ``issues``.
+
+    Refused (False) for any row that does not exist or is not ``failed``.
+    """
+    with keyed_lock("quest_run", run_id), transaction() as conn:
+        cur = conn.execute(
+            "UPDATE quest_run_payouts SET state='pending', issues='[]', "
+            "updated_at=? WHERE run_id=? AND position=? AND state='failed'",
+            (utc_now_iso(), run_id, position))
+        return cur.rowcount > 0

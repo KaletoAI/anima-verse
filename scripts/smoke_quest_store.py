@@ -91,6 +91,87 @@ WHAT IS CHECKED, and where every expected value comes from
       survives with `title == "Old"` and `giver_role == ""` (filled by the
       column default).
 
+  (m) STAGE 2 TASK 3 SCHEMA (D6). Tables `quest_run_objects` and
+      `quest_run_payouts` exist; `PRAGMA table_info(quest_run_objects)` column
+      names == ["id", "run_id", "effect_key", "position", "kind", "ref",
+      "label", "permanent", "status", "created_at", "updated_at"];
+      `PRAGMA table_info(quest_run_payouts)` column names == ["run_id",
+      "position", "avatar", "state", "issues", "created_at", "updated_at"];
+      `PRAGMA index_list(quest_run_objects)` contains
+      `idx_quest_run_objects_run` and `idx_quest_run_objects_status`;
+      `SCHEMA_VERSION` is still 14. CHECK constraints: `add_object(...,
+      status="bogus")` → `sqlite3.IntegrityError`; raw SQL insert with
+      `ref='not json'` → `sqlite3.IntegrityError`; `set_payout(run, "setup",
+      "bogus")` on an existing payout → `sqlite3.IntegrityError`.
+
+  (n) CREATE + FINISH PREPARING (D7, D9). Snapshot `SETUP_T` with 2 steps and
+      `setup_effects=[{"key": "box", "type": "create_item", "params": {}}]`:
+      `create_run(template=SETUP_T, bindings={}, state="open",
+      expires_at="Y0001-D001T00:00:00")` enters `quests.transaction` exactly
+      once (run row + payout row atomic), stores `state="preparing"`,
+      `started_game_ts=""`, `expires_at=""`, and `list_payouts(states=(),
+      run_id=prep)` returns 1 row: `position="setup"`, `avatar=""`,
+      `state="pending"`, `issues=[]`. A snapshot with `setup_effects=[]` and
+      `state="open"` creates an `"open"` run with 0 payout rows.
+      `finish_preparing(prep, to_state="open", started_game_ts=S,
+      expires_at="Y0001-D005T12:00:00")` (S = `game_time().canonical()`) →
+      True, `state="open"`, both stamps stored as given; repeating it → False.
+      `finish_preparing(other_prep, to_state="hidden", started_game_ts="",
+      expires_at="")` → True, `state="hidden"`, both stamps `""`.
+      `finish_preparing(bad_prep, to_state="done", ...)` → `ValueError` and
+      the run stays `"preparing"`.
+
+  (o) PAYOUTS OWED BY STEPS (D7). Snapshot `STEP_T` with 3 steps (`s0` with
+      1 `on_done` entry, `s1` without `on_done`, `s2` last) and 1 reward
+      entry, created `"open"` (`setup_effects=[]`). `record_step_done(run, 0,
+      avatar="Ava", mind="Ava")` → payout `"step:0"` with `avatar="Ava"`,
+      `state="pending"`. `record_step_done(run, 1, avatar="Bea", mind="Bea")`
+      → no `"step:1"` row. Atomicity: wrapping `quests.transaction` to raise
+      `RuntimeError` inside the real transaction after yield (before commit)
+      and counting entries — `record_step_done(run, 2, avatar="Bea",
+      mind="Bea")` raises `RuntimeError`, entered transaction once, and the
+      run stays `"open"`, `current_step==2`, `len(step_log)==2`, no `"reward"`
+      row. Without the wrapper, `record_step_done(run, 2, avatar="Bea",
+      mind="Bea")` → `state="done"` and 1 `"reward"` row with `avatar="Bea"`;
+      repeating it → None and still 1 `"reward"` row; total payouts for the
+      run == 2 (`step:0`, `reward`). Finishing a 1-step snapshot with
+      `rewards=[]` writes 0 `"reward"` rows.
+
+  (p) OBJECTS (D6, reward-permanent ruling). On run R: `id1` (effect_key
+      "rock", position "setup", kind "world_prop", ref `{"placement_id":
+      "wp_1"}`, label "Big rock", status "pending"), `id2` (effect_key "rock",
+      position "setup", kind "prop", ref `{"prop_id": "p_1"}`, default live),
+      `id3` (effect_key "charm", position "reward", kind "item", ref
+      `{"item_id": "i_1"}`, `permanent=False`). Expected: `id1 < id2 < id3`;
+      `list_objects(R)` has effect_keys `["rock", "rock", "charm"]`, first
+      `ref == {"placement_id": "wp_1"}`, `permanent == [False, False, True]`
+      (reward forced permanent), `status == ["pending", "live", "live"]`.
+      `set_object_status(id1, "live", ref={"placement_id": "wp_2"})` → True
+      and `ref` replaced; `set_object_status(id2, "reverted")` → True and
+      `ref` unchanged; `set_object_status(999999, "live")` → False.
+      `list_objects(R, statuses=("live",))` → `[id1, id3]`; `list_objects("")`
+      includes all three.
+
+  (q) CLEANUP SELECTION (D8 step 3). Hand table of 6 rows across ended run A
+      (`cancelled`) and open run B (`open`):
+        1. A, setup, live, permanent=False            → selected
+        2. A, setup, pending, permanent=False         → selected
+        3. A, step:0, revert_pending, permanent=False → selected
+        4. A, setup, reverted, permanent=False        → not selected (reverted)
+        5. A, setup, live, permanent=True             → not selected (permanent)
+        6. B, setup, live, permanent=False            → not selected (open run)
+      `objects_to_clean()` filtered to `run_id in (A, B)` returns `[row1,
+      row2, row3]` ids in that exact order.
+
+  (r) PAYOUT STATES. On a preparing run with a `"setup"` payout:
+      `set_payout(run, "setup", "failed", issues=[{"path": "", "code": "x",
+      "message": "m"}])` → True; `list_payouts(states=("failed",), run_id=run)`
+      returns 1 row with that `issues` list; `list_payouts()` (default pending)
+      excludes it; `rearm_payout(run, "setup")` → True, state `"pending"`,
+      `issues == []`; `rearm_payout` again → False (not failed);
+      `set_payout(run, "nope", "applied")` → False; `set_payout(run, "setup",
+      "applied")` → True and `rearm_payout` → False (applied is not failed).
+
 Usage:
     ./.venv/bin/python scripts/smoke_quest_store.py
 """
@@ -404,6 +485,254 @@ old_after = quests.get_template(old["id"])
 check("existing Old row survives with default giver_role ''",
       old_after is not None and (old_after["title"], old_after["giver_role"]) == ("Old", ""),
       str((old_after["title"], old_after["giver_role"]) if old_after else None))
+
+print("(m) stage 2 task 3 schema")
+tables_m = {r[0] for r in db.get_connection().execute(
+    "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+check("table quest_run_objects exists", "quest_run_objects" in tables_m)
+check("table quest_run_payouts exists", "quest_run_payouts" in tables_m)
+obj_cols = [c[1] for c in db.get_connection().execute("PRAGMA table_info(quest_run_objects)")]
+check("quest_run_objects columns exact",
+      obj_cols == ["id", "run_id", "effect_key", "position", "kind", "ref",
+                   "label", "permanent", "status", "created_at", "updated_at"],
+      str(obj_cols))
+pay_cols = [c[1] for c in db.get_connection().execute("PRAGMA table_info(quest_run_payouts)")]
+check("quest_run_payouts columns exact",
+      pay_cols == ["run_id", "position", "avatar", "state", "issues",
+                   "created_at", "updated_at"],
+      str(pay_cols))
+obj_idxs = {r[1] for r in db.get_connection().execute("PRAGMA index_list(quest_run_objects)")}
+check("quest_run_objects indexes exist",
+      {"idx_quest_run_objects_run", "idx_quest_run_objects_status"}.issubset(obj_idxs),
+      str(obj_idxs))
+check("SCHEMA_VERSION is still 14", world_db_schema.SCHEMA_VERSION == 14)
+check("add_object(status=bogus) → IntegrityError",
+      raises(sqlite3.IntegrityError,
+             lambda: quests.add_object(run["id"], effect_key="k", position="setup",
+                                       kind="item", ref={}, status="bogus")))
+
+
+def _bad_json_ref():
+    with db.transaction() as _c:
+        _c.execute(
+            "INSERT INTO quest_run_objects (run_id, effect_key, position, kind, ref, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (run["id"], "k", "setup", "item", "not json", "2026-01-01T00:00:00+00:00",
+             "2026-01-01T00:00:00+00:00"))
+
+
+check("quest_run_objects invalid json ref → IntegrityError",
+      raises(sqlite3.IntegrityError, _bad_json_ref))
+_chk_run = quests.create_run(
+    template={"id": "chk_t", "steps": [{"id": "s0"}],
+              "setup_effects": [{"key": "box", "type": "create_item", "params": {}}]},
+    bindings={}, state="open")
+check("set_payout(state=bogus) → IntegrityError",
+      raises(sqlite3.IntegrityError,
+             lambda: quests.set_payout(_chk_run["id"], "setup", "bogus")))
+
+print("(n) create + finish_preparing")
+SETUP_T = {
+    "id": "setup_t",
+    "steps": [{"id": "s0"}, {"id": "s1"}],
+    "setup_effects": [{"key": "box", "type": "create_item", "params": {}}],
+    "rewards": [],
+}
+tx_entries = [0]
+
+
+@contextlib.contextmanager
+def _counting_tx():
+    tx_entries[0] += 1
+    with _real_tx() as conn:
+        yield conn
+
+
+quests.transaction = _counting_tx
+try:
+    prep = quests.create_run(template=SETUP_T, bindings={}, state="open",
+                             expires_at="Y0001-D001T00:00:00")
+finally:
+    quests.transaction = _real_tx
+
+check("create_run with setup_effects enters transaction once", tx_entries[0] == 1, str(tx_entries[0]))
+check("preparing run state and empty stamps",
+      (prep["state"], prep["started_game_ts"], prep["expires_at"]) == ("preparing", "", ""),
+      str((prep["state"], prep["started_game_ts"], prep["expires_at"])))
+prep_payouts = quests.list_payouts(states=(), run_id=prep["id"])
+check("preparing run has one pending setup payout",
+      len(prep_payouts) == 1
+      and (prep_payouts[0]["position"], prep_payouts[0]["avatar"],
+           prep_payouts[0]["state"], prep_payouts[0]["issues"]) == ("setup", "", "pending", []),
+      str(prep_payouts))
+NO_SETUP_T = {"id": "no_setup_t", "steps": [{"id": "s0"}], "setup_effects": [], "rewards": []}
+plain_run = quests.create_run(template=NO_SETUP_T, bindings={}, state="open")
+check("empty setup_effects creates open run with no payout",
+      plain_run["state"] == "open" and quests.list_payouts(states=(), run_id=plain_run["id"]) == [])
+S_PREP = game_time().canonical()
+E_PREP = "Y0001-D005T12:00:00"
+check("finish_preparing(open) → True",
+      quests.finish_preparing(prep["id"], to_state="open",
+                              started_game_ts=S_PREP, expires_at=E_PREP) is True)
+prep_open = quests.get_run(prep["id"])
+check("finish_preparing(open) stored state and stamps",
+      (prep_open["state"], prep_open["started_game_ts"], prep_open["expires_at"]) == ("open", S_PREP, E_PREP))
+check("finish_preparing again → False",
+      quests.finish_preparing(prep["id"], to_state="open",
+                              started_game_ts=S_PREP, expires_at=E_PREP) is False)
+other_prep = quests.create_run(template=SETUP_T, bindings={}, state="open")
+check("finish_preparing(hidden) → True",
+      quests.finish_preparing(other_prep["id"], to_state="hidden",
+                              started_game_ts="", expires_at="") is True)
+other_got = quests.get_run(other_prep["id"])
+check("finish_preparing(hidden) stored state and empty stamps",
+      (other_got["state"], other_got["started_game_ts"], other_got["expires_at"]) == ("hidden", "", ""))
+bad_prep = quests.create_run(template=SETUP_T, bindings={}, state="open")
+check("finish_preparing(to_state=done) → ValueError",
+      raises(ValueError,
+             lambda: quests.finish_preparing(bad_prep["id"], to_state="done",
+                                             started_game_ts=S_PREP, expires_at=E_PREP)))
+check("rejected finish_preparing leaves run preparing",
+      quests.get_run(bad_prep["id"])["state"] == "preparing")
+
+print("(o) payouts owed by steps")
+STEP_T = {
+    "id": "step_t",
+    "steps": [
+        {"id": "s0", "on_done": [{"key": "note", "type": "create_item", "params": {}}]},
+        {"id": "s1"},
+        {"id": "s2"},
+    ],
+    "setup_effects": [],
+    "rewards": [{"key": "prize", "type": "create_item", "params": {}}],
+}
+step_run = quests.create_run(template=STEP_T, bindings={}, state="open")
+quests.record_step_done(step_run["id"], 0, avatar="Ava", mind="Ava")
+p_after_0 = quests.list_payouts(states=(), run_id=step_run["id"])
+check("step 0 with on_done inserts pending step:0 payout for Ava",
+      len(p_after_0) == 1
+      and (p_after_0[0]["position"], p_after_0[0]["avatar"], p_after_0[0]["state"]) == ("step:0", "Ava", "pending"),
+      str(p_after_0))
+quests.record_step_done(step_run["id"], 1, avatar="Bea", mind="Bea")
+p_after_1 = quests.list_payouts(states=(), run_id=step_run["id"])
+check("step 1 without on_done inserts no step:1 payout",
+      [p["position"] for p in p_after_1] == ["step:0"], str(p_after_1))
+abort_entries = [0]
+
+
+@contextlib.contextmanager
+def _aborting_tx():
+    abort_entries[0] += 1
+    with _real_tx() as conn:
+        yield conn
+        raise RuntimeError("injected rollback before commit")
+
+
+quests.transaction = _aborting_tx
+try:
+    check("aborted last step raises RuntimeError",
+          raises(RuntimeError,
+                 lambda: quests.record_step_done(step_run["id"], 2, avatar="Bea", mind="Bea")))
+finally:
+    quests.transaction = _real_tx
+
+check("record_step_done entered transaction exactly once", abort_entries[0] == 1, str(abort_entries[0]))
+sr_mid = quests.get_run(step_run["id"])
+p_mid = quests.list_payouts(states=(), run_id=step_run["id"])
+check("rolled-back last step leaves run open at step 2 with 2 log entries and no reward",
+      (sr_mid["state"], sr_mid["current_step"], len(sr_mid["step_log"])) == ("open", 2, 2)
+      and [p["position"] for p in p_mid] == ["step:0"],
+      str((sr_mid["state"], sr_mid["current_step"], len(sr_mid["step_log"]), p_mid)))
+sr_done = quests.record_step_done(step_run["id"], 2, avatar="Bea", mind="Bea")
+p_done = quests.list_payouts(states=(), run_id=step_run["id"])
+reward_rows = [p for p in p_done if p["position"] == "reward"]
+check("last step transitions to done and inserts one reward payout for Bea",
+      sr_done is not None and sr_done["state"] == "done"
+      and len(reward_rows) == 1 and reward_rows[0]["avatar"] == "Bea"
+      and reward_rows[0]["state"] == "pending",
+      str((sr_done["state"] if sr_done else None, reward_rows)))
+check("repeat last step returns None and keeps one reward row",
+      quests.record_step_done(step_run["id"], 2, avatar="Bea", mind="Bea") is None
+      and len([p for p in quests.list_payouts(states=(), run_id=step_run["id"])
+               if p["position"] == "reward"]) == 1)
+check("total payouts for step_run == 2 (step:0, reward)",
+      [p["position"] for p in quests.list_payouts(states=(), run_id=step_run["id"])] == ["step:0", "reward"])
+no_rew_run = quests.create_run(
+    template={"id": "no_rew", "steps": [{"id": "only"}], "setup_effects": [], "rewards": []},
+    bindings={}, state="open")
+quests.record_step_done(no_rew_run["id"], 0, avatar="Ava", mind="Ava")
+check("last step with rewards [] writes no reward row",
+      quests.list_payouts(states=(), run_id=no_rew_run["id"]) == [])
+
+print("(p) objects")
+obj_run = quests.create_run(template=NO_SETUP_T, bindings={}, state="open")
+R = obj_run["id"]
+id1 = quests.add_object(R, effect_key="rock", position="setup", kind="world_prop",
+                        ref={"placement_id": "wp_1"}, label="Big rock", status="pending")
+id2 = quests.add_object(R, effect_key="rock", position="setup", kind="prop",
+                        ref={"prop_id": "p_1"})
+id3 = quests.add_object(R, effect_key="charm", position="reward", kind="item",
+                        ref={"item_id": "i_1"}, permanent=False)
+check("object ids strictly increasing", id1 < id2 < id3, str((id1, id2, id3)))
+objs = quests.list_objects(R)
+check("list_objects keys in order", [o["effect_key"] for o in objs] == ["rock", "rock", "charm"])
+check("first ref decoded as dict", objs[0]["ref"] == {"placement_id": "wp_1"})
+check("permanent flags [False, False, True] (reward forced permanent)",
+      [o["permanent"] for o in objs] == [False, False, True],
+      str([o["permanent"] for o in objs]))
+check("statuses [pending, live, live]",
+      [o["status"] for o in objs] == ["pending", "live", "live"],
+      str([o["status"] for o in objs]))
+check("set_object_status(id1, live, ref=...) → True",
+      quests.set_object_status(id1, "live", ref={"placement_id": "wp_2"}) is True)
+check("set_object_status(id2, reverted) → True",
+      quests.set_object_status(id2, "reverted") is True)
+check("set_object_status(999999, live) → False",
+      quests.set_object_status(999999, "live") is False)
+objs_after = {o["id"]: o for o in quests.list_objects(R)}
+check("id1 ref replaced, id2 ref unchanged",
+      objs_after[id1]["ref"] == {"placement_id": "wp_2"}
+      and objs_after[id2]["ref"] == {"prop_id": "p_1"})
+check("list_objects(R, statuses=('live',)) → [id1, id3]",
+      [o["id"] for o in quests.list_objects(R, statuses=("live",))] == [id1, id3])
+all_obj_ids = {o["id"] for o in quests.list_objects("")}
+check("list_objects('') includes all three", {id1, id2, id3}.issubset(all_obj_ids))
+
+print("(q) cleanup selection")
+run_a = quests.create_run(template=NO_SETUP_T, bindings={}, state="open")
+quests.set_run_state(run_a["id"], "cancelled")
+run_b = quests.create_run(template=NO_SETUP_T, bindings={}, state="open")
+A, B = run_a["id"], run_b["id"]
+row1 = quests.add_object(A, effect_key="e1", position="setup", kind="item", ref={}, permanent=False, status="live")
+row2 = quests.add_object(A, effect_key="e2", position="setup", kind="item", ref={}, permanent=False, status="pending")
+row3 = quests.add_object(A, effect_key="e3", position="step:0", kind="item", ref={}, permanent=False, status="revert_pending")
+row4 = quests.add_object(A, effect_key="e4", position="setup", kind="item", ref={}, permanent=False, status="reverted")
+row5 = quests.add_object(A, effect_key="e5", position="setup", kind="item", ref={}, permanent=True, status="live")
+row6 = quests.add_object(B, effect_key="e6", position="setup", kind="item", ref={}, permanent=False, status="live")
+clean_ab = [o["id"] for o in quests.objects_to_clean() if o["run_id"] in (A, B)]
+check("objects_to_clean selects [row1, row2, row3] in order",
+      clean_ab == [row1, row2, row3], str(clean_ab))
+
+print("(r) payout states")
+pr_id = bad_prep["id"]
+issue_payload = [{"path": "", "code": "x", "message": "m"}]
+check("set_payout(failed, issues) → True",
+      quests.set_payout(pr_id, "setup", "failed", issues=issue_payload) is True)
+failed_rows = quests.list_payouts(states=("failed",), run_id=pr_id)
+check("list_payouts(failed) has one row with issues",
+      len(failed_rows) == 1 and failed_rows[0]["issues"] == issue_payload,
+      str(failed_rows))
+check("list_payouts() (default pending) excludes failed row",
+      all(not (p["run_id"] == pr_id and p["position"] == "setup") for p in quests.list_payouts()))
+check("rearm_payout(failed) → True", quests.rearm_payout(pr_id, "setup") is True)
+rearmed = quests.list_payouts(states=(), run_id=pr_id)
+check("rearmed row is pending with empty issues",
+      len(rearmed) == 1 and (rearmed[0]["state"], rearmed[0]["issues"]) == ("pending", []),
+      str(rearmed))
+check("rearm_payout(pending) → False", quests.rearm_payout(pr_id, "setup") is False)
+check("set_payout(unknown position) → False", quests.set_payout(pr_id, "nope", "applied") is False)
+check("set_payout(applied) → True", quests.set_payout(pr_id, "setup", "applied") is True)
+check("rearm_payout(applied) → False", quests.rearm_payout(pr_id, "setup") is False)
 
 print()
 if failures:

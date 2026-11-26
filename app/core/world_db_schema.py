@@ -12,7 +12,7 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 14  # 14: quest_templates.giver_role (quest stage 2)
+SCHEMA_VERSION = 14  # 14: quest_templates.giver_role, quest_run_objects, quest_run_payouts (quest stage 2)
 #                     13: quest system tables (quest_templates, quest_runs, quest_facts)
 #                     12: world_dev_runs.max_tokens (per-reply cap kept across restarts)
 #                     (ALTER only, no bump): world_dev_runs.bounds (a free-mode run's build box)
@@ -1205,6 +1205,39 @@ SCHEMA_STATEMENTS = [
         game_ts    TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         UNIQUE(mind, kind, subject)
+    )""",
+    # Run objects and payouts (quest stage 2, app/models/quests.py).
+    # quest_run_objects records every world object created by a quest run
+    # (positions: 'setup', 'step:<i>', 'reward'; statuses: 'pending', 'live',
+    # 'revert_pending', 'reverted', 'gone'). quest_run_payouts records every
+    # effect position owed by a run (states: 'pending', 'applied', 'failed'),
+    # written atomically with the run state change that owes it.
+    """CREATE TABLE IF NOT EXISTS quest_run_objects (
+        id         INTEGER PRIMARY KEY,
+        run_id     TEXT NOT NULL,
+        effect_key TEXT NOT NULL,
+        position   TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        ref        TEXT NOT NULL CHECK(json_valid(ref)),
+        label      TEXT NOT NULL DEFAULT '',
+        permanent  INTEGER NOT NULL DEFAULT 0,
+        status     TEXT NOT NULL DEFAULT 'live'
+                   CHECK(status IN ('pending', 'live', 'revert_pending', 'reverted', 'gone')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_quest_run_objects_run ON quest_run_objects (run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_quest_run_objects_status ON quest_run_objects (status)",
+    """CREATE TABLE IF NOT EXISTS quest_run_payouts (
+        run_id     TEXT NOT NULL,
+        position   TEXT NOT NULL,
+        avatar     TEXT NOT NULL DEFAULT '',
+        state      TEXT NOT NULL DEFAULT 'pending'
+                   CHECK(state IN ('pending', 'applied', 'failed')),
+        issues     TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(issues)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, position)
     )""",
 ]
 
