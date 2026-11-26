@@ -13286,6 +13286,14 @@ General rules of the same day (`scripts/smoke_footwear_general_rules.py`): a cla
 wall stands above 10 cm (`footwear_insole.ONE_WALL_SHAFT_M`), the open seed is searched behind the middle of the
 shoe, `deep_outside` is recorded but never refuses (`footwear_cut.REPORTED_ONLY`), `strap_push_max_mm` 50, and a
 shaft cap is cut from `prepared.glb` only once the insole passes.
+Since fit version 21 (2026-11-26, `scripts/smoke_footwear_toe_front.py`): a closed shoe carries the gate `toe_front`
+— the insole area in front of the toe tip over (its widest width × the foot length), limit `footwear_fit.TOE_FRONT_MAX`
+0.08 (right-looking shoes 0 – 0.065, the Sneekers 0.128 – 0.192, measured on every stored shoe on every body). A shoe
+refused by it gets the toe box attempt (`fit_height`): the toes end where the forepart in front is
+`TOE_FRONT_TARGET` 0.065, the toe box is raised where it is ready (`HEIGHT_CAP`), the cut slims the rest — instead of a
+longer shoe. The record's `scale.toe_front` holds both sides. The cut records `skin_seen_mm2`
+(`footwear_cut.skin_seen`): skin enclosed by the shoe on the four horizontal views (a hole of the mesh, a heel through
+the counter below the rim), per side and view under `diagnostics.<side>.cut.skin_seen_mm2`, the worst under `gates`.
 
 ### P2 runtime contract: secondary motion
 

@@ -135,8 +135,9 @@ ALLOWANCE_KEY = "footwear_allowance"
 AUTO = "auto"
 ALLOWANCE_NAMES: Tuple[str, ...] = ("width", "length")
 #: The refusals Auto answers with heel room: the foot outside the shoe below its rim (``deep_outside`` is reported
-#: only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``).
-AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke",)
+#: only since 2026-11-25, ``footwear_cut.REPORTED_ONLY``) and skin seen through it (2026-11-26,
+#: ``footwear_cut.SKIN_SEEN_MAX_MM2`` — mostly a heel through the counter).
+AUTO_LENGTH_GATES: Tuple[str, ...] = ("visible_poke", "skin_seen_mm2")
 
 
 def allowance(profile: Optional[Dict[str, Any]], item_id: str) -> Dict[str, Any]:
@@ -720,13 +721,16 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     body, joints = glb_mesh.body_arrays(rigged), glb_mesh.joint_bind_matrices(rigged)
     prims = glb_mesh.body_primitive_arrays(rigged)
     # Two attempts (fit version 15, boots plan Ruling 15i): the fit as it is; only when that is refused — by the fit's
-    # gates or the cut's — and the shoe has a closed toe box to raise (``scale.height_ready``), once more with the
-    # upper fitted to the foot's height. An accepted first attempt is the whole answer (an accepted look never
+    # gates or the cut's — and the shoe has a closed toe box to raise (``scale.height_ready``) or ends the toes short
+    # of its toe box (gate ``toe_front``, ``footwear_fit.TOE_FRONT_MAX``), once more with the toes in the toe
+    # box and the upper fitted to the foot's height. An accepted first attempt is the whole answer (an accepted look never
     # changes); the second attempt's outcome stands, a toe box it cannot raise enough names the mesh as the defect.
     def attempt(allow: Dict[str, int]) -> Dict[str, Any]:
         att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, allowance=allow,
                                                  manual=manual, force=True), prims, joints, insole)
-        if not att.get("ok") and (att["result"].record.get("scale") or {}).get("height_ready"):
+        first = att["result"].record
+        toe_short = ((first.get("gates") or {}).get("toe_front") or {}).get("ok") is False
+        if not att.get("ok") and ((first.get("scale") or {}).get("height_ready") or toe_short):
             att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True,
                                                      allowance=allow, manual=manual, force=True),
                                prims, joints, insole)
@@ -1044,8 +1048,22 @@ def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np
             cut_stats["throat_moved"][side] = int(cut_stats["throat_moved"].get(side, 0)) + int(
                 stats["throat_moved"].get(side, 0))
     # every part: a boot's shaft joins the enclosure and is judged by ``shaft_poke`` (spec § 7, § 9)
-    cut_gates = footwear_cut.cut_gates(_merged(list(replaced.values())), result.parts, cut, joints=joints,
-                                       body_before=_merged(prims))
+    cut_body = _merged(list(replaced.values()))
+    cut_gates = footwear_cut.cut_gates(cut_body, result.parts, cut, joints=joints, body_before=_merged(prims))
+    # skin seen through a closed shoe (``footwear_cut.SKIN_SEEN_MAX_MM2``); an open shoe shows its foot on purpose
+    if result.record.get("shoe_kind") != "open":
+        from app.core.footwear_gates import check_gates
+        seen = footwear_cut.skin_seen(cut_body, result.parts)
+        seen_ok, seen_reasons = check_gates(
+            {"skin_seen_mm2": seen["worst_mm2"]},
+            {"skin_seen_mm2": ("max", footwear_cut.SKIN_SEEN_MAX_MM2, footwear_cut.SKIN_SEEN_LABEL)})
+        cut_gates["gates"]["skin_seen_mm2"] = {"value": seen["worst_mm2"], "limit": footwear_cut.SKIN_SEEN_MAX_MM2,
+                                               "ok": seen_ok, "gating": True}
+        if not seen_ok:
+            cut_gates["ok"] = False
+            cut_gates["reasons"] = list(cut_gates.get("reasons") or []) + seen_reasons
+        for side, views in seen["mm2"].items():
+            cut_gates["sides"].setdefault(side, {})["skin_seen_mm2"] = views
     result.record["gates"].update(footwear_fit._r({name: {**gate, "gating": gate.get("gating", True)}
                                                    for name, gate in cut_gates["gates"].items()}))
     for side in footwear_fit.SIDES:

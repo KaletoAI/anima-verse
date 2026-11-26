@@ -116,6 +116,8 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'lift_asymmetry_mm', label: 'Lift asymmetry', scale: 1, unit: 'mm', digits: 1 },
   { key: 'stand_floor_mm', label: 'Sole above the floor (stand)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'slim_needed', label: 'Slimming needed', scale: 100, unit: '%', digits: 1 },
+  // A closed shoe (footwear_fit.CLOSED_GATES): the forepart in front of the toes — a shoe made long for a low toe box.
+  { key: 'toe_front', label: 'Shoe in front of the toes', scale: 100, unit: '%', digits: 1 },
   // A split fit (a boot) adds footwear_fit.SHAFT_GATES; the stretch and (fit version 12) the push are recorded, not
   // gated (`gating` false): under the collar the body is cut away, the push reads a leg that is not served.
   { key: 'shaft_push_p95_m', label: 'Shaft push at the collar (p95)', scale: 1000, unit: 'mm', digits: 1 },
@@ -131,6 +133,8 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
+  // Skin seen through the shoe from the four sides (footwear_cut.skin_seen): a hole of the mesh, a heel out of the counter.
+  { key: 'skin_seen_mm2', label: 'Skin seen through the shoe (cut)', scale: 1, unit: 'mm²', digits: 0 },
   // An open shoe (A189, footwear_fit.OPEN_GATES): the body is not cut, so it carries these instead of the cut gates.
   { key: 'strap_inside_share', label: 'Straps inside the skin', scale: 100, unit: '%', digits: 2 },
   { key: 'strap_push_max_mm', label: 'Straps pushed off the foot (max)', scale: 1, unit: 'mm', digits: 1 },

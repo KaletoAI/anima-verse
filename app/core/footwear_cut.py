@@ -1709,6 +1709,77 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
     }
 
 
+#: Skin seen THROUGH the shoe (2026-11-26): the cut body and the shoe parts in bind space, seen from the four
+#: horizontal sides the Wardrobe's views show (front, back, outer and inner side), rasterised at ``SKIN_SEEN_PX_M``
+#: (nearest depth per pixel, ``garment_fit._raster``). A body pixel is seen where no shoe lies nearer than
+#: ``SKIN_SEEN_EPS_M`` in front of it. A connected patch of seen body pixels that the shoe encloses on every side —
+#: it touches neither the picture's edge nor a pixel with nothing on it — is skin seen through the shoe: a hole of the
+#: mesh (a heel window, a torn counter) or a foot poking through a wall. The leg above the rim, the ankle in front of
+#: the tongue and a sliver at the rim all hang together with the leg and do not count — so does a heel that stands
+#: out of the counter all the way up to the rim (``visible_poke`` and ``toe_conform_m`` read what is under it). ``visible_poke`` counts foot
+#: vertices under the rim in the cut frame and does not see skin through a hole of the mesh (Kai's Sneakers moved
+#: forward by hand, 2026-11-25: visible_poke 0.0006, the heel seen through the counter from behind).
+#: The limit, measured on every stored closed shoe on every body (fit version 21, copies 2026-11-26): the shoes
+#: that look right on all four sides 0 – 4 mm2 (one pixel: raster noise at an edge); the ones with skin seen in the
+#: renders — the Sneekers' toe box attempts with a pink spot on the counter 36 / 68, Kai's Sneekers moved 4 mm
+#: forward by hand 40 (the heel through the counter), Kira's Woman shoes 320 (the heel out beside the counter),
+#: the refused Sneekers 300 – 1352. Five pixels: 20 mm2. A closed shoe only — an open shoe shows its foot on purpose.
+SKIN_SEEN_MAX_MM2 = 20.0
+SKIN_SEEN_LABEL = "skin enclosed by the shoe seen from front, back or a side (a hole or a heel through the counter), worst"
+SKIN_SEEN_PX_M = 0.002
+SKIN_SEEN_EPS_M = 0.001
+#: The views: name -> (coordinate order put on (col, row, depth), sign: 1 = the camera on the + side).
+SKIN_SEEN_VIEWS: Dict[str, Tuple[Tuple[int, int, int], float]] = {
+    "front": ((0, 1, 2), 1.0), "back": ((0, 1, 2), -1.0), "left": ((2, 1, 0), 1.0), "right": ((2, 1, 0), -1.0)}
+
+
+def skin_seen(body: "glb_mesh.Prim", parts: Dict[str, Dict[str, "glb_mesh.GarmentMesh"]]) -> Dict[str, Any]:
+    """Skin seen through the shoe (``SKIN_SEEN_PX_M`` block): ``{"mm2": {side: {view: mm2}}, "worst_mm2": the
+    largest}`` over the parts of each side (``foot`` and a boot's ``shaft``) on the cut ``body`` (bind space)."""
+    from scipy import ndimage
+    from app.core.garment_fit import _raster
+    P = np.asarray(body.positions, np.float64)
+    Fb = np.asarray(body.faces, np.int64).reshape(-1, 3)
+    px = SKIN_SEEN_PX_M
+    out: Dict[str, Dict[str, float]] = {}
+    for side, side_parts in parts.items():
+        Xs, Fs, base = [], [], 0
+        for mesh in side_parts.values():
+            X = np.asarray(mesh.positions, np.float64)
+            Xs.append(X)
+            Fs.append(np.asarray(mesh.indices, np.int64).reshape(-1, 3) + base)
+            base += len(X)
+        if not Xs:
+            continue
+        X, F = np.concatenate(Xs), np.concatenate(Fs)
+        lo3, hi3 = X.min(0) - 0.02, X.max(0) + 0.02
+        Fn = Fb[np.all((P[Fb] >= lo3) & (P[Fb] <= hi3), axis=2).any(1)]
+        out[side] = {}
+        for view, (order, sign) in SKIN_SEEN_VIEWS.items():
+            Xv, Pv = X[:, order], P[:, order]
+            lo = Xv.min(0)[:2] - 4 * px
+            hi = Xv.max(0)[:2] + 4 * px
+            shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
+            shoe_d = _raster(Xv, F, lo, shape, px, sign)
+            body_d = _raster(Pv, Fn, lo, shape, px, sign)
+            shoe = np.isfinite(shoe_d)
+            seen = np.isfinite(body_d) & ~(shoe & (shoe_d >= body_d - SKIN_SEEN_EPS_M))
+            empty = ~shoe & ~seen
+            lab, n = ndimage.label(seen)
+            if not n:
+                out[side][view] = 0.0
+                continue
+            # a patch touching an empty pixel or the picture's edge is open to the outside
+            near_empty = ndimage.binary_dilation(empty, structure=np.ones((3, 3), bool))
+            edge = np.zeros(shape, bool)
+            edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+            open_ids = np.unique(lab[(near_empty | edge) & seen])
+            enclosed = seen & ~np.isin(lab, open_ids)
+            out[side][view] = float(enclosed.sum()) * px * px * 1e6
+    worst = max((v for views in out.values() for v in views.values()), default=0.0)
+    return {"mm2": out, "worst_mm2": worst}
+
+
 def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]], cut: Dict[str, Any], *,
               joints: Dict[str, np.ndarray], body_before: Prim) -> Dict[str, Any]:
     """The cut's gates (module docstring): ``{"ok", "reasons", "gates": {name: {value, limit, ok}}, "sides": {side:
