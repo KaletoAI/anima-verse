@@ -38,7 +38,9 @@ namespace AnimaNative.Check;
 ///   R15 a world freeze: an active order accepted frozen stands on its slot with the row's pair held; a walk frozen
 ///       for 1 s stands still and ends its chain 1 s later;
 ///   R8  avoidance: two walks head-on through r-a keep ≥ 0.3 m between their centres and both arrive before flip + 5;
-///   R8b the same with two ticks per physics frame: the held answer keeps the meeting (gap within 0.03 m of R8's).
+///   R8b the same with two ticks per physics frame: the held answer keeps the meeting (gap within 0.03 m of R8's);
+///   R16 the loop start holds the entry's last frame while the row still shows the order approaching, the active row
+///       hands over its pose;  R17 an ended server walk lets the figure go at once, a row inside the tail places it again.
 /// </summary>
 public static partial class OrderCheck
 {
@@ -451,6 +453,57 @@ public static partial class OrderCheck
             // The 1.0 s frozen span (2.0 → 3.0) delays the chain end by exactly that much.
             Near("R15b chain end 5.68 + 1.0", r15b.At(Ona, OrderState.Loop), ChainEndS + 1.0, TolS);
             NearXZ("R15b on the bed slot", r15b.F(Ona).Position, BedSlot);
+
+            // ---- R16 the loop start before the row carries the loop pose (E3 final review I2) ----
+            // The rows keep the order "approaching" past the client's chain end (the server flip lies 0.4 s later, plus
+            // poll lag): the figure holds the entry's last frame on the slot instead of the row's stale pose, until a row
+            // shows the order active — then the row's pose plays.
+            var r16 = await Start(Map());
+            r16.Until(ChainEndS + 0.3);
+            Is("R16 in the loop", r16.Of(Ona).LastOrDefault() == OrderState.Loop, Seq(r16, Ona));
+            Is("R16 the loop start holds while the row is still approaching", r16.M.HoldsLoopStartPose(Ona));
+            NearXZ("R16 held on the bed slot", r16.F(Ona).Position, BedSlot);
+            await Poll(r16, Map(m =>
+            {
+                var o = OrderOf(m);
+                o["status"] = "active"; o["revision"] = 2; o["seq"] = 2; m["order_seq"] = 2;
+                Row(m, Ona)["activity_animation"] = "laying";
+            }));
+            r16.Until(ChainEndS + 0.4);
+            Is("R16 the active row lets the hold go", !r16.M.HoldsLoopStartPose(Ona));
+            Is("R16 the row's loop pose", r16.F(Ona).Activity == "laying", r16.F(Ona).Activity);
+            NearXZ("R16 still on the bed slot", r16.F(Ona).Position, BedSlot);
+
+            // ---- R17 an ended server walk hands the figure back to the rows at once (E3 final review I3) ----
+            // Uli strolls (95, 0) → (99, 0) in r-a (flip 103.357143); the ended revision arrives with the row on the goal,
+            // then — inside the server's 10 s tail, the order still published — a row with a new point (97, 2).
+            JsonNode Stroll(string status, int revision) => JsonNode.Parse($$"""
+                {"order_id":"ord-R17","revision":{{revision}},"seq":{{revision}},"kind":"walk","issued_motion_s":100,"eta_motion_s":103.357143,"flip_motion_s":103.357143,
+                 "deadline_motion_s":113.357143,"status":"{{status}}","awaits":"","gait":"walk","speed_m_s":1.4,
+                 "target":{"location_id":"loc-nav","room_id":"r-a","level":0,"x":99,"y":0,"z":0},"hint_route":[],"snap":false,
+                 "actors":[{"name":"{{Uli}}","role":"actor","clip_role":"","height_cm":180,"start":{"x":95,"y":0,"z":0,"yaw":0,"room_id":"r-a","level":0},
+                            "access":null,"anchor":null,"entry_mode":"","sequence":[{"step":"walk","pose_kind":"","pose_key":"","nominal_s":0}],"reports_arrival":false}]}
+                """)!;
+            JsonObject StrollMap(string status, int revision, double x, double z, double now) => Map(m =>
+            {
+                var row = Row(m, Uli);
+                row["room_id"] = "r-a";
+                row["pos"] = new JsonObject { ["x"] = x, ["z"] = z };
+                row["activity_animation"] = "standing";
+                row["order"] = Stroll(status, revision);
+                m["order_seq"] = revision; m["motion_now"] = now;
+            });
+            var r17 = await Start(StrollMap("approaching", 1, 95, 0, 100));
+            r17.Until(3.4);
+            Is("R17 the stroll reached its loop", r17.Of(Uli).LastOrDefault() == OrderState.Loop, Seq(r17, Uli));
+            r17.Until(3.6);
+            await Poll(r17, StrollMap("ended", 2, 99, 0, 103.6));
+            r17.Until(3.6 + FigureManager.OrderEndBlendS + 0.1);
+            Is("R17 the ended walk lets the figure go", !r17.M.HasLiveOrder(Uli), Seq(r17, Uli));
+            await Poll(r17, StrollMap("ended", 2, 97, 2, 104.5));
+            r17.Until(4.6);
+            Is("R17 a row inside the tail places the figure again", Math.Abs(r17.F(Uli).Target.X - 97) <= TolM && Math.Abs(r17.F(Uli).Target.Z - 2) <= TolM,
+               $"target {r17.F(Uli).Target}");
 
             // ---- R8 avoidance (plan E3 Task 11): two walks head-on through r-a pass each other ----
             // README "Orders world" R8: Uli (95, 0) → (99, 0) and Ona (99, 0) → (95, 0), 1.4 m/s, flip = issued + 4 / 1.4 + 0.5.

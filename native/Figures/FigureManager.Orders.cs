@@ -38,6 +38,13 @@ public partial class FigureManager
     private readonly Dictionary<string, (Order Order, double MotionNow, double At)> _parkedOrders = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (Vector3 From, double At)> _orderBlends = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _orderLoopShown = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The loop start held before the row carries the loop pose (E3 final review I2): order id, since when, and whether
+    /// an entry bridge was held (its last frame, <see cref="Figure.HoldPropPoseAtAnchor"/>).
+    /// </summary>
+    private readonly Dictionary<string, (string Id, double At, bool Bridge)> _orderLoopHeld = new(StringComparer.Ordinal);
+    /// <summary>The longest a loop start waits for its row (the server's flip plus poll lag lie far below it).</summary>
+    public const double LoopHoldMaxS = 10;
     private readonly Dictionary<string, OrderState> _orderShownState = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _orderExitY = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Key, JsonObject Spec)> _orderEntrySpecs = new(StringComparer.Ordinal);
@@ -292,6 +299,7 @@ public partial class FigureManager
         if (before == order.Id || (local && !order.IsLocal && player.IssuedLocal == issuedBefore)) return true;
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
+        _orderLoopHeld.Remove(name);
         _orderExitY[name] = fig.Position.Y;
         fig.Route = null; fig.Reckon = null; fig.Settle = null; fig.Ride = null;
         fig.Waypoints.Clear(); fig.DropTravelLine();
@@ -431,6 +439,7 @@ public partial class FigureManager
         _orderPlayers.Remove(name);
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
+        _orderLoopHeld.Remove(name);
         _orderShownState.Remove(name);
         _orderExitY.Remove(name);
         _orderEntrySpecs.Remove(name);
@@ -448,6 +457,7 @@ public partial class FigureManager
         _parkedOrders.Remove(name);
         _orderBlends.Remove(name);
         _orderLoopShown.Remove(name);
+        _orderLoopHeld.Remove(name);
         _orderShownState.Remove(name);
         _orderExitY.Remove(name);
         _orderEntrySpecs.Remove(name);
@@ -545,8 +555,10 @@ public partial class FigureManager
             case OrderState.Idle:
             case OrderState.Abort:
                 return false;
-            case OrderState.Loop when _roomWalkIds.Remove(order.Id):
-                // A room walk at its goal: blended into the row's rest placement, then the rows place the figure again.
+            case OrderState.Loop when _roomWalkIds.Remove(order.Id) || EndedServerWalk(name, order):
+                // A room walk at its goal — or a server walk the server has ended (E3 final review I3: its order stays
+                // published for the tail, and without this the rows could not re-place the figure for 10 s): blended
+                // into the row's rest placement, then the rows place the figure again.
                 _orderPlayers.Remove(name);
                 _orderShownState.Remove(name);
                 _orderBlends[name] = (fig.Position, _clock);
@@ -554,7 +566,12 @@ public partial class FigureManager
             case OrderState.Loop:
                 if (!_orderLoopShown.TryGetValue(name, out var shownId) || shownId != order.Id) ShowLoopStart(fig, player, frame);
                 ApplyLoopSurface(fig, player);
-                return false;
+                if (!HoldsLoopStart(fig, order)) return false;
+                // The row does not carry the loop pose yet: the order keeps the figure on its slot in the held frame.
+                fig.SecondaryFrozen = WorldFrozen;
+                fig.UpdateFigure(frozen ? 0 : dt);
+                fig.Portrait?.Tick(dt, camDist, false);
+                return true;
         }
         if (frozen)
         {
@@ -675,9 +692,55 @@ public partial class FigureManager
         fig.Face = facing;
         fig.FaceTowards(facing, snap: true);
         var row = _rowByName.GetValueOrDefault(name);
+        bool bridge = fig.Bridging || fig.PropEntryLift != 0;
         if (row?.Interaction is not null) fig.HoldPropPoseAtAnchor();
-        else if (fig.Bridging || fig.PropEntryLift != 0)
-            fig.FinishPropEntry(row is { ActivityAnimation.Length: > 0 } ? row.ActivityAnimation : FigureClips.PoseKind("standing", fig.Poses));
+        else if (!string.IsNullOrEmpty(player.PhasePoseKind) && RowAwaitsLoopPose(row, player.Current!))
+        {
+            // E3 final review I2: the client reaches the loop before the server's flip (START_SLACK_S, ticker beat, push
+            // batch, poll), and until then the row still carries the pose from before the run. The entry's last frame is
+            // held on the slot until a row shows the order active (HoldsLoopStart) — never a stale or standing pose.
+            if (bridge) fig.HoldPropPoseAtAnchor();
+            _orderLoopHeld[name] = (player.Current!.Id, _clock, bridge);
+        }
+        else if (bridge)
+            fig.FinishPropEntry(RowLoopClip(fig, row));
+    }
+
+    private static string RowLoopClip(Figure fig, CharacterRow? row)
+        => row is { ActivityAnimation.Length: > 0 } ? row.ActivityAnimation : FigureClips.PoseKind("standing", fig.Poses);
+
+    /// <summary>The row still shows <paramref name="order"/> before its flip: its pose is the one from before the run.</summary>
+    private static bool RowAwaitsLoopPose(CharacterRow? row, Order order)
+        => row is { Interaction: null, Order: { } shown } && shown.Id == order.Id && shown.Status is not ("active" or "ended");
+
+    /// <summary>The loop start of <paramref name="order"/> is held (<see cref="ShowLoopStart"/>); let go — into the row's pose —
+    /// once a row carries it or after <see cref="LoopHoldMaxS"/>.</summary>
+    private bool HoldsLoopStart(Figure fig, Order order)
+    {
+        string name = fig.CharacterName;
+        if (!_orderLoopHeld.TryGetValue(name, out var held)) return false;
+        var row = _rowByName.GetValueOrDefault(name);
+        if (held.Id == order.Id && RowAwaitsLoopPose(row, order) && _clock - held.At < LoopHoldMaxS) return true;
+        _orderLoopHeld.Remove(name);
+        if (held.Bridge && row?.Interaction is null) fig.FinishPropEntry(RowLoopClip(fig, row));
+        return false;
+    }
+
+    /// <summary>The loop start of <paramref name="name"/> waits for its row's loop pose (<see cref="ShowLoopStart"/>).</summary>
+    public bool HoldsLoopStartPose(string name) => _orderLoopHeld.ContainsKey(name);
+
+    /// <summary>
+    /// A server <c>walk</c> the server has ended (E3 final review I3): the row carries its <c>ended</c> revision (the target
+    /// is written then), or the ended revision came first and the row's point is already the walk's goal.
+    /// </summary>
+    private bool EndedServerWalk(string name, Order order)
+    {
+        if (order.Kind != "walk" || order.IsLocal) return false;
+        var row = _rowByName.GetValueOrDefault(name);
+        if (row?.Order is { } shown && shown.Id == order.Id && shown.Status == "ended") return true;
+        if (order.Status != "ended" || order.Goal is not { } goal || !_lastPlans.TryGetValue(name, out var plan)) return false;
+        double dx = plan.Pos.X - goal.X, dz = plan.Pos.Z - goal.Z;
+        return dx * dx + dz * dz <= OrderPlayer.ArriveTolM * OrderPlayer.ArriveTolM;
     }
 
     /// <summary>Decision 6: from where the ended order left the figure into the row's rest placement, then the rows again.</summary>
