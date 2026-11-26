@@ -50,8 +50,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 #: Inverse op of a journal row -> the gap group of a character it touches.
-#: restore_character / restore_status_effects touch no group.
+#: restore_status_effects touches no group.
 GROUP_OF_OP = {
+    "restore_character": "appearance",
     "restore_home_schedule": "home",
     "remove_known_places": "known",
     "remove_outfits": "outfits",
@@ -104,12 +105,13 @@ def _soul_without_content(text: Optional[str]) -> bool:
 def character_gaps(name: str, scope: Optional[Set[str]] = None) -> List[str]:
     """The gaps of a stored character, in a fixed order. ``scope`` None = all
     (a character this run created); otherwise only the gaps of these groups
-    (``home``, ``known``, ``outfits``, ``soul``, ``body_slots``,
+    (``home``, ``known``, ``outfits``, ``soul``, ``body_slots``, ``appearance``,
     ``secrets``, ``skills``; ``known`` reports only ``knows only its
     home``). Media gaps are not here (:func:`media_gaps`)."""
     from app.core import soul_writer
     from app.core.world_dev_apply import _template_has_wardrobe
-    from app.core.world_dev_tools import _missing_body_attrs, _template_fields
+    from app.core.world_dev_tools import (_appearance_lead_error, _field_store,
+                                          _missing_body_attrs, _template_fields)
     from app.models.character import (get_character_config,
                                       get_character_current_location,
                                       get_character_daily_schedule,
@@ -156,6 +158,22 @@ def character_gaps(name: str, scope: Optional[Set[str]] = None) -> List[str]:
         missing = _missing_body_attrs(name)
         if missing:
             gaps.append("body slots unset: " + ", ".join(missing))
+    if wanted("appearance"):
+        bad_leads: List[str] = []
+        cfg_app: Optional[Dict[str, Any]] = None
+        for key, field in _template_fields(template).items():
+            if not str(field.get("lead") or "").strip():
+                continue
+            if _field_store(field) == "config":
+                if cfg_app is None:
+                    cfg_app = get_character_config(name) or {}
+                val = cfg_app.get(key)
+            else:
+                val = prof.get(key)
+            if _appearance_lead_error(key, field, val):
+                bad_leads.append(key)
+        if bad_leads:
+            gaps.append("appearance without placeholders: " + ", ".join(bad_leads))
     if (wanted("home") or wanted("known")) and home is not None:
         known = set(get_known_locations(name))
         if known <= {str(home.get("id"))}:

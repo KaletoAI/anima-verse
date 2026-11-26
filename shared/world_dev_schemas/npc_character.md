@@ -44,8 +44,10 @@ Fields marked `[config]` are stored in the config; all others go into the profil
 - `npc_goals` — at most TWO short goals, one per line, each a handful of words.
   What they want out of the next hour, not out of their life.
 - `character_appearance` — an ENGLISH image-generation prompt: a comma-separated
-  list of attributes, no sentence, no name. Example:
-  `"man, 50s, heavy-set, close-cropped grey hair, weathered face, brown eyes"`.
+  list of attributes, no sentence, no name. ALWAYS start with the literal tokens
+  `{age} year old {gender}, ` (the system fills them from `age` and `gender`).
+  Example:
+  `"{age} year old {gender}, heavy-set, close-cropped grey hair, weathered face, brown eyes"`.
 - `face_appearance` — ENGLISH, head only. ALWAYS start with the literal tokens
   `{gender}, {age} years old, ` (the system fills them from `gender` and `age`),
   then face shape, distinct features, hair colour/length/style, eye colour, skin

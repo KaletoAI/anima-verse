@@ -247,6 +247,7 @@
           "type": "text",
           "multiline": true,
           "required": true,
+          "lead": "{age} year old {gender}, ",
           "workflow_required": [
             "image_generation"
           ],

@@ -77,11 +77,21 @@ When the task asks to fill, complete or check characters, work through each one 
 - A new character defaults to `chat_mode` `"rp_first"`; send `chat_mode: ""` for a
   tool-capable chat model.
 - A season-day field takes `"<season>:<day>"` of this world's calendar (e.g. `"spring:14"`).
-- `character_appearance`, `face_appearance`, `body_appearance` are ENGLISH comma-separated
-  attribute lists for image generation, never a sentence with the name ("young woman, slim, long
-  blonde hair"). With body slots, hair/eyes/skin/build go into `body_slots`. The server renders
-  the hairstyle, the portrait and the 3D figure from these fields after your turn
-  (system prompt, *Images and 3D models*).
+- `character_appearance` and `face_appearance` (and `body_appearance` where present) are ENGLISH
+  comma-separated attribute lists for image generation, never a sentence with the name. Both
+  fields MUST begin with their template placeholder lead verbatim — the server fills `{gender}`
+  and `{age}` from the profile fields; never write gender or age as words ("man", "woman",
+  "46 years old", "around 46"):
+  - `character_appearance` starts with `"{age} year old {gender}, "` — e.g.
+    `"{age} year old {gender}, weathered hands, upright posture, faint scar on left forearm"`.
+  - `face_appearance` starts with `"{gender}, {age} years old, "` — e.g.
+    `"{gender}, {age} years old, angular weathered face, high cheekbones, faint scar across eyebrow, calm expression"`.
+  With body slots, hair/eyes/skin/build stay in `body_slots` and are not repeated here.
+  `get_character` shows what the body-slot packages append to the image prompts (hair, eyes,
+  skin, height and build, …); never repeat any of it in the appearance texts — they keep only
+  what no slot covers: face shape, marks and scars, hairstyle details, posture, expression.
+  The server renders the hairstyle, the portrait and the 3D figure from these fields after your
+  turn (system prompt, *Images and 3D models*).
 - Personality and other prose are written in the character's language, without the name as the
   sentence opener.
 

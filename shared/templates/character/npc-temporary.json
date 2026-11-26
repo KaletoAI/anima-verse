@@ -354,6 +354,7 @@
           "type": "text",
           "multiline": true,
           "required": true,
+          "lead": "{age} year old {gender}, ",
           "workflow_required": [
             "image_generation"
           ],
@@ -435,6 +436,7 @@
           "label_de": "Gesicht (Profilbild)",
           "type": "text",
           "multiline": true,
+          "lead": "{gender}, {age} years old, ",
           "in_prompt": false,
           "image_preview": "profile",
           "llm_generable": true,

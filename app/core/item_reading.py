@@ -16,6 +16,7 @@ from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.timeutils import game_time
 from app.core.linked_characters import mind_of
+from app.core.tts_service import clean_text_for_tts, get_tts_service
 from app.models import character, inventory, secrets
 from app.models.memory import add_memory
 
@@ -218,6 +219,13 @@ def _public_page(page, *, npc=False):
     return result
 
 
+def _tts_enabled() -> bool:
+    try:
+        return bool(get_tts_service().enabled)
+    except Exception:
+        return False
+
+
 def read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict:
     """Read and learn one page, starting or extending the reading session."""
     found = _here(reader, item_id)
@@ -241,7 +249,50 @@ def read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -
     return {"avatar": reader,
             "item_name": localized(item, "name", character.get_character_language(reader)) or item_id,
             "index": index, "total": len(pages),
-            "page": _public_page(page) if page is not None else None}
+            "page": _public_page(page) if page is not None else None,
+            "can_speak": bool(page is not None and item.get("owner") and _tts_enabled())}
+
+
+def speak_page(reader: str, item_id: str, index: int) -> dict:
+    """Generate TTS audio for one page in the item owner's voice."""
+    found = _here(reader, item_id)
+    if found is None:
+        return {"error": "There is nothing like that to read here."}
+    item, pages = found
+    from app.core.reading_watch import watching_owner
+    watching = watching_owner(reader, item)
+    if watching:
+        return {"caught_by": watching}
+    session = active_session(reader)
+    if not session or session["item_id"] != item_id:
+        return {"error": "The reading session has ended."}
+    owner = item.get("owner", "")
+    if not owner:
+        return {"error": "This has no voice to read it."}
+    index = max(0, min(index, len(pages) - 1))
+    page = pages[index] if pages else None
+    text = clean_text_for_tts((page.get("text", "") if page else "") or "")
+    if not text:
+        return {"error": "There is nothing to read aloud on this page."}
+    service = get_tts_service()
+    if not service.enabled:
+        return {"error": "Reading aloud is not available."}
+    tts_cfg = service.get_character_config(character.get_character_config(owner) or {})
+    try:
+        audio_path = service.generate(
+            text=text,
+            voice=tts_cfg.get("voice", ""),
+            speaker_wav=tts_cfg.get("speaker_wav", ""),
+            language=tts_cfg.get("language") or "de",
+            model=tts_cfg.get("model", ""),
+            param=tts_cfg.get("param", ""),
+        )
+    except Exception:
+        logger.exception("Failed to read page aloud for %s (item %s)", reader, item_id)
+        return {"error": "Reading aloud failed."}
+    if audio_path and audio_path.exists():
+        return {"audio_url": f"/tts/tmp/{audio_path.name}"}
+    return {"error": "Reading aloud failed."}
 
 
 def _image_context(reader, item_id, index):

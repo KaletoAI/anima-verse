@@ -114,6 +114,9 @@ worlds/*
 start-*.sh
 !start-demo.sh
 
+# Opt-in marker for start.sh auto-pull (production hosts only)
+/.autopull
+
 # Logs
 logs/
 

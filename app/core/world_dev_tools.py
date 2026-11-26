@@ -2443,6 +2443,23 @@ def _get_character(step: _Step, args: Dict[str, Any]) -> str:
             block = "\n".join(_cap_lines(schema, "too many slots",
                                           budget=MAX_BODY_SCHEMA_CHARS))
             text += "\n" + block
+        if ("body_slots" in seen
+                or any(k in tfields and str(tfields[k].get("lead") or "").strip()
+                       for k in seen)):
+            try:
+                from app.core import body_slots
+                full_sfx = body_slots.appearance_suffix(name, profile=prof).strip()
+                face_sfx = body_slots.appearance_suffix(name, face_only=True,
+                                                        profile=prof).strip()
+                if full_sfx or face_sfx:
+                    if full_sfx and face_sfx and face_sfx != full_sfx:
+                        shown = f"{full_sfx}; portrait: {face_sfx}"
+                    else:
+                        shown = full_sfx or f"portrait: {face_sfx}"
+                    text += ("\npackages append to the image prompts "
+                             f"(do not repeat in the appearance texts): {shown}")
+            except Exception as exc:  # noqa: BLE001 — a reader error must never fail get_character
+                logger.warning("WorldDev: appearance_suffix for %s failed: %s", name, exc)
         if addresses:
             text += "\n" + "\n".join(_cap_lines(addresses, "too many pairs"))
         if secret_block:
@@ -4833,6 +4850,34 @@ def _select_values(field: Dict[str, Any]) -> Optional[List[Any]]:
     return options or None
 
 
+_LEAD_TOKEN = re.compile(r"\{([A-Za-z0-9_]+)\}")
+
+
+def _appearance_lead_error(key: str, field: Dict[str, Any], value: Any) -> Optional[str]:
+    """If ``field`` declares a non-empty ``lead`` prefix and ``value`` is a
+    non-empty string, require ``value`` to begin with that lead (case-
+    insensitive after stripping) and contain every ``{token}`` in it.
+    Returns a refusal message on mismatch, else None."""
+    lead = str(field.get("lead") or "")
+    if not lead.strip() or not isinstance(value, str) or not value.strip():
+        return None
+    norm_val = value.strip().lower()
+    norm_lead = lead.strip().lower()
+    tokens = _LEAD_TOKEN.findall(lead)
+    if norm_val.startswith(norm_lead) and all(f"{{{t}}}".lower() in norm_val for t in tokens):
+        return None
+    if tokens:
+        names = (tokens[0] if len(tokens) == 1
+                 else ", ".join(tokens[:-1]) + f" and {tokens[-1]}")
+        why = (f" — the server fills them from {names}; "
+               f"never write {names} as words")
+    else:
+        why = ""
+    example = lead + ("distinctive details, ..." if lead.endswith(" ")
+                      else " distinctive details, ...")
+    return f'{key} must start with the placeholders "{lead}"{why}. Example: "{example}"'
+
+
 def _check_field_value(key: str, field: Dict[str, Any], value: Any) -> None:
     """The template field type decides what a value may be:
     text/textarea -> string; number -> number; select with fixed options (no
@@ -4851,6 +4896,9 @@ def _check_field_value(key: str, field: Dict[str, Any], value: Any) -> None:
     if kind in ("text", "textarea"):
         if not isinstance(value, str):
             raise ToolRefusal(f"'{key}' must be a string")
+        err = _appearance_lead_error(key, field, value)
+        if err:
+            raise ToolRefusal(err)
         return
     if kind == "number":
         if not _is_num(value):
@@ -5423,6 +5471,9 @@ def _field_takes(field: Dict[str, Any]) -> str:
         return "soul text"
     kind = str(field.get("type") or "")
     if kind in ("text", "textarea"):
+        lead = str(field.get("lead") or "")
+        if lead.strip():
+            return f'text, starts with "{lead}"'
         return "text"
     if kind == "number":
         return "number"
