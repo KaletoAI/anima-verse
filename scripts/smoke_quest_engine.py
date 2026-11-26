@@ -169,6 +169,14 @@ WHAT FOLLOWS BY HAND
       owed=("setup",) -> those 2 + setup_effects.0..3.type (6 paths); owed=("step:1",) -> those 2 +
       steps.1.on_done.0.type (3 paths).
     - l. After restoring core: validate_template(ERRAND) == [].
+ 25. Preparing runs in start_run and tick (stage 2, Task 4):
+    Stub effect "p_hold" (owner "smoke_p", kind "effect", object_kind "", apply returning []). This smoke never calls
+    pass_once, so runs with setup [h: p_hold] stay "preparing":
+    - start_run of a ready template with setup [h: p_hold] -> state "preparing", news_event_id "" (ruling a).
+    - A preparing run whose thing role is bound to a fresh item: delete_item -> tick() -> "broken" with an issue at
+      "bindings.thing" (preparing runs are reference-checked now, D11).
+    - A preparing run, then unregister "smoke_p": tick 1 -> still "preparing"; tick 2 -> "broken" with an issue
+      ("setup_effects.0.type", "type_not_registered") (owed setup position, ruling c).
 """
 import os
 import sys
@@ -968,10 +976,48 @@ def main() -> int:
 
     check("l. ERRAND still valid after restore", qe.validate_template(ERRAND), [])
 
+    # 25 ---------------------------------------------------------------------------------------
+    section("[25]", "preparing runs: unannounced start, reference check, owed setup type")
+    qc.register("smoke_p", lambda: [qc.QuestType(
+        id="p_hold", kind="effect", label="P hold", description="stub hold",
+        params=(), apply=lambda params, ctx: [], object_kind="",
+    )])
+    p_runs = []
+    try:
+        p_tpl = template(title="Prep Hold", setup_effects=[{"key": "h", "type": "p_hold", "params": {}}])
+        rp1 = qe.start_run(p_tpl["id"], errand_bindings())
+        p_runs.append(rp1["id"])
+        check("start_run preparing and unannounced", (rp1["state"], rp1["news_event_id"]), ("preparing", ""))
+
+        fresh_item = inventory.add_item("FreshToken")["id"]
+        rp2 = qe.start_run(p_tpl["id"], errand_bindings(thing=fresh_item))
+        p_runs.append(rp2["id"])
+        inventory.delete_item(fresh_item)
+        qe.tick()
+        got_rp2 = run(rp2["id"])
+        check("preparing run broken when bound item deleted",
+              (got_rp2["state"], "bindings.thing" in {i["path"] for i in got_rp2["issues"]}),
+              ("broken", True))
+
+        rp3 = qe.start_run(p_tpl["id"], errand_bindings())
+        p_runs.append(rp3["id"])
+        hooks.unregister_owned_providers("smoke_p")
+        qe.tick()
+        check("first tick without owed setup type: still preparing", run(rp3["id"])["state"], "preparing")
+        qe.tick()
+        got_rp3 = run(rp3["id"])
+        check("second tick without owed setup type: broken with setup_effects.0.type",
+              (got_rp3["state"], ("setup_effects.0.type", "type_not_registered") in {
+                  (i["path"], i["code"]) for i in got_rp3["issues"]}),
+              ("broken", True))
+    finally:
+        hooks.unregister_owned_providers("smoke_p")
+        cleanup(*p_runs)
+
     if FAILURES:
         print(f"FAIL smoke_quest_engine: {len(FAILURES)} failed: {FAILURES}")
         return 1
-    print("PASS smoke_quest_engine: [1]-[24]")
+    print("PASS smoke_quest_engine: [1]-[25]")
     return 0
 
 

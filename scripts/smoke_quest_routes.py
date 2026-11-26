@@ -71,6 +71,16 @@ WHAT FOLLOWS BY HAND (plan D12, D13, Task 6 brief)
       state "ready".
     - Draft Errand with steps[0].condition {} -> PUT state "ready" -> 422 "invalid" with
       ("steps.0.condition", "required").
+ 11. Stage 2, Task 4 (run row objects/payouts, POST /quests/runs/{id}/retry):
+    - Register owner "test" effects "t.make" (creates an event) and "t.fail" (raises EffectFailed).
+    - Ready template with setup [m: t.make "r"] started via POST /quests/templates/{id}/start -> GET /quests/runs
+      row has state "preparing", objects [], payouts [{"position": "setup", "state": "pending", "issues": []}].
+    - quest_effects.pass_once() -> row state "open", objects [{"kind": "event", "label": "r", "permanent": False,
+      "status": "live"}], payouts [{"position": "setup", "state": "applied", "issues": []}].
+    - POST /quests/runs/<id>/retry -> 200 {"ok": false}; POST /quests/runs/qr_unknown/retry -> 200 {"ok": false};
+      player POST /quests/runs/<id>/retry -> 403.
+    - Second ready template with setup [f: t.fail] -> start via route -> pass_once() -> row has non-empty issues;
+      POST /quests/runs/<id2>/retry -> 200 {"ok": true} and row issues [].
 """
 import os
 import sys
@@ -385,6 +395,68 @@ def main() -> int:
               (resp.status_code, code(resp),
                ("steps.0.condition", "required") in {(i["path"], i["code"]) for i in issues}),
               (422, "invalid", True))
+
+        print("[11] stage 2 task 4: run row objects/payouts and retry route")
+        from app.core import hooks, quest_catalog as qc, quest_effects as qfx
+        from app.models import events as ev_store
+
+        def _rt_make(params, ctx):
+            ev = ev_store.add_event(params["text"], location_id=None, category="ambient")
+            return [qfx.CreatedObject("event", {"event_id": ev["id"]}, params["text"])]
+
+        def _rt_fail(params, ctx):
+            raise qfx.EffectFailed("route stub failure")
+
+        qc.register("test", lambda: [
+            qc.QuestType(
+                id="t.make", kind="effect", label="Make", description="stub make",
+                params=({"key": "text", "type": "text", "required": True},),
+                apply=_rt_make, object_kind="event",
+            ),
+            qc.QuestType(
+                id="t.fail", kind="effect", label="Fail", description="stub fail",
+                params=(), apply=_rt_fail, object_kind="",
+            ),
+        ])
+        try:
+            mk_tpl = call("POST", "/quests/templates", {
+                **ERRAND, "title": "Setup Route",
+                "setup_effects": [{"key": "m", "type": "t.make", "params": {"text": "r"}}],
+            }).json()
+            call("PUT", f"/quests/templates/{mk_tpl['id']}", {"state": "ready", "base_revision": 1})
+            mr = call("POST", f"/quests/templates/{mk_tpl['id']}/start", {"bindings": bindings}).json()
+            row = next((r for r in call("GET", "/quests/runs").json().get("runs", []) if r["id"] == mr["id"]), {})
+            check("preparing row before pass",
+                  (row.get("state"), row.get("objects"), row.get("payouts")),
+                  ("preparing", [], [{"position": "setup", "state": "pending", "issues": []}]))
+            qfx.pass_once()
+            row = next((r for r in call("GET", "/quests/runs").json().get("runs", []) if r["id"] == mr["id"]), {})
+            check("open row after pass",
+                  (row.get("state"), row.get("objects"), row.get("payouts")),
+                  ("open", [{"kind": "event", "label": "r", "permanent": False, "status": "live"}],
+                   [{"position": "setup", "state": "applied", "issues": []}]))
+            resp = call("POST", f"/quests/runs/{mr['id']}/retry")
+            check("retry open run -> 200 ok False", (resp.status_code, resp.json()), (200, {"ok": False}))
+            resp = call("POST", "/quests/runs/qr_unknown/retry")
+            check("retry unknown -> 200 ok False", (resp.status_code, resp.json()), (200, {"ok": False}))
+            check("player POST retry -> 403",
+                  call("POST", f"/quests/runs/{mr['id']}/retry", role="player").status_code, 403)
+
+            fl_tpl = call("POST", "/quests/templates", {
+                **ERRAND, "title": "Fail Route",
+                "setup_effects": [{"key": "f", "type": "t.fail", "params": {}}],
+            }).json()
+            call("PUT", f"/quests/templates/{fl_tpl['id']}", {"state": "ready", "base_revision": 1})
+            fr = call("POST", f"/quests/templates/{fl_tpl['id']}/start", {"bindings": bindings}).json()
+            qfx.pass_once()
+            frow = next((r for r in call("GET", "/quests/runs").json().get("runs", []) if r["id"] == fr["id"]), {})
+            check("failed setup row has issues", bool(frow.get("issues")), True)
+            resp = call("POST", f"/quests/runs/{fr['id']}/retry")
+            check("retry failed setup -> 200 ok True", (resp.status_code, resp.json()), (200, {"ok": True}))
+            frow2 = next((r for r in call("GET", "/quests/runs").json().get("runs", []) if r["id"] == fr["id"]), {})
+            check("issues cleared after retry", frow2.get("issues"), [])
+        finally:
+            hooks.unregister_owned_providers("test")
 
     quest_engine.drain()
     if FAILURES:

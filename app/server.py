@@ -735,6 +735,8 @@ async def lifespan(app: FastAPI):
     from app.core import quest_engine, quest_types
     quest_types.register()
     quest_engine.register()
+    from app.core import quest_effects
+    quest_effects.start()
     from app.core.relationship_decay import register_relationship_decay_handler
     register_relationship_decay_handler()
     from app.core.intent_engine import register_intent_handlers
@@ -1176,6 +1178,11 @@ async def lifespan(app: FastAPI):
         await periodic_jobs.stop()
     except Exception as _pe:
         logger.debug("periodic_jobs stop failed: %s", _pe)
+    try:
+        from app.core import quest_effects
+        quest_effects.stop()
+    except Exception as _qee:
+        logger.debug("quest_effects stop failed: %s", _qee)
 
     # Shutdown
     try:

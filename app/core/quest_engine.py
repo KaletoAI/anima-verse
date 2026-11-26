@@ -17,15 +17,22 @@ ends in one call). A run reads only its ``template_snapshot`` (D2): editing the 
 quest. Evaluation is skipped while no hidden/open run exists; that count is loaded from storage on first use (never
 assumed 0 after a restart) and reloaded after every start, open, end and tick.
 
-TICK (D10). :func:`tick` is the ``world_tick`` listener body, run on the worker. The periodic runner already gates
+TICK (D10, D11). :func:`tick` is the ``world_tick`` listener body, run on the worker. The periodic runner already gates
 ``world_tick`` on world freeze / queue pause, so the tick has no freeze check of its own, and a signal from a
-player's own action is evaluated while frozen too. Order: expiry, then the reference check (a binding that no longer
-resolves makes the run ``broken``; so does a type that is not registered at TWO consecutive ticks — one catalog read
-without it, a package reloading, is no evidence), then a full re-evaluation for every avatar. The reference check
+player's own action is evaluated while frozen too. Order: expiry, then the reference check over every not-ended run
+(``preparing``, ``hidden``, ``open``: a binding that no longer resolves makes the run ``broken``; so does a type that is
+not registered at TWO consecutive ticks — including owed effect positions — and a live run object whose ``exists`` check
+returns ``False`` at TWO consecutive ticks), then a full re-evaluation for every avatar. The reference check
 runs BEFORE the re-evaluation, so no type evaluates a binding the check would reject.
 A STORAGE failure during the check is not evidence that an entity is gone: that run is skipped for this tick (not
 checked, not evaluated), never marked broken. The full re-evaluation is also what catches inventory writes that
 emit no signal (an item definition deleted, a character import or reset).
+
+EFFECTS (D8-D10). A template with ``setup_effects`` starts in state ``preparing``; the background effects worker
+(:mod:`app.core.quest_effects`) applies setup, step ``on_done`` and ``reward`` payouts outside this worker, moves a
+prepared run to ``hidden`` or ``open`` (stamping start/expiry and announcing it when it opens), and removes
+non-permanent objects of ended runs. Every end site calls :func:`_after_run_ended` (withdraw announcement + wake the
+effects worker).
 
 TIME LIMIT. A signal never records a step of an open run past its ``expires_at``: the tick (which does not run while
 the queue is paused) ends it ``failed``.
@@ -34,9 +41,9 @@ PLACEHOLDERS. A player text (title, summary, step text/hint, the lock text) may 
 :func:`render_text` replaces it with the label frozen on the run at start (``binding_labels``).
 
 PUSH (D15). Every state change ends in :func:`_quests_changed`, outside locks and transactions. A step notifies only
-the avatar that fulfilled it; a run that opens at once is announced with a global world event (the author's title
-and summary) whose id is kept on the run; when an announced run ends cancelled, failed or broken that event is
-deleted, best effort.
+the avatar that fulfilled it; a run that opens at once (or opens from ``preparing``) is announced with a global world
+event (the author's title and summary) whose id is kept on the run; when an announced run ends cancelled, failed or
+broken that event is deleted, best effort.
 """
 from __future__ import annotations
 
@@ -564,8 +571,10 @@ def _unregistered(template: dict, *, owed: Iterable[str] = ()) -> List[Dict[str,
 
 _live_lock = threading.Lock()
 _live_count: Optional[int] = None  # None = not loaded yet (a fresh process)
-#: Ids of the live runs that named an unregistered type at the previous tick (only the tick reads and writes it).
+#: Ids of the not-ended runs that named an unregistered type at the previous tick (only the tick reads and writes it).
 _missing_type_runs: set = set()
+#: Ids of the live run objects whose ``exists`` check returned False at the previous tick (only the tick touches it).
+_missing_object_ids: set = set()
 
 
 def _refresh_live() -> int:
@@ -601,6 +610,16 @@ def _withdraw_announcement(run_id: str) -> None:
             delete_event(run["news_event_id"])
     except Exception as e:  # noqa: BLE001
         logger.warning("quest run %s: withdrawing the announcement failed: %s", run_id, e)
+
+
+def _after_run_ended(run_id: str) -> None:
+    """One end path (D10): withdraw the announcement (if any) and wake the effects worker for cleanup."""
+    _withdraw_announcement(run_id)
+    try:
+        from app.core import quest_effects
+        quest_effects.wake()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("quest run %s: waking the effects worker failed: %s", run_id, e)
 
 
 def _announce(run: dict) -> None:
@@ -661,8 +680,11 @@ def _expiry(snapshot: dict, now) -> str:
 def start_run(template_id: str, bindings: dict, *, started_by: str = "") -> dict:
     """Start a run of the ``ready`` template ``template_id`` with ``bindings``, or raise :class:`QuestRefused`.
 
-    The template is frozen as the run's snapshot. With a start condition the run is ``hidden``; without one it is
-    ``open`` at once (``started_game_ts`` stamped by the store, ``expires_at`` from ``time_limit_s``) and announced.
+    The template is frozen as the run's snapshot. When the template has ``setup_effects``, the store creates the
+    run in state ``preparing`` and this wakes the effects worker without announcing it (the worker announces it
+    once setup finishes and the run opens). Otherwise, with a start condition the run is ``hidden``; without one
+    it is ``open`` at once (``started_game_ts`` stamped by the store, ``expires_at`` from ``time_limit_s``) and
+    announced.
     """
     from app.core.timeutils import game_time
     from app.models import quests
@@ -679,9 +701,15 @@ def start_run(template_id: str, bindings: dict, *, started_by: str = "") -> dict
                             started_by=started_by,
                             expires_at="" if hidden else _expiry(template, game_time()),
                             binding_labels=_binding_labels(template, bindings))
-    if not hidden:
+    if run["state"] == "open":
         _announce(run)
         run = quests.get_run(run["id"]) or run
+    elif run["state"] == "preparing":
+        try:
+            from app.core import quest_effects
+            quest_effects.wake()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("quest run %s: waking the effects worker failed: %s", run["id"], e)
     _refresh_live()
     _quests_changed()
     return run
@@ -692,7 +720,7 @@ def cancel_run(run_id: str) -> bool:
     from app.models.quests import set_run_state
     if not set_run_state(run_id, "cancelled"):
         return False
-    _withdraw_announcement(run_id)
+    _after_run_ended(run_id)
     _refresh_live()
     _quests_changed()
     return True
@@ -712,7 +740,7 @@ def on_character_deleted(name: str) -> None:
         if issues and set_run_state(run["id"], "broken", issues=issues):
             changed.append(run["id"])
     for run_id in changed:
-        _withdraw_announcement(run_id)
+        _after_run_ended(run_id)
     if changed:
         _refresh_live()
         _quests_changed()
@@ -772,6 +800,14 @@ def _evaluate_run(run: dict, avatar: str, signal: str) -> bool:
             break  # another avatar (or the tick) got there first
         changed = True
         run = updated
+        if run.get("state") == "done":
+            _after_run_ended(run["id"])
+        else:
+            try:
+                from app.core import quest_effects
+                quest_effects.wake()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("quest run %s: waking the effects worker failed: %s", run["id"], e)
         _notify_step(avatar, run, index)
     return changed
 
@@ -827,19 +863,23 @@ def avatar_view(run: dict, avatar: str) -> dict:
 # --- Tick ------------------------------------------------------------------------------------------
 
 def tick() -> None:
-    """Expiry, reference check, full re-evaluation (D10); see the module docstring. No freeze check here."""
+    """Expiry, reference check, full re-evaluation (D10, D11); see the module docstring. No freeze check here."""
+    from app.core import quest_objects
     from app.core.timeutils import game_time
     from app.models.account import get_all_avatars
-    from app.models.quests import expire_runs, list_runs, set_run_state
-    global _missing_type_runs
+    from app.models.quests import RUN_OPEN_STATES, expire_runs, list_objects, list_payouts, list_runs, set_run_state
+    global _missing_type_runs, _missing_object_ids
     ended = list(expire_runs(game_time().canonical()))
     skip: set = set()
     missing_now: set = set()
-    for run in list_runs(states=LIVE_STATES):
+    missing_objects_now: set = set()
+    for run in list_runs(states=RUN_OPEN_STATES):
         snap = run.get("template_snapshot") or {}
         try:
+            owed = [p["position"] for p in list_payouts(states=("pending",), run_id=run["id"])]
             issues = check_bindings(snap, run.get("bindings") or {}, strict=True)
-            unregistered = _unregistered(snap)
+            unregistered = _unregistered(snap, owed=owed)
+            live_objects = list_objects(run["id"], statuses=("live",))
         except Exception as e:  # noqa: BLE001 - a failed read or a raising validator: skip this run this tick
             logger.warning("quest run %s: reference check failed, skipped this tick: %s", run.get("id"), e)
             skip.add(run["id"])
@@ -852,11 +892,27 @@ def tick() -> None:
             missing_now.add(run["id"])
             if run["id"] in _missing_type_runs:
                 issues = issues + unregistered
-        if issues and set_run_state(run["id"], "broken", issues=issues, from_states=LIVE_STATES):
+        for obj in live_objects:
+            kind = quest_objects.get_kind(str(obj.get("kind") or ""))
+            if kind is None:
+                continue
+            try:
+                present = kind.exists(obj.get("ref") or {})
+            except Exception as e:  # noqa: BLE001 - unreadable status is not "gone"
+                logger.warning("quest run %s: object %s exists check failed: %s", run.get("id"), obj.get("id"), e)
+                continue
+            if present is False:
+                oid = obj["id"]
+                missing_objects_now.add(oid)
+                if oid in _missing_object_ids:
+                    label = obj.get("label") or obj.get("effect_key") or str(oid)
+                    issues = issues + [_issue(f"objects.{obj['effect_key']}", "object_gone", f"'{label}' is gone")]
+        if issues and set_run_state(run["id"], "broken", issues=issues, from_states=RUN_OPEN_STATES):
             ended.append(run["id"])
     _missing_type_runs = missing_now
+    _missing_object_ids = missing_objects_now
     for run_id in ended:
-        _withdraw_announcement(run_id)
+        _after_run_ended(run_id)
     _refresh_live()
     if ended:
         _quests_changed()
@@ -954,7 +1010,8 @@ def drain(timeout: float = 5.0) -> bool:
 
 def _reset_for_tests() -> None:
     """Forget the in-memory state as a fresh process would (smoke only; the queue is drained by the caller)."""
-    global _live_count, _missing_type_runs
+    global _live_count, _missing_type_runs, _missing_object_ids
     with _live_lock:
         _live_count = None
     _missing_type_runs = set()
+    _missing_object_ids = set()

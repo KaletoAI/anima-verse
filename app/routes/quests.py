@@ -1,7 +1,7 @@
 """Admin routes for the quest system (stage 1): templates, runs and the type catalog.
 
-A thin HTTP adapter over `app.models.quests` (storage), `app.core.quest_catalog` (types) and
-`app.core.quest_engine` (validation, start, cancel); it does auth, parsing and the HTTP mapping only.
+A thin HTTP adapter over `app.models.quests` (storage), `app.core.quest_catalog` (types),
+`app.core.quest_engine` (validation, start, cancel) and `app.core.quest_effects` (retry); it does auth, parsing and the HTTP mapping only.
 Admin-only for reads AND writes (templates carry GM notes): `"/quests"` is on the gate's `_ADMIN_PREFIXES`
 and the router carries `Depends(require_admin)` as the second layer. The player's quest book is
 `GET /play/quests`, never this router.
@@ -26,7 +26,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.core import quest_catalog, quest_engine
+from app.core import quest_catalog, quest_effects, quest_engine
 from app.core.auth_dependency import require_admin
 from app.models import quests
 
@@ -91,6 +91,16 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
     steps = snapshot.get("steps") if isinstance(snapshot.get("steps"), list) else []
     step_log = [{**entry, "game_label": _label(str(entry.get("game_ts") or ""), lang)}
                 for entry in run.get("step_log") or [] if isinstance(entry, dict)]
+    run_id = str(run.get("id") or "")
+    objects = [
+        {"kind": o.get("kind"), "label": o.get("label") or "", "permanent": bool(o.get("permanent")),
+         "status": o.get("status")}
+        for o in quests.list_objects(run_id)
+    ]
+    payouts = [
+        {"position": p.get("position"), "state": p.get("state"), "issues": p.get("issues") or []}
+        for p in quests.list_payouts(states=(), run_id=run_id)
+    ]
     return {
         "id": run.get("id"),
         "title": quest_engine.render_text(str(snapshot.get("title") or ""), run),
@@ -103,6 +113,8 @@ def _run_row(run: Dict[str, Any], lang: str) -> Dict[str, Any]:
         "issues": run.get("issues") or [],
         "started_game_label": _label(run.get("started_game_ts") or "", lang),
         "expires_label": _label(run.get("expires_at") or "", lang),
+        "objects": objects,
+        "payouts": payouts,
     }
 
 
@@ -268,3 +280,9 @@ def list_runs_route(state: str = "", lang: str = "en") -> Dict[str, List[Dict[st
 async def cancel_run_route(run_id: str):
     """End a not yet ended run as `cancelled`; `ok` is False when it had ended or is unknown."""
     return {"ok": await asyncio.to_thread(quest_engine.cancel_run, run_id)}
+
+
+@router.post("/runs/{run_id}/retry")
+async def retry_run_route(run_id: str):
+    """Re-arms every failed payout of a not-ended (or done) run and clears a preparing run's issues."""
+    return {"ok": await asyncio.to_thread(quest_effects.retry, run_id)}
