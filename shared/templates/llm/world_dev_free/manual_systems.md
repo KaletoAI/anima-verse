@@ -100,8 +100,9 @@ minutes. At most 3 `create_prop` per quest and at most 20 effects per list.
   "params": {"character": "miller"}}}]}`.
 - The tin box: `{"title": "The tin box", "summary": "{giver} lost a tin box.", "giver_role": "giver", "roles": [{"key": "giver", "kind": "character"}, {"key": "glade", "kind": "room"}], "setup_effects": [{"key": "box", "type": "create_item", "params": {"name": "Old tin box", "category": "tool"}}, {"key": "box_spot", "type": "place_item", "params": {"item": "box", "room": "glade", "hidden": true, "difficulty": 3}}, {"key": "hint", "type": "give_hint", "params": {"holder": "giver", "text": "The box lies hidden in {glade}."}}], "steps": [{"id": "s1", "text": "Find out where the box is.", "condition": {"type": "knows_secret", "params": {"secret": "hint"}}}, {"id": "s2", "text": "Find the tin box in {glade}.", "condition": {"type": "found_item", "params": {"placement": "box_spot"}}, "on_done": [{"key": "told", "type": "narrate", "params": {"text": "Under the roots lies the box."}}]}], "rewards": [{"key": "coin", "type": "create_item", "permanent": true, "params": {"name": "Silver coin", "category": "gift"}}, {"key": "coin_given", "type": "give_item", "permanent": true, "params": {"item": "coin"}}]}`.
 
-An effect list or reference error refuses the whole call (nothing is stored — fix it and send the
-template again). Other issues are listed in the result line under `issues:`. To fix them, remove the
-draft with `delete_created` in the same turn and create it again; otherwise name them in your
-summary — the admin finishes the draft. The run can delete only its own templates, and only in the
-turn that created them.
+An error inside an effect list (`setup_effects`, `steps[].on_done`, `rewards`), in `giver_role`, or
+a wrong target/effect-key reference anywhere in the template refuses the whole call (nothing is
+stored — fix it and send the template again). Other issues are only listed as warnings in the result
+line under `issues:`. To fix them, remove the draft with `delete_created` in the same turn and
+create it again; otherwise name them in your summary — the admin finishes the draft. The run can
+delete only its own templates, and only in the turn that created them.

@@ -140,8 +140,8 @@ Run 4 (stage-2 template & blocking errors):
         (quest_engine.validate_template: _issue("giver_role", "unknown_role",
         f"The giver role '{giver}' is not a character role of this quest"));
       - j7 step 0 condition {type: "create_item", params: {name: "x"}} ->
-        "steps.0.condition.type: 'Create an item' is a effect, not allowed here (allowed: condition)"
-        (quest_catalog._check_leaf: f"'{t.label}' is a {t.kind}, not allowed here (allowed: {', '.join(allowed_kinds)})",
+        "steps.0.condition.type: 'Create an item' is an effect, not allowed here (allowed: condition)"
+        (quest_catalog._check_leaf: f"'{t.label}' is {article} {t.kind}, not allowed here (allowed: {', '.join(allowed_kinds)})",
         create_item label "Create an item", kind "effect");
       - j8 setup_effects [{key: "x1", type: "summon_dragon", params: {}}] ->
         "setup_effects.0.type: Unknown effect type 'summon_dragon'"
@@ -536,7 +536,7 @@ for label, args, needle in (
         ("j6 giver_role not character", j6,
          "giver_role: The giver role 'glade' is not a character role of this quest"),
         ("j7 effect in step condition", j7,
-         "steps.0.condition.type: 'Create an item' is a effect, not allowed here (allowed: condition)"),
+         "steps.0.condition.type: 'Create an item' is an effect, not allowed here (allowed: condition)"),
         ("j8 unknown effect type", j8,
          "setup_effects.0.type: Unknown effect type 'summon_dragon'")):
     res = call("create_quest_template", args)

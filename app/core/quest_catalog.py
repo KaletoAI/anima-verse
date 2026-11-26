@@ -316,8 +316,9 @@ def _check_leaf(path: str, leaf: dict, scope: Scope, allowed_kinds: Tuple[str, .
     if t is None:
         return [_issue(path + ".type", "unknown_type", f"Unknown {allowed_kinds[0]} type '{leaf['type']}'")]
     if t.kind not in allowed_kinds:
+        article = "an" if t.kind[:1].lower() in "aeiou" else "a"
         return [_issue(path + ".type", "wrong_kind",
-                       f"'{t.label}' is a {t.kind}, not allowed here (allowed: {', '.join(allowed_kinds)})")]
+                       f"'{t.label}' is {article} {t.kind}, not allowed here (allowed: {', '.join(allowed_kinds)})")]
     params = leaf.get("params") or {}
     issues: List[Dict[str, str]] = []
     declared = {p.get("key") for p in t.params}

@@ -58,7 +58,7 @@ class Focus(unittest.TestCase):
                 # Keep the real absence scan; isolate unrelated context loaders.
                 for name in (
                     "inbox", "events", "assignments", "state_flags", "outfit_decision",
-                    "arc", "retrospective", "recent_chat", "known_secrets",
+                    "quest", "retrospective", "recent_chat", "known_secrets",
                     "room_items", "inventory", "tracker", "activity_hint",
                 ):
                     stack.enter_context(patch.object(tc, f"_build_{name}_block", return_value=""))

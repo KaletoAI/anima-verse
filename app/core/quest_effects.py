@@ -512,36 +512,23 @@ def _cleanup_order(rows: list) -> list:
 
 
 def _untag_permanent_props() -> None:
-    """Clear the ``quest_run`` sidecar tag on live permanent props of ended runs (D17)."""
+    """Clear the ``quest_run`` sidecar tag on live or pending permanent props of ended runs (D17)."""
     from app.core import props
     from app.models import quests
 
     try:
-        rows = quests.list_objects(statuses=("live",))
+        rows = quests.permanent_props_of_ended_runs()
     except Exception:  # noqa: BLE001
         logger.exception("quest effects: permanent prop untag scan failed")
         return
 
-    run_ended: Dict[str, bool] = {}
     for row in rows:
-        if row.get("kind") != "prop" or not row.get("permanent"):
-            continue
         pid = str((row.get("ref") or {}).get("prop_id") or "")
         if not pid or pid in _untagged_props:
             continue
-        rid = str(row.get("run_id") or "")
-        if rid not in run_ended:
-            try:
-                run = quests.get_run(rid)
-                run_ended[rid] = bool(run and run.get("state") in quests.RUN_ENDED_STATES)
-            except Exception:  # noqa: BLE001
-                logger.exception("quest effects: failed reading run %s for prop untag", rid)
-                run_ended[rid] = False
-        if not run_ended[rid]:
-            continue
         try:
-            props.set_quest_run(pid, "")
-            _untagged_props.add(pid)
+            if props.set_quest_run(pid, ""):
+                _untagged_props.add(pid)
         except Exception:  # noqa: BLE001
             logger.exception("quest effects: failed untagging permanent prop %s", pid)
 

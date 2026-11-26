@@ -251,7 +251,7 @@ export function RunsView() {
                                 {(p.issues || []).length ? (
                                   <ul>
                                     {p.issues.map((i, k) => (
-                                      <li key={k}><code>{i.path || '—'}</code> {i.message}</li>
+                                      <li key={k}><code>{i.path || '—'}</code> {t(i.message)}</li>
                                     ))}
                                   </ul>
                                 ) : null}
@@ -261,7 +261,7 @@ export function RunsView() {
                         ) : <p className="ga-form-hint">{t('No payouts.')}</p>}
                         {run.issues.length ? (
                           <div className="ga-quest-error" role="alert">
-                            <ul>{run.issues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {i.message}</li>)}</ul>
+                            <ul>{run.issues.map((i, n) => <li key={n}><code>{i.path || '—'}</code> {t(i.message)}</li>)}</ul>
                           </div>
                         ) : null}
                       </td>

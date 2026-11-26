@@ -590,6 +590,24 @@ def objects_to_clean() -> list[dict]:
     return [_object_dict(r) for r in get_connection().execute(sql, states).fetchall()]
 
 
+def permanent_props_of_ended_runs() -> list[dict]:
+    """Permanent ``prop`` objects of ended runs whose status is ``live`` or
+    ``pending``, ordered by object id (for D17 sidecar untagging)."""
+    states = RUN_ENDED_STATES
+    sql = (
+        "SELECT o.* "
+        "FROM quest_run_objects o "
+        "JOIN quest_runs r ON r.id = o.run_id "
+        "WHERE r.state IN (%s) "
+        "AND o.kind = 'prop' "
+        "AND o.permanent = 1 "
+        "AND o.status IN ('live', 'pending') "
+        "ORDER BY o.id"
+        % ",".join("?" * len(states))
+    )
+    return [_object_dict(r) for r in get_connection().execute(sql, states).fetchall()]
+
+
 # ── Run Payouts ──────────────────────────────────────────────────────────
 
 def list_payouts(*, states: tuple[str, ...] = ("pending",),

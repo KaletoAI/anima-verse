@@ -300,15 +300,21 @@ the LIST of all that owner's types. The core names no package (R1); the plugin l
 | `CAPABILITY`, `KINDS`, `ROLE_KINDS`, `PARAM_TYPES` | `"quest.types"`; the type kinds; `character`, `location`, `room`, `item`; `str`, `text`, `int`, `float`, `bool`, `select`, `role`, `target` (`target` accepts a role key in `role_kinds` or a reachable effect key whose `object_kind` is in `object_kinds`) |
 | `app.core.quest_types.check_binding(kind, binding) -> list[ConditionIssue]` | The issues of one role binding (D6 shapes). RAISES on a storage error; an issue only when the binding is malformed or the entity is definitely gone |
 | `app.core.quest_types.build_context(avatar, run) -> QuestContext \| None` | The evaluation context of an avatar for a run: `avatar` (acting body), `mind`, `profile`, `location_id`, `room_id`, `now` (`GameTime`), `bindings`, `run`, `objects` (effect key → ref of the run's first live object, markers excluded). `None` when the profile, clock or run objects cannot be read |
+| `app.core.quest_effects.EffectContext(run, bindings, objects, avatar, position, effect_key, permanent, previous=(), …)` | Frozen dataclass passed to an effect's apply hook (D12): `run` (run row), `bindings` (role bindings), `objects` (effect key → ref of its first live object), `avatar` (acting body, `""` for setup), `position` (`setup` / `step:<i>` / `reward`), `effect_key`, `permanent`, `previous` (existing pending/live object rows for this `(run, effect_key)` in id order). Methods: `app.core.quest_effects.EffectContext.mint(prefix) -> str` (fresh id for a pending row) and `app.core.quest_effects.EffectContext.record_pending(kind, ref, label="") -> None` (writes or updates the pending object row before the external write) |
+| `app.core.quest_effects.CreatedObject(kind, ref, label="", status="live")` | Frozen dataclass returned in a list by an effect's apply hook: `kind` (a core object kind), `ref` (JSON-safe dict), `label`, `status` (`"live"` or `"pending"`) |
+| `app.core.quest_effects.EffectFailed(message, retryable=False, code="effect_failed")` | Exception an effect's apply hook raises when it cannot complete. `retryable=True` leaves the payout pending for a later pass with no issue; `retryable=False` marks the payout (or preparing run) failed with `message` and `code` |
 
 **Type hooks.** The evaluate hook is called with `(params, ctx)` and returns a `ConditionResult` of
 `app.core.activity_engine` — unavailable, never false, when a read fails. The optional validate hook is called with
 `(params, bindings)` and returns a list of `ConditionIssue`; `bindings` is `None` at template time (check only
-what needs no world entity) and the run's bindings at start and at every tick. Both receive CLEANED parameters: the
-generic checks passed, declared defaults filled in, and an absent parameter without a default DROPPED — read them with
-`params.get`. A validate hook may raise: at start that refuses the run (a `bad_param` issue), at the tick the run is
-skipped for that tick, never marked broken. Location, room and inventory are read for `ctx.avatar` (the acting
-body); facts for `ctx.mind`.
+what needs no world entity) and the run's bindings at start and at every tick. The apply hook of an effect type is
+called on the effects worker with `(params, ctx)` (where `ctx` is an `EffectContext`, and `{role}` placeholders in
+text parameters are already rendered) and returns `list[CreatedObject]` (or raises `EffectFailed`). All three receive
+CLEANED parameters: the generic checks passed, declared defaults filled in, and an absent parameter without a default
+DROPPED — read them with `params.get`. A validate hook may raise: at start that refuses the run (a `bad_param` issue),
+at the tick the run is skipped for that tick, never marked broken. Location, room and inventory are read for
+`ctx.avatar` (the acting body); facts for `ctx.mind`. Object kinds live in a core registry (`app/core/quest_objects.py`)
+and are not package-extensible in stage 2.
 
 ## Skill gate — `app.core.skill_gate` ⚠
 

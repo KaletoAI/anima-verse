@@ -1777,6 +1777,10 @@ _QUEST_TYPES_HEADER = (
 
 
 def _quest_param_text(p: Dict[str, Any]) -> str:
+    """Render one catalog parameter as ``key[*]:type-text`` for the
+    ``list_catalog quest_types`` header, with the ``role[...]`` (including
+    ``avatar_default``), ``target[...]`` (``role_kinds`` / ``object_kinds``),
+    and ``select[...]`` forms."""
     key = f"{p.get('key')}{'*' if p.get('required') else ''}"
     ptype = str(p.get("type") or "")
     if ptype == "role":
@@ -6837,19 +6841,26 @@ def _event_refs(loc_id: str) -> List[str]:
 #: route's body cap, routes/quests._MAX_BODY_BYTES: a template is copied into
 #: every run's snapshot).
 MAX_QUEST_TEMPLATE_BYTES = 256 * 1024
-#: Authoring issue codes that refuse create_quest_template anywhere in the
-#: template (target/kind mistakes, also in step conditions).
+#: Authoring issue codes that refuse ``create_quest_template`` anywhere in the
+#: template: target/effect-key reference errors (``unknown_target``,
+#: ``wrong_kind``, ``not_yet_created``). In addition, ``_quest_issue_blocks``
+#: refuses any issue inside an effect list (``setup_effects``,
+#: ``steps[].on_done``, ``rewards``) or on ``giver_role``; every other issue
+#: stays a warning on the stored draft.
 _QUEST_BLOCKING_CODES = ("unknown_target", "wrong_kind", "not_yet_created")
+#: Matches issue paths inside a step's ``on_done`` effect list.
 _QUEST_ON_DONE_RE = re.compile(r"^steps\.\d+\.on_done")
 
 
 def _quest_issue_blocks(issue: Dict[str, str]) -> bool:
     """Whether an authoring issue from ``validate_template`` refuses
-    ``create_quest_template`` instead of being kept as a draft warning.
+    ``create_quest_template`` instead of staying a warning on the stored draft.
 
-    A draft may be incomplete (the admin finishes it), but a wrong effect list,
-    giver role, or target/kind reference is a mistake the model can and must
-    fix itself.
+    Refuses: any issue inside an effect list (``setup_effects``,
+    ``steps[].on_done``, ``rewards``), any ``giver_role`` issue, and anywhere
+    in the template a target/effect-key reference error (codes
+    ``unknown_target``, ``wrong_kind``, ``not_yet_created``). Every other issue
+    stays a warning on the stored draft.
     """
     path = str(issue.get("path") or "")
     if (path == "giver_role"
@@ -6872,12 +6883,14 @@ def _create_quest_template(step: _Step, args: Dict[str, Any]) -> str:
     admin route calls). The field check is the route's own
     (``quest_engine.check_template_fields``); every value the writer would
     rewrite (a non-container roles/steps/conditions/effects) is refused, so the
-    stored template is the sent one. Effect-list, giver-role, and target/kind
-    issues (``_quest_issue_blocks``) refuse the call before anything is stored
-    so the model can fix them; other authoring issues (``validate_template``)
-    stay warnings because a draft may be incomplete. Inverse
-    ``delete_quest_template{id}`` (world_dev_undo); delete_created removes
-    one only in the same turn (E2) — the writer mints a new id and
+    stored template is the sent one. ``_quest_issue_blocks`` refuses the call
+    before anything is stored for any issue inside an effect list
+    (``setup_effects``, ``steps[].on_done``, ``rewards``), any ``giver_role``
+    issue, or a target/effect-key reference error (codes ``unknown_target``,
+    ``wrong_kind``, ``not_yet_created``) anywhere in the template; every other
+    authoring issue (``validate_template``) stays a warning on the stored draft.
+    Inverse ``delete_quest_template{id}`` (world_dev_undo); delete_created
+    removes one only in the same turn (E2) — the writer mints a new id and
     created_at, so no exact re-creation exists."""
     from app.core import quest_engine
     from app.models import quests

@@ -111,6 +111,12 @@ WHAT FOLLOWS BY HAND
        (pending-only keys stripped), world_prop ref has no mesh_failed / mesh_started_at / before.
      - cancel_run + pass_once() -> placement and prop both removed, both rows "reverted"
        (empty written dict skips edit comparison).
+ (t) Permanent prop cancelled while mesh is still pending (D17):
+     - create_prop with permanent=True -> pass_once() -> sidecar has quest_run == run_id,
+       prop row status == "pending", pid still in PENDING.
+     - cancel_run + pass_once() -> permanent_props_of_ended_runs() includes pending permanent
+       prop rows, so sidecar still exists and has NO "quest_run" key; both object rows stay
+       "pending" (not reverted because permanent=True).
 """
 from __future__ import annotations
 
@@ -734,6 +740,27 @@ def main() -> int:
           [("world_prop", "reverted"), ("prop", "reverted")])
     check("world prop deleted on cancel", any(r["id"] == wid_s for r in world_props.list_world_props()), False)
     check("prop sidecar deleted on cancel", bool(props.read_sidecar(pid_s, read_only=True)), False)
+
+    # ------------------------------------------------------------------ (t)
+    section("(t)", "permanent prop cancelled while mesh is still pending (D17)")
+    triggers.clear()
+    run_t = qe.start_run(tpl_n["id"], BASE_BINDINGS)
+    qfx.pass_once()
+    check("1 trigger for permanent pending prop", len(triggers), 1)
+    pid_t = triggers[0][0]
+    check("tagged while preparing", props.read_sidecar(pid_t, read_only=True).get("quest_run"), run_t["id"])
+    rows_t0 = [o for o in quests.list_objects(run_t["id"]) if o["effect_key"] == "rock"]
+    check("initial pending rows for t", [(r["kind"], r["status"]) for r in rows_t0],
+          [("world_prop", "pending"), ("prop", "pending")])
+    qe.cancel_run(run_t["id"])
+    qfx.pass_once()
+    sc_t_after = props.read_sidecar(pid_t, read_only=True)
+    check("permanent prop sidecar still exists", bool(sc_t_after), True)
+    check("quest_run key removed while pending", "quest_run" in sc_t_after, False)
+    rows_t1 = [o for o in quests.list_objects(run_t["id"]) if o["effect_key"] == "rock"]
+    check("permanent rows stay pending (not reverted)", [(r["kind"], r["status"]) for r in rows_t1],
+          [("world_prop", "pending"), ("prop", "pending")])
+    pending_pids.discard(pid_t)
 
     if FAILURES:
         print(f"FAIL smoke_quest_props: {len(FAILURES)} failed: {FAILURES}")
