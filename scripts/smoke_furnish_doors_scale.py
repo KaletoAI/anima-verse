@@ -34,18 +34,18 @@ Hand derivations
 
 (c) Living kit scaling (20 m^2 = 5x4 vs 70 m^2 = 10x7):
   resolve_count per template entry:
-    dining_table {base:0, per_m2:0.02, max:2}:
-      20 m^2 -> floor(0.4) = 0;   70 m^2 -> floor(1.4) = 1
+    dining_table {base:0, per_m2:0.025, max:2}:
+      20 m^2 -> floor(0.5) = 0;   70 m^2 -> floor(1.75) = 1
     chair {per_ref:4, max:8} (ref dining_table):
       20 m^2 -> 4 * 0 = 0;        70 m^2 -> 4 * 1 = 4
-    chest {base:0, per_m2:0.025, max:2}:
+    chest {base:0, per_m2:0.03, max:2}:
+      20 m^2 -> floor(0.6) = 0;   70 m^2 -> floor(2.1) = 2
+    cupboard {base:0, per_m2:0.025, max:2}:
       20 m^2 -> floor(0.5) = 0;   70 m^2 -> floor(1.75) = 1
-    cupboard {base:0, per_m2:0.02, max:2}:
-      20 m^2 -> floor(0.4) = 0;   70 m^2 -> floor(1.4) = 1
     ceiling_light {base:1, per_m2:0.02, max:4}:
       20 m^2 -> 1 + floor(0.4) = 1; 70 m^2 -> 1 + floor(1.4) = 2
   Total floor pieces: 20 m^2 places 6 (sofa, coffee_table, rug, 2 armchairs,
-  shelf); 70 m^2 places strictly more floor pieces (13) and 2 ceiling lights.
+  shelf); 70 m^2 places strictly more floor pieces (14 with the second chest) and 2 ceiling lights.
 
 (d) World Dev guards:
   - set_room_layout with two overlapping level-0 rooms -> ToolRefusal, nothing written.
@@ -198,8 +198,8 @@ check("(c) 70 m² chair count == 4",
       fk.resolve_count(living_tpl["chair"], area_m2=70, ref_instances=1) == 4)
 check("(c) 20 m² chest count == 0",
       fk.resolve_count(living_tpl["chest"], area_m2=20, ref_instances=0) == 0)
-check("(c) 70 m² chest count == 1",
-      fk.resolve_count(living_tpl["chest"], area_m2=70, ref_instances=0) == 1)
+check("(c) 70 m² chest count == 2",
+      fk.resolve_count(living_tpl["chest"], area_m2=70, ref_instances=0) == 2)
 check("(c) 20 m² cupboard count == 0",
       fk.resolve_count(living_tpl["cupboard"], area_m2=20, ref_instances=0) == 0)
 check("(c) 70 m² cupboard count == 1",

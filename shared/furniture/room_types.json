@@ -47,7 +47,7 @@
           "anchor": "center",
           "count": {
             "base": 0,
-            "per_m2": 0.02,
+            "per_m2": 0.025,
             "max": 2
           }
         },
@@ -66,7 +66,7 @@
           "wall": "other",
           "count": {
             "base": 0,
-            "per_m2": 0.025,
+            "per_m2": 0.03,
             "max": 2
           }
         },
@@ -76,7 +76,7 @@
           "wall": "any",
           "count": {
             "base": 0,
-            "per_m2": 0.02,
+            "per_m2": 0.025,
             "max": 2
           }
         },
@@ -476,7 +476,7 @@
           "wall": "main",
           "count": {
             "base": 1,
-            "per_m2": 0.02,
+            "per_m2": 0.03,
             "max": 4
           }
         },
@@ -486,7 +486,7 @@
           "wall": "other",
           "count": {
             "base": 1,
-            "per_m2": 0.02,
+            "per_m2": 0.03,
             "max": 4
           }
         },
@@ -495,7 +495,7 @@
           "anchor": "corner",
           "count": {
             "base": 1,
-            "per_m2": 0.02,
+            "per_m2": 0.03,
             "max": 4
           }
         },
